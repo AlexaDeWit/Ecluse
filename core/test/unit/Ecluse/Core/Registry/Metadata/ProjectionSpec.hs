@@ -9,6 +9,7 @@ import Data.Aeson (Value (Null, Number, String))
 import Test.Hspec
 
 import Ecluse.Core.Registry (ParseError (ParseError))
+import Ecluse.Core.Registry.JsonStream (nestingLimit)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable))
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, streamError, validateReportedName)
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
@@ -41,5 +42,5 @@ spec = do
         it "maps malformed JSON" $
             streamError defaultLimits (ParseError "unusable metadata") `shouldBe` MetadataUndecodable
         it "retains the configured depth ceiling" $
-            streamError defaultLimits{maxNestingDepth = 3} (ParseError "retained JSON nesting limit")
+            streamError defaultLimits{maxNestingDepth = 3} (ParseError nestingLimit)
                 `shouldBe` MetadataBoundExceeded (TooDeeplyNested 3)

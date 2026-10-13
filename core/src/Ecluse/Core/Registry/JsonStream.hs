@@ -17,6 +17,8 @@ module Ecluse.Core.Registry.JsonStream (
     -- * Retained values
     retainedValue,
     withinRetainedDepth,
+    nestingLimit,
+    isNestingLimit,
     Members,
     namedMembers,
     everyMember,
@@ -104,10 +106,18 @@ retainedValue depth =
   where
     child = retainedValue (depth - 1)
 
+-- | The parse error that marks a retained value past its structural budget.
+nestingLimit :: Text
+nestingLimit = "retained JSON nesting limit"
+
+-- | Distinguish a retained-depth refusal from malformed JSON.
+isNestingLimit :: ParseError -> Bool
+isNestingLimit (ParseError message) = message == nestingLimit
+
 -- | Charge the parsed value's own level, including empty containers. Children need one less level.
 withinRetainedDepth :: Int -> J.Parser a -> J.Parser a
 withinRetainedDepth budget parser
-    | budget <= 0 = J.mapWithFailure (const (Left "retained JSON nesting limit")) (pure ())
+    | budget <= 0 = J.mapWithFailure (const (Left (toString nestingLimit))) (pure ())
     | otherwise = parser
 
 {- | Which members of an object are retained, with what parser, and under which key. Every object

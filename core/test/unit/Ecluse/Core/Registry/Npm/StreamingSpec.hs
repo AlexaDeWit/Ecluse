@@ -19,7 +19,7 @@ import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry (ParseError (ParseError), RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (npmCached)
-import Ecluse.Core.Registry.JsonStream (StreamResult (..))
+import Ecluse.Core.Registry.JsonStream (StreamResult (..), nestingLimit)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw), VersionRead (vrVersion))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
@@ -472,7 +472,7 @@ depthBoundary mode label levels source = do
         streamValue result `shouldBe` Right ()
     it (toString label <> " refuses one fewer level in " <> show mode) $ do
         result <- extractFields (levels - 1) mode source
-        streamValue result `shouldBe` Left (ParseError "retained JSON nesting limit")
+        streamValue result `shouldBe` Left (ParseError nestingLimit)
 
 -- The one release object retained when every supported field, and one unknown field, holds 'nestedValue'.
 nestedRelease :: NpmRead -> IO (KeyMap.KeyMap Value)

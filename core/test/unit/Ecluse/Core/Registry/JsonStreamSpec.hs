@@ -12,6 +12,7 @@ import Data.JsonStream.Parser qualified as J
 import Data.Text qualified as T
 import Test.Hspec
 
+import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Registry.JsonStream
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey)
@@ -72,7 +73,7 @@ readSpec = describe "readJsonStream" $ do
             streamValue result `shouldBe` Right (Just value)
         it ("refuses an exhausted retained level for " <> show value) $ do
             result <- expectRight (decode (withinRetainedDepth 0 (retainedValue 1)) [toStrict (encode value)])
-            streamValue result `shouldSatisfy` isLeft
+            streamValue result `shouldBe` Left (ParseError nestingLimit)
 
     it "preserves nested values and split escapes at every source boundary" $ do
         let body = "{\"keep\":{\"list\":[1,true,null,\"a\\\\b\\u00e9\"]},\"ignored\":{\"blob\":[1,2,3]}}"
