@@ -102,7 +102,7 @@ auditFor recipe root expectedRun expectedAttempt = do
     run <- captureProblems (auditRunFor recipe root >> pure [])
     buildFaults <- concat <$> traverse (captureProblems . auditBuild root) builds
     passes <- concat <$> traverse (captureProblems . auditPassFor recipe root expectedRun expectedAttempt) (scheduleFor recipe)
-    other <- captureProblems (auditOrderFor recipe root >> auditDependencyFor recipe root >> auditPlansFor recipe root >> auditInputs root >> when (recipe == FullHistory) (Full.auditTrusted root) >> pure [])
+    other <- captureProblems (auditOrderFor recipe root >> auditDependency root >> auditPlansFor recipe root >> auditInputs root >> when (recipe == FullHistory) (Full.auditTrusted root) >> pure [])
     let faults = run <> buildFaults <> passes <> other
     writeJsonFile (root </> "audit-faults.json") faults
     when (null faults) (if recipe == Focused then writeObservationsFor recipe root else Full.writeObservations root)
@@ -205,8 +205,8 @@ auditOrderFor recipe root = do
     let passNames = filter (\name -> any (`T.isPrefixOf` toText name) ["C-", "I-", if recipe == Focused then "O-" else "M-"]) entries
     requireDiagnostic (sort passNames == sort [toString name | Pass name _ _ <- scheduleFor recipe]) "pass inventory differs"
 
-auditDependencyFor :: Recipe -> FilePath -> IO ()
-auditDependencyFor recipe root = do
+auditDependency :: FilePath -> IO ()
+auditDependency root = do
     status <- T.strip <$> readComparisonText (root </> "controls.status")
     requireDiagnostic (status == "0") "negative controls failed"
     tar <- digestFile (root </> "dependency/tasty-bench-0.4.1.tar.gz")
