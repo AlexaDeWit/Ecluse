@@ -166,13 +166,13 @@ tasks:
     vars: *comparison
     dir: '{{.SOURCE_DIR}}'
     cmds:
-      - bash scripts/process-capture.sh '{{.PASS_DIR}}/measure.status' '{{.PASS_DIR}}/measure.log' env ECLTEST_SOURCE='{{.SOURCE}}' ECLTEST_RUN_ID="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-{{.KIND}}-{{.PASS}}" task --exit-code performance:{{.KIND}}-measure SOURCE='{{.SOURCE}}' RUN_ID="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-{{.KIND}}-{{.PASS}}" PERF_ARTIFACT_DIR='{{.PASS_DIR}}/receipts'
+      - bash scripts/process-capture.sh '{{.PASS_DIR}}/measure.status' '{{.PASS_DIR}}/measure.log' env ECLTEST_SOURCE='{{.SOURCE}}' ECLTEST_RUN_ID="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-{{.KIND}}-{{.PASS}}" task --exit-code performance:{{.KIND}}-measure PERF_ARTIFACT_DIR='{{.PASS_DIR}}/receipts'
       - |
         set -euo pipefail
         outcome=failure
         if [ "$(cat '{{.PASS_DIR}}/measure.status')" = 0 ]; then outcome=success; fi
         bash scripts/process-capture.sh '{{.PASS_DIR}}/audit.status' '{{.PASS_DIR}}/audit.log' \
-          env PERF_NATIVE_OUTCOME="$outcome" ECLTEST_SOURCE='{{.SOURCE}}' ECLTEST_RUN_ID="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-{{.KIND}}-{{.PASS}}" task --exit-code performance:{{.KIND}}-receipt SOURCE='{{.SOURCE}}' RUN_ID="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-{{.KIND}}-{{.PASS}}" PERF_ARTIFACT_DIR='{{.PASS_DIR}}/receipts'
+          env PERF_NATIVE_OUTCOME="$outcome" ECLTEST_SOURCE='{{.SOURCE}}' ECLTEST_RUN_ID="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-{{.KIND}}-{{.PASS}}" task --exit-code performance:{{.KIND}}-receipt PERF_ARTIFACT_DIR='{{.PASS_DIR}}/receipts'
       - |
         set -euo pipefail
         for path in {{if eq .KIND "benchmark"}}bench-results.csv bench-output.txt{{else}}perf-allocation-report.md perf-allocation-observations.json{{end}}; do
