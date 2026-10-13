@@ -38,6 +38,7 @@ import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, ProxySettings (..), proxyPor
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName)
+import Ecluse.Test.Corpus qualified as Corpus
 import Ecluse.Test.Wai (rebaseAuthority)
 
 -- | Boot a proxy over two stubs with the given cache TTL and optional entry bound.
@@ -78,7 +79,7 @@ longCacheTtl = 3600
 artifactBytes :: Int -> LByteString
 artifactBytes size = LBS.replicate (fromIntegral (max 1 size)) 0x61
 
--- | Read the selected corpus, refusing empty captures before starting load.
+-- | Authenticate the selected corpus, refusing empty captures before starting load.
 loadCorpusBodies :: [CorpusPackage] -> IO (Map Text LByteString)
 loadCorpusBodies packages = Map.fromList <$> traverse (\cp -> (cpName cp,) <$> readCapture cp) packages
 
@@ -98,7 +99,7 @@ weightedMix weight url packages port = concatMap (\cp -> replicate (weight cp) (
 
 readCapture :: CorpusPackage -> IO LByteString
 readCapture cp = do
-    bytes <- readFileLBS (cpPath cp)
+    bytes <- toLazy <$> Corpus.readCapture cp
     when (LBS.null bytes) (benchFail ("bench-load: corpus capture is empty: " <> toText (cpPath cp)))
     pure bytes
 
