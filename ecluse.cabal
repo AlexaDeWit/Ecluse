@@ -324,6 +324,7 @@ library ecluse-core
     Ecluse.Core.Stream
     Ecluse.Core.Strict
     Ecluse.Core.Supervision
+    Ecluse.Core.Supervision.Internal
     Ecluse.Core.Telemetry.Catalogue
     Ecluse.Core.Telemetry.Metrics
     Ecluse.Core.Telemetry.Record
@@ -1167,7 +1168,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.UpstreamSpec
     Ecluse.Core.StreamSpec
     Ecluse.Core.StrictSpec
-    Ecluse.Core.SupervisionSpec
+    Ecluse.Core.Supervision.InternalSpec
     Ecluse.Core.Telemetry.CatalogueSpec
     Ecluse.Core.Telemetry.MetricsSpec
     Ecluse.Core.Text.Iso8601Spec

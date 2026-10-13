@@ -47,6 +47,7 @@ case "$suite" in
       ./core/src/Ecluse/Core/Server/Admission.hs
       ./core/src/Ecluse/Core/Server/Admission/Bytes.hs
       ./core/src/Ecluse/Core/Server/Pipeline.hs
+      ./core/src/Ecluse/Core/Supervision.hs
       ./core/src/Ecluse/Core/Worker.hs
       # Pure handle and error types. Remove when this module gains executable logic.
       ./core/src/Ecluse/Core/Registry.hs
