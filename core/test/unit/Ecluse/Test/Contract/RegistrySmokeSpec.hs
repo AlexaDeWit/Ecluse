@@ -8,7 +8,7 @@ module Ecluse.Test.Contract.RegistrySmokeSpec (spec) where
 import Control.Exception (AsyncException (ThreadKilled))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Test.Hspec
+import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe, shouldSatisfy, shouldThrow)
 import Test.Hspec.Core.Spec qualified as Hspec
 import UnliftIO.Exception (fromException, throwIO)
 
@@ -32,14 +32,14 @@ spec = describe "liveMetadata" $ do
     for_ [TransportTimeout, TransportUnreachable] $ \cause ->
         it ("reports " <> show cause <> " as pending") $
             liveMetadata "expected" (pure (Left (MetadataFetch (FetchTransport (transportFault cause "offline")))))
-                `shouldThrow` pending
+                `shouldThrow` isPendingResult
     for_ [TransportTls, TransportProtocol] $ \cause ->
         it ("fails " <> show cause <> " instead of reporting an unavailable upstream") $
             liveMetadata "expected" (pure (Left (MetadataFetch (FetchTransport (transportFault cause "request refused")))))
-                `shouldThrow` failed
+                `shouldThrow` isFailureException
     for_ [MetadataAbsent, MetadataAuthorisationFailure 401, MetadataAuthorisationFailure 403, MetadataHttpFailure 503] $ \fault ->
         it ("fails the status refusal " <> show fault) $
-            liveMetadata "expected" (pure (Left fault)) `shouldThrow` failed
+            liveMetadata "expected" (pure (Left fault)) `shouldThrow` isFailureException
     it "propagates cancellation from the fetch" $
         liveMetadata "expected" (throwIO ThreadKilled) `shouldThrow` (== ThreadKilled)
     it "fails malformed JSON from the production read" $ do
@@ -49,7 +49,7 @@ spec = describe "liveMetadata" $ do
                                 Left MetadataUndecodable -> True
                                 _ -> False
                             )
-        liveMetadata expectedName (pure result) `shouldThrow` failed
+        liveMetadata expectedName (pure result) `shouldThrow` isFailureException
     it "fails a name mismatch from the production read" $
         do
             let body = syntheticPackumentBytes 1
@@ -62,7 +62,7 @@ spec = describe "liveMetadata" $ do
                                     _ -> False
                                 )
 
-            liveMetadata expectedName (pure result) `shouldThrow` failed
+            liveMetadata expectedName (pure result) `shouldThrow` isFailureException
     for_
         [ ("body bytes", defaultLimits{maxMetadataBytes = 1}, MetadataFetch (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 1))))
         , ("nesting depth", defaultLimits{maxNestingDepth = 1}, MetadataBoundExceeded (TooDeeplyNested 1))
@@ -77,20 +77,20 @@ spec = describe "liveMetadata" $ do
                 case result of
                     Left fault -> fault `shouldBe` expected
                     Right _ -> expectationFailure "expected the named bound refusal"
-                liveMetadata expectedName (pure result) `shouldThrow` failed
+                liveMetadata expectedName (pure result) `shouldThrow` isFailureException
     it "accepts a matching non-empty full read" $ do
         manifest <- sample
         info <- liveMetadata (renderPackageName benchPackageName) (pure (Right manifest))
         Map.size (infoVersions info) `shouldBe` 1
     it "rejects a provider that reports a different package" $ do
         manifest <- sample
-        liveMetadata "different" (pure (Right manifest)) `shouldThrow` failed
+        liveMetadata "different" (pure (Right manifest)) `shouldThrow` isFailureException
     it "rejects an empty provider result" $ do
         manifest <- sample
         let emptyManifest = manifest{manifestInfo = (manifestInfo manifest){infoVersions = Map.empty}}
-        liveMetadata (renderPackageName benchPackageName) (pure (Right emptyManifest)) `shouldThrow` failed
+        liveMetadata (renderPackageName benchPackageName) (pure (Right emptyManifest)) `shouldThrow` isFailureException
     it "fails a projection refusal instead of reporting successful coverage" $
-        liveMetadata "expected" (pure (Left (MetadataNameMismatch "different"))) `shouldThrow` failed
+        liveMetadata "expected" (pure (Left (MetadataNameMismatch "different"))) `shouldThrow` isFailureException
 
 sample :: IO Manifest
 sample = heldManifest npmRead defaultLimits "https://registry.npmjs.org" benchPackageName [syntheticPackumentBytes 1] >>= expectRight
@@ -110,14 +110,14 @@ readBody limits bytes =
         benchPackageName
         (heldBody [bytes])
 
-failed :: SomeException -> Bool
-failed exception = case fromException exception of
+isFailureException :: SomeException -> Bool
+isFailureException exception = case fromException exception of
     Just Hspec.Pending{} -> False
     Just Hspec.Failure{} -> True
     Just Hspec.Success -> False
     Nothing -> True
 
-pending :: Hspec.ResultStatus -> Bool
-pending = \case
+isPendingResult :: Hspec.ResultStatus -> Bool
+isPendingResult = \case
     Hspec.Pending{} -> True
     _ -> False
