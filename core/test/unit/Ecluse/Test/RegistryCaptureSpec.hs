@@ -4,21 +4,42 @@
 
 module Ecluse.Test.RegistryCaptureSpec (spec) where
 
+import Control.Exception (AsyncException (ThreadKilled))
+import Control.Exception qualified as Exception
 import Data.Map.Strict qualified as Map
+import Network.HTTP.Client (ManagerSettings (managerModifyRequest), defaultManagerSettings, newManager, parseUrlThrow)
+import Network.HTTP.Types.Status (status200)
 import Test.Hspec
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Test.RegistryCapture (
     Catalogue (catBenchPins, catSmokeNames),
     decodeCatalogue,
+    fetchPackumentBody,
     loadCatalogue,
     parseRegistryVersions,
     registryUrl,
     smokeRegistryPackages,
  )
 
+import Ecluse.Test.Stub (stubBaseUrl, withStub)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
+
 spec :: Spec
 spec = do
+    describe "fetchPackumentBody" $ do
+        it "retains optional absence for a synchronous request failure" $ do
+            manager <- newManager defaultManagerSettings{managerModifyRequest = \_ -> throwIO (TestContractEscape "request failed")}
+            fetchPackumentBody manager Npm "demo" `shouldReturn` Nothing
+        it "propagates cancellation before network access" $ do
+            manager <- newManager defaultManagerSettings{managerModifyRequest = \_ -> Exception.throwIO ThreadKilled}
+            fetchPackumentBody manager Npm "demo" `shouldThrow` (== ThreadKilled)
+        it "returns successful response bytes unchanged" $
+            withStub status200 npmBody $ \stub -> do
+                manager <- newManager defaultManagerSettings{managerModifyRequest = \_ -> parseUrlThrow (toString (stubBaseUrl stub))}
+                fetchPackumentBody manager Npm "demo" `shouldReturn` Just npmBody
+
     describe "decodeCatalogue" $ do
         it "decodes the per-ecosystem smoke names and the bench pins" $
             case decodeCatalogue sampleCatalogue of

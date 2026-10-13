@@ -3,9 +3,7 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE OverloadedStrings #-}
 
-{- | Compiler regressions over committed feeds
-and local HTTP stubs.
--}
+-- | Compiler regressions over committed feeds and local HTTP stubs.
 module Ecluse.Core.Osv.CompileSpec (spec) where
 
 import Codec.Compression.GZip qualified as GZip
@@ -66,71 +64,72 @@ import Network.Wai.Handler.Warp (testWithApplication)
 
 spec :: Spec
 spec = describe "SQLite OSV Compilation" $ do
-    it "fetches an OSV zip and compiles it into a named, stamped SQLite artifact" $ do
-        zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
-        epssData <- LBS.readFile epssFixtureFile
-        (metrics, readRecorded) <- recordingAdvisoryCompileMetricsPort
-        (dbFile, sources) <- withStub status200 zipData $ \stub ->
-            withStub status200 epssData $ \epssStub -> do
-                let sources = sourcesOf stub epssStub "/sample.zip"
-                path <- runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) EpssRequired sources testQuietTime)
-                pure (path, sources)
-        let sourceHost = authorityLabel (toText (csOsvExportUrl sources))
-            epssHost = authorityLabel (toText (csEpssFeedUrl sources))
+    it "fetches an OSV zip and compiles it into a named, stamped SQLite artifact" $
+        withSystemTempDirectory "ecluse-osv-compile" $ \outDir -> do
+            zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+            epssData <- LBS.readFile epssFixtureFile
+            (metrics, readRecorded) <- recordingAdvisoryCompileMetricsPort
+            (dbFile, sources) <- withStub status200 zipData $ \stub ->
+                withStub status200 epssData $ \epssStub -> do
+                    let sources = sourcesOf stub epssStub "/sample.zip"
+                    path <- runOsvTestM (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) EpssRequired sources testQuietTime)
+                    pure (path, sources)
+            let sourceHost = authorityLabel (toText (csOsvExportUrl sources))
+                epssHost = authorityLabel (toText (csEpssFeedUrl sources))
 
-        conn <- open dbFile
-        rows <- query_ conn "SELECT package_name, cve_id, fixed_version, severity, epss_score FROM package_vulnerability_ranges" :: IO [(Text, Text, Maybe Text, Maybe Double, Maybe Double)]
-        stamped <- query_ conn "PRAGMA user_version" :: IO [Only Int]
-        metaRows <- query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)]
-        indexes <- query_ conn "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'package_vulnerability_ranges' AND name LIKE 'idx_%' ORDER BY name" :: IO [Only Text]
-        strictTables <- query_ conn "SELECT name FROM pragma_table_list WHERE name IN ('package_vulnerability_ranges', 'meta') AND strict = 1 ORDER BY name" :: IO [Only Text]
-        dedupIndexes <- query_ conn "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'package_vulnerability_ranges' AND name LIKE 'uq_%'" :: IO [Only Text]
-        close conn
-        catchIOError (removeFile dbFile) (const $ pure ())
+            conn <- open dbFile
+            rows <- query_ conn "SELECT package_name, cve_id, fixed_version, severity, epss_score FROM package_vulnerability_ranges" :: IO [(Text, Text, Maybe Text, Maybe Double, Maybe Double)]
+            stamped <- query_ conn "PRAGMA user_version" :: IO [Only Int]
+            metaRows <- query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)]
+            indexes <- query_ conn "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'package_vulnerability_ranges' AND name LIKE 'idx_%' ORDER BY name" :: IO [Only Text]
+            strictTables <- query_ conn "SELECT name FROM pragma_table_list WHERE name IN ('package_vulnerability_ranges', 'meta') AND strict = 1 ORDER BY name" :: IO [Only Text]
+            dedupIndexes <- query_ conn "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'package_vulnerability_ranges' AND name LIKE 'uq_%'" :: IO [Only Text]
+            close conn
+            catchIOError (removeFile dbFile) (const $ pure ())
 
-        -- The file-name literal and the meta keys below pin the artifact's wire contract, the forms
-        -- a reader depends on, not the constants that produced them.
-        takeFileName dbFile `shouldBe` "npm-osv-schema5.db"
-        -- EPSS joins through CVE-2024-48913, while the row retains the GHSA id.
-        rows `shouldBe` [("hono", "GHSA-2234-fmw7-43wr", Just "4.6.5", Just 5.9, Just 0.75)]
-        map fromOnly stamped `shouldBe` [osvSchemaEpoch]
-        map fromOnly indexes `shouldBe` ["idx_package_fixed", "idx_package_name"]
-        map fromOnly strictTables `shouldBe` ["meta", "package_vulnerability_ranges"]
-        map fromOnly dedupIndexes `shouldBe` ["uq_ranges_segment"]
+            -- The file-name literal and the meta keys below pin the artifact's wire contract, the forms
+            -- a reader depends on, not the constants that produced them.
+            takeFileName dbFile `shouldBe` "npm-osv-schema5.db"
+            -- EPSS joins through CVE-2024-48913, while the row retains the GHSA id.
+            rows `shouldBe` [("hono", "GHSA-2234-fmw7-43wr", Just "4.6.5", Just 5.9, Just 0.75)]
+            map fromOnly stamped `shouldBe` [osvSchemaEpoch]
+            map fromOnly indexes `shouldBe` ["idx_package_fixed", "idx_package_name"]
+            map fromOnly strictTables `shouldBe` ["meta", "package_vulnerability_ranges"]
+            map fromOnly dedupIndexes `shouldBe` ["uq_ranges_segment"]
 
-        let meta = Map.fromList metaRows
-        -- The stubs answer with no Last-Modified, so those two keys write no row at all
-        -- rather than an invented date.
-        Map.keys meta
-            `shouldBe` [ "built_at"
-                       , "ecosystem"
-                       , "epss_model_version"
-                       , "epss_score_date"
-                       , "epss_source"
-                       , "epss_source_url"
-                       , "epss_status"
-                       , "osv_newest_modified"
-                       , "osv_source"
-                       , "pilot_version"
-                       , "row_count"
-                       , "source_url"
-                       ]
-        Map.lookup "ecosystem" meta `shouldBe` Just "npm"
-        Map.lookup "row_count" meta `shouldBe` Just "1"
-        Map.lookup "pilot_version" meta `shouldBe` Just (toText (showVersion version))
-        Map.lookup "source_url" meta `shouldBe` Just sourceHost
-        Map.lookup "epss_source_url" meta `shouldBe` Just epssHost
-        -- These stub URLs carry no credential, so the recorded identity is the URL as written.
-        Map.lookup "osv_source" meta `shouldBe` Just (toText (csOsvExportUrl sources))
-        Map.lookup "epss_source" meta `shouldBe` Just (toText (csEpssFeedUrl sources))
-        Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-03-23T17:41:30.891186Z"
-        Map.lookup "epss_score_date" meta `shouldBe` Just "2026-08-29T00:00:00Z"
-        Map.lookup "epss_model_version" meta `shouldBe` Just "v2026.08.01"
-        Map.lookup "epss_status" meta `shouldBe` Just "available"
-        Map.lookup "built_at" meta `shouldSatisfy` maybe False (not . T.null)
+            let meta = Map.fromList metaRows
+            -- The stubs answer with no Last-Modified, so those two keys write no row at all
+            -- rather than an invented date.
+            Map.keys meta
+                `shouldBe` [ "built_at"
+                           , "ecosystem"
+                           , "epss_model_version"
+                           , "epss_score_date"
+                           , "epss_source"
+                           , "epss_source_url"
+                           , "epss_status"
+                           , "osv_newest_modified"
+                           , "osv_source"
+                           , "pilot_version"
+                           , "row_count"
+                           , "source_url"
+                           ]
+            Map.lookup "ecosystem" meta `shouldBe` Just "npm"
+            Map.lookup "row_count" meta `shouldBe` Just "1"
+            Map.lookup "pilot_version" meta `shouldBe` Just (toText (showVersion version))
+            Map.lookup "source_url" meta `shouldBe` Just sourceHost
+            Map.lookup "epss_source_url" meta `shouldBe` Just epssHost
+            -- These stub URLs carry no credential, so the recorded identity is the URL as written.
+            Map.lookup "osv_source" meta `shouldBe` Just (toText (csOsvExportUrl sources))
+            Map.lookup "epss_source" meta `shouldBe` Just (toText (csEpssFeedUrl sources))
+            Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-03-23T17:41:30.891186Z"
+            Map.lookup "epss_score_date" meta `shouldBe` Just "2026-08-29T00:00:00Z"
+            Map.lookup "epss_model_version" meta `shouldBe` Just "v2026.08.01"
+            Map.lookup "epss_status" meta `shouldBe` Just "available"
+            Map.lookup "built_at" meta `shouldSatisfy` maybe False (not . T.null)
 
-        recorded <- readRecorded
-        recorded `shouldBe` RecordedCompile [1] [(DropOversize, 0), (DropMalformed, 0)] [CompileCompleted]
+            recorded <- readRecorded
+            recorded `shouldBe` RecordedCompile [1] [(DropOversize, 0), (DropMalformed, 0)] [CompileCompleted]
 
     for_ [EpssRequired, EpssOptional] $ \requirement ->
         for_ [("matching", "CVE-2024-48913", Just 0.75), ("unmatched", "CVE-2026-10001", Nothing)] $ \(label, cveId, expectedScore) ->
@@ -153,50 +152,52 @@ spec = describe "SQLite OSV Compilation" $ do
                             flip finally (cveDbClose db) $
                                 cveCoveredNames (cveDbLookup db) `shouldReturn` ["hono"]
 
-    it "fetches both credential-bearing overrides without persisting or logging their credentials" $ do
-        zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
-        epssData <- LBS.readFile epssFixtureFile
-        (metrics, _) <- recordingAdvisoryCompileMetricsPort
-        (dbFile, logged) <- captureJsonLog $ \logEnv ->
-            withCredentialSource "OSV" zipData $ \source ->
-                withCredentialSource "EPSS" epssData $ \epssSource -> do
-                    path <- runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) EpssRequired (CompileSources source epssSource) testQuietTime)
-                    withConnection path $ \conn -> do
-                        meta <- Map.fromList <$> (query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)])
-                        Map.lookup "source_url" meta `shouldBe` Just (authorityLabel (toText source))
-                        Map.lookup "epss_source_url" meta `shouldBe` Just (authorityLabel (toText epssSource))
-                        -- The recorded identity keeps the path that names the source, and none
-                        -- of the credential material the fetch had to send.
-                        for_ [("osv_source", "OSV"), ("epss_source", "EPSS")] $ \(key, tag) -> do
-                            let stored = fromMaybe "" (Map.lookup key meta)
-                            stored `shouldSatisfy` T.isSuffixOf "/feed"
-                            for_ ["user-", "password-", "query-", "fragment-"] $ \prefix ->
-                                stored `shouldSatisfy` (not . T.isInfixOf (prefix <> tag))
-                        Map.lookup "built_at" meta `shouldSatisfy` maybe False (not . T.null)
-                        Map.lookup "row_count" meta `shouldBe` Just "1"
-                    pure path
-        bytes <- readFileBS dbFile
-        for_ ["OSV", "EPSS"] $ \tag ->
-            for_ ["user-", "password-", "query-", "fragment-"] $ \prefix -> do
-                let credential = prefix <> tag
-                bytes `shouldSatisfy` (not . BS.isInfixOf (encodeUtf8 credential))
-                logged `shouldSatisfy` (not . T.isInfixOf credential)
-        removeFile dbFile
+    it "fetches both credential-bearing overrides without persisting or logging their credentials" $
+        withSystemTempDirectory "ecluse-osv-compile" $ \outDir -> do
+            zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+            epssData <- LBS.readFile epssFixtureFile
+            (metrics, _) <- recordingAdvisoryCompileMetricsPort
+            (dbFile, logged) <- captureJsonLog $ \logEnv ->
+                withCredentialSource "OSV" zipData $ \source ->
+                    withCredentialSource "EPSS" epssData $ \epssSource -> do
+                        path <- runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) EpssRequired (CompileSources source epssSource) testQuietTime)
+                        withConnection path $ \conn -> do
+                            meta <- Map.fromList <$> (query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)])
+                            Map.lookup "source_url" meta `shouldBe` Just (authorityLabel (toText source))
+                            Map.lookup "epss_source_url" meta `shouldBe` Just (authorityLabel (toText epssSource))
+                            -- The recorded identity keeps the path that names the source, and none
+                            -- of the credential material the fetch had to send.
+                            for_ [("osv_source", "OSV"), ("epss_source", "EPSS")] $ \(key, tag) -> do
+                                let stored = fromMaybe "" (Map.lookup key meta)
+                                stored `shouldSatisfy` T.isSuffixOf "/feed"
+                                for_ ["user-", "password-", "query-", "fragment-"] $ \prefix ->
+                                    stored `shouldSatisfy` (not . T.isInfixOf (prefix <> tag))
+                            Map.lookup "built_at" meta `shouldSatisfy` maybe False (not . T.null)
+                            Map.lookup "row_count" meta `shouldBe` Just "1"
+                        pure path
+            bytes <- readFileBS dbFile
+            for_ ["OSV", "EPSS"] $ \tag ->
+                for_ ["user-", "password-", "query-", "fragment-"] $ \prefix -> do
+                    let credential = prefix <> tag
+                    bytes `shouldSatisfy` (not . BS.isInfixOf (encodeUtf8 credential))
+                    logged `shouldSatisfy` (not . T.isInfixOf credential)
+            removeFile dbFile
 
-    it "aborts the compile without publishing when the drop rate is systemic" $ do
-        -- 20 malformed entries to one good one trips the systemic-drop breaker. The breaker must
-        -- abandon the run rather than finalise an artifact that silently omits most advisories.
-        zipData <- systemicDropZip
-        epssData <- LBS.readFile epssFixtureFile
-        (metrics, readRecorded) <- recordingAdvisoryCompileMetricsPort
-        let action =
-                withStub status200 zipData $ \stub ->
-                    withStub status200 epssData $ \epssStub ->
-                        runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") testQuietTime)
-        action `shouldThrow` (\(PilotIngestAborted _) -> True)
+    it "aborts the compile without publishing when the drop rate is systemic" $
+        withSystemTempDirectory "ecluse-osv-compile" $ \outDir -> do
+            -- 20 malformed entries to one good one trips the systemic-drop breaker. The breaker must
+            -- abandon the run rather than finalise an artifact that silently omits most advisories.
+            zipData <- systemicDropZip
+            epssData <- LBS.readFile epssFixtureFile
+            (metrics, readRecorded) <- recordingAdvisoryCompileMetricsPort
+            let action =
+                    withStub status200 zipData $ \stub ->
+                        withStub status200 epssData $ \epssStub ->
+                            runOsvTestM (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") testQuietTime)
+            action `shouldThrow` (\(PilotIngestAborted _) -> True)
 
-        recorded <- readRecorded
-        recorded `shouldBe` RecordedCompile [1] [(DropOversize, 0), (DropMalformed, 20)] [CompileAborted]
+            recorded <- readRecorded
+            recorded `shouldBe` RecordedCompile [1] [(DropOversize, 0), (DropMalformed, 20)] [CompileAborted]
 
     for_ [(Npm, "npm", "v1.2.0", "v2.0.0+build.7", "v3.0.0", "1.2.0", "2.0.0+build.7", "3.0.0"), (PyPI, "PyPI", "1.2.0", "2.0.0", "3.0.0", "1.2", "2", "3"), (RubyGems, "RubyGems", "1.2.0", "2.0.0", "3.0.0", "1.2", "2", "3")] $ \(eco, sourceEco, rawLower, rawFix, rawLast, lower, fixed, lastAffected) ->
         it ("persists every canonical version field and matches compiled " <> show eco <> " fixes") $ do
@@ -215,63 +216,65 @@ spec = describe "SQLite OSV Compilation" $ do
                         map arCveId (fixedAt advisories (mkVersion eco fixed)) `shouldBe` ["GHSA-canonical"]
                         affecting advisories (mkVersion eco lower) `shouldSatisfy` (not . null)
 
-    it "accepts a rebuilt PyPI artifact with canonical package and fix versions" $ do
-        zipData <-
-            osvZipOf
-                [("pypi-advisory.json", "{\"id\":\"GHSA-pypi\",\"affected\":[{\"package\":{\"name\":\"Flask_Thing\",\"ecosystem\":\"PyPI\"},\"ranges\":[{\"type\":\"ECOSYSTEM\",\"events\":[{\"introduced\":\"0\"},{\"fixed\":\"1.0.0\"}]}]}]}")]
-        epssData <- LBS.readFile epssFixtureFile
-        (metrics, _) <- recordingAdvisoryCompileMetricsPort
-        dbFile <- withStub status200 zipData $ \stub ->
-            withStub status200 epssData $ \epssStub ->
-                runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor PyPI) EpssRequired (sourcesOf stub epssStub "/all.zip") testQuietTime)
-
-        conn <- open dbFile
-        rows <- query_ conn "SELECT package_name FROM package_vulnerability_ranges" :: IO [Only Text]
-        metaRows <- query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)]
-        close conn
-
-        map fromOnly rows `shouldBe` ["flask-thing"]
-        takeFileName dbFile `shouldBe` "pypi-osv-schema5.db"
-        Map.lookup "ecosystem" (Map.fromList metaRows) `shouldBe` Just "pypi"
-        Map.lookup "epss_status" (Map.fromList metaRows) `shouldBe` Just "available"
-        openCveDb PyPI EpssRequired dbFile >>= \case
-            Left rejection -> fail ("rebuilt PyPI artifact rejected: " <> show rejection)
-            Right db -> flip finally (cveDbClose db) $ do
-                let cve = cveDbLookup db
-                cveCoveredNames cve `shouldReturn` ["flask-thing"]
-                namesFix cve "flask-thing" "1" `shouldReturn` True
-                namesFix cve "flask-thing" "1.0.0" `shouldReturn` False
-                cveAdvisoriesFor cve "flask-thing" >>= (`shouldSatisfy` (not . null))
-        removeFile dbFile
-
-    it "writes an unorderable bound into the artifact and decodes the \"0\" lower bound" $ do
-        -- Malware feeds can name versions outside semver. Dropping them would admit affected versions.
-        zipData <-
-            osvZipOf
-                [ ("point.json", "{\"id\":\"MAL-point\",\"affected\":[{\"package\":{\"name\":\"pointy\",\"ecosystem\":\"npm\"},\"versions\":[\"1.0.0\",\"2026.05.1\"]}]}")
-                , ("range.json", "{\"id\":\"MAL-range\",\"affected\":[{\"package\":{\"name\":\"ranged\",\"ecosystem\":\"npm\"},\"ranges\":[{\"type\":\"SEMVER\",\"events\":[{\"introduced\":\"0\"},{\"fixed\":\"1.2.3\"}]}]}]}")
-                ]
-        epssData <- LBS.readFile epssFixtureFile
-        (metrics, _) <- recordingAdvisoryCompileMetricsPort
-        (dbFile, logged) <- captureJsonLog $ \logEnv ->
-            withStub status200 zipData $ \stub ->
+    it "accepts a rebuilt PyPI artifact with canonical package and fix versions" $
+        withSystemTempDirectory "ecluse-osv-compile" $ \outDir -> do
+            zipData <-
+                osvZipOf
+                    [("pypi-advisory.json", "{\"id\":\"GHSA-pypi\",\"affected\":[{\"package\":{\"name\":\"Flask_Thing\",\"ecosystem\":\"PyPI\"},\"ranges\":[{\"type\":\"ECOSYSTEM\",\"events\":[{\"introduced\":\"0\"},{\"fixed\":\"1.0.0\"}]}]}]}")]
+            epssData <- LBS.readFile epssFixtureFile
+            (metrics, _) <- recordingAdvisoryCompileMetricsPort
+            dbFile <- withStub status200 zipData $ \stub ->
                 withStub status200 epssData $ \epssStub ->
-                    runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") testQuietTime)
+                    runOsvTestM (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor PyPI) EpssRequired (sourcesOf stub epssStub "/all.zip") testQuietTime)
 
-        logged `shouldSatisfy` T.isInfixOf "for example pointy 2026.05.1"
-        logged `shouldSatisfy` T.isInfixOf "kept 1 unorderable"
-        logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
+            conn <- open dbFile
+            rows <- query_ conn "SELECT package_name FROM package_vulnerability_ranges" :: IO [Only Text]
+            metaRows <- query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)]
+            close conn
 
-        conn <- open dbFile
-        rows <- query_ conn "SELECT package_name, introduced_version, fixed_version, last_affected_version FROM package_vulnerability_ranges ORDER BY package_name, introduced_version" :: IO [(Text, Maybe Text, Maybe Text, Maybe Text)]
-        close conn
-        catchIOError (removeFile dbFile) (const $ pure ())
+            map fromOnly rows `shouldBe` ["flask-thing"]
+            takeFileName dbFile `shouldBe` "pypi-osv-schema5.db"
+            Map.lookup "ecosystem" (Map.fromList metaRows) `shouldBe` Just "pypi"
+            Map.lookup "epss_status" (Map.fromList metaRows) `shouldBe` Just "available"
+            openCveDb PyPI EpssRequired dbFile >>= \case
+                Left rejection -> fail ("rebuilt PyPI artifact rejected: " <> show rejection)
+                Right db -> flip finally (cveDbClose db) $ do
+                    let cve = cveDbLookup db
+                    cveCoveredNames cve `shouldReturn` ["flask-thing"]
+                    namesFix cve "flask-thing" "1" `shouldReturn` True
+                    namesFix cve "flask-thing" "1.0.0" `shouldReturn` False
+                    cveAdvisoriesFor cve "flask-thing" >>= (`shouldSatisfy` (not . null))
+            removeFile dbFile
 
-        rows
-            `shouldBe` [ ("pointy", Just "1.0.0", Nothing, Just "1.0.0")
-                       , ("pointy", Just "2026.05.1", Nothing, Just "2026.05.1")
-                       , ("ranged", Nothing, Just "1.2.3", Nothing)
-                       ]
+    it "writes an unorderable bound into the artifact and decodes the \"0\" lower bound" $
+        withSystemTempDirectory "ecluse-osv-compile" $ \outDir -> do
+            -- Malware feeds can name versions outside semver. Dropping them would admit affected versions.
+            zipData <-
+                osvZipOf
+                    [ ("point.json", "{\"id\":\"MAL-point\",\"affected\":[{\"package\":{\"name\":\"pointy\",\"ecosystem\":\"npm\"},\"versions\":[\"1.0.0\",\"2026.05.1\"]}]}")
+                    , ("range.json", "{\"id\":\"MAL-range\",\"affected\":[{\"package\":{\"name\":\"ranged\",\"ecosystem\":\"npm\"},\"ranges\":[{\"type\":\"SEMVER\",\"events\":[{\"introduced\":\"0\"},{\"fixed\":\"1.2.3\"}]}]}]}")
+                    ]
+            epssData <- LBS.readFile epssFixtureFile
+            (metrics, _) <- recordingAdvisoryCompileMetricsPort
+            (dbFile, logged) <- captureJsonLog $ \logEnv ->
+                withStub status200 zipData $ \stub ->
+                    withStub status200 epssData $ \epssStub ->
+                        runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") testQuietTime)
+
+            logged `shouldSatisfy` T.isInfixOf "for example pointy 2026.05.1"
+            logged `shouldSatisfy` T.isInfixOf "kept 1 unorderable"
+            logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
+
+            conn <- open dbFile
+            rows <- query_ conn "SELECT package_name, introduced_version, fixed_version, last_affected_version FROM package_vulnerability_ranges ORDER BY package_name, introduced_version" :: IO [(Text, Maybe Text, Maybe Text, Maybe Text)]
+            close conn
+            catchIOError (removeFile dbFile) (const $ pure ())
+
+            rows
+                `shouldBe` [ ("pointy", Just "1.0.0", Nothing, Just "1.0.0")
+                           , ("pointy", Just "2026.05.1", Nothing, Just "2026.05.1")
+                           , ("ranged", Nothing, Just "1.2.3", Nothing)
+                           ]
 
     epssEnrichmentSpec
 
@@ -372,75 +375,81 @@ spec = describe "SQLite OSV Compilation" $ do
                                         (lookupAttribute (hotAttributes compiledSpan) key >>= fromAttribute) `shouldBe` (expected :: Maybe Text)
 
     describe "source provenance" $ do
-        it "records the export's Last-Modified from the response that carried the rows" $ do
-            zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
-            epssData <- LBS.readFile epssFixtureFile
-            (metrics, _) <- recordingAdvisoryCompileMetricsPort
-            dbFile <- withStubHeaders status200 [(hLastModified, "Sat, 29 Aug 2026 06:30:00 GMT")] zipData $ \stub ->
-                withStub status200 epssData $ \epssStub ->
-                    runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") testQuietTime)
-            meta <- metaOf dbFile
-            Map.lookup "osv_last_modified" meta `shouldBe` Just "2026-08-29T06:30:00Z"
-            removeFile dbFile
+        it "records the export's Last-Modified from the response that carried the rows" $
+            withSystemTempDirectory "ecluse-osv-compile" $ \outDir -> do
+                zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+                epssData <- LBS.readFile epssFixtureFile
+                (metrics, _) <- recordingAdvisoryCompileMetricsPort
+                dbFile <- withStubHeaders status200 [(hLastModified, "Sat, 29 Aug 2026 06:30:00 GMT")] zipData $ \stub ->
+                    withStub status200 epssData $ \epssStub ->
+                        runOsvTestM (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") testQuietTime)
+                meta <- metaOf dbFile
+                Map.lookup "osv_last_modified" meta `shouldBe` Just "2026-08-29T06:30:00Z"
+                removeFile dbFile
 
-        it "keeps the newest record date and skips a record that carries none" $ do
-            zipData <-
-                osvZipOf
-                    [ ("older.json", datedAdvisory "GHSA-older" "older-pkg" (Just "2026-01-01T00:00:00Z"))
-                    , ("newer.json", datedAdvisory "GHSA-newer" "newer-pkg" (Just "2026-02-01T09:00:00Z"))
-                    , ("undated.json", datedAdvisory "GHSA-undated" "undated-pkg" Nothing)
-                    ]
-            dbFile <- compileZip zipData testQuietTime
-            meta <- metaOf dbFile
-            Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-02-01T09:00:00Z"
-            removeFile dbFile
+        it "keeps the newest record date and skips a record that carries none" $
+            withSystemTempDirectory "ecluse-osv-compile" $ \outDir -> do
+                zipData <-
+                    osvZipOf
+                        [ ("older.json", datedAdvisory "GHSA-older" "older-pkg" (Just "2026-01-01T00:00:00Z"))
+                        , ("newer.json", datedAdvisory "GHSA-newer" "newer-pkg" (Just "2026-02-01T09:00:00Z"))
+                        , ("undated.json", datedAdvisory "GHSA-undated" "undated-pkg" Nothing)
+                        ]
+                dbFile <- compileZip outDir zipData testQuietTime
+                meta <- metaOf dbFile
+                Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-02-01T09:00:00Z"
+                removeFile dbFile
 
-        it "keeps a record dated after the run's clock and ignores only its date" $ do
-            -- A date the source cannot yet know is not evidence about the ranges beside it,
-            -- so the rows stay and the age reading takes the newest date the run can trust.
-            zipData <-
-                osvZipOf
-                    [ ("ok.json", datedAdvisory "GHSA-ok" "ok-pkg" (Just "2026-01-01T00:00:00Z"))
-                    , ("ahead.json", datedAdvisory "GHSA-ahead" "ahead-pkg" (Just "2099-01-01T00:00:00Z"))
-                    ]
-            (dbFile, logged) <- captureJsonLog $ \logEnv -> compileZipWith logEnv zipData testQuietTime
-            meta <- metaOf dbFile
-            Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-01-01T00:00:00Z"
-            packagesOf dbFile `shouldReturn` ["ahead-pkg", "ok-pkg"]
-            logged `shouldSatisfy` T.isInfixOf "Ignoring the modified date of 1 npm advisory record(s), unreadable or dated after this run's clock"
-            logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
-            removeFile dbFile
+        it "keeps a record dated after the run's clock and ignores only its date" $
+            withSystemTempDirectory "ecluse-osv-compile" $ \outDir -> do
+                -- A date the source cannot yet know is not evidence about the ranges beside it,
+                -- so the rows stay and the age reading takes the newest date the run can trust.
+                zipData <-
+                    osvZipOf
+                        [ ("ok.json", datedAdvisory "GHSA-ok" "ok-pkg" (Just "2026-01-01T00:00:00Z"))
+                        , ("ahead.json", datedAdvisory "GHSA-ahead" "ahead-pkg" (Just "2099-01-01T00:00:00Z"))
+                        ]
+                (dbFile, logged) <- captureJsonLog $ \logEnv -> compileZipWith outDir logEnv zipData testQuietTime
+                meta <- metaOf dbFile
+                Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-01-01T00:00:00Z"
+                packagesOf dbFile `shouldReturn` ["ahead-pkg", "ok-pkg"]
+                logged `shouldSatisfy` T.isInfixOf "Ignoring the modified date of 1 npm advisory record(s), unreadable or dated after this run's clock"
+                logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
+                removeFile dbFile
 
-        it "keeps a record whose modified date no grammar reads, and ignores only that date" $ do
-            zipData <-
-                osvZipOf
-                    [ ("ok.json", datedAdvisory "GHSA-ok" "ok-pkg" (Just "2026-01-01T00:00:00Z"))
-                    , ("unreadable.json", datedAdvisory "GHSA-unreadable" "unreadable-pkg" (Just "the day before yesterday"))
-                    ]
-            (dbFile, logged) <- captureJsonLog $ \logEnv -> compileZipWith logEnv zipData testQuietTime
-            meta <- metaOf dbFile
-            Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-01-01T00:00:00Z"
-            packagesOf dbFile `shouldReturn` ["ok-pkg", "unreadable-pkg"]
-            logged `shouldSatisfy` T.isInfixOf "Ignoring the modified date of 1 npm advisory record(s), unreadable or dated after this run's clock"
-            logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
-            removeFile dbFile
+        it "keeps a record whose modified date no grammar reads, and ignores only that date" $
+            withSystemTempDirectory "ecluse-osv-compile" $ \outDir -> do
+                zipData <-
+                    osvZipOf
+                        [ ("ok.json", datedAdvisory "GHSA-ok" "ok-pkg" (Just "2026-01-01T00:00:00Z"))
+                        , ("unreadable.json", datedAdvisory "GHSA-unreadable" "unreadable-pkg" (Just "the day before yesterday"))
+                        ]
+                (dbFile, logged) <- captureJsonLog $ \logEnv -> compileZipWith outDir logEnv zipData testQuietTime
+                meta <- metaOf dbFile
+                Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-01-01T00:00:00Z"
+                packagesOf dbFile `shouldReturn` ["ok-pkg", "unreadable-pkg"]
+                logged `shouldSatisfy` T.isInfixOf "Ignoring the modified date of 1 npm advisory record(s), unreadable or dated after this run's clock"
+                logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
+                removeFile dbFile
 
-        it "logs the quiet-time alarm at ERROR, naming the source, the age, and the threshold" $ do
-            zipData <- osvZipOf [("old.json", datedAdvisory "GHSA-old" "old-pkg" (Just "2026-01-01T00:00:00Z"))]
-            (dbFile, logged) <- captureJsonLog $ \logEnv -> compileZipWith logEnv zipData tightQuietTime
-            logged `shouldSatisfy` T.isInfixOf "OSV export http://127.0.0.1:"
-            logged `shouldSatisfy` T.isInfixOf "quiet-time threshold 1s"
-            logged `shouldSatisfy` T.isInfixOf "so the source has gone quiet"
-            logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Error\""
-            removeFile dbFile
+        it "logs the quiet-time alarm at ERROR, naming the source, the age, and the threshold" $
+            withSystemTempDirectory "ecluse-osv-compile" $ \outDir -> do
+                zipData <- osvZipOf [("old.json", datedAdvisory "GHSA-old" "old-pkg" (Just "2026-01-01T00:00:00Z"))]
+                (dbFile, logged) <- captureJsonLog $ \logEnv -> compileZipWith outDir logEnv zipData tightQuietTime
+                logged `shouldSatisfy` T.isInfixOf "OSV export http://127.0.0.1:"
+                logged `shouldSatisfy` T.isInfixOf "quiet-time threshold 1s"
+                logged `shouldSatisfy` T.isInfixOf "so the source has gone quiet"
+                logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Error\""
+                removeFile dbFile
 
-        it "logs the ages at INFO and raises nothing while every source is inside its threshold" $ do
-            zipData <- osvZipOf [("old.json", datedAdvisory "GHSA-old" "old-pkg" (Just "2026-01-01T00:00:00Z"))]
-            (dbFile, logged) <- captureJsonLog $ \logEnv -> compileZipWith logEnv zipData testQuietTime
-            logged `shouldSatisfy` T.isInfixOf "last changed "
-            logged `shouldSatisfy` (not . T.isInfixOf "so the source has gone quiet")
-            logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
-            removeFile dbFile
+        it "logs the ages at INFO and raises nothing while every source is inside its threshold" $
+            withSystemTempDirectory "ecluse-osv-compile" $ \outDir -> do
+                zipData <- osvZipOf [("old.json", datedAdvisory "GHSA-old" "old-pkg" (Just "2026-01-01T00:00:00Z"))]
+                (dbFile, logged) <- captureJsonLog $ \logEnv -> compileZipWith outDir logEnv zipData testQuietTime
+                logged `shouldSatisfy` T.isInfixOf "last changed "
+                logged `shouldSatisfy` (not . T.isInfixOf "so the source has gone quiet")
+                logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
+                removeFile dbFile
 
     describe "osvToRow" $ do
         let rowFor upper = osvToRow (ExtractedOsv "pkg" "npm" "GHSA-row" (Just "1.0.0") upper (Just 5.9) (Just 0.25))
@@ -674,16 +683,16 @@ datedAdvisory advisoryId pkg mModified =
             )
         )
 
-compileZip :: LByteString -> QuietTime -> IO FilePath
-compileZip zipData quietTime = newTestLogEnv >>= \logEnv -> compileZipWith logEnv zipData quietTime
+compileZip :: FilePath -> LByteString -> QuietTime -> IO FilePath
+compileZip outDir zipData quietTime = newTestLogEnv >>= \logEnv -> compileZipWith outDir logEnv zipData quietTime
 
-compileZipWith :: LogEnv -> LByteString -> QuietTime -> IO FilePath
-compileZipWith logEnv zipData quietTime = do
+compileZipWith :: FilePath -> LogEnv -> LByteString -> QuietTime -> IO FilePath
+compileZipWith outDir logEnv zipData quietTime = do
     epssData <- LBS.readFile epssFixtureFile
     (metrics, _) <- recordingAdvisoryCompileMetricsPort
     withStub status200 zipData $ \stub ->
         withStub status200 epssData $ \epssStub ->
-            runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") quietTime)
+            runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") quietTime)
 
 packagesOf :: FilePath -> IO [Text]
 packagesOf dbFile = withConnection dbFile $ \conn ->

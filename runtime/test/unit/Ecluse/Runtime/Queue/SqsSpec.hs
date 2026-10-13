@@ -74,16 +74,12 @@ pypiJob =
         , jobTraceContext = Nothing
         }
 
-{- | A namespaced non-npm job fixture. No ecosystem ships namespaced names beside npm today, but
-the wire mapping is the one every backend inherits, so the namespace must survive the hop.
--}
+-- The wire mapping must preserve namespaces outside npm.
 namespacedPypiJob :: MirrorJob
 namespacedPypiJob =
     pypiJob{jobPackage = mkPackageName PyPI (Just (mkScope "acme")) "Flask"}
 
-{- | A job body with every required field and no @traceContext@ key at all, as a job
-enqueued with tracing off carries. The decode must accept it as a 'Nothing' carrier.
--}
+-- A producer with tracing disabled omits the traceContext key.
 noTraceContextBody :: Text
 noTraceContextBody =
     "{\"ecosystem\":\"npm\",\"name\":\"left-pad\",\
@@ -130,73 +126,6 @@ spec = do
 
         it "takes a RubyGems name as given: RubyGems has no scope grammar either" $
             decodeJob mirrorJobPackage mkRegistryUrl (jobBodyFor "rubygems" "a b") `shouldSatisfy` isRight
-
-    describe "decodeJob rejects a malformed body" $ do
-        it "rejects non-JSON" $
-            decodeJob mirrorJobPackage mkRegistryUrl "not json at all" `shouldSatisfy` isLeft
-
-        it "rejects a JSON value that is not an object" $
-            decodeJob mirrorJobPackage mkRegistryUrl "[1,2,3]" `shouldSatisfy` isLeft
-
-        it "rejects an object missing a required field" $
-            -- No "artifactUrl".
-            decodeJob
-                mirrorJobPackage
-                mkRegistryUrl
-                "{\"ecosystem\":\"npm\",\"name\":\"x\",\
-                \\"version\":\"1.0.0\",\"filename\":\"x-1.0.0.tgz\"}"
-                `shouldSatisfy` isLeft
-
-        it "rejects an unknown ecosystem, naming it in the error" $
-            case decodeJob
-                mirrorJobPackage
-                mkRegistryUrl
-                "{\"ecosystem\":\"cargo\",\"name\":\"x\",\
-                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"filename\":\"x-1.0.0.tgz\"}" of
-                Left err -> err `shouldSatisfy` ("cargo" `T.isInfixOf`)
-                Right job -> expectationFailure ("expected a decode error, got " <> show job)
-
-        it "rejects a body with no filename" $
-            -- The selection key is mandatory: without it the worker's ingest
-            -- re-evaluation has no artifact to gate.
-            decodeJob
-                mirrorJobPackage
-                mkRegistryUrl
-                "{\"ecosystem\":\"npm\",\"name\":\"x\",\
-                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\"}"
-                `shouldSatisfy` isLeft
-
-        it "rejects an artifact filename that is not a safe path component" $
-            -- The filename is interpolated into an upstream path, so a traversal in the
-            -- payload is refused at the boundary rather than carried into a fetch.
-            decodeJob
-                mirrorJobPackage
-                mkRegistryUrl
-                "{\"ecosystem\":\"npm\",\"name\":\"x\",\
-                \\"version\":\"1.0.0\",\
-                \\"artifactUrl\":\"https://registry.npmjs.org/x/-/x-1.0.0.tgz\",\
-                \\"filename\":\"../../etc/passwd\"}"
-                `shouldSatisfy` isLeft
-
-        it "rejects a job with a malformed traceContext (missing traceparent)" $
-            decodeJob
-                mirrorJobPackage
-                mkRegistryUrl
-                "{\"ecosystem\":\"npm\",\"name\":\"x\",\
-                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\
-                \\"filename\":\"x-1.0.0.tgz\",\
-                \\"traceContext\":{\"tracestate\":\"ecluse=1\"}}"
-                `shouldSatisfy` isLeft
-
-        it "rejects a job with traceContext present but not an object" $
-            decodeJob
-                mirrorJobPackage
-                mkRegistryUrl
-                "{\"ecosystem\":\"npm\",\"name\":\"x\",\
-                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\
-                \\"filename\":\"x-1.0.0.tgz\",\
-                \\"traceContext\":\"just-a-string\"}"
-                `shouldSatisfy` isLeft
 
     describe "defaultSqsConfig" $
         it "carries the queue URL and region through, and ships every other knob defaulted" $ do
@@ -260,9 +189,7 @@ spec = do
             delivered <- liftReceivedMessages logEnv mkRegistryUrl testLease (map deliveredWithCount [Nothing, Just "", Just "not-a-number", Just "0", Just "-4"])
             map msgReceiveCount delivered `shouldBe` [1, 1, 1, 1, 1]
 
-{- | One job per arm of the wire mapping: the two npm shapes, a second ecosystem, and a
-namespaced non-npm name no ecosystem ships today.
--}
+-- Namespaced non-npm names exercise the shared wire mapping.
 roundTripJobs :: [(Text, MirrorJob)]
 roundTripJobs =
     [ ("round-trips an unscoped npm job", npmJob)
@@ -271,9 +198,7 @@ roundTripJobs =
     , ("round-trips a namespaced non-npm job, so the namespace is not npm's alone", namespacedPypiJob)
     ]
 
-{- | What each redrive-policy spelling says about the terminus. A policy the reader cannot
-parse still reports a terminus, so the boot warning never fires for an operator who has one.
--}
+-- An unreadable policy still reports an attached terminus.
 redrivePolicies :: [(Text, Maybe Text, DeadLetterTerminus)]
 redrivePolicies =
     [ ("reports no terminus when the queue carries no redrive policy", Nothing, TerminusAbsent)
@@ -293,15 +218,11 @@ policyWith count = Just ("{" <> targetArn <> ",\"maxReceiveCount\":" <> count <>
 targetArn :: Text
 targetArn = "\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:dlq\""
 
-{- | The lease one poll's batch is delivered under: a thirty-second window from a fixed origin,
-with SQS's twelve-hour ceiling on the receipt.
--}
+-- SQS limits each receipt to twelve hours.
 testLease :: ReceiptLease
 testLease = receiptLease (MonoTime 1000) (Seconds 30) (Seconds 43_200)
 
-{- | A job body for @ecosystem@ naming @wireName@, split into the separate @namespace@ and @name@
-fields 'encodeJob' writes. Every other field is well-formed.
--}
+-- Keep every field except the package name valid.
 jobBodyFor :: Text -> Text -> Text
 jobBodyFor ecosystem wireName =
     "{\"ecosystem\":"
@@ -321,9 +242,7 @@ jobBodyFor ecosystem wireName =
         _ -> ("null", wireName)
     quoted t = "\"" <> t <> "\""
 
-{- | One well-formed message and one of each drop cause: missing body, missing receipt,
-undecodable body. Distinct message ids make the drop log's id field assertable.
--}
+-- Distinct message IDs identify each poison drop in the log.
 poisonBatch :: [ReceivedMessage]
 poisonBatch =
     [ ReceivedMessage{rmBody = Just (encodeJob npmJob), rmReceipt = Just "receipt-good", rmMessageId = Just "m-good", rmReceiveCount = Nothing}

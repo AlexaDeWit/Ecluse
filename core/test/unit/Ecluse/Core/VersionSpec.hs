@@ -12,7 +12,7 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
-import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Ecosystem (Ecosystem (..), parseEcosystem)
 import Ecluse.Core.Version
 import Ecluse.Test.Version (genGem, genNpm, genPyPI)
 
@@ -128,12 +128,26 @@ spec = do
     -- The differential check against node-semver, Python packaging, and Ruby Gem::Version.
     -- Regenerate the fixture with scripts/gen-version-fixtures.sh: it keeps this test offline.
     rows <- runIO loadFixture
+    describe "reference fixture validation" $ do
+        it "ignores only comments and blank lines" $
+            parseFixture "  # comment\n\n npm|1|2|LT\npypi|1|2|LT\nrubygems|1|2|LT"
+                `shouldBe` Right [Row Npm "1" "2" LT, Row PyPI "1" "2" LT, Row RubyGems "1" "2" LT]
+        for_ ["npm|1|2", "cargo|1|2|LT", "npm||2|LT", "npm|1|2|BAD"] $ \bad ->
+            it ("reports the malformed row's line: " <> toString bad) $
+                parseFixture ("# comment\n\n" <> bad) `shouldBe` Left (MalformedRow 3 bad)
+        for_ [Npm, PyPI, RubyGems] $ \missing ->
+            it ("rejects missing " <> show missing <> " comparisons") $ do
+                let complete = [Row Npm "1" "2" LT, Row PyPI "1" "2" LT, Row RubyGems "1" "2" LT]
+                requireEcosystems (filter (\(Row eco _ _ _) -> eco /= missing) complete)
+                    `shouldBe` Left (MissingEcosystem missing)
     describe "compareVersions agrees with the reference oracles" $ do
         it "the fixture is populated" $
             length rows `shouldSatisfy` (> 100)
         for_ [Npm, PyPI, RubyGems] $ \eco ->
-            it (show eco <> " ordering matches the reference") $
-                mismatches (filter (\(Row e _ _ _) -> e == eco) rows) `shouldBe` []
+            it (show eco <> " ordering matches the reference") $ do
+                let comparisons = filter (\(Row e _ _ _) -> e == eco) rows
+                comparisons `shouldSatisfy` (not . null)
+                mismatches comparisons `shouldBe` []
 
     describe "compareVersions" $ do
         let cmp eco a b = compareVersions (mkVersion eco a) (mkVersion eco b)
@@ -395,26 +409,32 @@ mismatches = mapMaybe check
         let got = compareVersions (mkVersion eco a) (mkVersion eco b)
          in if got == Just expected then Nothing else Just (a, b, expected, got)
 
-{- | Load and parse the committed fixture (path relative to the package root,
-which is the working directory Cabal runs the tests from).
--}
+data FixtureError = MalformedRow Int Text | MissingEcosystem Ecosystem
+    deriving stock (Eq, Show)
+
 loadFixture :: IO [Row]
-loadFixture = mapMaybe parseRow . lines . decodeUtf8 <$> readFileBS fixturePath
+loadFixture = do
+    bytes <- readFileBS "core/test/unit/fixtures/version-ordering.txt"
+    either (fail . show) pure (parseFixture (decodeUtf8 bytes))
+
+parseFixture :: Text -> Either FixtureError [Row]
+parseFixture input = traverse parseIndexed (zip [1 ..] (lines input)) >>= requireEcosystems . catMaybes
   where
-    fixturePath = "core/test/unit/fixtures/version-ordering.txt"
+    parseIndexed (number, line)
+        | T.null stripped || T.isPrefixOf "#" stripped = Right Nothing
+        | otherwise = maybe (Left (MalformedRow number line)) (Right . Just) (parseRow stripped)
+      where
+        stripped = T.strip line
+
+requireEcosystems :: [Row] -> Either FixtureError [Row]
+requireEcosystems rows = do
+    for_ [Npm, PyPI, RubyGems] $ \eco ->
+        unless (any (\(Row e _ _ _) -> e == eco) rows) (Left (MissingEcosystem eco))
+    pure rows
 
 parseRow :: Text -> Maybe Row
-parseRow line
-    | T.isPrefixOf "#" (T.strip line) = Nothing
-    | otherwise = case T.splitOn "|" line of
-        [e, a, b, o] -> Row <$> parseEco e <*> pure a <*> pure b <*> parseOrd o
-        _ -> Nothing
-
-parseEco :: Text -> Maybe Ecosystem
-parseEco = \case
-    "npm" -> Just Npm
-    "pypi" -> Just PyPI
-    "rubygems" -> Just RubyGems
+parseRow line = case T.splitOn "|" line of
+    [e, a, b, o] | not (T.null a || T.null b) -> Row <$> parseEcosystem e <*> pure a <*> pure b <*> parseOrd o
     _ -> Nothing
 
 parseOrd :: Text -> Maybe Ordering

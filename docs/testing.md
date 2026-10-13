@@ -1654,7 +1654,7 @@ Live protocol checks use `test/smoke/Ecluse/Core/Registry/<Ecosystem>SmokeSpec.h
 the [npm](../test/smoke/Ecluse/Core/Registry/NpmSmokeSpec.hs) and
 [PyPI](../test/smoke/Ecluse/Core/Registry/PyPISmokeSpec.hs) examples. PyPI reads the live Simple index
 and one wheel, then verifies its advertised integrity. Bounds, identity and protocol failures fail
-the case. Only transport unavailability makes it pending.
+the case. For shared metadata reads, only timeouts and unreachable peers make the case pending.
 Smoke coverage never replaces a gating case.
 
 ## OSV advisory fixtures
