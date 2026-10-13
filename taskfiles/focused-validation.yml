@@ -120,6 +120,51 @@ tasks:
           SUITE: "core"
           SEED: "702"
           ASSERTION_KIND: "reader-field"
+      - task: perturbation
+        vars:
+          CASE: "queue-missing-filename"
+          PATCH: "queue-missing-filename"
+          SELECTION: "rejects a missing legacy filename after validating the URL"
+          EXPECTED: "rejects a missing legacy filename after validating the URL"
+          SUITE: "queue"
+          SEED: "801"
+          ASSERTION_KIND: "queue-field"
+      - task: perturbation
+        vars:
+          CASE: "queue-schema1-missing-traceparent"
+          PATCH: "queue-missing-traceparent"
+          SELECTION: "schema 1 rejects missing traceparent at its field"
+          EXPECTED: "schema 1 rejects missing traceparent at its field"
+          SUITE: "queue"
+          SEED: "802"
+          ASSERTION_KIND: "queue-field"
+      - task: perturbation
+        vars:
+          CASE: "queue-schema1-nonobject-trace"
+          PATCH: "queue-nonobject-trace"
+          SELECTION: "schema 1 rejects non-object traceContext at its field"
+          EXPECTED: "schema 1 rejects non-object traceContext at its field"
+          SUITE: "queue"
+          SEED: "803"
+          ASSERTION_KIND: "queue-field"
+      - task: perturbation
+        vars:
+          CASE: "queue-schema2-missing-traceparent"
+          PATCH: "queue-missing-traceparent"
+          SELECTION: "schema 2 rejects missing traceparent at its field"
+          EXPECTED: "schema 2 rejects missing traceparent at its field"
+          SUITE: "queue"
+          SEED: "804"
+          ASSERTION_KIND: "queue-field"
+      - task: perturbation
+        vars:
+          CASE: "queue-schema2-nonobject-trace"
+          PATCH: "queue-nonobject-trace"
+          SELECTION: "schema 2 rejects non-object traceContext at its field"
+          EXPECTED: "schema 2 rejects non-object traceContext at its field"
+          SUITE: "queue"
+          SEED: "805"
+          ASSERTION_KIND: "queue-field"
   preflight:
     cmds:
       - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/preflight/status" "{{.EVIDENCE}}/preflight/run.log" task --exit-code --dir "$FOCUSED_CHECKOUT" --taskfile "{{.HARNESS}}/taskfiles/focused-validation.yml" preflight-checks
@@ -141,6 +186,9 @@ tasks:
         vars: {BUILD: '{{.EVIDENCE}}/build/focused'}
   controls:
     cmds:
+      - task: core
+        vars: {NAME: queue-controls, SELECTION: 'decodeJob field refusals', SEED: '800'}
+      - bash "{{.LEAVES}}/unit-controls.sh" "{{.EVIDENCE}}/queue-controls" "{{.PATCHES}}/required-queue-controls.txt"
       - task: core
         vars:
           NAME: "npm-reader-control"
@@ -236,7 +284,7 @@ tasks:
       EXPECTED: '{{.EXPECTED}}'
     cmds:
       - defer: bash "{{.LEAVES}}/restore.sh" "{{.RESULT}}"
-      - bash "{{.LEAVES}}/patch.sh" "{{.PATCHES}}/{{.CASE}}.patch" "{{.RESULT}}"
+      - bash "{{.LEAVES}}/patch.sh" "{{.PATCHES}}/{{.PATCH | default .CASE}}.patch" "{{.RESULT}}"
       - task: '{{.SUITE}}-build'
         vars: {BUILD: '{{.RESULT}}/build'}
       - bash "{{.LEAVES}}/working-tree.sh" "{{.RESULT}}/runtime" "{{.RESULT}}/applied.patch"
@@ -248,6 +296,27 @@ tasks:
       - task: '{{.SUITE}}'
         vars: {NAME: '{{.CASE}}-restored', SELECTION: '{{.SELECTION}}', SEED: '{{.SEED | default "301"}}', ASSERTION_KIND: '{{.ASSERTION_KIND | default "expectation"}}'}
       - bash "{{.HARNESS}}/scripts/process-status.sh" "{{.RESULT}}/qualification-status"
+  queue-build:
+    cmds:
+      - task: core-build
+        vars: {BUILD: '{{.BUILD}}'}
+  queue-perturbed:
+    cmds:
+      - bash "{{.LEAVES}}/working-tree.sh" "{{.RESULT}}/valid-controls" "{{.RESULT}}/applied.patch"
+      - task: core-perturbed
+        vars: {RESULT: '{{.RESULT}}/valid-controls', SELECTION: 'control decodes', EXPECTED: pass, SEED: '{{.SEED}}', ASSERTION_KIND: expectation}
+      - bash "{{.HARNESS}}/scripts/process-status.sh" "{{.RESULT}}/valid-controls/qualification-status"
+      - bash "{{.LEAVES}}/unit-controls.sh" "{{.RESULT}}/valid-controls" "{{.PATCHES}}/required-queue-valid-controls.txt"
+      - bash "{{.LEAVES}}/working-tree.sh" "{{.RESULT}}/runtime" "{{.RESULT}}/applied.patch"
+      - task: core-perturbed
+        vars: {RESULT: '{{.RESULT}}', SELECTION: '{{.SELECTION}}', EXPECTED: '{{.EXPECTED}}', SEED: '{{.SEED}}', ASSERTION_KIND: queue-field}
+  queue:
+    cmds:
+      - task: core
+        vars: {NAME: '{{.NAME}}-valid', SELECTION: 'control decodes', SEED: '{{.SEED}}', ASSERTION_KIND: expectation}
+      - bash "{{.LEAVES}}/unit-controls.sh" "{{.EVIDENCE}}/{{.NAME}}-valid" "{{.PATCHES}}/required-queue-valid-controls.txt"
+      - task: core
+        vars: {NAME: '{{.NAME}}', SELECTION: '{{.SELECTION}}', SEED: '{{.SEED}}', ASSERTION_KIND: queue-field}
   core-build:
     cmds:
       - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.BUILD}}/status" "{{.BUILD}}/build.log" cabal build ecluse-core-unit --builddir=dist-focused --ghc-options=-rtsopts

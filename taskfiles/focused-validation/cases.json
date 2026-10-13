@@ -116,5 +116,50 @@
     "suite": "core",
     "seed": 702,
     "assertionKind": "reader-field"
+  },
+  {
+    "name": "queue-missing-filename",
+    "patch": "queue-missing-filename",
+    "selection": "rejects a missing legacy filename after validating the URL",
+    "expected": "rejects a missing legacy filename after validating the URL",
+    "suite": "queue",
+    "seed": 801,
+    "assertionKind": "queue-field"
+  },
+  {
+    "name": "queue-schema1-missing-traceparent",
+    "patch": "queue-missing-traceparent",
+    "selection": "schema 1 rejects missing traceparent at its field",
+    "expected": "schema 1 rejects missing traceparent at its field",
+    "suite": "queue",
+    "seed": 802,
+    "assertionKind": "queue-field"
+  },
+  {
+    "name": "queue-schema1-nonobject-trace",
+    "patch": "queue-nonobject-trace",
+    "selection": "schema 1 rejects non-object traceContext at its field",
+    "expected": "schema 1 rejects non-object traceContext at its field",
+    "suite": "queue",
+    "seed": 803,
+    "assertionKind": "queue-field"
+  },
+  {
+    "name": "queue-schema2-missing-traceparent",
+    "patch": "queue-missing-traceparent",
+    "selection": "schema 2 rejects missing traceparent at its field",
+    "expected": "schema 2 rejects missing traceparent at its field",
+    "suite": "queue",
+    "seed": 804,
+    "assertionKind": "queue-field"
+  },
+  {
+    "name": "queue-schema2-nonobject-trace",
+    "patch": "queue-nonobject-trace",
+    "selection": "schema 2 rejects non-object traceContext at its field",
+    "expected": "schema 2 rejects non-object traceContext at its field",
+    "suite": "queue",
+    "seed": 805,
+    "assertionKind": "queue-field"
   }
 ]

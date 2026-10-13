@@ -1,0 +1,5 @@
+--- a/core/src/Ecluse/Core/Queue.hs
++++ b/core/src/Ecluse/Core/Queue.hs
+@@ -136 +136 @@
+-                rawFilename <- o .: "filename"
++                rawFilename <- o .:? "filename" .!= "thing-1.0.0.tgz"

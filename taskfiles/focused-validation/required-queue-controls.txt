@@ -1,0 +1,9 @@
+schema 1 control decodes
+schema 2 control decodes
+rejects a missing legacy filename after validating the URL
+schema 1 rejects unsafe filename at its field
+schema 1 rejects missing traceparent at its field
+schema 1 rejects non-object traceContext at its field
+schema 2 rejects unsafe filename at its field
+schema 2 rejects missing traceparent at its field
+schema 2 rejects non-object traceContext at its field

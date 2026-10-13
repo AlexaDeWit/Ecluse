@@ -54,3 +54,11 @@ Clean and restored controls must report one passing example and 2,000 successful
 A rejected mutation must report one failed example, the expected property name, a Hedgehog failure, and the emitted-field marker.
 Build errors, missing selections, pending cases and runtime timeouts cannot satisfy that check.
 The complete integration runs still require worker `native-002`, now with the acknowledgement check from the final test correction.
+
+The queue controls use three production-decoder patches for #1326.
+They allow a missing legacy filename, a missing traceparent, or a string traceContext, respectively.
+Five separate mutation runs cover the legacy filename example and both schema variants of each trace example.
+Each patched decoder must pass both valid-control examples before the named rejection runs.
+The expected failure must show that the decoder returned a MirrorJob instead of refusing the intended field.
+The fixtures, URL validation, filename safety check and other trace fields remain unchanged.
+Restored controls rerun both valid examples and the selected rejection. The clean group independently requires all nine field-control identities.

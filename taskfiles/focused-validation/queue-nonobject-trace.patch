@@ -1,0 +1,8 @@
+--- a/core/src/Ecluse/Core/Queue.hs
++++ b/core/src/Ecluse/Core/Queue.hs
+@@ -161,2 +161,3 @@
+-parseTraceContext = withObject "RemoteSpanContext" $ \t ->
+-    RemoteSpanContext <$> t .: "traceparent" <*> t .: "tracestate"
++parseTraceContext (Aeson.String _) = pure (RemoteSpanContext "" "")
++parseTraceContext value =
++    withObject "RemoteSpanContext" (\t -> RemoteSpanContext <$> t .: "traceparent" <*> t .: "tracestate") value

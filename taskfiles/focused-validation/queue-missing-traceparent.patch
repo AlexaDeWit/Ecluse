@@ -1,0 +1,5 @@
+--- a/core/src/Ecluse/Core/Queue.hs
++++ b/core/src/Ecluse/Core/Queue.hs
+@@ -162 +162 @@
+-    RemoteSpanContext <$> t .: "traceparent" <*> t .: "tracestate"
++    RemoteSpanContext <$> (t .:? "traceparent" .!= "") <*> t .: "tracestate"
