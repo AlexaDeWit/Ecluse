@@ -21,6 +21,11 @@ tasks:
       - |
         v="$(cabal info ./ecluse.cabal 2>/dev/null | sed -n -E 's/^\* ecluse-([0-9.]+).*/\1/p' | head -n1)"
         [ -n "$v" ] && echo "$v" || { echo "task version: could not read from 'cabal info'" >&2; exit 1; }
+  release-validate-version:
+    desc: Check the release version and print canonical image and Git tags
+    silent: true
+    cmds:
+      - bash scripts/release-gate.sh "$(task version)"
   tag:
     desc: Create the signed tag from the cabal version (RELEASE_TAG=/RELEASE_COMMIT= override it)
     silent: true
