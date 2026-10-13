@@ -369,6 +369,8 @@ integrationObligations =
         , "integration/worker/native-007"
         , "integration/worker/native-008"
         , "integration/worker/native-009"
+        , "integration/worker/native-010"
+        , "integration/worker/native-011"
         ]
     , required
         "integration/pilot"
