@@ -111,5 +111,7 @@ Use the mutually exclusive `residency_diagnostic` dispatch input on
 `measure/refactor-residency-diagnostic`. Shared hosts permit static checks only.
 The static controls inspect the real Task include tree, poison sibling variables,
 check exact nested snapshots and confine previews to a scratch fixture.
+They also execute the measure target against a Bash recorder. This checks
+returned paths and original arguments without running a native sampler.
 The runtime controls exercise the complete audit, refresh outer digests for
 semantic mutations and require a restored positive fixture.

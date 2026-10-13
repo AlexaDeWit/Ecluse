@@ -123,4 +123,59 @@ grep -Fq "HEAD HEAD^{tree} > '$native_root/evidence/build-B/source.txt'" "$nativ
 sed "s|mkdir -p '$evidence_root/overlay'|mkdir -p '/evidence/overlay'|" "$report_root/run.txt.commands" > "$report_root/escaped.commands"
 if verify_paths "$report_root/escaped.commands" "$diagnostic_root" "$repository_root" > "$report_root/negative.log" 2>&1; then fail 'escaped command accepted'; fi
 grep -Fq 'resolved path escapes diagnostic root: /evidence/overlay' "$report_root/negative.log" || fail 'path control failed for an unrelated reason'
-printf 'Validated %s residency summaries, sibling namespaces, exact argv, eight helpers, twelve children and twenty-four nested snapshots. No target command executed.\nEvidence: %s\n' "$summary_count" "$report_root"
+# Execute the real measure target with a recorder in the contained include tree.
+mkdir -p "$preview/scripts"
+cp "$repository_root/scripts/"{process-capture,process-group}.sh "$preview/scripts/"
+execution_root="$report_root/execution"
+execution_source="$execution_root/source-A"
+mkdir -p "$execution_source/bench/corpus/npm" "$execution_root/evidence/build-A"
+recorder="$execution_root/native recorder"
+cat > "$recorder" <<'RECORDER'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\0' "$@" > "$RES_DIAG_CONTROL_ARGV_LOG"
+printf '{"control":"argv"}\n'
+printf 'native control stderr\n' >&2
+RECORDER
+chmod +x "$recorder"
+printf '%s\n' "$recorder" > "$execution_root/evidence/build-A/binary-path.txt"
+for probe in s3-heavy webpack-shared lodash-publish; do
+  corpus=bench/corpus/npm/webpack.full.json
+  [ "$probe" != s3-heavy ] || corpus=bench/corpus/npm/aws-sdk-client-s3.full.json
+  [ "$probe" != lodash-publish ] || corpus=bench/corpus/npm/lodash.full.json
+  printf 'original public bytes\n' > "$execution_source/$corpus"
+  child_directory="$execution_root/evidence/child-A1-$probe"
+  generation_directory="$execution_root/evidence/generate-A1-$probe"
+  mkdir -p "$child_directory" "$generation_directory/live"
+  private="$generation_directory/live/private input \$literal \"quoted\" *.json"
+  printf 'original private bytes\n' > "$private"
+  printf '%s\n' "$private" "$corpus" > "$generation_directory/returned.txt"
+  args=(--metadata-probe Shared "$corpus" +RTS -T -N1 -RTS)
+  if [ "$probe" != webpack-shared ]; then
+    args=(--metadata-merge-probe "$private" "$corpus" +RTS -F1 -A128k -RTS "$corpus" +RTS -T -N1 -RTS)
+  fi
+  printf '%s\0' "${args[@]}" > "$child_directory/expected.argv"
+  printf '%s\n' "$recorder" "${args[@]}" > "$child_directory/expected.command"
+  RES_DIAG_CONTROL_ARGV_LOG="$child_directory/observed.argv" task --dir "$preview" \
+    performance:residency-diagnostics:measure "RES_DIAG_ROOT=$execution_root" RES_DIAG_SIDE=A RES_DIAG_PASS=A1 "RES_DIAG_PROBE=$probe" \
+    > "$child_directory/task.log" 2>&1
+  cmp "$child_directory/expected.argv" "$child_directory/observed.argv" || fail 'executed native argv differs'
+  cmp "$child_directory/expected.command" "$child_directory/command.txt" || fail 'recorded native command differs'
+  cmp "$child_directory/inputs-before.sha256" "$child_directory/inputs-after.sha256" || fail 'executed input bytes changed'
+  [ "$(cat "$child_directory/native.status")" = 0 ] || fail 'recorder status differs'
+  [ "$(cat "$child_directory/native.json")" = '{"control":"argv"}' ] || fail 'stdout identity differs'
+  [ "$(cat "$child_directory/native.stderr")" = 'native control stderr' ] || fail 'stderr identity differs'
+done
+
+# A malformed returned list must fail before the recorder starts.
+rejected_child="$execution_root/evidence/child-A2-s3-heavy"
+rejected_generation="$execution_root/evidence/generate-A2-s3-heavy"
+mkdir -p "$rejected_child" "$rejected_generation"
+printf '%s\n' "$private" > "$rejected_generation/returned.txt"
+if RES_DIAG_CONTROL_ARGV_LOG="$rejected_child/observed.argv" task --dir "$preview" \
+  performance:residency-diagnostics:measure "RES_DIAG_ROOT=$execution_root" RES_DIAG_SIDE=A RES_DIAG_PASS=A2 RES_DIAG_PROBE=s3-heavy \
+  > "$rejected_child/task.log" 2>&1; then fail 'a merge input with one path passed'; fi
+test ! -e "$rejected_child/observed.argv" || fail 'the recorder ran before input count qualification'
+test ! -e "$rejected_child/native.status" || fail 'capture started before input count qualification'
+
+printf 'Validated %s residency summaries, sibling namespaces, exact argv, eight helpers, twelve children and twenty-four nested snapshots. The preview executes no target command. Three contained argv recorders pass, and one malformed-input control stops before capture.\nEvidence: %s\n' "$summary_count" "$report_root"

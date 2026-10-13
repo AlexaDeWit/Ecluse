@@ -211,6 +211,7 @@ tasks:
     dir: '{{.RES_DIAG_SOURCE_DIR}}'
     cmds:
       - |
+        bash <<'RES_DIAG_BASH'
         set -euo pipefail
         executable="$(cat '{{.RES_DIAG_BUILD_DIR}}/binary-path.txt')"
         {{if eq .RES_DIAG_PROBE "webpack-shared"}}
@@ -228,6 +229,7 @@ tasks:
         bash '{{.ROOT_DIR}}/scripts/process-capture.sh' '{{.RES_DIAG_CHILD_DIR}}/native.status' '{{.RES_DIAG_CHILD_DIR}}/native.json' --stderr '{{.RES_DIAG_CHILD_DIR}}/native.stderr' timeout --signal=TERM --kill-after=30s 10m "$executable" "${args[@]}"
         printf '%s end child {{.RES_DIAG_PASS}}-{{.RES_DIAG_PROBE}} status=%s\n' "$(date --iso-8601=ns)" "$(cat '{{.RES_DIAG_CHILD_DIR}}/native.status')" | tee -a '{{.RES_DIAG_CHILD_DIR}}/events.txt' >> '{{.RES_DIAG_EVIDENCE}}/order.txt'
         sha256sum "${inputs[@]}" > '{{.RES_DIAG_CHILD_DIR}}/inputs-after.sha256'
+        RES_DIAG_BASH
 
   format:
     cmds:
