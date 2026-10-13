@@ -100,5 +100,21 @@
     "selection": "keeps a blocked job's own receipt hidden well past its original window",
     "expected": "pass",
     "suite": "core"
+  },
+  {
+    "name": "npm-reader-field",
+    "selection": "emits json-stream's fields and outcome for generated packuments",
+    "expected": "emits json-stream's fields and outcome for generated packuments",
+    "suite": "core",
+    "seed": 701,
+    "assertionKind": "reader-field"
+  },
+  {
+    "name": "pypi-reader-field",
+    "selection": "emits json-stream's fields and outcome for generated Simple indexes, or reads past its parse error",
+    "expected": "emits json-stream's fields and outcome for generated Simple indexes, or reads past its parse error",
+    "suite": "core",
+    "seed": 702,
+    "assertionKind": "reader-field"
   }
 ]

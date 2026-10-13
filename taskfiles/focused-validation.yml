@@ -104,6 +104,22 @@ tasks:
           SELECTION: "keeps a blocked job's own receipt hidden well past its original window"
           EXPECTED: pass
           SUITE: core
+      - task: perturbation
+        vars:
+          CASE: "npm-reader-field"
+          SELECTION: "emits json-stream's fields and outcome for generated packuments"
+          EXPECTED: "emits json-stream's fields and outcome for generated packuments"
+          SUITE: "core"
+          SEED: "701"
+          ASSERTION_KIND: "reader-field"
+      - task: perturbation
+        vars:
+          CASE: "pypi-reader-field"
+          SELECTION: "emits json-stream's fields and outcome for generated Simple indexes, or reads past its parse error"
+          EXPECTED: "emits json-stream's fields and outcome for generated Simple indexes, or reads past its parse error"
+          SUITE: "core"
+          SEED: "702"
+          ASSERTION_KIND: "reader-field"
   preflight:
     cmds:
       - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/preflight/status" "{{.EVIDENCE}}/preflight/run.log" task --exit-code --dir "$FOCUSED_CHECKOUT" --taskfile "{{.HARNESS}}/taskfiles/focused-validation.yml" preflight-checks
@@ -125,6 +141,20 @@ tasks:
         vars: {BUILD: '{{.EVIDENCE}}/build/focused'}
   controls:
     cmds:
+      - task: core
+        vars:
+          NAME: "npm-reader-control"
+          SELECTION: "emits json-stream's fields and outcome for generated packuments"
+          SEED: "701"
+          ASSERTION_KIND: "reader-field"
+      - bash "{{.LEAVES}}/unit-controls.sh" "{{.EVIDENCE}}/npm-reader-control" "{{.PATCHES}}/required-npm-reader-controls.txt"
+      - task: core
+        vars:
+          NAME: "pypi-reader-control"
+          SELECTION: "emits json-stream's fields and outcome for generated Simple indexes, or reads past its parse error"
+          SEED: "702"
+          ASSERTION_KIND: "reader-field"
+      - bash "{{.LEAVES}}/unit-controls.sh" "{{.EVIDENCE}}/pypi-reader-control" "{{.PATCHES}}/required-pypi-reader-controls.txt"
       - task: core
         vars: {NAME: lease-control, SELECTION: Ecluse.Core.Worker.Lease, SEED: '101'}
       - task: core
@@ -182,11 +212,12 @@ tasks:
     env:
       SELECTION: '{{.SELECTION}}'
       SEED: '{{.SEED | default "301"}}'
+      ASSERTION_KIND: '{{.ASSERTION_KIND | default "expectation"}}'
     cmds:
       - bash "{{.LEAVES}}/identity.sh" "{{.EVIDENCE}}/{{.NAME}}"
       - 'printf "%s\n" "$SELECTION" "$SEED" > "{{.EVIDENCE}}/{{.NAME}}/selection-and-seed.txt"'
       - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/{{.NAME}}/status" "{{.EVIDENCE}}/{{.NAME}}/run.log" timeout 180 "$(cabal list-bin ecluse-core-unit --builddir=dist-focused --ghc-options=-rtsopts)" --match "$SELECTION" --seed "$SEED" --format=specdoc --no-color +RTS -N1 -RTS
-      - bash "{{.LEAVES}}/assertion.sh" "{{.EVIDENCE}}/{{.NAME}}" pass
+      - bash "{{.LEAVES}}/assertion.sh" "{{.EVIDENCE}}/{{.NAME}}" pass "$ASSERTION_KIND"
   integration:
     env:
       ECLTEST_SOURCE: '{{.FOCUSED_SOURCE}}'
@@ -210,12 +241,12 @@ tasks:
         vars: {BUILD: '{{.RESULT}}/build'}
       - bash "{{.LEAVES}}/working-tree.sh" "{{.RESULT}}/runtime" "{{.RESULT}}/applied.patch"
       - task: '{{.SUITE}}-perturbed'
-        vars: {RESULT: '{{.RESULT}}', NAME: '{{.CASE}}', SELECTION: '{{.SELECTION}}', EXPECTED: '{{.EXPECTED}}'}
+        vars: {RESULT: '{{.RESULT}}', NAME: '{{.CASE}}', SELECTION: '{{.SELECTION}}', EXPECTED: '{{.EXPECTED}}', SEED: '{{.SEED | default "401"}}', ASSERTION_KIND: '{{.ASSERTION_KIND | default "expectation"}}'}
       - bash "{{.LEAVES}}/restore.sh" "{{.RESULT}}"
       - task: '{{.SUITE}}-build'
         vars: {BUILD: '{{.RESULT}}/restored-build'}
       - task: '{{.SUITE}}'
-        vars: {NAME: '{{.CASE}}-restored', SELECTION: '{{.SELECTION}}'}
+        vars: {NAME: '{{.CASE}}-restored', SELECTION: '{{.SELECTION}}', SEED: '{{.SEED | default "301"}}', ASSERTION_KIND: '{{.ASSERTION_KIND | default "expectation"}}'}
       - bash "{{.HARNESS}}/scripts/process-status.sh" "{{.RESULT}}/qualification-status"
   core-build:
     cmds:
@@ -229,10 +260,12 @@ tasks:
     env:
       SELECTION: '{{.SELECTION}}'
       EXPECTED: '{{.EXPECTED}}'
+      SEED: '{{.SEED | default "401"}}'
+      ASSERTION_KIND: '{{.ASSERTION_KIND | default "expectation"}}'
     cmds:
-      - 'printf "%s\n" "$SELECTION" 401 > "{{.RESULT}}/selection-and-seed.txt"'
-      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.RESULT}}/status" "{{.RESULT}}/run.log" timeout 180 "$(cabal list-bin ecluse-core-unit --builddir=dist-focused --ghc-options=-rtsopts)" --match "$SELECTION" --seed 401 --no-color +RTS -N1 -RTS
-      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.RESULT}}/qualification-status" "{{.RESULT}}/qualification.log" bash "{{.LEAVES}}/assertion.sh" "{{.RESULT}}" "$EXPECTED"
+      - 'printf "%s\n" "$SELECTION" "$SEED" > "{{.RESULT}}/selection-and-seed.txt"'
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.RESULT}}/status" "{{.RESULT}}/run.log" timeout 180 "$(cabal list-bin ecluse-core-unit --builddir=dist-focused --ghc-options=-rtsopts)" --match "$SELECTION" --seed "$SEED" --format=specdoc --no-color +RTS -N1 -RTS
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.RESULT}}/qualification-status" "{{.RESULT}}/qualification.log" bash "{{.LEAVES}}/assertion.sh" "{{.RESULT}}" "$EXPECTED" "$ASSERTION_KIND"
   integration-perturbed:
     env:
       ECLTEST_SOURCE: '{{.FOCUSED_SOURCE}}'

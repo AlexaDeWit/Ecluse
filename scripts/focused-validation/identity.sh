@@ -18,6 +18,10 @@ trap 'identity_status=$?
   if [[ -f "$evidence/source.txt" ]]; then cat "$evidence/source.txt" >&2; fi
   exit "$identity_status"' ERR
 [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+identity_check='pinned-source'
+cp "$here/../../taskfiles/focused-validation/source-commit.txt" "$evidence/pinned-source.txt"
+[[ "$source_sha" == "$(cat "$evidence/pinned-source.txt")" ]]
 identity_check='github-actions'
 [[ "${GITHUB_ACTIONS:-}" == true ]]
 identity_check='read-checkout'
@@ -34,7 +38,6 @@ identity_check='tracked-status'
 git status --porcelain --untracked-files=no > "$evidence/tracked-status.txt"
 test ! -s "$evidence/tracked-status.txt"
 identity_check='support-contract'
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cp "$here/../../taskfiles/focused-validation/support-commits.txt" "$evidence/support-commits.txt"
 while IFS= read -r support; do
   identity_check="support-ancestor:$support"

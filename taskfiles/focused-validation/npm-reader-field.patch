@@ -1,0 +1,13 @@
+--- a/core/test/unit/Ecluse/Core/Registry/Npm/ReaderSpec.hs
++++ b/core/test/unit/Ecluse/Core/Registry/Npm/ReaderSpec.hs
+@@ -7,0 +8 @@
++import Data.Aeson (Value (String))
+@@ -19 +20 @@
+-import Ecluse.Core.Registry.Npm.Streaming (NpmField)
++import Ecluse.Core.Registry.Npm.Streaming (NpmField, NpmFieldOf (NameField))
+@@ -70 +71,4 @@
+-    , emitted (unwalked <$> walkJsonChunks bound (npmWalk Trees depth (maybe WholePackument OneRelease selected) (pureStep step) keeps (testTable releaseUniqueFields) start) chunks)
++    , fmap (second (fmap (\case
++            [] -> []
++            _ : fields -> NameField (String "focused-emitted-field-mismatch") : fields)))
++        (emitted (unwalked <$> walkJsonChunks bound (npmWalk Trees depth (maybe WholePackument OneRelease selected) (pureStep step) keeps (testTable releaseUniqueFields) start) chunks))

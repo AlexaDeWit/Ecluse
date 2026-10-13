@@ -1,5 +1,5 @@
 --- a/core/test/unit/Ecluse/Core/Worker/LeaseSpec.hs
 +++ b/core/test/unit/Ecluse/Core/Worker/LeaseSpec.hs
-@@ -475 +475 @@
+@@ -467 +467 @@
 -    pollUntil 2_000 1_000 (>= wanted) (readTVarIO (lwNow world))
 +    pollUntil 2_000 1_000 (>= wanted) (readTVarIO (lwNow world) $> 0)

@@ -2,6 +2,7 @@
 
 The `focused-acceptance` job in `bench.yml` runs only on `measure/refactor-focused-validation`. Do not merge it into a product branch.
 The `focused_source` dispatch input requires the reviewed candidate's full 40-character commit SHA. There is no default source. Set `focused_validation=true` to select this job.
+The candidate is pinned to `ab5f4af6e55b90ae79392f3d10a9505295f1239f` in `source-commit.txt`.
 Every patch also requires the original file's recorded SHA-256. A source correction requires review of any affected patch.
 
 Task owns the serial sequence. The workflow supplies one ARM runner, the pinned toolchain, and artifact upload.
@@ -17,7 +18,8 @@ A second pair injects one assertion failure inside the left directory bracket. B
 
 The six concurrency groups run three times with distinct Hspec seeds and one GHC capability.
 The focused build adds `-rtsopts` in `dist-focused`. These runs are not performance evidence.
-Hspec seeds do not establish the Hedgehog seed. The raw logs retain any reported property seed.
+The pinned hspec-hedgehog 0.3.0.0 bridge derives Hedgehog seeds from Hspec replay arguments.
+Each run records its Hspec seed and retains the native failure report.
 Four caller controls delay entry with MVars. A separate renewal control holds the backend response before the next clock step.
 
 `cases.json` lists each patch, selected example, and expected result for review.
@@ -31,6 +33,7 @@ The candidate must descend from these reviewed support commits:
 - #1672: `eda18683ca81e0f38ef5ee64ced7e373514f868c`.
 - #1674: `d6caea0fe85624275a4256db6eb37a174a797d4e`.
 - #1673: `aee7742706e9b8fcb4b270afce05ada3ac493244`.
+- Final test correction: `307e532a3c7863adf11e5ecc4bc6b033c2361b86`.
 
 The harness owns the required runtime identities in `required-*-controls.txt`.
 Unit logs must contain each required example once and have zero failures or pending results.
@@ -38,3 +41,13 @@ This includes eight version-loader controls, three ecosystem comparisons, the de
 Integration reports must contain each required identity once with status `passed`.
 Only the redirect mutation requires `integration/egress/native-003` to fail. Its separate check still requires the named 302-to-503 assertion.
 These requirements supplement the complete integration audit. A candidate cannot remove them from its own catalogue.
+
+The R1 controls select the original generated-packument property and the original generated-Simple-index property.
+They use seeds 701 and 702, respectively, for each clean, perturbed, and restored run.
+Each scratch patch changes one field in a non-empty successful walker result. It preserves the byte count, result class, and field count.
+The independent json-stream reference and both 2,000-case declarations remain unchanged.
+The other two PyPI properties retain their existing checks and are not these mutation targets.
+Clean and restored controls must report one passing example and 2,000 successful tests.
+A rejected mutation must report one failed example, the expected property name, a Hedgehog failure, and the emitted-field marker.
+Build errors, missing selections, pending cases and runtime timeouts cannot satisfy that check.
+The complete integration runs still require worker `native-002`, now with the acknowledgement check from the final test correction.

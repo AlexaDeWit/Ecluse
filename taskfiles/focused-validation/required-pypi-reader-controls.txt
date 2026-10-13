@@ -1,0 +1,1 @@
+emits json-stream's fields and outcome for generated Simple indexes, or reads past its parse error

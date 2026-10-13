@@ -1,0 +1,8 @@
+--- a/core/test/unit/Ecluse/Core/Registry/PyPI/ReaderSpec.hs
++++ b/core/test/unit/Ecluse/Core/Registry/PyPI/ReaderSpec.hs
+@@ -239 +239,4 @@
+-    emitted . walkJsonChunks bound (pypiWalk depth mode (collect reading) keeps (testTable fileUniqueFields) start)
++    fmap (second (fmap (\case
++        [] -> []
++        _ : fields -> EnvelopeField "focused-emitted-field-mismatch" (String "mismatch") : fields)))
++        . emitted . walkJsonChunks bound (pypiWalk depth mode (collect reading) keeps (testTable fileUniqueFields) start)
