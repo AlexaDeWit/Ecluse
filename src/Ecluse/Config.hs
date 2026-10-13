@@ -61,7 +61,7 @@ module Ecluse.Config (
     PolicyError (..),
     renderPolicyError,
     emptyPolicy,
-    defaultPolicy,
+    decodeDefaultConfig,
     ConfigError (..),
     renderConfigError,
     loadConfig,
@@ -76,10 +76,10 @@ module Ecluse.Config (
     resolvedKeyProvenance,
 ) where
 
-import Data.Aeson (Value (..), encode, parseJSON)
+import Data.Aeson (Value (..), encode)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Aeson.Types (parseEither, withObject, (.!=), (.:?))
+import Data.Aeson.Types (parseEither)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -87,7 +87,7 @@ import Data.Text qualified as T
 import Data.Yaml (decodeEither')
 
 import Ecluse.Config.AdvisoryStore (advisoryObjectKey, advisoryStoreBucket)
-import Ecluse.Config.Aeson ()
+import Ecluse.Config.Aeson (parseAppConfig, parseRulesPatch)
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.Mirror (validateMirrorSettings)
 import Ecluse.Config.Resolve (buildEnvAst, deepMerge, secretLeafKeys)
@@ -108,30 +108,28 @@ import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Readiness (DatabaseRequirement (DatabaseOptional, DatabaseRequired))
 import Ecluse.Core.Text (registryPath, stripTrailingSlash)
 
--- | The rule policy embedded in the shipped configuration.
-
-{- HLINT ignore defaultPolicy "Avoid restricted function" -}
-defaultPolicy :: RulePolicy
-defaultPolicy =
-    case decodeEither' defaultConfigBytes of
-        Right ast -> case parseRulesPatch ast of
-            Right globalRules -> either (error . show) id (resolvePolicy emptyPolicy globalRules)
-            Left e -> error ("Invalid default policy JSON: " <> T.pack e)
-        Left e -> error ("Invalid default policy YAML: " <> show e)
+-- | Decode the default backbone without resolving mounts that need an operator overlay.
+decodeDefaultConfig :: ByteString -> Either [ConfigError] (Value, RulePolicy)
+decodeDefaultConfig bytes = do
+    ast <- parseDefaultAst bytes
+    _ <- decodeAppConfig ast
+    patch <- decodeRulesPatch ast
+    policy <- first (pure . PolicyErrors) (resolvePolicy emptyPolicy patch)
+    pure (ast, policy)
 
 {- | Load the merged configuration: the defaults, the operator document, then the environment
 overlay, strongest-last. A mount is __active__ only where that overlay declares a key under it.
 -}
 loadConfig :: [(String, String)] -> Maybe ByteString -> Either [ConfigError] Config
 loadConfig envVars mBytes = do
-    defaultAst <- parseDefaultAst
+    (defaultAst, baseline) <- decodeDefaultConfig defaultConfigBytes
     docAst <- parseDocumentAst mBytes
     let overridesAst = deepMerge docAst (buildEnvAst envVars)
     let merged = deepMerge defaultAst overridesAst
-    parsed <- parseAppConfig merged
+    parsed <- decodeAppConfig merged
     active <- declaredMounts overridesAst
     let appConfig = parsed{cfgMounts = servedMounts active (cfgMounts parsed)}
-    globalPolicy <- resolveGlobalPolicy overridesAst
+    globalPolicy <- resolveGlobalPolicy baseline overridesAst
     validateMirrorSettings appConfig
     mounts <- case (publicUrlErrors appConfig, resolveMounts defaultAst overridesAst globalPolicy appConfig) of
         ([], resolved) -> resolved
@@ -165,8 +163,8 @@ mountKeysOf (Object o) = case KeyMap.lookup "mounts" o of
     _ -> []
 mountKeysOf _ = []
 
-parseDefaultAst :: Either [ConfigError] Value
-parseDefaultAst = case decodeEither' defaultConfigBytes of
+parseDefaultAst :: ByteString -> Either [ConfigError] Value
+parseDefaultAst bytes = case decodeEither' bytes of
     Right ast -> Right ast
     Left err -> Left [ParseError ("config/default.yaml is invalid YAML: " <> T.pack (show err))]
 
@@ -177,20 +175,20 @@ parseDocumentAst = \case
         Right ast -> Right ast
         Left err -> Left [ParseError ("the config document is invalid YAML: " <> T.pack (show err))]
 
-parseAppConfig :: Value -> Either [ConfigError] AppConfig
-parseAppConfig merged = case parseEither parseJSON merged of
+decodeAppConfig :: Value -> Either [ConfigError] AppConfig
+decodeAppConfig merged = case parseEither parseAppConfig merged of
     Right appConfig -> Right appConfig
     Left err -> Left [ParseError ("Configuration parse error: " <> T.pack err)]
 
-parseRulesPatch :: Value -> Either String RulePatch
-parseRulesPatch = parseEither (withObject "Config" (\obj -> obj .:? "rules" .!= RulePatch Map.empty))
+decodeRulesPatch :: Value -> Either [ConfigError] RulePatch
+decodeRulesPatch ast = case parseEither parseRulesPatch ast of
+    Right patch -> Right patch
+    Left err -> Left [ParseError ("Rules parse error: " <> T.pack err)]
 
-resolveGlobalPolicy :: Value -> Either [ConfigError] RulePolicy
-resolveGlobalPolicy overridesAst = do
-    globalRulePatch <- case parseRulesPatch overridesAst of
-        Right r -> Right r
-        Left err -> Left [ParseError ("Rules parse error: " <> T.pack err)]
-    first sharedPolicyErrors (resolvePolicy defaultPolicy globalRulePatch)
+resolveGlobalPolicy :: RulePolicy -> Value -> Either [ConfigError] RulePolicy
+resolveGlobalPolicy baseline overridesAst = do
+    globalRulePatch <- decodeRulesPatch overridesAst
+    first sharedPolicyErrors (resolvePolicy baseline globalRulePatch)
 
 sharedPolicyErrors :: [PolicyError] -> [ConfigError]
 sharedPolicyErrors errors
@@ -259,7 +257,7 @@ resolveServeOnly policy eco mPrivate mcfg =
 mountRulePatch :: Value -> Ecosystem -> Either [ConfigError] RulePatch
 mountRulePatch ast eco =
     first (pure . ParseError . (prefix <>) . T.pack) $
-        parseRulesPatch (fromMaybe (Object mempty) (lookupPath ["mounts", ecosystemName eco] ast))
+        parseEither parseRulesPatch (fromMaybe (Object mempty) (lookupPath ["mounts", ecosystemName eco] ast))
   where
     prefix = "mounts." <> ecosystemName eco <> ".rules parse error: "
 
@@ -300,7 +298,7 @@ and its layer. Empty when a layer fails to parse, and a boot-computed key has no
 -}
 resolvedKeyProvenance :: [(String, String)] -> Maybe ByteString -> [Text]
 resolvedKeyProvenance envVars mBytes = fromRight [] $ do
-    defaultAst <- parseDefaultAst
+    defaultAst <- parseDefaultAst defaultConfigBytes
     docAst <- parseDocumentAst mBytes
     let envAst = buildEnvAst envVars
         merged = deepMerge defaultAst (deepMerge docAst envAst)

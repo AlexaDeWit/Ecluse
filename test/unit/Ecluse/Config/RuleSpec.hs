@@ -8,13 +8,15 @@ module Ecluse.Config.RuleSpec (spec) where
 import Prelude hiding (universe)
 
 import Data.Aeson (Value (Object), eitherDecodeStrict)
-import Data.Aeson.Types (parseEither, (.!=), (.:?))
+import Data.Aeson.Types (parseEither)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Universe.Class (Universe (universe))
 import Test.Hspec
 
-import Ecluse.Config (defaultPolicy)
+import Ecluse.Config (decodeDefaultConfig)
+import Ecluse.Config.Aeson (parseRulesPatch)
+import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.Rule
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Rules.Types (
@@ -493,12 +495,14 @@ allowLimitedToAdmission ty =
     "\"" <> ty <> "\" is an allow, and an allow cannot be limited to admission. If the Dredger ignored it, a lower deny could delete a version this rule admits. Limit the deny instead"
 
 resolveJson :: ByteString -> Either [PolicyError] [PrecededRule]
-resolveJson = resolveJsonOver defaultPolicy
+resolveJson body = do
+    (_, baseline) <- first (pure . MalformedRule "<defaults>" . show) (decodeDefaultConfig defaultConfigBytes)
+    resolveJsonOver baseline body
 
 resolveJsonOver :: RulePolicy -> ByteString -> Either [PolicyError] [PrecededRule]
 resolveJsonOver base body = case eitherDecodeStrict body :: Either String Value of
     Left e -> Left [MalformedRule "<decode>" (T.pack e)]
-    Right (Object o) -> case parseEither (\obj -> obj .:? "rules" .!= RulePatch Map.empty) o of
+    Right (Object o) -> case parseEither parseRulesPatch (Object o) of
         Left err -> Left [MalformedRule "<parse>" (T.pack err)]
         Right patch -> sortOn rulePrecedence . Map.elems . policyRules <$> resolvePolicy base patch
     Right _ -> Left [MalformedRule "<parse>" "expected object"]
