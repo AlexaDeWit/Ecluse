@@ -140,7 +140,7 @@ jobs:
         run: env -u IN_NIX_SHELL nix develop --command task update
       - name: Run source-bound acceptance checks
         working-directory: scratchpad/focused-source
-        run: env -u IN_NIX_SHELL nix develop --command task --exit-code --taskfile "$FOCUSED_HARNESS/taskfiles/focused-validation.yml" run
+        run: env -u IN_NIX_SHELL nix develop --command task --exit-code --dir "$FOCUSED_CHECKOUT" --taskfile "$FOCUSED_HARNESS/taskfiles/focused-validation.yml" run
       - name: Upload partial and completed evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

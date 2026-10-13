@@ -5,6 +5,8 @@ The `focused_source` dispatch input requires the reviewed candidate's full 40-ch
 Every patch also requires the original file's recorded SHA-256. A source correction requires review of any affected patch.
 
 Task owns the serial sequence. The workflow supplies one ARM runner, the pinned toolchain, and artifact upload.
+The workflow passes the candidate directory through Task's `--dir` option.
+Preflight captures its log and exit status before checking identity, source contracts, or tools.
 The complete integration target retains its declaration audit. The redirect mutation accepts exactly one named failed case.
 Core runtime checks require a non-empty Hspec summary. Pending tests, build failures and timeouts cannot qualify.
 

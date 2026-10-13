@@ -1,5 +1,4 @@
 version: '3'
-dir: '{{.FOCUSED_CHECKOUT}}'
 vars:
   HARNESS: '{{.FOCUSED_HARNESS}}'
   EVIDENCE: '{{.FOCUSED_EVIDENCE}}'
@@ -106,6 +105,10 @@ tasks:
           EXPECTED: pass
           SUITE: core
   preflight:
+    cmds:
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/preflight/status" "{{.EVIDENCE}}/preflight/run.log" task --exit-code --dir "$FOCUSED_CHECKOUT" --taskfile "{{.HARNESS}}/taskfiles/focused-validation.yml" preflight-checks
+      - bash "{{.HARNESS}}/scripts/process-status.sh" "{{.EVIDENCE}}/preflight/status"
+  preflight-checks:
     cmds:
       - bash "{{.LEAVES}}/identity.sh" "{{.EVIDENCE}}/initial"
       - test -z "${ECLTEST_ARGUMENTS:-}"
