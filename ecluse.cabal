@@ -970,6 +970,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
     Ecluse.Core.Registry.Json.WalkProbe
+    Ecluse.Core.Server.MemoryModel.HeapSample
     Ecluse.Test.Contract.Artifact.IdentitySpec
     Ecluse.Test.Contract.Artifact.AttemptSpec
     Ecluse.Test.Contract.BindingSpec
@@ -1622,7 +1623,12 @@ test-suite ecluse-residency
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ArchiveResidencySpec
+    Ecluse.Core.Server.MemoryModel.Calibration
+    Ecluse.Core.Server.MemoryModel.CalibrationResidencySpec
+    Ecluse.Core.Server.MemoryModel.HeapSample
     Ecluse.Core.Server.MemoryModel.Probe
+    Ecluse.Core.Server.MemoryModel.ProbeMode
+    Ecluse.Core.Server.MemoryModel.ProbeModeResidencySpec
     Ecluse.Core.Server.MemoryModelResidencySpec
     Ecluse.Core.Server.MirrorViewResidencySpec
     Ecluse.Core.Mirror.State.WeightResidencySpec

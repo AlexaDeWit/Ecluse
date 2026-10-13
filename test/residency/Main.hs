@@ -14,7 +14,10 @@ import Ecluse.Core.Registry.MetadataResidencySpec qualified as MetadataResidency
 import Ecluse.Core.Registry.Npm.ReaderResidencySpec qualified as NpmReaderResidencySpec
 import Ecluse.Core.Registry.PyPI.ArchiveResidencySpec qualified as ArchiveResidencySpec
 import Ecluse.Core.Registry.PyPI.ReaderResidencySpec qualified as PyPIReaderResidencySpec
+import Ecluse.Core.Server.MemoryModel.CalibrationResidencySpec qualified as CalibrationResidencySpec
 import Ecluse.Core.Server.MemoryModel.Probe (SelectedShape (SelectedControl, SelectedValue), childMain, packageMain, probe, probeEvaluation, probeListing, probeMerge)
+import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
+import Ecluse.Core.Server.MemoryModel.ProbeModeResidencySpec qualified as ProbeModeResidencySpec
 import Ecluse.Core.Server.MemoryModelResidencySpec qualified as MemoryModelResidencySpec
 import Ecluse.Core.Server.MirrorViewResidencySpec qualified as MirrorViewResidencySpec
 import Ecluse.Core.Server.Pipeline.TarballResidencySpec qualified as TarballResidencySpec
@@ -27,14 +30,10 @@ main =
         ["--mirror-state-probe", mode, path] -> StateWeightResidencySpec.probeMain mode path
         ["--archive-probe", mode, path] -> ArchiveResidencySpec.probeMain mode path
         ["--mirror-read-probe", phase, directory] -> MirrorViewResidencySpec.probeMain phase directory
-        ["--metadata-probe", shape, path] -> childMain probe shape path
-        ["--metadata-evaluation-probe", path] -> packageMain probeEvaluation path
-        ["--metadata-listing-probe", path] -> packageMain probeListing path
-        ["--metadata-merge-probe", private, public, path] -> packageMain (probeMerge private public) path
-        ["--metadata-source-probe", ecosystem, mode, name, version, limit, path] -> MemoryModelResidencySpec.sourceMain ecosystem mode name version limit path
-        ["--metadata-selected-retention-probe", ecosystem, name, version, limit, path] -> MemoryModelResidencySpec.selectedMain SelectedValue ecosystem name version limit path
-        ["--metadata-selected-control-probe", ecosystem, name, version, limit, path] -> MemoryModelResidencySpec.selectedMain SelectedControl ecosystem name version limit path
+        arguments | Just (mode, path) <- Mode.parseProbeMode arguments -> runProbe mode path
         _ -> hspec $ do
+            CalibrationResidencySpec.spec
+            ProbeModeResidencySpec.spec
             StateWeightResidencySpec.spec
             ArchiveResidencySpec.spec
             MirrorViewResidencySpec.spec
@@ -45,3 +44,13 @@ main =
             PyPIReaderResidencySpec.spec
             TarballResidencySpec.spec
             MemoryModelResidencySpec.spec
+
+runProbe :: Mode.ProbeMode -> FilePath -> IO ()
+runProbe mode path = case mode of
+    Mode.Retained shape -> childMain probe shape path
+    Mode.Evaluation -> packageMain probeEvaluation path
+    Mode.Listing -> packageMain probeListing path
+    Mode.Merge private public -> packageMain (probeMerge private public) path
+    Mode.Source ecosystem source name version limit -> MemoryModelResidencySpec.sourceMain ecosystem source name version limit path
+    Mode.SelectedRetention ecosystem name version limit -> MemoryModelResidencySpec.selectedMain SelectedValue ecosystem name version limit path
+    Mode.SelectedControl ecosystem name version limit -> MemoryModelResidencySpec.selectedMain SelectedControl ecosystem name version limit path

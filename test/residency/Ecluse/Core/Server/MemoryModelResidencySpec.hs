@@ -30,7 +30,9 @@ import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Admission.Budget (roundUpToStep, scaleCharge)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfOutputPermille))
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
+import Ecluse.Core.Server.MemoryModel.Calibration (fullReadCharge)
 import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), Measurement (..), PeakLimits (..), Residency (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), SingleListing (..), measureInChild, packages, probeSelected, probeSource, requireResidency, writeMergeDocuments)
+import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
 import Ecluse.Core.Snapshot (digestBytes)
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Corpus (CaptureRecord (crBytes, crSha256), CorpusPackage (cpPackage, cpPath), cpName, readCaptureRecords)
@@ -58,7 +60,7 @@ spec = do
             forM_ [minBound .. maxBound] $ \shape ->
                 it (toString (cpName package) <> "/" <> show shape) $ do
                     (size, digest) <- authenticate package
-                    measureInChild ["--metadata-probe", show shape] package >>= \case
+                    measureInChild (Mode.Retained (show shape)) package >>= \case
                         Left failure -> expectationFailure failure
                         Right result -> do
                             report package digest shape result
@@ -74,7 +76,7 @@ spec = do
                     outputLimit limits `shouldSatisfy` (< toInteger (cfOutputPermille factors))
         forM_ packages $ \package -> it (toString (cpName package)) $ do
             (size, _) <- authenticate package
-            measureInChild ("--metadata-listing-probe" : majorSampling) package >>= \case
+            measureInChild Mode.Listing package >>= \case
                 Left failure -> expectationFailure failure
                 Right single -> do
                     let peaks = singlePeaks single
@@ -104,9 +106,19 @@ spec = do
                 Nothing -> expectationFailure "the merge probe did not run"
                 Just (Left failure) -> expectationFailure failure
                 Just (Right peaks) -> do
-                    reportListing "metadata-merge" ["shape" .= (show shape :: Text)] package peaks
+                    record <- requireResidency (pkgEcosystem (cpPackage package))
+                    let derived = fullReadCharge (residencyCalibration record)
+                        observed = fromInteger (rise listingReadPeak listingBaseline peaks) / fromIntegral (listingSourceBytes peaks) :: Double
+                    reportListing
+                        "metadata-merge"
+                        [ "shape" .= (show shape :: Text)
+                        , "derived_full_read_permille" .= derived
+                        , "full_read_headroom_per_source_byte" .= (fromInteger derived / 1000 - observed)
+                        ]
+                        package
+                        peaks
                     checkBasis shape size peaks
-                    (record, factors) <- listingBounds package
+                    (_, factors) <- listingBounds package
                     let limits = residencyPeakLimits record
                     checkPaid factors peaks
                     checkOutputCharge factors peaks
@@ -125,7 +137,7 @@ measureMerges = do
     measure (package, shape) = ((cpPath package, shape),) . either (Left . show) id <$> tryAny (measureMerge package shape)
     measureMerge package shape = withSystemTempDirectory "ecluse-merge" $ \directory -> do
         (private, public) <- writeMergeDocuments shape directory package
-        measureInChild (["--metadata-merge-probe", private, public] <> majorSampling) package
+        measureInChild (Mode.Merge private public) package
 
 checkMeasurement :: Ecosystem -> Shape -> Int -> Measurement -> Expectation
 checkMeasurement ecosystem shape size result = do
@@ -142,10 +154,6 @@ checkMeasurement ecosystem shape size result = do
     when (shape == Shared) $ do
         (1000 * retained) `shouldSatisfy` (<= toInteger (cfFullReadPermille factors) * toInteger size)
         (2000 * toInteger (compactBytes result)) `shouldSatisfy` (<= toInteger (cfOutputPermille factors) * toInteger size)
-
--- A fixed old generation and 128 KiB nursery sample live data at nearly every collection.
-majorSampling :: [String]
-majorSampling = ["+RTS", "-F1", "-A128k", "-RTS"]
 
 listingBounds :: CorpusPackage -> IO (Residency, ChargeFactors)
 listingBounds package = (,) <$> requireResidency ecosystem <*> maybe (fail "residency ecosystem has no adapter") pure (chargeFactors ecosystem)
