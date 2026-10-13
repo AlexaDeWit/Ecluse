@@ -76,6 +76,7 @@ import Ecluse.Core.Security.Egress (registryUrlText)
 spec :: Spec
 spec = do
     mirrorCapabilitiesSpec
+    publicationCapabilitiesSpec
     ruleBlocksSpec
     clearedSpec
     refusalSpec
@@ -108,6 +109,38 @@ mirrorCapabilitiesSpec = describe "role-specific mirror capabilities" $ do
     withoutWriteSettings app = app{cfgMounts = Map.adjust stripWriter PyPI (cfgMounts app)}
     stripWriter mount = mount{mntMirrorTarget = fmap (\endpoint -> endpoint{meUploadUrl = Nothing, meUsername = Nothing}) (mntMirrorTarget mount)}
     capabilityResult role = snd . runVet (registryRoleOf role) . vetMirrorCapabilities role
+
+publicationCapabilitiesSpec :: Spec
+publicationCapabilitiesSpec = describe "PyPI publication credentials by boot role" $ do
+    for_ [BootMirrorPipeline ServeAndMirror, BootMirrorPipeline ServeOnly] $ \role ->
+        describe (show role) $ do
+            it "refuses a static token without an explicit username" $ do
+                config <- expectConfig tokenEnv Nothing
+                result role config `shouldBe` Left [UploadConfigurationRequired PyPI "publicationTarget.registry.username"]
+            it "accepts a static token with an explicit username" $ do
+                config <- expectConfig (overrideEnv (publicationKey <> "USERNAME") "publisher" tokenEnv) Nothing
+                result role config `shouldBe` Right [PyPI]
+            it "accepts anonymous publication without a token or username" $ do
+                config <- expectConfig publicationEnv Nothing
+                result role config `shouldBe` Right [PyPI]
+    for_ [BootMirrorPipeline MirrorOnly, BootStorePruner, BootStorePreview, BootWithoutPipeline] $ \role ->
+        it ("does not require a publication username under " <> show role) $ do
+            config <- expectConfig tokenEnv Nothing
+            result role config `shouldBe` Right [PyPI]
+  where
+    publicationKey = "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__"
+    publicationEnv =
+        [ ("ECLUSE_SERVER__AUTH_TOKEN", "edge-token")
+        , ("ECLUSE_MOUNTS__PYPI__ENABLED", "true")
+        , ("ECLUSE_MOUNTS__PYPI__FIRST_PARTY", "acme-*")
+        , ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/pypi/")
+        , (publicationKey <> "URL", "https://publish.example.test/legacy/")
+        ]
+            <> publicGateEnv
+    tokenEnv = overrideEnv (publicationKey <> "TOKEN") "publish-write-token" publicationEnv
+    result role config =
+        fmap (Map.keys . vpPublications) . snd . runVet (registryRoleOf role) $
+            vetBoot config <* vetMirrorCapabilities role (configApp config)
 
 ruleBlocksSpec :: Spec
 ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
@@ -174,8 +207,6 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
     installBlock = RuleBlockedOnMount PyPI DenyInstallTimeExecutionType "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release."
     scopeBlock = RuleBlockedOnMount PyPI AllowScopeType "A PyPI project name has no scope, so this rule can never match one."
 
-{- An advisory deny cannot decide without a database, so the pairing is a refusal in every role
-that evaluates rules, whatever the rule's own onUnavailable setting says. -}
 advisoryStoreSpec :: Spec
 advisoryStoreSpec = describe "vetBoot -- an advisory deny with no advisory store" $ do
     forM_ [MirrorWriter, MirrorPruner, MirrorPreviewer] $ \role ->
