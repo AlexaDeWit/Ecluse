@@ -5,13 +5,15 @@
 +import System.IO.Temp qualified as Temp
 +import System.Environment qualified as Environment
 +import System.IO qualified as IO
-@@ -68,0 +71,5 @@
+@@ -68,0 +71,7 @@
 +            ready <- Environment.getEnv "FOCUSED_READY"
 +            gate <- Environment.getEnv "FOCUSED_GATE"
 +            BS.writeFile ready (encodeUtf8 (toText outDir))
-+            token <- BS.readFile gate
++            token <- IO.withBinaryFile gate IO.ReadMode (\handle -> BS.hGet handle 1)
++            IO.hPutStrLn IO.stderr ("FOCUSED_GATE_BYTES " <> show (BS.length token))
++            token `shouldBe` "x"
 +            BS.length token `shouldBe` 2
-@@ -699,0 +707,6 @@
+@@ -699,0 +709,6 @@
 +
 +-- | Record directory lifetimes for the temporary remote acceptance run.
 +withSystemTempDirectory :: String -> (FilePath -> IO a) -> IO a

@@ -13,7 +13,10 @@ Core runtime checks require a non-empty Hspec summary. Pending tests, build fail
 
 The compiler processes use separate checkouts and builds with the same temporary parent.
 Both first examples create directories and wait on separate FIFOs before either process proceeds.
+The parent keeps FIFO writers open, and each example reads exactly one token byte without waiting for EOF.
 The harness records overlapping directory lifetimes, separate native statuses, every observed directory, and final cleanup.
+Failure cleanup joins both process owners before qualification. Those owners stop and join the native process groups.
+The parent records each gate's lifecycle and removes its FIFO after the children stop. Regular evidence files remain available for upload.
 A second pair injects one assertion failure inside the left directory bracket. Both restored copies then run the original spec.
 
 The six concurrency groups run three times with distinct Hspec seeds and one GHC capability.
