@@ -11,7 +11,6 @@ module Ecluse.Core.Registry.Npm.Maintenance (
 
     -- * The listing
     listingRequestFor,
-    packageListingParser,
 
     -- * The unpublish
     packumentRequestFor,
@@ -21,8 +20,6 @@ module Ecluse.Core.Registry.Npm.Maintenance (
 import Data.Aeson (Object, Value (Object, String), decodeStrict, encode)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.JsonStream.Parser qualified as J
-import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (Request (method, requestHeaders))
 import Network.HTTP.Types.Header (hAccept)
 
@@ -41,7 +38,8 @@ import Ecluse.Core.Registry.Adapter.Capability (
 import Ecluse.Core.Registry.Maintenance (StoreRefusal, storeRefusal)
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Registry.Npm.Document (tarballUrl)
-import Ecluse.Core.Registry.Npm.Project (npmNameLeadChars, projectName)
+import Ecluse.Core.Registry.Npm.Maintenance.Listing (packageListingWalk)
+import Ecluse.Core.Registry.Npm.Project (npmNameLeadChars)
 import Ecluse.Core.Registry.Npm.Request (
     MetadataForm (Full),
     artifactFileUrl,
@@ -65,7 +63,7 @@ npmMaintenance =
             Just
                 StoreListing
                     { listingRequest = listingRequestFor
-                    , listingParser = packageListingParser
+                    , listingWalk = packageListingWalk
                     }
         , maintenanceVersionDelete =
             Just
@@ -83,18 +81,6 @@ listingRequestFor origin = do
     base <- parseRequestEither url
     pure . withToken (ocToken origin) $
         base{requestHeaders = (hAccept, "application/json") : requestHeaders base}
-
--- | Read only package-name keys. Values are skipped without constructing package objects.
-packageListingParser :: J.Parser [PackageName]
-packageListingParser = J.mapWithFailure finish (J.foldI collect Nothing events)
-  where
-    events = J.objectFound Nothing Nothing (Just . fst <$> J.objectItems (pure ()))
-    collect found Nothing = Just (fromMaybe mempty found)
-    collect found (Just raw) = Just $ case projectName raw of
-        Right name | raw /= "_updated" -> Map.insert raw name (fromMaybe mempty found)
-        _ -> fromMaybe mempty found
-    finish Nothing = Left "the store's package listing is not a JSON object"
-    finish (Just names) = Right (Map.elems names)
 
 -- | Read the full packument, because the install view omits @_rev@ and @time@.
 packumentRequestFor :: OriginClient -> PackageName -> Either UrlFormationError Request

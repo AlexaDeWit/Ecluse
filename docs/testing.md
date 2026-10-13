@@ -1603,6 +1603,10 @@ obligations come with the testing pattern, beside the checklist in
   and nesting-failure classification. PyPI's reference, `pypiFields` in
   `Ecluse.Test.Registry.PyPI.Streaming`, is the reader PyPI ran before its walk.
   Where a walk skips more than its reference, as PyPI's selected read does, a property states the difference.
+  The 2,000-case property for `packageListingWalk` compares package names,
+  byte counts and failures with `referencePackageListingParser` in `Ecluse.Test.Registry.Npm.Maintenance`.
+  The production walk lives in `Ecluse.Core.Registry.Npm.Maintenance.Listing`.
+  The public fixture helper calls that walk.
   PyPI supplies no version-list-only reader. Mirror state still uses production combinator readers.
 - **Give every test a counterpart in every ecosystem.** When a change adds a test, a benchmark row
   or a load scenario for one ecosystem, it adds a counterpart for each other ecosystem. This applies

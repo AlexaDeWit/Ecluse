@@ -212,6 +212,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Document
     Ecluse.Core.Registry.Npm.Filter
     Ecluse.Core.Registry.Npm.Maintenance
+    Ecluse.Core.Registry.Npm.Maintenance.Listing
     Ecluse.Core.Registry.Npm.Metadata
     Ecluse.Core.Registry.Npm.Project
     Ecluse.Core.Registry.Npm.Reader
@@ -1091,6 +1092,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Npm.DocumentSpec
     Ecluse.Core.Registry.Npm.FilterSpec
     Ecluse.Core.Registry.Npm.MaintenanceSpec
+    Ecluse.Core.Registry.Npm.Maintenance.ListingSpec
     Ecluse.Core.Registry.Npm.MetadataSpec
     Ecluse.Core.Registry.Npm.ReaderSpec
     Ecluse.Core.Registry.Npm.VersionListReaderSpec

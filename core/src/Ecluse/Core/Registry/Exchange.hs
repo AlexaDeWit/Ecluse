@@ -14,7 +14,6 @@ module Ecluse.Core.Registry.Exchange (
     boundedExchange,
     runExchange,
     singleAttemptSettings,
-    boundedJsonFetch,
     withSuccessBody,
     boundedRelay,
 
@@ -37,7 +36,6 @@ module Ecluse.Core.Registry.Exchange (
 import Crypto.Hash (hashInit, hashUpdate)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
-import Data.JsonStream.Parser qualified as J
 import Network.HTTP.Client (
     BodyReader,
     Manager,
@@ -61,7 +59,6 @@ import Ecluse.Core.Registry (
     UrlFormationError,
     isSuccessStatus,
  )
-import Ecluse.Core.Registry.JsonStream (StreamResult, readJsonStream)
 import Ecluse.Core.Registry.Progress (meteredReader, meteredUpload, watched)
 import Ecluse.Core.Security (
     BodyLimit,
@@ -138,10 +135,6 @@ readBounded :: (Int -> Int -> ByteString -> a) -> BodyLimit -> Response BodyRead
 readBounded project limits response =
     fmap (uncurry (project (statusCode (responseStatus response))))
         <$> boundedRead limits (brRead (responseBody response))
-
--- | Extract selected values from a 2xx body within the response lifetime. Other statuses are never parsed.
-boundedJsonFetch :: Manager -> ProgressFloor -> BodyLimit -> J.Parser a -> (s -> a -> Either LimitError s) -> s -> Request -> IO (Either FetchFault (BodyOutcome (StreamResult s)))
-boundedJsonFetch manager progress limits parser step initial = withSuccessBody manager progress (readJsonStream limits parser step initial)
 
 -- | Consume a 2xx body within the response lifetime. A status outside 2xx never reaches the consumer.
 withSuccessBody :: Manager -> ProgressFloor -> (IO ByteString -> IO (Either LimitError a)) -> Request -> IO (Either FetchFault (BodyOutcome a))
