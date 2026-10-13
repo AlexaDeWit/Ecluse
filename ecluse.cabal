@@ -1292,6 +1292,7 @@ test-suite ecluse-unit
     Ecluse.Acceptance.EvidenceSpec
     Ecluse.BenchLoad.Advisories
     Ecluse.BenchLoad.Contract.Driver
+    Ecluse.BenchLoad.Contract.DriverSpec
     Ecluse.BenchLoad.Stress
     Ecluse.BenchLoad.AdvisoriesSpec
     Ecluse.BenchLoad.ContractSpec
@@ -1303,6 +1304,8 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.NpmArtifactSpec
     Ecluse.BenchLoad.NpmSpec
     Ecluse.BenchLoad.Fixture
+    Ecluse.BenchLoad.Listing
+    Ecluse.BenchLoad.ListingSpec
     Ecluse.BenchLoad.FixtureSpec
     Ecluse.BenchLoad.Npm
     Ecluse.BenchLoad.Worker
@@ -2061,6 +2064,7 @@ executable bench-load
     Ecluse.BenchLoad.Stress
     Ecluse.BenchLoad.Error
     Ecluse.BenchLoad.Fixture
+    Ecluse.BenchLoad.Listing
     Ecluse.BenchLoad.Harness
     Ecluse.BenchLoad.Npm
     Ecluse.BenchLoad.Worker

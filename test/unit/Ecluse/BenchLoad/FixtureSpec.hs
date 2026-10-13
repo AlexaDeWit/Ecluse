@@ -11,10 +11,11 @@ import Data.Map.Strict qualified as Map
 import Data.Ratio ((%))
 import Data.Set qualified as Set
 import Data.Text qualified as T
+import System.IO.Error (ioeGetErrorString, isUserError)
 import Test.Hspec
 
 import Ecluse.BenchLoad.Error (BenchLoadError (BenchLoadError))
-import Ecluse.BenchLoad.Fixture (loadCorpusCuts, weightedMix)
+import Ecluse.BenchLoad.Fixture (loadCorpusBodies, loadCorpusCuts, weightedMix)
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions), PackageName, renderPackageName)
 import Ecluse.Core.Registry.Metadata (MetadataError)
 import Ecluse.Core.Security (Limits, defaultLimits)
@@ -25,6 +26,19 @@ import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 
 spec :: Spec
 spec = do
+    describe "loadCorpusBodies" $ do
+        it "returns the authenticated bytes unchanged for both ecosystems" $ do
+            let packages = mediumNpm <> pypiCorpusPackages
+            expected <- Map.fromList <$> traverse (\cp -> (cpName cp,) <$> readFileLBS (cpPath cp)) packages
+            loadCorpusBodies packages `shouldReturn` expected
+
+        it "rejects a capture path outside its catalogue entry before loading or cutting" $
+            for_ mediumNpm $ \cp -> do
+                let packages = [cp{cpPath = "bench/corpus/unregistered.json"}]
+                    wrongPath err = isUserError err && ioeGetErrorString err == "capture pin path differs for " <> toString (cpName cp)
+                loadCorpusBodies packages `shouldThrow` wrongPath
+                loadCorpusCuts (\_ _ -> Left "the cut must not run") packages `shouldThrow` wrongPath
+
     describe "loadCorpusCuts" $ do
         it "serves each capture as its cut, keyed by the package name" $ do
             sizes <- traverse (fmap BS.length . readFileBS . cpPath) mediumNpm
@@ -48,7 +62,6 @@ spec = do
   where
     mediumNpm = filter ((== Medium) . cpTier) corpusPackages
 
--- Each cut, as the proxy projects it, holds the share of its capture's versions and none older than a dropped one.
 keepsNewestShare ::
     (Rational -> PackageName -> ByteString -> Either String Value) ->
     (Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, b)) ->

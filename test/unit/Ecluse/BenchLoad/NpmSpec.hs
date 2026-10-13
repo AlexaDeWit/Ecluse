@@ -2,11 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | The npm stubs' artifact paths, the scenario order, and the pattern knobs refused before any proxy boots.
+-- | npm artifact routes and replay settings fail before measured work starts.
 module Ecluse.BenchLoad.NpmSpec (spec) where
 
 import Data.Aeson ((.=))
-import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (status200, status404)
@@ -21,17 +20,7 @@ import Ecluse.Test.Env (withEnvVars)
 import Ecluse.Test.Wai (localhost, rebaseAuthority)
 
 spec :: Spec
-spec = do
-    describe "npm advisory variants" $
-        it "run right after their no-database counterparts" $ do
-            names `shouldSatisfy` isInfixOf ["merge-cold", "merge-cold-advisories", "merge-cold-all-advisory-rules"]
-            names `shouldSatisfy` isInfixOf ["revalidate-not-modified", "revalidate-not-modified-advisories"]
-    describe "npm private copies" $
-        it "run after the cold listing and its advisory variants, from the smallest share to the complete capture" $
-            names `shouldSatisfy` isInfixOf ["merge-cold", "merge-cold-advisories", "merge-cold-all-advisory-rules", "heavy-private-5pct", "heavy-private-25pct", "heavy-private"]
-    fixturePathSpec
-  where
-    names = map scenarioName (fixtureScenarios npmFixture)
+spec = fixturePathSpec
 
 fixturePathSpec :: Spec
 fixturePathSpec = describe "npm artifact fixture paths" $ do
