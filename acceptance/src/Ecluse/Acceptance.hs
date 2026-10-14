@@ -53,7 +53,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Universe.Class (Universe (universe))
 import Data.Universe.Generic (universeGeneric)
-import Numeric (showFFloat)
+import Ecluse.Report.Markdown (cells, fixed, signedPercent)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.Info qualified as Info
 
@@ -421,14 +421,13 @@ capturesSection calibration section =
                     , maybe "--" show (alCalibrated leg)
                     , maybe "--" (change bytes) (alCalibrated leg)
                     , maybe "--" (show . budgetBytes calibration) (alCalibrated leg)
-                    , fmt 3 (measuredMs (alMeasurement leg))
+                    , fixed 3 (measuredMs (alMeasurement leg))
                     , renderVerdict (alVerdict leg) <> maybe "" (recalibrate bytes) (alCalibrated leg)
                     ]
         FailedPackage name reason -> cells [name, "--", "--", "--", "--", "--", "--", "--", "--", "FAILED: " <> reason]
     change bytes calibrated =
         let percent = (fromIntegral bytes / fromIntegral calibrated - 1) * 100 :: Double
-            shown = fmt 1 (abs percent)
-         in if shown == fmt 1 0 then shown <> "%" else (if percent > 0 then "+" else "-") <> shown <> "%"
+         in signedPercent percent
     recalibrate bytes calibrated
         | belowMargin calibration calibrated bytes = ", recalibrate"
         | otherwise = ""
@@ -477,7 +476,7 @@ liveSection (eco, outcomes) =
   where
     rows = \case
         Measured sample ->
-            [ cells [sampleName sample, show (sampleVersions sample), maybe "--" (fmt 3) (sampleUpstreamMs sample), legKey leg, show (measuredBytes measurement), spread measurement, fmt 3 (measuredMs measurement), "measured"]
+            [ cells [sampleName sample, show (sampleVersions sample), maybe "--" (fixed 3) (sampleUpstreamMs sample), legKey leg, show (measuredBytes measurement), spread measurement, fixed 3 (measuredMs measurement), "measured"]
             | (leg, measurement) <- sampleLegs sample
             ]
         Failed name reason -> [cells [name, "--", "--", "--", "--", "--", "--", "FAILED: " <> reason]]
@@ -492,9 +491,3 @@ operatingLines op =
     , "- Legs: `full` reads the whole document through the production read driver over 32 KiB chunks of its held bytes, applies the rules, assembles, and serialises it. `singleVersion` reads one version through the driver's selected read and forces its artifact digests."
     , "- Advisory legs: `fullShippedAdvisories` and `fullAllAdvisoryRules` repeat `full` with the corpus advisories in bench/corpus/advisories served, under the shipped policy and under the shipped policy with both advisory denies."
     ]
-
-cells :: [Text] -> Text
-cells xs = "| " <> T.intercalate " | " xs <> " |"
-
-fmt :: Int -> Double -> Text
-fmt places x = toText (showFFloat (Just places) x "")

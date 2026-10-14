@@ -12,7 +12,8 @@ import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
 import Test.Hspec
 import UnliftIO.Temporary (withSystemTempDirectory)
 
-import Ecluse.Config (RulePolicy (policyRules), defaultPolicy)
+import Ecluse.Config (RulePolicy (policyRules), decodeDefaultConfig)
+import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), CveDb (cveDbLookup), CveLookup (CveLookup, cveCoveredNames))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -104,8 +105,9 @@ spec = do
                 `shouldReturn` Left "the capture typing_extensions differs from its lookup key typing-extensions"
 
     describe "shippedPolicy" $
-        it "is the shared policy config/default.yaml ships" $
-            shippedPolicy `shouldMatchList` Map.elems (policyRules defaultPolicy)
+        it "is the shared policy config/default.yaml ships" $ do
+            (_, baseline) <- expectRight (decodeDefaultConfig defaultConfigBytes)
+            shippedPolicy `shouldMatchList` Map.elems (policyRules baseline)
 
 assertCapturedRemediation :: RuleDeps -> EvalContext -> PackageDetails -> PackageDetails -> Expectation
 assertCapturedRemediation deps ctx fixedRelease affected = do

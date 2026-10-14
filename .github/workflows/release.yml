@@ -20,12 +20,13 @@ permissions:
   contents: read
 
 jobs:
-  # The tag (or the dispatch `tag` input) must match ecluse.cabal's `version:` field
-  # before the multi-arch build starts.
   verify-version:
     name: Verify tag matches cabal version
     runs-on: ubuntu-26.04
     timeout-minutes: 30
+    outputs:
+      image-tag: ${{ steps.version.outputs.image-tag }}
+      git-tag: ${{ steps.version.outputs.git-tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,18 +37,11 @@ jobs:
         uses: ./.github/actions/setup-toolchain
 
       - name: Assert the release tag matches ecluse.cabal version
+        id: version
         env:
           REF_NAME: ${{ github.ref_name }}
           INPUT_TAG: ${{ inputs.tag }}
-        run: |
-          if [ -n "$INPUT_TAG" ]; then tag="$INPUT_TAG"; else tag="${REF_NAME#v}"; fi
-          base="${tag%%-*}" # strip any -rc / -pre suffix
-          want="$(nix develop .#ci --command task version)"
-          if [ "$base" != "$want" ]; then
-            echo "::error::release tag '$tag' (base '$base') != ecluse.cabal version '$want': bump the cabal version or fix the tag"
-            exit 1
-          fi
-          echo "OK: tag base '$base' == ecluse.cabal version '$want'"
+        run: nix develop .#ci --command task release-validate-version
 
   build:
     needs: verify-version
@@ -57,11 +51,9 @@ jobs:
 
   publish:
     name: Assemble multi-arch image, attest & release
-    needs: build
+    needs: [verify-version, build]
     runs-on: ubuntu-26.04
-    # The workflow relies on the ephemeral GITHUB_TOKEN to push to GHCR. The
-    # protected environment (required reviewers) holds the job until a human
-    # approves the release.
+    # The protected environment requires human approval before publication.
     environment: release
     permissions:
       contents: write # create the GitHub Release (digest pin + verify recipe + notes)
@@ -76,37 +68,19 @@ jobs:
         with:
           persist-credentials: false
 
-      # This job holds id-token: write, so an unowned FlakeHub login here would be
-      # offering a signing-capable OIDC token to a third party.
+      # Avoid exposing this job's signing-capable OIDC token to a third-party login.
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
         with:
           determinate: false
           diagnostic-endpoint: ""
 
-      # Untrusted refs flow through env, never interpolated into the run script.
-      - name: Resolve image tag
-        id: tag
-        env:
-          REF_NAME: ${{ github.ref_name }}
-          INPUT_TAG: ${{ inputs.tag }}
-        run: |
-          if [ -n "$INPUT_TAG" ]; then
-            tag="$INPUT_TAG"
-          else
-            tag="${REF_NAME#v}"
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
       - name: Download per-arch build artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
 
-      # Authenticate so regctl can push the manifest list and the attest-actions
-      # can push referrers. The docker/login-action step writes
-      # ~/.docker/config.json, which both regctl and skopeo read as their fallback
-      # auth file.
+      # regctl and skopeo use the Docker credentials written by this action.
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -114,24 +88,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Assemble the two per-arch archives into ONE manifest list and push the
-      # single canonical tag. The step emits the index and per-platform digests for
-      # the attest steps. All skopeo, regctl, and jq logic lives in the script
-      # (shellcheck'd), so the workflow stays injection-free.
+      # Publish one immutable tag for both architectures.
       - name: Assemble & push multi-arch image
         id: push
         env:
-          TAG: ${{ steps.tag.outputs.tag }}
+          TAG: ${{ needs.verify-version.outputs.image-tag }}
         run: |
           nix develop .#ci --command \
             bash scripts/push-multiarch.sh "$IMAGE" "$TAG" \
               artifacts/image-amd64/image-amd64.tar \
               artifacts/image-arm64/image-arm64.tar >> "$GITHUB_OUTPUT"
 
-      # Provenance on the index (what `gh attestation verify oci://IMAGE:TAG`
-      # resolves to) and on each platform digest. A consumer pinning a single arch by
-      # digest can then verify it too. Keyless (OIDC → Fulcio/Rekor), stored as
-      # immutable OCI referrers, which suits the repo's immutable tags.
+      # Attest the index and platform digests so consumers can verify either pin.
       - name: Attest provenance (index)
         id: provenance-index
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -156,9 +124,7 @@ jobs:
           subject-digest: ${{ steps.push.outputs.arm64-digest }}
           push-to-registry: true
 
-      # The SBOM is per-platform, because each arch has its own C closure. Attach
-      # each arch's SBOM to that arch's platform digest, never to the index. The
-      # index has no closure of its own.
+      # Each platform has its own C closure, so its SBOM names the platform digest.
       - name: Attest SBOM (amd64)
         id: sbom-amd64
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
@@ -177,14 +143,11 @@ jobs:
           sbom-path: artifacts/sbom-arm64/ecluse.spdx.json
           push-to-registry: true
 
-      # The same attestations again, as files on the Release below: a copy pinned to
-      # the release object, and the only copy Scorecard's Signed-Releases check can
-      # see. Ungated on purpose: a rehearsal dispatch runs it too, so a bundle that
-      # never materialised fails there and not on a real tag. Step outputs flow
-      # through env, never into the run script.
+      # Stage bundles on dispatch too, so missing assets fail before a real release.
+      # Release assets also make attestations visible to Scorecard's Signed-Releases check.
       - name: Stage release assets
         env:
-          TAG: ${{ steps.tag.outputs.tag }}
+          TAG: ${{ needs.verify-version.outputs.image-tag }}
           PROVENANCE_INDEX: ${{ steps.provenance-index.outputs.bundle-path }}
           PROVENANCE_AMD64: ${{ steps.provenance-amd64.outputs.bundle-path }}
           PROVENANCE_ARM64: ${{ steps.provenance-arm64.outputs.bundle-path }}
@@ -194,15 +157,12 @@ jobs:
           SBOM_ARM64: artifacts/sbom-arm64/ecluse.spdx.json
         run: bash scripts/release-assets.sh "$TAG" "$RUNNER_TEMP/assets" > "$RUNNER_TEMP/assets.txt"
 
-      # On a real version tag (not an rc dispatch), publish a GitHub Release that
-      # pins the INDEX digest. The release gives the `gh attestation verify` recipe,
-      # the staged assets, and the auto-generated changelog. Untrusted refs flow
-      # through env, never into the run script directly.
+      # Dispatch rehearses publication without creating a GitHub Release.
       - name: Publish GitHub Release
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.verify-version.outputs.git-tag }}
           DIGEST: ${{ steps.push.outputs.index-digest }}
         run: |
           bash scripts/release-notes.sh "$TAG" "$IMAGE" "$DIGEST" > "$RUNNER_TEMP/notes.md"

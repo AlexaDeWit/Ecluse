@@ -10,6 +10,7 @@ module Ecluse.Core.ColdReadBench (withBenchmarks) where
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
 import Data.Map.Strict qualified as Map
+import Ecluse.Report.BenchLabels (ecosystemPrefix)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (status200, status404)
 import Network.Wai (Application, rawPathInfo, responseLBS)
@@ -17,8 +18,8 @@ import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfIO)
 import Test.Tasty.HUnit (assertBool, assertFailure, (@?=))
 
-import Ecluse.Bench.Corpus (LoadedEntry, entryName)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
+import Ecluse.Bench.Corpus (LoadedEntry (..), entryName)
+import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
@@ -49,8 +50,8 @@ withBenchmarks ecosystems action = do
     redirect port request = request{HTTP.host = "127.0.0.1", HTTP.port = port, HTTP.secure = False, HTTP.proxy = Nothing}
 
 replayResponse :: (EcosystemBench, LoadedEntry) -> IO (ByteString, BL.ByteString)
-replayResponse (ecosystem, (package, raw, _, _)) = do
-    request <- expectRight (erRequest (metadataRead (ebMetadata ecosystem)) (originUrl (ebEcosystem ecosystem)) Nothing (cpPackage package))
+replayResponse (ecosystem, LoadedEntry{lePackage = package, leBytes = raw}) = do
+    request <- expectRight (erRequest (metadataRead (ebMetadata ecosystem)) (ebOrigin ecosystem) Nothing (cpPackage package))
     pure (HTTP.path request, BL.fromStrict raw)
 
 replayApplication :: Map ByteString BL.ByteString -> Application
@@ -62,10 +63,10 @@ replayApplication responses request respond =
 ecosystemGroup :: HTTP.Manager -> EcosystemBench -> IO Benchmark
 ecosystemGroup manager ecosystem = do
     entries <- traverse (entryGroup manager ecosystem) (ebCorpus ecosystem)
-    pure (bgroup ("ecosystem: " <> toString (ecosystemName (ebEcosystem ecosystem))) [bgroup "cold production reads (per package)" entries])
+    pure (bgroup (toString (ecosystemPrefix <> ecosystemName (ebEcosystem ecosystem))) [bgroup "cold production reads (per package)" entries])
 
 entryGroup :: HTTP.Manager -> EcosystemBench -> LoadedEntry -> IO Benchmark
-entryGroup manager ecosystem entry@(_, raw, _, _) = do
+entryGroup manager ecosystem entry@LoadedEntry{leBytes = raw} = do
     defaults <- readGroup manager ecosystem entry "default cap" defaultLimits
     raised <-
         if BS.length raw > maxMetadataBytes defaultLimits
@@ -74,7 +75,7 @@ entryGroup manager ecosystem entry@(_, raw, _, _) = do
     pure (bgroup (entryName entry) (defaults : raised))
 
 readGroup :: HTTP.Manager -> EcosystemBench -> LoadedEntry -> String -> Limits -> IO Benchmark
-readGroup manager ecosystem (package, raw, info, _) label limits = do
+readGroup manager ecosystem LoadedEntry{lePackage = package, leBytes = raw, leInfo = info} label limits = do
     client <- metadataClient manager ecosystem limits
     (key, _) <- maybe (assertFailure "cold reads: empty capture projection") pure (Map.lookupMax (infoVersions info))
     let name = cpPackage package
@@ -135,15 +136,12 @@ sameDocument :: CachedDoc -> CachedDoc -> Bool
 sameDocument left right = case (snd npmPacked left, snd npmPacked right, snd pypiPacked left, snd pypiPacked right) of
     (Just expected, Just actual, _, _) -> expected == actual
     (_, _, Just expected, Just actual) -> expected == actual
-    _ -> snd npmCached left == snd npmCached right && snd pypiSimpleCached left == snd pypiSimpleCached right
+    _ -> case (snd npmCached left, snd npmCached right, snd pypiSimpleCached left, snd pypiSimpleCached right) of
+        (Just expected, Just actual, _, _) -> expected == actual
+        (_, _, Just expected, Just actual) -> expected == actual
+        _ -> False
 
 metadataClient :: HTTP.Manager -> EcosystemBench -> Limits -> IO MetadataClient
 metadataClient manager ecosystem limits = do
-    base <- expectRight (mkRegistryUrl (originUrl (ebEcosystem ecosystem)))
+    base <- expectRight (mkRegistryUrl (ebOrigin ecosystem))
     pure (privateMetadataClient (ecosystemMetadataReads (metadataRead (ebMetadata ecosystem)) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) (perCallerOrigin limits manager base Nothing)))
-
-originUrl :: Ecosystem -> Text
-originUrl = \case
-    Npm -> "https://registry.npmjs.org"
-    PyPI -> "https://pypi.org"
-    RubyGems -> "https://rubygems.org"

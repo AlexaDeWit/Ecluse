@@ -122,7 +122,6 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
             listBucketOf handle "l" `shouldReturn` Right [unscopedNpm "leftpad"]
             listBucketOf handle "r" `shouldReturn` Right [unscopedNpm "rightpad"]
 
-    -- A 201 carries a parseable listing: only a 200 listing is read.
     forM_ [(status201, RetryFutile), (status404, RetryFutile), (status408, RetryWorthwhile), (status429, RetryWorthwhile), (status503, RetryWorthwhile)] $ \(listingStatus, retry) ->
         it ("preserves HTTP " <> show (statusCode listingStatus) <> " in a listing fault without replaying the read") $
             withStore True (answerAll listingStatus "{}") $ \handle stub -> do
@@ -135,6 +134,22 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
                 fmap (tfCause . faultTransport) (leftToMaybe outcome) `shouldBe` Just TransportProtocol
                 fmap faultRetry (leftToMaybe outcome) `shouldBe` Just retry
                 calls stub `shouldReturn` [("GET", "/-/all")]
+
+    it "applies the body bound before classifying a 201 listing" $
+        withBoundedStore tinyBodyBound (answerAll status201 (LBS.replicate 100 0x20)) $ \handle _ -> do
+            outcome <- listWholeStore handle
+            fmap faultRetry (leftToMaybe outcome) `shouldBe` Just RetryFutile
+            faultDetail outcome `shouldBe` Just "the store's answer crossed the response-size bound"
+
+    it "classifies a malformed 201 body by status after parsing it" $
+        withStore True (answerAll status201 "{") $ \handle _ ->
+            faultDetail <$> listWholeStore handle
+                `shouldReturn` Just "the store answered the package listing with HTTP 201"
+
+    it "parses all names before filtering a bucket" $
+        withStore True (answerAll status200 "{\"leftpad\":0,\"rightpad\":") $ \handle _ ->
+            faultDetail <$> listBucketOf handle "l"
+                `shouldReturn` Just "the store's package listing did not parse"
 
     around (\use -> withStore True answerStore (\handle _ -> use handle)) $
         maintenanceInventoryContract

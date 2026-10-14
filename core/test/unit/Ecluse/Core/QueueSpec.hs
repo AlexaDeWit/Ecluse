@@ -4,6 +4,9 @@
 
 module Ecluse.Core.QueueSpec (spec) where
 
+import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, (.=))
+import Data.Aeson.Key (Key)
+import Data.Aeson.KeyMap qualified as KM
 import Data.Text qualified as T
 import Test.Hspec
 
@@ -22,6 +25,7 @@ import Ecluse.Core.Queue (
  )
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Test.Queue (sampleJob)
+import Ecluse.Test.Support (expectRight)
 
 -- | Version triggers, wire compatibility, and delivery-budget decisions.
 spec :: Spec
@@ -40,6 +44,32 @@ spec = do
             decodeJob packageName (const (Left "invalid legacy location")) legacyBody `shouldSatisfy` isLeft
         it "refuses unsupported wire schemas" $
             decodeJob packageName mkRegistryUrl (T.replace "\"schemaVersion\":2" "\"schemaVersion\":3" versionBody) `shouldSatisfy` isLeft
+    describe "decodeJob field refusals" $ do
+        for_ [("schema 1", legacyBody, "filename"), ("schema 2", encodeJob sampleJob, "triggerFilename")] $ \(schema, body, filenameKey) -> do
+            it (schema <> " control decodes") $
+                decodeJob packageName mkRegistryUrl body `shouldBe` Right sampleJob
+            for_
+                [ ("unsafe filename", filenameKey, Just (String "../../etc/passwd"), "artifact filename")
+                , ("missing traceparent", "traceContext", Just (object ["tracestate" .= ("ecluse=1" :: Text)]), "traceparent")
+                , ("non-object traceContext", "traceContext", Just (String "just-a-string"), "RemoteSpanContext")
+                ]
+                $ \(label, key, replacement, errorField) ->
+                    it (schema <> " rejects " <> label <> " at its field") $ do
+                        invalid <- changeField key replacement body
+                        assertFieldError errorField invalid
+        it "rejects a missing legacy filename after validating the URL" $ do
+            invalid <- changeField "filename" Nothing legacyBody
+            assertFieldError "filename" invalid
+        it "rejects non-JSON" $
+            decodeJob packageName mkRegistryUrl "not json at all" `shouldSatisfy` isLeft
+        it "rejects a JSON value that is not an object" $
+            decodeJob packageName mkRegistryUrl "[1,2,3]" `shouldSatisfy` isLeft
+        it "rejects a missing legacy artifactUrl at its field" $ do
+            invalid <- changeField "artifactUrl" Nothing legacyBody
+            assertFieldError "artifactUrl" invalid
+        it "rejects an unknown ecosystem at its field" $ do
+            invalid <- changeField "ecosystem" (Just (String "cargo")) legacyBody
+            assertFieldError "cargo" invalid
     describe "deliveryBudgetSpent -- the shared redelivery verdict" $ do
         it "grants every delivery below the budget" $
             map (deliveryBudgetSpent (DeliveryBudget 5) . deliveredTimes) [1, 2, 3, 4]
@@ -92,3 +122,15 @@ legacyBody = "{\"ecosystem\":\"npm\",\"name\":\"thing\",\"version\":\"1.0.0\",\"
 
 packageName :: Ecosystem -> Maybe Text -> Text -> Either Text PackageName
 packageName ecosystem scope name = Right (mkPackageName ecosystem (mkScope <$> scope) name)
+
+changeField :: Key -> Maybe Value -> Text -> IO Text
+changeField key replacement body = do
+    value <- expectRight (eitherDecodeStrict' (encodeUtf8 body))
+    case value of
+        Object fields -> pure (decodeUtf8 (encode (Object (maybe (KM.delete key fields) (\v -> KM.insert key v fields) replacement))))
+        _ -> fail "queue control body is not an object"
+
+assertFieldError :: Text -> Text -> Expectation
+assertFieldError field body = case decodeJob packageName mkRegistryUrl body of
+    Left err -> err `shouldSatisfy` T.isInfixOf field
+    Right job -> expectationFailure ("expected a field refusal, got " <> show job)

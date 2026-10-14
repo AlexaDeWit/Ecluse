@@ -3,11 +3,12 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Whole-tree reference projection and held-byte adapters for npm parser comparisons.
-module Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionList) where
+module Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionList, parseVersionBytes, referenceVersionListParser) where
 
 import Data.Aeson (Value, parseJSON, withObject, (.!=), (.:?))
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
+import Data.JsonStream.Parser qualified as J
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Time (UTCTime)
@@ -16,12 +17,15 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (InvalidEntryKind (..), PackageDetails (..), PackageInfo (..), PackageName, invalidKey, mkInvalidEntry)
 import Ecluse.Core.Registry (ParseError (ParseError), RegistryResponse (responseBody))
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
-import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult, versionListParser)
-import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, finishVersionList)
+import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult, projectVersionListEntry)
+import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (VersionsContainer), NpmFieldOf (BeginContainer, InvalidContainer, VersionField))
+import Ecluse.Core.Registry.Npm.VersionListReader (npmVersionListWalk)
+import Ecluse.Core.Registry.VersionList (VersionListItem (..), collectVersionList, emptyVersionList, finishVersionList)
 import Ecluse.Core.Registry.WireSupport (Projection, checkNameAgreement)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), defaultLimits)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, defaultLimits, maxNestingDepth)
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
+import Ecluse.Test.Registry.JsonStream (walkJsonChunks)
+import Ecluse.Test.Registry.Npm.Streaming (NpmRead (VersionListRead), npmFields)
 import Ecluse.Test.Registry.WireSupport (partitionLenient)
 
 -- | Keep the prior whole-tree policy projection as an independent comparison for streamed captures.
@@ -50,7 +54,19 @@ parsePackageInfoFromValue requested value = do
 
 -- | Parse caller-owned bytes through the production selective inventory parser.
 parseVersionList :: RegistryResponse -> Either ParseError [Version]
-parseVersionList response = do
-    let body = responseBody response
-    streamed <- first (ParseError . show) (parseJsonChunks (MetadataBodyLimit (BS.length body)) (versionListParser defaultLimits) (collectVersionList defaultLimits) emptyVersionList [body])
+parseVersionList = parseVersionBytes . responseBody
+
+-- | Read caller-owned bytes without manufacturing an HTTP response.
+parseVersionBytes :: ByteString -> Either ParseError [Version]
+parseVersionBytes body = do
+    streamed <- first (ParseError . show) (walkJsonChunks (MetadataBodyLimit (BS.length body)) (npmVersionListWalk defaultLimits (collectVersionList defaultLimits) emptyVersionList) [body])
     streamValue streamed >>= finishVersionList
+
+-- | Preserve the former production parser as an independent oracle for the native inventory walk.
+referenceVersionListParser :: Limits -> J.Parser VersionListItem
+referenceVersionListParser limits = J.objectFound VersionListObject VersionListObject (J.catMaybeI (candidate <$> npmFields (maxNestingDepth limits) VersionListRead))
+  where
+    candidate (BeginContainer VersionsContainer) = Just VersionListContainer
+    candidate (InvalidContainer VersionsContainer) = Just VersionListInvalidContainer
+    candidate (VersionField key raw) = Just (projectVersionListEntry key raw)
+    candidate _ = Nothing

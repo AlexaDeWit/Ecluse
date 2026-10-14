@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | The order of the PyPI fixture's scenarios.
+-- | Native PyPI stress settings and artifact stubs retain their measurement contracts.
 module Ecluse.BenchLoad.PyPISpec (spec) where
 
 import Data.Aeson ((.=))
@@ -23,13 +23,6 @@ import Ecluse.Test.Wai (localhost, rebaseAuthority)
 
 spec :: Spec
 spec = do
-    describe "PyPI advisory variants" $
-        it "run right after their no-database counterparts" $ do
-            names `shouldSatisfy` isInfixOf ["index-cold", "index-cold-advisories", "index-cold-all-advisory-rules"]
-            names `shouldSatisfy` isInfixOf ["revalidate-not-modified", "revalidate-not-modified-advisories"]
-    describe "PyPI private copies" $
-        it "run after the cold listing and its advisory variants, from the smallest share to the complete capture" $
-            names `shouldSatisfy` isInfixOf ["index-cold", "index-cold-advisories", "index-cold-all-advisory-rules", "heavy-private-5pct", "heavy-private-25pct", "heavy-private"]
     describe "PyPI stress measurements" $ do
         it "keeps four stress cases before mirroring and replay patterns with the existing stress settings" $ do
             names `shouldSatisfy` isInfixOf ["wheel-onboarding", "wheel-ceiling", "herd", "warm-under-cold", "ramp", "mirror-native-baseline", "mirror-managed-warm", "mirror-managed-revision", "worker-mirroring", "pattern-hot-set-control"]

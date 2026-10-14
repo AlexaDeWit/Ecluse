@@ -17,10 +17,10 @@ module Ecluse.Core.Registry.JsonStream (
     -- * Retained values
     retainedValue,
     withinRetainedDepth,
+    nestingLimit,
+    isNestingLimit,
     Members,
-    namedMembers,
     everyMember,
-    retainedObjectOr,
     retainedScalar,
     retainedObjectWith,
     retainedArrayWith,
@@ -35,6 +35,7 @@ import Data.JsonStream.Parser qualified as J
 import Data.Vector qualified as V
 
 import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry.JsonStream.Internal (Members (..))
 import Ecluse.Core.Security (BodyLimit, LimitError (BodyTooLarge), bodyLimitBytes)
 
 -- | Extracted data and the size of the complete decompressed source, including ignored fields.
@@ -44,9 +45,7 @@ data StreamResult a = StreamResult
     }
     deriving stock (Eq, Show)
 
-{- | A read in progress: it needs input, stops on a parse error or a refused value, or has finished.
-A read that writes as it goes resumes in its own effect.
--}
+-- | A suspended, failed, refused or finished read. Writing reads resume in their own effect.
 data Steps m s
     = NeedData (ByteString -> m (Steps m s))
     | Failed Text
@@ -56,9 +55,7 @@ data Steps m s
 -- | A read with no effect of its own.
 type Step = Steps Identity
 
-{- | Feed a read in pieces of at most 32 KiB, within the body ceiling, and drain the body after the
-read finishes. An empty chunk ends the body. The read resumes in its effect, run in the reader's.
--}
+-- | Enforce the body ceiling with pieces of at most 32 KiB, then drain until an empty chunk ends the body.
 readSteps :: (Monad n) => (forall a. m a -> n a) -> BodyLimit -> Steps m s -> n ByteString -> n (Either LimitError (StreamResult s))
 readSteps run bound start readChunk = go 0 start
   where
@@ -104,30 +101,23 @@ retainedValue depth =
   where
     child = retainedValue (depth - 1)
 
+-- | The parse error that marks a retained value past its structural budget.
+nestingLimit :: Text
+nestingLimit = "retained JSON nesting limit"
+
+-- | Distinguish a retained-depth refusal from malformed JSON.
+isNestingLimit :: ParseError -> Bool
+isNestingLimit (ParseError message) = message == nestingLimit
+
 -- | Charge the parsed value's own level, including empty containers. Children need one less level.
 withinRetainedDepth :: Int -> J.Parser a -> J.Parser a
 withinRetainedDepth budget parser
-    | budget <= 0 = J.mapWithFailure (const (Left "retained JSON nesting limit")) (pure ())
+    | budget <= 0 = J.mapWithFailure (\() -> Left (toString nestingLimit)) (pure ())
     | otherwise = parser
-
-{- | Which members of an object are retained, with what parser, and under which key. Every object
-read with one 'Members' value holds each name it knows under one shared key.
--}
-data Members
-    = NamedMembers (HashMap Text (Key.Key, J.Parser Value))
-    | EveryMember (J.Parser Value)
-
--- | Retain only the named members. The first entry for a name wins.
-namedMembers :: [(Text, J.Parser Value)] -> Members
-namedMembers entries = NamedMembers (HashMap.fromListWith (\_ earlier -> earlier) [(name, (Key.fromText name, parser)) | (name, parser) <- entries])
 
 -- | Retain every member with one parser, each under its own key.
 everyMember :: J.Parser Value -> Members
 everyMember = EveryMember
-
--- | Supply an invalid-shape witness without traversing a valid object through a parallel fallback.
-retainedObjectOr :: Value -> Members -> J.Parser Value
-retainedObjectOr fallback = fmap (fromMaybe fallback) . foldRetained . objectEvents
 
 -- | Select object events before folding. The fallback handles scalars and other container shapes.
 retainedObjectWith :: J.Parser Value -> Members -> J.Parser Value

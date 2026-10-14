@@ -6,7 +6,7 @@
 The shared adapter record owns the wire bytes and their format-specific operations.
 -}
 module Ecluse.Bench.Corpus (
-    LoadedEntry,
+    LoadedEntry (..),
     entryInfo,
     entryName,
     HeldTree,
@@ -25,22 +25,22 @@ import UnliftIO.Exception (evaluate, throwIO)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageInfo, mkScope)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataSerialise))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (MetadataError)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), PrecededRule, Rule (AllowIfOlderThan, AllowScope, DenyInstallTimeExecution))
 import Ecluse.Core.Snapshot (Snapshot (Snapshot, snapshotValue))
 import Ecluse.Test.Corpus (corpusLabel)
-import Ecluse.Test.EcosystemBench.Types (EcosystemBench (..), LoadedEntry)
+import Ecluse.Test.EcosystemBench.Types (EcosystemBench (..), LoadedEntry (..))
 import Ecluse.Test.Rules (atDefaultPrecedence)
 import Ecluse.Test.Snapshot (digestOf)
 
 -- | The projection validated when the corpus loaded.
 entryInfo :: LoadedEntry -> PackageInfo
-entryInfo (_, _, info, _) = info
+entryInfo LoadedEntry{leInfo = info} = info
 
 -- | A package identity and its declared corpus size tier.
 entryName :: LoadedEntry -> String
-entryName (package, _, _, _) = toString (corpusLabel package)
+entryName LoadedEntry{lePackage = package} = toString (corpusLabel package)
 
 -- | A document held as aeson's tree and forced when prepared. Only 'forcedTree' builds one.
 newtype HeldTree = HeldTree CachedDoc
@@ -58,7 +58,7 @@ instance Exception TreeUnavailable
 -- | A loaded entry's document as aeson's tree, forced by rendering it, so no timed operation decodes a packed read.
 forcedTree :: EcosystemBench -> Snapshot CachedDoc -> IO HeldTree
 forcedTree ecosystem served = do
-    tree <- maybe (throwIO (TreeUnavailable (ebEcosystem ecosystem))) pure ((fst npmCached <$> snd npmCached document) <|> (fst pypiSimpleCached <$> snd pypiSimpleCached document))
+    tree <- maybe (throwIO (TreeUnavailable (ebEcosystem ecosystem))) pure (ebTreeDocument ecosystem document)
     _ <- either throwIO (evaluate . BSL.length) (metadataSerialise (ebMetadata ecosystem) tree)
     pure (HeldTree tree)
   where

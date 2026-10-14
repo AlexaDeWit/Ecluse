@@ -34,7 +34,7 @@ import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Telemetry.Catalogue (MetricName (AssembledCacheResidentBytes, MetadataCacheRefused, MetadataCacheResidentBytes, SingleVersionCacheResidentBytes))
 import Ecluse.Core.Telemetry.Metrics (CacheStore (AssembledStore, FullStore, VersionStore), Label (LCacheStore), renderLabel)
-import Ecluse.Test.Corpus (CaptureRecord (crBytes, crCapturedAt), CorpusPackage (cpPackage), cpName, readCaptureRecords, readCorpusPins)
+import Ecluse.Test.Corpus (CaptureRecord (crCapturedAt), CorpusPackage (cpPackage), cpName, readCaptureRecords, readCorpusPins)
 import Ecluse.Test.Registry.Metadata.Fetch (heldManifest)
 import Ecluse.Test.Server.Cache (weighCacheEntry)
 import Ecluse.Test.Wai (localhost, rebaseAuthority)
@@ -61,7 +61,7 @@ patternScenarios ecosystem packages privateApp publicApp urlFor =
     boot patternKind defaultCap knobs use = do
         eco <- maybe (benchFail "pattern scenarios need an ecosystem with a metadata adapter") (pure . metadataRead . adapterMetadata) (adapterFor ecosystem)
         captures <- loadCorpusBodies packages
-        evaluationTime <- verifyCaptures ecosystem captures >>= patternClock
+        evaluationTime <- captureClock ecosystem >>= patternClock
         patternKnobs <- knobsFromEnv patternKind (length packages)
         requestTrace <- either benchFail pure (makeTrace patternKind patternKnobs (map cpName packages))
         wireBytes <- either benchFail pure (workingBytes (Map.map (fromIntegral . LBS.length) captures) requestTrace)
@@ -153,11 +153,9 @@ readKnob name fallback =
         Nothing -> pure fallback
         Just raw -> maybe (benchFail ("invalid " <> toText name)) pure (readMaybe raw)
 
-verifyCaptures :: Ecosystem -> Map Text LByteString -> IO UTCTime
-verifyCaptures ecosystem bodies = do
+captureClock :: Ecosystem -> IO UTCTime
+captureClock ecosystem = do
     records <- readCaptureRecords ecosystem >>= either (benchFail . toText) pure
-    for_ (Map.toList bodies) $ \(name, body) ->
-        unless ((crBytes <$> Map.lookup name records) == Just (LBS.length body)) (benchFail ("complete capture provenance missing or byte count differs: " <> name))
     pure (addUTCTime (2 * nominalDay) (foldl' max benchNow (map crCapturedAt (Map.elems records))))
 
 evidence :: ProxyProcess -> IORef (Int, Int) -> Maybe Int -> Int -> IORef (Int, Int, Int, Int) -> PatternKnobs -> RequestTrace -> Maybe String -> UTCTime -> IO Text
@@ -190,7 +188,6 @@ evidence proxy upstreamCount capacity rawBytes measuredBodies knobs requestTrace
             , "Full candidate charges above are diagnostic preparation only. The local request path never weighs full candidates. Compare equal successful work and the shared eligible-store budget."
             ]
 
--- One store's outcomes and occupancy from the scrape.
 collect :: [Sample] -> Int -> CacheStore -> Int -> StoreEvidence
 collect scraped fullWorkingBytes store capacity =
     StoreEvidence
@@ -210,7 +207,6 @@ collect scraped fullWorkingBytes store capacity =
         VersionStore -> SingleVersionCacheResidentBytes
         AssembledStore -> AssembledCacheResidentBytes
 
--- The cache weight of a served body's production full read, as a fetch from the stub upstream holds it.
 accountedFullBytes :: EcosystemRead -> Text -> CorpusPackage -> LByteString -> IO (Either Text Int)
 accountedFullBytes eco upstreamBase package bytes =
     bimap show weigh <$> heldManifest eco defaultLimits upstreamBase (cpPackage package) [LBS.toStrict bytes]

@@ -12,7 +12,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Test.Hspec
-import UnliftIO (concurrently, mapConcurrently)
+import UnliftIO (concurrently, mapConcurrently, timeout)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Fault (TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause), transportFault)
@@ -321,32 +321,36 @@ spec = do
             readIORef causes `shouldReturn` [(Metric.Public, Metric.Connection)]
 
         it "logs a failure once per real fetch: coalesced followers never re-log" $ do
-            -- Coalesced followers share the failing leader's typed Left, and the failure log fires
-            -- once inside the leader, never per follower.
-            fetches <- newIORef (0 :: Int)
-            failureLogs <- newIORef (0 :: Int)
-            started <- newEmptyMVar
-            release <- newEmptyMVar
-            cache <- newMetadataCache defaultCacheConfig
-            let blockingOutage _name = do
-                    atomicModifyIORef' fetches (\n -> (n + 1, ()))
-                    _ <- tryPutMVar started ()
-                    takeMVar release
-                    pure (Left (MetadataFetch (FetchTransport (transportFault TransportUnreachable "refused"))))
-                countingLog _name _err = atomicModifyIORef' failureLogs (\n -> (n + 1, ()))
-                client =
-                    publicMetadataClient cache source (newMetadataReads noopMetricsPort countingLog noInvalidLog noFetchLog (const blockingOutage) (const (failingVersion fetches)) anonymous)
-            (results, ()) <-
-                concurrently
-                    (mapConcurrently (const (fetchFullManifest client name)) [1 .. 8 :: Int])
-                    ( do
-                        takeMVar started
-                        threadDelay 30000 -- give the others time to coalesce
-                        putMVar release ()
-                    )
-            map isUnreachable results `shouldBe` replicate 8 True
-            readIORef fetches `shouldReturn` 1
-            readIORef failureLogs `shouldReturn` 1
+            completed <- timeout 5_000_000 $ do
+                -- Coalesced followers share the failing leader's typed Left, and the failure log fires
+                -- once inside the leader, never per follower.
+                fetches <- newIORef (0 :: Int)
+                failureLogs <- newIORef (0 :: Int)
+                started <- newEmptyMVar
+                release <- newEmptyMVar
+                joined <- newEmptyMVar
+                cache <- newMetadataCache defaultCacheConfig
+                let blockingOutage _name = do
+                        atomicModifyIORef' fetches (\n -> (n + 1, ()))
+                        _ <- tryPutMVar started ()
+                        takeMVar release
+                        pure (Left (MetadataFetch (FetchTransport (transportFault TransportUnreachable "refused"))))
+                    countingLog _name _err = atomicModifyIORef' failureLogs (\n -> (n + 1, ()))
+                    metrics = noopMetricsPort{mpCacheRequest = \request -> when (request == Metric.Collapsed) (putMVar joined ())}
+                    client =
+                        publicMetadataClient cache source (newMetadataReads metrics countingLog noInvalidLog noFetchLog (const blockingOutage) (const (failingVersion fetches)) anonymous)
+                (results, ()) <-
+                    concurrently
+                        (mapConcurrently (const (fetchFullManifest client name)) [1 .. 8 :: Int])
+                        ( do
+                            takeMVar started
+                            replicateM_ 7 (takeMVar joined)
+                            putMVar release ()
+                        )
+                map isUnreachable results `shouldBe` replicate 8 True
+                readIORef fetches `shouldReturn` 1
+                readIORef failureLogs `shouldReturn` 1
+            completed `shouldBe` Just ()
 
 selectVersionSpec :: Spec
 selectVersionSpec = describe "selectVersion" $ do

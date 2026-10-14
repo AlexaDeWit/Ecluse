@@ -136,6 +136,7 @@ integrationObligations =
         [ "integration/egress/native-001"
         , "integration/egress/native-002"
         , "integration/egress/native-003"
+        , "integration/egress/native-004"
         ]
     , required
         "integration/origin"
@@ -369,6 +370,8 @@ integrationObligations =
         , "integration/worker/native-007"
         , "integration/worker/native-008"
         , "integration/worker/native-009"
+        , "integration/worker/native-010"
+        , "integration/worker/native-011"
         ]
     , required
         "integration/pilot"
@@ -428,6 +431,8 @@ integrationObligations =
         ["server-shutdown"]
         [ "integration/server-shutdown/native-001"
         , "integration/server-shutdown/native-002"
+        , "integration/server-shutdown/native-003"
+        , "integration/server-shutdown/native-004"
         ]
     , required
         "integration/telemetry-metrics"

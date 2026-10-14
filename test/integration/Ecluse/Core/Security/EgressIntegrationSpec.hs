@@ -7,8 +7,8 @@ module Ecluse.Core.Security.EgressIntegrationSpec (spec) where
 
 import Data.Aeson (Value, encode, object, (.=))
 import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
-import Network.HTTP.Types (status200, status302)
+import Network.HTTP.Client (Manager, Request (redirectCount), defaultManagerSettings, newManager)
+import Network.HTTP.Types (status200, status302, status503)
 import Network.HTTP.Types.Header (hLocation)
 import Network.Wai.Handler.Warp (Port)
 import Test.Hspec
@@ -16,13 +16,16 @@ import Test.Hspec
 import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
-import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody))
-import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated))
+import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody, responseStatusCode))
+import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), metadataRequest)
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken))
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes, progressFloor), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Test.Registry.Metadata.Fetch (fetchTestBody)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig)
 import Ecluse.Test.Registry.Npm.Metadata (fetchMetadataFormBounded)
-import Ecluse.Test.Stub (stubPort, withStub, withStubHeaders)
+import Ecluse.Test.Stub (Stub, allCaptured, stubBaseUrl, stubPort, withStub, withStubHeaders)
+import Ecluse.Test.Support (expectRight)
 
 -- | Exercise test-only loopback HTTP and refused redirects through the npm fetch path.
 spec :: Spec
@@ -42,17 +45,23 @@ spec = do
                 response <- fetchMetadata manager port (Just "tok")
                 fmap responseBody response `shouldBe` Right (toStrict (encode packument))
 
-    describe "no upstream redirect is followed (redirectCount = 0)" $
-        it (caseLabel "integration/egress/native-003" "does not chase a 302 to an off-allowlist location") $
-            -- The upstream answers 302 to an off-allowlist host. With redirect-following
-            -- disabled the fetch never reaches it, so no hop escapes the allowlist.
-            withRedirector $ \port -> do
+    describe "no upstream redirect is followed (redirectCount = 0)" $ do
+        it (caseLabel "integration/egress/native-003" "returns the original 302 without contacting the local target") $
+            withRedirector $ \redirector target -> do
                 manager <- newManager defaultManagerSettings
-                result <- fetchMetadata manager port Nothing
-                case result of
-                    Right response -> responseBody response `shouldNotBe` toStrict (encode packument)
-                    -- A fetch fault is equally safe: the fetch never reached the redirect target.
-                    Left _ -> pass
+                result <- fetchMetadata manager (stubPort redirector) Nothing
+                fmap responseStatusCode result `shouldBe` Right 302
+                length <$> allCaptured redirector `shouldReturn` 1
+                allCaptured target `shouldReturn` []
+
+        it (caseLabel "integration/egress/native-004" "records a followed redirect even when the target rejects the fetch") $
+            withRedirector $ \redirector target -> do
+                manager <- newManager defaultManagerSettings
+                request <- expectRight (metadataRequest (stubBaseUrl redirector) Nothing Abbreviated thing)
+                result <- fetchTestBody manager (progressFloor defaultLimits) (MetadataBodyLimit (maxMetadataBytes defaultLimits)) request{redirectCount = 1}
+                fmap responseStatusCode result `shouldBe` Right 503
+                length <$> allCaptured redirector `shouldReturn` 1
+                length <$> allCaptured target `shouldReturn` 1
 
 fetchMetadata :: Manager -> Port -> Maybe Text -> IO (Either FetchFault RegistryResponse)
 fetchMetadata manager port token =
@@ -70,10 +79,11 @@ clientConfig manager port token =
 withUpstream :: (Port -> IO a) -> IO a
 withUpstream k = withStub status200 (encode packument) (k . stubPort)
 
--- Run an action against an in-process upstream that answers 302 to an off-allowlist host.
-withRedirector :: (Port -> IO a) -> IO a
-withRedirector k =
-    withStubHeaders status302 [(hLocation, "https://evil.example.test/elsewhere")] "" (k . stubPort)
+withRedirector :: (Stub -> Stub -> IO a) -> IO a
+withRedirector action =
+    withStub status503 "target rejected" $ \target ->
+        withStubHeaders status302 [(hLocation, encodeUtf8 (stubBaseUrl target <> "/elsewhere"))] "" $ \redirector ->
+            action redirector target
 
 -- A minimal packument body the upstream serves. The test asserts on the bytes, not
 -- their structure, so an opaque object is enough.

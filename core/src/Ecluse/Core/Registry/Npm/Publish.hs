@@ -51,7 +51,9 @@ import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
 import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, npmRead)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), jsonPutRequest, metadataRequest, packageUrl)
+import Ecluse.Core.Registry.Npm.VersionListReader (npmVersionListWalk)
 import Ecluse.Core.Registry.Publish (PublishCodec (..), PublishPlan (ppLatest))
+import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -91,7 +93,7 @@ npmPublishCodec =
         , pcTargetRead = npmRead
         , pcTargetReadPermille = cfFullReadPermille npmChargeFactors
         , pcProbeRequest = \targetUrl credential -> metadataRequest targetUrl credential Abbreviated
-        , pcVersionListParser = Just Project.versionListParser
+        , pcVersionListWalk = Just (\limits -> npmVersionListWalk limits (collectVersionList limits) emptyVersionList)
         , pcPublishRequest = npmPublishRequestFor
         , pcPublishOutcome = \status _ -> classifyPublish status
         }

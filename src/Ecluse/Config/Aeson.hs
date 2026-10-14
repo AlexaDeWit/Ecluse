@@ -2,17 +2,19 @@
 --
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE TupleSections #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
 
-{- | Configuration group decoders and their @FromJSON@ instances.
-The instances are orphans because "Ecluse.Config.Types" carries no Aeson dependency.
--}
-module Ecluse.Config.Aeson () where
+-- | Named configuration parsers at the YAML and JSON boundary.
+module Ecluse.Config.Aeson (
+    parseAppConfig,
+    parseRulesPatch,
+    parseRulePatch,
+    parseRuleEntry,
+) where
 
-import Data.Aeson (FromJSON (..), Value (..), withObject)
+import Data.Aeson (Value (..), withObject, (.!=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Aeson.Types (Parser)
+import Data.Aeson.Types (Parser, explicitParseFieldMaybe)
 import Data.IP (IPRange)
 import Data.Map.Strict qualified as Map
 import Data.Scientific (Scientific, base10Exponent, toBoundedInteger)
@@ -105,11 +107,11 @@ mountIntegrityDecoder =
         <$> optionalKey "minTrusted" (parseEnum parseMinTrustedIntegrity)
         <* optionalKey "divergencePolicy" parseLegacyDivergencePolicy
 
-instance FromJSON AppConfig where
-    parseJSON = withObject "AppConfig" (decodeGroup "document" documentDecoder)
+-- | Parse settings while leaving rule resolution to "Ecluse.Config".
+parseAppConfig :: Value -> Parser AppConfig
+parseAppConfig = withObject "AppConfig" (decodeGroup "document" documentDecoder)
 
--- @rules@ is accepted here and read by "Ecluse.Config" out of the merged document, never
--- through this decoder.
+-- Rule overlays resolve separately against their own layer.
 documentDecoder :: GroupDecoder AppConfig
 documentDecoder =
     AppConfig
@@ -386,16 +388,22 @@ parseDelaySeconds field v = do
         then pure secs
         else fail (field <> " must be a positive integer count of seconds, at most " <> show maxDelay)
 
-instance FromJSON RulePatch where
-    parseJSON = withObject "rules" $ \o ->
-        RulePatch . Map.fromList <$> traverse decodeEntry (KeyMap.toList o)
-      where
-        decodeEntry (k, v) = (Key.toText k,) <$> parseJSON v
+-- | Read a document's rule overlay, treating absent and null rules as an empty patch.
+parseRulesPatch :: Value -> Parser RulePatch
+parseRulesPatch = withObject "Config" (\obj -> explicitParseFieldMaybe parseRulePatch obj "rules" .!= RulePatch Map.empty)
 
-instance FromJSON RuleEntry where
-    parseJSON = withObject "rule" $ \o -> do
-        rejectSecretKeys o
-        decodeGroup "rule" ruleEntryDecoder o
+-- | Parse named rule entries without resolving them against a baseline.
+parseRulePatch :: Value -> Parser RulePatch
+parseRulePatch = withObject "rules" $ \o ->
+    RulePatch . Map.fromList <$> traverse decodeEntry (KeyMap.toList o)
+  where
+    decodeEntry (k, v) = (Key.toText k,) <$> parseRuleEntry v
+
+-- | Refuse secret keys before decoding a rule's fields.
+parseRuleEntry :: Value -> Parser RuleEntry
+parseRuleEntry = withObject "rule" $ \o -> do
+    rejectSecretKeys o
+    decodeGroup "rule" ruleEntryDecoder o
 
 ruleEntryDecoder :: GroupDecoder RuleEntry
 ruleEntryDecoder =

@@ -21,17 +21,15 @@ module Ecluse.Test.Corpus.Advisories (
 ) where
 
 import Codec.Compression.GZip qualified as GZip
-import Crypto.Hash (Digest, SHA256, hashlazy)
-import Data.Aeson (FromJSON (parseJSON), Object, Value, encode, object, withObject, (.:), (.=))
+import Data.Aeson (Object, Value, encode, object, (.:), (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.Types (Parser)
-import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.Short qualified as TS
 import Data.Time (nominalDay)
 import Network.HTTP.Types (status200)
-import System.FilePath (takeFileName, (</>))
+import System.FilePath (takeFileName)
 
 import Ecluse.Core.Cve (AdvisoryRange, CveLookup (cveAdvisoriesFor, cveCoveredNames))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
@@ -47,7 +45,7 @@ import Ecluse.Core.Rules.Types (
     Rule (AllowIfOlderThan, AllowIfRemediatesCve, DenyIfCve, DenyIfEpss),
  )
 import Ecluse.Core.Version (parseVersionKey)
-import Ecluse.Test.Corpus (readCorpusPins)
+import Ecluse.Test.Corpus (FilePin (..), readCorpusPins, readPinned)
 import Ecluse.Test.Osv (osvZipOf)
 import Ecluse.Test.OsvDb (compileOsvZipDbWithFeedTo, scoresOf)
 import Ecluse.Test.Rules (atDefaultPrecedence)
@@ -129,30 +127,12 @@ suggestedDenyIfCve = DenyIfCveParams 8 FailDeny
 suggestedDenyIfEpss :: DenyIfEpssParams
 suggestedDenyIfEpss = DenyIfEpssParams 0.5 FailDeny
 
--- A committed fixture file, by its path under @bench/corpus/@, with its pinned size and SHA-256.
-data FilePin = FilePin
-    { fpPath :: FilePath
-    , fpBytes :: Int64
-    , fpSha256 :: Text
-    }
-
-instance FromJSON FilePin where
-    parseJSON = withObject "advisory file pin" $ \pin -> FilePin <$> pin .: "path" <*> pin .: "bytes" <*> pin .: "sha256"
-
 advisoryPins :: Ecosystem -> Object -> Parser ([FilePin], FilePin)
 advisoryPins eco pins = do
     advisories <- pins .: "advisories"
     byEcosystem <- advisories .: "records"
     records :: Map Text FilePin <- byEcosystem .: Key.fromText (ecosystemName eco)
     (Map.elems records,) <$> advisories .: "epss"
-
--- Refuse a file whose bytes differ from its pin, so every run measures the captured data.
-readPinned :: FilePin -> IO LByteString
-readPinned pin = do
-    raw <- readFileLBS ("bench/corpus" </> fpPath pin)
-    unless (LBS.length raw == fpBytes pin && show (hashlazy raw :: Digest SHA256) == fpSha256 pin) $
-        fail ("bench/corpus/" <> fpPath pin <> " differs from its size or SHA-256 in bench/corpus/pins.json")
-    pure raw
 
 -- | A package the generated worst case names, its release keys, and how many advisories it gets.
 data SyntheticTarget = SyntheticTarget

@@ -20,6 +20,7 @@ import Ecluse.Core.Registry.JsonStream qualified as JsonStream
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit))
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genJsonBytes)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, readOutcome, testTable, walkJsonChunks)
+import Ecluse.Test.Registry.JsonStream qualified as Reference
 import Ecluse.Test.Registry.Shape (TestMembers (..), TestShape (..), genShape, shapeNames, toShape, toShapeWith)
 
 -- | Every generated shape reads every generated body to the same value, or fails the same way.
@@ -67,10 +68,10 @@ toParser = \case
     TestObjectWith budget members fallback -> JsonStream.withinRetainedDepth budget (JsonStream.retainedObjectWith (toParser fallback) (toMembers members))
     TestArrayWith budget item fallback -> JsonStream.withinRetainedDepth budget (JsonStream.retainedArrayWith (toParser fallback) (toParser item))
     TestStringOr budget other -> JsonStream.withinRetainedDepth budget ((String <$> J.string) <|> toParser other)
-    TestObjectOr fallback members -> JsonStream.retainedObjectOr fallback (toMembers members)
+    TestObjectOr fallback members -> Reference.retainedObjectOr fallback (toMembers members)
     TestChecked budget inner -> JsonStream.withinRetainedDepth budget (toParser inner)
   where
     toMembers = \case
-        TestNamed entries -> JsonStream.namedMembers [(name, toParser shape) | (name, shape) <- entries]
+        TestNamed entries -> Reference.namedMembers [(name, toParser shape) | (name, shape) <- entries]
         TestEvery shape -> JsonStream.everyMember (toParser shape)
         TestKnown _ shape -> JsonStream.everyMember (toParser shape)

@@ -6,6 +6,7 @@
 module Ecluse.Core.MirrorReadBench (benchmarks) where
 
 import Data.ByteString qualified as BS
+import Ecluse.Report.BenchLabels (ecosystemPrefix)
 import Ecluse.Test.Mirror.Read
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfIO)
 
@@ -17,7 +18,7 @@ benchmarks = do
     void (readManagedProject warm)
     pure $
         bgroup
-            "ecosystem: pypi"
+            (toString (ecosystemPrefix <> "pypi"))
             [ bgroup
                 "managed mirror read: 1000 versions, three files per version"
                 [ bench "cold record and listing" (whnfIO (newReadSession fixture >>= render))

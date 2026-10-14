@@ -3,8 +3,11 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | Configuration boundary parsing and refusal contracts.
 module Ecluse.Config.AesonSpec (spec) where
 
+import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson.Types (parseEither)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
@@ -32,6 +35,8 @@ import Ecluse.Config (
     renderConfigError,
     unUrl,
  )
+import Ecluse.Config.Aeson (parseRuleEntry, parseRulePatch, parseRulesPatch)
+import Ecluse.Config.Rule (RulePatch (..))
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (mkScope)
@@ -43,6 +48,21 @@ import Ecluse.Test.Registry.PyPI (pypiEntryVerdicts)
 
 spec :: Spec
 spec = describe "decodeDocument" $ do
+    describe "named rule parsers" $ do
+        for_ [object [], object ["rules" .= Null]] $ \value ->
+            it ("treats absent or null rules as an empty overlay: " <> show value) $
+                parseEither parseRulesPatch value `shouldBe` Right (RulePatch Map.empty)
+
+        it "keeps the rules field in malformed patch diagnostics" $
+            parseEither parseRulesPatch (object ["rules" .= ([] :: [Value])])
+                `shouldBe` Left "Error in $.rules: parsing rules failed, expected Object, but encountered Array"
+
+        it "refuses secrets before unknown keys or malformed rule values" $ do
+            let entry = object ["token" .= ("redacted" :: Text), "typo" .= True, "precedence" .= False]
+                refusal = "secret key(s) are not allowed in the config document (use environment variables): \"token\""
+            parseEither parseRuleEntry entry `shouldBe` Left ("Error in $: " <> refusal)
+            parseEither parseRulePatch (object ["example" .= entry]) `shouldBe` Left ("Error in $: " <> refusal)
+
     it "decodes a document with one mount and a rule patch" $
         mountKeysOf pubUrlEnv (Just singleMountDoc) `shouldReturn` [Npm]
 

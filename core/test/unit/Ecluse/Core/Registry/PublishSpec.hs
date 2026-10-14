@@ -31,7 +31,6 @@ import Ecluse.Core.Registry.Publish (
     PublishPlan (PublishPlan, ppLatest),
     newMirrorPublish,
  )
-import Ecluse.Core.Registry.VersionList (VersionListItem (VersionListObject))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Package (v1_0_0)
@@ -169,7 +168,7 @@ unsealedCodec :: PublishCodec
 unsealedCodec =
     PublishCodec
         { pcProbeRequest = \targetUrl _token _name -> unsealed (targetUrl <> "/probe")
-        , pcVersionListParser = Just (const (pure VersionListObject))
+        , pcVersionListWalk = pcVersionListWalk npmPublishCodec
         , pcNativeComplete = pcNativeComplete npmPublishCodec
         , pcTargetReadPermille = pcTargetReadPermille npmPublishCodec
         , pcTargetRead = npmRead{erRequest = \targetUrl _ _ -> unsealed (targetUrl <> "/probe")}

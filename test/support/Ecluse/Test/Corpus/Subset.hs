@@ -14,17 +14,20 @@ module Ecluse.Test.Corpus.Subset (
     -- * Cutting documents
     keepNpmVersions,
     keepPyPIVersions,
+    heavyNpmBase,
+    heavyPyPIBase,
 
     -- * The newest share of a capture
     newestNpmShare,
     newestPyPIShare,
 ) where
 
-import Data.Aeson (Value (Array, Object, String), eitherDecodeStrict, toJSON)
+import Data.Aeson (Value (Array, Object, String), eitherDecodeStrict, object, toJSON, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Data.Text qualified as T
 
 import Ecluse.Core.Package (Artifact (artFilename), PackageDetails (pkgArtifacts, pkgPublishedAt), PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Security (defaultLimits)
@@ -53,9 +56,7 @@ shareOf share items = max 1 (min count (ceiling (share * fromIntegral count)))
   where
     count = length items
 
-{- | An npm packument cut to the given versions: those versions, their times beside @created@ and
-@modified@, and the dist-tags that point at a kept version.
--}
+-- | Keep selected npm releases, their times, and tags that point at a kept release.
 keepNpmVersions :: Set Text -> Value -> Value
 keepNpmVersions kept = onFields $ \field value -> case (field, value) of
     ("versions", Object releases) -> Object (KeyMap.filterWithKey (\key _ -> Key.toText key `Set.member` kept) releases)
@@ -67,9 +68,7 @@ keepNpmVersions kept = onFields $ \field value -> case (field, value) of
         String target -> target `Set.member` kept
         _ -> False
 
-{- | A Simple index cut to the given versions: the files the projection places in them, and the
-entries of its versions list that name them.
--}
+-- | Keep the files and version entries that belong to the selected PyPI releases.
 keepPyPIVersions :: PackageInfo -> Set Text -> Value -> Value
 keepPyPIVersions info kept = onFields $ \field value -> case (field, value) of
     ("files", Array entries) -> toJSON (filter keptFile (toList entries))
@@ -100,3 +99,25 @@ onFields :: (Text -> Value -> Value) -> Value -> Value
 onFields change = \case
     Object fields -> Object (KeyMap.mapWithKey (change . Key.toText) fields)
     other -> other
+
+-- | Add release deprecation text whose total width follows the requested byte count.
+heavyNpmBase :: Int -> Value -> Value
+heavyNpmBase size = \case
+    Object fields -> Object $ case KeyMap.lookup "versions" fields of
+        Just (Object releases) -> KeyMap.insert "versions" (Object (deprecated releases)) fields
+        _ -> fields
+    other -> other
+  where
+    deprecated releases = KeyMap.mapWithKey (\key -> deprecate (padded (Key.toText key) (size `div` max 1 (KeyMap.size releases)))) releases
+    deprecate notice = \case
+        Object release -> Object (KeyMap.insert "deprecated" (String notice) release)
+        other -> other
+
+-- | Add project status text with the requested width.
+heavyPyPIBase :: Int -> Value -> Value
+heavyPyPIBase size = \case
+    Object fields -> Object (KeyMap.insert "project-status" (object ["status" .= ("active" :: Text), "reason" .= padded "heavy base" size]) fields)
+    other -> other
+
+padded :: Text -> Int -> Text
+padded label width = label <> " " <> T.replicate (max 0 (width - T.length label - 1)) "x"

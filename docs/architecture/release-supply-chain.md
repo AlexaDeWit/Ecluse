@@ -31,6 +31,9 @@ must match `ecluse.cabal`'s `version:` field, or the release fails fast at a ver
 a match the workflow builds the image natively for `linux/amd64` and `linux/arm64` (see
 [Multi-architecture image](#multi-architecture-image)).
 
+Local initiation, workflow validation, and verification accept the same stable and `rc.N` version grammar, with an optional leading `v` and no leading zeroes.
+Validation supplies canonical image (`X.Y.Z[-rc.N]`) and Git (`vX.Y.Z[-rc.N]`) tags to publication.
+
 The build is the reusable workflow
 [`release-build.yml`](../../.github/workflows/release-build.yml), and CI's release dry-run runs the
 same definition. Every commit on `main`, and every pull request that can change the build, builds

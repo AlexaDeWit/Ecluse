@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Worker publication and queue disposition against real SQS and loopback HTTP.
 module Ecluse.Core.Worker.LoopIntegrationSpec (spec) where
 
 import Data.Map.Strict qualified as Map
@@ -14,7 +15,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Artifact (artFilename), HashAlg (SRI), PackageDetails (pkgArtifacts), mkPackageName)
 import Ecluse.Core.Queue (
     MirrorJob (..),
-    MirrorQueue (enqueue, receive),
+    MirrorQueue (ack, enqueue, receive),
     Seconds (Seconds),
  )
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails), VersionEvaluation (VersionPresent))
@@ -31,21 +32,22 @@ import Ecluse.Integration.WorkerLoop (
     mirrorPoliciesUnderAt,
     newQueueEnv,
     observeAcknowledgement,
+    observeDeadLetter,
     publishedAtLeast,
     runLoopFor,
     runLoopUntil,
     withMirrorTarget,
  )
 import Ecluse.Runtime.Env (envWorkerHeartbeat, lastPoll)
+import Ecluse.Service (runWorker)
 import Ecluse.Test.Package (sriSha512Of, unsafeFilename, unsafeHash)
+import Ecluse.Test.Poll (runUntil)
 import Ecluse.Test.Rules (admitRule, denyRule)
 import Ecluse.Test.Stub (allCaptured, stubBaseUrl, withStub)
-import Ecluse.Test.Support (expectRightIO)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape), expectRightIO)
 import Ecluse.Test.Worker (workerSourceAt)
 
-{- | The mirror worker end to end against real SQS (a @ministack@ container) and WAI stubs: the
-visibility, redelivery, and boot-policy semantics the in-memory double cannot reproduce.
--}
+-- | Real SQS supplies visibility and redelivery behaviour absent from the in-memory queue.
 spec :: Spec
 spec =
     aroundAll withMinistack $
@@ -84,12 +86,14 @@ spec =
                 withUpstream $ \upstreamUrl ->
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-tamper" defaultQueueOptions
-                        env <- newQueueEnv queue
+                        (observedQueue, acknowledged) <- observeAcknowledgement queue
+                        env <- newQueueEnv observedQueue
                         -- The re-admitted digest is well-formed but does not match the served
                         -- bytes: a tampered artifact the worker must refuse to publish.
                         tamperPolicies <- mirrorPoliciesAt Nothing mirrorUrl (unsafeHash SRI mismatchSri :| [])
                         expectRightIO (enqueue queue job)
-                        runLoopFor (workerSourceAt upstreamUrl tamperPolicies) env 4_000_000
+                        runLoopUntil (workerSourceAt upstreamUrl tamperPolicies) env acknowledged
+                        acknowledged `shouldReturn` True
                         published <- readIORef publishLog
                         published `shouldBe` []
 
@@ -124,16 +128,18 @@ spec =
                         length published `shouldSatisfy` (>= 2)
                         published `shouldSatisfy` all (== npmPublishPath)
 
-            it (caseLabel "integration/worker/native-005" "never mirrors an over-cap artifact; it dead-letters the job to ride the redrive policy (issue #846)") $ \container ->
+            it (caseLabel "integration/worker/native-005" "dead-letters an over-cap artifact without mirroring it") $ \container ->
                 withUpstream $ \upstreamUrl ->
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-overcap" defaultQueueOptions
-                        env <- newQueueEnv queue
+                        (observedQueue, disposed) <- observeDeadLetter queue
+                        env <- newQueueEnv observedQueue
                         -- A fetch cap below the artifact's size. The bounded fetch aborts fail-
                         -- closed, so the worker dead-letters the job and never mirrors it.
                         policies <- mirrorPoliciesAt (Just 8) mirrorUrl (unsafeHash SRI trueSri :| [])
                         expectRightIO (enqueue queue job)
-                        runLoopFor (workerSourceAt upstreamUrl policies) env 4_000_000
+                        runLoopUntil (workerSourceAt upstreamUrl policies) env disposed
+                        disposed `shouldReturn` True
                         published <- readIORef publishLog
                         published `shouldBe` []
 
@@ -177,6 +183,24 @@ spec =
                         pollAfter <- lastPoll (envWorkerHeartbeat env)
                         pollAfter `shouldSatisfy` isJust
 
+            for_ [("integration/worker/native-010", status201), ("integration/worker/native-011", status409)] $ \(identifier, replyStatus) ->
+                it (caseLabel identifier "fails the acknowledgement wait when publication succeeds but acknowledgement is withheld") $ \container ->
+                    withUpstream $ \upstreamUrl ->
+                        withMirrorTarget replyStatus $ \mirrorUrl publishLog -> do
+                            queue <- freshQueue container (if replyStatus == status201 then "worker-withheld-success" else "worker-withheld-conflict") defaultQueueOptions
+                            attempted <- newIORef False
+                            blocked <- newEmptyMVar
+                            let withheld = queue{ack = \_ -> writeIORef attempted True >> takeMVar blocked}
+                            (observedQueue, acknowledged) <- observeAcknowledgement withheld
+                            env <- newQueueEnv observedQueue
+                            policies <- faithfulPolicies mirrorUrl
+                            expectRightIO (enqueue queue job)
+                            runUntil 5_000_000 50_000 (runWorker (workerSourceAt upstreamUrl policies) env) acknowledged
+                                `shouldThrow` (\(TestContractEscape message) -> message == "worker progress timed out")
+                            readIORef attempted `shouldReturn` True
+                            acknowledged `shouldReturn` False
+                            readIORef publishLog `shouldReturn` [npmPublishPath]
+
 -- A visibility window short enough that the ack assertions can outwait it. The shipped 30s default
 -- would hide an un-acked message behind its lease, so the read after the loop could never fail.
 rolloutQueueOptions :: QueueOptions
@@ -186,9 +210,7 @@ rolloutQueueOptions = defaultQueueOptions{qoVisibilityTimeout = Seconds 2}
 rolloutLoopWindow :: Int
 rolloutLoopWindow = 8_000_000
 
-{- | The queue holds nothing, read past 'rolloutQueueOptions' visibility window so a message the
-worker left un-acked is visible again rather than hidden behind its lease.
--}
+-- Read past visibility so an unacknowledged message cannot hide behind its lease.
 assertQueueDrained :: MirrorQueue -> IO ()
 assertQueueDrained queue = do
     threadDelay 2_500_000

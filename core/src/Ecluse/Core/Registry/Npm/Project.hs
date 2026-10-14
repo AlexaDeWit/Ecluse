@@ -7,7 +7,7 @@ Version-map keys identify artifacts independently of their filenames.
 -}
 module Ecluse.Core.Registry.Npm.Project (
     -- * Projection
-    versionListParser,
+    projectVersionListEntry,
     projectVersionEntryResult,
     projectVersionManifest,
     installHooks,
@@ -22,7 +22,6 @@ module Ecluse.Core.Registry.Npm.Project (
 import Data.Aeson (FromJSON (parseJSON), Value, withObject, (.:?))
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
-import Data.JsonStream.Parser qualified as J
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -44,7 +43,6 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Registry (ParseError (..))
-import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (VersionsContainer), NpmFieldOf (BeginContainer, InvalidContainer, VersionField), NpmRead (VersionListRead), npmFields)
 import Ecluse.Core.Registry.Npm.Wire (
     Dist (..),
     VersionManifest (..),
@@ -55,7 +53,6 @@ import Ecluse.Core.Registry.WireSupport (
     nameComponentWith,
     withinNameLimit,
  )
-import Ecluse.Core.Security (Limits, maxNestingDepth)
 import Ecluse.Core.Server.Path (Filename, mkFilename)
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Text (urlFilename)
@@ -73,15 +70,9 @@ projectVersionEntryResult :: PackageName -> Version -> Maybe UTCTime -> Value ->
 projectVersionEntryResult name version publishedAt value =
     projectDetails name version publishedAt <$> parseEither parseJSON value
 
--- | Recognise usable versions with only VersionEntry's discriminating fields and return sorted identifiers.
-versionListParser :: Limits -> J.Parser VersionListItem
-versionListParser limits = J.objectFound VersionListObject VersionListObject (J.catMaybeI (candidate <$> npmFields (maxNestingDepth limits) VersionListRead))
-  where
-    candidate (BeginContainer VersionsContainer) = Just VersionListContainer
-    candidate (InvalidContainer VersionsContainer) = Just VersionListInvalidContainer
-    candidate (VersionField key raw) = Just (VersionListEntry (if usable raw then Just (mkVersion Npm key) else Nothing))
-    candidate _ = Nothing
-    usable raw = isJust (raw >>= rightToMaybe . (parseEither parseJSON :: Value -> Either String VersionEntry))
+-- | Recognise a compact release with the same optional-field checks as a complete release.
+projectVersionListEntry :: Text -> Maybe Value -> VersionListItem
+projectVersionListEntry key raw = VersionListEntry (mkVersion Npm key <$ (raw >>= rightToMaybe . (parseEither parseJSON :: Value -> Either String VersionEntry)))
 
 -- Every field is evaluated here, so a retained release never keeps its decoded manifest alive.
 projectDetails :: PackageName -> Version -> Maybe UTCTime -> VersionEntry -> PackageDetails

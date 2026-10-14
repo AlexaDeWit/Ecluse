@@ -5,20 +5,17 @@
 -- | Live bytes a token walk holds while it reads a body, sampled between the body's chunks.
 module Ecluse.Core.Registry.Json.WalkProbe (heldDuring, heldWritingDuring, allowance) where
 
-import Control.Concurrent (yield)
 import Control.Monad.ST (RealWorld, ST, stToIO)
 import Data.ByteString qualified as BS
 import Data.JsonStream.Lexer (Cursor)
-import GHC.Stats (GCDetails (gcdetails_live_bytes), RTSStats (gc), getRTSStats, getRTSStatsEnabled)
-import System.Mem (performMajorGC)
+import GHC.Stats (getRTSStatsEnabled)
 import UnliftIO.Exception (evaluate)
 
 import Ecluse.Core.Registry.Json.Walk (Step, Steps, readJsonWalk, readJsonWalkST)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit))
+import Ecluse.Core.Server.MemoryModel.HeapSample qualified as Heap
 
-{- | The most live bytes at any 32 KiB chunk boundary while the walk reads the body, above the live
-bytes before it started, which include the body itself.
--}
+-- | Peak live growth at 32 KiB chunk boundaries above the baseline, which includes the input body.
 heldDuring :: (Cursor -> Step s) -> ByteString -> IO Integer
 heldDuring walk = heldReading (`readJsonWalk` walk)
 
@@ -54,11 +51,7 @@ pieces body
     | otherwise = BS.take fixtureChunkBytes body : pieces (BS.drop fixtureChunkBytes body)
 
 liveBytes :: IO Word64
-liveBytes = do
-    performMajorGC
-    yield
-    performMajorGC
-    gcdetails_live_bytes . gc <$> getRTSStats
+liveBytes = Heap.live <$> Heap.sample
 
 fixtureChunkBytes :: Int
 fixtureChunkBytes = 32768

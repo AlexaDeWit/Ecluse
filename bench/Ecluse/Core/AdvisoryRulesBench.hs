@@ -10,13 +10,14 @@ module Ecluse.Core.AdvisoryRulesBench (withBenchmarks) where
 
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Ecluse.Report.BenchLabels (ecosystemPrefix)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Tasty (localOption)
 import Test.Tasty.Bench (Benchmark, RelStDev (RelStDev), bench, bgroup, whnfAppIO)
 import Test.Tasty.HUnit (assertBool, assertFailure, (@?=))
 
-import Ecluse.Bench.Corpus (LoadedEntry, benchEvalContext, entryInfo, entryName)
+import Ecluse.Bench.Corpus (LoadedEntry (..), benchEvalContext, entryInfo, entryName)
 import Ecluse.Core.Cve (CveDb (cveDbLookup), CveLookup (cveAdvisoriesFor, cveCoveredNames))
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Package (infoVersions)
@@ -68,11 +69,11 @@ withEcosystemGroup dir ecosystem use = case filter ((`elem` measuredPackages) . 
         corpus <- compileCorpusAdvisories eco (scratch "corpus")
         synthetic <- syntheticAdvisories eco targets >>= compileAdvisoryInputs eco (scratch "synthetic")
         withServedArtifact eco corpus $ \corpusDeps _ -> withServedArtifact eco synthetic $ \syntheticDeps syntheticDb -> do
-            checkCapturesServed corpusDeps [cpPackage package | (package, _, _, _) <- entries] >>= either (assertFailure . ("advisory rows: " <>) . toString) pure
+            checkCapturesServed corpusDeps [cpPackage package | LoadedEntry{lePackage = package} <- entries] >>= either (assertFailure . ("advisory rows: " <>) . toString) pure
             checkSyntheticServed (cveDbLookup syntheticDb) heavy targets
             use
                 [ bgroup
-                    ("ecosystem: " <> toString (ecosystemName eco))
+                    (toString (ecosystemPrefix <> ecosystemName eco))
                     [ bgroup
                         "rules with an advisory database (per package)"
                         [ rows "shipped policy without a database" inertRuleDeps shippedPolicy entries
@@ -97,7 +98,7 @@ checkSyntheticServed synthetic heavy targets = do
     assertBool "advisory rows: the generated artifact's package names differ from its targets" (sort covered == sort (map stPackage targets))
 
 packageName :: LoadedEntry -> Text
-packageName (package, _, _, _) = cpName package
+packageName LoadedEntry{lePackage = package} = cpName package
 
 rows :: String -> RuleDeps -> [PrecededRule] -> [LoadedEntry] -> Benchmark
 rows label deps policy entries = bgroup label [bench (entryName entry) (whnfAppIO (survivors deps policy) entry) | entry <- entries]

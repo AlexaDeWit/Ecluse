@@ -8,6 +8,7 @@ module Ecluse.Test.Contract.RegistrySmoke (liveMetadata) where
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
+import Ecluse.Core.Fault (TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause))
 import Ecluse.Core.Package (PackageInfo (infoName, infoVersions), renderPackageName)
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError (MetadataFetch))
@@ -19,7 +20,8 @@ liveMetadata :: Text -> IO (Either MetadataError Manifest) -> IO PackageInfo
 liveMetadata expected fetch = do
     fetched <- fetch
     case fetched of
-        Left (MetadataFetch (FetchTransport fault)) -> pendingWith ("registry unreachable: " <> show fault)
+        Left (MetadataFetch (FetchTransport fault))
+            | tfCause fault `elem` [TransportTimeout, TransportUnreachable] -> pendingWith ("registry unreachable: " <> show fault)
         _ -> pure ()
     manifest <- expectRight fetched
     let info = manifestInfo manifest

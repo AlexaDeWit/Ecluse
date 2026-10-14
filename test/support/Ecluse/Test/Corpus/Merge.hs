@@ -13,22 +13,16 @@ module Ecluse.Test.Corpus.Merge (
     mergeDocuments,
 ) where
 
-import Data.Aeson (Value (Object, String), eitherDecodeStrict, object, (.=))
-import Data.Aeson.Key qualified as Key
-import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson (Value, eitherDecodeStrict)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Ratio ((%))
 import Data.Set qualified as Set
-import Data.Text qualified as T
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageInfo (infoName, infoVersions), pkgEcosystem)
-import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage))
-import Ecluse.Test.Corpus.Subset (byPublishTime, keepNpmVersions, keepPyPIVersions, newestVersions, oldestVersions)
-import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
-import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
+import Ecluse.Test.Corpus.Subset (byPublishTime, newestVersions, oldestVersions)
+import Ecluse.Test.EcosystemBench (EcosystemBench (ebHeavyBase, ebKeepVersions, ebTreeRead), ecosystemBenchFor)
 
 -- | How the private and public documents of a two-source listing share a capture's versions.
 data MergeShape
@@ -38,13 +32,9 @@ data MergeShape
       Overlapping
     | -- | Each holds half of the versions, none of them in both.
       Disjoint
-    | {- | The private copy holds the newest quarter by publish time, as a private registry that
-      holds the versions a deployment consumed does, and the public one every version.
-      -}
+    | -- | The private copy holds the newest quarter by publish time, and the public copy every version.
       PublishOrder
-    | {- | The private copy holds every tenth version by publish time and rendered text half the
-      capture's size, and the public one every version.
-      -}
+    | -- | The private copy holds every tenth version and text half the capture's size.
       HeavyBase
     | -- | 'HeavyBase' with the oldest tenth of the versions, whose releases are the smallest.
       HeavyOldBase
@@ -66,51 +56,28 @@ data MergeDocument = Captured | Rewritten Value
 -- | 'mergeDocuments' for a corpus capture's bytes, projected under the default limits.
 captureDocuments :: MergeShape -> CorpusPackage -> ByteString -> Either String (MergeDocument, MergeDocument)
 captureDocuments shape package bytes = do
-    info <- case pkgEcosystem name of
-        Npm -> bimap show fst (projectNpmManifest defaultLimits name bytes)
-        PyPI -> bimap show fst (projectPyPIIndex defaultLimits name bytes)
-        RubyGems -> Left "no RubyGems corpus"
+    ecosystem <- maybeToRight "no corpus provider" (ecosystemBenchFor (pkgEcosystem name))
+    info <- bimap show fst (ebTreeRead ecosystem name bytes)
     mergeDocuments shape info bytes
   where
     name = cpPackage package
 
-{- | The private and public documents of a merge in the shape, from a capture's bytes and its
-projection. A rewritten document keeps the capture's other fields.
--}
+-- | Rewrite the private and public documents, preserving fields outside the selected shape.
 mergeDocuments :: MergeShape -> PackageInfo -> ByteString -> Either String (MergeDocument, MergeDocument)
-mergeDocuments shape info bytes = case shape of
-    Identical -> Right (Captured, Captured)
-    Overlapping -> both (byKey (\position -> position `mod` 3 /= 2)) (byKey (\position -> position `mod` 3 /= 0))
-    Disjoint -> both (byKey even) (byKey odd)
-    PublishOrder -> privateOnly (keepVersions info (newestVersions (1 % 4) info))
-    HeavyBase -> privateOnly (weighDown info (BS.length bytes `div` 2) . keepVersions info (everyTenth (byPublishTime info)))
-    HeavyOldBase -> privateOnly (weighDown info (BS.length bytes `div` 2) . keepVersions info (oldestVersions (1 % 10) info))
+mergeDocuments shape info bytes = do
+    ecosystem <- maybeToRight "no corpus provider" (ecosystemBenchFor (pkgEcosystem (infoName info)))
+    shapedDocuments ecosystem
   where
-    rewrite keep = Rewritten . keep <$> eitherDecodeStrict bytes
-    both private public = (,) <$> rewrite (keepVersions info private) <*> rewrite (keepVersions info public)
-    privateOnly keep = (,Captured) <$> rewrite keep
-    byKey keeps = Set.fromList [key | (position, key) <- zip [0 :: Int ..] (Map.keys (infoVersions info)), keeps position]
-    everyTenth keys = Set.fromList [key | (position, key) <- zip [0 :: Int ..] keys, position `mod` 10 == 0]
-
-keepVersions :: PackageInfo -> Set Text -> Value -> Value
-keepVersions info = case pkgEcosystem (infoName info) of
-    PyPI -> keepPyPIVersions info
-    Npm -> keepNpmVersions
-    RubyGems -> const id
-
--- npm keeps release deprecation text, while PyPI keeps project status text.
-weighDown :: PackageInfo -> Int -> Value -> Value
-weighDown info size = \case
-    Object fields -> Object $ case pkgEcosystem (infoName info) of
-        Npm -> case KeyMap.lookup "versions" fields of
-            Just (Object releases) -> KeyMap.insert "versions" (Object (deprecated releases)) fields
-            _ -> fields
-        PyPI -> KeyMap.insert "project-status" (object ["status" .= ("active" :: Text), "reason" .= padded "heavy base" size]) fields
-        RubyGems -> fields
-    other -> other
-  where
-    deprecated releases = KeyMap.mapWithKey (\key -> deprecate (padded (Key.toText key) (size `div` max 1 (KeyMap.size releases)))) releases
-    deprecate notice = \case
-        Object release -> Object (KeyMap.insert "deprecated" (String notice) release)
-        other -> other
-    padded label width = label <> " " <> T.replicate (max 0 (width - T.length label - 1)) "x"
+    shapedDocuments ecosystem = case shape of
+        Identical -> Right (Captured, Captured)
+        Overlapping -> both (byKey (\position -> position `mod` 3 /= 2)) (byKey (\position -> position `mod` 3 /= 0))
+        Disjoint -> both (byKey even) (byKey odd)
+        PublishOrder -> privateOnly (ebKeepVersions ecosystem info (newestVersions (1 % 4) info))
+        HeavyBase -> privateOnly (ebHeavyBase ecosystem (BS.length bytes `div` 2) . ebKeepVersions ecosystem info (everyTenth (byPublishTime info)))
+        HeavyOldBase -> privateOnly (ebHeavyBase ecosystem (BS.length bytes `div` 2) . ebKeepVersions ecosystem info (oldestVersions (1 % 10) info))
+      where
+        rewrite keep = Rewritten . keep <$> eitherDecodeStrict bytes
+        both private public = (,) <$> rewrite (ebKeepVersions ecosystem info private) <*> rewrite (ebKeepVersions ecosystem info public)
+        privateOnly keep = (,Captured) <$> rewrite keep
+        byKey keeps = Set.fromList [key | (position, key) <- zip [0 :: Int ..] (Map.keys (infoVersions info)), keeps position]
+        everyTenth keys = Set.fromList [key | (position, key) <- zip [0 :: Int ..] keys, position `mod` 10 == 0]
