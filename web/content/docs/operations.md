@@ -222,8 +222,9 @@ the rule, and the cause. The line is bounded: once per package, version, and ski
 the life of the outage, cleared when the source recovers, so a mount with no mirror that admits the
 same version on every public serve logs it once per outage. The record behind that bound holds
 4096 identities per ecosystem and forgets the oldest past that. A trusted read never logs it.
-The mirror worker records its own skipped checks once per check per job attempt that passes admission.
-A retry can repeat this evidence, independently of the public gate's outage bound.
+The mirror worker records each skipped check once per successful re-admission.
+A job attempt can re-admit more than once as its expected inventory expands.
+Retries can also repeat this evidence, independently of the public gate's outage bound.
 The evidence lives in that decision and in the log only, never in registry metadata, so its retention is the log's.
 
 A one-shot `ecluse pilot compile` using the same Prometheus port as a live Pilot can log a bind

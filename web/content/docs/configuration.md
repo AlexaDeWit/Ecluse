@@ -626,7 +626,8 @@ the life of the advisory outage, cleared when the source recovers, so repeated p
 version during an outage log it once. A trusted read of a mirrored version runs no rules and logs
 nothing. A check the winning allow pre-empted is recorded as not reached, never as passed, and
 logs no line. The mirror worker also logs the checks skipped during its own re-admission, once
-per check per job attempt that passes the admission gate. Retries can repeat this worker evidence.
+per skipped check per successful re-admission. A job attempt can re-admit more than once as its
+expected inventory expands. Retries can also repeat this evidence.
 A skipped check never grants an allow by itself, and the worker still verifies artifact integrity. The evidence lives in that decision and in the log only: Écluse writes no metadata
 to the mirror, and the log's retention is yours. The outage itself is reported apart from any
 request, at `error`, as [Advisory outages](@/docs/operations.md#advisory-outages) describes.
