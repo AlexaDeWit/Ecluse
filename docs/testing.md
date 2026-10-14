@@ -891,7 +891,7 @@ install, so the harness passes `--only-binary=:all:` and installs a wheel alone,
 
 ## Prepared PyPI assembly rows
 
-`All.ecluse-core (work-per-request).ecosystem: PyPI.serve (filter + merge-assemble).prepared PyPI assembly` adds six native rows:
+`All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI assembly` adds six native rows:
 
 | Capture label | Survivor rows |
 |---|---|
