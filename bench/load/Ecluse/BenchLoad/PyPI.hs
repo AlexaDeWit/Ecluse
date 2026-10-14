@@ -12,7 +12,6 @@ module Ecluse.BenchLoad.PyPI (
     wheelStubWith,
 ) where
 
-import Control.Concurrent (threadDelay)
 import Data.Aeson (Value, eitherDecode, encode, object, (.:), (.=))
 import Data.Aeson.Types (Pair)
 import Data.ByteString.Lazy qualified as LBS
@@ -26,7 +25,7 @@ import Network.Wai (Application, Request, pathInfo, rawPathInfo, responseLBS)
 
 import Ecluse.BenchLoad.Contract.Driver (LoadReadDriver (..), readLoadContract)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (artifactBytes, fetchChecked, httpTarget, longCacheTtl, selfHosted, weightedMix, withProxyOverStubs)
+import Ecluse.BenchLoad.Fixture (artifactBytes, delayUpstream, fetchChecked, httpTarget, longCacheTtl, selfHosted, weightedMix, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (DriveBurst, DriveRamp), LoadKnobs (..), Scenario (..), UpstreamFixture, proxied, scenario, urlLoad)
 import Ecluse.BenchLoad.Listing (ListingSetup (..), cacheEvictsLoad, cacheFitsLoad, listingLoad, listingWorkingSet, revalidateLoad, withListingStubs)
 import Ecluse.BenchLoad.ManagedMirror (managedMirrorScenarios)
@@ -89,8 +88,7 @@ pypiListing =
 -- | State the effective eviction size and the limits of the service-time attribution.
 pypiLoadNotes :: LoadKnobs -> Text
 pypiLoadNotes knobs =
-    "PyPI uses the configured injected latency. No live PyPI RTT probe runs.\n\n"
-        <> "Service attribution subtracts one public baseline. Extra private or public hops remain in reported overhead, which is not intrinsic proxy CPU time.\n\n"
+    "Service attribution subtracts one public baseline. Extra private or public hops remain in reported overhead, which is not intrinsic proxy CPU time.\n\n"
         <> "Cache working set: "
         <> show count
         <> " projects. Eviction entry bound: "
@@ -267,7 +265,7 @@ wheelFilename name = name <> "-9999.0.2-py3-none-any.whl"
 
 indexStub :: IORef (Map Text LByteString) -> Int -> Map Text LByteString -> Application
 indexStub rewritten latency captures request respond = do
-    threadDelay latency
+    delayUpstream latency
     bodies <- selfHosted "https://files.pythonhosted.org" rewritten (selfBaseUrl request) captures
     respond $ case requestPath request of
         ["simple", project] | Just bytes <- Map.lookup project bodies -> responseLBS status200 [(hContentType, simpleIndexMediaType)] bytes
@@ -275,7 +273,7 @@ indexStub rewritten latency captures request respond = do
 
 wheelStub :: Int -> LByteString -> Application
 wheelStub latency bytes = \request respond -> do
-    threadDelay latency
+    delayUpstream latency
     respond $ case requestPath request of
         ["simple", project] | knownProject project -> responseLBS status200 [(hContentType, simpleIndexMediaType)] (encode (wheelIndex (selfBaseUrl request) digest size project))
         ["simple", project, filename] | knownProject project && filename == wheelFilename project -> responseLBS status200 [(hContentType, "application/octet-stream")] bytes
@@ -290,7 +288,7 @@ indexStubWithArtifacts :: IORef (Map Text LByteString) -> Int -> Map Text LByteS
 indexStubWithArtifacts rewritten latency captures artifacts request respond =
     case Map.lookup (rawPathInfo request) artifacts of
         Just bytes -> do
-            threadDelay latency
+            delayUpstream latency
             respond (responseLBS status200 [(hContentType, "application/octet-stream")] bytes)
         Nothing -> indexStub rewritten latency captures request respond
 
@@ -299,7 +297,7 @@ wheelStubWith :: (Text -> IO [Pair]) -> Int -> LByteString -> Application
 wheelStubWith extraFields latency bytes request respond =
     case requestPath request of
         ["simple", project] | project `elem` map cpName pypiCorpusPackages -> do
-            threadDelay latency
+            delayUpstream latency
             extra <- extraFields project
             respond (responseLBS status200 [(hContentType, simpleIndexMediaType)] (encode (withKeys extra (wheelIndex (selfBaseUrl request) digest size project))))
         _ -> wheelStub latency bytes request respond
@@ -309,7 +307,7 @@ wheelStubWith extraFields latency bytes request respond =
 
 missingStub :: Int -> Application
 missingStub latency _ respond = do
-    threadDelay latency
+    delayUpstream latency
     respond (responseLBS status404 [] "")
 
 requestPath :: Request -> [Text]

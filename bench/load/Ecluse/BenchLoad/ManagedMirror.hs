@@ -5,7 +5,6 @@
 -- | Matched native and managed PyPI listings through the measured HTTP proxy and state transport.
 module Ecluse.BenchLoad.ManagedMirror (managedMirrorScenarios) where
 
-import Control.Concurrent (threadDelay)
 import Data.Aeson (encode, object, (.=))
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
@@ -20,7 +19,7 @@ import Network.Wai (Application, pathInfo, rawPathInfo, requestHeaders, response
 import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (fetchChecked, httpTarget, longCacheTtl, withProxyPortsConfigured)
+import Ecluse.BenchLoad.Fixture (delayUpstream, fetchChecked, httpTarget, longCacheTtl, withProxyPortsConfigured)
 import Ecluse.BenchLoad.Harness (LoadKnobs (lkUpstreamLatencyMicros), Scenario (..), Target, scenario)
 import Ecluse.BenchLoad.ProxyProcess (ProxySettings (..), mirrorStateBucket)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
@@ -100,7 +99,7 @@ measured mode counts action = do
 
 privateApp :: Int -> IORef (Maybe ReadFixture) -> IORef (Map Text Int) -> Application
 privateApp latency fixture counts request respond = do
-    threadDelay latency
+    delayUpstream latency
     _ <- increment counts "private"
     input <- requireFixture fixture
     respond $ case filter (not . T.null) (pathInfo request) of
@@ -109,13 +108,13 @@ privateApp latency fixture counts request respond = do
 
 publicApp :: Int -> IORef (Map Text Int) -> Application
 publicApp latency counts _ respond = do
-    threadDelay latency
+    delayUpstream latency
     _ <- increment counts "public"
     respond (responseLBS status404 [] "")
 
 stateApp :: Int -> IORef (Maybe ReadFixture) -> IORef Bool -> IORef Bool -> IORef (Map Text Int) -> Application
 stateApp latency fixture advanced churn counts request respond = do
-    threadDelay latency
+    delayUpstream latency
     sequenceNumber <- increment counts "state"
     input <- requireFixture fixture
     newer <- readIORef advanced

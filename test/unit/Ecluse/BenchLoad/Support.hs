@@ -16,6 +16,7 @@ import Ecluse.BenchLoad.Floors (Enforcement (NotHeld), FloorKey, Pass (Concurren
 import Ecluse.BenchLoad.Harness (LoadSummary (..), ScenarioReport (..))
 import Ecluse.BenchLoad.Latency (Percentiles (Percentiles))
 import Ecluse.BenchLoad.Pod (PodShape (Limited))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 
 -- | A two-CPU quota and a 1 GiB memory bound.
 twoCores :: PodShape
@@ -34,7 +35,7 @@ floorsAtTwoCores =
 
 -- | A run whose latency exceeds its calibrated ceiling.
 slowNetwork :: Enforcement
-slowNetwork = NotHeld (LatencyAboveCeiling 444 210 :| [])
+slowNetwork = NotHeld (LatencyAboveCeiling Npm 444 210 :| [])
 
 -- | Build a loaded report with successful p50 and p99 latency in milliseconds.
 scenarioReport :: Text -> Int -> Int -> Double -> Double -> ScenarioReport

@@ -17,7 +17,6 @@ module Ecluse.BenchLoad.PyPI.WorkerFixture (
 ) where
 
 import Codec.Compression.GZip qualified as GZip
-import Control.Concurrent (threadDelay)
 import Data.Aeson (Value, encode, object, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
@@ -29,7 +28,7 @@ import Network.Wai (Application, Request, pathInfo, rawPathInfo, requestHeaders,
 import Network.Wai.Parse (FileInfo (..), RequestBodyType (Multipart), lbsBackEnd, parseContentType, sinkRequestBody)
 
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (artifactBytes)
+import Ecluse.BenchLoad.Fixture (artifactBytes, delayUpstream)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.PyPI.Wire (simpleIndexMediaType)
@@ -80,7 +79,7 @@ fixtureVersion = mkVersion PyPI "1"
 -- | Only declared distributions exist, so an incorrect worker URL fails before publication.
 sourceApp :: Int -> WorkerFixture -> Application
 sourceApp latency fixture request respond = do
-    threadDelay latency
+    delayUpstream latency
     case route request of
         ["simple", "example"] -> do
             count fixture "source-index"
@@ -93,7 +92,7 @@ sourceApp latency fixture request respond = do
 -- | The target advertises only exact bytes accepted by its independent multipart decoder.
 targetApp :: Int -> WorkerFixture -> Application
 targetApp latency fixture request respond = do
-    threadDelay latency
+    delayUpstream latency
     case (requestMethod request, route request) of
         ("GET", ["simple", "example"]) -> do
             count fixture "target-index"
@@ -172,7 +171,7 @@ expectedUploadFields filename bytes =
 -- | Opaque revisions and conditional writes retain S3's compare-and-swap behaviour.
 stateApp :: Int -> WorkerFixture -> Application
 stateApp latency fixture request respond = do
-    threadDelay latency
+    delayUpstream latency
     count fixture "state"
     let key = rawPathInfo request
         headers = requestHeaders request

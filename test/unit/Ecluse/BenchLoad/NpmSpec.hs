@@ -5,22 +5,47 @@
 -- | npm artifact routes and replay settings fail before measured work starts.
 module Ecluse.BenchLoad.NpmSpec (spec) where
 
-import Data.Aeson ((.=))
+import Data.Aeson (Value (Null), encode, object, (.=))
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (status200, status404)
+import Network.HTTP.Types (hContentType, status200, status404)
+import Network.Wai (responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 
 import Ecluse.BenchLoad.Error (BenchLoadError (BenchLoadError))
 import Ecluse.BenchLoad.Fixture (fetchChecked)
 import Ecluse.BenchLoad.Harness (LoadKnobs (..), Scenario (..), Target, UpstreamFixture (fixtureScenarios), defaultLoadKnobs)
-import Ecluse.BenchLoad.Npm (corpusPublicStub, npmFixture, privateOverlayStub, privateOverlayStubWith)
+import Ecluse.BenchLoad.Npm (corpusPublicStub, npmFixture, preflightNpmListing, privateOverlayStub, privateOverlayStubWith)
 import Ecluse.Test.Env (withEnvVars)
+import Ecluse.Test.Registry.Npm (packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Wai (localhost, rebaseAuthority)
 
 spec :: Spec
-spec = fixturePathSpec
+spec = do
+    fixturePathSpec
+    describe "native npm listing preflight" $ do
+        it "accepts a scoped native listing with public versions and all overlay versions" $
+            withListing "application/json" (listing "@scope/pkg" ["1.0.0", "9999.0.0", "9999.0.1", "9999.0.2"] "https://bench.proxy/npm/") $ \url ->
+                preflightNpmListing True url `shouldReturn` ()
+        it "rejects wrong media, package identity, artifact locations, and a missing overlay" $
+            for_ [("text/plain", listing "@scope/pkg" versions authority), ("application/json", listing "other" versions authority), ("application/json", listing "@scope/pkg" versions "https://registry.npmjs.org/"), ("application/json", listing "@scope/pkg" ["1.0.0"] authority)] $ \(media, body) ->
+                withListing media body $ \url -> preflightNpmListing True url `shouldThrow` (\(BenchLoadError _) -> True)
+        it "rejects empty and malformed native version maps" $
+            for_ [object [], object ["name" .= ("@scope/pkg" :: Text), "versions" .= object ["1.0.0" .= Null]]] $ \body ->
+                withListing "application/json" body $ \url -> preflightNpmListing False url `shouldThrow` (\(BenchLoadError _) -> True)
+        it "refuses a malformed scoped request name through the native parser" $
+            withListing "application/json" (listing "@scope/pkg" ["1.0.0"] authority) $ \url ->
+                preflightNpmListing False (url <> "/extra") `shouldThrow` (\(BenchLoadError message) -> "npm name component" `T.isInfixOf` message)
+        it "allows a private copy without synthetic overlay versions" $
+            withListing "application/json" (listing "@scope/pkg" ["1.0.0"] authority) $ \url ->
+                preflightNpmListing False url `shouldReturn` ()
+  where
+    versions = ["1.0.0", "9999.0.0", "9999.0.1", "9999.0.2"]
+    authority = "https://bench.proxy/npm/"
+    withListing media body action = testWithApplication (pure (\_ respond -> respond (responseLBS status200 [(hContentType, media)] (encode body)))) $ \port -> action (localhost port <> "/npm/@scope/pkg")
+    listing name releases base = packumentValue name "1.0.0" [(version, versionValue (versionSpec name version (base <> name <> "/-/pkg-" <> version <> ".tgz"))) | version <- releases] [] []
 
 fixturePathSpec :: Spec
 fixturePathSpec = describe "npm artifact fixture paths" $ do

@@ -22,7 +22,7 @@ import Numeric (showFFloat)
 
 import Ecluse.BenchLoad.BootLines (BootLimits (..), LoggedRule (..), bootLimits, loggedRules, ruleBootOrders)
 import Ecluse.BenchLoad.Exposition (CacheOutcomes (..), GaugeSummary (..))
-import Ecluse.BenchLoad.Floors (Calibration, Enforcement, FloorCheck (..), Pass (ConcurrencyOne, Loaded), describeEnforcement, floorCheck, floorsPath)
+import Ecluse.BenchLoad.Floors (Calibration (calConditions), Enforcement, FloorCheck (..), Pass (ConcurrencyOne, Loaded), describeEnforcement, describeRetainedConditions, floorCheck, floorsPath)
 import Ecluse.BenchLoad.Harness (LoadKnobs (..), LoadSummary (..), ProxyFigures (..), ScenarioReport (..), windowAttempts, windowRefusals, windowSuccesses)
 import Ecluse.BenchLoad.Latency (Percentiles (..))
 import Ecluse.BenchLoad.Normalise (
@@ -37,6 +37,7 @@ import Ecluse.BenchLoad.Normalise (
 import Ecluse.BenchLoad.PatternReport (renderReplayTotals)
 import Ecluse.BenchLoad.Pod (CgroupReading (..), counter)
 import Ecluse.BenchLoad.RtsWindow (RtsSnapshot (..), RtsWindow (..), compactionThresholdCrossed, gcCpuShare, meanLiveAtMajors, perSuccess)
+import Ecluse.BenchLoad.Selection (measurementConditionVersion)
 import Ecluse.BenchLoad.Verdict (ProxyEnding (..), describeEnding)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
@@ -97,6 +98,7 @@ operatingPointTable knobs capabilities processors shape limits =
     , row "runner logical processors" (show processors <> " (oha is pinned to logical CPU 0 when isolated)")
     , row "harness GHC capabilities (-N)" (show capabilities)
     , row "load" (show (lkConcurrency knobs) <> " connections x " <> show (lkDurationSeconds knobs) <> " s (a scenario may scale its own connections)")
+    , row "measurement conditions" measurementConditionVersion
     , row "injected upstream latency" (fmt1 (fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000) <> " ms")
     , row "serve admission (requests)" (maybe "n/a" show (blCpuAdmission limits) <> origin (lkServeMaxInFlight knobs))
     , row "memory admission budget at boot" (maybe "n/a" bytesCell (blMemoryBudgetBytes limits))
@@ -341,7 +343,7 @@ readingNotes =
     , "- **Successes are the primary figure.** A 2xx or 3xx response is a success. A `503` shed or a `429` is a refusal: a client retries it at once, so refusal counts measure retry speed, not demand."
     , "- **The run fails** when a scenario or a ramp step has no successful response, when a count of successes is below its floor, when a scheduled run's configuration keeps it off the floors, when the kernel OOM-kills a proxy, when a proxy exits on heap overflow or ends any other way than the clean shutdown the harness asks for, or when it exits early. Latency and memory have no threshold and never fail it."
     , "- **A success floor** is the fewest successes a scenario may have in one pass under this pod shape, from `" <> toText floorsPath <> "`. The at-a-glance table shows the loaded pass's floor, and the cost table the concurrency-one pass's. A ramp holds every step to its floor, and a paired scenario both of its loads. A run held to the floors also fails on a scenario without one, and on a floor that names no scenario."
-    , "- **A run is held to the floors** only on the runner they were calibrated on, at the calibrated settings, under a pod shape the floors hold, and while its npm fixture injects no more upstream latency than the ceiling. The Success floors section says whether this run is held, and names every reason when it is not. A run that is not held shows `not held` for each floor."
+    , "- **A run is held to the floors** only on the runner they were calibrated on, at the calibrated settings, under a pod shape the floors hold, and while each ecosystem fixture stays below its own latency ceiling and measurement conditions match. The Success floors section says whether this run is held, and names every reason when it is not. A run that is not held shows `not held` for each floor."
     , "- **Allocation and collector figures describe the proxy process alone** over the measured window, and divide by every successful request in it: both generators of a paired scenario, every step of a ramp. The stub upstreams and the load generator run outside it."
     , "- **The proxy's cgroup is not charged for its logs.** They go through pipes the harness drains, and only unread pipe buffers, at most 64 KiB per pipe, count against the limit. On CI the build step has just built or restored the executable, so its text pages are already in the page cache when the proxy starts and are not charged to it either. The harness does not enforce that."
     , "- **Each scenario boots its own proxy** from its own cgroup, so the runtime posture and the admission budgets are the ones that pod shape resolves. A boot retried after the runtime could not start a thread gets a fresh cgroup, so its readings exclude the failed attempt."
@@ -410,7 +412,14 @@ renderThrash scenarioKey steps =
 -- | Whether the run is held to the success floors, with their calibration or every reason it is not.
 renderFloors :: Calibration -> Enforcement -> Text
 renderFloors calibration enforcement =
-    T.unlines ["## Success floors", "", describeEnforcement calibration enforcement]
+    T.unlines
+        [ "## Success floors"
+        , ""
+        , describeEnforcement calibration enforcement
+        , ""
+        , "Floor measurement conditions: `" <> calConditions calibration <> "`."
+        , describeRetainedConditions calibration
+        ]
 
 -- | The run's verdict: every broken invariant, or a line saying none broke.
 renderVerdict :: [Text] -> Text

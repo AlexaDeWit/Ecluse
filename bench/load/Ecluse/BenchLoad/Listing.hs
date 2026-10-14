@@ -16,7 +16,7 @@ module Ecluse.BenchLoad.Listing (
 import Network.Wai (Application)
 
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (httpTarget, loadCorpusBodies, longCacheTtl, primeETag, weightedMix, withProxyOverStubs)
+import Ecluse.BenchLoad.Fixture (httpTarget, loadCorpusBodies, longCacheTtl, preflightDistinct, primeETag, weightedMix, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttp), Load (Load), LoadKnobs (..), Target, proxied)
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
@@ -67,8 +67,7 @@ listingWorkingSet setup knobs = take (max 1 (lkWorkingSet knobs)) (pcPackages (l
 withListings :: ListingSetup -> LoadKnobs -> Int -> Maybe Int -> [CorpusPackage] -> (CorpusPackage -> Int) -> (ProxyProcess -> [Text] -> IO a) -> IO a
 withListings setup knobs ttl entries packages weight body =
     withListingStubs setup knobs ttl entries packages (weightedMix weight (pcUrl (lsCopy setup)) packages) $ \proxy urls -> do
-        lsPreflight setup urls
-        body proxy urls
+        preflightDistinct (lsPreflight setup . pure) urls (body proxy urls)
 
 -- | Unprimed callers retain their own URL mix and add no listing preflight.
 withListingStubs :: ListingSetup -> LoadKnobs -> Int -> Maybe Int -> [CorpusPackage] -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a

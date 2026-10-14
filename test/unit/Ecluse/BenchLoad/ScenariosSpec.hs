@@ -9,10 +9,11 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Test.Hspec
 
-import Ecluse.BenchLoad.Floors (Calibration (calOperatingPoint, calRuns), Floors (floorsByShape, floorsCalibration), Pass (ConcurrencyOne, Loaded), loadFloors)
+import Ecluse.BenchLoad.Floors (Calibration (calNpmLatency, calOperatingPoint, calPypiLatency, calRuns), Enforcement (Enforced), Floors (floorsByShape, floorsCalibration), LatencyCeiling (lcCeilingMs), Pass (ConcurrencyOne, Loaded), RunFacts (..), RunnerReading (RunnerReading), Trigger (Scheduled), enforce, loadFloors, unheldViolations)
 import Ecluse.BenchLoad.Harness (UpstreamFixture (fixtureScenarios), defaultLoadKnobs, operatingPoint)
 import Ecluse.BenchLoad.Pod (PodShape (Unlimited), scheduledPodShapes)
 import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, fixtures)
+import Ecluse.BenchLoad.Selection (measurementConditionVersion)
 import Ecluse.BenchLoad.Support (twoCores)
 
 spec :: Spec
@@ -51,6 +52,24 @@ spec = do
         it "were calibrated at the harness's default knobs, over every scenario, with no pattern override" $
             withCommitted $ \floors ->
                 calOperatingPoint (floorsCalibration floors) `shouldBe` operatingPoint defaultLoadKnobs Nothing []
+        it "holds actual default runs at both native ceilings under every scheduled shape" $
+            withCommitted $ \floors ->
+                case calPypiLatency (floorsCalibration floors) of
+                    Nothing -> expectationFailure "the committed calibration has no native PyPI ceiling"
+                    Just pypiBound ->
+                        for_ scheduledPodShapes $ \shape -> do
+                            let facts =
+                                    RunFacts
+                                        { rfSettings = operatingPoint defaultLoadKnobs Nothing []
+                                        , rfRunner = RunnerReading (Just "true") (Just "Linux") (Just "ARM64")
+                                        , rfShape = shape
+                                        , rfNpmLatencyMs = lcCeilingMs (calNpmLatency (floorsCalibration floors))
+                                        , rfPypiLatencyMs = lcCeilingMs pypiBound
+                                        , rfConditions = measurementConditionVersion
+                                        }
+                                enforcement = enforce floors facts
+                            enforcement `shouldBe` Enforced shape (Map.findWithDefault Map.empty shape (floorsByShape floors))
+                            unheldViolations Scheduled enforcement `shouldBe` []
         it "record at least the ten runs they were calibrated from" $
             withCommitted $ \floors ->
                 length (calRuns (floorsCalibration floors)) `shouldSatisfy` (>= 10)
