@@ -17,7 +17,7 @@ import Ecluse.Core.Package (
     PackageInfo (infoName, infoVersions),
     renderPackageName,
  )
-import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionAdmit, AdmissionDenied), admitArtifact)
+import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionAdmit, AdmissionDenied), admitArtifactWithEvidence)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataUndecodable),
@@ -147,7 +147,7 @@ protocolSpec = describe "protocol envelope parity" $ do
     it "blocks cold artifact admission for bytes declaring an unsupported protocol" $ do
         rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
         let evalContext = EvalContext (UTCTime (fromGregorian 2026 9 7) 0) Nothing
-            admit body = traverse (traverse (admitArtifact evalContext rules defaultMinIntegrity (unsafeFilename "requests-2.34.2.tar.gz"))) (projectPyPIVersion defaultLimits requestsName (pypiVersion "2.34.2") body)
+            admit body = traverse (traverse (fmap fst . admitArtifactWithEvidence evalContext rules defaultMinIntegrity (unsafeFilename "requests-2.34.2.tar.gz"))) (projectPyPIVersion defaultLimits requestsName (pypiVersion "2.34.2") body)
         admitted <- admit (protocolIndex (Just (object ["api-version" .= ("1.0" :: Text)])))
         case admitted of
             Right (Just AdmissionAdmit{}) -> pass
@@ -193,12 +193,12 @@ releaseAgeSpec = describe "release age and artifact admission" $
                         admittedBy decision `shouldBe` ("AllowIfOlderThan" <$ expectedTime)
                         exceptionRules <- prepare inertRuleDeps (map atDefaultPrecedence [AllowByIdentity "requests@2.34.2", AllowIfOlderThan (7 * nominalDay)])
                         for_ names $ \name -> do
-                            admission <- admitArtifact ctx ageRules defaultMinIntegrity (unsafeFilename name) details
+                            (admission, _) <- admitArtifactWithEvidence ctx ageRules defaultMinIntegrity (unsafeFilename name) details
                             case (expectedTime, admission) of
                                 (Nothing, AdmissionDenied{}) -> pass
                                 (Just _, AdmissionAdmit{}) -> pass
                                 other -> expectationFailure ("unexpected age admission: " <> show other)
-                            exception <- admitArtifact ctx exceptionRules defaultMinIntegrity (unsafeFilename name) details
+                            (exception, _) <- admitArtifactWithEvidence ctx exceptionRules defaultMinIntegrity (unsafeFilename name) details
                             case exception of
                                 AdmissionAdmit{} -> pass
                                 other -> expectationFailure ("expected identity exception, got: " <> show other)

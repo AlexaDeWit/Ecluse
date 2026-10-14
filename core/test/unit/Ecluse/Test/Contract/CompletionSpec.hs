@@ -22,6 +22,13 @@ spec = describe "full completion" $ do
     it "distinguishes the explicit read-only foundation from full completion" $ do
         map fst (requiredFamilyLaws ReadOnlyEcosystemFoundation) `shouldMatchList` ["proxying", "installation", "policy", "advisories", "telemetry"]
         lookup "telemetry" (requiredFamilyLaws FullEcosystem) `shouldNotBe` lookup "telemetry" (requiredFamilyLaws ReadOnlyEcosystemFoundation)
+    it "requires the npm outage law even when its registration and evidence are omitted" $ do
+        let evidence = [LawEvidence family law E2E "npm" ("npm/" <> family <> "/" <> law) | (family, required) <- requiredFamilyLaws FullEcosystem, law <- required]
+            omitted = Completion "npm" FullEcosystem evidence
+        fromLeft [] (validateCompletion omitted []) `shouldContain` ["missing required law: dredger/skipped-admission-recovery"]
+    it "keeps the outage law outside PyPI and the read-only foundation" $ do
+        requiredFamilyLawsFor "pypi" FullEcosystem `shouldBe` requiredFamilyLaws FullEcosystem
+        requiredFamilyLawsFor "npm" ReadOnlyEcosystemFoundation `shouldBe` requiredFamilyLaws ReadOnlyEcosystemFoundation
     it "accepts independently declared laws with matching cases" $
         validateCompletion completion [catalogue] `shouldBe` Right completion
     it "rejects each omitted law even when its mapping and registration disappear together" $

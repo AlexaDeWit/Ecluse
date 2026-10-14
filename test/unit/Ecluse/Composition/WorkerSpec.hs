@@ -20,7 +20,7 @@ import Ecluse.Composition.Worker (mirrorTransportFor, workerPoliciesWithState)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Mirror.State (MirrorState (..), stateTarget)
 import Ecluse.Core.Package (Artifact (artFilename), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName)
-import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionDenied), admitArtifact)
+import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionDenied), admitArtifactWithEvidence)
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails, vdRaw), VersionEvaluation (VersionPresent))
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpProbeInventory), MirrorTransport (ptLimits))
@@ -90,7 +90,8 @@ policyInputsSpec = describe "workerPoliciesWithState policy inputs" $ do
             Nothing -> expectationFailure "expected an npm bundle"
             Just policy -> do
                 now <- wpNow policy
-                admitArtifact (EvalContext now Nothing) (wpRules policy) (wpMinIntegrity policy) (unsafeFilename "thing-1.0.0.tgz") (sampleDetails thingName v1_0_0) >>= \case
+                (admission, _) <- admitArtifactWithEvidence (EvalContext now Nothing) (wpRules policy) (wpMinIntegrity policy) (unsafeFilename "thing-1.0.0.tgz") (sampleDetails thingName v1_0_0)
+                case admission of
                     AdmissionDenied decision -> blockedBy decision `shouldBe` Just "DenyByIdentity"
                     other -> expectationFailure ("expected the bundle's rules to refuse the version, got " <> show other)
 

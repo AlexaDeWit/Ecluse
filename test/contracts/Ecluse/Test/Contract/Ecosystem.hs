@@ -92,7 +92,7 @@ composeEcosystem scope driver =
         <> ecosystemNativeExtensions driver
   where
     subject = ecosystemName driver
-    laws family = filter (/= "last-good-generation") $ fromMaybe [] $ lookup family (requiredFamilyLaws scope)
+    laws family = filter (/= "last-good-generation") $ fromMaybe [] $ lookup family (requiredFamilyLawsFor subject scope)
     prefix suffix = subject <> "/" <> suffix
     external family = \case
         Available _ -> []
@@ -171,7 +171,7 @@ missingGroup subject family prefix laws (MissingCapability reason) = DeclaredGro
 
 -- | Reference exact canonical cases across tiers without importing concrete providers into contracts.
 ecosystemCompletion :: CompletionScope -> EcosystemDriver observation graph value plane store project -> Completion
-ecosystemCompletion scope driver = Completion subject scope $ concatMap familyEvidence (requiredFamilyLaws scope)
+ecosystemCompletion scope driver = Completion subject scope $ concatMap familyEvidence (requiredFamilyLawsFor subject scope)
   where
     subject = ecosystemName driver
     familyEvidence (family, laws) = case (family, external family) of

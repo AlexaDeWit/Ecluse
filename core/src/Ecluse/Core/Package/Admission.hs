@@ -2,19 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The single public-version admission gate: the rules engine decides the __version__, the
-requested 'Filename' selects the __artifact__, and the integrity floor decides whether that
-artifact's digests are __strong enough to gate__.
-
-The serve path's tarball gate and the worker's ingest re-evaluation both call the one
-'admitArtifact', so a version the worker would freeze into the rule-exempt mirror is exactly a
-version the serve gate would admit. Neither decides for itself whether a retry could change a
-refusal, which is 'admissionTransience', read by both.
+{- | Decide public artifact admission and retain skipped or unreached rule evidence.
+The serve path and worker share rules, filename selection, and integrity-floor checks.
 -}
 module Ecluse.Core.Package.Admission (
     ArtifactAdmission (..),
     admissionTransience,
-    admitArtifact,
     admitArtifactWithEvidence,
 ) where
 
@@ -65,23 +58,7 @@ data ArtifactAdmission
       AdmissionBelowFloor
     deriving stock (Show)
 
-{- | Decide one requested artifact under current policy: the rules, then the filename, then the
-integrity floor. Serve and worker pass the same inputs, so re-evaluation can only /narrow/.
--}
-admitArtifact ::
-    EvalContext ->
-    [PreparedRule] ->
-    MinIntegrity ->
-    -- | The requested artifact filename (the client's, or the mirror job's).
-    Filename ->
-    PackageDetails ->
-    IO ArtifactAdmission
-admitArtifact ctx rules minIntegrity file details =
-    fst <$> admitArtifactWithEvidence ctx rules minIntegrity file details
-
-{- | 'admitArtifact' beside the skipped-check evidence its decision carried, empty unless the
-version was admitted, for the audit line the gate emits once.
--}
+-- | Decide one public artifact and retain the rule evidence beside its verdict.
 admitArtifactWithEvidence ::
     EvalContext ->
     [PreparedRule] ->
@@ -120,7 +97,7 @@ serve gate renders it as a @503@ or a @500@, and the mirror worker redelivers or
 admissionTransience :: ArtifactAdmission -> Maybe Transience
 admissionTransience = \case
     AdmissionUndecidable (Undecidable transience _) -> Just transience
-    -- 'admitArtifact' carries only an 'Undecidable' here, so another decision is a
+    -- 'AdmissionUndecidable' carries only an 'Undecidable' here, so another decision is a
     -- construction fault. Fail closed: an inability no retry clears.
     AdmissionUndecidable _ -> Just WontResolve
     AdmissionAdmit{} -> Nothing
