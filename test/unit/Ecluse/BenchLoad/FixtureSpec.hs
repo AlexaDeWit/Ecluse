@@ -13,6 +13,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import System.IO.Error (ioeGetErrorString, isUserError)
 import Test.Hspec
+import UnliftIO (throwIO)
 
 import Ecluse.BenchLoad.Error (BenchLoadError (BenchLoadError))
 import Ecluse.BenchLoad.Fixture (delayUpstream, loadCorpusBodies, loadCorpusCuts, preflightDistinct, probeBaseline, weightedMix)

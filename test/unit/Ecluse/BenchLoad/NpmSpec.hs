@@ -7,6 +7,7 @@ module Ecluse.BenchLoad.NpmSpec (spec) where
 
 import Data.Aeson (Value (Null), encode, object, (.=))
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (responseLBS)
@@ -34,6 +35,9 @@ spec = do
         it "rejects empty and malformed native version maps" $
             for_ [object [], object ["name" .= ("@scope/pkg" :: Text), "versions" .= object ["1.0.0" .= Null]]] $ \body ->
                 withListing "application/json" body $ \url -> preflightNpmListing False url `shouldThrow` (\(BenchLoadError _) -> True)
+        it "refuses a malformed scoped request name through the native parser" $
+            withListing "application/json" (listing "@scope/pkg" ["1.0.0"] authority) $ \url ->
+                preflightNpmListing False (url <> "/extra") `shouldThrow` (\(BenchLoadError message) -> "npm name component" `T.isInfixOf` message)
         it "allows a private copy without synthetic overlay versions" $
             withListing "application/json" (listing "@scope/pkg" ["1.0.0"] authority) $ \url ->
                 preflightNpmListing False url `shouldReturn` ()

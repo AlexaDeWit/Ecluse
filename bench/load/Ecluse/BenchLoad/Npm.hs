@@ -58,6 +58,7 @@ import Ecluse.Core.Queue (
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent))
 import Ecluse.Core.Registry.MirrorUpload (inventoryDetails)
+import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Publish (prepareNpmSource)
 import Ecluse.Core.Registry.Publish.Internal (MirrorPublish (..), PreparedMirrorUpload (..), PreparedMirrorVersion (..))
 import Ecluse.Core.Security (defaultLimits)
@@ -490,7 +491,8 @@ preflightNpmListing overlay url = do
     unless (List.lookup hContentType (HTTP.responseHeaders response) == Just jsonContentType) $
         benchFail ("npm listing preflight returned the wrong media type: " <> url)
     name <- maybe (benchFail ("npm listing preflight has no package path: " <> url)) pure (nonEmptyPath (snd (T.breakOnEnd "/npm/" url)))
-    (info, value) <- either (benchFail . show) pure (projectNpmManifest defaultLimits (mkPackageName Npm Nothing name) (toStrict (HTTP.responseBody response)))
+    package <- either (benchFail . show) pure (projectName name)
+    (info, value) <- either (benchFail . show) pure (projectNpmManifest defaultLimits package (toStrict (HTTP.responseBody response)))
     let versions = infoVersions info
         expectedPrefix = "https://bench.proxy/npm/" <> name <> "/-/"
         artifacts = concatMap (toList . pkgArtifacts) (Map.elems versions)
