@@ -132,18 +132,18 @@ pypiAssemblyBenchmarks ecosystem =
                     checkAssembly label expected assemble `seq`
                         bench label (whnf (pypiPlanDepth . assemble) (snapshotValue source))
             | (label, survivors) <- [("all", Map.keysSet (infoVersions info)), ("one", Set.fromList (take 1 (Map.keys (infoVersions info))))]
-            , let plan = fromMaybe (throw (PyPIAssemblyInvalid label)) (mergePackuments [(GatedSource, restrictToSurvivors survivors info <$ source)])
+            , let plan = fromMaybe (throw (PyPIAssemblyInvalid (toText label))) (mergePackuments [(GatedSource, restrictToSurvivors survivors info <$ source)])
                   assemble = metadataAssemble (ebMetadata ecosystem) syntheticProxyBase (Map.singleton 0 source) plan . Just
                   coordinates = Set.fromList [artEntryKey artifact | details <- Map.elems (Map.restrictKeys (infoVersions info) survivors), artifact <- toList (pkgArtifacts details)]
                   expected = assemblyExpected (cpName (lePackage entry)) (Set.toAscList survivors) coordinates reference
                   checkAssembly row output operation = case fmap eitherDecode (serialiseSimpleDocument (operation (snapshotValue source))) of
                     Right (Right actual) | actual == output -> ()
-                    _ -> throw (PyPIAssemblyInvalid row)
+                    _ -> throw (PyPIAssemblyInvalid (toText row))
             ]
         | entry@LoadedEntry{leInfo = info, leSnapshot = source, leBytes = raw} <- ebCorpus ecosystem
         , let reference = case ebTreeRead ecosystem (cpPackage (lePackage entry)) raw of
-                Right (_, document) -> fromMaybe (throw (PyPIAssemblyInvalid (entryName entry))) (snd pypiSimpleCached document)
-                Left _ -> throw (PyPIAssemblyInvalid (entryName entry))
+                Right (_, document) -> fromMaybe (throw (PyPIAssemblyInvalid (toText (entryName entry)))) (snd pypiSimpleCached document)
+                Left _ -> throw (PyPIAssemblyInvalid (toText (entryName entry)))
         ]
 
 -- Select original coordinates and rewrite URLs without calling production assembly.
@@ -154,15 +154,15 @@ assemblyExpected project versions coordinates reference =
     envelope = KeyMap.insert "versions" (toJSON versions) (simpleEnvelope reference)
     rebase (Object fields) = case KeyMap.lookup "filename" fields of
         Just (String filename) -> Object (KeyMap.insert "url" (String (syntheticProxyBase <> "/simple/" <> project <> "/" <> filename)) fields)
-        _ -> throw (PyPIAssemblyInvalid (toString project))
-    rebase _ = throw (PyPIAssemblyInvalid (toString project))
+        _ -> throw (PyPIAssemblyInvalid project)
+    rebase _ = throw (PyPIAssemblyInvalid project)
 
 pypiPlanDepth :: CachedDoc -> Int
 pypiPlanDepth document = case snd pypiRendered document of
     Just plan -> foldl' (\count table -> table `seq` count + 1) (renderPlanDepth plan) (planTables plan)
     Nothing -> throw (PyPIAssemblyInvalid "missing native render plan")
 
-newtype PyPIAssemblyInvalid = PyPIAssemblyInvalid String
+newtype PyPIAssemblyInvalid = PyPIAssemblyInvalid Text
     deriving stock (Show)
 
 instance Exception PyPIAssemblyInvalid
