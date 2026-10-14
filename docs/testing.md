@@ -889,6 +889,29 @@ The pip case carries the same prohibition. A source distribution runs its own bu
 install, so the harness passes `--only-binary=:all:` and installs a wheel alone, and it points
 `PIP_CONFIG_FILE` at `/dev/null` because `--isolated` still reads the global and site config files.
 
+## Prepared PyPI assembly rows
+
+`All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI assembly` adds six native rows:
+
+| Capture label | Survivor rows |
+|---|---|
+| `requests (medium)` | `all`, `one` |
+| `numpy (large)` | `all`, `one` |
+| `boto3 (heavy)` | `all`, `one` |
+
+`all` keeps every projected version. `one` keeps the first version in map key order.
+Each row assembles the authenticated packed capture through the native metadata adapter.
+The measured operation forces the resulting render plan's envelope, prefix, table references, and every piece.
+It excludes rendering, encoding, capture reads, authentication, decoding, and preparation of the survivor and merge plans.
+Before timing, an independent tree projection selects admitted source coordinates and rewrites each file URL from its filename.
+Setup compares the complete expected JSON with the native assembled output and requires a native render plan.
+The expected output does not call the production assembly function.
+
+Existing npm assembly, PyPI encoding, serving rows, conditions, budgets, cadence, and gates remain unchanged.
+Use `task performance:benchmark-measure` and `task performance:benchmark-receipt` for native allocation and timing evidence.
+Keep the source commit, capture pins and hashes, compiler identity, build options, and exact RTS options with those results.
+The added rows establish baselines. They do not show a production improvement.
+
 ## Allocation budgets: `perf-allocation` (gating)
 
 The `allocation` job in `ci.yml` holds the bytes each measured leg allocates to reviewed budgets,
