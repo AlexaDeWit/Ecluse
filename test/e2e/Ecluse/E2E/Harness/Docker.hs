@@ -67,6 +67,7 @@ import Network.HTTP.Types (statusCode)
 import System.Directory (createDirectoryIfMissing, renamePath)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
+import System.Posix.User (getEffectiveGroupID, getEffectiveUserID)
 import System.Process.Typed (proc, readProcess)
 import UnliftIO (bracket_, finally, handleAny, onException, throwIO)
 import UnliftIO.Temporary (withSystemTempDirectory)
@@ -283,11 +284,13 @@ withE2EWith cfg action gdp =
                 configuredEnv <- proxyEnv (gdpTopology gdp) proxyPort queueUrl
                 -- The product image is built by `task test-e2e` or the CI e2e job, never pulled, so
                 -- it is 'LocallyBuilt' and unpinned: the pin invariant covers only registry pulls.
+                fixtureUser <- traverse (const ((\uid gid -> show uid <> ":" <> show gid) <$> getEffectiveUserID <*> getEffectiveGroupID)) (ecAdvisoryDirectory cfg)
                 let proxRun =
                         (dockerRun prox net (LocallyBuilt (toText image)))
                             { drPorts = ["127.0.0.1:" <> show proxyPort <> ":4873"]
-                            , drMounts = [(certsDir, "/certs:ro")]
-                            , drTmpfs = [advisoryDataTmpfs]
+                            , drMounts = [(certsDir, "/certs:ro")] <> maybe [] (\directory -> [(directory, advisoryDataDir)]) (ecAdvisoryDirectory cfg)
+                            , drTmpfs = [advisoryDataTmpfs | isNothing (ecAdvisoryDirectory cfg)]
+                            , drUser = fixtureUser
                             , drEnv = configuredEnv <> ecExtraEnv cfg
                             , drCmd = ecArgs cfg
                             }
@@ -296,7 +299,7 @@ withE2EWith cfg action gdp =
                     e2e <- environment gdp manager base prox collectorName
                     ready <- waitFor manager (base <> "/readyz") 200
                     unless ready (fail "proxy did not become ready on /readyz within the timeout")
-                    action e2e
+                    action e2e{e2eAdvisoryDirectory = ecAdvisoryDirectory cfg}
 
 environment :: GlobalDataPlane -> Manager -> Text -> String -> Maybe String -> IO E2E
 environment plane manager base proxy collector = do
@@ -309,6 +312,7 @@ environment plane manager base proxy collector = do
             , e2eBaseUrl = base
             , e2eStore = gdpStore plane
             , e2ePlane = plane
+            , e2eAdvisoryDirectory = Nothing
             , e2eProxyContainer = proxy
             , e2eCollectorContainer = collector
             , e2eManager = manager

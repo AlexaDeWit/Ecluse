@@ -49,6 +49,7 @@ data DockerRun = DockerRun
     , drEnv :: [(Text, Text)]
     , drImage :: String
     , drCmd :: [String]
+    , drUser :: Maybe String
     }
 
 -- | Reject an invalid image pin before acquiring a resource.
@@ -68,6 +69,7 @@ dockerRun name net image =
         , drEnv = []
         , drImage = toString (renderImageRef image)
         , drCmd = []
+        , drUser = Nothing
         }
 
 runDetached :: [String] -> DockerRun -> IO ()
@@ -84,6 +86,7 @@ runArgs extra labelArgs spec =
         <> concatMap (\(h, c) -> ["-v", h <> ":" <> c]) (drMounts spec)
         <> concatMap (\t -> ["--tmpfs", t]) (drTmpfs spec)
         <> concatMap (\(k, v) -> ["-e", toString (k <> "=" <> v)]) (drEnv spec)
+        <> maybe [] (\user -> ["--user", user]) (drUser spec)
         <> labelArgs
         <> (drImage spec : drCmd spec)
 

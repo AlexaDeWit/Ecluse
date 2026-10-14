@@ -33,7 +33,6 @@ import Ecluse.Core.Package.Admission (
         AdmissionUndecidable
     ),
     admissionTransience,
-    admitArtifact,
     admitArtifactWithEvidence,
  )
 import Ecluse.Core.Package.Integrity (
@@ -136,7 +135,7 @@ skippedCveRule = constRule "DenyIfCve" (CannotVet FailNoDecision NoDatabaseLoade
 
 spec :: Spec
 spec = do
-    describe "admitArtifact -- the shared serve/worker admission oracle" $ do
+    describe "admitArtifactWithEvidence -- the shared serve/worker admission oracle" $ do
         it "carries the skipped-check evidence beside an admit, so the gate can record it once" $ do
             (admission, skipped) <- admitArtifactWithEvidence ctx [skippedCveRule, admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
             skipped `shouldBe` [SkippedUnavailable "DenyIfCve" NoDatabaseLoaded]
@@ -152,7 +151,7 @@ spec = do
                 other -> expectationFailure ("expected a denial, got " <> show other)
 
         it "admits a rule-admitted, floor-clearing artifact, selecting it by filename" $ do
-            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
+            (admission, _) <- admitArtifactWithEvidence ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
             case admission of
                 AdmissionAdmit filename artifact digests -> do
                     artFilename artifact `shouldBe` "thing-1.0.0.tgz"
@@ -165,32 +164,32 @@ spec = do
                 other -> expectationFailure ("expected an admit, got " <> show other)
 
         it "carries a rule denial through as AdmissionDenied (both surfaces render the same decision)" $ do
-            admission <- admitArtifact ctx [denyRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
+            (admission, _) <- admitArtifactWithEvidence ctx [denyRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
             case admission of
                 AdmissionDenied Blocked{} -> pass
                 other -> expectationFailure ("expected a rule denial, got " <> show other)
 
         it "carries a fail-closed uncomputable rule through as AdmissionUndecidable" $ do
-            admission <- admitArtifact ctx [cannotVetRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
+            (admission, _) <- admitArtifactWithEvidence ctx [cannotVetRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
             case admission of
                 AdmissionUndecidable Undecidable{} -> pass
                 other -> expectationFailure ("expected undecidable, got " <> show other)
 
         it "reports an absent filename as AdmissionFileAbsent, never selecting another artifact" $ do
-            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "renamed-2.0.0.tgz") strongDetails
+            (admission, _) <- admitArtifactWithEvidence ctx [admitRule] defaultMinIntegrity (unsafeFilename "renamed-2.0.0.tgz") strongDetails
             case admission of
                 AdmissionFileAbsent -> pass
                 other -> expectationFailure ("expected a file miss, got " <> show other)
 
         it "refuses a hashless artifact as AdmissionIntegrityMissing" $ do
-            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") (detailsWith [])
+            (admission, _) <- admitArtifactWithEvidence ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") (detailsWith [])
             case admission of
                 AdmissionIntegrityMissing -> pass
                 other -> expectationFailure ("expected integrity-missing, got " <> show other)
 
         it "refuses a weak-only digest set as AdmissionBelowFloor" $ do
             let weakDetails = detailsWith [unsafeHash SHA1 (Package.hexSha1Of sampleBytes)]
-            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") weakDetails
+            (admission, _) <- admitArtifactWithEvidence ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") weakDetails
             case admission of
                 AdmissionBelowFloor -> pass
                 other -> expectationFailure ("expected below-floor, got " <> show other)
@@ -198,14 +197,14 @@ spec = do
         it "never pays artifact selection or floor classification for a version a rule denies" $ do
             -- A denied version with a hashless artifact must surface the denial, not
             -- the integrity refusal: the rules run first.
-            admission <- admitArtifact ctx [denyRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") (detailsWith [])
+            (admission, _) <- admitArtifactWithEvidence ctx [denyRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") (detailsWith [])
             case admission of
                 AdmissionDenied Blocked{} -> pass
                 other -> expectationFailure ("expected the rule denial to win, got " <> show other)
 
     describe "admissionTransience -- the retry projection the serve gate and the worker share" $ do
         it "reads out the transience of an inability the evaluator expects to clear" $ do
-            admission <- admitArtifact ctx [cannotVetRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
+            (admission, _) <- admitArtifactWithEvidence ctx [cannotVetRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
             admissionTransience admission `shouldBe` Just (WillResolve Nothing)
 
         it "carries a WontResolve inability through, so serve renders a 500 and the worker drops" $
@@ -215,7 +214,7 @@ spec = do
                 `shouldBe` Just WontResolve
 
         it "reports no transience for a settled verdict, so no consumer waits on one" $ do
-            admitted <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
+            (admitted, _) <- admitArtifactWithEvidence ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
             admissionTransience admitted `shouldBe` Nothing
             admissionTransience (AdmissionDenied (Blocked "test-deny" Nothing revocation)) `shouldBe` Nothing
             admissionTransience AdmissionFileAbsent `shouldBe` Nothing
@@ -229,7 +228,7 @@ spec = do
                 hashes = sriHashesOf joined
                 joinedDetails = detailsWith hashes
             classifyDigests defaultMinIntegrity hashes `shouldBe` MeetsFloor
-            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") joinedDetails
+            (admission, _) <- admitArtifactWithEvidence ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") joinedDetails
             case admission of
                 AdmissionAdmit _ _ admitted -> do
                     verifyIntegrity admitted sampleBytes `shouldBe` IntegrityVerified
@@ -288,7 +287,7 @@ spec = do
                     cover 5 "a version that loses a file" (not (null listed) && length listed < length files)
                     cover 10 "a version the listing refuses" (null listed)
                     for_ files $ \file -> do
-                        admission <- evalIO (admitArtifact ctx [admitRule] minIntegrity (unsafeFilename (artFilename file)) details)
+                        (admission, _) <- evalIO (admitArtifactWithEvidence ctx [admitRule] minIntegrity (unsafeFilename (artFilename file)) details)
                         case admission of
                             AdmissionAdmit _ admitted digests -> do
                                 admitted === file

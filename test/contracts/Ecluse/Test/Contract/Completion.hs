@@ -9,6 +9,7 @@ module Ecluse.Test.Contract.Completion (
     LawEvidence (..),
     Completion (..),
     requiredFamilyLaws,
+    requiredFamilyLawsFor,
     validateCompletion,
     auditCompletion,
 ) where
@@ -72,12 +73,20 @@ requiredFamilyLaws scope =
                 ]
            ]
 
+-- | Add ecosystem-specific requirements without changing the shared laws.
+requiredFamilyLawsFor :: Text -> CompletionScope -> [(Text, [Text])]
+requiredFamilyLawsFor subject scope = map addOutage (requiredFamilyLaws scope)
+  where
+    addOutage ("dredger", laws)
+        | subject == "npm", scope == FullEcosystem = ("dredger", laws <> ["skipped-admission-recovery"])
+    addOutage family = family
+
 -- | Missing laws fail even when both their registration and their evidence mapping disappear.
 validateCompletion :: Completion -> [Catalogue] -> Either [Text] Completion
 validateCompletion completion catalogues = if null faults then Right completion else Left faults
   where
     evidence = completionEvidence completion
-    requirements = [(family, law) | (family, laws) <- requiredFamilyLaws (completionScope completion), law <- laws]
+    requirements = [(family, law) | (family, laws) <- requiredFamilyLawsFor (completionSubject completion) (completionScope completion), law <- laws]
     declared = [(evidenceFamily item, evidenceLaw item) | item <- evidence]
     groups = concatMap catalogueGroups catalogues
     faults =

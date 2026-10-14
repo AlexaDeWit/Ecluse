@@ -23,9 +23,14 @@ module Ecluse.Core.Rules.Outage (
     OutageStore,
     tvarOutageStore,
     sourceReporter,
+    logSkippedCheckEvidence,
 ) where
 
 import Data.Time (NominalDiffTime, UTCTime)
+import Katip (KatipContext, Severity (WarningS), SimpleLogPayload, katipAddContext, logFM, ls, sl)
+
+import Ecluse.Core.Rules.Render (renderInability)
+import Ecluse.Core.Rules.Types (SkippedCheck (SkippedUnavailable, Unreached))
 
 import Ecluse.Core.Rules.Outage.Internal (
     AdmissionIdentity (..),
@@ -85,3 +90,13 @@ sourceReporter period clock store emit = SourceReporter{reportSource = report, n
             current ->
                 let advance = admissionLogged loggedAdmissionCap ident
                  in if snd (advance current) then commitOutage store advance else pure False
+
+-- | Log the skipped checks of one admission, retaining the caller's identity fields.
+logSkippedCheckEvidence :: (KatipContext m) => SimpleLogPayload -> [SkippedCheck] -> m ()
+logSkippedCheckEvidence admissionContext = traverse_ logOne
+  where
+    logOne = \case
+        Unreached _ -> pass
+        SkippedUnavailable rule cause ->
+            katipAddContext (admissionContext <> sl "rule" rule <> sl "cause" (renderInability cause)) $
+                logFM WarningS (ls ("admitted with a check skipped for unavailability" :: Text))

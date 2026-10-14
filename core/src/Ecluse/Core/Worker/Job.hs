@@ -17,13 +17,13 @@ module Ecluse.Core.Worker.Job (
 import Control.Monad (foldM)
 import Control.Monad.Except (throwError)
 import Data.Map.Strict qualified as Map
-import Katip (Severity (DebugS, ErrorS, InfoS), katipAddNamespace, logFM, ls)
+import Katip (Severity (DebugS, ErrorS, InfoS), katipAddNamespace, logFM, ls, sl)
 import UnliftIO (withRunInIO)
 
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (tfCause)
 import Ecluse.Core.Mirror.State
-import Ecluse.Core.Package (Artifact (artFilename, artHashes, artSize, artUrl), Hash, PackageDetails (pkgArtifacts, pkgVersion), PackageInfo (..), pkgEcosystem)
+import Ecluse.Core.Package (Artifact (artFilename, artHashes, artSize, artUrl), Hash, PackageDetails (pkgArtifacts, pkgVersion), PackageInfo (..), pkgEcosystem, renderPackageName)
 import Ecluse.Core.Package.Admission (
     ArtifactAdmission (
         AdmissionAdmit,
@@ -34,7 +34,7 @@ import Ecluse.Core.Package.Admission (
         AdmissionUndecidable
     ),
     admissionTransience,
-    admitArtifact,
+    admitArtifactWithEvidence,
  )
 import Ecluse.Core.Package.Integrity (VersionIntegrity (..), classifyDigests, partitionByFloor)
 import Ecluse.Core.Queue (MirrorJob (jobPackage, jobTraceContext, jobTriggerFilename, jobVersion))
@@ -62,6 +62,7 @@ import Ecluse.Core.Registry.Publish (
     publishPrepared,
  )
 import Ecluse.Core.Registry.Request (sidecarUrl)
+import Ecluse.Core.Rules.Outage (logSkippedCheckEvidence)
 import Ecluse.Core.Rules.Render (renderReason)
 import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), Transience (WillResolve, WontResolve), mkEvalContext)
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxMirrorArtifactBytes), authorityLabel, hostPortAddress)
@@ -303,16 +304,20 @@ admitEvaluation policy job evaluation = case evaluation of
         Nothing -> pure (Left (Dropped "the source inventory has no supported trigger artifact"))
         Just trigger -> do
             ctx <- liftIO (mkEvalContext (wpNow policy) (pure Nothing))
-            admission <- liftIO (admitArtifact ctx (wpRules policy) (wpMinIntegrity policy) trigger (vdDetails doc))
+            (admission, skipped) <- liftIO (admitArtifactWithEvidence ctx (wpRules policy) (wpMinIntegrity policy) trigger (vdDetails doc))
             case outcomeOfAdmission job admission of
                 Left outcome -> pure (Left outcome)
-                Right _ -> case supportedVersion policy job trigger doc of
-                    Left outcome -> pure (Left outcome)
-                    Right supported -> case mpPrepareVersion (wpPublish policy) (jobPackage job) (jobVersion job) supported of
-                        Left fault -> Left <$> outcomeOfPublish job (Left fault)
-                        Right prepared -> pure $ do
-                            locations <- traverse (admittedLocation policy job) (inventoryFiles (pmvInventory prepared))
-                            pure (Readmitted prepared locations upstreamLatest)
+                Right _ -> do
+                    logSkippedCheckEvidence
+                        (sl "package" (renderPackageName (jobPackage job)) <> sl "version" (renderVersion (jobVersion job)))
+                        skipped
+                    case supportedVersion policy job trigger doc of
+                        Left outcome -> pure (Left outcome)
+                        Right supported -> case mpPrepareVersion (wpPublish policy) (jobPackage job) (jobVersion job) supported of
+                            Left fault -> Left <$> outcomeOfPublish job (Left fault)
+                            Right prepared -> pure $ do
+                                locations <- traverse (admittedLocation policy job) (inventoryFiles (pmvInventory prepared))
+                                pure (Readmitted prepared locations upstreamLatest)
   where
     unresolved = retryOrDrop (versionTransience evaluation)
 
