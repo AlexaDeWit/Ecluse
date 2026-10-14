@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | HTTP routing, advisory availability, and listener lifecycle regressions.
 module Ecluse.Runtime.ServerSpec (spec) where
 
 import Prelude hiding (get)
@@ -11,7 +12,8 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Katip (LogEnv, closeScribes)
+import Database.SQLite.Simple (execute_, withConnection)
+import Katip (LogEnv, SimpleLogPayload, closeScribes, runKatipContextT)
 import Network.HTTP.Client (HttpException, defaultManagerSettings, httpNoBody, newManager, parseRequest)
 import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Types (Header, Status, hConnection, hContentType, methodDelete, methodHead, methodPut, status200, status404, status500, statusCode)
@@ -25,10 +27,12 @@ import Network.Wai (
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Internal (ResponseReceived (ResponseReceived))
 import Network.Wai.Test qualified as WaiTest
+import System.FilePath ((</>))
+import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import Test.Hspec.Wai
 import UnliftIO (timeout)
-import UnliftIO.Async (link, withAsync)
+import UnliftIO.Async (link, poll, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (bracket, finally, throwIO, try)
 
@@ -40,6 +44,7 @@ import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Cve.Slot (swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataSerialise), AdapterPublish (publishRelay))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterProjectName))
@@ -52,7 +57,7 @@ import Ecluse.Core.Registry.ServedDocument (RenderRefused (RenderRefused))
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (
     DenyIfCveParams (DenyIfCveParams),
-    FailureAlignment (FailDeny),
+    FailureAlignment (FailDeny, FailNoDecision),
     PrecededRule,
     Rule (AllowByIdentity, AllowIfOlderThan, DenyIfCve),
  )
@@ -67,7 +72,7 @@ import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (UnclassifiedFault))
 import Ecluse.Core.Worker (Liveness (Liveness, liveHealthy, liveLastPoll), heartbeatLivenessNow, workerHeartbeatStaleAfter)
 import Ecluse.Cve.Sync (CveSyncHandle (csClock, csEnv, csReady), cveRuleDepsFor, cveSyncReadiness)
-import Ecluse.Runtime.Cve.Sync (SyncEnv (syncSlot))
+import Ecluse.Runtime.Cve.Sync.Internal (CveFetch (..), OsvDbFetchFault (OsvDbTransport), SyncEnv (..), SyncHooks (..), SyncSchedule (..), runCveSync)
 import Ecluse.Runtime.Env (envWorkerHeartbeat, recordPoll)
 import Ecluse.Runtime.Server.Internal (
     DrainSignal,
@@ -88,12 +93,15 @@ import Ecluse.Runtime.Server.Internal (
     serveBound,
  )
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Test.Cve (fetchServingAt, headOnlyFetch)
 import Ecluse.Runtime.Test.Support (newTestEnv, newTestEnvLogging)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Cve (fakeCveDb)
 import Ecluse.Test.Log (captureJsonLog, memoryLogEnv, newTestLogEnv)
+import Ecluse.Test.Osv (mkDbWithWrongEpoch, mkMinimalValidDbWithMeta)
 import Ecluse.Test.Package (validSha256, validSha256Sri)
-import Ecluse.Test.Poll (pollUntil)
+import Ecluse.Test.Poll (awaitUntil, pollUntil)
+import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, passthroughAdvisorySyncTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, publishedDaysAgo, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
@@ -241,6 +249,7 @@ spec = do
     perimeterGuardSpec
     composedNpmMountSpec
     partialAdvisorySpec
+    startupAdvisorySpec
     refusedRenderSpec
     runWarpDrainWiringSpec
     listeningLineSpec
@@ -624,7 +633,7 @@ partialAdvisorySpec = describe "two mounts, one advisory database" $ do
         -- The owner's case: npm synced and the PyPI artifact never arrived. One upstream
         -- serves both documents, so the advisory slot is the only difference between them.
         withRoutedStub upstreamReply $ \stub -> do
-            (app, handles) <- partialAdvisoryApp (stubLocalhostUrl stub) advisoryPolicy
+            (app, handles) <- advisoryApp (stubLocalhostUrl stub) advisoryPolicy [Npm] False
 
             npm <- requestPath app "/npm/leftpad"
             status npm `shouldBe` 200
@@ -651,9 +660,61 @@ partialAdvisorySpec = describe "two mounts, one advisory database" $ do
         -- An intentional allow outranks the advisory deny, so it keeps admitting through
         -- the outage the mount beside it is still waiting out.
         withRoutedStub upstreamReply $ \stub -> do
-            (app, _) <- partialAdvisoryApp (stubLocalhostUrl stub) overridePolicy
+            (app, _) <- advisoryApp (stubLocalhostUrl stub) overridePolicy [Npm] False
             overridden <- requestPath app "/pypi/simple/leftpad/"
             status overridden `shouldBe` 200
+
+startupAdvisorySpec :: Spec
+startupAdvisorySpec = describe "advisory acquisition at startup" $
+    for_ ["unavailable S3", "missing object", "rejected artifact"] $ \failure ->
+        for_ [("refuse", advisoryPolicy, False, 503), ("skip", skipAdvisoryPolicy, False, 200), ("override", overridePolicy, False, 200), ("trusted read", advisoryPolicy, True, 200)] $ \(policyName, policy, trusted, expected) ->
+            it (failure <> " keeps serving under " <> policyName <> " and recovers without restart") $
+                withSystemTempDirectory "startup-advisories" $ \dir ->
+                    withRoutedStub upstreamReply $ \stub -> do
+                        (app, handles) <- advisoryApp (stubLocalhostUrl stub) policy [] trusted
+                        handle <- maybe (fail "missing PyPI sync handle") pure (Map.lookup PyPI handles)
+                        pushedAt <- csClock handle
+                        recovery <- newTVarIO False
+                        steps <- newTVarIO (0 :: Int)
+                        let initial = case failure of
+                                "unavailable S3" -> headOnlyFetch (Left (OsvDbTransport (transportFault TransportUnreachable "S3 unavailable")))
+                                "missing object" -> headOnlyFetch (Right Nothing)
+                                _ -> fetchServingAt (Just servedAt) (Just "rejected") mkDbWithWrongEpoch
+                            healthy = fetchServingAt (Just pushedAt) (Just "recovered") $ \dest -> do
+                                mkMinimalValidDbWithMeta dest "leftpad" []
+                                withConnection dest $ \conn -> execute_ conn "UPDATE meta SET value = 'pypi' WHERE key = 'ecosystem'"
+                            choose = readTVarIO recovery <&> \ready -> if ready then healthy else initial
+                            fetch = CveFetch{fetchHead = choose >>= fetchHead, fetchDownload = \dest -> choose >>= (`fetchDownload` dest)}
+                            syncEnv = (csEnv handle){syncFetch = fetch, syncDbPath = dir </> "pypi.db"}
+                            hooks = SyncHooks (atomically (writeTVar (csReady handle) True)) (atomically (modifyTVar' steps (+ 1)))
+                            schedule = SyncSchedule [1_000, 1_000] 20_000 900_000_000
+                        (_, logged) <- captureJsonLog $ \logEnv ->
+                            withAsync (runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort syncEnv schedule hooks)) $ \worker -> do
+                                awaitUntil 5_000_000 1_000 ((>= 4) <$> readTVarIO steps) `shouldReturn` True
+                                poll worker >>= (`shouldSatisfy` isNothing)
+                                status <$> requestPath app "/livez" `shouldReturn` 200
+                                status <$> requestPath app "/readyz" `shouldReturn` 503
+                                status <$> requestPath app "/pypi/simple/leftpad/" `shouldReturn` expected
+                                advisoriesLanded handles Npm
+                                status <$> requestPath app "/readyz" `shouldReturn` 200
+                                status <$> requestPath app "/npm/leftpad" `shouldReturn` 200
+                                status <$> requestPath app "/pypi/simple/leftpad/" `shouldReturn` expected
+                                atomically (writeTVar recovery True)
+                                awaitUntil 5_000_000 1_000 (readTVarIO (csReady handle)) `shouldReturn` True
+                                poll worker >>= (`shouldSatisfy` isNothing)
+                                recovered <- requestPath app "/readyz"
+                                bodyOf recovered `shouldSatisfy` BS.isInfixOf "\"pypi\":\"ready\""
+                                status <$> requestPath app "/pypi/simple/leftpad/" `shouldReturn` 200
+                        let report = if failure == "rejected artifact" then "downloaded artifact refused" else "stays not-ready"
+                            errors = filter (T.isInfixOf report) (lines logged)
+                        errors `shouldSatisfy` (not . null)
+                        for_ errors $ \line -> line `shouldSatisfy` T.isInfixOf "\"sev\":\"Error\""
+
+skipAdvisoryPolicy :: [PrecededRule]
+skipAdvisoryPolicy =
+    [ atDefaultPrecedence (DenyIfCve (DenyIfCveParams 8.0 FailNoDecision))
+    , atDefaultPrecedence (AllowIfOlderThan 0)
+    ]
 
 refusedRenderSpec :: Spec
 refusedRenderSpec = describe "a served document whose render the adapter refuses" $
@@ -677,31 +738,27 @@ refusingRenderApp upstreamBase logEnv = do
         refusing = deps{pdMetadata = (pdMetadata deps){metadataSerialise = const (Left RenderRefused)}}
     pure (application (mkServerConfig (maybeToList (mountBindingFor Npm refusing Nothing))) env)
 
-{- | Both mounts as the composition root resolves them, over one upstream, with npm's advisory
-database installed and PyPI's slot empty. The handles come back so a test can land PyPI's.
--}
-partialAdvisoryApp :: Text -> [PrecededRule] -> IO (Application, Map.Map Ecosystem CveSyncHandle)
-partialAdvisoryApp upstreamBase policy = do
+-- | Bind both mounts to their advisory handles, with the named ecosystems initially loaded.
+advisoryApp :: Text -> [PrecededRule] -> [Ecosystem] -> Bool -> IO (Application, Map.Map Ecosystem CveSyncHandle)
+advisoryApp upstreamBase policy initiallyLoaded trusted = do
     handles <- Map.fromList <$> newAdvisoryHandles [Npm, PyPI]
-    advisoriesLanded handles Npm
-    for_ (Map.lookup PyPI handles) $ \handle ->
-        atomically (writeTVar (csReady handle) False)
+    for_ handles $ \handle -> atomically (writeTVar (csReady handle) False)
+    for_ initiallyLoaded (advisoriesLanded handles)
     let depsFor = cveRuleDepsFor handles noBreakerReporter (\_ _ -> pass)
     npmRules <- prepare (depsFor Npm) policy
     pypiRules <- prepare (depsFor PyPI) policy
     env <- newTestEnv
     let public = loopbackRegistryUrl upstreamBase
+        private = if trusted then Just public else Nothing
         bindings =
             catMaybes
-                [ mountBindingFor Npm (npmServeDeps Nothing public NoMirrorWrite npmRules (pure servedAt)) Nothing
-                , mountBindingFor PyPI (pypiServeDeps Nothing public NoMirrorWrite pypiRules (pure servedAt)) Nothing
+                [ mountBindingFor Npm (npmServeDeps private public NoMirrorWrite npmRules (pure servedAt)) Nothing
+                , mountBindingFor PyPI (pypiServeDeps private public NoMirrorWrite pypiRules (pure servedAt)) Nothing
                 ]
         cfg = (mkServerConfig bindings){scCheckReady = cveSyncReadiness handles}
     pure (application cfg env, handles)
 
-{- | One mount's first sync landing: its slot fills, and its one-way readiness flag flips. The
-object carries a publication time, as every stored one does, so its age is established.
--}
+-- Fill one slot and mark its first sync, with a publication time for freshness checks.
 advisoriesLanded :: Map.Map Ecosystem CveSyncHandle -> Ecosystem -> IO ()
 advisoriesLanded handles eco =
     for_ (Map.lookup eco handles) $ \handle -> do
@@ -709,18 +766,14 @@ advisoriesLanded handles eco =
         swapIn (syncSlot (csEnv handle)) (DbEtag "landed") (Just pushedAt) (fakeCveDb [])
         atomically (writeTVar (csReady handle) True)
 
-{- | The policy both mounts run. The advisory deny outranks the age allow, so a mount whose slot
-is empty refuses what the rule cannot vet, and a mount with its database admits.
--}
+-- The advisory deny outranks the age allow, so an empty slot refuses.
 advisoryPolicy :: [PrecededRule]
 advisoryPolicy =
     [ atDefaultPrecedence (DenyIfCve (DenyIfCveParams 8.0 FailDeny))
     , atDefaultPrecedence (AllowIfOlderThan 0)
     ]
 
-{- | 'advisoryPolicy' under an operator's identity allow, which outranks the advisory deny by
-default precedence. PyPI keys a release by its canonical PEP 440 spelling, so @1.0.0@ is @1@.
--}
+-- PyPI identity uses canonical PEP 440 spelling, so 1.0.0 is 1.
 overridePolicy :: [PrecededRule]
 overridePolicy = atDefaultPrecedence (AllowByIdentity "leftpad@1") : advisoryPolicy
 

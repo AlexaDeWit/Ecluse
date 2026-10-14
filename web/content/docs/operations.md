@@ -44,8 +44,10 @@ artifact exists, because every rule it holds decides without the database. Give 
 that first database download: a Kubernetes `startupProbe`, or a readiness `failureThreshold` sized
 for it. Pilot publishes an artifact for every ecosystem the configuration mounts. If acquisition
 fails, the process stays alive and keeps polling. Once the boot retry budget is spent, the sync
-logs an `ERROR` naming Pilot and the store, and repeats it every 15 minutes until an artifact
-loads. Alarm on that line: it is the one that says a rollout is stuck on Pilot.
+logs an `ERROR` with the cause and the store, and repeats it every 15 minutes until an artifact
+loads. Missing or rejected artifacts require a Pilot publication. Access failures require a bucket,
+object, or IAM correction. The same process recovers when a later poll acquires a valid artifact.
+Alarm on these lines to detect a rollout that cannot acquire its advisory database.
 
 Readiness reports every mount separately, so one ecosystem's missing artifact does not take the
 others out of rotation. The `/readyz` body carries a `mounts` object keyed by ecosystem, and each

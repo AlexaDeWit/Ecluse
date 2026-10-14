@@ -1644,7 +1644,7 @@ threats:
       category: denial-of-service
     severity: medium
     status: mitigated
-    description: A proxy configured to sync advisories from S3 starts without a loaded advisory generation. An S3 outage, a missing object, or a denied read can prevent its first sync. A replaced Kubernetes Pod loses its emptyDir data. A container restart within the same Pod can retain that data, but the proxy does not load a retained database at boot. Readiness alone does not block direct requests.
+    description: A proxy configured to sync advisories from S3 starts without a loaded advisory generation. An S3 outage, a missing object, or a denied read can prevent its first sync. A replaced Kubernetes Pod loses its emptyDir data. A container restart within the same Pod can retain that data, but the proxy does not load a retained database at boot. Readiness alone does not block direct requests. The process keeps polling after its bounded startup retries end and reports the unavailable database at ERROR. A later valid artifact restores the affected mount without a process restart. Healthy mounts remain routable.
     elements:
       - c8455307-cef2-4843-a821-ff90db9643d2
   - id: 987569ac-0a3a-4b7f-8b0a-7b67ee234097
