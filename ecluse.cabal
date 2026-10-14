@@ -1281,7 +1281,7 @@ test-suite ecluse-core-unit
 test-suite ecluse-unit
   import:             shared
   -- hspec-discover generates a Main without an export list.
-  ghc-options:        -Wno-missing-export-lists
+  ghc-options:        -Wno-missing-export-lists -threaded -rtsopts
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
   hs-source-dirs:     test/unit bench/load
