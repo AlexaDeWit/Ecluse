@@ -10,7 +10,7 @@ import Test.Hspec
 import UnliftIO.Async (cancel, withAsync)
 import UnliftIO.Exception (bracket, throwIO)
 
-import Ecluse.Test.Env (withEnvOverrides)
+import Ecluse.Test.Env (withEnvOverrides, withEnvVars)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 -- | Environment changes are process-global, so these cases run serially.
@@ -39,6 +39,15 @@ spec = sequential $ describe "withEnvOverrides" $ do
     it "applies duplicate settings in order and restores the original value" $ isolated $ do
         withEnvOverrides [(setKey, "first"), (setKey, "last")] $
             lookupEnv setKey `shouldReturn` Just "last"
+        restored
+    it "clears fixture keys and restores the ambient values after success" $ isolated $ do
+        withEnvVars [setKey, absentKey] [(absentKey, "temporary")] $ do
+            lookupEnv setKey `shouldReturn` Nothing
+            lookupEnv absentKey `shouldReturn` Just "temporary"
+        restored
+    it "restores cleared keys and entries outside the clear list after failure" $ isolated $ do
+        withEnvVars [setKey] [(absentKey, "temporary")] (throwIO (TestContractEscape "fixture"))
+            `shouldThrow` (== TestContractEscape "fixture")
         restored
 
 setKey, absentKey :: String

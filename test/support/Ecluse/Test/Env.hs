@@ -2,12 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Scoping a case's process environment.
-
-The process environment is one mutable value the whole suite shares, so a case that reads it
-depends on what every other case left behind. 'withEnvVars' clears the keys in play before it
-applies the case's own, which is what makes a case order-independent.
--}
+-- | Scoped process environment fixtures. Callers must run serially.
 module Ecluse.Test.Env (
     withEnvVars,
     withEnvOverrides,
@@ -16,19 +11,21 @@ module Ecluse.Test.Env (
 ) where
 
 import System.Environment (setEnv, unsetEnv)
-import UnliftIO.Exception (bracket, bracket_)
+import UnliftIO.Exception (bracket)
 
-{- | Run one case with the named keys cleared, then its own entries alone, and cleared again on
-exit. The caller names every key any case in its module sets, not just the ones it sets here.
+{- | Clear the named keys, apply entries, then restore every touched key on exit.
+Callers must run serially because the process environment is shared.
 -}
 withEnvVars :: [String] -> [(String, String)] -> IO a -> IO a
-withEnvVars keys entries = bracket_ enter (traverse_ unsetEnv keys)
-  where
-    enter = traverse_ unsetEnv keys >> traverse_ (uncurry setEnv) entries
+withEnvVars keys entries =
+    withEnvChanges (map (,Nothing) keys <> map (second Just) entries)
 
 -- | Restore all touched keys after success, failure, or cancellation. Callers must run serially.
 withEnvOverrides :: [(String, String)] -> IO a -> IO a
-withEnvOverrides entries action = bracket save restore (const (apply >> action))
+withEnvOverrides = withEnvChanges . map (second Just)
+
+withEnvChanges :: [(String, Maybe String)] -> IO a -> IO a
+withEnvChanges entries action = bracket save (traverse_ apply) (const (traverse_ apply entries >> action))
   where
     save =
         traverse
@@ -37,8 +34,7 @@ withEnvOverrides entries action = bracket save restore (const (apply >> action))
                 pure (key, value)
             )
             (ordNub (map fst entries))
-    restore = traverse_ (\(key, value) -> maybe (unsetEnv key) (setEnv key) value)
-    apply = traverse_ (uncurry setEnv) entries
+    apply (key, value) = maybe (unsetEnv key) (setEnv key) value
 
 -- | An AWS identity the credential discovery finds, for a case that must reach a resolved one.
 ambientAwsEntries :: [(String, String)]
