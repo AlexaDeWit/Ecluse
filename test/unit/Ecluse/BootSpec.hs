@@ -72,7 +72,7 @@ awsRunEnv =
         <> runEnv
 
 spec :: Spec
-spec = do
+spec = sequential $ do
     describe "blocked rules at both entry points" $ do
         let bothMounts = overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" publicGateEnv
         for_ [(PyPI, "DenyInstallTimeExecution", "", DenyInstallTimeExecutionType, "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release."), (PyPI, "AllowScope", ",\"scope\":\"acme\"", AllowScopeType, "A PyPI project name has no scope, so this rule can never match one."), (Npm, "DenyIfYanked", "", DenyIfYankedType, "npm reports no yank flag. Removed releases disappear from its metadata."), (PyPI, "DenyIfDeprecated", "", DenyIfDeprecatedType, "The PyPI adapter supplies no deprecation flag.")] $ \(eco, name, parameters, ty, reason) ->
@@ -388,8 +388,6 @@ spec = do
                 allCaptured feed `shouldReturn` []
 
         it "prints the mirror-collapse advisory a writing role boots on" $ do
-            -- The typed advisory reaches an operator as this line or as nothing at all, so this
-            -- is what pins the render to the print path rather than to the pass that logged it.
             output <- checkConfigOutput collapsedMirrorEnv
             lines output `shouldContain` [collapsedMirrorAdvisory]
 
@@ -441,16 +439,14 @@ caseKeys =
                , "ECLUSE_ADVISORIES__EPSS_FEED_URL"
                ]
 
-{- | Start a role under these entries and hold it for 100 ms. 'Nothing' is the bound expiring
-with the role still serving, which is what a boot that reached its listeners answers.
--}
+-- | Hold a role for 100 ms. 'Nothing' means the listener action did not exit.
 serves :: [String] -> [(String, String)] -> Expectation
 serves args envVars = withEnvVars caseKeys envVars (timeout 100000 (withArgs args run)) `shouldReturn` Nothing
 
--- | 'serves' for a boot that must abort before its listeners, reporting the status it took.
+-- | Require refusal without a scheduler-dependent deadline. A non-refusing boot fails the suite by hanging.
 abortsBoot :: [String] -> [(String, String)] -> Expectation
 abortsBoot args envVars =
-    withEnvVars caseKeys envVars (try (timeout 100000 (withArgs args run)) :: IO (Either ExitCode (Maybe ())))
+    withEnvVars caseKeys envVars (try (withArgs args run) :: IO (Either ExitCode ()))
         `shouldReturn` Left (ExitFailure 2)
 
 -- | Run the checker under these entries, keeping the status it exited with.
@@ -508,9 +504,7 @@ publishingTo = overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__UR
 splitRoleRefusal :: [String] -> IO (Either ExitCode (Maybe ()), [Text])
 splitRoleRefusal args = bootRefusal args (withoutQueueUrl runEnv)
 
-{- | An npm mount whose advisory sources are the stubs, with or without a rule that depends on EPSS.
-The store is configured only because such a rule refuses the boot without one. Nothing uploads.
--}
+-- | Use stub advisory sources and configure the store required by an EPSS rule.
 compileEnv :: Bool -> Stub -> Stub -> [(String, String)]
 compileEnv epssRule osvStub epssStub =
     [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
