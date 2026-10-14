@@ -93,10 +93,10 @@ sourceReporter period clock store emit = SourceReporter{reportSource = report, n
 
 -- | Log the skipped checks of one admission, retaining the caller's identity fields.
 logSkippedCheckEvidence :: (KatipContext m) => SimpleLogPayload -> [SkippedCheck] -> m ()
-logSkippedCheckEvidence identity = traverse_ logOne
+logSkippedCheckEvidence admissionContext = traverse_ logOne
   where
     logOne = \case
         Unreached _ -> pass
         SkippedUnavailable rule cause ->
-            katipAddContext (identity <> sl "rule" rule <> sl "cause" (renderInability cause)) $
+            katipAddContext (admissionContext <> sl "rule" rule <> sl "cause" (renderInability cause)) $
                 logFM WarningS (ls ("admitted with a check skipped for unavailability" :: Text))
