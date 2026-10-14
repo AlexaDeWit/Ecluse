@@ -8,8 +8,7 @@ module Ecluse.BenchLoad.SelectionSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
-import Ecluse.BenchLoad.Selection (evictionEntries, fixtureBaseline, fixtureSection, selectScenario)
+import Ecluse.BenchLoad.Selection (evictionEntries, fixtureSection, measurementConditionVersion, selectScenario)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 
 spec :: Spec
@@ -27,12 +26,9 @@ spec = do
             let output = fixtureSection Npm ["npm load", "npm service", "npm saturation"] <> fixtureSection PyPI ["pypi load", "pypi service", "pypi saturation"]
             T.splitOn "# " output
                 `shouldBe` ["", "npm load scenarios\n\nnpm load\nnpm service\nnpm saturation", "pypi load scenarios\n\npypi load\npypi service\npypi saturation"]
-    describe "baseline selection" $ do
-        it "does not attribute npm's measured RTT to PyPI" $ do
-            fixtureBaseline Npm 5_000 (MeasuredRtt 80 9) `shouldBe` MeasuredRtt 80 9
-            fixtureBaseline PyPI 5_000 (MeasuredRtt 80 9) `shouldBe` InjectedFallback 5
-        it "keeps each configured fallback independent when npm probing fails" $
-            fixtureBaseline PyPI 2_000 (InjectedFallback 10) `shouldBe` InjectedFallback 2
+    describe "measurement identity" $
+        it "versions shared conditions independently of scenario names" $
+            measurementConditionVersion `shouldBe` "unified-v2"
     describe "the eviction cache" $ do
         it "forces churn for the three-project corpus at the default and larger bounds" $ do
             evictionEntries 3 3 `shouldBe` Right 2

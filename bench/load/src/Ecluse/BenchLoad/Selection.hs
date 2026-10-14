@@ -9,15 +9,14 @@ module Ecluse.BenchLoad.Selection (
     scenarioKey,
     selectScenario,
     fixtureSection,
-    fixtureBaseline,
+    measurementConditionVersion,
     evictionEntries,
 ) where
 
 import Data.List (lookup)
 import Data.Text qualified as T
 
-import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback))
-import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
 -- | Qualify a child identifier so equal scenario names in different ecosystems stay distinct.
 scenarioKey :: Ecosystem -> Text -> Text
@@ -33,10 +32,9 @@ fixtureSection :: Ecosystem -> [Text] -> Text
 fixtureSection ecosystem sections =
     T.intercalate "\n" (("# " <> ecosystemName ecosystem <> " load scenarios\n") : sections)
 
--- | Only npm has a live probe. Other fixtures use the configured latency in microseconds.
-fixtureBaseline :: Ecosystem -> Int -> BaselineSource -> BaselineSource
-fixtureBaseline Npm _ measured = measured
-fixtureBaseline _ configuredMicros _ = InjectedFallback (fromIntegral configuredMicros / 1_000)
+-- | Identify the shared conditions independently of scenario names and workload settings.
+measurementConditionVersion :: Text
+measurementConditionVersion = "unified-v2"
 
 -- | Keep an eviction cache below its working set, refusing a set too small to churn.
 evictionEntries :: Int -> Int -> Either Text Int

@@ -24,7 +24,7 @@ import Ecluse.BenchLoad.Floors (
     RunnerKind (RunnerKind),
     RunnerReading (RunnerReading),
     Trigger (OnDemand, Scheduled),
-    Unheld (LatencyAboveCeiling, OtherRunner, SettingsDiffer, ShapeNotCalibrated, ThrashProbe),
+    Unheld (ConditionsDiffer, LatencyAboveCeiling, OtherRunner, SettingsDiffer, ShapeNotCalibrated, ThrashProbe),
     decodeFloors,
     describeEnforcement,
     enforce,
@@ -38,6 +38,7 @@ import Ecluse.BenchLoad.Floors (
  )
 import Ecluse.BenchLoad.Pod (PodShape (Unlimited))
 import Ecluse.BenchLoad.Support (floorsAtTwoCores, slowNetwork, twoCores)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 
 spec :: Spec
 spec = do
@@ -68,6 +69,14 @@ spec = do
         it "refuses a pod shape it cannot read, and one not in its rendered form" $
             for_ ["2cpu", "2CPU-1GIB", "2cpu-1024mib"] $ \shape ->
                 decodeFloors (document (calibrationValue []) [shape .= object ["npm/merge-cold" .= object ["loaded" .= (1 :: Int)]]]) `shouldSatisfy` isLeft
+        it "requires a PyPI ceiling when calibration names the unified conditions" $
+            decodeFloors (document (calibrationValue ["measurementConditions" .= ("unified-v2" :: Text)]) twoCoreFloors) `shouldSatisfy` isLeft
+        it "checks native PyPI ceiling arithmetic and pod identities" $
+            for_ [latencyValue [("2cpu-1gib", 100)] 151, latencyValue [("4cpu-1gib", 100)] 150] $ \ceiling ->
+                decodeFloors (document (calibrationValue ["measurementConditions" .= ("unified-v2" :: Text), "pypiInjectedLatency" .= ceiling]) twoCoreFloors) `shouldSatisfy` isLeft
+        it "reads each ecosystem ceiling and retained row provenance without changing counts" $ do
+            let changed = ["measurementConditions" .= ("unified-v2" :: Text), "pypiInjectedLatency" .= latencyValue [("2cpu-1gib", 100)] 150, "retainedFloorConditions" .= Map.singleton ("npm/herd" :: Text) ("legacy-v1" :: Text)]
+            fmap floorsByShape (decodeFloors (document (calibrationValue changed) twoCoreFloors)) `shouldBe` Right (floorsByShape sample)
         it "refuses an unknown pass" $
             decodeFloors (document (calibrationValue []) ["2cpu-1gib" .= object ["pypi/index-cold" .= object ["warm" .= (1 :: Int)]]]) `shouldSatisfy` isLeft
         it "refuses a floor below 1" $
@@ -95,7 +104,18 @@ spec = do
             enforce sample held `shouldBe` Enforced twoCores floorsAtTwoCores
         it "holds a run whose npm fixture injects the ceiling, and not one a millisecond above it" $ do
             enforce sample held{rfNpmLatencyMs = 210} `shouldBe` Enforced twoCores floorsAtTwoCores
-            enforce sample held{rfNpmLatencyMs = 211} `shouldBe` NotHeld (LatencyAboveCeiling 211 210 :| [])
+            enforce sample held{rfNpmLatencyMs = 211} `shouldBe` NotHeld (LatencyAboveCeiling Npm 211 210 :| [])
+        it "does not qualify changed conditions against retained legacy floors" $ do
+            enforce sample held{rfConditions = "unified-v2"} `shouldBe` NotHeld (ConditionsDiffer "legacy-v1" "unified-v2" :| [])
+            unheldViolations OnDemand (enforce sample held{rfConditions = "unified-v2"}) `shouldBe` []
+            unheldViolations Scheduled (enforce sample held{rfConditions = "unified-v2"}) `shouldSatisfy` (not . null)
+        it "applies a native PyPI ceiling independently and leaves the whole run unheld" $ do
+            let native = sample{floorsCalibration = calibration{calConditions = "unified-v2", calPypiLatency = Just (LatencyCeiling ceilingRule (Map.singleton twoCores 100) 150)}}
+                matched = held{rfConditions = "unified-v2", rfPypiLatencyMs = 150}
+            enforce native matched `shouldBe` Enforced twoCores floorsAtTwoCores
+            enforce native matched{rfPypiLatencyMs = 151} `shouldBe` NotHeld (LatencyAboveCeiling PyPI 151 150 :| [])
+            floorCheck (enforce native matched{rfPypiLatencyMs = 151}) ("npm/merge-cold", Loaded) `shouldBe` Unchecked
+            enforce native matched{rfPypiLatencyMs = 151, rfNpmLatencyMs = 211} `shouldBe` NotHeld (LatencyAboveCeiling Npm 211 210 :| [LatencyAboveCeiling PyPI 151 150])
         it "does not hold a run that differs in any setting, and names the setting" $
             for_ offCalibration $ \(setting, ran) ->
                 enforce sample held{rfSettings = ran} `shouldBe` NotHeld (SettingsDiffer (setting :| []) :| [])
@@ -105,8 +125,8 @@ spec = do
         it "does not hold a run under a pod shape the floors do not hold, and names the shape once" $
             enforce sample held{rfShape = Unlimited} `shouldBe` NotHeld (ShapeNotCalibrated Unlimited :| [])
         it "names every reason a run is not held" $
-            enforce sample RunFacts{rfSettings = calibrated{opDurationSeconds = 10, opScenarios = Just ["pypi/index-cold"]}, rfRunner = offGitHub, rfShape = Unlimited, rfNpmLatencyMs = 444}
-                `shouldBe` NotHeld (ShapeNotCalibrated Unlimited :| [SettingsDiffer ("durationSeconds" :| ["scenarios"]), OtherRunner "ubuntu-26.04-arm" calibratedRunner offGitHub, LatencyAboveCeiling 444 210])
+            enforce sample RunFacts{rfSettings = calibrated{opDurationSeconds = 10, opScenarios = Just ["pypi/index-cold"]}, rfRunner = offGitHub, rfShape = Unlimited, rfNpmLatencyMs = 444, rfPypiLatencyMs = 5, rfConditions = "legacy-v1"}
+                `shouldBe` NotHeld (ShapeNotCalibrated Unlimited :| [SettingsDiffer ("durationSeconds" :| ["scenarios"]), OtherRunner "ubuntu-26.04-arm" calibratedRunner offGitHub, LatencyAboveCeiling Npm 444 210])
 
     describe "floorCheck" $ do
         it "gives a held run each count's floor, for npm and PyPI alike, and none for a count the floors do not cover" $ do
@@ -129,7 +149,7 @@ spec = do
 
     describe "unheldViolations" $ do
         it "fails a scheduled run that its settings, its runner, or its pod shape keep off the floors, in one line" $
-            unheldViolations Scheduled (NotHeld (ShapeNotCalibrated Unlimited :| [SettingsDiffer ("durationSeconds" :| ["scenarios"]), OtherRunner "ubuntu-26.04-arm" calibratedRunner onX64, LatencyAboveCeiling 444 210]))
+            unheldViolations Scheduled (NotHeld (ShapeNotCalibrated Unlimited :| [SettingsDiffer ("durationSeconds" :| ["scenarios"]), OtherRunner "ubuntu-26.04-arm" calibratedRunner onX64, LatencyAboveCeiling Npm 444 210]))
                 `shouldBe` [ "a scheduled run must be held to the success floors, and this one is not: the floors hold no entry for the pod shape unlimited, and it differs from the calibrated operating point in durationSeconds, scenarios, and it does not run on the calibrated runner (ubuntu-26.04-arm: GitHub Actions on Linux ARM64), and the harness read GITHUB_ACTIONS=true, RUNNER_OS=Linux, RUNNER_ARCH=X64"
                            ]
         it "fails a scheduled run of the GC-thrash probe, which is never held" $
@@ -145,7 +165,7 @@ spec = do
     describe "describeEnforcement" $ do
         it "names the file, the runner, the runs, their commits, the rule, and the latency ceiling for a held run" $
             describeEnforcement calibration (Enforced twoCores floorsAtTwoCores)
-                `shouldBe` "This run is held to the success floors in `bench/load/floors.json`, calibrated on ubuntu-26.04-arm from 2 runs at abc123. Half the lowest night. A run whose npm fixture injects more than 210 ms of upstream latency is not held."
+                `shouldBe` "This run is held to the success floors in `bench/load/floors.json`, calibrated on ubuntu-26.04-arm from 2 runs at abc123. Half the lowest night. Measurement conditions: legacy-v1. npm latency ceiling: 210 ms."
         it "gives the injected latency and the ceiling for a run a slow network keeps off the floors" $
             describeEnforcement calibration slowNetwork
                 `shouldBe` "This run is not held to the success floors in `bench/load/floors.json`: its npm fixture injects 444 ms of upstream latency, above the ceiling of 210 ms."
@@ -181,6 +201,9 @@ calibration =
         , calRuns = CalibrationRun firstRun commit :| [CalibrationRun secondRun commit]
         , calOperatingPoint = calibrated
         , calNpmLatency = LatencyCeiling ceilingRule (Map.singleton twoCores 135) 210
+        , calPypiLatency = Nothing
+        , calConditions = "legacy-v1"
+        , calRetainedConditions = mempty
         }
 
 sample :: Floors
@@ -188,7 +211,7 @@ sample = Floors calibration (Map.singleton twoCores floorsAtTwoCores)
 
 -- A run that matches the sample's calibration under its one pod shape.
 held :: RunFacts
-held = RunFacts{rfSettings = calibrated, rfRunner = onCalibratedRunner, rfShape = twoCores, rfNpmLatencyMs = 135}
+held = RunFacts{rfSettings = calibrated, rfRunner = onCalibratedRunner, rfShape = twoCores, rfNpmLatencyMs = 135, rfPypiLatencyMs = 5, rfConditions = "legacy-v1"}
 
 -- One run per setting, each differing from the calibrated operating point in that setting alone.
 offCalibration :: [(Text, OperatingPoint)]

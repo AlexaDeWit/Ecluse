@@ -2,12 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The reviewed success floors a load run is held to. A floor is the fewest successes one
-scenario may have in one pass under one pod shape. The committed file also records where and how
-the floors were calibrated. A run is held to them only on that runner, at those settings, under a
-pod shape the file holds, and while its npm fixture injects no more latency than the file's
-ceiling. A held run fails closed: on a scenario without a floor, and on a floor for a count it does
-not check.
+{- | Reviewed minimum successes by scenario, pass, and pod shape, with calibration provenance.
+A held run fails on a missing floor or a floor that names an unreported count.
 -}
 module Ecluse.BenchLoad.Floors (
     -- * The committed floors
@@ -42,12 +38,13 @@ module Ecluse.BenchLoad.Floors (
     staleFloorViolations,
     unheldViolations,
     describeEnforcement,
+    describeRetainedConditions,
 ) where
 
 -- relude's prelude exports a Bounded/Enum-based `universe`. The Generic-derived one is used here.
 import Prelude hiding (universe)
 
-import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.:))
+import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.!=), (.:), (.:?))
 import Data.Aeson.Types (Parser)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -56,6 +53,8 @@ import Data.Universe.Class (Universe (universe))
 import Data.Universe.Generic (universeGeneric)
 
 import Ecluse.BenchLoad.Pod (PodShape, parsePodShape, renderPodShape)
+import Ecluse.BenchLoad.Selection (measurementConditionVersion)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
 
 -- | Which of a scenario's runs a count of successes comes from.
 data Pass
@@ -76,15 +75,13 @@ passKey = \case
 -- | A count the floors cover: a scenario's ecosystem-qualified key, and the pass.
 type FloorKey = (Text, Pass)
 
-{- | The settings a run is compared in: its load knobs, its scenario selection, and its request-pattern
-overrides. 'Nothing' leaves a bound to the proxy's computed default, or selects every scenario.
--}
+-- | Compare knobs, selected scenarios, and pattern overrides. 'Nothing' keeps computed bounds or selects all scenarios.
 data OperatingPoint = OperatingPoint
     { opDurationSeconds :: Int
     , opConcurrency :: Int
     , opPayloadBytes :: Int
     , opUpstreamLatencyMs :: Int
-    -- ^ The configured latency. The npm fixture injects the round trip it probes instead.
+    -- ^ The configured fallback latency. Each fixture normally injects its own measured round trip.
     , opCacheMaxEntries :: Int
     , opWorkingSet :: Int
     , opServeMaxInFlight :: Maybe Int
@@ -167,7 +164,7 @@ instance FromJSON CalibrationRun where
             fail "a calibration run must state its URL and its commit"
         pure run
 
--- | The highest latency the npm fixture injected in the calibration runs under each pod shape, and the most a held run may inject.
+-- | The highest native injected latency per pod shape and the ceiling for held runs.
 data LatencyCeiling = LatencyCeiling
     { lcRule :: Text
     , lcHighestMs :: Map PodShape Int
@@ -189,9 +186,7 @@ instance FromJSON LatencyCeiling where
         shapeLatency :: (Text, Int) -> Parser (PodShape, Int)
         shapeLatency (name, highest) = (,highest) <$> shapeNamed name
 
-{- | The ceiling the rule gives: 1.5 times the lowest of the pod shapes' highest latencies, rounded up
-to 10 ms. A latency-bound floor first breaches near twice its own shape's highest, so the lowest binds.
--}
+-- | Set the ceiling to 1.5 times the lowest per-shape maximum, rounded up to 10 ms.
 latencyCeilingMs :: NonEmpty Int -> Int
 latencyCeilingMs (highest :| others) = (foldl' min highest others * 3 + 19) `div` 20 * 10
 
@@ -210,6 +205,11 @@ data Calibration = Calibration
     , calRuns :: NonEmpty CalibrationRun
     , calOperatingPoint :: OperatingPoint
     , calNpmLatency :: LatencyCeiling
+    , calPypiLatency :: Maybe LatencyCeiling
+    -- ^ Legacy calibration predates the native PyPI probe.
+    , calConditions :: Text
+    , calRetainedConditions :: Map Text Text
+    -- ^ Unaffected scenario rows retain their earlier measurement identity.
     }
     deriving stock (Eq, Show)
 
@@ -223,8 +223,17 @@ instance FromJSON Calibration where
                 <*> o .: "runs"
                 <*> o .: "operatingPoint"
                 <*> o .: "npmInjectedLatency"
+                <*> o .:? "pypiInjectedLatency"
+                <*> o .:? "measurementConditions" .!= "legacy-v1"
+                <*> o .:? "retainedFloorConditions" .!= mempty
         when (any T.null [calRule calibration, calRunner calibration, rkOs (calRunnerKind calibration), rkArch (calRunnerKind calibration)]) $
             fail "the calibration must state its rule and its runner's label, operating system, and architecture"
+        unless (calConditions calibration `elem` ["legacy-v1", measurementConditionVersion]) $
+            fail "the calibration names unknown measurement conditions"
+        when (calConditions calibration == measurementConditionVersion && isNothing (calPypiLatency calibration)) $
+            fail "unified measurement conditions require a native PyPI latency ceiling"
+        when (any T.null (Map.keys (calRetainedConditions calibration) <> Map.elems (calRetainedConditions calibration))) $
+            fail "retained floor conditions require a scenario and its measurement identity"
         pure calibration
 
 -- | The calibration, and each count's floor by pod shape.
@@ -239,8 +248,10 @@ instance FromJSON Floors where
         calibration <- o .: "calibration"
         shapes <- o .: "floors"
         byShape <- Map.fromList <$> traverse parseShape (Map.toList shapes)
-        when (Map.keysSet byShape /= Map.keysSet (lcHighestMs (calNpmLatency calibration))) $
+        when (any ((/= Map.keysSet byShape) . Map.keysSet . lcHighestMs) (calNpmLatency calibration : maybeToList (calPypiLatency calibration))) $
             fail "the latency ceiling must record a highest latency for each pod shape the floors hold, and for no other"
+        unless (all (`elem` map fst (concatMap Map.keys (Map.elems byShape))) (Map.keys (calRetainedConditions calibration))) $
+            fail "retained measurement conditions name a scenario without floors"
         pure (Floors calibration byShape)
       where
         parseShape :: (Text, Map Text (Map Text Int)) -> Parser (PodShape, Map FloorKey Int)
@@ -294,7 +305,9 @@ data RunFacts = RunFacts
     , rfRunner :: RunnerReading
     , rfShape :: PodShape
     , rfNpmLatencyMs :: Int
-    -- ^ What the npm fixture injects: the public round trip the run probed, or the configured latency.
+    -- ^ The native measured round trip or declared configured fallback.
+    , rfPypiLatencyMs :: Int
+    , rfConditions :: Text
     }
     deriving stock (Eq, Show)
 
@@ -308,8 +321,10 @@ data Unheld
       ShapeNotCalibrated PodShape
     | -- | It runs the GC-thrash probe in place of the passes, and the probe is never held.
       ThrashProbe
-    | -- | Its npm fixture injects this many milliseconds, above this ceiling.
-      LatencyAboveCeiling Int Int
+    | -- | A native fixture injects this many milliseconds, above its own ceiling.
+      LatencyAboveCeiling Ecosystem Int Int
+    | -- | The run uses different measurement conditions from the retained floors.
+      ConditionsDiffer Text Text
     deriving stock (Eq, Show)
 
 -- | Whether a run is held to the floors.
@@ -329,11 +344,12 @@ enforce floors facts = case (Map.lookup shape (floorsByShape floors), reasons) o
   where
     shape = rfShape facts
     calibration = floorsCalibration floors
-    most = lcCeilingMs (calNpmLatency calibration)
+    ceilings = [(Npm, rfNpmLatencyMs facts, calNpmLatency calibration)] <> [(PyPI, rfPypiLatencyMs facts, ceiling) | ceiling <- maybeToList (calPypiLatency calibration)]
     reasons =
         [SettingsDiffer settings | Just settings <- [nonEmpty (differingSettings (calOperatingPoint calibration) (rfSettings facts))]]
             <> [OtherRunner (calRunner calibration) (calRunnerKind calibration) (rfRunner facts) | rfRunner facts /= readingOn (calRunnerKind calibration)]
-            <> [LatencyAboveCeiling (rfNpmLatencyMs facts) most | rfNpmLatencyMs facts > most]
+            <> [ConditionsDiffer (calConditions calibration) (rfConditions facts) | calConditions calibration /= rfConditions facts]
+            <> [LatencyAboveCeiling ecosystem injected most | (ecosystem, injected, ceiling) <- ceilings, let most = lcCeilingMs ceiling, injected > most]
 
 -- | What one scenario's successes are held to in one pass.
 data FloorCheck
@@ -360,9 +376,7 @@ staleFloorViolations enforcement checked = case enforcement of
         | (scenario, whichPass) <- Set.toList (Map.keysSet floors `Set.difference` checked)
         ]
 
-{- | The one violation of a scheduled run that its own configuration keeps off the floors. Latency
-above the ceiling is the network's doing, so it fails no run.
--}
+-- | Fail a scheduled configuration mismatch. A network latency breach keeps it unheld without failing it.
 unheldViolations :: Trigger -> Enforcement -> [Text]
 unheldViolations trigger enforcement = case (trigger, enforcement) of
     (Scheduled, NotHeld reasons)
@@ -377,7 +391,8 @@ configurationFault reason = case reason of
     OtherRunner{} -> Just (describeUnheld reason)
     ShapeNotCalibrated _ -> Just (describeUnheld reason)
     ThrashProbe -> Just (describeUnheld reason)
-    LatencyAboveCeiling _ _ -> Nothing
+    LatencyAboveCeiling{} -> Nothing
+    ConditionsDiffer _ _ -> Just (describeUnheld reason)
 
 describeUnheld :: Unheld -> Text
 describeUnheld = \case
@@ -393,7 +408,8 @@ describeUnheld = \case
             <> T.intercalate ", " [readAs "GITHUB_ACTIONS" (rrGithubActions reading), readAs "RUNNER_OS" (rrOs reading), readAs "RUNNER_ARCH" (rrArch reading)]
     ShapeNotCalibrated shape -> "the floors hold no entry for the pod shape " <> renderPodShape shape
     ThrashProbe -> "it runs the GC-thrash probe in place of the passes"
-    LatencyAboveCeiling injected most -> "its npm fixture injects " <> show injected <> " ms of upstream latency, above the ceiling of " <> show most <> " ms"
+    ConditionsDiffer calibrated ran -> "its measurement conditions are " <> ran <> ", but the floors retain " <> calibrated
+    LatencyAboveCeiling ecosystem injected most -> "its " <> ecosystemName ecosystem <> " fixture injects " <> show injected <> " ms of upstream latency, above the ceiling of " <> show most <> " ms"
   where
     readAs name = maybe (name <> " unset") ((name <> "=") <>)
 
@@ -411,12 +427,21 @@ describeEnforcement calibration = \case
             <> T.intercalate ", " (ordNub (map runCommit (toList (calRuns calibration))))
             <> ". "
             <> calRule calibration
-            <> " A run whose npm fixture injects more than "
-            <> show (lcCeilingMs (calNpmLatency calibration))
-            <> " ms of upstream latency is not held."
+            <> " Measurement conditions: "
+            <> calConditions calibration
+            <> ". "
+            <> T.intercalate " " [ecosystemName ecosystem <> " latency ceiling: " <> show (lcCeilingMs ceiling) <> " ms." | (ecosystem, ceiling) <- [(Npm, calNpmLatency calibration)] <> [(PyPI, ceiling) | ceiling <- maybeToList (calPypiLatency calibration)]]
+            <> describeRetainedConditions calibration
     NotHeld reasons ->
         "This run is not held to the success floors in `"
             <> toText floorsPath
             <> "`: "
             <> T.intercalate ", and " (map describeUnheld (toList reasons))
             <> "."
+
+-- | Identify unaffected rows that retain conditions from an earlier calibration.
+describeRetainedConditions :: Calibration -> Text
+describeRetainedConditions calibration =
+    if Map.null (calRetainedConditions calibration)
+        then ""
+        else " Retained row conditions: " <> T.intercalate ", " [name <> "=" <> identity | (name, identity) <- Map.toList (calRetainedConditions calibration)] <> "."

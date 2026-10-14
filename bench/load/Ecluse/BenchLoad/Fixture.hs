@@ -17,7 +17,12 @@ module Ecluse.BenchLoad.Fixture (
     primeETag,
     fetchChecked,
     benchNow,
+    delayUpstream,
+    preflightDistinct,
+    probeBaseline,
 ) where
+
+import Control.Concurrent (threadDelay)
 
 import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as LBS
@@ -34,6 +39,7 @@ import UnliftIO (evaluate)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttp), LoadKnobs (..), Target, proxied, urlLoad)
+import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, ProxySettings (..), proxyPort, proxySettings, withProxyProcess)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
@@ -135,3 +141,27 @@ fetchChecked expected headers url = do
 -- | A fixed date the stub documents are dated against, so their ages never depend on the run date.
 benchNow :: UTCTime
 benchNow = UTCTime (fromGregorian 2026 6 1) 0
+
+-- | Skip zero and negative delays while preserving each positive injected wait.
+delayUpstream :: Int -> IO ()
+delayUpstream latency = when (latency > 0) (threadDelay latency)
+
+-- | Check each selected URL once before invoking the measurement callback.
+preflightDistinct :: (Text -> IO ()) -> [Text] -> IO a -> IO a
+preflightDistinct check urls body = traverse_ check (ordNub urls) >> body
+
+-- | Warm one native connection, then measure successful fetches or declare the configured fallback.
+probeBaseline :: Double -> Bool -> [Text] -> (Text -> IO (Maybe Double)) -> IO BaselineSource
+probeBaseline configured enabled names fetch =
+    case (enabled, names) of
+        (True, warm : _) ->
+            fetch warm >>= \case
+                Nothing -> pure fallback
+                Just _ -> do
+                    samples <- catMaybes <$> traverse fetch names
+                    pure $ case nonEmpty samples of
+                        Nothing -> fallback
+                        Just values -> MeasuredRtt (fromIntegral (round (sum values / fromIntegral (length values)) :: Int)) (length values)
+        _ -> pure fallback
+  where
+    fallback = InjectedFallback configured

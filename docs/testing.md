@@ -1282,7 +1282,8 @@ A run is held to the floors only when it matches what they were calibrated at. T
 | Runner | Runs on GitHub Actions under `runnerOs` and `runnerArch` (Linux, ARM64) | `GITHUB_ACTIONS`, `RUNNER_OS`, `RUNNER_ARCH` |
 | Settings | Equals `operatingPoint`: every load knob at its default (30 seconds, 100 connections, the default payload, the proxy's computed admission and pools), every scenario, and no `BENCH_PATTERN_*` variable set | The `BENCH_LOAD_*` knobs, `BENCH_LOAD_SCENARIOS`, and the names of the `BENCH_PATTERN_*` variables that are set |
 | Pod shape | Runs under a shape that `floors` holds | `BENCH_LOAD_POD` |
-| Injected npm latency | Injects at most `npmInjectedLatency.ceilingMs` | The public round trip the run probes, which the report prints as "injected upstream latency" |
+| Measurement conditions | Matches `measurementConditions` | The harness reports `unified-v2` |
+| Native injected latency | Each ecosystem stays below its own ceiling | Each native public RTT, or the declared configured fallback |
 
 A run that misses a part is not held. It skips the floor check, its floor cells read `not held`,
 and the "Success floors" section of its report names every reason in one line. Every other check
@@ -1290,12 +1291,12 @@ applies to it. A dispatch that changes only the pod shape, among the four, is he
 another machine is not, and neither is the GC-thrash probe.
 
 A scheduled run must be held. When its settings, its runner, or its pod shape keep it off the
-floors, or when it runs the GC-thrash probe, it fails with one violation that names the reason. A
+floors, when its measurement conditions differ, or when it runs the GC-thrash probe, it fails with one violation that names the reason. A
 changed workflow default therefore turns the next scheduled run red, where it would otherwise
 switch the floors off. Latency above the ceiling is the one exception: the network decides it, so
 that run stays green and not held.
 
-The harness compares nothing else:
+After the calibration conditions match, the harness compares nothing else:
 
 - `BENCH_LOAD_PROBE_RTT` only swaps the probed latency for the configured 5 ms, which is under the
   ceiling. A run with the probe off, or with a probe that failed, is therefore held, and at 5 ms its
@@ -1306,17 +1307,40 @@ The harness compares nothing else:
 - The harness reads the runner's operating system and architecture, not its label, so any Linux
   ARM64 runner on GitHub Actions counts as the calibrated `ubuntu-26.04-arm`.
 
-The npm fixture injects the public round trip each run probes. The PyPI fixture runs no probe and
-injects the configured 5 ms. The latency-bound npm counts (`npm/tarball-hot-path`,
-`npm/tarball-onboarding`, `npm/worker-mirroring`, and the npm concurrency-one pass) fall as that
-latency rises, so they spread the widest between nights. A latency-bound floor is half a count
-that its own pod shape's slowest calibration run set, so it first breaches near twice that shape's
-highest latency. The ceiling is therefore 1.5 times the lowest of the pod shapes' highest
-latencies, rounded up to 10 ms: about three quarters of the latency at which the first floor
-breaches. `npmInjectedLatency.highestMs` records each shape's highest latency, so you can check the
-ceiling against the rule. On a night with a slower network the job stays green, and its "Success
-floors" section gives the latency its npm fixture injects and the ceiling. That whole run is not
-held, its PyPI scenarios included, because the harness decides once for the run.
+Both ecosystems use measurement conditions `unified-v2`:
+
+- Each eviction bound is `min(max(1, configured entries), actual selected project count - 1)`.
+  A selected working set with fewer than two projects fails before capture reads or proxy boot.
+- Each listing pass preflights every distinct selected URL before its measurement callback.
+  npm checks JSON, package identity, native metadata, rewritten artifact URLs, and the private
+  overlay for merged listings. PyPI retains its media, project, file, artifact URL, and overlay checks.
+  Private-copy listings retain their native checks without requiring a synthetic overlay.
+  Cold admission bursts and ramps remain unprimed.
+- All shared upstream stubs skip the delay at zero or negative latency. Positive delays stay unchanged.
+- Each ecosystem warms a native public listing connection before probing its own RTT.
+  npm fetches packuments. PyPI requests PEP 691 JSON Simple indexes, not the project JSON API.
+  Disabled probes, failed warm-ups, and probes with no successful samples report an explicit configured fallback.
+  Each report and observation artifact retains the baseline identity and sample count.
+
+Service attribution still subtracts one public baseline. Extra upstream hops remain in the reported
+proxy overhead. Scenario names, traffic mixes, timed workloads, and workflow cadence stay unchanged.
+The full timed grid remains outside ordinary pull-request CI.
+
+The `calibration.measurementConditions` field identifies the conditions behind the floors.
+Older files without this field mean `legacy-v1`: raw npm eviction bounds, PyPI-only listing preflight,
+an unconditional PyPI delay, and configured PyPI latency. The committed counts retain that identity
+until qualified recalibration replaces the affected rows. A `unified-v2` run against legacy floors
+is not held, even when a dispatched workflow exits green. It is not a qualifying sample by that fact.
+`retainedFloorConditions` maps unaffected scenario names to their earlier condition identity after
+partial recalibration. It records retained row provenance without changing those counts.
+
+Latency-bound counts fall as injected latency rises. Derive each native ceiling separately:
+1.5 times the lowest of its pod shapes' highest qualifying latencies, rounded up to 10 ms.
+`npmInjectedLatency.highestMs` and `pypiInjectedLatency.highestMs` record the per-shape observations.
+The reader checks the formula and pod identities for each ceiling. `unified-v2` calibration requires
+both native ceilings. A run above either ceiling is not held as a whole, including the other ecosystem.
+The report names the ecosystem, its injected latency, and its own ceiling. The network exception
+still applies to either ceiling breach. A missing calibration or condition mismatch is a configuration fault.
 
 To recalibrate, take the last ten scheduled runs of the Load test workflow on `main`, and take the
 next older run in place of each one you leave out:
@@ -1334,7 +1358,7 @@ Read each pod shape's `bench-load-results.md`:
 | Each ramp step | The step table in the scenario's own section |
 | The concurrent load of a paired scenario | The "concurrent load: successes" row in the scenario's own section |
 | Concurrency-one pass | The count of successes in the first "at base concurrency one" column of "Loaded cost against concurrency one" |
-| Injected npm latency | The "injected upstream latency" row of the npm section's operating point |
+| Native injected latencies | The "injected upstream latency" row in each ecosystem section's operating point |
 
 Set each floor to half the lowest count over the ten runs, rounded down, and at least 1. A scenario
 with several loads takes the lowest count of any of them. Then write the `calibration` record:
@@ -1342,16 +1366,22 @@ with several loads takes the lowest count of any of them. Then write the `calibr
 - `runs`: each run's URL with the commit it measured. Ten runs can span commits, so every run
   carries its own.
 - `rule`, `runner`, `runnerOs`, `runnerArch`, and `operatingPoint`.
-- `npmInjectedLatency`: under `highestMs`, each pod shape's highest injected npm latency over the
-  runs in `runs`, and the ceiling. The reader refuses a ceiling that is not 1.5 times the lowest of
-  those, rounded up to 10 ms, and a record whose pod shapes are not the ones `floors` holds.
+- `measurementConditions`: the conditions measured by the new calibration.
+- `retainedFloorConditions`: unaffected rows that retain an earlier calibration identity.
+- `npmInjectedLatency` and `pypiInjectedLatency`: each native ecosystem's highest qualifying injected
+  latency by pod shape and its derived ceiling. Preserve the measured baseline and fallback identities
+  when deciding whether an observation qualifies.
 
 Two cases have no ten scheduled runs to take:
 
 | Case | Why | What to do |
 |---|---|---|
 | A new scenario | No night has run it | Dispatch the workflow at least three times on the branch that adds it. Those runs go red on the missing floors, and their reports carry the counts all the same. Set the scenario's floors to half its lowest count |
-| A deliberate change of a knob default, the runner, or the pod shapes | A scheduled run at the changed setting is red by rule until the file matches it | Make the change and the recalibration in one pull request. Dispatch the workflow at least three times on that branch. Dispatched runs are on demand, so the rule does not fail them, and their reports carry every count. Set every floor from those runs |
+| A deliberate change of measurement conditions, a knob default, the runner, or the pod shapes | A scheduled run at the changed setting is red by rule until the file matches it | Make the change and the recalibration in one pull request. Dispatch the workflow at least three times on that branch. Dispatched runs are on demand, so the rule does not fail them, and their reports carry every count. Replace only affected floors from those runs. Retain unaffected counts and their provenance |
+
+Compare old and new conditions serially on each supported resource profile before replacing affected floors.
+Retain failed, adverse, and disqualified observations with their exclusion reasons. Do not turn green
+unheld workflow results into qualified measurements or invent calibration values.
 
 In both cases, add the dispatched runs to `runs`, each with the branch commit it measured. They
 count toward their pod shape's highest latency like any run in `runs`. The next recalibration from

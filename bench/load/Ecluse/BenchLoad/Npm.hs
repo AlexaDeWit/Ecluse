@@ -11,35 +11,39 @@ module Ecluse.BenchLoad.Npm (
     corpusPublicStub,
     privateOverlayStub,
     privateOverlayStubWith,
+    preflightNpmListing,
 ) where
 
-import Control.Concurrent (threadDelay)
-import Data.Aeson (Value, encode, (.=))
+import Data.Aeson (Value (..), encode, (.=))
 import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Pair)
+import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (addUTCTime, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Katip (LogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
+import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (Application, Request, pathInfo, rawPathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Contract.Driver (LoadReadDriver (..), readLoadContract)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, httpTarget, longCacheTtl, selfHosted, weightedMix, withProxyOverStubs)
+import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, delayUpstream, fetchChecked, httpTarget, longCacheTtl, selfHosted, weightedMix, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (..), LoadKnobs (..), Scenario (..), Target (Target), UpstreamFixture, proxied, scenario, urlLoad)
 import Ecluse.BenchLoad.Listing (ListingSetup (..), cacheEvictsLoad, cacheFitsLoad, listingLoad, revalidateLoad, withListingStubs)
 import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (saProxyPath))
 import Ecluse.BenchLoad.PatternScenario (loadPins, selectArtifacts)
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
+import Ecluse.BenchLoad.Selection (evictionEntries)
 import Ecluse.BenchLoad.Stress (WarmLoadDriver (..), herdSize, pairedLoad, rampSteps)
 import Ecluse.BenchLoad.Worker (runWorkerLoad)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageDetails (pkgVersion), PackageInfo (..), PackageName, mkPackageName, unscopedName)
+import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageDetails (pkgVersion), PackageInfo (..), PackageName, artUrl, infoName, infoVersions, mkPackageName, pkgArtifacts, renderPackageName, unscopedName)
 import Ecluse.Core.Queue (
     MirrorJob (
         MirrorJob,
@@ -56,6 +60,7 @@ import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent))
 import Ecluse.Core.Registry.MirrorUpload (inventoryDetails)
 import Ecluse.Core.Registry.Npm.Publish (prepareNpmSource)
 import Ecluse.Core.Registry.Publish.Internal (MirrorPublish (..), PreparedMirrorUpload (..), PreparedMirrorVersion (..))
+import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Core.Worker (
     WorkerRuntime (
@@ -78,6 +83,7 @@ import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (hexSha1OfLazy, sriSha512OfLazy, unsafeFilename, unsafeHash, validSha1, validSha512Sri)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Wai (localhost, selfBaseUrl)
 import Ecluse.Test.Worker (admitAllPolicies, workerSourceAt)
 
@@ -115,8 +121,8 @@ npmListing =
         { lsCopy = npmPrivateCopy
         , lsPrivate = \knobs -> privateOverlayStub (lkUpstreamLatencyMicros knobs) (artifactBytes (lkPayloadBytes knobs))
         , lsCapturePackages = const corpusPackages
-        , lsPreflight = const pass
-        , lsEvictionEntries = \knobs _ -> Right (lkCacheMaxEntries knobs)
+        , lsPreflight = traverse_ (preflightNpmListing True) . ordNub
+        , lsEvictionEntries = evictionEntries . lkCacheMaxEntries
         , lsRevalidateError = "revalidate-not-modified: no URL to drive"
         }
 
@@ -140,7 +146,7 @@ npmPrivateCopy =
             rewritten <- newIORef mempty
             pure (corpusPublicStub rewritten latency bodies Map.empty)
         , pcUrl = packageUrl
-        , pcPreflight = const pass
+        , pcPreflight = traverse_ (preflightNpmListing False) . ordNub
         }
 
 assembledHitScenario :: Scenario
@@ -168,7 +174,7 @@ cacheEvictsScenario :: Scenario
 cacheEvictsScenario =
     scenario
         "cache-evicts-large"
-        "GET the same uniform corpus working set with BENCH_LOAD_CACHE_MAX_ENTRIES slots. A bound below the working set forces repeated assembly. Full public metadata is always fetched."
+        "GET the same uniform corpus working set with min(configured entries, project count - 1) slots, forcing repeated assembly. Full public metadata is always fetched."
         (cacheEvictsLoad npmListing)
 
 tarballScenario :: Scenario
@@ -353,7 +359,7 @@ jobHashes bytes = unsafeHash SRI (sriSha512OfLazy bytes) :| [unsafeHash SHA1 (he
 
 stubUpstream :: ByteString -> Int -> LByteString -> Application
 stubUpstream contentType latency body _request respond = do
-    when (latency > 0) (threadDelay latency)
+    delayUpstream latency
     respond (responseLBS status200 [(hContentType, contentType)] body)
 
 jsonContentType, octetContentType :: ByteString
@@ -363,7 +369,7 @@ octetContentType = "application/octet-stream"
 -- | Serve complete metadata captures and only the selected known artifact paths.
 corpusPublicStub :: IORef (Map Text LByteString) -> Int -> Map Text LByteString -> Map ByteString LByteString -> Application
 corpusPublicStub rewritten latency bodies artifacts request respond = do
-    when (latency > 0) (threadDelay latency)
+    delayUpstream latency
     served <- selfHosted "https://registry.npmjs.org" rewritten (selfBaseUrl request) bodies
     respond $ case Map.lookup (rawPathInfo request) artifacts of
         Just bytes -> responseLBS status200 [(hContentType, octetContentType)] bytes
@@ -378,7 +384,7 @@ privateOverlayStub = privateOverlayStubWith (const (pure []))
 -- | 'privateOverlayStub' with extra top-level fields per package name, drawn on every request.
 privateOverlayStubWith :: (Text -> IO [Pair]) -> Int -> LByteString -> Application
 privateOverlayStubWith extraFields latency bytes request respond = do
-    when (latency > 0) (threadDelay latency)
+    delayUpstream latency
     let mPkg = requestedPackage request
     case mPkg of
         Just pkg
@@ -400,12 +406,12 @@ requestedPackage request = case pathInfo request of
 
 onboardingPrivateStub :: Int -> Application
 onboardingPrivateStub latency _request respond = do
-    when (latency > 0) (threadDelay latency)
+    delayUpstream latency
     respond (responseLBS status404 [(hContentType, jsonContentType)] "{}")
 
 onboardingPublicStub :: Int -> LByteString -> Application
 onboardingPublicStub latency bytes request respond = do
-    when (latency > 0) (threadDelay latency)
+    delayUpstream latency
     case requestedPackage request of
         Just pkg
             | "/-/" `T.isInfixOf` pkg ->
@@ -476,3 +482,25 @@ packageName = mkPackageName Npm Nothing packageText
 
 publishedLongAgo :: Text
 publishedLongAgo = toText (iso8601Show (addUTCTime (negate (400 * nominalDay)) benchNow))
+
+-- | Require native metadata, proxy artifact locations, and the overlay when the scenario merges one.
+preflightNpmListing :: Bool -> Text -> IO ()
+preflightNpmListing overlay url = do
+    response <- fetchChecked status200 [] url
+    unless (List.lookup hContentType (HTTP.responseHeaders response) == Just jsonContentType) $
+        benchFail ("npm listing preflight returned the wrong media type: " <> url)
+    name <- maybe (benchFail ("npm listing preflight has no package path: " <> url)) pure (nonEmptyPath (snd (T.breakOnEnd "/npm/" url)))
+    (info, value) <- either (benchFail . show) pure (projectNpmManifest defaultLimits (mkPackageName Npm Nothing name) (toStrict (HTTP.responseBody response)))
+    let versions = infoVersions info
+        expectedPrefix = "https://bench.proxy/npm/" <> name <> "/-/"
+        artifacts = concatMap (toList . pkgArtifacts) (Map.elems versions)
+        namesMatch =
+            renderPackageName (infoName info) == name && case value of
+                Object document -> KM.lookup "name" document == Just (String name)
+                _ -> False
+    unless (namesMatch && not (Map.null versions) && null (infoInvalidEntries info) && not (null artifacts) && all (T.isPrefixOf expectedPrefix . artUrl) artifacts) $
+        benchFail ("npm listing preflight returned an empty or malformed listing, the wrong package, or incorrect artifact URLs: " <> url)
+    when (overlay && (not (all (`Map.member` versions) ["9999.0.0", "9999.0.1", "9999.0.2"]) || Map.size versions <= 3)) $
+        benchFail ("npm listing preflight did not merge public versions and the private overlay: " <> url)
+  where
+    nonEmptyPath name = if T.null name then Nothing else Just name

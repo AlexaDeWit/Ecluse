@@ -15,7 +15,8 @@ import System.IO.Error (ioeGetErrorString, isUserError)
 import Test.Hspec
 
 import Ecluse.BenchLoad.Error (BenchLoadError (BenchLoadError))
-import Ecluse.BenchLoad.Fixture (loadCorpusBodies, loadCorpusCuts, weightedMix)
+import Ecluse.BenchLoad.Fixture (delayUpstream, loadCorpusBodies, loadCorpusCuts, preflightDistinct, probeBaseline, weightedMix)
+import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions), PackageName, renderPackageName)
 import Ecluse.Core.Registry.Metadata (MetadataError)
 import Ecluse.Core.Security (Limits, defaultLimits)
@@ -26,6 +27,41 @@ import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 
 spec :: Spec
 spec = do
+    describe "upstream delay" $
+        it "returns without scheduling a wait for nonpositive latency" $ do
+            delayUpstream 0 `shouldReturn` ()
+            delayUpstream (-1) `shouldReturn` ()
+    describe "listing preflight" $ do
+        it "checks each distinct URL before invoking the measurement callback" $ do
+            calls <- newIORef ([] :: [Text])
+            let record name = modifyIORef' calls (<> [name])
+            preflightDistinct record ["a", "b", "a", "b"] (record "measure")
+            readIORef calls `shouldReturn` ["a", "b", "measure"]
+        it "does not measure when a native listing fails preflight" $
+            preflightDistinct (const (throwIO (BenchLoadError "invalid listing"))) ["a"] (expectationFailure "failed preflight measured")
+                `shouldThrow` (\(BenchLoadError message) -> message == "invalid listing")
+    describe "native RTT baseline" $ do
+        it "warms before timing and counts only successful native samples" $ do
+            calls <- newIORef ([] :: [Text])
+            let fetch name = do
+                    modifyIORef' calls (<> [name])
+                    pure (if name == "failed" then Nothing else Just 80)
+            probeBaseline 5 True ["native", "failed"] fetch `shouldReturn` MeasuredRtt 80 1
+            readIORef calls `shouldReturn` ["native", "native", "failed"]
+        it "declares fallback for disabled, empty, failed warm-up, and failed measured probes" $ do
+            probeBaseline 5 False ["native"] (const (expectationFailure "disabled probe fetched" >> pure (Just 99))) `shouldReturn` InjectedFallback 5
+            probeBaseline 2 True [] (const (pure (Just 99))) `shouldReturn` InjectedFallback 2
+            probeBaseline 3 True ["native"] (const (pure Nothing)) `shouldReturn` InjectedFallback 3
+            replies <- newIORef [Just 80, Nothing]
+            let fetch _ =
+                    atomicModifyIORef'
+                        replies
+                        ( \case
+                            [] -> ([], Nothing)
+                            result : more -> (more, result)
+                        )
+            probeBaseline 4 True ["native"] fetch `shouldReturn` InjectedFallback 4
+
     describe "loadCorpusBodies" $ do
         it "returns the authenticated bytes unchanged for both ecosystems" $ do
             let packages = mediumNpm <> pypiCorpusPackages

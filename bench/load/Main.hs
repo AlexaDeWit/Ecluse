@@ -12,19 +12,27 @@ module Main (main) where
 import Data.Aeson (eitherDecode, encode)
 import Data.ByteString.Lazy.Char8 qualified as LBSC
 import Data.Char (toLower)
+import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Ecluse.Core.Registry.PyPI.Wire (SimpleIndex (..), simpleIndexMediaType)
+import Ecluse.Test.Corpus (cpName, pypiCorpusPackages)
 import GHC.Clock (getMonotonicTime)
 import GHC.Conc (getNumCapabilities, getNumProcessors)
 import Network.HTTP.Client (Manager, newManager)
+import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Client.TLS (tlsManagerSettings)
+import Network.HTTP.Types (hContentType, status200)
 import System.Environment (getEnvironment, getExecutablePath)
 import System.Process.Typed (ExitCode (ExitFailure, ExitSuccess), proc, readProcessStdout, setEnv)
 import UnliftIO (bracket_)
+import UnliftIO.Exception (tryAny)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Evidence (loadEvidence)
+import Ecluse.BenchLoad.Fixture (probeBaseline)
 import Ecluse.BenchLoad.Floors (
+    Calibration (calConditions, calRetainedConditions),
     Enforcement (NotHeld),
     FloorKey,
     Floors (floorsCalibration),
@@ -56,7 +64,7 @@ import Ecluse.BenchLoad.PyPI (pypiLoadNotes)
 import Ecluse.BenchLoad.Report (Section (..), renderFloors, renderLoadSaturation, renderReports, renderServiceTime, renderThrash, renderVerdict)
 import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
 import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScenario, fixtures, runsUnder)
-import Ecluse.BenchLoad.Selection (fixtureBaseline, fixtureSection, scenarioKey)
+import Ecluse.BenchLoad.Selection (fixtureSection, measurementConditionVersion, scenarioKey)
 import Ecluse.BenchLoad.Verdict (RunEvidence, runVerdict)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Test.RegistryCapture (catBenchPins, fetchPackumentBody, loadCatalogue)
@@ -107,18 +115,21 @@ runPasses :: Map Text Text -> LoadKnobs -> PodShape -> Maybe [Text] -> IO ([Text
 runPasses environment knobs shape selected = do
     -- Read before any scenario runs, so floors that do not decode cost no load.
     floors <- either benchFail pure =<< loadFloors
-    npmBaseline <- probePublicRtt knobs
+    npmBaseline <- probePublicRtt Npm knobs
+    pypiBaseline <- probePublicRtt PyPI knobs
     self <- getExecutablePath
     capabilities <- getNumCapabilities
     processors <- getNumProcessors
     -- One source for what each fixture injects, so the latency compared is the latency injected.
-    let baselineOf eco = fixtureBaseline eco (lkUpstreamLatencyMicros knobs) npmBaseline
+    let baselineOf eco = if eco == PyPI then pypiBaseline else npmBaseline
         facts =
             RunFacts
                 { rfSettings = operatingPoint knobs selected (patternOverridesIn environment)
                 , rfRunner = runnerIn environment
                 , rfShape = shape
                 , rfNpmLatencyMs = baselineInjectedMs (baselineOf Npm)
+                , rfPypiLatencyMs = baselineInjectedMs (baselineOf PyPI)
+                , rfConditions = measurementConditionVersion
                 }
         enforcement = enforce floors facts
         setup = Setup knobs shape selected enforcement baselineOf self capabilities processors
@@ -126,7 +137,9 @@ runPasses environment knobs shape selected = do
     when (null ran) (benchFail "no scenario matched BENCH_LOAD_SCENARIOS under this pod shape")
     let outcomes = concatMap snd ran
         violations = runVerdict (triggerIn environment) enforcement (checkedCounts shape) outcomes
-    writeLoadObservations (measurementConditions setup facts) enforcement violations outcomes
+    let calibration = floorsCalibration floors
+        provenance = Map.fromList [("floorMeasurementConditions", calConditions calibration), ("retainedFloorConditions", show (calRetainedConditions calibration))]
+    writeLoadObservations (Map.union provenance (measurementConditions setup facts)) enforcement violations outcomes
     pure
         ( map fst ran <> [renderFloors (floorsCalibration floors) enforcement]
         , violations
@@ -135,7 +148,10 @@ runPasses environment knobs shape selected = do
 measurementConditions :: Setup -> RunFacts -> Map Text Text
 measurementConditions setup facts =
     Map.fromList
-        [ ("podShape", renderPodShape (setupShape setup))
+        [ ("measurementConditions", measurementConditionVersion)
+        , ("npmBaseline", show (setupBaselineOf setup Npm))
+        , ("pypiBaseline", show (setupBaselineOf setup PyPI))
+        , ("podShape", renderPodShape (setupShape setup))
         , ("operatingPoint", show (rfSettings facts))
         , ("capabilities", show (setupCapabilities setup))
         , ("processors", show (setupProcessors setup))
@@ -275,35 +291,41 @@ overrideEnv overrides base =
   where
     overriddenKeys = map fst overrides
 
--- Warm the connection before timing registry fetches. Failed or disabled probes use the configured latency.
-probePublicRtt :: LoadKnobs -> IO BaselineSource
-probePublicRtt knobs = do
+-- Warm each native listing connection before measuring it. Report failed or disabled probes as fallbacks.
+probePublicRtt :: Ecosystem -> LoadKnobs -> IO BaselineSource
+probePublicRtt ecosystem knobs = do
     enabled <- probeEnabled
     if not enabled
-        then pure fallback
+        then pure (InjectedFallback configured)
         else do
-            catalogue <- loadCatalogue
+            names <- case ecosystem of
+                Npm -> Map.keys . catBenchPins <$> loadCatalogue
+                PyPI -> pure (map cpName pypiCorpusPackages)
+                _ -> pure []
             manager <- newManager tlsManagerSettings
-            case Map.keys (catBenchPins catalogue) of
-                [] -> pure fallback
-                names@(warm : _) -> do
-                    _ <- fetchPackumentBody manager Npm warm
-                    samples <- catMaybes <$> traverse (timeFetch manager) names
-                    pure $ case samples of
-                        [] -> fallback
-                        _ -> MeasuredRtt (meanMs samples) (length samples)
+            probeBaseline configured True names (timeFetch manager)
   where
-    fallback = InjectedFallback (fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000)
-
+    configured = fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000
     timeFetch :: Manager -> Text -> IO (Maybe Double)
     timeFetch manager name = do
         t0 <- getMonotonicTime
-        mBody <- fetchPackumentBody manager Npm name
+        body <- case ecosystem of
+            PyPI -> fetchPublicIndex manager name
+            _ -> fetchPackumentBody manager ecosystem name
         t1 <- getMonotonicTime
-        pure (if isJust mBody then Just ((t1 - t0) * 1_000) else Nothing)
+        pure (if isJust body then Just ((t1 - t0) * 1_000) else Nothing)
 
-    meanMs :: [Double] -> Double
-    meanMs samples = fromIntegral (round (sum samples / fromIntegral (length samples)) :: Int)
+fetchPublicIndex :: Manager -> Text -> IO (Maybe LByteString)
+fetchPublicIndex manager name = do
+    result <- tryAny $ do
+        request <- HTTP.parseRequest (toString ("https://pypi.org/simple/" <> name <> "/"))
+        response <- HTTP.httpLbs request{HTTP.requestHeaders = [("Accept", simpleIndexMediaType)], HTTP.responseTimeout = HTTP.responseTimeoutMicro (30 * 1_000 * 1_000)} manager
+        let bytes = HTTP.responseBody response
+            native = case eitherDecode bytes of
+                Right index -> siName index == name && not (null (siFiles index)) && null (siInvalidEntries index)
+                Left _ -> False
+        pure [bytes | HTTP.responseStatus response == status200, List.lookup hContentType (HTTP.responseHeaders response) == Just simpleIndexMediaType, native]
+    pure (either (const Nothing) listToMaybe result)
 
 probeEnabled :: IO Bool
 probeEnabled = maybe True ((`notElem` ["0", "false", "no", "off"]) . map toLower) <$> lookupEnv "BENCH_LOAD_PROBE_RTT"
