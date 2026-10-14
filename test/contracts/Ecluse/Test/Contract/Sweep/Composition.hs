@@ -9,6 +9,7 @@ import Test.Hspec (Spec, aroundAll)
 
 import Ecluse.Test.Contract.Sweep.Advisory qualified as Advisory
 import Ecluse.Test.Contract.Sweep.Identity qualified as Identity
+import Ecluse.Test.Contract.Sweep.Outage qualified as Outage
 import Ecluse.Test.Contract.Sweep.Recovery qualified as Recovery
 import Ecluse.Test.Contract.Sweep.Rollout qualified as Rollout
 import Ecluse.Test.Contract.Sweep.Types
@@ -30,11 +31,14 @@ data SweepDriver plane store project = SweepDriver
     , sweepAdvisoryOps :: AdvisoryOps plane store
     , sweepRecoveryOps :: RecoveryOps plane store
     , sweepRolloutOps :: RolloutOps plane store
+    , sweepAdmissionOutage :: Maybe (AdmissionOutageDriver plane store)
     }
 
 -- | Compose identity, advisory revocation, recovery and stale-role obligations.
 sweepContract :: SweepDriver plane store project -> Spec
 sweepContract driver = do
+    for_ (sweepAdmissionOutage driver) $ \outage ->
+        aroundAll (withAdmissionOutage outage) (Outage.admissionOutageScenario outage stores clients)
     aroundAll (withIdentitySweep driver) $
         Identity.identityScenarios (sweepIdentityFixture driver) stores clients (sweepGuardedOps driver)
     aroundAll (withAdvisorySweep driver) $

@@ -57,11 +57,11 @@ import Ecluse.Core.Package.Integrity (
     partitionByFloor,
  )
 import Ecluse.Core.Rules (PreparedRule, prepResilience)
-import Ecluse.Core.Rules.Outage (AdmissionIdentity (AdmissionIdentity))
-import Ecluse.Core.Rules.Render (cveIdsInReason, renderInability)
+import Ecluse.Core.Rules.Outage (AdmissionIdentity (AdmissionIdentity), logSkippedCheckEvidence)
+import Ecluse.Core.Rules.Render (cveIdsInReason)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
-    SkippedCheck (SkippedUnavailable, Unreached),
+    SkippedCheck (SkippedUnavailable),
  )
 import Ecluse.Core.Server.Response (
     PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
@@ -294,10 +294,4 @@ logSkippedChecksOnce note pkg version etag skipped =
 gets no line, and a trusted serve runs no rules, so it never reaches here.
 -}
 logSkippedChecks :: (KatipContext m) => PackageName -> Text -> Maybe DbEtag -> [SkippedCheck] -> m ()
-logSkippedChecks pkg version etag = traverse_ logOne
-  where
-    logOne = \case
-        Unreached _ -> pass
-        SkippedUnavailable rule cause ->
-            katipAddContext (versionAuditPayload pkg version etag <> sl "rule" rule <> sl "cause" (renderInability cause)) $
-                logFM WarningS (ls ("admitted with a check skipped for unavailability" :: Text))
+logSkippedChecks pkg version etag = logSkippedCheckEvidence (versionAuditPayload pkg version etag)

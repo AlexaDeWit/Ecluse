@@ -60,6 +60,7 @@ pypiSweepDriver fixture recorder =
         , sweepAdvisoryOps = advisoryOps
         , sweepRecoveryOps = recoveryOps
         , sweepRolloutOps = rolloutOps
+        , sweepAdmissionOutage = Nothing
         }
   where
     acquire resource action = timedFixture recorder (withFixture fixture) (timedFixtureWith recorder resource action)

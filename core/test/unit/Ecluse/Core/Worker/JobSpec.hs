@@ -8,6 +8,7 @@ module Ecluse.Core.Worker.JobSpec (spec) where
 import Data.Aeson (Value (String), object, (.=))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Test.Hspec
 import UnliftIO.Exception (impureThrow)
 
@@ -49,7 +50,7 @@ import Ecluse.Core.Registry.Publish (
     newMirrorPublish,
  )
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (Decision (Undecidable), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan, DenyIfDeprecated, DenyIfYanked), Transience (WillResolve, WontResolve), ruleName)
+import Ecluse.Core.Rules.Types (Decision (Undecidable), DenyIfCveParams (DenyIfCveParams), FailureAlignment (FailNoDecision), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan, DenyIfCve, DenyIfDeprecated, DenyIfYanked), Transience (WillResolve, WontResolve), ruleName)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit, MirrorArtifactBodyLimit), LimitError (BodyTooLarge), defaultLimits, hostPortAddress)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -57,16 +58,18 @@ import Ecluse.Core.Worker (
     JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
     RetryLeg (AfterPublish, BeforePublish),
     WorkerPolicies,
-    WorkerPolicy (wpArtifact, wpArtifactHostHonoured, wpFirstParty, wpMirrorState, wpPublish, wpRules),
+    WorkerPolicy (wpArtifact, wpArtifactHostHonoured, wpFirstParty, wpMirrorState, wpNow, wpPublish, wpRules),
     processJob,
  )
 import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchFault)
 import Ecluse.Core.Worker.Types (WorkerMirrorState (..))
 import Ecluse.Test.Json (fieldAt)
+import Ecluse.Test.Log (captureJsonLog)
 import Ecluse.Test.Mirror.State
 import Ecluse.Test.Package (hexSha256Of, npmVersion, unsafeFilename, unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Registry.Npm (sourceVersionDoc)
 import Ecluse.Test.Rules (admissionOnly, admitRule, atDefaultPrecedence, cannotVetRule, constRule, denyRule, inertRuleDeps)
 import Ecluse.Test.Snapshot (versionDocOf)
 import Ecluse.Test.Stub (allCaptured, capMethod, capPath, stubBaseUrl, withRoutedStub, withStub)
@@ -743,6 +746,31 @@ spec = do
                     job <- enqueueAndReceive queue sampleMirrorJob{jobTriggerFilename = Nothing}
                     runWM (sourceAt url runtime) (processJob job) `shouldReturn` Succeeded
                     length . plDocuments <$> readIORef logRef `shouldReturn` 1
+
+        for_ [False, True] $ \changedBytes ->
+            it (if changedBytes then "keeps integrity verification when an advisory check is skipped" else "mirrors an age-admitted version and logs its skipped advisory check") $ do
+                rules <- prepare inertRuleDeps (map atDefaultPrecedence [DenyIfCve (DenyIfCveParams 8 FailNoDecision), AllowIfOlderThan (7 * nominalDay)])
+                let artifact = if changedBytes then sampleArtifact{artHashes = [unsafeHash SRI falseSri]} else sampleArtifact
+                    resolve name version = pure (VersionPresent (sourceVersionDoc ((sampleDetails name version){pkgArtifacts = artifact :| [], pkgPublishedAt = Just (UTCTime (fromGregorian 2000 1 1) 0)})) Nothing)
+                    policies = Map.map (\policy -> policy{wpNow = pure (UTCTime (fromGregorian 2026 1 1) 0)}) (npmPolicies resolve rules)
+                withUpstream $ \url ->
+                    withRuntimePolicies policies noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                        job <- enqueueAndReceive queue sampleMirrorJob
+                        (outcome, logs) <- captureJsonLog (\logEnv -> runWMWith logEnv (sourceAt url runtime) (processJob job))
+                        if changedBytes then outcome `shouldSatisfy` isDropped else outcome `shouldBe` Succeeded
+                        length . plDocuments <$> readIORef logRef `shouldReturn` (if changedBytes then 0 else 1)
+                        logs `shouldSatisfy` T.isInfixOf "admitted with a check skipped for unavailability"
+                        logs `shouldSatisfy` T.isInfixOf "DenyIfCve"
+                        logs `shouldSatisfy` T.isInfixOf "no advisory database loaded"
+
+        it "does not mirror when a skipped check has no winning allow" $ do
+            rules <- prepare inertRuleDeps [atDefaultPrecedence (DenyIfCve (DenyIfCveParams 8 FailNoDecision))]
+            withRuntimePolicies (npmPolicies presentResolver rules) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                job <- enqueueAndReceive queue sampleMirrorJob
+                (outcome, logs) <- captureJsonLog (\logEnv -> runWMWith logEnv runtime (processJob job))
+                outcome `shouldSatisfy` isDropped
+                plDocuments <$> readIORef logRef `shouldReturn` []
+                logs `shouldSatisfy` (not . T.isInfixOf "admitted with a check skipped for unavailability")
 
         it "publishes a job whose version current policy admits (happy path unregressed)" $
             withUpstream $ \url ->

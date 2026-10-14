@@ -5,13 +5,20 @@
 -- | npm and Verdaccio providers for the maintenance business contracts.
 module Ecluse.E2E.Npm.DredgerE2ESpec (npmSweepDriver) where
 
+import Data.Aeson (object, (.=))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Database.SQLite.Simple (close, execute_, open)
+import Ecluse.Core.Osv.Schema (osvDbFileName)
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.Test.Contract.Ecosystem (FamilyMetadata (..))
 import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
+import Ecluse.Test.Poll (pollUntil)
 import System.Exit (ExitCode (ExitSuccess))
+import System.FilePath ((</>))
 import Test.Hspec
+import UnliftIO (bracket, bracket_)
+import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.E2E.Fixtures.Npm (
@@ -57,6 +64,7 @@ npmSweepDriver fixture recorder =
         , sweepAdvisoryOps = advisoryOps
         , sweepRecoveryOps = recoveryOps
         , sweepRolloutOps = rolloutOps
+        , sweepAdmissionOutage = Just outageDriver{withAdmissionOutage = acquire withOutageStores}
         }
   where
     acquire resource action = timedFixture recorder (withFixture fixture) (timedFixtureWith recorder resource action)
@@ -349,3 +357,55 @@ advisoryFixture =
 
 installCoordinate :: Text -> Maybe Text -> Text
 installCoordinate name = maybe name (\version -> name <> "@" <> version)
+
+-- | The isolated host directory allows schema faults without changing the product image.
+withOutageStores :: ((GlobalDataPlane, E2E, E2E) -> IO ()) -> GlobalDataPlane -> IO ()
+withOutageStores action plane = do
+    createAdvisoryBucket plane
+    compileGeneration plane CorpusV2
+    withSystemTempDirectory "ecluse-advisory-outage" $ \directory ->
+        withE2EWith
+            defaultE2EConfig{ecExtraEnv = outageProxyEnv, ecAdvisoryDirectory = Just directory}
+            (\proxy -> withDredgerPrivateCache plane proxy (\cache -> action (plane, proxy, cache)))
+            plane
+
+outageProxyEnv :: [(Text, Text)]
+outageProxyEnv = advisoryStoreEnv <> privateCacheEnv <> [("ECLUSE_RULES", outageRules)]
+
+outageRules :: Text
+outageRules =
+    renderRules
+        [ "min-age" .= object ["type" .= ("AllowIfOlderThan" :: Text), "ageSeconds" .= (604800 :: Int)]
+        , "deny-cve" .= object ["type" .= ("DenyIfCve" :: Text), "minCvss" .= (8 :: Int), "onUnavailable" .= ("skip" :: Text)]
+        ]
+
+-- | DDL invalidates SQLite's cached schema and restores it even when an assertion fails.
+withLookupFault :: E2E -> IO a -> IO a
+withLookupFault proxy action = do
+    directory <- maybe (fail "the outage fixture has no shared advisory directory") pure (e2eAdvisoryDirectory proxy)
+    bracket (open (directory </> osvDbFileName "npm")) close $ \connection ->
+        bracket_
+            (execute_ connection "ALTER TABLE package_vulnerability_ranges RENAME TO outage_ranges")
+            (execute_ connection "ALTER TABLE outage_ranges RENAME TO package_vulnerability_ranges")
+            action
+
+outageDriver :: AdmissionOutageDriver GlobalDataPlane E2E
+outageDriver =
+    AdmissionOutageDriver
+        { withAdmissionOutage = withDataPlane dredgerTopology . withOutageStores
+        , withLookupUnavailable = withLookupFault
+        , awaitLookupRecovery = \proxy -> pollUntil 240 500000 id $ do
+            void $ proxyGet proxy ("/npm/" <> psName dredgerKeepPkg)
+            T.isInfixOf "advisory source outage recovered" <$> containerLogs (e2eProxyContainer proxy)
+        , admissionEvidence = \proxy -> do
+            awaitProxyLog proxy ((>= 2) . T.count "admitted with a check skipped for unavailability") 240 `shouldReturn` True
+            containerLogs (e2eProxyContainer proxy)
+        , runRecoveredSweep = \plane mode ->
+            observeRun
+                <$> runDredgerOnce
+                    plane
+                    ["--once"]
+                    (advisoryStoreEnv <> privateCacheEnv <> sweepEnvUnder outageRules <> [(consentKey, "false") | mode == WithoutConsent])
+        , outagePackage = PackageFixture (psName corpusRevokedPkg) "1.0.0" ["1.0.0"]
+        , outageCasePrefix = "npm/dredger/"
+        }

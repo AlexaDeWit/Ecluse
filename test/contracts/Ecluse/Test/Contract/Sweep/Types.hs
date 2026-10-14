@@ -15,6 +15,7 @@ module Ecluse.Test.Contract.Sweep.Types (
     RecoveryOps (..),
     RolloutOps (..),
     AdvisoryOps (..),
+    AdmissionOutageDriver (..),
     IdentityFixture (..),
     RecoveryFixture (..),
     RolloutFixture (..),
@@ -166,3 +167,14 @@ data AdvisoryFixture = AdvisoryFixture
 -- | A successful empty response does not establish retained package bytes.
 servedBytes :: (Int, Int64) -> Bool
 servedBytes (status, size) = status == 200 && size > 0
+
+-- | A native fixture for a lookup outage while the running proxy and worker share policy.
+data AdmissionOutageDriver plane store = AdmissionOutageDriver
+    { withAdmissionOutage :: ((plane, store, store) -> IO ()) -> IO ()
+    , withLookupUnavailable :: forall a. store -> IO a -> IO a
+    , awaitLookupRecovery :: store -> IO Bool
+    , admissionEvidence :: store -> IO Text
+    , runRecoveredSweep :: plane -> SweepMode -> IO SweepRun
+    , outagePackage :: PackageFixture
+    , outageCasePrefix :: Text
+    }

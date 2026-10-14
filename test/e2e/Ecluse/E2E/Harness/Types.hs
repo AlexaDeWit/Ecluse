@@ -37,6 +37,7 @@ data E2E = E2E
     , e2eProxyContainer :: String
     , e2eCollectorContainer :: Maybe String
     , e2eManager :: Manager
+    , e2eAdvisoryDirectory :: Maybe FilePath
     }
 
 -- | Extra role configuration layered over the group's topology.
@@ -45,6 +46,7 @@ data E2EConfig = E2EConfig
     , ecExtraEnv :: [(Text, Text)]
     , ecQueueUrl :: Maybe Text
     , ecArgs :: [String]
+    , ecAdvisoryDirectory :: Maybe FilePath
     }
 
 -- | A service with its owned container and host-loopback endpoint.
@@ -102,7 +104,7 @@ ministackPort plane = maybe (fail "topology has no AWS emulator") (pure . servic
 
 -- | The base configuration: the plain topology, no collector and no extra environment.
 defaultE2EConfig :: E2EConfig
-defaultE2EConfig = E2EConfig{ecCollector = False, ecExtraEnv = [], ecQueueUrl = Nothing, ecArgs = []}
+defaultE2EConfig = E2EConfig{ecCollector = False, ecExtraEnv = [], ecQueueUrl = Nothing, ecArgs = [], ecAdvisoryDirectory = Nothing}
 
 -- | The stores and the stub one spec group boots once: every proxy of the group runs on them.
 data GlobalDataPlane = GlobalDataPlane

@@ -37,7 +37,7 @@ obligations =
         "npm/dredger"
         Supported
         ["read", "mirror", "maintenance", "advisories"]
-        ["npm/dredger/inventory", "npm/dredger/admission-only", "npm/dredger/denied-versions", "npm/dredger/dry-run", "npm/dredger/consent-refusal", "npm/dredger/first-party", "npm/dredger/two-stores", "npm/dredger/advisory-revocation", "npm/dredger/denied-install", "npm/dredger/delete-recovery", "npm/dredger/refill", "npm/dredger/missing-source", "npm/dredger/late-copy", "npm/dredger/old-worker", "npm/dredger/old-dredger-refill", "npm/dredger/old-dredger-loss"]
+        ["npm/dredger/skipped-admission-recovery", "npm/dredger/inventory", "npm/dredger/admission-only", "npm/dredger/denied-versions", "npm/dredger/dry-run", "npm/dredger/consent-refusal", "npm/dredger/first-party", "npm/dredger/two-stores", "npm/dredger/advisory-revocation", "npm/dredger/denied-install", "npm/dredger/delete-recovery", "npm/dredger/refill", "npm/dredger/missing-source", "npm/dredger/late-copy", "npm/dredger/old-worker", "npm/dredger/old-dredger-refill", "npm/dredger/old-dredger-loss"]
     , Obligation
         "pypi/install"
         "pypi/read"
