@@ -1397,6 +1397,7 @@ test-suite ecluse-unit
     Ecluse.Rts.SamplerSpec
     Ecluse.Runtime.EnvSpec
     Ecluse.Runtime.ServerSpec
+    Ecluse.ProxySpec
     Ecluse.ServiceSpec
     Ecluse.Site.MarkdownSpec
     Ecluse.Site.OpenApiSpec
