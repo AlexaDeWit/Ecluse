@@ -72,8 +72,8 @@ spec = do
         it "requires a PyPI ceiling when calibration names the unified conditions" $
             decodeFloors (document (calibrationValue ["measurementConditions" .= ("unified-v2" :: Text)]) twoCoreFloors) `shouldSatisfy` isLeft
         it "checks native PyPI ceiling arithmetic and pod identities" $
-            for_ [latencyValue [("2cpu-1gib", 100)] 151, latencyValue [("4cpu-1gib", 100)] 150] $ \ceiling ->
-                decodeFloors (document (calibrationValue ["measurementConditions" .= ("unified-v2" :: Text), "pypiInjectedLatency" .= ceiling]) twoCoreFloors) `shouldSatisfy` isLeft
+            for_ [latencyValue [("2cpu-1gib", 100)] 151, latencyValue [("4cpu-1gib", 100)] 150] $ \latencyRecord ->
+                decodeFloors (document (calibrationValue ["measurementConditions" .= ("unified-v2" :: Text), "pypiInjectedLatency" .= latencyRecord]) twoCoreFloors) `shouldSatisfy` isLeft
         it "reads each ecosystem ceiling and retained row provenance without changing counts" $ do
             let changed = ["measurementConditions" .= ("unified-v2" :: Text), "pypiInjectedLatency" .= latencyValue [("2cpu-1gib", 100)] 150, "retainedFloorConditions" .= Map.singleton ("npm/herd" :: Text) ("legacy-v1" :: Text)]
             fmap floorsByShape (decodeFloors (document (calibrationValue changed) twoCoreFloors)) `shouldBe` Right (floorsByShape sample)

@@ -344,12 +344,12 @@ enforce floors facts = case (Map.lookup shape (floorsByShape floors), reasons) o
   where
     shape = rfShape facts
     calibration = floorsCalibration floors
-    ceilings = [(Npm, rfNpmLatencyMs facts, calNpmLatency calibration)] <> [(PyPI, rfPypiLatencyMs facts, ceiling) | ceiling <- maybeToList (calPypiLatency calibration)]
+    ceilings = [(Npm, rfNpmLatencyMs facts, calNpmLatency calibration)] <> [(PyPI, rfPypiLatencyMs facts, latencyBound) | latencyBound <- maybeToList (calPypiLatency calibration)]
     reasons =
         [SettingsDiffer settings | Just settings <- [nonEmpty (differingSettings (calOperatingPoint calibration) (rfSettings facts))]]
             <> [OtherRunner (calRunner calibration) (calRunnerKind calibration) (rfRunner facts) | rfRunner facts /= readingOn (calRunnerKind calibration)]
             <> [ConditionsDiffer (calConditions calibration) (rfConditions facts) | calConditions calibration /= rfConditions facts]
-            <> [LatencyAboveCeiling ecosystem injected most | (ecosystem, injected, ceiling) <- ceilings, let most = lcCeilingMs ceiling, injected > most]
+            <> [LatencyAboveCeiling ecosystem injected most | (ecosystem, injected, latencyBound) <- ceilings, let most = lcCeilingMs latencyBound, injected > most]
 
 -- | What one scenario's successes are held to in one pass.
 data FloorCheck
@@ -430,7 +430,7 @@ describeEnforcement calibration = \case
             <> " Measurement conditions: "
             <> calConditions calibration
             <> ". "
-            <> T.intercalate " " [ecosystemName ecosystem <> " latency ceiling: " <> show (lcCeilingMs ceiling) <> " ms." | (ecosystem, ceiling) <- [(Npm, calNpmLatency calibration)] <> [(PyPI, ceiling) | ceiling <- maybeToList (calPypiLatency calibration)]]
+            <> T.intercalate " " [ecosystemName ecosystem <> " latency ceiling: " <> show (lcCeilingMs latencyBound) <> " ms." | (ecosystem, latencyBound) <- [(Npm, calNpmLatency calibration)] <> [(PyPI, pypiBound) | pypiBound <- maybeToList (calPypiLatency calibration)]]
             <> describeRetainedConditions calibration
     NotHeld reasons ->
         "This run is not held to the success floors in `"
@@ -444,4 +444,4 @@ describeRetainedConditions :: Calibration -> Text
 describeRetainedConditions calibration =
     if Map.null (calRetainedConditions calibration)
         then ""
-        else " Retained row conditions: " <> T.intercalate ", " [name <> "=" <> identity | (name, identity) <- Map.toList (calRetainedConditions calibration)] <> "."
+        else " Retained row conditions: " <> T.intercalate ", " [name <> "=" <> conditionVersion | (name, conditionVersion) <- Map.toList (calRetainedConditions calibration)] <> "."
