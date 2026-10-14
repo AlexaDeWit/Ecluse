@@ -421,7 +421,7 @@ describeEnforcement calibration = \case
             <> toText floorsPath
             <> "`, calibrated on "
             <> calRunner calibration
-            <> " from "
+            <> " with provenance for "
             <> show (length (calRuns calibration))
             <> " runs at "
             <> T.intercalate ", " (ordNub (map runCommit (toList (calRuns calibration))))

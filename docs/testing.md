@@ -1364,8 +1364,10 @@ Set each floor to half the lowest count over the ten runs, rounded down, and at 
 with several loads takes the lowest count of any of them. Then write the `calibration` record:
 
 - `runs`: each run's URL with the commit it measured. Ten runs can span commits, so every run
-  carries its own.
-- `rule`, `runner`, `runnerOs`, `runnerArch`, and `operatingPoint`.
+  carries its own. Keep the exact measured commit when a later patch changes only calibration data or report wording.
+- `rule`, `runner`, `runnerOs`, `runnerArch`, and `operatingPoint`. The rule identifies the run groups
+  that supply retained floors, recalibrated floors, and each native latency record. Historical runs
+  in `runs` do not count as observations under the new conditions.
 - `measurementConditions`: the conditions measured by the new calibration.
 - `retainedFloorConditions`: unaffected rows that retain an earlier calibration identity.
 - `npmInjectedLatency` and `pypiInjectedLatency`: each native ecosystem's highest qualifying injected
@@ -1383,9 +1385,34 @@ Compare old and new conditions serially on each supported resource profile befor
 Retain failed, adverse, and disqualified observations with their exclusion reasons. Do not turn green
 unheld workflow results into qualified measurements or invent calibration values.
 
-In both cases, add the dispatched runs to `runs`, each with the branch commit it measured. They
-count toward their pod shape's highest latency like any run in `runs`. The next recalibration from
-ten scheduled runs replaces those floors and drops those runs.
+In both cases, collect at least three qualifying observations per applicable pod shape. Add their
+run URLs and exact measured commits to `runs`. Preserve earlier source records and their assigned
+floor groups when those floors stay unchanged. A whole run above either applicable native ceiling
+contributes no floor counts or latency maxima, including its otherwise eligible profiles.
+
+For a new native latency policy, select bootstrap samples under the existing applicable constraints.
+A ceiling that does not yet exist cannot exclude those inputs. Derive the new ceiling after selection
+and apply it to future observations. Recorded per-shape maxima can exceed the derived ceiling because
+the formula uses the lowest shape maximum. Do not retrospectively exclude the samples using their
+new ceiling. Apply the same calculation independently to each native ecosystem because its floors
+depend on its own injected RTT.
+
+Each native latency record uses only its assigned qualifying source group. In a partial recalibration,
+a retained latency record keeps its historical source group. New observations qualify against its
+existing ceiling. They do not revise retained per-shape maxima merely because their
+RTT exceeds one historical maximum while remaining below the ceiling. A changed native policy
+receives a separate record derived from its qualifying observations.
+
+For mixed calibrations, `rule` identifies which historical runs supply the retained counts and
+latency record, and which new runs supply the affected counts and changed native latency record.
+The report's provenance count includes both groups. It is not the number of new qualifying samples.
+The next routine recalibration uses ten qualifying scheduled runs. Remove historical source records
+only after no retained floor or latency record refers to them.
+
+After a calibration-only patch, the committed-floor unit checks parse the actual file and verify
+default-condition enforcement under each scheduled shape at both native ceilings. Review and CI
+check the final commit. Keep the measured harness code unchanged and record any later report-only
+change. These checks do not require another timed grid.
 
 A report prints each floor beside the count it holds, so you can read a run against the floors
 without the file.

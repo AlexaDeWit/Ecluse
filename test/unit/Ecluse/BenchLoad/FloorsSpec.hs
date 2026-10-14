@@ -165,7 +165,7 @@ spec = do
     describe "describeEnforcement" $ do
         it "names the file, the runner, the runs, their commits, the rule, and the latency ceiling for a held run" $
             describeEnforcement calibration (Enforced twoCores floorsAtTwoCores)
-                `shouldBe` "This run is held to the success floors in `bench/load/floors.json`, calibrated on ubuntu-26.04-arm from 2 runs at abc123. Half the lowest night. Measurement conditions: legacy-v1. npm latency ceiling: 210 ms."
+                `shouldBe` "This run is held to the success floors in `bench/load/floors.json`, calibrated on ubuntu-26.04-arm with provenance for 2 runs at abc123. Half the lowest night. Measurement conditions: legacy-v1. npm latency ceiling: 210 ms."
         it "gives the injected latency and the ceiling for a run a slow network keeps off the floors" $
             describeEnforcement calibration slowNetwork
                 `shouldBe` "This run is not held to the success floors in `bench/load/floors.json`: its npm fixture injects 444 ms of upstream latency, above the ceiling of 210 ms."
