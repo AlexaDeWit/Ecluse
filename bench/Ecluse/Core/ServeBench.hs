@@ -7,7 +7,8 @@ Decoding and fetch-digest construction stay outside the measured operation.
 -}
 module Ecluse.Core.ServeBench (benchmarks) where
 
-import Data.Aeson (Encoding, Value (Number), toEncoding)
+import Control.Exception (throw)
+import Data.Aeson (Encoding, Value (Number, Object, String), eitherDecode, toEncoding, toJSON)
 import Data.Aeson.Encoding (encodingToLazyByteString)
 import Data.Aeson.Encoding qualified as Encoding
 import Data.Aeson.Key qualified as Key
@@ -18,16 +19,19 @@ import Data.Set qualified as Set
 import Ecluse.Bench.Corpus (benchEvalContext, entryName, syntheticInput)
 import Ecluse.Bench.Fit (notWorseThanLinearIO)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Package (infoVersions)
+import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts), infoVersions)
+import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Package.Filter (restrictToSurvivors)
 import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmPacked, npmRendered, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmPacked, npmRendered, pypiRendered, pypiSimpleCached)
 import Ecluse.Core.Registry.Json.Packed (Pieces (ArrayPieces, ObjectPieces), RenderPlan (..))
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEncoding, simpleEnvelope, simpleFiles)
+import Ecluse.Core.Registry.PyPI.Filter (serialiseSimpleDocument)
 import Ecluse.Core.Snapshot (Snapshot (snapshotValue))
-import Ecluse.Test.Corpus (syntheticProxyBase)
+import Ecluse.Test.Corpus (cpName, cpPackage, syntheticProxyBase)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..), LoadedEntry (..))
+import Ecluse.Test.Registry.PyPI.Metadata (simpleValue)
 import Ecluse.Test.Server.Transform (serveDocumentSize)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnf, whnfAppIO)
 
@@ -46,6 +50,7 @@ benchmarks ecosystem =
                ]
             <> [npmAssemblyBenchmarks ecosystem | ebEcosystem ecosystem == Npm]
             <> [pypiEncodingBenchmarks ecosystem | ebEcosystem ecosystem == PyPI]
+            <> [pypiAssemblyBenchmarks ecosystem | ebEcosystem ecosystem == PyPI]
   where
     serveDepth = serveDocumentSize (ebMetadata ecosystem) benchEvalContext
 
@@ -104,9 +109,60 @@ npmAssemblyBenchmarks ecosystem =
 -- The survivors in the assembled plan, forcing what the render reads: its members, prefix and pieces.
 planDepth :: CachedDoc -> Int
 planDepth assembled = case snd npmRendered assembled of
-    Just plan -> rnf (planMembers plan) `seq` maybe () (`seq` ()) (planPrefix plan) `seq` pieceCount (planPieces plan)
+    Just plan -> renderPlanDepth plan
     Nothing -> -1
+
+-- Force the fields rendering reads without rendering or encoding the plan.
+renderPlanDepth :: RenderPlan -> Int
+renderPlanDepth plan = rnf (planMembers plan) `seq` maybe () (`seq` ()) (planPrefix plan) `seq` pieceCount (planPieces plan)
   where
     pieceCount = \case
         ObjectPieces pieces -> foldl' (\count (key, piece) -> key `seq` piece `seq` count + 1) 0 pieces
         ArrayPieces pieces -> foldl' (\count piece -> piece `seq` count + 1) 0 pieces
+
+-- Preparation and native output checks finish before tasty runs either assembly row.
+pypiAssemblyBenchmarks :: EcosystemBench -> Benchmark
+pypiAssemblyBenchmarks ecosystem =
+    bgroup
+        "prepared PyPI assembly"
+        [ bgroup
+            (entryName entry)
+            [ rnf (show plan :: Text) `seq`
+                pypiPlanDepth (assemble (snapshotValue source)) `seq`
+                    checkAssembly label expected assemble `seq`
+                        bench label (whnf (pypiPlanDepth . assemble) (snapshotValue source))
+            | (label, survivors) <- [("all", Map.keysSet (infoVersions info)), ("one", Set.fromList (take 1 (Map.keys (infoVersions info))))]
+            , let plan = fromMaybe (throw (PyPIAssemblyInvalid label)) (mergePackuments [(GatedSource, restrictToSurvivors survivors info <$ source)])
+                  assemble = metadataAssemble (ebMetadata ecosystem) syntheticProxyBase (Map.singleton 0 source) plan . Just
+                  coordinates = Set.fromList [artEntryKey artifact | details <- Map.elems (Map.restrictKeys (infoVersions info) survivors), artifact <- toList (pkgArtifacts details)]
+                  expected = assemblyExpected (cpName (lePackage entry)) (Set.toAscList survivors) coordinates reference
+                  checkAssembly row output operation = case fmap eitherDecode (serialiseSimpleDocument (operation (snapshotValue source))) of
+                    Right (Right actual) | actual == output -> ()
+                    _ -> throw (PyPIAssemblyInvalid row)
+            ]
+        | entry@LoadedEntry{leInfo = info, leSnapshot = source, leBytes = raw} <- ebCorpus ecosystem
+        , let reference = case ebTreeRead ecosystem (cpPackage (lePackage entry)) raw of
+                Right (_, document) -> fromMaybe (throw (PyPIAssemblyInvalid (entryName entry))) (snd pypiSimpleCached document)
+                Left _ -> throw (PyPIAssemblyInvalid (entryName entry))
+        ]
+
+-- Select original coordinates and rewrite URLs without calling production assembly.
+assemblyExpected :: Text -> [Text] -> Set EntryKey -> SimpleDocument -> Value
+assemblyExpected project versions coordinates reference =
+    simpleValue (simpleDocument envelope [(key, rebase value) | (key, value) <- simpleFiles reference, key `Set.member` coordinates])
+  where
+    envelope = KeyMap.insert "versions" (toJSON versions) (simpleEnvelope reference)
+    rebase (Object fields) = case KeyMap.lookup "filename" fields of
+        Just (String filename) -> Object (KeyMap.insert "url" (String (syntheticProxyBase <> "/simple/" <> project <> "/" <> filename)) fields)
+        _ -> throw (PyPIAssemblyInvalid (toString project))
+    rebase _ = throw (PyPIAssemblyInvalid (toString project))
+
+pypiPlanDepth :: CachedDoc -> Int
+pypiPlanDepth document = case snd pypiRendered document of
+    Just plan -> foldl' (\count table -> table `seq` count + 1) (renderPlanDepth plan) (planTables plan)
+    Nothing -> throw (PyPIAssemblyInvalid "missing native render plan")
+
+newtype PyPIAssemblyInvalid = PyPIAssemblyInvalid String
+    deriving stock (Show)
+
+instance Exception PyPIAssemblyInvalid
