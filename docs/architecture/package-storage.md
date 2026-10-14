@@ -21,7 +21,10 @@ Its storage representation contains the following fields, independent of Haskell
 
 The codec rejects duplicate filenames, mismatched identities, unsupported schemas, invalid references, and exceeded bounds.
 It preserves the existing [supported field contract](../../web/content/docs/protocol-support.md), rather than defining another ecosystem field set.
-Committed filenames retain immutable digests and declarations, while the inventory may grow through conditional union.
+Committed filenames retain the immutable digests and declarations required by their ecosystem contract.
+PyPI permits additive filenames through conditional union.
+[npm publication](../../core/src/Ecluse/Core/Registry/Npm/Publish.hs) retains one immutable tarball per version and its immutable required metadata.
+An npm commit refuses additional tarballs or conflicting version content.
 Project envelopes and mutable npm tags remain separate from those immutable file identities.
 An update may point to a version only after that version commits.
 
@@ -38,7 +41,7 @@ Aggregated metadata must not silently omit a committed version whose required da
 
 Publication uses the ecosystem's existing authorised scope, rather than inventing a whole-version completion signal.
 [The settled PyPI protocol](https://github.com/AlexaDeWit/Ecluse/issues/1093#issuecomment-5502718228) accepts multipart, per-file, pathless uploads.
-A direct upload commits its verified distribution and required metadata, then later uploads add filenames to the same version.
+A direct PyPI upload commits its verified distribution and required metadata, then later uploads add filenames to the same version.
 Each marker describes all committed files, never unfinished staging data.
 A failed later upload preserves the prior committed inventory and its visibility.
 
@@ -46,7 +49,7 @@ Whole-version mirroring has a separate completion obligation.
 The worker admits complete inventory through `MirrorInventory` and verifies files through `ExpectedMirrorFile` and `VerifiedArtifactBytes`.
 Retain the paired source data represented by `MirrorReadData`.
 One committed upload cannot acknowledge a mirror job whose admitted expected inventory contains more files or companions.
-Expected sets may grow, as [ruled in #1133](https://github.com/AlexaDeWit/Ecluse/issues/1133#issuecomment-6116063124).
+PyPI expected sets may grow, as [ruled in #1133](https://github.com/AlexaDeWit/Ecluse/issues/1133#issuecomment-6116063124).
 The [durable PyPI contract](cloud-backends.md#durable-pypi-read-data) requires the latest full expected set before mirror completion.
 Managed serving reads also require that full expected view before exposing a mirrored version.
 A valid marker proves its referenced files, but cannot prove that the worker omitted no expected files.
@@ -61,8 +64,9 @@ The marker codec accepts only backend-owned references within the selected store
 flowchart LR
     A[Authorised file or mirror inventory] --> B[Stage and verify required bytes]
     B --> C[Read current marker]
-    C --> D[Union compatible completed files]
-    D --> E[Conditional create or replacement]
+    C --> D[Validate ecosystem membership rules]
+    D --> U[Union only permitted completed files]
+    U --> E[Conditional create or replacement]
     E -->|Concurrent change| C
     E -->|Committed| F[Verify committed publication]
     F --> G[Direct upload succeeds]
@@ -71,8 +75,10 @@ flowchart LR
 
 The first marker uses conditional creation.
 Later commits use compare-and-swap, which replaces only the marker revision the publisher read, or equivalent filesystem serialisation.
-Before each attempt, reread and union the candidate with every committed filename.
-After a concurrent change, repeat that union against the new revision so additions cannot erase another publisher's files.
+Before each attempt, reread and validate the candidate against the ecosystem membership and immutable-content rules.
+For PyPI additions, union the candidate with every committed filename.
+For npm, require the same single tarball and immutable required metadata.
+After a concurrent change, repeat validation and any permitted union against the new revision so additions cannot erase committed files.
 
 An existing filename succeeds idempotently only when its digests and immutable declarations match.
 Compare semantic content, excluding temporary candidate keys and transient download URLs.
@@ -86,7 +92,8 @@ Every newly referenced byte must finish durably before the marker update.
 | After data completion, before marker commit | The prior marker remains authoritative. Restart may reuse verified durable candidates. |
 | Marker commit fails or its acknowledgement disappears | Reread the marker. Matching file identities resolve success, conflicts refuse, and unresolved storage failure retries. |
 | Concurrent equivalent uploads | One commit wins. The other publisher verifies matching file identities and succeeds idempotently. |
-| Concurrent distinct filenames | Reread and union after conflict, retaining both completed files without lost additions. |
+| Concurrent distinct PyPI filenames | Reread and union after conflict, retaining both completed files without lost additions. |
+| Additional or conflicting npm member | Refuse the candidate and retain the committed single-tarball version and immutable required metadata. |
 | Concurrent conflicting uploads for one filename | One commit wins. The loser reports an immutable-file conflict and preserves committed content. |
 | Restart with staging data only | Staging never proves completion. Repeat verification before attempting commit. |
 | One mirror upload commits | Acknowledge only after the target proves every file and companion in the latest admitted expected inventory. |
@@ -102,7 +109,7 @@ Bind operations to a trusted root directory handle and reject symbolic-link trav
 Canonical-path checks alone do not protect later operations from path substitution.
 Stage on the same filesystem, flush completed files, and flush directories containing newly created entries.
 Serialise commits for each version across all writers, including separate processes, and reread the marker while holding that protection.
-Union completed files, then write and flush temporary metadata.
+Validate ecosystem membership, union permitted completed files, then write and flush temporary metadata.
 Create the first marker atomically without replacement, or atomically replace the observed marker under that serialisation.
 Flush its directory before acknowledging durable success.
 
@@ -124,8 +131,8 @@ A crash may lose an unacknowledged marker, but must never leave a durable marker
 Upload immutable candidate objects and finish multipart uploads before creating the metadata marker with `If-None-Match: *`.
 List-then-put cannot choose one winner.
 For later additions, GET the current marker and retain its ETag as the revision token.
-Union completed files and replace with `If-Match` for that ETag.
-On `412`, reread and repeat the union, refusing conflicting existing filename identities.
+Validate ecosystem membership, union permitted completed files, and replace with `If-Match` for that ETag.
+On `412`, reread and repeat validation and any permitted union, refusing conflicting existing filename identities.
 On uncertain transport results, perform the same readback before deciding success.
 On `404` during replacement, reread current state before attempting conditional creation, respecting concurrent deletion and refill authority.
 Handle `409` through bounded retry and current-state inspection.
@@ -176,7 +183,7 @@ The existing S3 mirror-state store records expected source evidence. It is not a
 | Current boundary | Proposed extension and retained guarantee |
 | --- | --- |
 | [`MetadataClient`](../../core/src/Ecluse/Core/Registry/Metadata.hs) | Supply committed full and selected reads, with existing bounds and paired metadata. Add native typed faults where HTTP outcomes cannot represent failures. |
-| [`MirrorPublish`](../../core/src/Ecluse/Core/Registry/Publish/Internal.hs) | Retain checked preparation. Add native per-file marker commits and additive inventory updates after verified data and companion completion. Retain existing HTTP publication rules. |
+| [`MirrorPublish`](../../core/src/Ecluse/Core/Registry/Publish/Internal.hs) | Retain checked preparation. Add native marker commits after verified data and companion completion, with additive filenames only where the ecosystem permits them. Retain existing HTTP publication rules. |
 | [Worker completion](../../core/src/Ecluse/Core/Worker/Job.hs) | Run the fresh target probe and revalidate the latest required inventory after native commits. Never acknowledge a stale or incomplete set. |
 | [Artifact capability](../../core/src/Ecluse/Core/Registry/Adapter/Capability.hs) | Add native bounded reads because current builders return HTTP requests. Enforce marker membership for GET, HEAD, and companions. |
 | [`StoreMaintenance`](../../core/src/Ecluse/Core/Registry/Maintenance.hs) | Derive enumeration and manifest membership from markers. Preserve consent, guarded batches, deletion outcomes, refill facts, and optional cursors. |
@@ -196,7 +203,8 @@ Add the following observations to deterministic specs and filesystem or emulated
 - Interrupt every publication phase, restart, and check all listing and direct-read forms from the visibility contract.
 - Race equivalent uploads, distinct filenames, and conflicting filename identities, including lost acknowledgements and uncertain directory flushes.
 - Commit a direct PyPI file, add another file, and confirm each revision references only complete durable bytes.
-- Interrupt a later upload and retain the previous readable inventory, with no lost files after concurrent additions.
+- Refuse extra npm tarballs and conflicting npm version content, preserving the committed version and separate mutable project tags.
+- Interrupt a later PyPI upload and retain the previous readable inventory, with no lost files after concurrent additions.
 - Keep mirror completion pending until the full latest admitted expected inventory and companions pass proof.
 - Reject forged references, symbolic links, identity collisions, duplicate filenames, invalid schemas, and exceeded metadata bounds.
 - Refuse partial committed data, preserve caller isolation, and reject reads outside the authorised scope.
@@ -207,9 +215,9 @@ Backend delivery must supply this runtime evidence. Documentation review does no
 
 ## What remains for owner approval?
 
-Recommend metadata-last commits with conditional creation and additive inventory updates for direct publication and whole-version mirroring, plus maintenance support.
+Recommend metadata-last commits with conditional creation and ecosystem-scoped inventory updates for direct publication and whole-version mirroring, plus maintenance support.
 The owner must approve the native representation and delivery scope before backend work starts.
-Per-file PyPI publication and growing expected sets are settled contracts, not new owner approval questions.
+Per-file PyPI publication and growing PyPI expected sets are settled contracts, not new owner approval questions.
 
 Native private reads require a caller-authorisation contract before activation, including the rule that produces the bound request scope.
 Existing mirror configuration also requires a private upstream, so usable delivery must preserve that topology requirement.
