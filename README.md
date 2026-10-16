@@ -34,11 +34,12 @@ can publish through the mount, and admitted versions can enter the configured pr
 
 A new public version waits in a quarantine, seven days by default, before a build can install it.
 Most malicious publishes are found and pulled within days, so the wait alone sidesteps them, with no
-attempt to detect malice. A security patch overrides the quarantine as soon as the advisory data is
-available: a version that a synced advisory names as the exact fix for a vulnerability skips the
-wait.
-When an advisory source is configured, active MAL advisories deny affected public versions by default.
-Source-free deployments keep the quarantine and remediation defaults. Other rules opt in by name.
+attempt to detect malice. With an advisory source configured, a security patch overrides the
+quarantine as soon as the advisory data is available: a version that a synced advisory names as the
+exact fix for a vulnerability skips the wait. A fix that another advisory still affects skips it only
+when that advisory's stored scores stay low. The same source makes active MAL advisories deny
+affected public versions by default. Source-free deployments keep the quarantine alone. Other rules
+opt in by name.
 
 If you run a private registry, Écluse reads it first and passes your own packages through untouched.
 Any https registry that speaks the ecosystem's protocol serves in that role. Écluse can also mirror

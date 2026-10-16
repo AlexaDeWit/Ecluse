@@ -105,8 +105,8 @@ count, since no retry could change it. The rule's failure alignment governs eith
 
 - **`FailDeny` (fail-closed, the default)**: decisive. The gate refuses a version a needed rule
   could not vet, whether the scanner is down or the advisory database is not yet loaded.
-- **`FailNoDecision` (fail-open)**: a no-op, for a remediation or allow-direction rule where a
-  missing signal should not block availability. There is deliberately no fail-allow.
+- **`FailNoDecision` (fail-open)**: a no-op, where a missing signal should not block availability.
+  There is deliberately no fail-allow.
 
 The blast radius is small. Only packages not yet in the private mirror reach this path.
 Already-approved versions serve from the private upstream with no rules. How a fail-closed
@@ -173,14 +173,13 @@ escape hatch. Both still sit above the quarantine, the remediation lane, and a s
 allow-list, and configured together they tie, which the boot order resolves by name. An operator may
 raise a specific allow above a specific deny, or the reverse, with an explicit precedence.
 
-The source-free [default policy](configuration.md#the-default-policy) has two shared rules: the pure
-`AllowIfOlderThan` quarantine (`min-age`) and the `AllowIfRemediatesCve` fast lane. The fast lane
-abstains without an advisory database, leaving the quarantine as the shared allow.
+The source-free [default policy](configuration.md#the-default-policy) has one shared rule: the pure
+`AllowIfOlderThan` quarantine (`min-age`).
 The npm mount also ships `deny-scripts` (`DenyInstallTimeExecution`) at admission only, so it
 refuses new public admission without deleting stored copies. Disable it with `enabled: false`
 under `mounts.npm.rules`, or admit a named package with an `AllowByIdentity` pin whose explicit
-precedence is above 300. `DenyIfKnownMalicious` adds a third shared default when `advisories.url` is configured.
-The remaining rules opt in by name.
+precedence is above 300. When `advisories.url` is configured, two more shared defaults activate:
+`DenyIfKnownMalicious` and the `AllowIfRemediatesCve` fast lane. The remaining rules opt in by name.
 
 ## CVE subsystem
 
@@ -200,14 +199,50 @@ response reads one generation. Four rule types read it.
 The quarantine would also hold back the security patch that fixes an in-the-wild
 vulnerability, delaying remediation by exactly the window that lets registries find and yank a
 malicious publish.
-`AllowIfRemediatesCve` removes that tension. For version *V* of *P*:
+`AllowIfRemediatesCve` removes that tension for an exact fix. For version *V* of *P*:
 
-- **`Allow`** when an advisory names *V* as its exact fixed version and no advisory's affected
-  range still contains *V*. The reason names the remediated advisory IDs.
-- **`NoDecision`** otherwise (including before a first sync), and a fail-open `Unavailable` when
-  a lookup against a loaded database faults. An allow that cannot confirm a remediation **fails
-  open**, unlike a deny, which fails closed. The version then falls back to the normal
-  quarantine instead of being admitted on an unverified claim.
+1. When no advisory names *V* as its fixed version, the rule abstains. Being merely unaffected
+   earns no exception.
+2. When advisories name *V* as their fix and no advisory still affects *V*, the rule admits *V*.
+   It reads no score, so a missing score cannot block a full fix.
+3. Otherwise *V* is a partial fix. An advisory whose fix is *V* but whose other range still holds
+   *V* is no genuine fix. When no genuine fix remains, the rule abstains.
+4. `remainingAdvisories` decides a partial fix. `abstain` returns no decision, so the fix waits out
+   the quarantine. `differential` admits it only when every enabled condition holds.
+
+The differential's conditions read the scores the artifact stores:
+
+- Every remaining advisory stores a CVSS at or below `maxRemainingCvss`.
+- Every remaining advisory stores an EPSS strictly below `maxRemainingEpss`.
+- With `minCvssGap` above zero, the highest genuinely fixed CVSS exceeds the highest remaining CVSS
+  by at least the gap.
+- With `minEpssGap` above zero, the same holds for EPSS, in probability points.
+
+The conditions compare maxima, so repeated rows cannot inflate a score. A missing score that a
+condition needs makes the rule abstain, because unknown is not zero. A remaining advisory with any
+unscored row counts as unscored. Scores compare as the shortest decimals that read back as the
+stored values, so a gap of 1.0 holds between 8.1 and 7.1. The decision evidence names the genuinely
+fixed and remaining advisories, the compared maxima, the limits, and each failed condition. Metric
+labels carry no advisory ID.
+
+The comparison reads stored scores. Pilot stores the highest valid CVSS vector score, or a
+qualitative label's upper limit when no vector exists, and the artifact does not record which. So
+the differential proves no exact severity reduction, and no reduced exposure against the version a
+client already has. The shipped limits are chosen product defaults, not validated safety boundaries.
+Many PyPI records carry no CVSS score, so the differential rarely admits a PyPI partial fix.
+
+`onUnavailable` decides what the rule does when advisory evidence is unavailable: no database
+configured or loaded, a failed or timed-out read, an open breaker, or an expired or undated push.
+`deny` refuses a version the rule reaches, as a fail-closed deny does. `skip` abstains, and an
+admission that follows records the skipped check. Unavailable evidence never supplies an exception.
+Under `deny`, the rule makes an advisory store mandatory and makes readiness wait for the first
+artifact, on the terms of the advisory denies. In differential mode the rule reads EPSS scores, so
+it makes EPSS enrichment required.
+
+The shipped `remediation-fast-track` declares `deny` and `differential`, and an advisory source
+activates it as it activates `DenyIfKnownMalicious`. During an advisory outage it refuses a version
+the quarantine alone would admit. Higher-ranked allows still decide first. The rule is an allow, so
+it authorises no Dredger deletion, and an unavailable generation justifies none.
 
 It ranks above the quarantine allow, so the rule admits a fix immediately. It ranks below the scope
 allow-list, so a trusted scope avoids its read only when no higher advisory rule runs. Pilot stores version bounds and exact
@@ -254,13 +289,13 @@ The separate MAL rule does not depend on either score state.
 - **`CannotVet`** when no advisory database is loaded, and the harness's **`Unavailable`** when a
   loaded-database lookup faults. Both align by `onUnavailable`. **`FailDeny`** (the default)
   refuses the version with a retryable `503`. **`FailNoDecision`** skips the rule, and the
-  admission that follows carries the skipped check as evidence. This is the inverse of
-  `AllowIfRemediatesCve`: neither an allow nor a deny that cannot confirm safety may admit.
+  admission that follows carries the skipped check as evidence. Neither an allow nor a deny that
+  cannot confirm safety may admit.
 - **`CannotVet FailDeny`** when the serving artifact's push is older than the mount's maximum,
   whatever `onUnavailable` says. Expiry is unavailability the operator cannot waive, so the
   alignment is fixed here rather than configured. The gate runs before breaker admission, which
-  an open breaker would otherwise skip past, and `AllowIfRemediatesCve` abstains on the same
-  reading so the refusal is what the version meets. The maximum and its derivation are in
+  an open breaker would otherwise skip past. `AllowIfRemediatesCve` follows its own
+  `onUnavailable` on the same reading. The maximum and its derivation are in
   [Advisory push age](https://ecluse-proxy.com/docs/operations/#advisory-push-age).
 
 Enabling it on a cold mirror can deny historical versions an existing build depends on, so it
@@ -297,22 +332,26 @@ gzip stream must reach its end-of-stream marker, so a feed cut short is refused 
 
 Every pass attempts the feed, whatever the rules. What a failed feed means depends on the
 ecosystem's resolved policy, the same requirement its consumers enforce. An ecosystem with an
-active `DenyIfEpss` requires enrichment, so its pass fails and publishes nothing, and consumers keep
-their last accepted artifact. Any other ecosystem publishes its OSV data with
+active rule that reads EPSS scores requires enrichment: a `DenyIfEpss`, or an
+`AllowIfRemediatesCve` in differential mode such as the shipped one. Its pass then fails and
+publishes nothing, and consumers keep their last accepted artifact. Any other ecosystem publishes its OSV data with
 `epss_status=unavailable`, so a new advisory and its fix still reach consumers during an EPSS
 outage. The scheduled loop runs each ecosystem on its own, so one ecosystem's required failure
 holds back no other. A one-shot compile of an ecosystem the configuration does not mount requires
-the feed, because it prepares a dataset ahead of that mount. A failed fetch, a byte ceiling, an
+the feed, because it prepares a dataset ahead of that mount. A one-shot compile with no
+`advisories.url` requires it too, because no source activates the shipped remediation rule there,
+so the compile cannot know whether the artifact's consumer reads EPSS. A failed fetch, a byte ceiling, an
 empty feed, and a gzip error count as a failed feed. An invalid feed URL and any other fault still
 fail the pass, whatever the requirement.
 
 Pilot cannot see a consumer's rules, only its own configuration. The shared configuration is the
-contract: when Pilot's copy omits a consumer's `DenyIfEpss`, the consumer refuses the unavailable
-artifact that results and keeps its last accepted one.
+contract: when Pilot's copy omits a consumer's EPSS-reading rule, the consumer refuses the
+unavailable artifact that results and keeps its last accepted one.
 
 Each ecosystem's resolved policy decides whether its consumers require EPSS enrichment.
-An active `DenyIfEpss` requires the exact `epss_status=available` metadata marker, including with
-`onUnavailable: skip` or a threshold of 1. A removed rule creates no requirement.
+An active `DenyIfEpss`, or an active `AllowIfRemediatesCve` in differential mode, requires the exact
+`epss_status=available` metadata marker, including under `onUnavailable: skip` or a threshold of 1.
+A removed rule creates no requirement.
 Missing, unavailable, or unrecognised markers do not establish enrichment, even when score rows exist.
 A valid success marker needs neither optional feed dates nor a score for every advisory.
 Consumers without EPSS-dependent rules accept otherwise valid artifacts regardless of this marker.
@@ -326,9 +365,11 @@ per-ecosystem exports, compiles them into a read-only SQLite database (`osv.db`)
 to a private object store. `advisories.url` names that store as `s3://bucket[/prefix]`, its
 scheme picking the provider the way `queue.url` does. Unset, the advisory stack is off: the artifact
 carries no signature and a bucket name is global, so a shipped default would name a bucket the
-project does not own. With the stack off, a mount whose rules include `DenyIfCve` or `DenyIfEpss`
-refuses the boot: those rules cannot decide without a database, so the pairing is a configuration
-error rather than a mount that denies every version it evaluates.
+project does not own. With the stack off, a mount whose rules refuse without advisory evidence
+refuses the boot. Those rules are `DenyIfKnownMalicious`, `DenyIfCve`, `DenyIfEpss`, and an
+`AllowIfRemediatesCve` under `onUnavailable: deny`. They cannot decide without a database, so the
+pairing is a configuration error rather than a mount that refuses every version it evaluates. An
+`AllowIfRemediatesCve` under `skip` boots with a warning, because it admits no fix without a source.
 
 OSV retains withdrawn records in its [GCS exports](https://google.github.io/osv.dev/faq/#how-does-osvdev-handle-withdrawn-records).
 Pilot excludes records carrying a withdrawal timestamp before it emits affected ranges or exact versions.
@@ -353,12 +394,12 @@ if the sync task is cancelled, so pruning remains the kernel's reclamation. The 
 generation keeps serving within its existing maximum push age. Rejection and repeated polls for the
 rejected ETag cannot refresh that age. A cold process creates empty slots and does not recover the
 canonical file from disk. [Readiness](web-layer.md#meta-routes-ping-health-and-search) is decided
-per mount from that mount's own rules: one whose rules include an advisory deny waits for its first
-sync, and one whose rules do not is ready without a database. The listener serves throughout. A
+per mount from that mount's own rules: one whose rules refuse without advisory evidence waits for its
+first sync, and one whose rules do not is ready without a database. The listener serves throughout. A
 never-published artifact keeps the role polling and logs an operator-facing `ERROR` naming Pilot
 and the store, first when the boot retry budget is spent and then every 15 minutes until one loads.
-An absent database makes each active advisory deny follow its `onUnavailable` setting: `deny`
-refuses and `skip` lets a lower rule decide. The remediation allow abstains.
+An absent database makes each active advisory rule follow its `onUnavailable` setting: `deny`
+refuses and `skip` lets a lower rule decide.
 
 Polling removes the one external dependency that would otherwise sit under the fail-closed gate:
 an advisory-source outage becomes sync lag, not per-package blocking. Lookups also leave the hot

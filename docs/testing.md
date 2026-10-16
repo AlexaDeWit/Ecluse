@@ -940,8 +940,8 @@ Each package has four legs:
 |---|---|
 | `full` | Decode, projection, rules, assembly, and serialisation of the whole document, under a one-day minimum age and no advisory database |
 | `singleVersion` | Selective projection of one version, forcing its artifact digests |
-| `fullShippedAdvisories` | `full` under the shared shipped policy (`AllowIfOlderThan` 7 days and `AllowIfRemediatesCve`), with the corpus advisories served |
-| `fullAllAdvisoryRules` | `full` under the shared shipped policy plus fail-closed `DenyIfCve` (CVSS 8) and `DenyIfEpss` (EPSS 0.5), with the corpus advisories served |
+| `fullShippedAdvisories` | `full` under the source-configured shipped policy (`DenyIfKnownMalicious`, `AllowIfOlderThan` 7 days, and the differential `AllowIfRemediatesCve`), with the corpus advisories served |
+| `fullAllAdvisoryRules` | `full` under the source-configured shipped policy plus fail-closed `DenyIfCve` (CVSS 8) and `DenyIfEpss` (EPSS 0.5), with the corpus advisories served |
 
 The advisory legs use the captured corpus advisories in `bench/corpus/advisories/`, which the
 [advisory rule rows](#advisory-rule-rows) also read. Setup compiles them through
