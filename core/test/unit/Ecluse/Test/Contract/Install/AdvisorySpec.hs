@@ -61,7 +61,7 @@ spec = do
             acquired <- newIORef False
             let driver = AdvisoryScenarioDriver (\_ action -> writeIORef acquired True >> action maliciousSession) (const maliciousCase)
             registered <- allCaseIds (beforeAll (pure driver) (advisoryContract "example/advisories"))
-            registered `shouldMatchList` ["example/advisories/deny-cve", "example/advisories/deny-epss", "example/advisories/mal-denial", "example/advisories/exact-fix"]
+            registered `shouldMatchList` ["example/advisories/deny-cve", "example/advisories/deny-epss", "example/advisories/mal-denial", "example/advisories/exact-fix", "example/advisories/partial-fix"]
             readIORef acquired `shouldReturn` False
   where
     result code = ClientResult "client" code "" "native refusal"

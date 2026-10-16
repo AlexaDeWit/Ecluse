@@ -51,7 +51,7 @@ obligations =
         "pypi/advisories"
         Supported
         ["read", "advisories", "client-install"]
-        ["pypi/advisories/exact-fix", "pypi/advisories/deny-cve", "pypi/advisories/deny-epss", "pypi/advisories/mal-denial"]
+        ["pypi/advisories/exact-fix", "pypi/advisories/partial-fix", "pypi/advisories/deny-cve", "pypi/advisories/deny-epss", "pypi/advisories/mal-denial"]
     , Obligation
         "npm/telemetry-read"
         "npm/telemetry"
@@ -86,7 +86,7 @@ obligations =
         "npm/advisories"
         Supported
         ["read", "mirror", "advisories", "client-install"]
-        ["npm/advisories/deny-cve", "npm/advisories/deny-epss", "npm/advisories/exact-fix", "npm/advisories/mal-denial"]
+        ["npm/advisories/deny-cve", "npm/advisories/deny-epss", "npm/advisories/exact-fix", "npm/advisories/partial-fix", "npm/advisories/mal-denial"]
     , Obligation
         "pypi/advisory-native"
         "pypi/advisories"

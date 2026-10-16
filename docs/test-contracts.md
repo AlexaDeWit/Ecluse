@@ -356,6 +356,16 @@ The independent obligations and concrete declarations require these MAL cases.
 | `npm/dredger/mal-revocation` | Accepted replacement generation, trusted GET 200 before deletion, one exact MAL deletion line per store and the exact tally, complete mirror snapshot, private-cache inventory, fresh install refusal, direct 403, no refill, and retained fix bytes. |
 | `pypi/dredger/mal-revocation` | The same lifecycle through the CodeArtifact mirror and cache fixture, with a fresh pip refusal. |
 
+## Partial-fix cases
+
+Each ecosystem's partial-fix source holds two advisories for one package. The young release fixes
+the severe one (CVSS 9.8). A minor one (CVSS 4.2, EPSS 0.005) still affects that release.
+
+| Case ID | Partial-fix evidence |
+| --- | --- |
+| `npm/advisories/partial-fix` | Under the shipped default, npm installs the young release. Under `remainingAdvisories: abstain`, the listing keeps the old release alone, and npm and a direct read refuse the young one by default. |
+| `pypi/advisories/partial-fix` | The same pair of policies for the Flask releases through pip. |
+
 Both clients run the same `Install.Advisory` law through native `AdvisoryDriver` observations.
 Each policy acquires an independent data plane and publishes its source through Pilot.
 Scored npm sessions are storeless. The npm MAL session observes a real mirror store.
@@ -401,7 +411,7 @@ Refusal requires a failed client and an empty installation tree, including npm's
 Those negative controls create and inspect their files before checking the contract's failure.
 
 The npm advisory counterparts are `npm/advisories/deny-cve`, `npm/advisories/deny-epss`,
-`npm/advisories/mal-denial` and `npm/advisories/exact-fix`.
+`npm/advisories/mal-denial`, `npm/advisories/exact-fix`, and `npm/advisories/partial-fix`.
 The PyPI full contract also runs `pypi/telemetry/signals`,
 `pypi/telemetry/disabled`, `pypi/telemetry/export-failure`, and `pypi/telemetry/datadog`.
 The six former telemetry IDs map as follows. Each case keeps its original observations.

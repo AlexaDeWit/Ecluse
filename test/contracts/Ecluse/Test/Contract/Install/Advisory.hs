@@ -37,6 +37,10 @@ data AdvisoryPolicy
       Remediation
     | -- | Keep the exact fix quarantined when remediation is disabled.
       RemediationDisabled
+    | -- | Admit a partial fix whose remaining advisory sits inside the shipped limits.
+      PartialFix
+    | -- | Keep the same partial fix quarantined when remediation abstains on remaining advisories.
+      PartialFixAbstaining
     | -- | Let the configured source activate the MAL default without an explicit rule.
       KnownMaliciousDefault
     deriving stock (Eq, Show)
@@ -64,7 +68,7 @@ data AdvisoryScenarioDriver = AdvisoryScenarioDriver
     , advisoryCaseForPolicy :: AdvisoryPolicy -> AdvisoryCase
     }
 
--- | Require scored and MAL denials plus an exact-fix override and its disabled control.
+-- | Require scored and MAL denials, and the exact-fix and partial-fix overrides beside their controls.
 advisoryContract :: Text -> SpecWith AdvisoryScenarioDriver
 advisoryContract prefix = do
     for_ [("deny-cve", DenyCve, "DenyIfCve"), ("deny-epss", DenyEpss, "DenyIfEpss"), ("mal-denial", KnownMaliciousDefault, "DenyIfKnownMalicious")] $ \(suffix, policy, rule) ->
@@ -75,6 +79,13 @@ advisoryContract prefix = do
         advisoryWithPolicy driver Remediation $ \session ->
             advisoryRelease session (advisoryFixedVersion fixture) >>= advisoryAdmits
         advisoryWithPolicy driver RemediationDisabled $ \session -> do
+            advisoryListedVersions session `shouldReturn` [advisoryAffectedVersion fixture]
+            refuse fixture session (advisoryFixedVersion fixture) "BlockedByDefault" Nothing
+    it (caseLabel (prefix <> "/partial-fix") "admits a partial fix inside the shipped limits while the abstaining control quarantines it") $ \driver -> do
+        let fixture = advisoryCaseForPolicy driver PartialFix
+        advisoryWithPolicy driver PartialFix $ \session ->
+            advisoryRelease session (advisoryFixedVersion fixture) >>= advisoryAdmits
+        advisoryWithPolicy driver PartialFixAbstaining $ \session -> do
             advisoryListedVersions session `shouldReturn` [advisoryAffectedVersion fixture]
             refuse fixture session (advisoryFixedVersion fixture) "BlockedByDefault" Nothing
 

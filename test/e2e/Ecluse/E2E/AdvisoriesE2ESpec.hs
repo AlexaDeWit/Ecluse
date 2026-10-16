@@ -26,7 +26,7 @@ import System.FilePath ((</>))
 import Test.Hspec (Expectation, expectationFailure, shouldSatisfy)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
-import Ecluse.E2E.Fixtures.Advisories (maliciousAdvisoryId, maliciousExportBase, npmAdvisoryExportBase, npmAdvisoryId, pypiAdvisoryExportBase, pypiAdvisoryId)
+import Ecluse.E2E.Fixtures.Advisories (maliciousAdvisoryId, maliciousExportBase, npmAdvisoryExportBase, npmAdvisoryId, partialFixAdvisoryId, partialFixExportBase, pypiAdvisoryExportBase, pypiAdvisoryId)
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.E2E.Fixtures.Npm (corpusRevokedPkg, psName, psVersion)
 import Ecluse.E2E.Fixtures.PyPI (pypiDistInfoFor, pypiWheelFor)
@@ -53,6 +53,8 @@ npmAdvisoryFamily resources = scenarioFamily resources Npm dredgerTopology npmAd
   where
     fixture policy = case policy of
         KnownMaliciousDefault -> npmCase (psName corpusRevokedPkg) "1.0.0" (psVersion corpusRevokedPkg) maliciousAdvisoryId True
+        PartialFix -> npmCase "e2e-advisory" "1.18.0" "1.19.0" partialFixAdvisoryId False
+        PartialFixAbstaining -> npmCase "e2e-advisory" "1.18.0" "1.19.0" partialFixAdvisoryId False
         _ -> npmCase "e2e-advisory" "1.18.0" "1.19.0" npmAdvisoryId False
     npmCase name affected fixed advisory mirror =
         AdvisoryCase
@@ -98,8 +100,12 @@ npmRelease policy e2e name version = do
 pypiAdvisoryFamily :: ConcreteFixture FamilyMetadata -> FamilyFixture AdvisoryScenarioDriver
 pypiAdvisoryFamily resources = scenarioFamily resources PyPI pypiAdvisoryTopology pypiAdvisoryExportBase fixture session
   where
-    fixture policy =
-        AdvisoryCase "flask" "1.18" "1.19" (if policy == KnownMaliciousDefault then maliciousAdvisoryId else pypiAdvisoryId) ("No matching distribution found for flask==" <>) False
+    fixture policy = AdvisoryCase "flask" "1.18" "1.19" (advisoryFor policy) ("No matching distribution found for flask==" <>) False
+    advisoryFor = \case
+        KnownMaliciousDefault -> maliciousAdvisoryId
+        PartialFix -> partialFixAdvisoryId
+        PartialFixAbstaining -> partialFixAdvisoryId
+        _ -> pypiAdvisoryId
     session _ e2e = AdvisorySession (map (wheelVersion . fst) <$> advertisedFiles e2e "flask") (pypiReleaseDriver e2e "flask") Nothing
     wheelVersion filename = fromMaybe filename (T.stripPrefix "flask-" filename >>= T.stripSuffix "-py3-none-any.whl")
 
@@ -114,7 +120,10 @@ scenarioFamily resources ecosystem maliciousTopology scoredSource fixture sessio
                     { advisoryWithPolicy = \policy useSession ->
                         let malicious = policy == KnownMaliciousDefault
                             acquire = if malicious then withDataPlane maliciousTopology else withFixture resources
-                            source = if malicious then maliciousExportBase else scoredSource
+                            source
+                                | malicious = maliciousExportBase
+                                | policy `elem` [PartialFix, PartialFixAbstaining] = partialFixExportBase
+                                | otherwise = scoredSource
                          in timedFixture recorder acquire $
                                 timedFixtureWith recorder (withPublishedAdvisories ecosystem source) $ \plane ->
                                     withPolicy ecosystem (policyFields policy) plane (useSession . session policy)
@@ -129,6 +138,8 @@ policyFields = \case
     KnownMaliciousDefault -> ["min-age" .= object ["ageSeconds" .= (0 :: Int)]]
     Remediation -> []
     RemediationDisabled -> ["remediation-fast-track" .= object ["enabled" .= False]]
+    PartialFix -> []
+    PartialFixAbstaining -> ["remediation-fast-track" .= object ["remainingAdvisories" .= ("abstain" :: Text)]]
 
 -- | Await the actual advisory swap before exposing a policy-configured proxy to clients.
 withPolicy :: Ecosystem -> [Pair] -> GlobalDataPlane -> (E2E -> IO ()) -> IO ()
