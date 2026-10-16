@@ -34,7 +34,7 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
 import Ecluse.Integration.Ministack (endpointFor, quietLogEnv, withMinistack)
-import Ecluse.Pilot (PilotCompileOptions (..), runPilotCompile)
+import Ecluse.Pilot (PilotCompileOptions (..), UploadRequest (Upload), runPilotCompile)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Cve.Sync.Internal (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncHooks (SyncHooks, hookFirstSync, hookPushAge), SyncSchedule (..), newS3CveSource, runCveSync, s3CveFetchFor)
 import Ecluse.Runtime.Server (application, mkServerConfig)
@@ -168,7 +168,7 @@ publishArchive s3Endpoint env zipBytes = do
                     telemetryDisabled
                     s3Endpoint
                     config
-                    PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = pilotDir, pcoUpload = True}
+                    PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = pilotDir, pcoUpload = Upload}
 
 -- The configured-source shared policy, with the packument stub as its public origin.
 proxyApp :: RuleDeps -> Text -> Text -> IO Application

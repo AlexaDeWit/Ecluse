@@ -2,21 +2,27 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Pilot publication preserves the prior S3 generation after refused compilation.
-EPSS failure blocks only mounts whose rules require it.
+{- | Pilot publication preserves the prior S3 generation after a refused compile or a refused
+publication. EPSS failure blocks only mounts whose rules require it.
 -}
 module Ecluse.PilotIntegrationSpec (spec) where
 
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
+import Amazonka.S3.Lens qualified as S3L
 import Amazonka.S3.ListObjectsV2 qualified as S3
 import Amazonka.S3.Types.Object qualified as S3Object
 import Codec.Compression.GZip qualified as GZip
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.ByteString.Lazy qualified as LBS
+import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Katip (runKatipContextT)
+import Lens.Micro ((^.))
 import Network.HTTP.Types.Status (status200, status404)
+import System.Directory (doesFileExist)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldNotBe, shouldReturn, shouldSatisfy, shouldThrow)
@@ -28,18 +34,21 @@ import Ecluse.Config.Ambient (parseEndpointUrl)
 import Ecluse.Core.Cve (AdvisoryRange (arEpss), CveDb (..), CveLookup (..), openCveDb)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
 import Ecluse.Core.Osv.Compile (PilotEpssRequired)
+import Ecluse.Core.Osv.Publication (ObjectRevision (ObjectRevision), PublicationRefusal (..), Rebaseline (Rebaseline), mkPercent)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired), osvDbFileName)
 import Ecluse.Core.Osv.Stream (PilotIngestAborted (..))
 import Ecluse.Integration.Ministack (endpointFor, quietLogEnv, withMinistack)
-import Ecluse.Pilot (PilotCompileOptions (..), runExportLoop, runPilotCompile)
+import Ecluse.Pilot (PilotCompileOptions (..), UploadRequest (..), runExportLoop, runPilotCompile)
 import Ecluse.Pilot.Plan (ExportTarget (ExportTarget), exportLoopPlan)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Cve.Sync.Internal (CveFetch (fetchDownload), newS3CveSource, s3CveFetchFor)
+import Ecluse.Runtime.Pilot.Export (PublicationStop (..), StoreFault (StoreNoRevision))
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (aiOsvZip), fillerTargets, syntheticAdvisories)
 import Ecluse.Test.Cve (namesFix)
-import Ecluse.Test.Log (runQuietKatip)
-import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2), osvCorpusZip, osvZipOf)
+import Ecluse.Test.Log (memoryLogEnv, runQuietKatip)
+import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2), mkMinimalValidDb, osvCorpusZip, osvZipOf)
 import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, stubSourceEnv, withSourceStubs)
 import Ecluse.Test.Poll (pollUntil, retryingIO)
 import Ecluse.Test.Stub (Captured (capMethod, capPath), Stub, allCaptured, stubBaseUrl, withStub)
@@ -71,9 +80,11 @@ spec = aroundAll withMinistack $ do
                             allCaptured observer >>= (`shouldBe` [])
                             after <- snapshot aws bucket
                             after `shouldBe` before
-                            void (compile target goodZip)
+                            -- An accepted compile reaches the store, starting with its metadata-only read.
+                            -- The observer answers it with no revision, so nothing is written.
+                            compile target goodZip `shouldThrow` (== PublicationFaulted StoreNoRevision)
                             requests <- allCaptured observer
-                            map capMethod requests `shouldBe` ["PUT"]
+                            map capMethod requests `shouldBe` ["HEAD"]
 
     describe "one-shot EPSS failure under the mount's rules" $
         for_ [True, False] $ \epssRule ->
@@ -136,6 +147,62 @@ spec = aroundAll withMinistack $ do
                                         withPublished endpoint bucket PyPI EpssOptional (dir </> "data" </> osvDbFileName "pypi") $ \lookup' ->
                                             map arEpss <$> cveAdvisoriesFor lookup' "redis" `shouldReturn` [Nothing]
 
+    describe "a one-shot rebaseline binds to the revision it names" $
+        for_ [Npm, PyPI] $ \eco ->
+            it (caseLabel ("integration/pilot/native-004/" <> ecosystemName eco) "refuses a sharp shrink, then accepts it once under an operator rebaseline of the stored revision") $ \container ->
+                withSystemTempDirectory "ecluse-pilot-rebaseline" $ \outDir -> do
+                    let endpoint = endpointFor container
+                        bucket = "pilot-rebaseline-" <> ecosystemName eco
+                    aws <- createStore endpoint bucket
+                    logEnv <- quietLogEnv
+                    large <- aiOsvZip <$> syntheticAdvisories eco (fillerTargets 400)
+                    small <- aiOsvZip <$> syntheticAdvisories eco (fillerTargets 20)
+                    epss <- LBS.readFile epssFixtureFile
+                    let options = (uploadOptions outDir){pcoEcosystem = ecosystemName eco}
+                        compile archive upload = withSourceStubs archive (status200, epss) $ \sources _ -> do
+                            config <- either (fail . show) pure (loadConfig (oneShotEnvFor eco bucket sources) Nothing)
+                            runPilotCompile logEnv telemetryDisabled (Just endpoint) config options{pcoUpload = upload}
+                        refused refusal = \case
+                            PublicationRefused found -> refusal found
+                            _ -> False
+                    void (compile large Upload)
+                    before <- snapshot aws bucket
+                    compile small Upload `shouldThrow` refused (\case ShrinkPastBaseline _ -> True; _ -> False)
+                    allowance <- maybe (fail "fixture percentage") pure (mkPercent 90)
+                    compile small (UploadRebaselined (Rebaseline (ObjectRevision "\"not-the-stored-revision\"") allowance))
+                        `shouldThrow` refused (\case RebaselineMismatch _ _ -> True; _ -> False)
+                    snapshot aws bucket `shouldReturn` before
+                    stored <- maybe (fail "no stored revision") pure (listToMaybe (map objectTag before))
+                    void (compile small (UploadRebaselined (Rebaseline (ObjectRevision (decodeUtf8 (unETag stored))) allowance)))
+                    metadata <- storedMetadata aws bucket (artifactKey eco)
+                    rebaselined <- snapshot aws bucket
+                    (HashMap.lookup "baseline-adjustment" metadata, HashMap.lookup "baseline-bytes" metadata)
+                        `shouldBe` (Just "operator-rebaseline", show . objectSize <$> listToMaybe rebaselined)
+
+    describe "the scheduled loop over a store it cannot order against" $
+        for_ [Npm, PyPI] $ \eco ->
+            it (caseLabel ("integration/pilot/native-005/" <> ecosystemName eco) "logs the refusal at ERROR, keeps the stored object, and keeps no local artifact") $ \container ->
+                withSystemTempDirectory "ecluse-pilot-loop-refusal" $ \dir -> do
+                    let endpoint = endpointFor container
+                        bucket = "pilot-loop-refusal-" <> ecosystemName eco
+                    aws <- createStore endpoint bucket
+                    mkMinimalValidDb (dir </> "legacy.db") "pkg-a"
+                    legacy <- readFileLBS (dir </> "legacy.db")
+                    void (runResourceT (AWS.send aws (S3.newPutObject (S3.BucketName bucket) (artifactKey eco) (AWS.toBody legacy))))
+                    before <- snapshot aws bucket
+                    archive <- osvCorpusZip CorpusV1
+                    epss <- LBS.readFile epssFixtureFile
+                    (logEnv, logged) <- memoryLogEnv
+                    withSourceStubs archive (status200, epss) $ \sources _ -> do
+                        config <- either (fail . show) pure (loadConfig (loopEnvFor eco bucket (dir </> "data") sources) Nothing)
+                        let targets = [ExportTarget mounted (mountEpssRequirement mount) | (mounted, mount) <- Map.toAscList (configMounts config)]
+                        plan <- maybe (fail "a configured store planned no export") pure (exportLoopPlan (cfgAdvisories (configApp config)) targets)
+                        withAsync (runKatipContextT logEnv () mempty (runExportLoop telemetryDisabled (Just endpoint) config plan)) $ \_ -> do
+                            stopped <- pollUntil 240 500_000 (any (T.isInfixOf "Advisory publication stopped")) logged
+                            filter (T.isInfixOf "Advisory publication stopped") stopped `shouldSatisfy` all (T.isInfixOf "publication-version")
+                    snapshot aws bucket `shouldReturn` before
+                    doesFileExist (dir </> "data" </> osvDbFileName (ecosystemName eco)) `shouldReturn` False
+
 -- Scores the advisory CorpusV1 shares between npm's corpus-mixed and PyPI's redis.
 scheduledFeed :: LByteString
 scheduledFeed = GZip.compress "cve,epss,percentile\nCVE-2026-10001,0.875,0.9\nCVE-2026-10006,0.75,0.9\n"
@@ -149,6 +216,29 @@ oneShotEnv bucket epssRule sources =
     ]
         <> [("ECLUSE_MOUNTS__NPM__RULES", denyIfEpssRules) | epssRule]
         <> sources
+
+-- One mounted ecosystem with no EPSS rule, uploading to @bucket@.
+oneShotEnvFor :: Ecosystem -> Text -> [(String, String)] -> [(String, String)]
+oneShotEnvFor eco bucket sources =
+    [ ("ECLUSE_SERVER__PUBLIC_URL", "https://proxy.example.test")
+    , ("ECLUSE_MOUNTS__" <> toString (T.toUpper (ecosystemName eco)) <> "__ENABLED", "true")
+    , ("ECLUSE_ADVISORIES__URL", toString ("s3://" <> bucket))
+    ]
+        <> sources
+
+-- The same mount under the scheduled loop, on an interval no case waits out.
+loopEnvFor :: Ecosystem -> Text -> FilePath -> [(String, String)] -> [(String, String)]
+loopEnvFor eco bucket dataDir sources =
+    oneShotEnvFor eco bucket sources
+        <> [("ECLUSE_ADVISORIES__DATA_DIR", dataDir), ("ECLUSE_ADVISORIES__COMPILE_INTERVAL", "3600")]
+
+storedMetadata :: AWS.Env -> Text -> S3.ObjectKey -> IO (HashMap.HashMap Text Text)
+storedMetadata aws bucket key = do
+    response <- runResourceT (AWS.send aws (S3.newHeadObject (S3.BucketName bucket) key))
+    pure (HashMap.fromList (map (first T.toLower) (HashMap.toList (response ^. S3L.headObjectResponse_metadata))))
+
+unETag :: S3.ETag -> ByteString
+unETag (S3.ETag tag) = tag
 
 -- npm with an EPSS rule beside PyPI without one, on an interval no case waits out.
 scheduledEnv :: Text -> FilePath -> Stub -> Stub -> [(String, String)]
@@ -164,7 +254,7 @@ scheduledEnv bucket dataDir osvStub epssStub =
         <> stubSourceEnv osvStub epssStub
 
 uploadOptions :: FilePath -> PilotCompileOptions
-uploadOptions outDir = PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = outDir, pcoUpload = True}
+uploadOptions outDir = PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = outDir, pcoUpload = Upload}
 
 -- Publish a qualified npm artifact ahead of the scheduled loop, from a feed that answers.
 seedNpm :: AwsEndpoint -> Text -> FilePath -> Stub -> IO ()
@@ -195,6 +285,9 @@ objectKey (key, _, _, _) = key
 
 objectTag :: StoredObject -> S3.ETag
 objectTag (_, tag, _, _) = tag
+
+objectSize :: StoredObject -> Integer
+objectSize (_, _, _, size) = size
 
 artifactKey :: Ecosystem -> S3.ObjectKey
 artifactKey = S3.ObjectKey . toText . osvDbFileName . ecosystemName

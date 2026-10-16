@@ -60,8 +60,10 @@ isWriteConflict err = serviceStatus err `elem` [Just 409, Just 412]
 absenceListing :: Text -> Text -> S3.ListObjectsV2
 absenceListing bucket key =
     S3.newListObjectsV2 (S3.BucketName bucket)
-        & S3L.listObjectsV2_prefix ?~ key
-        & S3L.listObjectsV2_maxKeys ?~ 1
+        & S3L.listObjectsV2_prefix
+        ?~ key
+            & S3L.listObjectsV2_maxKeys
+        ?~ 1
 
 -- | Only a complete, empty listing proves absence. A truncated or populated one proves nothing.
 listingProvesAbsence :: S3.ListObjectsV2Response -> Bool

@@ -10,6 +10,7 @@ module Ecluse.Runtime.Test.S3 (
     xmlError,
     emptyListing,
     populatedListing,
+    listingHolding,
     brokenResponse,
 ) where
 
@@ -47,10 +48,15 @@ emptyListing = "<ListBucketResult><IsTruncated>false</IsTruncated><KeyCount>0</K
 
 -- | A complete listing holding one object under @key@.
 populatedListing :: LByteString
-populatedListing =
+populatedListing = listingHolding "key"
+
+-- | A complete listing holding one object under this key.
+listingHolding :: LByteString -> LByteString
+listingHolding key =
     "<ListBucketResult><IsTruncated>false</IsTruncated><KeyCount>1</KeyCount><Contents>"
-        <> "<ETag>&quot;one&quot;</ETag><Size>8</Size><Key>key</Key>"
-        <> "<StorageClass>STANDARD</StorageClass><LastModified>2026-10-12T00:00:00.000Z</LastModified>"
+        <> "<ETag>&quot;one&quot;</ETag><Size>8</Size><Key>"
+        <> key
+        <> "</Key><StorageClass>STANDARD</StorageClass><LastModified>2026-10-12T00:00:00.000Z</LastModified>"
         <> "</Contents></ListBucketResult>"
 
 -- | Send a raw status line and these header and body bytes, then close, so a response can break early.

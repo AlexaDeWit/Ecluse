@@ -13,6 +13,7 @@ module Ecluse.Pilot (
 
     -- * One-shot compilation
     PilotCompileOptions (..),
+    UploadRequest (..),
     runPilotCompile,
     PilotUploadUnconfigured (..),
 ) where
@@ -35,8 +36,9 @@ import Ecluse.Config (
     advisoryStoreUrlText,
  )
 import Ecluse.Core.Ecosystem (ecosystemName, parseEcosystem)
-import Ecluse.Core.Osv.Compile (compileOsvToSqlite)
+import Ecluse.Core.Osv.Compile (OsvCandidate, candidateDestination, promoteCandidate, withOsvCandidate)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor, osvEcosystemNamed)
+import Ecluse.Core.Osv.Publication (Rebaseline)
 import Ecluse.Core.Supervision (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
     superviseLoop,
@@ -48,25 +50,26 @@ import Ecluse.Pilot.Plan (
     PilotCompileOptions (..),
     PilotUploadUnconfigured (..),
     UploadPlan (UploadSkipped, UploadTo),
+    UploadRequest (..),
     compileEpssRequirement,
     configuredSources,
     exportCadenceMicros,
     idleCadenceMicros,
     quietTimeFor,
+    shrinkPolicyOf,
     unmountedCompileWarning,
     uploadPlan,
     uploadTarget,
  )
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
+import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Log (moduleContext)
-import Ecluse.Runtime.Pilot.Export (exportToS3)
+import Ecluse.Runtime.Pilot.Export (publishCandidate)
 import Ecluse.Runtime.Server (probeOnlyApplication, raceServerAgainstLoop, runWarp)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryTracerProvider)
 import Ecluse.Runtime.Telemetry.Instruments (Metrics, advisoryCompileMetricsPortOf, newMetrics)
 
-{- | The entry point for the Pilot worker mode. The export loop never returns, so the
-server's graceful return on shutdown must cancel it, resuming from the remote artifact next boot.
--}
+-- | The Pilot worker mode. The server's return on shutdown cancels the export loop, which resumes from the stored artifact next boot.
 runPilot :: BootEnv -> ExportLoopPlan -> IO ()
 runPilot bootEnv exportPlan = do
     let cfg = probeServerConfig (configApp (beConfig bootEnv))
@@ -76,9 +79,7 @@ runPilot bootEnv exportPlan = do
             (liftIO $ runWarp (beLogEnv bootEnv) "Pilot health probes" cfg probeOnlyApplication)
             (runExportLoop (beTelemetry bootEnv) (bpS3Endpoint (beBootPlan bootEnv)) (beConfig bootEnv) exportPlan)
 
-{- | Run the loop the boot planned, never returning. Every fault inside a cycle is transient,
-because a cycle has no wiring fault to fail up on.
--}
+-- | Run the planned loop, never returning. A cycle has no wiring fault to fail up on, so every fault in it is transient.
 runExportLoop :: (MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> Maybe AwsEndpoint -> Config -> ExportLoopPlan -> m ()
 runExportLoop telemetry s3Endpoint config = \case
     ExportIdle -> do
@@ -97,49 +98,46 @@ runExportLoop telemetry s3Endpoint config = \case
     cadence = exportCadenceMicros advisories
     schedule = BackoffSchedule{bsBaseMicros = cadence, bsCapMicros = cadence}
 
-{- | Run one supervised cycle loop per ecosystem, side by side. Each keeps its own backoff, so a
-feed that fails costs its own cadence and holds back no other ecosystem's artifact.
--}
+-- | One supervised cycle loop per ecosystem, side by side, so a failing feed holds back no other ecosystem's artifact.
 superviseExportCycles :: (MonadUnliftIO m, KatipContext m) => BackoffSchedule -> NonEmpty ExportTarget -> (ExportTarget -> m ()) -> m ()
 superviseExportCycles schedule targets runCycle =
     mapConcurrently_ (\target -> superviseLoop (policyFor target) (runCycle target)) targets
   where
     policyFor target = transientPolicy ("pilot-export-" <> ecosystemName (etEcosystem target)) schedule
 
--- One full cycle for one ecosystem: compile its OSV artifact and upload it.
+-- One full cycle for one ecosystem: compile its OSV artifact, publish it, then keep it locally.
 exportEcosystem :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Metrics -> ExportTarget -> Telemetry -> Maybe AwsEndpoint -> AdvisoriesSettings -> AdvisoryStoreUrl -> m ()
 exportEcosystem metrics target telemetry s3Endpoint advisories store = do
     logFM InfoS (ls ("Starting " <> ecosystemName eco <> " OSV database compilation"))
-    dbPath <-
-        compileOsvToSqlite
-            (advisoryCompileMetricsPortOf metrics (Just eco))
-            (telemetryTracerProvider telemetry)
-            (advDataDir advisories)
-            osvEco
-            (etEpss target)
-            (configuredSources advisories osvEco)
-            (quietTimeFor advisories (Just eco))
-    uploadToStore telemetry s3Endpoint store dbPath
+    withOsvCandidate
+        (advisoryCompileMetricsPortOf metrics (Just eco))
+        (telemetryTracerProvider telemetry)
+        (advDataDir advisories)
+        osvEco
+        (etEpss target)
+        (configuredSources advisories osvEco)
+        (quietTimeFor advisories (Just eco))
+        (\candidate -> publishToStore telemetry s3Endpoint advisories store Nothing candidate >> void (promoteCandidate candidate))
   where
     eco = etEcosystem target
     osvEco = osvEcosystemFor eco
 
--- Upload one artifact to the address 'uploadTarget' derives, so it lands where the sync reads.
-uploadToStore :: (MonadResource m, MonadUnliftIO m, MonadMask m, KatipContext m) => Telemetry -> Maybe AwsEndpoint -> AdvisoryStoreUrl -> FilePath -> m ()
-uploadToStore telemetry s3Endpoint store dbPath =
-    exportToS3 (telemetryTracerProvider telemetry) s3Endpoint bucket key dbPath
-  where
-    (bucket, key) = uploadTarget store dbPath
+-- Publish to the key 'uploadTarget' derives, where the sync reads. A stop throws, so the loop's
+-- supervision retries it on the cadence and a one-shot run exits non-zero.
+publishToStore :: (MonadUnliftIO m, KatipContext m) => Telemetry -> Maybe AwsEndpoint -> AdvisoriesSettings -> AdvisoryStoreUrl -> Maybe Rebaseline -> OsvCandidate -> m ()
+publishToStore telemetry s3Endpoint advisories store rebaseline candidate = do
+    env <- liftIO (buildS3Env s3Endpoint)
+    let (bucket, key) = uploadTarget store (candidateDestination candidate)
+    publishCandidate (telemetryTracerProvider telemetry) env (shrinkPolicyOf advisories) rebaseline bucket key candidate
+        >>= either throwIO (const pass)
 
 -- Act on a planned upload. A skipped one is the caller's success path, not an error.
-runUploadPlan :: (MonadResource m, MonadUnliftIO m, MonadMask m, KatipContext m) => Telemetry -> Maybe AwsEndpoint -> UploadPlan -> FilePath -> m ()
-runUploadPlan telemetry s3Endpoint plan dbPath = case plan of
+runUploadPlan :: (MonadUnliftIO m, KatipContext m) => Telemetry -> Maybe AwsEndpoint -> AdvisoriesSettings -> UploadPlan -> OsvCandidate -> m ()
+runUploadPlan telemetry s3Endpoint advisories plan candidate = case plan of
     UploadSkipped -> pass
-    UploadTo store -> uploadToStore telemetry s3Endpoint store dbPath
+    UploadTo store rebaseline -> publishToStore telemetry s3Endpoint advisories store rebaseline candidate
 
-{- | Run a single OSV compilation, optionally upload the artifact, and return its path. An OSV
-failure or a required EPSS failure propagates, so the command exits non-zero and stays scriptable.
--}
+-- | Compile once, optionally publish, and return the artifact's path. Every refusal throws, so the command exits non-zero.
 runPilotCompile :: LogEnv -> Telemetry -> Maybe AwsEndpoint -> Config -> PilotCompileOptions -> IO FilePath
 runPilotCompile logEnv telemetry s3Endpoint config opts = do
     metrics <- newMetrics telemetry
@@ -152,17 +150,15 @@ runPilotCompile logEnv telemetry s3Endpoint config opts = do
             -- without first compiling the artifact it could never publish.
             plan <- either throwIO pure planned
             traverse_ (logFM WarningS . ls) (unmountedCompileWarning (configMounts config) opts)
-            dbFile <-
-                compileOsvToSqlite
-                    compileMetrics
-                    (telemetryTracerProvider telemetry)
-                    (pcoOutDir opts)
-                    osvEco
-                    (compileEpssRequirement (configMounts config) opts)
-                    (configuredSources advisories osvEco)
-                    (quietTimeFor advisories (parseEcosystem (pcoEcosystem opts)))
-            runUploadPlan telemetry s3Endpoint plan dbFile
-            pure dbFile
+            withOsvCandidate
+                compileMetrics
+                (telemetryTracerProvider telemetry)
+                (pcoOutDir opts)
+                osvEco
+                (compileEpssRequirement (configMounts config) opts)
+                (configuredSources advisories osvEco)
+                (quietTimeFor advisories (parseEcosystem (pcoEcosystem opts)))
+                (\candidate -> runUploadPlan telemetry s3Endpoint advisories plan candidate >> promoteCandidate candidate)
   where
     advisories = cfgAdvisories (configApp config)
     osvEco = osvEcosystemNamed (pcoEcosystem opts)

@@ -385,6 +385,10 @@ integrationObligations =
         , "integration/pilot/native-002/epss-unused"
         , "integration/pilot/native-003/feed-up"
         , "integration/pilot/native-003/feed-down"
+        , "integration/pilot/native-004/npm"
+        , "integration/pilot/native-004/pypi"
+        , "integration/pilot/native-005/npm"
+        , "integration/pilot/native-005/pypi"
         ]
     , required
         "integration/advisory-sync"
@@ -408,8 +412,22 @@ integrationObligations =
         "integration/advisory-export"
         "advisory"
         ["advisory-publication", "advisory-last-good"]
-        [ "integration/advisory-export/native-001"
-        , "integration/advisory-export/native-002"
+        [ "integration/advisory-export/native-001/npm"
+        , "integration/advisory-export/native-001/pypi"
+        , "integration/advisory-export/native-002/npm"
+        , "integration/advisory-export/native-002/pypi"
+        , "integration/advisory-export/native-003/npm"
+        , "integration/advisory-export/native-003/pypi"
+        , "integration/advisory-export/native-004/npm"
+        , "integration/advisory-export/native-004/pypi"
+        , "integration/advisory-export/native-005/npm"
+        , "integration/advisory-export/native-005/pypi"
+        , "integration/advisory-export/native-006/npm/unversioned"
+        , "integration/advisory-export/native-006/npm/versioned"
+        , "integration/advisory-export/native-006/pypi/unversioned"
+        , "integration/advisory-export/native-006/pypi/versioned"
+        , "integration/advisory-export/native-007/npm"
+        , "integration/advisory-export/native-007/pypi"
         , "advisory/s3/last-good"
         ]
     , required

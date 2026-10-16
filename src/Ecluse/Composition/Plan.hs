@@ -76,7 +76,7 @@ import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Cache (CacheConfig)
 import Ecluse.Core.Text (nonBlank)
-import Ecluse.Pilot.Plan (epssAttemptLine)
+import Ecluse.Pilot.Plan (pilotPostureLines)
 import Ecluse.Rts (EffectiveRuntimePlan)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsQueueUrl, sqsRegion))
@@ -235,7 +235,7 @@ bootPlanFrom role inputs (validated, mirror, s3Endpoint) =
                 , ruleOrderLines config
                 , advisoryAgeLines config
                 , advisoryEpssLines config
-                , [epssAttemptLine (cfgAdvisories app) | role == BootWithoutPipeline]
+                , [line | role == BootWithoutPipeline, line <- pilotPostureLines (cfgAdvisories app)]
                 ]
         , bpWarnings = mpDegradations memoryPlan <> mirrorRuntimeWarnings (mdRuntime mirror)
         }

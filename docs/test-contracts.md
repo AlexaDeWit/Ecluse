@@ -550,11 +550,11 @@ The old wrapper remains as a native source reference, but the runner does not sc
 | `integration/pipeline-faults` | `native-001` to `native-019` (19) | None | `Ecluse.Core.Server.Pipeline.SharedIntegrationSpec` |
 | `integration/npm-artifact` | `native-001` to `native-043` (51) | None | `Ecluse.Core.Server.Pipeline.TarballIntegrationSpec` |
 | `integration/worker` | `native-001` to `native-009` (9) | None | `Ecluse.Core.Worker.LoopIntegrationSpec` |
-| `integration/pilot` | `native-001` to `native-003` (8) | None | `Ecluse.PilotIntegrationSpec` |
+| `integration/pilot` | `native-001` to `native-005` (12) | None | `Ecluse.PilotIntegrationSpec` |
 | `integration/advisory-sync` | `native-001` to `native-001` (1) | None | `Ecluse.Runtime.Cve.SyncIntegrationSpec` |
 | `integration/mirror-state-s3-internal` | `native-001` (1) | None | `Ecluse.Runtime.Mirror.State.S3.InternalIntegrationSpec` |
 | `integration/mirror-state-s3` | `native-001` to `native-002` (2) | None | `Ecluse.Runtime.Mirror.State.S3IntegrationSpec` |
-| `integration/advisory-export` | `native-001` to `native-002` (2) | 1 advisory | `Ecluse.Runtime.Pilot.ExportIntegrationSpec` |
+| `integration/advisory-export` | `native-001` to `native-007` (16) | 1 advisory | `Ecluse.Runtime.Pilot.ExportIntegrationSpec` |
 | `integration/queue-sqs` | `native-001` to `native-006` (6) | 2 queue | `Ecluse.Runtime.Queue.SqsIntegrationSpec` |
 | `integration/server-shutdown` | `native-001` to `native-002` (2) | None | `Ecluse.Runtime.ServerIntegrationSpec` |
 | `integration/telemetry-metrics` | `native-001` to `native-002` (2) | None | `Ecluse.Runtime.Telemetry.InstrumentsIntegrationSpec` |

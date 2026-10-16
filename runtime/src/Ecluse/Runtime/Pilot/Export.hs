@@ -2,63 +2,216 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The S3 upload adapter for the compiled OSV artifact: @PutObject@ an @osv.db@ into the
-configured bucket, over an S3 env built for an optional custom endpoint
-('Ecluse.Runtime.Aws.S3.buildS3Env'). It takes a __resolved__ 'AwsEndpoint' rather than the
-application config, so it holds no dependency on the composition shell.
+{- | The S3 publication of a compiled OSV artifact, guarded against older and sharply reduced data.
+
+Each attempt reads the destination's metadata with HEAD, asks "Ecluse.Core.Osv.Publication"
+whether the candidate may replace what it found, and writes the artifact and its new metadata
+in one conditional PUT over that revision. A conflict rereads and decides again. The metadata
+carries the durable baseline, so the guard reads no object history and no stored database.
 -}
 module Ecluse.Runtime.Pilot.Export (
-    exportToS3,
+    Published (..),
+    PublicationStop (..),
+    StoreFault (..),
+    renderPublicationStop,
+    s3BaselineCapability,
+    maxPublicationAttempts,
+    publishCandidate,
 ) where
-
-import Conduit (MonadResource)
-import Control.Monad.Catch (MonadThrow)
-import Katip (KatipContext, Severity (..), katipAddContext, logFM, ls, sl)
-import System.Directory (getFileSize)
-import UnliftIO (MonadUnliftIO)
-import UnliftIO.Exception (withException)
 
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
+import Amazonka.S3.Lens qualified as S3L
+import Conduit (runResourceT)
+import Data.HashMap.Strict qualified as HashMap
+import Data.Text qualified as T
+import Katip (KatipContext, Severity (..), katipAddContext, logFM, ls, sl)
+import Lens.Micro ((.~), (^.))
+import System.Directory (getFileSize)
+import UnliftIO (MonadUnliftIO)
+
+import Ecluse.Core.Fault (TransportFault (tfCause, tfDetail), renderTransportCause)
+import Ecluse.Core.Osv.Compile (OsvCandidate, candidateFacts, candidatePath, stampCandidateNonce)
+import Ecluse.Core.Osv.Publication
+import Ecluse.Core.Osv.Publication.Envelope (decodeEnvelope, encodeEnvelope)
 import Ecluse.Core.Telemetry.Record (timedSeconds)
 import Ecluse.Core.Telemetry.Span (withOptionalSpan)
-import Ecluse.Runtime.Aws.Env (AwsEndpoint)
-import Ecluse.Runtime.Aws.S3 (buildS3Env)
+import Ecluse.Runtime.Aws.Fault (classifyAwsTransport, serviceStatus)
+import Ecluse.Runtime.Aws.S3.Conditional (ConditionalPut (..), WritePrecondition (..), absenceListing, isWriteConflict, listingProvesAbsence)
 import OpenTelemetry.Trace.Core (Span, SpanKind (Client), SpanStatus (Error), TracerProvider, addAttribute, setStatus)
 
-{- | Upload an OSV artifact to @bucketName@ under the caller's @keyText@, which it derives from the
-configured store so the proxy's sync reads this object. A failed upload logs and errors its span.
--}
-exportToS3 :: (MonadResource m, MonadUnliftIO m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> Maybe AwsEndpoint -> Text -> Text -> FilePath -> m ()
-exportToS3 mTracerProvider mEndpoint bucketName keyText dbPath = do
-    size <- liftIO $ getFileSize dbPath
+-- | A publication that landed: the revision the store reported, and the decision it carried out.
+data Published = Published
+    { pubRevision :: Maybe ObjectRevision
+    , pubPlan :: PublicationPlan
+    }
+    deriving stock (Eq, Show)
 
+-- | Why a publication stopped without replacing the stored artifact.
+data PublicationStop
+    = -- | The guard refused the candidate.
+      PublicationRefused PublicationRefusal
+    | -- | The store could not be read or written as the guard requires.
+      PublicationFaulted StoreFault
+    deriving stock (Eq, Show)
+
+instance Exception PublicationStop where
+    displayException = toString . renderPublicationStop
+
+-- | A store condition that leaves the publication's outcome unproven, so nothing is promoted.
+data StoreFault
+    = -- | A request failed outright.
+      StoreTransport TransportFault
+    | -- | The object exists, and HEAD was refused, so its metadata cannot be read.
+      StoreReadDenied
+    | -- | HEAD was refused, and the listing could not prove the key absent.
+      StoreAbsenceUnknown
+    | -- | HEAD answered without an ETag or a length.
+      StoreNoRevision
+    | -- | The store refused a conditional write as unimplemented.
+      StoreConditionalWriteUnsupported
+    | -- | The new metadata cannot be written.
+      StoreEnvelopeRefused EnvelopeFault
+    | -- | Every attempt lost a race to another writer.
+      StoreConflictsExhausted Int
+    | -- | The write's outcome stayed unknown after a reread showed another revision.
+      StoreWriteUncertain TransportFault
+    deriving stock (Eq, Show)
+
+-- | The S3 adapter keeps the baseline in each object's metadata.
+s3BaselineCapability :: BaselineCapability
+s3BaselineCapability = DurableBaseline
+
+-- | How many conditional writes one publication attempts before it gives up a race.
+maxPublicationAttempts :: Int
+maxPublicationAttempts = 3
+
+-- | The stop as an operator reads it.
+renderPublicationStop :: PublicationStop -> Text
+renderPublicationStop = \case
+    PublicationRefused refusal -> renderPublicationRefusal refusal
+    PublicationFaulted fault -> renderStoreFault fault
+
+renderStoreFault :: StoreFault -> Text
+renderStoreFault = \case
+    StoreTransport fault -> "the store request failed: " <> renderFault fault
+    StoreReadDenied -> "the store refused HEAD on an existing object, so its publication metadata cannot be read. Pilot needs s3:GetObject"
+    StoreAbsenceUnknown -> "the store refused HEAD, and its listing did not prove the key absent. Pilot needs s3:GetObject and prefix-scoped s3:ListBucket"
+    StoreNoRevision -> "the store answered HEAD without an ETag or a length"
+    StoreConditionalWriteUnsupported -> "the store does not implement conditional writes, which guarded publication requires"
+    StoreEnvelopeRefused fault -> "the new artifact's metadata cannot be written: " <> renderEnvelopeFault fault
+    StoreConflictsExhausted attempts -> "another writer replaced the object during each of " <> show attempts <> " attempts"
+    StoreWriteUncertain fault -> "the write's outcome is unknown, and a reread found another revision: " <> renderFault fault
+
+renderFault :: TransportFault -> Text
+renderFault fault = renderTransportCause (tfCause fault) <> " (" <> tfDetail fault <> ")"
+
+-- | Publish the candidate under @bucket@ and @key@, deciding each attempt on a fresh HEAD. Each attempt's nonce identifies it if it lands unseen.
+publishCandidate :: (MonadUnliftIO m, KatipContext m) => Maybe TracerProvider -> AWS.Env -> ShrinkPolicy -> Maybe Rebaseline -> Text -> Text -> OsvCandidate -> m (Either PublicationStop Published)
+publishCandidate mTracerProvider env policy rebaseline bucket key candidate =
     withOptionalSpan mTracerProvider Client "ecluse.pilot.osv.upload" $ \mSpan -> do
-        stampUploadSpan mSpan bucketName keyText size
-        katipAddContext (sl "bucket" bucketName <> sl "object_key" keyText <> sl "bytes" size) $
-            logFM InfoS (ls ("Uploading " <> toText dbPath <> " to S3 bucket " <> bucketName))
+        size <- liftIO (getFileSize (candidatePath candidate))
+        stampUploadSpan mSpan bucket key size
+        (outcome, elapsed) <- timedSeconds (attempt 1 [])
+        katipAddContext (sl "bucket" bucket <> sl "object_key" key <> sl "bytes" size <> sl "duration_s" elapsed) $
+            either (reportStop mSpan) reportPublished outcome
+        pure outcome
+  where
+    attempt number attempted =
+        liftIO (observeStore env bucket key) >>= \case
+            Left fault -> pure (Left (PublicationFaulted fault))
+            Right observed
+                | Just landed <- ownPublication attempted observed -> pure (Right landed)
+                | otherwise -> do
+                    nonce <- newPublicationNonce
+                    stampCandidateNonce candidate nonce
+                    bytes <- liftIO (getFileSize (candidatePath candidate))
+                    let request = PublicationRequest (candidateFacts candidate) bytes nonce rebaseline
+                    case planPublication policy s3BaselineCapability request observed of
+                        Left refusal -> pure (Left (PublicationRefused refusal))
+                        Right plan -> writePlanned number (plan : attempted) plan
+    writePlanned number attempted plan = case encodeEnvelope (plState plan) of
+        Left fault -> pure (Left (PublicationFaulted (StoreEnvelopeRefused fault)))
+        Right envelope ->
+            liftIO (putCandidate env bucket key (candidatePath candidate) (plPrecondition plan) envelope) >>= \case
+                Right revision -> pure (Right (Published revision plan))
+                Left err
+                    | isWriteConflict err && number < maxPublicationAttempts -> do
+                        logFM WarningS (ls ("Another writer replaced " <> key <> " during publication, so Pilot rereads it and decides again"))
+                        attempt (number + 1) attempted
+                    | isWriteConflict err -> pure (Left (PublicationFaulted (StoreConflictsExhausted number)))
+                    | serviceStatus err == Just 501 -> pure (Left (PublicationFaulted StoreConditionalWriteUnsupported))
+                    | otherwise -> reconcile attempted (classifyAwsTransport err)
+    -- A failed response does not prove the write was lost, so the nonce on a reread decides.
+    reconcile attempted fault =
+        liftIO (observeStore env bucket key) <&> \case
+            Right observed | Just landed <- ownPublication attempted observed -> Right landed
+            _ -> Left (PublicationFaulted (StoreWriteUncertain fault))
 
-        env <- liftIO $ buildS3Env mEndpoint
-        body <- liftIO $ AWS.chunkedFile 1048576 dbPath
-        let request = S3.newPutObject (S3.BucketName bucketName) (S3.ObjectKey keyText) body
+-- An object that carries the nonce of one of this publication's own attempts is that attempt, landed.
+ownPublication :: [PublicationPlan] -> StoreObservation -> Maybe Published
+ownPublication attempted = \case
+    StorePresent revision _ (Right stored) ->
+        Published (Just revision) <$> find ((== psNonce stored) . psNonce . plState) attempted
+    _ -> Nothing
 
-        -- Only the send is timed: building the env and the chunked body is not upload time.
-        (_, elapsed) <-
-            timedSeconds $
-                withException (void (AWS.send env request)) (reportUploadFailure mSpan bucketName keyText)
+-- Read the destination's revision, size, and publication metadata without its body. A refused HEAD
+-- falls back on a one-key listing, so a missing key is told apart from a denied read.
+observeStore :: AWS.Env -> Text -> Text -> IO (Either StoreFault StoreObservation)
+observeStore env bucket key =
+    runResourceT (AWS.sendEither env (S3.newHeadObject (S3.BucketName bucket) (S3.ObjectKey key))) >>= \case
+        Right response -> pure (presentObject response)
+        Left err
+            | serviceStatus err == Just 404 -> pure (Right StoreAbsent)
+            | serviceStatus err == Just 403 -> deniedHead env bucket key
+            | otherwise -> pure (Left (StoreTransport (classifyAwsTransport err)))
 
-        katipAddContext (sl "bucket" bucketName <> sl "bytes" size <> sl "duration_s" elapsed) $
-            logFM InfoS "S3 upload complete"
+presentObject :: S3.HeadObjectResponse -> Either StoreFault StoreObservation
+presentObject response = case (response ^. S3L.headObjectResponse_eTag, response ^. S3L.headObjectResponse_contentLength) of
+    (Just (S3.ETag tag), Just size) | not (T.null (decodeUtf8 tag)) -> Right (StorePresent (ObjectRevision (decodeUtf8 tag)) size stored)
+    _ -> Left StoreNoRevision
+  where
+    stored = decodeEnvelope (HashMap.toList (response ^. S3L.headObjectResponse_metadata))
+
+deniedHead :: AWS.Env -> Text -> Text -> IO (Either StoreFault StoreObservation)
+deniedHead env bucket key =
+    runResourceT (AWS.sendEither env (absenceListing bucket key)) <&> \case
+        Right listing
+            | listingProvesAbsence listing -> Right StoreAbsent
+            | any ((== S3.ObjectKey key) . (^. S3L.object_key)) (fromMaybe [] (listing ^. S3L.listObjectsV2Response_contents)) -> Left StoreReadDenied
+            | otherwise -> Left StoreAbsenceUnknown
+        Left err -> Left (StoreTransport (classifyAwsTransport err))
+
+-- The body streams from the candidate file, and amazonka's own retry is off: a resent PUT would
+-- reread the file, and the guard rereads the store itself before it tries again.
+putCandidate :: AWS.Env -> Text -> Text -> FilePath -> Precondition -> [(Text, Text)] -> IO (Either AWS.Error (Maybe ObjectRevision))
+putCandidate env bucket key path precondition envelope = do
+    body <- AWS.chunkedFile 1048576 path
+    let native = S3.newPutObject (S3.BucketName bucket) (S3.ObjectKey key) body & S3L.putObject_metadata .~ HashMap.fromList envelope
+    result <- runResourceT (AWS.sendEither (AWS.once env{AWS.retryCheck = \_ _ -> False}) (ConditionalPut (writePrecondition precondition) native))
+    pure (fmap (\response -> (\(S3.ETag tag) -> ObjectRevision (decodeUtf8 tag)) <$> response ^. S3L.putObjectResponse_eTag) result)
+
+writePrecondition :: Precondition -> WritePrecondition
+writePrecondition = \case
+    CreateOnly -> IfAbsent
+    ReplaceRevision (ObjectRevision tag) -> IfRevision (encodeUtf8 tag)
 
 stampUploadSpan :: (MonadIO m) => Maybe Span -> Text -> Text -> Integer -> m ()
-stampUploadSpan mSpan bucketName keyText size =
+stampUploadSpan mSpan bucket key size =
     whenJust mSpan $ \sp -> do
-        addAttribute sp "ecluse.osv.bucket" bucketName
-        addAttribute sp "ecluse.osv.object_key" keyText
+        addAttribute sp "ecluse.osv.bucket" bucket
+        addAttribute sp "ecluse.osv.object_key" key
         addAttribute sp "ecluse.osv.bytes" (show size :: Text)
 
--- Observation only: 'withException' re-raises, so the upload still fails after this runs.
-reportUploadFailure :: (KatipContext m) => Maybe Span -> Text -> Text -> SomeException -> m ()
-reportUploadFailure mSpan bucketName keyText err = do
-    whenJust mSpan $ \sp -> setStatus sp (Error ("S3 upload failed: " <> show err))
-    logFM ErrorS (ls ("S3 upload failed for " <> keyText <> " to bucket " <> bucketName <> ": " <> show err))
+reportPublished :: (KatipContext m) => Published -> m ()
+reportPublished published =
+    katipAddContext (sl "baseline_bytes" (psBaselineBytes stored) <> sl "epss_credit_bytes" (psEpssCreditBytes stored)) $
+        logFM InfoS (ls ("Published the advisory artifact: OSV " <> renderSourceOrder (plOsvOrder plan) <> ", EPSS " <> maybe "unavailable" renderSourceOrder (plEpssOrder plan) <> ", baseline " <> renderAdjustment (psAdjustment stored)))
+  where
+    plan = pubPlan published
+    stored = plState plan
+
+reportStop :: (KatipContext m) => Maybe Span -> PublicationStop -> m ()
+reportStop mSpan stop = do
+    whenJust mSpan $ \sp -> setStatus sp (Error ("advisory publication stopped: " <> renderPublicationStop stop))
+    logFM ErrorS (ls ("Advisory publication stopped: " <> renderPublicationStop stop))

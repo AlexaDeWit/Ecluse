@@ -64,7 +64,7 @@ import Ecluse.Config (AppConfig (cfgAdvisories), Config (configApp), advisoryAge
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, RubyGems))
 import Ecluse.Core.Security (Limits (progressFloor), mkProgressFloor, serveCapSeconds)
-import Ecluse.Pilot.Plan (epssAttemptLine)
+import Ecluse.Pilot.Plan (pilotPostureLines)
 import Ecluse.Rts (
     CgroupLimits (..),
     EffectiveAxis (..),
@@ -107,7 +107,7 @@ spec = describe "resolveBootPlan" $ do
                    ]
                 <> advisoryAgeLines config
                 <> advisoryEpssLines config
-                <> [epssAttemptLine (cfgAdvisories (configApp config))]
+                <> pilotPostureLines (cfgAdvisories (configApp config))
         bpWarnings plan `shouldBe` []
 
     it "states each mount's rule order and the phases each rule applies at, for every role" $ do

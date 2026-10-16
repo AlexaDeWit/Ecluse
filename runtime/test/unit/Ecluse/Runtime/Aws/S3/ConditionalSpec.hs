@@ -47,14 +47,14 @@ spec = do
                         Right _ -> expectationFailure "the refused write succeeded"
 
     describe "absenceListing" $ do
-        it "lists one key under the exact prefix" $
-            withS3
+        it "lists one key under the exact prefix"
+            $ withS3
                 ( \request respond -> do
                     lookup "prefix" (queryString request) `shouldBe` Just (Just "records/key")
                     lookup "max-keys" (queryString request) `shouldBe` Just (Just "1")
                     respond (responseLBS status200 [] emptyListing)
                 )
-                $ \env -> list env `shouldReturn` True
+            $ \env -> list env `shouldReturn` True
 
         for_
             [ ("a complete, empty listing", emptyListing, True)

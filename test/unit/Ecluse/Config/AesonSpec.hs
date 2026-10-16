@@ -39,6 +39,7 @@ import Ecluse.Config.Aeson (parseRuleEntry, parseRulePatch, parseRulesPatch)
 import Ecluse.Config.Rule (RulePatch (..))
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Osv.Publication (renderPercent)
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName, PyPIOwnedPrefix), mkPyPIPrefix)
 import Ecluse.Runtime.Log (LogLevel (DebugLevel, ErrorLevel, InfoLevel, WarnLevel))
@@ -377,6 +378,22 @@ spec = describe "decodeDocument" $ do
         it "refuses a value that is not a count of seconds" $
             loadConfig [] (Just "{\"advisories\":{\"maxAgeSeconds\":\"six days\"}}")
                 `shouldSatisfy` decodeErrorMentions "advisories.maxAgeSeconds"
+
+    describe "advisories shrink limits" $ do
+        it "ships a 2% shrink allowance and a 5% EPSS outage cap" $ do
+            advisories <- advisoriesOf [] Nothing
+            map renderPercent [advMaxShrink advisories, advEpssLossCap advisories] `shouldBe` ["2%", "5%"]
+
+        it "takes an operator's fractional and boundary values" $ do
+            advisories <- advisoriesOf [("ECLUSE_ADVISORIES__MAX_SHRINK_PERCENT", "0.5"), ("ECLUSE_ADVISORIES__EPSS_LOSS_CAP_PERCENT", "0")] Nothing
+            map renderPercent [advMaxShrink advisories, advEpssLossCap advisories] `shouldBe` ["0.5%", "0%"]
+            renderPercent . advMaxShrink <$> advisoriesOf [] (Just "{\"advisories\":{\"maxShrinkPercent\":100}}") `shouldReturn` "100%"
+
+        for_ ["maxShrinkPercent", "epssLossCapPercent" :: Text] $ \key ->
+            for_ ["-1", "100.5", "\"two\"", "1e99" :: Text] $ \value ->
+                it (toString ("refuses advisories." <> key <> " = " <> value)) $
+                    loadConfig [] (Just ("{\"advisories\":{\"" <> encodeUtf8 key <> "\":" <> encodeUtf8 value <> "}}"))
+                        `shouldSatisfy` decodeErrorMentions ("advisories." <> key)
 
     describe "deprecated divergence configuration" $ do
         for_ ["ECLUSE_INTEGRITY__DIVERGENCE_POLICY", "ECLUSE_MOUNTS__NPM__INTEGRITY__DIVERGENCE_POLICY"] $ \key -> do

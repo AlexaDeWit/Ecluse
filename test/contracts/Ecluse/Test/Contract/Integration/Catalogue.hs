@@ -56,7 +56,7 @@ integrationCatalogue =
             , Profile "integration/advisory-sync" [] ["ministack"] ["advisory-sync"]
             , Profile "integration/mirror-state-s3-internal" ["pypi"] ["ministack"] ["mirror-state"]
             , Profile "integration/mirror-state-s3" ["pypi"] ["ministack"] ["mirror-state"]
-            , Profile "integration/advisory-export" [] ["ministack"] ["advisory-publication", "advisory-last-good"]
+            , Profile "integration/advisory-export" ["npm", "pypi"] ["ministack"] ["advisory-publication", "advisory-last-good"]
             , Profile "integration/queue-sqs" ["npm"] ["ministack"] ["queue-payload", "queue-lease", "queue-redelivery"]
             , Profile "integration/server-shutdown" [] ["wai"] ["server-shutdown"]
             , Profile "integration/telemetry-metrics" [] ["collector"] ["telemetry-metrics"]

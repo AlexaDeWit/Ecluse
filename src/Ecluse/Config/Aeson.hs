@@ -27,6 +27,7 @@ import Ecluse.Config.Types
 
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..), ecosystemName, parseEcosystem)
+import Ecluse.Core.Osv.Publication (Percent, mkPercent)
 import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrity)
 import Ecluse.Core.Registry.Maintenance.Budget (parseQuotaDimension, parseRequestKind)
@@ -199,6 +200,8 @@ advisoriesDecoder =
         <*> nestedKey "quietTime" parseQuietTimes
         <*> requiredKey "epssQuietTime" parseDelaySeconds
         <*> optionalKey "maxAgeSeconds" parseDelaySeconds
+        <*> requiredKey "maxShrinkPercent" parsePercent
+        <*> requiredKey "epssLossCapPercent" parsePercent
 
 runtimeDecoder :: GroupDecoder RuntimeSettings
 runtimeDecoder =
@@ -339,6 +342,12 @@ parseUnitFraction :: String -> Value -> Parser Rational
 parseUnitFraction field value = case value of
     Number n | Just share <- boundedRational n, share > 0, share < 1 -> pure share
     _ -> fail (field <> " must be a number above 0 and below 1")
+
+-- Both ends mean something: 0 allows no shrink at all, and 100 lets any size through.
+parsePercent :: String -> Value -> Parser Percent
+parsePercent field value = case value of
+    Number n | Just percent <- mkPercent =<< boundedRational n -> pure percent
+    _ -> fail (field <> " must be a number from 0 to 100")
 
 -- The exponent is bounded before the rational is realised, so a 1e999999999 is refused rather
 -- than expanded.
