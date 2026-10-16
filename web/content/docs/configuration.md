@@ -613,8 +613,8 @@ Publish a valid artifact for each ecosystem before configuring its source. Roll 
 writer roles forward before enabling Dredger revocation. Preview deletions and retain target-local
 consent, first-party protection, maintenance support, and deletion caps. When relaxing a rule,
 update Dredger first, then admission and writer roles. Trusted private copies keep serving until
-eligible deletion completes. PyPI read admission works now. Its mirror writes and maintenance
-remain in [#765](https://github.com/AlexaDeWit/Ecluse/issues/765).
+eligible deletion completes. The rule applies the same way to npm and PyPI admission, mirror
+writes, and Dredger revocation.
 
 An absent generation or a faulted read follows `onUnavailable`, defaulting to `deny`.
 `skip` permits lower rules to decide but never waives stale or undated generation refusal.
