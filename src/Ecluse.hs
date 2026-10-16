@@ -4,21 +4,33 @@
 
 {- | Écluse: a supply-chain policy proxy for package registries.
 
-Écluse sits between clients and a package registry and applies a configurable resilience policy
-before any dependency reaches a build. It hosts no packages: the operator's own backend stores them,
-and Écluse governs only what may be fetched from, and mirrored to, those backends. The rules engine
-is __deny by default__ and mirroring is demand-driven, so a mirror write never runs on a request's
-critical path. 'run', the entry point the @ecluse@ executable invokes, reads the command line and
-starts that command through "Ecluse.Startup" with the shipped adapters.
+Écluse applies a configurable resilience policy between clients and a package registry before any
+dependency reaches a build. It hosts no packages: it governs only what may be fetched from, and
+mirrored to, the operator's own backends. The rules engine is __deny by default__. Mirroring is
+demand-driven, so a mirror write never runs on a request's critical path. 'run' sets UTF-8 output,
+reads the command line, and starts that command through "Ecluse.Startup" with the shipped adapters.
 -}
 module Ecluse (
     -- * Entry point
     run,
 ) where
 
+import GHC.IO.Encoding (setLocaleEncoding)
+import System.IO (hSetEncoding, utf8)
+
 import Ecluse.CLI (execCLI)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Startup (runWith)
 
 run :: IO ()
-run = execCLI >>= runWith mountBindingFor
+run = do
+    useUtf8
+    execCLI >>= runWith mountBindingFor
+
+-- A host with no locale leaves GHC on ASCII, which fails on the first non-ASCII character written.
+-- The locale encoding also reaches each handle opened later.
+useUtf8 :: IO ()
+useUtf8 = do
+    setLocaleEncoding utf8
+    hSetEncoding stdout utf8
+    hSetEncoding stderr utf8
