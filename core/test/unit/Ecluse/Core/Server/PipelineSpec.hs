@@ -273,7 +273,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
     for_ [("200", upstreamApp), ("206", partialUpstream)] $ \(label, upstream) ->
         it ("relays an upstream " <> label <> " artifact unchanged to a client that accepts gzip, for GET and HEAD") $
-            testWithApplication (pure upstream) $ \publicPort -> do
+            testWithApplication (pure (\req respond -> upstream req (respond . mapResponseHeaders ((hDate, "Thu, 01 Jan 2026 00:00:00 GMT") :)))) $ \publicPort -> do
                 rt <- testServeRuntime noopMetricsPort
                 deps <- withPrivateBaseUrl Nothing <$> depsFor publicPort
                 logEnv <- newTestLogEnv

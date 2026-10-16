@@ -14,14 +14,15 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
-import Network.HTTP.Types (Method, methodGet, methodHead, status200, status404, statusCode)
-import Network.HTTP.Types.Header (RequestHeaders, hAcceptEncoding, hContentEncoding, hContentLength, hETag, hIfNoneMatch, hVary)
+import Network.HTTP.Types (Header, Method, methodGet, methodHead, status200, status403, status404, statusCode)
+import Network.HTTP.Types.Header (RequestHeaders, hAcceptEncoding, hAuthorization, hContentEncoding, hContentLength, hETag, hIfNoneMatch, hVary)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders, requestMethod), Response, defaultRequest, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 import UnliftIO.Async (cancel, race_, wait, withAsync)
 import UnliftIO.Exception (throwIO)
 
+import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, pkgEcosystem)
 import Ecluse.Core.Package.Entry (EntryKey (..))
@@ -42,7 +43,7 @@ import Ecluse.Core.Server.Conditional (ETag, mkStrongETag, renderETag)
 import Ecluse.Core.Server.Context (
     MountBinding (..),
     MountRouter,
-    PackumentDeps (pdMetadataCompression, pdMountBaseUrl),
+    PackumentDeps (pdInboundToken, pdMetadataCompression, pdMountBaseUrl, pdRules),
     ResponseAction (RunPipeline),
     RouteAction (RouteAction),
     ServeRuntime (srMemoryMeter),
@@ -77,7 +78,7 @@ import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, vers
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureResponse), deliverServe, responseBytes, testServeRuntime, testServeRuntimeWith)
-import Ecluse.Test.Server.Mount (npmServeDeps, pypiServeDeps)
+import Ecluse.Test.Server.Mount (npmServeDeps, pypiServeDeps, withPrivateBaseUrl)
 import Ecluse.Test.Server.Response (reasonOf)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Wai (selfBaseUrl)
@@ -180,6 +181,24 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
                 gzipCharge <- takeLargestCharge meter
                 gzipCharge - plainCharge `shouldBe` gzipWorkspaceBytes + gzipBufferChargeBytes
                 snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
+        it "keeps edge authentication, private authorisation and policy ahead of a cached gzip validator" $ do
+            rt <- testServeRuntime noopMetricsPort
+            privateState <- newIORef PrivateServes
+            testWithApplication (pure (listingOrigin listing)) $ \publicPort ->
+                testWithApplication (pure (privateOrigin privateState (listingOrigin listing))) $ \privatePort -> do
+                    public <- listingDeps listing publicPort
+                    let publicOnly = public{pdInboundToken = Just (mkSecret "edge-token")}
+                        withPrivate = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) publicOnly
+                        serve deps headers = captureListing rt listing deps methodGet (gzipOffer <> headers)
+                        signed = [listingEdgeCredential listing]
+                    tag <- validator =<< serve withPrivate signed
+                    statusOf <$> serve withPrivate [(hIfNoneMatch, tag)] `shouldReturn` 401
+                    statusOf <$> serve withPrivate ((hIfNoneMatch, tag) : signed) `shouldReturn` 304
+                    writeIORef privateState PrivateRefuses
+                    statusOf <$> serve withPrivate ((hIfNoneMatch, tag) : signed) `shouldReturn` 403
+                    publicTag <- validator =<< serve publicOnly signed
+                    statusOf <$> serve publicOnly ((hIfNoneMatch, publicTag) : signed) `shouldReturn` 304
+                    statusOf <$> serve publicOnly{pdRules = []} ((hIfNoneMatch, publicTag) : signed) `shouldReturn` 403
         it "returns its admission slot and charges when cancelled while it responds" $ do
             admission <- newServeAdmissionTuned 1 0 0
             rt <- testServeRuntimeWith admission noopMetricsPort
@@ -198,6 +217,16 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
     statusOf = statusCode . responseStatus
     header name = lookup name . responseHeaders
     validator response = maybe (throwIO MissingFixtureResponse) pure (header hETag response)
+    gzipOffer = [(hAcceptEncoding, "gzip")]
+
+-- What the private origin answers for the listing.
+data PrivateState = PrivateServes | PrivateRefuses
+
+privateOrigin :: IORef PrivateState -> Application -> Application
+privateOrigin current origin request respond =
+    readIORef current >>= \case
+        PrivateServes -> origin request respond
+        PrivateRefuses -> respond (responseLBS status403 [] "")
 
 packumentETagSpec :: Spec
 packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
@@ -384,14 +413,17 @@ data Listing = Listing
     , listingPath :: [Text]
     , listingPrefix :: Text
     , listingCredential :: CredentialMapping
+    , listingEdgeCredential :: Header
+    -- ^ The edge token @edge-token@ in the ecosystem's own presentation.
     , listingDeps :: Int -> IO PackumentDeps
     , listingOrigin :: Application
     }
 
 listings :: [Listing]
 listings =
-    [ Listing "npm" npmRouter ["leftpad"] "npm" npmCredential (agedDeps npmServeDeps (UTCTime (fromGregorian 2020 1 1) 0)) npmOrigin
-    , Listing "PyPI" pypiRouter ["simple", "requests"] "pypi" pypiCredential (agedDeps pypiServeDeps (UTCTime (fromGregorian 2026 6 20) 0)) pypiOrigin
+    [ Listing "npm" npmRouter ["leftpad"] "npm" npmCredential (hAuthorization, "Bearer edge-token") (agedDeps npmServeDeps (UTCTime (fromGregorian 2020 1 1) 0)) npmOrigin
+    , -- HTTP Basic, user:edge-token.
+      Listing "PyPI" pypiRouter ["simple", "requests"] "pypi" pypiCredential (hAuthorization, "Basic dXNlcjplZGdlLXRva2Vu") (agedDeps pypiServeDeps (UTCTime (fromGregorian 2026 6 20) 0)) pypiOrigin
     ]
   where
     agedDeps serveDeps now port = do
