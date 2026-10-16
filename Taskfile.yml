@@ -640,7 +640,7 @@ tasks:
   scan-osv:
     desc: Scan the pinned Haskell closure for HSEC advisories (osv-scanner over the freezes)
     cmds:
-      # Exit 1 means findings, reported by security.yml's SARIF upload. A scanner error (>1) fails.
+      # Exit 1 means findings for security.yml's SARIF upload. Only an exit above 1 fails.
       # Each upstream.freeze has a non-standard name, so the scanner is told to read it as a freeze.
       - osv-scanner scan source --lockfile cabal.project.freeze --lockfile cabal.project.freeze:json-stream/upstream.freeze --lockfile cabal.project.freeze:vendor/lzma-managed/upstream.freeze --format sarif --output osv-freeze.sarif || test $? -eq 1
       - bash scripts/sarif-locations.sh osv-freeze.sarif cabal.project.freeze

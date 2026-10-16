@@ -27,7 +27,7 @@ carry, in one-line summaries, never a wall of prose.
 | **Pre-comment** (`-- \|`) / **post-comment** (`-- ^`) | A comment placed *before* vs *after* the thing it documents. |
 | **Module header** | The Haddock comment immediately before the `module` keyword: `{- \| … -}`, or `-- \|` when it is one line. |
 | **Section heading** | A `-- *`, `-- **`, … marker *in the export list*. It groups exports and builds the page's table of contents. |
-| **Example** / **doctest** | A `>>>` line plus its expected output. `task doctest` *runs* it (§9). |
+| **Example** / **doctest** | A `>>>` line plus its expected output. `task doctest` *runs* it in the libraries §9 names (§9). |
 
 ---
 
