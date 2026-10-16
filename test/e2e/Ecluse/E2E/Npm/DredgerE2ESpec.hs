@@ -21,7 +21,7 @@ import UnliftIO (bracket, bracket_)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.E2E.Fixtures.Advisories (maliciousExportBase)
+import Ecluse.E2E.Fixtures.Advisories (maliciousAdvisoryId, maliciousExportBase)
 import Ecluse.E2E.Fixtures.Npm (
     PkgSpec,
     corpusRevokedPkg,
@@ -384,6 +384,7 @@ outageRules =
     renderRules
         [ "min-age" .= object ["type" .= ("AllowIfOlderThan" :: Text), "ageSeconds" .= (604800 :: Int)]
         , "deny-cve" .= object ["type" .= ("DenyIfCve" :: Text), "minCvss" .= (8 :: Int), "onUnavailable" .= ("skip" :: Text)]
+        , "deny-known-malicious" .= object ["onUnavailable" .= ("skip" :: Text)]
         ]
 
 -- | DDL invalidates SQLite's cached schema and restores it even when an assertion fails.
@@ -418,7 +419,7 @@ outageDriver =
         }
 
 maliciousFixture :: AdvisoryFixture
-maliciousFixture = advisoryFixture{advisoryIdentifier = "MAL-derived-1"}
+maliciousFixture = advisoryFixture{advisoryIdentifier = maliciousAdvisoryId}
 
 maliciousAdvisoryOps :: AdvisoryOps GlobalDataPlane E2E
 maliciousAdvisoryOps =

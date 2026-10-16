@@ -17,6 +17,7 @@ import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
+import Ecluse.E2E.Fixtures.Advisories (maliciousAdvisoryId)
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.E2E.Fixtures.PyPI.Dredger
 import Ecluse.E2E.Fixtures.PyPI.Mirror (Distribution (..))
@@ -47,10 +48,12 @@ pypiSweepDriver fixture recorder =
     SweepDriver
         { withIdentitySweep = acquire withIdentity
         , withAdvisorySweep = acquire withAdvisory
+        , withMaliciousSweep = acquire withAdvisoryStores
         , withRecoverySweep = acquire withRecovery
         , withRolloutSweep = acquire withRollout
         , sweepIdentityFixture = identityFixture
         , sweepAdvisoryFixture = advisoryFixture
+        , sweepMaliciousFixture = advisoryFixture{advisoryIdentifier = maliciousAdvisoryId}
         , sweepRecoveryFixture = recoveryFixture
         , sweepRolloutFixture = rolloutFixture
         , sweepStoreOps = storeOps
@@ -58,6 +61,7 @@ pypiSweepDriver fixture recorder =
         , sweepGuardedOps = sweepOps [("ECLUSE_MOUNTS__PYPI__FIRST_PARTY", firstPartyName)]
         , sweepPlainOps = sweepOps []
         , sweepAdvisoryOps = advisoryOps
+        , sweepMaliciousOps = advisoryOps{publishNextGeneration = \plane -> observeRun <$> publishAdvisoryExport (Native.pspGlobal plane) PyPI dredgerMaliciousExportBase}
         , sweepRecoveryOps = recoveryOps
         , sweepRolloutOps = rolloutOps
         , sweepAdmissionOutage = Nothing
@@ -92,10 +96,14 @@ withIdentity action global = Native.withPyPISweepPlane global $ \plane ->
         action (plane, proxy, Native.cacheStore proxy)
 
 withAdvisory :: ((Native.PyPISweepPlane, Native.PyPISweepStore) -> IO ()) -> GlobalDataPlane -> IO ()
-withAdvisory action global = Native.withPyPISweepPlane global $ \plane -> do
+withAdvisory action = withAdvisoryStores (\(plane, proxy, _) -> action (plane, proxy))
+
+-- The first generation precedes boot because readiness waits for a successful advisory sync.
+withAdvisoryStores :: ((Native.PyPISweepPlane, Native.PyPISweepStore, Native.PyPISweepStore) -> IO ()) -> GlobalDataPlane -> IO ()
+withAdvisoryStores action global = Native.withPyPISweepPlane global $ \plane -> do
     run <- compileGeneration plane CorpusV1
     (roleExit run, roleOutput run) `shouldSatisfy` ((== ExitSuccess) . fst)
-    Native.withSweepProxy plane (advisoryStoreEnv <> [("ECLUSE_RULES", advisoryRules)]) Nothing [] (\proxy -> action (plane, proxy))
+    Native.withSweepProxy plane (advisoryStoreEnv <> [("ECLUSE_RULES", advisoryRules)]) Nothing [] (\proxy -> action (plane, proxy, Native.cacheStore proxy))
 
 withRecovery :: ((Native.PyPISweepPlane, Native.PyPISweepStore, Native.PyPISweepStore) -> IO ()) -> GlobalDataPlane -> IO ()
 withRecovery action global = Native.withPyPISweepPlane global $ \plane -> do

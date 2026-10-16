@@ -11,6 +11,7 @@ module Ecluse.E2E.Fixtures.Advisories (
     npmAdvisoryId,
     pypiAdvisoryId,
     maliciousExportBase,
+    maliciousAdvisoryId,
     neutralExportBase,
     buildAdvisoryFixtures,
     ecosystemAdvisory,
@@ -57,6 +58,10 @@ pypiAdvisoryId = "GHSA-e2e-flask"
 -- | The stub-relative base for derived MAL records targeting inert client fixtures.
 maliciousExportBase :: Text
 maliciousExportBase = "advisories/mal-derived"
+
+-- | The identifier 'maliciousZip' gives its first derived target.
+maliciousAdvisoryId :: Text
+maliciousAdvisoryId = "MAL-derived-1"
 
 -- | The source-qualified, unrelated control for a second active ecosystem.
 neutralExportBase :: Text

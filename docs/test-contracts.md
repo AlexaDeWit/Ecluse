@@ -327,7 +327,7 @@ Both ecosystem drivers bind concrete providers for every required family.
 PyPI mirror evidence includes whole-version copies, restart recovery, cross-target file selection and retained metadata.
 Cross-target checks prove selected files and installed contents. They do not execute foreign architecture code.
 
-The final functional declarations require 50 PyPI cases, 47 npm cases and one shared-system case.
+The final functional declarations require 52 PyPI cases, 51 npm cases and one shared-system case.
 Unit, integration, residency, allocation, load and smoke evidence remain independent requirements.
 
 Backend completion also requires the PyPI CodeArtifact full-store instance in the existing backend subject.
@@ -345,7 +345,7 @@ Metadata checks the actual declarations and reports. It does not choose test com
 
 ## MAL contract additions
 
-The independent obligations and concrete declarations require these five additional cases.
+The independent obligations and concrete declarations require these six additional cases.
 All original observations and their assertions remain under the identities described above.
 
 | Case ID | Preserved MAL evidence |
@@ -355,6 +355,7 @@ All original observations and their assertions remain under the identities descr
 | `npm/advisories/mal-denial` | Pilot compilation, observed npm generation sync, fresh npm refusal, direct 403, exact structured rule/MAL identifiers, and absent mirror publication. |
 | `pypi/advisories/mal-denial` | Pilot compilation and PyPI sync, affected wheel omitted while the good wheel remains, fresh pip refusal, direct 403, and exact structured identifiers. |
 | `npm/dredger/mal-revocation` | Accepted replacement generation, trusted GET 200 before deletion, named MAL audit, complete mirror snapshot, private-cache inventory, fresh install refusal, direct 403, no refill, and retained fix bytes. |
+| `pypi/dredger/mal-revocation` | The same lifecycle through the CodeArtifact mirror and cache fixture, with a fresh pip refusal. |
 
 Both clients run the same `Install.Advisory` law through native `AdvisoryDriver` observations.
 Each policy acquires an independent data plane and publishes its source through Pilot.
@@ -380,13 +381,14 @@ Fixed suite lists bind their contract functions to concrete fixtures.
 | `Publication` | Both `npm/publish/*` cases | First-party identity, expected version present in destination inventory, successful fresh installation and out-of-scope publication refusal. |
 | `Telemetry` | The retained six npm cases and paired PyPI read/service laws | Scenario-correlated spans, metrics, readiness and logs from the local Collector. Datadog tag/log checks do not contact its SaaS. |
 | `Sweep.Identity` | Seven `npm/dredger/*` identity cases below | Independent mirror/cache inventories, consent, dry-run and first-party observations. |
-| `Sweep.Advisory` | `npm/dredger/advisory-revocation`, `npm/dredger/mal-revocation` | Generation swap, exact audit, revoked/fixed installs, stored and served artifact observations. |
+| `Sweep.Advisory` | The `advisory-revocation` and `mal-revocation` cases for npm and PyPI | Generation swap, exact audit, revoked/fixed installs, stored and served artifact observations. |
 | `Sweep.Recovery` | Five recovery cases below | Residual deletion, refill, absent source bytes and copies arriving after cleanup. |
 | `Sweep.Rollout` | Three rollout cases below | Durable queue, independently started roles, stale policy, retained bytes and sentinel drain. |
 
 `Sweep.Types` owns the fixture and operation records. `Sweep` owns shared inventory, listing and refusal assertions.
-The Dredger provider keeps five isolated lifecycle brackets: identity, scored advisory, MAL advisory, recovery and rollout.
-All five remain inside the single schedulable `npm/dredger` group.
+Each Dredger provider keeps five isolated lifecycle brackets: identity, scored advisory, MAL advisory, recovery and rollout.
+npm adds a sixth bracket for the skipped-admission outage.
+Each provider's brackets remain inside its single schedulable `npm/dredger` or `pypi/dredger` group.
 The detailed tables below preserve all 49 original E2E observations and descriptions.
 Native deprecation/yank handling, npm publication metadata and tamper-refusal assertions remain in their ecosystem specs.
 
@@ -400,7 +402,7 @@ Refusal requires a failed client and an empty installation tree, including npm's
 Those negative controls create and inspect their files before checking the contract's failure.
 
 The npm advisory counterparts are `npm/advisories/deny-cve`, `npm/advisories/deny-epss`,
-and `npm/advisories/exact-fix`.
+`npm/advisories/mal-denial` and `npm/advisories/exact-fix`.
 The PyPI full contract also runs `pypi/telemetry/signals`,
 `pypi/telemetry/disabled`, `pypi/telemetry/export-failure`, and `pypi/telemetry/datadog`.
 The six former telemetry IDs map as follows. Each case keeps its original observations.

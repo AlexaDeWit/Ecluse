@@ -26,7 +26,7 @@ import System.FilePath ((</>))
 import Test.Hspec (Expectation, expectationFailure, shouldSatisfy)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
-import Ecluse.E2E.Fixtures.Advisories (maliciousExportBase, npmAdvisoryExportBase, npmAdvisoryId, pypiAdvisoryExportBase, pypiAdvisoryId)
+import Ecluse.E2E.Fixtures.Advisories (maliciousAdvisoryId, maliciousExportBase, npmAdvisoryExportBase, npmAdvisoryId, pypiAdvisoryExportBase, pypiAdvisoryId)
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.E2E.Fixtures.Npm (corpusRevokedPkg, psName, psVersion)
 import Ecluse.E2E.Fixtures.PyPI (pypiDistInfoFor, pypiWheelFor)
@@ -52,7 +52,7 @@ npmAdvisoryFamily :: ConcreteFixture FamilyMetadata -> FamilyFixture AdvisorySce
 npmAdvisoryFamily resources = scenarioFamily resources Npm dredgerTopology npmAdvisoryExportBase fixture session
   where
     fixture policy = case policy of
-        KnownMaliciousDefault -> npmCase (psName corpusRevokedPkg) "1.0.0" (psVersion corpusRevokedPkg) "MAL-derived-1" True
+        KnownMaliciousDefault -> npmCase (psName corpusRevokedPkg) "1.0.0" (psVersion corpusRevokedPkg) maliciousAdvisoryId True
         _ -> npmCase "e2e-advisory" "1.18.0" "1.19.0" npmAdvisoryId False
     npmCase name affected fixed advisory mirror =
         AdvisoryCase
@@ -99,7 +99,7 @@ pypiAdvisoryFamily :: ConcreteFixture FamilyMetadata -> FamilyFixture AdvisorySc
 pypiAdvisoryFamily resources = scenarioFamily resources PyPI pypiAdvisoryTopology pypiAdvisoryExportBase fixture session
   where
     fixture policy =
-        AdvisoryCase "flask" "1.18" "1.19" (if policy == KnownMaliciousDefault then "MAL-derived-1" else pypiAdvisoryId) ("No matching distribution found for flask==" <>) False
+        AdvisoryCase "flask" "1.18" "1.19" (if policy == KnownMaliciousDefault then maliciousAdvisoryId else pypiAdvisoryId) ("No matching distribution found for flask==" <>) False
     session _ e2e = AdvisorySession (map (wheelVersion . fst) <$> advertisedFiles e2e "flask") (pypiReleaseDriver e2e "flask") Nothing
     wheelVersion filename = fromMaybe filename (T.stripPrefix "flask-" filename >>= T.stripSuffix "-py3-none-any.whl")
 

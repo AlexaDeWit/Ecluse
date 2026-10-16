@@ -710,7 +710,7 @@ cases belong to no single ecosystem sits beside the directories, and there are t
 | `Ecluse.E2E.PyPI.InstallE2ESpec` | The `pip` install from the `pypi` mount, and its failure while both public upstreams are down. |
 | `Ecluse.E2E.PyPI.MirrorInstallE2ESpec` | Complete-version mirroring, durable recovery, companions and cross-target file selection. |
 | `Ecluse.E2E.PyPI.PublishE2ESpec` | Native multipart first-party publication and refusal controls. |
-| `Ecluse.E2E.PyPI.DredgerE2ESpec` | CodeArtifact inventory, consent, advisory revocation and recovery with deterministic control-plane responses. |
+| `Ecluse.E2E.PyPI.DredgerE2ESpec` | CodeArtifact inventory, consent, scored and MAL advisory revocation, and recovery with deterministic control-plane responses. |
 | `Ecluse.E2E.AdvisoriesE2ESpec` | Pilot publishes independent scored and MAL sources for npm and PyPI. The shared laws check exact listings, native client refusal, direct 403, structured advisory audit evidence, and remediation controls. The npm MAL session also observes absent mirror publication. |
 | `Ecluse.E2E.PyPI.AdvisoriesE2ESpec` | The native canonical-fix extension checks equivalent version spellings and retains its remediation-disabled and scored-denial controls. |
 | `Ecluse.E2E.TelemetryE2ESpec` | Telemetry export under each configuration. An `npm` client supplies the traffic, and the mirror cases require a mirror target. |
