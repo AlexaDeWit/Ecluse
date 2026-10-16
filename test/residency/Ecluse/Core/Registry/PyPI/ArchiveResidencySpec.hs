@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE PackageImports #-}
 
 -- | Isolated archive probes compare retained heap and native cleanup with the production workspace charges.
@@ -10,32 +9,32 @@ module Ecluse.Core.Registry.PyPI.ArchiveResidencySpec (spec, probeMain) where
 import Codec.Compression.BZip qualified as BZip
 import Codec.Compression.GZip qualified as GZip
 import Conduit
-import Control.Concurrent.MVar qualified as MVar
-import Data.Aeson (FromJSON, ToJSON, eitherDecodeStrict, encode)
-import Data.Bits (finiteBitSize)
+import Data.Aeson (FromJSON, ToJSON, encode)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T
-import Foreign.C.Types (CInt (..), CSize (..))
-import Foreign.Marshal.Alloc (alloca)
-import Foreign.Ptr (Ptr)
 import Foreign.StablePtr (freeStablePtr, newStablePtr)
-import Foreign.Storable (peek)
-import GHC.Conc (getAllocationCounter)
-import GHC.Stats (GCDetails (gcdetails_live_bytes), RTSStats (allocated_bytes, gc, gcs, max_live_bytes), getRTSStats)
+import GHC.Stats (GCDetails (gcdetails_live_bytes), RTSStats (allocated_bytes, gc, max_live_bytes), getRTSStats)
 import System.Directory (getFileSize)
-import System.Environment (getExecutablePath)
-import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.Mem (performMajorGC)
-import System.Process (readProcessWithExitCode)
 import Test.Hspec
-import UnliftIO.Async (AsyncCancelled (..), cancel, race_, wait, waitCatch, withAsync)
-import UnliftIO.Exception (bracket, evaluate, finally, throwIO, try)
+import UnliftIO.Exception (bracket)
 import UnliftIO.Temporary (withSystemTempDirectory)
 import "ecluse-lzma-managed" Codec.Compression.Lzma qualified as ManagedLzma
 import "lzma" Codec.Compression.Lzma qualified as Lzma
 
+import Ecluse.Core.NativeProbe (
+    NativeMeasurement (..),
+    NativeSample,
+    checkControl,
+    earlyExitProbe,
+    haskellControl,
+    nativeGrowthLimit,
+    nativeMeasurement,
+    probeChild,
+    sampleWithoutGC,
+ )
 import Ecluse.Core.Registry.PyPI.Archive (archiveMetadata)
 import Ecluse.Core.Registry.PyPI.Archive.BZip (withBzipChunks)
 import Ecluse.Core.Registry.PyPI.Archive.Inflate (InflateFormat (GzipMembers), withInflatedChunks)
@@ -57,38 +56,6 @@ data Measurement = Measurement
 
 instance ToJSON Measurement
 instance FromJSON Measurement
-
--- RSS includes cached and uncollected pages. VM and allocator retention have independent gates.
-data NativeMeasurement = NativeMeasurement
-    { nativeWorkspaceBytes :: Int
-    , nativeAllocatedBytes :: Integer
-    , nativeVirtualGrowthBytes :: Integer
-    , nativeResidentGrowthBytes :: Integer
-    , controlAllocatedBytes :: Integer
-    , controlVirtualGrowthBytes :: Integer
-    , controlResidentGrowthBytes :: Integer
-    , nativeOutputCount :: Int
-    , nativeAllocatorBefore :: AllocatorSnapshot
-    , nativeAllocatorAfter :: AllocatorSnapshot
-    , nativeAllocatorGrowthBytes :: Integer
-    , controlAllocatorBefore :: AllocatorSnapshot
-    , controlAllocatorAfter :: AllocatorSnapshot
-    , controlAllocatorGrowthBytes :: Integer
-    }
-    deriving stock (Generic, Show)
-
-instance ToJSON NativeMeasurement
-instance FromJSON NativeMeasurement
-
--- Glibc counts freed thread-cache chunks here, so this is retention rather than exact live ownership.
-data AllocatorSnapshot = AllocatorSnapshot
-    { allocatorArenaBytes :: Integer
-    , allocatorMappedBytes :: Integer
-    }
-    deriving stock (Generic, Show)
-
-instance ToJSON AllocatorSnapshot
-instance FromJSON AllocatorSnapshot
 
 spec :: Spec
 spec = describe "archive residency" $ do
@@ -130,16 +97,6 @@ spec = describe "archive residency" $ do
             nativeVirtualGrowthBytes result `shouldSatisfy` (> nativeGrowthLimit)
             nativeAllocatorGrowthBytes result `shouldSatisfy` (> nativeGrowthLimit)
 
--- The independent VM and allocator gates each allow one MiB after warmup.
-nativeGrowthLimit :: Integer
-nativeGrowthLimit = 1024 * 1024
-
-checkControl :: NativeMeasurement -> Expectation
-checkControl result = do
-    controlAllocatedBytes result `shouldSatisfy` (>= 16 * 1024 * 1024)
-    controlVirtualGrowthBytes result `shouldSatisfy` (<= nativeGrowthLimit)
-    controlAllocatorGrowthBytes result `shouldSatisfy` (<= nativeGrowthLimit)
-
 compressor :: Text -> BSL.ByteString -> BSL.ByteString
 compressor = \case
     "gzip" -> GZip.compress
@@ -147,12 +104,7 @@ compressor = \case
     _ -> Lzma.compress
 
 child :: (FromJSON a) => Text -> FilePath -> String -> IO a
-child mode path nursery = do
-    executable <- getExecutablePath
-    (status, output, errors) <- readProcessWithExitCode executable ["--archive-probe", toString mode, path, "+RTS", "-T", "-N1", "-F1", "-A" <> nursery, "-RTS"] ""
-    unless (status == ExitSuccess) (expectationFailure (show status <> ": " <> errors))
-    putStrLn ("archive-residency " <> toString mode <> " " <> output)
-    expectRight (eitherDecodeStrict (encodeUtf8 (toText output)))
+child = probeChild "archive"
 
 -- | Parent-authored fixtures keep compression work outside the measured child interval.
 probeMain :: String -> FilePath -> IO ()
@@ -191,133 +143,18 @@ heapProbe format path = do
                 , allocatedBytes = toInteger (allocated_bytes rtsAfter) - toInteger (allocated_bytes rtsBefore)
                 }
 
-data NativeSample = NativeSample
-    { sampledAllocated :: Integer
-    , sampledVirtual :: Integer
-    , sampledResident :: Integer
-    , sampledAllocatorBefore :: AllocatorSnapshot
-    , sampledAllocatorAfter :: AllocatorSnapshot
-    }
-
 nativeProbe :: Text -> Text -> FilePath -> IO NativeMeasurement
 nativeProbe format ending path = do
     bytes <- BS.readFile path
-    paid <- newIORef 0
-    childAllocated <- newIORef 0
-    outputCount <- newIORef 0
-    refuseCharge <- newIORef False
-    let charge wanted = do
-            refused <- readIORef refuseCharge
-            when refused (throwIO NativeAdmissionRefused)
-            modifyIORef' paid (max wanted)
-        counted action = do
-            start <- getAllocationCounter
-            finally action $ do
-                end <- getAllocationCounter
-                modifyIORef' childAllocated (+ (toInteger start - toInteger end))
-        onOutput output stop = do
+    let firstOutput stop output = do
             output `shouldSatisfy` (not . BS.null)
-            modifyIORef' outputCount (+ 1)
             stop
-        consume stop = await >>= maybe (liftIO (fail "decoder produced no output")) (\output -> liftIO (onOutput output stop))
-        run stop = case format of
-            "gzip" -> withInflatedChunks (GzipMembers 1) charge bytes (\pull -> pull >>= expectRight >>= (`onOutput` stop))
+        consume stop = await >>= maybe (liftIO (fail "decoder produced no output")) (liftIO . firstOutput stop)
+        run charge stop = case format of
+            "gzip" -> withInflatedChunks (GzipMembers 1) charge bytes (\pull -> pull >>= expectRight >>= firstOutput stop)
             "bzip" -> withBzipChunks 1 charge bytes (\source -> void (runExceptT (runConduit (source .| consume stop)) >>= expectRight))
             _ -> withLzmaChunks XzArchive charge [bytes] (\source -> void (runExceptT (runConduit (source .| consume stop)) >>= expectRight))
-        attempt = do
-            writeIORef refuseCharge False
-            case ending of
-                "refusal" -> do
-                    result <- try (run (writeIORef refuseCharge True >> readIORef paid >>= charge . (+ 1)))
-                    result `shouldBe` Left NativeAdmissionRefused
-                "cancel" -> do
-                    ready <- MVar.newEmptyMVar
-                    blocked <- MVar.newEmptyMVar
-                    withAsync (counted (run (MVar.putMVar ready () >> MVar.takeMVar blocked))) $ \worker -> do
-                        race_ (MVar.takeMVar ready) (wait worker)
-                        cancel worker
-                        result <- waitCatch worker
-                        case result of
-                            Left fault -> (fromException fault :: Maybe AsyncCancelled) `shouldBe` Just AsyncCancelled
-                            Right _ -> expectationFailure "native decoder swallowed cancellation"
-                _ -> run (pure ())
-    replicateM_ 4 attempt
-    control <- haskellControl
-    writeIORef childAllocated 0
-    writeIORef outputCount 0
-    sampled <- withoutGC (replicateM_ 64 attempt)
-    asynchronousAllocated <- readIORef childAllocated
-    peak <- readIORef paid
-    count <- readIORef outputCount
-    pure (nativeMeasurement control sampled{sampledAllocated = sampledAllocated sampled + asynchronousAllocated} peak count)
-
-nativeMeasurement :: NativeSample -> NativeSample -> Int -> Int -> NativeMeasurement
-nativeMeasurement control sampled workspace count =
-    NativeMeasurement
-        { nativeWorkspaceBytes = workspace
-        , nativeAllocatedBytes = sampledAllocated sampled
-        , nativeVirtualGrowthBytes = sampledVirtual sampled
-        , nativeResidentGrowthBytes = sampledResident sampled
-        , controlAllocatedBytes = sampledAllocated control
-        , controlVirtualGrowthBytes = sampledVirtual control
-        , controlResidentGrowthBytes = sampledResident control
-        , nativeOutputCount = count
-        , nativeAllocatorBefore = sampledAllocatorBefore sampled
-        , nativeAllocatorAfter = sampledAllocatorAfter sampled
-        , nativeAllocatorGrowthBytes = allocatorGrowth sampled
-        , controlAllocatorBefore = sampledAllocatorBefore control
-        , controlAllocatorAfter = sampledAllocatorAfter control
-        , controlAllocatorGrowthBytes = allocatorGrowth control
-        }
-
-haskellControl :: IO NativeSample
-haskellControl = withoutGC $ do
-    chunks <- traverse (evaluate . BS.replicate (256 * 1024)) [0 .. 63]
-    bracket (newStablePtr chunks) freeStablePtr $ \_ -> do
-        sum (map BS.length chunks) `shouldBe` 16 * 1024 * 1024
-
-withoutGC :: IO () -> IO NativeSample
-withoutGC action = sampleWithoutGC (action >>)
-
--- The callback samples before retained native scopes close. The GC check includes the memory-counter reads.
-sampleWithoutGC :: (IO NativeSample -> IO NativeSample) -> IO NativeSample
-sampleWithoutGC run = do
-    finiteBitSize (0 :: Int) `shouldBe` 64
-    performMajorGC
-    (virtualBefore, residentBefore) <- processMemory
-    rtsBefore <- getRTSStats
-    allocatorBefore <- allocatorSnapshot
-    allocationBefore <- getAllocationCounter
-    run $ do
-        allocationAfter <- getAllocationCounter
-        (virtualAfter, residentAfter) <- processMemory
-        allocatorAfter <- allocatorSnapshot
-        rtsAfter <- getRTSStats
-        gcs rtsAfter `shouldBe` gcs rtsBefore
-        pure
-            NativeSample
-                { sampledAllocated = toInteger allocationBefore - toInteger allocationAfter
-                , sampledVirtual = virtualAfter - virtualBefore
-                , sampledResident = residentAfter - residentBefore
-                , sampledAllocatorBefore = allocatorBefore
-                , sampledAllocatorAfter = allocatorAfter
-                }
-
-allocatorGrowth :: NativeSample -> Integer
-allocatorGrowth sample = total (sampledAllocatorAfter sample) - total (sampledAllocatorBefore sample)
-  where
-    total snapshot = allocatorArenaBytes snapshot + allocatorMappedBytes snapshot
-
-allocatorSnapshot :: IO AllocatorSnapshot
-allocatorSnapshot = alloca $ \arena -> alloca $ \mapped -> do
-    supported <- c_allocatorSnapshot arena mapped
-    unless (supported == 1) (fail "native allocator residency requires Linux with glibc mallinfo2")
-    arenaBytes <- toInteger <$> peek arena
-    mappedBytes <- toInteger <$> peek mapped
-    pure (AllocatorSnapshot arenaBytes mappedBytes)
-
-foreign import ccall unsafe "ecluse_archive_allocator_snapshot"
-    c_allocatorSnapshot :: Ptr CSize -> Ptr CSize -> IO CInt
+    earlyExitProbe ending run
 
 retainedProbe :: FilePath -> IO NativeMeasurement
 retainedProbe path = do
@@ -342,14 +179,3 @@ retainedProbe path = do
         ManagedLzma.DecompressInputRequired supply -> supply input >>= firstOutput BS.empty
         ManagedLzma.DecompressOutputAvailable output _ -> output `shouldSatisfy` (not . BS.null)
         _ -> fail "retained decoder did not reach native output"
-
-processMemory :: IO (Integer, Integer)
-processMemory = do
-    rows <- T.lines . decodeUtf8 <$> BS.readFile "/proc/self/status"
-    let value key = case [amount | row <- rows, [label, amount, "kB"] <- [T.words row], label == key] of
-            [amount] -> maybe (fail "invalid process memory counter") (pure . (* 1024)) (readMaybe (toString amount))
-            _ -> fail "missing process memory counter"
-    (,) <$> value "VmSize:" <*> value "VmRSS:"
-
-data NativeAdmissionRefused = NativeAdmissionRefused deriving stock (Eq, Show)
-instance Exception NativeAdmissionRefused

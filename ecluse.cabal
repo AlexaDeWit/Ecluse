@@ -306,6 +306,7 @@ library ecluse-core
     Ecluse.Core.Server.Framing
     Ecluse.Core.Server.MemoryModel
     Ecluse.Core.Server.Metadata
+    Ecluse.Core.Server.MetadataGzip
     Ecluse.Core.Server.MirrorView
     Ecluse.Core.Server.Pipeline
     Ecluse.Core.Server.Pipeline.Diagnostics
@@ -351,6 +352,7 @@ library ecluse-core
       Ecluse.Core.Worker.Loop
       Ecluse.Core.Worker.Realise
       Ecluse.Core.Worker.Types
+    Ecluse.Core.Zlib
 
   -- The PEP 440 and RubyGems version grammars. Internal to ecluse-core: VersionKey is
   -- opaque, so callers reach them only through the agnostic Ecluse.Core.Version API.
@@ -1167,6 +1169,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.FieldValueSpec
     Ecluse.Core.Server.FramingSpec
     Ecluse.Core.Server.MemoryModelSpec
+    Ecluse.Core.Server.MetadataGzipSpec
     Ecluse.Core.Server.MetadataSpec
     Ecluse.Core.Server.MirrorViewSpec
     Ecluse.Core.Server.PathSpec
@@ -1207,6 +1210,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Worker.LivenessSpec
     Ecluse.Core.Worker.LoopSpec
     Ecluse.Core.Worker.RealiseSpec
+    Ecluse.Core.ZlibSpec
     Ecluse.Package.Filter.Support
     Ecluse.Rules.Outage.Support
     Ecluse.Rules.Support
@@ -1644,9 +1648,10 @@ test-suite ecluse-residency
   type:               exitcode-stdio-1.0
   main-is:            Main.hs
   hs-source-dirs:     test/residency test/integration
-  c-sources:          test/residency/cbits/archive-native-memory.c
+  c-sources:          test/residency/cbits/native-memory.c
   other-modules:
     Data.JsonStream.LexerResidencySpec
+    Ecluse.Core.NativeProbe
     Ecluse.Core.Registry.Json.WalkProbe
     Ecluse.Core.Registry.JsonStreamResidencySpec
     Ecluse.Core.Registry.MetadataResidencySpec
@@ -1660,6 +1665,7 @@ test-suite ecluse-residency
     Ecluse.Core.Server.MemoryModel.ProbeMode
     Ecluse.Core.Server.MemoryModel.ProbeModeResidencySpec
     Ecluse.Core.Server.MemoryModelResidencySpec
+    Ecluse.Core.Server.MetadataGzipResidencySpec
     Ecluse.Core.Server.MirrorViewResidencySpec
     Ecluse.Core.Mirror.State.WeightResidencySpec
     Ecluse.Core.Server.Pipeline.TarballResidencySpec

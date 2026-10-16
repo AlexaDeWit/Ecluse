@@ -1,32 +1,24 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ForeignFunctionInterface #-}
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | A scoped inflater over the existing streaming-commons ABI, with deterministic release on every exit.
 module Ecluse.Core.Registry.PyPI.Archive.Inflate (InflateFormat (..), withInflatedChunks) where
 
 import Data.ByteString qualified as BS
-import Data.ByteString.Unsafe qualified as BSU
 import Data.Streaming.Zlib.Lowlevel qualified as Z
-import Foreign.C.Types (CInt (..))
+import Foreign.C.Types (CInt)
 import Foreign.ForeignPtr (ForeignPtr, mallocForeignPtrBytes, withForeignPtr)
-import Foreign.Marshal.Alloc (free)
-import Foreign.Ptr (castPtr, nullPtr)
-import UnliftIO.Exception (bracket, mask_, onException, throwIO)
+import Foreign.Ptr (castPtr)
+import UnliftIO.Exception (bracket, mask_, throwIO)
 
 import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Zlib (ZlibFault (InvalidZlibState, ZlibAllocationFailed), advanceStream, initialiseInflate, openStream, releaseInflate)
 
 -- | Raw ZIP members or a bounded sequence of gzip members.
 data InflateFormat = RawDeflate | GzipMembers Int
 
 data Inflater = Fresh !Int ByteString | Active !Int Z.ZStream' ByteString | Finished | Failed ParseError
-
-data NativeInflateFault = InflaterAllocationFailed | InflaterInitialisationFailed CInt | InvalidInflaterState | InvalidInflaterCounters
-    deriving stock (Show)
-
-instance Exception NativeInflateFault
 
 -- | Use the pull action sequentially inside its callback. Empty output denotes the verified stream end.
 withInflatedChunks :: InflateFormat -> (Int -> IO ()) -> ByteString -> (IO (Either ParseError ByteString) -> IO a) -> IO a
@@ -66,8 +58,8 @@ nextChunk format owner output =
                     | otherwise -> do
                         writeIORef owner (Active count native remaining)
                         emitOrContinue bytes
-                -4 -> throwIO InflaterAllocationFailed
-                -2 -> throwIO InvalidInflaterState
+                -4 -> throwIO ZlibAllocationFailed
+                -2 -> throwIO (InvalidZlibState status)
                 _ -> failStream owner "malformed or truncated compressed stream"
   where
     emitOrContinue bytes = if BS.null bytes then nextChunk format owner output else pure (Right bytes)
@@ -76,23 +68,15 @@ memberLimit :: InflateFormat -> Int
 memberLimit RawDeflate = 1
 memberLimit (GzipMembers limit) = limit
 
+-- Allocation failures belong to the worker fault boundary, not the archive-refusal result.
 acquire :: InflateFormat -> IO Z.ZStream'
-acquire format = mask_ $ do
-    native <- Z.zstreamNew
-    -- Allocation failures belong to the worker fault boundary, not the archive-refusal result.
-    when (native == nullPtr) (throwIO InflaterAllocationFailed)
-    status <- initialise native (case format of RawDeflate -> -15; GzipMembers _ -> 31) `onException` free native
-    if status == 0
-        then pure native
-        else do
-            free native
-            throwIO (InflaterInitialisationFailed status)
+acquire format = openStream (`initialiseInflate` (case format of RawDeflate -> -15; GzipMembers _ -> 31))
 
 close :: IORef Inflater -> IO ()
 close owner = mask_ $ do
     previous <- atomicModifyIORef' owner (Finished,)
     case previous of
-        Active _ native _ -> release native
+        Active _ native _ -> releaseInflate native
         Fresh{} -> pure ()
         Finished -> pure ()
         Failed{} -> pure ()
@@ -106,20 +90,7 @@ failStream owner message = do
 
 step :: Z.ZStream' -> ByteString -> ForeignPtr Word8 -> IO (CInt, Int, ByteString)
 step native input output =
-    BSU.unsafeUseAsCStringLen (BS.take chunkBytes input) $ \(source, inputLength) ->
-        withForeignPtr output $ \destination -> do
-            Z.c_set_avail_in native source (fromIntegral inputLength)
-            Z.c_set_avail_out native (castPtr destination) (fromIntegral chunkBytes)
-            status <- Z.c_call_inflate_noflush native
-            unread <- fromIntegral <$> Z.c_get_avail_in native
-            unused <- fromIntegral <$> Z.c_get_avail_out native
-            -- Reject impossible native counters before constructing a ByteString from the output pointer.
-            when (unread > inputLength || unused > chunkBytes) (throwIO InvalidInflaterCounters)
-            bytes <- BS.packCStringLen (castPtr destination, chunkBytes - unused)
-            pure (status, inputLength - unread, bytes)
-
-foreign import ccall unsafe "streaming_commons_inflate_init2"
-    initialise :: Z.ZStream' -> CInt -> IO CInt
-
-foreign import ccall unsafe "streaming_commons_free_z_stream_inflate"
-    release :: Z.ZStream' -> IO ()
+    withForeignPtr output $ \destination -> do
+        (status, consumed, written) <- advanceStream Z.c_call_inflate_noflush native (BS.take chunkBytes input) destination chunkBytes
+        bytes <- BS.packCStringLen (castPtr destination, written)
+        pure (status, consumed, bytes)
