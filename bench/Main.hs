@@ -16,6 +16,7 @@ import Ecluse.Core.ColdReadBench qualified as ColdReadBench
 import Ecluse.Core.DigestBench qualified as DigestBench
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.MergeBench qualified as MergeBench
+import Ecluse.Core.MetadataGzipBench qualified as MetadataGzipBench
 import Ecluse.Core.MirrorReadBench qualified as MirrorReadBench
 import Ecluse.Core.Package (artUrl, infoVersions, pkgArtifacts)
 import Ecluse.Core.PackedBench qualified as PackedBench
@@ -45,12 +46,13 @@ main = do
     cacheBenchmarks <- CacheBench.benchmarks
     packed <- traverse PackedBench.benchmarks ecosystems
     digests <- DigestBench.benchmarks ecosystems
+    gzipped <- MetadataGzipBench.benchmarks ecosystems
     ColdReadBench.withBenchmarks ecosystems $ \coldReads ->
         AdvisoryRulesBench.withBenchmarks ecosystems $ \advisoryRules ->
             defaultMain
                 [ bgroup
                     (toString tierName)
-                    (map fullBenchmarkContract ecosystems <> coldReads <> digests <> packed <> advisoryRules <> [StreamBench.benchmarks, cacheBenchmarks, mirrorReads])
+                    (map fullBenchmarkContract ecosystems <> coldReads <> digests <> gzipped <> packed <> advisoryRules <> [StreamBench.benchmarks, cacheBenchmarks, mirrorReads])
                 , testGroup "synthetic generators" (map generatorTests ecosystems)
                 ]
 

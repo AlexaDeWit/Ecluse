@@ -2029,6 +2029,7 @@ benchmark ecluse-bench
     Ecluse.Core.DigestBench
     Ecluse.Core.MirrorReadBench
     Ecluse.Core.MergeBench
+    Ecluse.Core.MetadataGzipBench
     Ecluse.Core.PackedBench
     Ecluse.Core.RouteBench
     Ecluse.Core.RulesBench
@@ -2061,6 +2062,7 @@ benchmark ecluse-bench
     , unliftio         ^>=0.2.25
     , wai              ^>=3.2
     , warp             ^>=3.4
+    , zlib             ^>=0.7
 
 -- The load tool links the composed application without entering the shipped library closure.
 -- It is both the harness and, under --serve-proxy, the proxy process each scenario measures.
