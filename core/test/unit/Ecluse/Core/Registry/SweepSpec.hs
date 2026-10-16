@@ -69,7 +69,7 @@ import Ecluse.Core.Registry.Sweep.Types (
  )
 import Ecluse.Core.Rules (RuleDeps (rdAdvisoryDatabase), prepare)
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh))
-import Ecluse.Core.Rules.Types (DenyIfCveParams (..), DenyIfEpssParams (..), FailureAlignment (FailDeny, FailNoDecision), Rule (AllowIfRemediatesCve, DenyByIdentity, DenyIfCve, DenyIfEpss))
+import Ecluse.Core.Rules.Types (DenyIfCveParams (..), DenyIfEpssParams (..), FailureAlignment (FailDeny, FailNoDecision), Rule (DenyByIdentity, DenyIfCve, DenyIfEpss))
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Cve (fakeCveLookup, unscoredEpssCases)
 import Ecluse.Test.Maintenance (
@@ -81,7 +81,7 @@ import Ecluse.Test.Maintenance (
     withBucket,
  )
 import Ecluse.Test.Package (npmVersion, unscopedNpm)
-import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, inertRuleDeps, servingRuleDeps, staticAdvisoryDatabase)
+import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, inertRuleDeps, servingRuleDeps, shippedRemediation, staticAdvisoryDatabase)
 import Ecluse.Test.Sweep (
     RecordedSweep (..),
     previewMount,
@@ -357,7 +357,7 @@ candidateCycleSpec = describe "the candidate cycle" $ do
     it "reports once that no advisory generation is loaded, and still sweeps the identity half" $ do
         store <- seededStore
         rec' <- recordingPorts Nothing
-        let configured = [AllowIfRemediatesCve, DenyByIdentity "left-pad"]
+        let configured = [shippedRemediation, DenyByIdentity "left-pad"]
         outcome <- sweepCycle testPacing (recPorts rec') [testMount (fakeMaintenance store) [denyRule] configured]
         tallyDeleted (outcomeTally outcome) `shouldBe` 1
         errors <- recErrors rec'

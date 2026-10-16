@@ -34,13 +34,22 @@ import Ecluse.Core.Rules (
  )
 import Ecluse.Core.Rules.Effectful (defaultEffectfulConfig, newBreaker)
 import Ecluse.Core.Rules.Types (
-    Decision (BlockedByDefault, Undecidable),
+    AdvisoryScore (Cvss),
+    Decision (Admitted, BlockedByDefault, Undecidable),
     FailureAlignment (FailDeny),
     Inability (EvaluationFailed, NoDatabaseLoaded),
-    Reason (FixesNoAdvisory, RuleUnable),
+    LimitShortfall (RemainingUnscored),
+    Reason (FixStillApplies, FixesButStillAffected, FixesNoAdvisory, RemediatesWithinLimits, RemediationBeyondLimits, RuleUnable),
     Rule (AllowIfOlderThan),
     RuleVerdict (NoDecision),
+    ScoreComparison (ScoreComparison),
+    ScoreReading (Scored, Unscored),
+    ScoreSides (ScoreSides),
     SkippedCheck (SkippedUnavailable, Unreached),
+    completeEvidence,
+    defaultDifferentialLimits,
+    mkAdvisoryIds,
+    mkLimitShortfalls,
  )
 import Ecluse.Core.Server.Pipeline.Internal (
     DenialAudit (..),
@@ -64,8 +73,10 @@ import Ecluse.Core.Server.Response (
     RuleName (RuleName),
     ServeDecision (Admit, Reject),
     Transience (WillResolve, WontResolve),
+    serveDecisionOf,
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpRuleEffectfulFailure))
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Log (runJsonLog)
 import Ecluse.Test.Package (
@@ -127,6 +138,28 @@ spec = do
             breaker <- newBreaker
             let resilience = Resilience defaultEffectfulConfig breaker noBreakerReporter getCurrentTime
             evalTier [packageRule "EffRule" 300 FailDeny (Just resilience) pass (NoDecision FixesNoAdvisory)] `shouldBe` Metric.Effectful
+
+    describe "remediation outcomes on the denial metrics" $ do
+        let ids = mkAdvisoryIds ("GHSA-fixed-0001" :| ["GHSA-open-0002"])
+            compared = ScoreComparison ids ids (ScoreSides (Scored 9.8) Unscored) (ScoreSides Unscored (Scored 0.005)) defaultDifferentialLimits
+            refusal = Undecidable (WillResolve Nothing) (RuleUnable "AllowIfRemediatesCve" NoDatabaseLoaded)
+            evidence = completeEvidence (detailsWith leftpadName (npmVersion "1.0.0") [])
+            labelsOf decision = case serveDecisionOf evidence decision of
+                Admit -> Nothing
+                Reject (Rejection reason _) -> Just (denialLabels reason)
+        it "labels every remediation outcome without an advisory identifier"
+            $ for_
+                [ Admitted "AllowIfRemediatesCve" (RemediatesWithinLimits compared) []
+                , BlockedByDefault [RemediationBeyondLimits compared (mkLimitShortfalls (RemainingUnscored Cvss ids :| [])), FixStillApplies ids, FixesButStillAffected ids ids]
+                , refusal
+                ]
+            $ \decision -> for_ (labelsOf decision) $ \(rule, reasonClass) ->
+                (maybeToList rule <> [show reasonClass]) `shouldSatisfy` all (\label -> not ("GHSA-" `T.isInfixOf` label))
+        it "counts a fail-closed remediation refusal as unavailable and as an effectful failure" $ do
+            labelsOf refusal `shouldBe` Just (Nothing, Metric.ReasonUnavailable)
+            causes <- newIORef []
+            recordEffectfulFailures noopMetricsPort{mpRuleEffectfulFailure = \cause -> modifyIORef' causes (cause :)} [refusal]
+            readIORef causes `shouldReturn` [Metric.Connection]
 
     describe "transienceCause (effectful-failure cause)" $ do
         it "maps a retryable cause to a connection fault" $
@@ -240,9 +273,7 @@ spec = do
                     refusals === (belowFloorMarker <$ Map.elems weak) <> (missingMarker <$ Map.elems digestless)
                     infoDistTags admissible === Map.filter ((`Map.member` listed) . renderVersion) (infoDistTags info)
 
-{- | A packument interleaving the three integrity classes by key. The refused classes alternate in
-ascending key order, so the assertion pins the bucket order and not the key order.
--}
+-- | Three integrity classes interleaved by key, so the assertion pins the bucket order and not the key order.
 mixedIntegrityInfo :: PackageInfo
 mixedIntegrityInfo =
     PackageInfo
@@ -259,16 +290,12 @@ mixedIntegrityInfo =
         , infoInvalidEntries = []
         }
 
-{- | The two context-worded refusals admitByIntegrity projects the dropped versions to.
-They stay distinct, so the bucket order is observable in the refusal list.
--}
+-- | The two refusals admitByIntegrity projects dropped versions to, distinct so the bucket order shows.
 belowFloorMarker, missingMarker :: ServeDecision
 belowFloorMarker = Reject (Rejection BelowIntegrityFloor "below the integrity floor")
 missingMarker = Reject (Rejection MissingIntegrity "no integrity digest")
 
-{- | A snapshot of 'leftpadName' at the given version carrying exactly the given digests.
-Everything else is an inert default, since admitByIntegrity reads only the artifacts.
--}
+-- | 'leftpadName' at the version, with exactly the given digests. admitByIntegrity reads only the artifacts.
 versionWith :: Text -> [Hash] -> PackageDetails
 versionWith raw = detailsWith leftpadName (npmVersion raw)
 
@@ -276,9 +303,7 @@ versionWith raw = detailsWith leftpadName (npmVersion raw)
 gateFloorAdmits :: Artifact -> Bool
 gateFloorAdmits artifact = classifyDigests defaultMinIntegrity (artHashes artifact) == MeetsFloor
 
-{- | A document of up to four versions, some of them tagged. An npm document carries one file a
-version and a PyPI document up to three, each with a strong digest, a weak one, both, or none.
--}
+-- | Up to four versions, npm with one file each and PyPI up to three, each digest strong, weak, both, or none.
 genIntegrityInfo :: Gen PackageInfo
 genIntegrityInfo = do
     (name, versionOf, fileCount) <- Gen.element [(leftpadName, npmVersion, Range.singleton 1), (requestsName, pypiVersion, Range.constant 1 3)]

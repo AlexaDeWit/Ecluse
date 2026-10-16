@@ -41,41 +41,27 @@ import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Wire (renderWire)
 
-{- | A reason the composition root refuses to start. The root aggregates them, so a
-single run reports every problem an operator must fix.
--}
+-- | A reason the composition root refuses to start. The root aggregates them, so one run reports every problem.
 data BootError
     = -- | A rule policy did not resolve (surfaced by 'Ecluse.Config.loadConfig').
       PolicyBootError PolicyError
     | -- | A configured mount's ecosystem has no adapter, so Écluse cannot serve it.
       MissingAdapter Ecosystem
-    | {- | A mount has no initialised mirror-write provider. Every active mount derives its
-      credential from its mirror target, so this is a safety net, not a reachable state.
-      -}
+    | -- | A mount has no mirror-write provider. Every mount derives one from its mirror target, so this is a safety net.
       UnresolvedCredential Ecosystem
     | -- | The queue URL names a backend this binary cannot run.
       QueueProviderUnavailable Text
-    | {- | An SQS endpoint override (@AWS_ENDPOINT_URL_SQS@) is set but @AWS_REGION@ is not.
-      An emulator or VPC endpoint carries no region in its host, so the ambient one must scope it.
-      -}
+    | -- | @AWS_ENDPOINT_URL_SQS@ is set but @AWS_REGION@ is not, and an emulator or VPC endpoint carries no region.
       QueueRegionMissing
-    | {- | @ECLUSE_QUEUE__URL@ is set but its shape names no backend this binary knows. Guessing
-      one would send mirror jobs somewhere the operator did not point at. Carries the value.
-      -}
+    | -- | @ECLUSE_QUEUE__URL@ names no backend this binary knows. Guessing one would misroute mirror jobs.
       QueueUrlUnrecognised Text
-    | {- | The configured SQS endpoint override (@AWS_ENDPOINT_URL_SQS@) is not a parseable
-      endpoint URL. It can carry a credential, so the value stays redacted behind the secret.
-      -}
+    | -- | @AWS_ENDPOINT_URL_SQS@ is not a parseable URL. It can carry a credential, so the value stays redacted.
       QueueEndpointMalformed Secret
-    | {- | The S3 advisory client's endpoint override (@AWS_ENDPOINT_URL@) is not a parseable
-      endpoint URL. Refused rather than dropped, so a typo never silently dials real AWS.
-      -}
+    | -- | @AWS_ENDPOINT_URL@ is not a parseable URL. Refused rather than dropped, so a typo never dials real AWS.
       AwsEndpointMalformed Secret
     | -- | The eager mint threw, carrying every configured consumer key and the rendered exception.
       CodeArtifactMintFailed (NonEmpty Text) Text
-    | {- | A mount declares a mirror target, but this build writes nothing for its ecosystem.
-      The mirror could never publish, so the mount is refused rather than booted half-wired.
-      -}
+    | -- | A mount declares a mirror target, but this build writes nothing for its ecosystem.
       MirrorTargetWithoutPublish Ecosystem
     | -- | A PyPI mirror role cannot retain or validate its expected inventory without durable state.
       MirrorStateRequired Ecosystem
@@ -83,93 +69,53 @@ data BootError
       UploadConfigurationRequired Ecosystem Text
     | -- | A publication target has no adapter that can write its ecosystem's protocol.
       PublicationTargetWithoutPublish Ecosystem
-    | {- | A publication target is set and the mount declares no first-party namespaces, so the
-      anti-shadowing guard has nothing to enforce and any name could be shadowed.
-      -}
+    | -- | A publication target with no first-party namespaces leaves the anti-shadowing guard nothing to enforce.
       FirstPartyMissing Ecosystem
     | -- | First-party names have no private authority, so every lookup would return 404.
       FirstPartyWithoutPrivateUpstream Ecosystem
-    | {- | A static publish credential is set without a verifiable inbound edge
-      (@ECLUSE_SERVER__AUTH_TOKEN@). An unauthenticated request could otherwise publish as Écluse.
-      -}
+    | -- | A static publish credential without @ECLUSE_SERVER__AUTH_TOKEN@ would let anyone publish as Écluse.
       PublishStaticCredentialNeedsEdge Ecosystem StoreTag
-    | {- | A mount's publication target, at the carried registry, shares a host with the named
-      mount's public upstream. The publisher's relayed credential would reach a public registry.
-      -}
+    | -- | A publication target shares a host with the named mount's public upstream, so a relayed credential would reach it.
       PublicationTargetOnPublicUpstream Ecosystem Ecosystem Text
-    | {- | A mount's publication target is also the named mount's endpoint under the named key, at
-      the carried registry. A publish would be relayed into a role declared for something else.
-      -}
+    | -- | A publication target is also the named mount's endpoint under the named key, so a publish would reach another role.
       PublicationTargetOnMountEndpoint Ecosystem Ecosystem Text Text
-    | {- | A mount's mirror target, at the carried registry, shares a host with the named mount's
-      public upstream. Écluse's own mirror-write credential would reach a public registry.
-      -}
+    | -- | A mirror target shares a host with the named mount's public upstream, so the mirror-write credential would reach it.
       MirrorTargetOnPublicUpstream Ecosystem Ecosystem Text
-    | {- | A mount's mirror target is also the named mount's endpoint under the named key, at the
-      carried registry. A sweep of that store would delete data the other role owns.
-      -}
+    | -- | A mirror target is also the named mount's endpoint under the named key, so a sweep would delete another role's data.
       MirrorTargetOnMountEndpoint Ecosystem Ecosystem Text Text
     | -- | One repository receives caller credentials and bypasses the public rules through the private leg.
       PrivateUpstreamOnPublicUpstream Ecosystem Text
-    | {- | The mount's private upstream can serve public content, so every version it holds would
-      be trusted as private. Carries what the backend reported.
-      -}
+    | -- | The private upstream can serve public content, which would be trusted as private. Carries what the backend reported.
       PrivateUpstreamUnsafe Ecosystem UnsafeReason
-    | {- | Asking the mount's private upstream what it aggregates threw rather than answering, so
-      nothing was settled about it. Carries the rendered exception.
-      -}
+    | -- | Asking the private upstream what it aggregates threw, so nothing was settled about it.
       PrivateUpstreamProbeFailed Ecosystem Text
-    | {- | Two endpoints, each carried as its mount and its tagged key path, name the carried
-      registry under different tags, so the two declarations disagree about what serves that store.
-      -}
+    | -- | Two endpoints name the carried registry under different tags, so they disagree about what serves that store.
       StoreTagConflict Ecosystem Text Ecosystem Text Text
-    | {- | An explicit memory override breaks the combined memory-plan invariant even after every
-      tenant shed to its minimum. A computed plan degrades and boots, an operator claim does not.
-      -}
+    | -- | An explicit memory override breaks the plan's invariant even at every tenant's minimum. A computed plan degrades instead.
       MemoryPlanOverrideUnsafe [Text]
-    | {- | A split-deployment role (carried as its invocation) was selected over the bounded
-      in-memory queue, whose jobs never leave the process that enqueued them.
-      -}
+    | -- | A split-deployment role selected over the in-memory queue, whose jobs never leave their process.
       SplitRoleNeedsDurableQueue Text
-    | {- | The dedicated mirror worker was launched with no mount declaring a mirror target, so
-      it has no queue to drain and nothing to publish.
-      -}
+    | -- | The mirror worker launched with no mount declaring a mirror target, so it has nothing to drain.
       MirrorRoleWithoutMirroring
-    | {- | Building the configured mirror-queue backend threw. Carries the rendered exception,
-      which tells a transient fault from a permanent one to fix.
-      -}
+    | -- | Building the mirror-queue backend threw. The rendered exception tells a transient fault from a permanent one.
       MirrorQueueUnavailable Text
-    | {- | Preparing the configured advisory sync threw. Carries the rendered exception, which
-      tells a transient fault from a permanent one to fix.
-      -}
+    | -- | Preparing the advisory sync threw. The rendered exception tells a transient fault from a permanent one.
       AdvisorySyncUnavailable Text
-    | {- | A vetted mirror store has no store maintenance backend the Dredger can sweep it
-      with, carrying why.
-      -}
+    | -- | A vetted mirror store has no maintenance backend the Dredger can sweep it with, carrying why.
       StoreMaintenanceUnavailable Ecosystem StoreMaintenanceReason
-    | {- | Two @dredger.quotaOverrides@ entries declare the same capacity pool differently,
-      carried as the pool and the two keys that define it.
-      -}
+    | -- | Two @dredger.quotaOverrides@ entries define one capacity pool differently: the pool and both keys.
       DredgerQuotaScopeConflict Text Text Text
-    | {- | The configured pause between sweep chunks is beneath its floor, carried beside it.
-      Only the deleting role reads the @dredger@ group, so only that role refuses.
-      -}
+    | -- | The pause between sweep chunks is beneath its floor. Only the deleting role reads it, so only that role refuses.
       DredgerChunkPauseBeneathFloor NominalDiffTime NominalDiffTime
-    | {- | A mount's rules deny on the advisory database and no advisory store is configured, so
-      those rules could never decide. Carries the mount and the rule names, in policy order.
-      -}
+    | -- | A mount's rules refuse without advisory evidence and no store is configured. Carries the rule names, in policy order.
       AdvisoryDenyWithoutStore Ecosystem (NonEmpty Text)
     | -- | An active mount carries a rule its adapter blocks, with the declared reason.
       RuleBlockedOnMount Ecosystem RuleType Text
-    | {- | An advisory store is configured and no mount is, so @ecluse pilot@ has no ecosystem
-      to compile an artifact for and would publish nothing.
-      -}
+    | -- | An advisory store with no mount leaves @ecluse pilot@ no ecosystem to compile for.
       PilotWithoutEcosystem
     | -- | The progress window is zero or negative. Carries the configured seconds.
       ProgressWindowNotPositive Int
-    | {- | The progress window is not below the serve-path cap, so the floor could never fire
-      first on a served request. Carries the window and the cap, in seconds.
-      -}
+    | -- | The progress window is not below the serve-path cap, so the floor could never fire first. Window and cap, in seconds.
       ProgressWindowNotBelowServeCap Int Int
     | -- | The progress floor's byte count is zero or negative. Carries the configured count.
       MinProgressBytesNotPositive Int
@@ -181,9 +127,7 @@ data StoreMaintenanceReason
       NoControlPlane StoreTag
     | -- | The mount's store carries no operator consent to delete from it.
       DeletionNotPermitted StoreTag
-    | {- | The store's only control plane is the ecosystem protocol, which spells no package
-      listing or version delete.
-      -}
+    | -- | The store's only control plane is the ecosystem protocol, which spells no listing or version delete.
       NoProtocolMaintenance
     | -- | The declared private cache lacks a supported maintenance or authentication operation.
       PrivateCacheUnavailable Text
@@ -191,35 +135,25 @@ data StoreMaintenanceReason
       ClientBuildFailed Text
     deriving stock (Eq, Show)
 
-{- | A finding a role boots on and warns about. The deleting role refuses the collapses below,
-so no advisory naming one reaches it.
--}
+-- | A finding a role boots on and warns about. The deleting role refuses the collapses below instead.
 data Advisory
-    = {- | A mount's mirror target is also the named mount's private upstream, at the carried
-      registry. Both mounts are carried, because the two can differ.
-      -}
+    = -- | A mirror target is also the named mount's private upstream, at the carried registry.
       MirrorTargetOnPrivateUpstream Ecosystem Ecosystem RegistryUrl
     | -- | A mount's mirror target is also its own publication target, at the carried registry.
       MirrorTargetOnOwnPublicationTarget Ecosystem RegistryUrl
-    | {- | A @dredger.quotaOverrides@ entry names a store no mount declares, carried as the key it
-      was written under.
-      -}
+    | -- | A @dredger.quotaOverrides@ entry, carried as its key, names a store no mount declares.
       DredgerQuotaOverrideUnmatched Text
-    | {- | Whether the mount's private upstream serves public content stayed open, so that
-      topology stays the operator's to verify. Carries why it stayed open.
-      -}
+    | -- | A mount's remediation rule skips with no advisory store, so it admits no fix and every admission logs the skip.
+      RemediationSkipsWithoutStore Ecosystem
+    | -- | Whether the private upstream serves public content stayed open, so verifying it stays the operator's. Carries why.
       PrivateUpstreamUndecided Ecosystem UndecidabilityReason
     deriving stock (Eq, Show)
 
-{- | Fold a thrown fault into the boot error the caller names, so a phase that dials a live
-environment refuses through the aggregate rather than escaping the boot as an exception.
--}
+-- | Fold a thrown fault into the named boot error, so a phase that dials a live environment refuses through the aggregate.
 refuseOnThrow :: (Text -> BootError) -> IO a -> IO (Either [BootError] a)
 refuseOnThrow refusal action = first (pure . refusal . displayExceptionT) <$> tryAny action
 
-{- | Render an aggregated refusal as the one block a failed launch reports, so every problem an
-operator must fix appears in a single run.
--}
+-- | Render an aggregated refusal as the one block a failed launch reports.
 renderBootErrors :: [BootError] -> Text
 renderBootErrors = T.unlines . map renderBootError
 
@@ -393,9 +327,9 @@ renderBootError = \case
     AdvisoryDenyWithoutStore eco rules ->
         "mount \""
             <> ecosystemName eco
-            <> "\" enables the advisory deny rules "
+            <> "\" enables rules that refuse without advisory evidence ("
             <> T.intercalate ", " (toList rules)
-            <> ", but ECLUSE_ADVISORIES__URL (advisories.url) is unset: those rules have no advisory database to read, so every version they evaluate would refuse. Set the advisory store and run ecluse pilot to publish an artifact for this mount, or remove these rules from its policy"
+            <> "), but ECLUSE_ADVISORIES__URL (advisories.url) is unset: those rules have no advisory database to read, so every version they evaluate would refuse. Set the advisory store and run ecluse pilot to publish an artifact for this mount, or remove these rules from its policy"
     PilotWithoutEcosystem ->
         "ECLUSE_ADVISORIES__URL is set but no mount is declared, so ecluse pilot has no ecosystem to compile an advisory artifact for: declare the mounts this deployment serves under ECLUSE_MOUNTS__<ECOSYSTEM>__, or run a role this configuration has work for"
     ProgressWindowNotPositive configured ->
@@ -431,9 +365,7 @@ renderStoreMaintenanceReason eco = \case
     PrivateCacheUnavailable detail -> "privateUpstream cannot be previewed: " <> detail
     ClientBuildFailed detail -> "building its client failed: " <> detail
 
-{- | Render an advisory as the warning line a boot logs and @ecluse check-config@ prints. Both
-entry points render here, so neither can word a warning its own way.
--}
+-- | Render an advisory as the warning a boot logs and @ecluse check-config@ prints, so neither words it its own way.
 renderAdvisory :: Advisory -> Text
 renderAdvisory = \case
     MirrorTargetOnPrivateUpstream eco other url ->
@@ -444,6 +376,10 @@ renderAdvisory = \case
         "dredger.quotaOverrides: "
             <> authorityLabel key
             <> " names no store this deployment declares, so it paces nothing"
+    RemediationSkipsWithoutStore eco ->
+        "mount \""
+            <> ecosystemName eco
+            <> "\" enables AllowIfRemediatesCve with onUnavailable: skip, but ECLUSE_ADVISORIES__URL (advisories.url) is unset: the rule admits no fix, and every admitted artifact logs a skipped remediation check. Set the advisory store, or disable the rule"
     PrivateUpstreamUndecided eco reason ->
         mountKeyRef eco "privateUpstream"
             <> " was not checked for a connection to a public registry: "

@@ -33,6 +33,9 @@ ruleLines =
     , "config: rules.min-age.ageSeconds = 3600 (environment)"
     , "config: rules.min-age.precedence = 100 (default)"
     , "config: rules.min-age.type = AllowIfOlderThan (default)"
+    , "config: rules.remediation-fast-track.maxRemainingCvss = 6.9 (default)"
+    , "config: rules.remediation-fast-track.onUnavailable = deny (default)"
+    , "config: rules.remediation-fast-track.remainingAdvisories = differential (default)"
     , "config: rules.remediation-fast-track.type = AllowIfRemediatesCve (default)"
     , "rule boot order for mount npm:"
     , "rule 1: DenyByIdentity (precedence 400, applies at admission only)"
@@ -78,7 +81,7 @@ spec = do
             loggedRules ruleLines
                 `shouldBe` [ LoggedRule "mounts.npm.rules.pin" (Just "AllowByIdentity") [("identity", "left-pad")] ["document"]
                            , LoggedRule "min-age" (Just "AllowIfOlderThan") [("ageSeconds", "3600"), ("precedence", "100")] ["environment", "default"]
-                           , LoggedRule "remediation-fast-track" (Just "AllowIfRemediatesCve") [] ["default"]
+                           , LoggedRule "remediation-fast-track" (Just "AllowIfRemediatesCve") [("maxRemainingCvss", "6.9"), ("onUnavailable", "deny"), ("remainingAdvisories", "differential")] ["default"]
                            ]
         it "reads the last parenthesis as the layer" $
             map lrSettings (loggedRules ["config: rules.pin.identity = a (b) (document)"]) `shouldBe` [[("identity", "a (b)")]]

@@ -58,8 +58,10 @@ import Ecluse.Test.Rules (
     mapPackageRead,
     mapResilience,
     packageRule,
+    remediationWith,
     sentences,
     servingRuleDeps,
+    shippedRemediation,
     staticAdvisoryDatabase,
     verdictSentence,
     withAdvisoryFreshness,
@@ -72,7 +74,8 @@ import Ecluse.Core.Rules.Effectful (EffectfulConfig (ecBreakerCooldown, ecBreake
 import Ecluse.Core.Rules.Freshness
 import Ecluse.Core.Rules.Render (renderDecision, renderInability, renderReason)
 import Ecluse.Core.Rules.Types
-import Ecluse.Rules.Support (ctx, now, pkg, sixDayLimit)
+import Ecluse.Rules.Remediation.Support (genRemediation, genRows, referenceRemediation)
+import Ecluse.Rules.Support (ctx, now, pkg, sixDayLimit, sourceStateDeps)
 
 listed :: Maybe Text -> RuleEvidence
 listed mScope = identityEvidence (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0
@@ -138,6 +141,21 @@ denyCveAt threshold = DenyIfCve (DenyIfCveParams threshold FailDeny)
 
 denyEpssAt :: Double -> Rule
 denyEpssAt threshold = DenyIfEpss (DenyIfEpssParams threshold FailDeny)
+
+-- | The remediation rule with both choices set to abstain, as the fast lane decided before its policy choices.
+skippingRemediation :: Rule
+skippingRemediation = remediationWith FailNoDecision AbstainOnRemaining
+
+-- | The shipped remediation limits under either unavailability choice.
+differentialUnder :: FailureAlignment -> Rule
+differentialUnder alignment = remediationWith alignment (Differential defaultDifferentialLimits)
+
+-- | A partial fix of @thing\@1.0.0@: a severe advisory it fixes, and a minor one that still affects it.
+partialFixRows :: Double -> [(Text, AdvisoryRange)]
+partialFixRows remainingCvss =
+    [ ("thing", AdvisoryRange "GHSA-fixed-0001" (Just 9.8) (Just "0") (FixedBefore "1.0.0") (Just 0.5))
+    , ("thing", AdvisoryRange "GHSA-open-0002" (Just remainingCvss) (Just "0.5.0") Unbounded (Just 0.005))
+    ]
 
 genScope :: Gen Text
 genScope = Gen.text (Range.linear 1 12) Gen.alpha
@@ -208,9 +226,13 @@ expirySpec = describe "an expired advisory push" $ do
                 (pkg Nothing 99)
                 >>= (`shouldSatisfy` isUndecidable)
 
-    it "abstains on the remediation allow when the push carries no publication time" $
-        decideWith (undated (depsWith fixRows)) [atDefaultPrecedence AllowIfRemediatesCve] (pkg Nothing 0)
-            >>= (`shouldSatisfy` isBlockedByDefault)
+    for_ [(FailNoDecision, "abstains", isBlockedByDefault), (FailDeny, "refuses", isUndecidable)] $ \(alignment, outcome, expected) -> do
+        it ("the remediation allow " <> outcome <> " under onUnavailable " <> show alignment <> " when the push carries no publication time") $
+            decideWith (undated (depsWith fixRows)) [atDefaultPrecedence (differentialUnder alignment)] (pkg Nothing 0)
+                >>= (`shouldSatisfy` expected)
+        it ("the remediation allow " <> outcome <> " under onUnavailable " <> show alignment <> " rather than admitting on expired evidence") $
+            decideWith (expired (depsWith fixRows)) [atDefaultPrecedence (differentialUnder alignment)] (pkg Nothing 0)
+                >>= (`shouldSatisfy` expected)
 
     it "is eligible at an age equal to the maximum" $
         decideWith
@@ -234,14 +256,10 @@ expirySpec = describe "an expired advisory push" $ do
             (pkg Nothing 0)
             >>= \d -> admittedBy d `shouldBe` Just "AllowByIdentity"
 
-    it "abstains on the remediation allow rather than admitting on expired evidence" $
-        decideWith (expired (depsWith fixRows)) [atDefaultPrecedence AllowIfRemediatesCve] (pkg Nothing 0)
-            >>= (`shouldSatisfy` isBlockedByDefault)
-
-    it "abstains on a remediation allow ranked above the deny, so the refusal takes effect" $
+    it "skips a remediation allow ranked above the deny, so the deny's refusal takes effect" $
         decideWith
             (expired (depsWith fixRows))
-            [at 300 AllowIfRemediatesCve, atDefaultPrecedence (denyCveAt 8.0)]
+            [at 300 skippingRemediation, atDefaultPrecedence (denyCveAt 8.0)]
             (pkg Nothing 0)
             >>= (`shouldSatisfy` isUndecidable)
 
@@ -303,8 +321,8 @@ evidenceSpec = describe "skipped-check evidence on an admission" $ do
         renderDecision (pkg Nothing 30) decision
             `shouldSatisfy` T.isSuffixOf "(skipped for unavailability: DenyIfCve (the rule source circuit breaker is open))"
 
-    it "keeps the remediation allow an expired push abstained, since a deny refuses on expiry instead" $ do
-        decision <- decideWith (expired (depsWith fixRows)) (map atDefaultPrecedence [AllowIfRemediatesCve, AllowIfOlderThan (7 * nominalDay)]) (pkg Nothing 30)
+    it "keeps the remediation check an expired push skipped under onUnavailable: skip" $ do
+        decision <- decideWith (expired (depsWith fixRows)) (map atDefaultPrecedence [differentialUnder FailNoDecision, AllowIfOlderThan (7 * nominalDay)]) (pkg Nothing 30)
         admittedBy decision `shouldBe` Just "AllowIfOlderThan"
         case skippedChecks decision of
             [SkippedUnavailable "AllowIfRemediatesCve" cause] -> renderInability cause `shouldSatisfy` T.isInfixOf "past the maximum"
@@ -325,7 +343,7 @@ evidenceSpec = describe "skipped-check evidence on an admission" $ do
         decision <-
             decideWith
                 inertRuleDeps
-                (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision), AllowScope (mkScope "myorg"), DenyIfCve (DenyIfCveParams 8.0 FailNoDecision), AllowIfRemediatesCve])
+                (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision), AllowScope (mkScope "myorg"), DenyIfCve (DenyIfCveParams 8.0 FailNoDecision), shippedRemediation])
                 (pkg (Just "myorg") 30)
         admittedBy decision `shouldBe` Just "AllowScope"
         skippedChecks decision
@@ -340,6 +358,11 @@ evidenceSpec = describe "skipped-check evidence on an admission" $ do
         decision `shouldSatisfy` isUndecidable
         skippedChecks decision `shouldBe` []
 
+    it "keeps the remediation check skipped before the first sync under onUnavailable: skip" $ do
+        decision <- decideWith unloadedDeps (map atDefaultPrecedence [differentialUnder FailNoDecision, AllowIfOlderThan (7 * nominalDay)]) (pkg Nothing 30)
+        admittedBy decision `shouldBe` Just "AllowIfOlderThan"
+        skippedChecks decision `shouldBe` [SkippedUnavailable "AllowIfRemediatesCve" NoDatabaseLoaded]
+
     it "does not turn an unavailable check into an admission by itself" $
         -- Nothing else admits a young version, so the skipped deny leaves deny-by-default standing.
         decideWith inertRuleDeps skipPolicy (pkg Nothing 1) >>= (`shouldSatisfy` isBlockedByDefault)
@@ -347,7 +370,7 @@ evidenceSpec = describe "skipped-check evidence on an admission" $ do
 sourceHealthSpec :: Spec
 sourceHealthSpec = describe "advisory source health reporting" $ do
     for_ [FailDeny, FailNoDecision] $ \alignment ->
-        for_ [DenyIfCve (DenyIfCveParams 8 alignment), DenyIfKnownMalicious alignment] $ \rule ->
+        for_ [DenyIfCve (DenyIfCveParams 8 alignment), DenyIfKnownMalicious alignment, differentialUnder alignment] $ \rule ->
             describe (toString (ruleName rule) <> " under " <> show alignment) $ do
                 let name = ruleName rule
                     policy = map atDefaultPrecedence [rule, AllowIfOlderThan (7 * nominalDay)]
@@ -362,11 +385,12 @@ sourceHealthSpec = describe "advisory source health reporting" $ do
                     decision <- decideWith deps policy (pkg Nothing 30)
                     admittedBy decision `shouldBe` Just "AllowIfOlderThan"
                     reported reports `shouldReturn` [SourceAnswered name]
-                it "reports an answered read when the named MAL control denies" $ do
-                    (deps, reports) <- observedDeps (depsWith malRows)
-                    decision <- decideWith deps policy (pkg Nothing 30)
-                    blockedBy decision `shouldBe` Just name
-                    reported reports `shouldReturn` [SourceAnswered name]
+                when (ruleDenies rule) $
+                    it "reports an answered read when the named MAL control denies" $ do
+                        (deps, reports) <- observedDeps (depsWith malRows)
+                        decision <- decideWith deps policy (pkg Nothing 30)
+                        blockedBy decision `shouldBe` Just name
+                        reported reports `shouldReturn` [SourceAnswered name]
                 it "reports an expired push as unavailable with its cause" $ do
                     (deps, reports) <- observedDeps (expired (depsWith malRows))
                     void (decideWith deps policy (pkg Nothing 30))
@@ -401,15 +425,17 @@ sourceHealthSpec = describe "advisory source health reporting" $ do
         void (decideWith deps (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), DenyInstallTimeExecution]) (pkg Nothing 30))
         reported reports `shouldReturn` []
 
-    it "reports the remediation allow as answered without a database, because abstaining is its verdict" $ do
-        (deps, reports) <- observedDeps inertRuleDeps
-        void (decideWith deps [atDefaultPrecedence AllowIfRemediatesCve] (pkg Nothing 30))
+    it "reports the remediation allow answered once its rows load" $ do
+        (deps, reports) <- observedDeps (depsWith fixRows)
+        decision <- decideWith deps [atDefaultPrecedence shippedRemediation] (pkg Nothing 0)
+        admittedBy decision `shouldBe` Just "AllowIfRemediatesCve"
         reported reports `shouldReturn` [SourceAnswered "AllowIfRemediatesCve"]
 
 -- | Exact verdicts and sentences shared by unconfigured databases and databases awaiting their first sync.
 noDatabaseVerdicts :: [(Text, Rule, RuleVerdict, Text)]
 noDatabaseVerdicts =
-    [ ("AllowIfRemediatesCve", AllowIfRemediatesCve, NoDecision NoDatabaseToRemediate, "no advisory database is loaded")
+    [ ("AllowIfRemediatesCve set to deny", shippedRemediation, CannotVet FailDeny NoDatabaseLoaded, "AllowIfRemediatesCve: no advisory database loaded")
+    , ("AllowIfRemediatesCve set to skip", differentialUnder FailNoDecision, CannotVet FailNoDecision NoDatabaseLoaded, "AllowIfRemediatesCve: no advisory database loaded")
     , ("DenyIfCve set to deny", denyCveAt 8.0, CannotVet FailDeny NoDatabaseLoaded, "DenyIfCve: no advisory database loaded")
     , ("DenyIfCve set to skip", DenyIfCve (DenyIfCveParams 8.0 FailNoDecision), CannotVet FailNoDecision NoDatabaseLoaded, "DenyIfCve: no advisory database loaded")
     , ("DenyIfEpss set to deny", denyEpssAt 0.5, CannotVet FailDeny NoDatabaseLoaded, "DenyIfEpss: no advisory database loaded")
@@ -440,7 +466,7 @@ noDatabaseSpec = describe "an advisory rule with no database configured" $ do
                 sentences decision `shouldBe` [sentence]
 
     it "decides the shipped policy as it does before the first sync" $ do
-        let shipped = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve]
+        let shipped = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), shippedRemediation]
         for_ [pkg Nothing 1, pkg Nothing 30] $ \ev -> do
             unconfigured <- decideWith inertRuleDeps shipped ev
             decideWith unloadedDeps shipped ev >>= (`shouldBe` unconfigured)
@@ -448,10 +474,10 @@ noDatabaseSpec = describe "an advisory rule with no database configured" $ do
 -- | Reference verdict from per-version SQL fix probes and repeated range parsing.
 perVersionVerdict :: DbEtag -> (Text -> Text -> IO Bool) -> CveLookup -> Rule -> RuleEvidence -> IO RuleVerdict
 perVersionVerdict etag probe cve rule ev = case rule of
-    AllowIfRemediatesCve ->
+    AllowIfRemediatesCve params ->
         probe name version >>= \case
             False -> pure (NoDecision FixesNoAdvisory)
-            True -> remediation <$> cveAdvisoriesFor cve name
+            True -> referenceRemediation (aircRemaining params) ((== FixedBefore version) . arUpperBound) (referenceInside eco version) <$> cveAdvisoriesFor cve name
     DenyIfCve params -> deny DenyMissingScore Cvss (dicMinCvss params) arSeverity <$> cveAdvisoriesFor cve name
     DenyIfKnownMalicious _ -> denyMal <$> cveAdvisoriesFor cve name
     DenyIfEpss params -> deny AbstainMissingScore Epss (dieMinEpss params) arEpss <$> cveAdvisoriesFor cve name
@@ -460,13 +486,6 @@ perVersionVerdict etag probe cve rule ev = case rule of
     eco = pkgEcosystem (evName ev)
     name = TS.toText (pkgCanonical (evName ev))
     version = renderVersion (evVersion ev)
-    remediation ranges =
-        let remediated = ordNub [arCveId ar | ar <- ranges, arUpperBound ar == FixedBefore version]
-            stillOpen = ordNub [arCveId ar | ar <- ranges, referenceInside eco version ar]
-         in case (mkAdvisoryIds <$> nonEmpty remediated, mkAdvisoryIds <$> nonEmpty stillOpen) of
-                (Nothing, _) -> NoDecision FixesNoAdvisory
-                (Just fixed, Just open) -> NoDecision (FixesButStillAffected fixed open)
-                (Just fixed, Nothing) -> Allow (Remediates fixed)
     denyMal ranges =
         case mkAdvisoryIds <$> nonEmpty (ordNub [arCveId ar | ar <- ranges, referenceInside eco version ar, Just suffix <- [T.stripPrefix "MAL-" (arCveId ar)], not (T.null suffix)]) of
             Nothing -> NoDecision NoKnownMaliciousAdvisory
@@ -488,13 +507,19 @@ perRequestVerdicts deps rule name versions =
         [PreparedRule{prepEval = PerPackage packageRead}] -> prRead packageRead name (\_ rows -> (\loaded -> map (prVerdict packageRead loaded) versions) <$> rows)
         _ -> fail "expected one prepared package read"
 
--- | Every advisory rule, at thresholds on, between, and past the fixtures' scores.
-differentialRules :: [Rule]
-differentialRules =
+-- | Every advisory rule, at thresholds and limits on, between, and past the fixtures' scores.
+referenceParityRules :: [Rule]
+referenceParityRules =
     DenyIfKnownMalicious FailDeny
-        : AllowIfRemediatesCve
-        : [DenyIfCve (DenyIfCveParams threshold alignment) | threshold <- [0, 5.0, 7.0, 9.9], alignment <- [FailDeny, FailNoDecision]]
+        : [remediationWith FailNoDecision remaining | remaining <- AbstainOnRemaining : map Differential parityLimits]
+            <> [DenyIfCve (DenyIfCveParams threshold alignment) | threshold <- [0, 5.0, 7.0, 9.9], alignment <- [FailDeny, FailNoDecision]]
             <> [DenyIfEpss (DenyIfEpssParams threshold FailDeny) | threshold <- [0, 0.25, 0.5, 0.95, 1]]
+  where
+    parityLimits =
+        [ defaultDifferentialLimits
+        , DifferentialLimits 10 1 NoGapRequired NoGapRequired
+        , DifferentialLimits 5.0 0.5 (GapOfAtLeast 0.5) (GapOfAtLeast 0.1)
+        ]
 
 -- | Ranges, points and version spelling variants, including unparseable bounds and missing scores.
 edgeCaseRows :: [RangeRow]
@@ -513,6 +538,8 @@ edgeCaseRows =
     , ("fix-pkg", "GHSA-f-0003", Nothing, Just "3.0.0+build.7", Nothing, Nothing, Just 0.2)
     , ("fix-pkg", "GHSA-f-0004", Just "4.0.0", Just "not.a.version", Nothing, Just 9.0, Nothing)
     , ("fix-pkg", "GHSA-f-0005", Just "1.0.0", Just "1.0.0", Nothing, Just 2.0, Just 0.01)
+    , ("partial-pkg", "GHSA-p-0001", Nothing, Just "2.0.0", Nothing, Just 9.8, Just 0.5)
+    , ("partial-pkg", "GHSA-p-0002", Just "1.5.0", Just "3.0.0", Nothing, Just 4.2, Just 0.005)
     , ("unfixed-pkg", "GHSA-u-0001", Just "1.0.0", Nothing, Nothing, Just 10.0, Just 0.5)
     , ("@scope/pkg", "GHSA-s-0001", Nothing, Just "1.0.0", Nothing, Just 3.9, Just 0.25)
     , ("bound-pkg", "GHSA-b-0001", Just "garbage", Just "6.0.0", Nothing, Just 9.0, Just 0.6)
@@ -593,42 +620,45 @@ agreesOn probe cve names =
         -- A version built under another ecosystem's grammar reaches the matcher's re-parse.
         versions <- (\vs -> [(v, builtUnder) | v <- vs, builtUnder <- universe]) <$> versionsFor cve name
         let evidence = [completeEvidence (sampleDetails name (mkVersion builtUnder v)) | (v, builtUnder) <- versions]
-        compared <- forM differentialRules $ \rule -> do
+        compared <- forM referenceParityRules $ \rule -> do
             perVersion <- traverse (perVersionVerdict etag probe cve rule) evidence
             perRequest <- perRequestVerdicts deps rule name evidence
             zip versions perRequest `shouldBe` zip versions perVersion
             pure perVersion
-        rules <- prepare deps (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve, denyCveAt 7.0, denyEpssAt 0.5])
+        rules <- prepare deps (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), shippedRemediation, denyCveAt 7.0, denyEpssAt 0.5])
         shared <- newEvaluator ctx rules >>= \decideShared -> traverse decideShared evidence
         fresh <- traverse (evalRules ctx rules) evidence
         zip versions shared `shouldBe` zip versions fresh
         pure compared
   where
-    etag = DbEtag "differential"
+    etag = DbEtag "reference-parity"
     deps = servingRuleDeps etag cve
 
 -- | Open an accepted artifact and lend the reference's fix probe and the lookup, then close both.
 withOpened :: FilePath -> ((Text -> Text -> IO Bool) -> CveLookup -> IO a) -> IO a
 withOpened path use =
     openCveDb Npm EpssOptional path >>= \case
-        Left rejection -> fail ("differential artifact rejected: " <> show rejection)
+        Left rejection -> fail ("reference-parity artifact rejected: " <> show rejection)
         Right db -> withConnection path (\conn -> use (sqlFixProbe conn) (cveDbLookup db)) `finally` cveDbClose db
 
 -- | The names an artifact holds rows for, as npm packages.
 coveredPackages :: CveLookup -> IO [PackageName]
 coveredPackages cve = map unscopedNpm <$> cveCoveredNames cve
 
-differentialSpec :: Spec
-differentialSpec = describe "one read per request against a read per version, over a real artifact" $ do
+referenceParitySpec :: Spec
+referenceParitySpec = describe "one read per request against a read per version, over a real artifact" $ do
     it "agrees on hand-built rows covering every bound shape and fix spelling" $
-        withSystemTempDirectory "ecluse-rules-differential" $ \dir -> do
+        withSystemTempDirectory "ecluse-rules-reference-parity" $ \dir -> do
             let path = dir </> "osv.db"
             mkValidDbWithRows path [] edgeCaseRows
             verdicts <- withOpened path $ \probe cve -> do
                 names <- coveredPackages cve
                 agreesOn probe cve (scopedNpm "scope" "pkg" : names)
-            -- The rows reach an admission, a denial, a still-affected fix, and a version no advisory fixes.
+            -- The rows reach an admission, a denial, a still-affected fix, both differential outcomes,
+            -- and a version no advisory fixes.
             verdicts `shouldSatisfy` any isAllow
+            verdicts `shouldSatisfy` any (\case Allow RemediatesWithinLimits{} -> True; _ -> False)
+            verdicts `shouldSatisfy` any (\case NoDecision RemediationBeyondLimits{} -> True; _ -> False)
             verdicts `shouldSatisfy` any isDeny
             map verdictSentence (filter isNoDecision verdicts) `shouldSatisfy` any (T.isInfixOf "but is still affected by")
             verdicts `shouldSatisfy` elem (NoDecision FixesNoAdvisory)
@@ -678,13 +708,27 @@ ruleSentences =
     , ("DenyIfEpss below its threshold", depsWith (affecting Nothing (Just 0.1)), denyEpssAt 0.5, pkg Nothing 0, NoDecision (NotAffectedAtThreshold Epss), "no advisory at or above the EPSS threshold affects this version")
     , ("DenyIfCve on a PyPI project", depsWith pypiAffecting, denyCveAt 8.0, pypiPkg 0, Deny (Just (DbEtag "etag-1")) (AffectedBy Cvss 8.0 (mkAdvisoryIds ("GHSA-affect-0001" :| []))), "affected by GHSA-affect-0001 (CVSS >= 8.0)")
     , ("DenyIfEpss on a PyPI project", depsWith pypiAffecting, denyEpssAt 0.5, pypiPkg 0, Deny (Just (DbEtag "etag-1")) (AffectedBy Epss 0.5 (mkAdvisoryIds ("GHSA-affect-0001" :| []))), "affected by GHSA-affect-0001 (EPSS >= 0.5)")
-    , ("AllowIfRemediatesCve on a PyPI project", depsWith [("flask-thing", snd row) | row <- fixRows], AllowIfRemediatesCve, pypiPkg 0, Allow (Remediates (mkAdvisoryIds ("GHSA-fixed-0001" :| []))), "remediates GHSA-fixed-0001")
+    , ("AllowIfRemediatesCve on a PyPI project", depsWith [("flask-thing", snd row) | row <- fixRows], shippedRemediation, pypiPkg 0, Allow (Remediates (mkAdvisoryIds ("GHSA-fixed-0001" :| []))), "remediates GHSA-fixed-0001")
+    , ("AllowIfRemediatesCve on a PyPI partial fix inside the limits", depsWith (pypiRows (partialFixRows 4.2)), shippedRemediation, pypiPkg 0, Allow (RemediatesWithinLimits (partialComparison 4.2)), "remediates GHSA-fixed-0001 with GHSA-open-0002 remaining inside the limits" <> partialFacts "4.2")
+    , ("AllowIfRemediatesCve on a PyPI partial fix outside the limits", depsWith (pypiRows (partialFixRows 7.0)), shippedRemediation, pypiPkg 0, NoDecision (RemediationBeyondLimits (partialComparison 7.0) (mkLimitShortfalls (RemainingAboveCeiling Cvss :| []))), "fixes GHSA-fixed-0001 with GHSA-open-0002 remaining outside the limits: remaining CVSS above its ceiling" <> partialFacts "7.0")
+    , ("AllowIfRemediatesCve on an npm partial fix inside the limits", depsWith (partialFixRows 4.2), shippedRemediation, pkg Nothing 0, Allow (RemediatesWithinLimits (partialComparison 4.2)), "remediates GHSA-fixed-0001 with GHSA-open-0002 remaining inside the limits" <> partialFacts "4.2")
+    , ("AllowIfRemediatesCve on an npm partial fix outside the limits", depsWith (partialFixRows 7.0), shippedRemediation, pkg Nothing 0, NoDecision (RemediationBeyondLimits (partialComparison 7.0) (mkLimitShortfalls (RemainingAboveCeiling Cvss :| []))), "fixes GHSA-fixed-0001 with GHSA-open-0002 remaining outside the limits: remaining CVSS above its ceiling" <> partialFacts "7.0")
     ]
   where
     myorg = mkScope "myorg"
     quarantineRule = AllowIfOlderThan (7 * nominalDay)
     unpublished ev = ev{evPublishedAt = Known Nothing}
-    pypiAffecting = [("flask-thing", snd row) | row <- affecting (Just 9.8) (Just 0.9)]
+    pypiAffecting = pypiRows (affecting (Just 9.8) (Just 0.9))
+    pypiRows rows = [("flask-thing", snd row) | row <- rows]
+    partialComparison remainingCvss =
+        ScoreComparison
+            (mkAdvisoryIds ("GHSA-fixed-0001" :| []))
+            (mkAdvisoryIds ("GHSA-open-0002" :| []))
+            (ScoreSides (Scored 9.8) (Scored remainingCvss))
+            (ScoreSides (Scored 0.5) (Scored 0.005))
+            defaultDifferentialLimits
+    partialFacts remainingCvss =
+        " (remaining CVSS " <> remainingCvss <> ", CVSS ceiling 6.9 inclusive, fixed CVSS 9.8, CVSS gap at least 1.0, remaining EPSS 0.005, EPSS ceiling 0.01 exclusive, fixed EPSS 0.5)"
 
 ruleSentenceSpec :: Spec
 ruleSentenceSpec = describe "the sentence each built-in rule's reason reads as" $ do
@@ -706,7 +750,7 @@ spec = do
     evidenceSpec
     sourceHealthSpec
     noDatabaseSpec
-    differentialSpec
+    referenceParitySpec
     ruleSentenceSpec
     describe "advisory package identity" $ do
         for_ [denyCveAt 0, denyEpssAt 0] $ \rule ->
@@ -718,14 +762,14 @@ spec = do
         it "matches a PyPI fix and keeps its display spelling in the decision message" $ do
             let pd = pypiPkg 0
                 rows = [("flask-thing", snd row) | row <- fixRows]
-            decision <- decideWith (depsWith rows) [atDefaultPrecedence AllowIfRemediatesCve] pd
+            decision <- decideWith (depsWith rows) [atDefaultPrecedence shippedRemediation] pd
             admittedBy decision `shouldBe` Just "AllowIfRemediatesCve"
             renderDecision pd decision `shouldSatisfy` T.isInfixOf "Flask_Thing@1.0.0"
 
         it "does not fast-track a PyPI fix while a canonical-name advisory still affects it" $ do
             let pd = pypiPkg 0
                 rows = [("flask-thing", snd row) | row <- fixRows <> affecting Nothing Nothing]
-            evalRule (depsWith rows) ctx AllowIfRemediatesCve pd >>= (`shouldSatisfy` isNoDecision)
+            evalRule (depsWith rows) ctx shippedRemediation pd >>= (`shouldSatisfy` isNoDecision)
 
         for_ [mkPackageName Npm Nothing "Flask_Thing", mkPackageName Npm (Just (mkScope "Acme")) "Flask_Thing"] $ \name ->
             it (toString ("preserves npm identity " <> renderPackageName name)) $ do
@@ -735,20 +779,21 @@ spec = do
                     exactFixes = [(renderPackageName name, snd row) | row <- fixRows]
                 evalRule (depsWith exactRows) ctx (denyCveAt 0) pd >>= (`shouldSatisfy` isDeny)
                 evalRule (depsWith otherRows) ctx (denyCveAt 0) pd >>= (`shouldSatisfy` isNoDecision)
-                evalRule (depsWith exactFixes) ctx AllowIfRemediatesCve pd >>= (`shouldSatisfy` isAllow)
+                evalRule (depsWith exactFixes) ctx shippedRemediation pd >>= (`shouldSatisfy` isAllow)
 
     describe "canonical remediation refusal controls" $
         for_ [(PyPI, "1.19.0", "1.19", "1.18"), (Npm, "3.0.0+build.7", "3.0.0+build.7", "2.9.0")] $ \(eco, advisoryFix, servedFix, oldVersion) ->
-            it ("admits an exact " <> show eco <> " fix only while no advisory still affects it") $ do
+            it ("admits an exact " <> show eco <> " fix only while no advisory affects it past the limits") $ do
                 let name = mkPackageName eco Nothing "pkg"
                     evidence raw = completeEvidence (sampleDetails name (mkVersion eco raw))
                     fixedRow = ("pkg", AdvisoryRange "FIX" (Just 9) Nothing (FixedBefore advisoryFix) (Just 0.9))
                     stillAffected = ("pkg", AdvisoryRange "OTHER" (Just 9) Nothing Unbounded (Just 0.9))
                     fixedDeps = depsWith [fixedRow]
                     affectedDeps = depsWith [fixedRow, stillAffected]
-                evalRule fixedDeps ctx AllowIfRemediatesCve (evidence servedFix) >>= (`shouldSatisfy` isAllow)
-                evalRule fixedDeps ctx AllowIfRemediatesCve (evidence oldVersion) >>= (`shouldSatisfy` isNoDecision)
-                evalRule affectedDeps ctx AllowIfRemediatesCve (evidence servedFix) >>= (`shouldSatisfy` isNoDecision)
+                for_ [remediationWith FailDeny AbstainOnRemaining, shippedRemediation] $ \remediation -> do
+                    evalRule fixedDeps ctx remediation (evidence servedFix) >>= (`shouldSatisfy` isAllow)
+                    evalRule fixedDeps ctx remediation (evidence oldVersion) >>= (`shouldSatisfy` isNoDecision)
+                    evalRule affectedDeps ctx remediation (evidence servedFix) >>= (`shouldSatisfy` isNoDecision)
                 for_ [denyCveAt 0, denyEpssAt 0] $ \rule -> do
                     evalRule fixedDeps ctx rule (evidence oldVersion) >>= (`shouldSatisfy` isDeny)
                     evalRule affectedDeps ctx rule (evidence servedFix) >>= (`shouldSatisfy` isDeny)
@@ -799,34 +844,42 @@ spec = do
 
     describe "evalRule (AllowIfRemediatesCve)" $ do
         it "allows a version an advisory names as its exact fix, crediting the advisory" $
-            evalRule (depsWith fixRows) ctx AllowIfRemediatesCve (pkg Nothing 0)
+            evalRule (depsWith fixRows) ctx shippedRemediation (pkg Nothing 0)
                 `shouldDecide` (Allow (Remediates (mkAdvisoryIds ("GHSA-fixed-0001" :| []))), "remediates GHSA-fixed-0001")
         it "names every advisory the version fixes in the reason" $ do
             let rows =
                     [ ("thing", AdvisoryRange "GHSA-fixed-0001" Nothing (Just "0") (FixedBefore "1.0.0") Nothing)
                     , ("thing", AdvisoryRange "GHSA-fixed-0002" Nothing (Just "0.2.0") (FixedBefore "1.0.0") Nothing)
                     ]
-            evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg Nothing 0)
+            evalRule (depsWith rows) ctx shippedRemediation (pkg Nothing 0)
                 `shouldDecide` (Allow (Remediates (mkAdvisoryIds ("GHSA-fixed-0001" :| ["GHSA-fixed-0002"]))), "remediates GHSA-fixed-0001, GHSA-fixed-0002")
         it "matches the OSV wire form of a scoped name" $ do
             let rows = [("@myorg/thing", AdvisoryRange "GHSA-fixed-0003" Nothing (Just "0") (FixedBefore "1.0.0") Nothing)]
-            evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg (Just "myorg") 0)
+            evalRule (depsWith rows) ctx shippedRemediation (pkg (Just "myorg") 0)
                 `shouldDecide` (Allow (Remediates (mkAdvisoryIds ("GHSA-fixed-0003" :| []))), "remediates GHSA-fixed-0003")
         it "abstains when no advisory names the version as a fix (exact match only)" $ do
             -- 1.0.0 sits past this advisory's 0.9.0 fix, but the fast lane is a
             -- deliberate exact-fix probe: being merely unaffected earns nothing.
             let rows = [("thing", AdvisoryRange "GHSA-fixed-0001" Nothing (Just "0") (FixedBefore "0.9.0") Nothing)]
-            evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg Nothing 0)
+            evalRule (depsWith rows) ctx shippedRemediation (pkg Nothing 0)
                 `shouldDecide` (NoDecision FixesNoAdvisory, "no advisory names this version as its fix")
-        it "abstains when the version still sits inside another advisory's affected range" $ do
+        it "abstains in abstain mode when the version still sits inside another advisory's affected range" $ do
             let rows =
                     fixRows
                         <> [("thing", AdvisoryRange "GHSA-open-0002" Nothing (Just "0.5.0") Unbounded Nothing)]
-            evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg Nothing 0)
+            evalRule (depsWith rows) ctx (remediationWith FailDeny AbstainOnRemaining) (pkg Nothing 0)
                 `shouldDecide` (NoDecision (FixesButStillAffected (mkAdvisoryIds ("GHSA-fixed-0001" :| [])) (mkAdvisoryIds ("GHSA-open-0002" :| []))), "fixes GHSA-fixed-0001 but is still affected by GHSA-open-0002")
-        it "abstains when no advisory database is loaded" $
-            evalRule inertRuleDeps ctx AllowIfRemediatesCve (pkg Nothing 0)
-                `shouldDecide` (NoDecision NoDatabaseToRemediate, "no advisory database is loaded")
+        it "abstains under the shipped limits when a remaining advisory stores no score" $ do
+            let rows =
+                    fixRows
+                        <> [("thing", AdvisoryRange "GHSA-open-0002" Nothing (Just "0.5.0") Unbounded Nothing)]
+                unscored = mkAdvisoryIds ("GHSA-open-0002" :| [])
+            evalRule (depsWith rows) ctx shippedRemediation (pkg Nothing 0)
+                >>= (`shouldBe` NoDecision (RemediationBeyondLimits (ScoreComparison (mkAdvisoryIds ("GHSA-fixed-0001" :| [])) unscored (ScoreSides Unscored Unscored) (ScoreSides Unscored Unscored) defaultDifferentialLimits) (mkLimitShortfalls (RemainingUnscored Cvss unscored :| [FixedUnscored Cvss, RemainingUnscored Epss unscored]))))
+        for_ [FailDeny, FailNoDecision] $ \alignment ->
+            it ("cannot vet under onUnavailable " <> show alignment <> " when no advisory database is loaded") $
+                evalRule inertRuleDeps ctx (differentialUnder alignment) (pkg Nothing 0)
+                    `shouldDecide` (CannotVet alignment NoDatabaseLoaded, "no advisory database loaded")
 
     describe "evalRule (DenyIfCve)" $ do
         it "denies an affected version whose advisory meets the threshold, naming it" $
@@ -952,7 +1005,7 @@ spec = do
 
     describe "defaultPrecedence" $ do
         it "ranks DenyInstallTimeExecution strictly above every allow default" $ do
-            let allows = [AllowScope (mkScope "x"), AllowIfOlderThan 0, AllowByIdentity "x", AllowIfRemediatesCve]
+            let allows = [AllowScope (mkScope "x"), AllowIfOlderThan 0, AllowByIdentity "x", shippedRemediation]
             defaultPrecedence DenyInstallTimeExecution
                 `shouldSatisfy` (\d -> all ((d >) . defaultPrecedence) allows)
         it "orders the allow band by explicitness: quarantine < fast lane < scope < identity" $
@@ -967,14 +1020,14 @@ spec = do
                 `shouldBe` PrecededRule defaultDenyInstallTimeExecutionPrecedence AdmissionAndRevocation DenyInstallTimeExecution
 
     describe "prepare" $ do
-        it "attaches a resilience and fail-open alignments to AllowIfRemediatesCve" $
-            -- The one thing a reviewer must check on the remediation lane: an
-            -- uncomputable lookup abstains (FailNoDecision) and never admits or 503s.
-            prepare unloadedDeps [atDefaultPrecedence AllowIfRemediatesCve] >>= \case
-                [r@PreparedRule{prepEval = PerPackage packageRead}] -> do
-                    isJust (prepResilience r) `shouldBe` True
-                    (onExpiredPush (prAlignment packageRead), onFaultedRead (prAlignment packageRead)) `shouldBe` (FailNoDecision, FailNoDecision)
-                other -> expectationFailure ("expected one prepared package read, got " <> show (length other))
+        for_ [FailDeny, FailNoDecision] $ \alignment ->
+            it ("attaches a resilience to AllowIfRemediatesCve and its " <> show alignment <> " to every unavailability") $
+                -- An expired push follows the remediation choice too, unlike an advisory deny's.
+                prepare unloadedDeps [atDefaultPrecedence (differentialUnder alignment)] >>= \case
+                    [r@PreparedRule{prepEval = PerPackage packageRead}] -> do
+                        isJust (prepResilience r) `shouldBe` True
+                        (onExpiredPush (prAlignment packageRead), onFaultedRead (prAlignment packageRead)) `shouldBe` (alignment, alignment)
+                    other -> expectationFailure ("expected one prepared package read, got " <> show (length other))
         it "prepares every pure built-in to run directly, with no resilience, database or not" $
             for_ [inertRuleDeps, unloadedDeps] $ \deps -> do
                 rules <-
@@ -1099,21 +1152,37 @@ spec = do
             -- for min-age because an advisory names it as the exact fix.
             decideWith
                 (depsWith fixRows)
-                (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve])
+                (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), shippedRemediation])
                 (pkg Nothing 0)
                 >>= \d -> admittedBy d `shouldBe` Just "AllowIfRemediatesCve"
-        it "a failing advisory lookup abstains: the quarantine still governs, and nothing turns Undecidable" $ do
-            -- The deliberate failure asymmetry: an unconfirmable remediation costs the fix its fast
-            -- lane, never availability and never an admission.
+        it "the shipped limits admit a young partial fix ahead of the quarantine, and abstain past them" $ do
+            let policy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), shippedRemediation]
+            decideWith (depsWith (partialFixRows 4.2)) policy (pkg Nothing 0)
+                >>= \d -> admittedBy d `shouldBe` Just "AllowIfRemediatesCve"
+            decideWith (depsWith (partialFixRows 7.0)) policy (pkg Nothing 0)
+                >>= (`shouldSatisfy` isBlockedByDefault)
+            decideWith (depsWith (partialFixRows 4.2)) (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), remediationWith FailDeny AbstainOnRemaining]) (pkg Nothing 0)
+                >>= (`shouldSatisfy` isBlockedByDefault)
+        it "a failing advisory lookup under skip leaves the quarantine to govern, and nothing turns Undecidable" $ do
+            -- An unconfirmable remediation costs the fix its fast lane, never availability and never an admission.
             let broken = faultingDeps "advisory database exploded"
-                policy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve]
-            -- An old enough version still rides the ordinary allow.
+                policy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), differentialUnder FailNoDecision]
             decideWith broken policy (pkg Nothing 30)
                 >>= \d -> admittedBy d `shouldBe` Just "AllowIfOlderThan"
-            -- A young version is denied by default, not fail-closed 'Undecidable'.
             decideWith broken policy (pkg Nothing 1) >>= \case
                 BlockedByDefault _ -> pass
                 other -> expectationFailure ("expected BlockedByDefault, got " <> show other)
+        it "a failing advisory lookup under deny refuses even a version the quarantine would admit" $ do
+            let policy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), shippedRemediation]
+            for_ [pkg Nothing 1, pkg Nothing 30] $
+                decideWith (faultingDeps "advisory database exploded") policy >=> (`shouldSatisfy` isUndecidable)
+        it "a stricter advisory deny blocks a partial fix the shipped limits admit" $ do
+            let rows = depsWith (partialFixRows 4.2)
+                policy deny = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), shippedRemediation, deny]
+            admittedBy <$> decideWith rows (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), shippedRemediation]) (pkg Nothing 0)
+                `shouldReturn` Just "AllowIfRemediatesCve"
+            blockedBy <$> decideWith rows (policy (denyCveAt 4.0)) (pkg Nothing 0) `shouldReturn` Just "DenyIfCve"
+            blockedBy <$> decideWith rows (policy (denyEpssAt 0.005)) (pkg Nothing 0) `shouldReturn` Just "DenyIfEpss"
         it "denies by default when every rule is non-decisive, collecting each reason in boot order" $
             -- The audit trail carries each non-decisive rule's reason in boot order, highest
             -- precedence first: AllowScope (200) then AllowIfOlderThan (100).
@@ -1252,6 +1321,27 @@ spec = do
                 shuffled <- liftIO (decide perm p)
                 canonical original === canonical shuffled
 
+        it "a default advisory deny that blocks alone still blocks beside any remediation rule" $
+            hedgehog $ do
+                rows <- forAll (genRows ["0.5.0", "1.0.0", "2.0.0"])
+                deny <- forAll (Gen.element [denyCveAt 7.0, denyEpssAt 0.5, DenyIfKnownMalicious FailDeny])
+                remediation <- forAll genRemediation
+                let deps = depsWith (map ("thing",) rows)
+                alone <- liftIO (decideWith deps [atDefaultPrecedence deny] (pkg Nothing 1))
+                remediationAlone <- liftIO (decideWith deps [atDefaultPrecedence remediation] (pkg Nothing 1))
+                whole <- liftIO (decideWith deps (map atDefaultPrecedence [deny, remediation, AllowIfOlderThan (7 * nominalDay)]) (pkg Nothing 1))
+                H.cover 10 "the deny alone blocks" (isJust (blockedBy alone))
+                H.classify "the remediation rule alone admits what the deny blocks" (isJust (blockedBy alone) && isJust (admittedBy remediationAlone))
+                when (isJust (blockedBy alone)) (blockedBy whole === blockedBy alone)
+
+        it "a matching scope or identity allow decides ahead of any remediation rule, whatever the source state" $
+            hedgehog $ do
+                allow <- forAll (Gen.element [AllowScope (mkScope "myorg"), AllowByIdentity "@myorg/thing"])
+                remediation <- forAll genRemediation
+                standing <- forAll Gen.enumBounded
+                d <- liftIO (decideWith (sourceStateDeps standing (depsWith (partialFixRows 4.2))) (map atDefaultPrecedence [allow, remediation, AllowIfOlderThan (7 * nominalDay)]) (pkg (Just "myorg") 1))
+                admittedBy d === Just (ruleName allow)
+
         it "the install-script deny always wins at default precedences" $
             hedgehog $ do
                 scopeTxt <- forAll genScope
@@ -1373,7 +1463,7 @@ knownMaliciousSpec = describe "DenyIfKnownMalicious" $ do
         lookedUpNames <- newIORef ([] :: [Text])
         let lookupRows name = modifyIORef' lookedUpNames (<> [name]) $> []
             deps = servingRuleDeps (DbEtag "shared") (CveLookup lookupRows (pure []))
-        rules <- prepare deps (map atDefaultPrecedence [mal, denyCveAt 8, denyEpssAt 0.5, AllowIfRemediatesCve, AllowIfOlderThan 0])
+        rules <- prepare deps (map atDefaultPrecedence [mal, denyCveAt 8, denyEpssAt 0.5, shippedRemediation, AllowIfOlderThan 0])
         decideVersion <- newEvaluator ctx rules
         void (mapConcurrently (\v -> decideVersion evidence{evVersion = mkVersion Npm v}) ["1.0.0", "2.0.0", "3.0.0"])
         readIORef lookedUpNames `shouldReturn` ["thing"]
@@ -1384,7 +1474,7 @@ knownMaliciousSpec = describe "DenyIfKnownMalicious" $ do
         let rows = [("thing", AdvisoryRange "MAL-pinned" Nothing (Just "2.0.0") (LastAffected "2.0.0") Nothing)]
         held <- newIORef (Just (DbEtag "before", fakeCveLookup rows))
         let deps = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (\use -> readIORef held >>= use)}
-        rules <- prepare deps (map atDefaultPrecedence [mal, denyCveAt 8, denyEpssAt 0.5, AllowIfRemediatesCve, AllowIfOlderThan 0])
+        rules <- prepare deps (map atDefaultPrecedence [mal, denyCveAt 8, denyEpssAt 0.5, shippedRemediation, AllowIfOlderThan 0])
         decideVersion <- newEvaluator ctx rules
         void (decideVersion evidence)
         writeIORef held (Just (DbEtag "after", fakeCveLookup []))
@@ -1392,6 +1482,18 @@ knownMaliciousSpec = describe "DenyIfKnownMalicious" $ do
             `shouldReturn` Blocked "DenyIfKnownMalicious" (Just (DbEtag "before")) (KnownMalicious (mkAdvisoryIds ("MAL-pinned" :| [])))
         fresh <- newEvaluator ctx rules
         fresh evidence{evVersion = mkVersion Npm "2.0.0"} >>= (\decision -> admittedBy decision `shouldBe` Just "AllowIfOlderThan")
+
+    it "keeps one borrowed generation for the remediation differential after a slot changes" $ do
+        held <- newIORef (Just (DbEtag "before", fakeCveLookup (partialFixRows 4.2)))
+        let deps = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (\use -> readIORef held >>= use)}
+            young = pkg Nothing 0
+        rules <- prepare deps (map atDefaultPrecedence [mal, denyCveAt 8, denyEpssAt 0.5, shippedRemediation, AllowIfOlderThan (7 * nominalDay)])
+        decideVersion <- newEvaluator ctx rules
+        blockedBy <$> decideVersion young{evVersion = mkVersion Npm "0.6.0"} `shouldReturn` Just "DenyIfCve"
+        writeIORef held (Just (DbEtag "after", fakeCveLookup (partialFixRows 7.0)))
+        admittedBy <$> decideVersion young `shouldReturn` Just "AllowIfRemediatesCve"
+        fresh <- newEvaluator ctx rules
+        fresh young >>= (`shouldSatisfy` isBlockedByDefault)
 
     for_ [Available, Deprecated, Yanked] $ \availability ->
         it ("does not treat registry availability as MAL evidence: " <> show availability) $

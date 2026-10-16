@@ -14,19 +14,23 @@ import Data.Text qualified as T
 import Data.Universe.Class (Universe (universe))
 import Test.Hspec
 
-import Ecluse.Config (decodeDefaultConfig, withoutMaliciousDefault)
+import Ecluse.Config (decodeDefaultConfig)
 import Ecluse.Config.Aeson (parseRulesPatch)
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.Rule
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Rules.Types (
+    AllowIfRemediatesCveParams (..),
     DenyIfCveParams (..),
     DenyIfEpssParams (..),
+    DifferentialLimits (..),
     FailureAlignment (..),
     PrecededRule (..),
+    RemainingAdvisories (..),
     Rule (..),
     RuleReach (..),
     RuleType,
+    ScoreGap (..),
     defaultAllowByIdentityPrecedence,
     defaultAllowIfOlderThanPrecedence,
     defaultAllowIfRemediatesCvePrecedence,
@@ -34,14 +38,16 @@ import Ecluse.Core.Rules.Types (
     defaultDenyIfCvePrecedence,
     defaultDenyIfEpssPrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
+    defaultDifferentialLimits,
     ruleName,
  )
 import Ecluse.Core.Wire (renderWire)
-import Ecluse.Test.Rules (admissionOnly, atPrecedence)
+import Ecluse.Test.Rules (admissionOnly, atPrecedence, remediationWith, shippedRemediation)
 
 spec :: Spec
 spec = do
     rulePolicySpec
+    remediationSpec
     appliesToSpec
     policyErrorRenderSpec
 
@@ -60,7 +66,7 @@ rulePolicySpec = describe "rulePolicySpec" $ do
         it "overrides a default rule's precedence" $
             resolveJson "{\"rules\":{\"min-age\":{\"precedence\":175}}}"
                 `shouldBe` Right
-                    [ atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
+                    [ atPrecedence defaultAllowIfRemediatesCvePrecedence shippedRemediation
                     , atPrecedence 175 (AllowIfOlderThan (7 * 86400))
                     ]
 
@@ -68,7 +74,7 @@ rulePolicySpec = describe "rulePolicySpec" $ do
             resolveJson "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}}"
                 `shouldBe` Right
                     [ atPrecedence defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))
-                    , atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
+                    , atPrecedence defaultAllowIfRemediatesCvePrecedence shippedRemediation
                     , atPrecedence defaultDenyInstallTimeExecutionPrecedence DenyInstallTimeExecution
                     ]
 
@@ -76,13 +82,13 @@ rulePolicySpec = describe "rulePolicySpec" $ do
             resolveJson "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"precedence\":275}}}"
                 `shouldBe` Right
                     [ atPrecedence defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))
-                    , atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
+                    , atPrecedence defaultAllowIfRemediatesCvePrecedence shippedRemediation
                     , atPrecedence 275 DenyInstallTimeExecution
                     ]
 
         it "suppresses a default rule with enabled:false" $
             resolveJson "{\"rules\":{\"min-age\":{\"enabled\":false}}}"
-                `shouldBe` Right [atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve]
+                `shouldBe` Right [atPrecedence defaultAllowIfRemediatesCvePrecedence shippedRemediation]
 
         it "suppresses the default remediation fast lane with enabled:false" $
             resolveJson "{\"rules\":{\"remediation-fast-track\":{\"enabled\":false}}}"
@@ -100,7 +106,7 @@ rulePolicySpec = describe "rulePolicySpec" $ do
             resolveJson "{\"rules\":{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":100}}}"
                 `shouldBe` Right
                     [ atPrecedence defaultAllowIfOlderThanPrecedence (AllowIfOlderThan 100)
-                    , atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
+                    , atPrecedence defaultAllowIfRemediatesCvePrecedence shippedRemediation
                     ]
 
         it "rejects a restated type on a patch that changes the default's kind" $
@@ -126,8 +132,8 @@ rulePolicySpec = describe "rulePolicySpec" $ do
         it "adds an AllowIfRemediatesCve rule at its type's default precedence" $
             -- A second rule of the shipped fast lane's own type, so the resolved policy
             -- carries both rather than one overwriting the other.
-            resolveJson "{\"rules\":{\"cve-fast-lane\":{\"type\":\"AllowIfRemediatesCve\"}}}"
-                `shouldResolveTo` (atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve : shippedRules)
+            resolveJson "{\"rules\":{\"cve-fast-lane\":{\"type\":\"AllowIfRemediatesCve\",\"onUnavailable\":\"skip\",\"remainingAdvisories\":\"differential\"}}}"
+                `shouldResolveTo` (atPrecedence defaultAllowIfRemediatesCvePrecedence (remediationWith FailNoDecision (Differential defaultDifferentialLimits)) : shippedRules)
 
         it "adds an AllowByIdentity rule from an identity field" $
             resolveJson "{\"rules\":{\"pinned-fix\":{\"type\":\"AllowByIdentity\",\"identity\":\"left-pad@1.3.0\"}}}"
@@ -331,7 +337,7 @@ rulePolicySpec = describe "rulePolicySpec" $ do
             resolveJsonOver emptyPolicy "{\"rules\":{\"r\":{\"type\":\"DenyInstallTimeExecution\",\"precedence\":275}}}"
                 `shouldBe` Right [atPrecedence 275 DenyInstallTimeExecution]
             resolveJson "{\"rules\":{\"min-age\":{\"enabled\":false}}}"
-                `shouldBe` Right [atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve]
+                `shouldBe` Right [atPrecedence defaultAllowIfRemediatesCvePrecedence shippedRemediation]
 
     describe "availability rule phases" $
         for_ [("DenyIfYanked" :: Text, DenyIfYanked), ("DenyIfDeprecated", DenyIfDeprecated)] $ \(ty, rule) ->
@@ -475,7 +481,119 @@ appliesToSpec = describe "appliesTo, the phases a rule applies at" $ do
             resolveJsonOver limitedBase "{\"rules\":{\"deny-scripts\":{\"enabled\":false,\"appliesTo\":[\"admission\",\"revocation\"]}}}"
                 `shouldBe` Right []
             resolveJson "{\"rules\":{\"min-age\":{\"enabled\":false,\"appliesTo\":[\"admission\"]}}}"
-                `shouldBe` Right [atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve]
+                `shouldBe` Right [atPrecedence defaultAllowIfRemediatesCvePrecedence shippedRemediation]
+
+-- | Every row of the remediation rule's resolution table, each with the exact result or refusal.
+remediationSpec :: Spec
+remediationSpec = describe "AllowIfRemediatesCve (choices, limits, and validation)" $ do
+    let shippedAt = atPrecedence defaultAllowIfRemediatesCvePrecedence
+        minAge = atPrecedence defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))
+        patched params = Right [minAge, shippedAt (AllowIfRemediatesCve params)]
+        within base = AllowIfRemediatesCveParams FailDeny (Differential base)
+        malformed name reason = Left [MalformedRule name reason]
+        onlyDifferential key = "\"" <> key <> "\" applies only when \"remainingAdvisories\" is \"differential\""
+        abstainingBase = RulePolicy (Map.singleton "fast" (shippedAt (remediationWith FailDeny AbstainOnRemaining)))
+        tunedBase = RulePolicy (Map.singleton "fast" (shippedAt (remediationWith FailNoDecision (Differential tuned))))
+        tuned = DifferentialLimits 5.0 0.05 (GapOfAtLeast 2.0) (GapOfAtLeast 0.01)
+        added body = "{\"rules\":{\"r\":{\"type\":\"AllowIfRemediatesCve\"" <> body <> "}}}"
+
+    it "resolves the shipped rule to deny and the shipped differential limits" $
+        resolveJson "{\"rules\":{}}" `shouldBe` patched (within defaultDifferentialLimits)
+
+    it "keeps the inherited mode and limits under an unavailability patch" $
+        resolveJson "{\"rules\":{\"remediation-fast-track\":{\"onUnavailable\":\"skip\"}}}"
+            `shouldBe` patched (AllowIfRemediatesCveParams FailNoDecision (Differential defaultDifferentialLimits))
+
+    it "replaces one patched limit and inherits the others" $
+        resolveJson "{\"rules\":{\"remediation-fast-track\":{\"maxRemainingCvss\":5.0}}}"
+            `shouldBe` patched (within defaultDifferentialLimits{dlMaxRemainingCvss = 5.0})
+
+    it "reads a zero gap as no gap condition" $
+        resolveJson "{\"rules\":{\"remediation-fast-track\":{\"minCvssGap\":0,\"minEpssGap\":0.0}}}"
+            `shouldBe` patched (within defaultDifferentialLimits{dlCvssGap = NoGapRequired})
+
+    it "drops the inherited limits when a patch switches to abstain" $
+        resolveJson "{\"rules\":{\"remediation-fast-track\":{\"remainingAdvisories\":\"abstain\"}}}"
+            `shouldBe` patched (AllowIfRemediatesCveParams FailDeny AbstainOnRemaining)
+
+    it "refuses each limit a switch to abstain supplies" $
+        resolveJson "{\"rules\":{\"remediation-fast-track\":{\"remainingAdvisories\":\"abstain\",\"maxRemainingCvss\":5,\"minEpssGap\":0.1}}}"
+            `shouldBe` Left [MalformedRule "remediation-fast-track" (onlyDifferential "maxRemainingCvss"), MalformedRule "remediation-fast-track" (onlyDifferential "minEpssGap")]
+
+    it "refuses a limit patched onto a rule that already abstains" $
+        resolveJsonOver abstainingBase "{\"rules\":{\"fast\":{\"maxRemainingEpss\":0.5}}}"
+            `shouldBe` malformed "fast" (onlyDifferential "maxRemainingEpss")
+
+    it "starts from the shipped limits when a patch switches an abstaining rule to differential" $
+        resolveJsonOver abstainingBase "{\"rules\":{\"fast\":{\"remainingAdvisories\":\"differential\",\"minCvssGap\":2.5}}}"
+            `shouldBe` Right [shippedAt (AllowIfRemediatesCve (within defaultDifferentialLimits{dlCvssGap = GapOfAtLeast 2.5}))]
+
+    it "inherits the rule's own limits when a patch restates differential" $
+        resolveJsonOver tunedBase "{\"rules\":{\"fast\":{\"remainingAdvisories\":\"differential\",\"maxRemainingEpss\":0.02}}}"
+            `shouldBe` Right [shippedAt (remediationWith FailNoDecision (Differential tuned{dlMaxRemainingEpss = 0.02}))]
+
+    it "requires both choices of a newly named rule, naming each missing key" $ do
+        resolveJson (added ",\"remainingAdvisories\":\"abstain\"") `shouldBe` malformed "r" "\"AllowIfRemediatesCve\" requires \"onUnavailable\""
+        resolveJson (added ",\"onUnavailable\":\"deny\"") `shouldBe` malformed "r" "\"AllowIfRemediatesCve\" requires \"remainingAdvisories\""
+        resolveJson (added "")
+            `shouldBe` Left [MalformedRule "r" "\"AllowIfRemediatesCve\" requires \"onUnavailable\"", MalformedRule "r" "\"AllowIfRemediatesCve\" requires \"remainingAdvisories\""]
+
+    it "refuses every limit beside abstain on a newly named rule" $
+        resolveJson (added ",\"onUnavailable\":\"deny\",\"remainingAdvisories\":\"abstain\",\"minCvssGap\":1,\"maxRemainingEpss\":0.5")
+            `shouldBe` Left [MalformedRule "r" (onlyDifferential "maxRemainingEpss"), MalformedRule "r" (onlyDifferential "minCvssGap")]
+
+    it "fills a newly named differential rule's omitted limits from the shipped ones" $
+        resolveJson (added ",\"onUnavailable\":\"skip\",\"remainingAdvisories\":\"differential\",\"maxRemainingEpss\":0.05")
+            `shouldResolveTo` (shippedAt (remediationWith FailNoDecision (Differential defaultDifferentialLimits{dlMaxRemainingEpss = 0.05})) : shippedRules)
+
+    it "refuses an unknown value for either choice, naming the key and the value" $ do
+        resolveJson "{\"rules\":{\"remediation-fast-track\":{\"onUnavailable\":\"maybe\"}}}"
+            `shouldBe` malformed "remediation-fast-track" "\"onUnavailable\" must be \"deny\" or \"skip\", not \"maybe\""
+        resolveJson "{\"rules\":{\"remediation-fast-track\":{\"remainingAdvisories\":\"partial\"}}}"
+            `shouldBe` malformed "remediation-fast-track" "\"remainingAdvisories\" must be \"abstain\" or \"differential\", not \"partial\""
+
+    it "refuses a limit outside its score's range, naming the key and the range" $ do
+        let cvss key = MalformedRule "remediation-fast-track" ("\"" <> key <> "\" must be a CVSS score between 0 and 10")
+            epss key = MalformedRule "remediation-fast-track" ("\"" <> key <> "\" must be an EPSS probability between 0 and 1")
+        resolveJson "{\"rules\":{\"remediation-fast-track\":{\"maxRemainingCvss\":10.1,\"minCvssGap\":-1,\"maxRemainingEpss\":1.5,\"minEpssGap\":-0.1}}}"
+            `shouldBe` Left [cvss "maxRemainingCvss", epss "maxRemainingEpss", cvss "minCvssGap", epss "minEpssGap"]
+        resolveJson "{\"rules\":{\"remediation-fast-track\":{\"maxRemainingCvss\":1e400}}}"
+            `shouldBe` Left [cvss "maxRemainingCvss"]
+
+    it "refuses a non-finite limit" $
+        for_ [0 / 0, 1 / 0, negate (1 / 0)] $ \nonFinite ->
+            resolvePolicy
+                (RulePolicy (Map.singleton "fast" (shippedAt shippedRemediation)))
+                (RulePatch (Map.singleton "fast" (blankEntry{entryMinEpssGap = Just nonFinite})))
+                `shouldBe` Left [MalformedRule "fast" "\"minEpssGap\" must be an EPSS probability between 0 and 1"]
+
+    it "requires no choice to disable the shipped rule" $
+        resolveJson "{\"rules\":{\"remediation-fast-track\":{\"enabled\":false}}}" `shouldBe` Right [minAge]
+
+    it "refuses a limit on another rule type" $
+        resolveJson "{\"rules\":{\"min-age\":{\"maxRemainingCvss\":5}}}"
+            `shouldBe` malformed "min-age" "\"AllowIfOlderThan\" does not read \"maxRemainingCvss\""
+
+-- | An entry that sets no key, for a case that sets one value JSON cannot carry.
+blankEntry :: RuleEntry
+blankEntry =
+    RuleEntry
+        { entryType = Nothing
+        , entryPrecedence = Nothing
+        , entryEnabled = Nothing
+        , entryAgeSeconds = Nothing
+        , entryScope = Nothing
+        , entryIdentity = Nothing
+        , entryMinCvss = Nothing
+        , entryMinEpss = Nothing
+        , entryOnUnavailable = Nothing
+        , entryRemainingAdvisories = Nothing
+        , entryMaxRemainingCvss = Nothing
+        , entryMaxRemainingEpss = Nothing
+        , entryMinCvssGap = Nothing
+        , entryMinEpssGap = Nothing
+        , entryAppliesTo = Nothing
+        }
 
 -- | A base policy whose install-code deny is limited to admission, as a shipped mount default may be.
 limitedBase :: RulePolicy
@@ -499,10 +617,11 @@ unknownPhase word = "\"appliesTo\" names unknown phase \"" <> word <> "\". The p
 allowLimitedToAdmission ty =
     "\"" <> ty <> "\" is an allow, and an allow cannot be limited to admission. If the Dredger ignored it, a lower deny could delete a version this rule admits. Limit the deny instead"
 
+-- | Resolve over the shipped catalogue without its MAL default, so the remediation rule stays patchable.
 resolveJson :: ByteString -> Either [PolicyError] [PrecededRule]
 resolveJson body = do
     (_, catalogue) <- first (pure . MalformedRule "<defaults>" . show) (decodeDefaultConfig defaultConfigBytes)
-    resolveJsonOver (withoutMaliciousDefault catalogue) body
+    resolveJsonOver (RulePolicy (Map.delete "deny-known-malicious" (policyRules catalogue))) body
 
 resolveJsonOver :: RulePolicy -> ByteString -> Either [PolicyError] [PrecededRule]
 resolveJsonOver base body = case eitherDecodeStrict body :: Either String Value of
@@ -534,9 +653,7 @@ epssBase =
     RulePolicy
         (Map.fromList [("deny-epss", atPrecedence defaultDenyIfEpssPrecedence (DenyIfEpss (DenyIfEpssParams 0.5 FailDeny)))])
 
-{- | The whole resolved policy as a multiset, so an "adds a rule" case cannot pass on a policy
-that also lost, gained, or re-graded another rule. The order is the caller's own concern.
--}
+-- | The whole resolved policy as a multiset, so an add cannot pass on a policy that also lost or re-graded a rule.
 shouldResolveTo :: Either [PolicyError] [PrecededRule] -> [PrecededRule] -> Expectation
 shouldResolveTo resolved expected = case resolved of
     Right rules -> rules `shouldMatchList` expected
@@ -546,7 +663,7 @@ shouldResolveTo resolved expected = case resolved of
 shippedRules :: [PrecededRule]
 shippedRules =
     [ atPrecedence defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))
-    , atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
+    , atPrecedence defaultAllowIfRemediatesCvePrecedence shippedRemediation
     ]
 
 hasRuleAtPrec :: Int -> Rule -> Either [PolicyError] [PrecededRule] -> Bool
@@ -557,15 +674,13 @@ hasRuleAtPrec _ _ _ = False
 refusalMentions :: Text -> Either [PolicyError] [PrecededRule] -> Bool
 refusalMentions needle = either (any (T.isInfixOf needle . renderPolicyError)) (const False)
 
-{- | A minimal well-formed "add" patch for each rule type, keyed by its type name. The "covers
-exactly" expectation ties it to 'knownRuleTypes', so a new 'Rule' type cannot join without an entry.
--}
+-- | A minimal add for each rule type. A case ties it to 'knownRuleTypes', so a new type cannot join without one.
 knownRuleAdds :: [(Text, ByteString)]
 knownRuleAdds =
     [ ("AllowScope", "{\"rules\":{\"r\":{\"type\":\"AllowScope\",\"scope\":\"myorg\"}}}")
     , ("AllowIfOlderThan", "{\"rules\":{\"r\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":100}}}")
     , ("AllowByIdentity", "{\"rules\":{\"r\":{\"type\":\"AllowByIdentity\",\"identity\":\"left-pad@1.3.0\"}}}")
-    , ("AllowIfRemediatesCve", "{\"rules\":{\"r\":{\"type\":\"AllowIfRemediatesCve\"}}}")
+    , ("AllowIfRemediatesCve", "{\"rules\":{\"r\":{\"type\":\"AllowIfRemediatesCve\",\"onUnavailable\":\"deny\",\"remainingAdvisories\":\"abstain\"}}}")
     , ("DenyIfCve", "{\"rules\":{\"r\":{\"type\":\"DenyIfCve\",\"minCvss\":8}}}")
     , ("DenyIfKnownMalicious", "{\"rules\":{\"r\":{\"type\":\"DenyIfKnownMalicious\"}}}")
     , ("DenyIfEpss", "{\"rules\":{\"r\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}}}")

@@ -22,6 +22,7 @@ module Ecluse.Core.Cve (
     keepAdvisories,
     affecting,
     fixedAt,
+    advisoryIdsOf,
     MissingScorePolicy (..),
     scoreAtLeast,
 ) where
@@ -39,14 +40,10 @@ import Ecluse.Core.Version (Version, VersionKey, parseVersionKey, renderVersion,
 
 import Database.SQLite.Simple (Connection, SQLError, close)
 
-{- | Query canonical package keys, with npm scopes inline, and canonical advisory versions.
-Display names must not be used as query keys.
--}
+-- | Query by canonical package key, with an npm scope inline. A display name is never a query key.
 data CveLookup = CveLookup
     { cveAdvisoriesFor :: Text -> IO [AdvisoryRange]
-    {- ^ Every advisory range recorded against a package name, for a rule predicate to read.
-    Throws the confined 'CveQueryFault' on a query fault, as every field here does.
-    -}
+    -- ^ Every advisory range recorded against a package name. Every field throws 'CveQueryFault' on a query fault.
     , cveCoveredNames :: IO [Text]
     -- ^ Every package name this generation records an advisory against, for a store sweep.
     }
@@ -62,22 +59,16 @@ data CveQueryFault = CveQueryFault
 
 instance Exception CveQueryFault
 
-{- | One opened artifact: the consumer view plus the owner's close. Whoever holds
-this owns the connection's lifetime. Hand a consumer 'cveDbLookup' only.
--}
+-- | One opened artifact. Its holder owns the connection's lifetime, and hands a consumer 'cveDbLookup' only.
 data CveDb = CveDb
     { cveDbLookup :: CveLookup
     -- ^ The view consumers query through.
     , cveDbClose :: IO ()
-    {- ^ Release the connection. Owner-only, and __never throws__, since the connection is
-    going away either way.
-    -}
+    -- ^ Release the connection. Owner-only, and __never throws__, since the connection is going away either way.
     , cveDbMeta :: [(Text, Text)]
     -- ^ The artifact's @meta@ provenance rows, snapshotted at open and key-sorted for the audit trail.
     , cveDbProvenance :: AdvisoryProvenance
-    {- ^ What the artifact records about the sources it was compiled from. An artifact written
-    before those keys decodes as absence.
-    -}
+    -- ^ What the artifact records about its sources. An artifact written before those keys decodes as absence.
     }
 
 -- | Reject incompatible artifacts as values. Opening faults leave no connection behind.
@@ -109,9 +100,7 @@ mkCveDb conn meta =
 taggedQuery :: Text -> IO a -> IO a
 taggedQuery tag act = act `catch` \(err :: SQLError) -> throwIO (CveQueryFault tag (show err))
 
-{- | One package's advisory segments, each with its bounds parsed once under the package's
-ecosystem, so every version of the package tests against ordering keys.
--}
+-- | One package's advisory segments, each with its bounds parsed once under the package's ecosystem.
 data PackageAdvisories = PackageAdvisories
     { paEcosystem :: Ecosystem
     , paSegments :: [Segment]
@@ -180,9 +169,7 @@ fixedAt advisories version
     probeKey = versionKeyIn (paEcosystem advisories) version
     probeIdentity = maybe (renderVersion version) renderVersionKey probeKey
 
-{- | The rows whose affected interval holds a version of the package, in row order. __Fail-closed:__
-an unprovable comparison counts as __inside__, bar a point the grammar cannot order.
--}
+-- | The rows whose interval holds the version, in row order. An unprovable comparison counts as inside, bar an unorderable point.
 affecting :: PackageAdvisories -> Version -> [AdvisoryRange]
 affecting advisories version = [segRange s | s <- paSegments advisories, holds (segBounds s)]
   where
@@ -200,6 +187,10 @@ withinUpper k = \case
     Below fixed -> k < fixed
     AtMost lastAffected -> k <= lastAffected
     NoUpper -> True
+
+-- | The distinct advisory identifiers of these rows, in the order they first appear.
+advisoryIdsOf :: [AdvisoryRange] -> [Text]
+advisoryIdsOf = ordNub . map arCveId
 
 {- OSV writes an enumerated version as introduced == last_affected. When the grammar rejects that
 string, the segment names it literally, since nothing can order it against anything. -}

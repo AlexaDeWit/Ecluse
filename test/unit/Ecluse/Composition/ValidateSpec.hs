@@ -8,6 +8,7 @@ import Data.Map.Strict qualified as Map
 import Test.Hspec
 
 import Ecluse.Composition.BootError (
+    Advisory (RemediationSkipsWithoutStore),
     BootError (
         AdvisoryDenyWithoutStore,
         DredgerChunkPauseBeneathFloor,
@@ -150,7 +151,7 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
             map vmEcosystem (vpMounts plan) `shouldBe` ecosystems
             for_ (vpMounts plan) $ \mount ->
                 map (ruleName . prRule) (mountPolicy (vmMount mount))
-                    `shouldMatchList` (["AllowIfOlderThan", "AllowIfRemediatesCve"] <> ["DenyInstallTimeExecution" | vmEcosystem mount == Npm])
+                    `shouldMatchList` (["AllowIfOlderThan"] <> ["DenyInstallTimeExecution" | vmEcosystem mount == Npm])
 
     for_ [MirrorWriter, MirrorPruner, MirrorPreviewer] $ \role -> describe (show role) $ do
         it "refuses a shared install-code deny" $
@@ -231,11 +232,31 @@ advisoryStoreSpec = describe "vetBoot -- an advisory deny with no advisory store
         refusalsFor MirrorWriter (denyingWith "DenyIfCve" "skip" staticEnvVars)
             `shouldReturn` [AdvisoryDenyWithoutStore Npm ("DenyIfCve" :| [])]
 
-    it "clears the shipped policy, whose only advisory rule abstains without a database" $
+    it "clears the source-free shipped policy, whose advisory rules no source activates" $
         refusalsFor MirrorWriter staticEnvVars `shouldReturn` []
 
     it "clears an advisory deny once a store is configured" $
         refusalsFor MirrorWriter (withAdvisoryStore (denyingOn "DenyIfCve" staticEnvVars)) `shouldReturn` []
+
+    it "clears the shipped advisory rules a store activates" $
+        refusalsFor MirrorWriter (withAdvisoryStore staticEnvVars) `shouldReturn` []
+
+    forM_ [MirrorWriter, MirrorPruner, MirrorPreviewer] $ \role -> do
+        it ("refuses the shipped remediation rule activated without a source under " <> show role) $
+            refusalsFor role (overrideEnv "ECLUSE_RULES" "{\"remediation-fast-track\":{\"enabled\":true}}" staticEnvVars)
+                `shouldReturn` [AdvisoryDenyWithoutStore Npm ("AllowIfRemediatesCve" :| [])]
+        it ("refuses a named remediation rule that denies without a source under " <> show role) $
+            refusalsFor role (denyingOn "AllowIfRemediatesCve" staticEnvVars)
+                `shouldReturn` [AdvisoryDenyWithoutStore Npm ("AllowIfRemediatesCve" :| [])]
+        it ("boots a remediation rule that skips without a source, and advises under " <> show role) $ do
+            config <- expectConfig (denyingWith "AllowIfRemediatesCve" "skip" staticEnvVars) Nothing
+            let (advisories, outcome) = runVet role (vetBoot config)
+            advisories `shouldSatisfy` elem (RemediationSkipsWithoutStore Npm)
+            void outcome `shouldBe` Right ()
+
+    it "advises nothing for a skipping remediation rule once a store is configured" $ do
+        config <- expectConfig (withAdvisoryStore (denyingWith "AllowIfRemediatesCve" "skip" staticEnvVars)) Nothing
+        fst (runVet MirrorWriter (vetBoot config)) `shouldSatisfy` notElem (RemediationSkipsWithoutStore Npm)
 
 privatePublicationSpec :: Spec
 privatePublicationSpec = describe "vetBoot private upstream and publication target collision" $ do
@@ -457,6 +478,7 @@ denyingWith ruleType alignment = overrideEnv "ECLUSE_RULES" rules
     threshold = case ruleType of
         "DenyIfKnownMalicious" -> ""
         "DenyIfEpss" -> ",\"minEpss\":0.5"
+        "AllowIfRemediatesCve" -> ",\"remainingAdvisories\":\"differential\""
         _ -> ",\"minCvss\":8"
 
 vetted :: RegistryRole -> Config -> Either [BootError] ValidatedPlan

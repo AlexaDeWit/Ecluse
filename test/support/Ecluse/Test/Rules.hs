@@ -13,6 +13,10 @@ module Ecluse.Test.Rules (
     staticAdvisoryDatabase,
     withAdvisoryFreshness,
 
+    -- * Remediation rules
+    shippedRemediation,
+    remediationWith,
+
     -- * Precedence and reach
     atDefaultPrecedence,
     atPrecedence,
@@ -90,6 +94,7 @@ import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh))
 import Ecluse.Core.Rules.Render (renderInability, renderReason)
 import Ecluse.Core.Rules.Types (
     AdvisoryScore (Cvss),
+    AllowIfRemediatesCveParams (AllowIfRemediatesCveParams),
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     EvalContext,
     Fact (Known),
@@ -97,12 +102,14 @@ import Ecluse.Core.Rules.Types (
     Inability (NoDatabaseLoaded),
     PrecededRule (PrecededRule),
     Reason (AffectedBy, IdentityRevoked, Remediates),
-    Rule,
+    RemainingAdvisories (Differential),
+    Rule (AllowIfRemediatesCve),
     RuleEvaluation (Unavailable),
     RuleEvidence (evInstallCode, evName),
     RuleReach (AdmissionAndRevocation, AdmissionOnly),
     RuleVerdict (Allow, CannotVet, Deny, NoDecision),
     completeEvidence,
+    defaultDifferentialLimits,
     defaultPrecedence,
     mkAdvisoryIds,
  )
@@ -149,6 +156,14 @@ withAdvisoryFreshness freshness deps =
             NoAdvisoryDatabase -> NoAdvisoryDatabase
             AdvisoryDatabase borrow -> AdvisoryDatabase (\use -> borrow (\generation -> use generation{agFreshness = freshness}))
         }
+
+-- | The remediation rule @config/default.yaml@ ships: deny on unavailable evidence, differential at the shipped limits.
+shippedRemediation :: Rule
+shippedRemediation = remediationWith FailDeny (Differential defaultDifferentialLimits)
+
+-- | A remediation rule with the given choices for unavailable evidence and for remaining advisories.
+remediationWith :: FailureAlignment -> RemainingAdvisories -> Rule
+remediationWith alignment remaining = AllowIfRemediatesCve (AllowIfRemediatesCveParams alignment remaining)
 
 -- | Use the rule type's 'defaultPrecedence'. Configuration supplies precedence for live policies.
 atDefaultPrecedence :: Rule -> PrecededRule

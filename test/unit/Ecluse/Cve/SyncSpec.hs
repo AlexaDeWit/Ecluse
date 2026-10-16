@@ -38,7 +38,7 @@ import Ecluse.Core.Rules.Freshness (
     maxAdvisoryAgeFor,
  )
 import Ecluse.Core.Rules.Outage (OutageReport (..), OutageState (Healthy))
-import Ecluse.Core.Rules.Types (AdvisoryAge (AdvisoryAge), Decision (Admitted), DenyIfCveParams (DenyIfCveParams), EvalContext (EvalContext), FailureAlignment (FailNoDecision), Inability (NoDatabaseLoaded), PrecededRule (PrecededRule), Rule (AllowIfOlderThan, AllowIfRemediatesCve, DenyIfCve), RuleEvidence, SkippedCheck (SkippedUnavailable), completeEvidence, defaultPrecedence)
+import Ecluse.Core.Rules.Types (AdvisoryAge (AdvisoryAge), Decision (Admitted), DenyIfCveParams (DenyIfCveParams), EvalContext (EvalContext), FailureAlignment (FailNoDecision), Inability (NoDatabaseLoaded), PrecededRule (PrecededRule), Rule (AllowIfOlderThan, DenyIfCve), RuleEvidence, SkippedCheck (SkippedUnavailable), completeEvidence, defaultPrecedence)
 import Ecluse.Core.Server.Readiness (
     DatabaseRequirement (DatabaseOptional, DatabaseRequired),
     MountReadiness (MountAwaitingFirstSync, MountReady),
@@ -55,7 +55,7 @@ import Ecluse.Test.Osv (mkMinimalValidDbWithMeta)
 import Ecluse.Test.Package (sampleDetails, v1_0_0)
 import Ecluse.Test.Poll (awaitUntil)
 import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, recordingAdvisorySyncTracingPort)
-import Ecluse.Test.Rules (isUndecidable, mapPackageRead)
+import Ecluse.Test.Rules (isUndecidable, mapPackageRead, shippedRemediation)
 
 import Ecluse.Core.Rules.Types qualified as Rules
 
@@ -142,7 +142,7 @@ spec = do
         it "prepares the advisory rules to run directly for an ecosystem the plan does not carry" $ do
             handle <- stubSyncHandle
             let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noOutageReport
-                advisoryPolicy = [PrecededRule (defaultPrecedence r) Rules.AdmissionAndRevocation r | r <- [AllowIfRemediatesCve, DenyIfCve (DenyIfCveParams 8.0 FailNoDecision)]]
+                advisoryPolicy = [PrecededRule (defaultPrecedence r) Rules.AdmissionAndRevocation r | r <- [shippedRemediation, DenyIfCve (DenyIfCveParams 8.0 FailNoDecision)]]
             prepare (deps PyPI) advisoryPolicy >>= (`shouldBe` [False, False]) . map (isJust . prepResilience)
             prepare (deps Npm) advisoryPolicy >>= (`shouldBe` [True, True]) . map (isJust . prepResilience)
 

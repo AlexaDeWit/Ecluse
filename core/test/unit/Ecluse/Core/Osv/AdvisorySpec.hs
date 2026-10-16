@@ -13,7 +13,6 @@ import Data.Aeson (Value (..), eitherDecodeStrict, encode, object, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.JsonStream.Parser qualified as J
-import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
@@ -39,15 +38,16 @@ import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Core.Package (canonicalise, mkPackageName)
 import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, fileCoordinate)
 import Ecluse.Core.Rules (AdvisoryRows, VerdictSource (..), readAdvisories, verdictSource, withCveLookup)
-import Ecluse.Core.Rules.Types (AdvisoryScore (..), DenyIfCveParams (..), DenyIfEpssParams (..), EvalContext (..), FailureAlignment (..), Inability (..), Reason (..), Rule (..), RuleVerdict (..), completeEvidence, mkAdvisoryIds, unAdvisoryIds)
+import Ecluse.Core.Rules.Types (AdvisoryScore (..), DenyIfCveParams (..), DenyIfEpssParams (..), EvalContext (..), FailureAlignment (..), Inability (..), LimitShortfall (..), Reason (..), RemainingAdvisories (AbstainOnRemaining), Rule (..), RuleVerdict (..), ScoreComparison (..), ScoreReading (..), ScoreSides (..), completeEvidence, defaultDifferentialLimits, mkAdvisoryIds, mkLimitShortfalls)
 import Ecluse.Core.Version (mkVersion, parseAdvisoryVersionKey, renderVersionKey)
+import Ecluse.Rules.Support (normaliseVerdictIds)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage), captureTexts, corpusPackages, cpName, pypiCorpusPackages)
 import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (..), compileAdvisoryInputs, corpusAdvisories)
 import Ecluse.Test.Osv (noScores, osvZipOf)
 import Ecluse.Test.Osv.Withdrawal (withdrawalBytes)
 import Ecluse.Test.OsvDb (metaOf, withServedArtifact)
 import Ecluse.Test.Package (sampleDetails)
-import Ecluse.Test.Rules (servingRuleDeps)
+import Ecluse.Test.Rules (remediationWith, servingRuleDeps, shippedRemediation)
 import Ecluse.Test.Version (genGem, genNpm, genPyPI)
 
 advisory :: [OsvSeverityEntry] -> Maybe Text -> OsvAdvisory
@@ -333,6 +333,14 @@ spec = describe "one OSV advisory record" $ do
             normaliseVerdictIds (Allow (Remediates ids)) `shouldBe` normaliseVerdictIds (Allow (Remediates reordered))
             normaliseVerdictIds (NoDecision (FixesButStillAffected fixed ids))
                 `shouldBe` normaliseVerdictIds (NoDecision (FixesButStillAffected fixedReordered reordered))
+            normaliseVerdictIds (NoDecision (FixStillApplies ids)) `shouldBe` normaliseVerdictIds (NoDecision (FixStillApplies reordered))
+            let compared fixedIds remainingIds = ScoreComparison fixedIds remainingIds (ScoreSides (Scored 9.8) Unscored) (ScoreSides Unscored (Scored 0.005)) defaultDifferentialLimits
+            normaliseVerdictIds (Allow (RemediatesWithinLimits (compared fixed ids)))
+                `shouldBe` normaliseVerdictIds (Allow (RemediatesWithinLimits (compared fixedReordered reordered)))
+            normaliseVerdictIds (NoDecision (RemediationBeyondLimits (compared fixed ids) (mkLimitShortfalls (RemainingUnscored Cvss ids :| []))))
+                `shouldBe` normaliseVerdictIds (NoDecision (RemediationBeyondLimits (compared fixedReordered reordered) (mkLimitShortfalls (RemainingUnscored Cvss reordered :| []))))
+            normaliseVerdictIds (Allow (RemediatesWithinLimits (compared fixed ids)))
+                `shouldNotBe` normaliseVerdictIds (Allow (RemediatesWithinLimits (compared ids fixed)))
 
         it "keeps decision, reason, score, threshold, etag, membership and multiplicity differences" $
             for_
@@ -589,25 +597,10 @@ verdictsFor eco name advisories versions = map decide rules
   where
     evidence = [completeEvidence (sampleDetails (mkPackageName eco Nothing name) (mkVersion eco version)) | version <- versions]
     context = EvalContext (UTCTime (fromGregorian 2026 1 1) 0) Nothing
-    rules = AllowIfRemediatesCve : [DenyIfCve (DenyIfCveParams threshold FailDeny) | threshold <- [0, 8, 10]] <> [DenyIfEpss (DenyIfEpssParams threshold FailDeny) | threshold <- [0, 0.5, 1]]
+    rules = remediationWith FailDeny AbstainOnRemaining : shippedRemediation : [DenyIfCve (DenyIfCveParams threshold FailDeny) | threshold <- [0, 8, 10]] <> [DenyIfEpss (DenyIfEpssParams threshold FailDeny) | threshold <- [0, 0.5, 1]]
     decide rule = case verdictSource rule of
         FromAdvisories _ verdict -> map (normaliseVerdictIds . verdict advisories) evidence
         FromEvidence verdict -> map (normaliseVerdictIds . verdict context) evidence
-
--- SQLite does not promise row order. Sorting each id collection preserves its membership and multiplicity.
-normaliseVerdictIds :: RuleVerdict -> RuleVerdict
-normaliseVerdictIds = \case
-    Allow reason -> Allow (normaliseReason reason)
-    Deny etag reason -> Deny etag (normaliseReason reason)
-    NoDecision reason -> NoDecision (normaliseReason reason)
-    verdict@CannotVet{} -> verdict
-  where
-    normaliseReason = \case
-        Remediates ids -> Remediates (ordered ids)
-        FixesButStillAffected fixed affected -> FixesButStillAffected (ordered fixed) (ordered affected)
-        AffectedBy score threshold ids -> AffectedBy score threshold (ordered ids)
-        reason -> reason
-    ordered = mkAdvisoryIds . NE.sort . unAdvisoryIds
 
 corpusRecords :: Ecosystem -> IO [OsvAdvisory]
 corpusRecords eco = do

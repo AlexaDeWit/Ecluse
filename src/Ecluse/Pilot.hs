@@ -64,9 +64,7 @@ import Ecluse.Runtime.Server (probeOnlyApplication, raceServerAgainstLoop, runWa
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryTracerProvider)
 import Ecluse.Runtime.Telemetry.Instruments (Metrics, advisoryCompileMetricsPortOf, newMetrics)
 
-{- | The entry point for the Pilot worker mode. The export loop never returns, so the
-server's graceful return on shutdown must cancel it, resuming from the remote artifact next boot.
--}
+-- | The Pilot worker mode. The export loop never returns, so the server's return on shutdown cancels it.
 runPilot :: BootEnv -> ExportLoopPlan -> IO ()
 runPilot bootEnv exportPlan = do
     let cfg = probeServerConfig (configApp (beConfig bootEnv))
@@ -76,9 +74,7 @@ runPilot bootEnv exportPlan = do
             (liftIO $ runWarp (beLogEnv bootEnv) "Pilot health probes" cfg probeOnlyApplication)
             (runExportLoop (beTelemetry bootEnv) (bpS3Endpoint (beBootPlan bootEnv)) (beConfig bootEnv) exportPlan)
 
-{- | Run the loop the boot planned, never returning. Every fault inside a cycle is transient,
-because a cycle has no wiring fault to fail up on.
--}
+-- | Run the loop the boot planned, never returning. Every fault inside a cycle is transient: a cycle has no wiring to fail on.
 runExportLoop :: (MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> Maybe AwsEndpoint -> Config -> ExportLoopPlan -> m ()
 runExportLoop telemetry s3Endpoint config = \case
     ExportIdle -> do
@@ -97,9 +93,7 @@ runExportLoop telemetry s3Endpoint config = \case
     cadence = exportCadenceMicros advisories
     schedule = BackoffSchedule{bsBaseMicros = cadence, bsCapMicros = cadence}
 
-{- | Run one supervised cycle loop per ecosystem, side by side. Each keeps its own backoff, so a
-feed that fails costs its own cadence and holds back no other ecosystem's artifact.
--}
+-- | One supervised cycle loop per ecosystem, side by side, each with its own backoff, so one failing feed holds back no other.
 superviseExportCycles :: (MonadUnliftIO m, KatipContext m) => BackoffSchedule -> NonEmpty ExportTarget -> (ExportTarget -> m ()) -> m ()
 superviseExportCycles schedule targets runCycle =
     mapConcurrently_ (\target -> superviseLoop (policyFor target) (runCycle target)) targets
@@ -137,9 +131,7 @@ runUploadPlan telemetry s3Endpoint plan dbPath = case plan of
     UploadSkipped -> pass
     UploadTo store -> uploadToStore telemetry s3Endpoint store dbPath
 
-{- | Run a single OSV compilation, optionally upload the artifact, and return its path. An OSV
-failure or a required EPSS failure propagates, so the command exits non-zero and stays scriptable.
--}
+-- | Compile once, optionally upload, and return the path. An OSV or required EPSS failure propagates, so the command exits non-zero.
 runPilotCompile :: LogEnv -> Telemetry -> Maybe AwsEndpoint -> Config -> PilotCompileOptions -> IO FilePath
 runPilotCompile logEnv telemetry s3Endpoint config opts = do
     metrics <- newMetrics telemetry
@@ -158,7 +150,7 @@ runPilotCompile logEnv telemetry s3Endpoint config opts = do
                     (telemetryTracerProvider telemetry)
                     (pcoOutDir opts)
                     osvEco
-                    (compileEpssRequirement (configMounts config) opts)
+                    (compileEpssRequirement advisories (configMounts config) opts)
                     (configuredSources advisories osvEco)
                     (quietTimeFor advisories (parseEcosystem (pcoEcosystem opts)))
             runUploadPlan telemetry s3Endpoint plan dbFile

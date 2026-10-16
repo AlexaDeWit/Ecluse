@@ -34,7 +34,7 @@ import Ecluse.Config (
     mountPostureLines,
     renderConfigError,
     resolvedKeyProvenance,
-    withoutMaliciousDefault,
+    withoutSourceDefaults,
  )
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.Resolve (deepMerge)
@@ -42,7 +42,23 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), defaultDeliveryBudget)
 import Ecluse.Core.Rules (evalRules, prepare)
-import Ecluse.Core.Rules.Types (Decision, EvalContext (EvalContext), Fact (Known), FailureAlignment (..), PrecededRule (..), Rule (DenyIfKnownMalicious), RuleEvidence (evPublishedAt), RuleReach (AdmissionAndRevocation, AdmissionOnly), identityEvidence, revocationRules, ruleName)
+import Ecluse.Core.Rules.Types (
+    AllowIfRemediatesCveParams (..),
+    Decision,
+    DifferentialLimits (..),
+    EvalContext (EvalContext),
+    Fact (Known),
+    FailureAlignment (..),
+    PrecededRule (..),
+    RemainingAdvisories (..),
+    Rule (AllowIfRemediatesCve, DenyIfKnownMalicious),
+    RuleEvidence (evPublishedAt),
+    RuleReach (AdmissionAndRevocation, AdmissionOnly),
+    defaultDifferentialLimits,
+    identityEvidence,
+    revocationRules,
+    ruleName,
+ )
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Readiness (DatabaseRequirement (DatabaseOptional, DatabaseRequired))
 import Ecluse.Test.Package (pypiVersion, thingName, unscopedPyPI, v1_0_0)
@@ -53,6 +69,7 @@ import Ecluse.Test.Support (expectRight)
 spec :: Spec
 spec = do
     maliciousDefaultSpec
+    remediationDefaultSpec
     describe "the embedded default configuration" $ do
         it "loads as a valid, self-contained backbone with no operator overlay" $
             loadConfig [] Nothing `shouldSatisfy` isRight
@@ -60,7 +77,7 @@ spec = do
         it "ships exactly the expected shared baseline rules under their default names" $ do
             (_, catalogue) <- expectRight (decodeDefaultConfig defaultConfigBytes)
             Map.keys (policyRules catalogue) `shouldMatchList` ["deny-known-malicious", "min-age", "remediation-fast-track"]
-            Map.keys (policyRules (withoutMaliciousDefault catalogue)) `shouldMatchList` ["min-age", "remediation-fast-track"]
+            Map.keys (policyRules (withoutSourceDefaults catalogue)) `shouldMatchList` ["min-age"]
 
         it "applies every shared shipped rule at both phases" $ do
             (_, baseline) <- expectRight (decodeDefaultConfig defaultConfigBytes)
@@ -98,16 +115,16 @@ spec = do
             it ("denies install scripts on the active npm mount with " <> label) $ do
                 cfg <- configFor doc
                 fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup Npm (configMounts cfg))
-                    `shouldBe` Just ["DenyInstallTimeExecution", "AllowIfOlderThan", "AllowIfRemediatesCve"]
+                    `shouldBe` Just ["DenyInstallTimeExecution", "AllowIfOlderThan"]
                 decideOn cfg Npm (scriptEvidence Npm) >>= (\decision -> blockedBy decision `shouldBe` Just "DenyInstallTimeExecution")
                 fmap (map (ruleName . prRule) . revocationRules . mountPolicy) (Map.lookup Npm (configMounts cfg))
-                    `shouldBe` Just ["AllowIfOlderThan", "AllowIfRemediatesCve"]
+                    `shouldBe` Just ["AllowIfOlderThan"]
 
         for_ [("PyPI-only", "{\"mounts\":{\"pypi\":{\"enabled\":true}}}"), ("both mounts", "{\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true}}}")] $ \(label, doc) ->
             it ("admits an old PyPI release that runs code on install with " <> label) $ do
                 cfg <- configFor doc
                 fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup PyPI (configMounts cfg))
-                    `shouldBe` Just ["AllowIfOlderThan", "AllowIfRemediatesCve"]
+                    `shouldBe` Just ["AllowIfOlderThan"]
                 decideOn cfg PyPI (scriptEvidence PyPI) >>= (\decision -> admittedBy decision `shouldBe` Just "AllowIfOlderThan")
 
         it "disables the npm default in the document or environment" $
@@ -124,7 +141,7 @@ spec = do
             cfg <- configFor "{\"mounts\":{\"npm\":{\"rules\":{\"deny-scripts\":{\"appliesTo\":[\"admission\",\"revocation\"]}}}}}"
             Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm []
             fmap (map (ruleName . prRule) . revocationRules . mountPolicy) (Map.lookup Npm (configMounts cfg))
-                `shouldBe` Just ["DenyInstallTimeExecution", "AllowIfOlderThan", "AllowIfRemediatesCve"]
+                `shouldBe` Just ["DenyInstallTimeExecution", "AllowIfOlderThan"]
 
         it "keeps the shipped mount layer above a shared entry of the same name" $ do
             cfg <- configFor "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\",\"revocation\"]}},\"mounts\":{\"npm\":{\"enabled\":true}}}"
@@ -247,7 +264,7 @@ spec = do
         it "keeps shared rules at both phases while the npm default applies only at admission" $ do
             cfg <- configFor "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\"}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true}}}"
             Map.map (map ruleReach . mountPolicy) (configMounts cfg)
-                `shouldBe` Map.fromList [(Npm, [AdmissionOnly, AdmissionAndRevocation, AdmissionAndRevocation]), (PyPI, replicate 3 AdmissionAndRevocation)]
+                `shouldBe` Map.fromList [(Npm, [AdmissionOnly, AdmissionAndRevocation]), (PyPI, replicate 2 AdmissionAndRevocation)]
 
         it "limits a shared deny to admission only on the mount that says so" $ do
             cfg <- configFor "{\"rules\":{\"withdrawn\":{\"type\":\"DenyByIdentity\",\"identity\":\"thing\"}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true,\"rules\":{\"withdrawn\":{\"appliesTo\":[\"admission\"]}}}}}"
@@ -271,7 +288,7 @@ spec = do
                     (pubUrlEnv <> [("ECLUSE_RULES", "{\"min-age\":{\"enabled\":false}}")])
                     (Just "{\"rules\":{\"min-age\":{\"appliesTo\":[\"admission\",\"revocation\"]}},\"mounts\":{\"npm\":{\"enabled\":true}}}")
             Map.map (map (ruleName . prRule) . mountPolicy) (configMounts cfg)
-                `shouldBe` Map.singleton Npm ["DenyInstallTimeExecution", "AllowIfRemediatesCve"]
+                `shouldBe` Map.singleton Npm ["DenyInstallTimeExecution"]
 
         it "refuses an ambiguous setting on a mount's own rules, for npm and for PyPI" $
             for_ ["npm", "pypi"] $ \mount ->
@@ -325,10 +342,19 @@ spec = do
             Map.map mountDatabaseRequirement (configMounts cfg)
                 `shouldBe` Map.fromList [(Npm, DatabaseRequired), (PyPI, DatabaseOptional)]
 
-        it "leaves the shipped policy needing no database, because the fast lane only abstains" $ do
+        it "leaves the source-free shipped policy needing no database, because no source activates its advisory rules" $ do
             cfg <- configFor privateMountDoc
             Map.map mountAdvisoryDenials (configMounts cfg) `shouldBe` Map.singleton Npm []
             Map.map mountDatabaseRequirement (configMounts cfg) `shouldBe` Map.singleton Npm DatabaseOptional
+
+        it "names the MAL default and the remediation rule under deny once a source activates them, and only MAL under skip" $ do
+            shipped <- expectConfig (pubUrlEnv <> advisoryStoreEnv) (Just privateMountDoc)
+            Map.map mountAdvisoryDenials (configMounts shipped) `shouldBe` Map.singleton Npm ["DenyIfKnownMalicious", "AllowIfRemediatesCve"]
+            skipping <- expectConfig (pubUrlEnv <> advisoryStoreEnv <> [("ECLUSE_RULES", "{\"remediation-fast-track\":{\"onUnavailable\":\"skip\"}}")]) (Just privateMountDoc)
+            Map.map mountAdvisoryDenials (configMounts skipping) `shouldBe` Map.singleton Npm ["DenyIfKnownMalicious"]
+            alone <- expectConfig (pubUrlEnv <> advisoryStoreEnv <> [("ECLUSE_RULES", "{\"deny-known-malicious\":{\"enabled\":false}}")]) (Just privateMountDoc)
+            Map.map mountAdvisoryDenials (configMounts alone) `shouldBe` Map.singleton Npm ["AllowIfRemediatesCve"]
+            Map.map mountDatabaseRequirement (configMounts alone) `shouldBe` Map.singleton Npm DatabaseRequired
 
     describe "mountEpssRequirement" $ do
         it "requires inherited EPSS rules only where the mount keeps them" $ do
@@ -339,22 +365,32 @@ spec = do
             cfg <- configFor "{\"mounts\":{\"npm\":{\"enabled\":true,\"rules\":{\"renamed-risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":1,\"onUnavailable\":\"skip\"}}},\"pypi\":{\"enabled\":true}}}"
             Map.map mountEpssRequirement (configMounts cfg) `shouldBe` Map.fromList [(Npm, EpssRequired), (PyPI, EpssOptional)]
 
-        it "does not require EPSS for the resolved defaults" $ do
+        it "does not require EPSS for the source-free resolved defaults" $ do
             cfg <- configFor privateMountDoc
             Map.map mountEpssRequirement (configMounts cfg) `shouldBe` Map.singleton Npm EpssOptional
 
+        it "requires EPSS for the shipped differential a source activates, and not once it abstains or is off"
+            $ for_
+                [ ([], EpssRequired)
+                , ([("ECLUSE_RULES", "{\"remediation-fast-track\":{\"remainingAdvisories\":\"abstain\"}}")], EpssOptional)
+                , ([("ECLUSE_RULES", "{\"remediation-fast-track\":{\"enabled\":false}}")], EpssOptional)
+                ]
+            $ \(patch, expected) -> do
+                cfg <- expectConfig (pubUrlEnv <> advisoryStoreEnv <> patch) (Just privateMountDoc)
+                Map.map mountEpssRequirement (configMounts cfg) `shouldBe` Map.singleton Npm expected
+
     describe "the EPSS requirement reported at boot" $ do
         it "names each mount's requirement from its own resolved rules" $ do
-            cfg <- expectConfig (pubUrlEnv <> advisoryStoreEnv) (Just "{\"rules\":{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true,\"rules\":{\"risk\":{\"enabled\":false}}}}}")
+            cfg <- expectConfig (pubUrlEnv <> advisoryStoreEnv) (Just "{\"rules\":{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true,\"rules\":{\"risk\":{\"enabled\":false},\"remediation-fast-track\":{\"remainingAdvisories\":\"abstain\"}}}}}")
             advisoryEpssLines cfg
-                `shouldBe` [ "mount \"npm\": EPSS enrichment is required, because a DenyIfEpss rule is active. A failed EPSS feed publishes no artifact, and consumers refuse one without enrichment"
-                           , "mount \"pypi\": EPSS enrichment is optional, because no DenyIfEpss rule is active. A failed EPSS feed publishes the OSV data with epss_status=unavailable"
+                `shouldBe` [ "mount \"npm\": EPSS enrichment is required, because these active rules read EPSS scores: AllowIfRemediatesCve, DenyIfEpss. A failed EPSS feed publishes no artifact, and consumers refuse one without enrichment"
+                           , "mount \"pypi\": EPSS enrichment is optional, because no active rule reads EPSS scores. A failed EPSS feed publishes the OSV data with epss_status=unavailable"
                            ]
 
         it "reports the requirement without an advisory store, which a local compile runs under" $ do
             cfg <- configFor privateMountDoc
             advisoryEpssLines cfg
-                `shouldBe` ["mount \"npm\": EPSS enrichment is optional, because no DenyIfEpss rule is active. A failed EPSS feed publishes the OSV data with epss_status=unavailable"]
+                `shouldBe` ["mount \"npm\": EPSS enrichment is optional, because no active rule reads EPSS scores. A failed EPSS feed publishes the OSV data with epss_status=unavailable"]
 
     describe "resolvedKeyProvenance" $ do
         it "labels each resolved key with the layer that supplied it" $ do
@@ -456,12 +492,12 @@ maliciousDefaultSpec = describe "the source-dependent MAL default" $ do
         (_, catalogue) <- expectRight (decodeDefaultConfig defaultConfigBytes)
         absent <- load [] "{}" "{}"
         present <- load source "{}" "{}"
-        concatMap mountPolicy (Map.elems (configMounts absent)) `shouldMatchList` Map.elems (policyRules (withoutMaliciousDefault catalogue))
+        concatMap mountPolicy (Map.elems (configMounts absent)) `shouldMatchList` Map.elems (policyRules (withoutSourceDefaults catalogue))
         concatMap mountPolicy (Map.elems (configMounts present)) `shouldMatchList` Map.elems (policyRules catalogue)
         malRules absent `shouldBe` []
         malRules present `shouldBe` [expected]
         map mountDatabaseRequirement (Map.elems (configMounts present)) `shouldBe` [DatabaseRequired]
-        map mountEpssRequirement (Map.elems (configMounts present)) `shouldBe` [EpssOptional]
+        map mountEpssRequirement (Map.elems (configMounts present)) `shouldBe` [EpssRequired]
     for_ [[], source] $ \sourceEnv -> do
         it ("rejects malformed unavailable handling on a retained disabled MAL default " <> show sourceEnv) $
             loadConfig
@@ -486,3 +522,66 @@ maliciousDefaultSpec = describe "the source-dependent MAL default" $ do
     it "reads a document source before selecting the default" $ do
         cfg <- expectConfig pubUrlEnv (Just "{\"advisories\":{\"url\":\"s3://advisories/ecluse\"},\"mounts\":{\"pypi\":{\"enabled\":true}}}")
         malRules cfg `shouldBe` [expected]
+
+-- The remediation default rides the MAL default's activation, so these cases mirror that table.
+remediationDefaultSpec :: Spec
+remediationDefaultSpec = describe "the source-dependent remediation default" $ do
+    let source = [("ECLUSE_ADVISORIES__URL", "s3://advisories/ecluse")]
+        both = Just "{\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true}}}"
+        fastLanes cfg = Map.map (mapMaybe (remediationOf . prRule) . mountPolicy) (configMounts cfg)
+        remediationOf = \case
+            AllowIfRemediatesCve params -> Just params
+            _ -> Nothing
+        onBoth params = Map.fromList [(Npm, params), (PyPI, params)]
+        shipped = AllowIfRemediatesCveParams FailDeny (Differential defaultDifferentialLimits)
+        sharedRules patch = [("ECLUSE_RULES", patch)]
+    it "is inactive without a source, so a source-free mount decides as before" $ do
+        cfg <- expectConfig pubUrlEnv both
+        fastLanes cfg `shouldBe` onBoth []
+        Map.map mountDatabaseRequirement (configMounts cfg) `shouldBe` onBoth DatabaseOptional
+
+    it "is active with a source, under deny and the shipped differential limits" $ do
+        cfg <- expectConfig (pubUrlEnv <> source) both
+        fastLanes cfg `shouldBe` onBoth [shipped]
+        Map.map mountAdvisoryDenials (configMounts cfg) `shouldBe` onBoth ["DenyIfKnownMalicious", "AllowIfRemediatesCve"]
+        Map.map mountEpssRequirement (configMounts cfg) `shouldBe` onBoth EpssRequired
+
+    for_ [("NPM", Npm, PyPI), ("PYPI", PyPI, Npm)] $ \(key, disabled, kept) ->
+        it ("is deactivated by enabled: false through ECLUSE_MOUNTS__" <> key <> "__RULES alone") $ do
+            cfg <- expectConfig (pubUrlEnv <> source <> [("ECLUSE_MOUNTS__" <> key <> "__RULES", "{\"remediation-fast-track\":{\"enabled\":false}}")]) both
+            Map.lookup disabled (fastLanes cfg) `shouldBe` Just []
+            Map.lookup kept (fastLanes cfg) `shouldBe` Just [shipped]
+
+    for_ ["{\"remediation-fast-track\":{\"enabled\":true}}", "{\"remediation-fast-track\":{\"type\":\"AllowIfRemediatesCve\"}}"] $ \patch ->
+        it ("is activated without a source by " <> patch) $ do
+            cfg <- expectConfig (pubUrlEnv <> sharedRules patch) both
+            fastLanes cfg `shouldBe` onBoth [shipped]
+            Map.map mountDatabaseRequirement (configMounts cfg) `shouldBe` onBoth DatabaseRequired
+
+    it "keeps the activation state under a partial patch" $ do
+        let skip = sharedRules "{\"remediation-fast-track\":{\"onUnavailable\":\"skip\"}}"
+        absent <- expectConfig (pubUrlEnv <> skip) both
+        fastLanes absent `shouldBe` onBoth []
+        present <- expectConfig (pubUrlEnv <> source <> skip) both
+        fastLanes present `shouldBe` onBoth [AllowIfRemediatesCveParams FailNoDecision (Differential defaultDifferentialLimits)]
+        Map.map mountAdvisoryDenials (configMounts present) `shouldBe` onBoth ["DenyIfKnownMalicious"]
+
+    it "layers a mount's differential limits over a shared abstain" $ do
+        cfg <-
+            expectConfig
+                ( pubUrlEnv
+                    <> source
+                    <> sharedRules "{\"remediation-fast-track\":{\"remainingAdvisories\":\"abstain\"}}"
+                    <> [("ECLUSE_MOUNTS__PYPI__RULES", "{\"remediation-fast-track\":{\"remainingAdvisories\":\"differential\",\"maxRemainingCvss\":5}}")]
+                )
+                both
+        fastLanes cfg
+            `shouldBe` Map.fromList
+                [ (Npm, [AllowIfRemediatesCveParams FailDeny AbstainOnRemaining])
+                , (PyPI, [AllowIfRemediatesCveParams FailDeny (Differential defaultDifferentialLimits{dlMaxRemainingCvss = 5})])
+                ]
+        Map.map mountEpssRequirement (configMounts cfg) `shouldBe` Map.fromList [(Npm, EpssOptional), (PyPI, EpssRequired)]
+
+    it "refuses a malformed patch on the inactive rule too" $
+        loadConfig pubUrlEnv (Just "{\"rules\":{\"remediation-fast-track\":{\"remainingAdvisories\":\"partial\"}},\"mounts\":{\"npm\":{\"enabled\":true}}}")
+            `shouldBe` Left [PolicyErrors [MalformedRule "remediation-fast-track" "\"remainingAdvisories\" must be \"abstain\" or \"differential\", not \"partial\""]]

@@ -13,9 +13,15 @@ module Ecluse.Core.Rules.Types (
     ruleType,
     DenyIfCveParams (..),
     DenyIfEpssParams (..),
+    AllowIfRemediatesCveParams (..),
+    RemainingAdvisories (..),
+    DifferentialLimits (..),
+    ScoreGap (..),
+    defaultDifferentialLimits,
     ruleName,
     readsAdvisories,
     deniesOnAdvisories,
+    requiresEpss,
     ruleDenies,
 
     -- * Precedence and reach
@@ -54,6 +60,13 @@ module Ecluse.Core.Rules.Types (
     unAdvisoryIds,
     Inability (..),
     AdvisoryScore (..),
+    ScoreComparison (..),
+    ScoreSides (..),
+    ScoreReading (..),
+    LimitShortfall (..),
+    LimitShortfalls,
+    mkLimitShortfalls,
+    unLimitShortfalls,
     AdvisoryAge (..),
 
     -- * Unavailability
@@ -77,73 +90,97 @@ import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version)
 import Ecluse.Core.Wire (WireVocab (..), renderWire)
 
-{- | The closed built-in rule vocabulary accepted from configuration.
-'Ecluse.Core.Rules.prepare' binds capabilities without accepting arbitrary evaluation closures.
--}
+-- | The closed rule vocabulary configuration selects. 'Ecluse.Core.Rules.prepare' binds its capabilities.
 data Rule
     = -- | Unconditionally allow every package under the given scope.
       AllowScope Scope
-    | {- | Delay new versions to give malicious publishes time to be detected and removed.
-      Allow only after the configured publish age.
-      -}
+    | -- | Delay new versions, so a malicious publish is found and removed before a build installs it.
       AllowIfOlderThan NominalDiffTime
-    | {- | Deny install-time code execution through npm scripts, RubyGems native builds, or PyPI sdist build backends.
-      Abstain when the package carries no install-time execution signal.
-      -}
+    | -- | Deny npm install scripts, RubyGems native builds, and PyPI sdist builds. Abstain without that signal.
       DenyInstallTimeExecution
     | -- | Refuse versions carrying the registry yank flag.
       DenyIfYanked
     | -- | Refuse versions carrying the registry deprecation flag, including obsolete release lines.
       DenyIfDeprecated
-    | {- | A hard deny for a specific package or package@version. Evaluated at top
-      precedence (above AllowScope) as a post-mirror revocation mechanism.
-      -}
+    | -- | A hard deny for one package or package@version, at top precedence, so it also revokes mirrored copies.
       DenyByIdentity Text
-    | {- | Allow an exact package identity, optionally with a version, including fixes the exact fix match cannot recognise.
-      Default precedence overrides scored advisory denies and yields to MAL, availability, install-code, and identity denies.
-      -}
+    | -- | Allow one package or package@version, including a fix the exact fix match cannot recognise.
       AllowByIdentity Text
-    | {- | Admit an exact advisory fix without quarantine when no advisory still affects the version.
-      Consult the local database and abstain when it is absent or either condition fails.
-      -}
-      AllowIfRemediatesCve
-    | {- | Opt-in denial for affected versions meeting the severity threshold, including historical mirror dependencies.
-      'DenyIfCveParams' governs missing scores and unavailable lookups.
-      -}
+    | -- | Admit an advisory's exact fix ahead of the quarantine, on the terms 'AllowIfRemediatesCveParams' sets.
+      AllowIfRemediatesCve AllowIfRemediatesCveParams
+    | -- | Deny versions an advisory at or above the CVSS threshold affects, including historical mirror dependencies.
       DenyIfCve DenyIfCveParams
     | -- | Deny versions affected by an active primary MAL advisory, independently of scores.
       DenyIfKnownMalicious FailureAlignment
-    | {- | Deny on a known EPSS score at or above the threshold. Individual missing scores
-      abstain, including malware without CVE aliases. 'DenyIfCve' governs severity independently.
-      -}
+    | -- | Deny on a known EPSS score at or above the threshold. An individual missing score abstains.
       DenyIfEpss DenyIfEpssParams
     deriving stock (Eq, Show)
 
-{- | 'DenyIfCve''s configured behaviour: a separate record rather than fields on
-the constructor, so its selectors stay total under the sum (@-Wpartial-fields@).
--}
+-- | 'DenyIfCve''s configured behaviour, a record so its selectors stay total under the sum.
 data DenyIfCveParams = DenyIfCveParams
     { dicMinCvss :: Double
-    {- ^ CVSS threshold (0 to 10). Qualitative labels use their band's ceiling.
-    Missing scores satisfy every threshold, so unscored malware remains denied.
-    -}
+    -- ^ CVSS threshold (0 to 10). A missing score satisfies every threshold, so unscored malware stays denied.
     , dicOnUnavailable :: FailureAlignment
-    {- ^ Resolve an unavailable advisory lookup: 'FailDeny' refuses by default.
-    'FailNoDecision' skips the rule and records the reason in the decision's audit trail.
-    -}
+    -- ^ How the rule resolves when the advisory database cannot answer: 'FailNoDecision' skips and records why.
     }
     deriving stock (Eq, Show)
 
 -- | 'DenyIfEpss''s configured behaviour, the EPSS twin of 'DenyIfCveParams'.
 data DenyIfEpssParams = DenyIfEpssParams
     { dieMinEpss :: Double
-    {- ^ The EPSS probability (0 to 1) at or above which an affecting advisory denies.
-    An individual missing score supplies no denial.
-    -}
+    -- ^ The EPSS probability (0 to 1) at or above which an affecting advisory denies. A missing score supplies no denial.
     , dieOnUnavailable :: FailureAlignment
     -- ^ How the rule resolves when the advisory database cannot answer, as 'dicOnUnavailable'.
     }
     deriving stock (Eq, Show)
+
+-- | 'AllowIfRemediatesCve''s configured behaviour. Configuration states both choices, and nothing defaults them.
+data AllowIfRemediatesCveParams = AllowIfRemediatesCveParams
+    { aircOnUnavailable :: FailureAlignment
+    -- ^ How the rule resolves when the advisory database cannot answer, an expired or undated push included.
+    , aircRemaining :: RemainingAdvisories
+    -- ^ What the rule does with an exact fix that another advisory still affects.
+    }
+    deriving stock (Eq, Show)
+
+-- | What the fast lane does with a partial fix: an exact fix that another advisory still affects.
+data RemainingAdvisories
+    = -- | Abstain, so the partial fix waits out the quarantine.
+      AbstainOnRemaining
+    | -- | Admit when the remaining advisories' stored scores sit inside the limits.
+      Differential DifferentialLimits
+    deriving stock (Eq, Show)
+
+-- | The differential's limits. They compare stored scores, which proves no reduced exposure.
+data DifferentialLimits = DifferentialLimits
+    { dlMaxRemainingCvss :: Double
+    -- ^ The CVSS (0 to 10) every remaining advisory must stay at or below.
+    , dlMaxRemainingEpss :: Double
+    -- ^ The EPSS probability (0 to 1) every remaining advisory must stay strictly below.
+    , dlCvssGap :: ScoreGap
+    -- ^ How far the highest fixed CVSS must exceed the highest remaining one.
+    , dlEpssGap :: ScoreGap
+    -- ^ How far the highest fixed EPSS must exceed the highest remaining one, in probability points.
+    }
+    deriving stock (Eq, Show)
+
+-- | A minimum difference between the highest fixed and the highest remaining score.
+data ScoreGap
+    = -- | No gap condition, so no fixed score is needed.
+      NoGapRequired
+    | -- | The highest known fixed score must exceed the highest remaining one by at least this.
+      GapOfAtLeast Double
+    deriving stock (Eq, Show)
+
+-- | The shipped limits, which fill omitted keys in differential mode only. They are product defaults, not safety boundaries.
+defaultDifferentialLimits :: DifferentialLimits
+defaultDifferentialLimits =
+    DifferentialLimits
+        { dlMaxRemainingCvss = 6.9
+        , dlMaxRemainingEpss = 0.01
+        , dlCvssGap = GapOfAtLeast 1.0
+        , dlEpssGap = NoGapRequired
+        }
 
 -- | Parameter-free rule identity for configuration and ecosystem blocks.
 data RuleType
@@ -188,7 +225,7 @@ ruleType = \case
     DenyInstallTimeExecution -> DenyInstallTimeExecutionType
     DenyByIdentity{} -> DenyByIdentityType
     AllowByIdentity{} -> AllowByIdentityType
-    AllowIfRemediatesCve -> AllowIfRemediatesCveType
+    AllowIfRemediatesCve{} -> AllowIfRemediatesCveType
     DenyIfCve{} -> DenyIfCveType
     DenyIfKnownMalicious{} -> DenyIfKnownMaliciousType
     DenyIfEpss{} -> DenyIfEpssType
@@ -197,12 +234,10 @@ ruleType = \case
 ruleName :: Rule -> Text
 ruleName = renderWire . ruleType
 
-{- | Whether a rule reads the advisory database. A rule set with none never needs one, and a set
-with one is worth waiting a bounded while for the first sync before deciding anything.
--}
+-- | Whether a rule reads the advisory database, so a rule set holding one waits a bounded while for the first sync.
 readsAdvisories :: Rule -> Bool
 readsAdvisories = \case
-    AllowIfRemediatesCve -> True
+    AllowIfRemediatesCve{} -> True
     DenyIfCve{} -> True
     DenyIfKnownMalicious{} -> True
     DenyIfEpss{} -> True
@@ -214,15 +249,13 @@ readsAdvisories = \case
     DenyByIdentity{} -> False
     AllowByIdentity{} -> False
 
-{- | Whether a rule denies on the advisory database rather than abstaining without one. A rule set
-holding one cannot decide anything until an artifact loads, which is what makes a store mandatory.
--}
+-- | Whether a rule refuses when the advisory database cannot answer, which makes an advisory store mandatory.
 deniesOnAdvisories :: Rule -> Bool
 deniesOnAdvisories = \case
     DenyIfCve{} -> True
     DenyIfKnownMalicious{} -> True
     DenyIfEpss{} -> True
-    AllowIfRemediatesCve -> False
+    AllowIfRemediatesCve params -> aircOnUnavailable params == FailDeny
     AllowScope{} -> False
     AllowIfOlderThan{} -> False
     DenyIfYanked -> False
@@ -231,9 +264,24 @@ deniesOnAdvisories = \case
     DenyByIdentity{} -> False
     AllowByIdentity{} -> False
 
-{- | Whether a rule can only refuse or abstain. Removing only such rules cannot make evaluation
-refuse a version the whole policy admits on the same evidence.
--}
+-- | Whether a rule reads EPSS scores, which makes Pilot's enrichment and a consumer's check of it mandatory.
+requiresEpss :: Rule -> Bool
+requiresEpss = \case
+    DenyIfEpss{} -> True
+    AllowIfRemediatesCve params -> case aircRemaining params of
+        Differential{} -> True
+        AbstainOnRemaining -> False
+    DenyIfCve{} -> False
+    DenyIfKnownMalicious{} -> False
+    AllowScope{} -> False
+    AllowIfOlderThan{} -> False
+    DenyIfYanked -> False
+    DenyIfDeprecated -> False
+    DenyInstallTimeExecution -> False
+    DenyByIdentity{} -> False
+    AllowByIdentity{} -> False
+
+-- | Whether a rule can only refuse or abstain, so removing it cannot refuse a version the whole policy admits.
 ruleDenies :: Rule -> Bool
 ruleDenies = \case
     DenyIfYanked -> True
@@ -246,11 +294,9 @@ ruleDenies = \case
     AllowScope{} -> False
     AllowIfOlderThan{} -> False
     AllowByIdentity{} -> False
-    AllowIfRemediatesCve -> False
+    AllowIfRemediatesCve{} -> False
 
-{- | A rule with explicit precedence, ordered highest first and then by name through 'Ecluse.Core.Rules.bootOrder'.
-No derived 'Ord' defines policy order.
--}
+-- | A rule with explicit precedence. 'Ecluse.Core.Rules.bootOrder' orders rules, never a derived 'Ord'.
 data PrecededRule = PrecededRule
     { rulePrecedence :: Int
     -- ^ The precedence at which this rule competes. Higher wins.
@@ -261,9 +307,7 @@ data PrecededRule = PrecededRule
     }
     deriving stock (Eq, Show)
 
-{- | The phases a rule applies at. Every rule applies at admission, so no value leaves admission
-out, and a deny limited to it never removes a stored version.
--}
+-- | The phases a rule applies at. Every rule applies at admission, so a deny limited to it never removes a stored version.
 data RuleReach
     = -- | The gate, the mirror worker's ingest, and the Dredger's revocation all read the rule.
       AdmissionAndRevocation
@@ -271,9 +315,7 @@ data RuleReach
       AdmissionOnly
     deriving stock (Eq, Show)
 
-{- | The rules the Dredger evaluates, in their given order. Configuration admits 'AdmissionOnly' on
-a deny alone ('ruleDenies'), so this list never blocks a version the whole policy admits.
--}
+-- | The rules the Dredger evaluates. Only a deny may be 'AdmissionOnly', so this never blocks what the policy admits.
 revocationRules :: [PrecededRule] -> [PrecededRule]
 revocationRules = filter (reachesRevocation . ruleReach)
   where
@@ -281,13 +323,11 @@ revocationRules = filter (reachesRevocation . ruleReach)
         AdmissionAndRevocation -> True
         AdmissionOnly -> False
 
-{- | Use the rule type's default when configuration omits precedence. See 'Ecluse.Core.Rules.bootOrder' for tie-breaking.
-Identity allows override scored advisory denies. MAL, availability, install-code, and identity denies outrank every default allow.
--}
+-- | The rule type's precedence when configuration omits one. 'Ecluse.Core.Rules.bootOrder' breaks ties.
 defaultPrecedence :: Rule -> Int
 defaultPrecedence = \case
     AllowIfOlderThan{} -> defaultAllowIfOlderThanPrecedence
-    AllowIfRemediatesCve -> defaultAllowIfRemediatesCvePrecedence
+    AllowIfRemediatesCve{} -> defaultAllowIfRemediatesCvePrecedence
     AllowScope{} -> defaultAllowScopePrecedence
     DenyIfCve{} -> defaultDenyIfCvePrecedence
     DenyIfKnownMalicious{} -> defaultDenyInstallTimeExecutionPrecedence
@@ -298,57 +338,39 @@ defaultPrecedence = \case
     DenyInstallTimeExecution -> defaultDenyInstallTimeExecutionPrecedence
     DenyByIdentity{} -> defaultDenyByIdentityPrecedence
 
-{- | Default precedence of 'AllowIfOlderThan': the lowest band, a passive
-quarantine that yields to an explicit allow-list and to every deny.
--}
+-- | Default precedence of 'AllowIfOlderThan': the lowest band, a quarantine that yields to allow-lists and every deny.
 defaultAllowIfOlderThanPrecedence :: Int
 defaultAllowIfOlderThanPrecedence = 100
 
-{- | Admit security fixes ahead of quarantine.
-Yield to 'AllowScope'. Higher advisory denies still read the database.
--}
+-- | Admit security fixes ahead of the quarantine, yielding to 'AllowScope' and to every deny.
 defaultAllowIfRemediatesCvePrecedence :: Int
 defaultAllowIfRemediatesCvePrecedence = 150
 
-{- | Default precedence of 'AllowScope': above the quarantine, because an
-explicit allow-list is a stronger statement than the time gate. Still below every deny.
--}
+-- | Default precedence of 'AllowScope': above the quarantine, because an allow-list is a stronger statement.
 defaultAllowScopePrecedence :: Int
 defaultAllowScopePrecedence = 200
 
-{- | Outrank quarantine, remediation, and scope allows.
-Yield to 'AllowByIdentity' so an operator can override an advisory denial.
--}
+-- | Outrank the quarantine, remediation, and scope allows, and yield to an 'AllowByIdentity' override.
 defaultDenyIfCvePrecedence :: Int
 defaultDenyIfCvePrecedence = 225
 
-{- | Default precedence of 'DenyIfEpss': the same rung as 'DenyIfCve', which reads the
-same database and answers to the same identity-pin override. A tie resolves by name.
--}
+-- | Default precedence of 'DenyIfEpss': the rung of 'DenyIfCve', which reads the same database. A tie resolves by name.
 defaultDenyIfEpssPrecedence :: Int
 defaultDenyIfEpssPrecedence = defaultDenyIfCvePrecedence
 
-{- | An identity pin overrides scored advisory denies.
-MAL, availability, install-code, and identity denies retain higher default precedence.
--}
+-- | An identity pin overrides scored advisory denies, and yields to MAL, availability, install-code, and identity denies.
 defaultAllowByIdentityPrecedence :: Int
 defaultAllowByIdentityPrecedence = 250
 
-{- | Default precedence of 'DenyInstallTimeExecution': the deny band, strictly above
-every allow default, so a matching deny overrides any allow out of the box.
--}
+-- | Default precedence of 'DenyInstallTimeExecution': the deny band, above every allow default.
 defaultDenyInstallTimeExecutionPrecedence :: Int
 defaultDenyInstallTimeExecutionPrecedence = 300
 
-{- Default precedence of 'DenyByIdentity': the top precedence, strictly above
-every other rule (including explicit allow-lists), to serve as a hard revocation.
--}
+-- The top precedence, above every other rule, so 'DenyByIdentity' serves as a hard revocation.
 defaultDenyByIdentityPrecedence :: Int
 defaultDenyByIdentityPrecedence = 400
 
-{- | Whether the evidence set carries one fact. 'Known' wraps the fact's own vocabulary, so a
-determined absence ('Known' 'Nothing') stays distinct from 'Unread', which is no reading at all.
--}
+-- | One fact of the evidence. A determined absence ('Known' 'Nothing') stays distinct from 'Unread', no reading at all.
 data Fact a
     = -- | The fact was read, and is whatever it says.
       Known a
@@ -356,9 +378,7 @@ data Fact a
       Unread
     deriving stock (Eq, Show)
 
-{- | What the engine reads about one version, one entry per fact the rule vocabulary consults.
-Identity is unconditional, because a store listing establishes it without any metadata read.
--}
+-- | What the engine reads about one version. Identity is unconditional, because a store listing establishes it.
 data RuleEvidence = RuleEvidence
     { evName :: PackageName
     -- ^ The package identity, which every rule reads.
@@ -384,9 +404,7 @@ completeEvidence pd =
         , evInstallCode = Known (pkgInstallCode pd)
         }
 
-{- | Identity alone, which an authenticated store listing establishes with no manifest. A rule
-reading any further fact cannot decide over it.
--}
+-- | Identity alone, as an authenticated store listing establishes it. A rule reading any other fact cannot decide.
 identityEvidence :: PackageName -> Version -> RuleEvidence
 identityEvidence name version =
     RuleEvidence
@@ -402,21 +420,15 @@ data EvalContext = EvalContext
     { ctxNow :: UTCTime
     -- ^ The wall-clock "now" for age-based rules.
     , ctxAdvisoryEtag :: Maybe DbEtag
-    {- ^ The advisory generation active when the audit line emits, or 'Nothing' when none is loaded.
-    A shadow swap means this need not identify the generation used for evaluation.
-    -}
+    -- ^ The advisory generation active at the audit line. A shadow swap can make it differ from the one evaluated.
     }
     deriving stock (Eq, Show)
 
-{- | Build the shared context from the mount's injected clock, never an ad-hoc wall clock.
-The advisory ETag is audit-only and cannot affect the decision.
--}
+-- | Build the context from the mount's injected clock. The advisory ETag is audit-only and cannot affect the decision.
 mkEvalContext :: IO UTCTime -> IO (Maybe DbEtag) -> IO EvalContext
 mkEvalContext now advisoryEtag = EvalContext <$> now <*> advisoryEtag
 
-{- | A deterministic verdict that the harness never retries. 'Allow', 'Deny', and fail-closed 'CannotVet' are decisive.
-Other verdict reasons enter the deny-by-default audit trail in boot order.
--}
+-- | A deterministic verdict the harness never retries. 'Allow', 'Deny', and fail-closed 'CannotVet' are decisive.
 data RuleVerdict
     = -- | This rule admits the package. Decisive.
       Allow Reason
@@ -424,27 +436,19 @@ data RuleVerdict
       Deny (Maybe DbEtag) Reason
     | -- | This rule has no opinion. The reason stays for the audit trail. A no-op.
       NoDecision Reason
-    | {- | Deterministic inability to vet: an absent database, or a fact nothing read. Never enters
-      retry or breaker handling. 'FailDeny' yields 'Undecidable'. 'FailNoDecision' abstains.
-      -}
+    | -- | Deterministic inability to vet, never retried. 'FailDeny' yields 'Undecidable', and 'FailNoDecision' abstains.
       CannotVet FailureAlignment Inability
     deriving stock (Eq, Show)
 
-{- | The harness alone creates 'Unavailable' from faults. Decisive verdicts and fail-closed faults determine the decision.
-Other outcomes contribute their reasons to the audit trail.
--}
+-- | One rule's evaluation. The harness alone creates 'Unavailable', from faults.
 data RuleEvaluation
     = -- | The rule returned a verdict, and the harness takes it at face value.
       Decided RuleVerdict
-    | {- | A harness-observed IO fault, timeout, or open breaker, with retry advice in 'Transience'.
-      'FailDeny' yields 'Undecidable'. 'FailNoDecision' abstains.
-      -}
+    | -- | A fault, timeout, or open breaker, with retry advice. 'FailDeny' yields 'Undecidable', and 'FailNoDecision' abstains.
       Unavailable Transience FailureAlignment Inability
     deriving stock (Eq, Show)
 
-{- | Choose refusal or abstention when a rule cannot vet or its evaluation faults.
-There is no failure alignment that admits unvetted bytes.
--}
+-- | Refusal or abstention when a rule cannot vet or its evaluation faults. No alignment admits unvetted bytes.
 data FailureAlignment
     = -- | __Fail closed.__ An uncomputable result is decisive: the version is not admitted.
       FailDeny
@@ -452,29 +456,19 @@ data FailureAlignment
       FailNoDecision
     deriving stock (Eq, Show)
 
-{- | The overall decision for a package version against a whole rule set. It credits the
-deciding rule by __name__ (see 'ruleName'), independent of how the engine evaluates it.
--}
+-- | The decision for a version against a whole rule set. It credits the deciding rule by name ('ruleName').
 data Decision
-    = {- | Admitted by the named rule, with its reason and the configured checks the admission did
-      not benefit from, so a copy this decision makes trusted can say what it passed without.
-      -}
+    = -- | Admitted by the named rule, with the configured checks the admission did not benefit from.
       Admitted Text Reason [SkippedCheck]
     | -- | Blocked by the named rule, with the advisory ETag that supplied its evidence and its reason.
       Blocked Text (Maybe DbEtag) Reason
-    | {- | No rule was decisive. Deny-by-default; carries every non-decisive reason,
-      in boot order, so the denial response can explain what was considered.
-      -}
+    | -- | No rule was decisive, so the version is denied. It carries every non-decisive reason, in boot order.
       BlockedByDefault [Reason]
-    | {- | A fail-closed rule won without vetting the version. Packuments omit it, and artifact requests return an error.
-      'Transience' selects the error status and retry advice. The reason remains available for audit.
-      -}
+    | -- | A fail-closed rule won without vetting. Packuments omit the version, and artifact requests fail by 'Transience'.
       Undecidable Transience Reason
     deriving stock (Eq, Show)
 
-{- | A configured check the winning allow did not benefit from. The two kinds stay apart so no
-consumer reads a check the engine never ran as one that passed.
--}
+-- | A configured check the winning allow did not benefit from. A check the engine never ran never reads as passed.
 data SkippedCheck
     = -- | The check ran, could not vet the version, and its fail-open alignment let the fold move on.
       SkippedUnavailable Text Inability
@@ -490,9 +484,7 @@ skippedChecks = \case
     BlockedByDefault{} -> []
     Undecidable{} -> []
 
-{- | Why a rule reached its result, as the facts it decided on. No text is built at decision time:
-'Ecluse.Core.Rules.Render.renderReason' writes the sentence where a reader needs one.
--}
+-- | Why a rule reached its result, as facts. 'Ecluse.Core.Rules.Render.renderReason' writes the sentence.
 data Reason
     = -- | 'AllowScope' admits: the package is under the scope it allows.
       ScopeAllowListed Scope
@@ -526,14 +518,18 @@ data Reason
       IdentityAllowListed Text
     | -- | 'AllowByIdentity' abstains: the version is not the identity it allows.
       IdentityNotAllowListed Text
-    | -- | 'AllowIfRemediatesCve' admits: the advisories this version is the exact fix for.
+    | -- | 'AllowIfRemediatesCve' admits: the advisories this version is the exact fix for, with none still affecting it.
       Remediates AdvisoryIds
-    | -- | 'AllowIfRemediatesCve' abstains: the advisories it fixes, then those still affecting it.
+    | -- | 'AllowIfRemediatesCve' admits a partial fix whose remaining advisories sit inside the limits.
+      RemediatesWithinLimits ScoreComparison
+    | -- | 'AllowIfRemediatesCve' abstains on a partial fix: the advisories it genuinely fixes, then those still affecting it.
       FixesButStillAffected AdvisoryIds AdvisoryIds
+    | -- | 'AllowIfRemediatesCve' abstains on a partial fix outside the limits, with every condition it failed.
+      RemediationBeyondLimits ScoreComparison LimitShortfalls
+    | -- | 'AllowIfRemediatesCve' abstains: every advisory naming this version as its fix still affects it through another range.
+      FixStillApplies AdvisoryIds
     | -- | 'AllowIfRemediatesCve' abstains: no advisory names this version as its fix.
       FixesNoAdvisory
-    | -- | 'AllowIfRemediatesCve' abstains: no advisory database is loaded.
-      NoDatabaseToRemediate
     | -- | An advisory deny fires: the score it gates on, its threshold, and the affecting advisories.
       AffectedBy AdvisoryScore Double AdvisoryIds
     | -- | Active primary MAL advisories affect the version, independently of scores.
@@ -546,9 +542,7 @@ data Reason
       RuleUnable Text Inability
     deriving stock (Eq, Show)
 
-{- | The advisories a reason names, at least one. 'mkAdvisoryIds' is the only way to build it and
-evaluates every identifier, so a reason leaves no range matching for the reader that renders it.
--}
+-- | The advisories a reason names, at least one. 'mkAdvisoryIds' evaluates every identifier, so no matching is deferred.
 newtype AdvisoryIds = AdvisoryIds (NonEmpty Text)
     deriving stock (Eq, Show)
 
@@ -560,15 +554,62 @@ mkAdvisoryIds = AdvisoryIds . strictElements
 unAdvisoryIds :: AdvisoryIds -> NonEmpty Text
 unAdvisoryIds (AdvisoryIds ids) = ids
 
--- | The score an advisory deny gates on.
+-- | The score an advisory rule compares.
 data AdvisoryScore
     = Cvss
     | Epss
     deriving stock (Eq, Show)
 
-{- | Why a rule could not vet a version. It carries no rule name, because every holder names the
-rule in a field of its own.
--}
+-- | What the differential compared for one partial fix: the advisories on each side, their highest scores, and the limits.
+data ScoreComparison = ScoreComparison
+    { scFixed :: AdvisoryIds
+    -- ^ The advisories the version genuinely fixes.
+    , scRemaining :: AdvisoryIds
+    -- ^ The advisories that still affect the version.
+    , scCvss :: ScoreSides
+    , scEpss :: ScoreSides
+    , scLimits :: DifferentialLimits
+    }
+    deriving stock (Eq, Show)
+
+-- | The highest stored score among the genuinely fixed advisories, and among the remaining ones.
+data ScoreSides = ScoreSides
+    { ssHighestFixed :: ScoreReading
+    , ssHighestRemaining :: ScoreReading
+    }
+    deriving stock (Eq, Show)
+
+-- | A score the advisory artifact stores. 'Unscored' never reads as zero.
+data ScoreReading
+    = Scored Double
+    | Unscored
+    deriving stock (Eq, Show)
+
+-- | One differential condition a partial fix failed.
+data LimitShortfall
+    = -- | The highest remaining score is past its ceiling: above it for CVSS, at or above it for EPSS.
+      RemainingAboveCeiling AdvisoryScore
+    | -- | These remaining advisories store no score of this kind.
+      RemainingUnscored AdvisoryScore AdvisoryIds
+    | -- | No genuinely fixed advisory stores a score of this kind, so an enabled gap cannot hold.
+      FixedUnscored AdvisoryScore
+    | -- | The highest fixed score exceeds the highest remaining one by less than the minimum gap.
+      GapBelowMinimum AdvisoryScore
+    deriving stock (Eq, Show)
+
+-- | The conditions a partial fix failed, at least one. 'mkLimitShortfalls' evaluates every one.
+newtype LimitShortfalls = LimitShortfalls (NonEmpty LimitShortfall)
+    deriving stock (Eq, Show)
+
+-- | Name the failed conditions. Evaluating the result evaluates every one.
+mkLimitShortfalls :: NonEmpty LimitShortfall -> LimitShortfalls
+mkLimitShortfalls = LimitShortfalls . strictElements
+
+-- | The failed conditions, in the order the rule checked them.
+unLimitShortfalls :: LimitShortfalls -> NonEmpty LimitShortfall
+unLimitShortfalls (LimitShortfalls shortfalls) = shortfalls
+
+-- | Why a rule could not vet a version. Every holder names the rule in a field of its own.
 data Inability
     = -- | Nothing read the publish time the rule decides on.
       PublishTimeUnread
@@ -592,9 +633,7 @@ data Inability
       AttemptTimedOut
     deriving stock (Eq, Show)
 
-{- | One reading of a push: when it landed, how old it is now, and the maximum it was read
-against. An audit line and an alarm both render this, so neither can report a different number.
--}
+-- | One reading of a push's age against its maximum. An audit line and an alarm render the same reading.
 data AdvisoryAge = AdvisoryAge
     { advisoryPushedAt :: UTCTime
     , advisoryAge :: NominalDiffTime
@@ -602,16 +641,10 @@ data AdvisoryAge = AdvisoryAge
     }
     deriving stock (Eq, Show)
 
-{- | Serve transient outages, rate limits, timeouts, and open breakers as @503@.
-Serve internal or parse faults as @500@. 'WillResolve' and 'WontResolve' encode that distinction.
--}
+-- | Whether a retry can help: a transient fault serves @503@, and an internal or parse fault @500@.
 data Transience
-    = {- | A retry may succeed after an outage, timeout, or open breaker.
-      The optional 'RetryAfter' suggests a client delay.
-      -}
+    = -- | A retry may succeed after an outage, timeout, or open breaker. 'RetryAfter' suggests a client delay.
       WillResolve (Maybe RetryAfter)
-    | {- | Not expected to self-heal (an internal or parse error). Retrying cannot
-      help, so the request is a @500@, never a @503@.
-      -}
+    | -- | Not expected to self-heal, so the request is a @500@, never a @503@.
       WontResolve
     deriving stock (Eq, Show)

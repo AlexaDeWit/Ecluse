@@ -49,7 +49,7 @@ import UnliftIO (evaluate, tryAny)
 import UnliftIO.MVar (modifyMVar)
 
 import Ecluse.Core.Breaker (BreakerReporter (..))
-import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), MissingScorePolicy (..), PackageAdvisories, affecting, fixedAt, keepAdvisories, packageAdvisories, scoreAtLeast)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), MissingScorePolicy (..), PackageAdvisories, advisoryIdsOf, affecting, keepAdvisories, packageAdvisories, scoreAtLeast)
 import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Package
 import Ecluse.Core.Rules.Effectful (
@@ -61,6 +61,7 @@ import Ecluse.Core.Rules.Effectful (
  )
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated))
 import Ecluse.Core.Rules.Outage (SourceHealth (..), SourceReporter (..), noSourceReporter)
+import Ecluse.Core.Rules.Remediation (remediationVerdict)
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Version (renderVersion)
@@ -146,12 +147,14 @@ verdictSource = \case
         if matchesIdentity ident ev
             then Allow (IdentityAllowListed ident)
             else NoDecision (IdentityNotAllowListed ident)
-    -- Expiry abstains on the remediation allow, so a deny's refusal is what the version meets.
-    AllowIfRemediatesCve -> FromAdvisories (AdvisoryAlignment FailNoDecision FailNoDecision) $ \case
-        Nothing -> const (NoDecision NoDatabaseToRemediate)
-        Just (_, advisories) -> classifyRanges advisories
-    -- A deny's configured alignment governs a faulted read and an unloaded database alike. No
-    -- in-process retry could load a database, so its absence is a verdict and never a fault.
+    -- The remediation allow's one choice governs every unavailability, an expired push included.
+    AllowIfRemediatesCve params ->
+        let alignment = aircOnUnavailable params
+            decide = remediationVerdict (aircRemaining params)
+         in FromAdvisories (AdvisoryAlignment alignment alignment) $ \case
+                Nothing -> const (CannotVet alignment NoDatabaseLoaded)
+                Just (_, advisories) -> decide advisories
+    -- No in-process retry could load a database, so its absence is a verdict and never a fault.
     DenyIfCve params -> FromAdvisories (AdvisoryAlignment FailDeny (dicOnUnavailable params)) $ \case
         Nothing -> const (CannotVet (dicOnUnavailable params) NoDatabaseLoaded)
         Just (etag, advisories) -> advisoryDenyVerdict etag DenyMissingScore Cvss (dicMinCvss params) arSeverity advisories
@@ -189,20 +192,9 @@ isMalicious = maybe False (not . T.null) . T.stripPrefix "MAL-" . arCveId
 -- Filtering shares parsed segments and happens once before the returned version function.
 affectedVerdict :: DbEtag -> (AdvisoryIds -> Reason) -> Reason -> PackageAdvisories -> RuleEvidence -> RuleVerdict
 affectedVerdict etag affectedReason absentReason advisories ev =
-    case ordNub (map arCveId (affecting advisories (evVersion ev))) of
+    case advisoryIdsOf (affecting advisories (evVersion ev)) of
         [] -> NoDecision absentReason
         affected : more -> Deny (Just etag) (affectedReason (mkAdvisoryIds (affected :| more)))
-
--- A version still inside any advisory's affected range, an unfixed one included, must not fast-track.
-classifyRanges :: PackageAdvisories -> RuleEvidence -> RuleVerdict
-classifyRanges advisories ev =
-    case (remediated, stillOpen) of
-        ([], _) -> NoDecision FixesNoAdvisory
-        (fixed : fixes, []) -> Allow (Remediates (mkAdvisoryIds (fixed :| fixes)))
-        (fixed : fixes, open : others) -> NoDecision (FixesButStillAffected (mkAdvisoryIds (fixed :| fixes)) (mkAdvisoryIds (open :| others)))
-  where
-    remediated = ordNub (map arCveId (fixedAt advisories (evVersion ev)))
-    stillOpen = ordNub (map arCveId (affecting advisories (evVersion ev)))
 
 -- The one identity test the by-identity twins share: the exact rendered package
 -- name, or the exact package@version.
@@ -320,9 +312,7 @@ renderReach = \case
     AdmissionAndRevocation -> "applies at admission and revocation"
     AdmissionOnly -> "applies at admission only"
 
-{- | Decide a request's versions in boot order, catching throws in verdicts and their payloads.
-Advisory rules must share one 'prepare' so they read one package generation.
--}
+-- | Decide a request's versions in boot order, catching throws. Advisory rules sharing one 'prepare' read one generation.
 newEvaluator :: EvalContext -> [PreparedRule] -> IO (RuleEvidence -> IO Decision)
 newEvaluator ctx rules = do
     shared <- newPackageCell

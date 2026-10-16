@@ -78,9 +78,7 @@ import Ecluse.Test.Credential (noCredentialReporters)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, pypiVersion, thingName, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Rules (blockedBy, inertRuleDeps)
 
-{- | Tests the composition root's boot-time wiring. Every boot problem is a fail-fast,
-aggregated boot error, and the injected clock and adapter resolver keep this spec free of IO.
--}
+-- | The composition root's boot wiring: every problem is an aggregated boot error, with no IO beyond the injected clock and resolver.
 spec :: Spec
 spec = do
     planMountsSpec
@@ -180,10 +178,10 @@ planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
         planFrom staticEnvVars Nothing >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
-                map prepName (bootOrder (pdRules deps)) `shouldBe` ["DenyInstallTimeExecution", "AllowIfRemediatesCve", "AllowIfOlderThan"]
+                map prepName (bootOrder (pdRules deps)) `shouldBe` ["DenyInstallTimeExecution", "AllowIfOlderThan"]
                 cfg <- expectConfig staticEnvVars Nothing
                 fmap (renderBootOrder . mountPolicy) (Map.lookup Npm (configMounts cfg))
-                    `shouldBe` Just ["rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)", "rule 2: AllowIfRemediatesCve (precedence 150, applies at admission and revocation)", "rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)"]
+                    `shouldBe` Just ["rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)", "rule 2: AllowIfOlderThan (precedence 100, applies at admission and revocation)"]
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "wires a deny limited to admission into each mount's gate, for npm and for PyPI" $ do
@@ -465,9 +463,7 @@ mirrorTargetText = \case
     MirrorOnAdmit url -> Just (registryUrlText url)
     NoMirrorWrite -> Nothing
 
-{- | The one first-party predicate every consumer of the privilege reads. Each ecosystem's arm is pinned
-here, because a disagreement between consumers is the dependency confusion it closes.
--}
+-- | The first-party predicate every consumer reads, pinned per ecosystem: a disagreement would be dependency confusion.
 firstPartySpec :: Spec
 firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $ do
     it "matches an npm scope exactly, refusing a lookalike and an unscoped name" $

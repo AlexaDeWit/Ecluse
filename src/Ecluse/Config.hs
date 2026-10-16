@@ -62,7 +62,7 @@ module Ecluse.Config (
     renderPolicyError,
     emptyPolicy,
     decodeDefaultConfig,
-    withoutMaliciousDefault,
+    withoutSourceDefaults,
     ConfigError (..),
     renderConfigError,
     loadConfig,
@@ -103,7 +103,7 @@ import Ecluse.Core.Rules.Freshness (
     maxAdvisoryAgeFor,
  )
 import Ecluse.Core.Rules.Render (renderDuration)
-import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule (DenyIfEpss), deniesOnAdvisories, readsAdvisories, ruleName)
+import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule, deniesOnAdvisories, readsAdvisories, requiresEpss, ruleName)
 import Ecluse.Core.Security (HostPort, hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Readiness (DatabaseRequirement (DatabaseOptional, DatabaseRequired))
@@ -118,34 +118,35 @@ decodeDefaultConfig bytes = do
     policy <- first (pure . PolicyErrors) (resolvePolicy emptyPolicy patch)
     pure (ast, policy)
 
--- | Remove the MAL default, which a policy keeps only while an advisory source activates it.
-withoutMaliciousDefault :: RulePolicy -> RulePolicy
-withoutMaliciousDefault = RulePolicy . Map.delete maliciousDefaultName . policyRules
+-- | Remove the defaults a policy keeps only while an advisory source activates them.
+withoutSourceDefaults :: RulePolicy -> RulePolicy
+withoutSourceDefaults = RulePolicy . (`Map.withoutKeys` sourceDefaultNames) . policyRules
 
--- The descriptor remains patchable after a disable, until the final mount policy is selected.
-data PendingPolicy = PendingPolicy RulePolicy Bool
+-- Each descriptor stays patchable after a disable, until the final mount policy is selected.
+data PendingPolicy = PendingPolicy RulePolicy (Map Text Bool)
 
-maliciousDefaultName :: Text
-maliciousDefaultName = "deny-known-malicious"
+-- The shipped rules an advisory source activates: neither can decide anything without one.
+sourceDefaultNames :: Set Text
+sourceDefaultNames = Set.fromList ["deny-known-malicious", "remediation-fast-track"]
+
+pendingPolicy :: RulePolicy -> Bool -> PendingPolicy
+pendingPolicy policy sourced = PendingPolicy policy (Map.fromSet (const sourced) sourceDefaultNames)
 
 effectivePolicy :: PendingPolicy -> RulePolicy
-effectivePolicy (PendingPolicy policy active)
-    | active = policy
-    | otherwise = withoutMaliciousDefault policy
+effectivePolicy (PendingPolicy policy active) =
+    RulePolicy (Map.withoutKeys (policyRules policy) (Map.keysSet (Map.filter not active)))
 
+-- @enabled: false@ deactivates, @enabled: true@ or a restated type activates, and a partial patch keeps the state.
 resolvePendingPolicy :: PendingPolicy -> RulePatch -> Either [PolicyError] PendingPolicy
 resolvePendingPolicy (PendingPolicy policy active) (RulePatch patch) =
-    (`PendingPolicy` nextActive) <$> resolvePolicy policy (RulePatch descriptorPatch)
+    (`PendingPolicy` Map.mapWithKey nextActive active) <$> resolvePolicy policy (RulePatch descriptorPatch)
   where
-    entry = Map.lookup maliciousDefaultName patch
-    nextActive = case entry of
-        Nothing -> active
-        Just declared -> fromMaybe (isJust (entryType declared) || active) (entryEnabled declared)
-    descriptorPatch = Map.adjust (\declared -> declared{entryEnabled = Just True}) maliciousDefaultName patch
+    nextActive name current = case Map.lookup name patch of
+        Nothing -> current
+        Just declared -> fromMaybe (isJust (entryType declared) || current) (entryEnabled declared)
+    descriptorPatch = foldr (Map.adjust (\declared -> declared{entryEnabled = Just True})) patch (Map.keys active)
 
-{- | Load the merged configuration: the defaults, the operator document, then the environment
-overlay, strongest-last. A mount is __active__ only where that overlay declares a key under it.
--}
+-- | Load the defaults, the operator document, then the environment overlay, strongest last. A mount is active only where the overlay declares it.
 loadConfig :: [(String, String)] -> Maybe ByteString -> Either [ConfigError] Config
 loadConfig envVars mBytes = do
     (defaultAst, catalogue) <- decodeDefaultConfig defaultConfigBytes
@@ -155,7 +156,7 @@ loadConfig envVars mBytes = do
     parsed <- decodeAppConfig merged
     active <- declaredMounts overridesAst
     let appConfig = parsed{cfgMounts = servedMounts active (cfgMounts parsed)}
-    globalPolicy <- resolveGlobalPolicy (PendingPolicy catalogue (isJust (advUrl (cfgAdvisories parsed)))) overridesAst
+    globalPolicy <- resolveGlobalPolicy (pendingPolicy catalogue (isJust (advUrl (cfgAdvisories parsed)))) overridesAst
     validateMirrorSettings appConfig
     mounts <- case (publicUrlErrors appConfig, resolveMounts defaultAst overridesAst globalPolicy appConfig) of
         ([], resolved) -> resolved
@@ -306,9 +307,7 @@ mountOf eco mcfg policy mode =
 rulesOf :: RulePolicy -> [PrecededRule]
 rulesOf = Map.elems . policyRules
 
-{- | Whether two configured endpoints name the same registry. The authority folds to lower case
-with its default port applied, and the path is compared exactly past a trailing slash.
--}
+-- | Whether two endpoints name one registry: the authority folds to lower case with its default port, and the path compares past a trailing slash.
 sameRegistry :: RegistryUrl -> RegistryUrl -> Bool
 sameRegistry a b = registryKey a == registryKey b
 
@@ -319,9 +318,7 @@ registryKey url = (hostPortAddress raw, stripTrailingSlash (registryPath raw))
   where
     raw = registryUrlText url
 
-{- | One line per resolved leaf of the merged configuration: the dotted path, the redacted value,
-and its layer. Empty when a layer fails to parse, and a boot-computed key has no leaf to report.
--}
+-- | One line per resolved leaf: the dotted path, the redacted value, and its layer. Empty when a layer fails to parse.
 resolvedKeyProvenance :: [(String, String)] -> Maybe ByteString -> [Text]
 resolvedKeyProvenance envVars mBytes = fromRight [] $ do
     defaultAst <- parseDefaultAst defaultConfigBytes
@@ -390,25 +387,21 @@ maintenanceClientLine (eco, mount) = do
             <> ecosystemName eco
             <> "\": the store maintenance client is built at boot against the live environment. check-config does not attempt this build."
 
-{- | One mount's effective maximum advisory push age, derived from that mount's own rules. An
-explicit @advisories.maxAgeSeconds@ overrides the derivation on every mount.
--}
+-- | One mount's maximum advisory push age, derived from its own rules unless @advisories.maxAgeSeconds@ overrides it.
 mountAdvisoryAge :: AdvisoriesSettings -> Mount -> MaxAdvisoryAge
 mountAdvisoryAge advisories = maxAdvisoryAgeFor (advMaxAgeSeconds advisories) . mountRulesOf
 
--- | Require enrichment when this mount's resolved policy contains an EPSS rule.
+-- | Require enrichment when this mount's resolved policy holds a rule that reads EPSS scores.
 mountEpssRequirement :: Mount -> EpssRequirement
-mountEpssRequirement = bool EpssOptional EpssRequired . any requiresEpss . mountRulesOf
-  where
-    requiresEpss DenyIfEpss{} = True
-    requiresEpss _ = False
+mountEpssRequirement = bool EpssRequired EpssOptional . null . mountEpssRules
+
+mountEpssRules :: Mount -> [Text]
+mountEpssRules = ordNub . map ruleName . filter requiresEpss . mountRulesOf
 
 mountRulesOf :: Mount -> [Rule]
 mountRulesOf = map prRule . mountPolicy
 
-{- | The names of this mount's rules that deny on the advisory database, in policy order. A
-non-empty list is what makes an advisory store mandatory and the mount's readiness wait for one.
--}
+-- | This mount's rules that refuse without advisory evidence. Any one makes a store mandatory and readiness wait for it.
 mountAdvisoryDenials :: Mount -> [Text]
 mountAdvisoryDenials = ordNub . map ruleName . filter deniesOnAdvisories . mountRulesOf
 
@@ -416,9 +409,7 @@ mountAdvisoryDenials = ordNub . map ruleName . filter deniesOnAdvisories . mount
 mountDatabaseRequirement :: Mount -> DatabaseRequirement
 mountDatabaseRequirement = bool DatabaseRequired DatabaseOptional . null . mountAdvisoryDenials
 
-{- | The effective maximum push age of every mount whose rules read the advisory database, with
-the basis that produced it. With no store configured nothing syncs, so nothing has an age.
--}
+-- | The maximum push age of every mount whose rules read advisories, with its basis. Without a store nothing has an age.
 advisoryAgeLines :: Config -> [Text]
 advisoryAgeLines config =
     [ ageLine eco (mountAdvisoryAge advisories mount)
@@ -438,16 +429,14 @@ ageLine eco limit =
         <> ", "
         <> renderBasis (maxAdvisoryAgeBasis limit)
 
-{- | Each mount's EPSS requirement, which Pilot and that mount's advisory consumers apply alike.
-It is reported with no store too, because @pilot compile@ runs under it without uploading.
--}
+-- | Each mount's EPSS requirement, which Pilot and the mount's consumers share. It is reported with no store too.
 advisoryEpssLines :: Config -> [Text]
-advisoryEpssLines config = [epssLine eco (mountEpssRequirement mount) | (eco, mount) <- Map.toAscList (configMounts config)]
+advisoryEpssLines config = [epssLine eco (mountEpssRules mount) | (eco, mount) <- Map.toAscList (configMounts config)]
 
-epssLine :: Ecosystem -> EpssRequirement -> Text
+epssLine :: Ecosystem -> [Text] -> Text
 epssLine eco = \case
-    EpssRequired -> prefix <> "EPSS enrichment is required, because a DenyIfEpss rule is active. A failed EPSS feed publishes no artifact, and consumers refuse one without enrichment"
-    EpssOptional -> prefix <> "EPSS enrichment is optional, because no DenyIfEpss rule is active. A failed EPSS feed publishes the OSV data with epss_status=unavailable"
+    [] -> prefix <> "EPSS enrichment is optional, because no active rule reads EPSS scores. A failed EPSS feed publishes the OSV data with epss_status=unavailable"
+    rules -> prefix <> "EPSS enrichment is required, because " <> T.intercalate ", " rules <> " read EPSS scores. A failed EPSS feed publishes no artifact, and consumers refuse one without enrichment"
   where
     prefix = "mount \"" <> ecosystemName eco <> "\": "
 

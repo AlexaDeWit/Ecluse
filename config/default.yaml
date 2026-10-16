@@ -161,10 +161,13 @@ advisories:
   osvExportBaseUrl: "https://osv-vulnerabilities.storage.googleapis.com"
   # The EPSS daily feed Pilot joins onto the advisories by CVE id, on the same terms:
   # override it if the upstream moves or you mirror it. Pilot attempts it on every compile,
-  # whatever the rules, so allowlist this host for Pilot's egress in every deployment. The
-  # DenyIfEpss rule reads the scores it supplies. When the feed fails, an ecosystem whose
-  # rules include DenyIfEpss publishes nothing, and any other ecosystem publishes its OSV
-  # data marked epss_status=unavailable. Pilot and every consumer must share these rules.
+  # whatever the rules, so allowlist this host for Pilot's egress in every deployment.
+  # DenyIfEpss and an AllowIfRemediatesCve rule in differential mode read the scores it
+  # supplies, and the shipped remediation-fast-track is one. When the feed fails, an
+  # ecosystem whose rules read EPSS publishes nothing, and any other ecosystem publishes its
+  # OSV data marked epss_status=unavailable. Pilot and every consumer must share these rules.
+  # A pilot compile with no advisories.url requires the feed, because it cannot tell which
+  # rules the consumer of its artifact runs.
   epssFeedUrl: "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
   # Pilot only: how long one ecosystem's advisory export may go unchanged, in seconds, before
   # Pilot logs the quiet-time alarm at ERROR after each compile. The key is the ecosystem, as
@@ -178,11 +181,12 @@ advisories:
   # Pilot only: the same threshold for the score date the EPSS feed declares, in seconds. One
   # key, because one feed serves every ecosystem.
   epssQuietTime: 604800
-  # How old the published advisory artifact may be, in seconds, before MAL, CVSS, and EPSS denies
-  # refuse rather than decide. The age is the time since Pilot last pushed the artifact, which a
-  # restart and a failed poll both leave alone. Past it, every advisory deny answers 503 even
-  # under `onUnavailable: skip`. The MAL default ranks above every default allow, so every public
-  # admission refuses. The Dredger stops deleting on an advisory match. Readiness does not
+  # How old the published advisory artifact may be, in seconds, before the advisory rules stop
+  # deciding on it. The age is the time since Pilot last pushed the artifact, which a restart
+  # and a failed poll both leave alone. Past it, every MAL, CVSS, and EPSS deny answers 503 even
+  # under `onUnavailable: skip`. AllowIfRemediatesCve follows its own onUnavailable, and the
+  # shipped deny answers 503 as well. The MAL default ranks above every default allow, so every
+  # public admission refuses. The Dredger stops deleting on an advisory match. Readiness does not
   # change. Unset, each mount derives its own: a day ahead of that mount's earliest
   # AllowIfOlderThan quarantine, never under three days. The shipped seven-day quarantine gives
   # six days, and a mount with no quarantine rule gets three. Set this to override every
@@ -193,9 +197,11 @@ advisories:
   # a scheme this build does not know is refused at load. AWS_ENDPOINT_URL still points
   # the S3 client at an emulator or a VPC endpoint. There is no default: the artifact
   # carries no signature and a bucket name is global, so a shipped one would name a
-  # bucket this project does not own. Unset, the advisory stack is off.
-  # AllowIfRemediatesCve then abstains. A manually enabled MAL, CVSS, or EPSS deny
-  # refuses the boot, because those rules have no database to decide on.
+  # bucket this project does not own. Unset, the advisory stack is off, and the shipped
+  # deny-known-malicious and remediation-fast-track rules stay inactive. A manually enabled
+  # MAL, CVSS, or EPSS deny, or an AllowIfRemediatesCve rule with onUnavailable: deny,
+  # refuses the boot, because it has no database to decide on. With onUnavailable: skip, an
+  # AllowIfRemediatesCve rule boots with a warning, admits no fix, and logs every skip.
   # url: s3://my-advisory-bucket/ecluse
 
 # Process sizing. Écluse computes every key at boot from the container's cgroup
@@ -509,12 +515,34 @@ rules:
     type: AllowIfOlderThan
     precedence: 100
     ageSeconds: 604800
-  # The remediation fast lane. Écluse admits a version a synced advisory names as its
-  # exact fix ahead of the min-age quarantine. With no advisory database configured
-  # (no advisories.url) the rule abstains, and only the quarantine governs.
+  # The remediation fast lane. It admits a version a synced advisory names as its exact fix
+  # ahead of the min-age quarantine. Like deny-known-malicious, it is active when
+  # advisories.url is configured, and the same patches disable or activate it. A patch
+  # inherits the keys below that it leaves out. A newly named AllowIfRemediatesCve rule must
+  # state onUnavailable and remainingAdvisories, and takes these limits for omitted ones.
   remediation-fast-track:
     type: AllowIfRemediatesCve
     precedence: 150
+    # deny refuses a version this rule reaches while advisory evidence is unavailable: no
+    # artifact loaded yet, a failed or timed-out read, an open breaker, or an expired or
+    # undated push. During an advisory outage an old version then cannot pass the quarantine
+    # either, unless a higher-ranked allow admits it. skip abstains, lets the other rules
+    # decide, and records the skipped check. Unavailable evidence never claims a fix.
+    onUnavailable: deny
+    # A partial fix is an exact fix that another advisory still affects. abstain leaves it
+    # to the quarantine. differential admits it only when every remaining advisory stores a
+    # CVSS at most maxRemainingCvss and an EPSS below maxRemainingEpss, and the highest fixed
+    # score exceeds the highest remaining one by each gap. A missing score that a check needs
+    # makes the rule abstain. Switching this rule to abstain drops the limits below, and
+    # writing a limit beside abstain is refused. differential needs EPSS enrichment, so a
+    # failed EPSS feed publishes no artifact for this ecosystem. The rule compares stored
+    # scores, which proves no reduced exposure. These numbers are chosen product defaults,
+    # not validated safety boundaries.
+    remainingAdvisories: differential
+    maxRemainingCvss: 6.9   # a CVSS score from 0 to 10, inclusive
+    maxRemainingEpss: 0.01  # an EPSS probability from 0 to 1, exclusive: 0.01 is one percent
+    minCvssGap: 1.0         # CVSS points. 0 removes the condition
+    minEpssGap: 0.0         # probability points: 0.05 is five points, not a relative 5%
   # Opt-in CVE deny gate, absent from this shipped policy. It denies a version a
   # synced advisory records as affected at or above `minCvss` (a CVSS base score,
   # 0-10). Unscored npm malware advisories count as above every threshold, so

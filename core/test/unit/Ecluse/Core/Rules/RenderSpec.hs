@@ -14,6 +14,7 @@ import Data.Time (NominalDiffTime, UTCTime (UTCTime), fromGregorian, nominalDay,
 import Hedgehog (Gen, PropertyT, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
+import Numeric (showFFloat)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
@@ -69,7 +70,11 @@ reasonPins =
     , (FixesButStillAffected (mkAdvisoryIds ("GHSA-fixed-0001" :| [])) (mkAdvisoryIds ("GHSA-open-0002" :| [])), "fixes GHSA-fixed-0001 but is still affected by GHSA-open-0002")
     , (FixesButStillAffected (mkAdvisoryIds ("GHSA-a" :| ["GHSA-b"])) (mkAdvisoryIds ("GHSA-c" :| ["MAL-d"])), "fixes GHSA-a, GHSA-b but is still affected by GHSA-c, MAL-d")
     , (FixesNoAdvisory, "no advisory names this version as its fix")
-    , (NoDatabaseToRemediate, "no advisory database is loaded")
+    , (FixStillApplies (mkAdvisoryIds ("GHSA-a" :| ["GHSA-b"])), "every advisory naming this version as its fix still applies to it: GHSA-a, GHSA-b")
+    , (RemediatesWithinLimits (pinnedComparison (Scored 4.2) (Scored 0.005) defaultDifferentialLimits), "remediates GHSA-fixed-0001 with GHSA-open-0002 remaining inside the limits (remaining CVSS 4.2, CVSS ceiling 6.9 inclusive, fixed CVSS 9.8, CVSS gap at least 1.0, remaining EPSS 0.005, EPSS ceiling 0.01 exclusive, fixed EPSS unscored)")
+    , (RemediatesWithinLimits (pinnedComparison (Scored 0) (Scored 0) (DifferentialLimits 10 1 NoGapRequired (GapOfAtLeast 0.05))), "remediates GHSA-fixed-0001 with GHSA-open-0002 remaining inside the limits (remaining CVSS 0.0, CVSS ceiling 10.0 inclusive, fixed CVSS 9.8, remaining EPSS 0.0, EPSS ceiling 1.0 exclusive, fixed EPSS unscored, EPSS gap at least 0.05)")
+    , (RemediationBeyondLimits (pinnedComparison (Scored 7.0) Unscored defaultDifferentialLimits) (mkLimitShortfalls (RemainingAboveCeiling Cvss :| [RemainingUnscored Epss (mkAdvisoryIds ("GHSA-open-0002" :| []))])), "fixes GHSA-fixed-0001 with GHSA-open-0002 remaining outside the limits: remaining CVSS above its ceiling, no EPSS score for GHSA-open-0002 (remaining CVSS 7.0, CVSS ceiling 6.9 inclusive, fixed CVSS 9.8, CVSS gap at least 1.0, remaining EPSS unscored, EPSS ceiling 0.01 exclusive, fixed EPSS unscored)")
+    , (RemediationBeyondLimits (pinnedComparison (Scored 4.2) (Scored 0.01) defaultDifferentialLimits) (mkLimitShortfalls (RemainingAboveCeiling Epss :| [GapBelowMinimum Cvss, FixedUnscored Epss, GapBelowMinimum Epss])), "fixes GHSA-fixed-0001 with GHSA-open-0002 remaining outside the limits: remaining EPSS at or above its ceiling, CVSS gap below its minimum, no fixed EPSS score, EPSS gap below its minimum (remaining CVSS 4.2, CVSS ceiling 6.9 inclusive, fixed CVSS 9.8, CVSS gap at least 1.0, remaining EPSS 0.01, EPSS ceiling 0.01 exclusive, fixed EPSS unscored)")
     , (AffectedBy Cvss 8.0 (mkAdvisoryIds ("GHSA-affect-0001" :| [])), "affected by GHSA-affect-0001 (CVSS >= 8.0)")
     , (AffectedBy Epss 0.5 (mkAdvisoryIds ("GHSA-affect-0001" :| [])), "affected by GHSA-affect-0001 (EPSS >= 0.5)")
     , (AffectedBy Cvss 7.0 (mkAdvisoryIds ("CVE-2026-0001" :| ["GHSA-aaaa-bbbb-cccc"])), "affected by CVE-2026-0001, GHSA-aaaa-bbbb-cccc (CVSS >= 7.0)")
@@ -109,15 +114,18 @@ inabilityPins =
     , (AttemptTimedOut, "the attempt timed out")
     ]
 
+-- | A partial fix of GHSA-fixed-0001 that leaves GHSA-open-0002, at the given remaining scores.
+pinnedComparison :: ScoreReading -> ScoreReading -> DifferentialLimits -> ScoreComparison
+pinnedComparison remainingCvss remainingEpss =
+    ScoreComparison (mkAdvisoryIds ("GHSA-fixed-0001" :| [])) (mkAdvisoryIds ("GHSA-open-0002" :| [])) (ScoreSides (Scored 9.8) remainingCvss) (ScoreSides Unscored remainingEpss)
+
 pushedAt :: UTCTime
 pushedAt = UTCTime (fromGregorian 2026 6 11) 0
 
 pushedMidSecond :: UTCTime
 pushedMidSecond = UTCTime (fromGregorian 2026 6 11) (picosecondsToDiffTime 45_296_500_000_000_000)
 
-{- | One tag for each 'Reason' constructor. 'reasonTag' matches every constructor, so a new one
-does not compile until it has a tag, and then fails here until it has a pin and a generator arm.
--}
+-- | One tag per 'Reason' constructor, so a new one fails to compile until it has a tag, a pin, and a generator arm.
 data ReasonTag
     = ScopeAllowListedTag
     | ScopeNotAllowListedTag
@@ -136,9 +144,11 @@ data ReasonTag
     | IdentityAllowListedTag
     | IdentityNotAllowListedTag
     | RemediatesTag
+    | RemediatesWithinLimitsTag
     | FixesButStillAffectedTag
+    | RemediationBeyondLimitsTag
+    | FixStillAppliesTag
     | FixesNoAdvisoryTag
-    | NoDatabaseToRemediateTag
     | AffectedByTag
     | KnownMaliciousTag
     | NoKnownMaliciousAdvisoryTag
@@ -165,9 +175,11 @@ reasonTag = \case
     IdentityAllowListed{} -> IdentityAllowListedTag
     IdentityNotAllowListed{} -> IdentityNotAllowListedTag
     Remediates{} -> RemediatesTag
+    RemediatesWithinLimits{} -> RemediatesWithinLimitsTag
     FixesButStillAffected{} -> FixesButStillAffectedTag
+    RemediationBeyondLimits{} -> RemediationBeyondLimitsTag
+    FixStillApplies{} -> FixStillAppliesTag
     FixesNoAdvisory -> FixesNoAdvisoryTag
-    NoDatabaseToRemediate -> NoDatabaseToRemediateTag
     AffectedBy{} -> AffectedByTag
     KnownMalicious{} -> KnownMaliciousTag
     NoKnownMaliciousAdvisory -> NoKnownMaliciousAdvisoryTag
@@ -330,6 +342,10 @@ readBackSpec = describe "cveIdsInReason -- recovering advisory ids for the denia
             ids <- forAll genIds
             let denial = Blocked "DenyIfCve" (Just (DbEtag "etag-1")) (AffectedBy score threshold ids)
             cveIdsInReason (renderDecision (pkg Nothing 0) denial) === toList (unAdvisoryIds ids)
+    it "reads no advisory from a default denial the remediation reasons explain" $
+        hedgehog $ do
+            reasons <- forAll (Gen.list (Range.linear 1 4) genRemediationReason)
+            cveIdsInReason (renderDecision (pkg Nothing 0) (BlockedByDefault reasons)) === []
 
 oracleSpec :: Spec
 oracleSpec = describe "properties" . modifyMaxSuccess (const 1000) $ do
@@ -361,9 +377,7 @@ unitCounts duration = [days, hours, minutes, seconds]
     (hours, underHour) = underDay `divMod` 3600
     (minutes, seconds) = underHour `divMod` 60
 
-{- | A second copy of each reason's sentence. Every constructor is matched, so a new one does not
-compile until it has a sentence here.
--}
+-- | A second copy of each reason's sentence, matched per constructor so a new one needs a sentence here.
 oracleReason :: Reason -> Text
 oracleReason = \case
     ScopeAllowListed scope -> "scope " <> renderScope scope <> " is allow-listed"
@@ -383,9 +397,12 @@ oracleReason = \case
     IdentityAllowListed ident -> "identity " <> ident <> " is allow-listed by operator"
     IdentityNotAllowListed ident -> "identity is not the allow-listed " <> ident
     Remediates ids -> "remediates " <> commaJoined ids
+    RemediatesWithinLimits compared -> "remediates " <> commaJoined (scFixed compared) <> " with " <> commaJoined (scRemaining compared) <> " remaining inside the limits" <> oracleComparison compared
     FixesButStillAffected ids open -> "fixes " <> commaJoined ids <> " but is still affected by " <> commaJoined open
+    RemediationBeyondLimits compared shortfalls ->
+        "fixes " <> commaJoined (scFixed compared) <> " with " <> commaJoined (scRemaining compared) <> " remaining outside the limits: " <> T.intercalate ", " (map oracleShortfall (toList (unLimitShortfalls shortfalls))) <> oracleComparison compared
+    FixStillApplies ids -> "every advisory naming this version as its fix still applies to it: " <> commaJoined ids
     FixesNoAdvisory -> "no advisory names this version as its fix"
-    NoDatabaseToRemediate -> "no advisory database is loaded"
     AffectedBy score threshold ids -> "affected by " <> commaJoined ids <> " (" <> oracleMetric score <> " >= " <> show threshold <> ")"
     KnownMalicious ids -> "affected by " <> commaJoined ids <> " (known malicious)"
     NoKnownMaliciousAdvisory -> "no known malicious advisory affects this version"
@@ -394,6 +411,32 @@ oracleReason = \case
 
 commaJoined :: AdvisoryIds -> Text
 commaJoined = T.intercalate ", " . toList . unAdvisoryIds
+
+oracleComparison :: ScoreComparison -> Text
+oracleComparison compared = " (" <> T.intercalate ", " (side "CVSS" "inclusive" (scCvss compared) (dlMaxRemainingCvss limits) (dlCvssGap limits) <> side "EPSS" "exclusive" (scEpss compared) (dlMaxRemainingEpss limits) (dlEpssGap limits)) <> ")"
+  where
+    limits = scLimits compared
+    side metric bound (ScoreSides fixed remaining) ceiling' gap =
+        ["remaining " <> metric <> " " <> oracleReading remaining, metric <> " ceiling " <> oracleScore ceiling' <> " " <> bound, "fixed " <> metric <> " " <> oracleReading fixed] <> case gap of
+            NoGapRequired -> []
+            GapOfAtLeast least -> [metric <> " gap at least " <> oracleScore least]
+
+oracleShortfall :: LimitShortfall -> Text
+oracleShortfall = \case
+    RemainingAboveCeiling Cvss -> "remaining CVSS above its ceiling"
+    RemainingAboveCeiling Epss -> "remaining EPSS at or above its ceiling"
+    RemainingUnscored score ids -> "no " <> oracleMetric score <> " score for " <> commaJoined ids
+    FixedUnscored score -> "no fixed " <> oracleMetric score <> " score"
+    GapBelowMinimum score -> oracleMetric score <> " gap below its minimum"
+
+oracleReading :: ScoreReading -> Text
+oracleReading = \case
+    Scored score -> oracleScore score
+    Unscored -> "unscored"
+
+-- 'showFFloat' with no precision writes the shortest digits in fixed notation, as the render must.
+oracleScore :: Double -> Text
+oracleScore score = toText (showFFloat Nothing score "")
 
 oracleMetric :: AdvisoryScore -> Text
 oracleMetric = \case
@@ -420,9 +463,7 @@ oracleInability = \case
     RuleThrew thrown -> "the rule threw: " <> thrown
     AttemptTimedOut -> "the attempt timed out"
 
-{- | A second copy of the two-unit ladder. It is the same algorithm as 'renderDuration', so it
-guards the render against a later edit and proves nothing the pins in 'durationSpec' do not.
--}
+-- | A second copy of the two-unit ladder. It guards the render against a later edit, and proves nothing the pins do not.
 oracleDuration :: NominalDiffTime -> Text
 oracleDuration d = case take 2 (components ladder secs) of
     [] -> "0 seconds"
@@ -455,9 +496,11 @@ genReason =
         , IdentityAllowListed <$> genFact
         , IdentityNotAllowListed <$> genFact
         , Remediates <$> genIds
+        , RemediatesWithinLimits <$> genComparison
         , FixesButStillAffected <$> genIds <*> genIds
+        , RemediationBeyondLimits <$> genComparison <*> genShortfalls
+        , FixStillApplies <$> genIds
         , pure FixesNoAdvisory
-        , pure NoDatabaseToRemediate
         , AffectedBy <$> genScore <*> genThreshold <*> genIds
         , KnownMalicious <$> genIds
         , pure NoKnownMaliciousAdvisory
@@ -493,13 +536,42 @@ genIds = mkAdvisoryIds <$> Gen.nonEmpty (Range.linear 1 5) (Gen.text (Range.line
 genScore :: Gen AdvisoryScore
 genScore = Gen.element [Cvss, Epss]
 
+-- | The reasons the remediation rule returns, which a default denial's trail can carry.
+genRemediationReason :: Gen Reason
+genRemediationReason =
+    Gen.choice
+        [ Remediates <$> genIds
+        , RemediatesWithinLimits <$> genComparison
+        , FixesButStillAffected <$> genIds <*> genIds
+        , RemediationBeyondLimits <$> genComparison <*> genShortfalls
+        , FixStillApplies <$> genIds
+        , pure FixesNoAdvisory
+        ]
+
+genComparison :: Gen ScoreComparison
+genComparison = ScoreComparison <$> genIds <*> genIds <*> genSides <*> genSides <*> genLimits
+  where
+    genSides = ScoreSides <$> genReading <*> genReading
+    genReading = Gen.choice [pure Unscored, Scored <$> genStoredScore]
+    genLimits = DifferentialLimits <$> genStoredScore <*> genStoredScore <*> genGap <*> genGap
+    genGap = Gen.choice [pure NoGapRequired, GapOfAtLeast <$> genStoredScore]
+
+-- | Scores as the artifact stores them, and the values near the shipped limits.
+genStoredScore :: Gen Double
+genStoredScore = Gen.choice [Gen.element [0, 0.005, 0.0099, 0.01, 0.05, 0.5, 1, 4.2, 6.9, 7, 9.8, 10], (/ 10) . fromInteger <$> Gen.integral (Range.linear 0 100)]
+
+genShortfalls :: Gen LimitShortfalls
+genShortfalls =
+    mkLimitShortfalls
+        <$> Gen.nonEmpty
+            (Range.linear 1 4)
+            (Gen.choice [RemainingAboveCeiling <$> genScore, RemainingUnscored <$> genScore <*> genIds, FixedUnscored <$> genScore, GapBelowMinimum <$> genScore])
+
 -- | A threshold in either score's range, with the values whose text is not a plain decimal.
 genThreshold :: Gen Double
 genThreshold = Gen.choice [Gen.element [0, 0.05, 0.5, 1, 7, 10], Gen.double (Range.linearFrac 0 10)]
 
-{- | A duration in picoseconds. A sixth are negative, a sixth under a second, and a quarter within
-a second of a unit boundary. The rest run to a thousand days and to past a million years.
--}
+-- | Picosecond durations: negative, sub-second, near a unit boundary, up to a thousand days, and past a million years.
 genDuration :: Gen NominalDiffTime
 genDuration =
     Gen.frequency

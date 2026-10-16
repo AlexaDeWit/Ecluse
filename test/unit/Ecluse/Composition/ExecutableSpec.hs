@@ -228,8 +228,8 @@ spec = describe "planExecutable" $ do
         readFakeContents cache `shouldReturn` beforeCache
 
     for_
-        [ ("[\"admission\",\"revocation\"]", ["AllowIfOlderThan", "AllowIfRemediatesCve", "DenyByIdentity"], 3)
-        , ("[\"admission\"]", ["AllowIfOlderThan", "AllowIfRemediatesCve"], 0)
+        [ ("[\"admission\",\"revocation\"]", ["AllowIfOlderThan", "DenyByIdentity"], 3)
+        , ("[\"admission\"]", ["AllowIfOlderThan"], 0)
         ]
         $ \(appliesTo, evaluated, selected) ->
             it ("hands the store pruner only the rules that apply at revocation, under appliesTo " <> appliesTo) $ do
@@ -326,7 +326,7 @@ spec = describe "planExecutable" $ do
                     overrideEnv "ECLUSE_ADVISORIES__DATA_DIR" dir $
                         overrideEnv "ECLUSE_ADVISORIES__URL" advisoryStoreUrl $
                             overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
-                                overrideEnv "ECLUSE_MOUNTS__PYPI__RULES" "{\"risk\":{\"enabled\":false}}" $
+                                overrideEnv "ECLUSE_MOUNTS__PYPI__RULES" "{\"risk\":{\"enabled\":false},\"remediation-fast-track\":{\"remainingAdvisories\":\"abstain\"}}" $
                                     overrideEnv "ECLUSE_RULES" "{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}}" staticEnvVars
             mirror <- expectExecutableWith envVars (BootMirrorPipeline ServeAndMirror) mountBindingFor inertQueue inertStore >>= expectMirrorWiring
             targets <-

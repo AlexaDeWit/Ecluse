@@ -71,6 +71,7 @@ import Ecluse.Test.Rules (
     mapResilience,
     packageRule,
     remediation,
+    remediationWith,
     revocation,
     sentences,
     servingRuleDeps,
@@ -492,9 +493,14 @@ requestVersions = [thingAt ("1." <> show minor <> "." <> show patch) | minor <- 
 affectingEvery :: [(Text, AdvisoryRange)]
 affectingEvery = [("thing", AdvisoryRange "GHSA-every-0001" (Just 9.8) Nothing Unbounded (Just 0.95))]
 
+-- | The remediation rule at the shipped limits under the given unavailability choice.
+fastLane :: FailureAlignment -> Rule
+fastLane alignment = remediationWith alignment (Differential defaultDifferentialLimits)
+
 advisoryRules :: [Rule]
 advisoryRules =
-    [ AllowIfRemediatesCve
+    [ fastLane FailDeny
+    , fastLane FailNoDecision
     , DenyIfKnownMalicious FailDeny
     , DenyIfKnownMalicious FailNoDecision
     , DenyIfCve (DenyIfCveParams 7.0 FailDeny)
@@ -506,6 +512,7 @@ advisoryRules =
 ruleLabel :: Rule -> String
 ruleLabel = \case
     DenyIfKnownMalicious alignment -> "DenyIfKnownMalicious " <> show alignment
+    AllowIfRemediatesCve params -> "AllowIfRemediatesCve " <> show (aircOnUnavailable params)
     DenyIfCve params -> "DenyIfCve " <> show (dicOnUnavailable params)
     DenyIfEpss params -> "DenyIfEpss " <> show (dieOnUnavailable params)
     other -> toString (ruleName other)
@@ -584,7 +591,7 @@ sharedReadSpec :: Spec
 sharedReadSpec = describe "one read shared by every advisory rule" $ do
     it "makes one query per request with all three rules on, through the first-reached rule's breaker" $ do
         (deps, calls) <- countingDeps affectingEvery
-        (rules, clocks) <- withClockCounts deps [DenyIfEpss (DenyIfEpssParams 0.99 FailDeny), AllowIfRemediatesCve, DenyIfCve (DenyIfCveParams 9.9 FailDeny)]
+        (rules, clocks) <- withClockCounts deps [DenyIfEpss (DenyIfEpssParams 0.99 FailDeny), fastLane FailDeny, DenyIfCve (DenyIfCveParams 9.9 FailDeny)]
         decisions <- decideRequest (pureAt 100 quarantine : rules) requestVersions
         decisions `shouldSatisfy` all ((== Just "AllowIfOlderThan") . admittedBy)
         callCounts calls `shouldReturn` (1, 1, 1)
@@ -610,13 +617,13 @@ sharedReadSpec = describe "one read shared by every advisory rule" $ do
 
     it "leaves a reusing rule's breaker untouched when the shared read fails" $ do
         let deps = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (\_ -> throwIO TestSourceUnavailable)}
-        rules <- withKnobs fastConfig{ecBreakerThreshold = 5} <$> prepare deps (map atDefaultPrecedence [DenyIfCve (DenyIfCveParams 7.0 FailNoDecision), DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision), AllowIfRemediatesCve, quarantine])
+        rules <- withKnobs fastConfig{ecBreakerThreshold = 5} <$> prepare deps (map atDefaultPrecedence [DenyIfCve (DenyIfCveParams 7.0 FailNoDecision), DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision), fastLane FailNoDecision, quarantine])
         void (decideRequest rules requestVersions)
         traverse (fmap breakerPhase . readTVarIO . resBreaker) (mapMaybe prepResilience rules) `shouldReturn` [Closed 1, Closed 0, Closed 0]
 
     it "reads nothing with no database, and decides the policy as before the first sync" $ do
         freshness <- newIORef (0 :: Int)
-        let policy = map atDefaultPrecedence [DenyIfCve (DenyIfCveParams 7.0 FailNoDecision), DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision), AllowIfRemediatesCve, quarantine]
+        let policy = map atDefaultPrecedence [DenyIfCve (DenyIfCveParams 7.0 FailNoDecision), DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision), fastLane FailNoDecision, quarantine]
             counted = inertRuleDeps{rdAdvisoryFreshness = AdvisoryFresh <$ modifyIORef' freshness (+ 1)}
         rules <- prepare counted policy
         map (isJust . prepResilience) rules `shouldBe` replicate 4 False
@@ -629,6 +636,7 @@ sharedReadSpec = describe "one read shared by every advisory rule" $ do
                 ( ==
                     [ SkippedUnavailable "DenyIfCve" NoDatabaseLoaded
                     , SkippedUnavailable "DenyIfEpss" NoDatabaseLoaded
+                    , SkippedUnavailable "AllowIfRemediatesCve" NoDatabaseLoaded
                     ]
                 )
 
@@ -674,7 +682,8 @@ openReaderBreaker rules = do
 faultAlignment :: Fault -> Rule -> FailureAlignment
 faultAlignment fault = \case
     DenyIfKnownMalicious alignment -> onRead alignment
-    AllowIfRemediatesCve -> FailNoDecision
+    -- Unlike a deny's, the remediation rule's own choice governs an expired push too.
+    AllowIfRemediatesCve params -> aircOnUnavailable params
     DenyIfCve params -> onRead (dicOnUnavailable params)
     DenyIfEpss params -> onRead (dieOnUnavailable params)
     _ -> FailDeny
@@ -707,14 +716,14 @@ faultPolicies :: [[PrecededRule]]
 faultPolicies =
     map (pure . atDefaultPrecedence) advisoryRules
         <> [[cve a, epss b] | a <- alignments, b <- alignments]
-        <> concat [[[deny, fastLaneLast], [fastLaneFirst, deny]] | deny <- map cve alignments <> map epss alignments]
-        <> concat [[[cve a, epss b, fastLaneLast], [fastLaneFirst, cve a, epss b]] | a <- alignments, b <- alignments]
+        <> concat [[[deny, fastLaneLast r], [fastLaneFirst r, deny]] | r <- alignments, deny <- map cve alignments <> map epss alignments]
+        <> concat [[[cve a, epss b, fastLaneLast r], [fastLaneFirst r, cve a, epss b]] | r <- alignments, a <- alignments, b <- alignments]
   where
     alignments = [FailDeny, FailNoDecision]
     cve a = atDefaultPrecedence (DenyIfCve (DenyIfCveParams 7.0 a))
     epss b = atDefaultPrecedence (DenyIfEpss (DenyIfEpssParams 0.5 b))
-    fastLaneLast = atDefaultPrecedence AllowIfRemediatesCve
-    fastLaneFirst = PrecededRule 300 AdmissionAndRevocation AllowIfRemediatesCve
+    fastLaneLast r = atDefaultPrecedence (fastLane r)
+    fastLaneFirst r = PrecededRule 300 AdmissionAndRevocation (fastLane r)
 
 policyLabel :: [PrecededRule] -> String
 policyLabel = intercalate ", " . map (\(PrecededRule prec _ rule) -> ruleLabel rule <> " at " <> show prec)
@@ -756,6 +765,26 @@ heldThrowSpec = describe "a throw outside the harness is held for the request" $
 
 breakerSpec :: Spec
 breakerSpec = describe "the breaker counts requests" $ do
+    for_ [FailDeny, FailNoDecision] $ \alignment ->
+        it ("trips on the remediation rule's reads and recovers through a half-open probe under " <> show alignment) $ do
+            (clock, setClock) <- newTestClock now
+            failing <- newIORef True
+            let fixRelease = (pkg Nothing 0){evVersion = mkVersion Npm "1.0.0"}
+                rows = [("thing", AdvisoryRange "GHSA-fixed-0001" Nothing Nothing (FixedBefore "1.0.0") Nothing)]
+                source use = readIORef failing >>= \down -> if down then throwIO TestSourceUnavailable else use (Just (DbEtag "recovered", fakeCveLookup rows))
+                deps = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) source}
+            rules <- map (mapResilience (\res -> res{resConfig = fastConfig, resClock = clock})) <$> prepare deps (map atDefaultPrecedence [fastLane alignment, quarantine])
+            replicateM_ 2 (decideRequest rules [fixRelease])
+            (fmap breakerPhase <$> breakerOf rules) `shouldReturn` Just (Open (addUTCTime 30 now))
+            decisions <- decideRequest rules [fixRelease]
+            case alignment of
+                FailDeny -> decisions `shouldSatisfy` all isUndecidable
+                FailNoDecision -> decisions `shouldSatisfy` all isBlockedByDefault
+            writeIORef failing False
+            setClock (addUTCTime 31 now)
+            map admittedBy <$> decideRequest rules [fixRelease] `shouldReturn` [Just "AllowIfRemediatesCve"]
+            (fmap breakerPhase <$> breakerOf rules) `shouldReturn` Just (Closed 0)
+
     it "counts a request of many versions as one failure" $ do
         rules <- faultingDeny
         void (decideRequest rules requestVersions)
