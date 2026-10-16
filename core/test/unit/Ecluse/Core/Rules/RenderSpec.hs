@@ -536,13 +536,12 @@ genIds = mkAdvisoryIds <$> Gen.nonEmpty (Range.linear 1 5) (Gen.text (Range.line
 genScore :: Gen AdvisoryScore
 genScore = Gen.element [Cvss, Epss]
 
--- | The reasons the remediation rule returns, which a default denial's trail can carry.
+-- | The remediation reasons a default denial can carry, less the abstention, which reads "affected by ".
 genRemediationReason :: Gen Reason
 genRemediationReason =
     Gen.choice
         [ Remediates <$> genIds
         , RemediatesWithinLimits <$> genComparison
-        , FixesButStillAffected <$> genIds <*> genIds
         , RemediationBeyondLimits <$> genComparison <*> genShortfalls
         , FixStillApplies <$> genIds
         , pure FixesNoAdvisory

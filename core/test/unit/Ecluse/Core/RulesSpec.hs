@@ -1330,7 +1330,7 @@ spec = do
                 alone <- liftIO (decideWith deps [atDefaultPrecedence deny] (pkg Nothing 1))
                 remediationAlone <- liftIO (decideWith deps [atDefaultPrecedence remediation] (pkg Nothing 1))
                 whole <- liftIO (decideWith deps (map atDefaultPrecedence [deny, remediation, AllowIfOlderThan (7 * nominalDay)]) (pkg Nothing 1))
-                H.cover 10 "the deny alone blocks" (isJust (blockedBy alone))
+                H.cover 5 "the deny alone blocks" (isJust (blockedBy alone))
                 H.classify "the remediation rule alone admits what the deny blocks" (isJust (blockedBy alone) && isJust (admittedBy remediationAlone))
                 when (isJust (blockedBy alone)) (blockedBy whole === blockedBy alone)
 

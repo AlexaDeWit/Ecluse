@@ -745,7 +745,7 @@ remediationSpec = describe "the remediation allow at revocation" $ do
             hedgehog $ do
                 remediation <- forAll genRemediation
                 precedence <- forAll (Gen.element [150, 260, 350])
-                standing <- forAll Gen.enumBounded
+                standing <- forAll (Gen.frequency [(1, pure Loaded), (1, Gen.enumBounded)])
                 version <- forAll (Gen.element versions)
                 let deps = depsIn standing name
                     denies = map atDefaultPrecedence [DenyIfKnownMalicious FailDeny, denyCveRule]
