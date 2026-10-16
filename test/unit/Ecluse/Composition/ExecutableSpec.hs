@@ -75,6 +75,7 @@ import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation, readFakeContents), FakeStoreConfig (fakeUpstream), defaultFakeStoreConfig, newFakeStore, seededStoreConfig)
 import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
+import Ecluse.Test.Support (expectRight, expectRightIO)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts), previewingReport, recordingPortsUnder, testPacing)
 
 -- | The boot's effectful planning phase, where every role spends each refusal a live environment can settle.
@@ -157,7 +158,7 @@ spec = describe "planExecutable" $ do
                 Left errs -> errs `shouldBe` [refusedMint]
 
         it ("reports the refused mint beside a queue it cannot build, under " <> show role) $ do
-            outcome <- planUnder staticEnvVars (BootMirrorPipeline role) mountBindingFor refusingQueue refusingCredentials inertStore
+            outcome <- planUnder npmAndPypiMirrorEnv (BootMirrorPipeline role) mountBindingFor refusingQueue refusingCredentials inertStore
             case outcome of
                 Right _ -> expectationFailure "expected the planning phase to refuse"
                 Left [MirrorQueueUnavailable detail, mint] -> do
@@ -168,8 +169,7 @@ spec = describe "planExecutable" $ do
         it ("hands the supplied credential build every mirrored mount in one call, under " <> show role) $ do
             (buildCredentials, calls) <- recordingCredentials initTargetCredentialProviders
             mirror <-
-                planUnder npmAndPypiMirrorEnv (BootMirrorPipeline role) mountBindingFor inertQueue buildCredentials inertStore
-                    >>= expectSettled
+                expectRightIO (planUnder npmAndPypiMirrorEnv (BootMirrorPipeline role) mountBindingFor inertQueue buildCredentials inertStore)
                     >>= expectMirrorWiring
             calls `shouldReturn` [npmAndPypiMirrorTargets]
             map ptEcosystem (bwPublishTargets (mwBootWiring mirror)) `shouldBe` [Npm, PyPI]
@@ -178,7 +178,7 @@ spec = describe "planExecutable" $ do
         -- A build that refuses every mint still yields the plan, because the serve-only role
         -- calls none: its identity needs no rights over the mirror store.
         outcome <- planUnder staticEnvVars (BootMirrorPipeline ServeOnly) mountBindingFor inertQueue refusingCredentials inertStore
-        mirror <- expectSettled outcome >>= expectMirrorWiring
+        mirror <- expectRight outcome >>= expectMirrorWiring
         map bindingPrefix (bwBindings (mwBootWiring mirror)) `shouldBe` [pure "npm"]
         map ptEcosystem (bwPublishTargets (mwBootWiring mirror)) `shouldBe` []
 
@@ -401,11 +401,7 @@ probedPlan role answer =
 
 -- | The arm a settled plan came back through, failing the case on a refusal.
 armOf :: Either [BootError] ExecutablePlan -> IO Text
-armOf = fmap (plannedArm . epRoleWiring) . expectSettled
-
--- | The plan the phase settled, failing the case on a refusal.
-expectSettled :: Either [BootError] ExecutablePlan -> IO ExecutablePlan
-expectSettled = either (\errs -> fail ("planning refused: " <> show errs)) pure
+armOf = fmap (plannedArm . epRoleWiring) . expectRight
 
 -- | Which arm of the phase a plan came back through, so an assertion names it rather than a shape.
 plannedArm :: RoleWiring -> Text
@@ -418,7 +414,7 @@ plannedArm = \case
 inertQueue :: BuildMirrorQueue
 inertQueue _ _ _ = pure noMirrorQueue
 
--- | A queue builder that throws as @amazonka@ does when it discovers no credentials.
+-- Throws as amazonka does when it discovers no credentials.
 refusingQueue :: BuildMirrorQueue
 refusingQueue _ _ _ = throwIO NoCredentials
 
@@ -482,29 +478,27 @@ inertCredentials _ _ = pure (Right noCredentialProviders)
 refusingCredentials :: BuildCredentials
 refusingCredentials _ _ = pure (Left [refusedMint])
 
--- | The refusal 'refusingCredentials' reports for the npm mount's mirror target.
 refusedMint :: BootError
 refusedMint = CodeArtifactMintFailed ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET" :| []) "no identity answered"
 
--- | A credential build that records the targets of every call, then builds them through the given one.
 recordingCredentials :: BuildCredentials -> IO (BuildCredentials, IO [[((Ecosystem, CredentialTarget), StoreBackend)]])
 recordingCredentials build = do
-    calls <- newIORef []
-    let record reportersFor targets = modifyIORef' calls (targets :) *> build reportersFor targets
-    pure (record, reverse <$> readIORef calls)
+    calls <- newTVarIO []
+    let record reportersFor targets = atomically (modifyTVar' calls (<> [targets])) *> build reportersFor targets
+    pure (record, readTVarIO calls)
 
--- | Two mounts mirroring under static write tokens, so a minting role's credential build reaches no cloud.
+-- Both mounts mirror under static write tokens, so a minting role's credential build reaches no cloud.
 npmAndPypiMirrorEnv :: [(String, String)]
 npmAndPypiMirrorEnv = staticEnvVars <> pypiMirrorEnv
 
--- | The mirror-write targets 'npmAndPypiMirrorEnv' declares, as a minting role's credential build receives them.
+-- The targets a minting role's credential build receives for 'npmAndPypiMirrorEnv'.
 npmAndPypiMirrorTargets :: [((Ecosystem, CredentialTarget), StoreBackend)]
 npmAndPypiMirrorTargets =
     [ ((Npm, MirrorCredential), BackendRegistry (mkSecret "mirror-write-token"))
     , ((PyPI, MirrorCredential), BackendRegistry (mkSecret "fixture-token"))
     ]
 
--- | An advisory data directory beneath a non-directory, so the sync throws on every host before any credential lookup.
+-- An advisory data directory beneath a non-directory, so the sync throws on every host before any credential lookup.
 unwritableAdvisoryEnv :: [(String, String)]
 unwritableAdvisoryEnv =
     overrideEnv "ECLUSE_ADVISORIES__DATA_DIR" advisoryDataDir $
@@ -518,7 +512,7 @@ advisoryDataDir = "/dev/null/ecluse-advisories"
 advisoryStoreEnv :: [(String, String)]
 advisoryStoreEnv = overrideEnv "ECLUSE_ADVISORIES__URL" advisoryStoreUrl staticEnvVars
 
--- | An advisory store with no mount declared, so the Pilot would compile nothing: the pilot arm's own refusal.
+-- An advisory store with no mount declared, so the Pilot would compile nothing: the pilot arm's own refusal.
 unmountedAdvisoryEnv :: [(String, String)]
 unmountedAdvisoryEnv = [("ECLUSE_ADVISORIES__URL", advisoryStoreUrl)]
 
@@ -578,7 +572,7 @@ expectExecutable = expectExecutableWith staticEnvVars
 -- | 'planWith', failing the test on a refusal.
 expectExecutableWith :: [(String, String)] -> BootRole -> ResolveAdapter -> BuildMirrorQueue -> StoreBuilds -> IO ExecutablePlan
 expectExecutableWith envVars role resolveAdapter buildQueue buildStore =
-    planWith envVars role resolveAdapter buildQueue buildStore >>= expectSettled
+    expectRightIO (planWith envVars role resolveAdapter buildQueue buildStore)
 
 -- | The pilot arm's export loop, failing the test on any other arm.
 expectPilotPlan :: ExecutablePlan -> IO ExportLoopPlan
