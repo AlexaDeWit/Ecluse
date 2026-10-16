@@ -17,7 +17,7 @@ import Database.SQLite.Simple (execute_, withConnection)
 import Katip (LogEnv, SimpleLogPayload, closeScribes, runKatipContextT)
 import Network.HTTP.Client (HttpException, defaultManagerSettings, httpNoBody, newManager, parseRequest)
 import Network.HTTP.Client qualified as HttpClient
-import Network.HTTP.Types (Header, Status, hConnection, hContentType, methodDelete, methodGet, methodHead, methodPut, status200, status404, status500, statusCode)
+import Network.HTTP.Types (Header, Status, hConnection, hContentType, methodDelete, methodGet, methodHead, methodPost, methodPut, status200, status404, status500, statusCode)
 import Network.Wai (
     Application,
     Response,
@@ -54,6 +54,7 @@ import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.Npm.Route.Internal (npmNotFound)
+import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.ServedDocument (RenderRefused (RenderRefused))
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (
@@ -106,7 +107,7 @@ import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, passthroughAdvisorySyncTra
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, publishedDaysAgo, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
-import Ecluse.Test.Server.Mount (inertPackumentDeps, npmServeDeps, pypiServeDeps)
+import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps, npmServeDeps, pypiServeDeps)
 import Ecluse.Test.Stub (Captured (capHeaders, capPath), stubLocalhostUrl, withRoutedStub)
 import Ecluse.Test.Wai (bodyContainsAll, freePort, selfBaseUrlOf, servedVersions, status)
 
@@ -129,6 +130,10 @@ publishMountAt prefix router publishDeps =
 -- One npm mount over closed-port upstreams and no publish target, resolved as the composition root resolves it.
 npmApp :: IO Application
 npmApp = application (mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))) <$> newTestEnv
+
+-- One PyPI mount over closed-port upstreams and no publication target.
+pypiApp :: IO Application
+pypiApp = application (mkServerConfig (maybeToList (mountBindingFor PyPI (inertDepsFor pypiAdapter) Nothing))) <$> newTestEnv
 
 -- | An unreachable target distinguishes a refused publish from one that reached the relay.
 npmMountApp :: IO Application
@@ -482,6 +487,9 @@ uncodedRoutesSpec = describe "routes outside native metadata gzip" $ do
     with publishMountApp $
         it "answer a refused and a relayed publish alike under Accept-Encoding gzip" $
             for_ [(methodPut, "/npm/@other/widget"), (methodPut, "/npm/@acme/widget")] uncoded
+    with pypiApp $
+        it "answer PyPI distribution, companion, upload, and unrouted refusals alike under Accept-Encoding gzip" $
+            for_ [(methodGet, "/pypi/simple/thing/thing-1.0.tar.gz"), (methodHead, "/pypi/simple/thing/thing-1.0.tar.gz"), (methodGet, "/pypi/simple/thing/thing-1.0-py3-none-any.whl.metadata"), (methodPost, "/pypi/legacy"), (methodGet, "/pypi/nope")] uncoded
   where
     uncoded (method, path) = do
         plain <- request method path [] ""
