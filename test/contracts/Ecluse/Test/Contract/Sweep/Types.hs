@@ -20,6 +20,7 @@ module Ecluse.Test.Contract.Sweep.Types (
     RecoveryFixture (..),
     RolloutFixture (..),
     AdvisoryFixture (..),
+    AdvisoryDenial (..),
     servedBytes,
 ) where
 
@@ -161,8 +162,18 @@ data AdvisoryFixture = AdvisoryFixture
     , advisoryUnaffected :: PackageFixture
     , advisoryVulnerable :: Text
     , advisoryFixed :: Text
-    , advisoryIdentifier :: Text
+    , advisoryDenial :: AdvisoryDenial
+    , advisoryTally :: Text
+    -- ^ The counts the sweep cycle's closing line reports.
     }
+
+-- | The named deny each deletion audits, with the advisory identifier it names.
+data AdvisoryDenial
+    = -- | 'DenyIfCve' at the advisory policy's CVSS threshold of 7.
+      ScoredDenial Text
+    | -- | The MAL default a configured advisory source activates.
+      MaliciousDenial Text
+    deriving stock (Eq, Show)
 
 -- | A successful empty response does not establish retained package bytes.
 servedBytes :: (Int, Int64) -> Bool

@@ -16,7 +16,7 @@ obligations =
         "npm/install"
         Supported
         ["read", "mirror", "client-install"]
-        ["npm/install/default-denial", "npm/install/lifecycle-script-control", "npm/install/deprecation-relay", "npm/install/deprecation-negative-control", "npm/install/integrity-refusal", "npm/install/head-no-effect", "npm/install/metadata-preservation", "npm/install/latest-preservation", "npm/install/publication-unconfigured"]
+        ["npm/install/default-denial", "npm/install/lifecycle-script-control", "npm/install/deprecation-relay", "npm/install/deprecation-negative-control", "npm/install/integrity-refusal", "npm/install/head-no-effect", "npm/install/metadata-preservation", "npm/install/latest-preservation", "npm/install/publication-unconfigured", "npm/install/mal-forced-source-required", "npm/install/mal-manual-source-required"]
     , Obligation
         "npm/mirror"
         "npm/registry"
@@ -37,7 +37,7 @@ obligations =
         "npm/dredger"
         Supported
         ["read", "mirror", "maintenance", "advisories"]
-        ["npm/dredger/skipped-admission-recovery", "npm/dredger/inventory", "npm/dredger/admission-only", "npm/dredger/denied-versions", "npm/dredger/dry-run", "npm/dredger/consent-refusal", "npm/dredger/first-party", "npm/dredger/two-stores", "npm/dredger/advisory-revocation", "npm/dredger/denied-install", "npm/dredger/delete-recovery", "npm/dredger/refill", "npm/dredger/missing-source", "npm/dredger/late-copy", "npm/dredger/old-worker", "npm/dredger/old-dredger-refill", "npm/dredger/old-dredger-loss"]
+        ["npm/dredger/skipped-admission-recovery", "npm/dredger/inventory", "npm/dredger/admission-only", "npm/dredger/denied-versions", "npm/dredger/dry-run", "npm/dredger/consent-refusal", "npm/dredger/first-party", "npm/dredger/two-stores", "npm/dredger/advisory-revocation", "npm/dredger/mal-revocation", "npm/dredger/denied-install", "npm/dredger/delete-recovery", "npm/dredger/refill", "npm/dredger/missing-source", "npm/dredger/late-copy", "npm/dredger/old-worker", "npm/dredger/old-dredger-refill", "npm/dredger/old-dredger-loss"]
     , Obligation
         "pypi/install"
         "pypi/read"
@@ -51,7 +51,7 @@ obligations =
         "pypi/advisories"
         Supported
         ["read", "advisories", "client-install"]
-        ["pypi/advisories/exact-fix", "pypi/advisories/deny-cve", "pypi/advisories/deny-epss"]
+        ["pypi/advisories/exact-fix", "pypi/advisories/deny-cve", "pypi/advisories/deny-epss", "pypi/advisories/mal-denial"]
     , Obligation
         "npm/telemetry-read"
         "npm/telemetry"
@@ -85,8 +85,8 @@ obligations =
         "npm/advisories"
         "npm/advisories"
         Supported
-        ["read", "advisories", "client-install"]
-        ["npm/advisories/deny-cve", "npm/advisories/deny-epss", "npm/advisories/exact-fix"]
+        ["read", "mirror", "advisories", "client-install"]
+        ["npm/advisories/deny-cve", "npm/advisories/deny-epss", "npm/advisories/exact-fix", "npm/advisories/mal-denial"]
     , Obligation
         "pypi/advisory-native"
         "pypi/advisories"
@@ -149,6 +149,6 @@ obligations =
         "pypi/dredger"
         Supported
         ["read", "mirror", "maintenance", "advisories"]
-        (map ("pypi/dredger/" <>) ["inventory", "admission-only", "denied-versions", "dry-run", "consent-refusal", "first-party", "two-stores", "advisory-revocation", "denied-install", "delete-recovery", "refill", "missing-source", "late-copy", "old-worker", "old-dredger-refill", "old-dredger-loss"])
+        (map ("pypi/dredger/" <>) ["inventory", "admission-only", "denied-versions", "dry-run", "consent-refusal", "first-party", "two-stores", "advisory-revocation", "mal-revocation", "denied-install", "delete-recovery", "refill", "missing-source", "late-copy", "old-worker", "old-dredger-refill", "old-dredger-loss"])
     , Obligation "s3/packages" "s3/packages" "publication" (Planned "https://github.com/AlexaDeWit/Ecluse/issues/1239") ["publication"] []
     ]

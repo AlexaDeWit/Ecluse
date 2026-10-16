@@ -12,9 +12,12 @@ import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Test.Hspec
 import UnliftIO.Exception (impureThrow)
 
+import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange))
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Mirror.State
+import Ecluse.Core.Osv.Types (UpperBound (LastAffected))
 import Ecluse.Core.Package (
     Artifact (artCoreMetadata, artFilename, artHashes),
     Availability (Deprecated, Yanked),
@@ -50,7 +53,7 @@ import Ecluse.Core.Registry.Publish (
     newMirrorPublish,
  )
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (Decision (Undecidable), DenyIfCveParams (DenyIfCveParams), FailureAlignment (FailNoDecision), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan, DenyIfCve, DenyIfDeprecated, DenyIfYanked), Transience (WillResolve, WontResolve), ruleName)
+import Ecluse.Core.Rules.Types (Decision (Undecidable), DenyIfCveParams (DenyIfCveParams), FailureAlignment (FailDeny, FailNoDecision), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan, DenyIfCve, DenyIfDeprecated, DenyIfKnownMalicious, DenyIfYanked), Transience (WillResolve, WontResolve), ruleName)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit, MirrorArtifactBodyLimit), LimitError (BodyTooLarge), defaultLimits, hostPortAddress)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -63,6 +66,7 @@ import Ecluse.Core.Worker (
  )
 import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchFault)
 import Ecluse.Core.Worker.Types (WorkerMirrorState (..))
+import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Json (fieldAt)
 import Ecluse.Test.Log (captureJsonLog)
 import Ecluse.Test.Mirror.State
@@ -70,7 +74,7 @@ import Ecluse.Test.Package (hexSha256Of, npmVersion, unsafeFilename, unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (sourceVersionDoc)
-import Ecluse.Test.Rules (admissionOnly, admitRule, atDefaultPrecedence, cannotVetRule, constRule, denyRule, inertRuleDeps)
+import Ecluse.Test.Rules (admissionOnly, admitRule, atDefaultPrecedence, cannotVetRule, constRule, denyRule, inertRuleDeps, servingRuleDeps)
 import Ecluse.Test.Snapshot (versionDocOf)
 import Ecluse.Test.Stub (allCaptured, capMethod, capPath, stubBaseUrl, withRoutedStub, withStub)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape), decodeJsonOrFail, expectRight)
@@ -626,6 +630,17 @@ spec = do
                     outcome <- runWM (sourceAt url runtime) (processJob job)
                     outcome `shouldSatisfy` isDropped
     describe "processJob: ingest-time policy re-evaluation" $ do
+        for_ [("an npm", Npm, sampleMirrorJob), ("a PyPI", PyPI, pypiMirrorJob)] $ \(label, eco, jobAt) ->
+            it ("drops " <> label <> " job newly MAL-denied before fetching or publishing") $ do
+                let deps = servingRuleDeps (DbEtag "mal-generation") (fakeCveLookup [("thing", AdvisoryRange "MAL-worker" Nothing (Just "1.0.0") (LastAffected "1.0.0") Nothing)])
+                rules <- prepare deps [atDefaultPrecedence (DenyIfKnownMalicious FailDeny), atDefaultPrecedence (AllowIfOlderThan 0)]
+                withRuntimePolicies (Map.singleton eco (npmPolicy presentResolver rules)) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                    job <- enqueueAndReceive queue jobAt
+                    runWM (sourceAt unreachableUrl runtime) (processJob job) >>= \case
+                        Dropped reason -> reason `shouldSatisfy` T.isInfixOf "MAL-worker (known malicious)"
+                        other -> expectationFailure ("expected MAL denial, got " <> show other)
+                    plDocuments <$> readIORef logRef `shouldReturn` []
+
         for_ [False, True] $ \poisonEvidence ->
             it ("names a pure rule exception without fetching or publishing, evidence=" <> show poisonEvidence) $ do
                 let thrown = TestContractEscape "pure worker verdict"

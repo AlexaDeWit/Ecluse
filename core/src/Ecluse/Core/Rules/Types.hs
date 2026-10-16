@@ -100,7 +100,7 @@ data Rule
       -}
       DenyByIdentity Text
     | {- | Allow an exact package identity, optionally with a version, including fixes the exact fix match cannot recognise.
-      Default precedence overrides advisory denies but yields to availability, install-code, and identity denies.
+      Default precedence overrides scored advisory denies and yields to MAL, availability, install-code, and identity denies.
       -}
       AllowByIdentity Text
     | {- | Admit an exact advisory fix without quarantine when no advisory still affects the version.
@@ -111,6 +111,8 @@ data Rule
       'DenyIfCveParams' governs missing scores and unavailable lookups.
       -}
       DenyIfCve DenyIfCveParams
+    | -- | Deny versions affected by an active primary MAL advisory, independently of scores.
+      DenyIfKnownMalicious FailureAlignment
     | {- | Deny on a known EPSS score at or above the threshold. Individual missing scores
       abstain, including malware without CVE aliases. 'DenyIfCve' governs severity independently.
       -}
@@ -150,6 +152,7 @@ data RuleType
     | AllowByIdentityType
     | AllowIfRemediatesCveType
     | DenyIfCveType
+    | DenyIfKnownMaliciousType
     | DenyIfEpssType
     | DenyIfYankedType
     | DenyIfDeprecatedType
@@ -167,6 +170,7 @@ instance WireVocab RuleType where
                , (AllowByIdentityType, "AllowByIdentity")
                , (AllowIfRemediatesCveType, "AllowIfRemediatesCve")
                , (DenyIfCveType, "DenyIfCve")
+               , (DenyIfKnownMaliciousType, "DenyIfKnownMalicious")
                , (DenyIfEpssType, "DenyIfEpss")
                , (DenyIfYankedType, "DenyIfYanked")
                , (DenyIfDeprecatedType, "DenyIfDeprecated")
@@ -186,6 +190,7 @@ ruleType = \case
     AllowByIdentity{} -> AllowByIdentityType
     AllowIfRemediatesCve -> AllowIfRemediatesCveType
     DenyIfCve{} -> DenyIfCveType
+    DenyIfKnownMalicious{} -> DenyIfKnownMaliciousType
     DenyIfEpss{} -> DenyIfEpssType
 
 -- | Canonical rule name used for boot-order ties, logs, and denial messages.
@@ -199,6 +204,7 @@ readsAdvisories :: Rule -> Bool
 readsAdvisories = \case
     AllowIfRemediatesCve -> True
     DenyIfCve{} -> True
+    DenyIfKnownMalicious{} -> True
     DenyIfEpss{} -> True
     AllowScope{} -> False
     AllowIfOlderThan{} -> False
@@ -214,6 +220,7 @@ holding one cannot decide anything until an artifact loads, which is what makes 
 deniesOnAdvisories :: Rule -> Bool
 deniesOnAdvisories = \case
     DenyIfCve{} -> True
+    DenyIfKnownMalicious{} -> True
     DenyIfEpss{} -> True
     AllowIfRemediatesCve -> False
     AllowScope{} -> False
@@ -234,6 +241,7 @@ ruleDenies = \case
     DenyInstallTimeExecution -> True
     DenyByIdentity{} -> True
     DenyIfCve{} -> True
+    DenyIfKnownMalicious{} -> True
     DenyIfEpss{} -> True
     AllowScope{} -> False
     AllowIfOlderThan{} -> False
@@ -274,7 +282,7 @@ revocationRules = filter (reachesRevocation . ruleReach)
         AdmissionOnly -> False
 
 {- | Use the rule type's default when configuration omits precedence. See 'Ecluse.Core.Rules.bootOrder' for tie-breaking.
-Identity allows override advisory denies. Availability, install-code, and identity denies outrank every default allow.
+Identity allows override scored advisory denies. MAL, availability, install-code, and identity denies outrank every default allow.
 -}
 defaultPrecedence :: Rule -> Int
 defaultPrecedence = \case
@@ -282,6 +290,7 @@ defaultPrecedence = \case
     AllowIfRemediatesCve -> defaultAllowIfRemediatesCvePrecedence
     AllowScope{} -> defaultAllowScopePrecedence
     DenyIfCve{} -> defaultDenyIfCvePrecedence
+    DenyIfKnownMalicious{} -> defaultDenyInstallTimeExecutionPrecedence
     DenyIfEpss{} -> defaultDenyIfEpssPrecedence
     AllowByIdentity{} -> defaultAllowByIdentityPrecedence
     DenyIfYanked -> defaultDenyInstallTimeExecutionPrecedence
@@ -296,7 +305,7 @@ defaultAllowIfOlderThanPrecedence :: Int
 defaultAllowIfOlderThanPrecedence = 100
 
 {- | Admit security fixes ahead of quarantine.
-Yield to 'AllowScope', whose trusted packages need no advisory probe.
+Yield to 'AllowScope'. Higher advisory denies still read the database.
 -}
 defaultAllowIfRemediatesCvePrecedence :: Int
 defaultAllowIfRemediatesCvePrecedence = 150
@@ -319,8 +328,8 @@ same database and answers to the same identity-pin override. A tie resolves by n
 defaultDenyIfEpssPrecedence :: Int
 defaultDenyIfEpssPrecedence = defaultDenyIfCvePrecedence
 
-{- | An identity pin overrides both advisory denies.
-Availability, install-code, and identity denies retain higher default precedence.
+{- | An identity pin overrides scored advisory denies.
+MAL, availability, install-code, and identity denies retain higher default precedence.
 -}
 defaultAllowByIdentityPrecedence :: Int
 defaultAllowByIdentityPrecedence = 250
@@ -527,6 +536,10 @@ data Reason
       NoDatabaseToRemediate
     | -- | An advisory deny fires: the score it gates on, its threshold, and the affecting advisories.
       AffectedBy AdvisoryScore Double AdvisoryIds
+    | -- | Active primary MAL advisories affect the version, independently of scores.
+      KnownMalicious AdvisoryIds
+    | -- | No active primary MAL advisory affects the version.
+      NoKnownMaliciousAdvisory
     | -- | An advisory deny abstains: no advisory at or above its threshold affects the version.
       NotAffectedAtThreshold AdvisoryScore
     | -- | The named rule could not vet the version. The engine's fold builds this, never a rule.

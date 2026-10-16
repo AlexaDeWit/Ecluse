@@ -14,10 +14,13 @@ module Ecluse.Test.Corpus.Advisories (
     suggestedDenyIfCve,
     suggestedDenyIfEpss,
     shippedPolicy,
+    configuredShippedPolicy,
     allAdvisoryRules,
     SyntheticTarget (..),
     fillerTargets,
     syntheticAdvisories,
+    mixedMaliciousAdvisories,
+    maliciousAdvisoryInputs,
 ) where
 
 import Codec.Compression.GZip qualified as GZip
@@ -42,11 +45,12 @@ import Ecluse.Core.Rules.Types (
     DenyIfEpssParams (DenyIfEpssParams),
     FailureAlignment (FailDeny),
     PrecededRule,
-    Rule (AllowIfOlderThan, AllowIfRemediatesCve, DenyIfCve, DenyIfEpss),
+    Rule (AllowIfOlderThan, AllowIfRemediatesCve, DenyIfCve, DenyIfEpss, DenyIfKnownMalicious),
  )
 import Ecluse.Core.Version (parseVersionKey)
 import Ecluse.Test.Corpus (FilePin (..), readCorpusPins, readPinned)
 import Ecluse.Test.Osv (osvZipOf)
+import Ecluse.Test.Osv.Withdrawal (maliciousEntries, maliciousZip)
 import Ecluse.Test.OsvDb (compileOsvZipDbWithFeedTo, scoresOf)
 import Ecluse.Test.Rules (atDefaultPrecedence)
 
@@ -115,9 +119,13 @@ rowsTheRulesRead deps package = do
 shippedPolicy :: [PrecededRule]
 shippedPolicy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve]
 
--- | The shared shipped policy with both advisory denies, at the suggested thresholds.
+-- | The shared shipped policy selected when advisories.url is present.
+configuredShippedPolicy :: [PrecededRule]
+configuredShippedPolicy = atDefaultPrecedence (DenyIfKnownMalicious FailDeny) : shippedPolicy
+
+-- | The source-configured shared policy with both scored advisory denies, at the suggested thresholds.
 allAdvisoryRules :: [PrecededRule]
-allAdvisoryRules = shippedPolicy <> map atDefaultPrecedence [DenyIfCve suggestedDenyIfCve, DenyIfEpss suggestedDenyIfEpss]
+allAdvisoryRules = configuredShippedPolicy <> map atDefaultPrecedence [DenyIfCve suggestedDenyIfCve, DenyIfEpss suggestedDenyIfEpss]
 
 -- | @DenyIfCve@ at the CVSS threshold @config/default.yaml@ suggests, failing closed.
 suggestedDenyIfCve :: DenyIfCveParams
@@ -147,8 +155,24 @@ fillerTargets count = [SyntheticTarget ("ecluse-bench-filler-" <> show k) ["1.0.
 
 -- | Generate release windows with real fixes, alternating critical CVSS vectors and EPSS scores from 0 to 0.95.
 syntheticAdvisories :: Ecosystem -> [SyntheticTarget] -> IO AdvisoryInputs
-syntheticAdvisories eco targets = do
-    archive <- osvZipOf [(recordId n <> ".json", encode (syntheticRecord eco n target window)) | (n, (target, window)) <- indexed]
+syntheticAdvisories = syntheticAdvisoriesWith []
+
+-- | Add labelled captured MAL points to the unchanged scored synthetic reference.
+mixedMaliciousAdvisories :: Ecosystem -> [SyntheticTarget] -> IO AdvisoryInputs
+mixedMaliciousAdvisories eco targets = do
+    entries <- maliciousEntries eco [(stPackage target, take 1 (stVersions target)) | target <- targets, stAdvisories target > 1] Nothing
+    syntheticAdvisoriesWith entries eco targets
+
+-- | Use attributed MAL-derived exact points with the existing captured EPSS input.
+maliciousAdvisoryInputs :: Ecosystem -> [(Text, [Text])] -> IO AdvisoryInputs
+maliciousAdvisoryInputs eco targets = do
+    source <- corpusAdvisories eco
+    archive <- maliciousZip eco targets Nothing
+    pure source{aiOsvZip = archive}
+
+syntheticAdvisoriesWith :: [(Text, LByteString)] -> Ecosystem -> [SyntheticTarget] -> IO AdvisoryInputs
+syntheticAdvisoriesWith extra eco targets = do
+    archive <- osvZipOf (extra <> [(recordId n <> ".json", encode (syntheticRecord eco n target window)) | (n, (target, window)) <- indexed])
     pure AdvisoryInputs{aiOsvZip = archive, aiEpssFeed = GZip.compress (epssPreamble <> foldMap (scoreLine . fst) indexed)}
   where
     -- Only the windows stay shared, so each record is encoded and dropped as the archive streams.

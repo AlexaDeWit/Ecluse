@@ -50,7 +50,7 @@ import Ecluse.BenchLoad.Harness (
     LoadKnobs (..),
     Scenario (scenarioName, scenarioServiceTime),
     ScenarioReport (srName),
-    UpstreamFixture (fixtureEcosystem, fixtureScenarios),
+    UpstreamFixture (fixtureEcosystem),
     loadKnobsFromEnv,
     operatingPoint,
     reportEvidence,
@@ -63,7 +63,7 @@ import Ecluse.BenchLoad.ProxyServe (runServeProxy)
 import Ecluse.BenchLoad.PyPI (pypiLoadNotes)
 import Ecluse.BenchLoad.Report (Section (..), renderFloors, renderLoadSaturation, renderReports, renderServiceTime, renderThrash, renderVerdict)
 import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
-import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScenario, fixtures, runsUnder)
+import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScenario, fixtures, runsUnder, scenariosForSelection)
 import Ecluse.BenchLoad.Selection (fixtureSection, measurementConditionVersion, scenarioKey)
 import Ecluse.BenchLoad.Verdict (RunEvidence, runVerdict)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -207,7 +207,7 @@ fixturePasses setup fixture
     capabilities = setupCapabilities setup
     eco = fixtureEcosystem fixture
     keyOf = scenarioKey eco . scenarioName
-    chosen = filter runsHere (fixtureScenarios fixture)
+    chosen = filter runsHere (scenariosForSelection (setupSelected setup) fixture)
     serviceTime = filter scenarioServiceTime chosen
     runsHere s = maybe True (keyOf s `elem`) (setupSelected setup) && runsUnder (setupShape setup) s
     baseline = setupBaselineOf setup eco

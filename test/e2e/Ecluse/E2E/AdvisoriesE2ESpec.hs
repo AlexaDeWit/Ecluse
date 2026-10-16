@@ -12,7 +12,7 @@ module Ecluse.E2E.AdvisoriesE2ESpec (
     refusesPyPIRelease,
 ) where
 
-import Data.Aeson (Value, encode, object, (.=))
+import Data.Aeson (encode, object, (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -26,13 +26,15 @@ import System.FilePath ((</>))
 import Test.Hspec (Expectation, expectationFailure, shouldSatisfy)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
-import Ecluse.E2E.Fixtures.Advisories (npmAdvisoryExportBase, npmAdvisoryId, pypiAdvisoryExportBase, pypiAdvisoryId)
-import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture, concreteFamily)
+import Ecluse.E2E.Fixtures.Advisories (maliciousAdvisoryId, maliciousExportBase, npmAdvisoryExportBase, npmAdvisoryId, pypiAdvisoryExportBase, pypiAdvisoryId)
+import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
+import Ecluse.E2E.Fixtures.Npm (corpusRevokedPkg, psName, psVersion)
 import Ecluse.E2E.Fixtures.PyPI (pypiDistInfoFor, pypiWheelFor)
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
-import Ecluse.Test.Contract.Ecosystem (FamilyFixture, FamilyMetadata)
+import Ecluse.Test.Contract.Ecosystem (FamilyFixture (..), FamilyMetadata)
 import Ecluse.Test.Contract.Install.Advisory
+import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Json (asObject, objectAt, textAt)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Poll (pollUntil)
@@ -47,80 +49,84 @@ withPublishedAdvisories ecosystem exportBase action plane = do
 
 -- | npm compiles its independent native export before exposing advisory operations.
 npmAdvisoryFamily :: ConcreteFixture FamilyMetadata -> FamilyFixture AdvisoryScenarioDriver
-npmAdvisoryFamily fixture = concreteFamily fixture $ \recorder action ->
-    timedFixtureWith recorder (withPublishedAdvisories Npm npmAdvisoryExportBase) (action . npmAdvisoryDriver)
-
--- | PyPI uses the same scenarios after Pilot compiles its native OSV export.
-pypiAdvisoryFamily :: ConcreteFixture FamilyMetadata -> FamilyFixture AdvisoryScenarioDriver
-pypiAdvisoryFamily fixture = concreteFamily fixture $ \recorder action ->
-    timedFixtureWith recorder (withPublishedAdvisories PyPI pypiAdvisoryExportBase) (action . pypiAdvisoryDriver)
-
-npmAdvisoryDriver :: GlobalDataPlane -> AdvisoryScenarioDriver
-npmAdvisoryDriver =
-    scenarioDriver
-        Npm
-        "e2e-advisory"
-        "1.18.0"
-        "1.19.0"
-        npmAdvisoryId
-        ("No matching version found for e2e-advisory@" <>)
-        npmVersions
-        npmRelease
+npmAdvisoryFamily resources = scenarioFamily resources Npm dredgerTopology npmAdvisoryExportBase fixture session
   where
-    npmVersions e2e = sort . map Key.toText . KeyMap.keys <$> npmAdvisoryVersions e2e
-    npmRelease e2e version = do
-        versions <- npmAdvisoryVersions e2e
-        let dist = objectAt "dist" (objectAt (Key.fromText version) versions)
-            artifacts = maybeToList ((,) <$> textAt "tarball" dist <*> textAt "integrity" dist)
-        pure $
-            AdvisoryDriver
-                { advisoryExpectedArtifact = e2eBaseUrl e2e <> npmTarballPath "e2e-advisory" version
-                , advisoryAdvertisedArtifacts = artifacts
-                , advisoryInstall = withNpmProject e2e $ \project -> do
-                    result <- npmInstallIn project ("e2e-advisory@" <> version)
-                    installed <- installedVersion project "e2e-advisory"
-                    pure (result, installed == Just version)
-                , advisoryArtifactStatus = proxyStatus e2e (npmTarballPath "e2e-advisory" version)
-                , advisoryAwaitDenials = awaitDenials e2e
+    fixture policy = case policy of
+        KnownMaliciousDefault -> npmCase (psName corpusRevokedPkg) "1.0.0" (psVersion corpusRevokedPkg) maliciousAdvisoryId True
+        _ -> npmCase "e2e-advisory" "1.18.0" "1.19.0" npmAdvisoryId False
+    npmCase name affected fixed advisory mirror =
+        AdvisoryCase
+            { advisoryPackage = name
+            , advisoryAffectedVersion = affected
+            , advisoryFixedVersion = fixed
+            , advisoryExpectedId = advisory
+            , advisoryRefusalMessage = (("No matching version found for " <> name <> "@") <>)
+            , advisoryRequiresMirror = mirror
+            }
+    session policy e2e =
+        let name = advisoryPackage (fixture policy)
+         in AdvisorySession
+                { advisoryListedVersions = sort . map Key.toText . KeyMap.keys <$> npmAdvisoryVersions e2e name
+                , advisoryRelease = npmRelease policy e2e name
+                , advisoryMirrorContains = if policy == KnownMaliciousDefault then Just (verdaccioMirroredWithinWindow e2e name) else Nothing
                 }
 
-npmAdvisoryVersions :: E2E -> IO Aeson.Object
-npmAdvisoryVersions e2e = do
-    (_, body) <- proxyGet e2e "/npm/e2e-advisory"
+npmAdvisoryVersions :: E2E -> Text -> IO Aeson.Object
+npmAdvisoryVersions e2e name = do
+    (_, body) <- proxyGet e2e ("/npm/" <> name)
     value <- maybe (fail "npm advisory metadata was not JSON") pure (Aeson.decode body)
     pure (objectAt "versions" (asObject value))
 
-pypiAdvisoryDriver :: GlobalDataPlane -> AdvisoryScenarioDriver
-pypiAdvisoryDriver =
-    scenarioDriver
-        PyPI
-        "flask"
-        "1.18"
-        "1.19"
-        pypiAdvisoryId
-        ("No matching distribution found for flask==" <>)
-        (\e2e -> map (wheelVersion . fst) <$> advertisedFiles e2e "flask")
-        (`pypiReleaseDriver` "flask")
+npmRelease :: AdvisoryPolicy -> E2E -> Text -> Text -> IO AdvisoryDriver
+npmRelease policy e2e name version = do
+    versions <- npmAdvisoryVersions e2e name
+    let dist = objectAt "dist" (objectAt (Key.fromText version) versions)
+        artifacts = maybeToList ((,) <$> textAt "tarball" dist <*> textAt "integrity" dist)
+    pure $
+        AdvisoryDriver
+            { advisoryExpectedArtifact = e2eBaseUrl e2e <> npmTarballPath name version
+            , advisoryAdvertisedArtifacts = artifacts
+            , advisoryInstall = withNpmProject e2e $ \project -> do
+                result <- npmInstallIn project (name <> "@" <> version)
+                installed <- installedVersion project name
+                pure (result, if policy == KnownMaliciousDefault then isJust installed else installed == Just version)
+            , advisoryArtifactStatus = proxyStatus e2e (npmTarballPath name version)
+            , advisoryAwaitDenials = awaitDenials e2e
+            }
+
+-- | PyPI uses the same scenarios after Pilot compiles its native OSV export.
+pypiAdvisoryFamily :: ConcreteFixture FamilyMetadata -> FamilyFixture AdvisoryScenarioDriver
+pypiAdvisoryFamily resources = scenarioFamily resources PyPI pypiAdvisoryTopology pypiAdvisoryExportBase fixture session
   where
+    fixture policy =
+        AdvisoryCase "flask" "1.18" "1.19" (if policy == KnownMaliciousDefault then maliciousAdvisoryId else pypiAdvisoryId) ("No matching distribution found for flask==" <>) False
+    session _ e2e = AdvisorySession (map (wheelVersion . fst) <$> advertisedFiles e2e "flask") (pypiReleaseDriver e2e "flask") Nothing
     wheelVersion filename = fromMaybe filename (T.stripPrefix "flask-" filename >>= T.stripSuffix "-py3-none-any.whl")
 
-scenarioDriver :: Ecosystem -> Text -> Text -> Text -> Text -> (Text -> Text) -> (E2E -> IO [Text]) -> (E2E -> Text -> IO AdvisoryDriver) -> GlobalDataPlane -> AdvisoryScenarioDriver
-scenarioDriver ecosystem name affected fixed advisory message listed release plane =
-    AdvisoryScenarioDriver
-        { advisoryWithPolicy = \policy action ->
-            withPolicy ecosystem (policyFields policy) plane $ \e2e ->
-                action (AdvisorySession (listed e2e) (release e2e))
-        , advisoryPackage = name
-        , advisoryAffectedVersion = affected
-        , advisoryFixedVersion = fixed
-        , advisoryExpectedId = advisory
-        , advisoryRefusalMessage = message
+-- Independent lifetimes prevent source replacement and the fixed Docker subnet from crossing policies.
+scenarioFamily :: ConcreteFixture FamilyMetadata -> Ecosystem -> Topology -> Text -> (AdvisoryPolicy -> AdvisoryCase) -> (AdvisoryPolicy -> E2E -> AdvisorySession) -> FamilyFixture AdvisoryScenarioDriver
+scenarioFamily resources ecosystem maliciousTopology scoredSource fixture session =
+    FamilyFixture
+        { familyMetadata = fixtureMetadata resources
+        , familyAcquire = \recorder action ->
+            action
+                AdvisoryScenarioDriver
+                    { advisoryWithPolicy = \policy useSession ->
+                        let malicious = policy == KnownMaliciousDefault
+                            acquire = if malicious then withDataPlane maliciousTopology else withFixture resources
+                            source = if malicious then maliciousExportBase else scoredSource
+                         in timedFixture recorder acquire $
+                                timedFixtureWith recorder (withPublishedAdvisories ecosystem source) $ \plane ->
+                                    withPolicy ecosystem (policyFields policy) plane (useSession . session policy)
+                    , advisoryCaseForPolicy = fixture
+                    }
         }
 
 policyFields :: AdvisoryPolicy -> [Pair]
 policyFields = \case
     DenyCve -> ["advisory-deny" .= object ["type" .= ("DenyIfCve" :: Text), "minCvss" .= (7.0 :: Double)]]
     DenyEpss -> ["advisory-deny" .= object ["type" .= ("DenyIfEpss" :: Text), "minEpss" .= (0.5 :: Double)]]
+    KnownMaliciousDefault -> ["min-age" .= object ["ageSeconds" .= (0 :: Int)]]
     Remediation -> []
     RemediationDisabled -> ["remediation-fast-track" .= object ["enabled" .= False]]
 
@@ -162,11 +168,3 @@ refusesPyPIRelease e2e name version rule advisory = do
 awaitDenials :: E2E -> Denial -> IO [Denial]
 awaitDenials e2e expected =
     pollUntil 120 250000 (elem expected) (mapMaybe parseDenial . T.lines <$> proxyContainerLogs e2e)
-
-parseDenial :: Text -> Maybe Denial
-parseDenial line = do
-    value <- Aeson.decodeStrict' (encodeUtf8 line) :: Maybe Value
-    let top = asObject value
-        fields = objectAt "data" top
-    guard (textAt "message" top == Just "denied")
-    Denial <$> textAt "package" fields <*> textAt "version" fields <*> textAt "rule" fields <*> pure (textAt "cve" fields)

@@ -329,7 +329,7 @@ The policy is a named map of rules over the deny-by-default gate described in
 `ECLUSE_RULES` carries the same object as JSON, which suits a one-rule tweak, and the document
 stays the reviewable home for a real policy.
 
-Écluse ships ten built-in rule types, catalogued below. A shipped name patches the rule it names,
+Écluse ships eleven built-in rule types, catalogued below. A shipped name patches the rule it names,
 `enabled: false` suppresses it, and a new name with a `type` adds a rule. A rule reads only its own
 type's knobs, and a knob written under a type that does not read it fails the load. The table lists
 the types from the highest default precedence to the lowest, so an earlier row wins over a later
@@ -341,10 +341,11 @@ one:
 | `DenyIfDeprecated` | No | Denies a version carrying the npm deprecation flag, including whole packages and release lines. | None |
 | `DenyIfYanked` | No | Denies a PyPI release only when every file is yanked. | None |
 | `DenyInstallTimeExecution` | npm only | `deny-scripts` denies npm install scripts at admission. Stored copies stay. | None |
-| `AllowByIdentity` | No | Admits a package or `package@version`, and a bare name matches every version. It overrides both advisory denies. | `identity` |
+| `DenyIfKnownMalicious` | With `advisories.url` | Denies affected versions named by an active primary `MAL-` advisory. Named `deny-known-malicious`, precedence 300, both phases. | `onUnavailable` |
+| `AllowByIdentity` | No | Admits a package or `package@version`, and a bare name matches every version. It overrides scored advisory denies. Override MAL denial with precedence above 300. | `identity` |
 | `DenyIfCve` | No | Denies a version that a synced advisory marks as affected at or above a CVSS threshold. | `minCvss` (0-10), `onUnavailable` |
 | `DenyIfEpss` | No | Denies a version that a synced advisory marks as affected when its EPSS score meets a threshold. Ties with `DenyIfCve`. | `minEpss` (0-1), `onUnavailable` |
-| `AllowScope` | No | Admits every version under an npm scope you trust, past the quarantine and without consulting the advisory database. | `scope`, without the leading `@` |
+| `AllowScope` | No | Admits every version under an npm scope you trust, past the quarantine, after any higher-precedence advisory rule. | `scope`, without the leading `@` |
 | `AllowIfRemediatesCve` | Yes | Provided by default with the name `remediation-fast-track`. Admits the exact fixed version a synced advisory names, ahead of the quarantine, if no other advisory still affects it. | None |
 | `AllowIfOlderThan` | Yes | Provided by default with the name `min-age`. Holds each new public version for the quarantine window, so a malicious publish is usually found and yanked before a build can install it. | `ageSeconds` (7 days by default) |
 
@@ -379,8 +380,8 @@ Without `appliesTo`, either deny also applies at revocation. The Dredger reads t
 metadata, so a later public yank or deprecation does not update the stored flag by itself.
 An admission-only rule never authorises deletion. Other revocation rules can still condemn the copy.
 These flags do not detect a malicious release removed from registry metadata.
-Known-malicious withdrawal ([#1128](https://github.com/AlexaDeWit/Ecluse/issues/1128)) and withdrawal
-writes ([#1098](https://github.com/AlexaDeWit/Ecluse/issues/1098)) remain separate work.
+`DenyIfKnownMalicious` reads advisory evidence independently of these flags. Withdrawal writes
+([#1098](https://github.com/AlexaDeWit/Ecluse/issues/1098)) remain separate work.
 
 The npm mount adds `deny-scripts` at precedence 300 with `appliesTo: [admission]`.
 The default applies only when you enable the npm mount. It does not enable a mount itself.
@@ -469,15 +470,15 @@ The advisory rules carry details the table leaves out:
 
 - `remediation-fast-track` abstains until a first advisory database syncs, so without one only the
   quarantine governs. Set `ECLUSE_ADVISORIES__URL` and run Pilot to sync one.
-- Both advisory denies need an advisory store. A mount that enables one with `advisories.url` unset
-  refuses the boot, whatever `onUnavailable` says, and `ecluse check-config` reports the same
-  refusal.
+- Every advisory deny (`DenyIfKnownMalicious`, `DenyIfCve` and `DenyIfEpss`) needs an advisory
+  store. A mount that enables one with `advisories.url` unset refuses the boot, whatever
+  `onUnavailable` says, and `ecluse check-config` reports the same refusal.
 - The npm malware feed carries no score, so `DenyIfCve` counts a malware entry as above every
   threshold. Enabling it also blocks known-malicious packages.
 - EPSS is FIRST.org's estimate of the probability that attackers exploit a vulnerability within 30
   days. `DenyIfEpss` gates on that likelihood, where `DenyIfCve` gates on severity. A missing EPSS
   score makes the rule abstain for that advisory.
-- `onUnavailable` decides what both advisory denies do when the advisory database cannot answer:
+- `onUnavailable` decides what advisory denies do when the advisory database cannot answer:
   `deny` by default, or `skip`.
 
 Before you enable `DenyIfCve` or `DenyIfEpss`, read
@@ -578,6 +579,57 @@ The Dredger evaluates the rules that apply at revocation, in that order, and pas
 rest. So a deny limited to admission cannot cause a revocation, and it does not stop the Dredger's
 walk either: a lower deny that applies at revocation still decides the version.
 
+## Known malicious packages and upgrades
+
+Configuring `advisories.url` activates `deny-known-malicious` before any sync succeeds.
+Source-free deployments retain their existing defaults and need no opt-out.
+Existing deployments with a source gain MAL denial, first-generation readiness gating, and fixed
+publication-age refusal. This selection does not depend on the local Pilot role or feed health.
+
+Known means an active primary `MAL-` record in the accepted OSV source. The rule matches its affected
+versions through the ecosystem's normal version ordering. It does not require CVSS or EPSS scores.
+Aliases, summary text, yank flags, deprecation notices, and missing scores do not classify malware.
+A replacement generation that withdraws a MAL record removes that record's authority. Independent
+active records still decide. Deleted copies do not return merely because an advisory withdraws.
+
+The default precedence is 300, above `AllowByIdentity` at 250 and below `DenyByIdentity` at 400.
+An explicit identity allow above 300 can override it. Equal precedences retain rule-name ordering.
+The default applies at admission and revocation. Limit deletion with `appliesTo: [admission]`.
+Disable it globally or under a mount:
+
+```yaml
+rules:
+  deny-known-malicious:
+    enabled: false
+```
+
+This opt-out also works without a source. Partial knobs preserve the current activation state.
+An explicit mount `enabled: true` can override a global disable without restating the type.
+An explicit `type: DenyIfKnownMalicious` declaration activates the rule unless disabled.
+Any manual activation without a source refuses boot and `check-config`, including under `skip`.
+Disabling the shipped name does not remove a separately named manual MAL rule.
+
+The rule ranks above every default allow. An expired or undated push refuses every public
+admission on the mount, scope and identity allows included. Under the default `deny`, a faulted
+read, an open breaker, or a missing first generation does the same. Only an allow ordered before
+the rule still admits: one above 300, or one at 300 whose name sorts first. Trusted private reads
+still serve. A deployment that set `onUnavailable: skip` on `DenyIfCve` or `DenyIfEpss` refuses
+during an advisory outage unless it also sets `onUnavailable: skip` on `deny-known-malicious`.
+
+Publish a valid artifact for each ecosystem before configuring its source. Roll admission and
+writer roles forward before enabling Dredger revocation. Preview deletions and retain target-local
+consent, first-party protection, maintenance support, and deletion caps. When relaxing a rule,
+update Dredger first, then admission and writer roles. Trusted private copies keep serving until
+eligible deletion completes. The rule applies the same way to npm and PyPI admission, mirror
+writes, and Dredger revocation.
+
+An absent generation or a faulted read follows `onUnavailable`, defaulting to `deny`.
+`skip` permits lower rules to decide but never waives stale or undated generation refusal.
+A failed poll retains the last-good generation until its publication age expires.
+Missing or late MAL records remain an evidence gap. Use `DenyByIdentity` for an earlier finding.
+The configured source can supply false positives. It remains a trusted authority, and the rule
+adds no guarantee for client-held bytes or the accepted worker-transfer window.
+
 ## Onboarding the advisory denies
 
 `DenyIfCve` and `DenyIfEpss` can break a cold deployment, because a freshly stood-up mirror
@@ -588,10 +640,13 @@ covered them. Enable them *after* you warm your private mirror:
    versions you depend on. Each lands in the trusted store, and Écluse serves it from there without
    gating it again at request time.
 2. Once your must-have builds have mirrored, add `DenyIfCve` with a `minCvss` you are
-   comfortable with. A threshold of 8 blocks high and critical CVEs, and malware blocks regardless
-   of the threshold.
-3. If Écluse then denies a specific version you must keep, pin it with an `AllowByIdentity` rule,
-   which outranks both. That covers a false positive or a risk you accept.
+   comfortable with. A threshold of 8 blocks high and critical CVEs. Unscored advisories satisfy
+   every CVSS threshold. The source-configured MAL rule denies known MAL evidence independently
+   of CVSS.
+3. An `AllowByIdentity` pin at its default precedence of 250 overrides the scored `DenyIfCve`
+   and `DenyIfEpss` rules. An intentional exception to `DenyIfKnownMalicious` needs explicit
+   precedence above 300, for example `precedence: 301`. Use that exception only for a false
+   positive or a risk you accept.
 
 A warmed version is not exempt forever. `ecluse dredger` checks the stored versions against your
 current rules that apply at revocation and prunes what they deny. A policy change therefore cannot
@@ -633,7 +688,7 @@ to the mirror, and the log's retention is yours. The outage itself is reported a
 request, at `error`, as [Advisory outages](@/docs/operations.md#advisory-outages) describes.
 
 `onUnavailable: skip` does not waive the maximum push age. Once the serving artifact is older
-than that maximum, both advisory denies refuse, and `AllowIfRemediatesCve` abstains. See
+than that maximum, every advisory deny refuses, and `AllowIfRemediatesCve` abstains. See
 [Advisory push age](@/docs/operations.md#advisory-push-age) for the maximum, its default
 derivation, and the alarm that precedes it. Individual missing scores differ from whole-feed
 failure, which the rest of this section covers.

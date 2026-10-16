@@ -14,7 +14,7 @@ import Data.Text qualified as T
 import Data.Universe.Class (Universe (universe))
 import Test.Hspec
 
-import Ecluse.Config (decodeDefaultConfig)
+import Ecluse.Config (decodeDefaultConfig, withoutMaliciousDefault)
 import Ecluse.Config.Aeson (parseRulesPatch)
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.Rule
@@ -136,6 +136,11 @@ rulePolicySpec = describe "rulePolicySpec" $ do
         it "rejects adding an AllowByIdentity without identity" $
             resolveJson "{\"rules\":{\"pinned-fix\":{\"type\":\"AllowByIdentity\"}}}"
                 `shouldBe` Left [MalformedRule "pinned-fix" "\"AllowByIdentity\" requires \"identity\""]
+
+    describe "DenyIfKnownMalicious validation" $
+        it "rejects malformed unavailable handling on a manual rule declaration" $
+            resolveJson "{\"rules\":{\"manual-mal\":{\"type\":\"DenyIfKnownMalicious\",\"onUnavailable\":\"maybe\"}}}"
+                `shouldBe` Left [MalformedRule "manual-mal" "\"onUnavailable\" must be \"deny\" or \"skip\", not \"maybe\""]
 
     describe "DenyIfCve (add, patch, and validation)" $ do
         it "adds a DenyIfCve from a minCvss, defaulting onUnavailable to fail-closed" $
@@ -396,9 +401,9 @@ appliesToSpec = describe "appliesTo, the phases a rule applies at" $ do
             resolveJsonOver mixedBase "{\"rules\":{\"deny-scripts\":{\"appliesTo\":[\"admission\"]}}}"
                 `shouldSatisfy` either (const False) (elem (admissionOnly (atPrecedence 300 DenyInstallTimeExecution)))
 
-        it "admits admission alone on each of the four deny types, and refuses it on each of the four allow types" $ do
+        it "admits admission alone on each deny type, and refuses it on each allow type" $ do
             let limited ty = [resolveJsonOver emptyPolicy (limitedToAdmission body) | (known, body) <- knownRuleAdds, known == ty]
-                denies = ["DenyIfYanked", "DenyIfDeprecated", "DenyByIdentity", "DenyInstallTimeExecution", "DenyIfCve", "DenyIfEpss"]
+                denies = ["DenyIfKnownMalicious", "DenyIfYanked", "DenyIfDeprecated", "DenyByIdentity", "DenyInstallTimeExecution", "DenyIfCve", "DenyIfEpss"]
                 allows = ["AllowByIdentity", "AllowScope", "AllowIfOlderThan", "AllowIfRemediatesCve"]
             (denies <> allows) `shouldMatchList` knownRuleTypes
             for_ denies $ \ty -> map (fmap (map ruleReach)) (limited ty) `shouldBe` [Right [AdmissionOnly]]
@@ -496,8 +501,8 @@ allowLimitedToAdmission ty =
 
 resolveJson :: ByteString -> Either [PolicyError] [PrecededRule]
 resolveJson body = do
-    (_, baseline) <- first (pure . MalformedRule "<defaults>" . show) (decodeDefaultConfig defaultConfigBytes)
-    resolveJsonOver baseline body
+    (_, catalogue) <- first (pure . MalformedRule "<defaults>" . show) (decodeDefaultConfig defaultConfigBytes)
+    resolveJsonOver (withoutMaliciousDefault catalogue) body
 
 resolveJsonOver :: RulePolicy -> ByteString -> Either [PolicyError] [PrecededRule]
 resolveJsonOver base body = case eitherDecodeStrict body :: Either String Value of
@@ -562,6 +567,7 @@ knownRuleAdds =
     , ("AllowByIdentity", "{\"rules\":{\"r\":{\"type\":\"AllowByIdentity\",\"identity\":\"left-pad@1.3.0\"}}}")
     , ("AllowIfRemediatesCve", "{\"rules\":{\"r\":{\"type\":\"AllowIfRemediatesCve\"}}}")
     , ("DenyIfCve", "{\"rules\":{\"r\":{\"type\":\"DenyIfCve\",\"minCvss\":8}}}")
+    , ("DenyIfKnownMalicious", "{\"rules\":{\"r\":{\"type\":\"DenyIfKnownMalicious\"}}}")
     , ("DenyIfEpss", "{\"rules\":{\"r\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}}}")
     , ("DenyIfYanked", "{\"rules\":{\"r\":{\"type\":\"DenyIfYanked\"}}}")
     , ("DenyIfDeprecated", "{\"rules\":{\"r\":{\"type\":\"DenyIfDeprecated\"}}}")

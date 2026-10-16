@@ -178,10 +178,11 @@ advisories:
   # Pilot only: the same threshold for the score date the EPSS feed declares, in seconds. One
   # key, because one feed serves every ecosystem.
   epssQuietTime: 604800
-  # How old the published advisory artifact may be, in seconds, before DenyIfCve and DenyIfEpss
+  # How old the published advisory artifact may be, in seconds, before MAL, CVSS, and EPSS denies
   # refuse rather than decide. The age is the time since Pilot last pushed the artifact, which a
-  # restart and a failed poll both leave alone. Past it, the CVE-deny path answers 503 even under
-  # `onUnavailable: skip`, and the Dredger stops deleting on an advisory match. Readiness does not
+  # restart and a failed poll both leave alone. Past it, every advisory deny answers 503 even
+  # under `onUnavailable: skip`. The MAL default ranks above every default allow, so every public
+  # admission refuses. The Dredger stops deleting on an advisory match. Readiness does not
   # change. Unset, each mount derives its own: a day ahead of that mount's earliest
   # AllowIfOlderThan quarantine, never under three days. The shipped seven-day quarantine gives
   # six days, and a mount with no quarantine rule gets three. Set this to override every
@@ -193,8 +194,8 @@ advisories:
   # the S3 client at an emulator or a VPC endpoint. There is no default: the artifact
   # carries no signature and a bucket name is global, so a shipped one would name a
   # bucket this project does not own. Unset, the advisory stack is off.
-  # AllowIfRemediatesCve then abstains, and a mount whose rules include DenyIfCve or
-  # DenyIfEpss refuses the boot, because those rules have no database to decide on.
+  # AllowIfRemediatesCve then abstains. A manually enabled MAL, CVSS, or EPSS deny
+  # refuses the boot, because those rules have no database to decide on.
   # url: s3://my-advisory-bucket/ecluse
 
 # Process sizing. Écluse computes every key at boot from the container's cgroup
@@ -496,6 +497,14 @@ mounts:
 # `[revocation]` alone, an unknown word, and `[admission]` on an allow. `enabled: false`
 # switches a rule off at both.
 rules:
+  # Active when advisories.url is configured, before operator patches.
+  # Both phases, precedence 300. An identity allow needs precedence above 300.
+  # Disable globally or per mount with deny-known-malicious: { enabled: false }.
+  # Partial patches retain activation. enabled: true or an explicit type activates it.
+  # Manual activation requires a source, including with onUnavailable: skip.
+  deny-known-malicious:
+    type: DenyIfKnownMalicious
+    onUnavailable: deny
   min-age:
     type: AllowIfOlderThan
     precedence: 100
@@ -536,9 +545,10 @@ rules:
   #   onUnavailable: deny     # as for DenyIfCve: "skip" fails open instead
   # Opt-in identity pin, absent from this shipped policy. It admits one package, or one
   # package@version, past the quarantine. `identity` matches the rendered package name
-  # exactly, or that name and version joined by an @: no prefix, glob, or range. It sits
-  # above both advisory denies, so a pin overrides either, and below
-  # DenyIfYanked, DenyIfDeprecated, DenyInstallTimeExecution and DenyByIdentity.
+  # exactly, or that name and version joined by an @: no prefix, glob, or range.
+  # At precedence 250 it overrides the scored DenyIfCve and DenyIfEpss rules.
+  # It stays below DenyIfKnownMalicious, DenyIfYanked, DenyIfDeprecated,
+  # DenyInstallTimeExecution and DenyByIdentity. Override MAL with precedence 301.
   # pin-fix:
   #   type: AllowByIdentity
   #   identity: left-pad@1.3.0  # a bare name pins every version of that package

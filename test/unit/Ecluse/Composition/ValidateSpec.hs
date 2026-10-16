@@ -214,6 +214,15 @@ advisoryStoreSpec = describe "vetBoot -- an advisory deny with no advisory store
             refusalsFor role (denyingOn "DenyIfCve" (withObservablePrivate codeArtifactEnvVars))
                 >>= (`shouldSatisfy` elem (AdvisoryDenyWithoutStore Npm ("DenyIfCve" :| [])))
 
+    for_ ["deny", "skip"] $ \alignment ->
+        it ("refuses a manual MAL rule without a source under " <> alignment) $
+            refusalsFor MirrorWriter (denyingWith "DenyIfKnownMalicious" alignment staticEnvVars)
+                `shouldReturn` [AdvisoryDenyWithoutStore Npm ("DenyIfKnownMalicious" :| [])]
+
+    it "refuses a forced named MAL default without a source" $
+        refusalsFor MirrorWriter (overrideEnv "ECLUSE_RULES" "{\"deny-known-malicious\":{\"enabled\":true}}" staticEnvVars)
+            `shouldReturn` [AdvisoryDenyWithoutStore Npm ("DenyIfKnownMalicious" :| [])]
+
     it "names the EPSS deny on its own terms" $
         refusalsFor MirrorWriter (denyingOn "DenyIfEpss" staticEnvVars)
             `shouldReturn` [AdvisoryDenyWithoutStore Npm ("DenyIfEpss" :| [])]
@@ -444,8 +453,11 @@ denyingOn ruleType = denyingWith ruleType "deny"
 denyingWith :: String -> String -> [(String, String)] -> [(String, String)]
 denyingWith ruleType alignment = overrideEnv "ECLUSE_RULES" rules
   where
-    rules = "{\"gate\":{\"type\":\"" <> ruleType <> "\",\"onUnavailable\":\"" <> alignment <> "\"," <> threshold <> "}}"
-    threshold = if ruleType == "DenyIfEpss" then "\"minEpss\":0.5" else "\"minCvss\":8"
+    rules = "{\"gate\":{\"type\":\"" <> ruleType <> "\",\"onUnavailable\":\"" <> alignment <> "\"" <> threshold <> "}}"
+    threshold = case ruleType of
+        "DenyIfKnownMalicious" -> ""
+        "DenyIfEpss" -> ",\"minEpss\":0.5"
+        _ -> ",\"minCvss\":8"
 
 vetted :: RegistryRole -> Config -> Either [BootError] ValidatedPlan
 vetted role config = snd (runVet role (vetBoot config))

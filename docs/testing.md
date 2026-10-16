@@ -710,8 +710,9 @@ cases belong to no single ecosystem sits beside the directories, and there are t
 | `Ecluse.E2E.PyPI.InstallE2ESpec` | The `pip` install from the `pypi` mount, and its failure while both public upstreams are down. |
 | `Ecluse.E2E.PyPI.MirrorInstallE2ESpec` | Complete-version mirroring, durable recovery, companions and cross-target file selection. |
 | `Ecluse.E2E.PyPI.PublishE2ESpec` | Native multipart first-party publication and refusal controls. |
-| `Ecluse.E2E.PyPI.DredgerE2ESpec` | CodeArtifact inventory, consent, advisory revocation and recovery with deterministic control-plane responses. |
-| `Ecluse.E2E.PyPI.AdvisoriesE2ESpec` | Pilot compiles and uploads PyPI advisories, the PyPI slot syncs them, and pip observes CVE and EPSS denial of an old affected release. The exact matching fix bypasses quarantine, a remediation-disabled control refuses it, and a canonicalised exact fix also bypasses quarantine. Advisory `Flask` matches served `flask`. |
+| `Ecluse.E2E.PyPI.DredgerE2ESpec` | CodeArtifact inventory, consent, scored and MAL advisory revocation, and recovery with deterministic control-plane responses. |
+| `Ecluse.E2E.AdvisoriesE2ESpec` | Pilot publishes independent scored and MAL sources for npm and PyPI. The shared laws check exact listings, native client refusal, direct 403, structured advisory audit evidence, and remediation controls. The npm MAL session also observes absent mirror publication. |
+| `Ecluse.E2E.PyPI.AdvisoriesE2ESpec` | The native canonical-fix extension checks equivalent version spellings and retains its remediation-disabled and scored-denial controls. |
 | `Ecluse.E2E.TelemetryE2ESpec` | Telemetry export under each configuration. An `npm` client supplies the traffic, and the mirror cases require a mirror target. |
 | `Ecluse.E2E.MixedEcosystemE2ESpec` | Both clients use one proxy in turn. |
 
@@ -1521,9 +1522,26 @@ package.
 | Row set | Advisory database | Policy |
 |---|---|---|
 | `shipped policy without a database` | None | `AllowIfOlderThan` (7 days) and `AllowIfRemediatesCve` |
-| `shipped policy over corpus advisories` | Captured advisories | `AllowIfOlderThan` (7 days) and `AllowIfRemediatesCve` |
+| `shipped policy over corpus advisories` | Captured advisories | Source-configured defaults, including `DenyIfKnownMalicious` |
 | `all advisory rules over corpus advisories` | Captured advisories | The shared shipped policy plus fail-closed `DenyIfCve` (CVSS 8) and `DenyIfEpss` (EPSS 0.5) |
-| `all advisory rules over synthetic advisories` | Generated worst case | The same four rules, over typescript and numpy only |
+| `all advisory rules over synthetic advisories` | Generated worst case | The five source-configured rules, over typescript and numpy only |
+
+The source-free row runs the source-free shared policy. Source-configured rows run the automatic
+MAL default. The captured scored corpus has no primary MAL records, so those rows measure abstention.
+Separate native MAL-hit and mixed-heavy rows use attributed, labelled variants under
+test/fixtures/osv/malicious/. Setup requires a named MAL denial. The scored synthetic reference
+holds 200 target advisories and 20,000 filler names. The mixed row adds MAL points to that reference.
+
+End-to-end MAL qualifications require explicit BENCH_LOAD_SCENARIOS selection:
+npm/merge-cold-mal-hit, npm/merge-cold-mal-mixed-heavy,
+pypi/index-cold-mal-hit, or pypi/index-cold-mal-mixed-heavy.
+They use the selected workload's operating settings, normal compilation and sync.
+They are separate from the default held rows and have no calibrated floors. Held execution
+therefore refuses their missing floors. Observe qualifications separately without altering floors.
+Qualification stderr records source and artifact hashes, the serving ETag, admitted versions, and the response-body hash.
+Refusal throughput is not comparable successful throughput. Keep complete reports, source and
+artifact hashes, serving generation, capture hashes, boot policy, admitted versions, and body hashes.
+Report p99, refusals, other failures, allocation, and whole-process memory, including adverse rows.
 
 The captured advisories are the osv.dev records for the corpus packages, unchanged, under
 `bench/corpus/advisories/`, with the EPSS feed rows for their CVE aliases. Their licences and

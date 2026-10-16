@@ -37,7 +37,8 @@ Most malicious publishes are found and pulled within days, so the wait alone sid
 attempt to detect malice. A security patch overrides the quarantine as soon as the advisory data is
 available: a version that a synced advisory names as the exact fix for a vulnerability skips the
 wait.
-Everything else is deny by default and opt-in by name.
+When an advisory source is configured, active MAL advisories deny affected public versions by default.
+Source-free deployments keep the quarantine and remediation defaults. Other rules opt in by name.
 
 If you run a private registry, Écluse reads it first and passes your own packages through untouched.
 Any https registry that speaks the ecosystem's protocol serves in that role. Écluse can also mirror

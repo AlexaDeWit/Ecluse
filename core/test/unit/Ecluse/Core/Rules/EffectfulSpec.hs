@@ -495,6 +495,8 @@ affectingEvery = [("thing", AdvisoryRange "GHSA-every-0001" (Just 9.8) Nothing U
 advisoryRules :: [Rule]
 advisoryRules =
     [ AllowIfRemediatesCve
+    , DenyIfKnownMalicious FailDeny
+    , DenyIfKnownMalicious FailNoDecision
     , DenyIfCve (DenyIfCveParams 7.0 FailDeny)
     , DenyIfCve (DenyIfCveParams 7.0 FailNoDecision)
     , DenyIfEpss (DenyIfEpssParams 0.5 FailDeny)
@@ -503,6 +505,7 @@ advisoryRules =
 
 ruleLabel :: Rule -> String
 ruleLabel = \case
+    DenyIfKnownMalicious alignment -> "DenyIfKnownMalicious " <> show alignment
     DenyIfCve params -> "DenyIfCve " <> show (dicOnUnavailable params)
     DenyIfEpss params -> "DenyIfEpss " <> show (dieOnUnavailable params)
     other -> toString (ruleName other)
@@ -670,6 +673,7 @@ openReaderBreaker rules = do
 
 faultAlignment :: Fault -> Rule -> FailureAlignment
 faultAlignment fault = \case
+    DenyIfKnownMalicious alignment -> onRead alignment
     AllowIfRemediatesCve -> FailNoDecision
     DenyIfCve params -> onRead (dicOnUnavailable params)
     DenyIfEpss params -> onRead (dieOnUnavailable params)
@@ -740,6 +744,15 @@ heldThrowSpec = describe "a throw outside the harness is held for the request" $
         decisions <- decideRequest [rule] requestVersions
         decisions `shouldSatisfy` all (\case Undecidable _ reason -> "ReportBomb: the rule threw" `T.isPrefixOf` renderReason reason; _ -> False)
         readIORef reports `shouldReturn` 1
+
+    for_ [FailDeny, FailNoDecision] $ \alignment ->
+        it ("holds a throwing MAL source reporter for every version under " <> show alignment) $ do
+            (throwing, reports) <- counting (throwIO (TestContractEscape "MAL reporter gone"))
+            let deps = (advisoryRuleDeps "mal-reporter" "MAL-reporter-control" pass){rdSourceReporter = noSourceReporter{reportSource = const throwing}}
+            rules <- prepare deps [atDefaultPrecedence (DenyIfKnownMalicious alignment)]
+            decisions <- decideRequest rules requestVersions
+            decisions `shouldSatisfy` all (\case Undecidable _ reason -> "DenyIfKnownMalicious: the rule threw" `T.isPrefixOf` renderReason reason; _ -> False)
+            readIORef reports `shouldReturn` 1
 
 breakerSpec :: Spec
 breakerSpec = describe "the breaker counts requests" $ do

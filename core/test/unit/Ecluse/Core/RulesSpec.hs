@@ -24,6 +24,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
+import UnliftIO.Async (mapConcurrently)
 import UnliftIO.Exception (evaluate, finally, impureThrow, throwIO)
 
 import Ecluse.Core.Breaker (Breaker, admit, initialBreaker, recordFailure)
@@ -36,8 +37,8 @@ import Ecluse.Core.Package
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Cve (fakeCveLookup, referenceInside, unscoredEpssCases)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV2), RangeRow, mkValidDbWithRows)
-import Ecluse.Test.Osv.Withdrawal (withdrawalZip)
-import Ecluse.Test.OsvDb (withFixtureOsvDb, withOsvZipDb)
+import Ecluse.Test.Osv.Withdrawal (maliciousZip, withdrawalZip)
+import Ecluse.Test.OsvDb (withFixtureOsvDb, withOsvZipDb, withServedArtifact)
 import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Rules (
     admissionOnly,
@@ -191,7 +192,7 @@ trippedBreaker cfg = foldl' recordOne initialBreaker [1 .. ecBreakerThreshold cf
 
 expirySpec :: Spec
 expirySpec = describe "an expired advisory push" $ do
-    for_ [DenyIfCve (DenyIfCveParams 8.0 FailNoDecision), DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision)] $ \rule ->
+    for_ [DenyIfKnownMalicious FailNoDecision, DenyIfCve (DenyIfCveParams 8.0 FailNoDecision), DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision)] $ \rule ->
         it (toString (ruleName rule <> " refuses under onUnavailable: skip, past a lower age allow")) $
             decideWith
                 (expired (depsWith (affecting (Just 9.8) (Just 0.9))))
@@ -199,7 +200,7 @@ expirySpec = describe "an expired advisory push" $ do
                 (pkg Nothing 99)
                 >>= (`shouldSatisfy` isUndecidable)
 
-    for_ [DenyIfCve (DenyIfCveParams 8.0 FailNoDecision), DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision)] $ \rule ->
+    for_ [DenyIfKnownMalicious FailNoDecision, DenyIfCve (DenyIfCveParams 8.0 FailNoDecision), DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision)] $ \rule ->
         it (toString (ruleName rule <> " refuses on a serving generation with no publication time")) $
             decideWith
                 (undated (depsWith (affecting (Just 9.8) (Just 0.9))))
@@ -345,32 +346,55 @@ evidenceSpec = describe "skipped-check evidence on an admission" $ do
 
 sourceHealthSpec :: Spec
 sourceHealthSpec = describe "advisory source health reporting" $ do
-    it "reports an absent database as unavailable, and a loaded one as answered, once per advisory rule" $ do
-        (absent, absentReports) <- observedDeps inertRuleDeps
-        void (decideWith absent skipPolicy (pkg Nothing 30))
-        reported absentReports `shouldReturn` [SourceUnavailable "DenyIfCve" NoDatabaseLoaded]
-        (loaded, loadedReports) <- observedDeps (depsWith [])
-        void (decideWith loaded skipPolicy (pkg Nothing 30))
-        reported loadedReports `shouldReturn` [SourceAnswered "DenyIfCve"]
-
-    it "reports under a fail-closed alignment too, so a refusing outage is observed" $ do
-        (deps, reports) <- observedDeps inertRuleDeps
-        void (decideWith deps [atDefaultPrecedence (denyCveAt 8.0)] (pkg Nothing 30))
-        reported reports `shouldReturn` [SourceUnavailable "DenyIfCve" NoDatabaseLoaded]
-
-    it "reports an expired push as unavailable with its cause" $ do
-        (deps, reports) <- observedDeps (expired (depsWith []))
-        void (decideWith deps [atDefaultPrecedence (denyCveAt 8.0)] (pkg Nothing 30))
-        reported reports >>= \case
-            [SourceUnavailable "DenyIfCve" cause] -> renderInability cause `shouldSatisfy` T.isInfixOf "past the maximum"
-            other -> expectationFailure ("expected one unavailability, got " <> show other)
-
-    it "reports a lookup fault once, with its detail, and nothing again for the decided verdict" $ do
-        (deps, reports) <- observedDeps (faultingDeps "advisory database exploded")
-        void (decideWith deps skipPolicy (pkg Nothing 30))
-        reported reports >>= \case
-            [SourceUnavailable "DenyIfCve" detail] -> renderInability detail `shouldSatisfy` T.isInfixOf "advisory database exploded"
-            other -> expectationFailure ("expected one unavailability, got " <> show other)
+    for_ [FailDeny, FailNoDecision] $ \alignment ->
+        for_ [DenyIfCve (DenyIfCveParams 8 alignment), DenyIfKnownMalicious alignment] $ \rule ->
+            describe (toString (ruleName rule) <> " under " <> show alignment) $ do
+                let name = ruleName rule
+                    policy = map atDefaultPrecedence [rule, AllowIfOlderThan (7 * nominalDay)]
+                    malRows = [("thing", AdvisoryRange "MAL-health-control" (Just 9.8) (Just "0") (FixedBefore "2.0.0") Nothing)]
+                it "reports an absent database as unavailable before and after source configuration" $
+                    for_ [inertRuleDeps, unloadedDeps] $ \absent -> do
+                        (deps, reports) <- observedDeps absent
+                        void (decideWith deps policy (pkg Nothing 30))
+                        reported reports `shouldReturn` [SourceUnavailable name NoDatabaseLoaded]
+                it "reports an answered read when no advisory matches" $ do
+                    (deps, reports) <- observedDeps (depsWith [])
+                    decision <- decideWith deps policy (pkg Nothing 30)
+                    admittedBy decision `shouldBe` Just "AllowIfOlderThan"
+                    reported reports `shouldReturn` [SourceAnswered name]
+                it "reports an answered read when the named MAL control denies" $ do
+                    (deps, reports) <- observedDeps (depsWith malRows)
+                    decision <- decideWith deps policy (pkg Nothing 30)
+                    blockedBy decision `shouldBe` Just name
+                    reported reports `shouldReturn` [SourceAnswered name]
+                it "reports an expired push as unavailable with its cause" $ do
+                    (deps, reports) <- observedDeps (expired (depsWith malRows))
+                    void (decideWith deps policy (pkg Nothing 30))
+                    reported reports >>= \case
+                        [SourceUnavailable reportedName cause] -> do
+                            reportedName `shouldBe` name
+                            renderInability cause `shouldSatisfy` T.isInfixOf "past the maximum"
+                        other -> expectationFailure ("expected one unavailability, got " <> show other)
+                it "reports a lookup fault once with its detail" $ do
+                    (deps, reports) <- observedDeps (faultingDeps "advisory database exploded")
+                    void (decideWith deps policy (pkg Nothing 30))
+                    reported reports >>= \case
+                        [SourceUnavailable reportedName detail] -> do
+                            reportedName `shouldBe` name
+                            renderInability detail `shouldSatisfy` T.isInfixOf "advisory database exploded"
+                        other -> expectationFailure ("expected one unavailability, got " <> show other)
+                it "reports an open breaker once and applies its alignment to every version" $ do
+                    (deps, reports) <- observedDeps (depsWith malRows)
+                    prepared <- prepare deps policy
+                    opened <- traverse openBreakerOn prepared
+                    decideVersion <- newEvaluator ctx opened
+                    decisions <- traverse decideVersion [(pkg Nothing 30){evVersion = mkVersion Npm version} | version <- ["1.0.0", "1.1.0"]]
+                    for_ decisions $ \decision -> case alignment of
+                        FailDeny -> decision `shouldSatisfy` isUndecidable
+                        FailNoDecision -> do
+                            admittedBy decision `shouldBe` Just "AllowIfOlderThan"
+                            skippedChecks decision `shouldBe` [SkippedUnavailable name SourceBreakerOpen]
+                    reported reports `shouldReturn` [SourceUnavailable name SourceBreakerOpen]
 
     it "reports nothing for a pure rule, which reads no source" $ do
         (deps, reports) <- observedDeps inertRuleDeps
@@ -429,6 +453,7 @@ perVersionVerdict etag probe cve rule ev = case rule of
             False -> pure (NoDecision FixesNoAdvisory)
             True -> remediation <$> cveAdvisoriesFor cve name
     DenyIfCve params -> deny DenyMissingScore Cvss (dicMinCvss params) arSeverity <$> cveAdvisoriesFor cve name
+    DenyIfKnownMalicious _ -> denyMal <$> cveAdvisoriesFor cve name
     DenyIfEpss params -> deny AbstainMissingScore Epss (dieMinEpss params) arEpss <$> cveAdvisoriesFor cve name
     other -> fail ("not an advisory rule: " <> show other)
   where
@@ -442,6 +467,10 @@ perVersionVerdict etag probe cve rule ev = case rule of
                 (Nothing, _) -> NoDecision FixesNoAdvisory
                 (Just fixed, Just open) -> NoDecision (FixesButStillAffected fixed open)
                 (Just fixed, Nothing) -> Allow (Remediates fixed)
+    denyMal ranges =
+        case mkAdvisoryIds <$> nonEmpty (ordNub [arCveId ar | ar <- ranges, referenceInside eco version ar, Just suffix <- [T.stripPrefix "MAL-" (arCveId ar)], not (T.null suffix)]) of
+            Nothing -> NoDecision NoKnownMaliciousAdvisory
+            Just ids -> Deny (Just etag) (KnownMalicious ids)
     deny missing score threshold scoreOf ranges =
         case mkAdvisoryIds <$> nonEmpty (ordNub [arCveId ar | ar <- ranges, referenceInside eco version ar, scoreAtLeast missing threshold (scoreOf ar)]) of
             Nothing -> NoDecision (NotAffectedAtThreshold score)
@@ -462,7 +491,8 @@ perRequestVerdicts deps rule name versions =
 -- | Every advisory rule, at thresholds on, between, and past the fixtures' scores.
 differentialRules :: [Rule]
 differentialRules =
-    AllowIfRemediatesCve
+    DenyIfKnownMalicious FailDeny
+        : AllowIfRemediatesCve
         : [DenyIfCve (DenyIfCveParams threshold alignment) | threshold <- [0, 5.0, 7.0, 9.9], alignment <- [FailDeny, FailNoDecision]]
             <> [DenyIfEpss (DenyIfEpssParams threshold FailDeny) | threshold <- [0, 0.25, 0.5, 0.95, 1]]
 
@@ -670,6 +700,7 @@ ruleSentenceSpec = describe "the sentence each built-in rule's reason reads as" 
 
 spec :: Spec
 spec = do
+    knownMaliciousSpec
     availabilitySpec
     expirySpec
     evidenceSpec
@@ -1276,3 +1307,93 @@ availabilitySpec = describe "availability denies" $
             let evidence = (pkg Nothing 30){evAvailability = Known flag}
             blockedBy <$> decide (map atDefaultPrecedence [rule, AllowByIdentity "thing"]) evidence `shouldReturn` Just (ruleName rule)
             admittedBy <$> decide [atDefaultPrecedence rule, atPrecedence 350 (AllowByIdentity "thing")] evidence `shouldReturn` Just "AllowByIdentity"
+
+knownMaliciousSpec :: Spec
+knownMaliciousSpec = describe "DenyIfKnownMalicious" $ do
+    let mal = DenyIfKnownMalicious FailDeny
+        row ident severity = AdvisoryRange ident severity (Just "0") (FixedBefore "2.0.0") Nothing
+        evidence = pkg Nothing 99
+        known = KnownMalicious (mkAdvisoryIds ("MAL-test" :| []))
+    for_ [Nothing, Just 0, Just 9.8] $ \severity ->
+        it ("denies primary MAL evidence with CVSS " <> show severity <> " and no EPSS") $
+            evalRule (depsWith [("thing", row "MAL-test" severity)]) ctx mal evidence
+                `shouldReturn` Deny (Just (DbEtag "etag-1")) known
+    for_ ["GHSA-test", "mal-test", "MAL-", "MAL", "X-MAL-test"] $ \ident ->
+        it ("does not classify the unscored primary identifier " <> toString ident) $
+            evalRule (depsWith [("thing", row ident Nothing)]) ctx mal evidence
+                `shouldReturn` NoDecision NoKnownMaliciousAdvisory
+    it "deduplicates affecting MAL identifiers and excludes non-MAL evidence" $
+        evalRule (depsWith [("thing", row ident Nothing) | ident <- ["MAL-test", "MAL-test", "GHSA-other", "MAL-second"]]) ctx mal evidence
+            `shouldReturn` Deny (Just (DbEtag "etag-1")) (KnownMalicious (mkAdvisoryIds ("MAL-test" :| ["MAL-second"])))
+    for_ [Npm, PyPI] $ \eco ->
+        for_ [("1.0.0", True), ("1.5.0", True), ("2.0.0", False), ("3.0.0", True), ("3.1.0", False)] $ \(version, denied) ->
+            it ("matches " <> show eco <> " disjoint range and point evidence at " <> toString version) $ do
+                let name = mkPackageName eco Nothing "thing"
+                    rows = [("thing", row "MAL-range" Nothing), ("thing", AdvisoryRange "MAL-point" Nothing (Just "3.0.0") (LastAffected "3.0.0") Nothing)]
+                verdict <- evalRule (depsWith rows) ctx mal (identityEvidence name (mkVersion eco version))
+                isDeny verdict `shouldBe` denied
+    for_ [id, reverse] $ \order -> do
+        it "outranks a default identity allow independently of input order" $
+            decideWith (depsWith [("thing", row "MAL-test" Nothing)]) (order (map atDefaultPrecedence [mal, AllowByIdentity "thing"])) evidence
+                `shouldReturn` Blocked "DenyIfKnownMalicious" (Just (DbEtag "etag-1")) known
+        it "yields to an explicit identity allow above 300" $ do
+            result <- decideWith (depsWith [("thing", row "MAL-test" Nothing)]) (order [atDefaultPrecedence mal, at 301 (AllowByIdentity "thing")]) evidence
+            admittedBy result `shouldBe` Just "AllowByIdentity"
+        it "yields to a default identity deny at 400" $
+            blockedBy <$> decideWith (depsWith [("thing", row "MAL-test" Nothing)]) (order (map atDefaultPrecedence [mal, DenyByIdentity "thing"])) evidence
+                `shouldReturn` Just "DenyByIdentity"
+        for_ [(DenyIfDeprecated, Deprecated, "DenyIfDeprecated"), (DenyIfYanked, Yanked, "DenyIfKnownMalicious")] $ \(other, availability, winner) ->
+            it ("orders an equal-precedence deny at 300 by rule name: " <> toString (ruleName other)) $
+                blockedBy <$> decideWith (depsWith [("thing", row "MAL-test" Nothing)]) (order (map atDefaultPrecedence [mal, other])) evidence{evAvailability = Known availability}
+                    `shouldReturn` Just winner
+    for_ [FailDeny, FailNoDecision] $ \alignment -> do
+        it ("uses " <> show alignment <> " before the first generation") $
+            evalRule unloadedDeps ctx (DenyIfKnownMalicious alignment) evidence
+                `shouldReturn` CannotVet alignment NoDatabaseLoaded
+        it ("retains " <> show alignment <> " on a faulted read") $ do
+            result <- decideWith (faultingDeps "MAL read failed") (map atDefaultPrecedence [DenyIfKnownMalicious alignment, AllowByIdentity "thing"]) evidence
+            case alignment of
+                FailDeny -> result `shouldSatisfy` isUndecidable
+                FailNoDecision -> skippedChecks result `shouldSatisfy` (not . null)
+    it "queries canonical PyPI identity without requiring metadata facts" $ do
+        let rows = [("flask-thing", row "MAL-test" Nothing)]
+        evalRule (depsWith rows) ctx mal (identityEvidence (unscopedPyPI "Flask_Thing") (mkVersion PyPI "1.0"))
+            `shouldReturn` Deny (Just (DbEtag "etag-1")) known
+
+    for_ [("active", Nothing, True), ("withdrawn", Just (String "2026-10-01T00:00:00Z"), False)] $ \(label, withdrawn, denied) ->
+        it ("compiles " <> label <> " MAL points through an epoch-5 artifact") $ do
+            archive <- maliciousZip Npm [("thing", ["1.0.0"]), ("chalk", ["5.6.1"])] withdrawn
+            withOsvZipDb Npm archive $ \path -> withServedArtifact Npm path $ \deps _ -> do
+                verdict <- evalRule deps ctx mal evidence
+                isDeny verdict `shouldBe` denied
+                evalRule deps ctx mal (identityEvidence (unscopedNpm "chalk") (mkVersion Npm "5.6.1"))
+                    >>= (`shouldSatisfy` isDeny)
+
+    it "shares one canonical lookup across MAL, CVSS, EPSS, remediation, and all versions" $ do
+        lookedUpNames <- newIORef ([] :: [Text])
+        let lookupRows name = modifyIORef' lookedUpNames (<> [name]) $> []
+            deps = servingRuleDeps (DbEtag "shared") (CveLookup lookupRows (pure []))
+        rules <- prepare deps (map atDefaultPrecedence [mal, denyCveAt 8, denyEpssAt 0.5, AllowIfRemediatesCve, AllowIfOlderThan 0])
+        decideVersion <- newEvaluator ctx rules
+        void (mapConcurrently (\v -> decideVersion evidence{evVersion = mkVersion Npm v}) ["1.0.0", "2.0.0", "3.0.0"])
+        readIORef lookedUpNames `shouldReturn` ["thing"]
+        void (decideVersion evidence{evName = unscopedNpm "other"})
+        void (decideVersion evidence)
+        readIORef lookedUpNames `shouldReturn` ["thing", "other", "thing"]
+    it "keeps the borrowed MAL generation after a slot changes between versions" $ do
+        let rows = [("thing", AdvisoryRange "MAL-pinned" Nothing (Just "2.0.0") (LastAffected "2.0.0") Nothing)]
+        held <- newIORef (Just (DbEtag "before", fakeCveLookup rows))
+        let deps = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (\use -> readIORef held >>= use)}
+        rules <- prepare deps (map atDefaultPrecedence [mal, denyCveAt 8, denyEpssAt 0.5, AllowIfRemediatesCve, AllowIfOlderThan 0])
+        decideVersion <- newEvaluator ctx rules
+        void (decideVersion evidence)
+        writeIORef held (Just (DbEtag "after", fakeCveLookup []))
+        decideVersion evidence{evVersion = mkVersion Npm "2.0.0"}
+            `shouldReturn` Blocked "DenyIfKnownMalicious" (Just (DbEtag "before")) (KnownMalicious (mkAdvisoryIds ("MAL-pinned" :| [])))
+        fresh <- newEvaluator ctx rules
+        fresh evidence{evVersion = mkVersion Npm "2.0.0"} >>= (\decision -> admittedBy decision `shouldBe` Just "AllowIfOlderThan")
+
+    for_ [Available, Deprecated, Yanked] $ \availability ->
+        it ("does not treat registry availability as MAL evidence: " <> show availability) $
+            evalRule (depsWith []) ctx mal evidence{evAvailability = Known availability}
+                `shouldReturn` NoDecision NoKnownMaliciousAdvisory

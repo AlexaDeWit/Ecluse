@@ -77,6 +77,8 @@ reasonPins =
     , (AffectedBy Cvss 10 (mkAdvisoryIds ("MAL-2026-1" :| [])), "affected by MAL-2026-1 (CVSS >= 10.0)")
     , (AffectedBy Epss 1 (mkAdvisoryIds ("CVE-2026-10002" :| [])), "affected by CVE-2026-10002 (EPSS >= 1.0)")
     , (AffectedBy Epss 0.05 (mkAdvisoryIds ("CVE-2026-10002" :| [])), "affected by CVE-2026-10002 (EPSS >= 5.0e-2)")
+    , (KnownMalicious (mkAdvisoryIds ("MAL-2025-46969" :| [])), "affected by MAL-2025-46969 (known malicious)")
+    , (NoKnownMaliciousAdvisory, "no known malicious advisory affects this version")
     , (NotAffectedAtThreshold Cvss, "no advisory at or above the CVSS threshold affects this version")
     , (NotAffectedAtThreshold Epss, "no advisory at or above the EPSS threshold affects this version")
     , (RuleUnable "AllowIfOlderThan" PublishTimeUnread, "AllowIfOlderThan: the publish time is not available")
@@ -138,6 +140,8 @@ data ReasonTag
     | FixesNoAdvisoryTag
     | NoDatabaseToRemediateTag
     | AffectedByTag
+    | KnownMaliciousTag
+    | NoKnownMaliciousAdvisoryTag
     | NotAffectedAtThresholdTag
     | RuleUnableTag
     deriving stock (Bounded, Enum, Eq, Ord, Show)
@@ -165,6 +169,8 @@ reasonTag = \case
     FixesNoAdvisory -> FixesNoAdvisoryTag
     NoDatabaseToRemediate -> NoDatabaseToRemediateTag
     AffectedBy{} -> AffectedByTag
+    KnownMalicious{} -> KnownMaliciousTag
+    NoKnownMaliciousAdvisory -> NoKnownMaliciousAdvisoryTag
     NotAffectedAtThreshold{} -> NotAffectedAtThresholdTag
     RuleUnable{} -> RuleUnableTag
 
@@ -304,6 +310,8 @@ readBackSpec = describe "cveIdsInReason -- recovering advisory ids for the denia
         cveIdsInReason denyReason `shouldBe` ["GHSA-affect-0001"]
     it "recovers the id a DenyIfEpss denial named" $
         cveIdsInReason "affected by GHSA-affect-0001 (EPSS >= 0.5)" `shouldBe` ["GHSA-affect-0001"]
+    it "recovers MAL ids without a score threshold" $
+        cveIdsInReason "affected by MAL-one, MAL-two (known malicious)" `shouldBe` ["MAL-one", "MAL-two"]
     it "recovers several ids" $
         cveIdsInReason "affected by CVE-2026-0001, GHSA-aaaa-bbbb-cccc (CVSS >= 7.0)"
             `shouldBe` ["CVE-2026-0001", "GHSA-aaaa-bbbb-cccc"]
@@ -379,6 +387,8 @@ oracleReason = \case
     FixesNoAdvisory -> "no advisory names this version as its fix"
     NoDatabaseToRemediate -> "no advisory database is loaded"
     AffectedBy score threshold ids -> "affected by " <> commaJoined ids <> " (" <> oracleMetric score <> " >= " <> show threshold <> ")"
+    KnownMalicious ids -> "affected by " <> commaJoined ids <> " (known malicious)"
+    NoKnownMaliciousAdvisory -> "no known malicious advisory affects this version"
     NotAffectedAtThreshold score -> "no advisory at or above the " <> oracleMetric score <> " threshold affects this version"
     RuleUnable rule inability -> rule <> ": " <> oracleInability inability
 
@@ -449,6 +459,8 @@ genReason =
         , pure FixesNoAdvisory
         , pure NoDatabaseToRemediate
         , AffectedBy <$> genScore <*> genThreshold <*> genIds
+        , KnownMalicious <$> genIds
+        , pure NoKnownMaliciousAdvisory
         , NotAffectedAtThreshold <$> genScore
         , RuleUnable <$> genFact <*> genInability
         ]

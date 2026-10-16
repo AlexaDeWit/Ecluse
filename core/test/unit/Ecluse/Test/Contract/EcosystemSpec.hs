@@ -89,6 +89,12 @@ spec = describe "canonical ecosystem composition" $ do
         length foundation `shouldBe` 5
         length full `shouldBe` 8
         concatMap (map caseId . groupCases . declaredGroup) foundation `shouldSatisfy` notElem "example/mirror/dependency-graph"
+    it "keeps MAL obligations visible when their production operations are unavailable" $ do
+        let full = concatMap (map caseId . groupCases . declaredGroup) (fullEcosystemContract unavailableDriver)
+            foundation = concatMap (map caseId . groupCases . declaredGroup) (readOnlyEcosystemFoundation unavailableDriver)
+        full `shouldSatisfy` elem "example/advisories/mal-denial"
+        full `shouldSatisfy` elem "example/dredger/mal-revocation"
+        foundation `shouldSatisfy` elem "example/advisories/mal-denial"
 
 unavailableDriver :: EcosystemDriver Bool () () () () ()
 unavailableDriver = EcosystemDriver "example" absent absent absent absent absent absent absent absent []

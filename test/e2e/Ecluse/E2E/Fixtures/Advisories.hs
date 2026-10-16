@@ -10,6 +10,8 @@ module Ecluse.E2E.Fixtures.Advisories (
     npmAdvisoryExportBase,
     npmAdvisoryId,
     pypiAdvisoryId,
+    maliciousExportBase,
+    maliciousAdvisoryId,
     buildAdvisoryFixtures,
     ecosystemAdvisory,
 ) where
@@ -19,7 +21,9 @@ import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.E2E.Fixtures.Npm (corpusRevokedPkg, psName)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2), osvCorpusZip, osvZipOf)
+import Ecluse.Test.Osv.Withdrawal (maliciousZip)
 import Ecluse.Test.OsvDb (epssFixtureFile)
 
 -- | The stub-relative base for one corpus generation in osv.dev's layout.
@@ -50,6 +54,14 @@ npmAdvisoryId = "GHSA-e2e-npm"
 pypiAdvisoryId :: Text
 pypiAdvisoryId = "GHSA-e2e-flask"
 
+-- | The stub-relative base for derived MAL records targeting inert client fixtures.
+maliciousExportBase :: Text
+maliciousExportBase = "advisories/mal-derived"
+
+-- | The identifier 'maliciousZip' gives its first derived target.
+maliciousAdvisoryId :: Text
+maliciousAdvisoryId = "MAL-derived-1"
+
 -- | Write the local OSV archives and shared EPSS slice without reaching public feeds.
 buildAdvisoryFixtures :: FilePath -> IO ()
 buildAdvisoryFixtures root = do
@@ -62,6 +74,8 @@ buildAdvisoryFixtures root = do
         >>= writeUnder (pypiAdvisoryExportBase <> "/PyPI/all.zip")
     osvZipOf [("npm.json", ecosystemAdvisory Npm npmAdvisoryId "e2e-advisory" "1.19.0")]
         >>= writeUnder (npmAdvisoryExportBase <> "/npm/all.zip")
+    maliciousZip Npm [(psName corpusRevokedPkg, ["1.0.0"])] Nothing >>= writeUnder (maliciousExportBase <> "/npm/all.zip")
+    maliciousZip PyPI [("Flask", ["1.18"])] Nothing >>= writeUnder (maliciousExportBase <> "/PyPI/all.zip")
     readFileLBS epssFixtureFile >>= writeUnder advisoryEpssPath
   where
     writeUnder relative bytes = do

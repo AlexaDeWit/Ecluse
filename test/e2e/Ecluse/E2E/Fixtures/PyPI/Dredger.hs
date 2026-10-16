@@ -21,6 +21,7 @@ module Ecluse.E2E.Fixtures.PyPI.Dredger (
     firstPartyName,
     dredgerAdvisoryId,
     dredgerExportBase,
+    dredgerMaliciousExportBase,
 ) where
 
 import Data.Aeson qualified as Aeson
@@ -35,6 +36,7 @@ import Ecluse.E2E.Fixtures.PyPI.Mirror (Distribution (..), distributionIndex)
 import Ecluse.E2E.Harness.Stub (StubRoute (PyPIPublic), stubUrl)
 import Ecluse.Test.Contract.Sweep.Types (PackageFixture (..))
 import Ecluse.Test.Osv (CorpusVersion (..), osvZipOf)
+import Ecluse.Test.Osv.Withdrawal (maliciousZip)
 
 -- | Each native version holds both a real installable wheel and a source archive.
 buildDredgerDistributions :: FilePath -> IO [Distribution]
@@ -127,13 +129,22 @@ dredgerExportBase = \case
     CorpusV1 -> "advisories/pypi-dredger-v1"
     CorpusV2 -> "advisories/pypi-dredger-v2"
 
+-- | The derived MAL generation condemns the advisory package's earlier release.
+dredgerMaliciousExportBase :: Text
+dredgerMaliciousExportBase = "advisories/pypi-dredger-mal"
+
 release :: Text -> PackageFixture
 release name = PackageFixture name "1.0.0" ["1.0.0"]
 
 buildGenerations :: FilePath -> IO ()
-buildGenerations work = for_ [CorpusV1, CorpusV2] $ \generation -> do
-    let directory = work </> "html" </> toString (dredgerExportBase generation) </> "PyPI"
-        unrelated = ("unrelated.json", ecosystemAdvisory PyPI "GHSA-e2e-unrelated" "e2e-unrelated" "2.0.0")
-        revoked = ("revoked.json", ecosystemAdvisory PyPI dredgerAdvisoryId (packageName advisoryPackage) "1.2.0")
-    createDirectoryIfMissing True directory
-    osvZipOf (unrelated : [revoked | generation == CorpusV2]) >>= writeFileLBS (directory </> "all.zip")
+buildGenerations work = do
+    for_ [CorpusV1, CorpusV2] $ \generation -> do
+        let unrelated = ("unrelated.json", ecosystemAdvisory PyPI "GHSA-e2e-unrelated" "e2e-unrelated" "2.0.0")
+            revoked = ("revoked.json", ecosystemAdvisory PyPI dredgerAdvisoryId (packageName advisoryPackage) "1.2.0")
+        osvZipOf (unrelated : [revoked | generation == CorpusV2]) >>= writeExport (dredgerExportBase generation)
+    maliciousZip PyPI [(packageName advisoryPackage, ["1.0.0"])] Nothing >>= writeExport dredgerMaliciousExportBase
+  where
+    writeExport base archive = do
+        let directory = work </> "html" </> toString base </> "PyPI"
+        createDirectoryIfMissing True directory
+        writeFileLBS (directory </> "all.zip") archive

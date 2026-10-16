@@ -480,9 +480,7 @@ reportAdvisoryDatabaseAge eco installedAt result = do
         now <- getMonotonicTime
         observeAge result eco (floor (now - stamp))
 
-{- | Attach one ecosystem's advisory-source age to @ecluse.advisory.source.age.seconds@: the age
-the CVE-deny path expires on, where 'registerAdvisoryDatabaseAge' is an installation diagnostic.
--}
+-- | Attach one ecosystem's advisory-source age, the age advisory denies expire on, to @ecluse.advisory.source.age.seconds@.
 registerAdvisorySourceAge :: Metrics -> Ecosystem -> IO (Maybe UTCTime) -> IO ()
 registerAdvisorySourceAge m eco pushedAt =
     void (observableGaugeRegisterCallback (mAdvisorySourceAgeSeconds m) (reportAdvisorySourceAge eco pushedAt))

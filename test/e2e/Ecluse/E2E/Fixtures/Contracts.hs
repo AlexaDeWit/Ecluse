@@ -70,6 +70,8 @@ npmRegistryFixture =
                     , Case "npm/install/metadata-preservation" ["npm/install"]
                     , Case "npm/install/latest-preservation" ["npm/install"]
                     , Case "npm/install/publication-unconfigured" ["npm/install"]
+                    , Case "npm/install/mal-forced-source-required" ["npm/install"]
+                    , Case "npm/install/mal-manual-source-required" ["npm/install"]
                     ]
                 , groupCapabilities = ["read", "mirror", "client-install"]
                 , groupPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
@@ -258,7 +260,7 @@ npmMirrorTelemetryFixture =
                 }
         }
 
--- | npm's public advisory proof avoids trusted-private reads masking the policy.
+-- | Scored sessions avoid trusted reads. The MAL session independently acquires its mirror store.
 npmPilotFixture :: ConcreteFixture FamilyMetadata
 npmPilotFixture =
     ConcreteFixture
@@ -267,6 +269,8 @@ npmPilotFixture =
             (fixtureMetadata pypiPilotFixture)
                 { familyId = "npm/advisories"
                 , familyProfile = "npm/advisories"
+                , familyCapabilities = ["read", "mirror", "advisories", "client-install"]
+                , familyResources = ["proxy", "nginx", "verdaccio", "ministack"]
                 , familyPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
                 }
         }

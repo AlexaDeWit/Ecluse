@@ -179,6 +179,7 @@ ruleTypeParameters = \case
     "AllowByIdentity" -> ["identity"]
     "DenyByIdentity" -> ["identity"]
     "AllowIfRemediatesCve" -> []
+    "DenyIfKnownMalicious" -> ["onUnavailable"]
     "DenyIfCve" -> ["minCvss", "onUnavailable"]
     "DenyIfEpss" -> ["minEpss", "onUnavailable"]
     "DenyIfYanked" -> []
@@ -213,6 +214,7 @@ buildRule name ty entry = case ty of
     "AllowByIdentity" ->
         AllowByIdentity <$> requireField name "AllowByIdentity" "identity" Right (entryIdentity entry)
     "AllowIfRemediatesCve" -> Right AllowIfRemediatesCve
+    "DenyIfKnownMalicious" -> DenyIfKnownMalicious <$> parseOnUnavailable name (entryOnUnavailable entry)
     "DenyIfCve" -> DenyIfCve <$> buildDenyIfCveParams name entry
     "DenyIfEpss" -> DenyIfEpss <$> buildDenyIfEpssParams name entry
     "DenyIfYanked" -> Right DenyIfYanked
@@ -248,6 +250,8 @@ patchRuleValue name entry rule =
         DenyByIdentity i -> Right (DenyByIdentity (fromMaybe i (entryIdentity entry)))
         AllowByIdentity i -> Right (AllowByIdentity (fromMaybe i (entryIdentity entry)))
         AllowIfRemediatesCve -> Right AllowIfRemediatesCve
+        DenyIfKnownMalicious alignment ->
+            DenyIfKnownMalicious <$> maybe (Right alignment) (parseOnUnavailable name . Just) (entryOnUnavailable entry)
         DenyIfCve params ->
             fmap DenyIfCve $
                 DenyIfCveParams

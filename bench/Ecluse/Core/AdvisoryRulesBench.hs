@@ -23,7 +23,7 @@ import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.Package.Filter (FilterPlan (fpDecisions, fpSurvivors))
 import Ecluse.Core.Rules (RuleDeps)
-import Ecluse.Core.Rules.Types (PrecededRule)
+import Ecluse.Core.Rules.Types (Decision (Blocked), PrecededRule, Reason (KnownMalicious))
 import Ecluse.Test.Corpus (cpName, cpPackage)
 import Ecluse.Test.Corpus.Advisories (
     SyntheticTarget (..),
@@ -31,7 +31,10 @@ import Ecluse.Test.Corpus.Advisories (
     checkCapturesServed,
     compileAdvisoryInputs,
     compileCorpusAdvisories,
+    configuredShippedPolicy,
     fillerTargets,
+    maliciousAdvisoryInputs,
+    mixedMaliciousAdvisories,
     shippedPolicy,
     syntheticAdvisories,
  )
@@ -68,21 +71,29 @@ withEcosystemGroup dir ecosystem use = case filter ((`elem` measuredPackages) . 
             targets = map heavyTarget heavy <> fillerTargets fillerPackages
         corpus <- compileCorpusAdvisories eco (scratch "corpus")
         synthetic <- syntheticAdvisories eco targets >>= compileAdvisoryInputs eco (scratch "synthetic")
-        withServedArtifact eco corpus $ \corpusDeps _ -> withServedArtifact eco synthetic $ \syntheticDeps syntheticDb -> do
-            checkCapturesServed corpusDeps [cpPackage package | LoadedEntry{lePackage = package} <- entries] >>= either (assertFailure . ("advisory rows: " <>) . toString) pure
-            checkSyntheticServed (cveDbLookup syntheticDb) heavy targets
-            use
-                [ bgroup
-                    (toString (ecosystemPrefix <> ecosystemName eco))
+        malicious <- maliciousAdvisoryInputs eco [(packageName entry, take 1 (Map.keys (infoVersions (entryInfo entry)))) | entry <- heavy] >>= compileAdvisoryInputs eco (scratch "mal-hit")
+        mixed <- mixedMaliciousAdvisories eco targets >>= compileAdvisoryInputs eco (scratch "mal-mixed")
+        withServedArtifact eco malicious $ \malDeps _ -> withServedArtifact eco mixed $ \mixedDeps _ ->
+            withServedArtifact eco corpus $ \corpusDeps _ -> withServedArtifact eco synthetic $ \syntheticDeps syntheticDb -> do
+                checkCapturesServed corpusDeps [cpPackage package | LoadedEntry{lePackage = package} <- entries] >>= either (assertFailure . ("advisory rows: " <>) . toString) pure
+                checkSyntheticServed (cveDbLookup syntheticDb) heavy targets
+                for_ [malDeps, mixedDeps] $ \deps -> for_ heavy $ \entry -> do
+                    plan <- filterPlan deps benchEvalContext configuredShippedPolicy (entryInfo entry)
+                    assertBool "MAL qualification did not reach a named known-malicious denial" (any malDenied (fpDecisions plan))
+                use
                     [ bgroup
-                        "rules with an advisory database (per package)"
-                        [ rows "shipped policy without a database" inertRuleDeps shippedPolicy entries
-                        , rows "shipped policy over corpus advisories" corpusDeps shippedPolicy entries
-                        , rows "all advisory rules over corpus advisories" corpusDeps allAdvisoryRules entries
-                        , localOption (RelStDev (1 / 0)) (rows "all advisory rules over synthetic advisories" syntheticDeps allAdvisoryRules heavy)
+                        (toString (ecosystemPrefix <> ecosystemName eco))
+                        [ bgroup
+                            "rules with an advisory database (per package)"
+                            [ rows "shipped policy without a database" inertRuleDeps shippedPolicy entries
+                            , rows "shipped policy over corpus advisories" corpusDeps configuredShippedPolicy entries
+                            , rows "configured shipped policy MAL-hit derived fixtures" malDeps configuredShippedPolicy heavy
+                            , localOption (RelStDev (1 / 0)) (rows "all advisory rules MAL mixed-heavy derived fixtures" mixedDeps allAdvisoryRules heavy)
+                            , rows "all advisory rules over corpus advisories" corpusDeps allAdvisoryRules entries
+                            , localOption (RelStDev (1 / 0)) (rows "all advisory rules over synthetic advisories" syntheticDeps allAdvisoryRules heavy)
+                            ]
                         ]
                     ]
-                ]
   where
     eco = ebEcosystem ecosystem
     scratch label = dir </> toString (ecosystemName eco) </> label
@@ -110,3 +121,7 @@ survivors deps policy entry = do
     plan <- filterPlan deps benchEvalContext policy (entryInfo entry)
     when (any isUndecidable (fpDecisions plan)) (assertFailure ("advisory rows: " <> entryName entry <> " left a version undecidable"))
     pure (Set.size (fpSurvivors plan))
+
+malDenied :: Decision -> Bool
+malDenied (Blocked "DenyIfKnownMalicious" _ KnownMalicious{}) = True
+malDenied _ = False

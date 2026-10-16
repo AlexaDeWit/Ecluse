@@ -57,7 +57,7 @@ assumptions:
       - 0ec10e5e-0000-4000-8000-000000000108
     appliesToModel: false
   - id: as-private-origin-trusted
-    prose: Écluse trusts the private upstream to hold content it admitted before or first-party content, and a private read does not repeat public admission. When the private and public copies disagree, the disagreement proves neither copy correct, and a damaged private copy can stay served. Écluse keeps no persistent conflict state, does not revalidate the public copy on each read, and does not delete on divergence alone.
+    prose: Écluse trusts the private upstream to hold content it admitted before or first-party content, and a private read does not repeat public admission. Newly MAL-denied copies remain readable until eligible Dredger deletion. When the private and public copies disagree, the disagreement proves neither copy correct, and a damaged private copy can stay served. Écluse keeps no persistent conflict state, does not revalidate the public copy on each read, and does not delete on divergence alone.
     status: valid
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010b
@@ -83,7 +83,7 @@ assumptions:
       - 0ec10e5e-0000-4000-8000-00000000010c
     appliesToModel: false
   - id: as-osv-source-truth
-    prose: "Pilot relies on OSV as the source of vulnerability truth. A compromised OSV is a foundational supply-chain compromise that defeats advisory-based rules outright: it can cause false denials and eligible Dredger deletions, or admit a malicious remediation. Transport, parsing, validation, and last-good-database controls handle tampering in transit, malformed payloads, and outages, but they cannot make a hostile source trustworthy. The owner accepts this residual risk."
+    prose: "Pilot relies on OSV as the source of vulnerability truth. Configured advisory sources also activate primary MAL denial. OpenSSF false positives can refuse admission and authorise eligible deletion under existing guards. A compromised OSV is a foundational supply-chain compromise that defeats advisory-based rules outright: it can cause false denials and eligible Dredger deletions, or admit a malicious remediation. Transport, parsing, validation, and last-good-database controls handle tampering in transit, malformed payloads, and outages, but they cannot make a hostile source trustworthy. The owner accepts this residual risk."
     status: valid
     threats:
       - 43f60aec-7a7c-4450-8992-ae2b42d20b0f
@@ -1111,7 +1111,7 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-000000000128
   - id: mit-max-advisory-age
     title: Maximum advisory age
-    prose: "Consumers refuse advisory evidence older than the maximum advisory age, measured from Pilot's last push. An explicit `advisories.maxAgeSeconds` overrides the default, which is the shortest period the quarantine holds a version on that mount, minus 24 hours and never under 3 days, or 3 days when the mount has no quarantine rule. A seven-day hold in the quarantine gives six days, so a failure surfaces before the next cohort leaves the quarantine. Past the maximum age, the CVE and EPSS deny paths refuse even under `onUnavailable: skip`, and the maximum age applies separately from any rule's skip setting. An undated artifact refuses, and the Dredger withholds advisory-based deletions."
+    prose: "Consumers refuse advisory evidence older than the maximum advisory age, measured from Pilot's last push. An explicit `advisories.maxAgeSeconds` overrides the default, which is the shortest period the quarantine holds a version on that mount, minus 24 hours and never under 3 days, or 3 days when the mount has no quarantine rule. A seven-day hold in the quarantine gives six days, so a failure surfaces before the next cohort leaves the quarantine. Past the maximum age, the MAL, CVE, and EPSS deny paths refuse even under `onUnavailable: skip`, and the maximum age applies separately from any rule's skip setting. An undated artifact refuses, and the Dredger withholds advisory-based deletions."
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010d

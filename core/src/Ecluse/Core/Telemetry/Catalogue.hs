@@ -21,9 +21,7 @@ import Prelude hiding (universe)
 import Data.Universe.Class (Universe (..))
 import Data.Universe.Generic (universeGeneric)
 
-{- | The catalogue of metric instruments Écluse emits. Queue backlog and DLQ depth are absent
-on purpose: those are cloud-native metrics, not signals Écluse re-emits.
--}
+-- | The metric instruments Écluse emits. Queue backlog and DLQ depth stay cloud-native metrics.
 data MetricName
     = -- | @http.server.request.duration@: server request latency (histogram).
       HttpServerRequestDuration
@@ -107,13 +105,9 @@ data MetricName
       AdvisorySyncAttempts
     | -- | @ecluse.advisory.sync.duration@: advisory sync attempt latency by ecosystem and result (histogram).
       AdvisorySyncDuration
-    | {- | @ecluse.advisory.database.age.seconds@: seconds since this ecosystem's last swap
-      (gauge). It measures this process's own installation, not the data.
-      -}
+    | -- | @ecluse.advisory.database.age.seconds@: seconds since this process last swapped the database (gauge).
       AdvisoryDatabaseAgeSeconds
-    | {- | @ecluse.advisory.source.age.seconds@: seconds since this ecosystem's serving artifact
-      was published (gauge). It is the age the CVE-deny path expires on.
-      -}
+    | -- | @ecluse.advisory.source.age.seconds@: seconds since the serving artifact's publication, the age advisory denies expire on (gauge).
       AdvisorySourceAgeSeconds
     | -- | @ecluse.advisory.compile.accepted@: advisory entries a compile pass accepted (counter).
       AdvisoryCompileAccepted

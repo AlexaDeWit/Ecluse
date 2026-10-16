@@ -54,7 +54,7 @@ import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Rts (RtsPosture (rpAllocAreaBytes, rpCapabilities), currentRtsPosture)
 import Ecluse.Test.Corpus (CaptureRecord (crCapturedAt), CorpusPackage (cpPackage), cpName, permissiveAgeRules, readCaptureRecords)
-import Ecluse.Test.Corpus.Advisories (allAdvisoryRules, checkCapturesServed, compileCorpusAdvisories, shippedPolicy)
+import Ecluse.Test.Corpus.Advisories (allAdvisoryRules, checkCapturesServed, compileCorpusAdvisories, configuredShippedPolicy)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..), LoadedEntry (..), ecosystemBenches)
 import Ecluse.Test.OsvDb (withServedArtifact)
 import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, fetchTestBody)
@@ -155,7 +155,7 @@ fullAllocationContract bench advisories ctx pkg raw =
     operation target = \case
         FullDocument -> full inertRuleDeps permissiveAgeRules
         SingleVersion -> runSelective bench pkg target
-        FullShippedAdvisories -> full advisories shippedPolicy
+        FullShippedAdvisories -> full advisories configuredShippedPolicy
         FullAllAdvisoryRules -> full advisories allAdvisoryRules
     full deps policy = runFull deps policy ctx bench pkg
 
