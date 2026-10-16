@@ -45,19 +45,13 @@ advisoryLifecycle fixture@AdvisoryFixture{..} stores@StoreOps{..} clients@Client
     for_ cache $ \_ -> fst <$> clientArtifact proxy name advisoryVulnerable `shouldReturn` 200
     run <- runSweep plane Apply AdvisoryPolicy
     (sweepExit run, sweepOutput run) `shouldSatisfy` ((== ExitSuccess) . fst)
-    let reason = case cache of
-            Nothing -> "DenyIfCve (affected by " <> advisoryIdentifier <> " (CVSS >= 7.0))"
-            Just _ -> "DenyIfKnownMalicious (affected by " <> advisoryIdentifier <> " (known malicious))"
-        deletion = "deleting " <> name <> "@" <> advisoryVulnerable <> ": blocked by " <> reason
-        tally = "mirror sweep cycle complete: examined 2, deleted 1, kept 1, guard-skipped 0"
+    let deletion = "deleting " <> name <> "@" <> advisoryVulnerable <> ": blocked by " <> deniedBy advisoryDenial
+        deletions = deletion <$ (proxy : maybeToList cache)
+        tally = "mirror sweep cycle complete: " <> advisoryTally
         messages = sweepEvents run
-    case cache of
-        Just private -> do
-            sweepOutput run `shouldSatisfy` T.isInfixOf ("blocked by " <> reason)
-            storeVersions private name `shouldReturn` [advisoryFixed]
-        Nothing ->
-            unless (reportsRevocation deletion tally messages) $
-                expectationFailure (toString ("the cycle reported these sweep lines:\n" <> T.unlines messages <> "\nexpected the deletion " <> deletion <> "\nand the tally " <> tally <> "\nwhole cycle output:\n" <> sweepOutput run))
+    unless (reportsRevocation deletions tally messages) $
+        expectationFailure (toString ("the cycle reported these sweep lines:\n" <> T.unlines messages <> "\nexpected one deletion per retaining store " <> deletion <> "\nand the tally " <> tally <> "\nwhole cycle output:\n" <> sweepOutput run))
+    for_ cache $ \private -> storeVersions private name `shouldReturn` [advisoryFixed]
     storeSnapshot proxy `shouldReturn` Map.adjust (filter (/= advisoryVulnerable)) name seeded
     assertAdvisoryInstalls fixture stores clients sweeps proxy
 
@@ -88,8 +82,13 @@ assertAdvisoryInstalls AdvisoryFixture{..} StoreOps{..} ClientOps{..} SweepOps{.
     served <- clientArtifact proxy name advisoryFixed
     second LBS.length served `shouldSatisfy` servedBytes
 
--- | Match the exact deletion and tally while retaining an unpinned advisory generation.
-reportsRevocation :: Text -> Text -> [Text] -> Bool
-reportsRevocation deletion tally messages =
-    map (fst . T.breakOn "; advisory generation ") (filter (T.isPrefixOf "deleting ") messages) == [deletion]
+-- | Match the exact deletions and tally while retaining an unpinned advisory generation.
+reportsRevocation :: [Text] -> Text -> [Text] -> Bool
+reportsRevocation deletions tally messages =
+    map (fst . T.breakOn "; advisory generation ") (filter (T.isPrefixOf "deleting ") messages) == deletions
         && filter (T.isPrefixOf "mirror sweep cycle ") messages == [tally]
+
+deniedBy :: AdvisoryDenial -> Text
+deniedBy = \case
+    ScoredDenial advisory -> "DenyIfCve (affected by " <> advisory <> " (CVSS >= 7.0))"
+    MaliciousDenial advisory -> "DenyIfKnownMalicious (affected by " <> advisory <> " (known malicious))"

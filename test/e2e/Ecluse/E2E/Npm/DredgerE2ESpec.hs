@@ -359,7 +359,8 @@ advisoryFixture =
         , advisoryUnaffected = packageFixture dredgerKeepPkg
         , advisoryVulnerable = "1.0.0"
         , advisoryFixed = "1.2.0"
-        , advisoryIdentifier = "GHSA-corpus-1002"
+        , advisoryDenial = ScoredDenial "GHSA-corpus-1002"
+        , advisoryTally = "examined 2, deleted 1, kept 1, guard-skipped 0"
         }
 
 installCoordinate :: Text -> Maybe Text -> Text
@@ -419,7 +420,7 @@ outageDriver =
         }
 
 maliciousFixture :: AdvisoryFixture
-maliciousFixture = advisoryFixture{advisoryIdentifier = maliciousAdvisoryId}
+maliciousFixture = advisoryFixture{advisoryDenial = MaliciousDenial maliciousAdvisoryId, advisoryTally = "examined 4, deleted 2, kept 2, guard-skipped 0"}
 
 maliciousAdvisoryOps :: AdvisoryOps GlobalDataPlane E2E
 maliciousAdvisoryOps =

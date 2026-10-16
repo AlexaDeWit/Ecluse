@@ -357,7 +357,8 @@ per mount from that mount's own rules: one whose rules include an advisory deny 
 sync, and one whose rules do not is ready without a database. The listener serves throughout. A
 never-published artifact keeps the role polling and logs an operator-facing `ERROR` naming Pilot
 and the store, first when the boot retry budget is spent and then every 15 minutes until one loads.
-An absent database makes active advisory denies refuse. The remediation allow abstains.
+An absent database makes each active advisory deny follow its `onUnavailable` setting: `deny`
+refuses and `skip` lets a lower rule decide. The remediation allow abstains.
 
 Polling removes the one external dependency that would otherwise sit under the fail-closed gate:
 an advisory-source outage becomes sync lag, not per-package blocking. Lookups also leave the hot

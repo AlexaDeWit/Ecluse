@@ -343,25 +343,24 @@ An absent or unbound driver still produces a named failure under the shared cont
 The shared `ecluse-e2e-test-support` library holds the fixture and provider modules.
 Metadata checks the actual declarations and reports. It does not choose test combinations at runtime.
 
-## MAL contract additions
+## MAL cases
 
-The independent obligations and concrete declarations require these six additional cases.
-All original observations and their assertions remain under the identities described above.
+The independent obligations and concrete declarations require these MAL cases.
 
-| Case ID | Preserved MAL evidence |
+| Case ID | MAL evidence |
 | --- | --- |
 | `npm/install/mal-forced-source-required` | Actual check-config and proxy invocations refuse forced activation without a source and name the rule and advisories.url. |
 | `npm/install/mal-manual-source-required` | A manual rule under skip reaches the same exact diagnostic requirements in both invocations. |
-| `npm/advisories/mal-denial` | Pilot compilation, observed npm generation sync, fresh npm refusal, direct 403, exact structured rule/MAL identifiers, and absent mirror publication. |
+| `npm/advisories/mal-denial` | Pilot compilation, observed npm generation sync, fresh npm refusal, direct 403, exact structured rule/MAL identifiers, and no mirror publication after the mirror window. |
 | `pypi/advisories/mal-denial` | Pilot compilation and PyPI sync, affected wheel omitted while the good wheel remains, fresh pip refusal, direct 403, and exact structured identifiers. |
-| `npm/dredger/mal-revocation` | Accepted replacement generation, trusted GET 200 before deletion, named MAL audit, complete mirror snapshot, private-cache inventory, fresh install refusal, direct 403, no refill, and retained fix bytes. |
+| `npm/dredger/mal-revocation` | Accepted replacement generation, trusted GET 200 before deletion, one exact MAL deletion line per store and the exact tally, complete mirror snapshot, private-cache inventory, fresh install refusal, direct 403, no refill, and retained fix bytes. |
 | `pypi/dredger/mal-revocation` | The same lifecycle through the CodeArtifact mirror and cache fixture, with a fresh pip refusal. |
 
 Both clients run the same `Install.Advisory` law through native `AdvisoryDriver` observations.
 Each policy acquires an independent data plane and publishes its source through Pilot.
-Scored npm sessions remain storeless. The npm MAL session observes a real mirror store.
+Scored npm sessions are storeless. The npm MAL session observes a real mirror store.
 The structured log parser is shared.
-The shared sweep lifecycle retains the scored case's exact deletion and tally assertions.
+The shared sweep lifecycle checks the exact deletion lines and closing tally the fixture names.
 Its MAL case adds the second retaining store and the trusted-read observation before deletion.
 The native drivers supply transport and client operations, not alternative business assertions.
 

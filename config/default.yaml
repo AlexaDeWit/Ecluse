@@ -180,8 +180,9 @@ advisories:
   epssQuietTime: 604800
   # How old the published advisory artifact may be, in seconds, before MAL, CVSS, and EPSS denies
   # refuse rather than decide. The age is the time since Pilot last pushed the artifact, which a
-  # restart and a failed poll both leave alone. Past it, the CVE-deny path answers 503 even under
-  # `onUnavailable: skip`, and the Dredger stops deleting on an advisory match. Readiness does not
+  # restart and a failed poll both leave alone. Past it, every advisory deny answers 503 even
+  # under `onUnavailable: skip`. The MAL default ranks above every default allow, so every public
+  # admission refuses. The Dredger stops deleting on an advisory match. Readiness does not
   # change. Unset, each mount derives its own: a day ahead of that mount's earliest
   # AllowIfOlderThan quarantine, never under three days. The shipped seven-day quarantine gives
   # six days, and a mount with no quarantine rule gets three. Set this to override every

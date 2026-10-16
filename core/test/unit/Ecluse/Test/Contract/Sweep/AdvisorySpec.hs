@@ -12,16 +12,20 @@ import Test.Hspec
 spec :: Spec
 spec = describe "advisory revocation audit evidence" $ do
     it "accepts the exact deletion and tally without pinning the generation" $
-        reportsRevocation deletion tally [deletion <> "; advisory generation generated-at-runtime", tally] `shouldBe` True
+        reportsRevocation [deletion] tally [deletion <> "; advisory generation generated-at-runtime", tally] `shouldBe` True
+    it "accepts one exact deletion per retaining store" $
+        reportsRevocation [deletion, deletion] tally [deletion, deletion, tally] `shouldBe` True
     it "rejects an extra deletion even when the requested version and tally appear" $
-        reportsRevocation deletion tally [deletion, "deleting sibling@2: blocked", tally] `shouldBe` False
+        reportsRevocation [deletion] tally [deletion, "deleting sibling@2: blocked", tally] `shouldBe` False
     it "rejects a duplicate deletion of the requested version" $
-        reportsRevocation deletion tally [deletion, deletion, tally] `shouldBe` False
+        reportsRevocation [deletion] tally [deletion, deletion, tally] `shouldBe` False
+    it "rejects a store that did not report its deletion" $
+        reportsRevocation [deletion, deletion] tally [deletion, tally] `shouldBe` False
     it "rejects a missing or different cycle tally" $ do
-        reportsRevocation deletion tally [deletion] `shouldBe` False
-        reportsRevocation deletion tally [deletion, "mirror sweep cycle complete: deleted 2"] `shouldBe` False
+        reportsRevocation [deletion] tally [deletion] `shouldBe` False
+        reportsRevocation [deletion] tally [deletion, "mirror sweep cycle complete: deleted 2"] `shouldBe` False
     it "rejects a different version with the same advisory reason" $
-        reportsRevocation deletion tally ["deleting affected@2: blocked by advisory", tally] `shouldBe` False
+        reportsRevocation [deletion] tally ["deleting affected@2: blocked by advisory", tally] `shouldBe` False
 
 deletion :: Text
 deletion = "deleting affected@1: blocked by advisory"

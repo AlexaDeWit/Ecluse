@@ -12,7 +12,6 @@ module Ecluse.E2E.Fixtures.Advisories (
     pypiAdvisoryId,
     maliciousExportBase,
     maliciousAdvisoryId,
-    neutralExportBase,
     buildAdvisoryFixtures,
     ecosystemAdvisory,
 ) where
@@ -63,10 +62,6 @@ maliciousExportBase = "advisories/mal-derived"
 maliciousAdvisoryId :: Text
 maliciousAdvisoryId = "MAL-derived-1"
 
--- | The source-qualified, unrelated control for a second active ecosystem.
-neutralExportBase :: Text
-neutralExportBase = "advisories/neutral-control"
-
 -- | Write the local OSV archives and shared EPSS slice without reaching public feeds.
 buildAdvisoryFixtures :: FilePath -> IO ()
 buildAdvisoryFixtures root = do
@@ -79,8 +74,6 @@ buildAdvisoryFixtures root = do
         >>= writeUnder (pypiAdvisoryExportBase <> "/PyPI/all.zip")
     osvZipOf [("npm.json", ecosystemAdvisory Npm npmAdvisoryId "e2e-advisory" "1.19.0")]
         >>= writeUnder (npmAdvisoryExportBase <> "/npm/all.zip")
-    maliciousZip Npm [] Nothing >>= writeUnder (neutralExportBase <> "/npm/all.zip")
-    maliciousZip PyPI [] Nothing >>= writeUnder (neutralExportBase <> "/PyPI/all.zip")
     maliciousZip Npm [(psName corpusRevokedPkg, ["1.0.0"])] Nothing >>= writeUnder (maliciousExportBase <> "/npm/all.zip")
     maliciousZip PyPI [("Flask", ["1.18"])] Nothing >>= writeUnder (maliciousExportBase <> "/PyPI/all.zip")
     readFileLBS epssFixtureFile >>= writeUnder advisoryEpssPath

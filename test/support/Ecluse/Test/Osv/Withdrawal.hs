@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Withdrawal variants of committed advisory fixtures.
-An independent overlap and an unrelated active control remain in every archive.
+{- | Withdrawal and derived MAL variants of committed advisory fixtures.
+Every archive keeps an unrelated active control. Withdrawal archives also keep an independent overlap.
 -}
 module Ecluse.Test.Osv.Withdrawal (withdrawalBytes, withdrawalZip, maliciousZip, maliciousEntries) where
 

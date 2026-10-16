@@ -68,7 +68,7 @@ npmAdvisoryFamily resources = scenarioFamily resources Npm dredgerTopology npmAd
          in AdvisorySession
                 { advisoryListedVersions = sort . map Key.toText . KeyMap.keys <$> npmAdvisoryVersions e2e name
                 , advisoryRelease = npmRelease policy e2e name
-                , advisoryMirrorContains = if policy == KnownMaliciousDefault then Just (verdaccioHasVersionNow e2e name) else Nothing
+                , advisoryMirrorContains = if policy == KnownMaliciousDefault then Just (verdaccioMirroredWithinWindow e2e name) else Nothing
                 }
 
 npmAdvisoryVersions :: E2E -> Text -> IO Aeson.Object

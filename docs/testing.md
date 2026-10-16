@@ -1526,17 +1526,17 @@ package.
 | `all advisory rules over corpus advisories` | Captured advisories | The shared shipped policy plus fail-closed `DenyIfCve` (CVSS 8) and `DenyIfEpss` (EPSS 0.5) |
 | `all advisory rules over synthetic advisories` | Generated worst case | The five source-configured rules, over typescript and numpy only |
 
-The source-free row retains its original policy. Source-configured rows execute the automatic MAL
-default. The captured scored corpus has no primary MAL records, so those rows measure abstention.
+The source-free row runs the source-free shared policy. Source-configured rows run the automatic
+MAL default. The captured scored corpus has no primary MAL records, so those rows measure abstention.
 Separate native MAL-hit and mixed-heavy rows use attributed, labelled variants under
-test/fixtures/osv/malicious/. Setup requires a named MAL denial. The original synthetic reference
-retains 200 target advisories and 20,000 filler names. The mixed row adds MAL points to that reference.
+test/fixtures/osv/malicious/. Setup requires a named MAL denial. The scored synthetic reference
+holds 200 target advisories and 20,000 filler names. The mixed row adds MAL points to that reference.
 
 End-to-end MAL qualifications require explicit BENCH_LOAD_SCENARIOS selection:
 npm/merge-cold-mal-hit, npm/merge-cold-mal-mixed-heavy,
 pypi/index-cold-mal-hit, or pypi/index-cold-mal-mixed-heavy.
-They retain the selected workload's operating settings and use normal compilation and sync.
-They remain separate from the default held rows and have no calibrated floors. Held execution
+They use the selected workload's operating settings, normal compilation and sync.
+They are separate from the default held rows and have no calibrated floors. Held execution
 therefore refuses their missing floors. Observe qualifications separately without altering floors.
 Qualification stderr records source and artifact hashes, the serving ETag, admitted versions, and the response-body hash.
 Refusal throughput is not comparable successful throughput. Keep complete reports, source and

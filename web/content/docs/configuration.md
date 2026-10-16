@@ -470,9 +470,9 @@ The advisory rules carry details the table leaves out:
 
 - `remediation-fast-track` abstains until a first advisory database syncs, so without one only the
   quarantine governs. Set `ECLUSE_ADVISORIES__URL` and run Pilot to sync one.
-- Both advisory denies need an advisory store. A mount that enables one with `advisories.url` unset
-  refuses the boot, whatever `onUnavailable` says, and `ecluse check-config` reports the same
-  refusal.
+- Every advisory deny (`DenyIfKnownMalicious`, `DenyIfCve` and `DenyIfEpss`) needs an advisory
+  store. A mount that enables one with `advisories.url` unset refuses the boot, whatever
+  `onUnavailable` says, and `ecluse check-config` reports the same refusal.
 - The npm malware feed carries no score, so `DenyIfCve` counts a malware entry as above every
   threshold. Enabling it also blocks known-malicious packages.
 - EPSS is FIRST.org's estimate of the probability that attackers exploit a vulnerability within 30
@@ -608,6 +608,13 @@ An explicit mount `enabled: true` can override a global disable without restatin
 An explicit `type: DenyIfKnownMalicious` declaration activates the rule unless disabled.
 Any manual activation without a source refuses boot and `check-config`, including under `skip`.
 Disabling the shipped name does not remove a separately named manual MAL rule.
+
+The rule ranks above every default allow. An expired or undated push refuses every public
+admission on the mount, scope and identity allows included. Under the default `deny`, a faulted
+read, an open breaker, or a missing first generation does the same. Only an allow with precedence
+above 300 still admits, and trusted private reads still serve. A deployment that set
+`onUnavailable: skip` on `DenyIfCve` or `DenyIfEpss` refuses during an advisory outage unless it
+also sets `onUnavailable: skip` on `deny-known-malicious`.
 
 Publish a valid artifact for each ecosystem before configuring its source. Roll admission and
 writer roles forward before enabling Dredger revocation. Preview deletions and retain target-local

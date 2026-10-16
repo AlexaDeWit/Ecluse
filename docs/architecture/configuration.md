@@ -337,24 +337,26 @@ document owns only the document-merge schema above.
 
 #### The default policy
 
-The shared shipped default enables two rules. `min-age` (`AllowIfOlderThan`, 7 days) admits a public
+The shared shipped default enables two rules, and a third when `advisories.url` is set. `min-age` (`AllowIfOlderThan`, 7 days) admits a public
 version only after a quarantine window. Registries usually find and yank a malicious publish within
 days, so the delay keeps it out of your builds. This quarantine is Écluse's core security boundary.
 `remediation-fast-track` (`AllowIfRemediatesCve`) ranks above it, so Écluse admits a release fixing
 a known CVE at once rather than waiting out the quarantine (see
 [Rules engine](rules-engine.md#allowifremediatescve-remediation-fast-track)).
+`deny-known-malicious` (`DenyIfKnownMalicious`) ranks at 300, above every default allow (see
+[Rules engine](rules-engine.md#denyifknownmalicious-primary-namespace-evidence)).
 
 The npm mount adds `deny-scripts` (`DenyInstallTimeExecution`) at admission only. It does not
 activate a mount. The operator can disable it under `mounts.npm.rules`, widen its phases, or add
 an `AllowByIdentity` pin with explicit precedence above 300. PyPI has no shipped mount rules.
-Every remaining built-in rule is off and opts in by name. The advisory denies (`DenyIfCve` and
-`DenyIfEpss`) in particular can deny historical versions an existing build depends on, if an
+Every remaining built-in rule is off and opts in by name. The scored advisory denies (`DenyIfCve`
+and `DenyIfEpss`) in particular can deny historical versions an existing build depends on, if an
 operator enables them before the mirror is warm. Read their
 [onboarding steps](https://ecluse-proxy.com/docs/configuration/#onboarding-the-advisory-denies) first.
 
 ### Advisory database sync
 
-The remediation fast lane and the two advisory denies read a synced local advisory database, not an
+The remediation fast lane and the advisory denies read a synced local advisory database, not an
 API per request. The compilation, ETag polling, and atomic shadow-swap are under [Rules engine → CVE
 subsystem](rules-engine.md#cve-subsystem). The operator knobs (the store URL, the poll interval, the
 OSV export and EPSS feed sources, and the download size cap) are in the

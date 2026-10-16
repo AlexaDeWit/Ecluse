@@ -14,7 +14,7 @@ module Ecluse.BenchLoad.Scenarios (
 
 import Data.Set qualified as Set
 
-import Ecluse.BenchLoad.Advisories (maliciousQualification)
+import Ecluse.BenchLoad.Advisories (MaliciousSource (MaliciousHit, MaliciousMixedHeavy), maliciousQualification)
 import Ecluse.BenchLoad.Contract (LoadScope (FullLoad), loadCoverageGaps)
 import Ecluse.BenchLoad.Floors (FloorKey, Pass (ConcurrencyOne, Loaded))
 import Ecluse.BenchLoad.Harness (Scenario (scenarioInProcess, scenarioName, scenarioServiceTime), UpstreamFixture (fixtureEcosystem, fixtureScenarios))
@@ -66,8 +66,8 @@ scenariosForSelection selected fixture = fixtureScenarios fixture <> maybe [] (c
 
 qualificationScenarios :: UpstreamFixture -> [Scenario]
 qualificationScenarios fixture =
-    [ maliciousQualification (fixtureEcosystem fixture) mixed scenario
+    [ maliciousQualification (fixtureEcosystem fixture) source scenario
     | scenario <- fixtureScenarios fixture
     , scenarioName scenario `elem` ["merge-cold", "index-cold"]
-    , mixed <- [False, True]
+    , source <- [MaliciousHit, MaliciousMixedHeavy]
     ]

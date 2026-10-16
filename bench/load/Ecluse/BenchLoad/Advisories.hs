@@ -11,6 +11,7 @@ module Ecluse.BenchLoad.Advisories (
     shippedAdvisories,
     allRulesAdvisories,
     advisoryDenyRules,
+    MaliciousSource (..),
     maliciousQualification,
     advisoryStoreReply,
 ) where
@@ -22,12 +23,13 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
-import Network.HTTP.Client (defaultManagerSettings, httpLbs, newManager, parseRequest, responseBody, responseStatus)
-import Network.HTTP.Types (Header, Status, hContentType, status200, status404, statusCode)
+import Network.HTTP.Client (responseBody)
+import Network.HTTP.Types (Header, Status, hContentType, status200, status404)
 import Network.HTTP.Types.Header (hETag, hLastModified)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.BenchLoad.Error (benchFail)
+import Ecluse.BenchLoad.Fixture (fetchChecked)
 import Ecluse.BenchLoad.Harness (LoadKnobs (lkAdvisories), Scenario (..), Target (targetProxy))
 import Ecluse.BenchLoad.ProxyProcess (AdvisoryFeed (AdvisoryFeed), advisoryBucket, proxyPort)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
@@ -71,13 +73,23 @@ allRulesAdvisories ecosystem =
 advisoryVariant :: Ecosystem -> Text -> Text -> [Pair] -> Scenario -> Scenario
 advisoryVariant = advisoryVariantWith compileCorpusAdvisories
 
+-- | The MAL source a qualification compiles.
+data MaliciousSource
+    = -- | Attributed MAL-derived points for the measured release alone.
+      MaliciousHit
+    | -- | The same point mixed into the scored synthetic reference and its filler names.
+      MaliciousMixedHeavy
+    deriving stock (Eq, Show)
+
 -- | Opt-in MAL work with explicit labels, preserving the reference scenario's operating settings.
-maliciousQualification :: Ecosystem -> Bool -> Scenario -> Scenario
-maliciousQualification eco mixed original =
+maliciousQualification :: Ecosystem -> MaliciousSource -> Scenario -> Scenario
+maliciousQualification eco source original =
     qualified{scenarioBoot = \knobs use -> scenarioBoot qualified knobs (\target -> checkFiltered target >> use target)}
   where
     qualified = advisoryVariantWith compileQualified eco label "Source qualification: attributed MAL-derived affected points. Denials change admitted work." [] original
-    label = if mixed then "mal-mixed-heavy" else "mal-hit"
+    label = case source of
+        MaliciousHit -> "mal-hit"
+        MaliciousMixedHeavy -> "mal-mixed-heavy"
     (package, version) = case eco of
         Npm -> ("react", "18.2.0")
         PyPI -> ("requests", "2.32.5")
@@ -87,10 +99,7 @@ maliciousQualification eco mixed original =
         let path = case eco of
                 Npm -> "/npm/" <> package
                 _ -> "/pypi/simple/" <> package <> "/"
-        manager <- newManager defaultManagerSettings
-        request <- parseRequest ("http://127.0.0.1:" <> show (proxyPort proxy) <> toString path)
-        response <- httpLbs request manager
-        unless (statusCode (responseStatus response) == 200) (benchFail "MAL qualification metadata did not retain a successful response")
+        response <- fetchChecked status200 [] ("http://127.0.0.1:" <> show (proxyPort proxy) <> path)
         let project = case eco of
                 Npm -> fmap fst . projectNpmManifest defaultLimits (mkPackageName eco Nothing package)
                 _ -> fmap fst . projectPyPIIndex defaultLimits (mkPackageName eco Nothing package)
@@ -98,10 +107,9 @@ maliciousQualification eco mixed original =
         when (Map.member version (infoVersions info) || Map.null (infoVersions info)) (benchFail "MAL qualification did not remove the affected release while retaining allowed releases")
         TIO.hPutStrLn stderr (label <> " response_sha256=" <> hexSha256Of (LBS.toStrict (responseBody response)) <> " admitted_versions=" <> T.intercalate "," (Map.keys (infoVersions info)))
     compileQualified ecosystem dir = do
-        inputs <-
-            if mixed
-                then mixedMaliciousAdvisories ecosystem (SyntheticTarget package [version, "999.0.0"] 200 : fillerTargets 20000)
-                else maliciousAdvisoryInputs ecosystem [(package, [version])]
+        inputs <- case source of
+            MaliciousHit -> maliciousAdvisoryInputs ecosystem [(package, [version])]
+            MaliciousMixedHeavy -> mixedMaliciousAdvisories ecosystem (SyntheticTarget package [version, "999.0.0"] 200 : fillerTargets 20000)
         path <- compileAdvisoryInputs ecosystem dir inputs
         artifact <- readFileLBS path
         TIO.hPutStrLn stderr (label <> " source_zip_sha256=" <> hexSha256Of (LBS.toStrict (aiOsvZip inputs)) <> " artifact_sha256=" <> hexSha256Of (LBS.toStrict artifact) <> " serving_etag=" <> hexSha1OfLazy artifact)

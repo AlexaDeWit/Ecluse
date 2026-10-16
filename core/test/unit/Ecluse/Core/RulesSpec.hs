@@ -1339,6 +1339,13 @@ knownMaliciousSpec = describe "DenyIfKnownMalicious" $ do
         it "yields to an explicit identity allow above 300" $ do
             result <- decideWith (depsWith [("thing", row "MAL-test" Nothing)]) (order [atDefaultPrecedence mal, at 301 (AllowByIdentity "thing")]) evidence
             admittedBy result `shouldBe` Just "AllowByIdentity"
+        it "yields to a default identity deny at 400" $
+            blockedBy <$> decideWith (depsWith [("thing", row "MAL-test" Nothing)]) (order (map atDefaultPrecedence [mal, DenyByIdentity "thing"])) evidence
+                `shouldReturn` Just "DenyByIdentity"
+        for_ [(DenyIfDeprecated, Deprecated, "DenyIfDeprecated"), (DenyIfYanked, Yanked, "DenyIfKnownMalicious")] $ \(other, availability, winner) ->
+            it ("orders an equal-precedence deny at 300 by rule name: " <> toString (ruleName other)) $
+                blockedBy <$> decideWith (depsWith [("thing", row "MAL-test" Nothing)]) (order (map atDefaultPrecedence [mal, other])) evidence{evAvailability = Known availability}
+                    `shouldReturn` Just winner
     for_ [FailDeny, FailNoDecision] $ \alignment -> do
         it ("uses " <> show alignment <> " before the first generation") $
             evalRule unloadedDeps ctx (DenyIfKnownMalicious alignment) evidence

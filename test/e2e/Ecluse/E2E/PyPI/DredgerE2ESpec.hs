@@ -53,7 +53,7 @@ pypiSweepDriver fixture recorder =
         , withRolloutSweep = acquire withRollout
         , sweepIdentityFixture = identityFixture
         , sweepAdvisoryFixture = advisoryFixture
-        , sweepMaliciousFixture = advisoryFixture{advisoryIdentifier = maliciousAdvisoryId}
+        , sweepMaliciousFixture = advisoryFixture{advisoryDenial = MaliciousDenial maliciousAdvisoryId, advisoryTally = "examined 4, deleted 2, kept 2, guard-skipped 0"}
         , sweepRecoveryFixture = recoveryFixture
         , sweepRolloutFixture = rolloutFixture
         , sweepStoreOps = storeOps
@@ -262,4 +262,4 @@ rolloutFixture :: RolloutFixture
 rolloutFixture = RolloutFixture "pypi/dredger/" deniedPackage keptPackage readmittedPackage missingPackage sentinelPackage firstPartyName "1.0.0"
 
 advisoryFixture :: AdvisoryFixture
-advisoryFixture = AdvisoryFixture "pypi/dredger/" advisoryPackage keptPackage "1.0.0" "1.2.0" dredgerAdvisoryId
+advisoryFixture = AdvisoryFixture "pypi/dredger/" advisoryPackage keptPackage "1.0.0" "1.2.0" (ScoredDenial dredgerAdvisoryId) "examined 2, deleted 1, kept 1, guard-skipped 0"

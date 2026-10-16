@@ -630,15 +630,16 @@ spec = do
                     outcome <- runWM (sourceAt url runtime) (processJob job)
                     outcome `shouldSatisfy` isDropped
     describe "processJob: ingest-time policy re-evaluation" $ do
-        it "drops newly MAL-denied queued bytes before fetching or publishing" $ do
-            let deps = servingRuleDeps (DbEtag "mal-generation") (fakeCveLookup [("thing", AdvisoryRange "MAL-worker" Nothing (Just "1.0.0") (LastAffected "1.0.0") Nothing)])
-            rules <- prepare deps [atDefaultPrecedence (DenyIfKnownMalicious FailDeny), atDefaultPrecedence (AllowIfOlderThan 0)]
-            withRuntimePolicies (npmPolicies presentResolver rules) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                job <- enqueueAndReceive queue sampleMirrorJob
-                runWM (sourceAt unreachableUrl runtime) (processJob job) >>= \case
-                    Dropped reason -> reason `shouldSatisfy` T.isInfixOf "MAL-worker (known malicious)"
-                    other -> expectationFailure ("expected MAL denial, got " <> show other)
-                plDocuments <$> readIORef logRef `shouldReturn` []
+        for_ [("an npm", Npm, sampleMirrorJob), ("a PyPI", PyPI, pypiMirrorJob)] $ \(label, eco, jobAt) ->
+            it ("drops " <> label <> " job newly MAL-denied before fetching or publishing") $ do
+                let deps = servingRuleDeps (DbEtag "mal-generation") (fakeCveLookup [("thing", AdvisoryRange "MAL-worker" Nothing (Just "1.0.0") (LastAffected "1.0.0") Nothing)])
+                rules <- prepare deps [atDefaultPrecedence (DenyIfKnownMalicious FailDeny), atDefaultPrecedence (AllowIfOlderThan 0)]
+                withRuntimePolicies (Map.singleton eco (npmPolicy presentResolver rules)) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                    job <- enqueueAndReceive queue jobAt
+                    runWM (sourceAt unreachableUrl runtime) (processJob job) >>= \case
+                        Dropped reason -> reason `shouldSatisfy` T.isInfixOf "MAL-worker (known malicious)"
+                        other -> expectationFailure ("expected MAL denial, got " <> show other)
+                    plDocuments <$> readIORef logRef `shouldReturn` []
 
         for_ [False, True] $ \poisonEvidence ->
             it ("names a pure rule exception without fetching or publishing, evidence=" <> show poisonEvidence) $ do

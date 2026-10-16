@@ -64,9 +64,11 @@ database therefore leaves a healthy npm mount routable, and the body names PyPI 
 waiting. A latched Dredger reports
 `halted` instead, and a draining instance reports `draining`. Readiness does not itself block direct
 requests: a request that needs advisory data its mount does not have is refused by that mount's own
-`onUnavailable` policy, and a rule that admits without reading the database still admits. A
-successful first sync does not prove that data remains fresh. [Advisory push age](#advisory-push-age)
-governs retained evidence.
+`onUnavailable` policy. A rule that admits without reading the database admits only when no
+advisory deny ranked above it refuses first. A configured source puts the MAL default above every
+default allow, so under its default `deny` that mount refuses every public admission until its
+first sync. A successful first sync does not prove that data remains fresh.
+[Advisory push age](#advisory-push-age) governs retained evidence.
 
 An EPSS-dependent ecosystem rejects artifacts without the exact `epss_status=available` marker.
 Without an accepted qualified generation, its slot stays empty, and its readiness keeps awaiting the advisory database.
@@ -267,11 +269,16 @@ The alarm never refuses a version. It reports what the artifact says about its o
 
 ## Advisory push age
 
-`DenyIfCve` and `DenyIfEpss` decide on evidence, and evidence goes out of date. Past a maximum
-age, both refuse instead of deciding: the request gets a retryable `503`, and the denial message
-says how old the push is and what the maximum was. `onUnavailable: skip` does not waive it, and an
-open circuit breaker does not skip past it. `AllowIfRemediatesCve` abstains on the same evidence,
-so the quarantine governs rather than the fast lane.
+`DenyIfKnownMalicious`, `DenyIfCve` and `DenyIfEpss` decide on evidence, and evidence goes out of
+date. Past a maximum age, each refuses instead of deciding, and the request gets a retryable `503`.
+The denial message says how old the push is and what the maximum was. `onUnavailable: skip` does
+not waive it, and an open circuit breaker does not skip past it. `AllowIfRemediatesCve` abstains on
+the same evidence, so the quarantine governs rather than the fast lane.
+
+A configured advisory source activates `DenyIfKnownMalicious` at precedence 300, above every
+default allow. An expired or undated push therefore refuses every public admission on the mount,
+scope and identity allows included. Only an allow with precedence above 300 still admits, and
+trusted private reads still serve.
 
 The age is the time since Pilot last pushed the artifact, taken from the published object's own
 timestamp. Pilot writes that object after every successful run, so unchanged bytes still move it.
@@ -306,8 +313,9 @@ Two remedies:
 | The maximum is shorter than your update cadence. | Set `advisories.maxAgeSeconds` to a value you can meet, and accept the older evidence that comes with it. |
 
 Readiness does not change. `GET /readyz` still reports the mount as ready, because the database is
-loaded and every rule that does not read it still decides. Only the CVE-deny path refuses. The
-Dredger stops deleting on an advisory match for the same reason, while an identity deny still
+loaded and every rule that does not read it still decides when it ranks above the advisory
+denies. The advisory denies refuse, and the MAL default refuses every public version that reaches
+it. The Dredger stops deleting on an advisory match for the same reason, while an identity deny still
 acts under its usual guards.
 
 ## Telemetry (opt-in)
