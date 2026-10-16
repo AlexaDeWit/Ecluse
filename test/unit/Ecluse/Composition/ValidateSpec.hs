@@ -249,11 +249,15 @@ advisoryStoreSpec = describe "vetBoot -- an advisory deny with no advisory store
         it ("refuses a named remediation rule that denies without a source under " <> show role) $
             refusalsFor role (denyingOn "AllowIfRemediatesCve" roleEnv)
                 >>= (`shouldSatisfy` elem (AdvisoryDenyWithoutStore Npm ("AllowIfRemediatesCve" :| [])))
-        it ("boots a remediation rule that skips without a source, and advises under " <> show role) $ do
+        it ("advises on, and raises no store refusal for, a remediation rule that skips without a source under " <> show role) $ do
             config <- expectConfig (denyingWith "AllowIfRemediatesCve" "skip" roleEnv) Nothing
             let (advisories, outcome) = runVet role (vetBoot config)
             advisories `shouldSatisfy` elem (RemediationSkipsWithoutStore Npm)
             fromLeft [] outcome `shouldSatisfy` not . any isStoreRefusal
+
+    it "boots a remediation rule that skips without a source" $ do
+        config <- expectConfig (denyingWith "AllowIfRemediatesCve" "skip" staticEnvVars) Nothing
+        void (snd (runVet MirrorWriter (vetBoot config))) `shouldBe` Right ()
 
     it "advises nothing for a skipping remediation rule once a store is configured" $ do
         config <- expectConfig (withAdvisoryStore (denyingWith "AllowIfRemediatesCve" "skip" staticEnvVars)) Nothing

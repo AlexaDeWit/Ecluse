@@ -451,7 +451,7 @@ epssLine :: Ecosystem -> EpssBasis -> Text
 epssLine eco = \case
     EpssUnread -> prefix <> "EPSS enrichment is optional, because no active rule reads EPSS scores. A failed EPSS feed publishes the OSV data with epss_status=unavailable"
     EpssReadBy rules -> prefix <> "EPSS enrichment is required, because these active rules read EPSS scores: " <> T.intercalate ", " (toList rules) <> ". A failed EPSS feed publishes no artifact, and consumers refuse one without enrichment"
-    EpssUnsourced -> prefix <> "EPSS enrichment is required, because with no advisories.url a compile cannot tell which rules the consumer of its artifact runs. A failed EPSS feed publishes no artifact"
+    EpssUnsourced -> prefix <> "EPSS enrichment is required for a compile. With no advisories.url, no source activates the shipped remediation rule, so a compile cannot tell which rules its consumers run. A failed EPSS feed publishes no artifact"
   where
     prefix = "mount \"" <> ecosystemName eco <> "\": "
 

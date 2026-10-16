@@ -75,7 +75,7 @@ import Ecluse.Core.Rules.Effectful (EffectfulConfig (ecBreakerCooldown, ecBreake
 import Ecluse.Core.Rules.Freshness
 import Ecluse.Core.Rules.Render (renderDecision, renderInability, renderReason)
 import Ecluse.Core.Rules.Types
-import Ecluse.Rules.Remediation.Support (genRemediation, genRows, referenceRemediation)
+import Ecluse.Rules.Remediation.Support (genRemediation, genRows, genTenths, referenceRemediation)
 import Ecluse.Rules.Support (ctx, now, pkg, sixDayLimit, sourceStateDeps)
 
 listed :: Maybe Text -> RuleEvidence
@@ -146,6 +146,19 @@ denyEpssAt threshold = DenyIfEpss (DenyIfEpssParams threshold FailDeny)
 -- | The remediation rule with both choices set to abstain, as the fast lane decided before its policy choices.
 skippingRemediation :: Rule
 skippingRemediation = remediationWith FailNoDecision AbstainOnRemaining
+
+-- | A partial fix of @thing\@1.0.0@ that loose limits admit, though every advisory deny blocks its remaining MAL advisory.
+genLooseFixOfBlocked :: Gen ([AdvisoryRange], Rule)
+genLooseFixOfBlocked = do
+    fixedCvss <- genTenths
+    remainingCvss <- (/ 10) . fromInteger <$> Gen.integral (Range.linear 70 100)
+    remainingEpss <- (/ 100) . fromInteger <$> Gen.integral (Range.linear 50 99)
+    alignment <- Gen.element [FailDeny, FailNoDecision]
+    let rows =
+            [ AdvisoryRange "GHSA-a" (Just fixedCvss) (Just "0") (FixedBefore "1.0.0") (Just 0.9)
+            , AdvisoryRange "MAL-d" (Just remainingCvss) (Just "0") Unbounded (Just remainingEpss)
+            ]
+    pure (rows, remediationWith alignment (Differential (DifferentialLimits 10 1 NoGapRequired NoGapRequired)))
 
 -- | A partial fix of @thing\@1.0.0@: a severe advisory it fixes, and a minor one that still affects it.
 partialFixRows :: Double -> [(Text, AdvisoryRange)]
@@ -1320,15 +1333,14 @@ spec = do
 
         modifyMaxSuccess (const 1000) . it "a default advisory deny that blocks alone still blocks beside any remediation rule" $
             hedgehog $ do
-                rows <- forAll (genRows ["0.5.0", "1.0.0", "2.0.0"])
+                (rows, remediation) <- forAll (Gen.frequency [(3, (,) <$> genRows ["0.5.0", "1.0.0", "2.0.0"] <*> genRemediation), (1, genLooseFixOfBlocked)])
                 deny <- forAll (Gen.element [denyCveAt 7.0, denyEpssAt 0.5, DenyIfKnownMalicious FailDeny])
-                remediation <- forAll genRemediation
                 let deps = depsWith (map ("thing",) rows)
                 alone <- liftIO (decideWith deps [atDefaultPrecedence deny] (pkg Nothing 1))
                 remediationAlone <- liftIO (decideWith deps [atDefaultPrecedence remediation] (pkg Nothing 1))
                 whole <- liftIO (decideWith deps (map atDefaultPrecedence [deny, remediation, AllowIfOlderThan (7 * nominalDay)]) (pkg Nothing 1))
                 H.cover 5 "the deny alone blocks" (isJust (blockedBy alone))
-                H.classify "the remediation rule alone admits what the deny blocks" (isJust (blockedBy alone) && isJust (admittedBy remediationAlone))
+                H.cover 10 "the remediation rule alone admits what the deny blocks" (isJust (blockedBy alone) && isJust (admittedBy remediationAlone))
                 when (isJust (blockedBy alone)) (blockedBy whole === blockedBy alone)
 
         it "a matching scope or identity allow decides ahead of any remediation rule, whatever the source state" $

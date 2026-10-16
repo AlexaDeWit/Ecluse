@@ -774,8 +774,9 @@ Pilot reads the requirement from its own loaded configuration. It cannot see wha
 so give Pilot, the proxy, the mirror worker, and Dredger the same rule configuration. If Pilot's
 copy lacks a consumer's EPSS-reading rule, Pilot can publish an artifact that consumer refuses, and
 the consumer keeps serving its last accepted one until that one ages out. A one-shot `pilot compile`
-with no `advisories.url` requires the feed, because it cannot tell which rules its artifact's
-consumer runs.
+with no `advisories.url` requires the feed: no source activates the shipped remediation rule, so the
+compile cannot tell which rules its consumers run. Every role's boot log and `ecluse check-config`
+print this requirement for each mount.
 
 To add a `DenyIfEpss` to a running deployment:
 

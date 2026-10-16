@@ -390,7 +390,12 @@ spec = do
         it "requires EPSS without an advisory store, as a local compile does" $ do
             cfg <- configFor privateMountDoc
             advisoryEpssLines cfg
-                `shouldBe` ["mount \"npm\": EPSS enrichment is required, because with no advisories.url a compile cannot tell which rules the consumer of its artifact runs. A failed EPSS feed publishes no artifact"]
+                `shouldBe` ["mount \"npm\": EPSS enrichment is required for a compile. With no advisories.url, no source activates the shipped remediation rule, so a compile cannot tell which rules its consumers run. A failed EPSS feed publishes no artifact"]
+
+        it "names an operator's EPSS-reading rule without an advisory store" $ do
+            cfg <- configFor "{\"rules\":{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5,\"onUnavailable\":\"skip\"}},\"mounts\":{\"npm\":{\"enabled\":true}}}"
+            advisoryEpssLines cfg
+                `shouldBe` ["mount \"npm\": EPSS enrichment is required, because these active rules read EPSS scores: DenyIfEpss. A failed EPSS feed publishes no artifact, and consumers refuse one without enrichment"]
 
     describe "resolvedKeyProvenance" $ do
         it "labels each resolved key with the layer that supplied it" $ do
