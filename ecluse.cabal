@@ -972,7 +972,8 @@ test-suite ecluse-core-unit
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
   -- Extra roots supply declarations for coverage audits, not discovered executable examples.
-  hs-source-dirs:     core/test/unit test/smoke test/residency
+  -- The bench root supplies the streaming bench's sink model, which a spec here checks.
+  hs-source-dirs:     core/test/unit test/smoke test/residency bench
   other-modules:
     SpecHook
     Ecluse.Core.Registry.NpmSmokeSpec
@@ -981,6 +982,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
     Ecluse.Core.Registry.Json.WalkProbe
     Ecluse.Core.Server.MemoryModel.HeapSample
+    Ecluse.Core.StreamBench.Sink
     Ecluse.Test.Contract.Artifact.IdentitySpec
     Ecluse.Test.Contract.Artifact.AttemptSpec
     Ecluse.Test.Contract.BindingSpec
@@ -1177,6 +1179,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.RouteSpec
     Ecluse.Core.Server.StreamSpec
     Ecluse.Core.Server.UpstreamSpec
+    Ecluse.Core.StreamBench.SinkSpec
     Ecluse.Core.StreamSpec
     Ecluse.Core.StrictSpec
     Ecluse.Core.Supervision.InternalSpec
@@ -1993,13 +1996,8 @@ executable ecluse-integration-audit
     , ecluse:ecluse-test-contracts
     , text           ^>=2.1
 
--- Benchmarks: the work-per-request micro-benches over the pure ecluse-core hot paths,
--- plus the synthetic-corpus generator's correctness tests and the complexity
--- assertions that guard the accidentally-quadratic class. The harness is tasty-bench
--- rather than criterion, because it reports time AND allocations. Allocations are the
--- machine-independent signal, captured from GC stats under +RTS -T, baked in below.
--- It links ecluse:ecluse-core and ecluse:ecluse-test-support, and stays OUT of the
--- library's own dependency closure.
+-- Work-per-request micro-benches, generator correctness tests, and complexity assertions.
+-- tasty-bench reports allocations beside time, and allocations hold across machines.
 benchmark ecluse-bench
   import:          shared
   type:            exitcode-stdio-1.0
@@ -2024,6 +2022,7 @@ benchmark ecluse-bench
     Ecluse.Core.SelectiveBench
     Ecluse.Core.ServeBench
     Ecluse.Core.StreamBench
+    Ecluse.Core.StreamBench.Sink
     Ecluse.Core.VersionBench
     Ecluse.Core.WireBench
 
@@ -2037,6 +2036,7 @@ benchmark ecluse-bench
     , filepath         ^>=1.4 || ^>=1.5
     , http-client      ^>=0.7
     , http-types       ^>=0.12
+    , streaming-commons ^>=0.2.3
     , tasty            ^>=1.5
     , tasty-bench      ^>=0.4
     , tasty-bench-fit  ^>=0.1

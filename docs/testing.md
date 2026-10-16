@@ -1546,6 +1546,46 @@ The worst-case rows run one iteration each, to bound their run time. Their repor
 spread estimate. Allocation varies little between runs, so one iteration still gives their
 allocation per request.
 
+### Streaming pump rows
+
+The `stream (pump into Warp sink)` group shows the CPU cost of a flush policy on the artifact relay.
+Each row pumps a held body into a model of Warp's stream response. The load test prices the socket
+sends that the model leaves out.
+
+| Condition | Value |
+|---|---|
+| Body | 8 MiB, with a byte pattern that repeats every 251 bytes |
+| Upstream chunk sizes | 4096, 16384, and 65536 bytes, cut before timing |
+| `opening-flush (shipped)` | The production `pumpBody`, which flushes once after the first chunk |
+| `flush-threshold-64k` | A flush once 64 KiB has arrived since the last flush, and one for any remainder at the end |
+| `flush-end-only` | One flush at the end |
+| Sink | streaming-commons' builder receiver over a reused 16 KiB buffer, as Warp 3.4.9 drives it for a stream response |
+| Timed work | Every write, a send of each full or flushed buffer, and a send of the buffered tail at the end of the stream |
+| Excluded | The socket, the response header, chunked framing, and the upstream read |
+
+A send only counts the bytes it receives. The pump writes each chunk with `byteString`, which
+copies a chunk of at most 8160 bytes into the buffer. It hands a larger chunk to the sink whole,
+and Warp sends such a chunk without a copy on the serve path too. The 16384-byte and 65536-byte
+rows therefore copy no body bytes.
+
+`Ecluse.Core.StreamBench.SinkSpec` in `ecluse-core-unit` checks that every pump sends the exact body,
+in order, at every chunk size. It compares the sent bytes with the body itself, never with another
+pump's output.
+
+Each row has a counterpart in the former `stream (pump flush strategy)` group, which measured
+different work. That group's sink committed only flushed bytes and dropped the rest, so its shipped
+row committed the first chunk alone. The group also read one chunk value, repeated, instead of a body.
+
+| Former row under `stream (pump flush strategy).<size>B chunks` | Row under `stream (pump into Warp sink).<size>B chunks` |
+|---|---|
+| `flush-each (shipped)` | `opening-flush (shipped)` |
+| `flush-threshold-64k` | `flush-threshold-64k` |
+| `flush-end-only` | `flush-end-only` |
+
+The [comparison against main](#comparison-against-main) pairs rows by name, so it lists a renamed
+row under "Only in this run" or "Only on `main`" and compares no figure for it. The first run on
+`main` that holds these rows is their baseline. No allocation budget covers them.
+
 ### Request patterns
 
 The finite replay families run once per captured identity sequence, with a new proxy and empty
