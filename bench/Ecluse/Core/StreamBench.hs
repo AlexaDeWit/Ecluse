@@ -13,9 +13,9 @@ module Ecluse.Core.StreamBench (
 
 import Test.Tasty.Bench (Benchmark, bench, bgroup, env, whnfAppIO)
 
-import Ecluse.Core.StreamBench.Sink (bodyChunks, chunkSizes, sentBytes, strategies)
+import Ecluse.Core.StreamBench.Sink (bodyChunks, chunkSizes, newSinkBuffer, sentBytes, strategies)
 
--- | One row for each pump strategy at each upstream chunk size, with the chunks cut before timing.
+-- | One row for each pump strategy at each upstream chunk size. The chunks and the sink buffer are made before timing.
 benchmarks :: Benchmark
 benchmarks =
     bgroup
@@ -23,6 +23,8 @@ benchmarks =
         [ env (pure (bodyChunks chunkSize)) $ \chunks ->
             bgroup
                 (show chunkSize <> "B chunks")
-                [bench (toString name) (whnfAppIO (sentBytes pump) chunks) | (name, pump) <- strategies]
+                [ env newSinkBuffer $ \buffer -> bench (toString name) (whnfAppIO (sentBytes buffer pump) chunks)
+                | (name, pump) <- strategies
+                ]
         | chunkSize <- chunkSizes
         ]
