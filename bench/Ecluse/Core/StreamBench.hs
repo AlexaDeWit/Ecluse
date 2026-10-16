@@ -2,124 +2,29 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Flush-strategy benches for the artifact streaming pump
-("Ecluse.Core.Server.Stream").
-
-The shipped 'pumpBody' writes and __flushes after every upstream chunk__. On the real
-serve path each flush is a socket send, so the flush cadence is a syscall-count knob.
-Batching several chunks per flush trades a little first-byte latency for fewer, larger
-sends. That end-to-end syscall effect only shows over a real socket, and pricing it is the
-load harness's job (@bench-load@). This micro-bench isolates the __CPU side__, so the two
-are never conflated.
-
-To make the flush cadence drive measurable work __without__ a socket, the sink models
-Warp's output buffer. Each @write@ appends the chunk's 'Builder' to an accumulator. Each
-@flush@ __commits__ that accumulator and resets it: the commit runs the accumulator to
-strict bytes, the copy Warp makes when it sends. Fewer flushes mean fewer, larger commits.
-The three strategies (flush-per-chunk, flush-on-threshold, flush-once-at-end) therefore
-differ in the bench exactly as they differ in commit granularity on the wire.
-
-The pump takes its reader and sink as plain actions. The shipped 'pumpBody' and the two
-bench-local variants ('pumpThreshold', 'pumpEndOnly') therefore run over the identical
-synthetic body, with no upstream and no proxy. The comparison is the flush policy alone.
-This measures whether changing the shipped cadence has any CPU cost to weigh against the
-load harness's syscall figures. On its own it does not justify a change.
+{- | Flush-strategy benches for the artifact streaming pump ("Ecluse.Core.Server.Stream").
+Each row pumps an 8 MiB body into the Warp sink model of "Ecluse.Core.StreamBench.Sink".
+The rows price the CPU side of a flush cadence, and the load harness (@bench-load@) prices the
+socket sends. A CPU difference here does not justify a cadence change on its own.
 -}
 module Ecluse.Core.StreamBench (
     benchmarks,
 ) where
 
-import Data.ByteString qualified as BS
-import Data.ByteString.Builder (Builder, byteString, toLazyByteString)
-import Data.ByteString.Lazy qualified as BSL
+import Test.Tasty.Bench (Benchmark, bench, bgroup, env, whnfAppIO)
 
-import Ecluse.Core.Server.Stream (pumpBody)
-import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO)
+import Ecluse.Core.StreamBench.Sink (bodyChunks, chunkSizes, newSinkBuffer, sentBytes, strategies)
 
-{- | The flush-strategy benches: the shipped flush-per-chunk pump against a
-threshold-batched pump and a flush-once pump, at three chunk sizes.
--}
+-- | One row for each pump strategy at each upstream chunk size. The chunks and the sink buffer are made before timing.
 benchmarks :: Benchmark
 benchmarks =
     bgroup
-        "stream (pump flush strategy)"
-        [ bgroup
-            (show chunkSize <> "B chunks")
-            [ bench "flush-each (shipped)" (whnfAppIO (runPump pumpBody) chunks)
-            , bench "flush-threshold-64k" (whnfAppIO (runPump (pumpThreshold flushThresholdBytes)) chunks)
-            , bench "flush-end-only" (whnfAppIO (runPump pumpEndOnly) chunks)
-            ]
+        "stream (pump into Warp sink)"
+        [ env (pure (bodyChunks chunkSize)) $ \chunks ->
+            bgroup
+                (show chunkSize <> "B chunks")
+                [ env newSinkBuffer $ \buffer -> bench (toString name) (whnfAppIO (sentBytes buffer pump) chunks)
+                | (name, pump) <- strategies
+                ]
         | chunkSize <- chunkSizes
-        , let chunks = bodyChunks bodyBytes chunkSize
         ]
-  where
-    -- A mid-size tarball, streamed at a few realistic upstream read granularities.
-    bodyBytes :: Int
-    bodyBytes = 8 * 1024 * 1024
-
-    chunkSizes :: [Int]
-    chunkSizes = [4096, 16384, 65536]
-
-    -- The threshold-batched pump commits roughly every 64 KiB.
-    flushThresholdBytes :: Int
-    flushThresholdBytes = 64 * 1024
-
-{- | Run a pump over a fixed chunk list and a buffer-modelling sink, returning the total
-bytes committed. A run gets a fresh reader and sink, so runs share no state.
--}
-runPump :: (IO ByteString -> (Builder -> IO ()) -> IO () -> IO ()) -> [ByteString] -> IO Int
-runPump pump chunks = do
-    remaining <- newIORef chunks
-    buffer <- newIORef mempty
-    committed <- newIORef (0 :: Int)
-    let readChunk =
-            atomicModifyIORef' remaining $ \case
-                [] -> ([], BS.empty)
-                (c : cs) -> (cs, c)
-        -- Warp's buffer: writes accumulate, a flush commits (serialises) and resets.
-        write b = modifyIORef' buffer (<> b)
-        flush = do
-            acc <- readIORef buffer
-            let n = BS.length (BSL.toStrict (toLazyByteString acc))
-            writeIORef buffer mempty
-            modifyIORef' committed (+ n)
-    pump readChunk write flush
-    readIORef committed
-
-{- | A threshold-batched pump: flush once the bytes written since the last flush reach
-@threshold@, plus once more for the tail.
--}
-pumpThreshold :: Int -> IO ByteString -> (Builder -> IO ()) -> IO () -> IO ()
-pumpThreshold threshold readChunk write flush = go 0
-  where
-    go pending = do
-        chunk <- readChunk
-        if BS.null chunk
-            then when (pending > 0) flush
-            else do
-                write (byteString chunk)
-                let pending' = pending + BS.length chunk
-                if pending' >= threshold
-                    then flush >> go 0
-                    else go pending'
-
--- | A flush-once pump: one commit for the whole body, the coarsest cadence.
-pumpEndOnly :: IO ByteString -> (Builder -> IO ()) -> IO () -> IO ()
-pumpEndOnly readChunk write flush = go
-  where
-    go = do
-        chunk <- readChunk
-        if BS.null chunk
-            then flush
-            else write (byteString chunk) >> go
-
-{- | Split a synthetic body of @total@ bytes into equal @chunkSize@ chunks, plus a short
-tail chunk. The split runs once, before the measured window.
--}
-bodyChunks :: Int -> Int -> [ByteString]
-bodyChunks total chunkSize =
-    replicate fullCount fullChunk <> tailChunk
-  where
-    fullChunk = BS.replicate chunkSize 0x61
-    (fullCount, remainder) = total `divMod` chunkSize
-    tailChunk = [BS.replicate remainder 0x61 | remainder > 0]

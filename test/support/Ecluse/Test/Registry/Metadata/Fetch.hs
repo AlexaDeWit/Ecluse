@@ -31,7 +31,7 @@ import Ecluse.Core.Security (BodyLimit, LimitError, Limits (maxMetadataBytes), P
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Corpus (CaptureUpstream (upstreamOrigin))
 import Ecluse.Test.Port (passthroughTracingPort)
-import Ecluse.Test.Registry.JsonStream (heldChunks)
+import Ecluse.Test.Registry.JsonStream (heldChunks, sliceChunks)
 
 -- | Preserve authorisation refusals without reading their bodies. Bound every other smoke or contract response.
 fetchTestBody :: Manager -> ProgressFloor -> BodyLimit -> Request -> IO (Either FetchFault RegistryResponse)
@@ -52,17 +52,11 @@ sourceBody next = Body (\consume -> answered <$> consume next)
 answered :: Either LimitError a -> Either FetchFault (BodyOutcome a)
 answered = bimap FetchBoundExceeded (SuccessBody 200)
 
-{- | A capture cut into the 32 KiB chunks a body arrives in, each a slice of the capture. A harness
-cuts them before a measured read, so the read's figure holds no slicing.
--}
+-- | A capture cut into the 32 KiB slices a body arrives in. Cut it before a measured read, so the figure holds no slicing.
 captureChunks :: ByteString -> [ByteString]
-captureChunks bytes
-    | BS.null bytes = []
-    | otherwise = case BS.splitAt 32768 bytes of (!piece, rest) -> piece : captureChunks rest
+captureChunks = sliceChunks 32768
 
-{- | The production full read of held chunks, as a fetch from an origin at the base URL runs it. The
-body limit is at least the chunks' size, and the charge has no payer, as outside the memory gate.
--}
+-- | The production full read of held chunks from the base URL, under a body limit that admits them and with no memory charge.
 heldManifest :: EcosystemRead -> Limits -> Text -> PackageName -> [ByteString] -> IO (Either MetadataError Manifest)
 heldManifest eco limits base name chunks = readManifest eco passthroughTracingPort (heldTerms limits base chunks) name (heldBody chunks)
 
