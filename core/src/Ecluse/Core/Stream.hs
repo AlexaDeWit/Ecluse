@@ -2,17 +2,18 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Byte limits for advisory streams. Callers own the breach effect, so ingestion
-and runtime downloads can share the traversal without sharing error types.
+{- | Byte limits and whole-stream digests for advisory streams. Callers own the breach effect, so
+ingestion and runtime downloads can share the traversal without sharing error types.
 -}
-module Ecluse.Core.Stream (boundBytes, boundLines) where
+module Ecluse.Core.Stream (boundBytes, boundLines, digestWhole) where
 
 import Conduit (ConduitT, await, yield)
+import Crypto.Hash (hashInit, hashUpdate)
 import Data.ByteString qualified as BS
 
-{- | Preserve chunks up to the byte cap. On breach, pass the observed byte count
-to the action and stop without yielding the excess chunk, even if the action returns.
--}
+import Ecluse.Core.Snapshot (ContentDigest, digestFromContext)
+
+-- | Pass chunks up to the byte cap. A breach hands the action the bytes seen and stops before the excess chunk, even if the action returns.
 boundBytes :: (Monad m) => Int -> (Int -> m ()) -> ConduitT ByteString ByteString m ()
 boundBytes cap onBreach = go 0
   where
@@ -25,9 +26,7 @@ boundBytes cap onBreach = go 0
                         then lift (onBreach seen')
                         else yield chunk >> go seen'
 
-{- | Split a stream into lines without their newline, holding at most @cap@ bytes of one line. A
-longer line passes its length to the action and stops the stream, even if the action returns.
--}
+-- | Split a stream into lines, holding at most @cap@ bytes of one. A longer line hands the action its length and stops, even if the action returns.
 boundLines :: (Monad m) => Int -> (Int -> m ()) -> ConduitT ByteString ByteString m ()
 boundLines cap onBreach = go BS.empty
   where
@@ -43,3 +42,15 @@ boundLines cap onBreach = go BS.empty
             | BS.length buffer > cap -> lift (onBreach (BS.length buffer))
             | otherwise -> go buffer
     newline = 10
+
+-- | Pass every chunk on and return their SHA-256 at the end. Fuse it with 'Data.Conduit.fuseBoth', which drains the source into the digest.
+digestWhole :: (Monad m) => ConduitT ByteString ByteString m ContentDigest
+digestWhole = go hashInit
+  where
+    go context =
+        await >>= \case
+            Nothing -> pure (digestFromContext context)
+            Just chunk -> do
+                let !next = hashUpdate context chunk
+                yield chunk
+                go next
