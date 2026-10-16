@@ -42,7 +42,7 @@ import Ecluse.Core.Rules.Types (
     ruleName,
  )
 import Ecluse.Core.Wire (renderWire)
-import Ecluse.Test.Rules (admissionOnly, atPrecedence, remediationWith, shippedRemediation)
+import Ecluse.Test.Rules (admissionOnly, atPrecedence, differentialRemediation, remediationWith, shippedRemediation)
 
 spec :: Spec
 spec = do
@@ -133,7 +133,7 @@ rulePolicySpec = describe "rulePolicySpec" $ do
             -- A second rule of the shipped fast lane's own type, so the resolved policy
             -- carries both rather than one overwriting the other.
             resolveJson "{\"rules\":{\"cve-fast-lane\":{\"type\":\"AllowIfRemediatesCve\",\"onUnavailable\":\"skip\",\"remainingAdvisories\":\"differential\"}}}"
-                `shouldResolveTo` (atPrecedence defaultAllowIfRemediatesCvePrecedence (remediationWith FailNoDecision (Differential defaultDifferentialLimits)) : shippedRules)
+                `shouldResolveTo` (atPrecedence defaultAllowIfRemediatesCvePrecedence (differentialRemediation FailNoDecision) : shippedRules)
 
         it "adds an AllowByIdentity rule from an identity field" $
             resolveJson "{\"rules\":{\"pinned-fix\":{\"type\":\"AllowByIdentity\",\"identity\":\"left-pad@1.3.0\"}}}"

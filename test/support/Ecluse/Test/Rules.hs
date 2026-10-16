@@ -15,6 +15,7 @@ module Ecluse.Test.Rules (
 
     -- * Remediation rules
     shippedRemediation,
+    differentialRemediation,
     remediationWith,
 
     -- * Precedence and reach
@@ -159,7 +160,11 @@ withAdvisoryFreshness freshness deps =
 
 -- | The remediation rule @config/default.yaml@ ships: deny on unavailable evidence, differential at the shipped limits.
 shippedRemediation :: Rule
-shippedRemediation = remediationWith FailDeny (Differential defaultDifferentialLimits)
+shippedRemediation = differentialRemediation FailDeny
+
+-- | The remediation rule at the shipped limits, with the given choice for unavailable evidence.
+differentialRemediation :: FailureAlignment -> Rule
+differentialRemediation alignment = remediationWith alignment (Differential defaultDifferentialLimits)
 
 -- | A remediation rule with the given choices for unavailable evidence and for remaining advisories.
 remediationWith :: FailureAlignment -> RemainingAdvisories -> Rule

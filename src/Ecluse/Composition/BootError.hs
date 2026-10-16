@@ -53,7 +53,7 @@ data BootError
       QueueProviderUnavailable Text
     | -- | @AWS_ENDPOINT_URL_SQS@ is set but @AWS_REGION@ is not, and an emulator or VPC endpoint carries no region.
       QueueRegionMissing
-    | -- | @ECLUSE_QUEUE__URL@ names no backend this binary knows. Guessing one would misroute mirror jobs.
+    | -- | @ECLUSE_QUEUE__URL@ names no backend this binary knows, and carries the value. Guessing one would misroute mirror jobs.
       QueueUrlUnrecognised Text
     | -- | @AWS_ENDPOINT_URL_SQS@ is not a parseable URL. It can carry a credential, so the value stays redacted.
       QueueEndpointMalformed Secret
@@ -61,7 +61,7 @@ data BootError
       AwsEndpointMalformed Secret
     | -- | The eager mint threw, carrying every configured consumer key and the rendered exception.
       CodeArtifactMintFailed (NonEmpty Text) Text
-    | -- | A mount declares a mirror target, but this build writes nothing for its ecosystem.
+    | -- | A mount declares a mirror target this build cannot write for its ecosystem, so it is refused rather than booted half-wired.
       MirrorTargetWithoutPublish Ecosystem
     | -- | A PyPI mirror role cannot retain or validate its expected inventory without durable state.
       MirrorStateRequired Ecosystem
@@ -137,7 +137,7 @@ data StoreMaintenanceReason
 
 -- | A finding a role boots on and warns about. The deleting role refuses the collapses below instead.
 data Advisory
-    = -- | A mirror target is also the named mount's private upstream, at the carried registry.
+    = -- | A mirror target is also the named mount's private upstream, at the carried registry. Both mounts are carried, as they can differ.
       MirrorTargetOnPrivateUpstream Ecosystem Ecosystem RegistryUrl
     | -- | A mount's mirror target is also its own publication target, at the carried registry.
       MirrorTargetOnOwnPublicationTarget Ecosystem RegistryUrl

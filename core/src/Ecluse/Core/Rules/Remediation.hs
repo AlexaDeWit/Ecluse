@@ -10,6 +10,7 @@ compare as shortest round-trip decimals, so a gap of 1.0 holds between 8.1 and 7
 module Ecluse.Core.Rules.Remediation (remediationVerdict) where
 
 import Data.Foldable1 qualified as Foldable1
+import Data.Map.Strict qualified as Map
 import Data.Scientific (Scientific, fromFloatDigits)
 
 import Ecluse.Core.Cve (AdvisoryRange (arCveId, arEpss, arSeverity), PackageAdvisories, advisoryIdsOf, affecting, fixedAt)
@@ -19,13 +20,13 @@ import Ecluse.Core.Rules.Types
 remediationVerdict :: RemainingAdvisories -> PackageAdvisories -> RuleEvidence -> RuleVerdict
 remediationVerdict remaining = classify (partialVerdict remaining)
 
--- An exact fix that another advisory still affects: the advisories it genuinely fixes and those
--- still affecting it, each with its rows.
+-- An exact fix that another advisory still affects: the advisories it genuinely fixes, with their
+-- rows, and those still affecting it, with their rows grouped by advisory.
 data PartialFix = PartialFix
     { pfFixed :: AdvisoryIds
     , pfFixedRows :: [AdvisoryRange]
     , pfRemaining :: AdvisoryIds
-    , pfRemainingRows :: [AdvisoryRange]
+    , pfRemainingRows :: Map Text [AdvisoryRange]
     }
 
 -- A fixed advisory that another of its ranges still holds is no genuine fix.
@@ -36,12 +37,13 @@ classify onPartial advisories ev = case idsOf (advisoryIdsOf fixedRows) of
         Nothing -> Allow (Remediates fixed)
         Just remaining -> case idsOf (advisoryIdsOf genuineRows) of
             Nothing -> NoDecision (FixStillApplies remaining)
-            Just genuine -> onPartial (PartialFix genuine genuineRows remaining openRows)
+            Just genuine -> onPartial (PartialFix genuine genuineRows remaining openByAdvisory)
   where
     fixedRows = fixedAt advisories (evVersion ev)
     openRows = affecting advisories (evVersion ev)
     openIds = advisoryIdsOf openRows
-    genuineRows = filter ((`notElem` openIds) . arCveId) fixedRows
+    openByAdvisory = Map.fromListWith (flip (<>)) [(arCveId row, [row]) | row <- openRows]
+    genuineRows = filter ((`Map.notMember` openByAdvisory) . arCveId) fixedRows
 
 idsOf :: [Text] -> Maybe AdvisoryIds
 idsOf = fmap mkAdvisoryIds . nonEmpty
@@ -92,7 +94,7 @@ checkScore check partial =
     score = ckScore check
     scoreOf = finite <=< ckRead check
     fixedHighest = viaNonEmpty Foldable1.maximum (mapMaybe scoreOf (pfFixedRows partial))
-    perAdvisory = [(advisory, traverse scoreOf (filter ((== advisory) . arCveId) (pfRemainingRows partial))) | advisory <- toList (unAdvisoryIds (pfRemaining partial))]
+    perAdvisory = [(advisory, traverse scoreOf (Map.findWithDefault [] advisory (pfRemainingRows partial))) | advisory <- toList (unAdvisoryIds (pfRemaining partial))]
     remainingHighest = viaNonEmpty Foldable1.maximum (concat [scores | (_, Just scores) <- perAdvisory])
     unscored = [RemainingUnscored score (mkAdvisoryIds ids) | Just ids <- [nonEmpty [advisory | (advisory, Nothing) <- perAdvisory]]]
     aboveCeiling = [RemainingAboveCeiling score | Just highest <- [remainingHighest], not (ckWithinCeiling check (fromFloatDigits highest))]

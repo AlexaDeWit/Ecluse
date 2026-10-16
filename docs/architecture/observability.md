@@ -79,10 +79,12 @@ change. Against Datadog the node-local Agent resamples, so always-on is not wast
 - `ecluse.advisory.sync.attempts` (a counter) and `ecluse.advisory.sync.duration` (a histogram, in
   seconds) both carry (ecosystem, result), where result is one of `swapped`, `unchanged`,
   `none_published`, `fetch_failed`, or `refused`. A run of `fetch_failed` or `refused` means that
-  ecosystem gates against an ageing advisory database or none at all. The advisory rules then follow
-  `onUnavailable`: the shipped fast lane and the MAL default refuse, and every other rule, the
-  quarantine included, decides as usual. Past the maximum advisory age, the advisory denies refuse. Check the bucket, the object key, and the IAM the sync task reads under. The artifact's
-  own identifiers stay on the sync log line, never a label.
+  ecosystem gates against an ageing advisory database or none at all. While the last good generation
+  is within its maximum advisory age, every rule decides as usual. With no generation loaded, the
+  advisory rules follow `onUnavailable`: the shipped fast lane and the MAL default refuse. Past the
+  maximum age, the advisory denies refuse, and the fast lane follows `onUnavailable`. The quarantine
+  always decides as usual. Check the bucket, the object key, and the IAM the sync task reads under.
+  The artifact's own identifiers stay on the sync log line, never a label.
 - `ecluse.advisory.database.age.seconds` (a gauge) carries (ecosystem). The proxy, mirror worker,
   and Dredger each observe their own slots. The gauge reads the seconds since
   that ecosystem's serving advisory database was installed. Écluse measures it at each collection,

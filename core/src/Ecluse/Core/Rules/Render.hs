@@ -74,11 +74,11 @@ renderReason = \case
     IdentityNotRevoked ident -> "identity is not the revoked " <> ident
     IdentityAllowListed ident -> "identity " <> ident <> " is allow-listed by operator"
     IdentityNotAllowListed ident -> "identity is not the allow-listed " <> ident
+    -- No remediation sentence holds "affected by ", which 'cveIdsInReason' reads as a denial's advisories.
     Remediates ids -> "remediates " <> listed ids
     RemediatesWithinLimits compared ->
         "remediates " <> listed (scFixed compared) <> " with " <> listed (scRemaining compared) <> " remaining inside the limits" <> renderComparison compared
-    FixesButStillAffected ids open ->
-        "fixes " <> listed ids <> " but is still affected by " <> listed open
+    FixesButStillAffected ids open -> "fixes " <> listed ids <> " with " <> listed open <> " remaining"
     RemediationBeyondLimits compared shortfalls ->
         "fixes "
             <> listed (scFixed compared)
@@ -123,7 +123,6 @@ renderInability = \case
 listed :: AdvisoryIds -> Text
 listed = T.intercalate ", " . toList . unAdvisoryIds
 
--- The sentences hold no "affected by ", which 'cveIdsInReason' would read as a denial's advisories.
 renderComparison :: ScoreComparison -> Text
 renderComparison compared =
     " (" <> T.intercalate ", " (sideFacts Cvss "inclusive" (scCvss compared) (dlMaxRemainingCvss limits) (dlCvssGap limits) <> sideFacts Epss "exclusive" (scEpss compared) (dlMaxRemainingEpss limits) (dlEpssGap limits)) <> ")"

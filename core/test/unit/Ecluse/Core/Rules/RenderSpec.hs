@@ -67,8 +67,8 @@ reasonPins =
     , (IdentityNotAllowListed "Flask_Thing", "identity is not the allow-listed Flask_Thing")
     , (Remediates (mkAdvisoryIds ("GHSA-fixed-0001" :| [])), "remediates GHSA-fixed-0001")
     , (Remediates (mkAdvisoryIds ("GHSA-fixed-0001" :| ["GHSA-fixed-0002"])), "remediates GHSA-fixed-0001, GHSA-fixed-0002")
-    , (FixesButStillAffected (mkAdvisoryIds ("GHSA-fixed-0001" :| [])) (mkAdvisoryIds ("GHSA-open-0002" :| [])), "fixes GHSA-fixed-0001 but is still affected by GHSA-open-0002")
-    , (FixesButStillAffected (mkAdvisoryIds ("GHSA-a" :| ["GHSA-b"])) (mkAdvisoryIds ("GHSA-c" :| ["MAL-d"])), "fixes GHSA-a, GHSA-b but is still affected by GHSA-c, MAL-d")
+    , (FixesButStillAffected (mkAdvisoryIds ("GHSA-fixed-0001" :| [])) (mkAdvisoryIds ("GHSA-open-0002" :| [])), "fixes GHSA-fixed-0001 with GHSA-open-0002 remaining")
+    , (FixesButStillAffected (mkAdvisoryIds ("GHSA-a" :| ["GHSA-b"])) (mkAdvisoryIds ("GHSA-c" :| ["MAL-d"])), "fixes GHSA-a, GHSA-b with GHSA-c, MAL-d remaining")
     , (FixesNoAdvisory, "no advisory names this version as its fix")
     , (FixStillApplies (mkAdvisoryIds ("GHSA-a" :| ["GHSA-b"])), "every advisory naming this version as its fix still applies to it: GHSA-a, GHSA-b")
     , (RemediatesWithinLimits (pinnedComparison (Scored 4.2) (Scored 0.005) defaultDifferentialLimits), "remediates GHSA-fixed-0001 with GHSA-open-0002 remaining inside the limits (remaining CVSS 4.2, CVSS ceiling 6.9 inclusive, fixed CVSS 9.8, CVSS gap at least 1.0, remaining EPSS 0.005, EPSS ceiling 0.01 exclusive, fixed EPSS unscored)")
@@ -398,7 +398,7 @@ oracleReason = \case
     IdentityNotAllowListed ident -> "identity is not the allow-listed " <> ident
     Remediates ids -> "remediates " <> commaJoined ids
     RemediatesWithinLimits compared -> "remediates " <> commaJoined (scFixed compared) <> " with " <> commaJoined (scRemaining compared) <> " remaining inside the limits" <> oracleComparison compared
-    FixesButStillAffected ids open -> "fixes " <> commaJoined ids <> " but is still affected by " <> commaJoined open
+    FixesButStillAffected ids open -> "fixes " <> commaJoined ids <> " with " <> commaJoined open <> " remaining"
     RemediationBeyondLimits compared shortfalls ->
         "fixes " <> commaJoined (scFixed compared) <> " with " <> commaJoined (scRemaining compared) <> " remaining outside the limits: " <> T.intercalate ", " (map oracleShortfall (toList (unLimitShortfalls shortfalls))) <> oracleComparison compared
     FixStillApplies ids -> "every advisory naming this version as its fix still applies to it: " <> commaJoined ids
@@ -536,12 +536,13 @@ genIds = mkAdvisoryIds <$> Gen.nonEmpty (Range.linear 1 5) (Gen.text (Range.line
 genScore :: Gen AdvisoryScore
 genScore = Gen.element [Cvss, Epss]
 
--- | The remediation reasons a default denial can carry, less the abstention, which reads "affected by ".
+-- | The reasons the remediation rule returns, which a default denial's trail can carry.
 genRemediationReason :: Gen Reason
 genRemediationReason =
     Gen.choice
         [ Remediates <$> genIds
         , RemediatesWithinLimits <$> genComparison
+        , FixesButStillAffected <$> genIds <*> genIds
         , RemediationBeyondLimits <$> genComparison <*> genShortfalls
         , FixStillApplies <$> genIds
         , pure FixesNoAdvisory

@@ -36,7 +36,6 @@ import Ecluse.Core.Rules (RuleDeps (rdAdvisoryDatabase), evalRules, prepare)
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh, AdvisoryUndated))
 import Ecluse.Core.Rules.Types (
     AdvisoryScore (Cvss, Epss),
-    AllowIfRemediatesCveParams (AllowIfRemediatesCveParams),
     Decision,
     DenyIfCveParams (DenyIfCveParams),
     DenyIfEpssParams (DenyIfEpssParams),
@@ -45,7 +44,7 @@ import Ecluse.Core.Rules.Types (
     LimitShortfall (GapBelowMinimum, RemainingUnscored),
     PrecededRule (PrecededRule, prRule, rulePrecedence, ruleReach),
     Reason (AffectedBy, FixStillApplies, FixesButStillAffected, Remediates, RemediatesWithinLimits, RemediationBeyondLimits),
-    RemainingAdvisories (AbstainOnRemaining, Differential),
+    RemainingAdvisories (AbstainOnRemaining),
     Rule (..),
     RuleEvidence (evAvailability, evInstallCode, evName, evPublishedAt, evVersion),
     RuleReach (AdmissionAndRevocation, AdmissionOnly),
@@ -70,7 +69,7 @@ import Ecluse.Rules.Remediation.Support (genRemediation)
 import Ecluse.Rules.Support (ctx, now)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, unscopedPyPI, v1_0_0)
-import Ecluse.Test.Rules (admissionOnly, atPrecedence, blockedBy, evalRule, inertRuleDeps, isAllow, isApproved, isUndecidable, servingRuleDeps, staticAdvisoryDatabase, withAdvisoryFreshness)
+import Ecluse.Test.Rules (admissionOnly, atPrecedence, blockedBy, differentialRemediation, evalRule, inertRuleDeps, isAllow, isApproved, isUndecidable, remediationWith, servingRuleDeps, shippedRemediation, staticAdvisoryDatabase, withAdvisoryFreshness)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 import Ecluse.Core.Rules.Types qualified as Types
@@ -96,7 +95,7 @@ vocabularySpec = describe "RuleType" $ do
             [ (Types.AllowScopeType, "AllowScope", AllowScope (mkScope "acme"))
             , (Types.AllowIfOlderThanType, "AllowIfOlderThan", AllowIfOlderThan nominalDay)
             , (Types.AllowByIdentityType, "AllowByIdentity", AllowByIdentity "thing")
-            , (Types.AllowIfRemediatesCveType, "AllowIfRemediatesCve", remediation FailDeny (Differential defaultDifferentialLimits))
+            , (Types.AllowIfRemediatesCveType, "AllowIfRemediatesCve", shippedRemediation)
             , (Types.DenyIfCveType, "DenyIfCve", DenyIfCve (DenyIfCveParams 8 FailDeny))
             , (Types.DenyIfKnownMaliciousType, "DenyIfKnownMalicious", DenyIfKnownMalicious FailDeny)
             , (Types.DenyIfEpssType, "DenyIfEpss", DenyIfEpss (DenyIfEpssParams 0.5 FailDeny))
@@ -175,19 +174,16 @@ ruleDeniesSpec = describe "ruleDenies" $
                 H.annotateShow verdict
                 H.assert (not (ruleDenies rule && isAllow verdict))
 
-remediation :: FailureAlignment -> RemainingAdvisories -> Rule
-remediation alignment remaining = AllowIfRemediatesCve (AllowIfRemediatesCveParams alignment remaining)
-
 -- | Whether each rule reads advisories, refuses without them, and reads EPSS, over every type.
 advisoryPredicates :: [(Rule, (Bool, Bool, Bool))]
 advisoryPredicates =
     [ (AllowScope (mkScope "acme"), (False, False, False))
     , (AllowIfOlderThan nominalDay, (False, False, False))
     , (AllowByIdentity "thing", (False, False, False))
-    , (remediation FailDeny (Differential defaultDifferentialLimits), (True, True, True))
-    , (remediation FailDeny AbstainOnRemaining, (True, True, False))
-    , (remediation FailNoDecision (Differential defaultDifferentialLimits), (True, False, True))
-    , (remediation FailNoDecision AbstainOnRemaining, (True, False, False))
+    , (shippedRemediation, (True, True, True))
+    , (remediationWith FailDeny AbstainOnRemaining, (True, True, False))
+    , (differentialRemediation FailNoDecision, (True, False, True))
+    , (remediationWith FailNoDecision AbstainOnRemaining, (True, False, False))
     , (DenyIfCve (DenyIfCveParams 8 FailDeny), (True, True, False))
     , (DenyIfCve (DenyIfCveParams 8 FailNoDecision), (True, True, False))
     , (DenyIfKnownMalicious FailNoDecision, (True, True, False))

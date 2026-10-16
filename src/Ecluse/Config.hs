@@ -62,7 +62,7 @@ module Ecluse.Config (
     renderPolicyError,
     emptyPolicy,
     decodeDefaultConfig,
-    withoutSourceDefaults,
+    sourceDefaultNames,
     ConfigError (..),
     renderConfigError,
     loadConfig,
@@ -70,6 +70,7 @@ module Ecluse.Config (
     mountPostureLines,
     mountAdvisoryAge,
     mountEpssRequirement,
+    compileMountEpssRequirement,
     mountAdvisoryDenials,
     mountDatabaseRequirement,
     advisoryAgeLines,
@@ -118,14 +119,10 @@ decodeDefaultConfig bytes = do
     policy <- first (pure . PolicyErrors) (resolvePolicy emptyPolicy patch)
     pure (ast, policy)
 
--- | Remove the defaults a policy keeps only while an advisory source activates them.
-withoutSourceDefaults :: RulePolicy -> RulePolicy
-withoutSourceDefaults = RulePolicy . (`Map.withoutKeys` sourceDefaultNames) . policyRules
-
 -- Each descriptor stays patchable after a disable, until the final mount policy is selected.
 data PendingPolicy = PendingPolicy RulePolicy (Map Text Bool)
 
--- The shipped rules an advisory source activates: neither can decide anything without one.
+-- | The shipped rules an advisory source activates: neither can decide anything without one.
 sourceDefaultNames :: Set Text
 sourceDefaultNames = Set.fromList ["deny-known-malicious", "remediation-fast-track"]
 
@@ -398,6 +395,22 @@ mountEpssRequirement = bool EpssRequired EpssOptional . null . mountEpssRules
 mountEpssRules :: Mount -> [Text]
 mountEpssRules = ordNub . map ruleName . filter requiresEpss . mountRulesOf
 
+-- | A compile's EPSS requirement for this mount. Without a source it cannot tell which rules its consumers run.
+compileMountEpssRequirement :: AdvisoriesSettings -> Mount -> EpssRequirement
+compileMountEpssRequirement advisories mount = case compileEpssBasis advisories mount of
+    EpssUnread -> EpssOptional
+    EpssReadBy _ -> EpssRequired
+    EpssUnsourced -> EpssRequired
+
+-- Why a compile for one mount needs EPSS enrichment, or why it does not.
+data EpssBasis = EpssReadBy (NonEmpty Text) | EpssUnsourced | EpssUnread
+
+compileEpssBasis :: AdvisoriesSettings -> Mount -> EpssBasis
+compileEpssBasis advisories mount = case (nonEmpty (mountEpssRules mount), advUrl advisories) of
+    (Just rules, _) -> EpssReadBy rules
+    (Nothing, Nothing) -> EpssUnsourced
+    (Nothing, Just _) -> EpssUnread
+
 mountRulesOf :: Mount -> [Rule]
 mountRulesOf = map prRule . mountPolicy
 
@@ -429,14 +442,16 @@ ageLine eco limit =
         <> ", "
         <> renderBasis (maxAdvisoryAgeBasis limit)
 
--- | Each mount's EPSS requirement, which Pilot and the mount's consumers share. It is reported with no store too.
+-- | Each mount's EPSS requirement, as 'compileMountEpssRequirement' decides it. It is reported with no store too.
 advisoryEpssLines :: Config -> [Text]
-advisoryEpssLines config = [epssLine eco (mountEpssRules mount) | (eco, mount) <- Map.toAscList (configMounts config)]
+advisoryEpssLines config =
+    [epssLine eco (compileEpssBasis (cfgAdvisories (configApp config)) mount) | (eco, mount) <- Map.toAscList (configMounts config)]
 
-epssLine :: Ecosystem -> [Text] -> Text
+epssLine :: Ecosystem -> EpssBasis -> Text
 epssLine eco = \case
-    [] -> prefix <> "EPSS enrichment is optional, because no active rule reads EPSS scores. A failed EPSS feed publishes the OSV data with epss_status=unavailable"
-    rules -> prefix <> "EPSS enrichment is required, because " <> T.intercalate ", " rules <> " read EPSS scores. A failed EPSS feed publishes no artifact, and consumers refuse one without enrichment"
+    EpssUnread -> prefix <> "EPSS enrichment is optional, because no active rule reads EPSS scores. A failed EPSS feed publishes the OSV data with epss_status=unavailable"
+    EpssReadBy rules -> prefix <> "EPSS enrichment is required, because these active rules read EPSS scores: " <> T.intercalate ", " (toList rules) <> ". A failed EPSS feed publishes no artifact, and consumers refuse one without enrichment"
+    EpssUnsourced -> prefix <> "EPSS enrichment is required, because with no advisories.url a compile cannot tell which rules the consumer of its artifact runs. A failed EPSS feed publishes no artifact"
   where
     prefix = "mount \"" <> ecosystemName eco <> "\": "
 

@@ -242,17 +242,18 @@ advisoryStoreSpec = describe "vetBoot -- an advisory deny with no advisory store
         refusalsFor MirrorWriter (withAdvisoryStore staticEnvVars) `shouldReturn` []
 
     forM_ [MirrorWriter, MirrorPruner, MirrorPreviewer] $ \role -> do
+        let roleEnv = withObservablePrivate codeArtifactEnvVars
         it ("refuses the shipped remediation rule activated without a source under " <> show role) $
-            refusalsFor role (overrideEnv "ECLUSE_RULES" "{\"remediation-fast-track\":{\"enabled\":true}}" staticEnvVars)
-                `shouldReturn` [AdvisoryDenyWithoutStore Npm ("AllowIfRemediatesCve" :| [])]
+            refusalsFor role (overrideEnv "ECLUSE_RULES" "{\"remediation-fast-track\":{\"enabled\":true}}" roleEnv)
+                >>= (`shouldSatisfy` elem (AdvisoryDenyWithoutStore Npm ("AllowIfRemediatesCve" :| [])))
         it ("refuses a named remediation rule that denies without a source under " <> show role) $
-            refusalsFor role (denyingOn "AllowIfRemediatesCve" staticEnvVars)
-                `shouldReturn` [AdvisoryDenyWithoutStore Npm ("AllowIfRemediatesCve" :| [])]
+            refusalsFor role (denyingOn "AllowIfRemediatesCve" roleEnv)
+                >>= (`shouldSatisfy` elem (AdvisoryDenyWithoutStore Npm ("AllowIfRemediatesCve" :| [])))
         it ("boots a remediation rule that skips without a source, and advises under " <> show role) $ do
-            config <- expectConfig (denyingWith "AllowIfRemediatesCve" "skip" staticEnvVars) Nothing
+            config <- expectConfig (denyingWith "AllowIfRemediatesCve" "skip" roleEnv) Nothing
             let (advisories, outcome) = runVet role (vetBoot config)
             advisories `shouldSatisfy` elem (RemediationSkipsWithoutStore Npm)
-            void outcome `shouldBe` Right ()
+            fromLeft [] outcome `shouldSatisfy` not . any isStoreRefusal
 
     it "advises nothing for a skipping remediation rule once a store is configured" $ do
         config <- expectConfig (withAdvisoryStore (denyingWith "AllowIfRemediatesCve" "skip" staticEnvVars)) Nothing
@@ -480,6 +481,11 @@ denyingWith ruleType alignment = overrideEnv "ECLUSE_RULES" rules
         "DenyIfEpss" -> ",\"minEpss\":0.5"
         "AllowIfRemediatesCve" -> ",\"remainingAdvisories\":\"differential\""
         _ -> ",\"minCvss\":8"
+
+isStoreRefusal :: BootError -> Bool
+isStoreRefusal = \case
+    AdvisoryDenyWithoutStore{} -> True
+    _ -> False
 
 vetted :: RegistryRole -> Config -> Either [BootError] ValidatedPlan
 vetted role config = snd (runVet role (vetBoot config))

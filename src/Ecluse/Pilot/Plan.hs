@@ -42,7 +42,7 @@ import Ecluse.Config (
     MountMap,
     advisoryObjectKey,
     advisoryStoreBucket,
-    mountEpssRequirement,
+    compileMountEpssRequirement,
     unUrl,
  )
 import Ecluse.Core.Clock (secondsToMicros)
@@ -76,7 +76,7 @@ exportLoopPlan advisories targets = case advUrl advisories of
     Nothing -> Just ExportIdle
     Just store -> ExportTo store <$> nonEmpty targets
 
--- | The delay between export cycles. The decoder bounds @compileInterval@, so the conversion cannot wrap to a negative delay.
+-- | The delay between export cycles. The decoder bounds @compileInterval@ to @maxBound \`div\` 1000000@ seconds, so it cannot wrap negative.
 exportCadenceMicros :: AdvisoriesSettings -> Int
 exportCadenceMicros = secondsToMicros . advCompileInterval
 
@@ -118,11 +118,9 @@ data PilotCompileOptions = PilotCompileOptions
     }
     deriving stock (Eq, Show)
 
--- | A source-configured mount's own requirement. Without a mount or a source, the artifact may serve a policy that needs EPSS.
+-- | The compiled mount's own requirement. A compile for no mount may serve a policy that needs EPSS.
 compileEpssRequirement :: AdvisoriesSettings -> MountMap -> PilotCompileOptions -> EpssRequirement
-compileEpssRequirement advisories mounts opts = case (advUrl advisories, compiledMount mounts opts) of
-    (Just _, Just mount) -> mountEpssRequirement mount
-    _ -> EpssRequired
+compileEpssRequirement advisories mounts opts = maybe EpssRequired (compileMountEpssRequirement advisories) (compiledMount mounts opts)
 
 -- | The warning a one-shot compile logs for an ecosystem the loaded configuration does not mount.
 unmountedCompileWarning :: MountMap -> PilotCompileOptions -> Maybe Text

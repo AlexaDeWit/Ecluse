@@ -34,7 +34,7 @@ import Ecluse.Config (
     mountPostureLines,
     renderConfigError,
     resolvedKeyProvenance,
-    withoutSourceDefaults,
+    sourceDefaultNames,
  )
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.Resolve (deepMerge)
@@ -77,7 +77,7 @@ spec = do
         it "ships exactly the expected shared baseline rules under their default names" $ do
             (_, catalogue) <- expectRight (decodeDefaultConfig defaultConfigBytes)
             Map.keys (policyRules catalogue) `shouldMatchList` ["deny-known-malicious", "min-age", "remediation-fast-track"]
-            Map.keys (policyRules (withoutSourceDefaults catalogue)) `shouldMatchList` ["min-age"]
+            Map.keys (Map.withoutKeys (policyRules catalogue) sourceDefaultNames) `shouldMatchList` ["min-age"]
 
         it "applies every shared shipped rule at both phases" $ do
             (_, baseline) <- expectRight (decodeDefaultConfig defaultConfigBytes)
@@ -387,10 +387,10 @@ spec = do
                            , "mount \"pypi\": EPSS enrichment is optional, because no active rule reads EPSS scores. A failed EPSS feed publishes the OSV data with epss_status=unavailable"
                            ]
 
-        it "reports the requirement without an advisory store, which a local compile runs under" $ do
+        it "requires EPSS without an advisory store, as a local compile does" $ do
             cfg <- configFor privateMountDoc
             advisoryEpssLines cfg
-                `shouldBe` ["mount \"npm\": EPSS enrichment is optional, because no active rule reads EPSS scores. A failed EPSS feed publishes the OSV data with epss_status=unavailable"]
+                `shouldBe` ["mount \"npm\": EPSS enrichment is required, because with no advisories.url a compile cannot tell which rules the consumer of its artifact runs. A failed EPSS feed publishes no artifact"]
 
     describe "resolvedKeyProvenance" $ do
         it "labels each resolved key with the layer that supplied it" $ do
@@ -492,7 +492,7 @@ maliciousDefaultSpec = describe "the source-dependent MAL default" $ do
         (_, catalogue) <- expectRight (decodeDefaultConfig defaultConfigBytes)
         absent <- load [] "{}" "{}"
         present <- load source "{}" "{}"
-        concatMap mountPolicy (Map.elems (configMounts absent)) `shouldMatchList` Map.elems (policyRules (withoutSourceDefaults catalogue))
+        concatMap mountPolicy (Map.elems (configMounts absent)) `shouldMatchList` Map.elems (Map.withoutKeys (policyRules catalogue) sourceDefaultNames)
         concatMap mountPolicy (Map.elems (configMounts present)) `shouldMatchList` Map.elems (policyRules catalogue)
         malRules absent `shouldBe` []
         malRules present `shouldBe` [expected]

@@ -117,7 +117,7 @@ data VerdictSource
 -- | How an advisory rule resolves when it cannot read: on an expired push, and on a faulted read.
 data AdvisoryAlignment = AdvisoryAlignment
     { onExpiredPush :: FailureAlignment
-    -- ^ Fixed per rule, since expiry is unavailability configuration cannot waive.
+    -- ^ A deny refuses an expired push under any configuration. The remediation allow takes its one choice here too.
     , onFaultedRead :: FailureAlignment
     -- ^ The rule's configured alignment for a timeout, a spent retry budget, or an open breaker.
     }

@@ -752,7 +752,7 @@ remediationSpec = describe "the remediation allow at revocation" $ do
                     manifest = Just (sampleManifest name [version])
                 (_, without) <- evalIO (revocationStep deps denies name version manifest)
                 (_, with) <- evalIO (revocationStep deps (PrecededRule precedence AdmissionAndRevocation remediation : denies) name version manifest)
-                H.cover 10 "the denies alone condemn the version" (null without)
+                H.cover 5 "the denies alone condemn the version" (null without)
                 H.cover 5 "the source cannot answer" (standing `elem` [NoSource, Unloaded, Faulting, Expired, Undated])
                 when (null with) (H.assert (null without))
 

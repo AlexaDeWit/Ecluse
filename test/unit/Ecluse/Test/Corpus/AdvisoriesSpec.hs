@@ -12,7 +12,7 @@ import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
 import Test.Hspec
 import UnliftIO.Temporary (withSystemTempDirectory)
 
-import Ecluse.Config (RulePolicy (policyRules), decodeDefaultConfig, withoutSourceDefaults)
+import Ecluse.Config (RulePolicy (policyRules), decodeDefaultConfig, sourceDefaultNames)
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), CveDb (cveDbLookup), CveLookup (CveLookup, cveCoveredNames))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
@@ -107,7 +107,7 @@ spec = do
     describe "shippedPolicy" $
         it "is the shared policy config/default.yaml ships without an advisory source" $ do
             (_, catalogue) <- expectRight (decodeDefaultConfig defaultConfigBytes)
-            shippedPolicy `shouldMatchList` Map.elems (policyRules (withoutSourceDefaults catalogue))
+            shippedPolicy `shouldMatchList` Map.elems (Map.withoutKeys (policyRules catalogue) sourceDefaultNames)
 
     describe "configuredShippedPolicy" $
         it "matches the effective shared policy with an advisory source" $ do

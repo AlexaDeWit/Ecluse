@@ -386,6 +386,7 @@ outageRules =
         [ "min-age" .= object ["type" .= ("AllowIfOlderThan" :: Text), "ageSeconds" .= (604800 :: Int)]
         , "deny-cve" .= object ["type" .= ("DenyIfCve" :: Text), "minCvss" .= (8 :: Int), "onUnavailable" .= ("skip" :: Text)]
         , "deny-known-malicious" .= object ["onUnavailable" .= ("skip" :: Text)]
+        , "remediation-fast-track" .= object ["onUnavailable" .= ("skip" :: Text)]
         ]
 
 -- | DDL invalidates SQLite's cached schema and restores it even when an assertion fails.

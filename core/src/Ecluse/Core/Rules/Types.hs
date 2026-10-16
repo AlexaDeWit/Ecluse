@@ -440,7 +440,9 @@ data RuleVerdict
       CannotVet FailureAlignment Inability
     deriving stock (Eq, Show)
 
--- | One rule's evaluation. The harness alone creates 'Unavailable', from faults.
+{- | One rule's evaluation. The harness alone creates 'Unavailable', from faults. Decisive verdicts
+and fail-closed faults decide the version, and other outcomes join the audit trail.
+-}
 data RuleEvaluation
     = -- | The rule returned a verdict, and the harness takes it at face value.
       Decided RuleVerdict

@@ -35,9 +35,7 @@ import Ecluse.Core.Rules.Types (
     FailureAlignment (FailDeny, FailNoDecision),
     PrecededRule,
     Reason (NoKnownMaliciousAdvisory),
-    RemainingAdvisories (Differential),
     Rule (AllowIfOlderThan, DenyIfKnownMalicious),
-    defaultDifferentialLimits,
     identityEvidence,
  )
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -61,7 +59,7 @@ import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, passthroughAdvisorySyncTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
-import Ecluse.Test.Rules (atDefaultPrecedence, blockedBy, remediationWith, slotRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, blockedBy, differentialRemediation, slotRuleDeps)
 import Ecluse.Test.Server.Mount (npmServeDeps)
 import Ecluse.Test.Stub (Captured (capHeaders), stubLocalhostUrl, withRoutedStub, withStub)
 import Ecluse.Test.Wai (rebaseAuthority, selfBaseUrlOf, status)
@@ -194,7 +192,7 @@ publishArchive s3Endpoint env zipBytes = do
 
 -- The quarantine and the shipped remediation limits, under the given unavailability choice.
 fastLaneUnder :: FailureAlignment -> [PrecededRule]
-fastLaneUnder alignment = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), remediationWith alignment (Differential defaultDifferentialLimits)]
+fastLaneUnder alignment = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), differentialRemediation alignment]
 
 -- A proxy under this policy, with the packument stub as its public origin.
 proxyApp :: RuleDeps -> [PrecededRule] -> Text -> Text -> IO Application

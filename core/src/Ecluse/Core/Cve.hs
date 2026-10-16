@@ -169,7 +169,7 @@ fixedAt advisories version
     probeKey = versionKeyIn (paEcosystem advisories) version
     probeIdentity = maybe (renderVersion version) renderVersionKey probeKey
 
--- | The rows whose interval holds the version, in row order. An unprovable comparison counts as inside, bar an unorderable point.
+-- | The rows whose interval holds the version, in row order. __Fail-closed:__ an unprovable comparison counts as inside, bar an unorderable point.
 affecting :: PackageAdvisories -> Version -> [AdvisoryRange]
 affecting advisories version = [segRange s | s <- paSegments advisories, holds (segBounds s)]
   where

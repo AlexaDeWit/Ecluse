@@ -22,7 +22,7 @@ import Hedgehog.Range qualified as Range
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
-import Test.Hspec.Hedgehog (hedgehog)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import UnliftIO.Async (mapConcurrently)
 import UnliftIO.Exception (evaluate, finally, impureThrow, throwIO)
@@ -47,6 +47,7 @@ import Ecluse.Test.Rules (
     atPrecedence,
     blockedBy,
     constRule,
+    differentialRemediation,
     evalRule,
     inertRuleDeps,
     isAllow,
@@ -146,10 +147,6 @@ denyEpssAt threshold = DenyIfEpss (DenyIfEpssParams threshold FailDeny)
 skippingRemediation :: Rule
 skippingRemediation = remediationWith FailNoDecision AbstainOnRemaining
 
--- | The shipped remediation limits under either unavailability choice.
-differentialUnder :: FailureAlignment -> Rule
-differentialUnder alignment = remediationWith alignment (Differential defaultDifferentialLimits)
-
 -- | A partial fix of @thing\@1.0.0@: a severe advisory it fixes, and a minor one that still affects it.
 partialFixRows :: Double -> [(Text, AdvisoryRange)]
 partialFixRows remainingCvss =
@@ -228,10 +225,10 @@ expirySpec = describe "an expired advisory push" $ do
 
     for_ [(FailNoDecision, "abstains", isBlockedByDefault), (FailDeny, "refuses", isUndecidable)] $ \(alignment, outcome, expected) -> do
         it ("the remediation allow " <> outcome <> " under onUnavailable " <> show alignment <> " when the push carries no publication time") $
-            decideWith (undated (depsWith fixRows)) [atDefaultPrecedence (differentialUnder alignment)] (pkg Nothing 0)
+            decideWith (undated (depsWith fixRows)) [atDefaultPrecedence (differentialRemediation alignment)] (pkg Nothing 0)
                 >>= (`shouldSatisfy` expected)
         it ("the remediation allow " <> outcome <> " under onUnavailable " <> show alignment <> " rather than admitting on expired evidence") $
-            decideWith (expired (depsWith fixRows)) [atDefaultPrecedence (differentialUnder alignment)] (pkg Nothing 0)
+            decideWith (expired (depsWith fixRows)) [atDefaultPrecedence (differentialRemediation alignment)] (pkg Nothing 0)
                 >>= (`shouldSatisfy` expected)
 
     it "is eligible at an age equal to the maximum" $
@@ -322,7 +319,7 @@ evidenceSpec = describe "skipped-check evidence on an admission" $ do
             `shouldSatisfy` T.isSuffixOf "(skipped for unavailability: DenyIfCve (the rule source circuit breaker is open))"
 
     it "keeps the remediation check an expired push skipped under onUnavailable: skip" $ do
-        decision <- decideWith (expired (depsWith fixRows)) (map atDefaultPrecedence [differentialUnder FailNoDecision, AllowIfOlderThan (7 * nominalDay)]) (pkg Nothing 30)
+        decision <- decideWith (expired (depsWith fixRows)) (map atDefaultPrecedence [differentialRemediation FailNoDecision, AllowIfOlderThan (7 * nominalDay)]) (pkg Nothing 30)
         admittedBy decision `shouldBe` Just "AllowIfOlderThan"
         case skippedChecks decision of
             [SkippedUnavailable "AllowIfRemediatesCve" cause] -> renderInability cause `shouldSatisfy` T.isInfixOf "past the maximum"
@@ -359,7 +356,7 @@ evidenceSpec = describe "skipped-check evidence on an admission" $ do
         skippedChecks decision `shouldBe` []
 
     it "keeps the remediation check skipped before the first sync under onUnavailable: skip" $ do
-        decision <- decideWith unloadedDeps (map atDefaultPrecedence [differentialUnder FailNoDecision, AllowIfOlderThan (7 * nominalDay)]) (pkg Nothing 30)
+        decision <- decideWith unloadedDeps (map atDefaultPrecedence [differentialRemediation FailNoDecision, AllowIfOlderThan (7 * nominalDay)]) (pkg Nothing 30)
         admittedBy decision `shouldBe` Just "AllowIfOlderThan"
         skippedChecks decision `shouldBe` [SkippedUnavailable "AllowIfRemediatesCve" NoDatabaseLoaded]
 
@@ -370,7 +367,7 @@ evidenceSpec = describe "skipped-check evidence on an admission" $ do
 sourceHealthSpec :: Spec
 sourceHealthSpec = describe "advisory source health reporting" $ do
     for_ [FailDeny, FailNoDecision] $ \alignment ->
-        for_ [DenyIfCve (DenyIfCveParams 8 alignment), DenyIfKnownMalicious alignment, differentialUnder alignment] $ \rule ->
+        for_ [DenyIfCve (DenyIfCveParams 8 alignment), DenyIfKnownMalicious alignment, differentialRemediation alignment] $ \rule ->
             describe (toString (ruleName rule) <> " under " <> show alignment) $ do
                 let name = ruleName rule
                     policy = map atDefaultPrecedence [rule, AllowIfOlderThan (7 * nominalDay)]
@@ -435,7 +432,7 @@ sourceHealthSpec = describe "advisory source health reporting" $ do
 noDatabaseVerdicts :: [(Text, Rule, RuleVerdict, Text)]
 noDatabaseVerdicts =
     [ ("AllowIfRemediatesCve set to deny", shippedRemediation, CannotVet FailDeny NoDatabaseLoaded, "AllowIfRemediatesCve: no advisory database loaded")
-    , ("AllowIfRemediatesCve set to skip", differentialUnder FailNoDecision, CannotVet FailNoDecision NoDatabaseLoaded, "AllowIfRemediatesCve: no advisory database loaded")
+    , ("AllowIfRemediatesCve set to skip", differentialRemediation FailNoDecision, CannotVet FailNoDecision NoDatabaseLoaded, "AllowIfRemediatesCve: no advisory database loaded")
     , ("DenyIfCve set to deny", denyCveAt 8.0, CannotVet FailDeny NoDatabaseLoaded, "DenyIfCve: no advisory database loaded")
     , ("DenyIfCve set to skip", DenyIfCve (DenyIfCveParams 8.0 FailNoDecision), CannotVet FailNoDecision NoDatabaseLoaded, "DenyIfCve: no advisory database loaded")
     , ("DenyIfEpss set to deny", denyEpssAt 0.5, CannotVet FailDeny NoDatabaseLoaded, "DenyIfEpss: no advisory database loaded")
@@ -660,7 +657,7 @@ referenceParitySpec = describe "one read per request against a read per version,
             verdicts `shouldSatisfy` any (\case Allow RemediatesWithinLimits{} -> True; _ -> False)
             verdicts `shouldSatisfy` any (\case NoDecision RemediationBeyondLimits{} -> True; _ -> False)
             verdicts `shouldSatisfy` any isDeny
-            map verdictSentence (filter isNoDecision verdicts) `shouldSatisfy` any (T.isInfixOf "but is still affected by")
+            verdicts `shouldSatisfy` any (\case NoDecision FixesButStillAffected{} -> True; _ -> False)
             verdicts `shouldSatisfy` elem (NoDecision FixesNoAdvisory)
             map verdictSentence verdicts `shouldSatisfy` elem "no advisory names this version as its fix"
 
@@ -868,7 +865,7 @@ spec = do
                     fixRows
                         <> [("thing", AdvisoryRange "GHSA-open-0002" Nothing (Just "0.5.0") Unbounded Nothing)]
             evalRule (depsWith rows) ctx (remediationWith FailDeny AbstainOnRemaining) (pkg Nothing 0)
-                `shouldDecide` (NoDecision (FixesButStillAffected (mkAdvisoryIds ("GHSA-fixed-0001" :| [])) (mkAdvisoryIds ("GHSA-open-0002" :| []))), "fixes GHSA-fixed-0001 but is still affected by GHSA-open-0002")
+                `shouldDecide` (NoDecision (FixesButStillAffected (mkAdvisoryIds ("GHSA-fixed-0001" :| [])) (mkAdvisoryIds ("GHSA-open-0002" :| []))), "fixes GHSA-fixed-0001 with GHSA-open-0002 remaining")
         it "abstains under the shipped limits when a remaining advisory stores no score" $ do
             let rows =
                     fixRows
@@ -878,7 +875,7 @@ spec = do
                 >>= (`shouldBe` NoDecision (RemediationBeyondLimits (ScoreComparison (mkAdvisoryIds ("GHSA-fixed-0001" :| [])) unscored (ScoreSides Unscored Unscored) (ScoreSides Unscored Unscored) defaultDifferentialLimits) (mkLimitShortfalls (RemainingUnscored Cvss unscored :| [FixedUnscored Cvss, RemainingUnscored Epss unscored]))))
         for_ [FailDeny, FailNoDecision] $ \alignment ->
             it ("cannot vet under onUnavailable " <> show alignment <> " when no advisory database is loaded") $
-                evalRule inertRuleDeps ctx (differentialUnder alignment) (pkg Nothing 0)
+                evalRule inertRuleDeps ctx (differentialRemediation alignment) (pkg Nothing 0)
                     `shouldDecide` (CannotVet alignment NoDatabaseLoaded, "no advisory database loaded")
 
     describe "evalRule (DenyIfCve)" $ do
@@ -1023,7 +1020,7 @@ spec = do
         for_ [FailDeny, FailNoDecision] $ \alignment ->
             it ("attaches a resilience to AllowIfRemediatesCve and its " <> show alignment <> " to every unavailability") $
                 -- An expired push follows the remediation choice too, unlike an advisory deny's.
-                prepare unloadedDeps [atDefaultPrecedence (differentialUnder alignment)] >>= \case
+                prepare unloadedDeps [atDefaultPrecedence (differentialRemediation alignment)] >>= \case
                     [r@PreparedRule{prepEval = PerPackage packageRead}] -> do
                         isJust (prepResilience r) `shouldBe` True
                         (onExpiredPush (prAlignment packageRead), onFaultedRead (prAlignment packageRead)) `shouldBe` (alignment, alignment)
@@ -1166,7 +1163,7 @@ spec = do
         it "a failing advisory lookup under skip leaves the quarantine to govern, and nothing turns Undecidable" $ do
             -- An unconfirmable remediation costs the fix its fast lane, never availability and never an admission.
             let broken = faultingDeps "advisory database exploded"
-                policy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), differentialUnder FailNoDecision]
+                policy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), differentialRemediation FailNoDecision]
             decideWith broken policy (pkg Nothing 30)
                 >>= \d -> admittedBy d `shouldBe` Just "AllowIfOlderThan"
             decideWith broken policy (pkg Nothing 1) >>= \case
@@ -1321,7 +1318,7 @@ spec = do
                 shuffled <- liftIO (decide perm p)
                 canonical original === canonical shuffled
 
-        it "a default advisory deny that blocks alone still blocks beside any remediation rule" $
+        modifyMaxSuccess (const 1000) . it "a default advisory deny that blocks alone still blocks beside any remediation rule" $
             hedgehog $ do
                 rows <- forAll (genRows ["0.5.0", "1.0.0", "2.0.0"])
                 deny <- forAll (Gen.element [denyCveAt 7.0, denyEpssAt 0.5, DenyIfKnownMalicious FailDeny])

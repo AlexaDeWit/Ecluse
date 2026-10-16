@@ -147,14 +147,16 @@ spec = do
             labelsOf decision = case serveDecisionOf evidence decision of
                 Admit -> Nothing
                 Reject (Rejection reason _) -> Just (denialLabels reason)
-        it "labels every remediation outcome without an advisory identifier"
+        it "records no denial labels for a remediation admission" $
+            labelsOf (Admitted "AllowIfRemediatesCve" (RemediatesWithinLimits compared) []) `shouldBe` Nothing
+        it "labels every remediation refusal without an advisory identifier"
             $ for_
-                [ Admitted "AllowIfRemediatesCve" (RemediatesWithinLimits compared) []
-                , BlockedByDefault [RemediationBeyondLimits compared (mkLimitShortfalls (RemainingUnscored Cvss ids :| [])), FixStillApplies ids, FixesButStillAffected ids ids]
+                [ BlockedByDefault [RemediationBeyondLimits compared (mkLimitShortfalls (RemainingUnscored Cvss ids :| [])), FixStillApplies ids, FixesButStillAffected ids ids]
                 , refusal
                 ]
-            $ \decision -> for_ (labelsOf decision) $ \(rule, reasonClass) ->
-                (maybeToList rule <> [show reasonClass]) `shouldSatisfy` all (\label -> not ("GHSA-" `T.isInfixOf` label))
+            $ \decision -> case labelsOf decision of
+                Nothing -> expectationFailure "expected a refusal"
+                Just (rule, reasonClass) -> (maybeToList rule <> [show reasonClass]) `shouldSatisfy` all (\label -> not ("GHSA-" `T.isInfixOf` label))
         it "counts a fail-closed remediation refusal as unavailable and as an effectful failure" $ do
             labelsOf refusal `shouldBe` Just (Nothing, Metric.ReasonUnavailable)
             causes <- newIORef []
