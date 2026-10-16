@@ -3,15 +3,20 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE DeriveAnyClass #-}
 
-{- | The runtime, admission, and rule decisions a proxy logged at boot, read back from its JSON
-log. The report quotes the lines as the build under test wrote them, and derives the limits from them
-where they parse, so a build that renames or removes a control shows its own lines and no figure.
+{- | The runtime, admission, compression, and rule decisions a proxy logged at boot, read back from
+its JSON log. The report quotes the lines as the build under test wrote them, and derives the limits
+from them where they parse, so a build that renames or removes a control shows its own lines and no
+figure.
 -}
 module Ecluse.BenchLoad.BootLines (
     logMessages,
     bootMessages,
     BootLimits (..),
     bootLimits,
+
+    -- * Native metadata compression
+    metadataCompression,
+    renderMetadataCompression,
 
     -- * The rule policy
     ruleMessages,
@@ -25,11 +30,33 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Char (isDigit)
 import Data.Text qualified as T
 
--- | The @message@ of every JSON log line that states a runtime or admission decision.
+import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
+
+-- | The @message@ of every JSON log line that states a runtime, admission, or compression decision.
 bootMessages :: [ByteString] -> [Text]
 bootMessages = filter decision . logMessages
   where
-    decision m = any (`T.isPrefixOf` m) ["runtime:", "memory plan:"]
+    decision m = any (`T.isPrefixOf` m) ["runtime:", "memory plan:", metadataGzipKey]
+
+-- The resolved key's provenance line, up to its value.
+metadataGzipKey :: Text
+metadataGzipKey = "config: server.metadataGzip = "
+
+-- | The native metadata compression a proxy resolved. 'Nothing' for a log that does not state it.
+metadataCompression :: [Text] -> Maybe MetadataCompression
+metadataCompression messages = listToMaybe (mapMaybe (posture <=< listToMaybe . words <=< T.stripPrefix metadataGzipKey) messages)
+  where
+    posture = \case
+        "true" -> Just GzipWhenAccepted
+        "false" -> Just IdentityOnly
+        _ -> Nothing
+
+-- | The posture as the report names it. A log from a build before the setting reads as unreported.
+renderMetadataCompression :: Maybe MetadataCompression -> Text
+renderMetadataCompression = \case
+    Just GzipWhenAccepted -> "enabled"
+    Just IdentityOnly -> "disabled"
+    Nothing -> "unreported"
 
 -- | The @message@ of every JSON log line that states a rule's configuration or a mount's rule order.
 ruleMessages :: [ByteString] -> [Text]
@@ -111,9 +138,7 @@ ruleKey message = do
         (before, after) | not (T.null before) -> Just (T.dropEnd (T.length separator) before, after)
         _ -> Nothing
 
-{- | Each mount's rules in the order it evaluates them, from the boot order the proxy logged:
-the mount's label and each rule's type, precedence, and phases.
--}
+-- | Each mount's label and its rules in evaluation order, each with its type, precedence, and phases.
 ruleBootOrders :: [Text] -> [(Text, [Text])]
 ruleBootOrders = \case
     [] -> []

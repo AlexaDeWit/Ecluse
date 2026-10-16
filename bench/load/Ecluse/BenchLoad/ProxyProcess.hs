@@ -13,6 +13,7 @@ module Ecluse.BenchLoad.ProxyProcess (
     podShapeFromEnv,
     serveProxyFlag,
     proxyEnvironment,
+    requireIdentityListings,
     sweepProxyCgroups,
 
     -- * A running proxy
@@ -97,7 +98,7 @@ import UnliftIO (bracket, finally, onException, try, tryAny, tryIO)
 import UnliftIO.Async (Async, async, cancel, link, poll)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
-import Ecluse.BenchLoad.BootLines (bootMessages, logMessages, ruleMessages)
+import Ecluse.BenchLoad.BootLines (bootMessages, logMessages, metadataCompression, renderMetadataCompression, ruleMessages)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Exposition (Sample, advisoryDatabaseInstalled, parseExposition)
 import Ecluse.BenchLoad.Pod (CgroupReading (..), PodShape (Limited, Unlimited), counter, cpuMaxValue, keyedCounters, parsePodShape, renderPodShape)
@@ -105,6 +106,7 @@ import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
 import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection), RtsSnapshot, collectionName)
 import Ecluse.BenchLoad.Verdict (ProxyEnding, classifyEnding)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Server.Encoding (MetadataCompression (IdentityOnly))
 import Ecluse.Rts (parseMemoryMax, readIfExists)
 import Ecluse.Runtime.Server (listeningPrefix, proxyListener)
 import Ecluse.Test.Env (ambientAwsEntries)
@@ -305,10 +307,17 @@ launch settings shape root dir publicPort privatePort = do
     (`onException` (stopProxy booted `finally` traverse_ retireCgroup cgroup)) $ do
         -- Every boot line precedes the listening line. Give the drain a moment to catch up.
         logged <- pollUntil 50 100_000 proxyListening (BS8.lines . capturedHead <$> readIORef (drStdout drained))
+        requireIdentityListings (bootMessages logged)
         when (isJust (psAdvisories settings)) (awaitAdvisoryDatabase booted (psEcosystem settings))
         idle <- proxySnapshot booted MajorCollection
         idleCgroup <- proxyCgroupNow booted
         pure booted{ppBootLines = bootMessages logged, ppRuleLines = ruleMessages logged, ppIdleRts = idle, ppIdleCgroupBytes = crMemoryCurrent =<< idleCgroup}
+
+-- | Refuse a proxy whose boot log does not state native metadata gzip off, the posture the floors hold.
+requireIdentityListings :: [Text] -> IO ()
+requireIdentityListings lines' = case metadataCompression lines' of
+    Just IdentityOnly -> pass
+    posture -> benchFail ("bench-load: the proxy resolved native metadata gzip as " <> renderMetadataCompression posture <> ", but load runs measure identity listings")
 
 -- | Wait at most a minute for advisory installation, stopping failed proxies and reporting both output tails.
 awaitAdvisoryDatabase :: ProxyProcess -> Ecosystem -> IO ()
@@ -353,6 +362,8 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
         [ ("ECLUSE_SERVER__PORT", show port)
         , ("ECLUSE_SERVER__PUBLIC_URL", "https://bench.proxy")
         , ("ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT", "10")
+        , -- The floors hold the identity baseline, so every load proxy turns native gzip off.
+          ("ECLUSE_SERVER__METADATA_GZIP", "false")
         , ("ECLUSE_ADVISORIES__DATA_DIR", toText (dir </> "advisories"))
         , ("ECLUSE_CACHE__TTL", show (psCacheTtlSeconds settings))
         , ("ECLUSE_OBSERVABILITY__TELEMETRY", "on")
