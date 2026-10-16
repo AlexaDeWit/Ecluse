@@ -65,7 +65,7 @@ import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Pipeline (headTarball, servePackument, serveTarball)
 import Ecluse.Core.Server.Pipeline.Publish ()
 import Ecluse.Core.Server.Pipeline.Shared (hRetryAfter)
-import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
+import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Deny, Unavailable), SweepResult (SweepDeleted), SweepTarget (SweepPrivate))
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpMemoryAdmissionOverdraw))
 import Ecluse.Core.Version (Version)
@@ -92,7 +92,7 @@ import Ecluse.Test.Server.Mount (npmServeDeps, pypiServeDeps, withPrivateBaseUrl
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recTargetResults), recordingPorts, testMount, testPacing, withPrivateCache)
 import Ecluse.Test.Wai (countingUpstream, selfBaseUrl)
 import Network.HTTP.Types.Header (RequestHeaders, hAcceptEncoding, hContentEncoding, hContentRange, hDate, hETag, hHost, hIfNoneMatch)
-import Network.Wai (Application, Request (rawPathInfo, requestHeaders), defaultRequest, mapResponseHeaders, responseHeaders, responseLBS, responseStatus)
+import Network.Wai (Application, Request (rawPathInfo, requestHeaders, requestMethod), defaultRequest, mapResponseHeaders, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Internal (Response)
 import Network.Wai.Test (SResponse (..), runSession)
@@ -249,7 +249,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                     decisions `shouldReturn` [expectedDecision, expectedDecision]
 
     it "keeps the public artifact status, headers and bytes after every private miss" $
-        testWithApplication (pure (\req respond -> upstreamApp req (respond . mapResponseHeaders ((hDate, "Thu, 01 Jan 2026 00:00:00 GMT") :)))) $ \publicPort -> do
+        testWithApplication (pure (dated upstreamApp)) $ \publicPort -> do
             rt <- testServeRuntime noopMetricsPort
             base <- depsFor publicPort
             logEnv <- newTestLogEnv
@@ -271,9 +271,9 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                 testWithApplication (pure (\_ respond -> respond (responseLBS privateStatus [] "private refusal"))) $ \privatePort ->
                     fetch (withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base) >>= assertSame
 
-    for_ [("200", upstreamApp), ("206", partialUpstream)] $ \(label, upstream) ->
-        it ("relays an upstream " <> label <> " artifact unchanged to a client that accepts gzip, for GET and HEAD") $
-            testWithApplication (pure (\req respond -> upstream req (respond . mapResponseHeaders ((hDate, "Thu, 01 Jan 2026 00:00:00 GMT") :)))) $ \publicPort -> do
+    for_ [(200, upstreamApp), (206, partialUpstream)] $ \(expected, upstream) ->
+        it ("relays an upstream " <> show expected <> " npm artifact unchanged to a client that accepts gzip, for GET and HEAD") $
+            testWithApplication (pure (dated upstream)) $ \publicPort -> do
                 rt <- testServeRuntime noopMetricsPort
                 deps <- withPrivateBaseUrl Nothing <$> depsFor publicPort
                 logEnv <- newTestLogEnv
@@ -281,13 +281,16 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                     let fetch headers =
                             runSession (WaiTest.request defaultRequest{requestHeaders = headers}) $ \req respond ->
                                 runHandler logEnv mempty (RequestCtx rt (mountWith deps)) (serve npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") req (respond . responseToWai npmTarballContract))
-                    plain <- fetch []
-                    offered <- fetch [(hAcceptEncoding, "gzip")]
-                    statusCode (simpleStatus offered) `shouldBe` if label == "206" then 206 else 200
-                    simpleStatus offered `shouldBe` simpleStatus plain
-                    simpleHeaders offered `shouldBe` simpleHeaders plain
-                    simpleBody offered `shouldBe` simpleBody plain
-                    lookup hContentEncoding (simpleHeaders offered) `shouldBe` Nothing
+                    relaysUncoded expected fetch
+
+    for_ [(200, status200), (206, status206)] $ \(expected, artifactStatus) ->
+        it ("relays an upstream " <> show expected <> " PyPI distribution unchanged to a client that accepts gzip, for GET and HEAD") $
+            testWithApplication (pure (dated (pypiPublicApp artifactStatus))) $ \publicPort -> do
+                rt <- testServeRuntime noopMetricsPort
+                prepared <- prepare inertRuleDeps allowPolicy
+                let deps = (pypiServeDeps Nothing (loopbackRegistryUrl ("http://localhost:" <> show publicPort)) NoMirrorWrite prepared (pure (UTCTime (fromGregorian 2026 6 20) 0))){pdMountBaseUrl = "http://proxy.test"}
+                for_ [methodGet, methodHead] $ \method ->
+                    relaysUncoded expected (fetchPypiArtifact rt deps method)
 
     it "sheds packument work when metadata admission refuses" $ do
         (metricsPort, _decisions) <- recordingMetricsPort
@@ -1018,6 +1021,45 @@ upstreamApp req respond =
 
 artifactBytes :: ByteString
 artifactBytes = "leftpad artifact bytes"
+
+-- Pin the upstream's Date, so two relays of one artifact cannot differ by a clock tick.
+dated :: Application -> Application
+dated upstream req respond = upstream req (respond . mapResponseHeaders ((hDate, "Thu, 01 Jan 2026 00:00:00 GMT") :))
+
+-- A relay with and without Accept-Encoding gzip: the same status, headers and bytes, and no coding.
+relaysUncoded :: Int -> (RequestHeaders -> IO SResponse) -> Expectation
+relaysUncoded expected fetch = do
+    plain <- fetch []
+    offered <- fetch [(hAcceptEncoding, "gzip")]
+    statusCode (simpleStatus offered) `shouldBe` expected
+    simpleStatus offered `shouldBe` simpleStatus plain
+    simpleHeaders offered `shouldBe` simpleHeaders plain
+    simpleBody offered `shouldBe` simpleBody plain
+    lookup hContentEncoding (simpleHeaders offered) `shouldBe` Nothing
+
+-- A public PyPI origin whose one distribution answers with the given status. A 206 carries a partial body.
+pypiPublicApp :: Status -> Application
+pypiPublicApp artifactStatus req respond
+    | rawPathInfo req == "/simple/requests/" = respond (responseLBS status200 [(hContentType, "application/vnd.pypi.simple.v1+json")] (encode index))
+    | rawPathInfo req == "/files/requests-1.0.0.tar.gz" = respond (responseLBS artifactStatus ((hContentType, "application/octet-stream") : range) (LBS.fromStrict body))
+    | otherwise = respond (responseLBS status404 [] "")
+  where
+    index = simpleIndex "requests" [withFileKeys [("url", String (selfBaseUrl req <> "/files/requests-1.0.0.tar.gz"))] (simpleFile "requests-1.0.0.tar.gz")]
+    partial = statusCode artifactStatus == 206
+    body = if partial then BS.take 7 artifactBytes else artifactBytes
+    range = [(hContentRange, "bytes 0-6/22") | partial]
+
+-- A PyPI distribution request through the mount's router, so a HEAD takes the bodiless contract.
+fetchPypiArtifact :: ServeRuntime -> PackumentDeps -> Method -> RequestHeaders -> IO SResponse
+fetchPypiArtifact rt deps method headers =
+    case pypiRouter method headers ["simple", "requests", "requests-1.0.0.tar.gz"] of
+        RouteAction contract (RunPipeline _ action) -> do
+            logEnv <- newTestLogEnv
+            runSession (WaiTest.request defaultRequest{requestMethod = method, requestHeaders = headers}) $ \req respond ->
+                runHandler logEnv mempty (RequestCtx rt binding) (action req (respond . responseToWai contract))
+        _ -> throwIO MissingFixtureResponse
+  where
+    binding = (mountUnder pypiCredential deps){bindingPrefix = "pypi" :| [], bindingRouter = pypiRouter}
 
 -- An upstream that answers the artifact with a partial reply, as a range-serving store may.
 partialUpstream :: Application

@@ -160,6 +160,20 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
                     responseHeaders response `shouldBe` responseHeaders plain
                     responseBytes response `shouldReturn` plainBytes
                 header hVary plain `shouldBe` Nothing
+        it "keeps the strong identity validator and no Vary on GET, HEAD and 304 when the operator opts out" $
+            withListing listing $ \serve -> do
+                plain <- serve IdentityOnly methodGet gzipOffer
+                tag <- validator plain
+                tag `shouldSatisfy` BS.isPrefixOf "\""
+                headed <- serve IdentityOnly methodHead gzipOffer
+                plainBytes <- responseBytes plain
+                header hContentLength headed `shouldBe` Just (show (LBS.length plainBytes))
+                matched <- forM [methodGet, methodHead] $ \method -> serve IdentityOnly method ((hIfNoneMatch, tag) : gzipOffer)
+                map statusOf matched `shouldBe` [304, 304]
+                for_ (plain : headed : matched) $ \response -> do
+                    header hETag response `shouldBe` Just tag
+                    header hContentEncoding response `shouldBe` Nothing
+                    header hVary response `shouldBe` Nothing
         it "serves both codings from one identity entry in the assembled cache" $ do
             results <- newIORef []
             rt <- testServeRuntime noopMetricsPort{mpAssembledCacheRequest = \result -> modifyIORef' results (result :)}

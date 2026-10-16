@@ -12,7 +12,11 @@ import Test.Hspec
 import UnliftIO.Async (AsyncCancelled (AsyncCancelled), cancel, race_, wait, waitCatch, withAsync)
 import UnliftIO.Exception (throwIO)
 
+import Ecluse.Core.Server.Admission (newServeAdmissionTuned, withServeAdmission)
+import Ecluse.Core.Server.Admission.Meter (MeterSettings (..), charge, meterSnapshot, newMemoryMeter, withMemoryEntry)
+import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
 import Ecluse.Core.Server.MetadataGzip (GzipBody (..), gzipBufferChargeBytes, gzipLazyBody, gzipMetadata, gzipWorkspaceBytes)
+import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Support (incompressibleBytes)
 
 spec :: Spec
@@ -55,6 +59,25 @@ spec = describe "gzipMetadata" $ do
             cancel worker
             outcome <- waitCatch worker
             either (\fault -> fromException fault `shouldBe` Just AsyncCancelled) (const (expectationFailure "compression ignored its cancellation")) outcome
+    it "returns its admission slot and every charge when cancelled at its third output buffer" $ do
+        meter <- newMemoryMeter MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 10, msEntryWaitMicros = 0}
+        admission <- newServeAdmissionTuned 1 0 0
+        ready <- MVar.newEmptyMVar
+        blocked <- MVar.newEmptyMVar
+        buffers <- newIORef (0 :: Int)
+        let pauseAtThird ticket cost = do
+                charge ticket cost
+                when (cost == gzipBufferChargeBytes) $ do
+                    count <- atomicModifyIORef' buffers (\n -> (n + 1, n + 1))
+                    when (count == 3) (MVar.putMVar ready () >> MVar.takeMVar blocked)
+            compress = withMemoryEntry noopMetricsPort meter $ \ticket ->
+                withServeAdmission noopMetricsPort admission (gzipMetadata (pauseAtThird ticket) (incompressibleBytes 200000))
+        withAsync compress $ \worker -> do
+            race_ (MVar.takeMVar ready) (void (wait worker))
+            snChargedBytes <$> meterSnapshot meter `shouldReturn` gzipWorkspaceBytes + 3 * gzipBufferChargeBytes
+            cancel worker
+        snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
+        withServeAdmission noopMetricsPort admission pass `shouldReturn` Just ()
   where
     bodies :: [(Text, ByteString)]
     bodies =

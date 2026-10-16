@@ -5,7 +5,8 @@
 
 {- | Owned zlib streams over the existing streaming-commons ABI. A caller opens a stream inside its
 own bracket, advances it in bounded native calls, and releases it there, so the native state never
-waits for a collector. Each call is an @unsafe@ foreign call, which keeps the bounded step short.
+waits for a collector. Each call is an @unsafe@ foreign call, which holds its capability and blocks
+collection while it runs, so every step is bounded to keep that pause short.
 -}
 module Ecluse.Core.Zlib (
     -- * Opening and releasing a stream

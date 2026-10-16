@@ -86,9 +86,9 @@ data ServeRuntime = ServeRuntime
     , srMemoryMeter :: MemoryMeter
     -- ^ The memory budget metadata requests pay into as they read and build.
     , srPublicManager :: Manager
-    -- ^ The manager for the __untrusted__ public metadata fetch and every artifact stream.
+    -- ^ The validating-TLS manager for the __untrusted__ public metadata fetch and every artifact stream.
     , srPrivateManager :: Manager
-    -- ^ The __trusted__ private upstream's manager, which differs in credential handling only.
+    -- ^ The __trusted__ private upstream's validating-TLS manager, which differs in credential handling only.
     , srMetadataCache :: MetadataCache
     -- ^ The short-TTL, size-bounded metadata cache the serve paths share ("Ecluse.Core.Server.Cache").
     , srQueue :: MirrorQueue
@@ -106,7 +106,7 @@ data PackumentDeps = PackumentDeps
     , pdMirrorState :: Maybe MirrorView
     -- ^ Source-only state, validated after each caller authorises the private read.
     , pdFirstParty :: PackageName -> Bool
-    -- ^ Whether this deployment owns the name. Only the private upstream serves it, and a private miss is @404@.
+    -- ^ Whether this deployment owns the name, derived once at the composition root and deny by default. Only the private upstream serves it, and a private miss is @404@.
     , pdMountBaseUrl :: Text
     -- ^ The mount's external base URL, under which served artifact URLs route back through the gate.
     , pdRules :: [PreparedRule]

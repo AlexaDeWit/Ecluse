@@ -117,7 +117,7 @@ data BootWiring = BootWiring
     -- ^ One target per mirrored mount, with the provider that mints its write token. A role that writes nothing plans none.
     }
 
--- | Build the boot wiring from the cleared plan, or the refusals only a live environment can settle.
+-- | Build the boot wiring from the cleared plan, or the refusals only a live environment can settle. The credential providers stay internal.
 resolveBootWiring :: WiringPorts -> MirrorMintPlan -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] BootWiring)
 resolveBootWiring ports mintPlan limits publishBudget plan = do
     providersE <- mintedProviders

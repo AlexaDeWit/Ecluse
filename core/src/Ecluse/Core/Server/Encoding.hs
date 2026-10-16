@@ -3,9 +3,10 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Content-coding negotiation for served metadata, read from every @Accept-Encoding@ field
-(RFC 9110, section 12.5.3). Écluse offers gzip and identity. Gzip wins a tie of positive
-qualities, a malformed quality refuses its coding, and a refusal beats a duplicate offer. A
-request that excludes both codings takes @406@. Identity-only metadata ignores the field.
+(RFC 9110, section 12.5.3). Écluse offers gzip and identity, and reads @x-gzip@ as gzip, as RFC
+9110 section 8.4.1.3 asks of a recipient. Gzip wins a tie of positive qualities, a malformed
+quality refuses its coding, and a refusal beats a duplicate offer. A request that excludes both
+codings takes @406@. Identity-only metadata ignores the field.
 -}
 module Ecluse.Core.Server.Encoding (
     -- * The operator's setting

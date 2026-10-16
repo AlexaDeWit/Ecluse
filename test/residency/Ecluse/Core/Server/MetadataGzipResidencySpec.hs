@@ -77,6 +77,14 @@ spec = describe "metadata gzip residency" $ do
                 nativeAllocatedBytes result `shouldSatisfy` (<= controlAllocatedBytes result)
                 nativeVirtualGrowthBytes result `shouldSatisfy` (<= nativeGrowthLimit)
                 nativeAllocatorGrowthBytes result `shouldSatisfy` (<= nativeGrowthLimit)
+    it "releases the native deflater on cancellation at its third output buffer before a GC" $
+        withFixture (incompressibleBytes (1024 * 1024)) $ \path -> do
+            result <- child "native-cancel-late" path "128m"
+            checkControl result
+            nativeOutputCount result `shouldBe` 64
+            nativeAllocatedBytes result `shouldSatisfy` (<= controlAllocatedBytes result)
+            nativeVirtualGrowthBytes result `shouldSatisfy` (<= nativeGrowthLimit)
+            nativeAllocatorGrowthBytes result `shouldSatisfy` (<= nativeGrowthLimit)
 
 withFixture :: ByteString -> (FilePath -> IO a) -> IO a
 withFixture bytes use =
@@ -94,9 +102,10 @@ probeMain mode path = do
     output <- case mode of
         "workspace" -> encode <$> workspaceProbe path
         "heap" -> encode <$> heapProbe path
-        "native-return" -> encode <$> nativeProbe "return" path
-        "native-refusal" -> encode <$> nativeProbe "refusal" path
-        "native-cancel" -> encode <$> nativeProbe "cancel" path
+        "native-return" -> encode <$> nativeProbe 1 "return" path
+        "native-refusal" -> encode <$> nativeProbe 1 "refusal" path
+        "native-cancel" -> encode <$> nativeProbe 1 "cancel" path
+        "native-cancel-late" -> encode <$> nativeProbe 3 "cancel" path
         _ -> fail "unknown gzip probe mode"
     BS.putStr (BSL.toStrict output)
 
@@ -136,16 +145,16 @@ heapProbe path = do
                 , retainedHeapBytes = live rtsAfter - live rtsBefore
                 }
 
--- An attempt stops at its first output buffer: its deflater is open and its workspace paid.
-nativeProbe :: Text -> FilePath -> IO NativeMeasurement
-nativeProbe ending path = do
+-- An attempt stops at the given output buffer's charge, with its deflater open and its workspace paid.
+nativeProbe :: Int -> Text -> FilePath -> IO NativeMeasurement
+nativeProbe stopBuffer ending path = do
     bytes <- BS.readFile path
     let run :: (Int -> IO ()) -> IO () -> IO ()
         run charge stop = do
-            unreached <- newIORef True
+            buffers <- newIORef (0 :: Int)
             let hooked cost = do
                     charge cost
                     when (cost == gzipBufferChargeBytes) $
-                        atomicModifyIORef' unreached (False,) >>= (`when` stop)
+                        atomicModifyIORef' buffers (\n -> (n + 1, n + 1)) >>= \count -> when (count == stopBuffer) stop
             void (gzipMetadata hooked bytes)
     earlyExitProbe ending run

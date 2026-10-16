@@ -99,10 +99,11 @@ XZ decoders must exceed both gates before their scopes close.
 
 The metadata deflater has its own probes, which share the archive probes' child process, control
 and allocator counter. They cover the same 64 early exits by return, refused charge and
-cancellation. A workspace probe samples the allocator while a deflater is open and requires the
-native peak plus one output buffer charge to fit the 512 KiB workspace the deflater charges.
-On the amd64 build host the peak was 268,192 bytes. A heap probe holds a 1 MiB incompressible
-body's gzip output within the buffer charges.
+cancellation, and a fourth set that cancels at the third output buffer of an incompressible body.
+A workspace probe samples the allocator while a deflater is open and requires the native peak plus
+one output buffer charge to fit the 512 KiB workspace the deflater charges. The peak was 268,192
+bytes on both arm64 CI and the amd64 build host, with 0 bytes left after release. A heap probe
+holds a 1 MiB incompressible body's gzip output within the buffer charges.
 
 The allocator counter adds glibc `mallinfo2` fields `uordblks` and `hblkhd` across all arenas and
 allocator mmap regions. It includes freed thread-cache chunks and allocator overhead, so it does
