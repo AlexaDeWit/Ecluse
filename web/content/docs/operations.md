@@ -143,7 +143,7 @@ artifact's metadata:
 | `built_at` | When compilation finished, not how old the source snapshot is. |
 
 A credential in userinfo, the query, or the fragment never reaches the artifact. One written into
-the path does. Sync logs only parsed compilation time and row count from metadata, including when
+the path does. Sync logs parsed compilation time and row count from metadata, including when
 it reads older artifacts with complete source URLs. On each swap it adds one `info` line naming
 where the serving artifact came from: the object's publication time, the OSV source as
 `host:port`, its newest advisory date, and the EPSS score date. A value the artifact never
