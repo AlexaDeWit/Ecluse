@@ -1514,17 +1514,18 @@ one request's rule phase. It measures the typescript, react, @types/node, and nu
 reports time and RTS allocation per request like the other rows. Each iteration prepares the policy,
 decides every release, and builds the filter plan. A row with the fail-closed deny rules fails when
 any version ends undecidable, because an unanswered read would measure an outage instead of a
-decision. Under the shared shipped policy, an artifact that serves nothing makes the remediation rule
-abstain, which would pass for a speed-up. So setup also checks that each artifact serves ranges:
+decision. Under the source-configured shipped policy, an artifact that serves nothing makes the
+advisory rules abstain, which would pass for a speed-up. So setup also checks that each artifact serves ranges:
 the captured one for react and numpy, and the generated one for its targets and every filler
 package.
 
 | Row set | Advisory database | Policy |
 |---|---|---|
-| `shipped policy without a database` | None | `AllowIfOlderThan` (7 days) and `AllowIfRemediatesCve` |
-| `shipped policy over corpus advisories` | Captured advisories | Source-configured defaults, including `DenyIfKnownMalicious` |
-| `all advisory rules over corpus advisories` | Captured advisories | The shared shipped policy plus fail-closed `DenyIfCve` (CVSS 8) and `DenyIfEpss` (EPSS 0.5) |
+| `shipped policy without a database` | None | `AllowIfOlderThan` (7 days), the source-free shipped policy |
+| `shipped policy over corpus advisories` | Captured advisories | Source-configured defaults: `DenyIfKnownMalicious`, the quarantine, and the differential `AllowIfRemediatesCve` |
+| `all advisory rules over corpus advisories` | Captured advisories | The source-configured shipped policy plus fail-closed `DenyIfCve` (CVSS 8) and `DenyIfEpss` (EPSS 0.5) |
 | `all advisory rules over synthetic advisories` | Generated worst case | The five source-configured rules, over typescript and numpy only |
+| `configured shipped policy over synthetic advisories` | Generated worst case | The source-configured defaults alone, over typescript and numpy only. No scored deny decides first, so every generated partial fix reaches the remediation differential |
 
 The source-free row runs the source-free shared policy. Source-configured rows run the automatic
 MAL default. The captured scored corpus has no primary MAL records, so those rows measure abstention.
