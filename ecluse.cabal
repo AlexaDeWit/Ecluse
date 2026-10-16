@@ -166,6 +166,9 @@ library ecluse-core
     Ecluse.Core.Osv.Ecosystem
     Ecluse.Core.Osv.Epss
     Ecluse.Core.Osv.Provenance
+    Ecluse.Core.Osv.Publication
+    Ecluse.Core.Osv.Publication.Envelope
+    Ecluse.Core.Osv.Publication.Types
     Ecluse.Core.Osv.Retry
     Ecluse.Core.Osv.Schema
     Ecluse.Core.Osv.Stream
@@ -1048,6 +1051,9 @@ test-suite ecluse-core-unit
     Ecluse.Core.Osv.EcosystemSpec
     Ecluse.Core.Osv.EpssSpec
     Ecluse.Core.Osv.ProvenanceSpec
+    Ecluse.Core.Osv.Publication.EnvelopeSpec
+    Ecluse.Core.Osv.Publication.TypesSpec
+    Ecluse.Core.Osv.PublicationSpec
     Ecluse.Core.Osv.RetrySpec
     Ecluse.Core.Osv.SchemaSpec
     Ecluse.Core.Osv.StreamSpec
