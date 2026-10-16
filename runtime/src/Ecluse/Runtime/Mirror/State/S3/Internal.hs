@@ -20,7 +20,7 @@ import Amazonka.Types qualified as Types
 import Conduit (ConduitT, MonadResource, ResourceT, await, runResourceT, sealConduitT, yield, ($$++), (.|))
 import Data.ByteString qualified as BS
 import Data.Conduit.Combinators qualified as C
-import Lens.Micro ((%~), (?~), (^.))
+import Lens.Micro ((%~), (^.))
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types.Status (statusCode)
 import UnliftIO (withRunInIO)
@@ -35,7 +35,8 @@ import Ecluse.Core.Registry.Progress (Watch, meteredReader, meteredUpload, watch
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (..), boundedRead)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
 import Ecluse.Core.Stream (boundBytes)
-import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
+import Ecluse.Runtime.Aws.Fault (classifyAwsTransport, serviceStatus)
+import Ecluse.Runtime.Aws.S3.Conditional (ConditionalPut (..), WritePrecondition (..), absenceListing, isWriteConflict, listingProvesAbsence)
 
 -- | A 304 carries only the exact revision supplied to this exchange.
 data ObjectRead = ObjectAbsent | ObjectUnchanged ByteString | ObjectLoaded ByteString ByteString
@@ -53,26 +54,19 @@ data ObjectFault
     | ObjectUnknownAbsence
     deriving stock (Eq, Show)
 
--- These wrappers preserve generated request construction while adding pre-signing conditions.
--- The associated response types require TypeFamilies, as the Amazonka request class does.
+-- These wrappers keep generated request construction and capture the raw response, so every body
+-- passes the wire ceiling. The associated response types need TypeFamilies, as amazonka's class does.
 
--- A missing expected revision means create-if-absent.
-data ConditionalPut = ConditionalPut (Maybe ByteString) S3.PutObject
+newtype BoundedPut = BoundedPut ConditionalPut
 
--- Both successful streaming bodies and error XML pass through the wire ceiling.
 data BoundedGet = BoundedGet (Maybe ByteString) S3.GetObject
 
 -- The absence fallback limits XML before the generated decoder buffers it.
 newtype BoundedList = BoundedList S3.ListObjectsV2
 
-instance AWS.AWSRequest ConditionalPut where
-    type AWSResponse ConditionalPut = RawResponse
-    request overrides (ConditionalPut revision native) =
-        coerce (AWS.request overrides native & Types.request_headers %~ condition)
-      where
-        condition headers =
-            maybe ("If-None-Match", "*") ("If-Match",) revision
-                : filter (\(name, _) -> name /= "If-Match" && name /= "If-None-Match") headers
+instance AWS.AWSRequest BoundedPut where
+    type AWSResponse BoundedPut = RawResponse
+    request overrides (BoundedPut conditional) = coerce (AWS.request overrides conditional)
     response = captureResponse
 
 instance AWS.AWSRequest BoundedGet where
@@ -184,38 +178,26 @@ writeObject charge env limits bucket key revision bytes
         pure $ case result of
             Right response -> ObjectStored <$> objectRevision (response ^. S3L.putObjectResponse_eTag)
             Left err
-                | serviceStatus err `elem` [Just 409, Just 412] -> Right ObjectConflict
+                | isWriteConflict err -> Right ObjectConflict
                 | otherwise -> Left (ObjectTransport (classifyAwsTransport err))
   where
-    request = ConditionalPut revision (S3.newPutObject (S3.BucketName bucket) (S3.ObjectKey key) (AWS.toBody bytes))
+    precondition = maybe IfAbsent IfRevision revision
+    request = BoundedPut (ConditionalPut precondition (S3.newPutObject (S3.BucketName bucket) (S3.ObjectKey key) (AWS.toBody bytes)))
 
 absenceFallback :: StateCharge -> AWS.Env -> Limits -> Text -> Text -> IO (Either ObjectFault ObjectRead)
 absenceFallback charge env limits bucket key = do
     result <- runResourceT (sendBounded charge 0 True env limits request (Proxy :: Proxy S3.ListObjectsV2))
     pure $ case result of
         Right response
-            | response ^. S3L.listObjectsV2Response_isTruncated == Just False
-            , null (fromMaybe [] (response ^. S3L.listObjectsV2Response_contents)) ->
-                Right ObjectAbsent
+            | listingProvesAbsence response -> Right ObjectAbsent
             | otherwise -> Left ObjectUnknownAbsence
         Left err -> Left (ObjectTransport (classifyAwsTransport err))
   where
-    request =
-        BoundedList
-            ( S3.newListObjectsV2 (S3.BucketName bucket)
-                & S3L.listObjectsV2_prefix
-                ?~ key
-                    & S3L.listObjectsV2_maxKeys
-                ?~ 1
-            )
+    request = BoundedList (absenceListing bucket key)
 
 objectRevision :: Maybe S3.ETag -> Either ObjectFault ByteString
 objectRevision (Just (S3.ETag value)) | not (BS.null value) = Right value
 objectRevision _ = Left ObjectNoRevision
-
-serviceStatus :: AWS.Error -> Maybe Int
-serviceStatus (AWS.ServiceError err) = Just (statusCode (err ^. AWS.serviceError_status))
-serviceStatus _ = Nothing
 
 serviceCode :: AWS.Error -> Maybe Text
 serviceCode (AWS.ServiceError err) = case err ^. AWS.serviceError_code of
