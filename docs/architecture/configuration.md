@@ -337,9 +337,10 @@ document owns only the document-merge schema above.
 
 #### The default policy
 
-The shared shipped default enables two rules, and a third when `advisories.url` is set. `min-age` (`AllowIfOlderThan`, 7 days) admits a public
-version only after a quarantine window. Registries usually find and yank a malicious publish within
-days, so the delay keeps it out of your builds. This quarantine is Écluse's core security boundary.
+The shared shipped default enables two rules, and a third when `advisories.url` is set. `min-age`
+(`AllowIfOlderThan`, 7 days) admits a public version only after a quarantine window. Registries
+usually find and yank a malicious publish within days, so the delay keeps it out of your builds.
+This quarantine is Écluse's core security boundary.
 `remediation-fast-track` (`AllowIfRemediatesCve`) ranks above it, so Écluse admits a release fixing
 a known CVE at once rather than waiting out the quarantine (see
 [Rules engine](rules-engine.md#allowifremediatescve-remediation-fast-track)).

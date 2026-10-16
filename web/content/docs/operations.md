@@ -66,9 +66,9 @@ waiting. A latched Dredger reports
 requests: a request that needs advisory data its mount does not have is refused by that mount's own
 `onUnavailable` policy. A rule that admits without reading the database admits only when no
 advisory deny ranked above it refuses first. A configured source puts the MAL default above every
-default allow, so under its default `deny` that mount refuses every public admission until its
-first sync. A successful first sync does not prove that data remains fresh.
-[Advisory push age](#advisory-push-age) governs retained evidence.
+default allow, so under its default `deny` that mount refuses public admission until its first
+sync, except through an allow ordered before the rule. A successful first sync does not prove that
+data remains fresh. [Advisory push age](#advisory-push-age) governs retained evidence.
 
 An EPSS-dependent ecosystem rejects artifacts without the exact `epss_status=available` marker.
 Without an accepted qualified generation, its slot stays empty, and its readiness keeps awaiting the advisory database.
@@ -277,8 +277,8 @@ the same evidence, so the quarantine governs rather than the fast lane.
 
 A configured advisory source activates `DenyIfKnownMalicious` at precedence 300, above every
 default allow. An expired or undated push therefore refuses every public admission on the mount,
-scope and identity allows included. Only an allow with precedence above 300 still admits, and
-trusted private reads still serve.
+scope and identity allows included. Only an allow ordered before the rule still admits: one above
+300, or one at 300 whose name sorts first. Trusted private reads still serve.
 
 The age is the time since Pilot last pushed the artifact, taken from the published object's own
 timestamp. Pilot writes that object after every successful run, so unchanged bytes still move it.

@@ -611,10 +611,10 @@ Disabling the shipped name does not remove a separately named manual MAL rule.
 
 The rule ranks above every default allow. An expired or undated push refuses every public
 admission on the mount, scope and identity allows included. Under the default `deny`, a faulted
-read, an open breaker, or a missing first generation does the same. Only an allow with precedence
-above 300 still admits, and trusted private reads still serve. A deployment that set
-`onUnavailable: skip` on `DenyIfCve` or `DenyIfEpss` refuses during an advisory outage unless it
-also sets `onUnavailable: skip` on `deny-known-malicious`.
+read, an open breaker, or a missing first generation does the same. Only an allow ordered before
+the rule still admits: one above 300, or one at 300 whose name sorts first. Trusted private reads
+still serve. A deployment that set `onUnavailable: skip` on `DenyIfCve` or `DenyIfEpss` refuses
+during an advisory outage unless it also sets `onUnavailable: skip` on `deny-known-malicious`.
 
 Publish a valid artifact for each ecosystem before configuring its source. Roll admission and
 writer roles forward before enabling Dredger revocation. Preview deletions and retain target-local
