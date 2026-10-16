@@ -805,6 +805,7 @@ library ecluse-test-support
     Ecluse.Test.Security.Limits
     Ecluse.Test.Sweep
     Ecluse.Test.Server.Cache
+    Ecluse.Test.Server.Handler
     Ecluse.Test.Server.Response
     Ecluse.Test.Server.Route
     Ecluse.Test.Server.Transform

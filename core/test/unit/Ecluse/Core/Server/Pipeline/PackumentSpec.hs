@@ -2,21 +2,58 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Validator identity, framing, first-party private misses, and the output charge's basis.
+-- | Validators, coding negotiation, first-party private misses, and the output charge's basis.
 module Ecluse.Core.Server.Pipeline.PackumentSpec (spec) where
 
+import Codec.Compression.GZip qualified as GZip
+import Control.Concurrent.MVar qualified as MVar
+import Crypto.Hash (Digest, SHA256, hash)
+import Data.Aeson (Value (String), encode, (.=))
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
+import Data.List (lookup)
+import Data.Text qualified as T
+import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
+import Network.HTTP.Types (Method, methodGet, methodHead, status200, status404, statusCode)
+import Network.HTTP.Types.Header (RequestHeaders, hAcceptEncoding, hContentEncoding, hContentLength, hETag, hIfNoneMatch, hVary)
+import Network.Wai (Application, Request (rawPathInfo, requestHeaders, requestMethod), Response, defaultRequest, responseHeaders, responseLBS, responseStatus)
+import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
+import UnliftIO.Async (cancel, race_, wait, withAsync)
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, pkgEcosystem)
 import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource), mergePackuments)
 import Ecluse.Core.Registry.Metadata (ContentDigest, Manifest (manifestDigest, manifestInfo, manifestRaw))
-import Ecluse.Core.Server.Conditional (ETag, renderETag)
+import Ecluse.Core.Registry.Npm.Credential (npmCredential)
+import Ecluse.Core.Registry.Npm.Route (npmRouter)
+import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
+import Ecluse.Core.Registry.PyPI.Route (pypiRouter)
+import Ecluse.Core.Registry.Request (CredentialMapping)
+import Ecluse.Core.Rules (prepare)
+import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Core.Server.Admission (newServeAdmissionTuned)
+import Ecluse.Core.Server.Admission.Meter (MeterSettings (..), meterSnapshot, newMemoryMeter, takeLargestCharge)
+import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
+import Ecluse.Core.Server.Conditional (ETag, mkStrongETag, renderETag)
+import Ecluse.Core.Server.Context (
+    MountBinding (..),
+    MountRouter,
+    PackumentDeps (pdMetadataCompression, pdMountBaseUrl),
+    ResponseAction (RunPipeline),
+    RouteAction (RouteAction),
+    ServeRuntime (srMemoryMeter),
+ )
+import Ecluse.Core.Server.Encoding (ContentCoding (GzipCoding, IdentityCoding), MetadataCompression (GzipWhenAccepted, IdentityOnly))
+import Ecluse.Core.Server.MetadataGzip (gzipBufferChargeBytes, gzipWorkspaceBytes)
 import Ecluse.Core.Server.Pipeline.Internal (denialLabels, packumentServeDecision)
 import Ecluse.Core.Server.Pipeline.Origin (Contribution (..), OriginMiss (MissAbsent, MissUnresolved))
 import Ecluse.Core.Server.Pipeline.Packument (
     PackumentReplies (..),
+    codedETag,
     firstPartyMissDecision,
     firstPartyMissReply,
     outputBasisBytes,
@@ -27,18 +64,140 @@ import Ecluse.Core.Server.Response (
     ServeDecision,
     Transience (WillResolve),
  )
+import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
+import Ecluse.Core.Telemetry.Metrics (CacheResult (Hit, Miss))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpAssembledCacheRequest))
 import Ecluse.Core.Version (Version)
-import Ecluse.Test.Package (npmVersion, pypiVersion, requestsName, sampleManifest, thingName)
+import Ecluse.Test.Log (newTestLogEnv)
+import Ecluse.Test.Package (npmVersion, pypiVersion, requestsName, sampleManifest, sriSha512Of, thingName)
+import Ecluse.Test.Port (noopMetricsPort)
+import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, versionSpec, versionValue)
+import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureResponse), deliverServe, responseBytes, testServeRuntime, testServeRuntimeWith)
+import Ecluse.Test.Server.Mount (npmServeDeps, pypiServeDeps)
 import Ecluse.Test.Server.Response (reasonOf)
 import Ecluse.Test.Snapshot (digestOf)
+import Ecluse.Test.Wai (selfBaseUrl)
 
 spec :: Spec
 spec = do
     packumentETagSpec
+    codedETagSpec
+    metadataGzipSpec
     firstPartyMissSpec
     outputBasisSpec
+
+codedETagSpec :: Spec
+codedETagSpec = describe "codedETag -- one validator per content coding" $ do
+    it "keeps the identity tag for identity coding" $
+        codedETag IdentityCoding (tagWith base) `shouldBe` tagWith base
+    it "pins a weak gzip tag over the framed identity tag" $
+        -- SHA-256 of "ecluse:packument-etag:gzip:v1\0" and the length-framed quoted identity tag.
+        renderETag (codedETag GzipCoding (mkStrongETag (hash ("identity" :: ByteString) :: Digest SHA256)))
+            `shouldBe` "W/\"34d4ae5c45518e8b9b30722d9a46d3628e64aca9df195e4351b9f3a702d44b3a\""
+    it "changes the gzip tag with the identity tag" $
+        codedETag GzipCoding (tagWith base{publicSurvivors = ["1.0.0"]}) `shouldNotBe` codedETag GzipCoding (tagWith base)
+    it "never shares the identity tag's opaque value" $
+        T.drop 2 (renderETag (codedETag GzipCoding (tagWith base))) `shouldNotBe` renderETag (tagWith base)
+
+metadataGzipSpec :: Spec
+metadataGzipSpec = describe "native metadata gzip over the live listing path" $
+    for_ listings $ \listing -> describe (listingLabel listing) $ do
+        it "gzips the identity listing's exact bytes for a client that accepts gzip" $
+            withListing listing $ \serve -> do
+                plain <- serve GzipWhenAccepted methodGet []
+                packed <- serve GzipWhenAccepted methodGet [(hAcceptEncoding, "gzip")]
+                map statusOf [plain, packed] `shouldBe` [200, 200]
+                header hContentEncoding plain `shouldBe` Nothing
+                header hContentEncoding packed `shouldBe` Just "gzip"
+                map (header hVary) [plain, packed] `shouldBe` [Just "Accept-Encoding", Just "Accept-Encoding"]
+                plainBytes <- responseBytes plain
+                packedBytes <- responseBytes packed
+                GZip.decompress packedBytes `shouldBe` plainBytes
+                header hContentLength packed `shouldBe` Just (show (LBS.length packedBytes))
+                header hETag packed `shouldSatisfy` maybe False (BS.isPrefixOf "W/")
+                header hETag plain `shouldSatisfy` maybe False (BS.isPrefixOf "\"")
+        it "states a gzip HEAD's exact length and validator without a body" $
+            withListing listing $ \serve -> do
+                packed <- serve GzipWhenAccepted methodGet [(hAcceptEncoding, "gzip")]
+                headed <- serve GzipWhenAccepted methodHead [(hAcceptEncoding, "gzip")]
+                statusOf headed `shouldBe` 200
+                responseBytes headed `shouldReturn` ""
+                packedBytes <- responseBytes packed
+                header hContentLength headed `shouldBe` Just (show (LBS.length packedBytes))
+                map (header hETag) [headed, packed] `shouldBe` replicate 2 (header hETag packed)
+                header hContentEncoding headed `shouldBe` Just "gzip"
+        it "answers 304 only to the selected coding's validator" $
+            withListing listing $ \serve -> do
+                plainTag <- validator =<< serve GzipWhenAccepted methodGet []
+                gzipTag <- validator =<< serve GzipWhenAccepted methodGet [(hAcceptEncoding, "gzip")]
+                for_ [methodGet, methodHead] $ \method -> do
+                    matched <- serve GzipWhenAccepted method [(hAcceptEncoding, "gzip"), (hIfNoneMatch, gzipTag)]
+                    statusOf matched `shouldBe` 304
+                    responseBytes matched `shouldReturn` ""
+                    header hETag matched `shouldBe` Just gzipTag
+                    header hVary matched `shouldBe` Just "Accept-Encoding"
+                crossed <- serve GzipWhenAccepted methodGet [(hAcceptEncoding, "gzip"), (hIfNoneMatch, plainTag)]
+                (statusOf crossed, header hContentEncoding crossed) `shouldBe` (200, Just "gzip")
+                unpacked <- serve GzipWhenAccepted methodGet [(hIfNoneMatch, gzipTag)]
+                (statusOf unpacked, header hContentEncoding unpacked) `shouldBe` (200, Nothing)
+        it "refuses with 406 a request that excludes both codings" $
+            withListing listing $ \serve -> do
+                refused <- serve GzipWhenAccepted methodGet [(hAcceptEncoding, "gzip;q=0, identity;q=0")]
+                statusOf refused `shouldBe` 406
+                header hVary refused `shouldBe` Just "Accept-Encoding"
+        it "keeps the identity response unchanged when the operator opts out" $
+            withListing listing $ \serve -> do
+                plain <- serve IdentityOnly methodGet []
+                plainBytes <- responseBytes plain
+                for_ [[(hAcceptEncoding, "gzip")], [(hAcceptEncoding, "*;q=0")]] $ \offered -> do
+                    response <- serve IdentityOnly methodGet offered
+                    statusOf response `shouldBe` 200
+                    responseHeaders response `shouldBe` responseHeaders plain
+                    responseBytes response `shouldReturn` plainBytes
+                header hVary plain `shouldBe` Nothing
+        it "serves both codings from one identity entry in the assembled cache" $ do
+            results <- newIORef []
+            rt <- testServeRuntime noopMetricsPort{mpAssembledCacheRequest = \result -> modifyIORef' results (result :)}
+            withListingIn rt listing $ \serve -> do
+                packed <- serve GzipWhenAccepted methodGet [(hAcceptEncoding, "gzip")]
+                plain <- serve GzipWhenAccepted methodGet []
+                plainBytes <- responseBytes plain
+                (GZip.decompress <$> responseBytes packed) `shouldReturn` plainBytes
+                reverse <$> readIORef results `shouldReturn` [Miss, Hit]
+        it "charges a gzip response its workspace and buffer, and returns every charge" $ do
+            meter <- newMemoryMeter MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 1000, msEntryWaitMicros = 0}
+            unmetered <- testServeRuntime noopMetricsPort
+            withListingIn unmetered{srMemoryMeter = meter} listing $ \serve -> do
+                void (serve GzipWhenAccepted methodGet [])
+                void (takeLargestCharge meter)
+                void (serve GzipWhenAccepted methodGet [])
+                plainCharge <- takeLargestCharge meter
+                void (serve GzipWhenAccepted methodGet [(hAcceptEncoding, "gzip")])
+                gzipCharge <- takeLargestCharge meter
+                gzipCharge - plainCharge `shouldBe` gzipWorkspaceBytes + gzipBufferChargeBytes
+                snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
+        it "returns its admission slot and charges when cancelled while it responds" $ do
+            admission <- newServeAdmissionTuned 1 0 0
+            rt <- testServeRuntimeWith admission noopMetricsPort
+            testWithApplication (pure (listingOrigin listing)) $ \port -> do
+                deps <- listingDeps listing port
+                ready <- MVar.newEmptyMVar
+                blocked <- MVar.newEmptyMVar
+                let stalled = runListing rt listing deps methodGet [(hAcceptEncoding, "gzip")] (\_ -> MVar.putMVar ready () >> MVar.takeMVar blocked)
+                withAsync stalled $ \worker -> do
+                    race_ (MVar.takeMVar ready) (wait worker)
+                    cancel worker
+                snChargedBytes <$> meterSnapshot (srMemoryMeter rt) `shouldReturn` 0
+                next <- captureListing rt listing deps methodGet [(hAcceptEncoding, "gzip")]
+                statusOf next `shouldBe` 200
+  where
+    statusOf = statusCode . responseStatus
+    header name = lookup name . responseHeaders
+    validator response = maybe (throwIO MissingFixtureResponse) pure (header hETag response)
 
 packumentETagSpec :: Spec
 packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
@@ -174,6 +333,7 @@ namedReplies =
         , packumentUnauthorised = \_ _ -> "unauthorised"
         , packumentForbidden = \_ _ -> "forbidden"
         , packumentNotFound = \_ _ -> "not-found"
+        , packumentNotAcceptable = \_ _ -> "not-acceptable"
         , packumentInternal = \_ _ -> "internal"
         , packumentBadGateway = \_ _ -> "bad-gateway"
         , packumentUnavailable = \_ _ -> "unavailable"
@@ -216,3 +376,69 @@ tagWith f = packumentETag mountBase [] thingName (piecesOf f)
 
 mountBase :: Text
 mountBase = "https://proxy.example/npm"
+
+-- One ecosystem's listing route, mount, and the public origin that serves its document.
+data Listing = Listing
+    { listingLabel :: String
+    , listingRouter :: MountRouter
+    , listingPath :: [Text]
+    , listingPrefix :: Text
+    , listingCredential :: CredentialMapping
+    , listingDeps :: Int -> IO PackumentDeps
+    , listingOrigin :: Application
+    }
+
+listings :: [Listing]
+listings =
+    [ Listing "npm" npmRouter ["leftpad"] "npm" npmCredential (agedDeps npmServeDeps (UTCTime (fromGregorian 2020 1 1) 0)) npmOrigin
+    , Listing "PyPI" pypiRouter ["simple", "requests"] "pypi" pypiCredential (agedDeps pypiServeDeps (UTCTime (fromGregorian 2026 6 20) 0)) pypiOrigin
+    ]
+  where
+    agedDeps serveDeps now port = do
+        prepared <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
+        pure (serveDeps Nothing (loopbackRegistryUrl ("http://localhost:" <> show port)) NoMirrorWrite prepared (pure now)){pdMountBaseUrl = "http://proxy.test"}
+
+npmOrigin :: Application
+npmOrigin request respond
+    | rawPathInfo request == "/leftpad" = respond (responseLBS status200 [] (encode document))
+    | otherwise = respond (responseLBS status404 [] "")
+  where
+    tarball = selfBaseUrl request <> "/leftpad/-/leftpad-1.0.0.tgz"
+    document = packumentValue "leftpad" "1.0.0" [("1.0.0", versionValue (versionSpec "leftpad" "1.0.0" tarball){vsIntegrity = Just (sriSha512Of "leftpad bytes")})] ["1.0.0" .= ("2019-01-01T00:00:00.000Z" :: Text)] []
+
+pypiOrigin :: Application
+pypiOrigin request respond
+    | rawPathInfo request == "/simple/requests/" = respond (responseLBS status200 [] (encode index))
+    | otherwise = respond (responseLBS status404 [] "")
+  where
+    index = simpleIndex "requests" [withFileKeys [("url", String (selfBaseUrl request <> "/files/requests-1.0.0.tar.gz"))] (simpleFile "requests-1.0.0.tar.gz")]
+
+-- Serve each request through a fresh runtime over one origin, choosing the mount's coding policy.
+withListing :: Listing -> ((MetadataCompression -> Method -> RequestHeaders -> IO Response) -> IO a) -> IO a
+withListing listing use = do
+    rt <- testServeRuntime noopMetricsPort
+    withListingIn rt listing use
+
+withListingIn :: ServeRuntime -> Listing -> ((MetadataCompression -> Method -> RequestHeaders -> IO Response) -> IO a) -> IO a
+withListingIn rt listing use =
+    testWithApplication (pure (listingOrigin listing)) $ \port -> do
+        deps <- listingDeps listing port
+        use (\policy -> captureListing rt listing deps{pdMetadataCompression = policy})
+
+captureListing :: ServeRuntime -> Listing -> PackumentDeps -> Method -> RequestHeaders -> IO Response
+captureListing rt listing deps method headers = do
+    captured <- newIORef Nothing
+    runListing rt listing deps method headers (writeIORef captured . Just)
+    maybe (throwIO MissingFixtureResponse) pure =<< readIORef captured
+
+-- The listing's route under its own router, so a HEAD takes the bodiless contract.
+runListing :: ServeRuntime -> Listing -> PackumentDeps -> Method -> RequestHeaders -> (Response -> IO ()) -> IO ()
+runListing rt listing deps method headers deliver =
+    case listingRouter listing method headers (listingPath listing) of
+        RouteAction contract (RunPipeline _ action) -> do
+            logEnv <- newTestLogEnv
+            deliverServe logEnv contract rt binding (action request) deliver
+        _ -> throwIO MissingFixtureResponse
+  where
+    binding = MountBinding (listingPrefix listing :| []) (listingRouter listing) (listingCredential listing) deps Nothing
+    request = defaultRequest{requestMethod = method, requestHeaders = headers}

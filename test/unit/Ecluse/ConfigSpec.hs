@@ -157,6 +157,7 @@ spec = do
         forM_
             [ ("server.port", "ECLUSE_SERVER__PORT", "{\"server\":{\"port\":\"bad\"}}")
             , ("server.shutdownDrainTimeout", "ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT", "{\"server\":{\"shutdownDrainTimeout\":\"bad\"}}")
+            , ("server.metadataGzip", "ECLUSE_SERVER__METADATA_GZIP", "{\"server\":{\"metadataGzip\":\"bad\"}}")
             , ("limits.maxVersionCount", "ECLUSE_LIMITS__MAX_VERSION_COUNT", "{\"limits\":{\"maxVersionCount\":\"bad\"}}")
             , ("limits.progressWindow", "ECLUSE_LIMITS__PROGRESS_WINDOW", "{\"limits\":{\"progressWindow\":\"bad\"}}")
             , ("limits.minProgressBytes", "ECLUSE_LIMITS__MIN_PROGRESS_BYTES", "{\"limits\":{\"minProgressBytes\":\"bad\"}}")

@@ -12,15 +12,12 @@ import Data.Aeson (Value (Object, String), eitherDecode, eitherDecodeStrict, enc
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
-import Data.ByteString.Builder (toLazyByteString)
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
-import Katip (LogEnv)
-import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (Method, Status, hContentType, methodGet, methodHead, status200, status302, status304, status400, status401, status403, status404, status429, status500, status503, statusCode)
+import Network.HTTP.Types (Method, Status, hContentType, methodGet, methodHead, status200, status206, status302, status304, status400, status401, status403, status404, status429, status500, status503, statusCode)
 
 import Ecluse.Core.Credential (ClientCredential (credSecret), bareCredential, mkSecret, unSecret)
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange))
@@ -49,23 +46,22 @@ import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Rules.Types qualified as Rules
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, newServeAdmissionTuned, withServeAdmission)
+import Ecluse.Core.Server.Admission (newServeAdmission, newServeAdmissionTuned, withServeAdmission)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), meterSnapshot, newMemoryMeter, withMemoryEntry)
 import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
 import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Context (
-    Handler,
     MountBinding (..),
     PackumentDeps (..),
     RequestCtx (RequestCtx),
     ResponseAction (RunPipeline),
     RouteAction (RouteAction),
-    ServeRuntime (ServeRuntime, srMemoryMeter, srMetadataCache, srMetrics),
+    ServeRuntime (srMemoryMeter, srMetadataCache, srMetrics),
     pdPrivateBaseUrl,
     pdPublicBaseUrl,
     runHandler,
  )
-import Ecluse.Core.Server.Contract (ResponseContract, responseToWai)
+import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Pipeline (headTarball, servePackument, serveTarball)
 import Ecluse.Core.Server.Pipeline.Publish ()
 import Ecluse.Core.Server.Pipeline.Shared (hRetryAfter)
@@ -86,20 +82,19 @@ import Ecluse.Test.Maintenance (
     servedVersions,
  )
 import Ecluse.Test.Package (hexSha1Of, leftpadName, npmVersion, requestsName, sampleDetails, sampleManifest, sriSha256Of, sriSha512Of, unsafeFilename)
-import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
-import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Port (noopMetricsPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, atPrecedence, blockedBy, inertRuleDeps, isUndecidable, servingRuleDeps)
-import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig, newMetadataCache)
+import Ecluse.Test.Server.Cache (cachedMetadata)
+import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureResponse), captureServe, captureServeWithLog, responseBytes, testServeRuntime, testServeRuntimeWith)
 import Ecluse.Test.Server.Mount (npmServeDeps, pypiServeDeps, withPrivateBaseUrl)
-import Ecluse.Test.Support (testMemoryMeter)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recTargetResults), recordingPorts, testMount, testPacing, withPrivateCache)
 import Ecluse.Test.Wai (countingUpstream, selfBaseUrl)
-import Network.HTTP.Types.Header (RequestHeaders, hDate, hETag, hHost, hIfNoneMatch)
+import Network.HTTP.Types.Header (RequestHeaders, hAcceptEncoding, hContentEncoding, hContentRange, hDate, hETag, hHost, hIfNoneMatch)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders), defaultRequest, mapResponseHeaders, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
-import Network.Wai.Internal (Response (ResponseBuilder), ResponseReceived (ResponseReceived))
+import Network.Wai.Internal (Response)
 import Network.Wai.Test (SResponse (..), runSession)
 import Network.Wai.Test qualified as WaiTest (request)
 import Test.Hspec
@@ -121,7 +116,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         it ("records private artifact HTTP " <> show (statusCode upstreamStatus) <> " as " <> show expected <> " for GET and HEAD") $
             testWithApplication (pure (\_ respond -> respond (responseLBS upstreamStatus [] "private response"))) $ \port -> do
                 (metricsPort, decisions) <- recordingMetricsPort
-                rt <- mkRuntime metricsPort
+                rt <- testServeRuntime metricsPort
                 base <- depsFor 1
                 let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) base
                 for_ [serveTarball, headTarball] $ \serve -> do
@@ -132,7 +127,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     it "serves a merged packument and records an admit through the metrics port" $
         testWithApplication (pure upstreamApp) $ \port -> do
             (metricsPort, decisions) <- recordingMetricsPort
-            rt <- mkRuntime metricsPort
+            rt <- testServeRuntime metricsPort
             deps <- depsFor port
             resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
             statusCode (responseStatus resp) `shouldBe` 200
@@ -140,7 +135,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
     it "records an unavailability and renders 503 when no upstream resolves" $ do
         (metricsPort, decisions) <- recordingMetricsPort
-        rt <- mkRuntime metricsPort
+        rt <- testServeRuntime metricsPort
         deps <- depsFor 1
         resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
         statusCode (responseStatus resp) `shouldBe` 503
@@ -148,7 +143,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
     it "admits exactly the credential presentation the mount's ecosystem declares" $ do
         (metricsPort, _decisions) <- recordingMetricsPort
-        rt <- mkRuntime metricsPort
+        rt <- testServeRuntime metricsPort
         -- Closed upstream ports distinguish edge refusal from an admitted request's fetch failure.
         gated <- gatedDeps
         let serveUnder mapping headers =
@@ -165,7 +160,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
     it "refuses public metadata and direct artifacts on MAL evidence with structured audit IDs" $
         testWithApplication (pure upstreamApp) $ \port -> do
-            rt <- mkRuntime noopMetricsPort
+            rt <- testServeRuntime noopMetricsPort
             base <- depsFor port
             let source = servingRuleDeps (DbEtag "mal-generation") (fakeCveLookup [("leftpad", AdvisoryRange "MAL-pipeline" Nothing Nothing Unbounded Nothing)])
             rules <- prepare source (atDefaultPrecedence (Rules.DenyIfKnownMalicious Rules.FailDeny) : allowPolicy)
@@ -181,7 +176,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     it "serves a gated tarball and records an admit, driving the metrics and tracing ports" $
         testWithApplication (pure upstreamApp) $ \port -> do
             (metricsPort, decisions) <- recordingMetricsPort
-            rt <- mkRuntime metricsPort
+            rt <- testServeRuntime metricsPort
             deps <- depsFor port
             resp <-
                 captureServe
@@ -194,7 +189,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
     it "keeps a first-party packument off the public upstream, answering 503 when the private origin cannot be read" $ do
         (metricsPort, decisions) <- recordingMetricsPort
-        rt <- mkRuntime metricsPort
+        rt <- testServeRuntime metricsPort
         hits <- newIORef (0 :: Int)
         testWithApplication (pure (countingUpstream hits upstreamApp)) $ \port -> do
             base <- depsFor port
@@ -216,7 +211,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
     it "keeps a first-party artifact off the public upstream, answering 503 when the private port is closed" $ do
         (metricsPort, decisions) <- recordingMetricsPort
-        rt <- mkRuntime metricsPort
+        rt <- testServeRuntime metricsPort
         hits <- newIORef (0 :: Int)
         testWithApplication (pure (countingUpstream hits upstreamApp)) $ \port -> do
             base <- depsFor port
@@ -235,7 +230,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     for_ [(status404, 404, Deny), (status302, 503, Unavailable), (status400, 503, Unavailable), (status429, 503, Unavailable), (status500, 503, Unavailable), (status503, 503, Unavailable)] $ \(privateStatus, expectedStatus, expectedDecision) ->
         it ("keeps first-party artifact HTTP " <> show (statusCode privateStatus) <> " private, answering " <> show expectedStatus <> " for GET and HEAD") $ do
             (metricsPort, decisions) <- recordingMetricsPort
-            rt <- mkRuntime metricsPort
+            rt <- testServeRuntime metricsPort
             publicHits <- newIORef (0 :: Int)
             testWithApplication (pure (countingUpstream publicHits upstreamApp)) $ \publicPort ->
                 testWithApplication (pure (\_ respond -> respond (responseLBS privateStatus [] "private refusal"))) $ \privatePort -> do
@@ -255,7 +250,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
     it "keeps the public artifact status, headers and bytes after every private miss" $
         testWithApplication (pure (\req respond -> upstreamApp req (respond . mapResponseHeaders ((hDate, "Thu, 01 Jan 2026 00:00:00 GMT") :)))) $ \publicPort -> do
-            rt <- mkRuntime noopMetricsPort
+            rt <- testServeRuntime noopMetricsPort
             base <- depsFor publicPort
             logEnv <- newTestLogEnv
             let fetch deps =
@@ -276,10 +271,28 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                 testWithApplication (pure (\_ respond -> respond (responseLBS privateStatus [] "private refusal"))) $ \privatePort ->
                     fetch (withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base) >>= assertSame
 
+    for_ [("200", upstreamApp), ("206", partialUpstream)] $ \(label, upstream) ->
+        it ("relays an upstream " <> label <> " artifact unchanged to a client that accepts gzip, for GET and HEAD") $
+            testWithApplication (pure upstream) $ \publicPort -> do
+                rt <- testServeRuntime noopMetricsPort
+                deps <- withPrivateBaseUrl Nothing <$> depsFor publicPort
+                logEnv <- newTestLogEnv
+                for_ [serveTarball, headTarball] $ \serve -> do
+                    let fetch headers =
+                            runSession (WaiTest.request defaultRequest{requestHeaders = headers}) $ \req respond ->
+                                runHandler logEnv mempty (RequestCtx rt (mountWith deps)) (serve npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") req (respond . responseToWai npmTarballContract))
+                    plain <- fetch []
+                    offered <- fetch [(hAcceptEncoding, "gzip")]
+                    statusCode (simpleStatus offered) `shouldBe` if label == "206" then 206 else 200
+                    simpleStatus offered `shouldBe` simpleStatus plain
+                    simpleHeaders offered `shouldBe` simpleHeaders plain
+                    simpleBody offered `shouldBe` simpleBody plain
+                    lookup hContentEncoding (simpleHeaders offered) `shouldBe` Nothing
+
     it "sheds packument work when metadata admission refuses" $ do
         (metricsPort, _decisions) <- recordingMetricsPort
         admission <- newServeAdmissionTuned 1 0 0
-        rt <- mkRuntimeWith admission metricsPort
+        rt <- testServeRuntimeWith admission metricsPort
         deps <- depsFor 1
         held <- withServeAdmission (srMetrics rt) admission (captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest))
         response <- maybe (throwIO MissingFixtureResponse) pure held
@@ -290,7 +303,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         testWithApplication (pure upstreamApp) $ \port -> do
             (metricsPort, _decisions) <- recordingMetricsPort
             admission <- newServeAdmissionTuned 1 0 0
-            rt <- mkRuntimeWith admission metricsPort
+            rt <- testServeRuntimeWith admission metricsPort
             deps <- depsFor port
             saturated <- withServeAdmission (srMetrics rt) admission (captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest))
             (statusCode . responseStatus <$> saturated) `shouldBe` Just 503
@@ -300,7 +313,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     it "sheds a tarball miss when its public metadata gate cannot acquire admission" $ do
         (metricsPort, _decisions) <- recordingMetricsPort
         admission <- newServeAdmissionTuned 1 0 0
-        rt <- mkRuntimeWith admission metricsPort
+        rt <- testServeRuntimeWith admission metricsPort
         deps <- depsFor 1
         held <-
             withServeAdmission (srMetrics rt) admission $
@@ -317,7 +330,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         testWithApplication (pure upstreamApp) $ \port -> do
             (metricsPort, _decisions) <- recordingMetricsPort
             admission <- newServeAdmission 1
-            rt <- mkRuntimeWith admission metricsPort
+            rt <- testServeRuntimeWith admission metricsPort
             deps <- depsFor 1
             let privateDeps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) deps
             held <-
@@ -331,7 +344,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
     it "releases both gates before public artifact relay starts" $ do
         admission <- newServeAdmissionTuned 1 0 0
-        rt <- mkRuntimeWith admission noopMetricsPort
+        rt <- testServeRuntimeWith admission noopMetricsPort
         released <- newIORef Nothing
         let upstream req respond = do
                 when ("/leftpad/-/" `BS.isPrefixOf` rawPathInfo req) $ do
@@ -359,7 +372,7 @@ memoryAdmissionSpec = describe "memory admission on live request paths" $ do
                     when (rawPathInfo req == "/leftpad") (modifyIORef' lookupCalls (+ 1))
                     upstreamApp req respond
             testWithApplication (pure upstream) $ \port -> do
-                rt <- mkRuntime noopMetricsPort
+                rt <- testServeRuntime noopMetricsPort
                 deps <- depsFor port
                 let serve rules selected =
                         captureServe
@@ -381,7 +394,7 @@ memoryAdmissionSpec = describe "memory admission on live request paths" $ do
         publicCalls <- newIORef (0 :: Int)
         testWithApplication (pure (countingUpstream privateCalls upstreamApp)) $ \privatePort ->
             testWithApplication (pure (countingUpstream publicCalls upstreamApp)) $ \publicPort -> do
-                rt <- mkRuntime noopMetricsPort
+                rt <- testServeRuntime noopMetricsPort
                 base <- depsFor publicPort
                 let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base
                     serve request = captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName request)
@@ -521,7 +534,7 @@ skippedCheckAuditSpec = describe "skipped-check evidence at the public artifact 
     it "logs the skipped check once, at the artifact admission, and not for the packument that listed it" $
         testWithApplication (pure upstreamApp) $ \port -> do
             (metricsPort, _decisions) <- recordingMetricsPort
-            rt <- mkRuntime metricsPort
+            rt <- testServeRuntime metricsPort
             deps <- skippingDeps port
             (_, logged) <- captureJsonLog $ \logEnv -> do
                 packument <- captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
@@ -536,7 +549,7 @@ skippedCheckAuditSpec = describe "skipped-check evidence at the public artifact 
     it "logs the line once per admission identity for the life of the outage, and again after recovery" $
         testWithApplication (pure twoVersionUpstream) $ \port -> do
             (metricsPort, _decisions) <- recordingMetricsPort
-            rt <- mkRuntime metricsPort
+            rt <- testServeRuntime metricsPort
             (reporter, deps) <- observedSkippingDeps port
             twoSkips <- prepare (ruleDepsOf reporter) (atDefaultPrecedence (Rules.DenyIfEpss (Rules.DenyIfEpssParams 0.5 Rules.FailNoDecision)) : skipPolicy)
             let serve logEnv d ver = do
@@ -557,7 +570,7 @@ skippedCheckAuditSpec = describe "skipped-check evidence at the public artifact 
     it "logs nothing for a trusted private serve, which runs no rules" $
         testWithApplication (pure upstreamApp) $ \port -> do
             (metricsPort, _decisions) <- recordingMetricsPort
-            rt <- mkRuntime metricsPort
+            rt <- testServeRuntime metricsPort
             deps <- withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) <$> skippingDeps 1
             (_, logged) <- captureJsonLog $ \logEnv ->
                 replicateM_ 3 $ do
@@ -644,7 +657,7 @@ withConflictOrigins public private action = do
     testWithApplication (pure (countingUpstream publicHits public)) $ \publicPort ->
         testWithApplication (pure private) $ \privatePort -> do
             (metrics, divergences) <- recordingDivergenceMetricsPort
-            rt <- mkRuntime metrics
+            rt <- testServeRuntime metrics
             base <- depsFor publicPort
             action rt (withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base) divergences publicHits
 
@@ -670,9 +683,7 @@ assertConflictLog expected logged = do
 
 servedFields :: Response -> IO (KeyMap.KeyMap Value)
 servedFields resp = do
-    value <- case resp of
-        ResponseBuilder _ _ builder -> either fail pure (eitherDecode (toLazyByteString builder))
-        _ -> fail "expected a packument response builder"
+    value <- responseBytes resp >>= either fail pure . eitherDecode
     case value of
         Object fields -> pure fields
         _ -> fail "expected a packument object"
@@ -861,7 +872,7 @@ nextPrivateGet privateUpstream rules retained = do
     testWithApplication (pure (countingUpstream publicHits upstreamApp)) $ \publicPort ->
         testWithApplication (pure (countingUpstream privateHits privateUpstream)) $ \privatePort -> do
             (metricsPort, decisions) <- recordingMetricsPort
-            rt <- mkRuntime metricsPort
+            rt <- testServeRuntime metricsPort
             base <- depsFor publicPort
             let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base{pdRules = rules}
             response <-
@@ -887,7 +898,7 @@ pypiPrivateArtifactSpec :: Spec
 pypiPrivateArtifactSpec = describe "PyPI first-party private artifacts" $ do
     it "answers 503 without a suggested delay when the private origin cannot be read" $ do
         (metricsPort, decisions) <- recordingMetricsPort
-        rt <- mkRuntime metricsPort
+        rt <- testServeRuntime metricsPort
         publicHits <- newIORef (0 :: Int)
         testWithApplication (pure (countingUpstream publicHits upstreamApp)) $ \publicPort -> do
             let deps = pypiPrivateDeps 1 publicPort
@@ -901,7 +912,7 @@ pypiPrivateArtifactSpec = describe "PyPI first-party private artifacts" $ do
     for_ [(status404, 404, Deny), (status302, 503, Unavailable), (status429, 503, Unavailable), (status500, 503, Unavailable)] $ \(privateStatus, expectedStatus, expectedDecision) ->
         it ("answers " <> show expectedStatus <> " after a private index hit and artifact HTTP " <> show (statusCode privateStatus)) $ do
             (metricsPort, decisions) <- recordingMetricsPort
-            rt <- mkRuntime metricsPort
+            rt <- testServeRuntime metricsPort
             publicHits <- newIORef (0 :: Int)
             privateHits <- newIORef (0 :: Int)
             testWithApplication (pure (countingUpstream publicHits upstreamApp)) $ \publicPort ->
@@ -936,44 +947,12 @@ pypiPrivateApp privateStatus req respond
   where
     index = simpleIndex "requests" [withFileKeys [("url", String (selfBaseUrl req <> "/files/requests-1.0.0.tar.gz"))] (simpleFile "requests-1.0.0.tar.gz")]
 
-captureServe :: ResponseContract response -> ServeRuntime -> MountBinding -> ((response -> IO ResponseReceived) -> Handler ResponseReceived) -> IO Response
-captureServe contract rt binding mkHandler = do
-    logEnv <- newTestLogEnv
-    captureServeWithLog logEnv contract rt binding mkHandler
-
-captureServeWithLog :: LogEnv -> ResponseContract response -> ServeRuntime -> MountBinding -> ((response -> IO ResponseReceived) -> Handler ResponseReceived) -> IO Response
-captureServeWithLog logEnv contract rt binding mkHandler = do
-    captured <- newIORef Nothing
-    let respond value = writeIORef captured (Just (responseToWai contract value)) >> pure ResponseReceived
-    _ <- runHandler logEnv mempty (RequestCtx rt binding) (mkHandler respond)
-    maybe (throwIO MissingFixtureResponse) pure =<< readIORef captured
-
--- A missing callback result is a fixture failure, never an upstream outcome.
-data MissingFixtureResponse = MissingFixtureResponse
-    deriving stock (Show)
-
-instance Exception MissingFixtureResponse
-
-mkRuntime :: MetricsPort -> IO ServeRuntime
-mkRuntime metricsPort = do
-    -- Admission cases use a separate tuned handle.
-    admission <- newServeAdmission 1_000_000
-    mkRuntimeWith admission metricsPort
-
 -- The zero waiting room makes a held step refuse the next request at once.
 fullDoorRuntime :: MetricsPort -> IO (ServeRuntime, MemoryMeter)
 fullDoorRuntime metricsPort = do
-    rt <- mkRuntime metricsPort
+    rt <- testServeRuntime metricsPort
     meter <- newMemoryMeter MeterSettings{msBudgetBytes = 1, msStepBytes = 1, msEntryRoom = 0, msEntryWaitMicros = 0}
     pure (rt{srMemoryMeter = meter}, meter)
-
-mkRuntimeWith :: ServeAdmission -> MetricsPort -> IO ServeRuntime
-mkRuntimeWith admission metricsPort = do
-    manager <- newManager defaultManagerSettings
-    cache <- newMetadataCache defaultCacheConfig
-    queue <- newTestMemoryQueue
-    meter <- testMemoryMeter
-    pure (ServeRuntime admission meter manager manager cache queue metricsPort passthroughTracingPort)
 
 mountWith :: PackumentDeps -> MountBinding
 mountWith = mountUnder npmCredential
@@ -1039,6 +1018,13 @@ upstreamApp req respond =
 
 artifactBytes :: ByteString
 artifactBytes = "leftpad artifact bytes"
+
+-- An upstream that answers the artifact with a partial reply, as a range-serving store may.
+partialUpstream :: Application
+partialUpstream req respond
+    | rawPathInfo req == "/leftpad/-/leftpad-1.0.0.tgz" =
+        respond (responseLBS status206 [(hContentType, "application/octet-stream"), (hContentRange, "bytes 0-6/22")] (LBS.fromStrict (BS.take 7 artifactBytes)))
+    | otherwise = upstreamApp req respond
 
 packumentWithIntegrity :: ByteString -> Text -> Value
 packumentWithIntegrity host integrity = privatePackumentOver host integrity ["1.0.0"] "1.0.0"

@@ -13,8 +13,9 @@ module Ecluse.Core.Server.Pipeline.Packument (
     firstPartyMissDecision,
     firstPartyMissReply,
 
-    -- * The derived validator (exported for its unit spec)
+    -- * The derived validators (exported for their unit spec)
     packumentETag,
+    codedETag,
 
     -- * The served body and its output charge basis (exported for the residency probe and a unit spec)
     assembleServedBody,
@@ -70,7 +71,7 @@ import Ecluse.Core.Server.Admission.Meter (MemoryTicket, awaitingFlight, charge,
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfOutputPermille))
 import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Cache.Types (assembledKey)
-import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag)
+import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag, mkWeakETag, renderETag)
 import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps),
@@ -82,8 +83,17 @@ import Ecluse.Core.Server.Context (
     pdPrivateBaseUrl,
     pdPublicBaseUrl,
  )
+import Ecluse.Core.Server.Encoding (
+    CodingChoice (NoAcceptableCoding, ServeCoding),
+    ContentCoding (GzipCoding, IdentityCoding),
+    MetadataCompression (GzipWhenAccepted, IdentityOnly),
+    chooseCoding,
+    gzipEncodingHeader,
+    varyAcceptEncoding,
+ )
 import Ecluse.Core.Server.Fault (RenderEscape (RenderEscape))
 import Ecluse.Core.Server.Framing (frameBytes)
+import Ecluse.Core.Server.MetadataGzip (GzipBody (gzipLength), gzipLazyBody, gzipMetadata)
 import Ecluse.Core.Server.MirrorView (mirrorProjectViews, publicMirrorCoverage, validateMirrorProject)
 import Ecluse.Core.Server.Pipeline.Diagnostics (warnDivergences)
 import Ecluse.Core.Server.Pipeline.Internal (
@@ -132,6 +142,7 @@ data PackumentReplies response = PackumentReplies
     , packumentUnauthorised :: ResponseHeaders -> Refusal -> response
     , packumentForbidden :: ResponseHeaders -> Refusal -> response
     , packumentNotFound :: ResponseHeaders -> Refusal -> response
+    , packumentNotAcceptable :: ResponseHeaders -> Refusal -> response
     , packumentInternal :: ResponseHeaders -> Refusal -> response
     , packumentBadGateway :: ResponseHeaders -> Refusal -> response
     , packumentUnavailable :: ResponseHeaders -> Refusal -> response
@@ -372,24 +383,53 @@ serveResolved serving sources plan = do
     liftIO (mpServeDecision (servingMetrics serving) Metric.Admit)
     answerPackumentConditional serving sources plan
 
--- A 304 still pays for origin reads and planning, but skips assembly and encoding.
+-- The coding is chosen before the validator, so a 304 names the coding's own tag. It skips assembly and compression.
 answerPackumentConditional :: PackumentServing response -> [Contribution] -> MergePlan -> Handler ResponseReceived
-answerPackumentConditional serving sources plan = do
-    let origins = map registryUrlText (maybeToList (pdPrivateBaseUrl deps) <> [pdPublicBaseUrl deps])
-        etag = packumentETag (pdMountBaseUrl deps) origins name (map fingerprintPiece sources)
-    case evaluateETag (requestHeaders (psvRequest serving)) etag of
-        NotModified matched -> do
-            logFM DebugS (ls ("packument unchanged for " <> renderPackageName name <> " (304, unassembled)"))
-            liftIO (respond (packumentNotModified replies [etagHeader matched]))
-        Modified fresh -> do
-            logFM DebugS (ls ("serving packument for " <> renderPackageName name))
-            bytes <- liftIO (servedBytes serving sources plan fresh)
-            liftIO (respond (packumentResponse replies (psvMode serving) fresh bytes))
+answerPackumentConditional serving sources plan =
+    case chooseCoding (pdMetadataCompression deps) headers of
+        NoAcceptableCoding ->
+            liftIO (respond (packumentNotAcceptable replies (represented []) (mkRefusal (pdHelp deps) "the request's Accept-Encoding excludes both gzip and identity")))
+        ServeCoding coding -> case evaluateETag headers (codedETag coding identityTag) of
+            NotModified matched -> do
+                logFM DebugS (ls ("packument unchanged for " <> renderPackageName name <> " (304, unassembled)"))
+                liftIO (respond (packumentNotModified replies (represented [etagHeader matched])))
+            Modified fresh -> do
+                logFM DebugS (ls ("serving packument for " <> renderPackageName name))
+                -- The assembled cache holds the identity bytes under the identity tag, whatever the coding.
+                bytes <- liftIO (servedBytes serving sources plan identityTag)
+                listing <- liftIO (codedListing (psvTicket serving) coding bytes)
+                liftIO (respond (packumentResponse replies (psvMode serving) (represented [etagHeader fresh]) listing))
   where
     deps = psvDeps serving
     name = psvName serving
     replies = psvReplies serving
     respond = psvRespond serving
+    headers = requestHeaders (psvRequest serving)
+    origins = map registryUrlText (maybeToList (pdPrivateBaseUrl deps) <> [pdPublicBaseUrl deps])
+    identityTag = packumentETag (pdMountBaseUrl deps) origins name (map fingerprintPiece sources)
+    -- An identity-only mount negotiates nothing, so its responses do not vary by Accept-Encoding.
+    represented = case pdMetadataCompression deps of
+        GzipWhenAccepted -> varyAcceptEncoding
+        IdentityOnly -> id
+
+-- One admitted listing in its selected coding.
+data CodedListing
+    = IdentityListing ByteString
+    | GzipListing GzipBody
+
+-- The request's ticket pays for the deflater and its output, on a cache hit as on a miss.
+codedListing :: MemoryTicket -> ContentCoding -> ByteString -> IO CodedListing
+codedListing ticket = \case
+    IdentityCoding -> pure . IdentityListing
+    GzipCoding -> fmap GzipListing . gzipMetadata (charge ticket)
+
+-- | A coding's validator: the identity tag itself, or a weak tag derived from it, because a codec change may change gzip bytes.
+codedETag :: ContentCoding -> ETag -> ETag
+codedETag coding identityTag = case coding of
+    IdentityCoding -> identityTag
+    GzipCoding -> mkWeakETag (hashFinalize (hashUpdates (hashInit :: Context SHA256) (LBS.toChunks (toLazyByteString discriminated))))
+  where
+    discriminated = "ecluse:packument-etag:gzip:v1\0" <> frameBytes (encodeUtf8 (renderETag identityTag))
 
 -- | A validator derived from framed inputs so unchanged requests skip assembly. Bump the salt when assembly behaviour changes.
 packumentETag :: Text -> [Text] -> PackageName -> [(Provenance, ContentDigest, [(Text, [EntryKey])])] -> ETag
@@ -487,15 +527,15 @@ baseDocument = fmap (srcValue . snd) . baseSource . zip [0 :: Int ..]
 baseSource :: [(Int, Contribution)] -> Maybe (Int, Contribution)
 baseSource indexed = find ((== TrustedSource) . srcProvenance . snd) indexed <|> listToMaybe indexed
 
-packumentResponse :: PackumentReplies response -> PackumentServe -> ETag -> ByteString -> response
-packumentResponse replies mode etag bytes = case mode of
-    PackumentFull ->
-        packumentOk replies [etagHeader etag] (LBS.fromStrict bytes)
-    PackumentHead ->
-        packumentOk
-            replies
-            [etagHeader etag, (hContentLength, show (BS.length bytes))]
-            (LBS.fromStrict bytes)
+-- A HEAD states the GET's exact length. A gzip GET states it too, because its length is known before it is sent.
+packumentResponse :: PackumentReplies response -> PackumentServe -> ResponseHeaders -> CodedListing -> response
+packumentResponse replies mode headers = \case
+    IdentityListing bytes -> case mode of
+        PackumentFull -> packumentOk replies headers (LBS.fromStrict bytes)
+        PackumentHead -> packumentOk replies (headers <> [contentLength (BS.length bytes)]) (LBS.fromStrict bytes)
+    GzipListing body -> packumentOk replies (headers <> [gzipEncodingHeader, contentLength (gzipLength body)]) (gzipLazyBody body)
+  where
+    contentLength size = (hContentLength, show size)
 
 -- The status folds the decision list once and both the metric and the response read that value.
 noServeableVersions ::

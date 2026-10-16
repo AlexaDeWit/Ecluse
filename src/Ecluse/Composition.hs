@@ -92,14 +92,10 @@ import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), mountUpstreams)
 import Ecluse.Core.Text (stripTrailingSlash)
 
-{- | Resolve an ecosystem's deps to its complete mount, 'Nothing' for an ecosystem this build
-ships no adapter for. "Ecluse.Service" holds the one implementation.
--}
+-- | Resolve an ecosystem's deps to its mount, 'Nothing' without an adapter. "Ecluse.Service" implements it.
 type ResolveAdapter = Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
 
-{- | The capabilities the wiring is built through, injected so a unit test runs the boot-time
-assembly without opening a listener.
--}
+-- | The capabilities the wiring is built through, injected so a unit test assembles it with no listener.
 data WiringPorts = WiringPorts
     { wpReporters :: Ecosystem -> StoreTag -> CredentialReporters
     -- ^ Reporters keyed by the shared credential's canonical ecosystem and store label.
@@ -113,21 +109,15 @@ data WiringPorts = WiringPorts
     -- ^ One ecosystem's rule capabilities, including its advisory-database lookup.
     }
 
-{- | What only a live environment settled: the mounts the front door serves, and the publish
-targets the worker writes approved artifacts through.
--}
+-- | What only a live environment settles: the served mounts and the worker's publish targets.
 data BootWiring = BootWiring
     { bwBindings :: [MountBinding]
     -- ^ The resolved mounts. A worker-only role builds them for their rules, and serves none.
     , bwPublishTargets :: [PublishTarget]
-    {- ^ One target per mirrored mount, each holding the provider that mints its write token. A
-    role that writes nothing plans none.
-    -}
+    -- ^ One target per mirrored mount, with the provider that mints its write token. A role that writes nothing plans none.
     }
 
-{- | Build the boot wiring from the cleared plan, or the refusals only a live environment can
-settle. The credential providers stay internal: a mount reaches one through the wiring it produced.
--}
+-- | Build the boot wiring from the cleared plan, or the refusals only a live environment can settle.
 resolveBootWiring :: WiringPorts -> MirrorMintPlan -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] BootWiring)
 resolveBootWiring ports mintPlan limits publishBudget plan = do
     providersE <- mintedProviders
@@ -149,17 +139,13 @@ resolveBootWiring ports mintPlan limits publishBudget plan = do
         SkipMirrorWrite -> pure (Right noCredentialProviders)
         MintMirrorWrite -> initCredentialProviders (wpBuildCredentials ports) (wpReporters ports) (map vmMount (vpMounts plan))
 
-{- | The publish-side byte discipline: the process-wide aggregate admission and the
-per-request cap. It exists exactly when a publication target is configured.
--}
+-- | The publish byte discipline, aggregate admission and per-request cap, present exactly when a mount publishes.
 data PublishBudget = PublishBudget
     { pbBodyBudget :: ByteAdmission
     , pbMaxRequestBytes :: Int
     }
 
-{- | Turn the boot's cleared plan into the served 'MountBinding's, or every remaining boot error at
-once. The caller injects every capability, so this opens no socket, and the 'Limits' arrive resolved.
--}
+-- | The cleared plan's served 'MountBinding's, or every remaining boot error at once. It opens no socket.
 planMounts ::
     ResolveAdapter ->
     IO UTCTime ->
@@ -260,6 +246,7 @@ packumentDepsFor ctx adapter mount mcfg = do
             , pdArtifact = adapterArtifact adapter
             , pdEgressUrl = mkRegistryUrl
             , pdMirrorState = Nothing
+            , pdMetadataCompression = srvMetadataGzip (cfgServer app)
             }
 
 -- A role that mints nothing references nothing, and a mount with no mirror target never writes,
@@ -285,9 +272,7 @@ mountBaseUrl publicUrl eco =
 mountBasePath :: Ecosystem -> Text
 mountBasePath eco = "/" <> T.intercalate "/" (toList (prefixFor eco))
 
-{- | Build the first-party publish dependencies from a cleared publication. 'Nothing' without a
-publish budget, which the memory plan allocates exactly when some mount publishes.
--}
+-- | A cleared publication's dependencies. 'Nothing' without the publish budget the memory plan allocates.
 publishDepsFor :: RegistryAdapter -> AppConfig -> Limits -> Maybe PublishBudget -> Maybe HelpMessage -> VettedPublication -> Maybe PublishDeps
 publishDepsFor adapter app limits publishBudget helpMessage publication = do
     budget <- publishBudget
@@ -308,17 +293,13 @@ publishDepsFor adapter app limits publishBudget helpMessage publication = do
             , pubAdapter = publish
             }
 
-{- | Whether a name belongs to a namespace this deployment owns. Each arm derives the one predicate every
-consumer of the privilege reads, so none can disagree about which names are privileged.
--}
+-- | Whether this deployment owns a name: the one predicate every consumer of the privilege reads.
 firstPartyName :: FirstParty -> PackageName -> Bool
 firstPartyName = \case
     FirstPartyNpmScopes scopes -> npmPublishAllowed (toList scopes)
     FirstPartyPyPI entries -> pypiFirstPartyName entries
 
-{- | One ecosystem's resolved publish target: the endpoint the worker writes approved
-artifacts to, and the provider that mints its bearer token. Resolved once, not per request.
--}
+-- | One ecosystem's publish target, resolved once: the worker's write endpoint and its token provider.
 data PublishTarget = PublishTarget
     { ptEcosystem :: Ecosystem
     -- ^ The ecosystem this publish target serves.
@@ -332,9 +313,7 @@ data PublishTarget = PublishTarget
     -- ^ The provider minting the mirror-target write token.
     }
 
-{- | Resolve each cleared mount to its publish target, or the aggregated boot errors. A role that
-mints no write credential plans no target, because nothing in its process writes.
--}
+-- | Each cleared mount's publish target, or the aggregated boot errors. A role that mints no write credential plans none.
 planPublishTargets ::
     MirrorMintPlan ->
     CredentialProviders ->

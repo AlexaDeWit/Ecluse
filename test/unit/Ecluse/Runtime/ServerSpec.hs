@@ -10,13 +10,14 @@ import Prelude hiding (get)
 import Data.Aeson (Value, encode, object, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Database.SQLite.Simple (execute_, withConnection)
 import Katip (LogEnv, SimpleLogPayload, closeScribes, runKatipContextT)
 import Network.HTTP.Client (HttpException, defaultManagerSettings, httpNoBody, newManager, parseRequest)
 import Network.HTTP.Client qualified as HttpClient
-import Network.HTTP.Types (Header, Status, hConnection, hContentType, methodDelete, methodHead, methodPut, status200, status404, status500, statusCode)
+import Network.HTTP.Types (Header, Status, hConnection, hContentType, methodDelete, methodGet, methodHead, methodPut, status200, status404, status500, statusCode)
 import Network.Wai (
     Application,
     Response,
@@ -109,9 +110,7 @@ import Ecluse.Test.Server.Mount (inertPackumentDeps, npmServeDeps, pypiServeDeps
 import Ecluse.Test.Stub (Captured (capHeaders, capPath), stubLocalhostUrl, withRoutedStub)
 import Ecluse.Test.Wai (bodyContainsAll, freePort, selfBaseUrlOf, servedVersions, status)
 
-{- | A test mount binding with the given prefix and router, and __inert__ packument-serve
-dependencies. These specs exercise routing, not the data plane.
--}
+-- A mount with the given prefix and router over __inert__ serve dependencies, for routing cases alone.
 mountAt :: NonEmpty Text -> MountRouter -> MountBinding
 mountAt prefix router =
     publishMountAt prefix router Nothing
@@ -127,9 +126,7 @@ publishMountAt prefix router publishDeps =
         , bindingPublishDeps = publishDeps
         }
 
-{- | A single npm mount with __inert__ packument-serve dependencies (every upstream a
-closed port) and no publish target, resolved as the composition root resolves it.
--}
+-- One npm mount over closed-port upstreams and no publish target, resolved as the composition root resolves it.
 npmApp :: IO Application
 npmApp = application (mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))) <$> newTestEnv
 
@@ -157,17 +154,13 @@ basePublishDeps bodyBudget =
         , pubAdapter = npmPublish
         }
 
-{- | The 'application' under a single @\/npm@ mount carrying the given publish deps,
-handed a generously-sized body-byte budget these routing tests never contend on.
--}
+-- One @\/npm@ mount with the given publish deps and a body budget these cases never contend on.
 publishAppWith :: (ByteAdmission -> PublishDeps) -> IO Application
 publishAppWith mkDeps = do
     bodyBudget <- newByteAdmission (128 * 1024 * 1024)
     application (mkServerConfig [publishMountAt ("npm" :| []) npmRouter (Just (mkDeps bodyBudget))]) <$> newTestEnv
 
-{- | The 'application' under a single @\/npm@ mount whose router is a __fake__, proving
-dispatch follows the binding's router rather than a hardwired npm grammar.
--}
+-- One @\/npm@ mount under a __fake__ router, proving dispatch follows the binding's router.
 fakeRouterApp :: IO Application
 fakeRouterApp = application (mkServerConfig [mountAt ("npm" :| []) fakeRouter]) <$> newTestEnv
   where
@@ -180,9 +173,7 @@ fakeRouterApp = application (mkServerConfig [mountAt ("npm" :| []) fakeRouter]) 
     fakeContract :: ResponseContract (VariableResponse LByteString)
     fakeContract = variableOpaqueContract "application/json" "The fake router's response."
 
-{- | The 'application' with __no mounts__: every path but the control-plane health
-probes matches no mount and is the neutral @404@.
--}
+-- No mounts: every path but the health probes is the neutral @404@.
 neutralApp :: IO Application
 neutralApp = application (mkServerConfig []) <$> newTestEnv
 
@@ -198,9 +189,7 @@ deadProbeOnlyApp = probeOnlyApplication ((mkServerConfig []){scCheckLive = pure 
 notLive :: Liveness
 notLive = Liveness{liveHealthy = False, liveLastPoll = Nothing}
 
-{- | An npm-mount 'application' whose 'DrainSignal' is __already raised__, standing in for
-an instance mid-graceful-shutdown without binding a socket.
--}
+-- An npm mount whose 'DrainSignal' is __already raised__, as mid-shutdown, with no socket bound.
 drainingApp :: IO Application
 drainingApp = do
     drain <- raisedDrain
@@ -213,16 +202,12 @@ raisedDrain = do
     beginDrain drain
     pure drain
 
-{- | An npm-mount 'application' whose readiness is the Dredger's halt latch, the one verdict
-no mount state explains, so @\/readyz@ renders it with no @mounts@ object.
--}
+-- An npm mount whose readiness is the Dredger's halt latch, which @\/readyz@ renders with no @mounts@ object.
 latchedApp :: IO Application
 latchedApp =
     application (mkServerConfig [mountAt ("npm" :| []) npmRouter]){scCheckReady = pure Latched} <$> newTestEnv
 
-{- | An npm-mount 'application' whose worker heartbeat is older than
-'workerHeartbeatStaleAfter', driving the liveness probe to its @503@ "worker stalled" arm.
--}
+-- An npm mount whose worker heartbeat is past 'workerHeartbeatStaleAfter', so liveness answers @503@.
 stalledWorkerApp :: IO Application
 stalledWorkerApp = do
     env <- newTestEnv
@@ -235,9 +220,7 @@ stalledWorkerApp = do
     let cfg = (mkServerConfig [mountAt ("npm" :| []) npmRouter]){scCheckLive = heartbeatLivenessNow (envWorkerHeartbeat env)}
     pure (application cfg env)
 
-{- | A header matcher that passes only when the response carries __no__ @Connection@
-header. @hspec-wai@'s '<:>' can only assert that a header is present.
--}
+-- Passes only without a @Connection@ header, which @hspec-wai@'s '<:>' cannot assert.
 matchNoConnectionHeader :: MatchHeader
 matchNoConnectionHeader = MatchHeader $ \headers _body ->
     if any ((== hConnection) . fst) headers
@@ -254,6 +237,7 @@ spec = do
     runWarpDrainWiringSpec
     listeningLineSpec
     raceServerAgainstLoopSpec
+    uncodedRoutesSpec
     describe "control-plane health probes (above any mount)" $
         with npmMountApp $ do
             it "reports a null last poll when no background loop is wired behind /livez" $
@@ -489,6 +473,25 @@ driveGuard handler = do
   where
     fallback = responseLBS status500 [] "internal server error"
 
+-- Native metadata gzip covers admitted listings alone, so every other route ignores Accept-Encoding.
+uncodedRoutesSpec :: Spec
+uncodedRoutesSpec = describe "routes outside native metadata gzip" $ do
+    with npmMountApp $
+        it "answer probes, ping, search, unrouted paths, and a disabled publish alike under Accept-Encoding gzip" $
+            for_ [(methodGet, "/livez"), (methodGet, "/readyz"), (methodGet, "/npm/-/ping"), (methodHead, "/npm/-/ping"), (methodGet, "/npm/-/v1/search"), (methodGet, "/npm/-/nope/x"), (methodPut, "/npm/widget")] uncoded
+    with publishMountApp $
+        it "answer a refused and a relayed publish alike under Accept-Encoding gzip" $
+            for_ [(methodPut, "/npm/@other/widget"), (methodPut, "/npm/@acme/widget")] uncoded
+  where
+    uncoded (method, path) = do
+        plain <- request method path [] ""
+        offered <- request method path [("Accept-Encoding", "gzip")] ""
+        liftIO $ do
+            (path, WaiTest.simpleStatus offered) `shouldBe` (path, WaiTest.simpleStatus plain)
+            (path, WaiTest.simpleHeaders offered) `shouldBe` (path, WaiTest.simpleHeaders plain)
+            (path, WaiTest.simpleBody offered) `shouldBe` (path, WaiTest.simpleBody plain)
+            (path, lookup "Content-Encoding" (WaiTest.simpleHeaders offered)) `shouldBe` (path, Nothing)
+
 perimeterGuardSpec :: Spec
 perimeterGuardSpec = describe "perimeterGuard (the typed request perimeter)" $ do
     it "passes a committed response through untouched, observing nothing" $ do
@@ -513,9 +516,7 @@ perimeterGuardSpec = describe "perimeterGuard (the typed request perimeter)" $ d
             Left escape -> fmap (\(RelayContractEscape detail) -> detail) (fromException escape) `shouldBe` Just "post-commit teardown"
             Right () -> expectationFailure "expected the post-commit escape to rethrow"
 
-{- | A control-flow abort the application builder raises the instant it receives its
-config, so 'runWarp' unwinds before @warp@ binds a socket.
--}
+-- The application builder raises it on receipt of its config, so 'runWarp' unwinds before binding a socket.
 data AbortLaunch = AbortLaunch
     deriving stock (Eq, Show)
 
@@ -538,9 +539,7 @@ runWarpDrainWiringSpec = describe "runWarp -- graceful-drain wiring (issue #841)
         beginDrain drain
         isDraining drain `shouldReturn` True
 
-{- | Pin the line 'runWarp' logs once bound, through 'serveBound', its binding half, which runs
-without the process-wide signal handlers 'runWarp' installs.
--}
+-- Pin the line 'runWarp' logs once bound, through 'serveBound', which installs no process-wide signal handlers.
 listeningLineSpec :: Spec
 listeningLineSpec = describe "serveBound -- the listening line" $ do
     it "logs the proxy's line with its configured port once it serves there" $ do
@@ -573,17 +572,13 @@ livezAnswers port = do
     livez <- parseRequest ("http://127.0.0.1:" <> show port <> "/livez")
     either (const False) ((== status200) . HttpClient.responseStatus) <$> (try (httpNoBody livez manager) :: IO (Either HttpException (HttpClient.Response ())))
 
-{- | A typed fault thrown from one arm of 'raceServerAgainstLoop', to assert the race
-re-raises it (fails the process up) rather than swallowing it.
--}
+-- A fault from one arm of 'raceServerAgainstLoop', which the race must re-raise rather than swallow.
 newtype RaceBoom = RaceBoom Text
     deriving stock (Eq, Show)
 
 instance Exception RaceBoom
 
-{- | Pin the shutdown-race invariant 'raceServerAgainstLoop' carries. The server arm's
-return must cancel the never-returning loop, and a fault from either arm must re-raise.
--}
+-- The server arm's return cancels the never-returning loop, and a fault from either arm re-raises.
 raceServerAgainstLoopSpec :: Spec
 raceServerAgainstLoopSpec = describe "raceServerAgainstLoop -- shutdown-race invariant (issue #842)" $ do
     it "returns when the server arm returns, cancelling the never-returning loop" $ do
@@ -606,9 +601,7 @@ raceServerAgainstLoopSpec = describe "raceServerAgainstLoop -- shutdown-race inv
             loop = throwIO (RaceBoom "loop")
         raceServerAgainstLoop server loop `shouldThrow` (== RaceBoom "loop")
 
-{- | The composed front door a bare npm mount resolves to, over the binding the
-composition root builds rather than this module's own fixture.
--}
+-- The front door a bare npm mount resolves to, over the composition root's binding, not this module's fixture.
 composedNpmMountSpec :: Spec
 composedNpmMountSpec = describe "the composed npm front door (a bare npm mount over mkServerConfig)" $
     with npmApp $ do
