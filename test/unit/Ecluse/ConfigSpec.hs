@@ -27,7 +27,6 @@ import Ecluse.Config (
     advisoryAgeLines,
     advisoryEpssLines,
     decodeDefaultConfig,
-    withoutMaliciousDefault,
     loadConfig,
     mountAdvisoryDenials,
     mountDatabaseRequirement,
@@ -35,6 +34,7 @@ import Ecluse.Config (
     mountPostureLines,
     renderConfigError,
     resolvedKeyProvenance,
+    withoutMaliciousDefault,
  )
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.Resolve (deepMerge)
