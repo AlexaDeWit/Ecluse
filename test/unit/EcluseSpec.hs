@@ -19,7 +19,7 @@ import Ecluse.Test.Log (captureStdout)
 spec :: Spec
 spec =
     describe "run" $
-        it "writes UTF-8 on both standard handles when the host has no locale" $
+        it "sets UTF-8 on the locale and both standard handles before it prints help" $
             withoutLocale $ do
                 help <- captureStdout (try (withArgs ["--help"] run) `shouldReturn` Left ExitSuccess)
                 help `shouldSatisfy` T.isInfixOf "Écluse"

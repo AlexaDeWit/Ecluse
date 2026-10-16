@@ -7,8 +7,8 @@
 Écluse applies a configurable resilience policy between clients and a package registry before any
 dependency reaches a build. It hosts no packages: it governs only what may be fetched from, and
 mirrored to, the operator's own backends. The rules engine is __deny by default__. Mirroring is
-demand-driven, so a mirror write never runs on a request's critical path. 'run' sets UTF-8 output,
-reads the command line, and starts that command through "Ecluse.Startup" with the shipped adapters.
+demand-driven, so a mirror write never runs on a request's critical path. 'run' starts each command
+through "Ecluse.Startup" with the shipped adapters.
 -}
 module Ecluse (
     -- * Entry point
@@ -22,6 +22,7 @@ import Ecluse.CLI (execCLI)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Startup (runWith)
 
+-- | Set UTF-8 output whatever the host locale, then parse the command line and run that command.
 run :: IO ()
 run = do
     useUtf8
