@@ -429,10 +429,40 @@ throughout.
 Pilot filters rows to the target ecosystem, so an advisory spanning two ecosystems does
 not leak foreign package rows. It refuses zero persisted ranges before writing success metadata
 or publishing. An empty or wrong-ecosystem export cannot replace last-good denial evidence or
-refresh its timestamps. The size guard for reduced nonempty output remains unimplemented (#1234).
+refresh its timestamps. [Guarded publication](#guarded-publication) bounds a reduced nonempty output.
 Each denial's audit log records the advisory database ETag live
 at emit (`active_advisory_db_etag`). That is deliberately the ETag live at emit rather than the
 one the rule evaluated against, since a shadow-swap can land mid-request.
+
+#### Guarded publication
+
+Pilot replaces the stored artifact only when the new compile is ordered after it and has not
+shrunk sharply. Both checks read the object's S3 user metadata with one `HEAD`, so Pilot never
+downloads the stored database. The write is one conditional `PUT` over the revision that `HEAD`
+returned, so two Pilot runs cannot compare one object and then overwrite another.
+
+Pilot orders the OSV export and the EPSS feed separately, because the two feeds age on their own.
+For each source it records the SHA-256 of its credential-free URL, the `Last-Modified` it answered
+with, and the SHA-256 of the whole response body. A later `Last-Modified` moves forward, and an
+earlier one is refused. Equal timestamps with equal bytes refresh the artifact. Equal timestamps
+with other bytes, and changed bytes with no timestamp to compare, are refused rather than guessed.
+Compilation time orders nothing, because a slow run over older data finishes last. A changed
+source URL starts a fresh order for that source.
+
+The size guard is a damage alarm, not a completeness proof, since withdrawn advisories shrink a
+feed legitimately. The metadata carries the largest accepted size as a durable baseline, so small
+shrinks cannot add up, and no object version history is needed. An optional EPSS outage earns a
+bounded credit once, and the feed's return clears it without lowering the baseline. An operator
+who expects a smaller artifact rebaselines one upload against the revision they inspected.
+
+Each publication writes a fresh nonce into the database, because an S3 ETag follows content and
+two publications of one input would otherwise share it. Consumers therefore download every
+accepted publication, a refresh of unchanged input included.
+
+An operator's direct write bypasses all of this, and it is the rollback authority. Consumers
+accept a restored older artifact that passes their usual verification and push age. Such a
+restore can re-admit a version a later generation denied, and the mirror worker can then refill a
+copy the Dredger removed. Pilot refuses to replace an object that carries no publication metadata.
 
 ### Re-checking stored versions
 

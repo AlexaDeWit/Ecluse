@@ -27,7 +27,7 @@ assumptions:
       - 0ec10e5e-0000-4000-8000-00000000010a
     appliesToModel: true
   - id: as-least-privilege-grants
-    prose: The operator gives each role its own identity with the least privilege the role needs, and Écluse cannot check these grants. Under `codeArtifact` the mirror worker's role policy allows reads of the mirror repository and package publication only, so the policy sets the scope of the minted token. Under `registry` and `verdaccio` the worker's static token belongs to a dedicated user whose package rights cover the mirror store only. This scoping is defence in depth behind Écluse's endpoint checks. The Dredger's delete grant covers the mirror repository and, where the operator enables cleanup of the private read repository, package-scoped deletion there, with its read and consent permissions granted separately and no permission over the publication target. The Dredger guide documents these permissions. A role-minted credential is preferred over a static secret, and on a store with no access control of its own the Dredger's account is a dedicated user whose package rights cover the mirror store only. Pilot holds `s3:PutObject` on the advisory prefix, the proxy holds `s3:GetObject` only, and the advisory bucket is private. The publisher's credential for the publication target is least privilege too. The independent mirror-state prefix permits proxy reads and prefix listing, plus worker conditional writes. It grants the worker no deletion and has no expiry policy for referenced records or companions.
+    prose: The operator gives each role its own identity with the least privilege the role needs, and Écluse cannot check these grants. Under `codeArtifact` the mirror worker's role policy allows reads of the mirror repository and package publication only, so the policy sets the scope of the minted token. Under `registry` and `verdaccio` the worker's static token belongs to a dedicated user whose package rights cover the mirror store only. This scoping is defence in depth behind Écluse's endpoint checks. The Dredger's delete grant covers the mirror repository and, where the operator enables cleanup of the private read repository, package-scoped deletion there, with its read and consent permissions granted separately and no permission over the publication target. The Dredger guide documents these permissions. A role-minted credential is preferred over a static secret, and on a store with no access control of its own the Dredger's account is a dedicated user whose package rights cover the mirror store only. Pilot holds `s3:GetObject` and `s3:PutObject` on the advisory prefix and `s3:ListBucket` limited to that prefix, the proxy holds `s3:GetObject` only, and the advisory bucket is private. The publisher's credential for the publication target is least privilege too. The independent mirror-state prefix permits proxy reads and prefix listing, plus worker conditional writes. It grants the worker no deletion and has no expiry policy for referenced records or companions.
     status: valid
     threats:
       - 0ec10e5e-0000-4000-8000-000000000106
@@ -158,6 +158,12 @@ assumptions:
     status: valid
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010d
+    appliesToModel: false
+  - id: as-operator-advisory-rollback
+    prose: An operator's direct write to the advisory store is the rollback authority, outside Pilot's ordering and size checks. Consumers accept a restored older artifact that passes their verification and maximum push age, and keep no record that would refuse it. Such a restore can re-admit a version a later generation denied, and the mirror worker can then refill a copy the Dredger removed. The owner accepts this consequence of a privileged storage action.
+    status: valid
+    threats:
+      - b74d9df0-8947-4e67-bf50-1c5e688a09f1
     appliesToModel: false
 diagrams:
   - id: "0"
@@ -477,7 +483,7 @@ diagrams:
         name: |-
           Écluse Pilot
           (advisory ingestion)
-        description: Pilot fetches configured OSV exports and the independent EPSS score feed, compiles per-ecosystem SQLite artifacts, and publishes them to S3. It produces advisory evidence rather than package-admission decisions. Proxy, mirror-worker, and Dredger roles use the shared rules engine against their loaded artifacts. Pilot records a successful EPSS feed in artifact metadata. When the feed fails, an ecosystem with an EPSS-dependent rule publishes nothing, and any other ecosystem publishes its OSV data recorded as without enrichment. A consumer with an EPSS-dependent rule refuses an artifact without the success record.
+        description: Pilot fetches configured OSV exports and the independent EPSS score feed, compiles per-ecosystem SQLite artifacts, and publishes them to S3 with a conditional write, guarded by source ordering and a durable size baseline. It produces advisory evidence rather than package-admission decisions. Proxy, mirror-worker, and Dredger roles use the shared rules engine against their loaded artifacts. Pilot records a successful EPSS feed in artifact metadata. When the feed fails, an ecosystem with an EPSS-dependent rule publishes nothing, and any other ecosystem publishes its OSV data recorded as without enrichment. A consumer with an EPSS-dependent rule refuses an artifact without the success record.
         outOfScope: false
         reasonOutOfScope: ""
         position:
@@ -558,7 +564,7 @@ diagrams:
       - kind: store
         id: c8455307-cef2-4843-a821-ff90db9643d2
         name: Advisory store (S3)
-        description: Per-ecosystem SQLite snapshots of OSV advisory ranges and EPSS enrichment. Consumers validate and load these artifacts, but current source-age and coverage controls have the gaps recorded in threat 112.
+        description: Per-ecosystem SQLite snapshots of OSV advisory ranges and EPSS enrichment, each object carrying Pilot's publication metadata. Consumers validate and load these artifacts. Threat 112 records what the source-age, ordering, and size controls leave open.
         outOfScope: false
         reasonOutOfScope: ""
         position:
@@ -1155,7 +1161,7 @@ mitigations:
       - b74d9df0-8947-4e67-bf50-1c5e688a09f1
   - id: mit-pilot-zero-output-refusal
     title: Zero-output refusal
-    prose: After ecosystem filtering, Pilot counts the persisted advisory ranges. When none remain, including for an empty or wrong-ecosystem export, it logs ERROR and publishes nothing, before it writes success metadata. A rejected compile keeps the last-good bytes and timestamps, and a first rejection leaves no artifact. A nonempty but reduced export still passes.
+    prose: After ecosystem filtering, Pilot counts the persisted advisory ranges. When none remain, including for an empty or wrong-ecosystem export, it logs ERROR and publishes nothing, before it writes success metadata. A rejected compile keeps the last-good bytes and timestamps, and a first rejection leaves no artifact. A nonempty but reduced export is left to the advisory size guard.
     status: implemented
     threats:
       - 3735906e-a06a-4e0f-ba45-894ba5400ce8
@@ -1248,14 +1254,14 @@ mitigations:
       - 1780db57-6b2f-456c-a393-e4e6b8b532f3
   - id: mit-advisory-overwrite-ordering
     title: Ordered advisory publication
-    prose: "Planned in #1222. Pilot will refuse to overwrite a newer advisory artifact with older data, using metadata-only ordering and concurrency protection. A direct restore by the operator stays a permitted rollback. Independent source timestamps and intentional rule precedence stay unchanged."
-    status: proposed
+    prose: Pilot replaces the published advisory artifact only with data ordered after it. One HEAD reads the stored object's metadata, and Pilot orders the OSV export and the EPSS feed separately by the SHA-256 of each credential-free source URL, the Last-Modified each source answered with, and the SHA-256 of each complete response body. An earlier snapshot, an equal timestamp with different bytes, and changed bytes without comparable timestamps are refused, and compilation time orders nothing. The write is one conditional PUT over the revision Pilot read, or create-only for an absent key, so concurrent Pilot runs cannot overwrite each other's work. Each publication carries its own nonce, so equal inputs still produce distinct revisions. A store that does not enforce conditional writes cannot carry guarded publication. Pilot refuses to replace an object without publication metadata. A direct write by the operator bypasses these checks and is the rollback authority.
+    status: implemented
     threats:
       - b74d9df0-8947-4e67-bf50-1c5e688a09f1
   - id: mit-advisory-shrink-guard
     title: Advisory size guard
-    prose: "Planned in #1234. Pilot will refuse a compile whose output shrinks past a configurable guard, set per ecosystem and schema epoch, with a durable high-water mark where the store supports one. The starting defaults are a 2% ordinary shrink plus 12 bytes per prior scored range row, capped at an extra 5% on optional EPSS-loss transitions. An approved adjustment rebases the mark explicitly. Size is a heuristic, not proof of complete coverage."
-    status: proposed
+    prose: "Pilot refuses a publication whose artifact shrinks more than `advisories.maxShrinkPercent`, 2% by default, below a durable high-water baseline. The baseline travels in the object's metadata for one ecosystem and schema epoch, so repeated small shrinks cannot add up and no version history is read. Only a fall from available to unavailable optional EPSS enrichment earns extra room: 12 bytes per previously scored range row, capped at `advisories.epssLossCapPercent` of the previous size, 5% by default. The credit lasts through the outage and clears when the feed returns, without lowering the baseline. An operator rebaseline binds to the ETag it names and cannot bypass ordering. Size is a heuristic, not proof of complete coverage, so a reduced export within the allowance still passes."
+    status: implemented
     threats:
       - 4d309275-cc3c-43d0-a1a2-f024789e9f17
       - b74d9df0-8947-4e67-bf50-1c5e688a09f1
@@ -1698,7 +1704,7 @@ threats:
       methodology: STRIDE
       category: spoofing
     severity: high
-    status: open
+    status: accepted-risk
     description: A compromised or incorrect EPSS source can supply plausible scores that pass validation. An overstated score can cause an EPSS denial and an eligible Dredger deletion. An understated score can fail to trigger an EPSS denial. Other configured rules still apply. Loss of EPSS coverage can remove a denial and let another allow admit the version, which does not show that the version is harmless. Transport and schema validity do not establish the accuracy of a predictive score.
     elements:
       - f1646094-9885-422a-b7e7-7888c72905ef
@@ -1709,8 +1715,8 @@ threats:
       methodology: STRIDE
       category: tampering
     severity: medium
-    status: open
-    description: The maximum advisory age runs from Pilot's last push, not from the source snapshot, and structural acceptance does not order source generations. A reduced but nonempty export still passes. These states can remove effective denial evidence, permit mirroring, or leave outdated advisory facts available to pruning. Compilation and consumer-load timestamps do not establish source freshness.
+    status: mitigated
+    description: The maximum advisory age runs from the last push, not from the source snapshot. Pilot orders its publications by source evidence and bounds their shrink against a durable baseline, but a write outside Pilot, such as an operator restore, bypasses both. Size is a heuristic, so a reduced export within the allowance still passes. These states can remove effective denial evidence, permit mirroring, or leave outdated advisory facts available to pruning. Compilation and consumer-load timestamps do not establish source freshness.
     elements:
       - c8455307-cef2-4843-a821-ff90db9643d2
   - id: 9d92a448-e04d-46b6-8b8d-bc353dacdb97

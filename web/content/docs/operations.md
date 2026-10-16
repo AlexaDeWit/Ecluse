@@ -150,6 +150,9 @@ artifact's metadata:
 | `epss_source_url` | The EPSS source's `host:port` identity. |
 | `osv_source` | The OSV source URL with its path kept. |
 | `epss_source` | The EPSS source URL with its path kept. |
+| `osv_digest` | The SHA-256 of the OSV export's response body. |
+| `epss_digest` | The SHA-256 of the EPSS feed's response body, when the feed arrived. |
+| `publication_nonce` | A random value that gives each publication its own bytes. |
 | `built_at` | When compilation finished, not how old the source snapshot is. |
 
 A credential in userinfo, the query, or the fragment never reaches the artifact. One written into
@@ -183,6 +186,9 @@ even when a later retry can recover. They include:
 - A Pilot compile that published nothing because its ecosystem has an active `DenyIfEpss` and
   the EPSS feed failed. The line starts `Aborting OSV compile:` and names the feed as `host:port`
   and the cause ([When the EPSS feed fails](@/docs/configuration.md#when-the-epss-feed-fails)).
+- A Pilot publication that its guard refused, or that the store could not serve as the guard
+  needs. The line starts `Advisory publication stopped:` and names the reason
+  ([Advisory publication guard](@/docs/operations.md#advisory-publication-guard)).
 
 Use the severity together with the event and its repetition:
 
@@ -290,10 +296,12 @@ default allow. An expired or undated push therefore refuses every public admissi
 scope and identity allows included. Only an allow ordered before the rule still admits: one above
 300, or one at 300 whose name sorts first. Trusted private reads still serve.
 
-The age is the time since Pilot last pushed the artifact, taken from the published object's own
-timestamp. Pilot writes that object after every successful run, so unchanged bytes still move it.
-A running consumer observes a newer timestamp for the accepted artifact even when its ETag stays
-unchanged. This updates publication age without resetting installation age. A restart re-reads the
+The age is the time since the artifact was last pushed, taken from the published object's own
+timestamp. Pilot writes that object after every publication its
+[guard](@/docs/operations.md#advisory-publication-guard) accepts. Each publication carries new
+bytes, so a consumer downloads it even when the sources have not changed. A refused publication
+writes nothing, so the age keeps growing. A push of identical bytes, such as an operator copying the
+object onto itself, moves the age without resetting installation age. A restart re-reads the
 timestamp from the object, and a failed poll leaves it where it was. A rejected artifact cannot
 refresh the last accepted artifact's publication age, including repeated HEAD responses for its rejected ETag.
 EPSS qualification rejection therefore grants no extra freshness interval.
@@ -319,7 +327,7 @@ Two remedies:
 
 | What you found | What to do |
 |---|---|
-| Pilot has stopped pushing. | Get it running again. Its own logs say whether the fetch, the compile, or the upload failed. |
+| Pilot has stopped pushing. | Get it running again. Its own logs say whether the fetch, the compile, or the publication failed, and why its [guard](@/docs/operations.md#advisory-publication-guard) refused a publication. |
 | The maximum is shorter than your update cadence. | Set `advisories.maxAgeSeconds` to a value you can meet, and accept the older evidence that comes with it. |
 
 Readiness does not change. `GET /readyz` still reports the mount as ready, because the database is
@@ -327,6 +335,66 @@ loaded and every rule that does not read it still decides when it ranks above th
 denies. The advisory denies refuse, and the MAL default refuses every public version that reaches
 it. The Dredger stops deleting on an advisory match for the same reason, while an identity deny still
 acts under its usual guards.
+
+## Advisory publication guard
+
+Pilot replaces a published advisory artifact only when the new compile is newer and has not shrunk
+sharply. It reads the stored object's metadata first, then writes only over the revision it read,
+so two Pilot runs cannot overwrite each other's work. It orders the OSV export and the EPSS feed
+separately, each by the `Last-Modified` its server answered with:
+
+| What a source answered | What Pilot does |
+|---|---|
+| A later `Last-Modified` than the stored artifact's | Publishes. |
+| The same `Last-Modified` and the same bytes | Publishes, which refreshes the push age. |
+| No `Last-Modified`, and the same bytes | Publishes, and keeps the stored date for later comparisons. |
+| An earlier `Last-Modified` | Refuses. |
+| The same `Last-Modified` with other bytes, or other bytes and no date to compare | Refuses. |
+| A source URL other than the stored one | Publishes, and starts a new order for that source. |
+
+The new artifact must also stay within `advisories.maxShrinkPercent` of the size baseline, 2% by
+default. The baseline is the largest size accepted under the object key, and it travels in the
+object's metadata. So the guard needs no object versioning and no version listing, and a lifecycle
+rule on old versions cannot erase it. When an optional EPSS feed fails, the publication that loses
+the scores may shrink by up to `advisories.epssLossCapPercent` more. The
+[configuration reference](@/docs/configuration.md#the-configuration-reference) states both limits.
+
+A refusal logs `error` on a line that starts `Advisory publication stopped:`. The stored artifact
+stays, so consumers keep it until it reaches its maximum push age. A one-shot
+`ecluse pilot compile --upload` exits non-zero, and the scheduled loop tries again on its next
+cycle. The local artifact under `advisories.dataDir` changes only after a publication lands.
+
+| The reason names | What it means |
+|---|---|
+| An older or unordered snapshot | The source served data that is not newer than what is published. A mirror can serve stale data. The next newer snapshot publishes. |
+| A shrink under the baseline | The feed lost coverage, or legitimately shrank more than the allowance. Check the feed before you [rebaseline](#rebaselining). |
+| Missing publication metadata | The stored object carries none of the guard's metadata, so Pilot cannot order against it and does not replace it. |
+| A refused read, or an absence the listing could not prove | Pilot lacks a permission from [Role identities and least privilege](@/docs/deployment.md#role-identities-and-least-privilege). |
+| A store without conditional writes | Pilot publishes only to a store that enforces `If-Match` and `If-None-Match` on writes. |
+
+### Rebaselining
+
+When you expect a smaller artifact, such as after a source correction, approve one upload against
+the revision you inspected. For example:
+
+```bash
+ecluse pilot compile --ecosystem npm --out /var/lib/ecluse/advisories --upload \
+  --rebaseline-etag '"<the stored object's ETag>"' --rebaseline-max-shrink-percent 10
+```
+
+The run still refuses older data and missing metadata. It replaces only the object with that ETag,
+so a retry cannot carry your approval to a revision someone wrote since. Its shrink is held to the
+percentage you give, and the baseline then restarts at the new artifact's size. The scheduled loop
+never rebaselines.
+
+### Restoring an older artifact
+
+Rollback is a storage action you take, outside Pilot. Write an older artifact to the object key
+yourself, for example by restoring an earlier object version. Consumers accept it after their usual
+verification and push-age checks. That restore can admit versions a later generation denied, and
+the mirror worker can then refill copies the Dredger removed. A version restore keeps the older
+artifact's publication metadata, so Pilot's next newer snapshot replaces it as usual. An artifact
+written without that metadata stops Pilot's publications, as above.
 
 ## Telemetry (opt-in)
 
