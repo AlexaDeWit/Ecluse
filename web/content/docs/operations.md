@@ -131,12 +131,19 @@ Four of those names matter to Datadog specifically: `timestamp`, `status`, `mess
 `service` are its reserved log attributes, and its JSON preprocessing reads them unmodified.
 `env` and `version` are ordinary attributes any backend indexes.
 
-Typed bearer-token fields render as redacted placeholders. Pilot records
-provenance in the artifact's metadata. `source_url` and `epss_source_url` hold each source's
-`host:port` identity. `osv_source` and `epss_source` hold the source URL with its path kept and its
-userinfo, query, and fragment removed, so no field carries a credential. `built_at` records when
-compilation finished. Sync logs only parsed compilation time and row
-count from metadata, including when it reads older artifacts with complete source URLs. On each
+Typed bearer-token fields render as redacted placeholders. Pilot records provenance in the
+artifact's metadata:
+
+| Field | Holds |
+|---|---|
+| `source_url` | The OSV source's `host:port` identity. |
+| `epss_source_url` | The EPSS source's `host:port` identity. |
+| `osv_source` | The OSV source URL with its path kept. |
+| `epss_source` | The EPSS source URL with its path kept. |
+| `built_at` | When compilation finished, not how old the source snapshot is. |
+
+A credential in userinfo, the query, or the fragment never reaches the artifact. One written into
+the path does. Sync logs only parsed compilation time and row count from metadata, including when it reads older artifacts with complete source URLs. On each
 swap it adds one `info` line naming where the serving artifact came from: the object's publication
 time, the OSV source as `host:port`, its newest advisory date, and the EPSS score date. A value the
 artifact never recorded reads as `<unrecorded>`, which is how the EPSS score date reads on an

@@ -143,7 +143,8 @@ covers:
 - **Advisory sync and export.** The `ecluse.osv.source_host` span attribute on the compile and
   stream spans, the stream's start line, and both source identities stored in artifact metadata.
   Sync logs only parsed compilation time and row count from metadata. It excludes arbitrary
-  fields and source values, including complete URLs in older artifacts.
+  fields, including complete URLs in older artifacts. The swap line renders the OSV source as
+  `host:port`.
 
 The span attribute names say what they hold: `ecluse.mirror.artifact_host` and
 `ecluse.osv.source_host`.

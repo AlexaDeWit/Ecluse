@@ -376,7 +376,7 @@ mounts:
     #     url: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/mirror/
     #     # Lifetime in seconds of a minted write token, within 900 to 43200. Unset,
     #     # the request omits it and AWS applies its 12-hour default, whatever the role
-    #     # session length. Zero, which ties it to the session, is rejected here. The refresh
+    #     # session length. The load refuses zero, which ties it to the role session. The refresh
     #     # policy follows the minted token's actual expiry, so this is a preference.
     #     tokenDuration: 3600
     # A non-minting mirror target takes a static write token instead. Set it via
