@@ -238,8 +238,11 @@ tasks:
       - cabal run -v0 perf-acceptance -- captures
   doctest:
     desc: Run the Haddock >>> examples as tests
+    # doctest reads one component per repl. Cabal passes the project's -Werror after the repl
+    # options, so a warning while GHCi loads a module fails that library's examples.
     cmds:
-      - cabal repl --with-ghc=doctest --repl-options="-Wwarn -Wno-missing-export-lists" lib:ecluse
+      - for: ['lib:ecluse-core', 'lib:ecluse-runtime', 'lib:ecluse']
+        cmd: cabal repl --with-ghc=doctest --repl-options=-Wno-missing-export-lists {{.ITEM}}
   coverage:
     desc: Combined unit and integration coverage matching Codecov
     cmds:
@@ -389,9 +392,8 @@ tasks:
   spdx-fix:
     desc: Insert missing SPDX licence headers into tracked Haskell sources
     cmds:
-      # Annotate only tracked files without the tag. Re-annotation can discard a comment
-      # that fourmolu joined to the header. git grep exits 1 when all files carry the tag.
-      # Preserve the maintained fork's BSD headers.
+      # Annotate only untagged files: re-annotation can discard a comment fourmolu joined to the
+      # header, and the fork's BSD headers stay. git grep exits 1 when every file carries the tag.
       - '{ git grep -z -L "SPDX-License-Identifier:" -- "*.hs" || true; } | xargs -0 -r reuse annotate --license MIT --copyright "Alexandra de Wit" --year 2026'
   test-task-composition:
     desc: Check Task sequencing and lifecycle with stubbed processes
@@ -638,9 +640,8 @@ tasks:
   scan-osv:
     desc: Scan the pinned Haskell closure for HSEC advisories (osv-scanner over the freezes)
     cmds:
-      # Exit 1 means findings, which are report-only: the SARIF upload in
-      # security.yml surfaces them. Only a scanner error (>1) fails the task. The maintained
-      # json-stream's freeze has its own name, so the scanner is told to read it as a freeze.
+      # Exit 1 means findings, reported by security.yml's SARIF upload. A scanner error (>1) fails.
+      # Each upstream.freeze has a non-standard name, so the scanner is told to read it as a freeze.
       - osv-scanner scan source --lockfile cabal.project.freeze --lockfile cabal.project.freeze:json-stream/upstream.freeze --lockfile cabal.project.freeze:vendor/lzma-managed/upstream.freeze --format sarif --output osv-freeze.sarif || test $? -eq 1
       - bash scripts/sarif-locations.sh osv-freeze.sarif cabal.project.freeze
   clean:
