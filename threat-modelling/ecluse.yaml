@@ -159,6 +159,12 @@ assumptions:
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010d
     appliesToModel: false
+  - id: as-compression-length-observation
+    prose: No supported deployment gives an attacker both the ability to drive repeated credentialed listing requests from a victim's client and a view of each encrypted response's length. The owner accepts the residual length surface of native metadata gzip on that basis, without padding or private-origin exclusions. An operator who considers that position reachable sets `ECLUSE_SERVER__METADATA_GZIP=false`, which serves every listing in identity coding. That setting governs Écluse's own compression only, not compression by a front proxy.
+    status: unconfirmed
+    threats:
+      - 68f1c8b8-2f55-4969-8036-aeddc439bd1d
+    appliesToModel: false
 diagrams:
   - id: "0"
     title: High Level
@@ -266,7 +272,7 @@ diagrams:
       - kind: process
         id: 0ec10e5e-0000-4000-8000-000000000020
         name: Écluse proxy
-        description: "The request pipeline: router, parallel upstream fetch, packument merge, deny-by-default rules and integrity gate, then serve. It relays publishes. It holds forwarded caller credentials transiently. One provider owns metadata retention. The local provider retains anonymous public selected versions and assembled responses, never full metadata. Assembled reuse never skips private fetches or their per-request authorisation. Private-origin reads share neither retention nor single-flight. It syncs advisory artifacts from the advisory store and swaps each new database in atomically."
+        description: "The request pipeline: router, parallel upstream fetch, packument merge, deny-by-default rules and integrity gate, then serve. It gzips an admitted listing per response for a client that accepts gzip, unless the operator turns that off. It relays publishes. It holds forwarded caller credentials transiently. One provider owns metadata retention. The local provider retains anonymous public selected versions and assembled responses, never full metadata, and assembled responses in identity coding only. Assembled reuse never skips private fetches or their per-request authorisation. Private-origin reads share neither retention nor single-flight. It syncs advisory artifacts from the advisory store and swaps each new database in atomically."
         outOfScope: false
         reasonOutOfScope: ""
         position:
@@ -1280,6 +1286,12 @@ mitigations:
     status: implemented
     threats:
       - a883d9d9-0aa3-4a27-9653-cae0424abdba
+  - id: mit-per-response-compression
+    title: Per-response compression after every check
+    prose: Écluse chooses a listing's content coding only after edge authentication, private authorisation, and policy admit the listing, so compression adds no response those checks refuse. Each gzip response gets its own deflater, released before the response is sent, with no shared dictionary and no compression history across requests. The metadata cache holds identity bytes only. The gzip validator is weak and distinct from the identity validator, so a 304 cannot stand for the other coding.
+    status: implemented
+    threats:
+      - 68f1c8b8-2f55-4969-8036-aeddc439bd1d
 threats:
   - id: 0ec10e5e-0000-4000-8000-000000000101
     number: 1
@@ -1769,4 +1781,16 @@ threats:
     elements:
       - 0ec10e5e-0000-4000-8000-000000000020
       - f66e2ffa-c6bf-4b45-8aad-a23ced3a97ff
-lastIssuedThreatNumber: 118
+  - id: 68f1c8b8-2f55-4969-8036-aeddc439bd1d
+    number: 119
+    title: Compressed listing lengths reveal merged private metadata
+    category:
+      methodology: STRIDE
+      category: information-disclosure
+    severity: low
+    status: accepted-risk
+    description: Écluse gzips an admitted npm packument or PyPI Simple index for a client that accepts gzip, and the shipped default turns this on. A listing can merge private-origin metadata with public metadata that anyone can publish. Compressing them together makes the response length depend on both, the shape of BREACH-style length analysis. An attacker would need to publish public metadata that a victim's listing merges, make the victim's client request that listing many times under its own credential, and observe the length of each encrypted response. Source review confirms the mixed-body surface. It does not establish the repeated credentialed requests or the length observation in a supported deployment, and no exploit is demonstrated. Edge authentication, TLS, and policy evaluation do not prevent length analysis.
+    elements:
+      - 0ec10e5e-0000-4000-8000-000000000020
+      - 0ec10e5e-0000-4000-8000-000000000040
+lastIssuedThreatNumber: 119
