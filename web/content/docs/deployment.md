@@ -293,11 +293,9 @@ artifact keeps the records it was built with until a successful compile and sync
 no relevant active rows remain, the zero-output refusal keeps the prior artifact. A withdrawal does
 not cancel other active advisories or an operator's identity denies.
 
-**Source provenance.** Pilot fetches each complete source URL. The artifact records each source's
-`host:port`, and the source URL with its userinfo, query, and fragment removed, so neither carries a
-credential. `built_at` records when compilation finished, not how old the source snapshot is. The
-sync log line that reads this provenance is described under
-[Logs](@/docs/operations.md#logs).
+**Source provenance.** Pilot fetches each complete source URL and records provenance in the
+artifact. [Logs](@/docs/operations.md#logs) names the source fields and the sync log line that
+reads them.
 
 ## What a deviation costs
 

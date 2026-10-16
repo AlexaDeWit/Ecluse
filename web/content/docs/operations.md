@@ -131,15 +131,25 @@ Four of those names matter to Datadog specifically: `timestamp`, `status`, `mess
 `service` are its reserved log attributes, and its JSON preprocessing reads them unmodified.
 `env` and `version` are ordinary attributes any backend indexes.
 
-Typed bearer-token fields render as redacted placeholders. Pilot stores each source's
-`host:port` in artifact provenance, and beside it the source URL with its userinfo, query, and
-fragment removed, so neither carries a credential. Sync logs only parsed compilation time and row
-count from metadata, including when it reads older artifacts with complete source URLs. On each
-swap it adds one `info` line naming where the serving artifact came from: the object's publication
-time, the OSV source as `host:port`, its newest advisory date, and the EPSS score date. A value the
-artifact never recorded reads as `<unrecorded>`, which is how the EPSS score date reads on an
-artifact published with `epss_status=unavailable`. Malformed or oversized display values appear as
-absent without changing artifact acceptance.
+Typed bearer-token fields render as redacted placeholders. Pilot records provenance in the
+artifact's metadata:
+
+| Field | Holds |
+|---|---|
+| `source_url` | The OSV source's `host:port` identity. |
+| `epss_source_url` | The EPSS source's `host:port` identity. |
+| `osv_source` | The OSV source URL with its path kept. |
+| `epss_source` | The EPSS source URL with its path kept. |
+| `built_at` | When compilation finished, not how old the source snapshot is. |
+
+A credential in userinfo, the query, or the fragment never reaches the artifact. One written into
+the path does. Sync logs parsed compilation time and row count from metadata, including when
+it reads older artifacts with complete source URLs. On each swap it adds one `info` line naming
+where the serving artifact came from: the object's publication time, the OSV source as
+`host:port`, its newest advisory date, and the EPSS score date. A value the artifact never
+recorded reads as `<unrecorded>`, which is how the EPSS score date reads on an artifact published
+with `epss_status=unavailable`. Malformed or oversized display values appear as absent without
+changing artifact acceptance.
 
 The boot configuration echo prints configured endpoint
 values. Use the dedicated [secret settings](@/docs/configuration.md#secrets) rather than putting

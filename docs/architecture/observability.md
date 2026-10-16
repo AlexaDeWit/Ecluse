@@ -142,8 +142,9 @@ covers:
   authority and the bounded transport cause, not the client's rendered exception.
 - **Advisory sync and export.** The `ecluse.osv.source_host` span attribute on the compile and
   stream spans, the stream's start line, and both source identities stored in artifact metadata.
-  Sync logs only parsed compilation time and row count from metadata. It excludes arbitrary
-  fields and source values, including complete URLs in older artifacts.
+  Sync logs parsed compilation time and row count from metadata. The `info` line it logs on each
+  swap adds the OSV source as `host:port`, the newest OSV advisory date, and the EPSS score date.
+  It excludes arbitrary fields, including complete URLs in older artifacts.
 
 The span attribute names say what they hold: `ecluse.mirror.artifact_host` and
 `ecluse.osv.source_host`.
