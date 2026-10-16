@@ -131,9 +131,11 @@ Four of those names matter to Datadog specifically: `timestamp`, `status`, `mess
 `service` are its reserved log attributes, and its JSON preprocessing reads them unmodified.
 `env` and `version` are ordinary attributes any backend indexes.
 
-Typed bearer-token fields render as redacted placeholders. Pilot stores each source's
-`host:port` in artifact provenance, and beside it the source URL with its userinfo, query, and
-fragment removed, so neither carries a credential. Sync logs only parsed compilation time and row
+Typed bearer-token fields render as redacted placeholders. Pilot records
+provenance in the artifact's metadata. `source_url` and `epss_source_url` hold each source's
+`host:port` identity. `osv_source` and `epss_source` hold the source URL with its path kept and its
+userinfo, query, and fragment removed, so no field carries a credential. `built_at` records when
+compilation finished. Sync logs only parsed compilation time and row
 count from metadata, including when it reads older artifacts with complete source URLs. On each
 swap it adds one `info` line naming where the serving artifact came from: the object's publication
 time, the OSV source as `host:port`, its newest advisory date, and the EPSS score date. A value the

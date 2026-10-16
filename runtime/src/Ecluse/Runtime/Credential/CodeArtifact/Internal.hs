@@ -55,8 +55,8 @@ data CodeArtifactConfig = CodeArtifactConfig
     the calling account ('Nothing' to default to the caller's account).
     -}
     , caDurationSeconds :: Maybe Natural
-    {- ^ Requested token lifetime in seconds (@900@-@43200@). 'Nothing' defaults it to the
-    caller's role-credential expiry, and the refresh policy adapts to the minted expiry anyway.
+    {- ^ Requested token lifetime in seconds (@900@-@43200@). 'Nothing' omits it, so AWS
+    applies its 12-hour default. Refresh follows the minted expiry.
     -}
     }
     deriving stock (Eq, Ord, Show)
