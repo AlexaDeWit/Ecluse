@@ -300,7 +300,9 @@ library ecluse-core
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
     Ecluse.Core.Server.Contract
+    Ecluse.Core.Server.Encoding
     Ecluse.Core.Server.Fault
+    Ecluse.Core.Server.FieldValue
     Ecluse.Core.Server.Framing
     Ecluse.Core.Server.MemoryModel
     Ecluse.Core.Server.Metadata
@@ -1160,7 +1162,9 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.CacheSpec
     Ecluse.Core.Server.ConditionalSpec
     Ecluse.Core.Server.ContractSpec
+    Ecluse.Core.Server.EncodingSpec
     Ecluse.Core.Server.FaultSpec
+    Ecluse.Core.Server.FieldValueSpec
     Ecluse.Core.Server.FramingSpec
     Ecluse.Core.Server.MemoryModelSpec
     Ecluse.Core.Server.MetadataSpec
