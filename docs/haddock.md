@@ -27,7 +27,7 @@ carry, in one-line summaries, never a wall of prose.
 | **Pre-comment** (`-- \|`) / **post-comment** (`-- ^`) | A comment placed *before* vs *after* the thing it documents. |
 | **Module header** | The Haddock comment immediately before the `module` keyword: `{- \| … -}`, or `-- \|` when it is one line. |
 | **Section heading** | A `-- *`, `-- **`, … marker *in the export list*. It groups exports and builds the page's table of contents. |
-| **Example** / **doctest** | A `>>>` line plus its expected output. `task doctest` *runs* it (§9). |
+| **Example** / **doctest** | A `>>>` line plus its expected output. `task doctest` *runs* it in the libraries §9 names (§9). |
 
 ---
 
@@ -235,10 +235,11 @@ decision messages. Always non-negative.
 renderDuration :: NominalDiffTime -> Text
 ```
 
-- **`task doctest`** runs every `>>>` example as a test, and so does the CI gate. An example that
-  disagrees with the code fails the build. It runs `cabal repl --with-ghc=doctest`, which inherits
-  the package's exact build configuration, including the `relude` prelude, so examples see the
-  same names the module does.
+- **`task doctest`** runs every `>>>` example in the `ecluse-core`, `ecluse-runtime`, and `ecluse`
+  libraries as a test, and so does the CI gate. An example that disagrees with the code fails the
+  build. It runs one `cabal repl --with-ghc=doctest` per library. Each repl inherits the library's
+  build configuration, including the `relude` prelude, so examples see the same names the module
+  does.
 - **Keep examples pure, total, and deterministic**. They run in a plain GHCi session with no `IO`
   setup, so the pure core (`Ecluse.Core.Rules`, `Ecluse.Core.Version`, `Ecluse.Core.Package`) is
   their natural home. `doctest` compares output to GHCi's printed form: a `Text` shows with quotes
