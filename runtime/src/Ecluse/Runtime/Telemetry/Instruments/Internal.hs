@@ -191,7 +191,7 @@ newMetrics telemetry = do
         <*> counter meter MetadataCacheRequests "{request}" "full-store requests by hit/miss/collapsed"
         <*> counter meter SingleVersionCacheRequests "{request}" "selected-version requests by hit/miss/collapsed"
         <*> counter meter AssembledCacheRequests "{request}" "assembled-response requests by hit/miss/collapsed"
-        <*> counter meter MetadataCacheRefused "{entry}" "capacity refusals and external backend failures by store"
+        <*> counter meter MetadataCacheRefused "{entry}" "capacity refusals and backend failures by store"
         <*> gauge meter MetadataCacheEntries "metadata-cache occupancy"
         <*> gauge meter MetadataCacheResidentBytes "full-packument metadata-cache resident bytes"
         <*> gauge meter SingleVersionCacheResidentBytes "single-version metadata-cache resident bytes"

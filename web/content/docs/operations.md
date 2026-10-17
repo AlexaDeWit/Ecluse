@@ -486,7 +486,7 @@ The request counters use `result=hit|miss|collapsed`:
 | `ecluse.metadata_cache.requests` | Full-document store requests |
 | `ecluse.metadata_cache.version.requests` | Selected-version store requests |
 | `ecluse.metadata_cache.assembled.requests` | Assembled-response store requests |
-| `ecluse.metadata_cache.refused` | Capacity refusals or external backend failures, by `store=full|version|assembled` |
+| `ecluse.metadata_cache.refused` | Capacity refusals and backend failures, by `store=full|version|assembled` |
 
 A `hit` uses a retained value. A `miss` leads a fetch or render. A `collapsed` request joins
 an existing leader and shares its result, including a failure. A follower that retries after
