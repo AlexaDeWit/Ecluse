@@ -9,7 +9,7 @@ import Data.Text.Encoding qualified as TE
 import Test.Hspec
 
 import Ecluse.Core.Registry (ParseError (..), PublishBodyFault (PublishMalformed, PublishUnsupported))
-import Ecluse.Core.Registry.PyPI.Publish.Multipart (pypiFileUploadOnly, pypiSdistNameForm, uploadClaims)
+import Ecluse.Core.Registry.PyPI.Publish.Multipart (pypiFileUploadOnly, pypiSdistNameForm, pypiVersionForm, uploadClaims)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Test.Registry.Publish (isMalformedBody)
 
@@ -84,13 +84,15 @@ releaseSpec = describe "uploadClaims file name" $ do
     for_ [("acme-widget", "1.0", "acme-widget-1.0.tar.gz"), ("acme.co-widget", "1", "acme.co-widget-1.tar.gz"), ("acme", "1.0", "acme_1.0.tar.gz"), ("acme", "1.0", "acme.1.0.tar.gz"), ("acme", "1.0", "_acme-1.0.tar.gz"), ("acme-2x", "1.0", "acme-2x-1.0.tar.gz"), ("acme-widget", "1.0", "Acme_Widget-1.0.tar.gz"), ("acme-widget", "1.0", "acme_widget-1.0.zip"), ("acme-widget", "1.0", "acme_widget-1.0.tgz")] $ \(name, version, file) ->
         it ("refuses " <> show file <> " for " <> show name <> ", naming the PEP 625 sdist form") $
             release name version file `shouldReturn` Left (PublishMalformed (ParseError pypiSdistNameForm))
+    it "names the version field when the declared version is not PEP 440, though the file is a PEP 625 sdist" $
+        release "acme-widget" "nightly" "acme_widget-1.0.tar.gz" `shouldReturn` Left (PublishMalformed (ParseError pypiVersionForm))
     for_ [("1.0.post1", "acme_widget-1.0.post1.tar.gz"), ("1!1.0+local.1", "acme_widget-1!1.0+local.1-py3-none-any.whl")] $ \(version, file) ->
         it ("relays " <> show file <> " as acme-widget " <> show version) $
             upload [part "version" version, contentPart file] `shouldReturn` Right ["acme-widget"]
     for_ [("another project", "victim_target-1.0.0.tar.gz"), ("a longer project", "acme_widget_extra-1.0.0.tar.gz"), ("another version", "acme_widget-99.0-py3-none-any.whl"), ("no distribution", "acme-widget-1.0.0.txt"), ("no release", "acme_widget.tar.gz")] $ \(label, file) ->
         it ("refuses a file name with " <> label <> ": " <> show file) $
             upload [part "version" "1.0.0", contentPart file] >>= (`shouldSatisfy` isMalformedBody)
-    for_ [("acme", "1.post1", "acme-1-1.tar.gz"), ("acme", "1", "acme-v1-2-py3-none-any.whl"), ("acme-widget", "1.0", "acme-widget-v1.0.tar.gz")] $ \(name, version, file) ->
+    for_ [("acme", "1.post1", "acme-1-1.tar.gz"), ("acme", "1", "acme-v1-2-py3-none-any.whl"), ("acme-widget", "1.0", "acme_widget-v1.0.tar.gz")] $ \(name, version, file) ->
         it ("refuses the legacy spelling " <> show file <> ", which a store files under another project or version") $
             release name version file >>= (`shouldSatisfy` isMalformedBody)
     for_ [("a path", "acme_widget-1.0-x-y/victim-9.0.whl"), ("a traversal", "acme_widget-1.0-a-b-c/../../../x.whl"), ("a space before the version", "acme_widget- 1.0.tar.gz"), ("a space after the version", "acme_widget-1.0 .tar.gz"), ("a tab after the version", "acme_widget-1.0\t.tar.gz"), ("a percent sign", "acme_widget-1.0-py3-none-x%2F..%2Fy.whl")] $ \(label, file) ->

@@ -4,7 +4,7 @@
 {-# LANGUAGE TupleSections #-}
 
 -- | Bounded reading of the name, version, @:action@ and file name claims in the unchanged PyPI publication relay body.
-module Ecluse.Core.Registry.PyPI.Publish.Multipart (uploadClaims, pypiFileUploadOnly, pypiSdistNameForm) where
+module Ecluse.Core.Registry.PyPI.Publish.Multipart (uploadClaims, pypiFileUploadOnly, pypiSdistNameForm, pypiVersionForm) where
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BSC
@@ -37,6 +37,10 @@ pypiFileUploadOnly = "this proxy relays new-release uploads (:action=file_upload
 -- | The @400@ reason for any upload that is not a wheel and does not name the declared release as PEP 625 names an sdist.
 pypiSdistNameForm :: Text
 pypiSdistNameForm = "multipart file name does not name the declared project and version: an sdist must be named <normalised_name>-<version>.tar.gz (PEP 625)"
+
+-- | The @400@ reason for a declared version that is not a PEP 440 version, whatever the file is named.
+pypiVersionForm :: Text
+pypiVersionForm = "multipart version is not a PEP 440 version"
 
 -- Uploaders send one file_upload. pypiserver deletes a release on remove_pkg under the same permission.
 uploadAction :: [ByteString] -> Either PublishBodyFault ()
@@ -95,7 +99,8 @@ releaseFile claims name = do
     versions <- formValues VersionField claims
     case (versions, [file | ContentClaim file <- claims]) of
         ([version], [Just file])
-            | Just declared <- canonicalPep440 =<< utf8 version
+            | Nothing <- declaredVersion version -> bad pypiVersionForm
+            | Just declared <- declaredVersion version
             , Just coordinate <- builtFileCoordinate name . unFilename =<< distributionFilename =<< utf8 file
             , fcVersionKey coordinate == renderVersion declared ->
                 Right [canonicalName name]
@@ -107,6 +112,7 @@ releaseFile claims name = do
         _ -> bad "multipart upload declares more than one version or content file"
   where
     utf8 = rightToMaybe . TE.decodeUtf8'
+    declaredVersion = canonicalPep440 <=< utf8
 
 -- Wheel and sdist names hold only these characters, so the gate also refuses whitespace and percent signs.
 distributionFilename :: Text -> Maybe Filename

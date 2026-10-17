@@ -45,7 +45,7 @@ also answers `400` when its file name:
 The normalised name is the PEP 503 name with `_` for each `-`. So `acme.co-widget` at `1.0`
 uploads as `acme_co_widget-1.0.tar.gz`. Build tools that predate PEP 625 write other names, such as
 `acme.co-widget-1.0.tar.gz` or a `.zip` archive. Their uploads answer `400` with the expected
-form. The publisher must upgrade the build tool.
+form. The publisher must build with a tool that writes the PEP 625 name.
 
 Some stores end a multipart part at a boundary delimiter after a bare CR or LF, or after trailing
 whitespace on the delimiter line. So a body with such a delimiter inside a part answers `400`,

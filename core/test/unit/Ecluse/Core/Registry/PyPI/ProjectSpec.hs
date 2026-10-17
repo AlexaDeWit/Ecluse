@@ -190,7 +190,7 @@ builtCoordinateSpec = describe "builtFileCoordinate" $ do
         builtFileCoordinate requestsName "requests-2.34.2-1.tar.gz" `shouldBe` Nothing
 
     it "refuses an sdist PEP 625 does not name: another project spelling or archive format" $
-        for_ ["azure-storage-blob-12.14.0.tar.gz", "Azure_Storage_Blob-12.14.0.tar.gz", "azure.storage.blob-12.14.0.tar.gz", "_azure_storage_blob-12.14.0.tar.gz", "azure_storage_blob-12.14.0.zip", "azure_storage_blob-12.14.0.tgz", "azure_storage_blob-12.14.0.tar.bz2"] $ \file -> do
+        for_ ["azure-storage-blob-12.14.0.tar.gz", "Azure_Storage_Blob-12.14.0.tar.gz", "azure.storage.blob-12.14.0.tar.gz", "_azure_storage_blob-12.14.0.tar.gz", "azure_storage_blob-12.14.0.zip", "azure_storage_blob-12.14.0.tgz", "azure_storage_blob-12.14.0.tar.bz2", "azure_storage_blob-12.14.0.tar.xz"] $ \file -> do
             fileCoordinate azureStorageBlob file `shouldSatisfy` isJust
             builtFileCoordinate azureStorageBlob file `shouldBe` Nothing
 
