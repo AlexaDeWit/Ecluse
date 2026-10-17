@@ -25,22 +25,42 @@ import OpenTelemetry.Exporter.InMemory.Span (inMemoryListExporter)
 import OpenTelemetry.Trace (createTracerProvider, emptyTracerProviderOptions, forceFlushTracerProvider)
 import OpenTelemetry.Trace.Core (ImmutableSpan (spanHot), SpanHot (hotAttributes, hotName, hotStatus), SpanStatus (Error, Unset))
 import Paths_ecluse (version)
-import System.Directory (doesFileExist, getModificationTime, listDirectory, removeFile, setModificationTime)
+import System.Directory (doesFileExist, getFileSize, getModificationTime, listDirectory, removeFile, setModificationTime)
 import System.FilePath (takeFileName, (</>))
 import System.IO.Error (catchIOError)
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (evaluate, finally, try)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbEpssNotEstablished), CveLookup (..), affecting, fixedAt, openCveDb, packageAdvisories)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
-import Ecluse.Core.Osv.Compile (CompileSources (..), PilotEpssRequired (..), compileOsvToSqlite, osvToRow)
-import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor)
+import Ecluse.Core.Osv.Compile (
+    CompileSources (..),
+    OsvCandidate,
+    PilotEpssRequired (..),
+    candidateDestination,
+    candidateFacts,
+    candidatePath,
+    osvToRow,
+    promoteCandidate,
+    stampCandidateNonce,
+    withOsvCandidate,
+ )
+import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory), osvEcosystemFor)
 import Ecluse.Core.Osv.Epss (maxEpssFeedBytes)
 import Ecluse.Core.Osv.Provenance (QuietTime (..))
+import Ecluse.Core.Osv.Publication (
+    CandidateFacts (..),
+    SourceMarker (..),
+    newPublicationNonce,
+    renderPublicationNonce,
+    sourceDigestHex,
+    sourceDigestOf,
+    sourceIdentityOf,
+ )
 import Ecluse.Core.Osv.Schema (EpssRequirement (..), osvDbFileName, osvSchemaEpoch)
 import Ecluse.Core.Osv.Stream (PilotIngestAborted (..))
 import Ecluse.Core.Osv.Types (UpperBound (..))
@@ -53,8 +73,9 @@ import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Cve (namesFix)
 import Ecluse.Test.Log (captureJsonLog, newTestLogEnv)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip, osvZipOf, runOsvTestM, runOsvTestMWith)
-import Ecluse.Test.OsvDb (compileOsvZipDbTo, compileOsvZipDbWithFeedTo, epssFixtureFile, metaOf, scoresOf)
+import Ecluse.Test.OsvDb (compileOsvToSqlite, compileOsvZipDbTo, compileOsvZipDbWithFeedTo, epssFixtureFile, metaOf, scoresOf)
 import Ecluse.Test.Port (RecordedCompile (RecordedCompile), recordingAdvisoryCompileMetricsPort)
+import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Stub (Stub, stubBaseUrl, withStub, withStubHeaders)
 import Network.HTTP.Client (applyBasicAuth, defaultRequest, requestHeaders)
 import Network.HTTP.Types.Header (hLastModified)
@@ -103,17 +124,25 @@ spec = describe "SQLite OSV Compilation" $ do
             Map.keys meta
                 `shouldBe` [ "built_at"
                            , "ecosystem"
+                           , "epss_digest"
                            , "epss_model_version"
                            , "epss_score_date"
                            , "epss_source"
                            , "epss_source_url"
                            , "epss_status"
+                           , "osv_digest"
                            , "osv_newest_modified"
                            , "osv_source"
                            , "pilot_version"
+                           , "publication_nonce"
                            , "row_count"
+                           , "scored_row_count"
                            , "source_url"
                            ]
+            Map.lookup "osv_digest" meta `shouldBe` Just (hexOf zipData)
+            Map.lookup "epss_digest" meta `shouldBe` Just (hexOf epssData)
+            Map.lookup "scored_row_count" meta `shouldBe` Just "1"
+            Map.lookup "publication_nonce" meta `shouldSatisfy` maybe False ((== 32) . T.length)
             Map.lookup "ecosystem" meta `shouldBe` Just "npm"
             Map.lookup "row_count" meta `shouldBe` Just "1"
             Map.lookup "pilot_version" meta `shouldBe` Just (toText (showVersion version))
@@ -277,6 +306,7 @@ spec = describe "SQLite OSV Compilation" $ do
                            ]
 
     epssEnrichmentSpec
+    candidateSpec
 
     for_ [("empty", osvZipOf []), ("wrong-ecosystem", LBS.readFile "test/unit/fixtures/osv/sample.zip")] $ \(label, rejectedZip) ->
         for_ [False, True] $ \hasPrevious ->
@@ -466,6 +496,73 @@ spec = describe "SQLite OSV Compilation" $ do
         it "carries an unscored segment's null epss_score through" $
             osvToRow (ExtractedOsv "pkg" "npm" "GHSA-row" Nothing Unbounded Nothing Nothing)
                 `shouldBe` ("pkg", "GHSA-row", Nothing, Nothing, Nothing, Nothing, Nothing)
+
+candidateSpec :: Spec
+candidateSpec = describe "the candidate a publication decides on" $ do
+    it "leaves the canonical artifact in place until promotion, and removes an unpromoted candidate" $
+        withSystemTempDirectory "ecluse-osv-candidate" $ \outDir -> do
+            zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+            canonical <- compileZip outDir zipData testQuietTime
+            before <- readFileBS canonical
+            withCandidate outDir zipData $ \candidate -> do
+                candidatePath candidate `shouldNotBe` canonical
+                candidateDestination candidate `shouldBe` canonical
+                doesFileExist (candidatePath candidate) `shouldReturn` True
+                readFileBS canonical `shouldReturn` before
+            listDirectory outDir `shouldReturn` [takeFileName canonical]
+            readFileBS canonical `shouldReturn` before
+
+    it "promotes exactly the bytes the candidate held" $
+        withSystemTempDirectory "ecluse-osv-candidate" $ \outDir -> do
+            zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+            (held, promoted) <- withCandidate outDir zipData $ \candidate ->
+                (,) <$> readFileBS (candidatePath candidate) <*> promoteCandidate candidate
+            readFileBS promoted `shouldReturn` held
+            listDirectory outDir `shouldReturn` [takeFileName promoted]
+
+    it "stamps each attempt's nonce without changing the artifact's size" $
+        withSystemTempDirectory "ecluse-osv-candidate" $ \outDir -> do
+            zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+            withCandidate outDir zipData $ \candidate -> do
+                before <- getFileSize (candidatePath candidate)
+                for_ [1 .. 3 :: Int] $ \_ -> do
+                    nonce <- newPublicationNonce
+                    stampCandidateNonce candidate nonce
+                    getFileSize (candidatePath candidate) `shouldReturn` before
+                    Map.lookup "publication_nonce" <$> metaOf (candidatePath candidate) `shouldReturn` Just (renderPublicationNonce nonce)
+
+    for_ [Npm, PyPI] $ \eco -> do
+        it ("counts scored ranges per row and records each source's identity, date, and digest, " <> show eco) $
+            withSystemTempDirectory "ecluse-osv-facts" $ \outDir -> do
+                archive <- factsArchive eco
+                facts <- withStubHeaders status200 [(hLastModified, "Sat, 29 Aug 2026 06:30:00 GMT")] archive $ \osvStub ->
+                    withStub status200 factsFeed $ \epssStub ->
+                        candidateFactsFrom outDir eco EpssRequired (sourcesOf osvStub epssStub "/all.zip")
+                (cfEcosystem facts, cfRelevantRows facts, cfScoredRows facts) `shouldBe` (ecosystemName eco, 3, 2)
+                smLastModified (cfOsv facts) `shouldBe` Just (UTCTime (fromGregorian 2026 8 29) 23400)
+                smDigest (cfOsv facts) `shouldBe` sourceDigestOf (digestOf (toStrict archive))
+                (smDigest <$> cfEpss facts) `shouldBe` Just (sourceDigestOf (digestOf (toStrict factsFeed)))
+                (smLastModified <$> cfEpss facts) `shouldBe` Just Nothing
+
+        it ("counts a Last-Modified past the run's clock as missing, for both sources, " <> show eco) $
+            withSystemTempDirectory "ecluse-osv-facts" $ \outDir -> do
+                archive <- factsArchive eco
+                let future = [(hLastModified, "Fri, 01 Jan 2100 00:00:00 GMT")]
+                facts <- withStubHeaders status200 future archive $ \osvStub ->
+                    withStubHeaders status200 future factsFeed $ \epssStub ->
+                        candidateFactsFrom outDir eco EpssRequired (sourcesOf osvStub epssStub "/all.zip")
+                (smLastModified (cfOsv facts), smLastModified <$> cfEpss facts) `shouldBe` (Nothing, Just Nothing)
+
+        it ("records no EPSS marker when an optional feed fails, " <> show eco) $
+            withSystemTempDirectory "ecluse-osv-facts" $ \outDir -> do
+                archive <- factsArchive eco
+                facts <- withStub status200 archive $ \osvStub ->
+                    withStub status404 "" $ \epssStub -> do
+                        let sources = sourcesOf osvStub epssStub "/all.zip"
+                        facts <- candidateFactsFrom outDir eco EpssOptional sources
+                        smIdentity (cfOsv facts) `shouldBe` sourceIdentityOf (toText (csOsvExportUrl sources))
+                        pure facts
+                (cfEpss facts, cfScoredRows facts) `shouldBe` (Nothing, 0)
 
 epssEnrichmentSpec :: Spec
 epssEnrichmentSpec = describe "EPSS enrichment under the ecosystem's requirement" $ do
@@ -693,6 +790,48 @@ compileZipWith outDir logEnv zipData quietTime = do
     withStub status200 zipData $ \stub ->
         withStub status200 epssData $ \epssStub ->
             runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") quietTime)
+
+hexOf :: LByteString -> Text
+hexOf = sourceDigestHex . sourceDigestOf . digestOf . toStrict
+
+withCandidate :: FilePath -> LByteString -> (OsvCandidate -> IO a) -> IO a
+withCandidate outDir zipData use = do
+    epssData <- LBS.readFile epssFixtureFile
+    (metrics, _) <- recordingAdvisoryCompileMetricsPort
+    withStub status200 zipData $ \stub ->
+        withStub status200 epssData $ \epssStub ->
+            runOsvTestM (withOsvCandidate metrics Nothing outDir (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") testQuietTime (liftIO . use))
+
+candidateFactsFrom :: FilePath -> Ecosystem -> EpssRequirement -> CompileSources -> IO CandidateFacts
+candidateFactsFrom outDir eco requirement sources = do
+    (metrics, _) <- recordingAdvisoryCompileMetricsPort
+    runOsvTestM (withOsvCandidate metrics Nothing outDir (osvEcosystemFor eco) requirement sources testQuietTime (pure . candidateFacts))
+
+-- One advisory scored through its CVE alias across two packages, and one the feed does not score.
+factsArchive :: Ecosystem -> IO LByteString
+factsArchive eco =
+    osvZipOf
+        [ ("scored.json", rangedAdvisory "GHSA-scored" "CVE-2026-10001" ["scored-a", "scored-b"])
+        , ("unscored.json", rangedAdvisory "GHSA-unscored" "CVE-2026-99999" ["unscored"])
+        ]
+  where
+    rangedAdvisory advisoryId cve packages =
+        encode
+            ( object
+                [ "id" .= (advisoryId :: Text)
+                , "aliases" .= [cve :: Text]
+                , "affected" .= [affected name | name <- packages :: [Text]]
+                ]
+            )
+    affected name =
+        object
+            [ "package" .= object ["name" .= name, "ecosystem" .= osvExportDirectory (osvEcosystemFor eco)]
+            , "ranges" .= [object ["type" .= rangeType, "events" .= [object ["introduced" .= ("0" :: Text)], object ["fixed" .= ("1.0.0" :: Text)]]]]
+            ]
+    rangeType = if eco == PyPI then "ECOSYSTEM" else "SEMVER" :: Text
+
+factsFeed :: LByteString
+factsFeed = GZip.compress "cve,epss,percentile\nCVE-2026-10001,0.5,0.9\n"
 
 packagesOf :: FilePath -> IO [Text]
 packagesOf dbFile = withConnection dbFile $ \conn ->

@@ -768,6 +768,9 @@ whatever the rules. When the feed fails:
 | Has a rule that reads EPSS scores | Fails the compile and publishes nothing. Consumers keep their last accepted artifact. |
 | Has no rule that reads EPSS scores | Publishes the OSV data with `epss_status=unavailable` and no scores, so new advisories and their fixes still reach consumers. |
 
+The publication that loses the scores may shrink by up to `advisories.epssLossCapPercent` beyond the
+usual allowance ([Advisory publication guard](@/docs/operations.md#advisory-publication-guard)).
+
 An artifact without the marker, or with `epss_status=unavailable`, serves only ecosystems with no
 EPSS-dependent rule.
 A running consumer retains its accepted qualified generation after rejection, subject to its existing maximum age.

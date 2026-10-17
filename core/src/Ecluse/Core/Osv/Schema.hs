@@ -100,9 +100,7 @@ osvTableSpecs =
         }
     ]
 
-{- | A key of the artifact's @meta@ table, which holds one @TEXT@ key\/value row per key
-and carries the artifact's provenance.
--}
+-- | A key of the artifact's @meta@ table, one @TEXT@ row per key, which carries the artifact's provenance.
 data MetaKey
     = -- | The Pilot application version that produced the artifact.
       MetaPilotVersion
@@ -114,9 +112,7 @@ data MetaKey
       MetaSourceUrl
     | -- | The EPSS source's host:port identity. Older artifacts can carry a complete URL.
       MetaEpssSourceUrl
-    | {- | The advisory source's credential-free URL, which identifies the export across runs
-      where the host alone cannot.
-      -}
+    | -- | The advisory source's credential-free URL, which identifies the export where the host alone cannot.
       MetaOsvSource
     | -- | The @Last-Modified@ the advisory export answered the fetch with.
       MetaOsvLastModified
@@ -134,6 +130,14 @@ data MetaKey
       MetaEpssStatus
     | -- | The number of advisory ranges the artifact holds.
       MetaRowCount
+    | -- | The SHA-256 of the advisory export's whole response body.
+      MetaOsvDigest
+    | -- | The SHA-256 of the EPSS feed's whole response body, when the feed arrived.
+      MetaEpssDigest
+    | -- | The number of advisory ranges that carry an EPSS score.
+      MetaScoredRowCount
+    | -- | The fixed-width nonce that gives each publication attempt its own bytes.
+      MetaPublicationNonce
     deriving stock (Eq, Generic, Show)
 
 instance Universe MetaKey where universe = universeGeneric
@@ -155,10 +159,12 @@ renderMetaKey = \case
     MetaEpssModelVersion -> "epss_model_version"
     MetaEpssStatus -> "epss_status"
     MetaRowCount -> "row_count"
+    MetaOsvDigest -> "osv_digest"
+    MetaEpssDigest -> "epss_digest"
+    MetaScoredRowCount -> "scored_row_count"
+    MetaPublicationNonce -> "publication_nonce"
 
-{- | Whether an ecosystem's resolved policy depends on EPSS. Where it does, Pilot publishes nothing
-without enrichment and a reader refuses an artifact that lacks it.
--}
+-- | Whether an ecosystem's policy depends on EPSS. Where it does, Pilot publishes nothing without enrichment and a reader refuses its absence.
 data EpssRequirement = EpssOptional | EpssRequired
     deriving stock (Eq, Show)
 

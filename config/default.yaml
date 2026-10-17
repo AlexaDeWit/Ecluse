@@ -200,6 +200,19 @@ advisories:
   # six days, and a mount with no quarantine rule gets three. Set this to override every
   # derivation, above or below it. The boot log names the value and where it came from.
   # maxAgeSeconds: 518400
+  # Pilot only: how far a new advisory artifact may shrink below its size baseline, in percent,
+  # before Pilot refuses to publish it. The baseline is the largest size accepted under the
+  # artifact's object key, kept in that object's metadata, so repeated small shrinks cannot add up
+  # past it. Withdrawn advisories shrink a feed legitimately, so this is a damage alarm, not a
+  # completeness proof. A refusal logs at ERROR and leaves the stored artifact in place. After a
+  # deliberate change, `ecluse pilot compile --out <dir> --upload --rebaseline-etag <etag>
+  # --rebaseline-max-shrink-percent <percent>` restarts the baseline.
+  maxShrinkPercent: 2
+  # Pilot only: the extra shrink one optional EPSS outage may earn, in percent of the previous
+  # artifact's size. The credit is 12 bytes per previously scored range, capped at this share.
+  # Only the publication that loses the feed earns it, and it ends when the feed returns. At both
+  # defaults a publication may shrink by just under 7% in total. 0 turns the credit off.
+  epssLossCapPercent: 5
   # The object store the compiled advisory databases sync from, as
   # s3://<bucket>[/<prefix>]. The scheme picks the provider, the way queue.url does, and
   # a scheme this build does not know is refused at load. AWS_ENDPOINT_URL still points

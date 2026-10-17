@@ -48,14 +48,14 @@ import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvEcosystemTag, osvMaxAdvisoryF
 import Ecluse.Core.Osv.Epss (EpssScores)
 import Ecluse.Core.Osv.Provenance (lastModifiedOf, parseSourceTime)
 import Ecluse.Core.Security.Authority (dialledAuthorityLabel)
+import Ecluse.Core.Snapshot (ContentDigest)
+import Ecluse.Core.Stream (digestWhole)
 import Ecluse.Core.Telemetry.Span (closeOptionalSpan, openOptionalSpan)
 
 -- | The per-advisory byte bound one ingest pass holds every zip entry to.
 newtype IngestLimits = IngestLimits
     { ilMaxAdvisoryBytes :: Int
-    {- ^ Largest decompressed advisory JSON, in bytes, the ingest accepts from one
-    zip entry. It drops a larger one. Bounds memory and, transitively, decode cost.
-    -}
+    -- ^ The largest decompressed advisory JSON one zip entry may hold, in bytes. It bounds memory and decode cost.
     }
     deriving stock (Eq, Show)
 
@@ -63,9 +63,7 @@ newtype IngestLimits = IngestLimits
 defaultIngestLimits :: IngestLimits
 defaultIngestLimits = IngestLimits{ilMaxAdvisoryBytes = 8 * 1024 * 1024}
 
-{- | The running tally of one ingest pass. Pilot reads it once the stream completes to
-decide whether the artifact is trustworthy enough to publish ('systemicDrop').
--}
+-- | The running tally of one ingest pass, which 'systemicDrop' reads once the stream completes.
 data IngestStats = IngestStats
     { statAccepted :: !Int
     -- ^ Advisory entries that decoded successfully.
@@ -74,22 +72,16 @@ data IngestStats = IngestStats
     , statDroppedMalformed :: !Int
     -- ^ Entries dropped because their JSON did not decode.
     , statUnorderable :: !Int
-    {- ^ Rows kept with a bound the grammar cannot parse ('orderableBounds'). Counted in
-    rows, so it stays out of 'systemicDrop'.
-    -}
+    -- ^ Rows kept with a bound the grammar cannot order ('orderableBounds'). Rows, so it stays out of 'systemicDrop'.
     , statUnusableModified :: !Int
-    {- ^ Records whose @modified@ no grammar reads, or which date it after the run's clock.
-    Their rows are kept and only the date is ignored, so this counts records, not drops.
-    -}
+    -- ^ Records whose @modified@ is unreadable or after the run's clock. Their rows are kept, so these are not drops.
     }
     deriving stock (Eq, Show)
 
 emptyIngestStats :: IngestStats
 emptyIngestStats = IngestStats 0 0 0 0 0
 
-{- | What one ingest attempt learned about its source beside the rows. A retry replaces it
-whole, so it always describes the attempt that produced the tally beside it.
--}
+-- | What one ingest attempt learned about its source. A retry replaces it whole, so it matches the tally beside it.
 data OsvAttempt = OsvAttempt
     { oaLastModified :: Maybe UTCTime
     -- ^ The @Last-Modified@ the export answered this attempt with.
@@ -109,9 +101,7 @@ data OsvIngest = OsvIngest
     { ingestLimits :: IngestLimits
     , ingestCounter :: IngestCounter
     , ingestEcosystem :: OsvEcosystem
-    {- ^ The feed this pass compiles: it carries the grammar that orders the pass's bounds and
-    the fan-out an ordinary advisory of the feed stays under.
-    -}
+    -- ^ The feed this pass compiles, with the grammar that orders its bounds and its ordinary fan-out.
     , ingestEpss :: EpssScores
     -- ^ The pass's EPSS table, joined onto each advisory as it is extracted.
     , ingestNow :: UTCTime
@@ -130,9 +120,7 @@ newOsvIngest limits eco scores now = do
 readIngestStats :: (MonadIO m) => OsvIngest -> m IngestStats
 readIngestStats ingest = readIORef (counterRef (ingestCounter ingest))
 
-{- | Zero the tally. The compiler re-streams from a clean slate on each retry attempt
-and zeroes the tally alongside it, so the tally reflects only the final attempt.
--}
+-- | Zero the tally before a retry re-streams, so it reflects only the final attempt.
 resetIngestStats :: (MonadIO m) => OsvIngest -> m ()
 resetIngestStats ingest = writeIORef (counterRef (ingestCounter ingest)) emptyIngestStats
 
@@ -140,9 +128,7 @@ resetIngestStats ingest = writeIORef (counterRef (ingestCounter ingest)) emptyIn
 readOsvAttempt :: (MonadIO m) => OsvIngest -> m OsvAttempt
 readOsvAttempt ingest = readIORef (ingestAttempt ingest)
 
-{- | Forget the source metadata, alongside 'resetIngestStats'. A retry re-reads the export, so
-last attempt's response header and record dates must not survive into this one's artifact.
--}
+-- | Forget the source metadata alongside 'resetIngestStats', so a failed attempt's dates never reach the artifact.
 resetOsvAttempt :: (MonadIO m) => OsvIngest -> m ()
 resetOsvAttempt ingest = writeIORef (ingestAttempt ingest) emptyOsvAttempt
 
@@ -160,16 +146,14 @@ systemicDropFloor = 16
 systemicDropPercent :: Int
 systemicDropPercent = 10
 
-{- | Raised when systemic drops or zero relevant output prevent publication.
-The tally records the rejected pass, without replacing a consumer's last-good artifact.
--}
+-- | Systemic drops or zero relevant rows refused the pass, whose tally this carries. Nothing replaces the last-good artifact.
 newtype PilotIngestAborted = PilotIngestAborted IngestStats
     deriving stock (Show)
 
 instance Exception PilotIngestAborted
 
--- | Fetch the OSV zip and stream its contents, bounded by @ingest@.
-streamOsvUrl :: (MonadResource m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> OsvIngest -> String -> ConduitT i ExtractedOsv m ()
+-- | Fetch the OSV zip and stream its contents, bounded by @ingest@. It returns the digest of the whole response body.
+streamOsvUrl :: (MonadResource m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> OsvIngest -> String -> ConduitT i ExtractedOsv m ContentDigest
 streamOsvUrl mTracerProvider ingest urlStr = do
     lift $ logFM InfoS (ls ("Initializing OSV stream from " <> dialledAuthorityLabel (toText urlStr)))
     bracketP
@@ -181,7 +165,7 @@ streamOsvUrl mTracerProvider ingest urlStr = do
             req <- liftIO $ setRequestCheckStatus <$> parseRequest urlStr
             httpSource req $ \res -> do
                 recordResponseDate ingest (getResponseHeader hLastModified res)
-                getResponseBody res .| parseOsvStream mTracerProvider ingest
+                fst <$> fuseBoth (getResponseBody res .| digestWhole) (parseOsvStream mTracerProvider ingest)
         )
 
 -- | Parse the zip stream and emit ExtractedOsv, bounded by @ingest@.

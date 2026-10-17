@@ -34,7 +34,7 @@ spec = do
         length (catalogueGroups integrationCatalogue) `shouldBe` 20
         map groupPartition (catalogueGroups integrationCatalogue) `shouldSatisfy` all (== "integration")
     it "retains every unique integration case" $
-        length (concatMap groupCases (catalogueGroups integrationCatalogue)) `shouldBe` 369
+        length (concatMap groupCases (catalogueGroups integrationCatalogue)) `shouldBe` 387
 
 removeCase :: Group -> Case -> Group -> Group
 removeCase selected item candidate

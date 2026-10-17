@@ -26,6 +26,7 @@ module Ecluse.Core.Package.Hash (
 
     -- * Wire encodings of digest bytes
     hexDigestText,
+    sha256Hex,
     base64DigestText,
 ) where
 
@@ -125,6 +126,10 @@ digestSize = \case
 -- | The lowercase hex a non-SRI digest is compared and reported in.
 hexDigestText :: ByteString -> Text
 hexDigestText d = decodeUtf8 (convertToBase Base16 d :: ByteString)
+
+-- | The SHA-256 of these bytes in lowercase hex, the form a content-addressed key takes.
+sha256Hex :: ByteString -> Text
+sha256Hex bytes = hexDigestText (convert (Crypto.hash bytes :: Digest SHA256))
 
 -- | The base64 body an SRI component carries after its algorithm prefix.
 base64DigestText :: ByteString -> Text

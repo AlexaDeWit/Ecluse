@@ -3,20 +3,20 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The @amazonka@ edge of the transport-fault vocabulary: fold the AWS error sum into
-"Ecluse.Core.Fault" at an adapter boundary.
-
-Three adapters face the same 'Amazonka.Error', so the classification lives once, here: the SQS
-mirror queue, the advisory sync's S3 transport, and the CodeArtifact store maintenance leaf. A
-service-level refusal (a throttle, an access denial, a serialisation surprise) is
-'TransportProtocol' with the rendered error as detail: the wire worked, the service said no.
+"Ecluse.Core.Fault" at an adapter boundary. A service-level refusal (a throttle, an access
+denial, a serialisation surprise) is 'TransportProtocol' with the rendered error as detail: the
+wire worked, the service said no.
 -}
 module Ecluse.Runtime.Aws.Fault (
     classifyAwsTransport,
     sendClassified,
+    serviceStatus,
 ) where
 
 import Amazonka qualified as AWS
 import Control.Monad.Trans.Resource (runResourceT)
+import Lens.Micro ((^.))
+import Network.HTTP.Types.Status (statusCode)
 
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), TransportFault, transportFault)
 import Ecluse.Core.Fault.Http (classifyTransport)
@@ -28,9 +28,7 @@ classifyAwsTransport = \case
     AWS.TransportError httpErr -> classifyTransport httpErr
     err -> transportFault TransportProtocol (displayExceptionT err)
 
-{- | Send a request with the AWS error kept out of the exception channel and folded into the
-caller's own fault type, which is how every adapter here reports a failure as a value.
--}
+-- | Send a request with the AWS error folded into the caller's own fault type, a value rather than an exception.
 sendClassified ::
     (AWS.AWSRequest a) =>
     (AWS.Error -> e) ->
@@ -38,3 +36,9 @@ sendClassified ::
     a ->
     IO (Either e (AWS.AWSResponse a))
 sendClassified classify env = fmap (first classify) . runResourceT . AWS.sendEither env
+
+-- | The HTTP status a service answered with, or 'Nothing' when the request never got an answer.
+serviceStatus :: AWS.Error -> Maybe Int
+serviceStatus = \case
+    AWS.ServiceError err -> Just (statusCode (err ^. AWS.serviceError_status))
+    _ -> Nothing

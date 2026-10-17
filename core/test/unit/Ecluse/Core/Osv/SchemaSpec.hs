@@ -56,4 +56,8 @@ spec = do
                            , "epss_model_version"
                            , "epss_status"
                            , "row_count"
+                           , "osv_digest"
+                           , "epss_digest"
+                           , "scored_row_count"
+                           , "publication_nonce"
                            ]

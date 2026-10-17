@@ -44,6 +44,7 @@ import Ecluse.Composition.Support (
     overrideEnv,
     privateInventoryRefusal,
     staticEnvVars,
+    twoStoreEnv,
     withObservablePrivate,
     withoutMirrorTargetToken,
     withoutMirrorTargetUrl,
@@ -511,13 +512,6 @@ clearedBackendsFor role env = do
     mounts <- mountsFor env
     either (\errs -> fail ("the backend rule refused: " <> show errs)) pure (snd (vetted role mounts))
 
--- | 'codeArtifactEnvVars' with a second mirrored mount, so the plan has two stores to build.
-twoStoreEnv :: [(String, String)]
-twoStoreEnv =
-    overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
-        overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL" pypiInternalEndpoint $
-            overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__URL" pypiEndpoint codeArtifactEnvVars
-
 -- | 'staticEnvVars' mirroring to a Verdaccio store, under the written deletion consent.
 verdaccioEnv :: String -> [(String, String)]
 verdaccioEnv permitDeletion =
@@ -525,12 +519,6 @@ verdaccioEnv permitDeletion =
         overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL" "https://verdaccio.example.test/" $
             overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN" "write-token" $
                 withoutMirrorTargetToken (withoutMirrorTargetUrl staticEnvVars)
-
-pypiEndpoint :: (IsString s, Semigroup s) => s
-pypiEndpoint = codeArtifactDomain <> "/pypi/mirror/"
-
-pypiInternalEndpoint :: (IsString s, Semigroup s) => s
-pypiInternalEndpoint = codeArtifactDomain <> "/pypi/internal/"
 
 -- | A private CodeArtifact cache on its own repository, distinct from the mirror target's.
 retainedEndpoint :: (IsString s) => s
