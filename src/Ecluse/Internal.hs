@@ -13,15 +13,20 @@ module Ecluse.Internal (
     superviseProcess,
     exitCodeFor,
     exitReasonFor,
+    installUncaughtReporter,
+    reportUncaught,
 ) where
 
 import Control.Exception (AsyncException (ThreadKilled, UserInterrupt), SomeAsyncException)
 import Control.Exception qualified as Exception
+import Data.Text.IO qualified as TIO
+import GHC.Conc (setUncaughtExceptionHandler)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
+import UnliftIO.Exception (catchAny)
 
 import Ecluse.Boot (BootAborted (BootAborted))
-import Ecluse.Core.Fault.Http (displayFaultT)
 import Ecluse.Core.Text (displayExceptionT)
+import Ecluse.Runtime.Aws.Fault (displayAwsFaultT)
 
 -- | How one whole service run ended. Each constructor owns one exit code ('exitCodeFor'), so an orchestrator reads the ending from the status alone.
 data ProcessOutcome
@@ -51,7 +56,18 @@ superviseProcess service =
                     -- fault of the run, not a cancellation.
                     other -> ServiceExited (displayExceptionT other)
             | Just (_ :: SomeAsyncException) <- fromException err -> Exception.throwIO err
-            | otherwise -> pure (ServiceExited (displayFaultT err))
+            | otherwise -> pure (ServiceExited (displayAwsFaultT err))
+
+-- | Make 'reportUncaught' the process-wide handler, which start-up does first.
+installUncaughtReporter :: IO ()
+installUncaughtReporter = setUncaughtExceptionHandler reportUncaught
+
+-- | The backstop report of an exception that ends a forked thread nothing watches. It renders as an exit reason does.
+reportUncaught :: SomeException -> IO ()
+reportUncaught err = traverse_ ignoringFailure [hFlush stdout, TIO.hPutStrLn stderr ("ecluse: uncaught exception: " <> displayAwsFaultT err)]
+  where
+    -- GHC reruns a handler that throws, so a failed write is dropped, as its default handler drops it.
+    ignoringFailure write = write `catchAny` const pass
 
 {- How a run ends. A failing status is representable only beside the reason it reports, so
 'Ecluse.Startup.runWith' cannot exit non-zero in silence. -}

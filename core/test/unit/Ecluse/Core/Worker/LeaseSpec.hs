@@ -8,7 +8,6 @@ module Ecluse.Core.Worker.LeaseSpec (spec) where
 import Control.Concurrent.STM (check, retry)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
-import GHC.Conc (ThreadStatus (ThreadDied, ThreadFinished), threadStatus)
 import Katip (KatipContextT)
 import Test.Hspec
 import UnliftIO (timeout)
@@ -35,7 +34,7 @@ import Ecluse.Core.Worker.Lease (
     withLeasedBatch,
  )
 import Ecluse.Test.Log (runQuietKatip)
-import Ecluse.Test.Poll (pollUntil)
+import Ecluse.Test.Poll (pollUntil, threadEnded)
 import Ecluse.Test.Queue (sampleJob)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
@@ -265,15 +264,11 @@ spec = do
             advanceWorld world 120
             renewalsSoFar world `shouldReturn` settled
 
-{- | The one real wait left: how long a case lets the controller run before cancelling it, and
-how long a job that models a backend with no lease to renew takes.
--}
+-- | The one real wait left: how long a case lets the controller run before cancelling it, and how long a job that models a backend with no lease to renew takes.
 settleMicros :: Int
 settleMicros = 20_000
 
-{- | A job that never ends on its own, so only a dropped lease stops it. Its result type is
-fixed, which is what lets a case assert on the 'Maybe' that 'whileLeased' hands back.
--}
+-- | A job that never ends on its own, so only a dropped lease stops it. Its result type is fixed, which is what lets a case assert on the 'Maybe' that 'whileLeased' hands back.
 neverEnds :: IO ()
 neverEnds = forever (threadDelay 1_000)
 
@@ -396,14 +391,6 @@ reapEndedWaiters world = do
     unless (null finished) . atomically $ do
         modifyTVar' (lwSeen world) (`Set.difference` Set.fromList finished)
         modifyTVar' (lwEnded world) (+ length finished)
-
-threadEnded :: ThreadId -> IO Bool
-threadEnded waiter = hasEnded <$> threadStatus waiter
-  where
-    hasEnded = \case
-        ThreadFinished -> True
-        ThreadDied -> True
-        _ -> False
 
 {- How long the stepper waits for the world to settle before it looks for an ended task. It
 paces nothing else: a step lands the instant the last renewal task parks. -}

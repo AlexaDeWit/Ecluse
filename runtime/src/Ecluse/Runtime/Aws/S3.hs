@@ -17,9 +17,7 @@ import Amazonka.S3 qualified as S3
 
 import Ecluse.Runtime.Aws.Env (AwsEndpoint, newAwsEnv)
 
-{- | Build an env for S3 under an optional endpoint override. 'Nothing' keeps @amazonka@'s
-default endpoint and credential resolution.
--}
+-- | Build an env for S3 under an optional endpoint override. 'Nothing' keeps @amazonka@'s default endpoint resolution.
 buildS3Env :: Maybe AwsEndpoint -> IO AWS.Env
 buildS3Env mEndpoint = newAwsEnv Nothing mEndpoint pathAddressedS3
 

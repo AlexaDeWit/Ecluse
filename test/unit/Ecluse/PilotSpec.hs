@@ -4,6 +4,7 @@
 
 module Ecluse.PilotSpec (spec) where
 
+import Amazonka.S3 qualified as S3
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -26,14 +27,16 @@ import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional))
 import Ecluse.Core.Supervision (BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros))
 import Ecluse.Pilot (PilotCompileOptions (..), PilotUploadUnconfigured (..), UploadRequest (..), runPilotCompile, superviseExportCycles)
 import Ecluse.Pilot.Plan (ExportTarget (ExportTarget, etEcosystem, etEpss))
+import Ecluse.Runtime.Aws.Env.Internal (newAwsEnvWith)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
-import Ecluse.Test.Log (captureJsonLog, newTestLogEnv, runQuietKatip)
+import Ecluse.Runtime.Test.Aws (deliverRefreshFailure, holdsNoPlantedSecret, refreshFailures, refusedDiscovery)
+import Ecluse.Test.Log (captureJsonLog, newTestLogEnv, runJsonLog, runQuietKatip)
 import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, epssFreeRules, metaOf, scoresOf, withSourceStubs)
-import Ecluse.Test.Stub (Captured (capPath), Stub, allCaptured)
+import Ecluse.Test.Stub (Captured (capPath), Stub, allCaptured, closedAuthority, requestSecrets)
 
 spec :: Spec
 spec = do
-    describe "superviseExportCycles (one supervised cycle loop per ecosystem)" $
+    describe "superviseExportCycles (one supervised cycle loop per ecosystem)" $ do
         it "keeps a faulting ecosystem's backoff off every other ecosystem's cadence" $ do
             -- The schedule is a five-second fixed retry, so a shared loop would let the healthy
             -- ecosystem tick at most once inside the window. Its own loop ticks throughout.
@@ -52,6 +55,26 @@ spec = do
             readIORef healthy >>= (`shouldSatisfy` (>= 5))
             -- The faulting pass spends its own cadence and nothing else's.
             readIORef faulted `shouldReturn` 1
+
+        it "logs a cycle whose S3 env fails credential discovery at STS by its cause at the dialled host:port, never the request" $ do
+            let schedule = BackoffSchedule{bsBaseMicros = 1_000, bsCapMicros = 8_000}
+                targets = ExportTarget{etEcosystem = Npm, etEpss = EpssOptional} :| [ExportTarget{etEcosystem = PyPI, etEpss = EpssOptional}]
+            logged <- runJsonLog (void (timeout 200_000 (superviseExportCycles schedule targets (const (liftIO (void (newAwsEnvWith refusedDiscovery Nothing Nothing S3.defaultService)))))))
+            for_ ["npm", "pypi"] $ \eco ->
+                logged `shouldSatisfy` T.isInfixOf ("pilot-export-" <> eco <> ": iteration faulted")
+            logged `shouldSatisfy` T.isInfixOf ("AWS request failed at " <> closedAuthority <> ": ConnectionFailure")
+            for_ requestSecrets $ \secret -> logged `shouldNotSatisfy` T.isInfixOf secret
+
+        it "logs a credential refresh failure handed to a cycle's thread by its typed cause, never the request" $ do
+            failures <- refreshFailures
+            for_ failures $ \failure -> do
+                let schedule = BackoffSchedule{bsBaseMicros = 1_000, bsCapMicros = 8_000}
+                    targets = ExportTarget{etEcosystem = Npm, etEpss = EpssOptional} :| [ExportTarget{etEcosystem = PyPI, etEpss = EpssOptional}]
+                logged <- runJsonLog (void (timeout 200_000 (superviseExportCycles schedule targets (const (liftIO (deliverRefreshFailure failure))))))
+                for_ ["npm", "pypi"] $ \eco ->
+                    logged `shouldSatisfy` T.isInfixOf ("pilot-export-" <> eco <> ": iteration faulted")
+                logged `shouldSatisfy` T.isInfixOf "AWS request failed at "
+                logged `shouldSatisfy` holdsNoPlantedSecret
 
     describe "runPilotCompile (one-shot compile mode)" $ do
         it "compiles the configured feeds into the requested directory and returns the artifact's path" $ do

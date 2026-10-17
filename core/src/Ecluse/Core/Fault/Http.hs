@@ -12,6 +12,7 @@ module Ecluse.Core.Fault.Http (
     httpFault,
     isRetryableStatusCode,
     displayFaultT,
+    hostPortLabel,
 ) where
 
 import Data.List (lookup)
@@ -94,10 +95,14 @@ displayFaultT err = maybe (displayExceptionT err) renderDialled (fromException e
   where
     renderDialled http = renderHttpFault (dialledAuthority http) (httpFault http)
 
+-- | A dialled host and port as a log line names them, so an IPv6 host keeps its brackets.
+hostPortLabel :: Text -> Int -> Text
+hostPortLabel dialledHost dialledPort = dialledAuthorityLabel (dialledHost <> ":" <> show dialledPort)
+
 -- A status carries the request a redirect reached, and a transport fault the request first sent.
 dialledAuthority :: HttpException -> Text
 dialledAuthority = \case
-    HttpExceptionRequest request _ -> dialledAuthorityLabel (decodeUtf8 (host request) <> ":" <> show (port request))
+    HttpExceptionRequest request _ -> hostPortLabel (decodeUtf8 (host request)) (port request)
     InvalidUrlException url _ -> dialledAuthorityLabel (toText url)
 
 clientReason :: HttpException -> Text

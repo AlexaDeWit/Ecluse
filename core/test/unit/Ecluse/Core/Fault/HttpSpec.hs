@@ -37,7 +37,7 @@ import Ecluse.Core.Fault (
 import Ecluse.Core.Fault.Http (classifyTransport, displayFaultT, httpFault)
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Test.Fault (httpTransportCause)
-import Ecluse.Test.Stub (failedFetch, redirectSecrets, redirectedStatusException, refusedFetch, requestSecrets, signedRequest)
+import Ecluse.Test.Stub (closedAuthority, failedFetch, redirectSecrets, redirectedStatusException, refusedFetch, requestSecrets, signedRequest)
 
 -- | A typed fault outside the HTTP client.
 data OtherFault = OtherFault
@@ -66,7 +66,7 @@ spec = do
         it "renders a refused connection by the client's reason at the dialled host:port, then its cause, never the request" $ do
             refused <- refusedFetch =<< signedRequest
             let rendered = displayFaultT (toException refused)
-            rendered `shouldSatisfy` T.isPrefixOf "127.0.0.1:1: ConnectionFailure: "
+            rendered `shouldSatisfy` T.isPrefixOf (closedAuthority <> ": ConnectionFailure: ")
             rendered `shouldSatisfy` T.isSuffixOf (" (" <> renderTransportCause TransportUnreachable <> ")")
             rendered `shouldSatisfy` (not . T.isInfixOf "\n")
             for_ requestSecrets $ \secret -> rendered `shouldSatisfy` (not . T.isInfixOf secret)
@@ -79,13 +79,13 @@ spec = do
             request <- signedRequest
             let fault = classifyTransport (HttpExceptionRequest request ResponseTimeout)
             tfCause fault `shouldBe` TransportTimeout
-            tfDetail fault `shouldBe` "127.0.0.1:1: ResponseTimeout"
+            tfDetail fault `shouldBe` closedAuthority <> ": ResponseTimeout"
 
         it "details a TLS refusal by its own reason on one line, without GHC's context" $ do
             request <- signedRequest
             let fault = classifyTransport (HttpExceptionRequest request (InternalException (toException (TLS.HandshakeFailed (TLS.Error_Misc "refused")))))
             tfCause fault `shouldBe` TransportTls
-            tfDetail fault `shouldBe` "127.0.0.1:1: InternalException: HandshakeFailed (Error_Misc \"refused\")"
+            tfDetail fault `shouldBe` closedAuthority <> ": InternalException: HandshakeFailed (Error_Misc \"refused\")"
 
         it "details a redirected status by its code at the dialled host:port, never the response" $ do
             (authority, err) <- redirectedStatusException status503
@@ -93,7 +93,7 @@ spec = do
 
         it "keeps a refused connection's own reason, and none of the request's path, query or headers" $ do
             fault <- classifyTransport <$> (refusedFetch =<< signedRequest)
-            tfDetail fault `shouldSatisfy` T.isPrefixOf "127.0.0.1:1: ConnectionFailure: "
+            tfDetail fault `shouldSatisfy` T.isPrefixOf (closedAuthority <> ": ConnectionFailure: ")
             tfDetail fault `shouldSatisfy` (not . T.isInfixOf "\n")
             for_ requestSecrets $ \secret -> tfDetail fault `shouldSatisfy` (not . T.isInfixOf secret)
 
@@ -102,7 +102,7 @@ spec = do
             request <- signedRequest
             fault <- classifyTransport <$> failedFetch tlsManagerSettings request{secure = True}
             tfCause fault `shouldBe` TransportUnreachable
-            tfDetail fault `shouldSatisfy` T.isPrefixOf "127.0.0.1:1: InternalException: HostCannotConnect "
+            tfDetail fault `shouldSatisfy` T.isPrefixOf (closedAuthority <> ": InternalException: HostCannotConnect ")
             tfDetail fault `shouldSatisfy` (not . T.isInfixOf "\n")
             for_ requestSecrets $ \secret -> tfDetail fault `shouldSatisfy` (not . T.isInfixOf secret)
 
