@@ -46,17 +46,17 @@ publishes a GitHub Release carrying the image digest, the `gh attestation verify
 generated changelog, and every attestation and SBOM as a downloadable asset. A pre-release tag
 (`vX.Y.Z-rc.N`) publishes as a prerelease. GHCR is the only registry Écluse publishes to.
 
-**Two builds of one commit.** Every CI run on `main` builds each image a second time, and so does
-the nightly run. The two builds run on separate runners and share no cache and no Nix store. The
-`release-compare` job then compares the SHA-256 of the two archives for each architecture. A pass
-shows that those two builds of that commit gave the same image archive. It is evidence and not a
-guarantee for every build, because GHC 9.10 does not promise deterministic object code. GHC 9.10
-orders its object code differently from build to build when it compiles modules in parallel, so the
-flake compiles the image's `ecluse` binary and each Haskell library it builds from source one module
-at a time. A release's own build is a third build, and no job compares it with the other two. The
-job gates those runs on both architectures. A mismatch or a skipped comparison after a failed build
-fails the gate. A pull request skips the second build, so a mismatch shows up on `main` after the
-merge.
+**Two builds of one commit.** Every CI run on `main` builds each image a second time, and so do the
+nightly run and a manual dispatch. The two builds run on separate runners and share no cache and no
+Nix store. The `release-compare` job then compares the SHA-256 of the two archives for each
+architecture. A pass shows that those two builds of that commit gave the same image archive. It is
+evidence and not a guarantee for every build, because GHC 9.10 does not promise deterministic object
+code. GHC 9.10 orders its object code differently from build to build when it compiles modules in
+parallel, so the flake compiles the image's `ecluse` binary and each Haskell library it builds from
+source one module at a time. A release's own build is a third build, and no job compares it with the
+other two. The job gates those runs on both architectures. A mismatch or a skipped comparison after
+a failed build fails the gate. A pull request skips the second build, so a mismatch shows up on
+`main` after the merge.
 
 **Immutable tags, no `latest`.** The target repo, `ghcr.io/alexadewit/ecluse`, enforces immutable
 tags, so every push is a fresh, never-reused tag. The release publishes `ecluse:X.Y.Z` and nothing

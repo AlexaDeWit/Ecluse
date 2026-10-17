@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Decide whether a full-context `git diff` of ecluse.cabal, read on stdin, can change the release
-# image. Exit 0 when every changed line is a comment, a blank line, a module-list entry, or inside a
-# test-suite or benchmark stanza. Exit 1 on any other change, and on input this script cannot parse.
-# The image build configures no test or benchmark, and e2e-prepare builds the arm64 image anyway.
+# image. Exit 0 when every changed line is a comment, a blank line, a module-list entry, or a
+# field of a test-suite or benchmark stanza that names no dependency. Exit 1 on any other change,
+# and on input this script cannot parse. The image build compiles no test or benchmark, but
+# evaluating it resolves the names they depend on. e2e-prepare builds the arm64 image, which
+# covers a module-list change.
 set -euo pipefail
 export LC_ALL=C
 
-declare -A kind=([old]="" [new]="") stanza=([old]="" [new]="")
-declare -A field=([old]="" [new]="") indent=([old]=0 [new]=0) line=([old]=0 [new]=0)
+declare -A kind=([old]="" [new]="") stanza=([old]="" [new]="") field=([old]="" [new]="")
+declare -A indent=([old]=0 [new]=0) line=([old]=0 [new]=0)
 changed=0
 
 reaches() {
@@ -24,10 +26,16 @@ blank_or_comment() {
 track() {
   local side="$1" text="$2" lead
   line[$side]=$((line[$side] + 1))
+  [[ "$text" != *[[:cntrl:]]* ]] ||
+    reaches "${side} line ${line[$side]} has a control character, which Cabal may read as a newline"
   ! blank_or_comment "$text" || return 0
-  [[ "$text" != *[$'\t\r{}']* ]] ||
-    reaches "${side} line ${line[$side]} has a tab, carriage return or brace, which it cannot parse"
+  [[ "$text" != *[{}]* ]] || reaches "${side} line ${line[$side]} has a brace, which is not parsed"
   lead="${text%%[^ ]*}"
+  # Cabal reads any line deeper than the current field as part of it, whatever the line says.
+  if [ -n "$lead" ] && [ -n "${field[$side]}" ] && [ "${field[$side]}" != conditional ] &&
+    ((${#lead} > indent[$side])); then
+    return 0
+  fi
   if [[ "$text" =~ ^([A-Za-z][A-Za-z0-9_-]*)[[:space:]]*: ]]; then
     kind[$side]=package
     stanza[$side]=package
@@ -41,8 +49,6 @@ track() {
     field[$side]="${BASH_REMATCH[1],,}"
   elif [[ "$text" =~ ^\ +(if|elif|else)([[:space:]]|\(|$) ]]; then
     field[$side]=conditional
-  elif [ -n "${field[$side]}" ] && ((${#lead} > indent[$side])); then
-    return 0
   else
     field[$side]=unknown
   fi
@@ -53,8 +59,13 @@ track() {
 harmless() {
   local side="$1" text="$2"
   ! blank_or_comment "$text" || return 0
+  case "${field[$side]}" in
+    exposed-modules | other-modules) return 0 ;;
+    # Evaluating the image resolves every dependency name, a test's or a benchmark's included.
+    build-depends | build-tool-depends | build-tools | pkgconfig-depends) return 1 ;;
+    extra-libraries | frameworks | import | conditional | unknown) return 1 ;;
+  esac
   case "${kind[$side]}" in test-suite | benchmark) return 0 ;; esac
-  case "${field[$side]}" in exposed-modules | other-modules) return 0 ;; esac
   return 1
 }
 
@@ -103,4 +114,4 @@ done
 [ "$hunk" = "${line[old]} ${line[new]}" ] ||
   reaches "the hunk counts ${hunk} do not match the lines read (${line[old]} ${line[new]})"
 echo "cabal: each of the ${changed} changed lines is a comment, a blank line, a module-list entry,"
-echo "cabal: or inside a test-suite or benchmark stanza"
+echo "cabal: or a test-suite or benchmark field that names no dependency"

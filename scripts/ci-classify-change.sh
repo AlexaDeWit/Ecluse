@@ -17,8 +17,8 @@ doc_path='^([A-Za-z0-9_]+\.md|DCO|LICENSE|CITATION\.cff)$|^(docs|web|threat-mode
 source_path='^(src|core|runtime|app|gen|manifest|site|test|bench|acceptance|config|runbooks)/'
 source_path="$source_path"'|^(\.hlint\.yaml|\.stan\.toml|fourmolu\.yaml|weeder\.toml|codecov\.yml)$'
 
-# Included Taskfiles, script tests, and scripts that release.yml, release-build.yml, and the dry-run
-# jobs never run. A new script runs the dry-run until it is listed here.
+# Script tests, and scripts that release.yml, release-build.yml, the dry-run jobs, and the
+# Taskfiles' top-level vars never run. A new script runs the dry-run until it is listed here.
 tool_scripts=(
   artifact-invalidate artifact-lock ci-gate-verdict ci-runner-policy coverage coverage-tix
   docker-image-config docker-prepull docs-open gen-bench-corpus gen-version-fixtures init-release
@@ -27,7 +27,7 @@ tool_scripts=(
   test-containers verify-release
 )
 tool_path="$(printf '%s|' "${tool_scripts[@]}")"
-source_path="$source_path"'|^taskfiles/|^scripts/[a-z0-9-]+\.test\.sh$'
+source_path="$source_path"'|^scripts/[a-z0-9-]+\.test\.sh$'
 source_path="$source_path|^scripts/(${tool_path%|})\\.sh\$"
 
 # Paths inside source_path that still run the dry-run: test/oracles/ feeds the `.#ci`
@@ -42,9 +42,12 @@ decide() {
   exit 0
 }
 
-# The checkout is the PR's merge commit, so its first parent is the base the PR is tested against.
+# On the PR's merge commit, the first parent is the base the PR is tested against.
 cabal_harmless() {
-  git rev-parse -q --verify 'HEAD^2' >/dev/null || return 1
+  if [ -z "${HEAD_SHA:-}" ] || [ "$(git rev-parse -q --verify 'HEAD^2')" != "$HEAD_SHA" ]; then
+    echo "  the checkout is not the merge commit of PR head ${HEAD_SHA:-(unknown)}"
+    return 1
+  fi
   git diff --no-color --no-ext-diff --no-textconv --unified=1000000 'HEAD^1' HEAD -- ecluse.cabal |
     bash "$here/ci-cabal-diff.sh"
 }
