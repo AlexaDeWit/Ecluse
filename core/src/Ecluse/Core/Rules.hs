@@ -219,7 +219,7 @@ data PreparedRule = PreparedRule
 
 -- | How a prepared rule reaches the versions an evaluator decides.
 data RuleEval
-    = -- | Each version's verdict on its own. A throw refuses admission.
+    = -- | Each version's verdict. It can run more than once for a version and must answer alike. A throw refuses admission.
       PerVersion (EvalContext -> RuleEvidence -> IO RuleVerdict)
     | -- | A verdict for each version from the evaluator's one advisory read of the package.
       PerPackage PackageRead
@@ -320,14 +320,19 @@ newEvaluator :: EvalContext -> [PreparedRule] -> IO (RuleEvidence -> IO Decision
 newEvaluator ctx rules = do
     shared <- newPackageCell
     bound <- traverse (\rule -> (rule,) <$> bindRule ctx shared rule) (bootOrder rules)
-    pure (\ev -> stepRules ev bound [])
+    -- One handler per version. A throw decides the version again with a handler per rule. The fast pass
+    -- forces the evidence first, so evidence that throws leaves no held result for the second pass to meet.
+    pure (\ev -> tryAny (evaluate ev *> stepRules forceEvaluation ev bound []) >>= either (const (stepRules caughtEvaluation ev bound [])) pure)
 
 -- | Decide one version through a fresh 'newEvaluator'.
 evalRules :: EvalContext -> [PreparedRule] -> RuleEvidence -> IO Decision
 evalRules ctx rules ev = newEvaluator ctx rules >>= ($ ev)
 
--- One rule as an evaluator runs it for each version: its evaluation, or what it threw.
-type VersionEval = RuleEvidence -> IO (Either Text RuleEvaluation)
+-- How the fold runs one rule's evaluation. Each way forces it with 'forceEvaluation'.
+type RunEvaluation = IO RuleEvaluation -> IO RuleEvaluation
+
+-- One rule's evaluation of a version, as the action the fold runs.
+type VersionEval = RuleEvidence -> IO (IO RuleEvaluation)
 
 -- A rule's closures are built once here, not per version. 'eval ctx' is bound outside the version
 -- lambda because a prepared rule builds its verdict function for each context it is given.
@@ -335,24 +340,32 @@ bindRule :: EvalContext -> PackageCell (Either Text AdvisoryRead) -> PreparedRul
 bindRule ctx shared rule = case prepEval rule of
     PerVersion eval -> do
         let decide = eval ctx
-        pure (\ev -> caughtEvaluation (Decided <$> decide ev))
+        pure (\ev -> pure (Decided <$!> decide ev))
     PerPackage packageRead -> do
         own <- newPackageCell
         let resolve = heldFor own (decideFromRead (prepName rule) packageRead shared)
         pure $ \ev ->
-            resolve ev >>= \case
-                Left escape -> pure (Left escape)
-                Right decideVersion -> caughtEvaluation (pure (decideVersion ev))
+            resolve ev <&> \case
+                Left escape -> pure (threw escape)
+                Right decideVersion -> pure (decideVersion ev)
 
 -- Strict fields evaluate the verdict payloads. Optional payloads need their own evaluation.
-caughtEvaluation :: IO RuleEvaluation -> IO (Either Text RuleEvaluation)
-caughtEvaluation action = caught $ do
+forceEvaluation :: IO RuleEvaluation -> IO RuleEvaluation
+forceEvaluation action = do
     result <- action >>= evaluate
     case result of
         Decided (Deny etag _) -> traverse_ evaluate etag
         Unavailable (WillResolve retry) _ _ -> traverse_ evaluate retry
         _ -> pass
     pure result
+
+-- The rule's own handler around 'forceEvaluation'. Both passes force alike, so the fast pass never forces less.
+caughtEvaluation :: RunEvaluation
+caughtEvaluation = fmap (either threw id) . caught . forceEvaluation
+
+-- An evaluation that throws breaks its contract, so it refuses admission as a fail-closed inability.
+threw :: Text -> RuleEvaluation
+threw = Decided . CannotVet FailDeny . RuleThrew
 
 caught :: IO a -> IO (Either Text a)
 caught = fmap (first displayExceptionT) . tryAny
@@ -421,15 +434,12 @@ readHealth name advisory resolved = case advisory of
 
 -- 'passed' holds each non-decisive evaluation in reverse boot order. The deny-by-default trail
 -- and an admission's skipped-check evidence both read it back.
-stepRules :: RuleEvidence -> [(PreparedRule, VersionEval)] -> [Passed] -> IO Decision
-stepRules _ [] passed = pure (BlockedByDefault (map passedReason (reverse passed)))
-stepRules ev ((rule, eval) : rest) passed =
-    eval ev >>= \case
-        -- An evaluation that throws breaks its contract and must refuse admission.
-        Left escape -> pure (Undecidable (WillResolve Nothing) (RuleUnable (prepName rule) (RuleThrew escape)))
-        Right res -> case decisive (prepName rule) res of
-            Just d -> pure (withEvidence passed (map fst rest) d)
-            Nothing -> stepRules ev rest (Passed (prepName rule) res : passed)
+stepRules :: RunEvaluation -> RuleEvidence -> [(PreparedRule, VersionEval)] -> [Passed] -> IO Decision
+stepRules _ _ [] passed = pure (BlockedByDefault (map passedReason (reverse passed)))
+stepRules run ev ((rule, eval) : rest) passed =
+    eval ev >>= run >>= \res -> case decisive (prepName rule) res of
+        Just d -> pure (withEvidence passed (map fst rest) d)
+        Nothing -> stepRules run ev rest (Passed (prepName rule) res : passed)
 
 -- One non-decisive evaluation as the fold keeps it, so the trail and the evidence read one record.
 data Passed = Passed Text RuleEvaluation

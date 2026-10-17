@@ -25,6 +25,7 @@ snapshot =
         , rsLiveBytes = 0
         , rsMemInUseBytes = 0
         , rsCapabilities = 2
+        , rsProcessors = 4
         , rsMaxHeapBytes = Nothing
         , rsAllocAreaBytes = 0
         , rsCompactAlways = False

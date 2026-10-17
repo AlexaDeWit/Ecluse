@@ -28,7 +28,7 @@ import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedD
 import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
 import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, npmRead)
 import Ecluse.Core.Registry.Npm.Project (projectName)
-import Ecluse.Core.Registry.Npm.Publish (declaredNames, npmPublishCodec)
+import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, uploadClaims)
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Registry.Npm.Route qualified as NpmRoute
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
@@ -68,6 +68,6 @@ npmPublish :: AdapterPublish
 npmPublish =
     AdapterPublish
         { publishRelay = \origin name -> relayPublishDocument origin name . publishBodyBytes
-        , publishDeclaredNames = \_ -> pure . Right . declaredNames . fromStrict . publishBodyBytes
+        , publishUploadClaims = \_ -> pure . uploadClaims . publishBodyBytes
         , publishCodec = npmPublishCodec
         }

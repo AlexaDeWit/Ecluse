@@ -13,6 +13,7 @@ module Ecluse.E2E.Harness.Verdaccio (
     verdaccioNamesUnder,
     verdaccioVersions,
     verdaccioVersionObject,
+    verdaccioDocumentFacts,
     verdaccioAwaitVersions,
     verdaccioArtifact,
     verdaccioArtifactBytes,
@@ -55,12 +56,10 @@ import Ecluse.Test.Maintenance (withBucket)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Npm.Maintenance (parsePackageListing)
-import Ecluse.Test.Registry.Npm.StoredVersions (storedObjectResponse, storedVersionKeys)
+import Ecluse.Test.Registry.Npm.StoredVersions (storedDocumentFacts, storedObjectResponse, storedVersionKeys)
 import Ecluse.Test.Support (expectRightText)
 
-{- | Wait out the window a worker would need to mirror a version, so an absence read after it
-is an absence rather than a race.
--}
+-- | Wait out a worker's mirror window, so an absence read after it is not a race.
 awaitMirrorWindow :: IO ()
 awaitMirrorWindow = threadDelay 1500000
 
@@ -69,9 +68,7 @@ verdaccioHasVersion :: E2E -> Text -> Text -> IO Bool
 verdaccioHasVersion e2e pkg version =
     pollUntil 40 500000 id (verdaccioHasVersionNow e2e pkg version)
 
-{- | Whether the mirror took a version, read once 'awaitMirrorWindow' has passed.
-'verdaccioHasVersion' would instead spend its whole polling budget before answering 'False'.
--}
+-- | Whether the mirror took a version, read once after 'awaitMirrorWindow' instead of polling until a timeout.
 verdaccioMirroredWithinWindow :: E2E -> Text -> Text -> IO Bool
 verdaccioMirroredWithinWindow e2e pkg version = do
     awaitMirrorWindow
@@ -140,11 +137,13 @@ verdaccioNamesUnder e2e raw = do
     names <- expectRightText (first (\fault -> "Verdaccio bucket " <> raw <> ": " <> show fault) result)
     pure (sort (map renderPackageName names))
 
-{- | Preserve every raw version key, rejecting unreadable or malformed packuments. Only HTTP
-404 means the package is absent.
--}
+-- | Every raw version key, failing on an unreadable packument. Only HTTP 404 means the package is absent.
 verdaccioVersions :: E2E -> Text -> IO [Text]
 verdaccioVersions = readStored storedVersionKeys
+
+-- | The stored document's versions, tags, and deprecation markers, read past the proxy.
+verdaccioDocumentFacts :: E2E -> Text -> IO [Text]
+verdaccioDocumentFacts = readStored storedDocumentFacts
 
 -- | One stored version's object as the store serves it. 'Nothing' for an absent package or version.
 verdaccioVersionObject :: E2E -> Text -> Text -> IO (Maybe Object)
@@ -168,9 +167,7 @@ readStored parse e2e name = do
         body = LBS.toStrict (responseBody resp)
     expectRightText (first (\err -> name <> ": " <> err) (parse status body))
 
-{- | Poll until the store serves exactly the wanted versions, sorted as 'verdaccioVersions' returns them.
-It yields what it last read, so a failure names the versions the store actually held.
--}
+-- | Poll until the store serves exactly the wanted sorted versions, yielding the last read so a failure names it.
 verdaccioAwaitVersions :: E2E -> Text -> [Text] -> IO [Text]
 verdaccioAwaitVersions e2e name wanted =
     pollUntil 40 500000 (== wanted) (verdaccioVersions e2e name)
@@ -180,9 +177,7 @@ verdaccioArtifact :: E2E -> Text -> Text -> IO (Int, Int64)
 verdaccioArtifact e2e name version =
     second LBS.length <$> verdaccioArtifactBytes e2e name version
 
-{- | Read one version's artifact straight from the store, returning the status and the body bytes. It
-bypasses the proxy, so a case can tell a stored artifact from a public-leg fallback.
--}
+-- | One version's artifact status and bytes, read past the proxy to tell a stored artifact from a public fallback.
 verdaccioArtifactBytes :: E2E -> Text -> Text -> IO (Int, LByteString)
 verdaccioArtifactBytes e2e name version = do
     store <- serviceUrl <$> packageStore e2e
@@ -190,9 +185,7 @@ verdaccioArtifactBytes e2e name version = do
     resp <- httpLbs req (e2eManager e2e)
     pure (statusCode (responseStatus resp), responseBody resp)
 
-{- | The store's own @dist-tags.latest@ target. 'Nothing' for an absent package or an absent
-tag, and a failure for an unreadable packument.
--}
+-- | The store's own @dist-tags.latest@. 'Nothing' for an absent package or tag, a failure for an unreadable packument.
 verdaccioLatest :: E2E -> Text -> IO (Maybe Text)
 verdaccioLatest e2e name = do
     tags <- storedObject "dist-tags" e2e name

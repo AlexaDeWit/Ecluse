@@ -18,11 +18,9 @@ import System.Mem (performMajorGC, performMinorGC)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection, MinorCollection), RtsSnapshot (..))
-import Ecluse.Rts (RtsPosture (rpAllocAreaBytes, rpCapabilities, rpMaxHeapBytes), currentRtsPosture)
+import Ecluse.Rts (RtsPosture (rpAllocAreaBytes, rpCapabilities, rpMaxHeapBytes, rpProcessors), currentRtsPosture)
 
-{- | The flag that turns on RTS statistics. Each scenario child and each proxy gets it through
-@GHCRTS@ at launch, because the shipped RTS options they link with leave the statistics off.
--}
+-- | The flag that turns on RTS statistics, which the shipped RTS options leave off. Children and proxies get it through @GHCRTS@.
 rtsStatsFlag :: String
 rtsStatsFlag = "-T"
 
@@ -59,6 +57,7 @@ snapshotAfter collection = do
             , rsLiveBytes = gcdetails_live_bytes (gc stats)
             , rsMemInUseBytes = gcdetails_mem_in_use_bytes (gc stats)
             , rsCapabilities = rpCapabilities posture
+            , rsProcessors = rpProcessors posture
             , rsMaxHeapBytes = rpMaxHeapBytes posture
             , rsAllocAreaBytes = rpAllocAreaBytes posture
             , rsCompactAlways = compact flags

@@ -407,9 +407,9 @@ spec = do
             provenance `shouldSatisfy` elem "config: observability.logFormat = json (default)"
 
         it "names the source path recording and the layer that set it" $ do
-            resolvedKeyProvenance [] Nothing `shouldSatisfy` elem "config: advisories.recordSourcePath = false (default)"
-            resolvedKeyProvenance [("ECLUSE_ADVISORIES__RECORD_SOURCE_PATH", "true")] Nothing
-                `shouldSatisfy` elem "config: advisories.recordSourcePath = true (environment)"
+            provenanceOf [] Nothing >>= (`shouldSatisfy` elem "config: advisories.recordSourcePath = false (default)")
+            provenanceOf [("ECLUSE_ADVISORIES__RECORD_SOURCE_PATH", "true")] Nothing
+                >>= (`shouldSatisfy` elem "config: advisories.recordSourcePath = true (environment)")
 
         it "redacts secret-typed keys whatever layer supplies them" $ do
             provenance <- provenanceOf (("ECLUSE_SERVER__AUTH_TOKEN", "hunter2") : staticEnvVars) Nothing

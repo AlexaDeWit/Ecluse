@@ -101,7 +101,20 @@ import UnliftIO.Temporary (withSystemTempDirectory)
 import Ecluse.BenchLoad.BootLines (bootMessages, logMessages, metadataCompression, renderMetadataCompression, ruleMessages)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Exposition (Sample, advisoryDatabaseInstalled, parseExposition)
-import Ecluse.BenchLoad.Pod (CgroupReading (..), PodShape (Limited, Unlimited), counter, cpuMaxValue, keyedCounters, parsePodShape, renderPodShape)
+import Ecluse.BenchLoad.Placement (readCpuList)
+import Ecluse.BenchLoad.Pod (
+    CgroupReading (..),
+    PodShape (Unlimited),
+    ProxyTuning (..),
+    counter,
+    keyedCounters,
+    needsCgroup,
+    noTuning,
+    parsePodShape,
+    podMemoryLimit,
+    proxyCgroupFiles,
+    renderPodShape,
+ )
 import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
 import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection), RtsSnapshot, collectionName)
 import Ecluse.BenchLoad.Verdict (ProxyEnding, classifyEnding)
@@ -134,11 +147,12 @@ data ProxySettings = ProxySettings
     , psMirrorStatePort :: Maybe Int
     -- ^ An optional S3-compatible fixture for durable managed mirror reads.
     , psAdvisories :: Maybe AdvisoryFeed
+    , psTuning :: ProxyTuning
     }
 
 -- | Settings for one mount with the given cache TTL, every bound left to the boot.
 proxySettings :: Ecosystem -> Int -> ProxySettings
-proxySettings ecosystem ttl = ProxySettings ecosystem ttl Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+proxySettings ecosystem ttl = ProxySettings ecosystem ttl Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing noTuning
 
 -- | The loopback object store serving the advisory database, and the named rules the policy adds to read it.
 data AdvisoryFeed = AdvisoryFeed
@@ -226,22 +240,19 @@ withProxyProcess settings publicPort privatePort body = do
     release proxy = stopProxy proxy `finally` traverse_ retireCgroup (ppCgroup proxy)
 
 -- Each boot attempt gets a cgroup of its own, so a retried boot's counters start from zero.
-acquireCgroup :: PodShape -> Maybe FilePath -> Int -> IO (Maybe FilePath)
-acquireCgroup shape root attempt = case (shape, root) of
-    (Unlimited, Nothing) -> pure Nothing
-    (Limited _ _, Nothing) ->
-        benchFail ("pod shape " <> renderPodShape shape <> " needs BENCH_LOAD_CGROUP: a cgroup v2 directory delegated to this user, with the cpu, memory, and pids controllers enabled")
-    (_, Just base) -> do
+acquireCgroup :: PodShape -> ProxyTuning -> Maybe FilePath -> Int -> IO (Maybe FilePath)
+acquireCgroup shape tuning root attempt = case root of
+    Nothing
+        | needsCgroup shape tuning ->
+            benchFail ("the pod shape " <> renderPodShape shape <> " or the CPU placement needs BENCH_LOAD_CGROUP: a cgroup v2 directory delegated to this user, with the cpuset, cpu, memory, and pids controllers enabled")
+        | otherwise -> pure Nothing
+    Just base -> do
         pid <- getProcessID
         let dir = base </> ("proxy-" <> show pid <> "-" <> show attempt)
         createDirectory dir
-        case shape of
-            Unlimited -> pass
-            Limited cpus bytes -> do
-                writeFileText (dir </> "memory.max") (show bytes)
-                swapFile <- doesFileExist (dir </> "memory.swap.max")
-                when swapFile (writeFileText (dir </> "memory.swap.max") "0")
-                writeFileText (dir </> "cpu.max") (cpuMaxValue cpus)
+        for_ (proxyCgroupFiles shape tuning) $ \(file, value) -> writeFileText (dir </> file) value
+        swapFile <- doesFileExist (dir </> "memory.swap.max")
+        when (swapFile && isJust (podMemoryLimit shape)) (writeFileText (dir </> "memory.swap.max") "0")
         pure (Just dir)
 
 -- Kill anything left in the cgroup, wait for it to empty, and remove it.
@@ -277,7 +288,7 @@ launch settings shape root dir publicPort privatePort = do
             -- The shell joins the cgroup and then becomes the proxy, so the boot already sees its limits.
             Just cg -> proc "/bin/sh" ["-c", "echo $$ > \"$0\" && exec \"$@\"", cg </> "cgroup.procs", self, serveProxyFlag]
         bootAttempt attempt = do
-            cgroup <- acquireCgroup shape root attempt
+            cgroup <- acquireCgroup shape (psTuning settings) root attempt
             outcome <- bootDrained manager 1200 port (setEnv environment (commandIn cgroup)) `onException` traverse_ retireCgroup cgroup
             case outcome of
                 Right drained -> pure (Right (drained, cgroup))
@@ -373,9 +384,10 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
         , ("OTEL_TRACES_EXPORTER", "none")
         , ("OTEL_LOGS_EXPORTER", "none")
         , ("BENCH_PROXY_CONTROL_PORT", show controlPort)
-        , ("GHCRTS", toText rtsStatsFlag)
+        , ("GHCRTS", T.unwords (toText rtsStatsFlag : ["-A" <> show area <> "m" | Just area <- [ptAllocAreaMib tuning]]))
         , upstream "PUBLIC_UPSTREAM" publicPort
         ]
+    tuning = psTuning settings
     advisories feed =
         [ ("ECLUSE_ADVISORIES__URL", "s3://" <> advisoryBucket)
         , ("AWS_ENDPOINT_URL", "http://127.0.0.1:" <> show (afStorePort feed))
@@ -400,8 +412,9 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
             , ("ECLUSE_RUNTIME__PUBLIC_CONNECTIONS_PER_HOST",) . show <$> psPublicConnections settings
             , ("ECLUSE_RUNTIME__PRIVATE_CONNECTIONS_PER_HOST",) . show <$> psPrivateConnections settings
             , ("BENCH_PROXY_NOW",) . toText . iso8601Show <$> psClock settings
-            , -- Without a quota, runtime.cores sets GHC capabilities to the harness's count.
-              ("ECLUSE_RUNTIME__CORES", show capabilities) <$ guard (shape == Unlimited)
+            , -- Without a quota or a pinned count, runtime.cores sets GHC capabilities to the harness's count.
+              ("ECLUSE_RUNTIME__CORES",) . show <$> (ptCores tuning <|> capabilities <$ guard (shape == Unlimited))
+            , ("ECLUSE_RUNTIME__MAX_HEAP_BYTES",) . show <$> ptMaxHeapBytes tuning
             ]
             <> foldMap advisories (psAdvisories settings)
             <> foldMap mirrorState (psMirrorStatePort settings)
@@ -447,7 +460,8 @@ readCgroup dir = do
     events <- maybe mempty keyedCounters <$> readIfExists (dir </> "memory.events")
     stat <- maybe mempty keyedCounters <$> readIfExists (dir </> "memory.stat")
     cpu <- maybe mempty keyedCounters <$> readIfExists (dir </> "cpu.stat")
-    pure (CgroupReading maxBytes peak current events stat cpu)
+    cpus <- readCpuList (dir </> "cpuset.cpus.effective")
+    pure (CgroupReading maxBytes peak current events stat cpu cpus)
   where
     bytesAt file = (>>= parseMemoryMax) <$> readIfExists (dir </> file)
 

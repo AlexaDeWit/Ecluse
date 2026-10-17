@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | npm mirror upload data, publication, and the first-party identity guard.
+{- | npm mirror upload data, publication, and the first-party upload guard.
 The checked mirror upload data keeps publication fields paired with the admitted tarball.
 -}
 module Ecluse.Core.Registry.Npm.Publish (
@@ -12,7 +12,8 @@ module Ecluse.Core.Registry.Npm.Publish (
     npmPublishCodec,
     publishRequest,
     npmPublishDocument,
-    declaredNames,
+    uploadClaims,
+    npmNewReleaseOnly,
     npmPublishAllowed,
 ) where
 
@@ -21,6 +22,8 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Parser (jsonNoDup')
+import Data.Attoparsec.ByteString (endOfInput, parseOnly, skipWhile)
 import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
@@ -38,6 +41,8 @@ import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest)
 import Ecluse.Core.Registry (
     FetchFault (FetchUrlUnformable),
     MirrorArtifact (maFilename, maHashes),
+    ParseError (ParseError),
+    PublishBodyFault (PublishMalformed, PublishUnsupported),
     PublishError (PublishError),
     PublishFault (PublishFetch, PublishRejected, PublishSourceUnavailable),
     UrlFormationError,
@@ -203,12 +208,51 @@ attachmentObject tarball =
     encodedTarball :: Text
     encodedTarball = decodeUtf8 (convertToBase Base64 tarball :: ByteString)
 
--- | Read @_id@, @name@ and each version's name for the anti-shadowing guard. An undecodable body declares nothing.
-declaredNames :: LByteString -> [Text]
-declaredNames body =
+-- | The declared names of a new-release document, which never reads the attachment data beyond the JSON parse.
+uploadClaims :: ByteString -> Either PublishBodyFault [Text]
+uploadClaims body = case parseOnly (jsonNoDup' <* skipWhile isJsonSpace <* endOfInput) body of
+    Right document@(Object fields)
+        | not (isNewRelease fields) -> Left (PublishUnsupported npmNewReleaseOnly)
+        | not (keyMatchesVersion fields) -> Left (PublishMalformed (ParseError "the publish body's version document must be an object whose version field equals its key"))
+        | otherwise -> Right (declaredNames document)
+    _ -> Left (PublishMalformed (ParseError "the publish body is not a JSON object without repeated keys"))
+
+-- | The @501@ reason for a write that is not a new release, such as @npm deprecate@ or @npm star@.
+npmNewReleaseOnly :: Text
+npmNewReleaseOnly = "this proxy relays new-release publish documents only: change an existing package's metadata, such as a deprecation, at the publication target"
+
+-- One version and a non-empty @_attachments@, with every tag on that version, so a tag can name only the new version.
+isNewRelease :: KeyMap Value -> Bool
+isNewRelease fields = case (KeyMap.lookup "_attachments" fields, singleVersion fields) of
+    (Just (Object attachments), Just (version, _)) -> not (KeyMap.null attachments) && tagsOnly version (KeyMap.lookup "dist-tags" fields)
+    _ -> False
+
+-- The key equals the document's own version field, so a store that reads either sees one version.
+keyMatchesVersion :: KeyMap Value -> Bool
+keyMatchesVersion fields = case singleVersion fields of
+    Just (version, Object document) -> KeyMap.lookup "version" document == Just (String (Key.toText version))
+    _ -> False
+
+singleVersion :: KeyMap Value -> Maybe (Key.Key, Value)
+singleVersion fields = case KeyMap.lookup "versions" fields of
+    Just (Object versions) | [entry] <- KeyMap.toList versions -> Just entry
+    _ -> Nothing
+
+tagsOnly :: Key.Key -> Maybe Value -> Bool
+tagsOnly version = \case
+    Nothing -> True
+    Just (Object tags) -> all (== String (Key.toText version)) tags
+    Just _ -> False
+
+-- JSON's own whitespace, which a store's parser allows after the document.
+isJsonSpace :: Word8 -> Bool
+isJsonSpace byte = byte == 32 || byte == 10 || byte == 13 || byte == 9
+
+-- @_id@, @name@ and each version's name, which the anti-shadowing guard compares with the path name.
+declaredNames :: Value -> [Text]
+declaredNames document =
     [ declared
-    | document <- maybeToList (Aeson.decode body :: Maybe Value)
-    , slot <-
+    | slot <-
         [document ^? key "_id", document ^? key "name"]
             <> [ versionDoc ^? key "name"
                | versions <- maybeToList (document ^? key "versions" . _Object)

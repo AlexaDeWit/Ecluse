@@ -147,8 +147,8 @@ URL-path name, the guard compares every present declared body name to it: `_id`,
 `name`, and each `versions[].name`. Any disagreement is a `403` before any upstream write. The
 comparison is `PackageName` equality under the same canonicalisation the route applies
 (ecosystem-aware, npm case-sensitive), so an encoding variant (`@acme%2ffoo` vs `@acme/foo`)
-can't disagree silently. The guard parses only the names and never decodes the base64
-`_attachments`. An absent declared name is not a bypass-grant. The guard refuses only a
-present, mismatching name, since a legitimate client always sends names matching its publish
-URL. This makes the control sound whether the downstream target keys the write off the body or
-the URL.
+can't disagree silently. The guard never decodes the base64 `_attachments`. An absent declared
+name is not a bypass-grant. The guard refuses only a present, mismatching name, since a
+legitimate client always sends names matching its publish URL. So a target that keys the write
+off the URL, or off these declared names, writes the name the guard authorised. The PyPI guard
+reads each multipart `name` field and the `:action` field in the same way.

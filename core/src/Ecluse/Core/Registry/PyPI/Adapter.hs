@@ -100,6 +100,6 @@ pypiPublish =
                             , requestBody = RequestBodyBS (publishBodyBytes body)
                             }
                 )
-        , publishDeclaredNames = \limits body -> Multipart.declaredNames limits (publishBodyContentType body) (publishBodyBytes body)
+        , publishUploadClaims = \limits body -> Multipart.uploadClaims limits (publishBodyContentType body) (publishBodyBytes body)
         , publishCodec = pypiPublishCodec
         }
