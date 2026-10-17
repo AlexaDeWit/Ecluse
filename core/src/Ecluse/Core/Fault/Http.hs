@@ -66,7 +66,7 @@ internalCause inner
     | Just ioe <- fromException inner, Just cause <- lookup (ioeGetErrorType ioe) socketCauses = cause
     | otherwise = TransportProtocol
 
--- A peer that closes or resets is unreachable, as NoResponseDataReceived is. ETIMEDOUT after connect is the kernel giving up on an unanswered peer.
+-- A peer that closes or resets is unreachable, as NoResponseDataReceived is. A timed-out socket call is the kernel giving up on an unanswered peer.
 socketCauses :: [(IOErrorType, TransportCause)]
 socketCauses = [(ResourceVanished, TransportUnreachable), (TimeExpired, TransportTimeout)]
 

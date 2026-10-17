@@ -156,6 +156,9 @@ transportFaultSpec = describe "transport faults as values" $ do
         causeOf (HttpExceptionRequest defaultRequest (InternalException handshake)) `shouldBe` TransportTls
         causeOf (HttpExceptionRequest defaultRequest (InternalException certificate)) `shouldBe` TransportTls
         causeOf (HttpExceptionRequest defaultRequest (InternalException (handshakeSocketError eINVAL))) `shouldBe` TransportTls
+        -- Only a socket error type between base's delimiters, and only inside Error_Misc, reads as a socket cause.
+        causeOf (HttpExceptionRequest defaultRequest (InternalException (toException (TLS.HandshakeFailed (TLS.Error_Misc "handshake timeout"))))) `shouldBe` TransportTls
+        causeOf (HttpExceptionRequest defaultRequest (InternalException (toException (TLS.HandshakeFailed (TLS.Error_Protocol "recv: timeout (Connection timed out)" TLS.HandshakeFailure))))) `shouldBe` TransportTls
 
     it "classifies every other client fault as TransportProtocol" $ do
         -- The closed catch-all keeps the sum total over whatever http-client reports.
