@@ -79,8 +79,8 @@ WAI stubs only. Run: `cabal test ecluse-residency` (or `task test-residency`). `
 it via `cabal-checks`.
 
 Managed state has an isolated retained-graph check in `Mirror.State.WeightResidencySpec`.
-Each child decodes the unchanged 1000-version record, consumes its full derived rendering,
-and retains only the record through a stable pointer. This forces expected descriptors,
+Each child decodes the unchanged 1000-version record, compares it with itself through derived
+equality, and retains only the record through a stable pointer. This forces expected descriptors,
 opaque parsed versions, verified hashes, companion references, and source fields independently
 of the weigher. Post-GC live growth must fit the record charge alone. Release uses the same
 16 KiB and one-tenth limits as the other retained probes. Smaller adversarial controls cover
