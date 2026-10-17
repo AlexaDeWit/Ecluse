@@ -44,7 +44,7 @@ transportFault cause detail = TransportFault cause (boundedDetail detail)
 data TransportCause
     = -- | The peer did not answer in time (a connect or response timeout).
       TransportTimeout
-    | -- | The peer could not be reached at all: a refused or reset connection, or a name that did not resolve.
+    | -- | The peer could not be reached at all: a refused connection, a failed lookup, or a peer that closed or reset before answering.
       TransportUnreachable
     | -- | The TLS layer refused the peer (a handshake or certificate failure).
       TransportTls
