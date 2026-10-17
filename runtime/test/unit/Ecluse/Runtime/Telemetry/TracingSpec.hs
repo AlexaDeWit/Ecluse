@@ -9,15 +9,19 @@ import Test.Hspec
 
 import Network.HTTP.Client (
     Manager,
-    Request,
+    ManagerSettings (managerTlsConnection),
+    Request (secure),
     defaultManagerSettings,
     httpLbs,
+    httpNoBody,
     newManager,
     parseRequest,
     requestHeaders,
  )
+import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types (status200)
 import Network.HTTP.Types.Header (HeaderName, hAuthorization, hUserAgent)
+import Network.TLS qualified as TLS
 import Network.Wai (Application, responseLBS)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
@@ -45,8 +49,10 @@ import OpenTelemetry.Trace.Core qualified as TraceCore
 import OpenTelemetry.Trace.Id (TraceId)
 import OpenTelemetry.Util (appendOnlyBoundedCollectionValues)
 
+import Ecluse.Core.Cve.Types (OsvDbFetchFault (OsvDbTransport))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Fault.Http (displayFaultT)
+import Ecluse.Core.Fault (TransportCause (TransportTimeout), TransportFault, transportFault)
+import Ecluse.Core.Fault.Http (classifyTransport, displayFaultT)
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Queue (RemoteSpanContext (RemoteSpanContext))
 import Ecluse.Core.Rules.Types (AdvisoryScore (Cvss), Reason (AffectedBy, RunsOnInstall), mkAdvisoryIds)
@@ -68,6 +74,7 @@ import Ecluse.Runtime.Telemetry.Internal (
 import Ecluse.Runtime.Telemetry.Tracing.Internal (
     JobSpanOutcome (JobSpanOutcome),
     dataPlaneInstrumentationConfig,
+    instrumentDataPlaneManagerSettings,
     ruleVerdictFields,
     telemetryWaiMiddleware,
     withAdvisorySyncSpan,
@@ -77,7 +84,7 @@ import Ecluse.Runtime.Telemetry.Tracing.Internal (
  )
 import Ecluse.Test.Stub (refusedFetch, requestSecrets, signedRequest)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
-import UnliftIO.Exception (throwIO, tryAny)
+import UnliftIO.Exception (throwIO, try, tryAny)
 
 -- | The verdict mapping is exact, a domain span is inert without telemetry, and no token or @Authorization@ header reaches a span.
 spec :: Spec
@@ -87,6 +94,7 @@ spec = do
     scrubSpec
     advisorySyncSpanSpec
     escapedExceptionSpec
+    dataPlaneFaultSpec
     crossAsyncLinkSpec
     enqueueStatusSpec
     enqueueAuthoritySpec
@@ -226,14 +234,14 @@ withTelemetrySpans :: (Telemetry -> IO ()) -> (IORef [ImmutableSpan] -> IO a) ->
 withTelemetrySpans emit =
     withSpanCapture (\tracerProvider -> emit (TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider)))
 
--- The captured spans rendered to text: every span's name and full attribute set. A
--- substring search then proves the secret is present nowhere on any span.
+-- Every captured span's name, status, attributes and event attributes as text, so a substring
+-- search proves a secret is present nowhere on any span.
 attributeDump :: IORef [ImmutableSpan] -> IO Text
 attributeDump ref = do
     spans <- readIORef ref
     parts <- forM spans $ \theSpan -> do
         hot <- readIORef (spanHot theSpan)
-        pure (hotName hot <> " " <> show (hotAttributes hot))
+        pure (T.unwords [hotName hot, show (hotStatus hot), show (hotAttributes hot), show (map eventAttributes (exceptionEvents hot))])
     pure (T.intercalate "\n" parts)
 
 -- The package/version coordinates the domain spans carry. Fixed, since these tests
@@ -272,14 +280,14 @@ escapedExceptionSpec = describe "an exception escaping a span" $ do
             hot <- readIORef (spanHot syncSpan)
             hotStatus hot `shouldBe` Error (displayFaultT (toException refused))
             map eventName (exceptionEvents hot) `shouldBe` ["exception"]
-            spanDump ref >>= \dump -> for_ requestSecrets $ \secret -> dump `shouldSatisfy` (not . T.isInfixOf secret)
+            attributeDump ref >>= \dump -> for_ requestSecrets $ \secret -> dump `shouldSatisfy` (not . T.isInfixOf secret)
 
     it "records one escaping the application on the WAI server span by its typed cause, never its request" $ do
         refused <- refusedFetch =<< signedRequest
         withTelemetrySpans (throwingBehindMiddleware (toException refused)) $ \ref -> do
             statuses <- traverse (fmap hotStatus . readIORef . spanHot) =<< readIORef ref
             statuses `shouldSatisfy` elem (Error (displayFaultT (toException refused)))
-            spanDump ref >>= \dump -> for_ requestSecrets $ \secret -> dump `shouldSatisfy` (not . T.isInfixOf secret)
+            attributeDump ref >>= \dump -> for_ requestSecrets $ \secret -> dump `shouldSatisfy` (not . T.isInfixOf secret)
 
     it "leaves any other exception to the library, which records it as before" $
         withTelemetrySpans (escapeFrom (\telemetry -> withAdvisorySyncSpan telemetry Npm (const (AdvisoryRefused, Nothing)) (throwIO (TestContractEscape "contract broken")))) $ \ref -> do
@@ -290,9 +298,53 @@ escapedExceptionSpec = describe "an exception escaping a span" $ do
             map eventName (exceptionEvents hot) `shouldBe` ["exception"]
 
     it "marks an attempt span errored with the fetch fault its result projects" $
-        withTelemetrySpans (\telemetry -> withAdvisorySyncSpan telemetry Npm (const (AdvisoryFetchFailed, Just "127.0.0.1:1: ResponseTimeout (the peer did not answer in time)")) pass) $ \ref -> do
+        withTelemetrySpans (\telemetry -> withAdvisorySyncSpan telemetry Npm (const (AdvisoryFetchFailed, Just timedOutFetch)) pass) $ \ref -> do
             hot <- readIORef . spanHot =<< findSpan ref "ecluse.advisory.sync.attempt"
             hotStatus hot `shouldBe` Error "127.0.0.1:1: ResponseTimeout (the peer did not answer in time)"
+
+-- A sync fetch that timed out at the closed port.
+timedOutFetch :: OsvDbFetchFault
+timedOutFetch = OsvDbTransport (transportFault TransportTimeout "127.0.0.1:1: ResponseTimeout")
+
+{- The TLS manager tags a connection fault with its request, and the client instrumentation records
+what the manager raises. The client span gets the client's reason, and the caller the request. -}
+dataPlaneFaultSpec :: Spec
+dataPlaneFaultSpec = describe "a data-plane fetch that cannot connect" $ do
+    it "records the client's reason on the client span, never the request it was sent" $ do
+        request <- tlsSignedRequest
+        withSpanCapture (\tracerProvider -> void (fetchFault request =<< dataPlaneManager tracerProvider tlsManagerSettings)) $ \ref -> do
+            hots <- traverse (readIORef . spanHot) =<< readIORef ref
+            let reasons = [reason | Error reason <- map hotStatus hots]
+                errorTypes = mapMaybe ((`textAttribute` "error.type") . hotAttributes) hots
+            reasons `shouldSatisfy` any (T.isInfixOf "HostCannotConnect")
+            for_ (reasons <> errorTypes) $ \recorded -> for_ requestSecrets $ \secret -> recorded `shouldSatisfy` (not . T.isInfixOf secret)
+            -- The span records the URL it fetched, never a header.
+            attributeDump ref >>= (`shouldSatisfy` (not . T.isInfixOf "token-secret"))
+
+    it "hands the caller the transport fault the TLS manager raises alone" $ do
+        request <- tlsSignedRequest
+        let refusing = tlsManagerSettings{managerTlsConnection = pure (\_ _ _ -> throwIO (TLS.HandshakeFailed (TLS.Error_Misc "refused")))}
+        alone <- fetchFault request =<< newManager refusing
+        observed <- newIORef Nothing
+        withSpanCapture (\tracerProvider -> writeIORef observed . Just =<< fetchFault request =<< dataPlaneManager tracerProvider refusing) (const pass)
+        readIORef observed `shouldReturn` Just alone
+
+-- 'signedRequest' over TLS, so the fetch takes the TLS manager's connection path.
+tlsSignedRequest :: IO Request
+tlsSignedRequest = (\request -> request{secure = True}) <$> signedRequest
+
+-- The data plane's manager over @base@, as production builds it. The instrumentation reads the global tracer provider.
+dataPlaneManager :: TracerProvider -> ManagerSettings -> IO Manager
+dataPlaneManager tracerProvider base = do
+    setGlobalTracerProvider tracerProvider
+    newManager =<< instrumentDataPlaneManagerSettings (TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider)) base
+
+-- The transport fault a fetch hands its caller. A fetch that answers fails the case.
+fetchFault :: Request -> Manager -> IO TransportFault
+fetchFault request manager =
+    try (httpNoBody request manager) >>= \case
+        Left err -> pure (classifyTransport err)
+        Right _ -> fail "a fetch of the closed port answered"
 
 -- Serve an application that throws @err@ behind the telemetry WAI middleware, and send it one request.
 throwingBehindMiddleware :: SomeException -> Telemetry -> IO ()
@@ -308,15 +360,6 @@ escapeFrom emit telemetry = void (tryAny (emit telemetry))
 -- The events a span holds, the library's own @exception@ event included.
 exceptionEvents :: SpanHot -> [Event]
 exceptionEvents = toList . appendOnlyBoundedCollectionValues . hotEvents
-
--- Every captured span's status, attributes, and event attributes, for a search that must find no secret.
-spanDump :: IORef [ImmutableSpan] -> IO Text
-spanDump ref = do
-    spans <- readIORef ref
-    parts <- forM spans $ \theSpan -> do
-        hot <- readIORef (spanHot theSpan)
-        pure (show (hotStatus hot) <> " " <> show (hotAttributes hot) <> " " <> show (map eventAttributes (exceptionEvents hot)))
-    pure (T.intercalate "\n" parts)
 
 -- Read one span attribute back as text, 'Nothing' when the key is absent or holds
 -- another type.

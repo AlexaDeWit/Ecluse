@@ -33,14 +33,13 @@ Hand-added domain spans carry the decisions operators care about:
   request. A job enqueued with tracing off bears no link.
 - **Advisory sync**: one `ecluse.advisory.sync.attempt` span per
   [advisory-dataset sync](rules-engine.md#cve-subsystem) attempt, carrying the ecosystem and which of
-  the five outcomes the attempt reached. A failed fetch also sets the span's error status to the
-  fetch fault: the endpoint dialled and the client's reason. The object key, ETag, and provenance
-  stay off it. That same bounded result labels the attempt metrics below, so a trace and a series
-  join on one value.
+  the five outcomes the attempt reached. A failed fetch also sets the span's error status to its
+  typed fault. The object key, ETag, and provenance stay off it. That same bounded result labels the
+  attempt metrics below, so a trace and a series join on one value.
 
-When an HTTP client or AWS SDK exception escapes a span, the span records the exception's typed
-cause and endpoint as its error status. The request the exception carries never reaches the span,
-because its path, query, and headers can hold a credential.
+When an HTTP client or AWS SDK exception escapes a span, the span records its typed fault as the
+error status. An upstream fetch's client span records the client's reason instead. Neither records
+the request the exception carries, because its path, query, and headers can hold a credential.
 
 Sampling is head-based and always-on by default, so Écluse never drops a rare denial or error
 trace. `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` set a parent-based ratio without a code
