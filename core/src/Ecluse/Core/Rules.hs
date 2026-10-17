@@ -329,7 +329,7 @@ evalRules ctx rules ev = newEvaluator ctx rules >>= ($ ev)
 -- One rule as an evaluator runs it for each version: its evaluation, or what it threw.
 type VersionEval = RuleEvidence -> IO (Either Text RuleEvaluation)
 
--- A rule's closures are built once here, so a version allocates only its own evaluation.
+-- A rule's closures are built once here, not per version.
 bindRule :: EvalContext -> PackageCell (Either Text AdvisoryRead) -> PreparedRule -> IO VersionEval
 bindRule ctx shared rule = case prepEval rule of
     PerVersion eval -> pure (\ev -> caughtEvaluation (Decided <$> eval ctx ev))

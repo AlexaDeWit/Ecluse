@@ -10,6 +10,9 @@ module Ecluse.Rules.FrozenEvaluator (
     frozenPrepare,
 ) where
 
+import Data.Foldable1 qualified as Foldable1
+import Data.Map.Strict qualified as Map
+import Data.Scientific (Scientific, fromFloatDigits)
 import Data.Text qualified as T
 import UnliftIO (evaluate, tryAny)
 import UnliftIO.MVar (modifyMVar)
@@ -39,17 +42,26 @@ frozenPrepare :: RuleDeps -> [PrecededRule] -> IO [PreparedRule]
 frozenPrepare deps rules = zipWith (frozenVerdict . prRule) rules <$> prepare deps rules
 
 frozenVerdict :: Rule -> PreparedRule -> PreparedRule
-frozenVerdict rule = mapPackageRead (\packageRead -> packageRead{prVerdict = verdictAsItStood rule (prVerdict packageRead)})
+frozenVerdict rule = maybe id (\verdict -> mapPackageRead (\packageRead -> packageRead{prVerdict = verdict})) (verdictAsItStood rule)
 
--- A version no row fixed abstained through its own probe. The remediation verdict's other paths are the live ones.
-verdictAsItStood :: Rule -> (AdvisoryRows -> RuleEvidence -> RuleVerdict) -> AdvisoryRows -> RuleEvidence -> RuleVerdict
-verdictAsItStood rule current rows = case (rule, rows) of
-    (DenyIfKnownMalicious _, Just (etag, advisories)) -> affectedVerdict etag KnownMalicious NoKnownMaliciousAdvisory (keepAdvisories isMalicious advisories)
-    (DenyIfCve params, Just (etag, advisories)) -> advisoryDenyVerdict etag DenyMissingScore Cvss (dicMinCvss params) arSeverity advisories
-    (DenyIfEpss params, Just (etag, advisories)) -> advisoryDenyVerdict etag AbstainMissingScore Epss (dieMinEpss params) arEpss advisories
-    (AllowIfRemediatesCve _, Just (_, advisories)) -> \ev ->
-        if null (fixedAt advisories (evVersion ev)) then NoDecision FixesNoAdvisory else current rows ev
-    _ -> current rows
+-- Only the advisory rules read the package. Every other rule keeps its prepared per-version verdict.
+verdictAsItStood :: Rule -> Maybe (AdvisoryRows -> RuleEvidence -> RuleVerdict)
+verdictAsItStood = \case
+    AllowIfRemediatesCve params ->
+        let decide = classify (partialVerdict (aircRemaining params))
+         in Just $ \case
+                Nothing -> const (CannotVet (aircOnUnavailable params) NoDatabaseLoaded)
+                Just (_, advisories) -> decide advisories
+    DenyIfCve params -> Just $ \case
+        Nothing -> const (CannotVet (dicOnUnavailable params) NoDatabaseLoaded)
+        Just (etag, advisories) -> advisoryDenyVerdict etag DenyMissingScore Cvss (dicMinCvss params) arSeverity advisories
+    DenyIfKnownMalicious alignment -> Just $ \case
+        Nothing -> const (CannotVet alignment NoDatabaseLoaded)
+        Just (etag, advisories) -> affectedVerdict etag KnownMalicious NoKnownMaliciousAdvisory (keepAdvisories isMalicious advisories)
+    DenyIfEpss params -> Just $ \case
+        Nothing -> const (CannotVet (dieOnUnavailable params) NoDatabaseLoaded)
+        Just (etag, advisories) -> advisoryDenyVerdict etag AbstainMissingScore Epss (dieMinEpss params) arEpss advisories
+    _ -> Nothing
 
 advisoryDenyVerdict :: DbEtag -> MissingScorePolicy -> AdvisoryScore -> Double -> (AdvisoryRange -> Maybe Double) -> PackageAdvisories -> RuleEvidence -> RuleVerdict
 advisoryDenyVerdict etag missing score threshold scoreOf advisories =
@@ -65,6 +77,92 @@ affectedVerdict etag affectedReason absentReason advisories ev =
     case advisoryIdsOf (affecting advisories (evVersion ev)) of
         [] -> NoDecision absentReason
         affected : more -> Deny (Just etag) (affectedReason (mkAdvisoryIds (affected :| more)))
+
+data PartialFix = PartialFix
+    { pfFixed :: AdvisoryIds
+    , pfFixedRows :: [AdvisoryRange]
+    , pfRemaining :: AdvisoryIds
+    , pfRemainingRows :: Map Text [AdvisoryRange]
+    }
+
+classify :: (PartialFix -> RuleVerdict) -> PackageAdvisories -> RuleEvidence -> RuleVerdict
+classify onPartial advisories ev = case idsOf (advisoryIdsOf fixedRows) of
+    Nothing -> NoDecision FixesNoAdvisory
+    Just fixed -> case idsOf openIds of
+        Nothing -> Allow (Remediates fixed)
+        Just remaining -> case idsOf (advisoryIdsOf genuineRows) of
+            Nothing -> NoDecision (FixStillApplies remaining)
+            Just genuine -> onPartial (PartialFix genuine genuineRows remaining openByAdvisory)
+  where
+    fixedRows = fixedAt advisories (evVersion ev)
+    openRows = affecting advisories (evVersion ev)
+    openIds = advisoryIdsOf openRows
+    openByAdvisory = Map.fromListWith (flip (<>)) [(arCveId row, [row]) | row <- openRows]
+    genuineRows = filter ((`Map.notMember` openByAdvisory) . arCveId) fixedRows
+
+idsOf :: [Text] -> Maybe AdvisoryIds
+idsOf = fmap mkAdvisoryIds . nonEmpty
+
+partialVerdict :: RemainingAdvisories -> PartialFix -> RuleVerdict
+partialVerdict = \case
+    AbstainOnRemaining -> \partial -> NoDecision (FixesButStillAffected (pfFixed partial) (pfRemaining partial))
+    Differential limits ->
+        let cvss = scoreCheck Cvss arSeverity (<=) (dlMaxRemainingCvss limits) (dlCvssGap limits)
+            epss = scoreCheck Epss arEpss (<) (dlMaxRemainingEpss limits) (dlEpssGap limits)
+         in differentialVerdict limits cvss epss
+
+data ScoreCheck = ScoreCheck
+    { ckScore :: AdvisoryScore
+    , ckRead :: AdvisoryRange -> Maybe Double
+    , ckWithinCeiling :: Scientific -> Bool
+    , ckGapHolds :: Maybe (Scientific -> Scientific -> Bool)
+    }
+
+scoreCheck :: AdvisoryScore -> (AdvisoryRange -> Maybe Double) -> (Scientific -> Scientific -> Bool) -> Double -> ScoreGap -> ScoreCheck
+scoreCheck score readScore withinCeiling limit gap =
+    ScoreCheck
+        { ckScore = score
+        , ckRead = readScore
+        , ckWithinCeiling = let bound = decimal limit in \highest -> maybe False (highest `withinCeiling`) bound
+        , ckGapHolds = case gap of
+            NoGapRequired -> Nothing
+            GapOfAtLeast least -> let bound = decimal least in Just (\fixed remaining -> maybe False (fixed - remaining >=) bound)
+        }
+
+differentialVerdict :: DifferentialLimits -> ScoreCheck -> ScoreCheck -> PartialFix -> RuleVerdict
+differentialVerdict limits cvss epss partial = case nonEmpty (cvssShortfalls <> epssShortfalls) of
+    Nothing -> Allow (RemediatesWithinLimits comparison)
+    Just shortfalls -> NoDecision (RemediationBeyondLimits comparison (mkLimitShortfalls shortfalls))
+  where
+    (cvssSides, cvssShortfalls) = checkScore cvss partial
+    (epssSides, epssShortfalls) = checkScore epss partial
+    comparison = ScoreComparison (pfFixed partial) (pfRemaining partial) cvssSides epssSides limits
+
+checkScore :: ScoreCheck -> PartialFix -> (ScoreSides, [LimitShortfall])
+checkScore check partial =
+    (ScoreSides (reading fixedHighest) (reading remainingHighest), unscored <> aboveCeiling <> gap)
+  where
+    score = ckScore check
+    scoreOf = finite <=< ckRead check
+    fixedHighest = viaNonEmpty Foldable1.maximum (mapMaybe scoreOf (pfFixedRows partial))
+    perAdvisory = [(advisory, traverse scoreOf (Map.findWithDefault [] advisory (pfRemainingRows partial))) | advisory <- toList (unAdvisoryIds (pfRemaining partial))]
+    remainingHighest = viaNonEmpty Foldable1.maximum (concat [scores | (_, Just scores) <- perAdvisory])
+    unscored = [RemainingUnscored score (mkAdvisoryIds ids) | Just ids <- [nonEmpty [advisory | (advisory, Nothing) <- perAdvisory]]]
+    aboveCeiling = [RemainingAboveCeiling score | Just highest <- [remainingHighest], not (ckWithinCeiling check (fromFloatDigits highest))]
+    gap = case (ckGapHolds check, fixedHighest, remainingHighest) of
+        (Nothing, _, _) -> []
+        (Just _, Nothing, _) -> [FixedUnscored score]
+        (Just holds, Just fixed, Just remaining) | not (holds (fromFloatDigits fixed) (fromFloatDigits remaining)) -> [GapBelowMinimum score]
+        (Just _, Just _, _) -> []
+
+reading :: Maybe Double -> ScoreReading
+reading = maybe Unscored Scored
+
+finite :: Double -> Maybe Double
+finite x = x <$ guard (not (isNaN x || isInfinite x))
+
+decimal :: Double -> Maybe Scientific
+decimal = fmap fromFloatDigits . finite
 
 -- | 'Ecluse.Core.Rules.newEvaluator' as it stood.
 frozenEvaluator :: EvalContext -> [PreparedRule] -> IO (RuleEvidence -> IO Decision)

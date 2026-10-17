@@ -79,7 +79,7 @@ import Ecluse.Core.Rules.Render (renderDecision, renderInability, renderReason)
 import Ecluse.Core.Rules.Types
 import Ecluse.Rules.FrozenEvaluator (frozenEvaluator, frozenPrepare)
 import Ecluse.Rules.Remediation.Support (genEcosystem, genRemediation, genRows, genTenths, referenceRemediation)
-import Ecluse.Rules.Support (SourceState (Loaded), ctx, normaliseVerdictIds, now, pkg, sixDayLimit, sourceStateDeps)
+import Ecluse.Rules.Support (SourceState (Faulting, Loaded), ctx, normaliseVerdictIds, now, pkg, sixDayLimit, sourceStateDeps)
 
 listed :: Maybe Text -> RuleEvidence
 listed mScope = identityEvidence (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0
@@ -733,10 +733,10 @@ liveEvaluator, frozen :: Evaluator
 liveEvaluator = Evaluator prepare newEvaluator
 frozen = Evaluator frozenPrepare frozenEvaluator
 
--- | What one request did: its decisions, its shared package reads, and its source reports in order.
+-- | What one request did: its decisions, the packages its shared reads read, and its source reports, in order.
 data Observed = Observed
     { obDecisions :: [Decision]
-    , obReads :: Int
+    , obReads :: [PackageName]
     , obReports :: [SourceHealth]
     }
     deriving stock (Eq, Show)
@@ -744,16 +744,22 @@ data Observed = Observed
 -- | Decide versions through a fresh evaluator. Retries are off, so a faulting read returns at once.
 observe :: Evaluator -> ((RuleEvidence -> IO Decision) -> [RuleEvidence] -> IO [Decision]) -> RuleDeps -> [PrecededRule] -> ([PreparedRule] -> [PreparedRule]) -> [RuleEvidence] -> IO Observed
 observe (Evaluator prepareWith evaluatorWith) decideAll deps policy adjust evidence = do
-    readCount <- newIORef 0
+    readPackages <- newIORef []
     reports <- newIORef []
     let reporting = deps{rdSourceReporter = noSourceReporter{reportSource = \health -> atomicModifyIORef'_ reports (health :)}}
-    rules <- adjust . map (countReads readCount . withoutRetries) <$> prepareWith reporting policy
+    rules <- adjust . map (recordReads readPackages . withoutRetries) <$> prepareWith reporting policy
     decisions <- evaluatorWith ctx rules >>= (`decideAll` evidence)
-    Observed (map decisionCause decisions) <$> readIORef readCount <*> (map healthCause . reverse <$> readIORef reports)
+    readOrder <- reverse <$> readIORef readPackages
+    reportOrder <- reverse <$> readIORef reports
+    pure (Observed (map decisionCause decisions) readOrder (map healthCause reportOrder))
 
 -- Yielding mid-read lets concurrent callers reach a held cell's lock while the read holds it.
-countReads :: IORef Int -> PreparedRule -> PreparedRule
-countReads counter = mapPackageRead (\packageRead -> packageRead{prRead = \package use -> atomicModifyIORef'_ counter (+ 1) >> yield >> prRead packageRead package use})
+recordReads :: IORef [PackageName] -> PreparedRule -> PreparedRule
+recordReads readPackages = mapPackageRead (\packageRead -> packageRead{prRead = \package use -> atomicModifyIORef'_ readPackages (package :) >> yield >> prRead packageRead package use})
+
+-- | How many versions reach an advisory rule, each decided alone by a fresh frozen evaluator.
+reachingAdvisoryRules :: RuleDeps -> [PrecededRule] -> [RuleEvidence] -> IO Int
+reachingAdvisoryRules deps policy = fmap (length . filter (not . null . obReads)) . traverse (observe frozen traverse deps policy id . one)
 
 withoutRetries :: PreparedRule -> PreparedRule
 withoutRetries = mapResilience (\res -> res{resConfig = (resConfig res){ecBackoff = []}})
@@ -819,6 +825,10 @@ namesAFix row = case arUpperBound row of
 genSourceState :: Gen SourceState
 genSourceState = Gen.frequency [(3, pure Loaded), (1, Gen.enumBounded)]
 
+-- | A source whose reads never fault, so no breaker opens on a read count the schedule decides.
+genSteadySource :: Gen SourceState
+genSteadySource = Gen.filter (/= Faulting) genSourceState
+
 -- | A request's versions of the named packages, interleaved, either side of the quarantine.
 genListing :: Ecosystem -> [Text] -> [Text] -> Gen [RuleEvidence]
 genListing eco names pool = Gen.list (Range.linear 1 10) $ do
@@ -863,7 +873,7 @@ evaluatorParitySpec = describe "the evaluator against the one frozen at f5f368d3
             let inTurn evaluator = liftIO (observe evaluator traverse (sourceStateDeps standing (depsWith rows)) policy (poisonAt eco poison) evidence)
             live <- inTurn liveEvaluator
             asItStood <- inTurn frozen
-            H.cover 10 "the request reads more than one run of packages" (obReads asItStood > 1)
+            H.cover 10 "the request reads more than one run of packages" (length (obReads asItStood) > 1)
             H.cover 5 "a rule's throw refuses a version" (any isRuleThrew (obDecisions asItStood))
             H.cover 10 "an advisory rule's abstention reaches the trail" (any holdsAdvisoryAbstention (obDecisions asItStood))
             live === asItStood
@@ -878,11 +888,32 @@ evaluatorParitySpec = describe "the evaluator against the one frozen at f5f368d3
             let deps = sourceStateDeps standing (depsWith rows)
             concurrent <- liftIO (observe liveEvaluator mapConcurrently deps policy id evidence)
             asItStood <- liftIO (observe frozen traverse deps policy id evidence)
-            H.cover 30 "an advisory rule reads the package" (obReads asItStood == 1)
+            reaching <- liftIO (reachingAdvisoryRules deps policy evidence)
+            H.cover 30 "two or more versions reach an advisory rule" (reaching >= 2)
             obDecisions concurrent === obDecisions asItStood
             obReads concurrent === obReads asItStood
-            H.assert (obReads asItStood <= 1)
+            H.assert (length (obReads asItStood) <= 1)
             sortOn (show @Text) (obReports concurrent) === sortOn (show @Text) (obReports asItStood)
+
+    modifyMaxSuccess (const 200) . it "decides two packages' versions concurrently as it did in turn, with reads and reports bounded" $
+        hedgehog $ do
+            (eco, pool) <- forAll genEcosystem
+            standing <- forAll genSteadySource
+            rows <- forAll (genPackageRows pool)
+            policy <- forAll (Gen.list (Range.linear 0 6) (genPolicyRule pool))
+            evidence <- forAll (genListing eco ["thing", "other"] pool)
+            let deps = sourceStateDeps standing (depsWith rows)
+                bound = length evidence * length policy
+                distinctReports = sortNub . map (show @Text) . obReports
+            concurrent <- liftIO (observe liveEvaluator mapConcurrently deps policy id evidence)
+            asItStood <- liftIO (observe frozen traverse deps policy id evidence)
+            reaching <- liftIO (reachingAdvisoryRules deps policy evidence)
+            H.cover 30 "two or more versions reach an advisory rule" (reaching >= 2)
+            H.cover 10 "both packages are read" (length (sortNub (obReads asItStood)) == 2)
+            obDecisions concurrent === obDecisions asItStood
+            sortNub (obReads concurrent) === sortNub (obReads asItStood)
+            distinctReports concurrent === distinctReports asItStood
+            H.assert (length (obReads concurrent) <= bound && length (obReports concurrent) <= bound)
 
     modifyMaxSuccess (const 300) . it "decides each version as the per-version reference, often with no row past the rule's filter, npm and PyPI" $
         hedgehog $ do
