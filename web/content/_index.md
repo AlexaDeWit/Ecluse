@@ -12,15 +12,18 @@ tagline = "A supply-chain policy proxy for package registries."
 install from them. Point your CI and developer tooling at Écluse instead of at a public
 registry. Écluse fetches from that registry on their behalf and decides which versions a
 build may install. The npm registry is the first one supported, and any client that speaks
-its protocol works, such as npm, pnpm, yarn, or bun. The name is French for a canal lock:
+its protocol works, such as npm, pnpm, yarn, or bun. PyPI supports installs, whole-version
+mirroring, and first-party publication. [Complete PyPI setup](@/docs/pypi-setup.md) connects
+those roles and their required stores. The name is French for a canal lock:
 the controlled passage every dependency clears before it reaches your build.
 
 A new public version waits in a quarantine, seven days by default, before a build can
 install it. Most malicious publishes are found and pulled within days, so the wait alone
-sidesteps them, with no attempt to detect malice. With an advisory database synced, a
-version that an advisory names as the exact fix for a vulnerability skips the wait, so the
-quarantine never delays a security patch. Everything else is deny by default and opt-in by
-name.
+sidesteps them, with no attempt to detect malice. An advisory source enables a fast track
+for exact security fixes and a deny for known malicious versions. Admission depends on
+fresh advisory evidence, the scores of remaining advisories, and higher-ranked denies.
+The [rule policy](@/docs/configuration.md#rule-policy) defines these conditions.
+Without an advisory source, the quarantine supplies the shared allow.
 
 If you run a private registry, Écluse reads it first and passes your own packages through
 untouched. Any https registry that speaks the ecosystem's protocol serves in that role. Écluse

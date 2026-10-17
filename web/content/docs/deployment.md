@@ -315,20 +315,22 @@ reads them.
 
 Some deviations warn, and others refuse startup. The
 [endpoint collision table](@/docs/configuration.md#endpoint-collisions) gives each outcome. The
-wiring inside a private registry is different: Écluse cannot inspect it, so a public uplink there
-can bypass public admission without a warning.
+private-upstream check depends on the backend. Proxy boot and both Dredger modes reject detected
+public aggregation. CodeArtifact checks its upstream chain. An undecidable result warns once.
+Mirror-only and Pilot roles do not run this private-read check.
 
 | Deviation | What you lose | Warning |
 |---|---|---|
 | One store for two roles | Provenance separation and per-store governance can be lost | Startup warns or refuses, depending on the pair |
-| A private upstream that draws directly from public | Public rules, the quarantine, and the public-admission integrity floor | **None. Écluse cannot detect this wiring.** |
+| A private upstream that draws directly from public | Public rules, the quarantine, and the public-admission integrity floor | Boot refuses detected public aggregation. Undecidable evidence warns once |
 | A closed edge: `ECLUSE_SERVER__AUTH_TOKEN` set | Per-caller passthrough, and per-caller publication with a static publication token | None. The posture is your own explicit setting |
 | A static publication token without an edge token | Nothing at runtime, because it never boots | The boot fails closed |
 | A static mirror-write secret | The short-lived token minted from the role identity | None. The secret is visible in the configuration you wrote |
 
 With a private upstream that draws from public, the trusted listing floor still applies, but
-conventional private npm artifact hits bypass metadata admission. That row has one remedy:
-aggregate **trusted stores only** into the private upstream. With a closed edge, every caller
+conventional private npm artifact hits bypass metadata admission. You must aggregate
+**trusted stores only** into the private upstream, including when the backend cannot prove its wiring.
+With a closed edge, every caller
 presents the one edge token and reaches the private upstream as one identity. The
 [threat model](@/docs/threat-model.md) records both store-level deviations.
 
