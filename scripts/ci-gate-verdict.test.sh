@@ -22,7 +22,7 @@ check() {
 
 # A later assignment to the same variable overrides these in `env`.
 all_pass=(
-  CHANGES=success STATIC_CHECKS=success BUILD=success ALLOCATION=success COVERAGE=success CODECOV_NOTIFY=success
+  CHANGES=success STATIC_CHECKS=success BUILD=success RESIDENCY=success ALLOCATION=success COVERAGE=success CODECOV_NOTIFY=success
   DOCS=success E2E_PREPARE=success E2E_CONFORMANCE=success E2E=success BACKEND_CONFORMANCE=success WEEDER=success STAN=success RELEASE_DRY_RUN=success
   RELEASE_DRY_RUN_ASSEMBLE=success RELEASE_DRY_RUN_BOOT=success RELEASE_COMPARE=success RELEASE_BUILD=true
 )
@@ -36,6 +36,11 @@ check "a code PR with a failing job fails" 1 \
 
 check "a code PR with a job skipped outside the filter fails" 1 \
   "${all_pass[@]}" BUILD=skipped DOCS_ONLY=false
+
+for result in failure cancelled skipped missing ''; do
+  check "a residency shard with result '$result' fails" 1 \
+    "${all_pass[@]}" "RESIDENCY=$result" DOCS_ONLY=false
+done
 
 check "a leg over its allocation budget fails" 1 \
   "${all_pass[@]}" ALLOCATION=failure DOCS_ONLY=false
@@ -54,7 +59,7 @@ check "a skipped Codecov notify fails behind green coverage" 1 \
 
 check "a documentation-only PR passes with the Haskell jobs, notify, and release jobs skipped" 0 \
   CHANGES=success STATIC_CHECKS=success \
-  BUILD=skipped ALLOCATION=skipped COVERAGE=skipped CODECOV_NOTIFY=skipped \
+  BUILD=skipped RESIDENCY=skipped ALLOCATION=skipped COVERAGE=skipped CODECOV_NOTIFY=skipped \
   DOCS=skipped E2E_PREPARE=skipped E2E_CONFORMANCE=skipped E2E=skipped BACKEND_CONFORMANCE=skipped WEEDER=skipped STAN=skipped \
   "${release_skipped[@]}" DOCS_ONLY=true RELEASE_BUILD=false
 

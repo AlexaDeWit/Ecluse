@@ -10,6 +10,13 @@ vars:
   COVERAGE_FLAGS: -fdev-http-egress
   HADDOCK_FLAGS: --haddock-hyperlink-source --haddock-quickjump
   NIX_BENCH: '{{if env "IN_NIX_SHELL"}}{{else}}nix develop ".#ci" --command{{end}}'
+  # Each named residency shard runs one slow case on its own CI runner. The `rest` shard skips them all.
+  RESIDENCY_SHARDS:
+    map:
+      mirror-read-cold: Cold retains transport, cached state, and output within their charges
+      mirror-read-replacement: Replacement retains transport, cached state, and output within their charges
+      mirror-read-warm: Warm retains transport, cached state, and output within their charges
+      mirror-state-decoded: Decoded fits its charge after dropping input and preparation roots
 tasks:
   default:
     cmds:
@@ -108,9 +115,54 @@ tasks:
     cmds:
       - task: test:integration
   test-residency:
-    desc: Run the bounded-memory streaming gate (own process, RTS -T)
+    desc: Run the bounded-memory streaming gate (own process, RTS -T), or its RESIDENCY_SHARD
+    # The probes read process-wide RTS statistics, so examples never run in parallel in one process.
+    vars:
+      RESIDENCY_SHARD: '{{.RESIDENCY_SHARD | default ""}}'
+      SELECTION: >-
+        {{if eq .RESIDENCY_SHARD "rest"}}{{range .RESIDENCY_SHARDS}} --test-option={{shellQuote (print "--skip=" .)}}{{end}}
+        {{- else if .RESIDENCY_SHARD}} --test-option={{shellQuote (print "--match=" (index .RESIDENCY_SHARDS .RESIDENCY_SHARD))}}{{end}}
+    preconditions:
+      - sh: '{{if and .RESIDENCY_SHARD (ne .RESIDENCY_SHARD "rest") (not (hasKey .RESIDENCY_SHARDS .RESIDENCY_SHARD))}}false{{else}}true{{end}}'
+        msg: 'RESIDENCY_SHARD must be rest or one of: {{keys .RESIDENCY_SHARDS | sortAlpha | join ", "}}'
     cmds:
-      - cabal test ecluse-residency --test-show-details=direct
+      - cabal test ecluse-residency --test-show-details=direct{{.SELECTION}} {{.CLI_ARGS}}
+  test-residency-shards:
+    desc: Dry-run every residency shard and fail unless each example falls in exactly one
+    # CI sets RESIDENCY_LEGS to its matrix size, so a shard the matrix lacks also fails.
+    set: [errexit, nounset, pipefail]
+    cmds:
+      - |
+        examples() {
+          count="$(task test-residency RESIDENCY_SHARD="$1" -- --test-option=--dry-run --test-option=--no-color \
+            | sed -n -E 's/^([0-9]+) examples?, .*/\1/p')"
+          case "$count" in
+            '' | *[!0-9]*) echo "no example count for residency shard '$1'" >&2; return 1 ;;
+          esac
+          echo "$count"
+        }
+        total="$(examples '')"
+        selected=0
+        shards=0
+        for shard in {{range $name, $_ := .RESIDENCY_SHARDS}}{{$name}} {{end}}rest; do
+          count="$(examples "$shard")"
+          echo "residency shard $shard: $count of $total examples"
+          if [ "$shard" != rest ] && [ "$count" = 0 ]; then
+            echo "residency shard $shard selects no example" >&2
+            exit 1
+          fi
+          selected=$((selected + count))
+          shards=$((shards + 1))
+        done
+        if [ "$selected" != "$total" ]; then
+          echo "the residency shards select $selected examples, and the suite has $total" >&2
+          exit 1
+        fi
+        legs={{shellQuote (.RESIDENCY_LEGS | default "")}}
+        if [ -n "$legs" ] && [ "$legs" != "$shards" ]; then
+          echo "CI runs $legs residency legs for $shards shards" >&2
+          exit 1
+        fi
   test-smoke:
     desc: Run the smoke suite (live registries, non-gating)
     cmds:

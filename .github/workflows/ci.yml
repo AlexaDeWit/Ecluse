@@ -51,7 +51,7 @@ jobs:
         run: bash scripts/ci-classify-change.sh
 
   build:
-    name: Build & compile checks (all targets, residency, doctest)
+    name: Build & compile checks (all targets, doctest)
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
     # Builds the widest cabal plan, so it is the sole writer of the cabal store and of
@@ -81,8 +81,8 @@ jobs:
         run: nix develop .#ci --command task update
 
       # go-task runs several targets in the order given, in one dev shell.
-      - name: Build every target, then residency, doctest, and cabal check
-        run: nix develop .#ci --command task build test-residency doctest cabal-check
+      - name: Build every target, then doctest and cabal check
+        run: nix develop .#ci --command task build doctest cabal-check
 
       # Only this job writes the cabal caches, on main even if a later target fails.
       # The commit-specific dist key gives each main run a new entry, except a rerun with a cache hit.
@@ -99,6 +99,49 @@ jobs:
         with:
           path: dist-newstyle
           key: dist-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
+
+  residency:
+    name: Residency (${{ matrix.shard }})
+    needs: changes
+    if: ${{ needs.changes.outputs.docs-only != 'true' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    # One leg per RESIDENCY_SHARDS entry in the Taskfile, plus `rest`. Each leg runs its
+    # examples in one process, in sequence, and restores the build job's caches.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [mirror-read-replacement, mirror-read-warm, mirror-read-cold, mirror-state-decoded, rest]
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+
+      - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
+        run: nix develop .#ci --command task update
+
+      - name: Check that the shards select every example exactly once
+        if: ${{ matrix.shard == 'rest' }}
+        env:
+          LEGS: ${{ strategy.job-total }}
+        run: nix develop .#ci --command task test-residency-shards RESIDENCY_LEGS="$LEGS"
+
+      - name: Run the shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: nix develop .#ci --command task test-residency RESIDENCY_SHARD="$SHARD"
 
   allocation:
     name: Allocation budgets (committed captures)
@@ -915,12 +958,12 @@ jobs:
 
   gate:
     name: CI gate
-    # Add a gating job to both `needs` and scripts/ci-gate-verdict.sh.
-    # smoke and grype do not gate. Required contexts are in .agents/orchestration-strategy.md.
-    # Keep the required context so its verdict can reject skipped jobs on cancelled runs.
+    # A gating job goes in `needs` and in scripts/ci-gate-verdict.sh. smoke and grype do not gate.
+    # always() lets this required context (.agents/orchestration-strategy.md) reject a cancelled run.
     needs:
       - changes
       - build
+      - residency
       - allocation
       - coverage
       - codecov-notify
@@ -954,6 +997,7 @@ jobs:
           CHANGES: ${{ needs.changes.result }}
           STATIC_CHECKS: ${{ needs.static-checks.result }}
           BUILD: ${{ needs.build.result }}
+          RESIDENCY: ${{ needs.residency.result }}
           ALLOCATION: ${{ needs.allocation.result }}
           COVERAGE: ${{ needs.coverage.result }}
           CODECOV_NOTIFY: ${{ needs.codecov-notify.result }}

@@ -35,6 +35,7 @@ case "$1" in
     exit "${TEST_MEASURE_STATUS:-0}"
     ;;
   test)
+    [ "$2" != ecluse-residency ] || exec residency-suite "${@:3}"
     printf 'integration\n' >> "$TEST_TRACE"
     [ -z "${HPCTIXFILE:-}" ]
     [ "${#ECLTEST_PLAN_DIGEST}" -eq 64 ]
@@ -179,6 +180,28 @@ for name in ecluse-e2e-manifest ecluse-e2e-audit ecluse-e2e-npm ecluse-e2e-pypi 
   ecluse-conformance-codeartifact ecluse-conformance-codeartifact-manifest ecluse-conformance-codeartifact-audit; do
   cp bin/runner "bin/$name"
 done
+# Applies hspec's --match and --skip substring filters to the examples in TEST_RESIDENCY_EXAMPLES.
+cat > bin/residency-suite <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+matches=() skips=()
+for option in "$@"; do
+  case "$option" in
+    --test-option=--match=*) matches+=("${option#--test-option=--match=}") ;;
+    --test-option=--skip=*) skips+=("${option#--test-option=--skip=}"); printf 'skip:%s\n' "${skips[-1]}" >> "$TEST_TRACE" ;;
+  esac
+done
+count=0
+while IFS= read -r example; do
+  [ -n "$example" ] || continue
+  selected=$(( ${#matches[@]} == 0 ))
+  for pattern in "${matches[@]}"; do [[ "$example" != *"$pattern"* ]] || selected=1; done
+  for pattern in "${skips[@]}"; do [[ "$example" != *"$pattern"* ]] || selected=0; done
+  count=$((count + selected))
+done <<< "${TEST_RESIDENCY_EXAMPLES:-}"
+printf 'Finished in 0.0001 seconds\n%s examples, 0 failures\n' "$count"
+exit "${TEST_RESIDENCY_STATUS:-0}"
+STUB
 cat > bin/hpc-codecov <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -387,4 +410,19 @@ grep -Fxq 'proxyCpus=' "$PERF_ARTIFACT_DIR/conditions.json"
 TEST_FAIL_BUILD=exe:bench-report PERF_NATIVE_OUTCOME=failure reject run_task performance:load-receipt
 [ ! -e "$PERF_ARTIFACT_DIR/ecosystem-npm/receipt.json" ]
 [ ! -e "$PERF_ARTIFACT_DIR/ecosystem-pypi/receipt.json" ]
-printf 'ok - Task sequence, current failures, aggregate evidence, locks, cancellation, coverage and fixed backend contracts\n'
+
+: > "$TEST_TRACE"
+run_task test-residency RESIDENCY_SHARD=rest
+mapfile -t slow < <(sed -n 's/^skip://p' "$TEST_TRACE")
+[ "${#slow[@]}" -gt 1 ]
+export TEST_RESIDENCY_EXAMPLES
+TEST_RESIDENCY_EXAMPLES="$(printf 'group/%s\n' "${slow[@]}")"$'\nrounding/keeps a tenth\nan example added later'
+legs=$((${#slow[@]} + 1))
+run_task test-residency-shards
+RESIDENCY_LEGS="$legs" run_task test-residency-shards
+RESIDENCY_LEGS="$((legs - 1))" reject run_task test-residency-shards
+TEST_RESIDENCY_EXAMPLES="$(sed 1d <<< "$TEST_RESIDENCY_EXAMPLES")" reject run_task test-residency-shards
+TEST_RESIDENCY_EXAMPLES="$TEST_RESIDENCY_EXAMPLES"$'\n'"${slow[0]} ${slow[1]}" reject run_task test-residency-shards
+TEST_RESIDENCY_STATUS=1 reject run_task test-residency-shards
+reject run_task test-residency RESIDENCY_SHARD=unknown
+printf 'ok - Task sequence, current failures, aggregate evidence, locks, cancellation, coverage, fixed backend contracts and residency shards\n'

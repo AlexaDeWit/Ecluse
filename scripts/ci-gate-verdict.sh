@@ -30,6 +30,7 @@ require() {
 require changes "${CHANGES:-missing}"
 require static-checks "${STATIC_CHECKS:-missing}"
 require build "${BUILD:-missing}" docs
+require residency "${RESIDENCY:-missing}" docs
 require allocation "${ALLOCATION:-missing}" docs
 require coverage "${COVERAGE:-missing}" docs
 

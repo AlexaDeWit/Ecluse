@@ -78,6 +78,13 @@ flag (`-with-rtsopts=-T`) in its `ghc-options`. It runs outside coverage too. No
 WAI stubs only. Run: `cabal test ecluse-residency` (or `task test-residency`). `task check` includes
 it via `cabal-checks`.
 
+CI runs the suite as the `residency` matrix, one runner per shard. Each entry in the Taskfile's
+`RESIDENCY_SHARDS` names one slow case. The `rest` shard skips those cases and runs every other
+example, so a new case lands there. `task test-residency RESIDENCY_SHARD=<name>` runs one shard.
+Each shard is one process that runs its examples in sequence, because the probes read process-wide
+RTS statistics. `task test-residency-shards` dry-runs the suite and every shard. It fails unless
+each example falls in exactly one shard and CI runs one leg per shard.
+
 Managed state has an isolated retained-graph check in `Mirror.State.WeightResidencySpec`.
 Each child decodes the unchanged 1000-version record, consumes its full derived rendering,
 and retains only the record through a stable pointer. This forces expected descriptors,
@@ -2000,9 +2007,9 @@ the floor in `.stan.toml`. Each is its own parallel job the CI `gate` depends on
 its floor blocks the merge. Among the always-on jobs, only `smoke` is non-gating.
 
 The Haskell jobs run in parallel where their prerequisites permit it. `build` compiles every
-target and then runs the residency suite, the doctests, and `cabal check`. `coverage` is a matrix
-with one runner per instrumented suite. `allocation`, `docs`, `weeder`, `stan`, and
-`static-checks` each hold their own runner. E2E preparation feeds the ecosystem and
+target and then runs the doctests and `cabal check`. `residency` and `coverage` are matrices, with
+one runner per residency shard and one per instrumented suite. `allocation`, `docs`, `weeder`,
+`stan`, and `static-checks` each hold their own runner. E2E preparation feeds the ecosystem and
 shared-system subject jobs and their completeness audit. The Verdaccio and CodeArtifact
 package-store subjects run in separate jobs. `codecov-notify` follows the coverage legs
 and releases the Codecov statuses.
