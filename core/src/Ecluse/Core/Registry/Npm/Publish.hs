@@ -22,6 +22,8 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Parser (jsonNoDup')
+import Data.Attoparsec.ByteString (endOfInput, parseOnly, skipWhile)
 import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
@@ -206,22 +208,34 @@ attachmentObject tarball =
     encodedTarball :: Text
     encodedTarball = decodeUtf8 (convertToBase Base64 tarball :: ByteString)
 
--- | The declared names of a new-release document: one version and a non-empty @_attachments@, whose data it never reads.
+-- | The declared names of a new-release document, which never reads the attachment data beyond the JSON parse.
 uploadClaims :: ByteString -> Either PublishBodyFault [Text]
-uploadClaims body = case Aeson.decodeStrict body of
-    Just document@(Object fields)
+uploadClaims body = case parseOnly (jsonNoDup' <* skipWhile isJsonSpace <* endOfInput) body of
+    Right document@(Object fields)
         | isNewRelease fields -> Right (declaredNames document)
         | otherwise -> Left (PublishUnsupported npmNewReleaseOnly)
-    _ -> Left (PublishMalformed (ParseError "the publish body is not a JSON object"))
+    _ -> Left (PublishMalformed (ParseError "the publish body is not a JSON object without repeated keys"))
 
 -- | The @501@ reason for a write that is not a new release, such as @npm deprecate@ or @npm star@.
 npmNewReleaseOnly :: Text
 npmNewReleaseOnly = "this proxy relays new-release publish documents only: change an existing package's metadata, such as a deprecation, at the publication target"
 
+-- One version, a non-empty @_attachments@, and every tag on that version, so no stored tag moves.
 isNewRelease :: KeyMap Value -> Bool
 isNewRelease fields = case (KeyMap.lookup "_attachments" fields, KeyMap.lookup "versions" fields) of
-    (Just (Object attachments), Just (Object versions)) -> not (KeyMap.null attachments) && KeyMap.size versions == 1
+    (Just (Object attachments), Just (Object versions))
+        | [version] <- KeyMap.keys versions -> not (KeyMap.null attachments) && tagsOnly version (KeyMap.lookup "dist-tags" fields)
     _ -> False
+
+tagsOnly :: Key.Key -> Maybe Value -> Bool
+tagsOnly version = \case
+    Nothing -> True
+    Just (Object tags) -> all (== String (Key.toText version)) tags
+    Just _ -> False
+
+-- JSON's own whitespace, which a store's parser allows after the document.
+isJsonSpace :: Word8 -> Bool
+isJsonSpace byte = byte == 32 || byte == 10 || byte == 13 || byte == 9
 
 -- @_id@, @name@ and each version's name, which the anti-shadowing guard compares with the path name.
 declaredNames :: Value -> [Text]

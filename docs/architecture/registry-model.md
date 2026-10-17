@@ -87,14 +87,16 @@ require one consistent canonical project identity. Framing and name checks run a
 authentication within the mount's request bound. The relay preserves the incoming body and exact
 Content-Type, including its boundary. It does not rebuild the client's distribution.
 - **New-release shape only.** The relays forward only a body with the shape of a new-release
-  upload. An npm document must carry a non-empty `_attachments` object and exactly one `versions`
-  entry. A PyPI upload must carry exactly one `:action` part, with the value `file_upload`. Any
-  other readable body, such as the one `npm deprecate` or `npm star` sends, or a PyPI
-  `remove_pkg`, is a `501` before any relay. `npm deprecate` sends back Écluse's served document,
+  upload. An npm document must carry exactly one `versions` entry and a non-empty `_attachments`
+  object, every `dist-tags` value must name that version, and no object may repeat a key. A PyPI
+  upload must carry exactly one `:action` part, with the value `file_upload`. Any other readable
+  body, such as the one `npm deprecate` or `npm star` sends, a null tag or a tag on another
+  version, or a PyPI `remove_pkg`, is a `501` before any relay. `npm deprecate` sends back Écluse's served document,
   which omits the stored versions Écluse hides and carries its own `latest`. Verdaccio applies
-  that document over its own, and pypiserver deletes a release on `remove_pkg`. An unreadable
-  body, or a missing or repeated `:action`, is a `400`. The check reads key presence and counts,
-  never the attachment data.
+  that document over its own, and pypiserver deletes a release on `remove_pkg`. A repeated key is
+  a `400`, because a store that keeps the last copy would read a different body from the one the
+  guard checked. An unreadable body, or a missing or repeated `:action`, is also a `400`. The
+  check reads the parsed document, never the attachment data.
 
 - **Credential.** See [Credential flow and authority](#credential-flow-and-authority).
 - **No read-back role.** Write-only from the proxy's view. Published packages read back through

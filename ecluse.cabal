@@ -390,6 +390,10 @@ library ecluse-core
     , zlib ^>=0.7
     , wai-extra ^>=3.1
     , aeson                 >=2.2      && <2.4
+    -- The npm publish guard parses with jsonNoDup', which refuses a repeated key. Both
+    -- packages are already in the resolved build plan as transitive dependencies.
+    , attoparsec            ^>=0.14
+    , attoparsec-aeson      ^>=2.2
     , autodocodec           ^>=0.5
     , bytestring            ^>=0.12
     , cache                 ^>=0.1.3

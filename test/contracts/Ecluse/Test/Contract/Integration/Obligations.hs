@@ -267,6 +267,8 @@ integrationObligations =
         , "integration/publication/native-019"
         , "integration/publication/native-020"
         , "integration/publication/native-021"
+        , "integration/publication/native-022"
+        , "integration/publication/native-023"
         , "integration/publication/native-pypi-001"
         , "integration/publication/native-pypi-002/201"
         , "integration/publication/native-pypi-002/400"

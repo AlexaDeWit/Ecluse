@@ -371,10 +371,11 @@ publication token under the publication target's tag
 edge token and replaces it with the static publication token on every publish, so the publication
 target never receives the edge token. Every holder of the edge token can then send any upload the
 relay forwards, within the configured first-party scopes and what the static token permits, so
-this is not the preferred deployment. The relay forwards an npm document with exactly one version
-and a non-empty `_attachments` object, or a PyPI upload with one `:action=file_upload` part. The
-boot refuses a static publication token without `ECLUSE_SERVER__AUTH_TOKEN`
-(`PublishStaticCredentialNeedsEdge`), because an open edge would let any client publish under it.
+this is not the preferred deployment. The relay forwards an npm document with exactly one
+version, a non-empty `_attachments` object, every tag on that version, and no repeated key. It
+forwards a PyPI upload with one `:action=file_upload` part. The boot refuses a static publication
+token without `ECLUSE_SERVER__AUTH_TOKEN` (`PublishStaticCredentialNeedsEdge`), because an open
+edge would let any client publish under it.
 Without a static publication token, a closed-edge publish forwards the edge token unchanged.
 
 `ECLUSE_MOUNTS__NPM__FIRST_PARTY` names the scopes you own, and only a name under one of them may be

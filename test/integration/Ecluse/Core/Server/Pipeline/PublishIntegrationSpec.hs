@@ -50,7 +50,7 @@ import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Ecluse.Test.Registry.Npm.Publish (npmDeprecateDocument, npmReleaseDocument)
+import Ecluse.Test.Registry.Npm.Publish (npmDeprecateDocument, npmReleaseDocument, npmRepeatedAttachments, npmTaggedRelease)
 import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps)
 import Ecluse.Test.Stub (Captured (capBody, capMethod, capPath), Stub, allCaptured, headerValue, stubPort, withStubHeaders)
 import Ecluse.Test.Wai (status)
@@ -320,6 +320,20 @@ npmPublishSpec = describe "first-party npm publication relay" $ do
             app <- proxyWith (Just (publishDepsAt targetPort Nothing))
             resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") "{\"_id\":" app
             status resp `shouldBe` 400
+            targetSaw target `shouldReturn` []
+
+    it (caseLabel "integration/publication/native-022" "refuses an npm publish body that repeats _attachments with 400 before any relay") $
+        withTarget 201 "{\"success\":true}" $ \targetPort target -> do
+            app <- proxyWith (Just (publishDepsAt targetPort Nothing))
+            resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") npmRepeatedAttachments app
+            status resp `shouldBe` 400
+            targetSaw target `shouldReturn` []
+
+    it (caseLabel "integration/publication/native-023" "refuses an npm release that moves latest to another version with 501 before any relay") $
+        withTarget 201 "{\"success\":true}" $ \targetPort target -> do
+            app <- proxyWith (Just (publishDepsAt targetPort Nothing))
+            resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") (npmTaggedRelease (Aeson.object ["latest" .= ("1.0.0" :: Text)])) app
+            status resp `shouldBe` 501
             targetSaw target `shouldReturn` []
 
 pypiProxy :: Maybe (ByteAdmission -> PublishDeps) -> IO Application

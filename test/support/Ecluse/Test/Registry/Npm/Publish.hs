@@ -5,6 +5,8 @@
 -- | The bodies npm 11.17.0 sent to a publish route for @\@acme/widget@, against a stub serving Écluse's view.
 module Ecluse.Test.Registry.Npm.Publish (
     npmReleaseDocument,
+    npmTaggedRelease,
+    npmRepeatedAttachments,
     npmProvenanceRelease,
     npmDeprecateDocument,
     npmStarDocument,
@@ -16,11 +18,20 @@ import Data.Aeson.Types (Pair)
 
 -- | An @npm publish@ of version 2.0.0, with the given @_id@, top-level @name@, and version @name@.
 npmReleaseDocument :: Text -> Text -> Text -> LByteString
-npmReleaseDocument documentId documentName versionName = releaseDocument documentId documentName versionName []
+npmReleaseDocument documentId documentName versionName = releaseDocument documentId documentName versionName latestTag []
+
+-- | An @npm publish@ of @\@acme/widget@ 2.0.0 with the given @dist-tags@ member. @--tag beta@ sends @{"beta":"2.0.0"}@.
+npmTaggedRelease :: Value -> LByteString
+npmTaggedRelease tags = releaseDocument widget widget widget tags []
+
+-- | A hand-built release with @_attachments@ twice, which a first-wins reader and a last-wins store read differently.
+npmRepeatedAttachments :: LByteString
+npmRepeatedAttachments =
+    "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"2.0.0\":{\"name\":\"@acme/widget\",\"version\":\"2.0.0\",\"deprecated\":\"gone\"}},\"_attachments\":{\"@acme/widget-2.0.0.tgz\":{\"data\":\"AA==\"}},\"_attachments\":{}}"
 
 -- | An @npm publish --provenance@ of @\@acme/widget@ 2.0.0, with libnpmpublish's bundle attachment around a placeholder bundle.
 npmProvenanceRelease :: LByteString
-npmProvenanceRelease = releaseDocument widget widget widget [Key.fromText (widget <> "-2.0.0.sigstore") .= provenanceAttachment]
+npmProvenanceRelease = releaseDocument widget widget widget latestTag [Key.fromText (widget <> "-2.0.0.sigstore") .= provenanceAttachment]
 
 -- | An @npm deprecate \@acme/widget\@1.0.0@ with the given message, which is empty for an undeprecate.
 npmDeprecateDocument :: Text -> LByteString
@@ -43,12 +54,15 @@ npmStarDocument = "{\"users\":{\"e2e-user\":true}}"
 widget :: Text
 widget = "@acme/widget"
 
-releaseDocument :: Text -> Text -> Text -> [Pair] -> LByteString
-releaseDocument documentId documentName versionName extraAttachments =
+latestTag :: Value
+latestTag = object ["latest" .= ("2.0.0" :: Text)]
+
+releaseDocument :: Text -> Text -> Text -> Value -> [Pair] -> LByteString
+releaseDocument documentId documentName versionName tags extraAttachments =
     encode . object $
         [ "_id" .= documentId
         , "name" .= documentName
-        , "dist-tags" .= object ["latest" .= ("2.0.0" :: Text)]
+        , "dist-tags" .= tags
         , "versions" .= object ["2.0.0" .= releaseManifest versionName]
         , "access" .= Null
         , "_attachments" .= object ((Key.fromText (documentName <> "-2.0.0.tgz") .= tarballAttachment) : extraAttachments)
