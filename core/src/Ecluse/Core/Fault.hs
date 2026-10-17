@@ -75,11 +75,11 @@ data HttpFault
       HttpTransport TransportFault
     deriving stock (Eq, Show)
 
--- | A fault for a log line, after the @host:port@ that names its source. A transport fault ends with its detail.
+-- | A fault for a log line. A status follows its source's @host:port@, and a transport fault reads from its detail, which names the endpoint.
 renderHttpFault :: Text -> HttpFault -> Text
 renderHttpFault source = \case
     HttpStatus code -> source <> ": HTTP " <> show code
-    HttpTransport fault -> source <> ": " <> renderTransportCause (tfCause fault) <> " (" <> tfDetail fault <> ")"
+    HttpTransport fault -> tfDetail fault <> " (" <> renderTransportCause (tfCause fault) <> ")"
 
 -- | A @Retry-After@ delay in whole seconds, never confused with another integer on its way to a header or a sweep's wait.
 newtype RetryAfter = RetryAfter Int

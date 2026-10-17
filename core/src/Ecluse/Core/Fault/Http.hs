@@ -33,9 +33,9 @@ import Ecluse.Core.Fault (
 import Ecluse.Core.Security.Authority (dialledAuthorityLabel)
 import Ecluse.Core.Text (displayExceptionT)
 
--- | Classify a client exception, recognising TLS failures by type rather than rendered text. The detail is the client's own reason.
+-- | Classify a client exception, recognising TLS failures by type rather than rendered text. The detail is the dialled @host:port@ and the client's own reason.
 classifyTransport :: HttpException -> TransportFault
-classifyTransport err = transportFault (causeOf err) (clientReason err)
+classifyTransport err = transportFault (causeOf err) (dialledAuthority err <> ": " <> clientReason err)
   where
     causeOf = \case
         HttpExceptionRequest _ content -> case content of

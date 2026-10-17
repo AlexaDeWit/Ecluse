@@ -155,10 +155,11 @@ spec = do
                 logged `shouldSatisfy` T.isInfixOf (authority <> ": HTTP 503")
                 for_ redirectSecrets $ \secret -> logged `shouldSatisfy` (not . T.isInfixOf secret)
 
-        it "renders a refused connection by its classified cause at the dialled host:port, never the request" $ do
+        it "renders a refused connection by the client's reason at the dialled host:port, then its cause, never the request" $ do
             refused <- refusedFetch =<< signedRequest
             logged <- runJsonLog (superviseBriefly Transient (throwIO refused))
-            logged `shouldSatisfy` T.isInfixOf ("127.0.0.1:1: " <> renderTransportCause TransportUnreachable)
+            logged `shouldSatisfy` T.isInfixOf "127.0.0.1:1: ConnectionFailure: "
+            logged `shouldSatisfy` T.isInfixOf ("(" <> renderTransportCause TransportUnreachable <> ")")
             for_ requestSecrets $ \secret -> logged `shouldSatisfy` (not . T.isInfixOf secret)
 
 requestedDelays :: [Bool] -> IO [Int]

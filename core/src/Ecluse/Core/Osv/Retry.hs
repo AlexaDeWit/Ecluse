@@ -46,7 +46,7 @@ isRetryableHttpException err = case httpFault err of
     HttpStatus code -> isRetryableStatusCode code
     HttpTransport fault -> transportRetryable (tfCause fault)
 
--- | Retry temporary HTTP failures within the policy budget, warning under the feed's @host:port@. Other failures propagate immediately.
+-- | Retry temporary HTTP failures within the policy budget, warning before each retry. Other failures propagate immediately.
 withOsvRetry :: (MonadMask m, KatipContext m) => Text -> RetryPolicyM m -> m a -> m a
 withOsvRetry feed policy fetch =
     recovering policy [retryHandler feed] (const fetch)
@@ -58,7 +58,7 @@ retryHandler feed status = Handler $ \e ->
         then logFM WarningS (ls (transientMessage feed status e)) >> pure True
         else pure False
 
--- | The warning before a retry, naming the feed by @host:port@. The attempt number is 1-based, because 'rsIterNumber' counts retries from zero.
+-- | The warning before a retry, which names a status by the feed's @host:port@. The attempt number is 1-based, as 'rsIterNumber' counts from zero.
 transientMessage :: Text -> RetryStatus -> HttpException -> Text
 transientMessage feed status err =
     "advisory-source fetch failed transiently on attempt "

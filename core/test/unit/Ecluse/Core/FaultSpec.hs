@@ -30,9 +30,9 @@ renderHttpFaultSpec = describe "renderHttpFault" $ do
     it "renders a status by its code after the source's host:port" $
         renderHttpFault "osv.example:443" (HttpStatus 503) `shouldBe` "osv.example:443: HTTP 503"
 
-    it "renders a transport fault by its cause, then its detail" $
-        renderHttpFault "osv.example:443" (HttpTransport (transportFault TransportTimeout "ResponseTimeout"))
-            `shouldBe` "osv.example:443: " <> renderTransportCause TransportTimeout <> " (ResponseTimeout)"
+    it "renders a transport fault from its detail, which names the endpoint, then its cause" $
+        renderHttpFault "osv.example:443" (HttpTransport (transportFault TransportTimeout "127.0.0.1:1: ResponseTimeout"))
+            `shouldBe` "127.0.0.1:1: ResponseTimeout (" <> renderTransportCause TransportTimeout <> ")"
 
 boundedDetailSpec :: Spec
 boundedDetailSpec = describe "boundedDetail" $ do

@@ -44,27 +44,28 @@ spec = do
             rendered `shouldBe` authority <> ": HTTP 404"
             for_ redirectSecrets $ \secret -> rendered `shouldSatisfy` (not . T.isInfixOf secret)
 
-        it "renders a refused connection by its cause and the client's reason at the dialled host:port, never the request" $ do
+        it "renders a refused connection by the client's reason at the dialled host:port, then its cause, never the request" $ do
             refused <- refusedFetch =<< signedRequest
             let rendered = displayFaultT (toException refused)
-            rendered `shouldSatisfy` T.isPrefixOf ("127.0.0.1:1: " <> renderTransportCause TransportUnreachable <> " (ConnectionFailure: ")
+            rendered `shouldSatisfy` T.isPrefixOf "127.0.0.1:1: ConnectionFailure: "
+            rendered `shouldSatisfy` T.isSuffixOf (" (" <> renderTransportCause TransportUnreachable <> ")")
             for_ requestSecrets $ \secret -> rendered `shouldSatisfy` (not . T.isInfixOf secret)
 
         it "renders any other exception as displayExceptionT does" $
             displayFaultT (toException OtherFault) `shouldBe` displayExceptionT (toException OtherFault)
 
     describe "classifyTransport" $ do
-        it "details a timeout by the client's reason alone, never the request" $ do
+        it "details a timeout by the dialled host:port and the client's reason, never the request" $ do
             request <- signedRequest
             let fault = classifyTransport (HttpExceptionRequest request ResponseTimeout)
             tfCause fault `shouldBe` TransportTimeout
-            tfDetail fault `shouldBe` "ResponseTimeout"
+            tfDetail fault `shouldBe` "127.0.0.1:1: ResponseTimeout"
 
-        it "details a redirected status by its code, never the response" $ do
-            (_, err) <- redirectedStatusException status503
-            tfDetail (classifyTransport err) `shouldBe` "StatusCodeException: HTTP 503"
+        it "details a redirected status by its code at the dialled host:port, never the response" $ do
+            (authority, err) <- redirectedStatusException status503
+            tfDetail (classifyTransport err) `shouldBe` authority <> ": StatusCodeException: HTTP 503"
 
         it "keeps a refused connection's own reason, and none of the request's path, query or headers" $ do
             fault <- classifyTransport <$> (refusedFetch =<< signedRequest)
-            tfDetail fault `shouldSatisfy` T.isPrefixOf "ConnectionFailure: "
+            tfDetail fault `shouldSatisfy` T.isPrefixOf "127.0.0.1:1: ConnectionFailure: "
             for_ requestSecrets $ \secret -> tfDetail fault `shouldSatisfy` (not . T.isInfixOf secret)

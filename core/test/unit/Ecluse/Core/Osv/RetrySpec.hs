@@ -152,11 +152,11 @@ spec = do
             readIORef attempts `shouldReturn` 1
 
     describe "transientMessage, the retry log line" $ do
-        it "counts attempts from one and names the cause at the feed's host:port" $ do
+        it "counts attempts from one and names a transport fault by the endpoint it dialled" $ do
             let msg = transientMessage feed defaultRetryStatus{rsIterNumber = 2} transientFailure
             msg `shouldSatisfy` T.isInfixOf "attempt 3"
             msg `shouldSatisfy` T.isInfixOf "backing off before the next retry"
-            msg `shouldSatisfy` T.isSuffixOf (feed <> ": " <> renderTransportCause TransportTimeout <> " (ConnectionTimeout)")
+            msg `shouldSatisfy` T.isSuffixOf ("localhost:80: ConnectionTimeout (" <> renderTransportCause TransportTimeout <> ")")
 
         it "reports the initial attempt as attempt 1, not 0" $
             transientMessage feed defaultRetryStatus transientFailure `shouldSatisfy` T.isInfixOf "attempt 1"
@@ -170,5 +170,5 @@ spec = do
         it "renders a timeout by its classified cause and the client's reason, never the request" $ do
             timedOut <- (`HttpExceptionRequest` ConnectionTimeout) <$> signedRequest
             let msg = transientMessage feed defaultRetryStatus timedOut
-            msg `shouldSatisfy` T.isSuffixOf (feed <> ": " <> renderTransportCause TransportTimeout <> " (ConnectionTimeout)")
+            msg `shouldSatisfy` T.isSuffixOf ("127.0.0.1:1: ConnectionTimeout (" <> renderTransportCause TransportTimeout <> ")")
             for_ requestSecrets $ \secret -> msg `shouldSatisfy` (not . T.isInfixOf secret)
