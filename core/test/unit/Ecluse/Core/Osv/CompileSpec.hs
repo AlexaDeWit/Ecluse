@@ -29,7 +29,7 @@ import System.Directory (doesFileExist, getFileSize, getModificationTime, listDi
 import System.FilePath (takeFileName, (</>))
 import System.IO.Error (catchIOError)
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldReturn, shouldSatisfy, shouldThrow)
+import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe, shouldNotBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (evaluate, finally, try)
 import UnliftIO.Timeout (timeout)
@@ -54,7 +54,7 @@ import Ecluse.Core.Osv.Compile (
     stampCandidateNonce,
     withOsvCandidate,
  )
-import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory), osvEcosystemFor)
+import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory, osvWireName), osvEcosystemFor)
 import Ecluse.Core.Osv.Epss (maxEpssFeedBytes)
 import Ecluse.Core.Osv.Provenance (QuietTime (..), SourcePathRecording (..))
 import Ecluse.Core.Osv.Publication (
@@ -749,6 +749,23 @@ fetchFaultSpec = describe "advisory fetch faults behind a redirect to a signed U
                             logged <- runOsvJsonLog (superviseBriefly disposition compile)
                             logged `shouldSatisfy` T.isInfixOf ("OSV export fetch failed at " <> feed <> ": HTTP 404")
                             for_ redirectSecrets $ \secret -> logged `shouldSatisfy` (not . T.isInfixOf secret)
+
+        it ("names a refused EPSS feed by its status at the feed's host:port, in the optional warning and the required refusal, " <> show eco) $
+            withSystemTempDirectory "epss-fetch-refused" $ \outDir -> do
+                archive <- factsArchive eco
+                (metrics, _) <- recordingAdvisoryCompileMetricsPort
+                withStub status200 archive $ \osvStub ->
+                    withSignedSource (secretAnswer status404 :| []) $ \epssUrl -> do
+                        let feed = authorityLabel (toText epssUrl)
+                            wire = osvWireName (osvEcosystemFor eco)
+                            compile requirement = compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor eco) requirement (mkCompileSources FingerprintSourcePath (unpack (stubBaseUrl osvStub) <> "/all.zip") epssUrl) testQuietTime
+                        warned <- runOsvJsonLog (compile EpssOptional)
+                        warned `shouldSatisfy` T.isInfixOf ("EPSS enrichment unavailable for " <> wire <> ": " <> feed <> ": HTTP 404")
+                        for_ redirectSecrets $ \secret -> warned `shouldSatisfy` (not . T.isInfixOf secret)
+                        refused <- try (runOsvTestM (compile EpssRequired)) :: IO (Either PilotEpssRequired FilePath)
+                        case refused of
+                            Left refusal -> toText (displayException refusal) `shouldBe` wire <> " requires EPSS enrichment, and the feed failed: " <> feed <> ": HTTP 404"
+                            Right path -> expectationFailure ("a required feed failure published " <> path)
 
 -- A source that redirects to a signed URL, which gives each answer in turn and then repeats the last.
 withSignedSource :: NonEmpty (Status, [Header], LByteString) -> (String -> IO a) -> IO a

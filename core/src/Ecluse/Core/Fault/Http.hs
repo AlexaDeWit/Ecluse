@@ -62,13 +62,13 @@ httpFault = \case
 isRetryableStatusCode :: Int -> Bool
 isRetryableStatusCode code = code >= 500 || code == 408 || code == 429
 
--- | 'displayExceptionT' for a log line, except that an 'HttpException' renders through 'renderHttpFault' at the @host:port@ it dialled.
+-- | An exception for a log line, without GHC's context. An 'HttpException' renders through 'renderHttpFault' at the @host:port@ it dialled.
 displayFaultT :: SomeException -> Text
-displayFaultT err = maybe (displayExceptionT err) renderDialled (fromException err)
+displayFaultT err@(SomeException inner) = maybe (displayExceptionT inner) renderDialled (fromException err)
   where
     renderDialled http = renderHttpFault (dialledAuthority http) (httpFault http)
 
--- The request's host and port, which a redirect may have moved off the configured feed.
+-- A status carries the request a redirect reached, and a transport fault the request first sent.
 dialledAuthority :: HttpException -> Text
 dialledAuthority = \case
     HttpExceptionRequest request _ -> dialledAuthorityLabel (decodeUtf8 (host request) <> ":" <> show (port request))
@@ -79,8 +79,8 @@ clientReason = \case
     HttpExceptionRequest _ content -> contentReason content
     InvalidUrlException _ reason -> "InvalidUrlException: " <> toText reason
 
--- Every constructor by name, so a new one fails the build until it is judged. A byte string here
--- is a header, a status line, or a proxy value, and is never rendered.
+-- Every constructor by name, so a new one fails the build until judged. Byte strings (headers, status
+-- lines, proxy values) are never rendered, and an inner exception renders without GHC's context.
 contentReason :: HttpExceptionContent -> Text
 contentReason = \case
     StatusCodeException response _ -> "StatusCodeException: HTTP " <> show (statusCode (responseStatus response))
@@ -89,11 +89,11 @@ contentReason = \case
     TooManyHeaderFields -> "TooManyHeaderFields"
     ResponseTimeout -> "ResponseTimeout"
     ConnectionTimeout -> "ConnectionTimeout"
-    ConnectionFailure inner -> "ConnectionFailure: " <> displayExceptionT inner
+    ConnectionFailure (SomeException inner) -> "ConnectionFailure: " <> displayExceptionT inner
     InvalidStatusLine _ -> "InvalidStatusLine"
     InvalidHeader _ -> "InvalidHeader"
     InvalidRequestHeader _ -> "InvalidRequestHeader"
-    InternalException inner -> "InternalException: " <> displayExceptionT inner
+    InternalException (SomeException inner) -> "InternalException: " <> displayExceptionT inner
     ProxyConnectException{} -> "ProxyConnectException"
     NoResponseDataReceived -> "NoResponseDataReceived"
     TlsNotSupported -> "TlsNotSupported"

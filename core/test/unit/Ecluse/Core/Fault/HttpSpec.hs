@@ -9,22 +9,17 @@ import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionC
 import Network.HTTP.Types.Status (status404, status503)
 import Test.Hspec
 
-import Ecluse.Core.Fault (HttpFault (HttpStatus, HttpTransport), TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause, tfDetail), renderTransportCause)
+import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause, tfDetail), renderTransportCause)
 import Ecluse.Core.Fault.Http (classifyTransport, displayFaultT, httpFault)
-import Ecluse.Core.Text (displayExceptionT)
+import Ecluse.Test.Fault (httpTransportCause)
 import Ecluse.Test.Stub (redirectSecrets, redirectedStatusException, refusedFetch, requestSecrets, signedRequest)
 
--- | A typed fault outside the HTTP client.
+-- | A typed fault outside the HTTP client, which renders as its own 'displayException'.
 data OtherFault = OtherFault
     deriving stock (Show)
 
-instance Exception OtherFault
-
--- | The transport cause a fault carries, when the transport failed.
-transportCause :: HttpFault -> Maybe TransportCause
-transportCause = \case
-    HttpStatus _ -> Nothing
-    HttpTransport fault -> Just (tfCause fault)
+instance Exception OtherFault where
+    displayException OtherFault = "another fault"
 
 spec :: Spec
 spec = do
@@ -35,7 +30,7 @@ spec = do
 
         it "keeps the transport fault when nothing answered" $ do
             refused <- refusedFetch =<< signedRequest
-            transportCause (httpFault refused) `shouldBe` Just TransportUnreachable
+            httpTransportCause (httpFault refused) `shouldBe` Just TransportUnreachable
 
     describe "displayFaultT" $ do
         it "renders a status by its code at the dialled host:port, never the request or the response" $ do
@@ -49,10 +44,11 @@ spec = do
             let rendered = displayFaultT (toException refused)
             rendered `shouldSatisfy` T.isPrefixOf "127.0.0.1:1: ConnectionFailure: "
             rendered `shouldSatisfy` T.isSuffixOf (" (" <> renderTransportCause TransportUnreachable <> ")")
+            rendered `shouldSatisfy` (not . T.isInfixOf "\n")
             for_ requestSecrets $ \secret -> rendered `shouldSatisfy` (not . T.isInfixOf secret)
 
-        it "renders any other exception as displayExceptionT does" $
-            displayFaultT (toException OtherFault) `shouldBe` displayExceptionT (toException OtherFault)
+        it "renders any other exception as its own displayException, without GHC's context" $
+            displayFaultT (toException OtherFault) `shouldBe` "another fault"
 
     describe "classifyTransport" $ do
         it "details a timeout by the dialled host:port and the client's reason, never the request" $ do
@@ -68,4 +64,5 @@ spec = do
         it "keeps a refused connection's own reason, and none of the request's path, query or headers" $ do
             fault <- classifyTransport <$> (refusedFetch =<< signedRequest)
             tfDetail fault `shouldSatisfy` T.isPrefixOf "127.0.0.1:1: ConnectionFailure: "
+            tfDetail fault `shouldSatisfy` (not . T.isInfixOf "\n")
             for_ requestSecrets $ \secret -> tfDetail fault `shouldSatisfy` (not . T.isInfixOf secret)

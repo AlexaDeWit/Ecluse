@@ -11,6 +11,7 @@ module Ecluse.Core.Fault (
     transportFault,
     TransportCause (..),
     renderTransportCause,
+    renderTransportFault,
     transportRetryable,
 
     -- * HTTP faults
@@ -59,6 +60,10 @@ renderTransportCause = \case
     TransportTls -> "the TLS layer refused the peer"
     TransportProtocol -> "the peer's answer could not be used"
 
+-- | A transport fault for a log line: its detail, then its cause.
+renderTransportFault :: TransportFault -> Text
+renderTransportFault fault = tfDetail fault <> " (" <> renderTransportCause (tfCause fault) <> ")"
+
 -- | Whether another attempt can help. A timeout and an unreachable peer clear on their own, and a TLS or protocol fault needs a fix.
 transportRetryable :: TransportCause -> Bool
 transportRetryable = \case
@@ -79,7 +84,7 @@ data HttpFault
 renderHttpFault :: Text -> HttpFault -> Text
 renderHttpFault source = \case
     HttpStatus code -> source <> ": HTTP " <> show code
-    HttpTransport fault -> tfDetail fault <> " (" <> renderTransportCause (tfCause fault) <> ")"
+    HttpTransport fault -> renderTransportFault fault
 
 -- | A @Retry-After@ delay in whole seconds, never confused with another integer on its way to a header or a sweep's wait.
 newtype RetryAfter = RetryAfter Int

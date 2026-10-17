@@ -31,7 +31,7 @@ import System.Directory (getFileSize)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Exception (handle, try)
 
-import Ecluse.Core.Fault (TransportCause (TransportProtocol), TransportFault (tfCause, tfDetail), renderTransportCause, transportFault)
+import Ecluse.Core.Fault (TransportCause (TransportProtocol), TransportFault, renderTransportFault, transportFault)
 import Ecluse.Core.Osv.Compile (OsvCandidate, candidateFacts, candidatePath, stampCandidateNonce)
 import Ecluse.Core.Osv.Publication
 import Ecluse.Core.Osv.Publication.Envelope (decodeEnvelope, encodeEnvelope)
@@ -102,7 +102,7 @@ renderPublicationStop = \case
 
 renderStoreFault :: StoreFault -> Text
 renderStoreFault = \case
-    StoreTransport fault -> "the store request failed: " <> renderFault fault
+    StoreTransport fault -> "the store request failed: " <> renderTransportFault fault
     StoreReadDenied -> "the store refused HEAD on an existing object, so its publication metadata cannot be read. Pilot needs s3:GetObject"
     StoreAbsenceUnknown -> "the store refused HEAD, and its listing did not prove the key absent. Pilot needs s3:GetObject and prefix-scoped s3:ListBucket"
     StoreListDenied -> "the store refused HEAD and the one-key listing, so a missing object and a denied read look alike. Pilot needs s3:GetObject and s3:ListBucket limited to the advisory prefix"
@@ -111,16 +111,13 @@ renderStoreFault = \case
     StoreConditionalWriteUnsupported -> "the store does not implement conditional writes, which guarded publication requires"
     StoreEnvelopeRefused fault -> "the new artifact's metadata cannot be written: " <> renderEnvelopeFault fault
     StoreConflictsExhausted attempts -> "another writer replaced the object during each of " <> show attempts <> " attempts"
-    StoreWriteUncertain fault finding -> "the write failed without proof either way (" <> renderFault fault <> "), and a reread " <> renderFinding finding
+    StoreWriteUncertain fault finding -> "the write failed without proof either way (" <> renderTransportFault fault <> "), and a reread " <> renderFinding finding
 
 renderFinding :: RereadFinding -> Text
 renderFinding = \case
     RereadNoObject -> "found no object"
     RereadOtherRevision (ObjectRevision tag) -> "found revision " <> tag <> ", which no attempt of this publication wrote"
     RereadFailed fault -> "could not read the object: " <> renderStoreFault fault
-
-renderFault :: TransportFault -> Text
-renderFault fault = renderTransportCause (tfCause fault) <> " (" <> tfDetail fault <> ")"
 
 -- | Publish the candidate under @bucket@ and @key@, deciding each attempt on a fresh HEAD. Each attempt's nonce identifies it if it lands unseen.
 publishCandidate :: (MonadUnliftIO m, KatipContext m) => Maybe TracerProvider -> AWS.Env -> ShrinkPolicy -> BaselineCapability -> Maybe Rebaseline -> Text -> Text -> OsvCandidate -> m (Either PublicationStop Published)

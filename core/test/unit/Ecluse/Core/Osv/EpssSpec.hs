@@ -19,7 +19,7 @@ import System.IO.Error (doesNotExistErrorType, mkIOError)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Exception (evaluate)
 
-import Ecluse.Core.Fault (HttpFault (HttpStatus, HttpTransport), TransportCause (TransportProtocol, TransportTimeout, TransportUnreachable), TransportFault (tfCause))
+import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportCause (TransportProtocol, TransportTimeout, TransportUnreachable))
 import Ecluse.Core.Osv.Epss (
     EpssEnrichment (..),
     EpssFeed (..),
@@ -42,6 +42,7 @@ import Ecluse.Core.Osv.Epss (
     resolveEnrichment,
  )
 import Ecluse.Core.Osv.Schema (EpssRequirement (..), EpssStatus (..))
+import Ecluse.Test.Fault (httpTransportCause)
 import Ecluse.Test.Osv (runOsvTestM)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Stub (allCaptured, stubBaseUrl, withStub, withStubHeaders)
@@ -86,7 +87,7 @@ requestFailure = toException . HttpExceptionRequest defaultRequest
 -- The transport cause of a classified fetch failure, so a case reads the class and not the client's wording.
 fetchCause :: SomeException -> Maybe TransportCause
 fetchCause err = case classifyEpssFailure err of
-    Just (EpssFeedFetch (HttpTransport fault)) -> Just (tfCause fault)
+    Just (EpssFeedFetch fault) -> httpTransportCause fault
     _ -> Nothing
 
 spec :: Spec

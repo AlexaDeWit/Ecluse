@@ -771,6 +771,7 @@ library ecluse-test-support
     Ecluse.Test.EcosystemBench.Types
     Ecluse.Test.Env
     Ecluse.Test.Exposition
+    Ecluse.Test.Fault
     Ecluse.Test.InstalledTree
     Ecluse.Test.Json
     Ecluse.Test.Log
