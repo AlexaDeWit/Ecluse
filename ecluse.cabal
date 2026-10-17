@@ -460,6 +460,7 @@ library
     Ecluse.Startup
     Ecluse.Boot
     Ecluse.Proxy
+    Ecluse.Proxy.Internal
     Ecluse.Mirror
     Ecluse.Service
     Ecluse.Pilot
@@ -1434,6 +1435,7 @@ test-suite ecluse-unit
     Ecluse.Rts.SamplerSpec
     Ecluse.Runtime.EnvSpec
     Ecluse.Runtime.ServerSpec
+    Ecluse.Proxy.InternalSpec
     Ecluse.ProxySpec
     Ecluse.ServiceSpec
     Ecluse.Site.MarkdownSpec

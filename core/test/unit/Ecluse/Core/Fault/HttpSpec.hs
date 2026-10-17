@@ -5,11 +5,12 @@
 module Ecluse.Core.Fault.HttpSpec (spec) where
 
 import Data.Text qualified as T
-import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (ResponseTimeout))
+import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (InternalException, ResponseTimeout))
 import Network.HTTP.Types.Status (status404, status503)
+import Network.TLS qualified as TLS
 import Test.Hspec
 
-import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause, tfDetail), renderTransportCause)
+import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportCause (TransportTimeout, TransportTls, TransportUnreachable), TransportFault (tfCause, tfDetail), renderTransportCause)
 import Ecluse.Core.Fault.Http (classifyTransport, displayFaultT, httpFault)
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Test.Fault (httpTransportCause)
@@ -56,6 +57,12 @@ spec = do
             let fault = classifyTransport (HttpExceptionRequest request ResponseTimeout)
             tfCause fault `shouldBe` TransportTimeout
             tfDetail fault `shouldBe` "127.0.0.1:1: ResponseTimeout"
+
+        it "details a TLS refusal by its own reason on one line, without GHC's context" $ do
+            request <- signedRequest
+            let fault = classifyTransport (HttpExceptionRequest request (InternalException (toException (TLS.HandshakeFailed (TLS.Error_Misc "refused")))))
+            tfCause fault `shouldBe` TransportTls
+            tfDetail fault `shouldBe` "127.0.0.1:1: InternalException: HandshakeFailed (Error_Misc \"refused\")"
 
         it "details a redirected status by its code at the dialled host:port, never the response" $ do
             (authority, err) <- redirectedStatusException status503

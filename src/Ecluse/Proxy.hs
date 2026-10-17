@@ -8,18 +8,14 @@
 module Ecluse.Proxy (
     runProxy,
     runServer,
-    warpExceptionHook,
 ) where
 
-import Katip (LogEnv, Severity (ErrorS), SimpleLogPayload, katipAddContext, logFM, runKatipContextT, sl)
-import Network.Wai qualified as Wai
-import Network.Wai.Handler.Warp qualified as Warp
 import UnliftIO (concurrently_, race_)
 import UnliftIO.Async (mapConcurrently_)
 
 import Ecluse.Boot (applyServerSettings)
 import Ecluse.Config (AppConfig (cfgServer))
-import Ecluse.Core.Fault.Http (displayFaultT)
+import Ecluse.Proxy.Internal (warpExceptionHook)
 import Ecluse.Runtime.Env (Env, envLogEnv)
 import Ecluse.Runtime.Server (
     ServerConfig (scCheckLive, scCheckReady, scOnException),
@@ -59,15 +55,3 @@ proxyServerConfig runtime =
 -- | Run the proxy listener with the mounted adapters and shared process resources.
 runServer :: ServerConfig -> Env -> IO ()
 runServer cfg env = Server.runWarp (envLogEnv env) Server.proxyListener cfg (`Server.tracedApplication` env)
-
--- | Warp's exception hook over the process logger. Routine client disconnects stay out of the log, so an aborted download does not spam it.
-warpExceptionHook :: LogEnv -> Maybe Wai.Request -> SomeException -> IO ()
-warpExceptionHook logEnv mRequest err =
-    when (Warp.defaultShouldDisplayException err) $
-        runKatipContextT logEnv (mempty :: SimpleLogPayload) "server" $
-            katipAddContext payload $
-                logFM ErrorS "a fault escaped to the server (a post-commit teardown, or warp's own connection handling)"
-  where
-    payload =
-        sl "path" (maybe ("unknown" :: Text) (decodeUtf8 . Wai.rawPathInfo) mRequest)
-            <> sl "detail" (displayFaultT err)

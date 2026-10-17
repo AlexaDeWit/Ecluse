@@ -92,12 +92,12 @@ data CycleOutcome = CycleOutcome
     }
     deriving stock (Eq, Show)
 
--- | Whether a cycle's counts cover what they claim: it walked the whole store given, and every deciding rule read its facts. Permission plays no part.
+-- | Whether a cycle's counts cover what they claim: it walked the whole store it was given, and every deciding rule read its facts. Permission plays no part.
 outcomeComplete :: CycleOutcome -> Bool
 outcomeComplete outcome =
     isNothing (outcomeHalt outcome) && evidenceComplete (outcomeEvidence outcome)
 
--- | Whether a halt stops the Dredger for the life of the process. Only the cap does, as a self-closing breaker is none. Others are re-read next cycle.
+-- | Whether a halt stops the Dredger for the life of the process. Only the cap does: a breaker that re-closes itself is no breaker. Others are re-read next cycle.
 latches :: CycleHalt -> Bool
 latches = \case
     HaltDeletionCap{} -> True

@@ -43,7 +43,7 @@ import System.Directory (createDirectoryIfMissing, removeFile, renameFile)
 import System.FilePath ((</>))
 import System.IO (hClose, openTempFile)
 import System.IO.Error (catchIOError)
-import UnliftIO.Exception (bracket, handle, throwIO)
+import UnliftIO.Exception (bracket, throwIO, try)
 
 import Ecluse.Core.BuildIdentity (productVersion)
 import Ecluse.Core.Fault (HttpFault, renderHttpFault)
@@ -305,24 +305,29 @@ renderRequirement = \case
     EpssRequired -> "required"
     EpssOptional -> "optional"
 
--- A failed attempt leaves committed batches. NULL bounds defeat deduplication, so each retry
--- clears the table, the tally, and the source metadata before it re-streams.
+-- The client's exception holds the request a redirect reached. The typed fault is thrown outside any
+-- handler, so nothing can annotate it with that exception.
 ingestAdvisories :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => CompileRun -> OsvIngest -> Connection -> m ContentDigest
 ingestAdvisories run ingest conn =
-    -- The client's exception holds the request a redirect reached, so the fault leaves without it.
-    handle (throwIO . PilotOsvFetchFailed feed . httpFault) . withOsvRetry feed defaultOsvRetryPolicy $ do
-        resetIngestStats ingest
-        resetOsvAttempt ingest
-        liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
-        runConduit $
-            fuseUpstream
-                (streamOsvUrl (crTracerProvider run) ingest (csOsvExportUrl (crSources run)))
-                ( CL.filter ((== osvExportDirectory (crEcosystem run)) . extEcosystem)
-                    .| CL.chunksOf 2000
-                    .| sinkSqlite conn
-                )
+    try (withOsvRetry feed defaultOsvRetryPolicy (restreamAdvisories run ingest conn))
+        >>= either (throwIO . PilotOsvFetchFailed feed . httpFault) pure
   where
     feed = osvFeedLabel run
+
+-- A failed attempt leaves committed batches. NULL bounds defeat deduplication, so each attempt
+-- clears the table, the tally, and the source metadata before it re-streams.
+restreamAdvisories :: (MonadResource m, MonadThrow m, KatipContext m) => CompileRun -> OsvIngest -> Connection -> m ContentDigest
+restreamAdvisories run ingest conn = do
+    resetIngestStats ingest
+    resetOsvAttempt ingest
+    liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
+    runConduit $
+        fuseUpstream
+            (streamOsvUrl (crTracerProvider run) ingest (csOsvExportUrl (crSources run)))
+            ( CL.filter ((== osvExportDirectory (crEcosystem run)) . extEcosystem)
+                .| CL.chunksOf 2000
+                .| sinkSqlite conn
+            )
 
 data CompileConclusion = CompileConclusion
     { ccEcosystem :: Text
