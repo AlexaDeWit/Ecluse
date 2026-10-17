@@ -821,20 +821,20 @@ queue retention removes it, with none of the per-job worker signals described ab
 
 ## Appendix: runtime-sizing arithmetic
 
-**Give Écluse whole cores.** A fractional CPU limit, say 3.5, has no good option: claiming 4
-capabilities overruns the CFS quota during stop-the-world GC and freezes the process mid-pause,
-while flooring to 3 strands the fraction. So pair an integer limit with `requests = limits` (and
-exclusive cores where offered) to remove throttling structurally, since Écluse floors the derived
-count.
+**Give Écluse whole cores.** A fractional CPU limit, say 3.5, has no good option. Claiming 4
+capabilities overruns the CFS quota during a stop-the-world collection and freezes the process
+mid-pause. Flooring to 3 strands the fraction. So pair an integer limit with `requests = limits`
+(and exclusive cores where offered) to remove throttling structurally, since Écluse floors the
+derived count.
 
 **A pod with no CPU limit is the case to configure.** A CPU **limit** is a cgroup quota Écluse
 reads, and it does not shrink the processor count the runtime sees. A CPU **request** is not a
-quota. It reaches the container only as a scheduler weight, and the same weight has meant
-requests up to 3.4x apart across runc versions, so Écluse will not guess a core count from it.
-With no limit set, Écluse falls back to the count the memory limit can feed, and with no memory
-limit either it caps at `ECLUSE_RUNTIME__CORES_CEILING` (8). Neither number is your request, and
-the boot log warns and says so. On a 32-core node a 2-CPU-request pod with no memory limit
-therefore claims 8 capabilities, not 2. Tell it the number with the Downward API:
+quota. It reaches the container only as a scheduler weight. The same weight has meant requests up
+to 3.4x apart across runc versions, so Écluse does not guess a core count from it. With no CPU
+limit set, Écluse falls back to the count the memory limit can feed. With no memory limit either,
+it caps at `ECLUSE_RUNTIME__CORES_CEILING` (8). Neither number is your request, and the boot log
+warns and says so. On a 32-core node a 2-CPU-request pod with no memory limit therefore claims 8
+capabilities, not 2. Tell it the number with the Downward API:
 
 ```yaml
 env:
@@ -849,9 +849,46 @@ Read `requests.cpu`, never `limits.cpu`: with no limit set, the kubelet substitu
 allocatable CPU, which is the whole-node claim you are trying to avoid. `divisor: "1"` rounds up
 to whole cores, so a `500m` request becomes 1.
 
-Écluse reads a memory limit the same way, from cgroup v2 alone. See
-[Memory plan and runtime sizing](@/docs/operations.md#memory-plan-and-runtime-sizing) for what a
-container without a readable limit runs with, and the keys to set by hand.
+**Set a memory limit, not only a memory request.** Écluse reads a memory limit from cgroup v2's
+`memory.max`, and fits its allocation area and heap ceiling to it. With no CPU limit, the memory
+limit also sets the capability count. Kubernetes uses a memory request to schedule the pod, but it
+does not expose the request inside the container. So with a request alone, Écluse sees no bound
+and boots on its generic defaults.
+
+With no CPU limit, no `runtime` keys set and at least 8 processors on the node, Écluse boots with:
+
+| Pod memory | Capabilities | Allocation area | Heap ceiling | Serve admission |
+|---|---|---|---|---|
+| 1 GiB limit | 4 | 32 MiB | 864 MiB | 80 |
+| 2 GiB limit | 8 | 32 MiB | 1,760 MiB | 160 |
+| A request of any size, no limit | 8 | 64 MiB | None | 160 |
+
+A node with fewer processors caps the count at its processor count. The allocation area and serve
+admission, 20 per capability, follow from that count. In load tests at 1 GiB and 2 GiB limits, no
+other capability count served more requests.
+
+With a request alone, the request is a baseline, and Écluse bursts above it under heavy load. In
+load tests with a 1 GiB request, the median peak sat near the request, and the worst peak reached
+about twice the request. This matches the Kubernetes Burstable class. Under node memory pressure,
+the kubelet evicts a pod above its request before pods within theirs.
+
+To keep Écluse inside a number, set a memory limit, ideally equal to the request:
+
+```yaml
+resources:
+  requests:
+    memory: 1Gi
+  limits:
+    memory: 1Gi
+```
+
+`runtime.maxHeapBytes` caps the heap alone. Socket buffers, OS thread stacks and native zlib state
+sit outside the heap. The heap itself can pass its ceiling by one allocation area between
+collections. So the process can exceed a ceiling you set by roughly an eighth of it, plus one
+allocation area. A memory limit is the better tool for a whole-process bound. Under cgroup v1, or
+any layout that hides the limit, Écluse cannot read it.
+[Memory plan and runtime sizing](@/docs/operations.md#memory-plan-and-runtime-sizing) names the
+keys to set by hand there.
 
 **Bare metal and dev hosts** have no cgroup limits either, so they take the same ceiling of 8, or
 the processor count when that is lower. Raise `ECLUSE_RUNTIME__CORES_CEILING`, or set
@@ -861,11 +898,11 @@ the processor count when that is lower. Raise `ECLUSE_RUNTIME__CORES_CEILING`, o
 per-core allocation area (`-A`) from the memory limit: an eighth of the limit across the cores, in
 whole MiB from 4 to 64. A heap ceiling you set that is tighter than the memory limit, or set with no
 memory limit, takes the limit's place, so the nursery still fits. The heap ceiling (`-M`) is the
-limit less an eighth of it (at least 32 MiB) for memory outside the heap, and less one allocation
-area for the growth between collections. The nursery sits inside that ceiling. An allocation area
-you set through `GHCRTS` stands, unless it equals the shipped `-A64m`. The binary also ships `-T`
-for the memory sampler, and `--disable-delayed-os-memory-return` so memory the heap gives back
-leaves the cgroup's count at once.
+limit less an eighth of it (at least 32 MiB) for memory outside the heap. Écluse also takes off one
+allocation area for the growth between collections. The nursery sits inside that ceiling. An
+allocation area you set through `GHCRTS` stands, unless it equals the shipped `-A64m`. The binary
+also ships `-T` for the memory sampler, and `--disable-delayed-os-memory-return` so memory the heap
+gives back leaves the cgroup's count at once.
 
 These examples meet the [1 GiB minimum](@/docs/operations.md#memory-plan-and-runtime-sizing).
 They show the arithmetic, not a workload guarantee:
