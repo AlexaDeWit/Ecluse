@@ -410,6 +410,7 @@ tasks:
       - 'flake.lock'
     cmds:
       - bash scripts/ci-build-diagnostics.test.sh
+      - bash scripts/ci-cabal-diff.test.sh
       - bash scripts/ci-classify-change.test.sh
       - bash scripts/ci-gate-verdict.test.sh
       - bash scripts/ci-runner-policy.test.sh
