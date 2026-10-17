@@ -38,15 +38,15 @@ import Ecluse.Composition.Executable (
     RoleWiring (MirrorPipelineWiring, PilotWiring, StorePrunerWiring),
     planExecutable,
  )
-import Ecluse.Composition.Maintenance (ClearedBackend (cbUrl), StoreBuilds (StoreBuilds, sbDeleting, sbObserving, sbProbing))
+import Ecluse.Composition.Maintenance (ClearedBackend (cbUrl), StoreBuilds (StoreBuilds, sbDeleting, sbObserving, sbProbing), StorePorts (spCredential))
 import Ecluse.Composition.Plan (BootPlan (bpRole))
-import Ecluse.Composition.Support (NoCredentials (NoCredentials), codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, overrideEnv, privateUpstreamUrl, pypiMirrorEnv, staticEnvVars, withObservablePrivate)
+import Ecluse.Composition.Support (NoCredentials (NoCredentials), clearedUrl, codeArtifactEnvVars, codeArtifactMirrorUrl, codeArtifactPypiCacheUrl, codeArtifactPypiMirrorUrl, expectConfig, expectPlanFor, noCeiling, overrideEnv, privateUpstreamUrl, pypiMirrorEnv, staticEnvVars, twoStoreEnv, withObservablePrivate)
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePreview, BootStorePruner, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
  )
-import Ecluse.Config (MintPlan (MintCodeArtifact, MintStatic), StoreBackend (BackendRegistry), sbMint)
-import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Config (DeletionConsent (DeletionPermitted), StoreBackend (BackendCodeArtifact, BackendRegistry, BackendVerdaccio))
+import Ecluse.Core.Credential (mintSecret, mkSecret, unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired))
 import Ecluse.Core.Queue (noMirrorQueue)
@@ -70,6 +70,7 @@ import Ecluse.Cve.Sync (CveSyncHandle (csEnv))
 import Ecluse.Pilot.Plan (ExportLoopPlan (ExportIdle, ExportTo), ExportTarget (etEcosystem, etEpss))
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (CodeArtifactConfig, caDomain, caDomainOwner, caDurationSeconds, caRegion))
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEpssRequirement))
+import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (CodeArtifactStore, casDomain, casDomainOwner, casFormat, casRegion, casRepository), codeArtifactFormat)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Env (withAmbientAws)
 import Ecluse.Test.Log (newTestLogEnv)
@@ -197,11 +198,16 @@ spec = describe "planExecutable" $ do
         map smEcosystem (pwMounts preview) `shouldBe` [Npm]
 
     for_ [(BootStorePruner, inertStore), (BootStorePreview, observingOnly)] $ \(role, builds) ->
-        it ("hands the supplied credential build both swept stores in one call, under " <> show role) $ do
-            (buildCredentials, calls) <- recordingCredentials inertCredentials
-            pruner <- expectRightIO (planUnder codeArtifactEnvVars role (\_ _ _ -> Nothing) refusingQueue buildCredentials builds) >>= expectPrunerWiring
-            map (map (second sbMint)) <$> calls `shouldReturn` [codeArtifactMintTargets]
-            map smEcosystem (pwMounts pruner) `shouldBe` [Npm]
+        for_ [(codeArtifactEnvVars, [Npm]), (twoStoreEnv, [Npm, PyPI])] $ \(env, ecosystems) ->
+            it ("builds each swept store over its own slot of the supplied credential build, for " <> show ecosystems <> " under " <> show role) $ do
+                swept <- expectRight (maybeToRight ("no CodeArtifact format" :: Text) sweptStores)
+                let expected = [store | store@((eco, _), _, _) <- swept, eco `elem` ecosystems]
+                (buildCredentials, calls) <- recordingCredentials slotCredentials
+                (recordingBuilds, tokens) <- recordingStoreTokens builds
+                pruner <- expectRightIO (planUnder env role (\_ _ _ -> Nothing) refusingQueue buildCredentials recordingBuilds) >>= expectPrunerWiring
+                calls `shouldReturn` [[(slot, backend) | (slot, backend, _) <- expected]]
+                sort <$> tokens `shouldReturn` sort [(url, Just (show slot)) | (slot, _, url) <- expected]
+                map smEcosystem (pwMounts pruner) `shouldBe` ecosystems
 
     it "builds both observing targets and drives their real grouped preview without a deleting builder" $ do
         mirror <- previewFixture ["1.0.0", "3.0.0"]
@@ -287,8 +293,8 @@ spec = describe "planExecutable" $ do
                 (_, Left errors) -> expectationFailure ("expected the exact target refusals in order, got: " <> show errors)
 
     it "reports a mirror-write mint the live environment refuses" $ do
-        -- The Dredger reads and deletes through the mirror write's own credential, so it mints
-        -- at boot exactly as the proxy does, and an identity that cannot answer refuses here.
+        -- The Dredger reads the manifests a deletion rests on with the mirror write's credential,
+        -- so it mints at boot as the proxy does, and an identity that cannot answer refuses here.
         outcome <- planUnder codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue refusingCredentials inertStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
@@ -498,12 +504,45 @@ npmAndPypiMirrorTargets =
     , ((PyPI, MirrorCredential), BackendRegistry (mkSecret "fixture-token"))
     ]
 
--- What a store role's credential build mints from for 'codeArtifactEnvVars': the mirror target, then the private cache.
-codeArtifactMintTargets :: [((Ecosystem, CredentialTarget), MintPlan)]
-codeArtifactMintTargets =
-    [ ((Npm, MirrorCredential), MintCodeArtifact CodeArtifactConfig{caRegion = "eu-west-1", caDomain = "acme", caDomainOwner = Just "111122223333", caDurationSeconds = Nothing})
-    , ((Npm, PrivateCacheCredential), MintStatic (mkSecret "private-maintenance-token"))
-    ]
+-- Mints each slot a static token that spells the slot, so a store's ports show which credential reached it.
+slotCredentials :: BuildCredentials
+slotCredentials reportersFor targets =
+    initTargetCredentialProviders reportersFor [(slot, BackendRegistry (mkSecret (show slot))) | (slot, _) <- targets]
+
+-- Store builds that record each store's URL beside the token its ports carry, then build as the given ones do.
+recordingStoreTokens :: StoreBuilds -> IO (StoreBuilds, IO [(Text, Maybe Text)])
+recordingStoreTokens builds = do
+    seen <- newTVarIO []
+    let record ports backend = do
+            token <- traverse (fmap unSecret . mintSecret) (spCredential ports)
+            atomically (modifyTVar' seen (<> [(clearedUrl backend, token)]))
+    pure
+        ( builds
+            { sbDeleting = \ports limits backend -> record ports backend *> sbDeleting builds ports limits backend
+            , sbObserving = \ports limits backend -> record ports backend *> sbObserving builds ports limits backend
+            }
+        , readTVarIO seen
+        )
+
+-- Each store 'twoStoreEnv' declares: its credential slot, backend and URL, in the order a store role's credential build receives them.
+sweptStores :: Maybe [((Ecosystem, CredentialTarget), StoreBackend, Text)]
+sweptStores = do
+    npmMirror <- codeArtifactBackend Npm "mirror"
+    pypiMirror <- codeArtifactBackend PyPI "mirror"
+    pypiCache <- codeArtifactBackend PyPI "internal"
+    pure
+        [ ((Npm, MirrorCredential), npmMirror, codeArtifactMirrorUrl)
+        , ((PyPI, MirrorCredential), pypiMirror, codeArtifactPypiMirrorUrl)
+        , ((Npm, PrivateCacheCredential), BackendVerdaccio (mkSecret "private-maintenance-token") DeletionPermitted, privateUpstreamUrl)
+        , ((PyPI, PrivateCacheCredential), pypiCache, codeArtifactPypiCacheUrl)
+        ]
+
+-- A repository under the fixtures' CodeArtifact domain, as a mount's declaration resolves it.
+codeArtifactBackend :: Ecosystem -> Text -> Maybe StoreBackend
+codeArtifactBackend eco repository = BackendCodeArtifact mintIdentity . store <$> codeArtifactFormat eco
+  where
+    mintIdentity = CodeArtifactConfig{caRegion = "eu-west-1", caDomain = "acme", caDomainOwner = Just "111122223333", caDurationSeconds = Nothing}
+    store format = CodeArtifactStore{casDomain = "acme", casDomainOwner = "111122223333", casRegion = "eu-west-1", casRepository = repository, casFormat = format}
 
 -- An advisory data directory beneath a non-directory, so the sync throws on every host before any credential lookup.
 unwritableAdvisoryEnv :: [(String, String)]

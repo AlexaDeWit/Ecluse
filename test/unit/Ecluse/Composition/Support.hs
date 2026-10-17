@@ -28,6 +28,9 @@ module Ecluse.Composition.Support (
     codeArtifactDomain,
     codeArtifactMirrorUrl,
     codeArtifactEnvVars,
+    codeArtifactPypiMirrorUrl,
+    codeArtifactPypiCacheUrl,
+    twoStoreEnv,
     withObservablePrivate,
     withDredgeablePrivate,
     noMaintenanceBackend,
@@ -77,9 +80,7 @@ import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (Fr
 import Ecluse.Test.Credential (noCredentialReporters)
 import Ecluse.Test.Log (captureStderrWith)
 
-{- | The typed stand-in for amazonka's credential-discovery failure, which a boot folds into a
-refusal naming this constructor. A case that drives a build to throw throws this.
--}
+-- | Stands in for amazonka's credential-discovery failure: a boot folds it into a refusal naming this constructor.
 data NoCredentials = NoCredentials
     deriving stock (Show)
 
@@ -103,9 +104,7 @@ mib = 1024 * 1024
 gib :: Int
 gib = 1024 * mib
 
-{- | A posture with no heap-ceiling datapoint, so the memory plan renders its shipped
-fallbacks and every number a golden pins is fixed.
--}
+-- | A posture with no heap ceiling, so the memory plan renders its shipped fallbacks and every golden number is fixed.
 noCeiling :: EffectiveRuntimePlan
 noCeiling =
     EffectiveRuntimePlan
@@ -117,9 +116,7 @@ noCeiling =
         , erpContainerMemoryBytes = Nothing
         }
 
-{- | A minimal valid environment. The mirror target is a non-CodeArtifact host with a
-static write token, so the mount's mirror credential derives to a static provider.
--}
+-- | A minimal valid environment whose registry mirror target takes a static write token, so its credential is a static provider.
 staticEnvVars :: [(String, String)]
 staticEnvVars =
     [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
@@ -142,9 +139,7 @@ publicGateEnv = ("ECLUSE_MOUNTS__NPM__ENABLED", "true") : pubUrlEnv <> [("ECLUSE
 privateUpstreamUrl :: (IsString s) => s
 privateUpstreamUrl = "https://private.example.test"
 
-{- | Point the npm mount's registry mirror target at its own private upstream. A writing role
-advises on the collapse and the deleting role refuses it.
--}
+-- | Point the npm mirror target at its own private upstream: a writing role advises on the collapse, and the deleting role refuses it.
 collapsingMirrorTarget :: [(String, String)] -> [(String, String)]
 collapsingMirrorTarget = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL" privateUpstreamUrl
 
@@ -160,9 +155,7 @@ mountDocFor eco keys = encodeUtf8 ("{\"mounts\":{\"" <> eco <> "\":{" <> T.inter
 npmMountDoc :: [Text] -> ByteString
 npmMountDoc = mountDocFor "npm"
 
-{- | A complete mount for the given ecosystem: both upstreams and a registry mirror target with
-its static write token, so a case refuses on the fact it varies and not on a missing endpoint.
--}
+-- | A complete mount (both upstreams, and a registry mirror target with its token), so a case refuses only on the fact it varies.
 completeMountDoc :: Text -> ByteString
 completeMountDoc eco =
     mountDocFor
@@ -172,21 +165,15 @@ completeMountDoc eco =
         , "\"mirrorTarget\":{\"registry\":{\"url\":\"https://mirror.example.test\",\"token\":\"t\"}}"
         ]
 
-{- | 'Ecluse.Test.Package.thingName' under the given scope, for the specs that read a
-first-party predicate. The unscoped counterpart is @thingName@ itself.
--}
+-- | 'Ecluse.Test.Package.thingName' under the given scope, for the specs that read a first-party predicate.
 scopedName :: Text -> PackageName
 scopedName scope = mkPackageName Npm (Just (mkScope scope)) "thing"
 
-{- | An ambient @AWS_ENDPOINT_URL@ carrying userinfo, which the egress guard refuses. Both entry
-points must report it, and neither may echo the credential it holds.
--}
+-- | An ambient @AWS_ENDPOINT_URL@ with userinfo: both entry points refuse it, and neither may echo its credential.
 malformedAwsEndpoint :: String
 malformedAwsEndpoint = "http://operator:s3cr3t@localhost:9000"
 
-{- | The CodeArtifact domain endpoint the fixtures address: the one host this build carries a
-store maintenance backend for. Its account id and region are the shapes the host parser accepts.
--}
+-- | The CodeArtifact domain endpoint the fixtures address, in the account and region shapes the host parser accepts.
 codeArtifactDomain :: (IsString s) => s
 codeArtifactDomain = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com"
 
@@ -194,14 +181,27 @@ codeArtifactDomain = "https://acme-111122223333.d.codeartifact.eu-west-1.amazona
 codeArtifactMirrorUrl :: (IsString s, Semigroup s) => s
 codeArtifactMirrorUrl = codeArtifactDomain <> "/npm/mirror/"
 
-{- | 'staticEnvVars' mirroring to 'codeArtifactMirrorUrl' under its own tag. That tag mints the
-write token, so the static one goes with the registry target it belonged to.
--}
+-- | 'staticEnvVars' mirroring to 'codeArtifactMirrorUrl', which mints its own write token, beside a dredgeable Verdaccio cache.
 codeArtifactEnvVars :: [(String, String)]
 codeArtifactEnvVars =
     withDredgeablePrivate $
         overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactMirrorUrl $
             withoutMirrorTargetToken (withoutMirrorTargetUrl staticEnvVars)
+
+-- | 'codeArtifactEnvVars' plus a PyPI mount that mirrors to and caches from CodeArtifact, so a plan has two mounts' stores.
+twoStoreEnv :: [(String, String)]
+twoStoreEnv =
+    overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
+        overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL" codeArtifactPypiCacheUrl $
+            overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactPypiMirrorUrl codeArtifactEnvVars
+
+-- | The repository 'twoStoreEnv' mirrors PyPI to.
+codeArtifactPypiMirrorUrl :: (IsString s, Semigroup s) => s
+codeArtifactPypiMirrorUrl = codeArtifactDomain <> "/pypi/mirror/"
+
+-- | The repository 'twoStoreEnv' caches PyPI in.
+codeArtifactPypiCacheUrl :: (IsString s, Semigroup s) => s
+codeArtifactPypiCacheUrl = codeArtifactDomain <> "/pypi/internal/"
 
 -- | Declare the existing anonymous private fixture under its observable protocol backend.
 withObservablePrivate :: [(String, String)] -> [(String, String)]
@@ -243,9 +243,7 @@ withoutMirrorTargetToken = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGIS
 withoutPrivateUpstreamUrl :: [(String, String)] -> [(String, String)]
 withoutPrivateUpstreamUrl = filter (not . ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__" `isPrefixOf`) . fst)
 
-{- | Drop the ECLUSE_QUEUE__URL entry, so a test can exercise the absent-URL rollover
-to the bounded in-memory queue.
--}
+-- | Drop @ECLUSE_QUEUE__URL@, so a test reaches the bounded in-memory queue.
 withoutQueueUrl :: [(String, String)] -> [(String, String)]
 withoutQueueUrl = filter ((/= "ECLUSE_QUEUE__URL") . fst)
 
@@ -261,9 +259,7 @@ expectEnv env = expectAppConfig env Nothing
 expectAppConfig :: [(String, String)] -> Maybe ByteString -> IO AppConfig
 expectAppConfig env mDoc = configApp <$> expectConfig env mDoc
 
-{- | Vet a resolved 'Config' as a writing role would, failing the test on a refusal. It is the
-boot's own pure pass, so a spec builds from exactly what the composition root would.
--}
+-- | Vet a 'Config' through the boot's own pass as a writing role would, failing the test on a refusal.
 expectValidated :: Config -> IO ValidatedPlan
 expectValidated config =
     either (\errs -> fail ("boot vetting refused: " <> show errs)) pure (snd (runVet MirrorWriter (vetBoot config)))
@@ -280,9 +276,7 @@ expectConfig :: [(String, String)] -> Maybe ByteString -> IO Config
 expectConfig env mDoc =
     either (\errs -> fail ("config load failed: " <> show (map renderConfigError errs))) pure (loadConfig env mDoc)
 
-{- | The pure tier's inputs for a fixture: the layers a configuration loaded from, and the process
-facts a boot would have measured.
--}
+-- | The pure tier's inputs for a fixture: its configuration layers, and the process facts a boot would measure.
 bootInputsFor :: [(String, String)] -> Maybe ByteString -> Config -> EffectiveRuntimePlan -> BootInputs
 bootInputsFor envVars docBlob config effective =
     BootInputs
@@ -305,9 +299,7 @@ expectPlanFor role envVars docBlob config effective =
         pure
         (brOutcome (resolveBootPlan role (bootInputsFor envVars docBlob config effective)))
 
-{- | The status a whole boot took and the lines it reported on standard error. The timeout guards
-against a hung boot, without requiring refusal within a boot-speed deadline.
--}
+-- | A whole boot's status and its standard-error lines. The timeout catches a hung boot, not a slow refusal.
 captureBoot :: IO () -> IO (Either ExitCode (Maybe ()), [Text])
 captureBoot boot = do
     (outcome, report) <- captureStderrWith (try (timeout 5_000_000 boot))
