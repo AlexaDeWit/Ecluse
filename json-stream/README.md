@@ -19,4 +19,5 @@ input-piece limits. Tokens and cursors can retain input slices until their calle
 
 [Frozen scanner traces and decoder outcomes](../core/test/unit/fixtures/json-stream/README.md)
 check inherited behaviour through the maintained Haskell interfaces. Their provenance identifies
-the historical source revisions. Source formatting, lint, Stan and SPDX checks include this library.
+the historical source revisions. Source formatting, lint, doctest, Stan and SPDX checks include
+this library.
