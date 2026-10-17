@@ -91,7 +91,8 @@ non-empty `_attachments` object, and only `dist-tags` that name that version. Th
 document, and a store such as Verdaccio applies it over its own. The route returns `400` for a body
 that cannot be read, is not a JSON object, or repeats a key, and for a version filed under a key
 that differs from its own `version` field. The PyPI upload route returns `501` for an `:action`
-other than `file_upload`. Mirror, Pilot, and Dredger expose their health probes on
+other than `file_upload`. It returns `400` when the `content` file name does not name the declared
+project at the declared `version`. Mirror, Pilot, and Dredger expose their health probes on
 `ECLUSE_SERVER__PORT`. A separate metrics listener appears only when telemetry is on and
 `OTEL_METRICS_EXPORTER=prometheus`. Co-located Prometheus listeners need distinct ports
 ([Telemetry](@/docs/operations.md#telemetry-opt-in)).

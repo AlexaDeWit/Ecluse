@@ -363,7 +363,10 @@ multipartType = "multipart/form-data; boundary=relay-boundary"
 
 -- A file_upload of one archive under the given name parts, in the order twine sends them.
 multipartBody :: [ByteString] -> LByteString
-multipartBody names = formBody ((":action", "file_upload") : map ("name",) names) archivePart
+multipartBody names = uploadOf names "acme_widget-1.0.tar.gz"
+
+uploadOf :: [ByteString] -> ByteString -> LByteString
+uploadOf names file = formBody ((":action", "file_upload") : map ("name",) names <> [("version", "1.0")]) (archivePart file)
 
 -- A raw remove_pkg, which pypiserver honours and no uploader sends.
 removalBody :: LByteString
@@ -374,8 +377,8 @@ formBody fields archive = fromStrict (foldMap field fields <> archive <> "--rela
   where
     field (name, value) = "--relay-boundary\r\nContent-Disposition: form-data; name=\"" <> name <> "\"\r\n\r\n" <> value <> "\r\n"
 
-archivePart :: ByteString
-archivePart = "--relay-boundary\r\nContent-Disposition: form-data; name=\"content\"; filename=\"acme_widget-1.0.tar.gz\"\r\nContent-Type: application/octet-stream\r\n\r\noriginal archive bytes\r\n"
+archivePart :: ByteString -> ByteString
+archivePart file = "--relay-boundary\r\nContent-Disposition: form-data; name=\"content\"; filename=\"" <> file <> "\"\r\nContent-Type: application/octet-stream\r\n\r\noriginal archive bytes\r\n"
 
 postUpload :: RequestBodyLength -> RequestHeaders -> LByteString -> Application -> IO SResponse
 postUpload bodyLength headers body = runSession (srequest (SRequest request body))
@@ -438,7 +441,7 @@ pypiPublishSpec = describe "first-party PyPI publication relay" $ do
     it (caseLabel "integration/publication/native-pypi-006" "refuses an agreed name outside the first-party declaration") $
         withTarget 201 "accepted" $ \port target -> do
             app <- pypiProxy (Just (pypiDeps port))
-            response <- postUpload ChunkedBody [("Content-Type", multipartType)] (multipartBody ["victim"]) app
+            response <- postUpload ChunkedBody [("Content-Type", multipartType)] (uploadOf ["victim"] "victim-1.0.tar.gz") app
             status response `shouldBe` 403
             targetSaw target `shouldReturn` []
 
@@ -521,6 +524,13 @@ pypiPublishSpec = describe "first-party PyPI publication relay" $ do
     it (caseLabel "integration/publication/native-pypi-014" "refuses an upload with no :action with 400 before any relay") $
         withTarget 201 "accepted" $ \port target -> do
             app <- pypiProxy (Just (pypiDeps port))
-            response <- postUpload ChunkedBody [("Content-Type", multipartType)] (formBody [("name", "acme-widget")] archivePart) app
+            response <- postUpload ChunkedBody [("Content-Type", multipartType)] (formBody [("name", "acme-widget")] (archivePart "acme_widget-1.0.tar.gz")) app
+            status response `shouldBe` 400
+            targetSaw target `shouldReturn` []
+
+    it (caseLabel "integration/publication/native-pypi-015" "refuses a file name for another project with 400 before any relay") $
+        withTarget 201 "accepted" $ \port target -> do
+            app <- pypiProxy (Just (pypiDeps port))
+            response <- postUpload ChunkedBody [("Content-Type", multipartType)] (uploadOf ["acme-widget"] "victim_target-99.0.tar.gz") app
             status response `shouldBe` 400
             targetSaw target `shouldReturn` []

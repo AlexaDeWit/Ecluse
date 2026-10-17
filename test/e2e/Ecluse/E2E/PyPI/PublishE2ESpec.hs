@@ -37,7 +37,8 @@ nativePublicationContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \r
                     publicationConfig
                     ( \proxy -> do
                         distribution <- requiredDistribution "e2e-published" distributions
-                        sendUpload proxy distribution [("name", "unowned-project")] `shouldReturn` 403
+                        unowned <- requiredDistribution "e2e-unowned" distributions
+                        sendUpload proxy unowned [("name", "e2e-published")] `shouldReturn` 400
                         sendUpload proxy distribution [("name", "e2e-published"), ("name", "e2e-published-other")] `shouldReturn` 400
                         targetFiles target `shouldReturn` Map.empty
                         readTVarIO (ntRequests target) `shouldReturn` 0

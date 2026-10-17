@@ -295,6 +295,7 @@ integrationObligations =
         , "integration/publication/native-pypi-012"
         , "integration/publication/native-pypi-013"
         , "integration/publication/native-pypi-014"
+        , "integration/publication/native-pypi-015"
         ]
     , required
         "integration/pipeline-faults"

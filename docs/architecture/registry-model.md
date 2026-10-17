@@ -82,7 +82,9 @@ trigger, content, and credential from the mirror write.
   declared name that disagrees is a `403` before any relay, under the same `PackageName` equality
   the route uses. An absent name is no claim. The guard never decodes the base64 `_attachments`.
 PyPI publication uses the same guard with native multipart name declarations. Pathless uploads
-require one consistent canonical project identity. Framing and name checks run after edge
+require one consistent canonical project identity. A store can key the write off the uploaded file
+name, so the `content` part's file name must name that project at the declared `version`, or the
+upload is a `400`. Framing and name checks run after edge
 authentication within the mount's request bound. The relay preserves the incoming body and exact
 Content-Type, including its boundary. It does not rebuild the client's distribution.
 - **New-release shape only.** The relays forward only a body with the shape of a new-release

@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Multipart identity attacks and upload actions across the entire preserved relay body.
+-- | Multipart identity attacks, release file names and upload actions across the entire preserved relay body.
 module Ecluse.Core.Registry.PyPI.Publish.MultipartSpec (spec) where
 
 import Test.Hspec
@@ -15,12 +15,13 @@ import Ecluse.Test.Registry.Publish (isMalformedBody)
 spec :: Spec
 spec = do
     namesSpec
+    releaseSpec
     actionSpec
 
 namesSpec :: Spec
 namesSpec = describe "uploadClaims names" $ do
     it "accepts repeated canonically equal names, including after the file" $
-        decode (part "name" "Example_Pkg" <> filePart <> part "name" "example-pkg") `shouldReturn` Right ["example-pkg"]
+        decode (part "name" "Example_Pkg" <> contentPart "Example_Pkg-1.0.tar.gz" <> part "name" "example-pkg") `shouldReturn` Right ["example-pkg"]
     it "rejects a conflicting claim after the file" $
         decode (part "name" "allowed" <> filePart <> part "name" "forbidden") >>= (`shouldSatisfy` isMalformedBody)
     for_ ["", "bad/name", "bad\nname"] $ \name ->
@@ -39,14 +40,14 @@ namesSpec = describe "uploadClaims names" $ do
         uploadClaims defaultLimits contentType (fileUpload <> part "name" "allowed") >>= (`shouldSatisfy` isMalformedBody)
         decode (part "name" "allowed" <> end <> part "name" "forbidden") >>= (`shouldSatisfy` isMalformedBody)
     it "checks late claims after an inline fake closing delimiter in file bytes" $ do
-        let fakeFile = "--boundary\r\nContent-Disposition: form-data; name=\"content\"; filename=\"a.whl\"\r\n\r\nx--boundary--\r\n\r\nfile bytes\r\n"
+        let fakeFile = "--boundary\r\nContent-Disposition: form-data; name=\"content\"; filename=\"allowed-1.0.tar.gz\"\r\n\r\nx--boundary--\r\n\r\nfile bytes\r\n"
         decode (part "name" "allowed" <> fakeFile <> part "name" "forbidden") >>= (`shouldSatisfy` isMalformedBody)
         decode (part "name" "allowed" <> fakeFile <> part "name" "") >>= (`shouldSatisfy` isMalformedBody)
         decode (part "name" "allowed" <> fakeFile <> part "name" "allowed") `shouldReturn` Right ["allowed"]
     it "rejects a late MIME quoted-pair spelling of the name attribute" $
         decode (part "name" "allowed" <> "--boundary\r\nContent-Disposition: form-data; name=\"na\\me\"\r\n\r\nforbidden\r\n") >>= (`shouldSatisfy` isMalformedBody)
     it "accepts a valid name containing the inbound delimiter text" $
-        uploadClaims defaultLimits (Just "multipart/form-data; boundary=x") "--x\r\nContent-Disposition: form-data; name=\":action\"\r\n\r\nfile_upload\r\n--x\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\nallowed--x\r\n--x--\r\n" `shouldReturn` Right ["allowed-x"]
+        uploadClaims defaultLimits (Just "multipart/form-data; boundary=x") "--x\r\nContent-Disposition: form-data; name=\":action\"\r\n\r\nfile_upload\r\n--x\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\nallowed--x\r\n--x\r\nContent-Disposition: form-data; name=\"version\"\r\n\r\n1.0\r\n--x\r\nContent-Disposition: form-data; name=\"content\"; filename=\"allowed_x-1.0.tar.gz\"\r\n\r\narchive\r\n--x--\r\n" `shouldReturn` Right ["allowed-x"]
     it "retains all claims when parsing crosses its chunk boundary" $ do
         let names = mconcat (replicate 600 (part "name" "allowed"))
         decode (names <> filePart <> part "name" "forbidden") >>= (`shouldSatisfy` isMalformedBody)
@@ -55,7 +56,26 @@ namesSpec = describe "uploadClaims names" $ do
         uploadClaims defaultLimits{maxPublishRequestBytes = 10} contentType (fileUpload <> part "name" "allowed" <> end) >>= (`shouldSatisfy` isMalformedBody)
         uploadClaims defaultLimits{maxArtifactCount = 2} contentType (fileUpload <> part "name" "allowed" <> filePart <> end) >>= (`shouldSatisfy` isMalformedBody)
   where
-    decode body = uploadClaims defaultLimits contentType (fileUpload <> body <> end)
+    decode body = uploadClaims defaultLimits contentType (fileUpload <> part "version" "1.0" <> body <> end)
+
+releaseSpec :: Spec
+releaseSpec = describe "uploadClaims file name" $ do
+    for_ ["acme_widget-1.0.0-py3-none-any.whl", "acme-widget-1.0.0.tar.gz", "Acme_Widget-1.0.tar.gz"] $ \file ->
+        it ("relays " <> show file <> " as acme-widget 1.0.0") $
+            upload [part "version" "1.0.0", contentPart file] `shouldReturn` Right ["acme-widget"]
+    for_ [("another project", "victim_target-1.0.0.tar.gz"), ("a longer project", "acme_widget_extra-1.0.0.tar.gz"), ("another version", "acme_widget-99.0-py3-none-any.whl"), ("no distribution", "acme-widget-1.0.0.txt"), ("no release", "")] $ \(label, file) ->
+        it ("refuses a file name with " <> label <> ": " <> show file) $
+            upload [part "version" "1.0.0", contentPart file] >>= (`shouldSatisfy` isMalformedBody)
+    it "refuses a missing, repeated, or non-PEP 440 version" $
+        for_ [[], [part "version" "1.0.0", part "version" "1.0.0"], [part "version" "latest"]] $ \versions ->
+            upload (versions <> [contentPart "acme_widget-1.0.0.tar.gz"]) >>= (`shouldSatisfy` isMalformedBody)
+    it "refuses no content part, two content parts, and a content part with no file name" $
+        for_ [[], [contentPart "acme_widget-1.0.0.tar.gz", contentPart "acme_widget-1.0.0-py3-none-any.whl"], [part "content" "archive"]] $ \files ->
+            upload (part "version" "1.0.0" : files) >>= (`shouldSatisfy` isMalformedBody)
+    it "refuses a version sent as a file part" $
+        upload ["--boundary\r\nContent-Disposition: form-data; name=\"version\"; filename=\"1.0.0\"\r\n\r\n1.0.0\r\n", contentPart "acme_widget-1.0.0.tar.gz"] >>= (`shouldSatisfy` isMalformedBody)
+  where
+    upload parts = uploadClaims defaultLimits contentType (fileUpload <> part "name" "acme-widget" <> mconcat parts <> end)
 
 actionSpec :: Spec
 actionSpec = describe "uploadClaims :action" $ do
@@ -73,7 +93,7 @@ actionSpec = describe "uploadClaims :action" $ do
     it "refuses an action sent as a file part" $
         withAction ["--boundary\r\nContent-Disposition: form-data; name=\":action\"; filename=\"a\"\r\n\r\nfile_upload\r\n"] >>= (`shouldSatisfy` isMalformedBody)
   where
-    withAction actions = uploadClaims defaultLimits contentType (mconcat actions <> part "name" "allowed" <> filePart <> end)
+    withAction actions = uploadClaims defaultLimits contentType (mconcat actions <> part "name" "allowed" <> part "version" "1.0" <> filePart <> end)
 
 contentType :: Maybe ByteString
 contentType = Just "multipart/form-data; boundary=\"boundary\""
@@ -87,5 +107,9 @@ part name value = "--boundary\r\nContent-Disposition: form-data; name=\"" <> nam
 fileUpload :: ByteString
 fileUpload = part ":action" "file_upload"
 
+-- The release of the project "allowed" at version 1.0.
 filePart :: ByteString
-filePart = "--boundary\r\nContent-Disposition: form-data; name=\"content\"; filename=\"a.whl\"\r\nContent-Type: application/octet-stream\r\n\r\nPK archive bytes\r\n"
+filePart = contentPart "allowed-1.0-py3-none-any.whl"
+
+contentPart :: ByteString -> ByteString
+contentPart file = "--boundary\r\nContent-Disposition: form-data; name=\"content\"; filename=\"" <> file <> "\"\r\nContent-Type: application/octet-stream\r\n\r\nPK archive bytes\r\n"

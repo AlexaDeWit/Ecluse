@@ -151,4 +151,7 @@ can't disagree silently. The guard never decodes the base64 `_attachments`. An a
 name is not a bypass-grant. The guard refuses only a present, mismatching name, since a
 legitimate client always sends names matching its publish URL. So a target that keys the write
 off the URL, or off these declared names, writes the name the guard authorised. The PyPI guard
-reads each multipart `name` field and the `:action` field in the same way.
+reads each multipart `name` field and the `:action` field in the same way. A PyPI store can also
+read the project and version from the uploaded file's name. So the guard requires the `content`
+part's file name to name the declared project at the declared `version`. A target that keys the
+write off the `name` field or off the file name then writes the project the guard authorised.
