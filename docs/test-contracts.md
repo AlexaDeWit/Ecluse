@@ -564,7 +564,7 @@ The old wrapper remains as a native source reference, but the runner does not sc
 | `integration/egress` | `native-001` to `native-003` (3) | None | `Ecluse.Core.Security.EgressIntegrationSpec` |
 | `integration/origin` | `native-001` to `native-017` (29) | None | `Ecluse.Core.Server.Pipeline.OriginIntegrationSpec` |
 | `integration/npm-metadata` | `native-001` to `native-035` (37) | 10 serving | `Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec` |
-| `integration/publication` | npm `native-001` to `native-023` and 25 PyPI cases (54) | None | `Ecluse.Core.Server.Pipeline.PublishIntegrationSpec` |
+| `integration/publication` | npm `native-001` to `native-024` and 25 PyPI cases (55) | None | `Ecluse.Core.Server.Pipeline.PublishIntegrationSpec` |
 | `integration/pipeline-faults` | `native-001` to `native-019` (19) | None | `Ecluse.Core.Server.Pipeline.SharedIntegrationSpec` |
 | `integration/npm-artifact` | `native-001` to `native-043` (51) | None | `Ecluse.Core.Server.Pipeline.TarballIntegrationSpec` |
 | `integration/worker` | `native-001` to `native-009` (9) | None | `Ecluse.Core.Worker.LoopIntegrationSpec` |

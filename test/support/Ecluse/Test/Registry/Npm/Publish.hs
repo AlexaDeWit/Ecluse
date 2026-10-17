@@ -7,6 +7,7 @@ module Ecluse.Test.Registry.Npm.Publish (
     npmReleaseDocument,
     npmTaggedRelease,
     npmRepeatedAttachments,
+    npmMisfiledVersion,
     npmProvenanceRelease,
     npmDeprecateDocument,
     npmStarDocument,
@@ -28,6 +29,11 @@ npmTaggedRelease tags = releaseDocument widget widget widget tags []
 npmRepeatedAttachments :: LByteString
 npmRepeatedAttachments =
     "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"2.0.0\":{\"name\":\"@acme/widget\",\"version\":\"2.0.0\",\"deprecated\":\"gone\"}},\"_attachments\":{\"@acme/widget-2.0.0.tgz\":{\"data\":\"AA==\"}},\"_attachments\":{}}"
+
+-- | A hand-built release filed under the key 9.9.9 whose own @version@ field says 1.0.0.
+npmMisfiledVersion :: LByteString
+npmMisfiledVersion =
+    "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"dist-tags\":{\"latest\":\"9.9.9\"},\"versions\":{\"9.9.9\":{\"name\":\"@acme/widget\",\"version\":\"1.0.0\"}},\"_attachments\":{\"@acme/widget-9.9.9.tgz\":{\"data\":\"AA==\"}}}"
 
 -- | An @npm publish --provenance@ of @\@acme/widget@ 2.0.0, with libnpmpublish's bundle attachment around a placeholder bundle.
 npmProvenanceRelease :: LByteString

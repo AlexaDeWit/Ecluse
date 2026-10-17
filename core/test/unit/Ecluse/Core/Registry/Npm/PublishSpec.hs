@@ -49,7 +49,7 @@ import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityVerified), verify
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, pypiVersion, sriSha256Of, sriSha512Of, unsafeHash, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc, mirrorVersionDoc)
-import Ecluse.Test.Registry.Npm.Publish (npmDeprecateDocument, npmProvenanceRelease, npmReleaseDocument, npmRepeatedAttachments, npmStarDocument, npmTaggedRelease)
+import Ecluse.Test.Registry.Npm.Publish (npmDeprecateDocument, npmMisfiledVersion, npmProvenanceRelease, npmReleaseDocument, npmRepeatedAttachments, npmStarDocument, npmTaggedRelease)
 import Ecluse.Test.Registry.Publish (checkedNpmUpload, isMalformedBody, publishOnlyFile)
 import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
@@ -377,6 +377,10 @@ uploadGuardSpec = describe "uploadClaims (the first-party new-release guard)" $ 
         uploadClaims (toStrict (npmTaggedRelease (object ["latest" .= ("1.0.0" :: Text)]))) `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
         uploadClaims (toStrict (npmTaggedRelease (object ["latest" .= ("2.0.0" :: Text), "beta" .= Null]))) `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
         uploadClaims (toStrict (npmTaggedRelease (String "2.0.0"))) `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
+    it "refuses a version filed under another key, or with no version field, as malformed" $ do
+        uploadClaims (toStrict npmMisfiledVersion) `shouldSatisfy` isMalformedBody
+        unversioned <- editedRelease (KeyMap.insert "versions" (object ["2.0.0" .= object ["name" .= widget]]))
+        uploadClaims unversioned `shouldSatisfy` isMalformedBody
     it "relays a release under another tag, or with no dist-tags member" $ do
         uploadClaims (toStrict (npmTaggedRelease (object ["beta" .= ("2.0.0" :: Text)]))) `shouldBe` Right [widget, widget, widget]
         untagged <- editedRelease (KeyMap.delete "dist-tags")

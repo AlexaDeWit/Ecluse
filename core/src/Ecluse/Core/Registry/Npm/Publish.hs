@@ -212,8 +212,9 @@ attachmentObject tarball =
 uploadClaims :: ByteString -> Either PublishBodyFault [Text]
 uploadClaims body = case parseOnly (jsonNoDup' <* skipWhile isJsonSpace <* endOfInput) body of
     Right document@(Object fields)
-        | isNewRelease fields -> Right (declaredNames document)
-        | otherwise -> Left (PublishUnsupported npmNewReleaseOnly)
+        | not (isNewRelease fields) -> Left (PublishUnsupported npmNewReleaseOnly)
+        | not (versionFiled fields) -> Left (PublishMalformed (ParseError "the publish body files its version under a key that differs from its version field"))
+        | otherwise -> Right (declaredNames document)
     _ -> Left (PublishMalformed (ParseError "the publish body is not a JSON object without repeated keys"))
 
 -- | The @501@ reason for a write that is not a new release, such as @npm deprecate@ or @npm star@.
@@ -225,6 +226,13 @@ isNewRelease :: KeyMap Value -> Bool
 isNewRelease fields = case (KeyMap.lookup "_attachments" fields, KeyMap.lookup "versions" fields) of
     (Just (Object attachments), Just (Object versions))
         | [version] <- KeyMap.keys versions -> not (KeyMap.null attachments) && tagsOnly version (KeyMap.lookup "dist-tags" fields)
+    _ -> False
+
+-- The key equals the document's own version field, so a store that reads either sees one version.
+versionFiled :: KeyMap Value -> Bool
+versionFiled fields = case KeyMap.lookup "versions" fields of
+    Just (Object versions)
+        | [(version, Object document)] <- KeyMap.toList versions -> KeyMap.lookup "version" document == Just (String (Key.toText version))
     _ -> False
 
 tagsOnly :: Key.Key -> Maybe Value -> Bool
