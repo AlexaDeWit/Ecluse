@@ -6,7 +6,7 @@
 module Ecluse.Runtime.Test.Contract.UnitCatalogueSpec (spec, unitCatalogue) where
 
 import Ecluse.Runtime.Credential.CodeArtifactSpec qualified as Credential
-import Ecluse.Runtime.Cve.SyncSpec qualified as Advisory
+import Ecluse.Runtime.Cve.Sync.StepSpec qualified as Advisory
 import Ecluse.Runtime.Maintenance.CodeArtifactSpec qualified as Maintenance
 import Ecluse.Runtime.Test.Contract.UnitCatalogue (runtimeUnitCatalogue)
 import Ecluse.Test.Contract.Binding (labelledCaseIds)

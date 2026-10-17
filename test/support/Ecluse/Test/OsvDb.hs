@@ -22,6 +22,7 @@ module Ecluse.Test.OsvDb (
     withCompiledCandidate,
 
     -- * Reading an artifact back
+    openCveDb,
     scoresOf,
     metaOf,
     withServedArtifact,
@@ -44,7 +45,8 @@ import Network.HTTP.Types.Status (Status, status200)
 import System.IO.Temp (withSystemTempDirectory)
 import UnliftIO.Exception (bracket)
 
-import Ecluse.Core.Cve (CveDb (cveDbClose), openCveDb)
+import Ecluse.Core.Cve (CveDb (cveDbClose), CveDbRejected)
+import Ecluse.Core.Cve.Internal (transferCveDb)
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -62,6 +64,10 @@ import Ecluse.Test.Support (expectRight)
 import Katip (KatipContext)
 import OpenTelemetry.Trace.Core (TracerProvider)
 import UnliftIO (MonadUnliftIO)
+
+-- | Reject incompatible artifacts as values. The caller must protect the returned database's ownership.
+openCveDb :: Ecosystem -> EpssRequirement -> FilePath -> IO (Either CveDbRejected CveDb)
+openCveDb eco epssRequirement dbFile = transferCveDb eco epssRequirement dbFile pure
 
 -- | The shared EPSS feed slice omits some corpus aliases to cover missing scores.
 epssFixtureFile :: FilePath

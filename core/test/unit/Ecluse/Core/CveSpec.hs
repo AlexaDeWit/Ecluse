@@ -34,7 +34,6 @@ import Ecluse.Core.Cve (
     hasAdvisories,
     hasFixes,
     keepAdvisories,
-    openCveDb,
     packageAdvisories,
     scoreAtLeast,
  )
@@ -53,7 +52,7 @@ import Ecluse.Test.Osv (
     mkDbWithWrongEpoch,
     mkDbWithoutEpssColumn,
  )
-import Ecluse.Test.OsvDb (withFixtureOsvDb)
+import Ecluse.Test.OsvDb (openCveDb, withFixtureOsvDb)
 import Ecluse.Test.Version (genGem, genNpm, genPyPI)
 
 -- Keep these fake rows aligned with the committed corpus pins in Ecluse.Test.OsvSpec.
