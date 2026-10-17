@@ -17,6 +17,7 @@ module Ecluse.E2E.Fixtures.PyPI.Mirror (
     mirrorArchitectures,
     distributionFields,
     distributionUploadBody,
+    builtByCurrentTool,
     hiddenPartUploadBody,
     releaseRemovalBody,
     nativeUploadContentType,
@@ -240,6 +241,12 @@ nativeUploadContentType = "multipart/form-data; boundary=fixture-upload"
 -- | Encode an actual client upload, with explicit replacement fields for refusal controls.
 distributionUploadBody :: Distribution -> [(Text, Text)] -> ByteString
 distributionUploadBody distribution overrides = uploadWithData distribution overrides (distributionBytes distribution)
+
+-- | Whether a current build tool writes this file, which the publish guard requires: a wheel, or an sdist under its PEP 625 name.
+builtByCurrentTool :: Distribution -> Bool
+builtByCurrentTool distribution = ".whl" `T.isSuffixOf` filename || filename == T.replace "-" "_" (distributionProject distribution) <> "-" <> distributionVersion distribution <> ".tar.gz"
+  where
+    filename = distributionFilename distribution
 
 -- | A client upload whose content data hides a second content part after the given line end and delimiter padding.
 hiddenPartUploadBody :: Distribution -> Distribution -> ByteString -> ByteString -> ByteString

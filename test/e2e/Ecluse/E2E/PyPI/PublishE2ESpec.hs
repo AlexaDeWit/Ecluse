@@ -6,7 +6,6 @@
 module Ecluse.E2E.PyPI.PublishE2ESpec (pypiPublicationFamily, nativePublicationContract) where
 
 import Data.Map.Strict qualified as Map
-import Data.Text qualified as T
 import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS), applyBasicAuth, httpLbs, parseRequest, responseBody, responseStatus)
 import Network.HTTP.Types (statusCode)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
@@ -151,10 +150,6 @@ withPublicationFixture plane action = do
     distributions <- filter builtByCurrentTool <$> buildNativeProjects (gdpWorkDir plane </> "pypi") ["e2e-published", "e2e-unowned", retainedProject]
     withNativeTarget PreserveUploadFields distributions $ \target ->
         withStubFault plane (PyPIMirrorBackend (ntPort target) False) (action target distributions)
-
--- The guard relays a wheel or a PEP 625 .tar.gz sdist, and refuses the older source archive formats.
-builtByCurrentTool :: Distribution -> Bool
-builtByCurrentTool distribution = any (`T.isSuffixOf` distributionFilename distribution) [".whl", ".tar.gz"]
 
 sendUpload :: E2E -> Distribution -> [(Text, Text)] -> IO Int
 sendUpload proxy distribution extra = do
