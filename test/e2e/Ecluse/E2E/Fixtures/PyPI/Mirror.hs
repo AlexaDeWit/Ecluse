@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | A dependency graph with distinct wheel metadata and every supported source archive format.
 module Ecluse.E2E.Fixtures.PyPI.Mirror (
@@ -18,6 +17,7 @@ module Ecluse.E2E.Fixtures.PyPI.Mirror (
     mirrorArchitectures,
     distributionFields,
     distributionUploadBody,
+    releaseRemovalBody,
     nativeUploadContentType,
     buildMirrorGraph,
     buildNativeProjects,
@@ -212,7 +212,15 @@ distributionUploadBody distribution overrides =
         , ("pyversion", if ".whl" `T.isSuffixOf` distributionFilename distribution then "py3" else "source")
         , ("sha256_digest", encodeUtf8 (hexSha256Of (distributionBytes distribution)))
         ]
-    fieldPart (name, value) = "--fixture-upload\r\nContent-Disposition: form-data; name=\"" <> name <> "\"\r\n\r\n" <> value <> "\r\n"
+
+-- | A raw @remove_pkg@ of one release, which pypiserver honours and no uploader sends.
+releaseRemovalBody :: Text -> Text -> ByteString
+releaseRemovalBody project version =
+    BS.concat (map fieldPart [(":action", "remove_pkg"), ("name", encodeUtf8 project), ("version", encodeUtf8 version)])
+        <> "--fixture-upload--\r\n"
+
+fieldPart :: (ByteString, ByteString) -> ByteString
+fieldPart (name, value) = "--fixture-upload\r\nContent-Disposition: form-data; name=\"" <> name <> "\"\r\n\r\n" <> value <> "\r\n"
 
 -- | The wheel's installed console command, executed only in a native virtual environment.
 mirrorExecutable :: Text

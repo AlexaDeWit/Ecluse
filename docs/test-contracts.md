@@ -333,7 +333,7 @@ Both ecosystem drivers bind concrete providers for every required family.
 PyPI mirror evidence includes whole-version copies, restart recovery, cross-target file selection and retained metadata.
 Cross-target checks prove selected files and installed contents. They do not execute foreign architecture code.
 
-The final functional declarations require 52 PyPI cases, 52 npm cases and one shared-system case.
+The final functional declarations require 53 PyPI cases, 53 npm cases and one shared-system case.
 Unit, integration, residency, allocation, load and smoke evidence remain independent requirements.
 
 Backend completion also requires the PyPI CodeArtifact full-store instance in the existing backend subject.
@@ -341,6 +341,7 @@ Its deterministic control-plane tests do not establish live AWS service guarante
 
 Native cases also cover partial copies, public outages and exact installed files, including executable scripts.
 Publication maps the required `authorisation-refusal` law to `pypi/publish/scope-refusal`.
+Its `non-upload-refusal` law sends a raw `remove_pkg`, because no PyPI client sends one.
 The write telemetry group supplies `pypi/telemetry/domain-spans` and `pypi/telemetry/private-fetch`.
 Both completion audits use `FullEcosystem` and require actual execution reports.
 An absent or unbound driver still produces a named failure under the shared contract.
@@ -393,7 +394,7 @@ Fixed suite lists bind their contract functions to concrete fixtures.
 | `Install.Outage` | `pypi/install/outage` | Fresh proxy/client, public-route fault controls and request evidence. |
 | `Serving` | `pypi/install/sdist`, `npm/install/head-no-effect`, and paired successful artifact HEAD laws | Source distribution digest and exact bytes, HEAD size/body and no-mirror observation. The integration providers use the same artifact laws. |
 | `Mirror` | All seven `npm/mirror/*` cases and `npm/install/latest-preservation` | Fresh public/mirror installations, exact native graphs/values, binaries, locks, origin evidence and independent negative control. Native tag observations remain provider-owned. |
-| `Publication` | Both `npm/publish/*` cases | First-party identity, expected version present in destination inventory, successful fresh installation and out-of-scope publication refusal. |
+| `Publication` | The three `npm/publish/*` cases | First-party identity, expected version present in destination inventory, successful fresh installation, out-of-scope publication refusal, and a refused `npm deprecate` that leaves the store's versions, tags and deprecation markers unchanged. |
 | `Telemetry` | The retained six npm cases and paired PyPI read/service laws | Scenario-correlated spans, metrics, readiness and logs from the local Collector. Datadog tag/log checks do not contact its SaaS. |
 | `Sweep.Identity` | Seven `npm/dredger/*` identity cases below | Independent mirror/cache inventories, consent, dry-run and first-party observations. |
 | `Sweep.Advisory` | The `advisory-revocation` and `mal-revocation` cases for npm and PyPI | Generation swap, exact audit, revoked/fixed installs, stored and served artifact observations. |
@@ -472,6 +473,7 @@ The native modules retain scenario providers. The fixed suite declarations regis
 |---|---|
 | `npm/publish/publish-install` | publishes an in-scope package, then installs it back through the private leg |
 | `npm/publish/scope-refusal` | refuses an out-of-scope publish before any upstream write (anti-shadowing guard) |
+| `npm/publish/non-upload-refusal` | refuses `npm deprecate` with the `501` text and leaves the store's document unchanged |
 
 ### `test/e2e/Ecluse/E2E/Npm/DredgerE2ESpec.hs`
 
@@ -562,7 +564,7 @@ The old wrapper remains as a native source reference, but the runner does not sc
 | `integration/egress` | `native-001` to `native-003` (3) | None | `Ecluse.Core.Security.EgressIntegrationSpec` |
 | `integration/origin` | `native-001` to `native-017` (29) | None | `Ecluse.Core.Server.Pipeline.OriginIntegrationSpec` |
 | `integration/npm-metadata` | `native-001` to `native-035` (37) | 10 serving | `Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec` |
-| `integration/publication` | npm `native-001` to `native-019` and 23 PyPI cases (48) | None | `Ecluse.Core.Server.Pipeline.PublishIntegrationSpec` |
+| `integration/publication` | npm `native-001` to `native-021` and 25 PyPI cases (52) | None | `Ecluse.Core.Server.Pipeline.PublishIntegrationSpec` |
 | `integration/pipeline-faults` | `native-001` to `native-019` (19) | None | `Ecluse.Core.Server.Pipeline.SharedIntegrationSpec` |
 | `integration/npm-artifact` | `native-001` to `native-043` (51) | None | `Ecluse.Core.Server.Pipeline.TarballIntegrationSpec` |
 | `integration/worker` | `native-001` to `native-009` (9) | None | `Ecluse.Core.Worker.LoopIntegrationSpec` |

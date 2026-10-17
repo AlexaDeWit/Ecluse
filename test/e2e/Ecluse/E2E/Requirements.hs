@@ -30,7 +30,7 @@ obligations =
         "npm/publish"
         Supported
         ["read", "publication", "client-install"]
-        ["npm/publish/publish-install", "npm/publish/scope-refusal"]
+        ["npm/publish/publish-install", "npm/publish/scope-refusal", "npm/publish/non-upload-refusal"]
     , Obligation
         "npm/dredger"
         "npm/maintenance"
@@ -128,7 +128,7 @@ obligations =
         "pypi/publish"
         Supported
         ["read", "publication", "client-install"]
-        ["pypi/publish/publish-install", "pypi/publish/scope-refusal"]
+        ["pypi/publish/publish-install", "pypi/publish/scope-refusal", "pypi/publish/non-upload-refusal"]
     , Obligation
         "pypi/publish-native"
         "pypi/publication"
