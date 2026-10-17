@@ -22,6 +22,7 @@ import Ecluse.Core.Version.Token (digitRuns, withinVersionLength)
 import Ecluse.Test.Corpus (corpusPackages, cpPath)
 import Ecluse.Test.Json (keysAt, objectAt)
 import Ecluse.Test.Support (decodeJsonOrFail)
+import Ecluse.Test.Version (digitRunIs, genNpmNearPlain)
 
 spec :: Spec
 spec = describe "parseSemver" $ do
@@ -41,7 +42,7 @@ spec = describe "parseSemver" $ do
 
 generatedSpec :: Spec
 generatedSpec = describe "properties" $
-    modifyMaxSuccess (const 20000) $
+    modifyMaxSuccess (const 20000) $ do
         it "returns what the library's parser returns under the two bounds, for generated text" $
             hedgehog $ do
                 raw <- forAll genVersionText
@@ -62,6 +63,17 @@ generatedSpec = describe "properties" $
                 cover 0.5 "refused by the length bound alone" (libraryAccepts && not (withinVersionLength raw))
                 coverTextClasses raw
                 scanned raw === expected
+        it "returns what the library's parser returns for plain releases and their near misses" $
+            hedgehog $ do
+                raw <- forAll genNpmNearPlain
+                let plain = plainRelease raw
+                    accepted = isJust (libraryParse raw)
+                cover 20 "a plain release (the one-pass scanner)" plain
+                cover 20 "a near miss the library refuses (the full scanner)" (not plain && not accepted)
+                cover 1 "a near miss the library accepts (the full scanner)" (not plain && accepted)
+                cover 1 "a number of 18 digits" (any (digitRunIs EQ) (digitRuns raw))
+                cover 1 "a number of more than 18 digits" (any (digitRunIs GT) (digitRuns raw))
+                scanned raw === libraryParse raw
 
 -- Each rule of the library's grammar that a reader of the semver specification could miss.
 grammarSpec :: Spec
@@ -107,8 +119,13 @@ libraryParse raw = do
 disagreements :: [Text] -> [Text]
 disagreements = take 5 . filter (\raw -> scanned raw /= libraryParse raw)
 
-digitRunIs :: Ordering -> Text -> Bool
-digitRunIs comparison run = T.all isDigit run && T.compareLength run 18 == comparison
+-- Three numbers of at most 18 digits, none with a leading zero.
+plainRelease :: Text -> Bool
+plainRelease raw = case T.split (== '.') raw of
+    [major, minor, patch] -> all plainNumber [major, minor, patch]
+    _ -> False
+  where
+    plainNumber n = (digitRunIs LT n || digitRunIs EQ n) && (n == "0" || not (T.null n || T.isPrefixOf "0" n))
 
 -- Labels of the raw text alone, so the property fails when a class of text stops being generated.
 coverTextClasses :: (MonadTest m) => Text -> m ()

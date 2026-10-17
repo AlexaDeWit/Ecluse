@@ -39,17 +39,47 @@ instance NFData Pep440Key
 parsePep440 :: Text -> Maybe Pep440Key
 parsePep440 raw = do
     guard (withinVersionLength raw)
-    let lowered = T.toLower (T.strip raw)
-        noV = fromMaybe lowered (T.stripPrefix "v" lowered)
-        (mainPart, localRaw) = T.breakOn "+" noV
-    guard (T.all isMainChar mainPart)
-    (epoch, afterEpoch) <- parseEpoch mainPart
-    (release, suffix) <- parseRelease afterEpoch
-    suffixParts <- parsePep440Suffix suffix
-    localToks <- parseLocal localRaw
-    pure (force (assembleKey epoch release suffixParts localToks))
+    plainRelease raw <|> do
+        let lowered = T.toLower (T.strip raw)
+            noV = fromMaybe lowered (T.stripPrefix "v" lowered)
+            (mainPart, localRaw) = T.breakOn "+" noV
+        guard (T.all isMainChar mainPart)
+        (epoch, afterEpoch) <- parseEpoch mainPart
+        (release, suffix) <- parseRelease afterEpoch
+        suffixParts <- parsePep440Suffix suffix
+        localToks <- parseLocal localRaw
+        pure (force (assembleKey epoch release suffixParts localToks))
   where
     isMainChar c = isAsciiAlphaNum c || c == '.' || c == '!' || c == '-' || c == '_'
+
+-- Dot-separated ASCII digit runs and nothing else, the common spelling, in one pass that allocates only
+-- the key. It reads right to left, so it builds the release list in order. The full grammar reads the rest.
+plainRelease :: Text -> Maybe Pep440Key
+plainRelease raw = case T.foldr' plainStep (PlainScan 0 1 0 []) raw of
+    PlainScan digits _ value later | digits > 0 -> Just (force (assembleKey 0 (toInteger value : later) (Nothing, Nothing, Nothing) []))
+    _ -> Nothing
+
+{- A right-to-left scan: the digits of the segment being read, or 'plainRefused', the place value
+of its next digit, its value so far, and the segments after it. -}
+data PlainScan = PlainScan Int Int Int [Integer]
+
+-- 18 digits keep a segment's value and place value within an 'Int'.
+maxPlainDigits :: Int
+maxPlainDigits = 18
+
+plainRefused :: Int
+plainRefused = -1
+
+-- Inlined into the fold, so the scan passes between characters without a heap object.
+plainStep :: Char -> PlainScan -> PlainScan
+plainStep c (PlainScan digits place value later)
+    | digits == plainRefused = refused
+    | isDigit c && digits < maxPlainDigits = PlainScan (digits + 1) (place * 10) (value + place * (ord c - ord '0')) later
+    | c == '.' && digits > 0 = let !segment = toInteger value in PlainScan 0 1 0 (segment : later)
+    | otherwise = refused
+  where
+    refused = PlainScan plainRefused 0 0 []
+{-# INLINE plainStep #-}
 
 parseEpoch :: Text -> Maybe (Integer, Text)
 parseEpoch mainPart = do
