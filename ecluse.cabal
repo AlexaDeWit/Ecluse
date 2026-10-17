@@ -1,6 +1,6 @@
 cabal-version: 3.0
 name:          ecluse
-version:       0.4.0
+version:       0.3.0
 synopsis:      Supply-chain resilience proxy for package registries
 description:
   Écluse is a controlled passage in front of package registries (npm, PyPI, …).
@@ -707,7 +707,7 @@ library ecluse-manifest
 
 -- The OpenAPI spec generator: a build-time component that assembles the
 -- OpenAPI document (Ecluse.Manifest) from the fixed canonical source and writes
--- the committed openapi.json. It depends on the ecluse-manifest sublibrary, NOT the
+-- the published openapi.json. It depends on the ecluse-manifest sublibrary, NOT the
 -- app library, so the OpenAPI dependency tree never reaches the running proxy. Run
 -- with `cabal run openapi-gen`.
 executable openapi-gen

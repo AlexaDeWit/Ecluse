@@ -37,8 +37,8 @@ spec = do
     describe "the page lead" $ do
         it "opens with the document's own description" $
             rendered `carries` "What this server speaks."
-        it "states the API version" $
-            rendered `carries` "**API version**: `9.9.9`"
+        it "states the Écluse version" $
+            rendered `carries` "**Écluse version**: `9.9.9`"
         it "tables the servers" $
             rendered `carries` "| `https://registry.example` | The externally-reachable base URL. |"
 
@@ -81,7 +81,7 @@ spec = do
 
     describe "an empty document" $
         it "renders the version line alone" $
-            renderOpenApiPage mempty `shouldBe` "**API version**: ``\n\n"
+            renderOpenApiPage mempty `shouldBe` "**Écluse version**: ``\n\n"
 
 rendered :: Text
 rendered = renderOpenApiPage document
