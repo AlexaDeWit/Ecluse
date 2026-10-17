@@ -404,6 +404,7 @@ tasks:
     sources:
       - 'scripts/**/*.sh'
       - 'taskfiles/*.yml'
+      - '.github/workflows/*.yml'
       - 'Taskfile.yml'
       - 'bench/corpus/**/*.json'
       - 'bench/load/sweeps/*.json'
@@ -500,7 +501,7 @@ tasks:
       - task: check
       - task: docs-check
   gate:
-    desc: Reproduce the full CI gate locally
+    desc: Run check, integration tests, and Haddock locally
     cmds:
       - task: check
       - task: test-integration
