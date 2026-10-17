@@ -369,9 +369,10 @@ A `publish` forwards the publisher's own token the same way. You can instead set
 publication token under the publication target's tag
 (`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN`). Écluse then authenticates the
 edge token and replaces it with the static publication token on every publish, so the publication
-target never receives the edge token. Every holder of the edge token can then publish anything the
-static token permits within the configured first-party scopes, so this is not the preferred
-deployment. The boot refuses a static publication token without `ECLUSE_SERVER__AUTH_TOKEN`
+target never receives the edge token. Every holder of the edge token can then publish a new
+release of any package the static token permits within the configured first-party scopes, so this
+is not the preferred deployment. Écluse relays only new-release uploads, so the edge token does not
+reach the static token's other writes, such as a deprecation or a release removal. The boot refuses a static publication token without `ECLUSE_SERVER__AUTH_TOKEN`
 (`PublishStaticCredentialNeedsEdge`), because an open edge would let any client publish under it.
 Without a static publication token, a closed-edge publish forwards the edge token unchanged.
 
