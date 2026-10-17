@@ -13,6 +13,9 @@ module Ecluse.Runtime.Aws.Env (
 ) where
 
 import Amazonka qualified as AWS
+import Amazonka.Env.Hooks qualified as Hooks
+import Network.HTTP.Client qualified as HTTP
+import Network.HTTP.Types (HeaderName)
 
 import Ecluse.Runtime.Aws.Fault (retypeAwsFailure)
 
@@ -27,14 +30,14 @@ data AwsEndpoint = AwsEndpoint
     }
     deriving stock (Eq, Show)
 
--- | An env for @service@ over discovered credentials. A failed AWS or HTTP call during discovery raises 'Ecluse.Runtime.Aws.Fault.AwsRequestFailed'.
+-- | An env for @service@ over discovered credentials. A failed AWS or HTTP call during discovery raises a typed fault from "Ecluse.Runtime.Aws.Fault", as does an empty credential chain.
 newAwsEnv :: Maybe Text -> Maybe AwsEndpoint -> AWS.Service -> IO AWS.Env
 newAwsEnv = newAwsEnvWith AWS.discover
 
 -- | 'newAwsEnv' over a caller's discovery, so a test can fail it at a stub. An absent region or override keeps @amazonka@'s own resolution.
 newAwsEnvWith :: (AWS.EnvNoAuth -> IO AWS.Env) -> Maybe Text -> Maybe AwsEndpoint -> AWS.Service -> IO AWS.Env
 newAwsEnvWith discovery mRegion mEndpoint service = do
-    base <- retypeAwsFailure (AWS.newEnv discovery)
+    base <- retypeAwsFailure (AWS.newEnvNoAuth >>= discovery . redactingCredentialHeaders)
     pure (overridden (scoped base))
   where
     scoped env = maybe env (\region -> env{AWS.region = AWS.Region' region}) mRegion
@@ -47,3 +50,15 @@ newAwsEnvWith discovery mRegion mEndpoint service = do
             (encodeUtf8 (endpointHost endpoint))
             (endpointPort endpoint)
             service
+
+{- Any later show of a request hides its session token. The STS, SSO and assume-role calls of discovery
+inherit the hook, as does every call the env sends. Container and instance-metadata fetches bypass it. -}
+redactingCredentialHeaders :: AWS.Env' withAuth -> AWS.Env' withAuth
+redactingCredentialHeaders env =
+    env{AWS.hooks = Hooks.clientRequestHook (\previous current request -> redacted <$> previous current request) (AWS.hooks env)}
+  where
+    redacted request = request{HTTP.redactHeaders = HTTP.redactHeaders request <> credentialHeaders}
+
+-- The headers that carry a session token: an AWS signature's, and an SSO portal's bearer.
+credentialHeaders :: Set HeaderName
+credentialHeaders = fromList ["X-Amz-Security-Token", "x-amz-sso_bearer_token"]
