@@ -19,6 +19,9 @@ module Ecluse.Runtime.Aws.Fault (
     AwsAnswer (..),
     sendRaising,
     retypeAwsFailure,
+
+    -- * Error codes
+    errorCodeText,
 ) where
 
 import Amazonka qualified as AWS
@@ -27,9 +30,9 @@ import Data.Text qualified as T
 import Lens.Micro ((^.))
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types.Status (statusCode)
-import UnliftIO.Exception (handle, throwIO)
+import UnliftIO.Exception (throwIO, try)
 
-import Ecluse.Core.Fault (HttpFault (HttpStatus, HttpTransport), TransportCause (TransportProtocol), TransportFault, renderHttpFault, transportFault)
+import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportCause (TransportProtocol), TransportFault, boundedDetail, renderHttpFault, transportFault)
 import Ecluse.Core.Fault.Http (classifyTransport, hostPortLabel, httpFault)
 
 -- | Classify an @amazonka@ error into the core transport vocabulary. A service's answer is detailed as 'AwsAnswer' renders it.
@@ -37,7 +40,7 @@ classifyAwsTransport :: AWS.Error -> TransportFault
 classifyAwsTransport = \case
     AWS.TransportError httpErr -> classifyTransport httpErr
     AWS.ServiceError service -> transportFault TransportProtocol (renderAnswer (serviceName service) (serviceAnswer service))
-    AWS.SerializeError failure -> transportFault TransportProtocol (renderUndecodable (failure ^. AWS.serializeError_abbrev . AWS._Abbrev) failure)
+    AWS.SerializeError failure -> transportFault TransportProtocol (renderUndecodable (failure ^. AWS.serializeError_abbrev . AWS._Abbrev) (undecodableStatus failure))
 
 -- | Send a request with the AWS error folded into the caller's own fault type, a value rather than an exception.
 sendClassified ::
@@ -76,6 +79,8 @@ data AwsParty
 data AwsFault
     = -- | The service refused it.
       AwsStatus AwsAnswer
+    | -- | The service answered with this HTTP status, in a body @amazonka@ could not decode.
+      AwsUndecodable Int
     | -- | The HTTP exchange failed: a status from an endpoint outside the AWS protocol, or a transport fault.
       AwsHttp HttpFault
     deriving stock (Eq, Show)
@@ -86,7 +91,7 @@ data AwsAnswer = AwsAnswer
     , aaCode :: Text
     , aaRequestId :: Maybe Text
     , aaMessage :: Maybe Text
-    -- ^ The first line of any other message, which names an IAM action and resource.
+    -- ^ The first line of any other message. For an access denial, it names the IAM action and resource.
     }
     deriving stock (Eq, Show)
 
@@ -96,16 +101,23 @@ sendRaising env request = sendClassified (raised (const (requestEndpoint env req
 
 -- | Raise the @amazonka@ or http-client failure of an action whose request the caller never holds, such as credential discovery, as 'AwsRequestFailed'.
 retypeAwsFailure :: IO a -> IO a
-retypeAwsFailure = handle (throwIO . raised AwsServiceNamed) . handle (throwIO . raisedHttp)
+retypeAwsFailure action =
+    -- Thrown outside any handler, so no annotation of the throw carries the original along.
+    try (try action) >>= \case
+        Left awsErr -> throwIO (raised AwsServiceNamed awsErr)
+        Right (Left httpErr) -> throwIO (raisedHttp httpErr)
+        Right (Right value) -> pure value
+
+-- | An error code lowercased, so no comparison turns on a service's own casing.
+errorCodeText :: AWS.ErrorCode -> Text
+errorCodeText code = T.toLower (code ^. AWS._ErrorCode)
 
 -- A service's answer is named by @answering@, given the service's name.
 raised :: (Text -> AwsParty) -> AWS.Error -> SomeException
 raised answering = \case
     AWS.TransportError httpErr -> raisedHttp httpErr
     AWS.ServiceError service -> toException (AwsRequestFailed (answering (serviceName service)) (AwsStatus (serviceAnswer service)))
-    AWS.SerializeError failure ->
-        let party = answering (failure ^. AWS.serializeError_abbrev . AWS._Abbrev)
-         in toException (AwsRequestFailed party (AwsHttp (HttpTransport (transportFault TransportProtocol (renderUndecodable (renderParty party) failure)))))
+    AWS.SerializeError failure -> toException (AwsRequestFailed (answering (failure ^. AWS.serializeError_abbrev . AWS._Abbrev)) (AwsUndecodable (undecodableStatus failure)))
 
 -- An unparseable URL leaves as the client's own exception, which "Ecluse.Core.Fault.Http" renders by its authority.
 raisedHttp :: HTTP.HttpException -> SomeException
@@ -117,18 +129,16 @@ serviceAnswer :: AWS.ServiceError -> AwsAnswer
 serviceAnswer service =
     AwsAnswer
         { aaStatus = statusCode (service ^. AWS.serviceError_status)
-        , aaCode = codeText
+        , aaCode = code ^. AWS._ErrorCode
         , aaRequestId = AWS.fromRequestId <$> service ^. AWS.serviceError_requestId
-        , aaMessage = if code `elem` signatureCodes then Nothing else firstLine . AWS.fromErrorMessage =<< service ^. AWS.serviceError_message
+        , aaMessage = if errorCodeText code `elem` signatureCodes then Nothing else firstLine . AWS.fromErrorMessage =<< service ^. AWS.serviceError_message
         }
   where
     code = service ^. AWS.serviceError_code
-    codeText = case code of
-        AWS.ErrorCode text -> text
 
 -- The codes whose message AWS documents as quoting the canonical request, spelled as AWS sends them.
-signatureCodes :: [AWS.ErrorCode]
-signatureCodes = map AWS.newErrorCode ["InvalidSignatureException", "SignatureDoesNotMatch", "IncompleteSignature"]
+signatureCodes :: [Text]
+signatureCodes = map (errorCodeText . AWS.newErrorCode) ["InvalidSignatureException", "SignatureDoesNotMatch", "IncompleteSignature"]
 
 firstLine :: Text -> Maybe Text
 firstLine message = case T.takeWhile (`notElem` ['\n', '\r']) message of
@@ -141,6 +151,7 @@ serviceName service = service ^. AWS.serviceError_abbrev . AWS._Abbrev
 renderFailure :: AwsRequestFailed -> Text
 renderFailure (AwsRequestFailed party fault) = case fault of
     AwsStatus answer -> renderAnswer (renderParty party) answer
+    AwsUndecodable status -> renderUndecodable (renderParty party) status
     AwsHttp http -> renderHttpFault (renderParty party) http
 
 renderParty :: AwsParty -> Text
@@ -148,17 +159,21 @@ renderParty = \case
     AwsEndpointAt endpointHost endpointPort -> hostPortLabel endpointHost endpointPort
     AwsServiceNamed service -> service
 
+-- Bounded here, so the classified detail and the raised fault keep one log-line budget.
 renderAnswer :: Text -> AwsAnswer -> Text
 renderAnswer source answer =
-    renderHttpFault source (HttpStatus (aaStatus answer))
-        <> (" " <> aaCode answer)
-        <> foldMap (\requestId -> " (request " <> requestId <> ")") (aaRequestId answer)
-        <> foldMap (": " <>) (aaMessage answer)
+    boundedDetail $
+        renderHttpFault source (HttpStatus (aaStatus answer))
+            <> (" " <> aaCode answer)
+            <> foldMap (\requestId -> " (request " <> requestId <> ")") (aaRequestId answer)
+            <> foldMap (": " <>) (aaMessage answer)
 
--- A decoder's message can quote the body it read, so only the status is rendered.
-renderUndecodable :: Text -> AWS.SerializeError -> Text
-renderUndecodable source failure =
-    renderHttpFault source (HttpStatus (statusCode (failure ^. AWS.serializeError_status))) <> ", an answer that could not be decoded"
+renderUndecodable :: Text -> Int -> Text
+renderUndecodable source status = renderHttpFault source (HttpStatus status) <> ", an answer that could not be decoded"
+
+-- The body holds the whole answer, credentials included, and the decoder's message can quote it, so only the status is kept.
+undecodableStatus :: AWS.SerializeError -> Int
+undecodableStatus failure = statusCode (failure ^. AWS.serializeError_status)
 
 -- The @host:port@ an env sends a request to, by the service resolution @amazonka@ applies.
 requestEndpoint :: (AWS.AWSRequest a) => AWS.Env -> a -> AwsParty

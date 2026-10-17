@@ -5,15 +5,16 @@
 -- | How an @amazonka@ failure leaves an adapter, as a value or raised: never with the request, a response header or a quoted signature.
 module Ecluse.Runtime.Aws.FaultSpec (spec) where
 
+import Amazonka qualified as AWS
 import Data.Text qualified as T
-import Network.HTTP.Types.Status (status404)
+import Network.HTTP.Types.Status (status200, status404)
 import Test.Hspec
 import UnliftIO.Exception (throwIO, try)
 
 import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportFault (tfDetail))
 import Ecluse.Runtime.Aws.Fault (
     AwsAnswer (AwsAnswer),
-    AwsFault (AwsHttp, AwsStatus),
+    AwsFault (AwsHttp, AwsStatus, AwsUndecodable),
     AwsParty (AwsServiceNamed),
     AwsRequestFailed (AwsRequestFailed, arfFault),
     classifyAwsTransport,
@@ -25,7 +26,7 @@ import Ecluse.Test.Stub (redirectSecrets, redirectedStatusException, refusedFetc
 spec :: Spec
 spec = do
     describe "classifyAwsTransport" $ do
-        for_ ["InvalidSignatureException", "SignatureDoesNotMatch", "IncompleteSignature"] $ \code ->
+        for_ ["InvalidSignatureException", "SignatureDoesNotMatch", "IncompleteSignature", "signaturedoesnotmatch"] $ \code ->
             it ("details the " <> toString code <> " refusal by its code, status and request id, and none of the canonical request") $
                 detailOf code canonicalRequestMessage `shouldBe` "SQS: HTTP 403 " <> signatureCode code <> " (request req-1)"
 
@@ -38,6 +39,9 @@ spec = do
         it "details no response header" $
             for_ [("SignatureDoesNotMatch", canonicalRequestMessage), ("AccessDenied", accessDenial)] $ \(code, message) ->
                 detailOf code message `shouldNotSatisfy` T.isInfixOf (decodeUtf8 (snd plantedHeader))
+
+        it "details a decoder failure by its status, never the body it read or the decoder's message" $
+            tfDetail (classifyAwsTransport undecodableAnswer) `shouldBe` "STS: HTTP 200, an answer that could not be decoded"
 
     describe "retypeAwsFailure" $ do
         it "raises a refused connection by its transport cause at the dialled host:port, never the request" $
@@ -56,7 +60,23 @@ spec = do
         it "raises a service's refusal by the service's name, as discovery holds no request" $
             retypeAwsFailure (throwIO (plantedRefusal "STS" "AccessDenied" accessDenial))
                 `shouldThrow` (== AwsRequestFailed (AwsServiceNamed "STS") (AwsStatus (AwsAnswer 403 "AccessDenied" (Just "req-1") (Just accessDenial))))
+
+        it "bounds a raised refusal's text to the detail budget the classified form keeps" $
+            retypeAwsFailure (throwIO (plantedRefusal "STS" "AccessDenied" (T.replicate 2000 "x")))
+                `shouldThrow` ((<= T.length "AWS request failed at " + 512) . T.length . toText . displayException @AwsRequestFailed)
+
+        it "raises a decoder failure as its status, never the body it read or the decoder's message" $ do
+            outcome <- try (retypeAwsFailure (throwIO undecodableAnswer))
+            case outcome of
+                Left failed -> do
+                    failed `shouldBe` AwsRequestFailed (AwsServiceNamed "STS") (AwsUndecodable 200)
+                    displayException failed `shouldBe` "AWS request failed at STS: HTTP 200, an answer that could not be decoded"
+                Right () -> expectationFailure "the decoder failure was not raised"
   where
+    -- An AssumeRole answer amazonka could not decode: its body holds the minted credentials.
+    undecodableAnswer =
+        AWS.SerializeError
+            (AWS.SerializeError' "STS" status200 (Just "<AssumeRoleResponse><Credentials><SessionToken>token-secret</SessionToken></Credentials></AssumeRoleResponse>") "Failed reading: unexpected token-secret")
     detailOf code message = tfDetail (classifyAwsTransport (plantedRefusal "SQS" code message))
     signatureCode code = fromMaybe code (T.stripSuffix "Exception" code)
     accessDenial = "User: arn:aws:sts::123456789012:assumed-role/ecluse is not authorized to perform: sqs:ReceiveMessage on resource: arn:aws:sqs:us-east-1:123456789012:mirror"
