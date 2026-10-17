@@ -7,8 +7,16 @@ module Ecluse.Site.Search (prepareSearchMetadata) where
 
 import Data.Text qualified as T
 
-{- | Annotate the generated, attribute-free title element without changing its escaped text.
-Pagefind uses this fallback only when automatic or explicit title metadata is absent.
+{- | Retain generated titles, or use the source filename when Haddock omits the title.
+Pagefind gives automatic and explicit metadata precedence over this fallback.
 -}
-prepareSearchMetadata :: Text -> Text
-prepareSearchMetadata = T.replace "<title>" "<title data-pagefind-default-meta=\"title\">"
+prepareSearchMetadata :: Text -> Text -> Text
+prepareSearchMetadata sourceName html
+    | "<title>" `T.isInfixOf` html = T.replace "<title>" titleOpen html
+    | "<title" `T.isInfixOf` html = html
+    | otherwise = T.replace "</head>" (titleOpen <> escapeTitle sourceName <> "</title></head>") html
+  where
+    titleOpen = "<title data-pagefind-default-meta=\"title\">"
+
+escapeTitle :: Text -> Text
+escapeTitle = T.replace ">" "&gt;" . T.replace "<" "&lt;" . T.replace "&" "&amp;"

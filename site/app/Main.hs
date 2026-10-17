@@ -7,7 +7,7 @@ module Main (main) where
 
 import Data.List (lookup)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, listDirectory)
-import System.FilePath (takeDirectory, takeExtension, (</>))
+import System.FilePath (takeBaseName, takeDirectory, takeExtension, takeFileName, (</>))
 
 import Ecluse.Manifest (buildOpenApi, canonicalManifestSource)
 import Ecluse.Site.OpenApi (renderOpenApiPage)
@@ -33,7 +33,8 @@ run (SearchMetadata root) = do
             then run (SearchMetadata path)
             else when (takeExtension path == ".html") $ do
                 original <- readFileText path
-                let prepared = prepareSearchMetadata original
+                let sourceLabel = if takeFileName (takeDirectory path) == "src" then " (source)" else ""
+                    prepared = prepareSearchMetadata (toText (takeBaseName path) <> sourceLabel) original
                 when (prepared /= original) (writeFileText path prepared)
 
 writePage :: FilePath -> Text -> IO ()
