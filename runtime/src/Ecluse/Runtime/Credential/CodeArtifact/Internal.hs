@@ -43,7 +43,7 @@ data CodeArtifactMintError = AuthorizationTokenMissing
 instance Exception CodeArtifactMintError
 
 {- | What the CodeArtifact leaf needs to mint a token. The AWS /credentials/ are __not__ here:
-'AWS.discover' finds them in the ambient environment, so the proxy never holds long-lived AWS keys.
+'Amazonka.Auth.discover' finds them in the ambient environment, so the proxy never holds long-lived AWS keys.
 -}
 data CodeArtifactConfig = CodeArtifactConfig
     { caRegion :: Text

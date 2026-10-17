@@ -120,7 +120,7 @@ nameComponentWith noun usable component = do
     unusable = ParseError ("unusable " <> noun <> ": " <> show component)
 
 {- | Refuse a name over an ecosystem's own cap, which the noun names in the refusal text.
-'T.compareLength' stops at the cap without measuring the whole input.
+'Data.Text.compareLength' stops at the cap without measuring the whole input.
 -}
 withinNameLimit :: Text -> Int -> Text -> Either ParseError ()
 withinNameLimit noun limit raw

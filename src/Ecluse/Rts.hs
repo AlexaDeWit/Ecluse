@@ -427,8 +427,8 @@ renderMiB bytes =
 showRounded :: Double -> String
 showRounded x = show (fromIntegral (round (x * 10) :: Int) / 10 :: Double)
 
-{- | Parse a cgroup-v2 @cpu.max@ body. @\"<quota> <period>\"@ yields the granted cores, and the
-@max@ sentinel or a malformed body yields 'Nothing': no limit is inferred from noise.
+{- | Parse @quota period@ from cgroup-v2 @cpu.max@ as granted cores, dividing quota by period.
+The @max@ sentinel or malformed input yields 'Nothing'.
 -}
 parseCpuMax :: Text -> Maybe Double
 parseCpuMax body = case T.words (T.strip body) of

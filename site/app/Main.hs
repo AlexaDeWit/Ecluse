@@ -2,21 +2,18 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The @site-gen@ build-time generator: write the OpenAPI reference fragment the
-site embeds.
-
-@site-gen openapi@ renders the document "Ecluse.Manifest" assembles from its fixed
-canonical source. The output is derived data, so the build generates it on demand and
-the repository does not carry it.
--}
+-- | Build-time OpenAPI fragments and search metadata for the assembled site.
 module Main (main) where
 
+import Control.Exception (throwIO)
 import Data.List (lookup)
-import System.Directory (createDirectoryIfMissing)
-import System.FilePath (takeDirectory)
+import Data.Text.Encoding qualified as TE
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, listDirectory)
+import System.FilePath (takeBaseName, takeDirectory, takeExtension, takeFileName, (</>))
 
 import Ecluse.Manifest (buildOpenApi, canonicalManifestSource)
 import Ecluse.Site.OpenApi (renderOpenApiPage)
+import Ecluse.Site.Search (prepareSearchMetadata)
 
 main :: IO ()
 main = do
@@ -25,11 +22,22 @@ main = do
         Left message -> die (toString message)
         Right command -> run command
 
--- | The page to render, and where to write it.
-newtype Command = OpenApiPage FilePath
+data Command = OpenApiPage FilePath | SearchMetadata FilePath
 
 run :: Command -> IO ()
 run (OpenApiPage outPath) = writePage outPath (renderOpenApiPage (buildOpenApi canonicalManifestSource))
+run (SearchMetadata root) = do
+    entries <- listDirectory root
+    for_ entries $ \entry -> do
+        let path = root </> entry
+        directory <- doesDirectoryExist path
+        if directory
+            then run (SearchMetadata path)
+            else when (takeExtension path == ".html") $ do
+                original <- either throwIO pure . TE.decodeUtf8' =<< readFileBS path
+                let sourceLabel = if takeFileName (takeDirectory path) == "src" then " (source)" else ""
+                    prepared = prepareSearchMetadata (toText (takeBaseName path) <> sourceLabel) original
+                when (prepared /= original) (writeFileBS path (TE.encodeUtf8 prepared))
 
 writePage :: FilePath -> Text -> IO ()
 writePage path body = do
@@ -42,6 +50,9 @@ parseCommand = \case
     ("openapi" : rest) -> do
         flags <- parseFlags ["--out"] rest
         OpenApiPage <$> flagValue "--out" flags
+    ("search-metadata" : rest) -> do
+        flags <- parseFlags ["--root"] rest
+        SearchMetadata <$> flagValue "--root" flags
     _ -> Left usage
 
 -- Only the named flags are accepted, so an unknown flag is a usage error rather
@@ -59,4 +70,4 @@ flagValue flag flags =
     maybeToRight ("site-gen: missing " <> flag <> "\n" <> usage) (toString <$> lookup flag flags)
 
 usage :: Text
-usage = "usage: site-gen openapi --out <file>"
+usage = "usage: site-gen openapi --out <file> | search-metadata --root <directory>"

@@ -533,7 +533,7 @@ nullable valparse = Parser (moreData value')
     value' _ (JValue AE.Null) ntok = Yield Nothing (Done "" ntok)
     value' tok _ _ = callParse (Just <$> valparse) tok
 
--- | Match values with a 'AE.Parser'.  Returns values for which the given parser succeeds.
+-- | Match values with a t'Data.Aeson.Types.Parser'.  Returns values for which the given parser succeeds.
 valueWith :: (AE.Value -> AE.Parser a) -> Parser a
 valueWith jparser = Parser $ \ntok -> loop (callParse aeValue ntok)
   where
@@ -545,7 +545,7 @@ valueWith jparser = Parser $ \ntok -> loop (callParse aeValue ntok)
             AE.Error _ -> loop np
             AE.Success res -> Yield res (loop np)
 
-{- | Match 'AE.FromJSON' value. Equivalent to @'valueWith' 'AE.parseJSON'@.
+{- | Match t'Data.Aeson.Types.FromJSON' value. Equivalent to @'valueWith' 'Data.Aeson.Types.parseJSON'@.
 
 >>> let json = "[{\"key1\": [1,2], \"key2\": [5,6]}]"
 >>> parseByteString (arrayOf value) json :: [AE.Value]
@@ -810,14 +810,14 @@ eitherDecode bs = loop bs (runParser value)
     checkExit _ (ParseNeedData _) BL.Empty = Left "Incomplete json structure."
     checkExit v (ParseNeedData cont) (BL.Chunk dta rest) = checkExit v (cont dta) rest
 
--- | Like 'decode', but on strict 'BS.ByteString'
+-- | Like 'decode', but on strict t'Data.ByteString.ByteString'
 decodeStrict :: (AE.FromJSON a) => BS.ByteString -> Maybe a
 decodeStrict bs =
     case eitherDecodeStrict bs of
         Right val -> Just val
         Left _ -> Nothing
 
--- | Like 'eitherDecode', but on strict 'BS.ByteString'
+-- | Like 'eitherDecode', but on strict t'Data.ByteString.ByteString'
 eitherDecodeStrict :: (AE.FromJSON a) => BS.ByteString -> Either String a
 eitherDecodeStrict bs =
     case runParser' value bs of
