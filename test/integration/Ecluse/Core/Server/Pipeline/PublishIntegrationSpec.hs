@@ -378,7 +378,10 @@ formBody fields archive = fromStrict (foldMap field fields <> archive <> "--rela
     field (name, value) = "--relay-boundary\r\nContent-Disposition: form-data; name=\"" <> name <> "\"\r\n\r\n" <> value <> "\r\n"
 
 archivePart :: ByteString -> ByteString
-archivePart file = "--relay-boundary\r\nContent-Disposition: form-data; name=\"content\"; filename=\"" <> file <> "\"\r\nContent-Type: application/octet-stream\r\n\r\noriginal archive bytes\r\n"
+archivePart file = archiveOf file "original archive bytes"
+
+archiveOf :: ByteString -> ByteString -> ByteString
+archiveOf file bytes = "--relay-boundary\r\nContent-Disposition: form-data; name=\"content\"; filename=\"" <> file <> "\"\r\nContent-Type: application/octet-stream\r\n\r\n" <> bytes <> "\r\n"
 
 postUpload :: RequestBodyLength -> RequestHeaders -> LByteString -> Application -> IO SResponse
 postUpload bodyLength headers body = runSession (srequest (SRequest request body))
@@ -532,5 +535,14 @@ pypiPublishSpec = describe "first-party PyPI publication relay" $ do
         withTarget 201 "accepted" $ \port target -> do
             app <- pypiProxy (Just (pypiDeps port))
             response <- postUpload ChunkedBody [("Content-Type", multipartType)] (uploadOf ["acme-widget"] "victim_target-99.0.tar.gz") app
+            status response `shouldBe` 400
+            targetSaw target `shouldReturn` []
+
+    it (caseLabel "integration/publication/native-pypi-016" "refuses a content part hidden after a bare LF with 400 before any relay") $
+        withTarget 201 "accepted" $ \port target -> do
+            app <- pypiProxy (Just (pypiDeps port))
+            let hidden = "original archive bytes\n--relay-boundary\nContent-Disposition: form-data; name=\"content\"; filename=\"victim_target-99.0.tar.gz\"\n\nvictim bytes"
+                body = formBody [(":action", "file_upload"), ("name", "acme-widget"), ("version", "1.0")] (archiveOf "acme_widget-1.0.tar.gz" hidden)
+            response <- postUpload ChunkedBody [("Content-Type", multipartType)] body app
             status response `shouldBe` 400
             targetSaw target `shouldReturn` []

@@ -17,6 +17,7 @@ module Ecluse.Core.Registry.PyPI.Project (
     fcVersionKey,
     DistributionKind (..),
     fileCoordinate,
+    builtFileCoordinate,
     FilenameMemo,
     filenameMemo,
     readCoordinate,
@@ -31,7 +32,7 @@ module Ecluse.Core.Registry.PyPI.Project (
 ) where
 
 import Data.Aeson (toJSON)
-import Data.Char (isAlphaNum, isAscii)
+import Data.Char (isAlphaNum, isAscii, isDigit)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -116,9 +117,7 @@ projectedEntryKey = \case
     ReleaseFile file -> artEntryKey (frArtifact file)
     UncoordinatedFile key _ -> key
 
-{- | Group files supplied in reverse source order, retaining original artifact and diagnostic order.
-Decode errors precede filename errors.
--}
+-- | Group files supplied in reverse source order, keeping artifact and diagnostic order. Decode errors come first.
 projectSimpleIndex :: PackageName -> [InvalidEntry] -> [ProjectedFile] -> PackageInfo
 projectSimpleIndex name invalid files =
     PackageInfo
@@ -217,8 +216,16 @@ indexHash (algorithm, digest) = do
 
 -- | Read a filename's coordinate, rejecting another project, an unknown archive, or invalid PEP 440.
 fileCoordinate :: PackageName -> Text -> Maybe FileCoordinate
-fileCoordinate name file = do
+fileCoordinate = coordinateWhere (const True)
+
+-- | Read as 'fileCoordinate' does, refusing a version a build tool never writes: one not led by a digit, or holding @-@.
+builtFileCoordinate :: PackageName -> Text -> Maybe FileCoordinate
+builtFileCoordinate = coordinateWhere (\version -> maybe False (isDigit . fst) (T.uncons version) && not (T.any (== '-') version))
+
+coordinateWhere :: (Text -> Bool) -> PackageName -> Text -> Maybe FileCoordinate
+coordinateWhere accepts name file = do
     (version, kind) <- filenameParts (fileProject name) file
+    guard (accepts version)
     (`FileCoordinate` kind) <$> canonicalPep440 version
 
 -- A project's PEP 503 key, prepared once for reading many of its filenames.

@@ -2,9 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Multipart identity attacks, release file names and upload actions across the entire preserved relay body.
+-- | Multipart identity attacks, hidden delimiters, release file names and upload actions across the entire preserved relay body.
 module Ecluse.Core.Registry.PyPI.Publish.MultipartSpec (spec) where
 
+import Data.Text.Encoding qualified as TE
 import Test.Hspec
 
 import Ecluse.Core.Registry (PublishBodyFault (PublishUnsupported))
@@ -15,6 +16,7 @@ import Ecluse.Test.Registry.Publish (isMalformedBody)
 spec :: Spec
 spec = do
     namesSpec
+    delimiterSpec
     releaseSpec
     actionSpec
 
@@ -58,14 +60,40 @@ namesSpec = describe "uploadClaims names" $ do
   where
     decode body = uploadClaims defaultLimits contentType (fileUpload <> part "version" "1.0" <> body <> end)
 
+delimiterSpec :: Spec
+delimiterSpec = describe "uploadClaims delimiters" $ do
+    for_ [("a bare LF", "\n"), ("a bare CR", "\r")] $ \(label, lineEnd) ->
+        it ("refuses a content part hidden after " <> label) $
+            upload (contentData ("PK archive" <> lineEnd <> hiddenPart lineEnd)) >>= (`shouldSatisfy` isMalformedBody)
+    it "refuses a delimiter at the start of a part's data" $
+        upload (contentData (hiddenPart "\r\n")) >>= (`shouldSatisfy` isMalformedBody)
+    it "refuses transport padding after a delimiter" $ do
+        uploadClaims defaultLimits contentType (fileUpload <> part "name" "allowed" <> "--boundary \r\nContent-Disposition: form-data; name=\"version\"\r\n\r\n1.0\r\n" <> filePart <> end) >>= (`shouldSatisfy` isMalformedBody)
+        uploadClaims defaultLimits contentType (fileUpload <> part "name" "allowed" <> part "version" "1.0" <> filePart <> "--boundary-- \r\n") >>= (`shouldSatisfy` isMalformedBody)
+  where
+    upload content = uploadClaims defaultLimits contentType (fileUpload <> part "name" "allowed" <> part "version" "1.0" <> content <> end)
+    contentData = fileWith "allowed-1.0.tar.gz"
+    hiddenPart lineEnd = "--boundary" <> lineEnd <> "Content-Disposition: form-data; name=\"content\"; filename=\"victim-9.0.tar.gz\"" <> lineEnd <> lineEnd <> "VICTIM"
+
 releaseSpec :: Spec
 releaseSpec = describe "uploadClaims file name" $ do
     for_ ["acme_widget-1.0.0-py3-none-any.whl", "acme-widget-1.0.0.tar.gz", "Acme_Widget-1.0.tar.gz"] $ \file ->
         it ("relays " <> show file <> " as acme-widget 1.0.0") $
             upload [part "version" "1.0.0", contentPart file] `shouldReturn` Right ["acme-widget"]
-    for_ [("another project", "victim_target-1.0.0.tar.gz"), ("a longer project", "acme_widget_extra-1.0.0.tar.gz"), ("another version", "acme_widget-99.0-py3-none-any.whl"), ("no distribution", "acme-widget-1.0.0.txt"), ("no release", "")] $ \(label, file) ->
+    for_ [("1.0.post1", "acme_widget-1.0.post1.tar.gz"), ("1!1.0+local.1", "acme_widget-1!1.0+local.1-py3-none-any.whl")] $ \(version, file) ->
+        it ("relays " <> show file <> " as acme-widget " <> show version) $
+            upload [part "version" version, contentPart file] `shouldReturn` Right ["acme-widget"]
+    for_ [("another project", "victim_target-1.0.0.tar.gz"), ("a longer project", "acme_widget_extra-1.0.0.tar.gz"), ("another version", "acme_widget-99.0-py3-none-any.whl"), ("no distribution", "acme-widget-1.0.0.txt"), ("no release", "acme_widget.tar.gz")] $ \(label, file) ->
         it ("refuses a file name with " <> label <> ": " <> show file) $
             upload [part "version" "1.0.0", contentPart file] >>= (`shouldSatisfy` isMalformedBody)
+    for_ [("acme", "1.post1", "acme-1-1.tar.gz"), ("acme", "1", "acme-v1-2-py3-none-any.whl"), ("acme-widget", "1.0", "acme-widget-v1.0.tar.gz")] $ \(name, version, file) ->
+        it ("refuses the legacy spelling " <> show file <> ", which a store files under another project or version") $
+            uploadClaims defaultLimits contentType (fileUpload <> part "name" name <> part "version" version <> contentPart file <> end) >>= (`shouldSatisfy` isMalformedBody)
+    for_ [("a path", "acme_widget-1.0-x-y/victim-9.0.whl"), ("a traversal", "acme_widget-1.0-a-b-c/../../../x.whl"), ("a space before the version", "acme_widget- 1.0.tar.gz"), ("a space after the version", "acme_widget-1.0 .tar.gz"), ("a tab after the version", "acme_widget-1.0\t.tar.gz"), ("a percent sign", "acme_widget-1.0-py3-none-x%2F..%2Fy.whl")] $ \(label, file) ->
+        it ("refuses a file name with " <> label <> ": " <> show file) $
+            upload [part "version" "1.0", contentPart file] >>= (`shouldSatisfy` isMalformedBody)
+    it "refuses a non-ASCII project spelling that folds to the declared one" $
+        uploadClaims defaultLimits contentType (fileUpload <> part "name" "kelvin" <> part "version" "1.0" <> contentPart (TE.encodeUtf8 "\8490elvin-1.0.tar.gz") <> end) >>= (`shouldSatisfy` isMalformedBody)
     it "refuses a missing, repeated, or non-PEP 440 version" $
         for_ [[], [part "version" "1.0.0", part "version" "1.0.0"], [part "version" "latest"]] $ \versions ->
             upload (versions <> [contentPart "acme_widget-1.0.0.tar.gz"]) >>= (`shouldSatisfy` isMalformedBody)
@@ -92,6 +120,9 @@ actionSpec = describe "uploadClaims :action" $ do
         withAction [part ":Action" "file_upload"] `shouldReturn` missing
     it "refuses an action sent as a file part" $
         withAction ["--boundary\r\nContent-Disposition: form-data; name=\":action\"; filename=\"a\"\r\n\r\nfile_upload\r\n"] >>= (`shouldSatisfy` isMalformedBody)
+    it "answers 501 for another action whatever its other parts hold" $
+        uploadClaims defaultLimits contentType (part ":action" "remove_pkg" <> "--boundary\r\nContent-Disposition: form-data; name=\"name\"; filename=\"a\"\r\n\r\nallowed\r\n" <> part "content" "no file name" <> end)
+            `shouldReturn` Left (PublishUnsupported pypiFileUploadOnly)
   where
     withAction actions = uploadClaims defaultLimits contentType (mconcat actions <> part "name" "allowed" <> part "version" "1.0" <> filePart <> end)
 
@@ -112,4 +143,7 @@ filePart :: ByteString
 filePart = contentPart "allowed-1.0-py3-none-any.whl"
 
 contentPart :: ByteString -> ByteString
-contentPart file = "--boundary\r\nContent-Disposition: form-data; name=\"content\"; filename=\"" <> file <> "\"\r\nContent-Type: application/octet-stream\r\n\r\nPK archive bytes\r\n"
+contentPart file = fileWith file "PK archive bytes"
+
+fileWith :: ByteString -> ByteString -> ByteString
+fileWith file bytes = "--boundary\r\nContent-Disposition: form-data; name=\"content\"; filename=\"" <> file <> "\"\r\nContent-Type: application/octet-stream\r\n\r\n" <> bytes <> "\r\n"

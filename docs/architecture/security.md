@@ -153,5 +153,10 @@ legitimate client always sends names matching its publish URL. So a target that 
 off the URL, or off these declared names, writes the name the guard authorised. The PyPI guard
 reads each multipart `name` field and the `:action` field in the same way. A PyPI store can also
 read the project and version from the uploaded file's name. So the guard requires the `content`
-part's file name to name the declared project at the declared `version`. A target that keys the
-write off the `name` field or off the file name then writes the project the guard authorised.
+part's file name to be a wheel or source distribution name of the declared project. The name may
+hold only ASCII letters, digits and `-_.!+`. Its version must start with a digit, hold no `-`, and
+equal the declared `version` under PEP 440. The guard also refuses a body with a boundary
+delimiter inside a part after a bare CR or LF, or with a padded delimiter line. Some multipart
+parsers end a part at either. The rule relies on a store that parses the file name as the wheel
+and sdist specifications define, and multipart as RFC 2046 defines. Such a store writes the
+project the guard authorised, whether it keys the write off the `name` field or off the file name.

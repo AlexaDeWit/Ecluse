@@ -31,11 +31,19 @@ Content-Type only for an upload with these parts:
 | `:action` | Exactly one, with the value `file_upload`, which every uploader sends. Any other value, such as `remove_pkg` or `doc_upload`, answers `501`. |
 | `name` | One or more, which all name the same project. |
 | `version` | Exactly one. |
-| `content` | Exactly one, with a file name that parses as a wheel or source distribution of that project at that version. |
+| `content` | Exactly one file part, whose file name parses as a wheel or source distribution of that project at that version. |
 
 An upload that breaks any other rule in the table answers `400`. The guard compares project names under
 PEP 503 and versions under PEP 440, so `Acme_Widget-1.0.tar.gz` matches `acme-widget` at `1.0.0`.
-It reads the `content` part's file name, never the file data.
+It reads the `content` part's file name, never the file data. An upload also answers `400` when
+its file name:
+
+- holds a character other than an ASCII letter or digit, `-`, `_`, `.`, `!` or `+`
+- has a version that does not start with a digit, or that holds a `-`, which no build tool writes
+
+Some stores end a multipart part at a boundary delimiter after a bare CR or LF, or after trailing
+whitespace on the delimiter line. So a body with such a delimiter inside a part answers `400`,
+because the guard and the store would read different parts.
 
 PyPI mirroring requires an explicit upload endpoint and a durable mirror-state store. It copies
 all admitted supported wheels and source distributions for a version. A different recorded wheel
