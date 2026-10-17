@@ -168,7 +168,8 @@ uploadRoute =
         [SegLit "legacy"]
         buildUpload
         "Upload a first-party distribution"
-        "Relays a bounded multipart upload after authentication and first-party name validation."
+        "Relays a bounded multipart upload after authentication and first-party name validation. \
+        \Only `:action=file_upload` is relayed: another action answers `501`, and a missing or repeated one answers `400`."
         Nothing
         pypiUploadContract
 
@@ -266,7 +267,7 @@ pypiArtifactReplies =
         }
 
 pypiUploadContract :: ResponseContract PassthroughResponse
-pypiUploadContract = passthroughContract "The publication target's status and raw bytes, or a local publication refusal."
+pypiUploadContract = passthroughContract "The publication target's status and raw bytes, or a local publication refusal, including the `501` for an action other than `file_upload`."
 
 pypiPublishReplies :: PublishReplies PassthroughResponse
 pypiPublishReplies =

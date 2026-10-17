@@ -393,6 +393,10 @@ library ecluse-core
     , zlib ^>=0.7
     , wai-extra ^>=3.1
     , aeson                 >=2.2      && <2.4
+    -- The npm publish guard parses with jsonNoDup', which refuses a repeated key. Both
+    -- packages are already in the resolved build plan as transitive dependencies.
+    , attoparsec            ^>=0.14
+    , attoparsec-aeson      ^>=2.2
     , autodocodec           ^>=0.5
     , bytestring            ^>=0.12
     , cache                 ^>=0.1.3
@@ -792,6 +796,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.Npm.StoredVersions
     Ecluse.Test.Registry.Npm.Maintenance
     Ecluse.Test.Registry.Npm.Project
+    Ecluse.Test.Registry.Npm.Publish
     Ecluse.Test.Registry.Npm.Streaming
     Ecluse.Test.Registry.JsonBytes
     Ecluse.Test.Registry.JsonStream
@@ -1338,6 +1343,7 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.AdvisoriesSpec
     Ecluse.BenchLoad.ContractSpec
     Ecluse.BenchLoad.BootLinesSpec
+    Ecluse.BenchLoad.CpuUseSpec
     Ecluse.BenchLoad.EvidenceSpec
     Ecluse.BenchLoad.ExpositionSpec
     Ecluse.BenchLoad.FloorsSpec
@@ -1360,6 +1366,8 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.PyPISpec
     Ecluse.BenchLoad.NormaliseSpec
     Ecluse.BenchLoad.PodSpec
+    Ecluse.BenchLoad.Placement
+    Ecluse.BenchLoad.PlacementSpec
     Ecluse.BenchLoad.ProxyProcess
     Ecluse.BenchLoad.ProxyProcessSpec
     Ecluse.BenchLoad.RtsProbe
@@ -1369,6 +1377,7 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.ScenariosSpec
     Ecluse.BenchLoad.SelectionSpec
     Ecluse.BenchLoad.Support
+    Ecluse.BenchLoad.SweepSpec
     Ecluse.BenchLoad.Error
     Ecluse.BenchLoad.Harness
     Ecluse.BenchLoad.HarnessSpec
@@ -1388,6 +1397,7 @@ test-suite ecluse-unit
     Ecluse.BenchReport.PerformanceReceiptSpec
     Ecluse.BenchReport.PerformanceCommandSpec
     Ecluse.BenchReport.PerformanceSpec
+    Ecluse.BenchReport.SweepSpec
     Ecluse.BenchReportSpec
     EcluseSpec
     Ecluse.BootSpec
@@ -2126,6 +2136,7 @@ executable bench-load
     Ecluse.BenchLoad.PyPI.Worker
     Ecluse.BenchLoad.PyPI.WorkerFixture
     Ecluse.BenchLoad.Oha
+    Ecluse.BenchLoad.Placement
     Ecluse.BenchLoad.ProxyProcess
     Ecluse.BenchLoad.ProxyServe
     Ecluse.BenchLoad.PyPI
@@ -2175,6 +2186,7 @@ library ecluse-bench-load
   exposed-modules:
     Ecluse.BenchLoad.Contract
     Ecluse.BenchLoad.BootLines
+    Ecluse.BenchLoad.CpuUse
     Ecluse.BenchLoad.Evidence
     Ecluse.BenchLoad.Exposition
     Ecluse.BenchLoad.Floors
@@ -2182,8 +2194,10 @@ library ecluse-bench-load
     Ecluse.BenchLoad.NpmArtifact
     Ecluse.BenchLoad.Normalise
     Ecluse.BenchLoad.Pod
+    Ecluse.BenchLoad.ReportLabels
     Ecluse.BenchLoad.RtsWindow
     Ecluse.BenchLoad.Selection
+    Ecluse.BenchLoad.Sweep
     Ecluse.BenchLoad.Patterns
     Ecluse.BenchLoad.PatternReport
     Ecluse.BenchLoad.Verdict
@@ -2220,6 +2234,7 @@ library ecluse-bench-report
     Ecluse.BenchReport.Performance
     Ecluse.BenchReport.PerformanceCommand
     Ecluse.BenchReport.PerformanceReceipt
+    Ecluse.BenchReport.Sweep
   build-depends:
     , ecluse:ecluse-report-format
     , aeson >=2.2 && <2.4
@@ -2240,6 +2255,7 @@ executable bench-report
   main-is:        Main.hs
   hs-source-dirs: bench/report
   build-depends:
+    , ecluse:ecluse-bench-load
     , ecluse:ecluse-bench-report
     , filepath  ^>=1.4 || ^>=1.5
     , text      ^>=2.1

@@ -2,21 +2,35 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Project scenario reports into service attribution without discarding raw private-hit latency.
+-- | Project scenario reports into service attribution without discarding raw private-hit latency, and render a placed proxy's CPU time.
 module Ecluse.BenchLoad.ReportSpec (spec) where
 
 import Data.Aeson (eitherDecode, encode)
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.BenchLoad.Harness (Scenario (scenarioPublicLegUnavailableReason), ScenarioReport (..))
+import Ecluse.BenchLoad.Harness (LoadKnobs (lkProxyTuning), ProxyFigures (pfCpu), Scenario (scenarioPublicLegUnavailableReason), ScenarioReport (..))
 import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
-import Ecluse.BenchLoad.Report (renderServiceTime)
+import Ecluse.BenchLoad.Pod (ProxyTuning (ptCpus), noTuning, parseCpuList)
+import Ecluse.BenchLoad.Report (Section (sectionKnobs), renderReports, renderServiceTime)
 import Ecluse.BenchLoad.Scenarios (findScenario)
-import Ecluse.BenchLoad.Support (scenarioReport)
+import Ecluse.BenchLoad.Support (loadedSection, placedWindow, proxyWithPeak, scenarioReport)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 
 spec :: Spec
-spec = describe "renderServiceTime" $ do
+spec = do
+    serviceTimeSpec
+    describe "renderReports" $
+        it "shows busy time on the proxy's CPUs that the proxy did not spend only for a proxy placed on its own CPUs" $ do
+            let report = (scenarioReport "npm/merge-cold" 100 0 255 300){srProxy = Just (proxyWithPeak (300 * 1024 * 1024)){pfCpu = Just (placedWindow 1_000)}}
+                unplaced = loadedSection Npm 5_000 [report]
+                placed = unplaced{sectionKnobs = (sectionKnobs unplaced){lkProxyTuning = noTuning{ptCpus = rightToMaybe (parseCpuList "2-3")}}}
+                foreignRow = T.isPrefixOf "| busy time on the proxy's CPUs that the proxy did not spend |"
+            T.lines (renderReports placed) `shouldSatisfy` any foreignRow
+            T.lines (renderReports unplaced) `shouldNotSatisfy` any foreignRow
+
+serviceTimeSpec :: Spec
+serviceTimeSpec = describe "renderServiceTime" $ do
     case findScenario "npm/tarball-ceiling" of
         Nothing -> it "has a ceiling scenario" (expectationFailure "missing npm/tarball-ceiling scenario")
         Just ceilingScenario -> do

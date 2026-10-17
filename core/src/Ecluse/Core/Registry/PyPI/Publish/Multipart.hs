@@ -1,11 +1,10 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE TupleSections #-}
 
--- | Bounded declared-name decoding for the unchanged PyPI publication relay body.
-module Ecluse.Core.Registry.PyPI.Publish.Multipart (declaredNames) where
+-- | Bounded reading of the name and @:action@ claims in the unchanged PyPI publication relay body.
+module Ecluse.Core.Registry.PyPI.Publish.Multipart (uploadClaims, pypiFileUploadOnly) where
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BSC
@@ -14,13 +13,33 @@ import Data.Text.Encoding qualified as TE
 import Network.Wai.Parse qualified as Wai
 import UnliftIO.Exception (tryAny)
 
-import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry (ParseError (..), PublishBodyFault (PublishMalformed, PublishUnsupported))
 import Ecluse.Core.Registry.PyPI.Project (canonicalName, projectName)
 import Ecluse.Core.Security.Limits (Limits (..))
 
--- | Read every claim using the declared Content-Type boundary. Conflicting or missing claims refuse the relay.
-declaredNames :: Limits -> Maybe ByteString -> ByteString -> IO (Either ParseError [Text])
-declaredNames limits contentType body = case checkedClaims limits contentType body >>= traverse decodeName of
+-- | The agreed project name of one @file_upload@, read with the declared Content-Type boundary.
+uploadClaims :: Limits -> Maybe ByteString -> ByteString -> IO (Either PublishBodyFault [Text])
+uploadClaims limits contentType body = case checkedFields limits contentType body of
+    Left fault -> pure (Left (PublishMalformed fault))
+    Right fields -> case uploadAction [value | (ActionField, value) <- fields] of
+        Left fault -> pure (Left fault)
+        Right () -> first PublishMalformed <$> agreedName limits [value | (NameField, value) <- fields]
+
+-- | The @501@ reason for any other @:action@, such as @remove_pkg@ or @doc_upload@.
+pypiFileUploadOnly :: Text
+pypiFileUploadOnly = "this proxy relays new-release uploads (:action=file_upload) only: change or remove an existing release at the publication target"
+
+-- Uploaders send one file_upload. pypiserver deletes a release on remove_pkg under the same permission.
+uploadAction :: [ByteString] -> Either PublishBodyFault ()
+uploadAction = \case
+    ["file_upload"] -> Right ()
+    [_] -> Left (PublishUnsupported pypiFileUploadOnly)
+    [] -> Left (PublishMalformed (ParseError "multipart upload has no :action"))
+    _ -> Left (PublishMalformed (ParseError "multipart upload declares more than one :action"))
+
+-- Conflicting or missing names refuse the relay, as does a name Wai would read differently.
+agreedName :: Limits -> [ByteString] -> IO (Either ParseError [Text])
+agreedName limits raw = case traverse decodeName raw of
     Left fault -> pure (Left fault)
     Right claims -> do
         let values = map (TE.encodeUtf8 . canonicalName) claims
@@ -58,8 +77,12 @@ discardFile _ _ readChunk = drain
   where
     drain = readChunk >>= \chunk -> unless (BS.null chunk) drain
 
-checkedClaims :: Limits -> Maybe ByteString -> ByteString -> Either ParseError [ByteString]
-checkedClaims limits contentType body = do
+-- The form fields the guard reads. Every other part passes through unread.
+data GuardField = NameField | ActionField
+    deriving stock (Eq)
+
+checkedFields :: Limits -> Maybe ByteString -> ByteString -> Either ParseError [(GuardField, ByteString)]
+checkedFields limits contentType body = do
     when (BS.length body > maxPublishRequestBytes limits) (bad "multipart upload exceeds its byte bound")
     header <- maybe (bad "missing multipart Content-Type") Right contentType
     when (BS.length header > 8192) (bad "multipart Content-Type exceeds its bound")
@@ -75,19 +98,19 @@ boundaryByte :: Word8 -> Bool
 boundaryByte byte = byte >= 33 && byte <= 126 && byte /= 34 && byte /= 92
 
 -- Wai ignores malformed part headers, so reject ambiguity before it selects a disposition claim.
-checkParts :: Limits -> ByteString -> Int -> ByteString -> Either ParseError [ByteString]
+checkParts :: Limits -> ByteString -> Int -> ByteString -> Either ParseError [(GuardField, ByteString)]
 checkParts limits boundary count bytes = do
     when (count >= maxArtifactCount limits) (bad "multipart part count exceeds its bound")
     let (headers, headerSuffix) = BS.breakSubstring "\r\n\r\n" bytes
     when (BS.null headerSuffix || BS.length headers > 16384) (bad "malformed multipart headers")
-    named <- checkHeaders headers
+    field <- checkHeaders headers
     (value, suffix) <- splitPart boundary (BS.drop 4 headerSuffix)
     later <- case suffix of
         "--\r\n" -> Right []
         "--" -> Right []
         remaining | Just following <- BS.stripPrefix "\r\n" remaining -> checkParts limits boundary (count + 1) following
         _ -> bad "malformed multipart boundary delimiter"
-    pure ([value | named] <> later)
+    pure (map (,value) (maybeToList field) <> later)
 
 splitPart :: ByteString -> ByteString -> Either ParseError (ByteString, ByteString)
 splitPart boundary bytes = go 0 bytes
@@ -102,7 +125,7 @@ splitPart boundary bytes = go 0 bytes
                     then Right (BS.take offset bytes, after)
                     else go (offset + BS.length marker) after
 
-checkHeaders :: ByteString -> Either ParseError Bool
+checkHeaders :: ByteString -> Either ParseError (Maybe GuardField)
 checkHeaders bytes = do
     headers <- traverse parseHeader (BSC.lines bytes)
     disposition <- case [value | ("content-disposition", value) <- headers] of
@@ -115,15 +138,21 @@ checkHeaders bytes = do
     unless (kind == "form-data" && length names == 1 && not (any BS.null names)) (bad "malformed multipart disposition name")
     unless (length [() | ("filename", _) <- attributes] <= 1) (bad "ambiguous multipart filename")
     when (any (\(key, _) -> key `notElem` ["name", "filename"]) attributes) (bad "unsupported multipart disposition attribute")
-    let named = names == ["name"]
-    when (named && any ((== "filename") . fst) attributes) (bad "multipart name is a file part")
-    pure named
+    let field = guardField names
+    when (isJust field && any ((== "filename") . fst) attributes) (bad "multipart name or :action is a file part")
+    pure field
   where
     parseHeader line = do
         let clean = fromMaybe line (BS.stripSuffix "\r" line)
             (key, rest) = BS.break (== 58) clean
         when (BS.null key || BS.null rest || BS.any (\c -> c <= 32 || c >= 127) key) (bad "malformed multipart header")
         pure (BSC.map toLower key, BSC.dropWhile (== ' ') (BS.drop 1 rest))
+
+guardField :: [ByteString] -> Maybe GuardField
+guardField = \case
+    ["name"] -> Just NameField
+    [":action"] -> Just ActionField
+    _ -> Nothing
 
 bad :: Text -> Either ParseError a
 bad = Left . ParseError

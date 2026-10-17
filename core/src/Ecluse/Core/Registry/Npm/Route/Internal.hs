@@ -253,7 +253,11 @@ publishRoute =
         "Publish a first-party package"
         "Relays the publish document to the configured publication target after the anti-shadowing \
         \scope guard. Écluse keys the write on the route's package name, never the document's \
-        \self-reported name. The target's status and JSON-labelled bytes are relayed transparently."
+        \self-reported name. Only a document with a non-empty `_attachments` object, exactly one \
+        \version, and every `dist-tags` value on that version is relayed: any other body, such as the \
+        \one `npm deprecate` sends, answers `501`. A body that repeats a key, is not a JSON object, or \
+        \files its version under a key other than its `version` field answers `400`. The target's \
+        \status and JSON-labelled bytes are relayed transparently."
         (Just publishRequest)
         npmPublishContract
 
@@ -381,7 +385,7 @@ npmPublishContract :: ResponseContract NpmPublishResponse
 npmPublishContract =
     variableOpaqueContract
         "application/json"
-        "The publication target's status and JSON-labelled response bytes are relayed. Local authentication, scope, configuration, transport, and internal failures use npm's JSON error body."
+        "The publication target's status and JSON-labelled response bytes are relayed. Local authentication, scope, unsupported-write, configuration, transport, and internal failures use npm's JSON error body."
 
 npmPublishReplies :: PublishReplies NpmPublishResponse
 npmPublishReplies =

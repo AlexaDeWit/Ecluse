@@ -71,6 +71,7 @@ withProxyPortsConfigured ecosystem knobs configure privateApp publicApp mkMix bo
             , psPublicConnections = lkPublicConnectionsPerHost knobs
             , psPrivateConnections = lkPrivateConnectionsPerHost knobs
             , psAdvisories = lkAdvisories knobs
+            , psTuning = lkProxyTuning knobs
             }
 
 -- | The target for a duration-driven load over the URL mix.

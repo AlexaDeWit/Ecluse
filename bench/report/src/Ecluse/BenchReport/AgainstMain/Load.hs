@@ -10,12 +10,19 @@ so each section shows how its scenarios moved together and which operating point
 -}
 module Ecluse.BenchReport.AgainstMain.Load (
     againstMain,
+
+    -- * Reading a load report
+    Reading (..),
+    Scenario (..),
+    readReport,
 ) where
 
 import Data.Char (isDigit)
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+
+import Ecluse.BenchLoad.ReportLabels (memoryPeakColumn)
 
 import Ecluse.BenchReport.AgainstMain (
     Baseline,
@@ -43,7 +50,7 @@ againstMain =
             , reportNotes = notes
             }
 
--- One scenario's row of an at-a-glance table.
+-- | One scenario's row of an at-a-glance table, and the rows of the scenario's own table.
 data Scenario = Scenario
     { scName :: Text
     , scSuccesses :: Maybe Int
@@ -51,15 +58,17 @@ data Scenario = Scenario
     , scP50Ms :: Maybe Double
     , scP99Ms :: Maybe Double
     , scEnding :: Maybe Text
+    , scMemoryPeakMib :: Maybe Double
+    , scFigures :: Map Text Text
     }
 
--- What one report holds: each ecosystem's operating point, and every scenario in report order.
+-- | What one report holds: each ecosystem's operating point, and every scenario in report order.
 data Reading = Reading
     { readingKnobs :: Map Text [(Text, Text)]
     , readingScenarios :: [Scenario]
     }
 
--- An operating point belongs to the at-a-glance table that follows it.
+-- | Read a report's tables. An operating point belongs to the at-a-glance table that follows it.
 readReport :: Text -> Either Text Reading
 readReport raw = case catMaybes (snd (mapAccumL step [] (tables raw))) of
     [] -> Left "It holds no scenario table."
@@ -67,9 +76,12 @@ readReport raw = case catMaybes (snd (mapAccumL step [] (tables raw))) of
         Right
             Reading
                 { readingKnobs = Map.fromList [(ecosystemOf opening, knobs) | (knobs, opening : _) <- sections]
-                , readingScenarios = concatMap snd sections
+                , readingScenarios = map withFigures (concatMap snd sections)
                 }
   where
+    -- Each scenario's own table follows a heading that names it.
+    figures = Map.fromList [(heading, Map.fromList [(metric, value) | [metric, value] <- tableRows table]) | table <- tables raw, map T.toLower (tableHeader table) == ["metric", "value"], Just heading <- [tableHeading table]]
+    withFigures scenario = scenario{scFigures = Map.findWithDefault mempty (scName scenario) figures}
     step knobs table
         | map T.toLower (tableHeader table) == ["knob", "value"] = ([(knob, value) | [knob, value] <- tableRows table], Nothing)
         | hasColumns ["scenario", "successes", "refusals"] table = ([], Just (knobs, mapMaybe scenarioOf (records table)))
@@ -86,12 +98,18 @@ scenarioOf record = do
             , scP50Ms = cell "success p50" >>= milliseconds
             , scP99Ms = cell "success p99" >>= milliseconds
             , scEnding = cell "ending"
+            , scMemoryPeakMib = cell memoryPeakColumn >>= mebibytes . fst . T.breakOn " / "
+            , scFigures = mempty
             }
   where
     cell column = Map.lookup column record
     -- A ramp prints its count with a note after it.
     leadingCount = readMaybe . toString . T.takeWhile isDigit
     milliseconds = T.stripSuffix " ms" >=> readMaybe . toString
+
+-- A size the report prints in MiB.
+mebibytes :: Text -> Maybe Double
+mebibytes = T.stripSuffix " MiB" . T.strip >=> readMaybe . toString
 
 -- A scenario key opens with its ecosystem.
 ecosystemOf :: Scenario -> Text

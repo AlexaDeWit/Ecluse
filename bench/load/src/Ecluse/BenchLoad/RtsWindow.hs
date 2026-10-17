@@ -21,9 +21,7 @@ module Ecluse.BenchLoad.RtsWindow (
 
 import Data.Aeson (FromJSON, ToJSON)
 
-{- | The collection a snapshot runs first. The RTS updates its cumulative counters only at a
-collection, so every snapshot takes one: a minor one to close a window, a major one for live data.
--}
+-- | The collection a snapshot runs first, since the RTS updates its cumulative counters only at one.
 data Collection = MinorCollection | MajorCollection
     deriving stock (Eq, Show, Enum, Bounded)
 
@@ -52,6 +50,8 @@ data RtsSnapshot = RtsSnapshot
     -- ^ Live data after the latest collection, exact only when that collection was major.
     , rsMemInUseBytes :: Word64
     , rsCapabilities :: Int
+    , rsProcessors :: Int
+    -- ^ The processors the RTS sees, which a cgroup's CPU placement bounds.
     , rsMaxHeapBytes :: Maybe Int
     -- ^ The @-M@ ceiling in force, 'Nothing' when unbounded.
     , rsAllocAreaBytes :: Int
@@ -104,9 +104,7 @@ meanLiveAtMajors w
     | rwMajorGcs w == 0 = Nothing
     | otherwise = Just (fromIntegral (rwCumulativeLiveBytes w) / fromIntegral (rwMajorGcs w))
 
-{- | Whether the fullest small-object live data passed the compaction threshold, the point where
-every collection turns single-threaded. Inferred from the maxima. 'Nothing' without a heap ceiling.
--}
+-- | Whether small-object live data passed the threshold where every collection turns single-threaded. 'Nothing' without @-M@.
 compactionThresholdCrossed :: RtsSnapshot -> Maybe Bool
 compactionThresholdCrossed s
     | rsCompactAlways s = Just True
