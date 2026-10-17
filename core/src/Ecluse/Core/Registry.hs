@@ -113,7 +113,7 @@ data FetchFault
       FetchTransport TransportFault
     deriving stock (Eq, Show)
 
--- | Why a publish body is not relayed. Only a new-release upload is: other writes change or delete stored releases.
+-- | Why a publish body is not relayed. Only the shape of a new-release upload is, since other writes edit stored releases.
 data PublishBodyFault
     = -- | The body cannot be read as the ecosystem's upload: @400@.
       PublishMalformed ParseError

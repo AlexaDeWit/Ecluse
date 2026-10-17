@@ -64,9 +64,12 @@ actionSpec = describe "uploadClaims :action" $ do
     it "refuses a missing or repeated action as malformed" $ do
         withAction [] >>= (`shouldSatisfy` isMalformedBody)
         withAction [fileUpload, fileUpload] >>= (`shouldSatisfy` isMalformedBody)
-    for_ ["remove_pkg", "doc_upload", "submit"] $ \action ->
+    for_ ["remove_pkg", "doc_upload", "submit", "File_Upload", " file_upload"] $ \action ->
         it ("refuses " <> show action <> " as a write it does not relay") $
             withAction [part ":action" action] `shouldReturn` Left (PublishUnsupported pypiFileUploadOnly)
+    it "reads a field named :Action as no action" $ do
+        missing <- withAction []
+        withAction [part ":Action" "file_upload"] `shouldReturn` missing
     it "refuses an action sent as a file part" $
         withAction ["--boundary\r\nContent-Disposition: form-data; name=\":action\"; filename=\"a\"\r\n\r\nfile_upload\r\n"] >>= (`shouldSatisfy` isMalformedBody)
   where

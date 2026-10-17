@@ -86,10 +86,11 @@ PyPI publication uses the same guard with native multipart name declarations. Pa
 require one consistent canonical project identity. Framing and name checks run after edge
 authentication within the mount's request bound. The relay preserves the incoming body and exact
 Content-Type, including its boundary. It does not rebuild the client's distribution.
-- **New releases only.** The relays accept a new-release upload and nothing else. An npm document
-  must carry a non-empty `_attachments` object and exactly one `versions` entry. A PyPI upload
-  must carry exactly one `:action` part, with the value `file_upload`. Any other readable write
-  is a `501` before any relay. `npm deprecate` and `npm star` send back Écluse's served document,
+- **New-release shape only.** The relays forward only a body with the shape of a new-release
+  upload. An npm document must carry a non-empty `_attachments` object and exactly one `versions`
+  entry. A PyPI upload must carry exactly one `:action` part, with the value `file_upload`. Any
+  other readable body, such as the one `npm deprecate` or `npm star` sends, or a PyPI
+  `remove_pkg`, is a `501` before any relay. `npm deprecate` sends back Écluse's served document,
   which omits the stored versions Écluse hides and carries its own `latest`. Verdaccio applies
   that document over its own, and pypiserver deletes a release on `remove_pkg`. An unreadable
   body, or a missing or repeated `:action`, is a `400`. The check reads key presence and counts,

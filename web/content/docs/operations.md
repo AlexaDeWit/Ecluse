@@ -85,13 +85,13 @@ returns `501` by design, because search is a discovery convenience, not an insta
 `/npm/-/package/{package}/dist-tags/{tag}` also return `501`, because Écluse implements no mutable
 named pointer. A package's tags are in the metadata document Écluse serves, and the publication
 target owns setting and removing them. With a publication target configured, the npm publish route
-`PUT /npm/{package}` also returns `501` for a write that is not a new release, such as
-`npm deprecate` or `npm star`. That write carries Écluse's served document, and a store such as
-Verdaccio applies it over its own. The PyPI upload route returns `501` for an `:action` other
-than `file_upload`. Mirror, Pilot, and Dredger expose their health probes on
-`ECLUSE_SERVER__PORT`. A separate metrics listener appears only when telemetry is on and
-`OTEL_METRICS_EXPORTER=prometheus`. Co-located Prometheus listeners need distinct ports
-([Telemetry](@/docs/operations.md#telemetry-opt-in)).
+`PUT /npm/{package}` also returns `501` for a document without exactly one version and a non-empty
+`_attachments` object, such as the one `npm deprecate` or `npm star` sends. `npm deprecate` sends
+back Écluse's served document, and a store such as Verdaccio applies it over its own. The PyPI
+upload route returns `501` for an `:action` other than `file_upload`. Mirror, Pilot, and Dredger
+expose their health probes on `ECLUSE_SERVER__PORT`. A separate metrics listener appears only when
+telemetry is on and `OTEL_METRICS_EXPORTER=prometheus`. Co-located Prometheus listeners need
+distinct ports ([Telemetry](@/docs/operations.md#telemetry-opt-in)).
 
 ## Graceful shutdown and pod drain
 

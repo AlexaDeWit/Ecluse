@@ -160,7 +160,7 @@ basePublishDeps bodyBudget =
         , pubAdapter = npmPublish
         }
 
--- The in-scope package the publish cases write, in a new-release document that passes the upload guard.
+-- The in-scope package name the publish cases write to.
 widgetName :: Text
 widgetName = "@acme/widget"
 

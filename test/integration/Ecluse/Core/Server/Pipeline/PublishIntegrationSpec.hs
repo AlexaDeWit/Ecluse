@@ -7,6 +7,8 @@
 -- | Publish routing and credentials through the application and a captured target.
 module Ecluse.Core.Server.Pipeline.PublishIntegrationSpec (spec) where
 
+import Data.Aeson ((.=))
+import Data.Aeson qualified as Aeson
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Text qualified as T
@@ -310,7 +312,7 @@ npmPublishSpec = describe "first-party npm publication relay" $ do
             app <- proxyWith (Just (publishDepsAt targetPort Nothing))
             resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") (npmDeprecateDocument "use 1.1.0") app
             status resp `shouldBe` 501
-            decodeUtf8 (LBS.toStrict (simpleBody resp)) `shouldSatisfy` T.isInfixOf NpmPublish.npmNewReleaseOnly
+            Aeson.decode (simpleBody resp) `shouldBe` Just (Aeson.object ["error" .= NpmPublish.npmNewReleaseOnly])
             targetSaw target `shouldReturn` []
 
     it (caseLabel "integration/publication/native-021" "refuses an undecodable npm publish body with 400 before any relay") $

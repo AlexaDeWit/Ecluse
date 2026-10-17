@@ -253,8 +253,8 @@ publishRoute =
         "Publish a first-party package"
         "Relays the publish document to the configured publication target after the anti-shadowing \
         \scope guard. Écluse keys the write on the route's package name, never the document's \
-        \self-reported name. Only a new-release document, with a non-empty `_attachments` object and \
-        \exactly one version, is relayed: any other write, such as `npm deprecate`, answers `501`, and \
+        \self-reported name. Only a document with a non-empty `_attachments` object and exactly one \
+        \version is relayed: any other body, such as the one `npm deprecate` sends, answers `501`, and \
         \a body that is not a JSON object answers `400`. The target's status and JSON-labelled bytes \
         \are relayed transparently."
         (Just publishRequest)

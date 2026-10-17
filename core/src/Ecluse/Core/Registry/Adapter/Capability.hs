@@ -66,7 +66,7 @@ data AdapterMetadata = AdapterMetadata
     -- ^ What this ecosystem's full reads and listings charge the memory budget per source byte.
     }
 
--- | Artifact request formation by conventional filename or authoritative URL, shared by serve and worker.
+-- | Artifact request formation by filename or authoritative URL, shared by serve and worker ('Ecluse.Core.Server.Context.pdArtifact').
 data AdapterArtifact = AdapterArtifact
     { artifactByFile :: OriginClient -> PackageName -> Text -> Either UrlFormationError Request
     -- ^ Address a trusted origin by the conventional filename path under its base URL.
@@ -87,9 +87,9 @@ data AdapterPublish = AdapterPublish
     { publishRelay :: OriginClient -> PackageName -> PublishRequestBody -> IO (Either FetchFault PublishRelayResponse)
     -- ^ Relay a client's publish document to the target named as the origin, and return its answer.
     , publishUploadClaims :: Limits -> PublishRequestBody -> IO (Either PublishBodyFault [Text])
-    -- ^ Every identity claim of a new-release upload, or why the body is not relayed.
+    -- ^ Every identity claim of a body shaped as a new-release upload, or why the body is not relayed.
     , publishCodec :: PublishCodec
-    -- ^ The mirror write's document, requests, probe, and status semantics. The transport owns the rest.
+    -- ^ The mirror write's document, requests, probe, and status semantics. The transport owns the manager, mint, and fault classification.
     }
 
 -- | Store maintenance verbs for "Ecluse.Core.Registry.Maintenance.Protocol". A missing verb makes the Dredger refuse.

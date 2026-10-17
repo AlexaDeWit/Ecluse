@@ -358,9 +358,11 @@ uploadGuardSpec = describe "uploadClaims (the first-party new-release guard)" $ 
     for_ [("deprecate", npmDeprecateDocument "use 1.1.0"), ("undeprecate", npmDeprecateDocument ""), ("star", npmStarDocument)] $ \(command, body) ->
         it ("refuses the body of npm " <> command <> " as a write it does not relay") $
             uploadClaims (toStrict body) `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
-    it "refuses a release that also carries a second version, or no attachment" $ do
+    it "refuses a release with two versions or none, or with no attachment" $ do
         twoVersions <- editedRelease (KeyMap.insertWith withVersions "versions" (object ["1.0.0" .= object ["name" .= widget, "version" .= ("1.0.0" :: Text)]]))
         uploadClaims twoVersions `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
+        noVersions <- editedRelease (KeyMap.insert "versions" (object []))
+        uploadClaims noVersions `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
         bare <- editedRelease (KeyMap.insert "_attachments" (object []))
         uploadClaims bare `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
     it "refuses an undecodable body as malformed" $ do
