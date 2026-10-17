@@ -3,8 +3,10 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The @amazonka@ edge of the transport-fault vocabulary. An adapter folds the AWS error sum into
-"Ecluse.Core.Fault" as a value, or raises it past the adapter as 'AwsRequestFailed'. Neither form
-holds the request or the response headers, and a service's message keeps at most its first line.
+"Ecluse.Core.Fault" as a value, or raises it past the adapter as 'AwsRequestFailed'. A credential
+failure that reaches no adapter, such as a background refresh, renders through 'displayAwsFaultT'.
+No form holds the request or the response headers, and a service's message keeps at most its first
+line.
 -}
 module Ecluse.Runtime.Aws.Fault (
     -- * Faults as values
@@ -19,6 +21,10 @@ module Ecluse.Runtime.Aws.Fault (
     AwsAnswer (..),
     sendRaising,
     retypeAwsFailure,
+
+    -- * Failures that reach no adapter
+    AwsCredentialFault (..),
+    retypeAmazonkaEscapes,
     displayAwsFaultT,
 
     -- * Error codes
@@ -26,12 +32,14 @@ module Ecluse.Runtime.Aws.Fault (
 ) where
 
 import Amazonka qualified as AWS
+import Amazonka.Auth.Exception (AuthError (..))
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Text qualified as T
 import Lens.Micro ((^.))
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types.Status (statusCode)
-import UnliftIO.Exception (throwIO, try)
+import UnliftIO (MonadUnliftIO)
+import UnliftIO.Exception (throwIO, tryJust)
 
 import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportCause (TransportProtocol), TransportFault, boundedDetail, renderHttpFault, transportFault)
 import Ecluse.Core.Fault.Http (classifyTransport, displayFaultT, hostPortLabel, httpFault)
@@ -100,18 +108,59 @@ data AwsAnswer = AwsAnswer
 sendRaising :: (AWS.AWSRequest a) => AWS.Env -> a -> IO (AWS.AWSResponse a)
 sendRaising env request = sendClassified (raised (const (requestEndpoint env request))) env request >>= either throwIO pure
 
--- | Raise the @amazonka@ or http-client failure of an action whose request the caller never holds, such as credential discovery, as 'AwsRequestFailed'. An unparseable URL leaves as http-client's own exception.
+-- | Raise the @amazonka@ or http-client failure of an action whose request the caller never holds, such as credential discovery, as a typed fault. An unparseable URL leaves as http-client's own exception.
 retypeAwsFailure :: IO a -> IO a
 retypeAwsFailure action =
     -- Thrown outside any handler, so no annotation of the throw carries the original along.
-    try (try action) >>= \case
-        Left awsErr -> throwIO (raised AwsServiceNamed awsErr)
-        Right (Left httpErr) -> throwIO (raisedHttp httpErr)
-        Right (Right value) -> pure value
+    tryJust awsCallFault action >>= either throwIO pure
 
--- | 'displayFaultT', with a raised AWS fault rendered as its own text. Rendered through 'SomeException', it would gain GHC's exception context.
+-- | Why @amazonka@ found no usable credentials when no request failed. It keeps the first line of amazonka's reason, never a file's contents.
+data AwsCredentialFault
+    = -- | A setting a provider reads is missing: an environment variable or a file.
+      AwsCredentialMissing Text
+    | -- | A credentials file or document could not be used.
+      AwsCredentialUnusable Text
+    | -- | No provider in the chain found credentials.
+      AwsCredentialsExhausted
+    deriving stock (Eq, Show)
+
+instance Exception AwsCredentialFault where
+    displayException = toString . renderCredentialFault
+
+-- | Rethrow an @amazonka@ error or credential failure escaping the action as its typed fault. Any other exception passes unchanged.
+retypeAmazonkaEscapes :: (MonadUnliftIO m) => m a -> m a
+retypeAmazonkaEscapes action = tryJust amazonkaFault action >>= either throwIO pure
+
+-- | 'displayFaultT', with an @amazonka@ error or credential failure rendered as its typed fault's own text. Rendered through 'SomeException', it would gain GHC's exception context.
 displayAwsFaultT :: SomeException -> Text
-displayAwsFaultT err = maybe (displayFaultT err) renderRequestFailed (fromException err)
+displayAwsFaultT err = fromMaybe (displayFaultT typed) (typedText typed)
+  where
+    typed = fromMaybe err (amazonkaFault err)
+    typedText fault = (renderRequestFailed <$> fromException fault) <|> (renderCredentialFault <$> fromException fault)
+
+-- amazonka's background refresh hands a failure to the thread that discovered the credentials, wrapped in 'AuthError'.
+amazonkaFault :: SomeException -> Maybe SomeException
+amazonkaFault err
+    | Just awsErr <- fromException err = Just (raised AwsServiceNamed awsErr)
+    | Just authErr <- fromException err = Just (authFault authErr)
+    | otherwise = Nothing
+
+authFault :: AuthError -> SomeException
+authFault = \case
+    RetrievalError httpErr -> raisedHttp httpErr
+    AuthServiceError service -> raised AwsServiceNamed (AWS.ServiceError service)
+    OtherAuthError inner -> fromMaybe inner (awsCallFault inner)
+    MissingEnvError reason -> toException (AwsCredentialMissing (firstLineOf reason))
+    MissingFileError path -> toException (AwsCredentialMissing (toText path))
+    InvalidFileError reason -> toException (AwsCredentialUnusable (firstLineOf reason))
+    InvalidIAMError reason -> toException (AwsCredentialUnusable (firstLineOf reason))
+    CredentialChainExhausted -> toException AwsCredentialsExhausted
+  where
+    firstLineOf = fromMaybe "" . firstLine
+
+-- An http-client failure counts too, as the caller knows the call was one of amazonka's, such as a container credential fetch.
+awsCallFault :: SomeException -> Maybe SomeException
+awsCallFault err = amazonkaFault err <|> (raisedHttp <$> fromException err)
 
 -- | An error code lowercased, so no comparison turns on a service's own casing.
 errorCodeText :: AWS.ErrorCode -> Text
@@ -152,6 +201,12 @@ firstLine message = case T.takeWhile (`notElem` ['\n', '\r']) message of
 
 serviceName :: AWS.ServiceError -> Text
 serviceName service = service ^. AWS.serviceError_abbrev . AWS._Abbrev
+
+renderCredentialFault :: AwsCredentialFault -> Text
+renderCredentialFault = \case
+    AwsCredentialMissing reason -> "AWS credentials missing: " <> reason
+    AwsCredentialUnusable reason -> "AWS credentials unusable: " <> reason
+    AwsCredentialsExhausted -> "AWS credential discovery found no credentials"
 
 renderRequestFailed :: AwsRequestFailed -> Text
 renderRequestFailed failed = "AWS request failed at " <> renderFailure failed

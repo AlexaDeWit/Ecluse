@@ -29,7 +29,7 @@ import Ecluse.Pilot (PilotCompileOptions (..), PilotUploadUnconfigured (..), Upl
 import Ecluse.Pilot.Plan (ExportTarget (ExportTarget, etEcosystem, etEpss))
 import Ecluse.Runtime.Aws.Env.Internal (newAwsEnvWith)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
-import Ecluse.Runtime.Test.Aws (refusedDiscovery)
+import Ecluse.Runtime.Test.Aws (deliverRefreshFailure, holdsNoPlantedSecret, refreshFailures, refusedDiscovery)
 import Ecluse.Test.Log (captureJsonLog, newTestLogEnv, runJsonLog, runQuietKatip)
 import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, epssFreeRules, metaOf, scoresOf, withSourceStubs)
 import Ecluse.Test.Stub (Captured (capPath), Stub, allCaptured, closedAuthority, requestSecrets)
@@ -64,6 +64,17 @@ spec = do
                 logged `shouldSatisfy` T.isInfixOf ("pilot-export-" <> eco <> ": iteration faulted")
             logged `shouldSatisfy` T.isInfixOf ("AWS request failed at " <> closedAuthority <> ": ConnectionFailure")
             for_ requestSecrets $ \secret -> logged `shouldNotSatisfy` T.isInfixOf secret
+
+        it "logs a credential refresh failure handed to a cycle's thread by its typed cause, never the request" $ do
+            failures <- refreshFailures
+            for_ failures $ \failure -> do
+                let schedule = BackoffSchedule{bsBaseMicros = 1_000, bsCapMicros = 8_000}
+                    targets = ExportTarget{etEcosystem = Npm, etEpss = EpssOptional} :| [ExportTarget{etEcosystem = PyPI, etEpss = EpssOptional}]
+                logged <- runJsonLog (void (timeout 200_000 (superviseExportCycles schedule targets (const (liftIO (deliverRefreshFailure failure))))))
+                for_ ["npm", "pypi"] $ \eco ->
+                    logged `shouldSatisfy` T.isInfixOf ("pilot-export-" <> eco <> ": iteration faulted")
+                logged `shouldSatisfy` T.isInfixOf "AWS request failed at "
+                logged `shouldSatisfy` holdsNoPlantedSecret
 
     describe "runPilotCompile (one-shot compile mode)" $ do
         it "compiles the configured feeds into the requested directory and returns the artifact's path" $ do

@@ -9,7 +9,6 @@ module Ecluse.Core.Credential.Refresh.InternalSpec (spec) where
 import Control.Concurrent (ThreadId, myThreadId, throwTo)
 import Control.Exception (AsyncException (ThreadKilled))
 import Data.Time (NominalDiffTime, UTCTime (..), addUTCTime, diffUTCTime, fromGregorian)
-import GHC.Conc (ThreadStatus (ThreadDied, ThreadFinished), threadStatus)
 import Hedgehog (
     Callback (Ensure, Require, Update),
     Command (Command),
@@ -42,7 +41,7 @@ import Ecluse.Core.Credential.Refresh.Internal (
     releaseSingleFlight,
  )
 import Ecluse.Core.Rules.Effectful (Resilience (..), defaultEffectfulConfig, newBreaker, runResilient)
-import Ecluse.Test.Poll (awaitUntil)
+import Ecluse.Test.Poll (awaitUntil, threadEnded)
 import Ecluse.Test.Support (newTestClock)
 
 t0 :: UTCTime
@@ -1074,10 +1073,3 @@ recoverySpec = describe "owned credential recovery" $ do
                 unSecret . authSecret <$> currentToken other `shouldReturn` "other-fresh"
                 atomically (putTMVar gate ())
                 wait winner `shouldReturn` ()
-
-threadEnded :: ThreadId -> IO Bool
-threadEnded worker =
-    threadStatus worker <&> \case
-        ThreadFinished -> True
-        ThreadDied -> True
-        _ -> False
