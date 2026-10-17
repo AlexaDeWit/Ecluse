@@ -14,6 +14,7 @@ module Ecluse.Core.Fault.Http (
     displayFaultT,
 ) where
 
+import Data.Text qualified as T
 import Network.Connection (HostCannotConnect, HostNotResolved)
 import Network.HTTP.Client (
     HttpException (HttpExceptionRequest, InvalidUrlException),
@@ -23,6 +24,7 @@ import Network.HTTP.Client (
  )
 import Network.HTTP.Types.Status (statusCode)
 import Network.TLS qualified as TLS
+import System.IO.Error (isResourceVanishedError, resourceVanishedErrorType)
 
 import Ecluse.Core.Fault (
     HttpFault (HttpStatus, HttpTransport),
@@ -34,7 +36,7 @@ import Ecluse.Core.Fault (
 import Ecluse.Core.Security.Authority (dialledAuthorityLabel)
 import Ecluse.Core.Text (displayExceptionT)
 
--- | Classify a client exception, recognising TLS and connection failures by type rather than rendered text. The detail is the dialled @host:port@ and the client's own reason.
+-- | Classify a client exception by type, reading text only for the socket reset tls keeps as text. The detail is the dialled @host:port@ and the client's own reason.
 classifyTransport :: HttpException -> TransportFault
 classifyTransport err = transportFault (causeOf err) (dialledAuthority err <> ": " <> clientReason err)
   where
@@ -47,14 +49,28 @@ classifyTransport err = transportFault (causeOf err) (dialledAuthority err <> ":
             -- The peer hung up before the first response byte, so the request never
             -- reached a protocol exchange.
             NoResponseDataReceived -> TransportUnreachable
-            -- The TLS manager wraps its connector's refused connection or empty address list here, where plain HTTP raises ConnectionFailure.
-            InternalException inner
-                | Just (_ :: TLS.TLSException) <- fromException inner -> TransportTls
-                | Just (_ :: HostCannotConnect) <- fromException inner -> TransportUnreachable
-                | Just (_ :: HostNotResolved) <- fromException inner -> TransportUnreachable
-                | otherwise -> TransportProtocol
+            InternalException inner -> internalCause inner
             _ -> TransportProtocol
         InvalidUrlException _ _ -> TransportProtocol
+
+-- The TLS manager wraps its connector's refused connection or empty address list here, where plain HTTP raises ConnectionFailure.
+-- A peer that closes or resets the handshake or the socket is unreachable on either scheme, as NoResponseDataReceived is.
+internalCause :: SomeException -> TransportCause
+internalCause inner
+    | Just (TLS.HandshakeFailed reason) <- fromException inner, peerHungUp reason = TransportUnreachable
+    | Just (_ :: TLS.TLSException) <- fromException inner = TransportTls
+    | Just (_ :: HostCannotConnect) <- fromException inner = TransportUnreachable
+    | Just (_ :: HostNotResolved) <- fromException inner = TransportUnreachable
+    | Just ioe <- fromException inner, isResourceVanishedError ioe = TransportUnreachable
+    | otherwise = TransportProtocol
+
+-- tls keeps a socket's IOException only as its shown text, "location: type (reason)", so a reset is
+-- recognised by the type base renders between those delimiters.
+peerHungUp :: TLS.TLSError -> Bool
+peerHungUp = \case
+    TLS.Error_EOF -> True
+    TLS.Error_Misc shown -> (": " <> show resourceVanishedErrorType <> " (") `T.isInfixOf` toText shown
+    _ -> False
 
 -- | The answered status, or else the transport fault 'classifyTransport' assigns.
 httpFault :: HttpException -> HttpFault
