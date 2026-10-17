@@ -563,9 +563,10 @@ PyPI metadata, and `files.pythonhosted.org` for PyPI distributions. Private arti
 the selected backend. Pilot uses `osv-vulnerabilities.storage.googleapis.com` and
 `epss.empiricalsecurity.com` by default. It attempts the EPSS feed on every compile, even when no
 EPSS rule is enabled, so allow that egress whatever your rules. `ecluse check-config` prints the
-feed's `host:port` on a line that starts `pilot: every compile attempts the EPSS feed at`. On a
-`5xx`, `408`, or `429` from either host, Pilot retries with capped, jittered backoff, so a transient
-outage does not get your NAT address rate-limited.
+feed's `host:port` on a line that starts `pilot: every compile attempts the EPSS feed at`. Pilot
+retries with capped, jittered backoff on a `5xx`, `408`, or `429` from either host, and on a download
+the host resets or cuts short partway through. A transient outage then does not get your NAT address
+rate-limited.
 
 Allow CodeArtifact API access for token minting on every role that mints: `ecluse proxy`,
 `ecluse mirror`, and Dredger. `ecluse proxy --no-worker` mints no mirror-write token. Dredger also

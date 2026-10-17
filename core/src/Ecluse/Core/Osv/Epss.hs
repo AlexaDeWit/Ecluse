@@ -62,8 +62,8 @@ import Data.Streaming.Zlib (
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Katip (KatipContext, Severity (InfoS), logFM, ls)
-import Network.HTTP.Client (HttpException (InvalidUrlException))
-import Network.HTTP.Simple (getResponseBody, getResponseHeader, httpSource, parseRequest, setRequestCheckStatus)
+import Network.HTTP.Client (HttpException (InvalidUrlException), Manager)
+import Network.HTTP.Simple (getResponseBody, getResponseHeader, httpSource, parseRequest, setRequestCheckStatus, setRequestManager)
 import Network.HTTP.Types.Header (hLastModified)
 import UnliftIO.Exception (tryJust)
 
@@ -179,11 +179,11 @@ parseEpssLine raw = case T.splitOn "," (decodeUtf8 raw) of
         pure p
 
 -- | Fetch and decode the feed, bounded by @cap@ bytes on each side of decompression. A non-2xx, undecodable, over-large, or scoreless feed throws.
-fetchEpssScores :: (MonadResource m, MonadThrow m, KatipContext m) => Int -> String -> m EpssFeed
-fetchEpssScores cap urlStr = do
+fetchEpssScores :: (MonadResource m, MonadThrow m, KatipContext m) => Manager -> Int -> String -> m EpssFeed
+fetchEpssScores manager cap urlStr = do
     -- 'setRequestCheckStatus' throws at the header boundary, so a 502 reaches the caller's
     -- backoff as a retryable fault instead of feeding an error page to the decompressor.
-    req <- liftIO (setRequestCheckStatus <$> parseRequest urlStr)
+    req <- liftIO (setRequestManager manager . setRequestCheckStatus <$> parseRequest urlStr)
     -- The header is read from the response that carried the rows, so the date and the scores
     -- describe one fetch.
     ((digest, decoded), served) <- runConduit $ httpSource req $ \res -> do
@@ -310,8 +310,8 @@ httpFailure = \case
     other -> Just (EpssFeedFetch (httpFault other))
 
 -- | Fetch the feed under the advisory retry policy. A failure 'classifyEpssFailure' names is a value. Anything else propagates.
-acquireEpssFeed :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Int -> String -> m (Either EpssFeedFailure EpssFeed)
-acquireEpssFeed cap url = tryJust classifyEpssFailure (withOsvRetry (dialledAuthorityLabel (toText url)) defaultOsvRetryPolicy (fetchEpssScores cap url))
+acquireEpssFeed :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Manager -> Int -> String -> m (Either EpssFeedFailure EpssFeed)
+acquireEpssFeed manager cap url = tryJust classifyEpssFailure (withOsvRetry (dialledAuthorityLabel (toText url)) defaultOsvRetryPolicy (fetchEpssScores manager cap url))
 
 -- | What one compile joins onto its advisories.
 data EpssEnrichment

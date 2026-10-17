@@ -17,6 +17,7 @@ import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldReturn, sho
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
+import Ecluse.Core.Osv.Compile (newFeedManager)
 import Ecluse.Core.Osv.Ecosystem (
     OsvEcosystem (osvExportDirectory, osvMaxAdvisoryFanOut, osvWireName),
     osvEcosystemFor,
@@ -56,9 +57,7 @@ fanOutAdvisory feed n = encodeUtf8 (opening <> T.intercalate "," (map versionLit
             <> "\"},\"versions\":["
     versionLiteral i = "\"1.0." <> show i <> "\""
 
-{- | Ingest a whole in-memory archive, answering the rows it emitted beside the run's tally.
-Every archive case here drives the stream this way, so the wiring lives in one place.
--}
+-- | Ingest a whole in-memory archive, answering the rows it emitted beside the run's tally.
 ingestArchive :: IngestLimits -> OsvEcosystem -> LByteString -> OsvTestM ([ExtractedOsv], IngestStats)
 ingestArchive limits feed archive = do
     ingest <- newOsvIngest limits feed noScores ingestClock
@@ -82,7 +81,8 @@ ingestedUrl :: String -> IO [ExtractedOsv]
 ingestedUrl url =
     runOsvTestM $ do
         ingest <- newOsvIngest defaultIngestLimits npmFeed noScores ingestClock
-        runConduit (void (streamOsvUrl Nothing ingest url) .| sinkList)
+        feeds <- liftIO newFeedManager
+        runConduit (void (streamOsvUrl Nothing feeds ingest url) .| sinkList)
 
 fanOutRows :: OsvEcosystem -> Int -> IO ([ExtractedOsv], IngestStats)
 fanOutRows feed n = osvZipOf [("fan.json", fanOutAdvisory feed n)] >>= ingestedRows feed
@@ -132,7 +132,8 @@ spec = describe "the OSV ingest stream" $ do
         for_ [(npmFeed, npmArchive), (pypiFeed, pypiArchive)] $ \(feed, archive) -> do
             digest <- withStub status200 archive $ \stub -> runOsvTestM $ do
                 ingest <- newOsvIngest defaultIngestLimits feed noScores ingestClock
-                runConduit (fuseUpstream (streamOsvUrl Nothing ingest (unpack (stubBaseUrl stub) <> "/all.zip")) sinkNull)
+                feeds <- liftIO newFeedManager
+                runConduit (fuseUpstream (streamOsvUrl Nothing feeds ingest (unpack (stubBaseUrl stub) <> "/all.zip")) sinkNull)
             digest `shouldBe` digestOf (toStrict archive)
 
     for_ [(String "2024-05-14T20:15:44Z", 0), (String "invalid", 1)] $ \(withdrawn, malformed) ->

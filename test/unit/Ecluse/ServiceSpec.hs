@@ -7,7 +7,9 @@ module Ecluse.ServiceSpec (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Time (addUTCTime, getCurrentTime)
+import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (InternalException), brConsume, newManager, parseRequest, responseBody, withResponse)
 import Test.Hspec
+import UnliftIO.Exception (try)
 
 import Ecluse.Boot (BootEnv (BootEnv))
 import Ecluse.Composition.Credential (initTargetCredentialProviders)
@@ -33,11 +35,13 @@ import Ecluse.Core.Worker.Liveness (newWorkerHeartbeatWithClock)
 import Ecluse.Cve.Sync (CveSyncHandle (csEnv))
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncSlot))
 import Ecluse.Runtime.Server (MountBinding (bindingPrefix))
-import Ecluse.Service (mountBindingFor, withServiceRuntime, workerLiveness)
+import Ecluse.Runtime.Telemetry (Telemetry, telemetryDisabled)
+import Ecluse.Service (dataPlaneManagerSettings, mountBindingFor, withServiceRuntime, workerLiveness)
 import Ecluse.Test.Cve (fakeCveDb)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
+import Ecluse.Test.Stub.Socket (resetAfterPartialBodyOverTcp, withRawServer)
 import Ecluse.Test.Support (newTestClock)
 
 stalledHeartbeat :: IO WorkerHeartbeat
@@ -50,7 +54,8 @@ stalledHeartbeat = do
 spec :: Spec
 spec = do
     advisoryAgeSpec
-    describe "workerLiveness -- what /livez answers once the spawn decision is derived" $ do
+    dataPlaneSpec
+    describe "workerLiveness, what /livez answers once the spawn decision is derived" $ do
         it "reports a stalled consume loop as not live where the process runs one" $ do
             liveness <- stalledHeartbeat >>= workerLiveness True
             liveHealthy liveness `shouldBe` False
@@ -85,7 +90,7 @@ spec = do
             liveHealthy absent `shouldBe` True
             liveLastPoll absent `shouldBe` Nothing
 
-    describe "mountBindingFor -- ecosystem drives the binding" $ do
+    describe "mountBindingFor, where the ecosystem drives the binding" $ do
         it "resolves npm to a binding whose prefix is derived from the ecosystem (/npm)" $
             (bindingPrefix <$> mountBindingFor Npm inertPackumentDeps Nothing) `shouldBe` Just ("npm" :| [])
 
@@ -94,6 +99,24 @@ spec = do
 
         it "has no binding for an ecosystem with no adapter wired (loud Nothing, not a stub)" $
             (bindingPrefix <$> mountBindingFor RubyGems inertPackumentDeps Nothing) `shouldBe` Nothing
+
+dataPlaneSpec :: Spec
+dataPlaneSpec = describe "dataPlaneManagerSettings" $ do
+    it "types a body read the upstream resets after its 200, with telemetry off" $
+        typesBodyResetUnder telemetryDisabled
+
+    it "types a body read the upstream resets after its 200, under the client span" $
+        withRoleTelemetry (\_ telemetry _ -> typesBodyResetUnder telemetry)
+
+-- A body read through a data-plane manager that the upstream resets raises the client's own exception, which the relay and the exchanges catch.
+typesBodyResetUnder :: Telemetry -> IO ()
+typesBodyResetUnder telemetry = withRawServer resetAfterPartialBodyOverTcp $ \port -> do
+    manager <- newManager =<< dataPlaneManagerSettings telemetry
+    request <- parseRequest ("http://127.0.0.1:" <> show port <> "/")
+    try (withResponse request manager (brConsume . responseBody)) >>= \case
+        Left (HttpExceptionRequest _ (InternalException _)) -> pass
+        Left other -> expectationFailure ("expected a typed body-read reset, got " <> show other)
+        Right _ -> expectationFailure "a reset body was read whole"
 
 advisoryAgeSpec :: Spec
 advisoryAgeSpec = describe "withServiceRuntime advisory database ages" $
