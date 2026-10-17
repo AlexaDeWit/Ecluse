@@ -150,11 +150,11 @@ data PackumentStatus
       PackumentUnavailable (Maybe RetryAfter)
     | -- | @502@: no valid origin remained and an upstream packument named a different package.
       PackumentBadGateway
-    | -- | @500@: no version survived, no exclusion is retryable, and one is a permanent inability to decide.
+    | -- | @500@: no version survived, no exclusion is retryable, and one is a permanent or internal inability to decide. Retrying cannot help.
       PackumentServerError
     deriving stock (Eq, Show)
 
--- | With no survivor the most recoverable cause wins (@503@ over @502@, as an origin may yet answer). No input is @403@.
+-- | With no survivor the most recoverable cause wins (@503@ over @502@, as an origin may yet answer). An empty input is a @403@.
 packumentStatus :: [ServeDecision] -> PackumentStatus
 packumentStatus decisions
     | tallyAdmit tally = PackumentOk

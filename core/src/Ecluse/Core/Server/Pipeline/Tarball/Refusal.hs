@@ -48,7 +48,7 @@ artifactOutcomeStatus decision
     | decision `elem` [versionAbsent, firstPartyAbsent] = NotFound
     | otherwise = artifactStatus decision
 
--- | Render a non-admit artifact outcome as the serve error model. A transient status suggests no delay.
+-- | Render a non-admit artifact outcome as the serve error model. A transient status suggests no delay: the single-artifact path has none to offer.
 artifactError :: TarballReplies response -> PackumentDeps -> ServeDecision -> response
 artifactError replies deps decision =
     tarballError replies (artifactHttpStatus status) retryHeaders (mkRefusal (pdHelp deps) message)

@@ -4,9 +4,8 @@
 
 module Ecluse.Core.Server.Pipeline.InternalSpec (spec) where
 
-import Data.Aeson (Object, Value (String), decodeStrict, (.:), (.:?))
+import Data.Aeson (Value (String), decodeStrict')
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Aeson.Types (parseMaybe)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -80,6 +79,7 @@ import Ecluse.Core.Server.Response (
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpRuleEffectfulFailure))
 import Ecluse.Core.Version (renderVersion)
+import Ecluse.Test.Json (textAtPath)
 import Ecluse.Test.Log (runJsonLog)
 import Ecluse.Test.Package (
     artifactsWith,
@@ -312,7 +312,7 @@ spec = do
 auditCve :: RuleEvidence -> Decision -> IO [Maybe Text]
 auditCve evidence decision = do
     logged <- runJsonLog (logDenials (evName evidence) Nothing [VersionVerdict (renderVersion (evVersion evidence)) (serveDecisionOf evidence decision)])
-    pure [join (parseMaybe (\entry -> entry .: "data" >>= (.:? "cve")) line) | Just line <- map (decodeStrict @Object . encodeUtf8) (lines logged)]
+    pure [textAtPath ["data", "cve"] =<< decodeStrict' (encodeUtf8 line) | line <- lines logged]
 
 npmEvidence, pypiEvidence :: RuleEvidence
 npmEvidence = completeEvidence (detailsWith leftpadName (npmVersion "1.0.0") [])

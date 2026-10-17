@@ -51,7 +51,7 @@ data AdvisoryCase = AdvisoryCase
     , advisoryAffectedVersion :: Text
     , advisoryFixedVersion :: Text
     , advisoryExpectedId :: Text
-    -- ^ The advisory the policy's denial names: the affecting one, or the one still affecting a partial fix.
+    -- ^ The advisory an advisory denial names, when the case expects one.
     , advisoryRefusalMessage :: Text -> Text
     , advisoryRequiresMirror :: Bool
     }

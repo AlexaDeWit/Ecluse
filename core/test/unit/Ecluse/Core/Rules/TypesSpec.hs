@@ -41,9 +41,10 @@ import Ecluse.Core.Rules.Types (
     DenyIfEpssParams (DenyIfEpssParams),
     Fact (Known, Unread),
     FailureAlignment (FailDeny, FailNoDecision),
+    Inability (RuleThrew),
     LimitShortfall (GapBelowMinimum, RemainingUnscored),
     PrecededRule (PrecededRule, prRule, rulePrecedence, ruleReach),
-    Reason (AffectedBy, FixStillApplies, FixesButStillAffected, Remediates, RemediatesWithinLimits, RemediationBeyondLimits),
+    Reason (..),
     RemainingAdvisories (AbstainOnRemaining),
     Rule (..),
     RuleEvidence (evAvailability, evInstallCode, evName, evPublishedAt, evVersion),
@@ -59,6 +60,7 @@ import Ecluse.Core.Rules.Types (
     mkAdvisoryIds,
     mkLimitShortfalls,
     readsAdvisories,
+    reasonAdvisories,
     requiresEpss,
     revocationRules,
     ruleDenies,
@@ -88,6 +90,7 @@ spec = do
     advisoryPredicateSpec
     revocationSpec
     advisoryIdsSpec
+    reasonAdvisoriesSpec
 
 vocabularySpec :: Spec
 vocabularySpec = describe "RuleType" $ do
@@ -349,6 +352,49 @@ deferredReasons =
     ]
   where
     compared remaining = ScoreComparison (mkAdvisoryIds ("GHSA-a" :| [])) remaining (ScoreSides (Scored 9.8) (Scored 4.2)) (ScoreSides Unscored (Scored 0.005)) defaultDifferentialLimits
+
+-- One row per constructor. Each remediation row carries distinct fixed and remaining ids, so naming a fixed one fails.
+reasonAdvisoriesSpec :: Spec
+reasonAdvisoriesSpec = describe "reasonAdvisories" $
+    for_ rows $ \(label, reason, expected) ->
+        it ("names only the advisories still affecting the version: " <> label) $
+            reasonAdvisories reason `shouldBe` expected
+  where
+    fixed = mkAdvisoryIds ("GHSA-fixed-1" :| ["GHSA-fixed-2"])
+    open = mkAdvisoryIds ("GHSA-open-1" :| ["GHSA-open-2"])
+    stillOpen = ["GHSA-open-1", "GHSA-open-2"]
+    compared = ScoreComparison fixed open (ScoreSides (Scored 9.8) (Scored 4.2)) (ScoreSides Unscored (Scored 0.005)) defaultDifferentialLimits
+    lookalike = "affected by GHSA-text-0001 (CVSS >= 7.0)"
+    rows :: [(String, Reason, [Text])]
+    rows =
+        [ ("ScopeAllowListed", ScopeAllowListed (mkScope "acme"), [])
+        , ("ScopeNotAllowListed", ScopeNotAllowListed (mkScope "acme"), [])
+        , ("PublishedLongEnough", PublishedLongEnough 8 7, [])
+        , ("PublishedTooRecently", PublishedTooRecently 1 7, [])
+        , ("PublishTimeUnknown", PublishTimeUnknown, [])
+        , ("RunsOnInstall", RunsOnInstall lookalike, [])
+        , ("NothingRunsOnInstall", NothingRunsOnInstall, [])
+        , ("InstallCodeUndetermined", InstallCodeUndetermined, [])
+        , ("VersionYanked", VersionYanked, [])
+        , ("VersionNotYanked", VersionNotYanked, [])
+        , ("VersionDeprecated", VersionDeprecated, [])
+        , ("VersionNotDeprecated", VersionNotDeprecated, [])
+        , ("IdentityRevoked", IdentityRevoked "GHSA-identity", [])
+        , ("IdentityNotRevoked", IdentityNotRevoked "GHSA-identity", [])
+        , ("IdentityAllowListed", IdentityAllowListed "GHSA-identity", [])
+        , ("IdentityNotAllowListed", IdentityNotAllowListed "GHSA-identity", [])
+        , ("Remediates", Remediates fixed, [])
+        , ("RemediatesWithinLimits", RemediatesWithinLimits compared, stillOpen)
+        , ("FixesButStillAffected", FixesButStillAffected fixed open, stillOpen)
+        , ("RemediationBeyondLimits", RemediationBeyondLimits compared (mkLimitShortfalls (RemainingUnscored Epss open :| [GapBelowMinimum Cvss])), stillOpen)
+        , ("FixStillApplies", FixStillApplies open, stillOpen)
+        , ("FixesNoAdvisory", FixesNoAdvisory, [])
+        , ("AffectedBy", AffectedBy Cvss 7.0 open, stillOpen)
+        , ("KnownMalicious", KnownMalicious (mkAdvisoryIds ("MAL-one" :| ["MAL-two"])), ["MAL-one", "MAL-two"])
+        , ("NoKnownMaliciousAdvisory", NoKnownMaliciousAdvisory, [])
+        , ("NotAffectedAtThreshold", NotAffectedAtThreshold Cvss, [])
+        , ("RuleUnable", RuleUnable "DenyIfCve" (RuleThrew lookalike), [])
+        ]
 
 -- A rule finds the later advisories by matching ranges lazily. Left unevaluated, that matching
 -- would run where the reason is rendered, outside the handler that evaluated the verdict.
