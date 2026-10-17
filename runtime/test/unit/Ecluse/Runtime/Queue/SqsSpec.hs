@@ -6,9 +6,13 @@ module Ecluse.Runtime.Queue.SqsSpec (spec) where
 
 import Data.Text qualified as T
 import Katip (closeScribes)
+import Network.HTTP.Types (hContentType, status403)
+import Network.Wai (Application, responseLBS)
+import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Fault (TransportFault (tfDetail))
 import Ecluse.Core.Package (mkPackageName, mkScope)
 import Ecluse.Core.Queue (
     DeadLetterTerminus (TerminusAbsent, TerminusAttached),
@@ -20,10 +24,12 @@ import Ecluse.Core.Queue (
     decodeJob,
     defaultDeliveryBudget,
     encodeJob,
+    mkReceiptHandle,
  )
 import Ecluse.Core.Queue.Lease (MonoTime (MonoTime), ReceiptLease, receiptLease)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
+import Ecluse.Core.Worker.Lease (LeaseOps (loRenew), queueLeaseOps)
 import Ecluse.Runtime.Queue.Sqs.Internal (
     ReceivedMessage (..),
     SqsConfig (..),
@@ -31,7 +37,9 @@ import Ecluse.Runtime.Queue.Sqs.Internal (
     defaultSqsConfig,
     liftReceivedMessages,
     mirrorJobPackage,
+    sqsQueueOver,
  )
+import Ecluse.Runtime.Test.Aws (canonicalRequestMessage, loopbackAwsEnv, plantedHeader)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv)
 import Ecluse.Test.Package (unsafeFilename)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
@@ -188,6 +196,29 @@ spec = do
             logEnv <- newTestLogEnv
             delivered <- liftReceivedMessages logEnv mkRegistryUrl testLease (map deliveredWithCount [Nothing, Just "", Just "not-a-number", Just "0", Just "-4"])
             map msgReceiveCount delivered `shouldBe` [1, 1, 1, 1, 1]
+
+    describe "the lease line, through the handle's renewal" $
+        it "renders a signature refusal by its code, status and request id, never the canonical request or a response header" $
+            testWithApplication (pure signatureRefusal) $ \port -> do
+                env <- loopbackAwsEnv port
+                logEnv <- newTestLogEnv
+                queue <- sqsQueueOver logEnv mkRegistryUrl env (defaultSqsConfig "http://127.0.0.1/000000000000/mirror" "us-east-1")
+                renewal <- loRenew (queueLeaseOps queue) (mkReceiptHandle "receipt") (Seconds 30)
+                case renewal of
+                    Left fault -> do
+                        tfDetail fault `shouldSatisfy` T.isSuffixOf ": HTTP 403 SignatureDoesNotMatch (request req-1)"
+                        for_ ["Canonical", "token-secret", decodeUtf8 (snd plantedHeader)] $ \secret -> tfDetail fault `shouldNotSatisfy` T.isInfixOf secret
+                    Right () -> expectationFailure "the refused renewal reported success"
+
+-- An SQS signature refusal whose message quotes the canonical request, beside a planted response header.
+signatureRefusal :: Application
+signatureRefusal _req respond =
+    respond (responseLBS status403 [(hContentType, "text/xml"), plantedHeader] (encodeUtf8 refusalDocument))
+  where
+    refusalDocument =
+        "<ErrorResponse><Error><Type>Sender</Type><Code>SignatureDoesNotMatch</Code><Message>"
+            <> canonicalRequestMessage
+            <> "</Message></Error><RequestId>req-1</RequestId></ErrorResponse>"
 
 -- Namespaced non-npm names exercise the shared wire mapping.
 roundTripJobs :: [(Text, MirrorJob)]

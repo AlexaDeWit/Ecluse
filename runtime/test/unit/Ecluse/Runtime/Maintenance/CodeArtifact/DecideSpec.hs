@@ -21,7 +21,7 @@ import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
-import Ecluse.Core.Fault (RetryAfter (RetryAfter), TransportCause (TransportTimeout), tfCause)
+import Ecluse.Core.Fault (RetryAfter (RetryAfter), TransportCause (TransportProtocol, TransportTimeout), renderTransportCause, tfCause)
 import Ecluse.Core.Package (renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
@@ -47,6 +47,7 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UnsafeReason (InsufficientPermissions),
     UpstreamSafety (Undecidable, Unsafe),
  )
+import Ecluse.Core.Registry.Sweep.Outcome (renderStoreFault)
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal (
     CodeArtifactStore (..),
@@ -91,6 +92,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Support (
     serviceError,
     withNpmStore,
  )
+import Ecluse.Runtime.Test.Aws (canonicalRequestMessage, plantedRefusal)
 import Ecluse.Test.Maintenance (withBucket)
 import Ecluse.Test.Package (babelCore, lodashName, npmVersion)
 
@@ -300,6 +302,10 @@ faultSpec = describe "classifyStoreFault" $ do
 
     it "reads an unusable URL as futile" $
         adviceFor (AWS.TransportError (InvalidUrlException "u" "unusable")) `shouldBe` RetryFutile
+
+    it "renders a signature refusal on the store line by its code, status and request id, never the canonical request or a response header" $
+        renderStoreFault (classifyStoreFault (plantedRefusal "CodeArtifact" "InvalidSignatureException" canonicalRequestMessage))
+            `shouldBe` "CodeArtifact: HTTP 403 InvalidSignature (request req-1) (" <> renderTransportCause TransportProtocol <> ")"
   where
     adviceFor = faultRetry . classifyStoreFault
 

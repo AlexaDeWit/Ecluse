@@ -2,25 +2,61 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | How an @amazonka@ failure leaves an adapter: typed, with no request in its text.
+-- | How an @amazonka@ failure leaves an adapter, as a value or raised: never with the request, a response header or a quoted signature.
 module Ecluse.Runtime.Aws.FaultSpec (spec) where
 
-import Network.HTTP.Client (defaultManagerSettings, httpNoBody, newManager, parseRequest, requestHeaders)
+import Data.Text qualified as T
+import Network.HTTP.Types.Status (status404)
 import Test.Hspec
+import UnliftIO.Exception (throwIO, try)
 
-import Ecluse.Core.Fault (TransportCause (TransportUnreachable))
-import Ecluse.Runtime.Aws.Fault (AwsFault (AwsTransport), AwsRequestFailed (AwsRequestFailed), retypeAwsFailure)
-import Ecluse.Runtime.Test.CodeArtifact (closedEndpoint, refusedRequest)
+import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportFault (tfDetail))
+import Ecluse.Runtime.Aws.Fault (
+    AwsAnswer (AwsAnswer),
+    AwsFault (AwsHttp, AwsStatus),
+    AwsParty (AwsServiceNamed),
+    AwsRequestFailed (AwsRequestFailed, arfFault),
+    classifyAwsTransport,
+    retypeAwsFailure,
+ )
+import Ecluse.Runtime.Test.Aws (canonicalRequestMessage, plantedHeader, plantedRefusal, refusedAtClosedPort)
+import Ecluse.Test.Stub (redirectSecrets, redirectedStatusException, refusedFetch, signedRequest)
 
 spec :: Spec
-spec = describe "retypeAwsFailure" $ do
-    it "raises an amazonka transport failure by its cause at the dialled host:port, never the signed request" $
-        retypeAwsFailure refusedRequest `shouldThrow` (== refusedAtClosedEndpoint)
+spec = do
+    describe "classifyAwsTransport" $ do
+        for_ ["InvalidSignatureException", "SignatureDoesNotMatch", "IncompleteSignature"] $ \code ->
+            it ("details the " <> toString code <> " refusal by its code, status and request id, and none of the canonical request") $
+                detailOf code canonicalRequestMessage `shouldBe` "SQS: HTTP 403 " <> signatureCode code <> " (request req-1)"
 
-    it "raises an http-client failure, as the container credential fetch throws, the same way" $ do
-        request <- parseRequest "http://127.0.0.1:1/v2/credentials/path-secret"
-        manager <- newManager defaultManagerSettings
-        retypeAwsFailure (void (httpNoBody request{requestHeaders = [("X-Amz-Security-Token", "token-secret")]} manager))
-            `shouldThrow` (== refusedAtClosedEndpoint)
+        it "keeps the first line of an access denial, which names the IAM action and resource" $
+            detailOf "AccessDenied" accessDenial `shouldBe` "SQS: HTTP 403 AccessDenied (request req-1): " <> accessDenial
+
+        it "keeps only the first line of another code's message" $
+            detailOf "ThrottlingException" ("Rate exceeded\n" <> canonicalRequestMessage) `shouldBe` "SQS: HTTP 403 Throttling (request req-1): Rate exceeded"
+
+        it "details no response header" $
+            for_ [("SignatureDoesNotMatch", canonicalRequestMessage), ("AccessDenied", accessDenial)] $ \(code, message) ->
+                detailOf code message `shouldNotSatisfy` T.isInfixOf (decodeUtf8 (snd plantedHeader))
+
+    describe "retypeAwsFailure" $ do
+        it "raises a refused connection by its transport cause at the dialled host:port, never the request" $
+            retypeAwsFailure (throwIO =<< refusedFetch =<< signedRequest) `shouldThrow` refusedAtClosedPort
+
+        it "raises a credential endpoint's status at the dialled host:port, never the request or the answer" $ do
+            (authority, err) <- redirectedStatusException status404
+            outcome <- try (retypeAwsFailure (throwIO err))
+            case outcome of
+                Left failed -> do
+                    arfFault failed `shouldBe` AwsHttp (HttpStatus 404)
+                    displayException failed `shouldBe` toString ("AWS request failed at " <> authority <> ": HTTP 404")
+                    for_ redirectSecrets $ \secret -> toText (displayException failed) `shouldNotSatisfy` T.isInfixOf secret
+                Right () -> expectationFailure "the credential endpoint's status was not raised"
+
+        it "raises a service's refusal by the service's name, as discovery holds no request" $
+            retypeAwsFailure (throwIO (plantedRefusal "STS" "AccessDenied" accessDenial))
+                `shouldThrow` (== AwsRequestFailed (AwsServiceNamed "STS") (AwsStatus (AwsAnswer 403 "AccessDenied" (Just "req-1") (Just accessDenial))))
   where
-    refusedAtClosedEndpoint = AwsRequestFailed closedEndpoint (AwsTransport TransportUnreachable)
+    detailOf code message = tfDetail (classifyAwsTransport (plantedRefusal "SQS" code message))
+    signatureCode code = fromMaybe code (T.stripSuffix "Exception" code)
+    accessDenial = "User: arn:aws:sts::123456789012:assumed-role/ecluse is not authorized to perform: sqs:ReceiveMessage on resource: arn:aws:sqs:us-east-1:123456789012:mirror"

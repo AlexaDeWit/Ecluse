@@ -9,6 +9,7 @@ configured the same way on every path.
 module Ecluse.Runtime.Aws.Env (
     AwsEndpoint (..),
     newAwsEnv,
+    newAwsEnvWith,
 ) where
 
 import Amazonka qualified as AWS
@@ -26,10 +27,14 @@ data AwsEndpoint = AwsEndpoint
     }
     deriving stock (Eq, Show)
 
--- | An env for @service@ over discovered credentials. An absent region or override keeps @amazonka@'s own resolution, and a failed discovery raises 'Ecluse.Runtime.Aws.Fault.AwsRequestFailed'.
+-- | An env for @service@ over discovered credentials. A failed AWS or HTTP call during discovery raises 'Ecluse.Runtime.Aws.Fault.AwsRequestFailed'.
 newAwsEnv :: Maybe Text -> Maybe AwsEndpoint -> AWS.Service -> IO AWS.Env
-newAwsEnv mRegion mEndpoint service = do
-    base <- retypeAwsFailure (AWS.newEnv AWS.discover)
+newAwsEnv = newAwsEnvWith AWS.discover
+
+-- | 'newAwsEnv' over a caller's discovery, so a test can fail it at a stub. An absent region or override keeps @amazonka@'s own resolution.
+newAwsEnvWith :: (AWS.EnvNoAuth -> IO AWS.Env) -> Maybe Text -> Maybe AwsEndpoint -> AWS.Service -> IO AWS.Env
+newAwsEnvWith discovery mRegion mEndpoint service = do
+    base <- retypeAwsFailure (AWS.newEnv discovery)
     pure (overridden (scoped base))
   where
     scoped env = maybe env (\region -> env{AWS.region = AWS.Region' region}) mRegion

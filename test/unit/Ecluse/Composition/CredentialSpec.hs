@@ -30,9 +30,11 @@ import Ecluse.Config (Config (configMounts), StoreBackend (BackendRegistry), Sto
 import Ecluse.Core.Credential (authSecret, currentToken, mkSecret, unSecret)
 import Ecluse.Core.Credential.Refresh (noCredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable), renderTransportCause)
 import Ecluse.Core.Telemetry.Metrics (Label (LProvider), renderLabel)
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (..))
-import Ecluse.Runtime.Test.CodeArtifact (closedEndpoint, refusedMint, sessionSecrets)
+import Ecluse.Runtime.Test.CodeArtifact (refusedMint)
+import Ecluse.Test.Stub (closedAuthority, requestSecrets)
 
 spec :: Spec
 spec = do
@@ -94,8 +96,9 @@ mintFailureSpec = describe "CodeArtifact mint failure attribution" $ do
             refused <- refuseOnThrow (codeArtifactMintFailure ((eco, MirrorCredential) :| [])) refusedMint
             case refused of
                 Left [failure] -> do
-                    renderBootError failure `shouldSatisfy` T.isInfixOf ("at boot: AWS request failed at " <> closedEndpoint <> ": the peer could not be reached")
-                    for_ sessionSecrets $ \secret -> renderBootError failure `shouldNotSatisfy` T.isInfixOf secret
+                    renderBootError failure `shouldSatisfy` T.isInfixOf ("at boot: AWS request failed at " <> closedAuthority <> ": ConnectionFailure")
+                    renderBootError failure `shouldSatisfy` T.isInfixOf ("(" <> renderTransportCause TransportUnreachable <> ")")
+                    for_ requestSecrets $ \secret -> renderBootError failure `shouldNotSatisfy` T.isInfixOf secret
                 _ -> expectationFailure "expected the one mint refusal"
 
 -- The label every credential signal carries derives from the mount's own tag, so a second minting store cannot report under the first one's name.

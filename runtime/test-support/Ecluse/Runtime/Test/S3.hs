@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | An in-process S3 endpoint with static credentials, for wire tests of the S3 adapters.
+-- | An in-process S3 endpoint, for wire tests of the S3 adapters.
 module Ecluse.Runtime.Test.S3 (
     withS3,
     reply,
@@ -15,17 +15,15 @@ module Ecluse.Runtime.Test.S3 (
 ) where
 
 import Amazonka qualified as AWS
-import Amazonka.Auth (fromKeys)
 import Network.HTTP.Types (ResponseHeaders, Status, status200, status403, status500)
 import Network.Wai (Application, queryString, requestMethod, responseLBS, responseRaw)
 import Network.Wai.Handler.Warp (testWithApplication)
 
+import Ecluse.Runtime.Test.Aws (loopbackAwsEnv)
+
 -- | Serve the application and hand the test a single-attempt env that signs against it.
 withS3 :: Application -> (AWS.Env -> IO ()) -> IO ()
-withS3 application action = testWithApplication (pure application) $ \port -> do
-    base <- AWS.newEnv (pure . fromKeys (AWS.AccessKey "AKIDtestkey") (AWS.SecretKey "testsecretkey"))
-    let env = AWS.overrideService (\service -> AWS.setEndpoint False "127.0.0.1" port service{AWS.s3AddressingStyle = AWS.S3AddressingStylePath}) base
-    action (AWS.once env{AWS.retryCheck = \_ _ -> False})
+withS3 application action = testWithApplication (pure application) (loopbackAwsEnv >=> action)
 
 -- | Answer every request alike.
 reply :: Status -> ResponseHeaders -> LByteString -> Application

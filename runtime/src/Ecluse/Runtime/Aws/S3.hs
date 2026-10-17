@@ -10,18 +10,21 @@ seals (@docs\/architecture\/cloud-backends.md@).
 -}
 module Ecluse.Runtime.Aws.S3 (
     buildS3Env,
+    buildS3EnvWith,
 ) where
 
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 
-import Ecluse.Runtime.Aws.Env (AwsEndpoint, newAwsEnv)
+import Ecluse.Runtime.Aws.Env (AwsEndpoint, newAwsEnvWith)
 
-{- | Build an env for S3 under an optional endpoint override. 'Nothing' keeps @amazonka@'s
-default endpoint and credential resolution.
--}
+-- | Build an env for S3 under an optional endpoint override. 'Nothing' keeps @amazonka@'s default endpoint resolution.
 buildS3Env :: Maybe AwsEndpoint -> IO AWS.Env
-buildS3Env mEndpoint = newAwsEnv Nothing mEndpoint pathAddressedS3
+buildS3Env = buildS3EnvWith AWS.discover
+
+-- | 'buildS3Env' over a caller's credential discovery, so a test can fail it at a stub.
+buildS3EnvWith :: (AWS.EnvNoAuth -> IO AWS.Env) -> Maybe AwsEndpoint -> IO AWS.Env
+buildS3EnvWith discovery mEndpoint = newAwsEnvWith discovery Nothing mEndpoint pathAddressedS3
 
 -- Path-addressing style, which only takes effect under an override: an emulator or VPC
 -- endpoint has no virtual-host DNS for the bucket.
