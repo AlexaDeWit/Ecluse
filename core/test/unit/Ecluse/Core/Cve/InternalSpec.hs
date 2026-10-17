@@ -10,31 +10,30 @@ import Database.SQLite.Simple (Connection, Only (..), SQLError, close, execute_,
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldThrow)
 import UnliftIO.Async (cancel, withAsync)
-import UnliftIO.Exception (throwIO)
+import UnliftIO.Exception (bracket, throwIO)
 
 import Ecluse.Core.Cve (AdvisoryRange (..))
-import Ecluse.Core.Cve.Internal (CveDbRejected (CveDbWrongEpoch), acceptConnection, openHardenedConnection, toRange)
+import Ecluse.Core.Cve.Internal (CveDbRejected (CveDbWrongEpoch), acceptConnection, toRange, verifyConnection)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1))
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
 
--- Hand the body a hardened connection over the fixture artifact. A rejection of the
--- fixture is a loud test failure. The connection closes on the body's normal exit.
 withHardenedConnection :: (Connection -> IO ()) -> IO ()
 withHardenedConnection body =
-    withFixtureOsvDb CorpusV1 $
-        openHardenedConnection Npm EpssOptional >=> \case
-            Left rejection -> fail ("fixture artifact unexpectedly rejected: " <> show rejection)
-            Right conn -> body conn >> close conn
+    withFixtureOsvDb CorpusV1 $ \path ->
+        bracket (open path) close $ \conn ->
+            verifyConnection Npm EpssOptional conn >>= \case
+                Left rejection -> fail ("fixture artifact unexpectedly rejected: " <> show rejection)
+                Right () -> body conn
 
 spec :: Spec
 spec = do
     describe "connection ownership" $ do
         it "acquires and transfers masked while verification remains unmasked" $ do
             states <- newIORef []
-            let record = getMaskingState >>= \state -> modifyIORef' states (<> [state])
+            let record = getMaskingState >>= \maskingState -> modifyIORef' states (<> [maskingState])
             result <- acceptConnection (record >> open ":memory:") close (\_ -> record $> Right ()) (\conn () -> record >> close conn)
             result `shouldBe` Right ()
             readIORef states `shouldReturn` [MaskedInterruptible, Unmasked, MaskedInterruptible]

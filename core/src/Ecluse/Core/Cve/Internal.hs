@@ -8,9 +8,8 @@ The public "Ecluse.Core.Cve" module curates these operations.
 module Ecluse.Core.Cve.Internal (
     AdvisoryRange (..),
     CveDbRejected (..),
-    openHardenedConnection,
+    verifyConnection,
     acceptConnection,
-    openCveDb,
     transferCveDb,
     CveDb (..),
     CveLookup (..),
@@ -57,13 +56,6 @@ data CveDbRejected
       CveDbEpssNotEstablished
     deriving stock (Eq, Show)
 
-{- | Harden the connection before acceptance. SQLite's query-only pragma refuses writes.
-Rejection and opening faults close the connection before returning.
--}
-openHardenedConnection :: Ecosystem -> EpssRequirement -> FilePath -> IO (Either CveDbRejected Connection)
-openHardenedConnection eco epssRequirement dbFile =
-    acceptConnection (open dbFile) close (verifyConnection eco epssRequirement) (\conn () -> pure conn)
-
 -- | Acquire masked, verify under the caller's mask state, then transfer ownership to the masked continuation.
 acceptConnection :: IO Connection -> (Connection -> IO ()) -> (Connection -> IO (Either CveDbRejected a)) -> (Connection -> a -> IO b) -> IO (Either CveDbRejected b)
 acceptConnection acquire release verify use = mask $ \restore -> do
@@ -73,12 +65,9 @@ acceptConnection acquire release verify use = mask $ \restore -> do
         Left rejection -> release conn $> Left rejection
         Right value -> Right <$> use conn value
 
+-- | Harden and verify the connection. Its owner remains responsible for closing it.
 verifyConnection :: Ecosystem -> EpssRequirement -> Connection -> IO (Either CveDbRejected ())
 verifyConnection eco epssRequirement conn = hardenConnection conn >> acceptArtifact eco epssRequirement conn
-
--- | Reject incompatible artifacts as values. The caller must protect the returned database's ownership.
-openCveDb :: Ecosystem -> EpssRequirement -> FilePath -> IO (Either CveDbRejected CveDb)
-openCveDb eco epssRequirement dbFile = transferCveDb eco epssRequirement dbFile pure
 
 -- | Transfer an accepted database to a masked owner. Verification retains the caller's masking state.
 transferCveDb :: Ecosystem -> EpssRequirement -> FilePath -> (CveDb -> IO a) -> IO (Either CveDbRejected a)

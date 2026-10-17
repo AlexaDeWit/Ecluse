@@ -8,7 +8,6 @@ Package keys are canonical per ecosystem.
 module Ecluse.Core.Cve (
     -- * The opened artifact
     CveDb (..),
-    openCveDb,
     CveDbRejected (..),
 
     -- * The consumer view
@@ -32,7 +31,7 @@ module Ecluse.Core.Cve (
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 
-import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDb (..), CveDbRejected (..), CveLookup (..), CveQueryFault (..), openCveDb)
+import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDb (..), CveDbRejected (..), CveLookup (..), CveQueryFault (..))
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Core.Version (Version, VersionKey, parseVersionKey, renderVersion, renderVersionKey, versionKeyIn)
