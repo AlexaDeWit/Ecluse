@@ -40,9 +40,7 @@ import Ecluse.Core.Version.Pep440 (Pep440Key, isPep440Stable, parsePep440, rende
 import Ecluse.Core.Version.Semver (SemverKey, isSemverStable, parseSemver, renderSemver)
 import Ecluse.Core.Version.Token (withinVersionLength)
 
-{- | A package version: the raw text as published, plus the parsed ordering key when the text
-parses. There is deliberately __no__ 'Ord'. Comparison goes through 'compareVersions'.
--}
+-- | The raw text as published, plus its ordering key when it parses. No 'Ord': compare with 'compareVersions'.
 data Version = Version
     { -- The version as published: for rendering and round-tripping, never for ordering.
       versionRaw :: Text
@@ -51,9 +49,7 @@ data Version = Version
     }
     deriving stock (Eq, Show)
 
-{- | Build a 'Version', parsing and evaluating a canonical key when possible. Total: an
-unparseable version is still represented, keyless, so a proxy never drops one over a parser gap.
--}
+-- | Build a 'Version' with its evaluated key. An unparseable version stays, keyless, so a parser gap drops nothing.
 mkVersion :: Ecosystem -> Text -> Version
 mkVersion eco raw = Version raw $ case parseVersionKey eco raw of
     Right key -> Just $! key
@@ -63,38 +59,28 @@ mkVersion eco raw = Version raw $ case parseVersionKey eco raw of
 renderVersion :: Version -> Text
 renderVersion = versionRaw
 
-{- | The parsed, canonical ordering key. 'Nothing' if the raw text did not parse for its
-ecosystem, in which case ordering rules abstain.
--}
+-- | The canonical ordering key, or 'Nothing' when the text did not parse, so ordering rules abstain.
 versionKey :: Version -> Maybe VersionKey
 versionKey = versionKeyField
 
-{- | The version's key under an ecosystem's grammar, as 'mkVersion' for that ecosystem builds it.
-It reuses the key the version carries when that key is the ecosystem's, and parses otherwise.
--}
+-- | The key 'mkVersion' builds under an ecosystem's grammar, reusing the carried key when it is that ecosystem's.
 versionKeyIn :: Ecosystem -> Version -> Maybe VersionKey
 versionKeyIn eco version = case versionKey version of
     Just key | keyEcosystem key == eco -> Just key
     _ -> rightToMaybe (parseVersionKey eco (versionRaw version))
 
-{- | Compare two versions by their canonical keys. 'Nothing' when either version has no
-key, in which case an ordering-based rule abstains.
--}
+-- | Compare by canonical keys. 'Nothing' when either version has no key, so an ordering rule abstains.
 compareVersions :: Version -> Version -> Maybe Ordering
 compareVersions a b = compare <$> versionKey a <*> versionKey b
 
-{- | The parsed, canonical, comparable form of a version. The type is __opaque__ and
-'parseVersionKey' is its only constructor, so the comparator cannot see non-canonical input.
--}
+-- | The canonical, comparable form of a version. It is __opaque__ and built only by parsing, so no comparator sees non-canonical input.
 data VersionKey
     = NpmKey SemverKey
     | PyPIKey Pep440Key
     | RubyGemsKey GemKey
     deriving stock (Eq, Ord, Show)
 
-{- | Parse raw version text into a canonical 'VersionKey' for its ecosystem, or report why it
-did not parse. The 'Ord' on the result is meaningful only within one ecosystem.
--}
+-- | Parse version text under its ecosystem's grammar. The key's 'Ord' holds only within one ecosystem.
 parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey
 parseVersionKey eco raw = case eco of
     Npm -> note (NpmKey <$> parseSemver raw)
@@ -136,7 +122,15 @@ isStable = \case
     PyPIKey k -> isPep440Stable k
     RubyGemsKey k -> isGemStable k
 
--- | Build the canonical PEP 440 spelling used to merge equivalent PyPI releases.
+{- | Build the canonical PEP 440 spelling used to merge equivalent PyPI releases.
+
+>>> renderVersion <$> canonicalPep440 "1.0.0"
+Just "1"
+>>> map (fmap renderVersion . canonicalPep440) ["2!1.0", "1.0-RC.1", "1.0-1", "1.0dev", "1.0+Ubuntu-1"]
+[Just "2!1",Just "1rc1",Just "1.post1",Just "1.dev0",Just "1+ubuntu.1"]
+>>> renderVersion <$> canonicalPep440 "not-a-version"
+Nothing
+-}
 canonicalPep440 :: Text -> Maybe Version
 -- Inlined so a caller that wraps the version leaves one unevaluated closure, not two.
 {-# INLINE canonicalPep440 #-}
@@ -146,9 +140,7 @@ canonicalPep440 raw = do
     -- A spelling can be longer than its text, and 'mkVersion' reads no key past the length bound.
     pure (Version spelling (if withinVersionLength spelling then Just $! PyPIKey key else Nothing))
 
-{- | Resolve @dist-tags.latest@ over the survivors the caller left, keeping @chosen@ when it
-survives so a prerelease never displaces a maintainer's stable tag. The result is a survivor.
--}
+-- | Resolve @dist-tags.latest@ to a survivor, keeping a surviving @chosen@ so a prerelease never displaces the maintainer's tag.
 selectLatest :: Maybe Version -> [Version] -> Maybe Version
 selectLatest chosen survivors = case nonEmpty survivors of
     Nothing -> Nothing
