@@ -22,10 +22,28 @@
         hackageNoCheck = hself: pkg: ver: sha256:
           hlib.dontCheck (hself.callHackageDirect { inherit pkg ver sha256; } { });
 
-        # The base set carries OTel 0.x. Keep the 1.0 packages aligned with
-        # cabal.project and its freeze. Hash-pinned sources resolve against this
-        # shared overlay, including their OTel dependencies.
-        # See docs/architecture/observability.md.
+        # True when a cold store builds pkg from source, because its output differs
+        # from the binary-cached base set's.
+        builtFromSource = name: pkg:
+          let served = builtins.tryEval (pkgs.haskell.packages.ghc910.${name}.outPath or null);
+          in !(served.success && served.value == pkg.outPath);
+
+        # The names of the third-party Haskell packages in drv's build closure that build
+        # from source with their suites on. `ecluse` below asserts there are none.
+        upstreamSuitesRun = drv:
+          let
+            node = dep: { key = dep.outPath; val = dep; };
+            closure = builtins.genericClosure {
+              startSet = map node drv.getBuildInputs.haskellBuildInputs;
+              operator = { val, ... }: map node val.getBuildInputs.haskellBuildInputs;
+            };
+            runs = { val, ... }:
+              val.doCheck && val.pname != "ecluse-lzma-managed"
+              && builtFromSource val.pname val;
+          in map ({ val, ... }: val.pname) (builtins.filter runs closure);
+
+        # The base set carries OTel 0.x. Keep these 1.0 pins aligned with cabal.project
+        # and its freeze (docs/architecture/observability.md).
         otelOverlay = hself: _hsuper:
           let fromHackage = hackageNoCheck hself;
           in {
@@ -120,9 +138,8 @@
           hash = "sha256-zeA69byUJv59avBMfstNuHzeG8V09o87Fp9N98aioII=";
         };
 
-        # The same subdirectory set cabal.project vendors: the umbrella package,
-        # its own dependencies, and the service leaves we call. `dontCheck` for the
-        # reason hackageNoCheck gives above.
+        # The subdirectories cabal.project vendors: the umbrella package, its dependencies,
+        # and the services we call. `dontCheck` for the reason hackageNoCheck gives.
         amazonkaOverlay = hself: _hsuper:
           let
             fromMonorepo = name: subdir:
@@ -142,11 +159,8 @@
             amazonka-s3 = fromMonorepo "amazonka-s3" "lib/services/amazonka-s3";
           };
 
-        # These fixes cover JSON decoding DoS (HSEC-2026-0007) and X.509
-        # Name Constraints (HSEC-2026-0008). Keep crypton, hpke, the x509 family,
-        # and tls aligned: tls 2.4.10 needs hpke 0.3 and x509 1.10, and all three
-        # need crypton 2.1.8 or later. aeson-pretty 0.8.11 admits aeson 2.3.
-        # hackageNoCheck above skips their upstream suites.
+        # Fixes for HSEC-2026-0007 (JSON decoding DoS) and HSEC-2026-0008 (X.509 Name
+        # Constraints). tls 2.4.10 needs hpke 0.3 and x509 1.10. All need crypton >= 2.1.8.
         advisoryOverlay = hself: hsuper:
           let fromHackage = hackageNoCheck hself;
           in {
@@ -154,6 +168,7 @@
               "sha256-nIUIE+wLCHTxhiKimKb1v8iTFxpQrzgyF8yY+27BrXY=";
             text-iso8601 = fromHackage "text-iso8601" "0.2.0.0"
               "sha256-EGwbQnjRumL2ztwXman6uEEvB0oRspEUB1tl0NyjAGI=";
+            # 0.8.11 admits aeson 2.3.
             aeson-pretty = fromHackage "aeson-pretty" "0.8.11"
               "sha256-SmMKRymEU239HsYJL5oVh5eJpFqHoQdKTcw/jyWLeAU=";
             crypton-x509 = fromHackage "crypton-x509" "1.10.0"
@@ -183,18 +198,41 @@
               revision = "1";
               editedCabalFile = "sha256-CJSPRbiSxXWNLELiL+L71BpPbcOV+wpDwr9Fih8pVzY=";
             });
-            # cborg's library has no aeson dependency. Only its test suite caps
-            # aeson <2.3, so dropping the suite drops the conflict.
-            cborg = hlib.dontCheck hsuper.cborg;
-            # ecluse-test-support links hspec-wai, and this set rebuilds it from
-            # source. Its suite is not ours to run, as hackageNoCheck says above.
-            hspec-wai = hlib.dontCheck hsuper.hspec-wai;
-            # No insert-ordered-containers or openapi3 release or revision admits
-            # aeson 2.3 yet. They compile against it, as this build and the suites
-            # prove, so strip the stale caps until upstream widens.
+            # No insert-ordered-containers or openapi3 release or revision admits aeson
+            # 2.3 yet. Both compile against it, so strip the stale caps until upstream widens.
             insert-ordered-containers = hlib.doJailbreak hsuper.insert-ordered-containers;
             openapi3 = hlib.doJailbreak hsuper.openapi3;
           };
+
+        # Upstream suites are not ours to run. The release closure builds these from source,
+        # and `ecluse` below fails evaluation when one is missing.
+        upstreamSuitesOverlay = _hself: hsuper:
+          pkgs.lib.genAttrs [
+            "attoparsec-aeson"
+            "autodocodec"
+            "autodocodec-openapi3"
+            "binary-conduit"
+            "bitvec"
+            "bzlib-conduit"
+            "cborg"
+            "conduit"
+            "conduit-extra"
+            "hspec-wai"
+            "http2"
+            "insert-ordered-containers"
+            "katip"
+            "libyaml"
+            "microlens-aeson"
+            "mono-traversable"
+            "openapi3"
+            "simple-sendfile"
+            "vector-algorithms"
+            "wai-extra"
+            "warp"
+            "xml-conduit"
+            "yaml"
+            "zip-stream"
+          ] (name: hlib.dontCheck hsuper.${name});
 
         # nixpkgs passes haddock -j$NIX_BUILD_CORES, and GHC 9.10's haddock then
         # sometimes deadlocks in the RTS scheduler (GHC #21539). -j1 avoids it.
@@ -216,13 +254,8 @@
         # Only libraries whose output differs from the base set's take the two
         # overrides, so no path cache.nixos.org serves changes.
         sequentialBuildOverlay = _hself: hsuper:
-          let
-            base = pkgs.haskell.packages.ghc910;
-            rebuilt = name: pkg:
-              let served = builtins.tryEval (base.${name}.outPath or null);
-              in !(served.success && served.value == pkg.outPath);
-          in builtins.mapAttrs (name: pkg:
-            if (pkg.isHaskellLibrary or false) && rebuilt name pkg
+          builtins.mapAttrs (name: pkg:
+            if (pkg.isHaskellLibrary or false) && builtFromSource name pkg
             then sequentialCompile (sequentialHaddock pkg)
             else pkg) hsuper;
 
@@ -235,6 +268,7 @@
             otelOverlay
             amazonkaOverlay
             advisoryOverlay
+            upstreamSuitesOverlay
             managedLzmaOverlay
             sequentialBuildOverlay
           ];
@@ -308,7 +342,14 @@
 
         # Build every library and executable here. Tests run on the Cabal path,
         # because the integration and smoke suites need Docker or live registries.
-        ecluse = hlib.dontCheck ecluseRaw;
+        ecluse =
+          let
+            pkg = hlib.dontCheck ecluseRaw;
+            running = pkgs.lib.concatStringsSep ", " (upstreamSuitesRun pkg);
+          in
+          assert pkgs.lib.assertMsg (running == "")
+            "Upstream suites run in the release closure. Add to upstreamSuitesOverlay: ${running}";
+          pkg;
 
         # Compile only exe:ecluse sequentially for the image. The whole-package
         # Haddock build above keeps parallel compilation and stays outside it.
