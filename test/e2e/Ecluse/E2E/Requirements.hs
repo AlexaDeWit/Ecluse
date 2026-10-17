@@ -121,7 +121,7 @@ obligations =
         "pypi/mirror-native"
         Supported
         ["read", "mirror", "client-install", "telemetry"]
-        ["pypi/mirror-native/read-roundtrip", "pypi/mirror-native/lost-reply", "pypi/mirror-native/interruption"]
+        ["pypi/mirror-native/read-roundtrip", "pypi/mirror-native/lost-reply", "pypi/mirror-native/interruption", "pypi/mirror-native/yanked-greatest", "pypi/mirror-native/yank-negative-control"]
     , Obligation
         "pypi/publish"
         "pypi/publication"

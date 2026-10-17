@@ -124,8 +124,8 @@ data NpmProject = NpmProject
     , npEnv :: [(String, String)]
     }
 
-{- | An isolated, throwaway @pip@ project: its own requirements file, install target and @HOME@
-keep global pip state out and the proxy the only index.
+{- | An isolated, throwaway @pip@ project: its own install target and @HOME@ keep global pip
+state out and the proxy the only index.
 -}
 data PipProject = PipProject
     { ppDir :: FilePath

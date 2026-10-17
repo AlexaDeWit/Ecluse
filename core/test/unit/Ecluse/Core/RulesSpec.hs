@@ -24,18 +24,20 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
+import Control.Concurrent (yield)
 import UnliftIO.Async (mapConcurrently)
 import UnliftIO.Exception (evaluate, finally, impureThrow, throwIO)
 
 import Ecluse.Core.Breaker (Breaker, admit, initialBreaker, recordFailure)
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), MissingScorePolicy (..), openCveDb, scoreAtLeast)
+import Ecluse.Core.Cve.Internal (toRange)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, LastAffected, Unbounded))
 import Ecluse.Core.Package
-import Ecluse.Core.Version (mkVersion, renderVersion)
-import Ecluse.Test.Cve (fakeCveLookup, referenceInside, unscoredEpssCases)
+import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
+import Ecluse.Test.Cve (fakeCveLookup, namesFix, referenceInside, unscoredEpssCases)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV2), RangeRow, mkValidDbWithRows)
 import Ecluse.Test.Osv.Withdrawal (maliciousZip, withdrawalZip)
 import Ecluse.Test.OsvDb (withFixtureOsvDb, withOsvZipDb, withServedArtifact)
@@ -71,12 +73,13 @@ import Ecluse.Test.Rules (
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 import Ecluse.Core.Rules
-import Ecluse.Core.Rules.Effectful (EffectfulConfig (ecBreakerCooldown, ecBreakerThreshold))
+import Ecluse.Core.Rules.Effectful (EffectfulConfig (ecBackoff, ecBreakerCooldown, ecBreakerThreshold))
 import Ecluse.Core.Rules.Freshness
 import Ecluse.Core.Rules.Render (renderDecision, renderInability, renderReason)
 import Ecluse.Core.Rules.Types
-import Ecluse.Rules.Remediation.Support (genRemediation, genRows, genTenths, referenceRemediation)
-import Ecluse.Rules.Support (ctx, now, pkg, sixDayLimit, sourceStateDeps)
+import Ecluse.Rules.FrozenEvaluator (frozenEvaluator, frozenPrepare)
+import Ecluse.Rules.Remediation.Support (genEcosystem, genRemediation, genRows, genTenths, referenceRemediation)
+import Ecluse.Rules.Support (SourceState (Faulting, Loaded), ctx, normaliseVerdictIds, now, pkg, sixDayLimit, sourceStateDeps)
 
 listed :: Maybe Text -> RuleEvidence
 listed mScope = identityEvidence (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0
@@ -116,6 +119,22 @@ shouldReturnDecisions evaluated expected = do
     actual <- evaluated
     length actual `shouldBe` length expected
     for_ (zip actual expected) (uncurry shouldMatchDecision)
+
+-- | What a poisoned verdict throws.
+thrownVerdict :: TestContractEscape
+thrownVerdict = TestContractEscape "pure verdict"
+
+-- | Verdicts that throw from each position the evaluator must force, so it refuses by the rule's name.
+poisonedVerdicts :: [(String, RuleVerdict)]
+poisonedVerdicts =
+    [ ("the whole verdict", impureThrow thrownVerdict)
+    , ("an allow reason", Allow (impureThrow thrownVerdict))
+    , ("a deny reason", Deny Nothing (impureThrow thrownVerdict))
+    , ("an abstention reason", NoDecision (impureThrow thrownVerdict))
+    , ("an inability", CannotVet FailNoDecision (impureThrow thrownVerdict))
+    , ("an advisory generation", Deny (Just (impureThrow thrownVerdict)) FixesNoAdvisory)
+    , ("a later advisory identifier", Allow (Remediates (mkAdvisoryIds ("GHSA-first" :| [impureThrow thrownVerdict]))))
+    ]
 
 -- | Rule capabilities whose advisory database is the given fake's rows.
 depsWith :: [(Text, AdvisoryRange)] -> RuleDeps
@@ -624,14 +643,14 @@ versionsFor cve name = do
             Unbounded -> []
 
 -- | Compare shared reads against per-version reads and evaluators, returning the checked verdicts.
-agreesOn :: (Text -> Text -> IO Bool) -> CveLookup -> [PackageName] -> IO [RuleVerdict]
-agreesOn probe cve names =
-    fmap (concat . concat) . forM (names <> [unscopedNpm "no-such-package"]) $ \name -> do
+agreesOn :: Ecosystem -> (Text -> Text -> IO Bool) -> CveLookup -> [PackageName] -> IO [RuleVerdict]
+agreesOn eco probe cve names =
+    fmap (concat . concat) . forM (names <> [mkPackageName eco Nothing "no-such-package"]) $ \name -> do
         -- A version built under another ecosystem's grammar reaches the matcher's re-parse.
-        versions <- (\vs -> [(v, builtUnder) | v <- vs, builtUnder <- universe]) <$> versionsFor cve name
+        versions <- (\vs -> [(v, builtUnder) | v <- ordNub (map (servedSpelling eco) vs), builtUnder <- universe]) <$> versionsFor cve name
         let evidence = [completeEvidence (sampleDetails name (mkVersion builtUnder v)) | (v, builtUnder) <- versions]
         compared <- forM referenceParityRules $ \rule -> do
-            perVersion <- traverse (perVersionVerdict etag probe cve rule) evidence
+            perVersion <- traverse (perVersionVerdict parityEtag probe cve rule) evidence
             perRequest <- perRequestVerdicts deps rule name evidence
             zip versions perRequest `shouldBe` zip versions perVersion
             pure perVersion
@@ -641,8 +660,23 @@ agreesOn probe cve names =
         zip versions shared `shouldBe` zip versions fresh
         pure compared
   where
-    etag = DbEtag "reference-parity"
-    deps = servingRuleDeps etag cve
+    deps = servingRuleDeps parityEtag cve
+
+parityEtag :: DbEtag
+parityEtag = DbEtag "reference-parity"
+
+-- | A version as each ecosystem's projection spells it: canonical PEP 440 for PyPI, the published text for npm.
+servedSpelling :: Ecosystem -> Text -> Text
+servedSpelling = \case
+    PyPI -> \raw -> maybe raw renderVersion (canonicalPep440 raw)
+    _ -> id
+
+-- | One hand-built row as a compiled PyPI artifact holds it, each bound in canonical PEP 440 spelling.
+pypiRange :: RangeRow -> (Text, AdvisoryRange)
+pypiRange (package, advisory, introduced, fixed, lastAffected, cvss, epss) =
+    (package, toRange (advisory, spelled <$> introduced, spelled <$> fixed, spelled <$> lastAffected, cvss, epss))
+  where
+    spelled = servedSpelling PyPI
 
 -- | Open an accepted artifact and lend the reference's fix probe and the lookup, then close both.
 withOpened :: FilePath -> ((Text -> Text -> IO Bool) -> CveLookup -> IO a) -> IO a
@@ -655,6 +689,17 @@ withOpened path use =
 coveredPackages :: CveLookup -> IO [PackageName]
 coveredPackages cve = map unscopedNpm <$> cveCoveredNames cve
 
+-- | The verdicts reach an admission, a denial, a still-affected fix, both differential outcomes, and a version no advisory fixes.
+reachesEveryOutcome :: [RuleVerdict] -> Expectation
+reachesEveryOutcome verdicts = do
+    verdicts `shouldSatisfy` any isAllow
+    verdicts `shouldSatisfy` any (\case Allow RemediatesWithinLimits{} -> True; _ -> False)
+    verdicts `shouldSatisfy` any (\case NoDecision RemediationBeyondLimits{} -> True; _ -> False)
+    verdicts `shouldSatisfy` any isDeny
+    verdicts `shouldSatisfy` any (\case NoDecision FixesButStillAffected{} -> True; _ -> False)
+    verdicts `shouldSatisfy` elem (NoDecision FixesNoAdvisory)
+    map verdictSentence verdicts `shouldSatisfy` elem "no advisory names this version as its fix"
+
 referenceParitySpec :: Spec
 referenceParitySpec = describe "one read per request against a read per version, over a real artifact" $ do
     it "agrees on hand-built rows covering every bound shape and fix spelling" $
@@ -663,26 +708,228 @@ referenceParitySpec = describe "one read per request against a read per version,
             mkValidDbWithRows path [] edgeCaseRows
             verdicts <- withOpened path $ \probe cve -> do
                 names <- coveredPackages cve
-                agreesOn probe cve (scopedNpm "scope" "pkg" : names)
-            -- The rows reach an admission, a denial, a still-affected fix, both differential outcomes,
-            -- and a version no advisory fixes.
-            verdicts `shouldSatisfy` any isAllow
-            verdicts `shouldSatisfy` any (\case Allow RemediatesWithinLimits{} -> True; _ -> False)
-            verdicts `shouldSatisfy` any (\case NoDecision RemediationBeyondLimits{} -> True; _ -> False)
-            verdicts `shouldSatisfy` any isDeny
-            verdicts `shouldSatisfy` any (\case NoDecision FixesButStillAffected{} -> True; _ -> False)
-            verdicts `shouldSatisfy` elem (NoDecision FixesNoAdvisory)
-            map verdictSentence verdicts `shouldSatisfy` elem "no advisory names this version as its fix"
+                agreesOn Npm probe cve (scopedNpm "scope" "pkg" : names)
+            reachesEveryOutcome verdicts
+
+    it "agrees on the hand-built rows under PyPI names, each bound and version spelled as PyPI serves it" $ do
+        let cve = fakeCveLookup [pypiRange row | row@(package, _, _, _, _, _, _) <- edgeCaseRows, not ("@" `T.isPrefixOf` package)]
+        names <- map unscopedPyPI <$> cveCoveredNames cve
+        agreesOn PyPI (namesFix cve) cve names >>= reachesEveryOutcome
 
     it "agrees on the compiled corpus" $
         withFixtureOsvDb CorpusV2 $
-            \path -> withOpened path $ \probe cve -> void (coveredPackages cve >>= agreesOn probe cve)
+            \path -> withOpened path $ \probe cve -> void (coveredPackages cve >>= agreesOn Npm probe cve)
 
     for_ [("active", Nothing), ("withdrawn", Just (String "2024-05-14T20:15:44Z"))] $ \(label, withdrawn) ->
         it ("agrees on a compiled archive whose advisory is " <> label) $ do
             archive <- withdrawalZip withdrawn
             withOsvZipDb Npm archive $ \path ->
-                withOpened path (\probe cve -> void (agreesOn probe cve (map unscopedNpm ["withdrawal-only", "withdrawal-overlap", "corpus-vuln"])))
+                withOpened path (\probe cve -> void (agreesOn Npm probe cve (map unscopedNpm ["withdrawal-only", "withdrawal-overlap", "corpus-vuln"])))
+
+-- | One evaluator under comparison: how it prepares a policy, and the decider it builds per request.
+data Evaluator = Evaluator (RuleDeps -> [PrecededRule] -> IO [PreparedRule]) (EvalContext -> [PreparedRule] -> IO (RuleEvidence -> IO Decision))
+
+liveEvaluator, frozen :: Evaluator
+liveEvaluator = Evaluator prepare newEvaluator
+frozen = Evaluator frozenPrepare frozenEvaluator
+
+-- | What one request did: its decisions, the packages its shared reads read, and its source reports, in order.
+data Observed = Observed
+    { obDecisions :: [Decision]
+    , obReads :: [PackageName]
+    , obReports :: [SourceHealth]
+    }
+    deriving stock (Eq, Show)
+
+-- | Decide versions through a fresh evaluator. Retries are off, so a faulting read returns at once.
+observe :: Evaluator -> ((RuleEvidence -> IO Decision) -> [RuleEvidence] -> IO [Decision]) -> RuleDeps -> [PrecededRule] -> ([PreparedRule] -> [PreparedRule]) -> [RuleEvidence] -> IO Observed
+observe (Evaluator prepareWith evaluatorWith) decideAll deps policy adjust evidence = do
+    readPackages <- newIORef []
+    reports <- newIORef []
+    let reporting = deps{rdSourceReporter = noSourceReporter{reportSource = \health -> atomicModifyIORef'_ reports (health :)}}
+    rules <- adjust . map (recordReads readPackages . withoutRetries) <$> prepareWith reporting policy
+    decisions <- evaluatorWith ctx rules >>= (`decideAll` evidence)
+    readOrder <- reverse <$> readIORef readPackages
+    reportOrder <- reverse <$> readIORef reports
+    pure (Observed (map decisionCause decisions) readOrder (map healthCause reportOrder))
+
+-- Yielding mid-read lets concurrent callers reach a held cell's lock while the read holds it.
+recordReads :: IORef [PackageName] -> PreparedRule -> PreparedRule
+recordReads readPackages = mapPackageRead (\packageRead -> packageRead{prRead = \package use -> atomicModifyIORef'_ readPackages (package :) >> yield >> prRead packageRead package use})
+
+-- | How many versions reach an advisory rule, each decided alone by a fresh frozen evaluator.
+reachingAdvisoryRules :: RuleDeps -> [PrecededRule] -> [RuleEvidence] -> IO Int
+reachingAdvisoryRules deps policy = fmap (length . filter (not . null . obReads)) . traverse (observe frozen traverse deps policy id . one)
+
+withoutRetries :: PreparedRule -> PreparedRule
+withoutRetries = mapResilience (\res -> res{resConfig = (resConfig res){ecBackoff = []}})
+
+-- GHC can append a runtime backtrace after the exception's own diagnostic line.
+causeOf :: Text -> Text
+causeOf = fst . T.breakOn "\n"
+
+decisionCause :: Decision -> Decision
+decisionCause = \case
+    Undecidable transience (RuleUnable name (RuleThrew detail)) -> Undecidable transience (RuleUnable name (RuleThrew (causeOf detail)))
+    other -> other
+
+healthCause :: SourceHealth -> SourceHealth
+healthCause = \case
+    SourceUnavailable name (RuleThrew detail) -> SourceUnavailable name (RuleThrew (causeOf detail))
+    other -> other
+
+-- | Which prepared rule throws, for which release, and from which of 'poisonedVerdicts'.
+data Poison = Poison Int Text Int
+    deriving stock (Show)
+
+poisonAt :: Ecosystem -> Maybe Poison -> [PreparedRule] -> [PreparedRule]
+poisonAt eco poison rules = case poison of
+    Nothing -> rules
+    Just (Poison index release position) ->
+        let target = index `mod` max 1 (length rules)
+            poisoned = maybe id (poisonRule (mkVersion eco release) . snd) (poisonedVerdicts !!? position)
+         in zipWith (\i rule -> if i == target then poisoned rule else rule) [0 ..] rules
+
+-- | The rule returns the poisoned verdict for one version and decides every other version as before.
+poisonRule :: Version -> RuleVerdict -> PreparedRule -> PreparedRule
+poisonRule version verdict rule = case prepEval rule of
+    PerVersion eval -> rule{prepEval = PerVersion (\c ev -> if evVersion ev == version then pure verdict else eval c ev)}
+    PerPackage packageRead -> rule{prepEval = PerPackage packageRead{prVerdict = \rows ev -> if evVersion ev == version then verdict else prVerdict packageRead rows ev}}
+
+-- | One rule of a generated policy, at its default precedence or another.
+genPolicyRule :: [Text] -> Gen PrecededRule
+genPolicyRule pool = do
+    rule <-
+        Gen.choice
+            [ DenyIfKnownMalicious <$> genAlignment
+            , DenyIfCve <$> (DenyIfCveParams <$> Gen.element [0, 5.0, 9.9] <*> genAlignment)
+            , DenyIfEpss <$> (DenyIfEpssParams <$> Gen.element [0, 0.5, 0.95] <*> genAlignment)
+            , genRemediation
+            , Gen.element (AllowIfOlderThan (7 * nominalDay) : DenyInstallTimeExecution : DenyByIdentity "other" : [AllowByIdentity ("thing@" <> release) | release <- take 1 pool])
+            ]
+    Gen.frequency [(3, pure (atDefaultPrecedence rule)), (1, (`at` rule) <$> genPrecedence)]
+
+genAlignment :: Gen FailureAlignment
+genAlignment = Gen.element [FailDeny, FailNoDecision]
+
+-- | Rows for @thing@ and @other@: none, none that names a fix, or any.
+genPackageRows :: [Text] -> Gen [(Text, AdvisoryRange)]
+genPackageRows pool = concat <$> traverse (\name -> map (name,) <$> Gen.frequency [(1, pure []), (1, filter (not . namesAFix) <$> genRows pool), (2, genRows pool)]) ["thing", "other"]
+
+namesAFix :: AdvisoryRange -> Bool
+namesAFix row = case arUpperBound row of
+    FixedBefore _ -> True
+    _ -> False
+
+-- | Mostly a loaded source, so the advisory rules decide from rows.
+genSourceState :: Gen SourceState
+genSourceState = Gen.frequency [(3, pure Loaded), (1, Gen.enumBounded)]
+
+-- | A source whose reads never fault, so no breaker opens on a read count the schedule decides.
+genSteadySource :: Gen SourceState
+genSteadySource = Gen.filter (/= Faulting) genSourceState
+
+-- | A request's versions of the named packages, interleaved, either side of the quarantine.
+genListing :: Ecosystem -> [Text] -> [Text] -> Gen [RuleEvidence]
+genListing eco names pool = Gen.list (Range.linear 1 10) $ do
+    name <- Gen.element names
+    release <- Gen.element pool
+    age <- Gen.element [0, 30]
+    scripts <- Gen.bool
+    let ev = (pkg Nothing age){evName = mkPackageName eco Nothing name, evVersion = mkVersion eco release}
+    pure (if scripts then withInstallScripts ev else ev)
+
+-- | Whether a rule's filter keeps a row: a MAL record, a score at the threshold, or a named fix.
+keptBy :: Rule -> AdvisoryRange -> Bool
+keptBy rule row = case rule of
+    DenyIfKnownMalicious _ -> maybe False (not . T.null) (T.stripPrefix "MAL-" (arCveId row))
+    DenyIfCve params -> scoreAtLeast DenyMissingScore (dicMinCvss params) (arSeverity row)
+    DenyIfEpss params -> scoreAtLeast AbstainMissingScore (dieMinEpss params) (arEpss row)
+    AllowIfRemediatesCve _ -> namesAFix row
+    _ -> False
+
+isRuleThrew :: Decision -> Bool
+isRuleThrew = \case
+    Undecidable _ (RuleUnable _ RuleThrew{}) -> True
+    _ -> False
+
+-- | Whether the deny-by-default trail holds an advisory rule's abstention.
+holdsAdvisoryAbstention :: Decision -> Bool
+holdsAdvisoryAbstention = \case
+    BlockedByDefault reasons -> any (\case FixesNoAdvisory -> True; NoKnownMaliciousAdvisory -> True; NotAffectedAtThreshold _ -> True; _ -> False) reasons
+    _ -> False
+
+evaluatorParitySpec :: Spec
+evaluatorParitySpec = describe "the evaluator against the one frozen at f5f368d31" $ do
+    modifyMaxSuccess (const 300) . it "decides, reads and reports as it did over one or two packages in turn, npm and PyPI" $
+        hedgehog $ do
+            (eco, pool) <- forAll genEcosystem
+            standing <- forAll genSourceState
+            rows <- forAll (genPackageRows pool)
+            policy <- forAll (Gen.list (Range.linear 0 6) (genPolicyRule pool))
+            poison <- forAll (Gen.maybe (Poison <$> Gen.int (Range.constant 0 5) <*> Gen.element pool <*> Gen.int (Range.constant 0 (length poisonedVerdicts - 1))))
+            names <- forAll (Gen.element [["thing"], ["thing", "other"]])
+            evidence <- forAll (genListing eco names pool)
+            let inTurn evaluator = liftIO (observe evaluator traverse (sourceStateDeps standing (depsWith rows)) policy (poisonAt eco poison) evidence)
+            live <- inTurn liveEvaluator
+            asItStood <- inTurn frozen
+            H.cover 10 "the request reads more than one run of packages" (length (obReads asItStood) > 1)
+            H.cover 5 "a rule's throw refuses a version" (any isRuleThrew (obDecisions asItStood))
+            H.cover 10 "an advisory rule's abstention reaches the trail" (any holdsAdvisoryAbstention (obDecisions asItStood))
+            live === asItStood
+
+    modifyMaxSuccess (const 200) . it "decides one package's versions concurrently as it did in turn, reading the package at most once" $
+        hedgehog $ do
+            (eco, pool) <- forAll genEcosystem
+            standing <- forAll genSourceState
+            rows <- forAll (genPackageRows pool)
+            policy <- forAll (Gen.list (Range.linear 0 6) (genPolicyRule pool))
+            evidence <- forAll (genListing eco ["thing"] pool)
+            let deps = sourceStateDeps standing (depsWith rows)
+            concurrent <- liftIO (observe liveEvaluator mapConcurrently deps policy id evidence)
+            asItStood <- liftIO (observe frozen traverse deps policy id evidence)
+            reaching <- liftIO (reachingAdvisoryRules deps policy evidence)
+            H.cover 30 "two or more versions reach an advisory rule" (reaching >= 2)
+            obDecisions concurrent === obDecisions asItStood
+            obReads concurrent === obReads asItStood
+            H.assert (length (obReads asItStood) <= 1)
+            sortOn (show @Text) (obReports concurrent) === sortOn (show @Text) (obReports asItStood)
+
+    modifyMaxSuccess (const 200) . it "decides two packages' versions concurrently as it did in turn, with reads and reports bounded" $
+        hedgehog $ do
+            (eco, pool) <- forAll genEcosystem
+            standing <- forAll genSteadySource
+            rows <- forAll (genPackageRows pool)
+            policy <- forAll (Gen.list (Range.linear 0 6) (genPolicyRule pool))
+            evidence <- forAll (genListing eco ["thing", "other"] pool)
+            let deps = sourceStateDeps standing (depsWith rows)
+                bound = length evidence * length policy
+                distinctReports = sortNub . map (show @Text) . obReports
+            concurrent <- liftIO (observe liveEvaluator mapConcurrently deps policy id evidence)
+            asItStood <- liftIO (observe frozen traverse deps policy id evidence)
+            reaching <- liftIO (reachingAdvisoryRules deps policy evidence)
+            H.cover 30 "two or more versions reach an advisory rule" (reaching >= 2)
+            H.cover 10 "both packages are read" (length (sortNub (obReads asItStood)) == 2)
+            obDecisions concurrent === obDecisions asItStood
+            sortNub (obReads concurrent) === sortNub (obReads asItStood)
+            distinctReports concurrent === distinctReports asItStood
+            H.assert (length (obReads concurrent) <= bound && length (obReports concurrent) <= bound)
+
+    modifyMaxSuccess (const 300) . it "decides each version as the per-version reference, often with no row past the rule's filter, npm and PyPI" $
+        hedgehog $ do
+            (eco, pool) <- forAll genEcosystem
+            rule <- forAll (Gen.choice [pure (DenyIfKnownMalicious FailDeny), denyCveAt <$> Gen.element [5.0, 9.9], denyEpssAt <$> Gen.element [0.5, 0.95], genRemediation])
+            generated <- forAll (genRows pool)
+            unmatched <- forAll Gen.bool
+            let rows = if unmatched then filter (not . keptBy rule) generated else generated
+                name = mkPackageName eco Nothing "thing"
+                cve = fakeCveLookup (map ("thing",) rows)
+                evidence = [identityEvidence name (mkVersion eco release) | release <- pool]
+            H.cover 30 "the rule's filter keeps no row" (not (any (keptBy rule) rows))
+            H.cover 10 "the rule's filter keeps a row" (any (keptBy rule) rows)
+            perVersion <- liftIO (traverse (perVersionVerdict parityEtag (namesFix cve) cve rule) evidence)
+            perRequest <- liftIO (perRequestVerdicts (servingRuleDeps parityEtag cve) rule name evidence)
+            map normaliseVerdictIds perRequest === map normaliseVerdictIds perVersion
 
 -- | The PyPI counterpart of 'pkg': @Flask_Thing\@1.0.0@, published the given days before 'now'.
 pypiPkg :: Integer -> RuleEvidence
@@ -761,6 +1008,7 @@ spec = do
     sourceHealthSpec
     noDatabaseSpec
     referenceParitySpec
+    evaluatorParitySpec
     ruleSentenceSpec
     describe "advisory package identity" $ do
         for_ [denyCveAt 0, denyEpssAt 0] $ \rule ->
@@ -1209,24 +1457,14 @@ spec = do
     describe "verdict exceptions" $ do
         let versions = [(pkg Nothing 30){evVersion = v} | v <- map (mkVersion Npm) ["1.0.0", "2.0.0", "3.0.0"]]
             poisoned = mkVersion Npm "2.0.0"
-            thrown = TestContractEscape "pure verdict"
-            refusal name = Undecidable (WillResolve Nothing) (RuleUnable name (RuleThrew (show thrown)))
+            refusal name = Undecidable (WillResolve Nothing) (RuleUnable name (RuleThrew (show thrownVerdict)))
             healthy = Admitted "AllowIfOlderThan" (PublishedLongEnough (30 * nominalDay) (7 * nominalDay)) []
-            bombVerdict ev = if evVersion ev == poisoned then impureThrow thrown else NoDecision FixesNoAdvisory
+            bombVerdict ev = if evVersion ev == poisoned then impureThrow thrownVerdict else NoDecision FixesNoAdvisory
 
-        for_
-            [ ("the whole verdict", impureThrow thrown)
-            , ("an allow reason", Allow (impureThrow thrown))
-            , ("a deny reason", Deny Nothing (impureThrow thrown))
-            , ("an abstention reason", NoDecision (impureThrow thrown))
-            , ("an inability", CannotVet FailNoDecision (impureThrow thrown))
-            , ("an advisory generation", Deny (Just (impureThrow thrown)) FixesNoAdvisory)
-            , ("a later advisory identifier", Allow (Remediates (mkAdvisoryIds ("GHSA-first" :| [impureThrow thrown]))))
-            ]
-            $ \(label, verdict) ->
-                it ("refuses by name when a per-version rule throws in " <> label) $
-                    evalRules ctx [constRule "PureBomb" verdict] (pkg Nothing 0)
-                        >>= (`shouldMatchDecision` refusal "PureBomb")
+        for_ poisonedVerdicts $ \(label, verdict) ->
+            it ("refuses by name when a per-version rule throws in " <> label) $
+                evalRules ctx [constRule "PureBomb" verdict] (pkg Nothing 0)
+                    >>= (`shouldMatchDecision` refusal "PureBomb")
 
         it "refuses only the poisoned verdict across one listing" $ do
             let bomb = PreparedRule "PureBomb" 300 (PerVersion (\_ -> pure . bombVerdict))
@@ -1237,9 +1475,9 @@ spec = do
         it "refuses only the poisoned publish time across one listing" $ do
             rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
             decideVersion <- newEvaluator ctx rules
-            let evidence = [if evVersion ev == poisoned then ev{evPublishedAt = Known (Just (impureThrow thrown))} else ev | ev <- versions]
+            let evidence = [if evVersion ev == poisoned then ev{evPublishedAt = Known (Just (impureThrow thrownVerdict))} else ev | ev <- versions]
             traverse decideVersion evidence `shouldReturnDecisions` [healthy, refusal "AllowIfOlderThan", healthy]
-            evalRules ctx rules (pkg Nothing 30){evPublishedAt = Known (Just (impureThrow thrown))}
+            evalRules ctx rules (pkg Nothing 30){evPublishedAt = Known (Just (impureThrow thrownVerdict))}
                 >>= (`shouldMatchDecision` refusal "AllowIfOlderThan")
 
         it "refuses only the poisoned advisory verdict without poisoning the shared read" $ do
@@ -1267,7 +1505,7 @@ spec = do
             readIORef reports >>= \case
                 [SourceUnavailable name (RuleThrew detail)] -> do
                     name `shouldBe` "AdvisoryBomb"
-                    detail `shouldHaveExceptionCause` show thrown
+                    detail `shouldHaveExceptionCause` show thrownVerdict
                 other -> expectationFailure ("expected one thrown-rule source report, got " <> show other)
 
     describe "properties" $ do

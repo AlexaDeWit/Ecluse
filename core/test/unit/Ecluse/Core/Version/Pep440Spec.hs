@@ -9,7 +9,7 @@ import Data.Char (isDigit)
 import Data.List (dropWhileEnd)
 import Data.Text qualified as T
 import Data.Text.Read qualified as TR
-import Hedgehog (forAll, (===))
+import Hedgehog (Gen, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
@@ -17,14 +17,28 @@ import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Text (isAsciiAlphaNum)
 import Ecluse.Core.Version (canonicalPep440, compareVersions, isStable, mkVersion, parseVersionKey, renderVersion)
-import Ecluse.Core.Version.Token (VToken (VNum, VStr), classifyRun, numOr0, parseNumSeg, withinVersionLength)
-import Ecluse.Test.Version (genPyPI)
+import Ecluse.Core.Version.Token (VToken (VNum, VStr), classifyRun, digitRuns, numOr0, parseNumSeg, withinVersionLength)
+import Ecluse.Test.Version (digitRunIs, genPyPI, genPyPINearPlain, leadsWithZero)
 
 -- | Preserve complete keys, refusals, rendering and ordering against the base parser.
 spec :: Spec
 spec = describe "PEP 440 against the frozen parser at ec1b8d8" $ do
     it "keeps complete keys, refusals, rendering and stability for deterministic generated inputs" $
         take 10 [raw | raw <- pep440Cases, pep440Snapshot raw /= frozenSnapshot raw] `shouldBe` []
+    modifyMaxSuccess (const 5000) $
+        it "keeps complete keys, refusals, rendering and stability for plain releases and their near misses" $
+            hedgehog $ do
+                raw <- forAll genPyPINearPlain
+                let plain = plainRelease raw
+                    accepted = isJust (frozenParsePep440 raw)
+                cover 20 "a plain release (the one-pass scanner)" plain
+                cover 10 "a near miss the frozen parser refuses (the full scanner)" (not plain && not accepted)
+                cover 10 "a near miss the frozen parser accepts (the full scanner)" (not plain && accepted)
+                cover 1 "a plain release with an 18-digit number" (plain && any (digitRunIs EQ) (digitRuns raw))
+                cover 1 "a plain release with a leading zero" (plain && any leadsWithZero (digitRuns raw))
+                cover 1 "a near miss with a leading zero" (not plain && any leadsWithZero (digitRuns raw))
+                cover 1 "a near miss with a number over 18 digits" (not plain && any (digitRunIs GT) (digitRuns raw))
+                pep440Snapshot raw === frozenSnapshot raw
     it "keeps release normalisation for nonzero ends, zero suffixes and all-zero lists" $
         take 10 [raw | raw <- releaseNormalisationCases, pep440Snapshot raw /= frozenSnapshot raw] `shouldBe` []
     it "keeps ordering for deterministic release pairs" $
@@ -37,10 +51,10 @@ spec = describe "PEP 440 against the frozen parser at ec1b8d8" $ do
                 /= (compare <$> frozenParsePep440 a <*> frozenParsePep440 b)
             ]
             `shouldBe` []
-    modifyMaxSuccess (const 2000) $
+    modifyMaxSuccess (const 4500) $
         it "keeps ordering for generated valid and malformed pairs" $
             hedgehog $ do
-                (a, b) <- forAll ((,) <$> Gen.choice [genPyPI, Gen.element pep440EdgeCases] <*> Gen.choice [genPyPI, Gen.element pep440EdgeCases])
+                (a, b) <- forAll ((,) <$> genPair <*> genPair)
                 compareVersions (mkVersion PyPI a) (mkVersion PyPI b)
                     === (compare <$> frozenParsePep440 a <*> frozenParsePep440 b)
     it "keeps the existing canonical rendering examples" $ do
@@ -52,6 +66,14 @@ spec = describe "PEP 440 against the frozen parser at ec1b8d8" $ do
             parseVersionKey PyPI raw `shouldSatisfy` isRight
         for_ [".", "1..", "1..0", "1.0..dev1", "1!!1"] $ \raw ->
             parseVersionKey PyPI raw `shouldSatisfy` isLeft
+
+-- Either half of an ordered pair: a canonical version, a plain release or a near miss, or an edge case.
+genPair :: Gen Text
+genPair = Gen.choice [genPyPI, genPyPINearPlain, Gen.element pep440EdgeCases]
+
+-- Dotted numbers of at most 18 digits each.
+plainRelease :: Text -> Bool
+plainRelease = all (\n -> not (T.null n) && (digitRunIs LT n || digitRunIs EQ n)) . T.split (== '.')
 
 -- The grammar is private. Its public Show instance exposes every key field without widening the API.
 pep440Snapshot :: Text -> (Maybe Text, Maybe Text, Maybe Bool)

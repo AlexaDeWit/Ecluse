@@ -41,7 +41,7 @@ import Data.Map.Strict qualified as Map
 import System.FilePath (takeFileName)
 
 import Ecluse.Config (
-    AdvisoriesSettings (advCompileInterval, advEpssFeedUrl, advEpssLossCap, advEpssQuietTime, advMaxShrink, advOsvExportBaseUrl, advQuietTime, advUrl),
+    AdvisoriesSettings (advCompileInterval, advEpssFeedUrl, advEpssLossCap, advEpssQuietTime, advMaxShrink, advOsvExportBaseUrl, advQuietTime, advSourcePathRecording, advUrl),
     AdvisoryStoreUrl,
     Mount,
     MountMap,
@@ -54,7 +54,7 @@ import Ecluse.Config.AdvisoryStore (advisoryStoreCapability)
 import Ecluse.Core.Clock (secondsToMicros)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Osv.Advisory (osvExportUrl)
-import Ecluse.Core.Osv.Compile (CompileSources (..))
+import Ecluse.Core.Osv.Compile (CompileSources, mkCompileSources)
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory))
 import Ecluse.Core.Osv.Provenance (QuietTime (..), defaultQuietTime)
 import Ecluse.Core.Osv.Publication (Rebaseline, ShrinkPolicy (..), renderBaselineCapability, renderPercent)
@@ -91,13 +91,13 @@ exportCadenceMicros = secondsToMicros . advCompileInterval
 idleCadenceMicros :: Int
 idleCadenceMicros = secondsToMicros (24 * 60 * 60)
 
--- | The upstreams a compile reads. Both are configured keys, so a moved or mirrored feed never needs a new binary.
+-- | The upstreams a compile reads, and how its artifact records them. A moved or mirrored feed never needs a new binary.
 configuredSources :: AdvisoriesSettings -> OsvEcosystem -> CompileSources
 configuredSources advisories eco =
-    CompileSources
-        { csOsvExportUrl = osvExportUrl (unUrl (advOsvExportBaseUrl advisories)) (osvExportDirectory eco)
-        , csEpssFeedUrl = toString (unUrl (advEpssFeedUrl advisories))
-        }
+    mkCompileSources
+        (advSourcePathRecording advisories)
+        (osvExportUrl (unUrl (advOsvExportBaseUrl advisories)) (osvExportDirectory eco))
+        (toString (unUrl (advEpssFeedUrl advisories)))
 
 -- | The egress every compile attempts whatever the rules, named by the host and port it dials.
 epssAttemptLine :: AdvisoriesSettings -> Text

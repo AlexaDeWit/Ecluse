@@ -46,10 +46,10 @@ import Data.Text qualified as T
 import Data.Text.Short qualified as TS
 import Data.Time (NominalDiffTime, diffUTCTime, getCurrentTime)
 import UnliftIO (evaluate, tryAny)
-import UnliftIO.MVar (modifyMVar)
+import UnliftIO.MVar (withMVar)
 
 import Ecluse.Core.Breaker (BreakerReporter (..))
-import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), MissingScorePolicy (..), PackageAdvisories, advisoryIdsOf, affecting, keepAdvisories, packageAdvisories, scoreAtLeast)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), MissingScorePolicy (..), PackageAdvisories, advisoryIdsOf, affecting, hasAdvisories, keepAdvisories, packageAdvisories, scoreAtLeast)
 import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Package
 import Ecluse.Core.Rules.Effectful (
@@ -189,12 +189,15 @@ advisoryDenyVerdict etag missing score threshold scoreOf advisories =
 isMalicious :: AdvisoryRange -> Bool
 isMalicious = maybe False (not . T.null) . T.stripPrefix "MAL-" . arCveId
 
--- Filtering shares parsed segments and happens once before the returned version function.
+-- Filtering happens once per package. With no segment left, every version shares one abstention.
 affectedVerdict :: DbEtag -> (AdvisoryIds -> Reason) -> Reason -> PackageAdvisories -> RuleEvidence -> RuleVerdict
-affectedVerdict etag affectedReason absentReason advisories ev =
-    case advisoryIdsOf (affecting advisories (evVersion ev)) of
-        [] -> NoDecision absentReason
+affectedVerdict etag affectedReason absentReason advisories
+    | hasAdvisories advisories = \ev -> case advisoryIdsOf (affecting advisories (evVersion ev)) of
+        [] -> absent
         affected : more -> Deny (Just etag) (affectedReason (mkAdvisoryIds (affected :| more)))
+    | otherwise = const absent
+  where
+    absent = NoDecision absentReason
 
 -- The one identity test the by-identity twins share: the exact rendered package
 -- name, or the exact package@version.
@@ -326,14 +329,20 @@ evalRules ctx rules ev = newEvaluator ctx rules >>= ($ ev)
 -- One rule as an evaluator runs it for each version: its evaluation, or what it threw.
 type VersionEval = RuleEvidence -> IO (Either Text RuleEvaluation)
 
+-- A rule's closures are built once here, not per version. 'eval ctx' is bound outside the version
+-- lambda because a prepared rule builds its verdict function for each context it is given.
 bindRule :: EvalContext -> PackageCell (Either Text AdvisoryRead) -> PreparedRule -> IO VersionEval
 bindRule ctx shared rule = case prepEval rule of
-    PerVersion eval -> pure (caughtEvaluation . fmap Decided . eval ctx)
+    PerVersion eval -> do
+        let decide = eval ctx
+        pure (\ev -> caughtEvaluation (Decided <$> decide ev))
     PerPackage packageRead -> do
         own <- newPackageCell
+        let resolve = heldFor own (decideFromRead (prepName rule) packageRead shared)
         pure $ \ev ->
-            heldFor own (evName ev) (decideFromRead (prepName rule) packageRead shared ev)
-                >>= either (pure . Left) (caughtEvaluation . pure . ($ ev))
+            resolve ev >>= \case
+                Left escape -> pure (Left escape)
+                Right decideVersion -> caughtEvaluation (pure (decideVersion ev))
 
 -- Strict fields evaluate the verdict payloads. Optional payloads need their own evaluation.
 caughtEvaluation :: IO RuleEvaluation -> IO (Either Text RuleEvaluation)
@@ -349,16 +358,21 @@ caught :: IO a -> IO (Either Text a)
 caught = fmap (first displayExceptionT) . tryAny
 
 -- A result held for the last package decided. Another package computes its own, never borrowing it.
-newtype PackageCell a = PackageCell (MVar (Maybe (PackageName, a)))
+-- The lock serialises computing. A hit reads the latest result without it.
+data PackageCell a = PackageCell (MVar ()) (IORef (Maybe (PackageName, a)))
 
 newPackageCell :: IO (PackageCell a)
-newPackageCell = PackageCell <$> newMVar Nothing
+newPackageCell = PackageCell <$> newMVar () <*> newIORef Nothing
 
-heldFor :: PackageCell a -> PackageName -> IO a -> IO a
-heldFor (PackageCell held) package compute =
-    modifyMVar held $ \case
-        Just (known, value) | known == package -> pure (Just (known, value), value)
-        _ -> (\value -> (Just (package, value), value)) <$> compute
+-- A miss looks again under the lock, so concurrent callers for one package compute it once.
+heldFor :: PackageCell a -> (RuleEvidence -> IO a) -> RuleEvidence -> IO a
+heldFor (PackageCell lock latest) compute ev =
+    readIORef latest >>= \case
+        Just (known, value) | known == evName ev -> pure value
+        _ -> withMVar lock $ \() ->
+            readIORef latest >>= \case
+                Just (known, value) | known == evName ev -> pure value
+                _ -> compute ev >>= \value -> value <$ atomicWriteIORef latest (Just (evName ev, value))
 
 -- The evaluator's one advisory read of a package: its rows, or why it has none.
 data AdvisoryRead
@@ -370,14 +384,12 @@ data AdvisoryRead
 -- reached. The rule reports once per package whether the read let it consult the source.
 decideFromRead :: Text -> PackageRead -> PackageCell (Either Text AdvisoryRead) -> RuleEvidence -> IO (Either Text (RuleEvidence -> RuleEvaluation))
 decideFromRead name packageRead shared reaching =
-    heldFor shared package (caught (readShared packageRead package)) >>= \case
+    heldFor shared (caught . readShared packageRead . evName) reaching >>= \case
         Left escape -> pure (Left escape)
         Right advisory -> do
             let resolved = resolveRead packageRead advisory
             health <- caught (evaluate (readHealth name advisory (resolved reaching)))
             caught (resolved <$ reportSource (prReporter packageRead) (either (SourceUnavailable name . RuleThrew) id health))
-  where
-    package = evName reaching
 
 -- The push-age gate, then the rows under the reading rule's resilience. The gate runs ahead of
 -- breaker admission, which an open breaker would otherwise skip past.

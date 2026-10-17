@@ -18,6 +18,13 @@ module Ecluse.Core.Osv.Provenance (
     provenanceRows,
     decodeProvenance,
 
+    -- * How a source is recorded
+    SourcePathRecording (..),
+    RecordedSource (..),
+    RecordedPath (..),
+    recordSource,
+    renderRecordedSource,
+
     -- * Source timestamps
     parseSourceTime,
     parseHttpDate,
@@ -50,6 +57,8 @@ import Ecluse.Core.Osv.Schema (
     ),
     renderMetaKey,
  )
+import Ecluse.Core.Package.Hash (sha256Hex)
+import Ecluse.Core.Security.Authority (credentialFreeOrigin, credentialFreePath, dialledOrigin)
 import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 
 {- | The sources one artifact was compiled from, as they described themselves. Every field is
@@ -57,13 +66,13 @@ import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 -}
 data AdvisoryProvenance = AdvisoryProvenance
     { apOsvSource :: Maybe Text
-    -- ^ The advisory export's credential-free URL.
+    -- ^ The advisory export in its stored form ('renderRecordedSource'). Older artifacts carry a credential-free URL.
     , apOsvLastModified :: Maybe UTCTime
     -- ^ The @Last-Modified@ the export answered the successful fetch with.
     , apOsvNewestModified :: Maybe UTCTime
     -- ^ The newest @modified@ across the advisory records the pass read.
     , apEpssSource :: Maybe Text
-    -- ^ The EPSS feed's credential-free URL.
+    -- ^ The EPSS feed in its stored form ('renderRecordedSource').
     , apEpssLastModified :: Maybe UTCTime
     -- ^ The @Last-Modified@ the feed answered the successful fetch with.
     , apEpssScoreDate :: Maybe UTCTime
@@ -120,6 +129,45 @@ maxSourceLength = 2048
 maxStampLength = 64
 maxLabelLength = 128
 
+-- | Whether an artifact records each source's path. Every consumer and every reader of the bucket can read the artifact.
+data SourcePathRecording
+    = -- | Record only the path's SHA-256, so a credential written into the path stays out of the artifact.
+      FingerprintSourcePath
+    | -- | Record the URL as 'Ecluse.Core.Security.Authority.credentialFreeUrl' leaves it, path included.
+      RecordSourcePath
+    deriving stock (Eq, Show)
+
+-- | A source as an artifact records it. Userinfo, the query and the fragment are never part of it.
+data RecordedSource = RecordedSource
+    { rsOrigin :: Text
+    -- ^ The scheme and authority: the dialled @host:port@ before a fingerprint, the authority as written before a path.
+    , rsPath :: RecordedPath
+    }
+    deriving stock (Eq, Show)
+
+-- | A source's path, or the fingerprint that stands in for it.
+data RecordedPath
+    = -- | The path as fetched.
+      PathAsFetched Text
+    | -- | The SHA-256 of the path's UTF-8 bytes, in lowercase hex.
+      PathSha256 Text
+    deriving stock (Eq, Show)
+
+-- | Record a fetched URL. A changed path changes the record under either choice.
+recordSource :: SourcePathRecording -> Text -> RecordedSource
+recordSource recording url = case recording of
+    FingerprintSourcePath -> RecordedSource{rsOrigin = dialledOrigin url, rsPath = PathSha256 (sha256Hex (encodeUtf8 path))}
+    RecordSourcePath -> RecordedSource{rsOrigin = credentialFreeOrigin url, rsPath = PathAsFetched path}
+  where
+    path = credentialFreePath url
+
+-- | The stored form. A fingerprint follows a slash, so 'Ecluse.Core.Security.Authority.dialledAuthorityLabel' still reads the authority.
+renderRecordedSource :: RecordedSource -> Text
+renderRecordedSource source =
+    rsOrigin source <> case rsPath source of
+        PathAsFetched path -> path
+        PathSha256 hex -> "/<sha256:" <> hex <> ">"
+
 {- | An RFC 3339 timestamp, or a bare date read as its UTC start of day. Anything else is
 'Nothing', which records no value rather than an invented one.
 -}
@@ -167,7 +215,7 @@ data ProvenanceSource
 data SourceAge = SourceAge
     { saSource :: ProvenanceSource
     , saUrl :: Text
-    -- ^ The credential-free source URL, or @\<unrecorded\>@ when the artifact carries none.
+    -- ^ The source in its stored form, or @\<unrecorded\>@ when the artifact carries none.
     , saAge :: NominalDiffTime
     , saThreshold :: NominalDiffTime
     }

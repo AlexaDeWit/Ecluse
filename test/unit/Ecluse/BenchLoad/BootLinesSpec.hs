@@ -18,6 +18,8 @@ import Ecluse.BenchLoad.BootLines (
     ruleBootOrders,
     ruleMessages,
  )
+import Ecluse.Composition.Support (expectConfig, pubUrlEnv)
+import Ecluse.Config (resolvedKeyProvenance)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
 
 messages :: [Text]
@@ -95,10 +97,22 @@ spec = do
     describe "loggedRules" $ do
         it "groups each rule's keys under its name, with the layers they came from" $
             loggedRules ruleLines
-                `shouldBe` [ LoggedRule "mounts.npm.rules.pin" (Just "AllowByIdentity") [("identity", "left-pad")] ["document"]
-                           , LoggedRule "min-age" (Just "AllowIfOlderThan") [("ageSeconds", "3600"), ("precedence", "100")] ["environment", "default"]
-                           , LoggedRule "remediation-fast-track" (Just "AllowIfRemediatesCve") [("maxRemainingCvss", "6.9"), ("onUnavailable", "deny"), ("remainingAdvisories", "differential")] ["default"]
+                `shouldBe` [ LoggedRule "mounts.npm.rules.pin" (Just "AllowByIdentity") [("identity", "left-pad")] ["document"] Nothing
+                           , LoggedRule "min-age" (Just "AllowIfOlderThan") [("ageSeconds", "3600"), ("precedence", "100")] ["environment", "default"] Nothing
+                           , LoggedRule "remediation-fast-track" (Just "AllowIfRemediatesCve") [("maxRemainingCvss", "6.9"), ("onUnavailable", "deny"), ("remainingAdvisories", "differential")] ["default"] Nothing
                            ]
+        it "splits the inactivity marker off the layer, and names it once for the rule" $
+            loggedRules
+                [ "config: rules.deny-known-malicious.onUnavailable = skip (environment, inactive: no advisories.url)"
+                , "config: rules.deny-known-malicious.type = DenyIfKnownMalicious (default, inactive: no advisories.url)"
+                ]
+                `shouldBe` [LoggedRule "deny-known-malicious" (Just "DenyIfKnownMalicious") [("onUnavailable", "skip")] ["environment", "default"] (Just "no advisories.url")]
+        it "reads the marker the proxy writes for a rule no source activates" $ do
+            let document = Just "{\"mounts\":{\"npm\":{\"enabled\":true}}}"
+            config <- expectConfig pubUrlEnv document
+            let logged = [rule | rule <- loggedRules (resolvedKeyProvenance config pubUrlEnv document), lrName rule == "deny-known-malicious"]
+            map lrLayers logged `shouldBe` [["default"]]
+            map lrInactive logged `shouldBe` [Just "no advisories.url"]
         it "reads the last parenthesis as the layer" $
             map lrSettings (loggedRules ["config: rules.pin.identity = a (b) (document)"]) `shouldBe` [[("identity", "a (b)")]]
         it "keeps quoted, JSON array, empty, and assignment-shaped values whole" $
@@ -106,7 +120,7 @@ spec = do
                 `shouldBe` [[("note", "say \"hi\""), ("note", "[\"@a\",\"@b\"]"), ("note", ""), ("note", "a = b")]]
         it "reads every segment before the last key as the rule name" $
             loggedRules ["config: rules.a.b.type = DenyByIdentity (document)"]
-                `shouldBe` [LoggedRule "a.b" (Just "DenyByIdentity") [] ["document"]]
+                `shouldBe` [LoggedRule "a.b" (Just "DenyByIdentity") [] ["document"] Nothing]
     describe "ruleBootOrders" $
         it "lists each mount's rules in the order it logged them" $
             ruleBootOrders ruleLines

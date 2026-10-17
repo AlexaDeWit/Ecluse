@@ -20,7 +20,9 @@ module Ecluse.Core.Cve (
     PackageAdvisories,
     packageAdvisories,
     keepAdvisories,
+    hasAdvisories,
     affecting,
+    hasFixes,
     fixedAt,
     advisoryIdsOf,
     MissingScorePolicy (..),
@@ -133,6 +135,14 @@ packageAdvisories eco = fromSegments eco . map (\ar -> Segment ar (segmentBounds
 -- | Keep only the segments whose row passes the test.
 keepAdvisories :: (AdvisoryRange -> Bool) -> PackageAdvisories -> PackageAdvisories
 keepAdvisories keep advisories = fromSegments (paEcosystem advisories) (filter (keep . segRange) (paSegments advisories))
+
+-- | Whether any segment remains. Without one, 'affecting' holds no row for any version.
+hasAdvisories :: PackageAdvisories -> Bool
+hasAdvisories = not . null . paSegments
+
+-- | Whether any row names a fix. Without one, 'fixedAt' holds no row for any version.
+hasFixes :: PackageAdvisories -> Bool
+hasFixes = not . Map.null . paFixes
 
 -- The fixes index keeps row order within each fixed version.
 fromSegments :: Ecosystem -> [Segment] -> PackageAdvisories

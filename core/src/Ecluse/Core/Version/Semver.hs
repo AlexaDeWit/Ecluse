@@ -3,13 +3,12 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The semver grammar and ordering (npm).
-
 'SemverKey' wraps the [@versions@](https://hackage.haskell.org/package/versions) library's
 'Data.Versions.SemVer', so precedence is the library's: semver 11 ordering, with @+build@
 metadata excluded from it. 'parseSemver' scans the grammar itself. Within the length and
 digit-run bounds it accepts and builds what the library's parser does. Among prerelease
 identifiers numeric ones rank below alphanumeric ones, the opposite of the rule in
-"Ecluse.Core.Version.Token". A semver version is stable iff it carries no prerelease.
+"Ecluse.Core.Version.Token".
 -}
 module Ecluse.Core.Version.Semver (
     SemverKey (..),
@@ -30,15 +29,14 @@ newtype SemverKey = SemverKey SemVer
     deriving stock (Show)
     deriving newtype (Eq, Ord)
 
-{- | Parse a semver version, or 'Nothing' so an ordering rule abstains rather than drops it.
-The digit-run bound refuses a number that would overflow the key's fixed-width components.
--}
+-- | Parse a semver version, or 'Nothing' so an ordering rule abstains rather than drops it. The digit-run bound keeps each number within the key's fixed-width components.
 parseSemver :: Text -> Maybe SemverKey
 parseSemver raw = do
     guard (withinVersionLength raw)
-    guard (not (hasOverlongNumericRun raw))
-    -- Evaluated in full, so a retained key holds no thunk over the scan.
-    SemverKey . force <$> scanSemver raw
+    plainRelease raw <|> do
+        guard (not (hasOverlongNumericRun raw))
+        -- Evaluated in full, so a retained key holds no thunk over the scan.
+        SemverKey . force <$> scanSemver raw
 
 -- | Render every semver field, including build metadata excluded from precedence.
 renderSemver :: SemverKey -> Text
@@ -68,6 +66,34 @@ hasOverlongNumericRun raw = T.foldl' runLength 0 raw > maxNumericRun
         | run > maxNumericRun = run
         | isDigit c = run + 1
         | otherwise = 0
+
+-- Three dot-separated numbers and nothing else, the common spelling, in one pass that allocates
+-- only the key. 'scanSemver' reads every other spelling.
+plainRelease :: Text -> Maybe SemverKey
+plainRelease raw = case T.foldl' plainStep (PlainScan 0 0 0 0 0) raw of
+    PlainScan 2 digits major minor patch | digits > 0 -> Just (SemverKey (SemVer major minor patch Nothing Nothing))
+    _ -> Nothing
+
+{- A plain-release scan: the dots passed, or 'plainRefused', the digits of the number being read,
+the numbers before the first and the second dot, and the value of the number being read. -}
+data PlainScan = PlainScan Int Int Word Word Word
+
+plainRefused :: Int
+plainRefused = -1
+
+-- Inlined into the fold, so the scan passes between characters without a heap object.
+plainStep :: PlainScan -> Char -> PlainScan
+plainStep (PlainScan dots digits major minor value) c
+    | dots == plainRefused = refused
+    | isDigit c && digits < maxNumericRun && not leadingZero = PlainScan dots (digits + 1) major minor (addDigit value c)
+    | c == '.' && digits > 0 && dots == 0 = PlainScan 1 0 value 0 0
+    | c == '.' && digits > 0 && dots == 1 = PlainScan 2 0 major value 0
+    | otherwise = refused
+  where
+    refused = PlainScan plainRefused 0 0 0 0
+    -- A number that has read @0@ takes no further digit.
+    leadingZero = digits > 0 && value == 0
+{-# INLINE plainStep #-}
 
 -- The grammar of the library's @semver@ parser, in that parser's order. @SemverSpec@ checks the
 -- two against each other.
@@ -102,7 +128,12 @@ spellsNumber digits = case T.uncons digits of
 
 -- Expects digits only. The digit-run bound keeps the value within a 'Word'.
 digitsValue :: Text -> Word
-digitsValue = T.foldl' (\value digit -> value * 10 + fromIntegral (ord digit - ord '0')) 0
+digitsValue = T.foldl' addDigit 0
+
+-- Expects an ASCII digit.
+addDigit :: Word -> Char -> Word
+addDigit value digit = value * 10 + fromIntegral (ord digit - ord '0')
+{-# INLINE addDigit #-}
 
 markedPart :: Char -> (Text -> Maybe (a, Text)) -> Text -> Maybe (Maybe a, Text)
 markedPart marker part t = case afterChar marker t of

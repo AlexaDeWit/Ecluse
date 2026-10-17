@@ -39,13 +39,16 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Fault (HttpFault (HttpStatus))
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Compile (
-    CompileSources (..),
+    CompileSources,
     OsvCandidate,
     PilotEpssRequired (..),
     PilotOsvFetchFailed (..),
     candidateDestination,
     candidateFacts,
     candidatePath,
+    csEpssFeedUrl,
+    csOsvExportUrl,
+    mkCompileSources,
     osvToRow,
     promoteCandidate,
     stampCandidateNonce,
@@ -53,7 +56,7 @@ import Ecluse.Core.Osv.Compile (
  )
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory), osvEcosystemFor)
 import Ecluse.Core.Osv.Epss (maxEpssFeedBytes)
-import Ecluse.Core.Osv.Provenance (QuietTime (..))
+import Ecluse.Core.Osv.Provenance (QuietTime (..), SourcePathRecording (..))
 import Ecluse.Core.Osv.Publication (
     CandidateFacts (..),
     SourceMarker (..),
@@ -66,6 +69,7 @@ import Ecluse.Core.Osv.Publication (
 import Ecluse.Core.Osv.Schema (EpssRequirement (..), osvDbFileName, osvSchemaEpoch)
 import Ecluse.Core.Osv.Stream (PilotIngestAborted (..))
 import Ecluse.Core.Osv.Types (UpperBound (..))
+import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Supervision (FaultDisposition (Permanent, Transient))
 import Ecluse.Core.Telemetry.Metrics (
@@ -153,9 +157,9 @@ spec = describe "SQLite OSV Compilation" $ do
             Map.lookup "pilot_version" meta `shouldBe` Just (toText (showVersion version))
             Map.lookup "source_url" meta `shouldBe` Just sourceHost
             Map.lookup "epss_source_url" meta `shouldBe` Just epssHost
-            -- These stub URLs carry no credential, so the recorded identity is the URL as written.
-            Map.lookup "osv_source" meta `shouldBe` Just (toText (csOsvExportUrl sources))
-            Map.lookup "epss_source" meta `shouldBe` Just (toText (csEpssFeedUrl sources))
+            -- The SHA-256 of /sample.zip and of /epss.csv.gz stand in for the stub paths.
+            Map.lookup "osv_source" meta `shouldBe` Just ("http://" <> sourceHost <> "/<sha256:3121a70de23df2c8c1b5014ea7163843b5b618dbe8ccc4d0cadcd206d354edc8>")
+            Map.lookup "epss_source" meta `shouldBe` Just ("http://" <> epssHost <> "/<sha256:5e9650266d894e12be3dd4e7074731d6d5dfbb5cad9977815efca4fa789bd901>")
             Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-03-23T17:41:30.891186Z"
             Map.lookup "epss_score_date" meta `shouldBe` Just "2026-08-29T00:00:00Z"
             Map.lookup "epss_model_version" meta `shouldBe` Just "v2026.08.01"
@@ -186,36 +190,51 @@ spec = describe "SQLite OSV Compilation" $ do
                             flip finally (cveDbClose db) $
                                 cveCoveredNames (cveDbLookup db) `shouldReturn` ["hono"]
 
-    it "fetches both credential-bearing overrides without persisting or logging their credentials" $
-        withSystemTempDirectory "ecluse-osv-compile" $ \outDir -> do
-            zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
-            epssData <- LBS.readFile epssFixtureFile
-            (metrics, _) <- recordingAdvisoryCompileMetricsPort
-            (dbFile, logged) <- captureJsonLog $ \logEnv ->
-                withCredentialSource "OSV" zipData $ \source ->
-                    withCredentialSource "EPSS" epssData $ \epssSource -> do
-                        path <- runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) EpssRequired (CompileSources source epssSource) testQuietTime)
-                        withConnection path $ \conn -> do
-                            meta <- Map.fromList <$> (query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)])
+    -- The SHA-256 of /feed stands in for the path under the default recording.
+    for_ [(eco, recording, storedPath) | eco <- [Npm, PyPI], (recording, storedPath) <- [(FingerprintSourcePath, "/<sha256:88af5e07b80709e7fc3d12d4f8e0858b26ba848361018050dcbec50f9d06a280>"), (RecordSourcePath, "/feed")]] $ \(eco, recording, storedPath) ->
+        it ("fetches both credential-bearing overrides without persisting or logging their credentials, " <> show eco <> ", " <> show recording) $
+            withSystemTempDirectory "ecluse-osv-compile" $ \outDir -> do
+                archive <- factsArchive eco
+                epssData <- LBS.readFile epssFixtureFile
+                (metrics, _) <- recordingAdvisoryCompileMetricsPort
+                (dbFile, logged) <- captureJsonLog $ \logEnv ->
+                    withCredentialSource "OSV" archive $ \source ->
+                        withCredentialSource "EPSS" epssData $ \epssSource -> do
+                            path <- runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor eco) EpssRequired (mkCompileSources recording source epssSource) testQuietTime)
+                            meta <- metaOf path
                             Map.lookup "source_url" meta `shouldBe` Just (authorityLabel (toText source))
                             Map.lookup "epss_source_url" meta `shouldBe` Just (authorityLabel (toText epssSource))
-                            -- The recorded identity keeps the path that names the source, and none
-                            -- of the credential material the fetch had to send.
-                            for_ [("osv_source", "OSV"), ("epss_source", "EPSS")] $ \(key, tag) -> do
-                                let stored = fromMaybe "" (Map.lookup key meta)
-                                stored `shouldSatisfy` T.isSuffixOf "/feed"
-                                for_ ["user-", "password-", "query-", "fragment-"] $ \prefix ->
-                                    stored `shouldSatisfy` (not . T.isInfixOf (prefix <> tag))
-                            Map.lookup "built_at" meta `shouldSatisfy` maybe False (not . T.null)
-                            Map.lookup "row_count" meta `shouldBe` Just "1"
-                        pure path
-            bytes <- readFileBS dbFile
-            for_ ["OSV", "EPSS"] $ \tag ->
-                for_ ["user-", "password-", "query-", "fragment-"] $ \prefix -> do
-                    let credential = prefix <> tag
-                    bytes `shouldSatisfy` (not . BS.isInfixOf (encodeUtf8 credential))
-                    logged `shouldSatisfy` (not . T.isInfixOf credential)
-            removeFile dbFile
+                            Map.lookup "osv_source" meta `shouldBe` Just ("http://" <> authorityLabel (toText source) <> storedPath)
+                            Map.lookup "epss_source" meta `shouldBe` Just ("http://" <> authorityLabel (toText epssSource) <> storedPath)
+                            Map.lookup "row_count" meta `shouldBe` Just "3"
+                            pure path
+                bytes <- readFileBS dbFile
+                for_ ["OSV", "EPSS"] $ \tag ->
+                    for_ credentialParts $ \prefix -> do
+                        let credential = prefix <> tag
+                        bytes `shouldSatisfy` (not . BS.isInfixOf (encodeUtf8 credential))
+                        logged `shouldSatisfy` (not . T.isInfixOf credential)
+                removeFile dbFile
+
+    for_ [Npm, PyPI] $ \eco ->
+        it ("records no path text for either source by default, " <> show eco) $
+            withSystemTempDirectory "ecluse-osv-path" $ \outDir -> do
+                archive <- factsArchive eco
+                epssData <- LBS.readFile epssFixtureFile
+                (metrics, _) <- recordingAdvisoryCompileMetricsPort
+                (dbFile, logged) <- captureJsonLog $ \logEnv ->
+                    withStub status200 archive $ \osvStub ->
+                        withStub status200 epssData $ \epssStub -> do
+                            let sources = mkCompileSources FingerprintSourcePath (unpack (stubBaseUrl osvStub) <> "/path-token-osv/all.zip") (unpack (stubBaseUrl epssStub) <> "/path-token-epss/scores.csv.gz")
+                            path <- runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor eco) EpssRequired sources testQuietTime)
+                            meta <- metaOf path
+                            Map.lookup "osv_source" meta `shouldBe` Just (stubBaseUrl osvStub <> "/<sha256:" <> sha256Hex "/path-token-osv/all.zip" <> ">")
+                            Map.lookup "epss_source" meta `shouldBe` Just (stubBaseUrl epssStub <> "/<sha256:" <> sha256Hex "/path-token-epss/scores.csv.gz" <> ">")
+                            pure path
+                bytes <- readFileBS dbFile
+                bytes `shouldSatisfy` (not . BS.isInfixOf "path-token")
+                logged `shouldSatisfy` (not . T.isInfixOf "path-token")
+                logged `shouldSatisfy` T.isInfixOf "EPSS feed http://"
 
     it "aborts the compile without publishing when the drop rate is systemic" $
         withSystemTempDirectory "ecluse-osv-compile" $ \outDir -> do
@@ -368,7 +387,7 @@ spec = describe "SQLite OSV Compilation" $ do
                     tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
                     withCredentialSource "OSV" zipData $ \source ->
                         withCredentialSource "EPSS" epssData $ \epssSource -> do
-                            let compile = compileOsvToSqlite metrics (Just tracerProvider) outDir (osvEcosystemFor ecosystem) EpssRequired (CompileSources source epssSource) testQuietTime
+                            let compile = compileOsvToSqlite metrics (Just tracerProvider) outDir (osvEcosystemFor ecosystem) EpssRequired (mkCompileSources FingerprintSourcePath source epssSource) testQuietTime
                                 runCompile logEnv = runKatipContextT logEnv () mempty (runResourceT compile)
                             (_, logged) <- captureJsonLog $ \logEnv -> case refusal of
                                 Nothing -> void (runCompile logEnv)
@@ -570,6 +589,24 @@ candidateSpec = describe "the candidate a publication decides on" $ do
                         pure facts
                 (cfEpss facts, cfScoredRows facts) `shouldBe` (Nothing, 0)
 
+        it ("keys publication on each whole source URL under either recording, " <> show eco) $
+            withSystemTempDirectory "ecluse-osv-identity" $ \outDir -> do
+                archive <- factsArchive eco
+                withStub status200 archive $ \osvStub ->
+                    withStub status200 factsFeed $ \epssStub -> do
+                        let factsAt recording (osvPath, epssPath) = candidateFactsFrom outDir eco EpssRequired (mkCompileSources recording (unpack (stubBaseUrl osvStub) <> osvPath) (unpack (stubBaseUrl epssStub) <> epssPath))
+                            identitiesAt (osvPath, epssPath) = (sourceIdentityOf (stubBaseUrl osvStub <> toText osvPath), Just (sourceIdentityOf (stubBaseUrl epssStub <> toText epssPath)))
+                            identitiesOf facts = (smIdentity (cfOsv facts), smIdentity <$> cfEpss facts)
+                            shipped = ("/all.zip", "/epss.csv.gz")
+                            moved = ("/moved/all.zip", "/moved/epss.csv.gz")
+                        fingerprinted <- factsAt FingerprintSourcePath shipped
+                        recorded <- factsAt RecordSourcePath shipped
+                        -- The guard decides on these facts, so the recording choice alone changes no decision.
+                        recorded `shouldBe` fingerprinted
+                        identitiesOf fingerprinted `shouldBe` identitiesAt shipped
+                        movedFacts <- traverse (`factsAt` moved) [FingerprintSourcePath, RecordSourcePath]
+                        map identitiesOf movedFacts `shouldBe` replicate 2 (identitiesAt moved)
+
 epssEnrichmentSpec :: Spec
 epssEnrichmentSpec = describe "EPSS enrichment under the ecosystem's requirement" $ do
     for_ failedFeeds $ \(label, feedAnswer) ->
@@ -597,7 +634,7 @@ epssEnrichmentSpec = describe "EPSS enrichment under the ecosystem's requirement
             meta <- metaOf dbFile
             filter (T.isPrefixOf "epss_") (Map.keys meta) `shouldBe` ["epss_status"]
             Map.lookup "epss_status" meta `shouldBe` Just "unavailable"
-            Map.lookup "osv_source" meta `shouldSatisfy` maybe False (T.isSuffixOf "/all.zip")
+            Map.lookup "osv_source" meta `shouldSatisfy` maybe False (T.isSuffixOf ("/<sha256:" <> sha256Hex "/all.zip" <> ">"))
             Map.lookup "osv_last_modified" meta `shouldBe` Just "2026-08-29T06:30:00Z"
             Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-03-23T17:41:30.891186Z"
             scoresOf dbFile `shouldReturn` [Nothing]
@@ -654,7 +691,7 @@ epssEnrichmentSpec = describe "EPSS enrichment under the ecosystem's requirement
             (metrics, _) <- recordingAdvisoryCompileMetricsPort
             outcome <- withStub status200 zipData $ \osvStub ->
                 withStalledSource $ \epssUrl ->
-                    timeout 200_000 (runOsvTestM (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) EpssOptional (CompileSources (unpack (stubBaseUrl osvStub) <> "/all.zip") epssUrl) testQuietTime))
+                    timeout 200_000 (runOsvTestM (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) EpssOptional (mkCompileSources FingerprintSourcePath (unpack (stubBaseUrl osvStub) <> "/all.zip") epssUrl) testQuietTime))
             outcome `shouldBe` Nothing
             listDirectory outDir `shouldReturn` []
 
@@ -667,7 +704,7 @@ epssEnrichmentSpec = describe "EPSS enrichment under the ecosystem's requirement
                 tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
                 (_, logged) <- withStub status200 zipData $ \osvStub ->
                     withCredentialSource "EPSS" "" $ \epssSource -> do
-                        let compile = compileOsvToSqlite metrics (Just tracerProvider) outDir (osvEcosystemFor Npm) requirement (CompileSources (unpack (stubBaseUrl osvStub) <> "/all.zip") epssSource) testQuietTime
+                        let compile = compileOsvToSqlite metrics (Just tracerProvider) outDir (osvEcosystemFor Npm) requirement (mkCompileSources FingerprintSourcePath (unpack (stubBaseUrl osvStub) <> "/all.zip") epssSource) testQuietTime
                         captureJsonLog $ \logEnv -> case requirement of
                             EpssRequired -> do
                                 outcome <- try (runKatipContextT logEnv () mempty (runResourceT compile))
@@ -696,7 +733,7 @@ fetchFaultSpec = describe "advisory fetch faults behind a redirect to a signed U
                 (metrics, _) <- recordingAdvisoryCompileMetricsPort
                 withSignedSource (secretAnswer status503 :| [(status200, [], archive)]) $ \osvUrl ->
                     withSignedSource (secretAnswer status503 :| [(status200, [], factsFeed)]) $ \epssUrl -> do
-                        logged <- runOsvJsonLog (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor eco) EpssRequired (CompileSources osvUrl epssUrl) testQuietTime)
+                        logged <- runOsvJsonLog (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor eco) EpssRequired (mkCompileSources FingerprintSourcePath osvUrl epssUrl) testQuietTime)
                         for_ [osvUrl, epssUrl] $ \url -> logged `shouldSatisfy` T.isInfixOf (authorityLabel (toText url) <> ": HTTP 503")
                         for_ redirectSecrets $ \secret -> logged `shouldSatisfy` (not . T.isInfixOf secret)
 
@@ -706,7 +743,7 @@ fetchFaultSpec = describe "advisory fetch faults behind a redirect to a signed U
                 withSignedSource (secretAnswer status404 :| []) $ \osvUrl ->
                     withStub status200 factsFeed $ \epssStub -> do
                         let feed = authorityLabel (toText osvUrl)
-                            compile = compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor eco) EpssRequired (CompileSources osvUrl (unpack (stubBaseUrl epssStub) <> "/epss.csv.gz")) testQuietTime
+                            compile = compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor eco) EpssRequired (mkCompileSources FingerprintSourcePath osvUrl (unpack (stubBaseUrl epssStub) <> "/epss.csv.gz")) testQuietTime
                         runOsvTestM compile `shouldThrow` (== PilotOsvFetchFailed feed (HttpStatus 404))
                         for_ [Transient, Permanent] $ \disposition -> do
                             logged <- runOsvJsonLog (superviseBriefly disposition compile)
@@ -779,10 +816,7 @@ systemicDropZip =
 
 sourcesOf :: Stub -> Stub -> String -> CompileSources
 sourcesOf osvStub epssStub osvPath =
-    CompileSources
-        { csOsvExportUrl = unpack (stubBaseUrl osvStub) <> osvPath
-        , csEpssFeedUrl = unpack (stubBaseUrl epssStub) <> "/epss.csv.gz"
-        }
+    mkCompileSources FingerprintSourcePath (unpack (stubBaseUrl osvStub) <> osvPath) (unpack (stubBaseUrl epssStub) <> "/epss.csv.gz")
 
 -- The shared stub omits query strings, so this fixture checks authentication before serving bytes.
 withCredentialSource :: Text -> LByteString -> (String -> IO a) -> IO a

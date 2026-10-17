@@ -19,7 +19,7 @@ import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Rules.Remediation (remediationVerdict)
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Rules.Remediation.Support (genEpss, genLimits, genRows, genTenths, referenceRemediation)
+import Ecluse.Rules.Remediation.Support (genEcosystem, genEpss, genLimits, genRows, genTenths, referenceRemediation)
 import Ecluse.Rules.Support (normaliseVerdictIds)
 import Ecluse.Test.Cve (referenceInside)
 
@@ -224,10 +224,6 @@ isBeyondLimits = \case
 isFullFix = \case
     Allow Remediates{} -> True
     _ -> False
-
--- | An ecosystem and canonical releases in it, so a textual fix match is the canonical one.
-genEcosystem :: Gen (Ecosystem, [Text])
-genEcosystem = Gen.element [(Npm, ["1.0.0", "2.0.0", "3.0.0"]), (PyPI, ["1", "2", "3"])]
 
 -- | The second release is the one most generated rows fix, so partial fixes are common.
 genVersion :: [Text] -> Gen Text

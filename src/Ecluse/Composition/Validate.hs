@@ -48,8 +48,7 @@ import Ecluse.Composition.Maintenance (ClearedBackend, ResolveMaintenanceAdapter
 import Ecluse.Composition.Types (BootRole, MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly), pipelineRoleOf)
 import Ecluse.Composition.Vet (Severity (Advise, Ignore, Refuse), Vet, byStoreRole, decided, rule)
 import Ecluse.Config (
-    AdvisoriesSettings (advUrl),
-    AppConfig (cfgAdvisories, cfgDredger, cfgLimits, cfgMirrorState, cfgMounts, cfgServer),
+    AppConfig (cfgDredger, cfgLimits, cfgMirrorState, cfgMounts, cfgServer),
     Config (configApp, configMounts),
     DredgerSettings (drgChunkPause, drgQuotaOverrides),
     FirstParty,
@@ -65,6 +64,7 @@ import Ecluse.Config (
     StoreBackend,
     StoreTag (TagCodeArtifact),
     Target (tgtTag, tgtUrl),
+    advisorySourced,
     meTarget,
     mountAdvisoryDenials,
     mountPolicy,
@@ -206,7 +206,7 @@ vetAdvisoryStore :: Config -> Vet ()
 vetAdvisoryStore config =
     traverse_ (rule (const (Refuse (uncurry AdvisoryDenyWithoutStore))) denyingWithoutStore) mounts
   where
-    stored = isJust (advUrl (cfgAdvisories (configApp config)))
+    stored = advisorySourced (configApp config)
     mounts = Map.toAscList (configMounts config)
 
     denyingWithoutStore (eco, mount)
@@ -217,7 +217,7 @@ vetAdvisoryStore config =
 vetRemediationStore :: Config -> Vet ()
 vetRemediationStore config = traverse_ (rule (const (Advise RemediationSkipsWithoutStore)) skippingWithoutStore) mounts
   where
-    stored = isJust (advUrl (cfgAdvisories (configApp config)))
+    stored = advisorySourced (configApp config)
     mounts = Map.toAscList (configMounts config)
 
     skippingWithoutStore (eco, mount) = eco <$ guard (not stored && any (skips . prRule) (mountPolicy mount))

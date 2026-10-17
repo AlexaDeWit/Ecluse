@@ -19,6 +19,7 @@ module Ecluse.Config (
     QuotaOverride (..),
     MountMap,
     Mount (..),
+    RuleInactivity (..),
     MountRegistries (..),
     MountMode (..),
     MirroredLegs (..),
@@ -63,6 +64,7 @@ module Ecluse.Config (
     emptyPolicy,
     decodeDefaultConfig,
     sourceDefaultNames,
+    advisorySourced,
     ConfigError (..),
     renderConfigError,
     loadConfig,
@@ -119,29 +121,61 @@ decodeDefaultConfig bytes = do
     policy <- first (pure . PolicyErrors) (resolvePolicy emptyPolicy patch)
     pure (ast, policy)
 
--- Each descriptor stays patchable after a disable, until the final mount policy is selected.
-data PendingPolicy = PendingPolicy RulePolicy (Map Text Bool)
+{- Each descriptor stays patchable after a disable, until the final mount policy is selected. The
+middle field is why a rule left to the source does not run, absent when a source is configured. -}
+data PendingPolicy = PendingPolicy RulePolicy (Maybe RuleInactivity) (Map Text Activation)
+
+-- How one scope decides a source-activated rule: left to the source, or enabled or disabled by a patch.
+data Activation = SourceDecides | OperatorEnabled | OperatorDisabled
+    deriving stock (Eq)
 
 -- | The shipped rules an advisory source activates: neither can decide anything without one.
 sourceDefaultNames :: Set Text
 sourceDefaultNames = Set.fromList ["deny-known-malicious", "remediation-fast-track"]
 
 pendingPolicy :: RulePolicy -> Bool -> PendingPolicy
-pendingPolicy policy sourced = PendingPolicy policy (Map.fromSet (const sourced) sourceDefaultNames)
-
-effectivePolicy :: PendingPolicy -> RulePolicy
-effectivePolicy (PendingPolicy policy active) =
-    RulePolicy (Map.withoutKeys (policyRules policy) (Map.keysSet (Map.filter not active)))
+pendingPolicy policy sourced =
+    PendingPolicy policy (NoAdvisorySource <$ guard (not sourced)) (Map.fromSet (const SourceDecides) sourceDefaultNames)
 
 -- @enabled: false@ deactivates, @enabled: true@ or a restated type activates, and a partial patch keeps the state.
 resolvePendingPolicy :: PendingPolicy -> RulePatch -> Either [PolicyError] PendingPolicy
-resolvePendingPolicy (PendingPolicy policy active) (RulePatch patch) =
-    (`PendingPolicy` Map.mapWithKey nextActive active) <$> resolvePolicy policy (RulePatch descriptorPatch)
+resolvePendingPolicy (PendingPolicy policy unsourced activation) (RulePatch patch) =
+    (\resolved -> PendingPolicy resolved unsourced (Map.mapWithKey decide activation)) <$> resolvePolicy policy (RulePatch descriptorPatch)
   where
-    nextActive name current = case Map.lookup name patch of
+    decide name current = case Map.lookup name patch of
         Nothing -> current
-        Just declared -> fromMaybe (isJust (entryType declared) || current) (entryEnabled declared)
-    descriptorPatch = foldr (Map.adjust (\declared -> declared{entryEnabled = Just True})) patch (Map.keys active)
+        Just declared -> case entryEnabled declared of
+            Just True -> OperatorEnabled
+            Just False -> OperatorDisabled
+            Nothing -> if isJust (entryType declared) then OperatorEnabled else current
+    descriptorPatch = foldr (Map.adjust (\declared -> declared{entryEnabled = Just True})) patch (Map.keys activation)
+
+-- A scope's selected rules, and the rules it leaves to a source that is not configured, with why.
+data SettledPolicy = SettledPolicy RulePolicy (Map Text RuleInactivity)
+
+settlePolicy :: PendingPolicy -> SettledPolicy
+settlePolicy (PendingPolicy policy unsourced activation) =
+    SettledPolicy (RulePolicy (Map.withoutKeys (policyRules policy) idle)) waiting
+  where
+    idle = Map.keysSet (Map.filter (not . runs) activation)
+    runs = \case
+        SourceDecides -> isNothing unsourced
+        OperatorEnabled -> True
+        OperatorDisabled -> False
+    waiting = maybe Map.empty (\reason -> reason <$ Map.filter (== SourceDecides) activation) unsourced
+
+-- The source-activated rules a scope runs.
+runningSourceRules :: SettledPolicy -> Set Text
+runningSourceRules (SettledPolicy policy _) = Map.keysSet (Map.restrictKeys (policyRules policy) sourceDefaultNames)
+
+-- A shared rule left to the source is marked only where some mount leaves it to the source too and none runs it.
+sharedInactivity :: MountMap -> Set Text -> SettledPolicy -> Map Text RuleInactivity
+sharedInactivity mounts mountRuns (SettledPolicy _ waiting) =
+    Map.restrictKeys waiting (foldMap (Map.keysSet . mountInactiveRules) mounts `Set.difference` mountRuns)
+
+-- | Whether @advisories.url@ is configured, the source the advisory rules read.
+advisorySourced :: AppConfig -> Bool
+advisorySourced = isJust . advUrl . cfgAdvisories
 
 -- | Load the defaults, the operator document, then the environment overlay, strongest last. A mount is active only where the overlay declares it.
 loadConfig :: [(String, String)] -> Maybe ByteString -> Either [ConfigError] Config
@@ -153,12 +187,12 @@ loadConfig envVars mBytes = do
     parsed <- decodeAppConfig merged
     active <- declaredMounts overridesAst
     let appConfig = parsed{cfgMounts = servedMounts active (cfgMounts parsed)}
-    globalPolicy <- resolveGlobalPolicy (pendingPolicy catalogue (isJust (advUrl (cfgAdvisories parsed)))) overridesAst
+    globalPolicy <- resolveGlobalPolicy (pendingPolicy catalogue (advisorySourced appConfig)) overridesAst
     validateMirrorSettings appConfig
-    mounts <- case (publicUrlErrors appConfig, resolveMounts defaultAst overridesAst globalPolicy appConfig) of
+    (mounts, mountRuns) <- case (publicUrlErrors appConfig, resolveMounts defaultAst overridesAst globalPolicy appConfig) of
         ([], resolved) -> resolved
         (errs, resolved) -> Left (errs <> fromLeft [] resolved)
-    Right (Config appConfig mounts)
+    Right (Config appConfig mounts (sharedInactivity mounts mountRuns (settlePolicy globalPolicy)))
 
 -- enabled: false switches a declared mount off. Anything else declared serves.
 servedMounts :: Set Ecosystem -> Map Ecosystem MountConfig -> Map Ecosystem MountConfig
@@ -219,18 +253,20 @@ sharedPolicyErrors errors
     | SuppressUnknownRule "deny-scripts" `elem` errors = [SharedPolicyErrors errors]
     | otherwise = [PolicyErrors errors]
 
-resolveMounts :: Value -> Value -> PendingPolicy -> AppConfig -> Either [ConfigError] MountMap
+-- The resolved mounts, and the source-activated rules any of them runs.
+resolveMounts :: Value -> Value -> PendingPolicy -> AppConfig -> Either [ConfigError] (MountMap, Set Text)
 resolveMounts defaultAst overridesAst globalPolicy appConfig =
     case partitionEithers (map resolveOne (Map.toAscList (cfgMounts appConfig))) of
-        ([], mounts) -> Right (Map.fromList mounts)
+        ([], resolved) -> Right (Map.fromList (map fst resolved), foldMap snd resolved)
         (errs, _) -> Left (concat errs)
   where
     resolveOne (eco, mcfg) = case lefts (declarationErrors eco mcfg) of
         [] -> do
             shipped <- mountRulePatch defaultAst eco
             declared <- mountRulePatch overridesAst eco
-            policy <- resolveMountPolicy globalPolicy shipped declared
-            (eco,) <$> resolveMode policy eco mcfg
+            settled <- settlePolicy <$> resolveMountPolicy globalPolicy shipped declared
+            mount <- resolveMode settled eco mcfg
+            pure ((eco, mount), runningSourceRules settled)
         tagErrs -> Left tagErrs
 
 {- Every endpoint checked against the tag it was declared under, and the private upstream checked
@@ -248,14 +284,14 @@ readAndPublishTargets mcfg =
         <> [("publicationTarget", peTarget endpoint) | Just endpoint <- [mntPublicationTarget mcfg]]
 
 -- A declared mirror target makes the mount mirrored, which then needs its private upstream.
-resolveMode :: RulePolicy -> Ecosystem -> MountConfig -> Either [ConfigError] Mount
+resolveMode :: SettledPolicy -> Ecosystem -> MountConfig -> Either [ConfigError] Mount
 resolveMode policy eco mcfg = case (mntMirrorTarget mcfg, mntPrivateUpstream mcfg) of
     (Just mirrorTarget, Just privateUpstream) ->
         resolveMirrored policy eco (preTarget privateUpstream) mirrorTarget mcfg
     (Just _, Nothing) -> Left [MountMissingPrivateUpstream eco]
     (Nothing, mPrivate) -> resolveServeOnly policy eco (preTarget <$> mPrivate) mcfg
 
-resolveMirrored :: RulePolicy -> Ecosystem -> Target -> MirrorEndpoint -> MountConfig -> Either [ConfigError] Mount
+resolveMirrored :: SettledPolicy -> Ecosystem -> Target -> MirrorEndpoint -> MountConfig -> Either [ConfigError] Mount
 resolveMirrored policy eco privateUpstream mirrorTarget mcfg = do
     backend <- first (: []) (resolveStoreBackend eco mirrorTarget)
     Right $
@@ -274,7 +310,7 @@ resolveMirrored policy eco privateUpstream mirrorTarget mcfg = do
                             }
                     }
 
-resolveServeOnly :: RulePolicy -> Ecosystem -> Maybe Target -> MountConfig -> Either [ConfigError] Mount
+resolveServeOnly :: SettledPolicy -> Ecosystem -> Maybe Target -> MountConfig -> Either [ConfigError] Mount
 resolveServeOnly policy eco mPrivate mcfg =
     Right (mountOf eco mcfg policy (ServeOnly (tgtUrl <$> mPrivate)))
 
@@ -285,12 +321,12 @@ mountRulePatch ast eco =
   where
     prefix = "mounts." <> ecosystemName eco <> ".rules parse error: "
 
-resolveMountPolicy :: PendingPolicy -> RulePatch -> RulePatch -> Either [ConfigError] RulePolicy
+resolveMountPolicy :: PendingPolicy -> RulePatch -> RulePatch -> Either [ConfigError] PendingPolicy
 resolveMountPolicy shared shipped declared =
-    effectivePolicy <$> first (pure . PolicyErrors) (resolvePendingPolicy shared shipped >>= (`resolvePendingPolicy` declared))
+    first (pure . PolicyErrors) (resolvePendingPolicy shared shipped >>= (`resolvePendingPolicy` declared))
 
-mountOf :: Ecosystem -> MountConfig -> RulePolicy -> MountMode -> Mount
-mountOf eco mcfg policy mode =
+mountOf :: Ecosystem -> MountConfig -> SettledPolicy -> MountMode -> Mount
+mountOf eco mcfg (SettledPolicy policy inactive) mode =
     Mount
         { mountEcosystem = eco
         , mountRegistries =
@@ -299,6 +335,7 @@ mountOf eco mcfg policy mode =
                 , regMode = mode
                 }
         , mountPolicy = rulesOf policy
+        , mountInactiveRules = inactive
         }
 
 rulesOf :: RulePolicy -> [PrecededRule]
@@ -315,29 +352,41 @@ registryKey url = (hostPortAddress raw, stripTrailingSlash (registryPath raw))
   where
     raw = registryUrlText url
 
--- | One line per resolved leaf: the dotted path, the redacted value, and its layer. Empty when a layer fails to parse.
-resolvedKeyProvenance :: [(String, String)] -> Maybe ByteString -> [Text]
-resolvedKeyProvenance envVars mBytes = fromRight [] $ do
+-- | One line per resolved leaf of the layers 'Config' loaded from: path, redacted value, layer, and any rule inactivity.
+resolvedKeyProvenance :: Config -> [(String, String)] -> Maybe ByteString -> [Text]
+resolvedKeyProvenance config envVars mBytes = fromRight [] $ do
     defaultAst <- parseDefaultAst defaultConfigBytes
     docAst <- parseDocumentAst mBytes
     let envAst = buildEnvAst envVars
         merged = deepMerge defaultAst (deepMerge docAst envAst)
-    pure (map (renderResolvedLeaf envAst docAst) (sortOn fst (leafPaths [] merged)))
+    pure (map (renderResolvedLeaf config envAst docAst) (sortOn fst (leafPaths [] merged)))
 
 leafPaths :: [Text] -> Value -> [(Text, Value)]
 leafPaths path (Object o) =
     concatMap (\(k, v) -> leafPaths (path <> [Key.toText k]) v) (KeyMap.toList o)
 leafPaths path v = [(T.intercalate "." path, v)]
 
-renderResolvedLeaf :: Value -> Value -> (Text, Value) -> Text
-renderResolvedLeaf envAst docAst (path, v) =
-    "config: " <> path <> " = " <> renderLeafValue path v <> " (" <> source <> ")"
+renderResolvedLeaf :: Config -> Value -> Value -> (Text, Value) -> Text
+renderResolvedLeaf config envAst docAst (path, v) =
+    "config: " <> path <> " = " <> renderLeafValue path v <> " (" <> source <> maybe "" inactiveMarker (leafInactivity config segments) <> ")"
   where
+    segments = T.splitOn "." path
     source
         | pathPresentIn envAst = "environment"
         | pathPresentIn docAst = "document"
         | otherwise = "default"
-    pathPresentIn ast = isJust (lookupPath (T.splitOn "." path) ast)
+    pathPresentIn ast = isJust (lookupPath segments ast)
+
+-- A shared rule's key reads the shared inactivity, and a mount rule's key that mount's.
+leafInactivity :: Config -> [Text] -> Maybe RuleInactivity
+leafInactivity config = \case
+    "rules" : name : _ -> Map.lookup name (configInactiveRules config)
+    "mounts" : eco : "rules" : name : _ -> Map.lookup name . mountInactiveRules =<< (`Map.lookup` configMounts config) =<< parseEcosystem eco
+    _ -> Nothing
+
+inactiveMarker :: RuleInactivity -> Text
+inactiveMarker = \case
+    NoAdvisorySource -> ", inactive: no advisories.url"
 
 lookupPath :: [Text] -> Value -> Maybe Value
 lookupPath [] ast = Just ast
@@ -426,7 +475,7 @@ mountDatabaseRequirement = bool DatabaseRequired DatabaseOptional . null . mount
 advisoryAgeLines :: Config -> [Text]
 advisoryAgeLines config =
     [ ageLine eco (mountAdvisoryAge advisories mount)
-    | isJust (advUrl advisories)
+    | advisorySourced (configApp config)
     , (eco, mount) <- Map.toAscList (configMounts config)
     , any readsAdvisories (mountRulesOf mount)
     ]
@@ -442,7 +491,7 @@ ageLine eco limit =
         <> ", "
         <> renderBasis (maxAdvisoryAgeBasis limit)
 
--- | Each mount's EPSS requirement, as 'compileMountEpssRequirement' decides it. It is reported with no store too.
+-- | Each mount's EPSS requirement, as 'compileMountEpssRequirement' decides it, with or without a store.
 advisoryEpssLines :: Config -> [Text]
 advisoryEpssLines config =
     [epssLine eco (compileEpssBasis (cfgAdvisories (configApp config)) mount) | (eco, mount) <- Map.toAscList (configMounts config)]

@@ -12,6 +12,7 @@ module Ecluse.E2E.Harness.Pip (
     pipInstalledTree,
     pipInstallsWheel,
     pipInstallGraph,
+    pipInstallRequirement,
     pipInstallAndInspect,
     PythonGraph,
     installedPythonGraph,
@@ -52,9 +53,15 @@ pipCredentialUrl username password = T.replace "http://" ("http://" <> username 
 -- | Pin @project==version@ to @digest@ in an isolated project removed after the action.
 withPipProject :: E2E -> Text -> Text -> Text -> (PipProject -> IO a) -> IO a
 withPipProject e2e project version digest use =
+    withPipClient e2e $ \client -> do
+        writeFileText (ppDir client </> requirementsFile) (requirement project version digest)
+        use client
+
+-- A fresh home directory gives each client its own empty cache and configuration.
+withPipClient :: E2E -> (PipProject -> IO a) -> IO a
+withPipClient e2e use =
     withClientDir "pip" $ \projectDir -> do
         index <- clientEndpoint PyPI e2e
-        writeFileText (projectDir </> requirementsFile) (requirement project version digest)
         baseEnv <- getEnvironment
         -- --isolated drops PIP_* and the user config but still reads the global and site
         -- config files, which PIP_CONFIG_FILE is the only way to silence.
@@ -186,22 +193,32 @@ targetDir = "site"
 
 -- | Capture every site-package file and package-installed script from a fresh virtual environment.
 pipInstallGraph :: E2E -> Text -> Text -> IO InstalledTree
-pipInstallGraph proxy project version = do
-    (result, tree) <- pipInstallAndInspect proxy project version
+pipInstallGraph proxy project version = pipInstallRequirement proxy (pinned project version)
+
+-- | Install one requirement, such as a bare project name that leaves the release to pip.
+pipInstallRequirement :: E2E -> Text -> IO InstalledTree
+pipInstallRequirement proxy requirementText = do
+    (result, tree) <- inspectRequirement proxy requirementText
     void (shouldSucceedThroughProxy proxy result)
     pure tree
 
 -- | Return the native install outcome, all site packages, and the installed package scripts.
 pipInstallAndInspect :: E2E -> Text -> Text -> IO (ClientResult, InstalledTree)
-pipInstallAndInspect proxy project version = withInstalledGraph proxy project version $ \installed ->
+pipInstallAndInspect proxy project version = inspectRequirement proxy (pinned project version)
+
+inspectRequirement :: E2E -> Text -> IO (ClientResult, InstalledTree)
+inspectRequirement proxy requirementText = withInstalledRequirement proxy requirementText $ \installed ->
     (piClient installed,) <$> snapshotInstallation installed
+
+pinned :: Text -> Text -> Text
+pinned project version = project <> "==" <> version
 
 -- | Installed versions and dependency declarations from each package's own metadata.
 type PythonGraph = Map Text (Text, [Text])
 
 -- | Observe graph, root exports, and the installed executable through the native virtual environment.
 pipObserveGraph :: E2E -> Text -> Text -> Text -> IO (Observed PythonGraph Value, Either Text [(Text, Text)])
-pipObserveGraph proxy project version executableName = withInstalledGraph proxy project version $ \installed -> do
+pipObserveGraph proxy project version executableName = withInstalledRequirement proxy (pinned project version) $ \installed -> do
     tree <- snapshotInstallation installed
     exported <-
         observeJson
@@ -222,8 +239,8 @@ data PipInstallation = PipInstallation
     , piSources :: Either Text [(Text, Text)]
     }
 
-withInstalledGraph :: E2E -> Text -> Text -> (PipInstallation -> IO a) -> IO a
-withInstalledGraph proxy project version use = withPipProject proxy project version "" $ \client -> do
+withInstalledRequirement :: E2E -> Text -> (PipInstallation -> IO a) -> IO a
+withInstalledRequirement proxy requirementText use = withPipClient proxy $ \client -> do
     let virtualenv = ppDir client </> "venv"
         python = virtualenv </> "bin" </> "python"
         report = ppDir client </> "report.json"
@@ -256,7 +273,7 @@ withInstalledGraph proxy project version use = withPipProject proxy project vers
             , toString (ppIndex client)
             , "--report"
             , report
-            , toString (project <> "==" <> version)
+            , toString requirementText
             ]
     scriptNames <- listDirectory (site </> scriptDirectory)
     let scriptRoots = [scriptDirectory </> name | name <- scriptNames, name `notElem` bootstrapScripts]
@@ -307,7 +324,7 @@ data PipTargetInstall = PipTargetInstall
 
 -- | Install the complete dependency graph for a named platform into a fresh target directory.
 pipInstallForPlatform :: E2E -> Text -> Text -> Text -> IO PipTargetInstall
-pipInstallForPlatform proxy project version platform = withPipProject proxy project version "" $ \client -> do
+pipInstallForPlatform proxy project version platform = withPipClient proxy $ \client -> do
     let destination = ppDir client </> "target"
         report = ppDir client </> "report.json"
     result <-
@@ -335,7 +352,7 @@ pipInstallForPlatform proxy project version platform = withPipProject proxy proj
             , destination
             , "--report"
             , report
-            , toString (project <> "==" <> version)
+            , toString (pinned project version)
             ]
     exists <- doesDirectoryExist destination
     roots <- if exists then listDirectory destination else pure []
