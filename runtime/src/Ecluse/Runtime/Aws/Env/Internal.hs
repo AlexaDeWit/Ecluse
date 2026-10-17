@@ -13,6 +13,7 @@ module Ecluse.Runtime.Aws.Env.Internal (
 ) where
 
 import Amazonka qualified as AWS
+import Amazonka.Data.Headers (hAMZToken)
 import Amazonka.Env.Hooks qualified as Hooks
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (HeaderName)
@@ -61,4 +62,4 @@ redactingCredentialHeaders env =
 
 -- The headers that carry a session token: an AWS signature's, and an SSO portal's bearer.
 credentialHeaders :: Set HeaderName
-credentialHeaders = fromList ["X-Amz-Security-Token", "x-amz-sso_bearer_token"]
+credentialHeaders = fromList [hAMZToken, "x-amz-sso_bearer_token"]

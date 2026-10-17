@@ -69,6 +69,7 @@ refreshFailures = do
         [ RetrievalError refused
         , AuthServiceError (plantedServiceError "SSO" "UnauthorizedException" canonicalRequestMessage)
         , OtherAuthError (toException (AWS.TransportError refused))
+        , OtherAuthError (toException refused)
         ]
 
 -- | The transport cause a raised fault carries, when the transport failed.

@@ -9,7 +9,7 @@ import Amazonka qualified as AWS
 import Control.Concurrent qualified as Conc
 import Control.Exception (AsyncException (ThreadKilled))
 import Data.Text qualified as T
-import GHC.Conc (ThreadStatus (ThreadDied, ThreadFinished), getUncaughtExceptionHandler, setUncaughtExceptionHandler, threadStatus)
+import GHC.Conc (getUncaughtExceptionHandler, setUncaughtExceptionHandler)
 import Network.HTTP.Types.Status (status503)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import Test.Hspec
@@ -17,10 +17,11 @@ import UnliftIO (bracket, throwIO, timeout, try)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Boot (BootAborted (BootAborted))
-import Ecluse.Internal (ProcessOutcome (..), exitCodeFor, exitReasonFor, reportUncaught, superviseProcess)
+import Ecluse.Internal (ProcessOutcome (..), exitCodeFor, exitReasonFor, installUncaughtReporter, superviseProcess)
 import Ecluse.Runtime.Test.Aws (deliverRefreshFailure, holdsNoPlantedSecret, refreshFailures)
 import Ecluse.Runtime.Test.CodeArtifact (refusedMint)
 import Ecluse.Test.Log (captureStderr)
+import Ecluse.Test.Poll (awaitUntil, threadEnded)
 import Ecluse.Test.Stub (closedAuthority, redirectedStatusException, refusedFetch, requestSecrets, signedRequest)
 
 spec :: Spec
@@ -70,12 +71,21 @@ spec = do
             outcome <- timeout 50000 (superviseProcess (threadDelay 10_000_000 >> pure ShutdownRequested))
             outcome `shouldBe` Nothing
 
-    describe "reportUncaught (the process-wide uncaught-exception handler)" $
-        it "reports an amazonka error that ends a forked thread by its typed cause, never the request" $ do
+    describe "installUncaughtReporter (the process-wide uncaught-exception handler)" $ do
+        it "installs a handler that reports an amazonka error by its typed cause, never the request" $ do
+            refused <- refusedFetch =<< signedRequest
+            reported <- captureStderr . withUncaughtReporter $ do
+                handler <- getUncaughtExceptionHandler
+                handler (toException (AWS.TransportError refused))
+            reported `shouldSatisfy` T.isPrefixOf ("ecluse: uncaught exception: AWS request failed at " <> closedAuthority)
+            reported `shouldSatisfy` holdsNoPlantedSecret
+
+        it "reports an amazonka error that ends a forked thread the same way" $ do
             refused <- refusedFetch =<< signedRequest
             reported <- captureStderr . withUncaughtReporter $ do
                 thread <- Conc.forkIO (throwIO (AWS.TransportError refused))
-                awaitEnd thread
+                -- The handler runs inside the dying thread, so the thread has reported once it ends.
+                void (awaitUntil 1_000_000 1_000 (threadEnded thread))
             reported `shouldSatisfy` T.isPrefixOf ("ecluse: uncaught exception: AWS request failed at " <> closedAuthority)
             reported `shouldSatisfy` holdsNoPlantedSecret
 
@@ -86,20 +96,10 @@ spec = do
             exitCodeFor (BootFault "refusal") `shouldBe` ExitFailure 2
             exitCodeFor RunCancelled `shouldBe` ExitFailure 3
 
--- Install 'reportUncaught' for the action, as start-up does, and restore the suite's own handler after.
+-- Install the reporter for the action, as start-up does, and restore the suite's own handler after.
 withUncaughtReporter :: IO () -> IO ()
 withUncaughtReporter action =
-    bracket getUncaughtExceptionHandler setUncaughtExceptionHandler (const (setUncaughtExceptionHandler reportUncaught >> action))
-
--- The uncaught handler runs inside the dying thread, so the thread has reported once it ends.
-awaitEnd :: Conc.ThreadId -> IO ()
-awaitEnd thread = void (timeout 1_000_000 poll)
-  where
-    poll =
-        threadStatus thread >>= \case
-            ThreadFinished -> pass
-            ThreadDied -> pass
-            _ -> threadDelay 1_000 >> poll
+    bracket getUncaughtExceptionHandler setUncaughtExceptionHandler (const (installUncaughtReporter >> action))
 
 -- | A service fault raised past the perimeter, so a case can watch it classified.
 newtype ServiceEscape = ServiceEscape Text

@@ -10,7 +10,6 @@ loopback resolver, so the proxy it measures boots through this code.
 module Ecluse.Startup (runWith) where
 
 import Data.Text.IO qualified as TIO
-import GHC.Conc (setUncaughtExceptionHandler)
 
 import Ecluse.Boot
 import Ecluse.CLI (AppCommand (..))
@@ -32,7 +31,7 @@ import Ecluse.Composition.Types (
  )
 import Ecluse.Dredger (runDredger)
 import Ecluse.Dredger.Plan (DredgerOptions (doMode), dredgerBootRole)
-import Ecluse.Internal (ProcessOutcome (ServiceExited, ShutdownRequested), exitCodeFor, exitReasonFor, reportUncaught, superviseProcess)
+import Ecluse.Internal (ProcessOutcome (ServiceExited, ShutdownRequested), exitCodeFor, exitReasonFor, installUncaughtReporter, superviseProcess)
 import Ecluse.Mirror
 import Ecluse.Pilot
 import Ecluse.Proxy
@@ -42,7 +41,7 @@ import Ecluse.Service
 -- | Start one command under the process perimeter, then exit with the status its ending owns.
 runWith :: ResolveAdapter -> AppCommand -> IO ()
 runWith resolveAdapter cmd = do
-    setUncaughtExceptionHandler reportUncaught
+    installUncaughtReporter
     outcome <- superviseProcess (runCommand resolveAdapter cmd)
     -- A non-zero status is representable only beside its reason, so reporting here covers
     -- every one of them.

@@ -112,9 +112,7 @@ sendRaising env request = sendClassified (raised (const (requestEndpoint env req
 retypeAwsFailure :: IO a -> IO a
 retypeAwsFailure action =
     -- Thrown outside any handler, so no annotation of the throw carries the original along.
-    tryJust retyped action >>= either throwIO pure
-  where
-    retyped err = amazonkaFault err <|> (raisedHttp <$> fromException err)
+    tryJust awsCallFault action >>= either throwIO pure
 
 -- | Why @amazonka@ found no usable credentials when no request failed. It keeps the first line of amazonka's reason, never a file's contents.
 data AwsCredentialFault
@@ -152,7 +150,7 @@ authFault :: AuthError -> SomeException
 authFault = \case
     RetrievalError httpErr -> raisedHttp httpErr
     AuthServiceError service -> raised AwsServiceNamed (AWS.ServiceError service)
-    OtherAuthError inner -> fromMaybe inner (amazonkaFault inner)
+    OtherAuthError inner -> fromMaybe inner (awsCallFault inner)
     MissingEnvError reason -> toException (AwsCredentialMissing (firstLineOf reason))
     MissingFileError path -> toException (AwsCredentialMissing (toText path))
     InvalidFileError reason -> toException (AwsCredentialUnusable (firstLineOf reason))
@@ -160,6 +158,10 @@ authFault = \case
     CredentialChainExhausted -> toException AwsCredentialsExhausted
   where
     firstLineOf = fromMaybe "" . firstLine
+
+-- An http-client failure counts too, as the caller knows the call was one of amazonka's, such as a container credential fetch.
+awsCallFault :: SomeException -> Maybe SomeException
+awsCallFault err = amazonkaFault err <|> (raisedHttp <$> fromException err)
 
 -- | An error code lowercased, so no comparison turns on a service's own casing.
 errorCodeText :: AWS.ErrorCode -> Text
