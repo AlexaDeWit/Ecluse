@@ -57,6 +57,7 @@ module Ecluse.Config.Types (
     MirrorTarget (..),
     Mount (..),
     MountMap,
+    RuleInactivity (..),
     Config (..),
     ConfigError (..),
     renderConfigError,
@@ -131,9 +132,7 @@ splitHttpScheme :: Text -> Maybe (HttpScheme, Text)
 splitHttpScheme raw =
     ((Https,) <$> T.stripPrefix "https://" raw) <|> ((Http,) <$> T.stripPrefix "http://" raw)
 
-{- | Which store backend an endpoint names. The operator declares it as the one key under the
-endpoint, and the load validates the URL against it rather than guessing it from a host shape.
--}
+-- | Which store backend an endpoint names: the one key under it, which the load validates the URL against, never a guess from the host.
 data StoreTag
     = -- | Any host that speaks the ecosystem's protocol, authenticated by a static token.
       TagRegistry
@@ -157,17 +156,13 @@ data Target = Target
     }
     deriving stock (Eq, Show)
 
-{- | Whether the operator consented to @ecluse dredger@ deleting from a Verdaccio store. It is a
-declaration about that one store, so it exists under no other tag.
--}
+-- | Whether the operator consented to @ecluse dredger@ deleting from a Verdaccio store. No other tag carries it.
 data DeletionConsent
     = DeletionPermitted
     | DeletionWithheld
     deriving stock (Eq, Show)
 
-{- | How a mount's mirror write authenticates, one arm per tag. The mirror write is Écluse's one
-standing credential, so a minting tag carries no static token and a non-minting tag requires one.
--}
+-- | How the mirror write, Écluse's one standing credential, authenticates: a minting tag carries no static token, and any other requires one.
 data MirrorWrite
     = -- | Any protocol-speaking host: the operator's static write token.
       WriteRegistry Secret
@@ -267,9 +262,7 @@ sbControl = \case
     BackendCodeArtifact _ store -> ControlCodeArtifact store
     BackendVerdaccio token consent -> ControlProtocol token consent
 
-{- | The namespaces a mount's deployment owns, one arm per ecosystem, read only in that registry's
-own naming shape. Every consumer of the privilege derives its predicate from this one value.
--}
+-- | The namespaces a mount's deployment owns, in its registry's naming shape. Every consumer of the privilege derives from this value.
 data FirstParty
     = -- | The npm scopes the deployment owns, at least one.
       FirstPartyNpmScopes (NonEmpty Scope)
@@ -277,23 +270,17 @@ data FirstParty
       FirstPartyPyPI (NonEmpty PyPIFirstParty)
     deriving stock (Eq, Show)
 
-{- | A mount's refinements of the global @integrity@ group, under its own @integrity@ key so the
-mount groups them exactly as the top level does. Each is 'Nothing' at the global setting.
--}
+-- | A mount's refinements of the global @integrity@ group, under its own @integrity@ key. Each is 'Nothing' at the global setting.
 newtype MountIntegrity = MountIntegrity
     { miMinTrusted :: Maybe MinTrustedIntegrity
-    {- ^ A per-mount refinement of the global trusted-integrity floor, for the one
-    legacy private registry whose loosening must not leak onto other mounts.
-    -}
+    -- ^ A per-mount trusted-integrity floor, for one legacy private registry whose loosening must not leak onto other mounts.
     }
     deriving stock (Eq, Show)
 
 -- | Endpoint and activation settings for one mount before resolution.
 data MountConfig = MountConfig
     { mntEnabled :: Maybe Bool
-    {- ^ The mount's on\/off switch. Any operator-declared key already activates the mount, so
-    @true@ serves the public gate that declares no other key and @false@ switches one off in place.
-    -}
+    -- ^ Any operator-declared key activates the mount, so @true@ serves a bare public gate and @false@ switches one off in place.
     , mntPrivateUpstream :: Maybe PrivateEndpoint
     , mntPublicUpstream :: RegistryUrl
     -- ^ Only the @registry@ tag is admitted here, so the URL is the whole declaration.
@@ -328,9 +315,7 @@ data AppConfig = AppConfig
 data ServerSettings = ServerSettings
     { srvPort :: Int
     , srvPublicUrl :: Maybe Url
-    {- ^ Required whenever a mount is active, and 'Ecluse.Config.loadConfig' refuses
-    otherwise. The proxy rewrites served artifact URLs against it.
-    -}
+    -- ^ Required whenever a mount is active, or 'Ecluse.Config.loadConfig' refuses. Served artifact URLs are rewritten against it.
     , srvAuthToken :: Maybe Secret
     , srvHelpMessage :: Maybe Text
     , srvShutdownDrainTimeout :: Int
@@ -347,32 +332,24 @@ data QueueSettings = QueueSettings
     , qsMaxMemoryDepth :: Maybe Int
     -- ^ Computed from the runtime posture when unset. A configured value wins.
     , qsMaxReceiveCount :: Int
-    {- ^ Deliveries one message gets before the worker retires it. A __floor__: a queue with a
-    dead-letter terminus runs one above its capture count, so it captures first ("Ecluse.Core.Queue").
+    {- ^ Deliveries one message gets before the worker retires it. A __floor__: the worker runs one above an
+    attached dead-letter terminus's capture count, so the terminus captures first ("Ecluse.Core.Queue").
     -}
     }
     deriving stock (Eq, Show)
 
-{- | The @limits@ group: the hostile-input bounds. The memory plan computes the tenant-sized caps
-when unset ("Ecluse.Composition.MemoryPlan"), a configured value winning, and the rest stay pinned.
--}
+-- | The @limits@ group: the hostile-input bounds. The memory plan computes unset tenant-sized caps, and the rest stay pinned.
 data LimitsSettings = LimitsSettings
     { limMaxResponseBytes :: Maybe Int
     , limMaxVersionCount :: Int
     , limMaxArtifactCount :: Int
-    {- ^ The per-package artifact fan-out cap. It bounds document shape rather than bytes, so
-    the memory plan does not size it and it stays pinned.
-    -}
+    -- ^ The per-package artifact fan-out cap. It bounds document shape, not bytes, so it stays pinned.
     , limMaxNestingDepth :: Int
     , limMaxAdvisoryDatabaseBytes :: Int
-    {- ^ The advisory-database download cap. It bounds a stream to disk rather than a heap
-    tenant, so the memory plan does not size it and it stays pinned.
-    -}
+    -- ^ The advisory-database download cap. It bounds a stream to disk, not a heap tenant, so it stays pinned.
     , limMaxRequestBytes :: Maybe Int
     , limMaxArtifactBytes :: Maybe Int
-    {- ^ The mirror worker's per-artifact fetch byte cap. Computed from the memory
-    plan's mirror-artifact tenant when unset, a configured value winning.
-    -}
+    -- ^ The mirror worker's per-artifact fetch byte cap, computed from the mirror-artifact tenant when unset.
     , limProgressWindow :: Int
     -- ^ Seconds of waiting within which an upstream body must deliver 'limMinProgressBytes'.
     , limMinProgressBytes :: Int
@@ -417,7 +394,7 @@ data AdvisoriesSettings = AdvisoriesSettings
     , advEpssQuietTime :: NominalDiffTime
     -- ^ Pilot only: the same threshold for the EPSS feed's declared score date.
     , advMaxAgeSeconds :: Maybe NominalDiffTime
-    -- ^ How old a published artifact may be before advisory denies refuse. Unset, each mount derives its own.
+    -- ^ How old a published advisory artifact may be before advisory denial refuses. Unset, each mount derives it from its quarantine rules.
     , advMaxShrink :: Percent
     -- ^ Pilot only: how far below its size baseline one publication may shrink the artifact.
     , advEpssLossCap :: Percent
@@ -446,9 +423,7 @@ data ObservabilitySettings = ObservabilitySettings
     }
     deriving stock (Eq, Show)
 
-{- | The @dredger@ group: how the mirror sweep paces itself, how much one cycle may delete, and
-which names it carries. Only @ecluse dredger@ reads it, and every other role carries it unread.
--}
+-- | The @dredger@ group: the sweep's pacing, its deletion cap, and the names it walks. Only @ecluse dredger@ reads it.
 data DredgerSettings = DredgerSettings
     { drgChunkSize :: Int
     -- ^ Candidate packages one chunk examines before the sweep pauses.
@@ -457,13 +432,9 @@ data DredgerSettings = DredgerSettings
     , drgCyclePause :: NominalDiffTime
     -- ^ Seconds between the end of one cycle and the start of the next.
     , drgTargetCycleWindow :: Maybe NominalDiffTime
-    {- ^ Seconds within which an advisory is paced to reach every affected mirrored version.
-    Computed from the cycle pause when unset.
-    -}
+    -- ^ Seconds within which an advisory is paced to reach every affected mirrored version. Unset, the cycle pause sets it.
     , drgRequestBudgetFraction :: Maybe Rational
-    {- ^ The share of a store's request capacity one sweep may take. Computed per capacity pool
-    when unset, so a sweep cannot starve the proxy's own calls.
-    -}
+    -- ^ The share of a store's request capacity one sweep may take, computed per pool when unset so the proxy is not starved.
     , drgQuotaOverrides :: Map Text QuotaOverride
     -- ^ Declared request capacity, keyed by the store URL it describes.
     , drgDeletionCap :: Maybe Int
@@ -497,9 +468,7 @@ data MountRegistries = MountRegistries
     }
     deriving stock (Eq, Show)
 
-{- | Whether a mount mirrors, derived from its declared endpoints. A declared @mirrorTarget@ makes
-it 'Mirrored', which carries the private upstream the mirror is read back through, never without.
--}
+-- | Whether a mount mirrors. A declared @mirrorTarget@ makes it 'Mirrored', which always carries the private upstream it reads back.
 data MountMode
     = -- | The mount mirrors admitted public artifacts, and it needs both legs.
       Mirrored MirroredLegs
@@ -507,9 +476,7 @@ data MountMode
       ServeOnly (Maybe RegistryUrl)
     deriving stock (Eq, Show)
 
-{- | A mirrored mount's two required halves: the readable private upstream and the
-mirror target married to its derived write credential.
--}
+-- | A mirrored mount's two required halves: the readable private upstream, and the mirror target with its derived write credential.
 data MirroredLegs = MirroredLegs
     { mlPrivateUpstream :: RegistryUrl
     , mlMirrorTarget :: MirrorTarget
@@ -544,16 +511,28 @@ data Mount = Mount
     { mountEcosystem :: Ecosystem
     , mountRegistries :: MountRegistries
     , mountPolicy :: [PrecededRule]
+    , mountInactiveRules :: Map Text RuleInactivity
+    -- ^ The source-activated shipped rules this mount leaves to an advisory source that is not configured, by name.
     }
     deriving stock (Eq, Show)
 
 -- | The mounts a load resolved, keyed by the ecosystem each was declared under.
 type MountMap = Map Ecosystem Mount
 
+-- | Why a shipped rule an advisory source activates does not run, when no operator patch enabled or disabled it.
+data RuleInactivity
+    = -- | No @advisories.url@ is configured, and no patch decided the rule.
+      NoAdvisorySource
+    deriving stock (Eq, Show)
+
 -- | A completed load: the document's settings and the mounts resolved against them.
 data Config = Config
     { configApp :: AppConfig
     , configMounts :: MountMap
+    , configInactiveRules :: Map Text RuleInactivity
+    {- ^ The source-activated shipped rules the shared @rules@ map leaves to an unconfigured advisory
+    source, where some mount leaves them to the source too and no mount runs them.
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -563,21 +542,15 @@ data ConfigError
     | PolicyErrors [PolicyError]
     | -- | Shared rule errors that include suppression of the shipped npm mount default.
       SharedPolicyErrors [PolicyError]
-    | {- | A mount is active but @server.publicUrl@ is unset. It is not derived from the @Host@
-      header: a spoofed header poisons shared-cache entries with an attacker-chosen artifact URL.
-      -}
+    | -- | A mount is active but @server.publicUrl@ is unset. Deriving it from a spoofable @Host@ header would poison the shared cache.
       PublicUrlRequired
     | {- | A mount declares a @mirrorTarget@ but no private upstream, through which the mirror
       write must be readable back. A serve-only mount never raises this.
       -}
       MountMissingPrivateUpstream Ecosystem
-    | {- | An endpoint declared under the @codeArtifact@ tag whose URL is not a CodeArtifact
-      endpoint. The tag names the store, so a URL contradicting it is a misdirected write or read.
-      -}
+    | -- | A @codeArtifact@ endpoint whose URL is not a CodeArtifact endpoint. The tag names the store, so the URL would misdirect a write or read.
       CodeArtifactHostMismatch Ecosystem Text
-    | {- | A @codeArtifact@ endpoint on a mount whose ecosystem CodeArtifact carries no package
-      format for, so no repository under it could serve the mount. Carries the key it was written at.
-      -}
+    | -- | A @codeArtifact@ endpoint on an ecosystem CodeArtifact has no package format for. Carries its key.
       CodeArtifactFormatUnsupported Ecosystem Text
     | {- | A @codeArtifact@ endpoint whose path addresses no repository under the mount's own
       format, whose per-format endpoints are separate stores. Carries its key, then the format token.

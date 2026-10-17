@@ -67,6 +67,7 @@ import Ecluse.Config (
     RuntimeSettings (rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost, rtServeMaxInFlight),
     advisoryAgeLines,
     advisoryEpssLines,
+    advisorySourced,
     mountPostureLines,
     resolvedKeyProvenance,
  )
@@ -81,9 +82,7 @@ import Ecluse.Rts (EffectiveRuntimePlan)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsQueueUrl, sqsRegion))
 
-{- | What the pure tier reads: the loaded configuration, the layers it came from, and the process
-facts a boot measured before any decision. Nothing past this is read from the environment again.
--}
+-- | The loaded configuration, the layers it came from, and the process facts a boot measured. Nothing past this reads the environment.
 data BootInputs = BootInputs
     { biEnvVars :: [(String, String)]
     -- ^ The process environment, for the provenance lines and the ambient AWS override.
@@ -109,14 +108,10 @@ data BootReport = BootReport
     -- ^ Every refusal the role earned, or the decisions it cleared.
     }
 
-{- | What a boot resolves: the role it starts, the decisions that role applies, and the lines
-both entry points report in the order they hold here.
--}
+-- | What a boot resolves: the role it starts, the decisions that role applies, and the lines both entry points report.
 data BootPlan = BootPlan
     { bpRole :: BootRole
-    {- ^ The role the pass vetted under, which a boot also selects its behaviour from, so the
-    severities it cleared and the behaviour it runs name one role.
-    -}
+    -- ^ The role the pass vetted under and the boot runs, so the severities it cleared and its behaviour name one role.
     , bpValidated :: ValidatedPlan
     -- ^ What the pure pass cleared: the mounts, the endpoints, and the settings no rule vets.
     , bpMirrorRuntime :: MirrorRuntimePlan
@@ -145,7 +140,7 @@ runs this whole tier, and a boot adds no pure refusal of its own past it.
 resolveBootPlan :: BootRole -> BootInputs -> BootReport
 resolveBootPlan role inputs =
     BootReport
-        { brProvenance = configDocumentLine envVars document : resolvedKeyProvenance envVars document
+        { brProvenance = configDocumentLine envVars document : resolvedKeyProvenance (biConfig inputs) envVars document
         , brAdvisories = advisories
         , brOutcome = outcome
         }
@@ -154,9 +149,7 @@ resolveBootPlan role inputs =
     document = biDocument inputs
     (advisories, outcome) = planDecisions role inputs
 
-{- | Every refusal a role other than @own@ earns from this configuration, each named by the command
-that earns it. A checker picks no subcommand, so it reports these beside its own verdict.
--}
+-- | Every refusal a role other than @own@ earns, named by its command. A checker picks no subcommand, so it reports these too.
 roleRefusalWarnings :: BootRole -> BootInputs -> [Text]
 roleRefusalWarnings own inputs =
     [ bootInvocation role <> " would refuse to boot: " <> renderBootError err
@@ -234,7 +227,7 @@ bootPlanFrom role inputs (validated, mirror, s3Endpoint) =
                 , mountPostureLines config
                 , ruleOrderLines config
                 , advisoryAgeLines config
-                , advisoryEpssLines config
+                , [line | handlesAdvisoryArtifact role app, line <- advisoryEpssLines config]
                 , [line | role == BootWithoutPipeline, line <- pilotPostureLines (cfgAdvisories app)]
                 ]
         , bpWarnings = mpDegradations memoryPlan <> mirrorRuntimeWarnings (mdRuntime mirror)
@@ -246,6 +239,10 @@ bootPlanFrom role inputs (validated, mirror, s3Endpoint) =
     runtimeSettings = cfgRuntime app
     (privateConnections, privateLine) = resolvePrivateConnections (rtPrivateConnectionsPerHost runtimeSettings) (biFdLimit inputs)
     (publicConnections, publicLine) = resolvePublicConnections (rtPublicConnectionsPerHost runtimeSettings) (biFdLimit inputs)
+
+-- Pilot compiles an artifact, and check-config vets as Pilot. Any other role reads one only from a configured store.
+handlesAdvisoryArtifact :: BootRole -> AppConfig -> Bool
+handlesAdvisoryArtifact role app = role == BootWithoutPipeline || advisorySourced app
 
 {- The memory plan and its lines. The 'publishConfigured' predicate and this settings
 projection live here, so the two entry points cannot disagree on either. -}
@@ -299,9 +296,7 @@ mirrorRuntimeWarnings = \case
 defaultConfigPath :: FilePath
 defaultConfigPath = "/etc/ecluse/config.yaml"
 
-{- | The path a non-blank @ECLUSE_CONFIG@ names, trimmed of surrounding whitespace. 'Nothing'
-leaves 'defaultConfigPath' standing, where an absent document is not a failure.
--}
+-- | The path a non-blank @ECLUSE_CONFIG@ names, trimmed. 'Nothing' leaves 'defaultConfigPath', where an absent document is not a failure.
 explicitConfigPath :: [(String, String)] -> Maybe FilePath
 explicitConfigPath envVars = do
     raw <- lookup "ECLUSE_CONFIG" envVars

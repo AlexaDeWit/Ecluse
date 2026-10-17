@@ -13,7 +13,7 @@ import Data.Time (addUTCTime, nominalDay)
 import Data.Yaml qualified as Yaml
 import Test.Hspec
 
-import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, fixedNow, npmMountDoc, pubUrlEnv)
+import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, fixedNow, npmMountDoc, pubUrlEnv, staticEnvVars)
 import Ecluse.Config (
     AppConfig (cfgQueue),
     Config (configApp, configMounts),
@@ -311,8 +311,8 @@ spec = do
             loadConfig (pubUrlEnv <> inEnvironment) Nothing `shouldBe` refusal
 
         it "names the setting and its layer in the provenance lines" $
-            resolvedKeyProvenance [] (Just "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\"]}}}")
-                `shouldSatisfy` elem "config: rules.deny-scripts.appliesTo = [\"admission\"] (document)"
+            provenanceOf [] (Just "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\"]}}}")
+                >>= (`shouldSatisfy` elem "config: rules.deny-scripts.appliesTo = [\"admission\"] (document)")
 
     describe "the advisory push-age limit reported at boot" $ do
         it "derives six days from the shipped seven-day quarantine, naming the rule" $ do
@@ -400,29 +400,108 @@ spec = do
 
     describe "resolvedKeyProvenance" $ do
         it "labels each resolved key with the layer that supplied it" $ do
-            let provenance =
-                    resolvedKeyProvenance
-                        [("ECLUSE_SERVER__PORT", "4873")]
-                        (Just "{\"server\":{\"helpMessage\":\"ask platform-eng\"}}")
+            provenance <- provenanceOf [("ECLUSE_SERVER__PORT", "4873")] (Just "{\"server\":{\"helpMessage\":\"ask platform-eng\"}}")
             provenance `shouldSatisfy` elem "config: server.port = 4873 (environment)"
             provenance `shouldSatisfy` elem "config: server.helpMessage = ask platform-eng (document)"
             provenance `shouldSatisfy` elem "config: observability.logFormat = json (default)"
 
         it "redacts secret-typed keys whatever layer supplies them" $ do
-            let provenance =
-                    resolvedKeyProvenance
-                        [ ("ECLUSE_SERVER__AUTH_TOKEN", "hunter2")
-                        , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "hunter3")
-                        ]
-                        Nothing
+            provenance <- provenanceOf (("ECLUSE_SERVER__AUTH_TOKEN", "hunter2") : staticEnvVars) Nothing
             provenance `shouldSatisfy` elem "config: server.authToken = <redacted> (environment)"
             provenance
-                `shouldSatisfy` elem "config: mounts.npm.mirrorTarget.verdaccio.token = <redacted> (environment)"
-            provenance `shouldSatisfy` (not . any (T.isInfixOf "hunter"))
+                `shouldSatisfy` elem "config: mounts.npm.mirrorTarget.registry.token = <redacted> (environment)"
+            provenance `shouldSatisfy` (not . any (\line -> T.isInfixOf "hunter" line || T.isInfixOf "mirror-write-token" line))
+
+    describe "the boot lines of a shipped rule an advisory source activates" $ do
+        let npmDoc = Just "{\"mounts\":{\"npm\":{\"enabled\":true}}}"
+            ruleLines name = filter (T.isPrefixOf ("config: rules." <> name <> "."))
+            anyRuleLines name = filter (T.isInfixOf ("rules." <> name <> "."))
+            marked = T.isSuffixOf ", inactive: no advisories.url)"
+        it "marks every line of both rules inactive without advisories.url, and no other line" $ do
+            provenance <- provenanceOf pubUrlEnv npmDoc
+            for_ sourceDefaultNames $ \name -> do
+                ruleLines name provenance `shouldSatisfy` (not . null)
+                ruleLines name provenance `shouldSatisfy` all (T.isSuffixOf " (default, inactive: no advisories.url)")
+            filter marked provenance `shouldBe` concatMap (`ruleLines` provenance) (toList sourceDefaultNames)
+            ruleLines "min-age" provenance `shouldSatisfy` (not . null)
+            provenance `shouldSatisfy` elem "config: rules.deny-known-malicious.onUnavailable = deny (default, inactive: no advisories.url)"
+            provenance `shouldSatisfy` elem "config: rules.remediation-fast-track.remainingAdvisories = differential (default, inactive: no advisories.url)"
+
+        it "keeps an operator patch's own layer and adds the marker, shared or on a mount" $ do
+            provenance <-
+                provenanceOf
+                    (pubUrlEnv <> [("ECLUSE_RULES", "{\"deny-known-malicious\":{\"onUnavailable\":\"skip\"}}")])
+                    (Just "{\"rules\":{\"remediation-fast-track\":{\"remainingAdvisories\":\"abstain\"}},\"mounts\":{\"npm\":{\"rules\":{\"deny-known-malicious\":{\"precedence\":310},\"remediation-fast-track\":{\"onUnavailable\":\"skip\"}}}}}")
+            provenance `shouldSatisfy` elem "config: rules.deny-known-malicious.onUnavailable = skip (environment, inactive: no advisories.url)"
+            provenance `shouldSatisfy` elem "config: rules.remediation-fast-track.remainingAdvisories = abstain (document, inactive: no advisories.url)"
+            provenance `shouldSatisfy` elem "config: mounts.npm.rules.deny-known-malicious.precedence = 310 (document, inactive: no advisories.url)"
+            provenance `shouldSatisfy` elem "config: mounts.npm.rules.remediation-fast-track.onUnavailable = skip (document, inactive: no advisories.url)"
+
+        it "marks no line once advisories.url is configured" $ do
+            provenance <- provenanceOf (pubUrlEnv <> advisoryStoreEnv) npmDoc
+            for_ sourceDefaultNames $ \name -> ruleLines name provenance `shouldSatisfy` (not . null)
+            provenance `shouldSatisfy` (not . any (T.isInfixOf "inactive"))
+
+        for_
+            [ ("deny-known-malicious", "remediation-fast-track", "{\"rules\":{\"deny-known-malicious\":{\"enabled\":true}},\"mounts\":{\"npm\":{\"enabled\":true}}}")
+            , ("deny-known-malicious", "remediation-fast-track", "{\"rules\":{\"deny-known-malicious\":{\"type\":\"DenyIfKnownMalicious\"}},\"mounts\":{\"npm\":{\"enabled\":true}}}")
+            , ("deny-known-malicious", "remediation-fast-track", "{\"mounts\":{\"npm\":{\"rules\":{\"deny-known-malicious\":{\"enabled\":true}}}}}")
+            , ("remediation-fast-track", "deny-known-malicious", "{\"rules\":{\"remediation-fast-track\":{\"enabled\":true}},\"mounts\":{\"npm\":{\"enabled\":true}}}")
+            , ("remediation-fast-track", "deny-known-malicious", "{\"rules\":{\"remediation-fast-track\":{\"type\":\"AllowIfRemediatesCve\"}},\"mounts\":{\"npm\":{\"enabled\":true}}}")
+            , ("remediation-fast-track", "deny-known-malicious", "{\"mounts\":{\"npm\":{\"rules\":{\"remediation-fast-track\":{\"enabled\":true,\"onUnavailable\":\"skip\"}}}}}")
+            ]
+            $ \(activated, other, doc :: Text) ->
+                it ("marks no line of a rule an operator activates: " <> toString doc) $ do
+                    provenance <- provenanceOf pubUrlEnv (Just (encodeUtf8 doc))
+                    ruleLines activated provenance `shouldSatisfy` (not . null)
+                    anyRuleLines activated provenance `shouldSatisfy` (not . any marked)
+                    ruleLines other provenance `shouldSatisfy` (\otherLines -> not (null otherLines) && all marked otherLines)
+
+        for_
+            [ ("deny-known-malicious", "remediation-fast-track", "{\"rules\":{\"deny-known-malicious\":{\"enabled\":false}},\"mounts\":{\"npm\":{\"enabled\":true}}}")
+            , ("deny-known-malicious", "remediation-fast-track", "{\"mounts\":{\"npm\":{\"rules\":{\"deny-known-malicious\":{\"enabled\":false}}}}}")
+            , ("remediation-fast-track", "deny-known-malicious", "{\"rules\":{\"remediation-fast-track\":{\"enabled\":false}},\"mounts\":{\"npm\":{\"enabled\":true}}}")
+            , ("remediation-fast-track", "deny-known-malicious", "{\"mounts\":{\"npm\":{\"rules\":{\"remediation-fast-track\":{\"enabled\":false}}}}}")
+            ]
+            $ \(disabled, other, doc :: Text) ->
+                it ("marks no line of a rule an operator disables, because a source would not run it: " <> toString doc) $ do
+                    provenance <- provenanceOf pubUrlEnv (Just (encodeUtf8 doc))
+                    anyRuleLines disabled provenance `shouldSatisfy` (\disabledLines -> not (null disabledLines) && not (any marked disabledLines))
+                    provenance `shouldSatisfy` any (T.isInfixOf ("rules." <> disabled <> ".enabled = false (document)"))
+                    ruleLines other provenance `shouldSatisfy` (\otherLines -> not (null otherLines) && all marked otherLines)
+
+        it "keeps a shared rule's lines unmarked where one mount activates it, and marks the mount that leaves it to the source" $ do
+            provenance <-
+                provenanceOf
+                    pubUrlEnv
+                    (Just "{\"mounts\":{\"npm\":{\"rules\":{\"deny-known-malicious\":{\"enabled\":true}}},\"pypi\":{\"rules\":{\"deny-known-malicious\":{\"precedence\":310}}}}}")
+            ruleLines "deny-known-malicious" provenance `shouldSatisfy` (\shared -> not (null shared) && not (any marked shared))
+            provenance `shouldSatisfy` elem "config: mounts.npm.rules.deny-known-malicious.enabled = true (document)"
+            provenance `shouldSatisfy` elem "config: mounts.pypi.rules.deny-known-malicious.precedence = 310 (document, inactive: no advisories.url)"
+            ruleLines "remediation-fast-track" provenance `shouldSatisfy` (\shared -> not (null shared) && all marked shared)
+
+        it "marks a shared rule's lines where one mount disables it and another leaves it to the source" $ do
+            provenance <-
+                provenanceOf
+                    pubUrlEnv
+                    (Just "{\"mounts\":{\"npm\":{\"rules\":{\"deny-known-malicious\":{\"enabled\":false}}},\"pypi\":{\"rules\":{\"deny-known-malicious\":{\"precedence\":310}}}}}")
+            ruleLines "deny-known-malicious" provenance `shouldSatisfy` (\shared -> not (null shared) && all marked shared)
+            provenance `shouldSatisfy` elem "config: mounts.npm.rules.deny-known-malicious.enabled = false (document)"
+            provenance `shouldSatisfy` elem "config: mounts.pypi.rules.deny-known-malicious.precedence = 310 (document, inactive: no advisories.url)"
+
+        for_ [("no mount", "{}"), ("the only mount switched off", "{\"mounts\":{\"npm\":{\"enabled\":false}}}")] $ \(label, doc :: Text) ->
+            it ("marks no shared rule line where no mount serves: " <> label) $ do
+                provenance <- provenanceOf pubUrlEnv (Just (encodeUtf8 doc))
+                for_ sourceDefaultNames $ \name ->
+                    ruleLines name provenance `shouldSatisfy` (\shared -> not (null shared) && not (any marked shared))
 
 -- | The types of a mount's rules that are limited to admission, which the Dredger does not evaluate.
 limitedRules :: Mount -> [Text]
 limitedRules mount = [ruleName (prRule rule) | rule <- mountPolicy mount, ruleReach rule == AdmissionOnly]
+
+-- | The provenance lines of the configuration these layers load.
+provenanceOf :: [(String, String)] -> Maybe ByteString -> IO [Text]
+provenanceOf envVars document = (\config -> resolvedKeyProvenance config envVars document) <$> expectConfig envVars document
 
 -- | An advisory store, which the age lines report only once one is configured.
 advisoryStoreEnv :: [(String, String)]
