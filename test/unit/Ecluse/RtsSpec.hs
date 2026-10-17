@@ -366,7 +366,19 @@ renderSpec = describe "renderEffectivePosture and renderPostureWarnings" $ do
         renderPostureWarnings effective
             `shouldSatisfy` any (\l -> "found no cgroup CPU or memory limit" `T.isInfixOf` l)
         renderPostureWarnings effective
-            `shouldSatisfy` any (\l -> "runtime.cores (ECLUSE_RUNTIME__CORES)" `T.isInfixOf` l && "runtime.maxHeapBytes (ECLUSE_RUNTIME__MAX_HEAP_BYTES)" `T.isInfixOf` l)
+            `shouldSatisfy` any (\l -> "set a memory limit" `T.isInfixOf` l && "runtime.cores (ECLUSE_RUNTIME__CORES)" `T.isInfixOf` l)
+
+    it "keeps runtime.maxHeapBytes out of the coresCeiling warning, whether it is set or not" $ do
+        let heapOnly = noOverrides{roMaxHeapBytes = Just (832 * mib)}
+            ghcrtsHeap = bigNode{rpMaxHeapBytes = Just (832 * mib)}
+            postures =
+                [ appliedRuntimePlan noCgroup (resolveRuntimePlan heapOnly noCgroup bigNode) bigNode
+                , appliedRuntimePlan noCgroup (resolveRuntimePlan noOverrides noCgroup ghcrtsHeap) ghcrtsHeap
+                , appliedRuntimePlan noCgroup (resolveRuntimePlan noOverrides noCgroup bigNode) bigNode
+                ]
+        for_ postures $ \effective -> do
+            effectiveCapabilities effective `shouldBe` (8, FromCoresCeiling)
+            renderPostureWarnings effective `shouldNotSatisfy` any ("runtime.maxHeapBytes" `T.isInfixOf`)
 
     it "keeps quiet about the count when a quota or the config decided it" $ do
         let quotaCgroup = noCgroup{cgCpuCores = Just 2}
