@@ -337,15 +337,18 @@ document owns only the document-merge schema above.
 
 #### The default policy
 
-The shared shipped default enables two rules, and a third when `advisories.url` is set. `min-age`
+The shared shipped default enables one rule, and two more when `advisories.url` is set. `min-age`
 (`AllowIfOlderThan`, 7 days) admits a public version only after a quarantine window. Registries
 usually find and yank a malicious publish within days, so the delay keeps it out of your builds.
 This quarantine is Écluse's core security boundary.
-`remediation-fast-track` (`AllowIfRemediatesCve`) ranks above it, so Écluse admits a release fixing
-a known CVE at once rather than waiting out the quarantine (see
+With a source, `remediation-fast-track` (`AllowIfRemediatesCve`) ranks above it, so Écluse admits a
+release fixing a known CVE at once rather than waiting out the quarantine. It admits a partial fix
+only when the advisories still affecting it store scores inside its limits, and it refuses while
+advisory evidence is unavailable (see
 [Rules engine](rules-engine.md#allowifremediatescve-remediation-fast-track)).
 `deny-known-malicious` (`DenyIfKnownMalicious`) ranks at 300, above every default allow (see
-[Rules engine](rules-engine.md#denyifknownmalicious-primary-namespace-evidence)).
+[Rules engine](rules-engine.md#denyifknownmalicious-primary-namespace-evidence)). Without a source,
+neither rule is active, so a source-free deployment boots and decides on the quarantine alone.
 
 The npm mount adds `deny-scripts` (`DenyInstallTimeExecution`) at admission only. It does not
 activate a mount. The operator can disable it under `mounts.npm.rules`, widen its phases, or add
@@ -362,7 +365,9 @@ API per request. The compilation, ETag polling, and atomic shadow-swap are under
 subsystem](rules-engine.md#cve-subsystem). The operator knobs (the store URL, the poll interval, the
 OSV export and EPSS feed sources, and the download size cap) are in the
 [configuration reference](https://ecluse-proxy.com/docs/configuration/#the-configuration-reference).
-With no store configured, the fast lane abstains and the quarantine governs alone.
+With no store configured, no source activates the fast lane, and the quarantine governs alone. With
+one, a mount whose rules refuse without advisory evidence, the shipped fast lane included, stays
+not-ready until its first artifact syncs.
 
 ### Validation: fail fast, reject the unknown
 

@@ -44,7 +44,7 @@ import Ecluse.Runtime.Server (
  )
 import Ecluse.Test.Env (withEnvVars)
 import Ecluse.Test.Log (captureStderrWith, captureStdout)
-import Ecluse.Test.OsvDb (denyIfEpssRules, stubSourceEnv)
+import Ecluse.Test.OsvDb (denyIfEpssRules, epssFreeRules, stubSourceEnv)
 import Ecluse.Test.Stub (Stub, allCaptured, stubBaseUrl, withStub)
 
 runEnv :: [(String, String)]
@@ -301,15 +301,15 @@ spec = sequential $ do
             bootRefusal args envVars `shouldReturn` (Left (ExitFailure 2), expected)
 
     describe "pilot compile after a failed EPSS feed" $
-        for_ [(False, Left ExitSuccess), (True, Left (ExitFailure 1))] $ \(epssRule, expected) ->
-            it ("exits with " <> show expected <> " and publishes only without an EPSS rule, EPSS rule=" <> show epssRule) $ do
+        for_ [("an EPSS deny", Just denyIfEpssRules, False), ("the shipped differential remediation", Nothing, False), ("no rule that reads EPSS", Just epssFreeRules, True)] $ \(label, rules, publishes) ->
+            it ("exits " <> (if publishes then "0 and publishes" else "1 and publishes nothing") <> " under " <> label) $ do
                 zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
                 withSystemTempDirectory "ecluse-bootspec-compile" $ \outDir ->
                     withStub status200 zipData $ \osvStub ->
                         withStub status404 "" $ \epssStub -> do
-                            outcome <- withEnvVars caseKeys (compileEnv epssRule osvStub epssStub) (try (withArgs ["pilot", "compile", "--out", outDir] run))
-                            outcome `shouldBe` expected
-                            doesFileExist (outDir </> "npm-osv-schema5.db") `shouldReturn` not epssRule
+                            outcome <- withEnvVars caseKeys (compileEnv rules osvStub epssStub) (try (withArgs ["pilot", "compile", "--out", outDir] run))
+                            outcome `shouldBe` Left (if publishes then ExitSuccess else ExitFailure 1)
+                            doesFileExist (outDir </> "npm-osv-schema5.db") `shouldReturn` publishes
 
     describe "check-config (validate and print, boot nothing)" $ do
         it "validates a bootable configuration and exits 0" $
@@ -361,7 +361,7 @@ spec = sequential $ do
         it "refuses an advisory deny with no advisory store with exit 2, naming the rule" $ do
             (outcome, report) <- checkConfigRefusal (overrideEnv "ECLUSE_RULES" cveDenyRule runEnv)
             outcome `shouldBe` refusedCheck
-            report `shouldSatisfy` any (T.isInfixOf "enables the advisory deny rules DenyIfCve")
+            report `shouldSatisfy` any (T.isInfixOf "enables rules that refuse without advisory evidence (DenyIfCve)")
 
         it "refuses a rule that applies at revocation alone with exit 2, naming the rule" $ do
             (outcome, report) <- checkConfigRefusal (overrideEnv "ECLUSE_RULES" (limitedInstallDeny "[\"revocation\"]") runEnv)
@@ -376,8 +376,7 @@ spec = sequential $ do
             filter (T.isPrefixOf "rule ") (lines output)
                 `shouldBe` [ "rule boot order for mount npm:"
                            , "rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)"
-                           , "rule 2: AllowIfRemediatesCve (precedence 150, applies at admission and revocation)"
-                           , "rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
+                           , "rule 2: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
                            ]
 
         it "prints the EPSS feed every compile attempts once, and never fetches it" $
@@ -504,15 +503,15 @@ publishingTo = overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__UR
 splitRoleRefusal :: [String] -> IO (Either ExitCode (Maybe ()), [Text])
 splitRoleRefusal args = bootRefusal args (withoutQueueUrl runEnv)
 
--- | Use stub advisory sources and configure the store required by an EPSS rule.
-compileEnv :: Bool -> Stub -> Stub -> [(String, String)]
-compileEnv epssRule osvStub epssStub =
+-- | Use stub advisory sources and the store whose consumers share the npm mount's rules.
+compileEnv :: Maybe String -> Stub -> Stub -> [(String, String)]
+compileEnv rules osvStub epssStub =
     [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
     , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
     , ("ECLUSE_ADVISORIES__URL", "s3://advisories.example.test")
     ]
         <> stubSourceEnv osvStub epssStub
-        <> [("ECLUSE_MOUNTS__NPM__RULES", denyIfEpssRules) | epssRule]
+        <> [("ECLUSE_MOUNTS__NPM__RULES", patch) | Just patch <- [rules]]
 
 -- | A shared policy carrying one advisory deny, which needs a store no fixture here configures.
 cveDenyRule :: String

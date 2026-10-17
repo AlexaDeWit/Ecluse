@@ -39,7 +39,7 @@ import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion), VersionP
 import Ecluse.Core.Registry.Sweep.Package (sweepPackageGroup)
 import Ecluse.Core.Registry.Sweep.Types (SweepMount (smFirstParty, smStore), newSweepState)
 import Ecluse.Core.Rules (RuleDeps (..), prepare)
-import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), DenyIfEpssParams (DenyIfEpssParams), FailureAlignment (FailDeny), Rule (..), RuleVerdict (..), completeEvidence, mkEvalContext)
+import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), DenyIfEpssParams (DenyIfEpssParams), FailureAlignment (FailDeny, FailNoDecision), RemainingAdvisories (AbstainOnRemaining), Rule (..), RuleVerdict (..), completeEvidence, mkEvalContext)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
  )
@@ -75,7 +75,7 @@ import Ecluse.Test.Port (
     recordingAdvisorySyncMetricsPort,
     recordingAdvisorySyncTracingPort,
  )
-import Ecluse.Test.Rules (atDefaultPrecedence, evalRule, isAllow, isDeny, isNoDecision, slotRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, evalRule, isAllow, isDeny, isNoDecision, remediationWith, shippedRemediation, slotRuleDeps)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Test.Sweep (RecordedSweep (recPorts), recordingPorts, testMount, testPacing)
 
@@ -274,11 +274,12 @@ withdrawalSpec = describe "compiled withdrawal through sync and shared policy" $
                     survivesSweep deps rule False "withdrawal-only" `shouldReturn` not active
                     survivesSweep deps rule False "withdrawal-overlap" `shouldReturn` False
                     survivesSweep deps rule True "withdrawal-overlap" `shouldReturn` True
-                fixVerdict <- evalRule deps ctx AllowIfRemediatesCve (completeEvidence (sampleDetails (unscopedNpm "withdrawal-only") (mkVersion Npm "2.0.0")))
-                case fixVerdict of
-                    Allow _ -> active `shouldBe` True
-                    NoDecision _ -> active `shouldBe` False
-                    other -> expectationFailure ("unexpected withdrawal remediation verdict: " <> show other)
+                for_ [shippedRemediation, remediationWith FailNoDecision AbstainOnRemaining] $ \remediation -> do
+                    fixVerdict <- evalRule deps ctx remediation (completeEvidence (sampleDetails (unscopedNpm "withdrawal-only") (mkVersion Npm "2.0.0")))
+                    case fixVerdict of
+                        Allow _ -> active `shouldBe` True
+                        NoDecision _ -> active `shouldBe` False
+                        other -> expectationFailure ("unexpected withdrawal remediation verdict: " <> show other)
             survivesSweep deps (DenyByIdentity "withdrawal-only") False "withdrawal-only" `shouldReturn` False
 
 -- Sweep one stored version, 1.0.0, under a single rule, and report whether it is still stored.
@@ -339,12 +340,14 @@ unavailableEnrichmentSpec = describe "an artifact published with unavailable EPS
             (qualified, unavailable) <- corpusGenerations dir
             let deps = slotRuleDeps slot
                 deny = DenyIfCve (DenyIfCveParams 5 FailDeny)
+                -- A consumer without EPSS rules runs remediation in abstain mode.
+                abstaining = remediationWith FailDeny AbstainOnRemaining
                 verdictOn rule name version = do
                     ctx <- mkEvalContext (pure publishedAt) (currentAdvisoryEtag slot)
                     evalRule deps ctx rule (completeEvidence (sampleDetails (unscopedNpm name) (mkVersion Npm version)))
             syncStep (servingAt envWith "qualified" 0 qualified) Nothing >>= expectSwap "qualified"
             verdictOn deny "corpus-revoked" "1.0.0" >>= (`shouldSatisfy` isNoDecision)
-            verdictOn AllowIfRemediatesCve "corpus-revoked" "1.2.0" >>= (`shouldSatisfy` isNoDecision)
+            verdictOn abstaining "corpus-revoked" "1.2.0" >>= (`shouldSatisfy` isNoDecision)
             verdictOn deny "corpus-clean" "1.0.0" >>= (`shouldSatisfy` isNoDecision)
             survivesSweep deps deny False "corpus-revoked" `shouldReturn` True
             syncStep (servingAt envWith "unavailable" 60 unavailable) (Just (DbEtag "qualified")) >>= \case
@@ -353,7 +356,7 @@ unavailableEnrichmentSpec = describe "an artifact published with unavailable EPS
                     lookup "epss_status" meta `shouldBe` Just "unavailable"
                 other -> expectationFailure ("expected the unavailable artifact installed, got " <> show other)
             verdictOn deny "corpus-revoked" "1.0.0" >>= (`shouldSatisfy` isDeny)
-            verdictOn AllowIfRemediatesCve "corpus-revoked" "1.2.0" >>= (`shouldSatisfy` isAllow)
+            verdictOn abstaining "corpus-revoked" "1.2.0" >>= (`shouldSatisfy` isAllow)
             verdictOn deny "corpus-clean" "1.0.0" >>= (`shouldSatisfy` isDeny)
             survivesSweep deps deny False "corpus-revoked" `shouldReturn` False
 

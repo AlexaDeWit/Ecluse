@@ -102,8 +102,7 @@ spec = describe "resolveBootPlan" $ do
                 <> mountPostureLines config
                 <> [ "rule boot order for mount npm:"
                    , "rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)"
-                   , "rule 2: AllowIfRemediatesCve (precedence 150, applies at admission and revocation)"
-                   , "rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
+                   , "rule 2: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
                    ]
                 <> advisoryAgeLines config
                 <> advisoryEpssLines config
@@ -121,12 +120,10 @@ spec = describe "resolveBootPlan" $ do
                 `shouldBe` Right
                     [ "rule boot order for mount npm:"
                     , "rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)"
-                    , "rule 2: AllowIfRemediatesCve (precedence 150, applies at admission and revocation)"
-                    , "rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
+                    , "rule 2: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
                     , "rule boot order for mount pypi:"
                     , "rule 1: DenyByIdentity (precedence 400, applies at admission only)"
-                    , "rule 2: AllowIfRemediatesCve (precedence 150, applies at admission and revocation)"
-                    , "rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
+                    , "rule 2: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
                     ]
 
     it "holds every upstream exchange to the configured progress floor" $ do
@@ -381,9 +378,7 @@ collapsedMirrorEnv = collapsingMirrorTarget staticEnvVars
 mirrorCollapseAdvisory :: Advisory
 mirrorCollapseAdvisory = MirrorTargetOnPrivateUpstream Npm Npm (unsafeRegistryUrl privateUpstreamUrl)
 
-{- | A plan resolution reduced to its verdict. 'BootPlan' carries the cleared adapters, which are
-records of functions, so the refusal is what an assertion compares.
--}
+-- | A plan resolution reduced to its verdict, because 'BootPlan' holds records of functions no assertion compares.
 refusalsOf :: BootReport -> Either [BootError] ()
 refusalsOf = void . brOutcome
 
@@ -404,9 +399,7 @@ noCgroup = CgroupLimits{cgCpuCores = Nothing, cgMemoryMaxBytes = Nothing}
 roomyHeapOverride :: RuntimeOverrides
 roomyHeapOverride = RuntimeOverrides{roCores = Just 4, roCoresCeiling = Nothing, roMaxHeapBytes = Just (4096 * mib)}
 
-{- | An operator @GHCRTS -M256m@ binding the heap below the plan. The capability count matches,
-so the heap axis alone separates what the boot measures from what the checker predicts.
--}
+-- | An operator @GHCRTS -M256m@ binding the heap below the plan, with the capability count unchanged.
 ghcrtsBoundPosture :: RtsPosture
 ghcrtsBoundPosture =
     RtsPosture

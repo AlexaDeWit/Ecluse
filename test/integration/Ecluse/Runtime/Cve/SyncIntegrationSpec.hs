@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Exercise remediation and MAL decisions across accepted Pilot generations.
-The running proxy loads it through the Docker-backed S3 fixture.
+{- | Exercise remediation and MAL decisions across accepted Pilot generations, under each
+remediation unavailability choice. The running proxy loads it through the Docker-backed S3 fixture.
 -}
 module Ecluse.Runtime.Cve.SyncIntegrationSpec (spec) where
 
@@ -29,7 +29,15 @@ import Ecluse.Core.Cve.Slot (newCveSlot)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Rules (RuleDeps, evalRules, prepare)
-import Ecluse.Core.Rules.Types (Decision (BlockedByDefault), EvalContext (EvalContext), FailureAlignment (FailDeny), Reason (NoKnownMaliciousAdvisory), Rule (AllowIfOlderThan, AllowIfRemediatesCve, DenyIfKnownMalicious), identityEvidence)
+import Ecluse.Core.Rules.Types (
+    Decision (BlockedByDefault),
+    EvalContext (EvalContext),
+    FailureAlignment (FailDeny, FailNoDecision),
+    PrecededRule,
+    Reason (NoKnownMaliciousAdvisory),
+    Rule (AllowIfOlderThan, DenyIfKnownMalicious),
+    identityEvidence,
+ )
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
@@ -42,6 +50,7 @@ import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.TestSupport (getPath)
 import Ecluse.Service (mountBindingFor)
+import Ecluse.Test.Corpus.Advisories (configuredShippedPolicy)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip)
 import Ecluse.Test.Osv.Withdrawal (maliciousZip)
 import Ecluse.Test.OsvDb (epssFixtureFile, withSourceStubs)
@@ -50,7 +59,7 @@ import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, passthroughAdvisorySyncTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
-import Ecluse.Test.Rules (atDefaultPrecedence, blockedBy, slotRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, blockedBy, differentialRemediation, slotRuleDeps)
 import Ecluse.Test.Server.Mount (npmServeDeps)
 import Ecluse.Test.Stub (Captured (capHeaders), stubLocalhostUrl, withRoutedStub, withStub)
 import Ecluse.Test.Wai (rebaseAuthority, selfBaseUrlOf, status)
@@ -61,7 +70,7 @@ spec :: Spec
 spec =
     aroundAll withMinistack $
         describe "advisory sync + shadow swap (ministack S3, one proxy, two phases)" $
-            it (caseLabel "integration/advisory-sync/native-001" "denies the young fix with no database, then admits it once the synced artifact swaps in") $ \container ->
+            it (caseLabel "integration/advisory-sync/native-001" "refuses or quarantines the young fix with no database, then admits it once the synced artifact swaps in") $ \container ->
                 withSystemTempDir $ \dataDir ->
                     withPublicUpstream $ \publicUrl ->
                         withPrivateUpstream $ \privateUrl -> do
@@ -88,13 +97,22 @@ spec =
                                         , syncStoreRef = "s3://" <> bucket
                                         }
                                 schedule = SyncSchedule{schedBootBackoff = [50_000, 50_000], schedPollDelay = 100_000, schedAbsentReport = 600_000_000}
-                            app <- proxyApp ruleDeps privateUrl publicUrl
+                            app <- proxyApp ruleDeps configuredShippedPolicy privateUrl publicUrl
+                            refusing <- proxyApp ruleDeps (fastLaneUnder FailDeny) privateUrl publicUrl
+                            skipping <- proxyApp ruleDeps (fastLaneUnder FailNoDecision) privateUrl publicUrl
                             withAsync (runQuiet (runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort syncEnv schedule (SyncHooks{hookFirstSync = pass, hookPushAge = pass}))) $ \_ -> do
                                 -- The configured MAL deny cannot vet before the first accepted generation.
                                 denied <- getPath "/npm/corpus-vuln" app
                                 status denied `shouldBe` 503
                                 let deniedBody = decodeUtf8 (simpleBody denied) :: Text
                                 deniedBody `shouldSatisfy` T.isInfixOf "no advisory database loaded"
+
+                                -- Alone, the remediation rule refuses under deny and leaves the quarantine to decide under skip.
+                                refused <- getPath "/npm/corpus-vuln" refusing
+                                status refused `shouldBe` 503
+                                (decodeUtf8 (simpleBody refused) :: Text) `shouldSatisfy` T.isInfixOf "AllowIfRemediatesCve: no advisory database loaded"
+                                quarantined <- getPath "/npm/corpus-vuln" skipping
+                                status quarantined `shouldBe` 403
 
                                 -- The running sync task's next poll verifies the new artifact and
                                 -- swaps it in, with no restart and no config change.
@@ -104,6 +122,8 @@ spec =
                                 -- the served document carries the fixed version.
                                 served <- awaitAdmitted app "/npm/corpus-vuln"
                                 (decodeUtf8 (simpleBody served) :: Text) `shouldSatisfy` T.isInfixOf "\"1.2.0\""
+                                for_ [refusing, skipping] $ \fastLane ->
+                                    awaitAdmitted fastLane "/npm/corpus-vuln" >>= \admitted -> (decodeUtf8 (simpleBody admitted) :: Text) `shouldSatisfy` T.isInfixOf "\"1.2.0\""
 
                                 malRules <- prepare ruleDeps [atDefaultPrecedence (DenyIfKnownMalicious FailDeny)]
                                 let evidence = identityEvidence (unscopedNpm "corpus-vuln") (npmVersion "1.2.0")
@@ -170,10 +190,14 @@ publishArchive s3Endpoint env zipBytes = do
                     config
                     PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = pilotDir, pcoUpload = True}
 
--- The configured-source shared policy, with the packument stub as its public origin.
-proxyApp :: RuleDeps -> Text -> Text -> IO Application
-proxyApp ruleDeps privateUrl publicUrl = do
-    prepared <- prepare ruleDeps [atDefaultPrecedence (DenyIfKnownMalicious FailDeny), atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay)), atDefaultPrecedence AllowIfRemediatesCve]
+-- The quarantine and the shipped remediation limits, under the given unavailability choice.
+fastLaneUnder :: FailureAlignment -> [PrecededRule]
+fastLaneUnder alignment = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), differentialRemediation alignment]
+
+-- A proxy under this policy, with the packument stub as its public origin.
+proxyApp :: RuleDeps -> [PrecededRule] -> Text -> Text -> IO Application
+proxyApp ruleDeps policy privateUrl publicUrl = do
+    prepared <- prepare ruleDeps policy
     manager <- newManager defaultManagerSettings
     queue <- newTestMemoryQueue
     env <- newTestEnvWith queue (manager, manager) telemetryDisabled

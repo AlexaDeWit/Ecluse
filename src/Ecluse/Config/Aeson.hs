@@ -378,9 +378,8 @@ parsePositiveInt field value
     | value > 0 = pure value
     | otherwise = fail (field <> " must be a positive integer")
 
-{- A recurring delay, positive and bounded. Zero would spin the poll without yielding, and the
-bound keeps the microsecond conversion inside 'Int' rather than wrapping to a negative delay.
--}
+-- A recurring delay, positive and bounded. Zero would spin the poll, and the bound keeps the
+-- microsecond conversion inside 'Int' rather than wrapping to a negative delay.
 parseDelaySeconds :: String -> Value -> Parser NominalDiffTime
 parseDelaySeconds field v = do
     secs <- parseSeconds field v
@@ -419,5 +418,10 @@ ruleEntryDecoder =
         <*> optionalPlainKey "minCvss"
         <*> optionalPlainKey "minEpss"
         <*> optionalPlainKey "onUnavailable"
+        <*> optionalPlainKey "remainingAdvisories"
+        <*> optionalPlainKey "maxRemainingCvss"
+        <*> optionalPlainKey "maxRemainingEpss"
+        <*> optionalPlainKey "minCvssGap"
+        <*> optionalPlainKey "minEpssGap"
         -- An empty value would read as both phases, and the Dredger deletes on that reading.
         <*> optionalNonNullKey "appliesTo"

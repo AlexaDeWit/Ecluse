@@ -719,7 +719,7 @@ cases belong to no single ecosystem sits beside the directories, and there are t
 | `Ecluse.E2E.PyPI.MirrorInstallE2ESpec` | Complete-version mirroring, durable recovery, companions and cross-target file selection. |
 | `Ecluse.E2E.PyPI.PublishE2ESpec` | Native multipart first-party publication and refusal controls. |
 | `Ecluse.E2E.PyPI.DredgerE2ESpec` | CodeArtifact inventory, consent, scored and MAL advisory revocation, and recovery with deterministic control-plane responses. |
-| `Ecluse.E2E.AdvisoriesE2ESpec` | Pilot publishes independent scored and MAL sources for npm and PyPI. The shared laws check exact listings, native client refusal, direct 403, structured advisory audit evidence, and remediation controls. The npm MAL session also observes absent mirror publication. |
+| `Ecluse.E2E.AdvisoriesE2ESpec` | Pilot publishes independent scored, MAL, and partial-fix sources for npm and PyPI. The shared laws check exact listings, native client refusal, direct 403, structured advisory audit evidence, and the exact-fix and partial-fix remediation controls. The npm MAL session also observes absent mirror publication. |
 | `Ecluse.E2E.PyPI.AdvisoriesE2ESpec` | The native canonical-fix extension checks equivalent version spellings and retains its remediation-disabled and scored-denial controls. |
 | `Ecluse.E2E.TelemetryE2ESpec` | Telemetry export under each configuration. An `npm` client supplies the traffic, and the mirror cases require a mirror target. |
 | `Ecluse.E2E.MixedEcosystemE2ESpec` | Both clients use one proxy in turn. |
@@ -948,8 +948,8 @@ Each package has four legs:
 |---|---|
 | `full` | Decode, projection, rules, assembly, and serialisation of the whole document, under a one-day minimum age and no advisory database |
 | `singleVersion` | Selective projection of one version, forcing its artifact digests |
-| `fullShippedAdvisories` | `full` under the shared shipped policy (`AllowIfOlderThan` 7 days and `AllowIfRemediatesCve`), with the corpus advisories served |
-| `fullAllAdvisoryRules` | `full` under the shared shipped policy plus fail-closed `DenyIfCve` (CVSS 8) and `DenyIfEpss` (EPSS 0.5), with the corpus advisories served |
+| `fullShippedAdvisories` | `full` under the source-configured shipped policy (`DenyIfKnownMalicious`, `AllowIfOlderThan` 7 days, and the differential `AllowIfRemediatesCve`), with the corpus advisories served |
+| `fullAllAdvisoryRules` | `full` under the source-configured shipped policy plus fail-closed `DenyIfCve` (CVSS 8) and `DenyIfEpss` (EPSS 0.5), with the corpus advisories served |
 
 The advisory legs use the captured corpus advisories in `bench/corpus/advisories/`, which the
 [advisory rule rows](#advisory-rule-rows) also read. Setup compiles them through
@@ -1530,17 +1530,18 @@ one request's rule phase. It measures the typescript, react, @types/node, and nu
 reports time and RTS allocation per request like the other rows. Each iteration prepares the policy,
 decides every release, and builds the filter plan. A row with the fail-closed deny rules fails when
 any version ends undecidable, because an unanswered read would measure an outage instead of a
-decision. Under the shared shipped policy, an artifact that serves nothing makes the remediation rule
-abstain, which would pass for a speed-up. So setup also checks that each artifact serves ranges:
+decision. Under the source-configured shipped policy, an artifact that serves nothing makes the
+advisory rules abstain, which would pass for a speed-up. So setup also checks that each artifact serves ranges:
 the captured one for react and numpy, and the generated one for its targets and every filler
 package.
 
 | Row set | Advisory database | Policy |
 |---|---|---|
-| `shipped policy without a database` | None | `AllowIfOlderThan` (7 days) and `AllowIfRemediatesCve` |
-| `shipped policy over corpus advisories` | Captured advisories | Source-configured defaults, including `DenyIfKnownMalicious` |
-| `all advisory rules over corpus advisories` | Captured advisories | The shared shipped policy plus fail-closed `DenyIfCve` (CVSS 8) and `DenyIfEpss` (EPSS 0.5) |
+| `shipped policy without a database` | None | `AllowIfOlderThan` (7 days), the source-free shipped policy |
+| `shipped policy over corpus advisories` | Captured advisories | Source-configured defaults: `DenyIfKnownMalicious`, the quarantine, and the differential `AllowIfRemediatesCve` |
+| `all advisory rules over corpus advisories` | Captured advisories | The source-configured shipped policy plus fail-closed `DenyIfCve` (CVSS 8) and `DenyIfEpss` (EPSS 0.5) |
 | `all advisory rules over synthetic advisories` | Generated worst case | The five source-configured rules, over typescript and numpy only |
+| `configured shipped policy over synthetic advisories` | Generated worst case | The source-configured defaults alone, over typescript and numpy only. No scored deny decides first, so every generated partial fix reaches the remediation differential |
 
 The source-free row runs the source-free shared policy. Source-configured rows run the automatic
 MAL default. The captured scored corpus has no primary MAL records, so those rows measure abstention.

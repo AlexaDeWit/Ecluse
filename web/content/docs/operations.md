@@ -65,9 +65,9 @@ waiting. A latched Dredger reports
 `halted` instead, and a draining instance reports `draining`. Readiness does not itself block direct
 requests: a request that needs advisory data its mount does not have is refused by that mount's own
 `onUnavailable` policy. A rule that admits without reading the database admits only when no
-advisory deny ranked above it refuses first. A configured source puts the MAL default above every
-default allow, so under its default `deny` that mount refuses public admission until its first
-sync, except through an allow ordered before the rule. A successful first sync does not prove that
+advisory rule ranked above it refuses first. A configured source puts the MAL default above every
+default allow, and the remediation fast lane above the quarantine. Under their shipped `deny`, that
+mount refuses public admission until its first sync, except through an allow ordered before them. A successful first sync does not prove that
 data remains fresh. [Advisory push age](#advisory-push-age) governs retained evidence.
 
 An EPSS-dependent ecosystem rejects artifacts without the exact `epss_status=available` marker.
@@ -180,9 +180,10 @@ even when a later retry can recover. They include:
   ([Advisory quiet time](@/docs/operations.md#advisory-quiet-time)).
 - An advisory database a mount's rules cannot consult, when the outage begins and every 15
   minutes while it lasts ([Advisory outages](@/docs/operations.md#advisory-outages)).
-- A Pilot compile that published nothing because its ecosystem has an active `DenyIfEpss` and
-  the EPSS feed failed. The line starts `Aborting OSV compile:` and names the feed as `host:port`
-  and the cause ([When the EPSS feed fails](@/docs/configuration.md#when-the-epss-feed-fails)).
+- A Pilot compile that published nothing because its ecosystem has an active rule that reads EPSS
+  scores, such as `DenyIfEpss` or the shipped remediation fast lane, and the EPSS feed failed. The
+  line starts `Aborting OSV compile:` and names the feed as `host:port` and the cause
+  ([When the EPSS feed fails](@/docs/configuration.md#when-the-epss-feed-fails)).
 
 Use the severity together with the event and its repetition:
 
@@ -222,10 +223,10 @@ ways:
 | `advisory source outage recovered` | `info` | Once every rule consults the database again. |
 
 The causes are no database loaded, a push past its maximum age, a lookup fault with its detail, and
-an open circuit breaker. The report covers the rules that deny on advisories, `DenyIfCve` and
-`DenyIfEpss`, which are also the rules that make the store mandatory at boot: a mount whose only
-advisory rule is `AllowIfRemediatesCve` abstains without a database and reports no outage. A
-request never adds a line, so an outage costs the log the same whatever the traffic. The report
+an open circuit breaker. The report covers every advisory rule a request reaches, the remediation
+fast lane under either `onUnavailable` included. Under `skip`, the fast lane abstains and an
+admission that follows records the skipped check. A request never adds a line, so an outage costs
+the log the same whatever the traffic. The report
 fires only on traffic that reaches an advisory rule, so an idle mount reports nothing, and the sync
 task's own `error` line covers a database that never loads. A request stops at the first rule that
 decides, so a rule that a higher-precedence rule always decides ahead of never reports, and the
@@ -282,8 +283,9 @@ The alarm never refuses a version. It reports what the artifact says about its o
 `DenyIfKnownMalicious`, `DenyIfCve` and `DenyIfEpss` decide on evidence, and evidence goes out of
 date. Past a maximum age, each refuses instead of deciding, and the request gets a retryable `503`.
 The denial message says how old the push is and what the maximum was. `onUnavailable: skip` does
-not waive it, and an open circuit breaker does not skip past it. `AllowIfRemediatesCve` abstains on
-the same evidence, so the quarantine governs rather than the fast lane.
+not waive it, and an open circuit breaker does not skip past it. `AllowIfRemediatesCve` follows its
+own `onUnavailable` on the same evidence. The shipped `deny` refuses, and `skip` leaves the version
+to the quarantine.
 
 A configured advisory source activates `DenyIfKnownMalicious` at precedence 300, above every
 default allow. An expired or undated push therefore refuses every public admission on the mount,
@@ -644,7 +646,8 @@ bytes remain outside registry revocation.
 
 Use the same intended configuration across roles, Pilot included. Pilot reads its own copy to decide
 whether a failed EPSS feed stops an ecosystem's artifact. When tightening policy, update admission
-and writer roles before Dredger. When you add a `DenyIfEpss`, update Pilot before them all
+and writer roles before Dredger. When you add a rule that reads EPSS scores, a `DenyIfEpss` or a
+differential `AllowIfRemediatesCve`, update Pilot before them all
 ([When the EPSS feed fails](@/docs/configuration.md#when-the-epss-feed-fails)). When relaxing a
 deny, update Dredger before writers can rely on the new permission. These are ordering
 recommendations, not an atomic cutover requirement.

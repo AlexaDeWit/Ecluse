@@ -91,6 +91,8 @@ withEcosystemGroup dir ecosystem use = case filter ((`elem` measuredPackages) . 
                             , localOption (RelStDev (1 / 0)) (rows "all advisory rules MAL mixed-heavy derived fixtures" mixedDeps allAdvisoryRules heavy)
                             , rows "all advisory rules over corpus advisories" corpusDeps allAdvisoryRules entries
                             , localOption (RelStDev (1 / 0)) (rows "all advisory rules over synthetic advisories" syntheticDeps allAdvisoryRules heavy)
+                            , -- No scored deny decides first, so every generated partial fix reaches the remediation differential.
+                              localOption (RelStDev (1 / 0)) (rows "configured shipped policy over synthetic advisories" syntheticDeps configuredShippedPolicy heavy)
                             ]
                         ]
                     ]

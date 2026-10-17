@@ -1117,7 +1117,7 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-000000000128
   - id: mit-max-advisory-age
     title: Maximum advisory age
-    prose: "Consumers refuse advisory evidence older than the maximum advisory age, measured from Pilot's last push. An explicit `advisories.maxAgeSeconds` overrides the default, which is the shortest period the quarantine holds a version on that mount, minus 24 hours and never under 3 days, or 3 days when the mount has no quarantine rule. A seven-day hold in the quarantine gives six days, so a failure surfaces before the next cohort leaves the quarantine. Past the maximum age, the MAL, CVE, and EPSS deny paths refuse even under `onUnavailable: skip`, and the maximum age applies separately from any rule's skip setting. An undated artifact refuses, and the Dredger withholds advisory-based deletions."
+    prose: "Consumers refuse advisory evidence older than the maximum advisory age, measured from Pilot's last push. An explicit `advisories.maxAgeSeconds` overrides the default, which is the shortest period the quarantine holds a version on that mount, minus 24 hours and never under 3 days, or 3 days when the mount has no quarantine rule. A seven-day hold in the quarantine gives six days, so a failure surfaces before the next cohort leaves the quarantine. Past the maximum age, the MAL, CVE, and EPSS deny paths refuse even under `onUnavailable: skip`, and the maximum age applies separately from any rule's skip setting. The remediation fast lane follows its own `onUnavailable` past the maximum age: under `deny`, the shipped choice, it refuses as well, and under `skip` it supplies no exception. An undated artifact refuses, and the Dredger withholds advisory-based deletions."
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010d
@@ -1177,14 +1177,14 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-000000000124
   - id: mit-epss-success-record
     title: EPSS success record
-    prose: Pilot records a successful EPSS enrichment in the artifact metadata, and a consumer with an EPSS-dependent rule refuses an artifact without that record.
+    prose: Pilot records a successful EPSS enrichment in the artifact metadata, and a consumer with an EPSS-dependent rule refuses an artifact without that record. The EPSS-dependent rules are `DenyIfEpss` and `AllowIfRemediatesCve` in differential mode, which the shipped remediation rule uses.
     status: implemented
     threats:
       - 4d309275-cc3c-43d0-a1a2-f024789e9f17
       - b74d9df0-8947-4e67-bf50-1c5e688a09f1
   - id: mit-epss-missing-score-abstain
     title: Missing EPSS scores abstain
-    prose: When a version's advisory has no EPSS score, the EPSS rule abstains for that advisory. A missing score cannot deny admission or authorise a deletion on its own, and other scored advisories and decisive rules still apply.
+    prose: When a version's advisory has no EPSS score, the EPSS rule abstains for that advisory. A missing score cannot deny admission or authorise a deletion on its own, and other scored advisories and decisive rules still apply. A missing EPSS score on an advisory that still affects a partial fix makes the remediation differential abstain, so an unknown score never admits a version.
     status: implemented
     threats:
       - 43f60aec-7a7c-4450-8992-ae2b42d20b0f
@@ -1197,7 +1197,7 @@ mitigations:
       - 6a368fa6-e4c8-446e-8e24-0685bb0980ef
   - id: mit-fail-deny-without-advisories
     title: Absent advisories fail closed on deny rules
-    prose: Requests keep their configured trusted-read, allow, skip, and refusal behaviour when advisories are absent. When evaluation reaches an advisory rule that fails closed, an absent database stops public admission.
+    prose: Requests keep their configured trusted-read, allow, skip, and refusal behaviour when advisories are absent. When evaluation reaches an advisory rule that fails closed, an absent database stops public admission. The remediation fast lane fails closed under its `deny` choice, which the shipped rule uses, so it stops public admission on an absent database as the advisory denies do. A mount whose rules fail closed without an advisory store refuses the boot.
     status: implemented
     threats:
       - 6a368fa6-e4c8-446e-8e24-0685bb0980ef
@@ -1267,14 +1267,14 @@ mitigations:
       - b74d9df0-8947-4e67-bf50-1c5e688a09f1
   - id: mit-optional-epss-failure
     title: EPSS failure blocks only EPSS-dependent ecosystems
-    prose: Pilot attempts the EPSS feed on every compile, and each ecosystem's resolved policy decides what a failed feed means. An ecosystem with an active DenyIfEpss rule fails the compile and publishes nothing, so its consumers keep their last accepted artifact. Any other ecosystem publishes its OSV data marked epss_status=unavailable, with no scores and no EPSS provenance, so new advisories and their fixes still reach its consumers. A consumer with an EPSS-dependent rule refuses that artifact. A one-shot compile of an ecosystem the configuration does not mount requires the feed. The decision reads Pilot's own configuration, so Pilot and the consumers must share one rule configuration.
+    prose: Pilot attempts the EPSS feed on every compile, and each ecosystem's resolved policy decides what a failed feed means. An ecosystem with an active rule that reads EPSS scores fails the compile and publishes nothing, so its consumers keep their last accepted artifact. Those rules are `DenyIfEpss` and `AllowIfRemediatesCve` in differential mode, which the shipped remediation rule uses. Any other ecosystem publishes its OSV data marked epss_status=unavailable, with no scores and no EPSS provenance, so new advisories and their fixes still reach its consumers. A consumer with an EPSS-dependent rule refuses that artifact. A one-shot compile of an ecosystem the configuration does not mount requires the feed, and so does a compile with no advisory source configured. The decision reads Pilot's own configuration, so Pilot and the consumers must share one rule configuration.
     status: implemented
     threats:
       - 4d309275-cc3c-43d0-a1a2-f024789e9f17
       - b74d9df0-8947-4e67-bf50-1c5e688a09f1
   - id: mit-outage-evidence-reporting
     title: Outage reporting and skipped-check evidence
-    prose: "Each admission carries the configured checks it did not benefit from: a check that ran and could not vet under `onUnavailable: skip`, kept apart from a check a higher-precedence allow pre-empted, so no consumer reads an unreached check as passed. The public artifact gate logs a skipped check with the package, version, rule, and cause, once per package, version, and skipped rule set for the life of the advisory outage, cleared when the source recovers and capped at 4096 identities per ecosystem, and a trusted read of a mirrored copy runs no rules and logs nothing. The worker records each skipped check once per successful re-admission. A job attempt can re-admit more than once as its expected inventory expands. Retries can also repeat this evidence. It preserves the shared admission policy and verifies artifact integrity before publication. A skipped check alone never grants an allow. The evidence lives in the decision and the log only, never in registry metadata. Apart from that, each ecosystem's advisory source has an outage monitor: the first evaluation that cannot consult the database (none loaded, an expired push, a lookup fault, or an open breaker) logs at ERROR, a continuing outage logs at ERROR again at most every 15 minutes, and recovery logs at INFO. A failed poll of the advisory store logs at ERROR at the first failure and again at most every 15 minutes, with recovery at INFO. A request never adds an outage line."
+    prose: "Each admission carries the configured checks it did not benefit from: a check that ran and could not vet under `onUnavailable: skip`, kept apart from a check a higher-precedence allow pre-empted, so no consumer reads an unreached check as passed. The public artifact gate logs a skipped check with the package, version, rule, and cause, once per package, version, and skipped rule set for the life of the advisory outage, cleared when the source recovers and capped at 4096 identities per ecosystem, and a trusted read of a mirrored copy runs no rules and logs nothing. The worker records each skipped check once per successful re-admission. A job attempt can re-admit more than once as its expected inventory expands. Retries can also repeat this evidence. It preserves the shared admission policy and verifies artifact integrity before publication. A skipped check alone never grants an allow. The evidence lives in the decision and the log only, never in registry metadata. Apart from that, each ecosystem's advisory source has an outage monitor: the first evaluation that cannot consult the database (none loaded, an expired push, a lookup fault, or an open breaker) logs at ERROR, a continuing outage logs at ERROR again at most every 15 minutes, and recovery logs at INFO. The remediation fast lane reports to that monitor as the advisory denies do. A failed poll of the advisory store logs at ERROR at the first failure and again at most every 15 minutes, with recovery at INFO. A request never adds an outage line."
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010d
@@ -1601,7 +1601,7 @@ threats:
       category: spoofing
     severity: high
     status: accepted-risk
-    description: An attacker who gains control of osv.dev can push malicious vulnerability records. Those records trigger false positives, or fast-lane a malicious remediation package. The attack is strongest when the attacker also publishes a malicious package. A hostile oracle defeats advisory-based rules outright.
+    description: An attacker who gains control of osv.dev can push malicious vulnerability records. Those records trigger false positives, or fast-lane a malicious remediation package. The fast lane includes a partial fix whose remaining advisories store scores inside the configured limits, so forged scores widen it. The attack is strongest when the attacker also publishes a malicious package. A hostile oracle defeats advisory-based rules outright.
     elements:
       - f1646094-9885-422a-b7e7-7888c72905ef
   - id: 0b32b3e5-74f1-421c-8c9b-92a24fd2a00b
@@ -1711,7 +1711,7 @@ threats:
       category: spoofing
     severity: high
     status: open
-    description: A compromised or incorrect EPSS source can supply plausible scores that pass validation. An overstated score can cause an EPSS denial and an eligible Dredger deletion. An understated score can fail to trigger an EPSS denial. Other configured rules still apply. Loss of EPSS coverage can remove a denial and let another allow admit the version, which does not show that the version is harmless. Transport and schema validity do not establish the accuracy of a predictive score.
+    description: A compromised or incorrect EPSS source can supply plausible scores that pass validation. An overstated score can cause an EPSS denial and an eligible Dredger deletion. An understated score can fail to trigger an EPSS denial, and can let the remediation differential admit a partial fix whose remaining advisory still affects it. Other configured rules still apply. Loss of EPSS coverage can remove a denial and let another allow admit the version, which does not show that the version is harmless. Transport and schema validity do not establish the accuracy of a predictive score.
     elements:
       - f1646094-9885-422a-b7e7-7888c72905ef
   - id: b74d9df0-8947-4e67-bf50-1c5e688a09f1

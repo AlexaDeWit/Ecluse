@@ -65,7 +65,7 @@ requiredFamilyLaws scope =
     [ ("proxying", ["identity-precedence", "authorised-union", "private-divergence", "artifact-integrity", "artifact-head", "conditional-coherence"] <> contentCodingLaws <> map ("metadata-fetch/" <>) metadataFetchLaws <> map ("metadata-projection/" <>) metadataProjectionLaws)
     , ("installation", ["accepted-install", "default-denial", "artifact-integrity", "artifact-head"])
     , ("policy", ["default-denial", "quarantine-private-authority", "public-integrity", "trusted-integrity", "metadata-gzip-policy"])
-    , ("advisories", ["exact-fix", "deny-cve", "deny-epss", "mal-denial", "last-good-generation"])
+    , ("advisories", ["exact-fix", "partial-fix", "deny-cve", "deny-epss", "mal-denial", "last-good-generation"])
     , ("telemetry", ["signals", "disabled", "export-failure", "datadog"] <> [law | scope == FullEcosystem, law <- ["domain-spans", "private-fetch"]])
     ]
         <> [ family

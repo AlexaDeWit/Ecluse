@@ -12,11 +12,13 @@ module Ecluse.E2E.Fixtures.Advisories (
     pypiAdvisoryId,
     maliciousExportBase,
     maliciousAdvisoryId,
+    partialFixExportBase,
+    partialFixAdvisoryId,
     buildAdvisoryFixtures,
     ecosystemAdvisory,
 ) where
 
-import Data.Aeson (encode, object, (.=))
+import Data.Aeson (Value, encode, object, (.=))
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
 
@@ -24,7 +26,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.E2E.Fixtures.Npm (corpusRevokedPkg, psName)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2), osvCorpusZip, osvZipOf)
 import Ecluse.Test.Osv.Withdrawal (maliciousZip)
-import Ecluse.Test.OsvDb (epssFixtureFile)
+import Ecluse.Test.OsvDb (epssFixtureWith)
 
 -- | The stub-relative base for one corpus generation in osv.dev's layout.
 advisoryExportBase :: CorpusVersion -> Text
@@ -62,6 +64,14 @@ maliciousExportBase = "advisories/mal-derived"
 maliciousAdvisoryId :: Text
 maliciousAdvisoryId = "MAL-derived-1"
 
+-- | The stub-relative base for each ecosystem's partial-fix export.
+partialFixExportBase :: Text
+partialFixExportBase = "advisories/partial-fix"
+
+-- | The severe advisory the partial fix resolves. A minor one still affects that release, inside the shipped limits.
+partialFixAdvisoryId :: Text
+partialFixAdvisoryId = "GHSA-e2e-partial-severe"
+
 -- | Write the local OSV archives and shared EPSS slice without reaching public feeds.
 buildAdvisoryFixtures :: FilePath -> IO ()
 buildAdvisoryFixtures root = do
@@ -76,7 +86,10 @@ buildAdvisoryFixtures root = do
         >>= writeUnder (npmAdvisoryExportBase <> "/npm/all.zip")
     maliciousZip Npm [(psName corpusRevokedPkg, ["1.0.0"])] Nothing >>= writeUnder (maliciousExportBase <> "/npm/all.zip")
     maliciousZip PyPI [("Flask", ["1.18"])] Nothing >>= writeUnder (maliciousExportBase <> "/PyPI/all.zip")
-    readFileLBS epssFixtureFile >>= writeUnder advisoryEpssPath
+    for_ [(Npm, "npm", "e2e-advisory", "1.19.0"), (PyPI, "PyPI", "Flask", "1.19")] $ \(ecosystem, directory, name, fixed) ->
+        osvZipOf [("severe.json", ecosystemAdvisory ecosystem partialFixAdvisoryId name fixed), ("minor.json", minorAdvisory ecosystem name fixed)]
+            >>= writeUnder (partialFixExportBase <> "/" <> directory <> "/all.zip")
+    epssFixtureWith [(minorAlias, "0.005")] >>= writeUnder advisoryEpssPath
   where
     writeUnder relative bytes = do
         let path = root </> toString relative
@@ -86,15 +99,27 @@ buildAdvisoryFixtures root = do
 -- | A scored native advisory with one fixed boundary and no feed-specific decoration.
 ecosystemAdvisory :: Ecosystem -> Text -> Text -> Text -> LByteString
 ecosystemAdvisory ecosystem advisory name fixed =
+    scoredAdvisory ecosystem advisory "CVE-2026-10001" "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" name [object ["introduced" .= ("0" :: Text)], object ["fixed" .= fixed]]
+
+-- The partial fix's remaining advisory: CVSS 4.2 and the EPSS 'minorAlias' carries, from the fix on.
+minorAdvisory :: Ecosystem -> Text -> Text -> LByteString
+minorAdvisory ecosystem name fixed =
+    scoredAdvisory ecosystem "GHSA-e2e-partial-minor" minorAlias "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:L/A:N" name [object ["introduced" .= fixed]]
+
+minorAlias :: Text
+minorAlias = "CVE-2026-10007"
+
+scoredAdvisory :: Ecosystem -> Text -> Text -> Text -> Text -> [Value] -> LByteString
+scoredAdvisory ecosystem advisory alias vector name events =
     encode $
         object
             [ "id" .= advisory
-            , "aliases" .= ["CVE-2026-10001" :: Text]
-            , "severity" .= [object ["type" .= ("CVSS_V3" :: Text), "score" .= ("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" :: Text)]]
+            , "aliases" .= [alias]
+            , "severity" .= [object ["type" .= ("CVSS_V3" :: Text), "score" .= vector]]
             , "affected"
                 .= [ object
                         [ "package" .= object ["name" .= name, "ecosystem" .= (if ecosystem == PyPI then "PyPI" else "npm" :: Text)]
-                        , "ranges" .= [object ["type" .= (if ecosystem == PyPI then "ECOSYSTEM" else "SEMVER" :: Text), "events" .= [object ["introduced" .= ("0" :: Text)], object ["fixed" .= fixed]]]]
+                        , "ranges" .= [object ["type" .= (if ecosystem == PyPI then "ECOSYSTEM" else "SEMVER" :: Text), "events" .= events]]
                         ]
                    ]
             ]

@@ -17,6 +17,7 @@ module Ecluse.Core.Rules.Render (
     cveIdsInReason,
 ) where
 
+import Data.Scientific (FPFormat (Fixed), formatScientific, fromFloatDigits)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, nominalDiffTimeToSeconds)
 
@@ -25,9 +26,7 @@ import Ecluse.Core.Rules.Types
 import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 
-{- | A human-readable summary of a decision, suitable for logs and the denial
-response body.
--}
+-- | A decision as one line, for logs and the denial response body.
 renderDecision :: RuleEvidence -> Decision -> Text
 renderDecision ev decision =
     let subject = renderPackageName (evName ev) <> "@" <> renderVersion (evVersion ev)
@@ -75,11 +74,21 @@ renderReason = \case
     IdentityNotRevoked ident -> "identity is not the revoked " <> ident
     IdentityAllowListed ident -> "identity " <> ident <> " is allow-listed by operator"
     IdentityNotAllowListed ident -> "identity is not the allow-listed " <> ident
+    -- No remediation sentence holds "affected by ", which 'cveIdsInReason' reads as a denial's advisories.
     Remediates ids -> "remediates " <> listed ids
-    FixesButStillAffected ids open ->
-        "fixes " <> listed ids <> " but is still affected by " <> listed open
+    RemediatesWithinLimits compared ->
+        "remediates " <> listed (scFixed compared) <> " with " <> listed (scRemaining compared) <> " remaining inside the limits" <> renderComparison compared
+    FixesButStillAffected ids open -> "fixes " <> listed ids <> " with " <> listed open <> " remaining"
+    RemediationBeyondLimits compared shortfalls ->
+        "fixes "
+            <> listed (scFixed compared)
+            <> " with "
+            <> listed (scRemaining compared)
+            <> " remaining outside the limits: "
+            <> T.intercalate ", " (map renderShortfall (toList (unLimitShortfalls shortfalls)))
+            <> renderComparison compared
+    FixStillApplies ids -> "every advisory naming this version as its fix still applies to it: " <> listed ids
     FixesNoAdvisory -> "no advisory names this version as its fix"
-    NoDatabaseToRemediate -> "no advisory database is loaded"
     AffectedBy score threshold ids ->
         "affected by " <> listed ids <> " (" <> scoreName score <> " >= " <> show threshold <> ")"
     KnownMalicious ids -> "affected by " <> listed ids <> " (known malicious)"
@@ -88,9 +97,7 @@ renderReason = \case
         "no advisory at or above the " <> scoreName score <> " threshold affects this version"
     RuleUnable rule inability -> rule <> ": " <> renderInability inability
 
-{- | Why a rule could not vet, without the rule's name. A record that names the rule in a field
-of its own prints this beside it.
--}
+-- | Why a rule could not vet, without the rule's name, which its holder prints beside it.
 renderInability :: Inability -> Text
 renderInability = \case
     PublishTimeUnread -> "the publish time is not available"
@@ -115,6 +122,37 @@ renderInability = \case
 
 listed :: AdvisoryIds -> Text
 listed = T.intercalate ", " . toList . unAdvisoryIds
+
+renderComparison :: ScoreComparison -> Text
+renderComparison compared =
+    " (" <> T.intercalate ", " (sideFacts Cvss "inclusive" (scCvss compared) (dlMaxRemainingCvss limits) (dlCvssGap limits) <> sideFacts Epss "exclusive" (scEpss compared) (dlMaxRemainingEpss limits) (dlEpssGap limits)) <> ")"
+  where
+    limits = scLimits compared
+    sideFacts score bound sides limit gap =
+        [ "remaining " <> scoreName score <> " " <> renderReading (ssHighestRemaining sides)
+        , scoreName score <> " ceiling " <> renderScore limit <> " " <> bound
+        , "fixed " <> scoreName score <> " " <> renderReading (ssHighestFixed sides)
+        ]
+            <> [scoreName score <> " gap at least " <> renderScore least | GapOfAtLeast least <- [gap]]
+
+renderShortfall :: LimitShortfall -> Text
+renderShortfall = \case
+    RemainingAboveCeiling Cvss -> "remaining CVSS above its ceiling"
+    RemainingAboveCeiling Epss -> "remaining EPSS at or above its ceiling"
+    RemainingUnscored score ids -> "no " <> scoreName score <> " score for " <> listed ids
+    FixedUnscored score -> "no fixed " <> scoreName score <> " score"
+    GapBelowMinimum score -> scoreName score <> " gap below its minimum"
+
+renderReading :: ScoreReading -> Text
+renderReading = \case
+    Scored score -> renderScore score
+    Unscored -> "unscored"
+
+-- The shortest decimal that reads back as the stored score, never exponent notation.
+renderScore :: Double -> Text
+renderScore score
+    | isNaN score || isInfinite score = show score
+    | otherwise = toText (formatScientific Fixed Nothing (fromFloatDigits score))
 
 scoreName :: AdvisoryScore -> Text
 scoreName = \case
