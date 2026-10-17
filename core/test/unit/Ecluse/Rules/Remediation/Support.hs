@@ -8,6 +8,7 @@ engine folds maxima and compares decimals. The generators keep every score on th
 -}
 module Ecluse.Rules.Remediation.Support (
     referenceRemediation,
+    genEcosystem,
     genRemediation,
     genLimits,
     genRows,
@@ -20,6 +21,7 @@ import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 
 import Ecluse.Core.Cve (AdvisoryRange (..))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, LastAffected, Unbounded))
 import Ecluse.Core.Rules.Types
 
@@ -86,6 +88,10 @@ referenceSide side open genuineRows openRows =
 
 units :: Integer -> Double -> Integer
 units scale x = round (x * fromInteger scale)
+
+-- | An ecosystem and canonical releases in it, so a textual fix match is the canonical one.
+genEcosystem :: Gen (Ecosystem, [Text])
+genEcosystem = Gen.element [(Npm, ["1.0.0", "2.0.0", "3.0.0"]), (PyPI, ["1", "2", "3"])]
 
 -- | A remediation rule with either unavailability choice and either remaining mode.
 genRemediation :: Gen Rule

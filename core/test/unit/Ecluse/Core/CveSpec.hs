@@ -31,6 +31,8 @@ import Ecluse.Core.Cve (
     MissingScorePolicy (..),
     affecting,
     fixedAt,
+    hasAdvisories,
+    hasFixes,
     keepAdvisories,
     openCveDb,
     packageAdvisories,
@@ -415,6 +417,23 @@ spec = do
                 let advisories = packageAdvisories PyPI rows
                 fixedAt advisories version `shouldBe` [longRow]
                 affecting advisories version `shouldBe` rows
+
+    describe "hasAdvisories and hasFixes" $
+        it "say whether any row is left and any row names a fix, and without one no version matches, npm and PyPI" $
+            hedgehog $ do
+                eco <- forAll (Gen.element [Npm, PyPI])
+                pool <- forAll (Gen.list (Range.linear 1 6) genVersionText)
+                ranges <- forAll (Gen.list (Range.linear 0 8) (genSegment pool))
+                kept <- forAll (Gen.element ["GHSA-a", "MAL-c", "none"])
+                let advisories = keepAdvisories ((== kept) . arCveId) (packageAdvisories eco ranges)
+                    keptRanges = filter ((== kept) . arCveId) ranges
+                    versions = map (mkVersion eco) pool
+                H.cover 10 "a row is left" (not (null keptRanges))
+                H.cover 10 "no row is left" (null keptRanges)
+                hasAdvisories advisories === not (null keptRanges)
+                hasFixes advisories === any (\ar -> case arUpperBound ar of FixedBefore _ -> True; _ -> False) keptRanges
+                unless (hasAdvisories advisories) (concatMap (affecting advisories) versions === [])
+                unless (hasFixes advisories) (concatMap (fixedAt advisories) versions === [])
 
     describe "affecting" $ do
         it "agrees with the per-row reference, whatever ecosystem built the version" $
