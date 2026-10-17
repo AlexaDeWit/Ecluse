@@ -367,6 +367,8 @@ renderSpec = describe "renderEffectivePosture and renderPostureWarnings" $ do
             `shouldSatisfy` any (\l -> "found no cgroup CPU or memory limit" `T.isInfixOf` l)
         renderPostureWarnings effective
             `shouldSatisfy` any (\l -> "set a memory limit" `T.isInfixOf` l && "runtime.cores (ECLUSE_RUNTIME__CORES)" `T.isInfixOf` l)
+        renderPostureWarnings effective
+            `shouldSatisfy` any (\l -> "If a limit exists but Écluse cannot read it, set runtime.cores" `T.isInfixOf` l)
 
     it "keeps runtime.maxHeapBytes out of the coresCeiling warning, whether it is set or not" $ do
         let heapOnly = noOverrides{roMaxHeapBytes = Just (832 * mib)}

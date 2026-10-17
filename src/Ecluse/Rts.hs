@@ -113,7 +113,7 @@ data RuntimePlan = RuntimePlan
     }
     deriving stock (Eq, Show)
 
--- | Resolve capabilities down the four-rung ladder, the heap ceiling from config, cgroup or @GHCRTS@, and an area to fit.
+-- | Resolve capabilities down the four-rung ladder, the heap ceiling from config, else the cgroup limit, else @GHCRTS@, and an area to fit.
 resolveRuntimePlan :: RuntimeOverrides -> CgroupLimits -> RtsPosture -> RuntimePlan
 resolveRuntimePlan overrides cgroup rts =
     RuntimePlan
@@ -340,7 +340,7 @@ capabilityAdvice p = case effectiveCapabilities p of
     (n, FromCoresCeiling) ->
         [ advice
             ("found no cgroup CPU or memory limit, so capabilities are capped at " <> show n <> " by runtime.coresCeiling")
-            ("If this container has a memory request but no limit, set a memory limit, ideally equal to the request, for Écluse to size itself to. " <> cpuRequestAdvice)
+            ("If this container has a memory request but no limit, set a memory limit, ideally equal to the request, for Écluse to size itself to. " <> cpuRequestAdvice <> " If a limit exists but Écluse cannot read it, set runtime.cores (ECLUSE_RUNTIME__CORES) by hand.")
         ]
     -- Listed rather than wildcarded, so a new rung has to decide whether it warns.
     (_, FromConfig) -> []
@@ -425,7 +425,7 @@ parseInactiveFile body =
         , Just n <- [readMaybe (toString value)]
         ]
 
--- | A reader for cgroup memory use less page cache, in thousandths of the tightest @memory.max@, else 'Nothing'.
+-- | A reader for cgroup memory use less inactive file pages, in thousandths of the tightest @memory.max@, else 'Nothing'.
 cgroupMemoryUse :: IO (IO (Maybe Int))
 cgroupMemoryUse = do
     selfCgroup <- readIfExists "/proc/self/cgroup"

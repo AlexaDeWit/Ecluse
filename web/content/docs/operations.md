@@ -849,11 +849,15 @@ Read `requests.cpu`, never `limits.cpu`: with no limit set, the kubelet substitu
 allocatable CPU, which is the whole-node claim you are trying to avoid. `divisor: "1"` rounds up
 to whole cores, so a `500m` request becomes 1.
 
+**Bare metal and dev hosts** have no cgroup limits either, so they take the same ceiling of 8, or
+the processor count when that is lower. Raise `ECLUSE_RUNTIME__CORES_CEILING`, or set
+`ECLUSE_RUNTIME__CORES`, to use a bigger box fully.
+
 **Set a memory limit, not only a memory request.** Écluse reads a memory limit from cgroup v2's
 `memory.max`, and fits its allocation area and heap ceiling to it. With no CPU limit, the memory
-limit also sets the capability count. Kubernetes uses a memory request to schedule the pod, but it
-does not expose the request inside the container. So with a request alone, Écluse sees no bound
-and boots on its generic defaults.
+limit also sets the capability count. Kubernetes uses a memory request to schedule the pod, but
+writes no file Écluse reads for it, and Écluse has no key that takes it. So with a request alone,
+Écluse sees no bound and boots on its generic defaults.
 
 With no CPU limit, no `runtime` keys set and at least 8 processors on the node, Écluse boots with:
 
@@ -863,14 +867,16 @@ With no CPU limit, no `runtime` keys set and at least 8 processors on the node, 
 | 2 GiB limit | 8 | 32 MiB | 1,760 MiB | 160 |
 | A request of any size, no limit | 8 | 64 MiB | None | 160 |
 
-A node with fewer processors caps the count at its processor count. The allocation area and serve
-admission, 20 per capability, follow from that count. In load tests at 1 GiB and 2 GiB limits, no
-other capability count served more requests.
+A node with fewer processors caps the count at its processor count, and serve admission follows at
+20 per capability. Under a limit, the allocation area and the heap ceiling follow the count too.
+With a request alone, the allocation area stays 64 MiB. In load tests on two CPUs, the table's
+counts scored best of those tried: 1, 2, 3, 4 and 8 at a 1 GiB limit, and 2, 4 and 8 at 2 GiB.
 
-With a request alone, the request is a baseline, and Écluse bursts above it under heavy load. In
-load tests with a 1 GiB request, the median peak sat near the request, and the worst peak reached
-about twice the request. This matches the Kubernetes Burstable class. Under node memory pressure,
-the kubelet evicts a pod above its request before pods within theirs.
+With a request alone, Écluse cannot see the request, so its memory use does not scale with it.
+Under heavy load it bursts above a request sized for typical use. In load tests on two CPUs with no
+limit, the median peak was near 990 MiB and the worst near 2 GiB. This matches the Kubernetes
+Burstable class. Under node memory pressure, the kubelet evicts a pod above its request before pods
+within theirs.
 
 To keep Écluse inside a number, set a memory limit, ideally equal to the request:
 
@@ -883,16 +889,13 @@ resources:
 ```
 
 `runtime.maxHeapBytes` caps the heap alone. Socket buffers, OS thread stacks and native zlib state
-sit outside the heap. The heap itself can pass its ceiling by one allocation area between
-collections. So the process can exceed a ceiling you set by roughly an eighth of it, plus one
-allocation area. A memory limit is the better tool for a whole-process bound. Under cgroup v1, or
+sit outside the heap, and the heap itself can pass its ceiling by one allocation area between
+collections. When Écluse derives a ceiling from a limit, it leaves room outside it for that memory:
+an eighth of the limit (at least 32 MiB), plus one allocation area. Leave the same room above a
+ceiling you set. A memory limit is the better tool for a whole-process bound. Under cgroup v1, or
 any layout that hides the limit, Écluse cannot read it.
 [Memory plan and runtime sizing](@/docs/operations.md#memory-plan-and-runtime-sizing) names the
 keys to set by hand there.
-
-**Bare metal and dev hosts** have no cgroup limits either, so they take the same ceiling of 8, or
-the processor count when that is lower. Raise `ECLUSE_RUNTIME__CORES_CEILING`, or set
-`ECLUSE_RUNTIME__CORES`, to use a bigger box fully.
 
 **Size a proxy pod from measured process usage as well as the RTS numbers.** The boot sizes the
 per-core allocation area (`-A`) from the memory limit: an eighth of the limit across the cores, in
