@@ -52,7 +52,7 @@ import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPath), corpusPackages)
 import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genPackumentBytes, genServablePackumentBytes)
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks, readOutcome, testTable, walkJsonChunks, walkWritingChunks)
+import Ecluse.Test.Registry.JsonStream (byteChunks, parseJsonChunks, readOutcome, testTable, walkJsonChunks, walkWritingChunks)
 import Ecluse.Test.Registry.Npm qualified as Fixture
 import Ecluse.Test.Registry.Npm.Streaming (NpmRead (..), npmFields)
 import Ecluse.Test.Snapshot (digestOf)
@@ -528,9 +528,6 @@ extended fields = BS.dropEnd 1 baseRelease <> "," <> fields <> "}"
 
 packument :: ByteString -> ByteString
 packument release = "{\"name\":\"thing\",\"versions\":{\"1.0.0\":" <> release <> "}}"
-
-byteChunks :: ByteString -> [ByteString]
-byteChunks = map BS.singleton . BS.unpack
 
 adverseReleases :: [(String, ByteString)]
 adverseReleases =

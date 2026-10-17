@@ -33,7 +33,7 @@ import Ecluse.Core.Registry.Json.Walk (Steps (Finished), withElement)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError)
 import Ecluse.Core.Text (urlFilenameComponent)
-import Ecluse.Test.Registry.JsonStream (readOutcome, testTable, walkJsonChunks)
+import Ecluse.Test.Registry.JsonStream (readOutcome, sliceChunks, testTable, walkJsonChunks)
 import Ecluse.Test.Registry.Packed (packBytes, packTable, packValue, renderAlone, walkedLength)
 
 spec :: Spec
@@ -76,7 +76,7 @@ spec = modifyMaxSuccess (const 2000) $ do
         it "preserves string bytes when the production reader splits UTF-8 and escapes across chunks" $ do
             let body = "[" <> BS.intercalate "," (map snd legacyStrings) <> "]"
             forM_ [1, 2, 3, 7, 64] $ \width -> do
-                let chunks = unfoldr (\rest -> if BS.null rest then Nothing else Just (BS.splitAt width rest)) body
+                let chunks = sliceChunks width body
                 case packBytes (Generic limit) [] chunks of
                     Right (StreamResult (Right (table, value)) _) -> do
                         renderAlone table Nothing value `shouldBe` Just body

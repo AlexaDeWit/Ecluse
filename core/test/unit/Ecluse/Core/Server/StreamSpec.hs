@@ -28,6 +28,7 @@ import UnliftIO.Exception (tryAny)
 import Ecluse.Core.Security (Limits (progressFloor), ProgressFloor, defaultLimits, mkProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
 import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamBody (NoBody, StreamBody), pumpBody, withUpstreamWhen)
+import Ecluse.Test.Registry.JsonStream (sliceChunks)
 import Ecluse.Test.Wai (pacedBody)
 
 spec :: Spec
@@ -133,9 +134,8 @@ spec = do
 -- The proxy under test, over the manager it relays with and the upstream's port.
 type ProxyApp = HTTP.Manager -> Int -> Application
 
-{- | The proxy under test: relay the upstream when its status passes @accept@, and answer the
-fall-through marker when the helper commits nothing, so a miss is observable as a body.
--}
+-- The proxy under test: relay the upstream when its status passes @accept@, and answer the
+-- fall-through marker when the helper commits nothing, so a miss is observable as a body.
 relayProxy :: ProgressFloor -> UpstreamBody -> (Status -> Bool) -> Method -> ProxyApp
 relayProxy progress body accept method manager upPort _req respond = do
     upstream <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
@@ -164,15 +164,14 @@ notModifiedProxy = relayProxy (progressFloor defaultLimits) StreamBody (\status 
 probeProxy :: ProxyApp
 probeProxy = relayProxy (progressFloor defaultLimits) NoBody statusIsSuccessful methodHead
 
--- | One request through the proxy under test, standing in front of this upstream.
+-- One request through the proxy under test, standing in front of this upstream.
 throughProxy :: Application -> ProxyApp -> IO (HTTP.Response LByteString)
 throughProxy upstream proxy = do
     manager <- newManager defaultManagerSettings
     testWithApplication (pure upstream) (askProxy manager . proxy manager)
 
-{- | 'throughProxy' against a port bound only long enough to learn a free one, then released, so
-the proxy's open fails.
--}
+-- 'throughProxy' against a port bound only long enough to learn a free one, then released, so
+-- the proxy's open fails.
 throughDeadUpstream :: ProxyApp -> IO (HTTP.Response LByteString)
 throughDeadUpstream proxy = do
     manager <- newManager defaultManagerSettings
@@ -190,12 +189,11 @@ askProxy manager app =
 headerOf :: HeaderName -> HTTP.Response body -> Maybe ByteString
 headerOf name = fmap snd . find ((== name) . fst) . HTTP.responseHeaders
 
-{- | An upstream that streams a fixed body back in 64 KiB chunks, under a 2xx the proxy never
-answers itself, so a relay that committed its own status rather than upstream's would fail.
--}
+-- An upstream that streams a fixed body back in 64 KiB chunks, under a 2xx the proxy never
+-- answers itself, so a relay that committed its own status rather than upstream's would fail.
 upstreamApp :: ByteString -> Application
 upstreamApp body _req respond =
-    respond (responseStream status206 [] (\write flush -> writeChunks write flush (chunk 65536 body)))
+    respond (responseStream status206 [] (\write flush -> writeChunks write flush (sliceChunks 65536 body)))
 
 -- An upstream that answers 200 with a body and a content header to relay.
 headeredUpstream :: Application
@@ -230,20 +228,14 @@ writeChunks :: (Builder -> IO ()) -> IO () -> [ByteString] -> IO ()
 writeChunks _ _ [] = pure ()
 writeChunks write flush (c : cs) = write (byteString c) >> flush >> writeChunks write flush cs
 
-chunk :: Int -> ByteString -> [ByteString]
-chunk n bs
-    | BS.null bs = []
-    | otherwise = let (h, t) = BS.splitAt n bs in h : chunk n t
-
 waiRelayResponder :: (Response -> IO ResponseReceived) -> RelayResponder ResponseReceived
 waiRelayResponder respond =
     RelayResponder
         (\status headers body -> respond (responseStream status headers body))
         (\status headers -> respond (responseLBS status headers ""))
 
-{- | A chunk source: each pull returns the next chunk, then an empty 'ByteString' once
-exhausted (the @http-client@ @BodyReader@ contract). It records the outstanding high-water mark.
--}
+-- A chunk source on the http-client BodyReader contract: the next chunk on each pull, then an
+-- empty ByteString once exhausted. It records the outstanding high-water mark.
 data Source = Source
     { srcNext :: IO ByteString
     , srcProduced :: IORef Int
@@ -251,7 +243,6 @@ data Source = Source
     , srcHighWater :: IORef Int
     }
 
--- | Build a chunk 'Source' over the given chunks.
 newSource :: [ByteString] -> IO Source
 newSource chunks = do
     remaining <- newIORef chunks
@@ -270,6 +261,6 @@ newSource chunks = do
                     pure c
     pure Source{srcNext = next, srcProduced = produced, srcOutstanding = outstanding, srcHighWater = highWater}
 
--- | Render a one-builder write back to the strict bytes it carried.
+-- Render a one-builder write back to the strict bytes it carried.
 builtBytes :: Builder -> ByteString
 builtBytes = toStrict . toLazyByteString

@@ -15,7 +15,7 @@ import UnliftIO.Exception (bracket, evaluate)
 
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue), retainedValue)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit))
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
+import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sliceChunks)
 import Ecluse.Test.Registry.Source (assertSourceHeld, awaitSourceRelease, trackedSource)
 import Ecluse.Test.Support (expectRight)
 
@@ -49,7 +49,7 @@ spec = describe "decoded text ownership" $ do
 decodeTracked :: Int -> Value -> MVar () -> IO Value
 decodeTracked size expected released = do
     source <- trackedSource (toStrict (encode expected)) released
-    let chunks = unfoldr (\rest -> if BS.null rest then Nothing else Just (BS.splitAt size rest)) source
+    let chunks = sliceChunks size source
     result <- expectRight (parseJsonChunks (MetadataBodyLimit (8 * 1024 * 1024)) (retainedValue 2) (\_ value -> Right (Just value)) Nothing chunks)
     value <- expectRight (streamValue result) >>= maybe (fail "missing retained value") pure
     void (evaluate (BS.length (toStrict (encode value))))
