@@ -600,6 +600,7 @@ library ecluse-runtime
     Ecluse.Runtime.Telemetry
     Ecluse.Runtime.Telemetry.Correlation
     Ecluse.Runtime.Telemetry.Correlation.Internal
+    Ecluse.Runtime.Telemetry.Escape
     Ecluse.Runtime.Telemetry.ExportFailure
     Ecluse.Runtime.Telemetry.ExportFailure.Internal
     Ecluse.Runtime.Telemetry.Instruments
@@ -1555,6 +1556,7 @@ test-suite ecluse-runtime-unit
     Ecluse.Runtime.Server.DrainSpec
     Ecluse.Runtime.Server.HaltSpec
     Ecluse.Runtime.Telemetry.CorrelationSpec
+    Ecluse.Runtime.Telemetry.EscapeSpec
     Ecluse.Runtime.Telemetry.ExportFailureSpec
     Ecluse.Runtime.Telemetry.InstrumentsSpec
     Ecluse.Runtime.Telemetry.ReportersSpec
@@ -1591,6 +1593,7 @@ test-suite ecluse-runtime-unit
     , universe-base     ^>=1.1
     , unordered-containers  ^>=0.2
     , http-client       ^>=0.7
+    , http-client-tls   >=0.3.6 && <0.5
     , http-types        ^>=0.12
     , hs-opentelemetry-api  ^>=1.0
     , hs-opentelemetry-exporter-in-memory  ^>=1.0
@@ -1604,6 +1607,7 @@ test-suite ecluse-runtime-unit
     , temporary         ^>=1.3
     , text              ^>=2.1
     , time              ^>=1.12
+    , tls               >=2.1 && <2.5
     , unliftio          ^>=0.2.25
     , vector            ^>=0.13
     , wai               ^>=3.2

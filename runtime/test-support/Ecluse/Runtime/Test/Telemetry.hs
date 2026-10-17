@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | In-process telemetry collection without exporters or background readers.
-module Ecluse.Runtime.Test.Telemetry (withTestTelemetry, gaugePoints, sumPoints) where
+-- | In-process telemetry collection without exporters or background readers, and a captured span's events.
+module Ecluse.Runtime.Test.Telemetry (withTestTelemetry, gaugePoints, sumPoints, spanEvents) where
 
 import OpenTelemetry.Attributes (Attributes)
 import OpenTelemetry.Exporter.Metric (
@@ -18,6 +18,8 @@ import OpenTelemetry.MeterProvider (SdkMeterEnv, collectResourceMetrics)
 import OpenTelemetry.Metric (createMeterProvider, defaultSdkMeterProviderOptions, shutdownMeterProvider)
 import OpenTelemetry.Resource (emptyMaterializedResources)
 import OpenTelemetry.Trace (createTracerProvider, emptyTracerProviderOptions, shutdownTracerProvider)
+import OpenTelemetry.Trace.Core (Event, SpanHot (hotEvents))
+import OpenTelemetry.Util (appendOnlyBoundedCollectionValues)
 import UnliftIO (bracket)
 
 import Ecluse.Runtime.Telemetry.Internal (Telemetry (TelemetryEnabled), TelemetryProviders (TelemetryProviders))
@@ -44,6 +46,10 @@ sumPoints wanted = collectPoints $ \case
         | name == wanted ->
             [(sumDataPointAttributes point, sumDataPointValue point) | point <- toList points]
     _ -> []
+
+-- | The events a captured span holds, the library's own @exception@ event included.
+spanEvents :: SpanHot -> [Event]
+spanEvents = toList . appendOnlyBoundedCollectionValues . hotEvents
 
 collectPoints :: (MetricExport -> [(Attributes, NumberValue)]) -> SdkMeterEnv -> IO [(Attributes, Int64)]
 collectPoints select meterEnv = do

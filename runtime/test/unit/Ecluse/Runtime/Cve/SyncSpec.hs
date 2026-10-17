@@ -17,8 +17,12 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime (UTCTime), addUTCTime, fromGregorian)
 import Database.SQLite.Simple (execute_, withConnection)
-import Katip (KatipContextT)
+import Katip (KatipContextT, runKatipContextT)
 import Network.HTTP.Types.Status (status404)
+import OpenTelemetry.Exporter.InMemory.Span (inMemoryListExporter)
+import OpenTelemetry.Metric (noopMeterProvider)
+import OpenTelemetry.Trace (createTracerProvider, emptyTracerProviderOptions, forceFlushTracerProvider)
+import OpenTelemetry.Trace.Core (ImmutableSpan (spanHot), SpanHot (hotStatus), SpanStatus (Error))
 import System.Directory (copyFile, doesFileExist)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -30,7 +34,7 @@ import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbEpssNotEstablished, CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (..))
 import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, swapIn, withSlotGeneration)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apOsvNewestModified, apOsvSource), noProvenance)
 import Ecluse.Core.Osv.Schema (EpssRequirement (..), osvDbFileName, osvSchemaEpoch)
@@ -56,13 +60,18 @@ import Ecluse.Runtime.Cve.Sync.Internal (
     SyncSchedule (..),
     cappedAt,
     runCveSync,
+    s3CveFetch,
     syncStep,
  )
+import Ecluse.Runtime.Telemetry.Escape (withEscapeHandler)
+import Ecluse.Runtime.Telemetry.Internal (Telemetry (TelemetryEnabled), TelemetryProviders (TelemetryProviders))
+import Ecluse.Runtime.Telemetry.Tracing.Internal (advisorySyncTracingPortOf)
 import Ecluse.Runtime.Test.Advisory (advisoryDriver)
 import Ecluse.Runtime.Test.Cve (fetchServing, fetchServingAt, headOnlyFetch)
+import Ecluse.Runtime.Test.S3 (brokenResponse, withS3)
 import Ecluse.Test.Contract.Advisory (AdvisoryFixture (..), advisoryContract)
 import Ecluse.Test.Cve (fakeCveLookup, namesFix)
-import Ecluse.Test.Log (runJsonLog, runQuietKatip)
+import Ecluse.Test.Log (memoryLogEnv, runJsonLog, runQuietKatip)
 import Ecluse.Test.Maintenance (FakeStore (..), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2), mkDbWithMalformedProvenance, mkDbWithWrongEpoch, mkMinimalValidDb, mkMinimalValidDbWithMeta, osvCorpusZip, osvZipOf)
 import Ecluse.Test.Osv.Withdrawal (withdrawalBytes, withdrawalZip)
@@ -79,16 +88,43 @@ import Ecluse.Test.Rules (atDefaultPrecedence, evalRule, isAllow, isDeny, isNoDe
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Test.Sweep (RecordedSweep (recPorts), recordingPorts, testMount, testPacing)
 
+-- A GetObject body the store cuts short, which amazonka surfaces as a bare HTTP exception. The
+-- attempt span and the fetch report carry its typed fault, never the object key or a signed header.
+resetDownloadSpec :: Spec
+resetDownloadSpec = describe "a GetObject body that resets mid-download" $
+    for_ [(Npm, "npm.db"), (PyPI, "pypi.db")] $ \(eco, key) ->
+        it ("is a typed transport fault on the " <> toString (ecosystemName eco) <> " attempt span and in the fetch report, never the signed request") $
+            withSyncEnvFor eco $ \_ _ envWith ->
+                withS3 (brokenResponse "200 OK" "Content-Length: 20\r\n\r\nshort") $ \awsEnv -> do
+                    (processor, spansRef) <- inMemoryListExporter
+                    tracerProvider <- createTracerProvider [processor] (withEscapeHandler emptyTracerProviderOptions)
+                    (logEnv, readMessages) <- memoryLogEnv
+                    let tracing = advisorySyncTracingPortOf (TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider))
+                        env = envWith (s3CveFetch awsEnv "test-advisories" key 1_000_000)
+                        reported = find (T.isInfixOf "sync fetch failed") <$> readMessages
+                    runKatipContextT logEnv () mempty . withAsync (runCveSync noopAdvisorySyncMetricsPort tracing env oneAttempt (notifyOnly pass)) $ \_ ->
+                        liftIO (waitFor "the fetch report" (isJust <$> reported))
+                    report <- fromMaybe "" <$> reported
+                    report `shouldSatisfy` T.isInfixOf "sync fetch failed: 127.0.0.1:"
+                    for_ [key, "X-Amz-"] $ \leak -> report `shouldSatisfy` (not . T.isInfixOf leak)
+                    _ <- forceFlushTracerProvider tracerProvider Nothing
+                    statuses <- traverse (fmap hotStatus . readIORef . spanHot) =<< readIORef spansRef
+                    statuses `shouldSatisfy` any (\case Error message -> T.isPrefixOf "127.0.0.1:" message && T.isSuffixOf message report; _ -> False)
+
 withSyncEnv :: (FilePath -> CveSlot -> (CveFetch -> SyncEnv) -> IO a) -> IO a
-withSyncEnv use =
+withSyncEnv = withSyncEnvFor Npm
+
+-- 'withSyncEnv' for one ecosystem's sync task.
+withSyncEnvFor :: Ecosystem -> (FilePath -> CveSlot -> (CveFetch -> SyncEnv) -> IO a) -> IO a
+withSyncEnvFor eco use =
     withSystemTempDirectory "ecluse-cve-sync" $ \dir -> do
         slot <- newCveSlot
         let envWith fetch =
                 SyncEnv
                     { syncFetch = fetch
-                    , syncEcosystem = Npm
+                    , syncEcosystem = eco
                     , syncEpssRequirement = EpssOptional
-                    , syncDbPath = dir </> osvDbFileName "npm"
+                    , syncDbPath = dir </> osvDbFileName (ecosystemName eco)
                     , syncSlot = slot
                     , syncStoreRef = testStoreRef
                     }
@@ -380,6 +416,7 @@ spec :: Spec
 spec = do
     withdrawalSpec
     unavailableEnrichmentSpec
+    resetDownloadSpec
     describe "sync provenance logging" $ do
         for_ [("2026-09-08T12:34:56Z", "42", "(Just 2026-09-08 12:34:56 UTC,Just 42)"), ("SECRET-time", "SECRET-count", "(Nothing,Nothing)"), (T.replicate 65 "9", T.replicate 21 "9", "(Nothing,Nothing)"), ("invalid", "18446744073709551616", "(Nothing,Nothing)"), ("invalid", "-1", "(Nothing,Nothing)"), ("invalid", "", "(Nothing,Nothing)")] $ \(builtAt, rowCount, summary) ->
             it ("logs only parsed values for built_at=" <> toString builtAt <> " and row_count=" <> toString rowCount) $

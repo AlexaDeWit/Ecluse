@@ -46,14 +46,23 @@ import OpenTelemetry.Metric (
     setGlobalMeterProvider,
     shutdownMeterProvider,
  )
+import OpenTelemetry.Propagator (setGlobalTextMapPropagator)
 import OpenTelemetry.Registry (registerSpanExporterFactory)
 import OpenTelemetry.Resource (materializeResources, mergeResources, mkResource)
 import OpenTelemetry.Resource.Detect (detectBuiltInResources, detectResourceAttributes)
 import OpenTelemetry.SDK (OTelSignals (..))
-import OpenTelemetry.Trace (TracerProvider, initializeGlobalTracerProvider, shutdownTracerProvider)
+import OpenTelemetry.Trace (
+    TracerProvider,
+    TracerProviderOptions (tracerProviderOptionsPropagators),
+    createTracerProvider,
+    getTracerProviderInitializationOptions,
+    setGlobalTracerProvider,
+    shutdownTracerProvider,
+ )
 import UnliftIO (bracket)
 import UnliftIO.Exception (catchAny)
 
+import Ecluse.Runtime.Telemetry.Escape (withEscapeHandler)
 import Ecluse.Runtime.Telemetry.ExportFailure (
     ExportFailureSink,
     exportFailureSink,
@@ -67,15 +76,11 @@ import Data.Universe.Generic (universeGeneric)
 
 import Ecluse.Core.Wire (WireVocab (..), parseWire)
 
-{- | The @ECLUSE_OBSERVABILITY__TELEMETRY@ master switch. Telemetry is opt-in, so
-'TelemetryOff' is the default.
--}
+-- | The @ECLUSE_OBSERVABILITY__TELEMETRY@ master switch. Telemetry is opt-in, so 'TelemetryOff' is the default.
 data TelemetrySwitch
     = -- | Telemetry is disabled (the default): nothing is wired and nothing is emitted.
       TelemetryOff
-    | {- | Telemetry is enabled: the SDK providers are built from the standard
-      @OTEL_*@ environment and the OTLP exporter is active.
-      -}
+    | -- | Telemetry is enabled: the SDK providers are built from the standard @OTEL_*@ environment and the OTLP exporter is active.
       TelemetryOn
     deriving stock (Eq, Generic, Show)
 
@@ -103,21 +108,14 @@ Left "unknown telemetry switch \"maybe\" (expected one of: on, off)"
 parseTelemetrySwitch :: Text -> Either Text TelemetrySwitch
 parseTelemetrySwitch = parseWire
 
-{- | The telemetry handle held in the composition root: the off-by-default no-op or the enabled
-providers. The disabled case carries no provider, so telemetry is inert rather than unsampled.
--}
+-- | The telemetry handle held in the composition root: the off-by-default no-op or the enabled providers. The disabled case carries no provider, so telemetry is inert rather than unsampled.
 data Telemetry
     = -- | The off-by-default no-op: no providers, nothing emitted.
       TelemetryDisabled
-    | {- | The enabled handle carrying the SDK's providers, built from the standard
-      @OTEL_*@ environment. The providers live in a 'TelemetryProviders' product so
-      neither field is a partial record selector on this sum.
-      -}
+    | -- | The enabled handle carrying the SDK's providers, built from the @OTEL_*@ environment, in a product so no selector is partial.
       TelemetryEnabled TelemetryProviders
 
-{- | The SDK providers an enabled 'Telemetry' handle carries: a total product, so its
-fields are not partial selectors over the 'Telemetry' sum.
--}
+-- | The SDK providers an enabled 'Telemetry' handle carries: a total product, so its fields are not partial selectors over the 'Telemetry' sum.
 data TelemetryProviders = TelemetryProviders
     { tpTracerProvider :: TracerProvider
     -- ^ The SDK tracer provider the proxy hangs spans on.
@@ -125,9 +123,7 @@ data TelemetryProviders = TelemetryProviders
     -- ^ The SDK meter provider the proxy hangs metric instruments on.
     }
 
-{- | The disabled telemetry handle: the off-by-default no-op that holds no providers
-and emits nothing. This is what an unset @ECLUSE_OBSERVABILITY__TELEMETRY@ resolves to.
--}
+-- | The disabled telemetry handle: the off-by-default no-op that holds no providers and emits nothing. This is what an unset @ECLUSE_OBSERVABILITY__TELEMETRY@ resolves to.
 telemetryDisabled :: Telemetry
 telemetryDisabled = TelemetryDisabled
 
@@ -140,25 +136,19 @@ telemetryEnabled signals =
             , tpMeterProvider = otelMeterProvider signals
             }
 
-{- | The tracer provider a 'Telemetry' handle exposes, 'Nothing' when telemetry is disabled.
-'Nothing' means emit nothing, never fabricate a no-op provider at the edge.
--}
+-- | The tracer provider a 'Telemetry' handle exposes, 'Nothing' when telemetry is disabled. 'Nothing' means emit nothing, never fabricate a no-op provider at the edge.
 telemetryTracerProvider :: Telemetry -> Maybe TracerProvider
 telemetryTracerProvider = \case
     TelemetryDisabled -> Nothing
     TelemetryEnabled providers -> Just (tpTracerProvider providers)
 
-{- | The meter provider a 'Telemetry' handle exposes, 'Nothing' when telemetry is
-disabled (the dual of 'telemetryTracerProvider' for metric instruments).
--}
+-- | The meter provider a 'Telemetry' handle exposes, 'Nothing' when telemetry is disabled (the dual of 'telemetryTracerProvider' for metric instruments).
 telemetryMeterProvider :: Telemetry -> Maybe MeterProvider
 telemetryMeterProvider = \case
     TelemetryDisabled -> Nothing
     TelemetryEnabled providers -> Just (tpMeterProvider providers)
 
-{- | Run an action with a 'Telemetry' handle bracketed by the 'TelemetrySwitch'. 'TelemetryOff'
-opens nothing. 'TelemetryOn' builds the providers, runs the scrape listener, and tears both down.
--}
+-- | Run an action with a 'Telemetry' handle bracketed by the 'TelemetrySwitch'. 'TelemetryOff' opens nothing. 'TelemetryOn' builds the providers, runs the scrape listener, and tears both down.
 withTelemetry :: TelemetrySwitch -> LogEnv -> (Telemetry -> IO a) -> IO a
 withTelemetry switch logEnv use = case switch of
     TelemetryOff -> use telemetryDisabled
@@ -203,7 +193,7 @@ registerObservedSpanExporter sink =
 registry, so 'registerObservedSpanExporter' runs first. Re-diff against the SDK on a bump. -}
 initializeObservedOpenTelemetry :: ExportFailureSink -> IO (OTelSignals, Maybe MetricScrape)
 initializeObservedOpenTelemetry sink = do
-    tracerProvider <- initializeGlobalTracerProvider
+    tracerProvider <- initializeEscapeHandledTracerProvider
     (meterProvider, scrape) <- initializeObservedMeterProvider sink
     loggerProvider <- initializeGlobalLoggerProvider
     let shutdown = do
@@ -220,6 +210,16 @@ initializeObservedOpenTelemetry sink = do
             }
         , scrape
         )
+
+{- Mirror @hs-opentelemetry-sdk@ 1.0.0.0's @initializeGlobalTracerProvider@, adding 'withEscapeHandler'
+so an escaping exception never puts a request on a span. Re-diff against the SDK on a bump. -}
+initializeEscapeHandledTracerProvider :: IO TracerProvider
+initializeEscapeHandledTracerProvider = do
+    (processors, options) <- getTracerProviderInitializationOptions
+    setGlobalTextMapPropagator (tracerProviderOptionsPropagators options)
+    provider <- createTracerProvider processors (withEscapeHandler options)
+    setGlobalTracerProvider provider
+    pure provider
 
 {- Mirror @hs-opentelemetry-sdk@ 1.0.0.0's @initializeGlobalMeterProvider@, observing the metric
 exporter's failures and lifting the meter environment out for the scrape. Re-diff on a bump. -}

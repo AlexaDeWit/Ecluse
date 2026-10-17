@@ -32,7 +32,12 @@ module Ecluse.Runtime.Telemetry.Tracing.Internal (
     ruleVerdictFields,
 ) where
 
-import Network.HTTP.Client (ManagerSettings)
+import Network.HTTP.Client (
+    HttpException (HttpExceptionRequest),
+    HttpExceptionContent (InternalException),
+    ManagerSettings (managerWrapException),
+ )
+import Network.HTTP.Client.Internal (throwHttp)
 import Network.Wai (Middleware)
 import OpenTelemetry.Instrumentation.HttpClient (
     HttpClientInstrumentationConfig,
@@ -56,7 +61,9 @@ import OpenTelemetry.Trace (
     tracerOptions,
  )
 import UnliftIO (MonadUnliftIO, withRunInIO)
+import UnliftIO.Exception (catch, throwIO, withException)
 
+import Ecluse.Core.Cve.Types (OsvDbFetchFault, renderOsvDbFetchFault)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Queue (RemoteSpanContext (RemoteSpanContext, rscTraceparent, rscTracestate))
@@ -75,6 +82,7 @@ import Ecluse.Runtime.Telemetry (
     telemetryMeterProvider,
     telemetryTracerProvider,
  )
+import Ecluse.Runtime.Telemetry.Escape (escapeRecordingMiddleware, recordEscape)
 
 -- | The WAI server-span middleware, or 'id' without telemetry. It belongs __outermost__, so the span covers the request.
 telemetryWaiMiddleware :: Telemetry -> IO Middleware
@@ -82,7 +90,7 @@ telemetryWaiMiddleware telemetry =
     case (telemetryTracerProvider telemetry, telemetryMeterProvider telemetry) of
         (Just tracerProvider, Just meterProvider) -> do
             meter <- getMeter meterProvider ecluseScope
-            newOpenTelemetryWaiMiddleware' tracerProvider meter
+            (. escapeRecordingMiddleware) <$> newOpenTelemetryWaiMiddleware' tracerProvider meter
         _ -> pure id
 
 -- | Make upstream fetches open a client span and carry W3C trace-context headers, when telemetry is enabled.
@@ -90,7 +98,17 @@ instrumentDataPlaneManagerSettings :: Telemetry -> ManagerSettings -> IO Manager
 instrumentDataPlaneManagerSettings telemetry settings =
     case telemetryTracerProvider telemetry of
         Nothing -> pure settings
-        Just _ -> instrumentManagerSettings dataPlaneInstrumentationConfig settings
+        Just _ -> instrumentManagerSettings dataPlaneInstrumentationConfig (wrapWithoutRequest settings)
+
+{- The client span records what the base wrapper raises, and the TLS wrapper tags a connection fault
+with its request. Raise it untagged: @responseOpen@ tags it again with the same request. -}
+wrapWithoutRequest :: ManagerSettings -> ManagerSettings
+wrapWithoutRequest settings =
+    settings{managerWrapException = \request action -> managerWrapException settings request action `catch` untagged}
+  where
+    untagged = \case
+        HttpExceptionRequest _ content@(InternalException _) -> throwHttp content
+        other -> throwIO other
 
 -- | The data plane's http-client instrumentation. It records __no__ headers, so an @Authorization@ header never reaches a span.
 dataPlaneInstrumentationConfig :: HttpClientInstrumentationConfig
@@ -153,14 +171,16 @@ withAdvisorySyncSpan ::
     (MonadUnliftIO m) =>
     Telemetry ->
     Ecosystem ->
-    (a -> AdvisorySyncResult) ->
+    (a -> (AdvisorySyncResult, Maybe OsvDbFetchFault)) ->
     m a ->
     m a
 withAdvisorySyncSpan telemetry eco project action =
     withDomainSpan telemetry Internal [] "ecluse.advisory.sync.attempt" $ \mSpan -> do
         recordFields mSpan [("ecluse.ecosystem", ecosystemName eco)]
         result <- action
-        recordFields mSpan [("ecluse.advisory.sync.result", advisorySyncResultName (project result))]
+        let (outcome, failure) = project result
+        recordFields mSpan [("ecluse.advisory.sync.result", advisorySyncResultName outcome)]
+        whenJust mSpan $ \theSpan -> whenJust failure (setStatus theSpan . Error . renderOsvDbFetchFault)
         pure result
 
 -- A domain span over one package alone: the packument gate and the two metadata legs.
@@ -227,8 +247,8 @@ ruleNameField = \case
     BelowIntegrityFloor -> []
     UpstreamInvalid -> []
 
-{- Run an action within a domain span, or against 'Nothing' when telemetry is disabled, which
-creates no tracer. The span parents on the ambient context, so it nests under the WAI server span. -}
+{- Run an action within a domain span, or against 'Nothing' without telemetry. The span nests under
+the ambient one, and records an escaping request-carrying exception by its typed cause. -}
 withDomainSpan ::
     (MonadUnliftIO m) =>
     Telemetry ->
@@ -242,7 +262,8 @@ withDomainSpan telemetry spanKind spanLinks name body =
         Nothing -> body Nothing
         Just tracerProvider ->
             let tracer = makeTracer tracerProvider ecluseScope tracerOptions
-             in inSpan' tracer name defaultSpanArguments{kind = spanKind, links = spanLinks} (body . Just)
+             in inSpan' tracer name defaultSpanArguments{kind = spanKind, links = spanLinks} $ \theSpan ->
+                    body (Just theSpan) `withException` recordEscape theSpan
 
 -- Capture a live span's trace context as the carrier stamped onto the mirror job, encoded as the
 -- standard W3C @traceparent@\/@tracestate@ pair.

@@ -8,6 +8,7 @@ import Prelude hiding (get)
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (Builder, byteString, toLazyByteString)
+import Data.Text qualified as T
 import GHC.Clock (getMonotonicTime)
 import Network.HTTP.Client (
     defaultManagerSettings,
@@ -19,21 +20,22 @@ import Network.HTTP.Client (
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (Method, ResponseHeaders, Status, methodGet, methodHead, status200, status206, status304, status404, statusCode, statusIsSuccessful)
 import Network.HTTP.Types.Header (HeaderName, hContentType, hETag)
-import Network.Wai (Application, Response, ResponseReceived, responseLBS, responseStream)
+import Network.Wai (Application, Response, ResponseReceived, responseLBS, responseRaw, responseStream)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 import UnliftIO (concurrently)
-import UnliftIO.Exception (tryAny)
+import UnliftIO.Exception (tryAny, withException)
 
 import Ecluse.Core.Security (Limits (progressFloor), ProgressFloor, defaultLimits, mkProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
-import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamBody (NoBody, StreamBody), pumpBody, withUpstreamWhen)
+import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamBody (NoBody, StreamBody), UpstreamBodyFailed (UpstreamBodyFailed), pumpBody, withUpstreamWhen)
 import Ecluse.Test.Registry.JsonStream (sliceChunks)
+import Ecluse.Test.Stub (requestSecrets, signedRequest)
 import Ecluse.Test.Wai (pacedBody)
 
 spec :: Spec
 spec = do
-    describe "pumpBody -- constant memory and backpressure" $ do
+    describe "pumpBody, constant memory and backpressure" $ do
         it "holds at most one chunk in flight regardless of body size (constant memory)" $ do
             -- Each 'write' blocks until the consumer acks, so the producer never runs ahead.
             -- A high-water mark of 1 for a 256-chunk body is the constant-memory property.
@@ -78,7 +80,7 @@ spec = do
             pumpBody (srcNext src) (const (pure ())) (modifyIORef' flushes (+ 1))
             readIORef flushes `shouldReturn` 1
 
-    describe "withUpstreamWhen -- large body, end to end over an in-process upstream" $
+    describe "withUpstreamWhen, a large body end to end over an in-process upstream" $
         it "relays a large body through with the upstream status" $ do
             -- A 4 MiB body must arrive intact through the full http-client wiring. The pump case
             -- above is the proof that this path never buffers the body whole.
@@ -87,7 +89,7 @@ spec = do
             statusCode (HTTP.responseStatus resp) `shouldBe` 206
             toStrict (responseBody resp) `shouldBe` bigBody
 
-    describe "withUpstreamWhen -- conditional relay (hit / miss / open-failure)" $ do
+    describe "withUpstreamWhen, a conditional relay (hit, miss, open failure)" $ do
         it "relays the body AND the upstream content headers when the status passes accept" $ do
             -- The client verifies dist.integrity over the relayed bytes and headers, so the relay
             -- must forward the upstream's content headers along with the body.
@@ -114,7 +116,7 @@ spec = do
             responseBody resp `shouldBe` ""
             headerOf hETag resp `shouldBe` Just "\"v1\""
 
-    describe "withUpstreamWhen -- the progress floor, with no cap" $
+    describe "withUpstreamWhen, the progress floor with no cap" $
         it "aborts a relay whose upstream stops mid-body within about one window" $ do
             progress <- either (fail . show) pure (mkProgressFloor 30 0.5 1024)
             started <- getMonotonicTime
@@ -123,7 +125,19 @@ spec = do
             outcome `shouldSatisfy` isLeft
             (finished - started) `shouldSatisfy` (\seconds -> seconds >= 0.5 && seconds < 10)
 
-    describe "withUpstreamWhen -- bodiless relay (HEAD, no pump)" $
+    describe "withUpstreamWhen, an upstream body that breaks after the commit" $
+        it "raises a typed fault that never carries the upstream request" $ do
+            escaped <- newIORef Nothing
+            void (tryAny (throughProxy truncatedUpstream (recordingSignedRelay escaped)))
+            readIORef escaped >>= \case
+                Just err -> do
+                    fromException err `shouldSatisfy` \case
+                        Just (UpstreamBodyFailed _) -> True
+                        Nothing -> False
+                    for_ requestSecrets $ \secret -> toText (displayException err) `shouldSatisfy` (not . T.isInfixOf secret)
+                Nothing -> expectationFailure "no fault escaped the committed relay"
+
+    describe "withUpstreamWhen, a bodiless relay (HEAD, no pump)" $
         it "relays the upstream status and content headers with no body on a hit" $ do
             -- The helper never pumps the body on a HEAD, which is the amplification a HEAD must
             -- never trigger.
@@ -151,6 +165,22 @@ relayProxy progress body accept method manager upPort _req respond = do
     case outcome of
         Just (_, received) -> pure received
         Nothing -> respond (responseLBS status200 [] fellThroughMarker)
+
+-- A relay of a signed upstream URL that records whatever escapes it, so a case reads what a committed failure carries.
+recordingSignedRelay :: IORef (Maybe SomeException) -> ProxyApp
+recordingSignedRelay escaped manager upPort _req respond = do
+    upstream <- (\request -> request{HTTP.port = upPort}) <$> signedRequest
+    outcome <-
+        withUpstreamWhen manager (progressFloor defaultLimits) upstream StreamBody statusIsSuccessful relayVerbatim (waiRelayResponder respond)
+            `withException` (writeIORef escaped . Just)
+    case outcome of
+        Just (_, received) -> pure received
+        Nothing -> respond (responseLBS status200 [] fellThroughMarker)
+
+-- An upstream that promises twenty bytes, sends five, and closes, so the relay fails after it commits.
+truncatedUpstream :: Application
+truncatedUpstream _req respond =
+    respond (responseRaw (\_ send -> send "HTTP/1.1 200 OK\r\nContent-Length: 20\r\nConnection: close\r\n\r\nshort") (responseLBS status404 [] ""))
 
 -- A hit is observable as the relayed upstream body.
 conditionalProxy :: ProxyApp
