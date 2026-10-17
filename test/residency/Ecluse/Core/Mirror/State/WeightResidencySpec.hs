@@ -92,7 +92,7 @@ prepare mode path = do
     root <- newStablePtr shaped
     pure (root, paid)
 
--- Equality forces every field Show renders, opaque parsed keys and descriptors included, without building the text.
+-- For these PyPI records, equality forces every field Show renders, parsed keys and descriptors included, without building the text.
 forceCompared :: ProjectMirrorRecord -> IO ()
 forceCompared record = unless (record == record) (fail "a mirror record differs from itself")
 
