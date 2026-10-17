@@ -96,7 +96,9 @@ import Ecluse.Runtime.Telemetry (TelemetrySwitch)
 newtype Url = Url Text
     deriving stock (Eq, Ord, Show)
 
--- | Build a 'Url' from a key and its value. The credential refusal runs first, because the two refusals below it quote the value.
+{- | Build a 'Url' from a configuration key and the value written under it, the key naming every
+refusal. The credential refusal runs first, because the two refusals below it quote the value.
+-}
 mkUrl :: Text -> Text -> Either Text Url
 mkUrl key raw
     | Left reason <- refuseCredentialMaterial key trimmed = Left reason
@@ -217,7 +219,9 @@ data MintPlan
 data ControlPlane
     = -- | The CodeArtifact repository the target addresses, which the load has vetted.
       ControlCodeArtifact CodeArtifactStore
-    | -- | A store swept through the ecosystem protocol's own verbs: its write token, and the consent to delete from it.
+    | {- | A store with no vendor control plane, swept through the ecosystem protocol's own
+      verbs: its write token, and the operator's consent to delete from it.
+      -}
       ControlProtocol Secret DeletionConsent
     | -- | The tag names no control plane this build implements.
       ControlNone
@@ -318,7 +322,9 @@ data ServerSettings = ServerSettings
     }
     deriving stock (Eq, Show)
 
--- | The @queue@ group: destination, depth cap, and redelivery budget. The URL's shape decides the backend ("Ecluse.Config.QueueTarget").
+{- | The @queue@ group: the mirror queue's destination, depth cap, and redelivery budget. The
+URL's shape decides the backend, and the load derives it once ("Ecluse.Config.QueueTarget").
+-}
 data QueueSettings = QueueSettings
     { qsUrl :: Maybe QueueUrl
     , qsMaxMemoryDepth :: Maybe Int
@@ -430,8 +436,8 @@ data DredgerSettings = DredgerSettings
     , drgQuotaOverrides :: Map Text QuotaOverride
     -- ^ Declared request capacity, keyed by the store URL it describes.
     , drgDeletionCap :: Maybe Int
-    {- ^ Versions one cycle may delete, computed per store when unset. Reaching it halts the sweep for the life
-    of the process, so a poisoned generation stops there.
+    {- ^ Versions one cycle may hand over for deletion, computed per sweepable store when unset.
+    Reaching it halts the sweep for the life of the process, so a poisoned generation stops there.
     -}
     , drgFullWalk :: Bool
     {- ^ Walk every package each cycle, not only the advisory and identity-deny candidates. It covers a rule
@@ -440,8 +446,8 @@ data DredgerSettings = DredgerSettings
     }
     deriving stock (Eq, Show)
 
-{- | One store's declared request capacity. It supplies the capacity a backend publishes none of, and a
-shared scope joins two endpoints of one pool so the sweep paces them together.
+{- | One store's declared request capacity. It supplies the capacity a backend publishes none of,
+and a shared scope joins two endpoints of one pool so the sweep paces them together.
 -}
 data QuotaOverride = QuotaOverride
     { qoScope :: Maybe Text
@@ -534,7 +540,9 @@ data ConfigError
       SharedPolicyErrors [PolicyError]
     | -- | A mount is active but @server.publicUrl@ is unset. Deriving it from a spoofable @Host@ header would poison the shared cache.
       PublicUrlRequired
-    | -- | A mount declares a @mirrorTarget@ but no private upstream to read the mirror write back through.
+    | {- | A mount declares a @mirrorTarget@ but no private upstream, through which the mirror
+      write must be readable back. A serve-only mount never raises this.
+      -}
       MountMissingPrivateUpstream Ecosystem
     | -- | A @codeArtifact@ endpoint whose URL is not a CodeArtifact endpoint. The tag names the store, so the URL would misdirect a write or read.
       CodeArtifactHostMismatch Ecosystem Text

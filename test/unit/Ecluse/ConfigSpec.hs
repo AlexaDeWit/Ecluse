@@ -480,6 +480,21 @@ spec = do
             provenance `shouldSatisfy` elem "config: mounts.pypi.rules.deny-known-malicious.precedence = 310 (document, inactive: no advisories.url)"
             ruleLines "remediation-fast-track" provenance `shouldSatisfy` (\shared -> not (null shared) && all marked shared)
 
+        it "marks a shared rule's lines where one mount disables it and another leaves it to the source" $ do
+            provenance <-
+                provenanceOf
+                    pubUrlEnv
+                    (Just "{\"mounts\":{\"npm\":{\"rules\":{\"deny-known-malicious\":{\"enabled\":false}}},\"pypi\":{\"rules\":{\"deny-known-malicious\":{\"precedence\":310}}}}}")
+            ruleLines "deny-known-malicious" provenance `shouldSatisfy` (\shared -> not (null shared) && all marked shared)
+            provenance `shouldSatisfy` elem "config: mounts.npm.rules.deny-known-malicious.enabled = false (document)"
+            provenance `shouldSatisfy` elem "config: mounts.pypi.rules.deny-known-malicious.precedence = 310 (document, inactive: no advisories.url)"
+
+        for_ [("no mount", "{}"), ("the only mount switched off", "{\"mounts\":{\"npm\":{\"enabled\":false}}}")] $ \(label, doc :: Text) ->
+            it ("marks no shared rule line where no mount serves: " <> label) $ do
+                provenance <- provenanceOf pubUrlEnv (Just (encodeUtf8 doc))
+                for_ sourceDefaultNames $ \name ->
+                    ruleLines name provenance `shouldSatisfy` (\shared -> not (null shared) && not (any marked shared))
+
 -- | The types of a mount's rules that are limited to admission, which the Dredger does not evaluate.
 limitedRules :: Mount -> [Text]
 limitedRules mount = [ruleName (prRule rule) | rule <- mountPolicy mount, ruleReach rule == AdmissionOnly]

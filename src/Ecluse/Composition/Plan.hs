@@ -96,7 +96,9 @@ data BootInputs = BootInputs
     -- ^ The open-file soft limit both connection-pool sizes are computed from.
     }
 
--- | What one role's pass reported. Every field comes back on the refusing path too, so a refusal naming a key stays traceable.
+{- | What one role's pass reported. Every field comes back on the refusing path too, so a refusal
+naming a config key stays traceable and an advisory beside it is not lost with the plan.
+-}
 data BootReport = BootReport
     { brProvenance :: [Text]
     -- ^ The config-document line and the per-key provenance lines, reported ahead of any refusal.
@@ -132,8 +134,8 @@ data BootPlan = BootPlan
     -- ^ The warning lines, in emission order.
     }
 
-{- | Decide everything one role's boot settles from the configuration alone. @ecluse check-config@ runs
-this whole tier, and a boot adds no pure refusal of its own past it.
+{- | Decide everything one role's boot settles from the configuration alone. @ecluse check-config@
+runs this whole tier, and a boot adds no pure refusal of its own past it.
 -}
 resolveBootPlan :: BootRole -> BootInputs -> BootReport
 resolveBootPlan role inputs =

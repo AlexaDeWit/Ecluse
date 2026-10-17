@@ -18,6 +18,8 @@ import Ecluse.BenchLoad.BootLines (
     ruleBootOrders,
     ruleMessages,
  )
+import Ecluse.Composition.Support (expectConfig, pubUrlEnv)
+import Ecluse.Config (resolvedKeyProvenance)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
 
 messages :: [Text]
@@ -105,6 +107,12 @@ spec = do
                 , "config: rules.deny-known-malicious.type = DenyIfKnownMalicious (default, inactive: no advisories.url)"
                 ]
                 `shouldBe` [LoggedRule "deny-known-malicious" (Just "DenyIfKnownMalicious") [("onUnavailable", "skip")] ["environment", "default"] (Just "no advisories.url")]
+        it "reads the marker the proxy writes for a rule no source activates" $ do
+            let document = Just "{\"mounts\":{\"npm\":{\"enabled\":true}}}"
+            config <- expectConfig pubUrlEnv document
+            let logged = [rule | rule <- loggedRules (resolvedKeyProvenance config pubUrlEnv document), lrName rule == "deny-known-malicious"]
+            map lrLayers logged `shouldBe` [["default"]]
+            map lrInactive logged `shouldBe` [Just "no advisories.url"]
         it "reads the last parenthesis as the layer" $
             map lrSettings (loggedRules ["config: rules.pin.identity = a (b) (document)"]) `shouldBe` [[("identity", "a (b)")]]
         it "keeps quoted, JSON array, empty, and assignment-shaped values whole" $

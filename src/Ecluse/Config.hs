@@ -368,7 +368,7 @@ leafPaths path v = [(T.intercalate "." path, v)]
 
 renderResolvedLeaf :: Config -> Value -> Value -> (Text, Value) -> Text
 renderResolvedLeaf config envAst docAst (path, v) =
-    "config: " <> path <> " = " <> renderLeafValue path v <> " (" <> source <> foldMap inactiveMarker (leafInactivity config segments) <> ")"
+    "config: " <> path <> " = " <> renderLeafValue path v <> " (" <> source <> maybe "" inactiveMarker (leafInactivity config segments) <> ")"
   where
     segments = T.splitOn "." path
     source
