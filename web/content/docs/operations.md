@@ -46,9 +46,10 @@ the same allowance, so later stalls also fail liveness after 660 seconds without
 
 Readiness is deliberately lenient about public-upstream reachability, so a transient blip does not
 pull a healthy pod from rotation. The starting-up case is the one to plan for. Readiness follows
-each mount's own rules. A mount whose rules include `DenyIfCve` or `DenyIfEpss` waits for its first
-advisory sync, a one-way flip that never flaps back. A mount with no such rule is ready before any
-artifact exists, because every rule it holds decides without the database. Give a cold pod room for
+each mount's own rules. `DenyIfCve`, `DenyIfEpss`, `DenyIfKnownMalicious`, and
+`AllowIfRemediatesCve` with `onUnavailable: deny` require the first accepted advisory generation.
+This readiness transition is one-way and never flaps back. A mount with none of these rules is
+ready before an artifact exists. Give a cold pod room for
 that first database download: a Kubernetes `startupProbe`, or a readiness `failureThreshold` sized
 for it. Pilot publishes an artifact for every ecosystem the configuration mounts. If acquisition
 fails, the process stays alive and keeps polling. Once the boot retry budget is spent, the sync
@@ -581,8 +582,8 @@ listing and each public artifact decision for the memory it uses, as it uses it,
 | Work | What it pays |
 |---|---|
 | Entering, before the request takes a CPU slot | One 1 MiB step |
-| A full metadata read, which a listing makes | Per decompressed source byte, chunk by chunk before parsing: 1.1 bytes for npm, 3.2 bytes for PyPI |
-| A listing's response | Per byte of its output basis, before assembly: 2.0 bytes for npm, 1.6 bytes for PyPI |
+| A full metadata read, which a listing makes | Per decompressed source byte, chunk by chunk before parsing: 1.1 bytes for npm, 3.5 bytes for PyPI |
+| A listing's response | Per byte of its output basis, before assembly: 2.0 bytes for npm, 1.9 bytes for PyPI |
 | A selected read, which a public artifact decision makes | Nothing beyond the entry step |
 | An assembled hit or a `304` | Its reads, but no response charge |
 | A gzip listing response, hit or miss | 512 KiB for the deflater, then 36 KiB for each 32 KiB output buffer |

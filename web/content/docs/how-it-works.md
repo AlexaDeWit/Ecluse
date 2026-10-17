@@ -13,12 +13,11 @@ and PyPI support reads, mirroring, and first-party publication.
 
 A new public version waits in a quarantine, seven days by default, before a build can install it.
 Most malicious publishes are found and pulled within days, so the wait alone sidesteps them, with
-no attempt to detect malice. A security patch overrides the quarantine as soon as the advisory
-data is available: a version that a synced advisory names as the exact fix for a vulnerability
-skips the wait. A fix still waits when no advisory database has synced, when the advisory data is
-too old, when another advisory still affects the version, or when the advisory spells the version
-differently. Pin such a fix with `AllowByIdentity`. Everything else is deny by default and opt-in by
-name.
+no attempt to detect malice. An advisory source enables a fast track for exact security fixes
+and a deny for known malicious versions. A partial fix passes only when the remaining advisory
+scores meet the configured ceilings and gaps. Missing or old advisory evidence can refuse
+admission. Higher-ranked denies still apply. The
+[rule policy](@/docs/configuration.md#rule-policy) defines the evidence, precedence, and override conditions.
 
 If you run a private registry, Écluse treats its packages as trusted, subject to integrity and
 managed-mirror completion checks. Any https registry that speaks the ecosystem's protocol serves
@@ -103,17 +102,16 @@ explains completion and recovery through partial copies.
 
 ### npm mirror metadata
 
-The npm mirror write republishes the version object the public registry served when the worker
-admitted the version, so an install from the mirror resolves the same dependencies, executable
-mappings, engines, scripts, and deprecation notice as an install from the public registry. The
-worker reads that object at admission time, never from the queued job.
+The npm mirror write republishes supported metadata from the public version object. It retains
+dependencies, executable mappings, engines, scripts, and deprecation notices. The worker reads
+that object at admission time, never from the queued job.
 
-- Écluse keeps every field the author wrote, including fields it does not model.
+- Écluse keeps the [supported npm fields](@/docs/protocol-support.md#npm-metadata-fields). Fields outside that contract do not survive extraction.
 - Écluse rewrites only what it verified itself: the name, the version, the attachment, and the
   `dist` location and digests. A digest the public registry declared but the worker did not verify
   is dropped rather than republished.
-- Écluse strips `dist.signatures`, `dist.attestations`, and every underscore-prefixed field,
-  because they describe the public registry's own keys, bundles, and bookkeeping.
+- Écluse strips `dist.signatures`, `dist.attestations`, and underscore-prefixed bookkeeping fields.
+  It retains `_hasShrinkwrap` because this marker affects installation.
 - Missing or inconsistent mirror upload data stops mirroring before the artifact download. The worker
   checks the admitted package, version, and complete npm tarball inventory against the publication
   input. It retires a refused job without publishing and logs the reason apart from a policy denial.

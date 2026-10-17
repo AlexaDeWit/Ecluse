@@ -224,8 +224,8 @@ advisories:
   # The object store the compiled advisory databases sync from, as
   # s3://<bucket>[/<prefix>]. The scheme picks the provider, the way queue.url does, and
   # a scheme this build does not know is refused at load. AWS_ENDPOINT_URL still points
-  # the S3 client at an emulator or a VPC endpoint. There is no default: the artifact
-  # carries no signature and a bucket name is global, so a shipped one would name a
+  # both advisory and durable mirror-state S3 clients at an emulator or a VPC endpoint.
+  # There is no default: the artifact carries no signature and a bucket name is global, so a shipped one would name a
   # bucket this project does not own. Unset, the advisory stack is off, and the shipped
   # deny-known-malicious and remediation-fast-track rules stay inactive. A manually enabled
   # MAL, CVSS, or EPSS deny, or an AllowIfRemediatesCve rule with onUnavailable: deny,
@@ -442,7 +442,7 @@ mounts:
     # Only a first-party name may be published here, and a first-party name
     # resolves from privateUpstream alone: it is never fetched from publicUpstream,
     # never merged with a public document, and never mirrored. A private 404 answers
-    # 404, and a private upstream that cannot be read answers 503.
+    # 404. A private 401/403 answers a local 403. Other private read failures answer 503.
     # The shape is per-ecosystem. npm reads scopes. PyPI reads PEP 503 canonical
     # distribution names, and an entry ending in a separator then * is a prefix, so
     # acme-* covers acme-tools and not acmeco. A star on no separator (acme*) is
