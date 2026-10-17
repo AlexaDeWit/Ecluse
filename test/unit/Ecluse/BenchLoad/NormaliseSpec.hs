@@ -106,6 +106,14 @@ spec = do
             T.lines rendered `shouldSatisfy` elem "| private relay | n/a | n/a | n/a | n/a | n/a | n/a | unavailable: no public leg |"
 
     describe "renderSaturation" $ do
+        it "reports no usable comparison for an empty result" $ do
+            let rendered = renderSaturation 0.5 []
+            T.lines rendered `shouldSatisfy` elem "No usable queuing comparison is available."
+            rendered `shouldNotSatisfy` T.isInfixOf "No measured queuing fraction exceeds"
+            rendered `shouldNotSatisfy` T.isInfixOf "not backlog"
+            rendered `shouldNotSatisfy` T.isInfixOf "FLAG, queuing-bound:"
+            rendered `shouldNotSatisfy` T.isInfixOf "Queuing comparison unavailable:"
+
         it "calls out the queuing-bound scenarios in a loud summary line" $ do
             let bound = deriveSaturation 0.5 (SaturationInput "merge-cold" 42 50 (Just 255) (Just 1090))
                 rendered = renderSaturation 0.5 [bound]

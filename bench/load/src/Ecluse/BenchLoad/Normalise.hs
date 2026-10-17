@@ -213,11 +213,15 @@ renderSaturation threshold sats =
                 <> ". The loaded latency is mostly backlog (connection-pool or admission-bound), not per-request work."
     unmeasuredLine =
         "Queuing comparison unavailable: " <> T.intercalate ", " (map unavailableLabel unmeasured) <> "."
-    unavailableLabel s = satName s <> " (" <> reason s <> ")"
-    reason s
-        | isNothing (satLoadedP50Ms s) = "no successful response under load"
-        | isNothing (satC1ServiceP50Ms s) = "concurrency-1 service p50 unavailable"
-        | otherwise = "loaded p50 is not positive"
+
+unavailableLabel :: Saturation -> Text
+unavailableLabel s = satName s <> " (" <> unavailableReason s <> ")"
+
+unavailableReason :: Saturation -> Text
+unavailableReason s
+    | isNothing (satLoadedP50Ms s) = "no successful response under load"
+    | isNothing (satC1ServiceP50Ms s) = "concurrency-1 service p50 unavailable"
+    | otherwise = "loaded p50 is not positive"
 
 renderSat :: Saturation -> Text
 renderSat s =
