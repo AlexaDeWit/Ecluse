@@ -33,6 +33,7 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UnsafeReason (ConfigurationEvidence, InsufficientPermissions),
  )
 import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyInstallTimeExecutionType))
+import Ecluse.Runtime.Test.Aws (deliverRefreshFailure, holdsNoPlantedSecret, refreshFailures)
 import Ecluse.Test.Package (unsafeRegistryUrl)
 import Ecluse.Test.Stub (redirectedStatusException)
 
@@ -76,11 +77,20 @@ ruleBlockRenderSpec = describe "blocked-rule remedies" $ do
 
 refuseOnThrowSpec :: Spec
 refuseOnThrowSpec =
-    describe "refuseOnThrow" $
+    describe "refuseOnThrow" $ do
         it "refuses an HTTP fault by its status at the dialled host:port, never the request or the response" $ do
             (authority, err) <- redirectedStatusException status503
             refuseOnThrow (PrivateUpstreamProbeFailed Npm) (throwIO err :: IO ())
                 `shouldReturn` Left [PrivateUpstreamProbeFailed Npm (authority <> ": HTTP 503")]
+
+        it "refuses a credential refresh failure handed to its thread by the typed cause, never the request" $ do
+            failures <- refreshFailures
+            for_ failures $ \failure ->
+                refuseOnThrow (PrivateUpstreamProbeFailed Npm) (deliverRefreshFailure failure) >>= \case
+                    Left [PrivateUpstreamProbeFailed Npm detail] -> do
+                        detail `shouldSatisfy` T.isPrefixOf "AWS request failed at "
+                        detail `shouldSatisfy` holdsNoPlantedSecret
+                    other -> expectationFailure ("expected one probe refusal, got " <> show other)
 
 renderBootErrorsSpec :: Spec
 renderBootErrorsSpec =

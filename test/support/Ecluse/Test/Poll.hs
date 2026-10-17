@@ -6,19 +6,19 @@
 module Ecluse.Test.Poll (
     pollUntil,
     awaitUntil,
+    threadEnded,
     retryingIO,
     runUntil,
 ) where
 
 import Control.Retry (constantDelay, limitRetries, retrying)
+import GHC.Conc (ThreadId, ThreadStatus (ThreadDied, ThreadFinished), threadStatus)
 import UnliftIO (MonadUnliftIO, race, throwIO, timeout, tryAny)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
-{- | Run @act@ up to @attempts@ times, @delayMicros@ apart, stopping at the first outcome
-'accept' holds for. The final outcome comes back whether or not it was accepted.
--}
+-- | Run @act@ up to @attempts@ times, @delayMicros@ apart, stopping at the first outcome 'accept' holds for. The final outcome comes back whether or not it was accepted.
 pollUntil :: (MonadIO m) => Int -> Int -> (a -> Bool) -> m a -> m a
 pollUntil attempts delayMicros accept act =
     retrying
@@ -26,17 +26,21 @@ pollUntil attempts delayMicros accept act =
         (const (pure . not . accept))
         (const act)
 
-{- | Run @check@ every @delayMicros@ until it holds or @budgetMicros@ of wall clock elapses.
-'False' is the budget expiring, which the caller reports in its own words.
--}
+-- | Run @check@ every @delayMicros@ until it holds or @budgetMicros@ of wall clock elapses. 'False' is the budget expiring, which the caller reports in its own words.
 awaitUntil :: (MonadUnliftIO m) => Int -> Int -> m Bool -> m Bool
 awaitUntil budgetMicros delayMicros check = fromMaybe False <$> timeout budgetMicros loop
   where
     loop = check >>= \held -> if held then pure True else threadDelay delayMicros >> loop
 
-{- | 'pollUntil' over an action that signals failure by throwing: the last attempt's
-exception propagates. 'tryAny' leaves an async exception alone, so a cancel still travels.
--}
+-- | Whether a thread has finished or died, for an 'awaitUntil' that waits on it.
+threadEnded :: ThreadId -> IO Bool
+threadEnded thread =
+    threadStatus thread <&> \case
+        ThreadFinished -> True
+        ThreadDied -> True
+        _ -> False
+
+-- | 'pollUntil' over an action that signals failure by throwing: the last attempt's exception propagates. 'tryAny' leaves an async exception alone, so a cancel still travels.
 retryingIO :: (MonadUnliftIO m) => Int -> Int -> m a -> m a
 retryingIO attempts delayMicros act =
     pollUntil attempts delayMicros isRight (tryAny act) >>= either throwIO pure

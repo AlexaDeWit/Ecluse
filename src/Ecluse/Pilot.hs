@@ -63,6 +63,7 @@ import Ecluse.Pilot.Plan (
     uploadTarget,
  )
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
+import Ecluse.Runtime.Aws.Fault (retypeAmazonkaEscapes)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Log (moduleContext)
 import Ecluse.Runtime.Pilot.Export (publishCandidate)
@@ -102,7 +103,8 @@ runExportLoop telemetry s3Endpoint config = \case
 -- | One supervised cycle loop per ecosystem, side by side, each with its own backoff, so one failing feed holds back no other.
 superviseExportCycles :: (MonadUnliftIO m, KatipContext m) => BackoffSchedule -> NonEmpty ExportTarget -> (ExportTarget -> m ()) -> m ()
 superviseExportCycles schedule targets runCycle =
-    mapConcurrently_ (\target -> superviseLoop (policyFor target) (runCycle target)) targets
+    -- amazonka hands a failed credential refresh to the cycle thread that discovered the credentials.
+    mapConcurrently_ (\target -> superviseLoop (policyFor target) (retypeAmazonkaEscapes (runCycle target))) targets
   where
     policyFor target = transientPolicy ("pilot-export-" <> ecosystemName (etEcosystem target)) schedule
 
