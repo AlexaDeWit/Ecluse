@@ -3,8 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The first-party publish route, guarded before any upstream write.
-Credential selection follows the authenticated edge mode. Body limits and name agreement
-bound the request before the adapter relays it to the publication target.
+Credential selection follows the authenticated edge mode. Body limits, the new-release upload
+shape, and name agreement bound the request before the adapter relays it to the publication target.
 -}
 module Ecluse.Core.Server.Pipeline.Publish (
     PublishReplies (..),
@@ -14,13 +14,18 @@ module Ecluse.Core.Server.Pipeline.Publish (
 ) where
 
 import Data.List (lookup)
-import Network.HTTP.Types (ResponseHeaders, Status, hContentType, mkStatus, status400, status401, status403, status413, status500, status502)
+import Network.HTTP.Types (ResponseHeaders, Status, hContentType, mkStatus, status400, status401, status403, status413, status500, status501, status502)
 import Network.Wai (Request, RequestBodyLength (ChunkedBody, KnownLength), ResponseReceived, getRequestBodyChunk, requestBodyLength, requestHeaders)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageName, renderPackageName)
-import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable), ParseError (parseErrorMessage), PublishRelayResponse (PublishRelayResponse))
-import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishDeclaredNames, publishRelay), PublishRequestBody (..))
+import Ecluse.Core.Registry (
+    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
+    ParseError (parseErrorMessage),
+    PublishBodyFault (PublishMalformed, PublishUnsupported),
+    PublishRelayResponse (PublishRelayResponse),
+ )
+import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishRelay, publishUploadClaims), PublishRequestBody (..))
 import Ecluse.Core.Registry.Exchange (withinServeCap)
 import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Security (BodyLimit (PublishRequestBodyLimit), Limits (maxPublishRequestBytes, progressFloor), boundedRead)
@@ -93,7 +98,7 @@ publishWithDeps replies deps clientToken name request respond
         KnownLength n -> fromIntegral n
         ChunkedBody -> pubMaxRequestBytes deps
 
-{- Read the bounded body, check the name it declares, then relay, in that order. This runs
+{- Read the bounded body, check its upload shape and names, then relay, in that order. This runs
 inside the byte-admission bracket, so the reserved weight always covers the bytes buffered. -}
 readAndRelay ::
     PublishReplies response ->
@@ -107,9 +112,9 @@ readAndRelay replies deps target name request =
         Left _ -> pure (publishTooLarge replies deps)
         Right (_, bytes) -> do
             let body = PublishRequestBody bytes (lookup hContentType (requestHeaders request))
-            claims <- publishDeclaredNames (pubAdapter deps) ((pubLimits deps){maxPublishRequestBytes = pubMaxRequestBytes deps}) body
+            claims <- publishUploadClaims (pubAdapter deps) ((pubLimits deps){maxPublishRequestBytes = pubMaxRequestBytes deps}) body
             case claims of
-                Left fault -> pure (publishError replies status400 [] (appendHelp (pubHelp deps) (parseErrorMessage fault)))
+                Left fault -> pure (bodyRefusal replies deps fault)
                 Right declared -> case resolveName declared of
                     Left refusal -> pure refusal
                     Right agreed -> renderRelay replies deps <$> withinServeCap (progressFloor (pubLimits deps)) id (publishRelay (pubAdapter deps) target agreed body)
@@ -159,6 +164,11 @@ renderRelay replies deps = \case
         publishError replies status502 [] (appendHelp (pubHelp deps) "the publication target could not be reached")
     Left (FetchBoundExceeded _limit) ->
         publishError replies status502 [] (appendHelp (pubHelp deps) "the publication target could not be reached")
+
+bodyRefusal :: PublishReplies response -> PublishDeps -> PublishBodyFault -> response
+bodyRefusal replies deps = \case
+    PublishMalformed fault -> publishError replies status400 [] (appendHelp (pubHelp deps) (parseErrorMessage fault))
+    PublishUnsupported reason -> publishError replies status501 [] (appendHelp (pubHelp deps) reason)
 
 -- A @503@ for a publish shed at the aggregate body-byte budget: server capacity, not client
 -- rate, so not a @429@. Same wait-then-shed timing and @Retry-After@ hint as the read path.

@@ -786,6 +786,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.Npm.StoredVersions
     Ecluse.Test.Registry.Npm.Maintenance
     Ecluse.Test.Registry.Npm.Project
+    Ecluse.Test.Registry.Npm.Publish
     Ecluse.Test.Registry.Npm.Streaming
     Ecluse.Test.Registry.JsonBytes
     Ecluse.Test.Registry.JsonStream

@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | npm mirror upload data, publication, and the first-party identity guard.
+{- | npm mirror upload data, publication, and the first-party upload guard.
 The checked mirror upload data keeps publication fields paired with the admitted tarball.
 -}
 module Ecluse.Core.Registry.Npm.Publish (
@@ -12,7 +12,8 @@ module Ecluse.Core.Registry.Npm.Publish (
     npmPublishCodec,
     publishRequest,
     npmPublishDocument,
-    declaredNames,
+    uploadClaims,
+    npmNewReleaseOnly,
     npmPublishAllowed,
 ) where
 
@@ -38,6 +39,8 @@ import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest)
 import Ecluse.Core.Registry (
     FetchFault (FetchUrlUnformable),
     MirrorArtifact (maFilename, maHashes),
+    ParseError (ParseError),
+    PublishBodyFault (PublishMalformed, PublishUnsupported),
     PublishError (PublishError),
     PublishFault (PublishFetch, PublishRejected, PublishSourceUnavailable),
     UrlFormationError,
@@ -203,12 +206,28 @@ attachmentObject tarball =
     encodedTarball :: Text
     encodedTarball = decodeUtf8 (convertToBase Base64 tarball :: ByteString)
 
--- | Read @_id@, @name@ and each version's name for the anti-shadowing guard. An undecodable body declares nothing.
-declaredNames :: LByteString -> [Text]
-declaredNames body =
+-- | The declared names of a new-release document: one version and a non-empty @_attachments@, whose data it never reads.
+uploadClaims :: ByteString -> Either PublishBodyFault [Text]
+uploadClaims body = case Aeson.decodeStrict body of
+    Just document@(Object fields)
+        | isNewRelease fields -> Right (declaredNames document)
+        | otherwise -> Left (PublishUnsupported npmNewReleaseOnly)
+    _ -> Left (PublishMalformed (ParseError "the publish body is not a JSON object"))
+
+-- | The @501@ reason for a write that is not a new release, such as @npm deprecate@ or @npm star@.
+npmNewReleaseOnly :: Text
+npmNewReleaseOnly = "this proxy relays new-release publish documents only: change an existing package's metadata, such as a deprecation, at the publication target"
+
+isNewRelease :: KeyMap Value -> Bool
+isNewRelease fields = case (KeyMap.lookup "_attachments" fields, KeyMap.lookup "versions" fields) of
+    (Just (Object attachments), Just (Object versions)) -> not (KeyMap.null attachments) && KeyMap.size versions == 1
+    _ -> False
+
+-- @_id@, @name@ and each version's name, which the anti-shadowing guard compares with the path name.
+declaredNames :: Value -> [Text]
+declaredNames document =
     [ declared
-    | document <- maybeToList (Aeson.decode body :: Maybe Value)
-    , slot <-
+    | slot <-
         [document ^? key "_id", document ^? key "name"]
             <> [ versionDoc ^? key "name"
                | versions <- maybeToList (document ^? key "versions" . _Object)

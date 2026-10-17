@@ -39,6 +39,7 @@ import Ecluse.Core.Registry.Npm.Adapter (npmAdapter, npmPublish)
 import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter, pypiPublish)
 import Ecluse.Core.Registry.PyPI.Project (canonicalName)
+import Ecluse.Core.Registry.PyPI.Publish.Multipart (pypiFileUploadOnly)
 import Ecluse.Core.Security (defaultLimits, maxMetadataBytes, maxPublishRequestBytes)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission, newByteAdmissionTuned)
@@ -47,6 +48,7 @@ import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Registry.Npm.Publish (npmDeprecateDocument, npmReleaseDocument)
 import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps)
 import Ecluse.Test.Stub (Captured (capBody, capMethod, capPath), Stub, allCaptured, headerValue, stubPort, withStubHeaders)
 import Ecluse.Test.Wai (status)
@@ -106,30 +108,23 @@ putPublishAs bodyLen path bearer body =
             }
     auth = maybe [] (\t -> [(hAuthorization, "Bearer " <> encodeUtf8 t)]) bearer
 
--- A representative npm publish document body whose declared identity (@_id@,
--- top-level @name@) agrees with the @\@acme\/widget@ URL the tests publish to.
+-- An npm 11 release whose @_id@, @name@, and version @name@ all agree with the @\@acme\/widget@ URL.
 publishBody :: LByteString
-publishBody = "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{}}"
+publishBody = npmReleaseDocument widget widget widget
 
--- A legitimate npm client's shape: @_id@, top-level @name@, and the one @versions[].name@
--- all agree with the @\@acme\/widget@ URL, so the agreement check must still relay it.
-matchingVersionBody :: LByteString
-matchingVersionBody =
-    "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"1.0.0\":{\"name\":\"@acme/widget\",\"version\":\"1.0.0\"}}}"
-
--- Publish documents whose declared identity disagrees with the in-scope URL name
--- @\@acme\/widget@ on one field: the anti-shadowing bypass a crafted body attempts.
+-- Releases whose declared identity disagrees with the in-scope URL name on one field: the
+-- anti-shadowing bypass a crafted body attempts.
 mismatchedIdBody :: LByteString
-mismatchedIdBody =
-    "{\"_id\":\"@victim/target\",\"name\":\"@acme/widget\",\"versions\":{}}"
+mismatchedIdBody = npmReleaseDocument "@victim/target" widget widget
 
 mismatchedNameBody :: LByteString
-mismatchedNameBody =
-    "{\"_id\":\"@acme/widget\",\"name\":\"@victim/target\",\"versions\":{}}"
+mismatchedNameBody = npmReleaseDocument widget "@victim/target" widget
 
 mismatchedVersionNameBody :: LByteString
-mismatchedVersionNameBody =
-    "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"1.0.0\":{\"name\":\"@victim/target\",\"version\":\"1.0.0\"}}}"
+mismatchedVersionNameBody = npmReleaseDocument widget widget "@victim/target"
+
+widget :: Text
+widget = "@acme/widget"
 
 -- | Publish guards and the target-visible request and response contract.
 spec :: Spec
@@ -305,10 +300,25 @@ npmPublishSpec = describe "first-party npm publication relay" $ do
     it (caseLabel "integration/publication/native-019" "relays an in-scope publish whose body _id / name / versions[].name all agree with the URL name") $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             app <- proxyWith (Just (publishDepsAt targetPort Nothing))
-            resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") matchingVersionBody app
+            resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
             status resp `shouldBe` 201
             seen <- targetSaw target
             map fst seen `shouldBe` [Just "Bearer publisher-token"]
+
+    it (caseLabel "integration/publication/native-020" "refuses an npm deprecate body with 501 in npm's error shape before any relay") $
+        withTarget 201 "{\"success\":true}" $ \targetPort target -> do
+            app <- proxyWith (Just (publishDepsAt targetPort Nothing))
+            resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") (npmDeprecateDocument "use 1.1.0") app
+            status resp `shouldBe` 501
+            decodeUtf8 (LBS.toStrict (simpleBody resp)) `shouldSatisfy` T.isInfixOf NpmPublish.npmNewReleaseOnly
+            targetSaw target `shouldReturn` []
+
+    it (caseLabel "integration/publication/native-021" "refuses an undecodable npm publish body with 400 before any relay") $
+        withTarget 201 "{\"success\":true}" $ \targetPort target -> do
+            app <- proxyWith (Just (publishDepsAt targetPort Nothing))
+            resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") "{\"_id\":" app
+            status resp `shouldBe` 400
+            targetSaw target `shouldReturn` []
 
 pypiProxy :: Maybe (ByteAdmission -> PublishDeps) -> IO Application
 pypiProxy build = do
@@ -328,11 +338,21 @@ pypiDeps port budget =
 multipartType :: ByteString
 multipartType = "multipart/form-data; boundary=relay-boundary"
 
+-- A file_upload of one archive under the given name parts, in the order twine sends them.
 multipartBody :: [ByteString] -> LByteString
-multipartBody names = fromStrict (foldMap field names <> file <> "--relay-boundary--\r\n")
+multipartBody names = formBody ((":action", "file_upload") : map ("name",) names) archivePart
+
+-- A raw remove_pkg, which pypiserver honours and no uploader sends.
+removalBody :: LByteString
+removalBody = formBody [(":action", "remove_pkg"), ("name", "acme-widget"), ("version", "1.0")] ""
+
+formBody :: [(ByteString, ByteString)] -> ByteString -> LByteString
+formBody fields archive = fromStrict (foldMap field fields <> archive <> "--relay-boundary--\r\n")
   where
-    field value = "--relay-boundary\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\n" <> value <> "\r\n"
-    file = "--relay-boundary\r\nContent-Disposition: form-data; name=\"content\"; filename=\"acme_widget-1.0.tar.gz\"\r\nContent-Type: application/octet-stream\r\n\r\noriginal archive bytes\r\n"
+    field (name, value) = "--relay-boundary\r\nContent-Disposition: form-data; name=\"" <> name <> "\"\r\n\r\n" <> value <> "\r\n"
+
+archivePart :: ByteString
+archivePart = "--relay-boundary\r\nContent-Disposition: form-data; name=\"content\"; filename=\"acme_widget-1.0.tar.gz\"\r\nContent-Type: application/octet-stream\r\n\r\noriginal archive bytes\r\n"
 
 postUpload :: RequestBodyLength -> RequestHeaders -> LByteString -> Application -> IO SResponse
 postUpload bodyLength headers body = runSession (srequest (SRequest request body))
@@ -466,3 +486,18 @@ pypiPublishSpec = describe "first-party PyPI publication relay" $ do
             putMVar release ()
             completed <- wait heldRequest
             status completed `shouldBe` 201
+
+    it (caseLabel "integration/publication/native-pypi-013" "refuses a remove_pkg with 501 before any relay") $
+        withTarget 201 "accepted" $ \port target -> do
+            app <- pypiProxy (Just (pypiDeps port))
+            response <- postUpload ChunkedBody [("Content-Type", multipartType)] removalBody app
+            status response `shouldBe` 501
+            simpleBody response `shouldBe` fromStrict (encodeUtf8 pypiFileUploadOnly)
+            targetSaw target `shouldReturn` []
+
+    it (caseLabel "integration/publication/native-pypi-014" "refuses an upload with no :action with 400 before any relay") $
+        withTarget 201 "accepted" $ \port target -> do
+            app <- pypiProxy (Just (pypiDeps port))
+            response <- postUpload ChunkedBody [("Content-Type", multipartType)] (formBody [("name", "acme-widget")] archivePart) app
+            status response `shouldBe` 400
+            targetSaw target `shouldReturn` []

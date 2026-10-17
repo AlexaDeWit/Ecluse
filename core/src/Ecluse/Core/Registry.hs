@@ -23,6 +23,7 @@ module Ecluse.Core.Registry (
     PublishFault (..),
     UrlFormationError (..),
     renderUrlFormationError,
+    PublishBodyFault (..),
     PublishRelayResponse (..),
 ) where
 
@@ -110,6 +111,14 @@ data FetchFault
       FetchBoundExceeded LimitError
     | -- | The adapter classified a failed or interrupted exchange.
       FetchTransport TransportFault
+    deriving stock (Eq, Show)
+
+-- | Why a publish body is not relayed. Only a new-release upload is: other writes change or delete stored releases.
+data PublishBodyFault
+    = -- | The body cannot be read as the ecosystem's upload: @400@.
+      PublishMalformed ParseError
+    | -- | A readable write that is not a new-release upload, with the publisher's way forward: @501@.
+      PublishUnsupported Text
     deriving stock (Eq, Show)
 
 -- | The response from the publication target after relaying a publish document.
