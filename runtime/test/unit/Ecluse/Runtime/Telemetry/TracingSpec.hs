@@ -42,7 +42,7 @@ import OpenTelemetry.Trace.Core (
     Event (eventAttributes, eventName),
     ImmutableSpan (spanContext, spanHot),
     Link (frozenLinkContext),
-    SpanHot (hotAttributes, hotEvents, hotLinks, hotName, hotStatus),
+    SpanHot (hotAttributes, hotLinks, hotName, hotStatus),
     SpanStatus (Error, Unset),
  )
 import OpenTelemetry.Trace.Core qualified as TraceCore
@@ -82,6 +82,7 @@ import Ecluse.Runtime.Telemetry.Tracing.Internal (
     withMirrorJobSpan,
     withRuleEvalSpan,
  )
+import Ecluse.Runtime.Test.Telemetry (spanEvents)
 import Ecluse.Test.Stub (refusedFetch, requestSecrets, signedRequest)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import UnliftIO.Exception (throwIO, try, tryAny)
@@ -241,7 +242,7 @@ attributeDump ref = do
     spans <- readIORef ref
     parts <- forM spans $ \theSpan -> do
         hot <- readIORef (spanHot theSpan)
-        pure (T.unwords [hotName hot, show (hotStatus hot), show (hotAttributes hot), show (map eventAttributes (exceptionEvents hot))])
+        pure (T.unwords [hotName hot, show (hotStatus hot), show (hotAttributes hot), show (map eventAttributes (spanEvents hot))])
     pure (T.intercalate "\n" parts)
 
 -- The package/version coordinates the domain spans carry. Fixed, since these tests
@@ -279,7 +280,7 @@ escapedExceptionSpec = describe "an exception escaping a span" $ do
             syncSpan <- findSpan ref "ecluse.advisory.sync.attempt"
             hot <- readIORef (spanHot syncSpan)
             hotStatus hot `shouldBe` Error (displayFaultT (toException refused))
-            map eventName (exceptionEvents hot) `shouldBe` ["exception"]
+            map eventName (spanEvents hot) `shouldBe` ["exception"]
             attributeDump ref >>= \dump -> for_ requestSecrets $ \secret -> dump `shouldSatisfy` (not . T.isInfixOf secret)
 
     it "records one escaping the application on the WAI server span by its typed cause, never its request" $ do
@@ -295,7 +296,7 @@ escapedExceptionSpec = describe "an exception escaping a span" $ do
             hotStatus hot `shouldSatisfy` \case
                 Error message -> T.isInfixOf "contract broken" message
                 _ -> False
-            map eventName (exceptionEvents hot) `shouldBe` ["exception"]
+            map eventName (spanEvents hot) `shouldBe` ["exception"]
 
     it "marks an attempt span errored with the fetch fault its result projects" $
         withTelemetrySpans (\telemetry -> withAdvisorySyncSpan telemetry Npm (const (AdvisoryFetchFailed, Just timedOutFetch)) pass) $ \ref -> do
@@ -356,10 +357,6 @@ throwingBehindMiddleware err telemetry = do
 -- Run a span body that throws, and swallow the throw, so the capture reads what the span recorded.
 escapeFrom :: (Telemetry -> IO ()) -> Telemetry -> IO ()
 escapeFrom emit telemetry = void (tryAny (emit telemetry))
-
--- The events a span holds, the library's own @exception@ event included.
-exceptionEvents :: SpanHot -> [Event]
-exceptionEvents = toList . appendOnlyBoundedCollectionValues . hotEvents
 
 -- Read one span attribute back as text, 'Nothing' when the key is absent or holds
 -- another type.

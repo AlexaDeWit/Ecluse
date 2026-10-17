@@ -39,7 +39,9 @@ Hand-added domain spans carry the decisions operators care about:
 
 When an HTTP client or AWS SDK exception escapes a span, the span records its typed fault as the
 error status. An upstream fetch's client span records the client's reason instead. Neither records
-the request the exception carries, because its path, query, and headers can hold a credential.
+the request the exception carries, because its path, query, and headers can hold a credential. An
+upstream fetch's client span records the URL it fetched, path and query included, and never a
+request header.
 
 Sampling is head-based and always-on by default, so Écluse never drops a rare denial or error
 trace. `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` set a parent-based ratio without a code
