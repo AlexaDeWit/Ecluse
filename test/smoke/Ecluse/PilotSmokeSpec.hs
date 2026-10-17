@@ -20,7 +20,7 @@ import Ecluse.Config (Config, loadConfig)
 import Ecluse.Core.Fault.Http (isRetryableStatusCode)
 import Ecluse.Core.Osv.Compile (PilotEpssRequired (perFailure))
 import Ecluse.Core.Osv.Epss (EpssFeedFailure (EpssFeedStatus, EpssFeedTransport))
-import Ecluse.Pilot (PilotCompileOptions (..), runPilotCompile)
+import Ecluse.Pilot (PilotCompileOptions (..), UploadRequest (NoUpload), runPilotCompile)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 
 spec :: Spec
@@ -36,7 +36,7 @@ spec = describe "osv.dev npm export (live oracle)" $
                         telemetryDisabled
                         Nothing
                         config
-                        PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = outDir, pcoUpload = False}
+                        PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = outDir, pcoUpload = NoUpload}
             case outcome of
                 Left (e :: HttpException) ->
                     pendingWith ("osv.dev unreachable: " <> show e)

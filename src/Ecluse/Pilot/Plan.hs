@@ -22,8 +22,13 @@ module Ecluse.Pilot.Plan (
     quietTimeFor,
     epssAttemptLine,
 
+    -- * The publication guard
+    shrinkPolicyOf,
+    pilotPostureLines,
+
     -- * The one-shot run
     PilotCompileOptions (..),
+    UploadRequest (..),
     compileEpssRequirement,
     unmountedCompileWarning,
     UploadPlan (..),
@@ -36,7 +41,7 @@ import Data.Map.Strict qualified as Map
 import System.FilePath (takeFileName)
 
 import Ecluse.Config (
-    AdvisoriesSettings (advCompileInterval, advEpssFeedUrl, advEpssQuietTime, advOsvExportBaseUrl, advQuietTime, advUrl),
+    AdvisoriesSettings (advCompileInterval, advEpssFeedUrl, advEpssLossCap, advEpssQuietTime, advMaxShrink, advOsvExportBaseUrl, advQuietTime, advUrl),
     AdvisoryStoreUrl,
     Mount,
     MountMap,
@@ -45,12 +50,14 @@ import Ecluse.Config (
     compileMountEpssRequirement,
     unUrl,
  )
+import Ecluse.Config.AdvisoryStore (advisoryStoreCapability)
 import Ecluse.Core.Clock (secondsToMicros)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Osv.Advisory (osvExportUrl)
 import Ecluse.Core.Osv.Compile (CompileSources (..))
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory))
 import Ecluse.Core.Osv.Provenance (QuietTime (..), defaultQuietTime)
+import Ecluse.Core.Osv.Publication (Rebaseline, ShrinkPolicy (..), renderBaselineCapability, renderPercent)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
 import Ecluse.Core.Security.Authority (dialledAuthorityLabel)
 
@@ -99,6 +106,23 @@ epssAttemptLine advisories =
         <> dialledAuthorityLabel (unUrl (advEpssFeedUrl advisories))
         <> ", whatever the rules, so its egress must be allowed"
 
+-- | The shrink limits every publication is held to, scheduled or one-shot.
+shrinkPolicyOf :: AdvisoriesSettings -> ShrinkPolicy
+shrinkPolicyOf advisories = ShrinkPolicy{spMaxShrink = advMaxShrink advisories, spEpssLossCap = advEpssLossCap advisories}
+
+-- | What every Pilot boot reports: the egress it attempts, and, with a store to publish to, the guard each publication passes.
+pilotPostureLines :: AdvisoriesSettings -> [Text]
+pilotPostureLines advisories = epssAttemptLine advisories : maybe [] (pure . guardLine . advisoryStoreCapability) (advUrl advisories)
+  where
+    guardLine capability =
+        "pilot: a publication must not be older than the stored artifact, by source, nor shrink more than "
+            <> renderPercent (advMaxShrink advisories)
+            <> " under its "
+            <> renderBaselineCapability capability
+            <> ", with up to "
+            <> renderPercent (advEpssLossCap advisories)
+            <> " more after an optional EPSS outage"
+
 -- | The quiet-time thresholds of one compile. An unconfigured ecosystem, or one this build does not serve, takes 'defaultQuietTime'.
 quietTimeFor :: AdvisoriesSettings -> Maybe Ecosystem -> QuietTime
 quietTimeFor advisories mEco =
@@ -113,9 +137,17 @@ quietTimeFor advisories mEco =
 data PilotCompileOptions = PilotCompileOptions
     { pcoEcosystem :: Text
     , pcoOutDir :: FilePath
-    , pcoUpload :: Bool
-    -- ^ Upload the compiled artifact to the configured advisory store.
+    , pcoUpload :: UploadRequest
     }
+    deriving stock (Eq, Show)
+
+-- | Whether a one-shot run publishes its artifact. A rebaseline exists only beside an upload.
+data UploadRequest
+    = NoUpload
+    | -- | Publish under the configured guard.
+      Upload
+    | -- | Publish once over the named revision, with this run's own shrink allowance, and restart the baseline.
+      UploadRebaselined Rebaseline
     deriving stock (Eq, Show)
 
 -- | The compiled mount's own requirement. A compile for no mount may serve a policy that needs EPSS.
@@ -146,15 +178,18 @@ instance Exception PilotUploadUnconfigured
 data UploadPlan
     = -- | The run did not ask to upload, so the artifact stays local.
       UploadSkipped
-    | -- | Upload the compiled artifact to this store.
-      UploadTo AdvisoryStoreUrl
+    | -- | Upload the compiled artifact to this store, under an operator's rebaseline if one was given.
+      UploadTo AdvisoryStoreUrl (Maybe Rebaseline)
     deriving stock (Eq, Show)
 
 -- | Plan a one-shot run's upload. One asked for with no store is refused, so a scripted run cannot succeed having published nothing.
 uploadPlan :: PilotCompileOptions -> Maybe AdvisoryStoreUrl -> Either PilotUploadUnconfigured UploadPlan
-uploadPlan opts mStore
-    | not (pcoUpload opts) = Right UploadSkipped
-    | otherwise = maybe (Left PilotUploadUnconfigured) (Right . UploadTo) mStore
+uploadPlan opts mStore = case pcoUpload opts of
+    NoUpload -> Right UploadSkipped
+    Upload -> uploadingTo Nothing
+    UploadRebaselined approval -> uploadingTo (Just approval)
+  where
+    uploadingTo approval = maybe (Left PilotUploadUnconfigured) (\store -> Right (UploadTo store approval)) mStore
 
 -- | Where one compiled artifact lands: the store's bucket and its file's key under the prefix, which the proxy's sync reads.
 uploadTarget :: AdvisoryStoreUrl -> FilePath -> (Text, Text)

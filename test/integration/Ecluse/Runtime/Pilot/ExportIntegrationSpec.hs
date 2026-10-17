@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Advisory publication and consumer polling against the ministack S3 service.
+{- | Guarded advisory publication and consumer polling against the ministack S3 service.
 Requires a Docker daemon.
 -}
 module Ecluse.Runtime.Pilot.ExportIntegrationSpec (
@@ -10,149 +10,246 @@ module Ecluse.Runtime.Pilot.ExportIntegrationSpec (
 ) where
 
 import Control.Monad.Trans.Resource (runResourceT)
+import Data.HashMap.Strict qualified as HashMap
 import Data.Text qualified as T
 import Ecluse.Test.Contract.Catalogue (caseLabel)
-import System.FilePath (takeFileName)
+import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, aroundAll, aroundWith, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
+import Test.Hspec (Spec, SpecWith, aroundAll, aroundWith, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
 import TestContainers (Container, containerAddress)
+import UnliftIO.Async (concurrently)
 
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 import Amazonka.S3.Lens qualified as S3L
-import Amazonka.S3.ListObjectsV2 qualified as S3
-import Amazonka.S3.Types.Object qualified as S3Object
-import Ecluse.Config.AdvisoryStore (AdvisoryStoreUrl, advisoryObjectKey, advisoryStoreBucket, mkAdvisoryStoreUrl)
+import Data.Time (UTCTime)
+import Ecluse.Config.AdvisoryStore (AdvisoryStoreUrl, advisoryStoreBucket, mkAdvisoryStoreUrl)
 import Ecluse.Config.Ambient (parseEndpointUrl)
 import Ecluse.Core.Cve (CveDbRejected (CveDbWrongEpoch))
-import Ecluse.Core.Cve.Slot (AdvisorySource (..), currentAdvisorySource, generationInstalledAt, newCveSlot)
+import Ecluse.Core.Cve.Slot (AdvisorySource (..), currentAdvisorySource, newCveSlot)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Osv.Schema (EpssRequirement (..), osvSchemaEpoch)
-import Ecluse.Integration.Ministack (withMinistack)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
+import Ecluse.Core.Osv.Compile (OsvCandidate, candidatePath)
+import Ecluse.Core.Osv.Provenance (ProvenanceSource (OsvExport))
+import Ecluse.Core.Osv.Publication
+import Ecluse.Core.Osv.Schema (EpssRequirement (..), osvDbFileName, osvSchemaEpoch)
+import Ecluse.Integration.Ministack (objectMetadata, withMinistack)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Cve.Sync.Internal (SyncEnv (..), SyncOutcome (..), newS3CveSource, s3CveFetchFor, syncStep)
-import Ecluse.Runtime.Pilot.Export (exportToS3)
+import Ecluse.Runtime.Pilot.Export (PublicationStop (..), Published (..), publishCandidate)
 import Ecluse.Runtime.Test.Advisory (advisoryDriver)
 import Ecluse.Test.Contract.Advisory (AdvisoryDriver, AdvisoryFixture (..), advisoryContract)
-import Ecluse.Test.Osv (mkDbWithWrongEpoch, mkMinimalValidDb, mkMinimalValidDbWithMeta)
+import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (aiOsvZip), fillerTargets, syntheticAdvisories)
+import Ecluse.Test.Log (runQuietKatip)
+import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2), mkDbWithWrongEpoch, mkMinimalValidDb, osvCorpusZip)
+import Ecluse.Test.OsvDb (SourceServer, withServedCandidate, withSourceServer)
 import Ecluse.Test.Poll (pollUntil, retryingIO)
-import Katip (Environment (..), initLogEnv, runKatipContextT)
-import Lens.Micro ((^.))
+import Lens.Micro ((.~), (?~), (^.))
 
--- | Run the last-good contract and native S3 publication assertions against ministack.
+-- | The last-good contract over operator writes, and guarded publication against ministack.
 spec :: Spec
-spec = do
-    describe "S3 Export Integration" $ do
+spec =
+    describe "S3 Export Integration" $
         aroundAll withMinistack $ do
             aroundWith withS3AdvisoryDriver $
                 advisoryContract "advisory/s3" (CveDbWrongEpoch (osvSchemaEpoch + 1))
+            for_ [Npm, PyPI] guardedPublicationSpec
+            for_ [Npm, PyPI] $ \eco -> for_ [False, True] (shrinkSpec eco)
 
-            it (caseLabel "integration/advisory-export/native-001" "uploads OSV databases to S3") $ \container -> do
-                withSystemTempDirectory "ecluse-osv-test" $ \tmpDir -> do
-                    Store{stEndpoint = endpoint, stAws = base, stStore = store} <-
-                        createdBucket container "s3://test-osv-bucket"
-                    let bucket = advisoryStoreBucket store
+guardedPublicationSpec :: Ecosystem -> SpecWith Container
+guardedPublicationSpec eco = do
+    it (label "native-001" "creates the first artifact only while the key is absent, with its publication metadata") $ \container ->
+        withGuarded container eco "first" $ \store server dir -> do
+            published <- served server "Wed, 01 Oct 2026 10:00:00 GMT" CorpusV1 dir (publish store) >>= expectPublished
+            plPrecondition (pubPlan published) `shouldBe` CreateOnly
+            metadata <- storedMetadata store
+            HashMap.lookup "baseline-adjustment" metadata `shouldBe` Just "initial"
+            HashMap.lookup "osv-last-modified" metadata `shouldBe` Just "2026-10-01T10:00:00Z"
+            HashMap.lookup "ecosystem" metadata `shouldBe` Just (ecosystemName eco)
+            consumer <- consumerFor store eco dir
+            syncStep consumer Nothing >>= (`shouldSatisfy` swapped)
 
-                    let dummyDb = tmpDir <> "/dummy.sqlite"
-                    liftIO $ writeFile dummyDb "dummy sqlite data"
+    it (label "native-002" "refreshes unchanged input under a new revision, which the consumer swaps in with a later push time") $ \container ->
+        withGuarded container eco "refresh" $ \store server dir -> do
+            consumer <- consumerFor store eco dir
+            served server "Wed, 01 Oct 2026 10:00:00 GMT" CorpusV1 dir $ \candidate -> do
+                void (publish store candidate >>= expectPublished)
+                firstSeen <- syncStep consumer Nothing >>= swappedEtag
+                firstPush <- pushedAt consumer
+                firstHead <- headObject store
+                -- HTTP Last-Modified carries whole seconds, so republish until the consumer can tell the pushes apart.
+                let republished = do
+                        void (publish store candidate >>= expectPublished)
+                        later <- headObject store
+                        pure (later ^. S3L.headObjectResponse_lastModified > firstHead ^. S3L.headObjectResponse_lastModified)
+                pollUntil 21 500_000 id republished >>= (`shouldBe` True)
+                refreshed <- syncStep consumer (Just firstSeen) >>= swappedEtag
+                refreshed `shouldSatisfy` (/= firstSeen)
+                pushedAt consumer >>= (`shouldSatisfy` (> firstPush))
 
-                    logEnv <- liftIO $ initLogEnv "ecluse-test" (Environment "test")
-                    let objectKey = advisoryObjectKey store (takeFileName dummyDb)
-                    runKatipContextT logEnv () mempty (runResourceT $ exportToS3 Nothing (Just endpoint) bucket objectKey dummyDb)
+    it (label "native-003" "refuses an earlier-data run that finishes after a newer one, and leaves the consumer's push time alone") $ \container ->
+        withGuarded container eco "older" $ \store server dir -> do
+            consumer <- consumerFor store eco dir
+            served server "Wed, 01 Oct 2026 10:00:00 GMT" CorpusV1 (dir </> "older") $ \older -> do
+                served server "Wed, 01 Oct 2026 11:00:00 GMT" CorpusV2 (dir </> "newer") $ \newer ->
+                    void (publish store newer >>= expectPublished)
+                seen <- syncStep consumer Nothing >>= swappedEtag
+                push <- pushedAt consumer
+                before <- storedEtag store
+                publish store older >>= \case
+                    Left (PublicationRefused (SourceOutOfOrder _ (OlderSnapshot _ _))) -> pass
+                    other -> expectationFailure ("expected the older run refused, got " <> show other)
+                storedEtag store `shouldReturn` before
+                syncStep consumer (Just seen) >>= (`shouldSatisfy` unchanged)
+                pushedAt consumer `shouldReturn` push
 
-                    resp <- runResourceT $ AWS.send base (S3.newListObjectsV2 (S3.BucketName bucket))
-                    let objects = fromMaybe [] (S3.contents resp)
+    it (label "native-004" "lets exactly one of two first writers create the object, and keeps the newer data") $ \container ->
+        withGuarded container eco "race" $ \store server dir ->
+            served server "Wed, 01 Oct 2026 10:00:00 GMT" CorpusV1 (dir </> "older") $ \older ->
+                served server "Wed, 01 Oct 2026 11:00:00 GMT" CorpusV2 (dir </> "newer") $ \newer -> do
+                    (olderOutcome, newerOutcome) <- concurrently (publish store older) (publish store newer)
+                    newerOutcome `shouldSatisfy` isRight
+                    olderOutcome `shouldSatisfy` either refusedAsOlder (const True)
+                    HashMap.lookup "osv-last-modified" <$> storedMetadata store `shouldReturn` Just "2026-10-01T11:00:00Z"
 
-                    length objects `shouldBe` 1
-                    case objects of
-                        [obj] -> S3Object.key obj `shouldBe` S3.ObjectKey "dummy.sqlite"
-                        _ -> fail ("Expected 1 object, got " <> show (length objects))
+    it (label "native-005" "refuses to replace an object written without publication metadata") $ \container ->
+        withGuarded container eco "legacy" $ \store server dir -> do
+            mkMinimalValidDb (dir </> "legacy.db") "pkg-a"
+            void (putDirect store (dir </> "legacy.db") HashMap.empty)
+            before <- storedEtag store
+            served server "Wed, 01 Oct 2026 10:00:00 GMT" CorpusV1 dir (publish store) >>= \case
+                Left (PublicationRefused (PredecessorUnreadable (EnvelopeMissing keys))) -> toList keys `shouldSatisfy` elem "baseline-bytes"
+                other -> expectationFailure ("expected a missing-metadata refusal, got " <> show other)
+            storedEtag store `shouldReturn` before
 
-            it (caseLabel "integration/advisory-export/native-002" "uploads again when the artifact's bytes have not changed") $ \container -> do
-                -- Republishing one accepted artifact preserves its bytes, including built_at.
-                withSystemTempDirectory "ecluse-osv-republish" $ \tmpDir -> do
-                    Store{stEndpoint = endpoint, stAws = base, stStore = store} <-
-                        createdBucket container "s3://test-osv-republish-bucket"
-                    let bucket = advisoryStoreBucket store
+    it (label "native-007" "lets an operator restore an older artifact directly, which consumers accept and Pilot orders from") $ \container ->
+        withGuarded container eco "restore" $ \store server dir -> do
+            consumer <- consumerFor store eco dir
+            served server "Wed, 01 Oct 2026 10:00:00 GMT" CorpusV1 (dir </> "g1") $ \g1 -> do
+                void (publish store g1 >>= expectPublished)
+                g1Metadata <- storedMetadata store
+                served server "Wed, 01 Oct 2026 11:00:00 GMT" CorpusV2 (dir </> "g2") $ \g2 ->
+                    void (publish store g2 >>= expectPublished)
+                seen <- syncStep consumer Nothing >>= swappedEtag
+                -- A version restore copies the older object's bytes and metadata.
+                restored <- putDirect store (candidatePath g1) g1Metadata
+                syncStep consumer (Just seen) >>= swappedEtag >>= (`shouldBe` restored)
+            served server "Wed, 01 Oct 2026 12:00:00 GMT" CorpusV2 (dir </> "g3") $ \g3 ->
+                plOsvOrder . pubPlan <$> (publish store g3 >>= expectPublished) `shouldReturn` OrderedForward
+  where
+    label caseId = caseLabel ("integration/advisory-export/" <> caseId <> "/" <> ecosystemName eco)
+    served server stamp version dir use = do
+        archive <- osvCorpusZip version
+        withServedCandidate server eco archive (Just stamp) dir use
+    swapped = \case
+        SyncSwapped _ _ -> True
+        _ -> False
+    unchanged = \case
+        SyncUnchanged -> True
+        _ -> False
+    refusedAsOlder = \case
+        PublicationRefused (SourceOutOfOrder OsvExport (OlderSnapshot _ _)) -> True
+        _ -> False
 
-                    let dbPath = tmpDir <> "/unchanged.sqlite"
-                        objectKey = advisoryObjectKey store (takeFileName dbPath)
-                    mkMinimalValidDbWithMeta dbPath "pkg-a" [("source_url", "pkg-a"), ("epss_status", "available")]
-                    logEnv <- liftIO $ initLogEnv "ecluse-test" (Environment "test")
-                    let export = runKatipContextT logEnv () mempty (runResourceT $ exportToS3 Nothing (Just endpoint) bucket objectKey dbPath)
-                        storedObject = runResourceT $ AWS.send base (S3.newHeadObject (S3.BucketName bucket) (S3.ObjectKey objectKey))
+shrinkSpec :: Ecosystem -> Bool -> SpecWith Container
+shrinkSpec eco versioned =
+    it (caseLabel ("integration/advisory-export/native-006/" <> ecosystemName eco <> "/" <> bucketKind) "refuses a sharp shrink against the baseline the metadata carries, with no history read") $ \container ->
+        withGuarded container eco ("shrink-" <> bucketKind) $ \store server dir -> do
+            when versioned $
+                void (runResourceT (AWS.send (stAws store) (S3.newPutBucketVersioning (S3.BucketName (bucketOf store)) (S3.newVersioningConfiguration & S3L.versioningConfiguration_status ?~ S3.BucketVersioningStatus_Enabled))))
+            large <- aiOsvZip <$> syntheticAdvisories eco (fillerTargets 400)
+            small <- aiOsvZip <$> syntheticAdvisories eco (fillerTargets 20)
+            void (withServedCandidate server eco large (Just "Wed, 01 Oct 2026 10:00:00 GMT") (dir </> "large") (publish store) >>= expectPublished)
+            before <- storedEtag store
+            baseline <- HashMap.lookup "baseline-bytes" <$> storedMetadata store
+            withServedCandidate server eco small (Just "Wed, 01 Oct 2026 11:00:00 GMT") (dir </> "small") (publish store) >>= \case
+                Left (PublicationRefused (ShrinkPastBaseline reading)) -> show (srBaselineBytes reading) `shouldBe` fromMaybe "" baseline
+                other -> expectationFailure ("expected a shrink refusal, got " <> show other)
+            storedEtag store `shouldReturn` before
+  where
+    bucketKind = if versioned then "versioned" else "unversioned"
 
-                    export
-                    published <- storedObject
-                    published ^. S3L.headObjectResponse_lastModified `shouldSatisfy` isJust
-                    source <- newS3CveSource (Just endpoint)
-                    slot <- newCveSlot
-                    let env = SyncEnv (s3CveFetchFor source bucket objectKey (512 * 1024 * 1024)) Npm EpssRequired (tmpDir <> "/consumer.sqlite") slot ("s3://" <> bucket)
-                    initialSync <- syncStep env Nothing
-                    acceptedEtag <- case initialSync of
-                        SyncSwapped etag _ -> pure etag
-                        other -> fail ("expected first artifact swap, got " <> show other)
-                    installed <- generationInstalledAt slot
-                    (asPushedAt =<<) <$> currentAdvisorySource slot
-                        `shouldReturn` (published ^. S3L.headObjectResponse_lastModified)
+-- One case's bucket, the key it publishes under, and the shipped guard.
+data Store = Store
+    { stEndpoint :: AwsEndpoint
+    , stAws :: AWS.Env
+    , stStore :: AdvisoryStoreUrl
+    , stKey :: Text
+    , stPolicy :: ShrinkPolicy
+    }
 
-                    -- HTTP Last-Modified carries whole seconds, unlike the listing's fractional timestamp.
-                    -- Wait for a change that the consumer's HEAD and GET responses can observe.
-                    let advancedPast before object = object ^. S3L.headObjectResponse_lastModified > before ^. S3L.headObjectResponse_lastModified
-                    pollUntil 21 500_000 id (export >> (advancedPast published <$> storedObject))
-                        >>= (`shouldBe` True)
+withGuarded :: Container -> Ecosystem -> Text -> (Store -> SourceServer -> FilePath -> IO ()) -> IO ()
+withGuarded container eco name use =
+    withSystemTempDirectory "ecluse-guarded-export" $ \dir -> do
+        store <- createdBucket container ("s3://guarded-" <> name <> "-" <> ecosystemName eco)
+        withSourceServer $ \server -> use store{stKey = toText (osvDbFileName (ecosystemName eco))} server dir
 
-                    republished <- storedObject
-                    republished ^. S3L.headObjectResponse_eTag `shouldBe` published ^. S3L.headObjectResponse_eTag
-                    syncStep env (Just acceptedEtag) >>= \case
-                        SyncUnchanged -> pass
-                        other -> expectationFailure ("expected metadata-only observation, got " <> show other)
-                    (asPushedAt =<<) <$> currentAdvisorySource slot
-                        `shouldReturn` (republished ^. S3L.headObjectResponse_lastModified)
-                    generationInstalledAt slot `shouldReturn` installed
+publish :: Store -> OsvCandidate -> IO (Either PublicationStop Published)
+publish store candidate = runQuietKatip (publishCandidate Nothing (stAws store) (stPolicy store) DurableBaseline Nothing (bucketOf store) (stKey store) candidate)
 
+expectPublished :: Either PublicationStop Published -> IO Published
+expectPublished = either (fail . show) pure
+
+bucketOf :: Store -> Text
+bucketOf = advisoryStoreBucket . stStore
+
+headObject :: Store -> IO S3.HeadObjectResponse
+headObject store = runResourceT (AWS.send (stAws store) (S3.newHeadObject (S3.BucketName (bucketOf store)) (S3.ObjectKey (stKey store))))
+
+storedMetadata :: Store -> IO (HashMap.HashMap Text Text)
+storedMetadata store = objectMetadata (stAws store) (bucketOf store) (S3.ObjectKey (stKey store))
+
+storedEtag :: Store -> IO (Maybe S3.ETag)
+storedEtag store = (^. S3L.headObjectResponse_eTag) <$> headObject store
+
+-- An operator's direct write: no guard, no precondition.
+putDirect :: Store -> FilePath -> HashMap.HashMap Text Text -> IO DbEtag
+putDirect store path metadata = do
+    body <- AWS.chunkedFile 1048576 path
+    response <- runResourceT (AWS.send (stAws store) (S3.newPutObject (S3.BucketName (bucketOf store)) (S3.ObjectKey (stKey store)) body & S3L.putObject_metadata .~ metadata))
+    maybe (fail "the direct write has no ETag") (\(S3.ETag tag) -> pure (DbEtag (decodeUtf8 tag))) (response ^. S3L.putObjectResponse_eTag)
+
+consumerFor :: Store -> Ecosystem -> FilePath -> IO SyncEnv
+consumerFor store eco dir = do
+    source <- newS3CveSource (Just (stEndpoint store))
+    slot <- newCveSlot
+    pure (SyncEnv (s3CveFetchFor source (bucketOf store) (stKey store) (512 * 1024 * 1024)) eco EpssRequired (dir </> "consumer.db") slot ("s3://" <> bucketOf store))
+
+swappedEtag :: SyncOutcome -> IO DbEtag
+swappedEtag = \case
+    SyncSwapped etag _ -> pure etag
+    other -> fail ("expected the artifact swapped in, got " <> show other)
+
+pushedAt :: SyncEnv -> IO (Maybe UTCTime)
+pushedAt consumer = (asPushedAt =<<) <$> currentAdvisorySource (syncSlot consumer)
+
+-- Operator writes stand for the publisher here: the contract is about what consumers keep.
 withS3AdvisoryDriver :: (AdvisoryDriver -> IO ()) -> Container -> IO ()
 withS3AdvisoryDriver use container =
     withSystemTempDirectory "ecluse-advisory-contract" $ \dir -> do
-        Store{stEndpoint = endpoint, stAws = aws, stStore = store} <-
-            createdBucket container "s3://advisory-contract"
-        let bucket = advisoryStoreBucket store
-            key = "contract.db"
+        store <- createdBucket container "s3://advisory-contract"
+        let contract = store{stKey = "contract.db"}
             goodPath = dir <> "/good.db"
             badPath = dir <> "/bad.db"
         mkMinimalValidDb goodPath "pkg-a"
         mkDbWithWrongEpoch badPath
         bytes <- readFileBS goodPath
-        logEnv <- initLogEnv "ecluse-test" (Environment "test")
         slot <- newCveSlot
-        source <- newS3CveSource (Just endpoint)
+        source <- newS3CveSource (Just (stEndpoint store))
         let env =
                 SyncEnv
-                    { syncFetch = s3CveFetchFor source bucket key (512 * 1024 * 1024)
+                    { syncFetch = s3CveFetchFor source (bucketOf contract) (stKey contract) (512 * 1024 * 1024)
                     , syncEcosystem = Npm
                     , syncEpssRequirement = EpssOptional
                     , syncDbPath = dir <> "/live.db"
                     , syncSlot = slot
-                    , syncStoreRef = "s3://" <> bucket
+                    , syncStoreRef = "s3://" <> bucketOf contract
                     }
-            publish fixture = do
-                let path = case fixture of
-                        AcceptedArtifact -> goodPath
-                        RefusedArtifact -> badPath
-                runKatipContextT logEnv () mempty (runResourceT (exportToS3 Nothing (Just endpoint) bucket key path))
-                response <- runResourceT (AWS.send aws (S3.newHeadObject (S3.BucketName bucket) (S3.ObjectKey key)))
-                case response ^. S3L.headObjectResponse_eTag of
-                    Just (S3.ETag tag) -> pure (DbEtag (decodeUtf8 tag))
-                    Nothing -> fail "the published artifact has no ETag"
-        advisoryDriver bytes publish (pure env) >>= use
-
-data Store = Store
-    { stEndpoint :: AwsEndpoint
-    , stAws :: AWS.Env
-    , stStore :: AdvisoryStoreUrl
-    }
+            publishFixture = \case
+                AcceptedArtifact -> putDirect contract goodPath HashMap.empty
+                RefusedArtifact -> putDirect contract badPath HashMap.empty
+        advisoryDriver bytes publishFixture (pure env) >>= use
 
 createdBucket :: Container -> Text -> IO Store
 createdBucket container url = do
@@ -167,4 +264,5 @@ createdBucket container url = do
     -- The readiness wait only proves the port accepts connections, so the S3 gateway may
     -- still be warming when the first CreateBucket lands.
     retryingIO 21 500_000 (void (runResourceT (AWS.send regioned (S3.newCreateBucket (S3.BucketName (advisoryStoreBucket store))))))
-    pure Store{stEndpoint = endpoint, stAws = base, stStore = store}
+    policy <- maybe (fail "the shipped guard") pure (ShrinkPolicy <$> mkPercent 2 <*> mkPercent 5)
+    pure Store{stEndpoint = endpoint, stAws = base, stStore = store, stKey = "artifact.db", stPolicy = policy}

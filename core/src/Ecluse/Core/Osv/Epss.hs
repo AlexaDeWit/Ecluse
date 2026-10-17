@@ -74,23 +74,18 @@ import Ecluse.Core.Osv.Provenance (lastModifiedOf, parseSourceTime)
 import Ecluse.Core.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired), EpssStatus (EnrichmentAvailable, EnrichmentUnavailable))
 import Ecluse.Core.Security.Authority (dialledAuthorityLabel)
-import Ecluse.Core.Stream (boundBytes, boundLines)
+import Ecluse.Core.Snapshot (ContentDigest)
+import Ecluse.Core.Stream (boundBytes, boundLines, digestWhole)
 
-{- | The byte ceiling Pilot fetches under, 64 MiB, applied to the served stream and again to its
-expansion. The feed is one short row per scored CVE, so the headroom is several times over.
--}
+-- | 64 MiB, applied to the served stream and again to its expansion: several times a feed of one short row per scored CVE.
 maxEpssFeedBytes :: Int
 maxEpssFeedBytes = 64 * 1024 * 1024
 
-{- | The longest feed line Pilot holds, 4 KiB. A scored row is under 100 bytes, so a longer line
-is no row, and bytes that never reach a newline cannot pile up.
--}
+-- | The longest feed line Pilot holds, 4 KiB. A scored row is under 100 bytes, so a longer line is no row.
 maxEpssLineBytes :: Int
 maxEpssLineBytes = 4 * 1024
 
-{- | The feed passed a byte ceiling, so the fetch refused it whole. Each carries that ceiling
-and the bytes seen when it tripped, which is the ceiling plus at most one chunk.
--}
+-- | The feed passed a byte ceiling, so the fetch refused it whole. Each carries the ceiling and the bytes seen when it tripped.
 data EpssFeedTooLarge
     = -- | The compressed stream the host served, so an endless one cannot hang the pass.
       CompressedTooLarge Int Int
@@ -102,9 +97,7 @@ data EpssFeedTooLarge
 
 instance Exception EpssFeedTooLarge
 
-{- | The feed decoded to no scores at all: an error page served as 200, or a column order the row
-decode no longer reads. Whole-feed failure remains distinct from an individual missing score.
--}
+-- | The feed decoded to no scores at all, as an error page served as 200 does. One missing score is not this.
 data EpssFeedEmpty = EpssFeedEmpty
     deriving stock (Eq, Show)
 
@@ -116,9 +109,7 @@ data EpssFeedTruncated = EpssFeedTruncated
 
 instance Exception EpssFeedTruncated
 
-{- | One fetch of the feed: the scores it carries, and what it says about itself. The feed
-declares its own score date, so a stalled feed is visible without a second source of truth.
--}
+-- | One fetch of the feed: its scores, and what it says about itself, so a stalled feed shows without a second source.
 data EpssFeed = EpssFeed
     { efScores :: EpssScores
     , efLastModified :: Maybe UTCTime
@@ -127,21 +118,19 @@ data EpssFeed = EpssFeed
     -- ^ The @score_date@ the preamble declares, a bare date read as its UTC start of day.
     , efModelVersion :: Maybe Text
     -- ^ The scoring model the preamble declares.
+    , efDigest :: ContentDigest
+    -- ^ The digest of the whole served feed, before decompression.
     }
     deriving stock (Eq, Show)
 
-{- | What the feed's leading comment line declares. FIRST.org writes it as
-@#model_version:v2026.08.01,score_date:2026-08-29T00:00:00+0000@.
--}
+-- | What the feed's leading comment declares, written as @#model_version:v2026.08.01,score_date:2026-08-29T00:00:00+0000@.
 data EpssPreamble = EpssPreamble
     { epScoreDate :: Maybe UTCTime
     , epModelVersion :: Maybe Text
     }
     deriving stock (Eq, Show)
 
-{- | Read the feed's leading comment line. A line that is not a comment, a comment naming
-neither field, and a date the grammar cannot read all yield absence, never a substitute value.
--}
+-- | Read the feed's leading comment line. Anything this cannot read yields absence, never a substitute value.
 parseEpssPreamble :: ByteString -> EpssPreamble
 parseEpssPreamble raw = case T.stripPrefix "#" (decodeUtf8 raw) of
     Nothing -> EpssPreamble Nothing Nothing
@@ -157,24 +146,18 @@ parseEpssPreamble raw = case T.stripPrefix "#" (decodeUtf8 raw) of
         let (key, value) = T.breakOn ":" entry
          in if T.strip key == name then Just (T.strip (T.drop 1 value)) else Nothing
 
-{- | The scores from one fetch of the feed. Keys are upper-cased CVE ids, so a case
-difference between the feed and an advisory's aliases cannot silently miss the join.
--}
+-- | The scores from one fetch, keyed by upper-cased CVE id so a case difference cannot miss the join.
 newtype EpssScores = EpssScores (Map Text Double)
     deriving stock (Eq, Show)
 
-{- | Build a score table from @(CVE id, probability)@ rows. A duplicate id keeps the higher
-score, the fail-closed direction for a rule that denies above a threshold.
--}
+-- | Build a score table. A duplicate id keeps the higher score, the fail-closed direction for a threshold deny.
 mkEpssScores :: [(Text, Double)] -> EpssScores
 mkEpssScores = foldl' (flip addScore) (EpssScores Map.empty)
 
 addScore :: (Text, Double) -> EpssScores -> EpssScores
 addScore (cve, score) (EpssScores scores) = EpssScores (Map.insertWith max (T.toUpper cve) score scores)
 
-{- | The highest score the feed carries for any of these identifiers, or 'Nothing' when it
-scores none of them.
--}
+-- | The highest score the feed carries for any of these identifiers.
 epssForIds :: EpssScores -> [Text] -> Maybe Double
 epssForIds (EpssScores scores) ids = viaNonEmpty Foldable1.maximum (mapMaybe lookupScore ids)
   where
@@ -184,9 +167,7 @@ epssForIds (EpssScores scores) ids = viaNonEmpty Foldable1.maximum (mapMaybe loo
 epssScoreCount :: EpssScores -> Int
 epssScoreCount (EpssScores scores) = Map.size scores
 
-{- | One feed row as @(CVE id, probability)@. A comment, the header, an unreadable row, and a
-score outside @[0, 1]@ all yield 'Nothing', so one bad row drops out instead of failing the pass.
--}
+-- | One feed row as @(CVE id, probability)@. Anything else, a score outside @[0, 1]@ included, drops out rather than failing the pass.
 parseEpssLine :: ByteString -> Maybe (Text, Double)
 parseEpssLine raw = case T.splitOn "," (decodeUtf8 raw) of
     (cve : score : _) -> (,) <$> identifier (T.strip cve) <*> probability (T.strip score)
@@ -198,9 +179,7 @@ parseEpssLine raw = case T.splitOn "," (decodeUtf8 raw) of
         guard (p >= 0 && p <= 1)
         pure p
 
-{- | Fetch the feed and decode it into a score table, bounded by @cap@ bytes on each side of
-decompression. A non-2xx, undecodable, over-large, or scoreless feed throws.
--}
+-- | Fetch and decode the feed, bounded by @cap@ bytes on each side of decompression. A non-2xx, undecodable, over-large, or scoreless feed throws.
 fetchEpssScores :: (MonadResource m, MonadThrow m, KatipContext m) => Int -> String -> m EpssFeed
 fetchEpssScores cap urlStr = do
     -- 'setRequestCheckStatus' throws at the header boundary, so a 502 reaches the caller's
@@ -208,7 +187,7 @@ fetchEpssScores cap urlStr = do
     req <- liftIO (setRequestCheckStatus <$> parseRequest urlStr)
     -- The header is read from the response that carried the rows, so the date and the scores
     -- describe one fetch.
-    (decoded, served) <- runConduit $ httpSource req $ \res -> do
+    ((digest, decoded), served) <- runConduit $ httpSource req $ \res -> do
         accumulated <- getResponseBody res .| decodeEpssFeed cap
         pure (accumulated, lastModifiedOf (getResponseHeader hLastModified res))
     let scores = faScores decoded
@@ -220,6 +199,7 @@ fetchEpssScores cap urlStr = do
             , efLastModified = served
             , efScoreDate = epScoreDate (faPreamble decoded)
             , efModelVersion = epModelVersion (faPreamble decoded)
+            , efDigest = digest
             }
 
 -- The running decode of one feed: the preamble the first line carries, and the scores the
@@ -232,13 +212,15 @@ data FeedAccum = FeedAccum
 
 -- The feed's wire form: gzip, then CSV rows. The served and expanded bounds cap the bytes a pass
 -- reads, and the line bound caps what one unfinished row holds, however the stream is chunked.
-decodeEpssFeed :: (MonadIO m, MonadThrow m) => Int -> ConduitT ByteString o m FeedAccum
+decodeEpssFeed :: (MonadIO m, MonadThrow m) => Int -> ConduitT ByteString o m (ContentDigest, FeedAccum)
 decodeEpssFeed cap =
-    boundBytes cap (throwM . CompressedTooLarge cap)
-        .| ungzipWhole
-        .| boundBytes cap (throwM . DecompressedTooLarge cap)
-        .| boundLines maxEpssLineBytes (throwM . LineTooLarge maxEpssLineBytes)
-        .| C.foldl addLine (FeedAccum True (EpssPreamble Nothing Nothing) (mkEpssScores []))
+    fuseBoth
+        (boundBytes cap (throwM . CompressedTooLarge cap) .| digestWhole)
+        ( ungzipWhole
+            .| boundBytes cap (throwM . DecompressedTooLarge cap)
+            .| boundLines maxEpssLineBytes (throwM . LineTooLarge maxEpssLineBytes)
+            .| C.foldl addLine (FeedAccum True (EpssPreamble Nothing Nothing) (mkEpssScores []))
+        )
 
 -- Every gzip member to the end of input. Any byte that does not begin a whole member, zero padding
 -- included, fails the feed. 'Data.Conduit.Zlib.ungzip' stops after one member and passes a cut one.
@@ -312,9 +294,7 @@ renderEpssFeedFailure = \case
     EpssFeedUndecodable -> "the feed is not a complete gzip stream"
     EpssFeedNoScores -> "the feed carried no scores"
 
-{- | The feed failures a compile can continue past. An invalid URL is a configuration fault, and
-anything unnamed here may be a bug, so both stay exceptions rather than read as an outage.
--}
+-- | The feed failures a compile can continue past. An invalid URL or an unnamed exception is a fault, never an outage.
 classifyEpssFailure :: SomeException -> Maybe EpssFeedFailure
 classifyEpssFailure err
     | Just http <- fromException err = httpFailure http
@@ -330,9 +310,7 @@ httpFailure = \case
     HttpExceptionRequest _ (StatusCodeException response _) -> Just (EpssFeedStatus (statusCode (responseStatus response)))
     other -> Just (EpssFeedTransport (tfCause (classifyTransport other)))
 
-{- | Fetch the feed under the advisory retry policy. A failure 'classifyEpssFailure' names returns
-as a value, and every other exception, a cancellation included, propagates.
--}
+-- | Fetch the feed under the advisory retry policy. A failure 'classifyEpssFailure' names is a value. Anything else propagates.
 acquireEpssFeed :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Int -> String -> m (Either EpssFeedFailure EpssFeed)
 acquireEpssFeed cap url = tryJust classifyEpssFailure (withOsvRetry defaultOsvRetryPolicy (fetchEpssScores cap url))
 
@@ -344,9 +322,7 @@ data EpssEnrichment
       EpssUnavailable EpssFeedFailure
     deriving stock (Eq, Show)
 
-{- | Settle one attempt under the ecosystem's requirement. A failure stays 'Left' where the
-ecosystem requires enrichment, so an unavailable feed never stands in for a required one.
--}
+-- | Settle one attempt under the ecosystem's requirement, so an unavailable feed never stands in for a required one.
 resolveEnrichment :: EpssRequirement -> Either EpssFeedFailure EpssFeed -> Either EpssFeedFailure EpssEnrichment
 resolveEnrichment requirement = \case
     Right feed -> Right (EpssEnriched feed)

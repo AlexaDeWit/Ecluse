@@ -177,7 +177,7 @@ holds on any backend, and the AWS column shows one way to grant it:
 |---|---|---|
 | `ecluse proxy --no-worker` | Send mirror jobs, read advisory artifacts, read what the private upstream aggregates | `sqs:SendMessage`, `sqs:GetQueueAttributes`, `s3:GetObject`, `codeartifact:DescribeRepository` on the private upstream repository and every repository in its upstream chain |
 | `ecluse mirror` | Consume mirror jobs, publish to the mirror store, read advisory artifacts | SQS receive, delete, change visibility, and get attributes. CodeArtifact token mint, reads, and publish on the mirror repository. `s3:GetObject` |
-| `ecluse pilot` | Publish advisory artifacts | `s3:PutObject` on the advisory prefix |
+| `ecluse pilot` | Read the published artifacts' metadata, and publish advisory artifacts | `s3:GetObject` and `s3:PutObject` on the advisory prefix, and `s3:ListBucket` limited to that prefix. With SSE-KMS, `kms:GenerateDataKey` on the bucket's key |
 | `ecluse dredger` | Read and delete in the mirror target and in the private cache, read advisory artifacts, read what the private upstream aggregates | CodeArtifact token mint, repository reads, and `codeartifact:DeletePackageVersions` on package ARNs in both repositories ([full list](@/docs/dredger.md#permissions)). `codeartifact:DescribeRepository` on both repositories and on every repository in the private upstream's chain. `s3:GetObject` |
 
 `ecluse proxy` without `--no-worker` runs the mirror worker in the same process, so its identity
@@ -245,7 +245,8 @@ advisory export and the EPSS feed, and writes `<ecosystem>-osv-schema5.db` into 
 |---|---|
 | `--out DIR` | Required. The directory the artifact is written into |
 | `--ecosystem ECOSYSTEM` | The export to compile. Default `npm` |
-| `--upload` | Also publishes the artifact to the advisory store, a full sync cycle in one run. Aborts before compiling when no store is configured |
+| `--upload` | Also publishes the artifact to the advisory store under the [publication guard](@/docs/operations.md#advisory-publication-guard). Aborts before compiling when no store is configured |
+| `--rebaseline-etag ETAG` with `--rebaseline-max-shrink-percent PERCENT` | Only beside `--upload`. Replaces only the stored object with that ETag, holds the shrink to that percentage, and restarts the size baseline ([Rebaselining](@/docs/operations.md#rebaselining)) |
 
 Both feeds come from the configuration keys the scheduled loop reads, `advisories.osvExportBaseUrl`
 and `advisories.epssFeedUrl`. To point one run at a mirror or a moved feed, set
@@ -265,6 +266,7 @@ there, so the compile cannot tell whether its artifact's consumer reads EPSS.
 | The EPSS feed failed where no rule of the ecosystem reads EPSS scores, and the artifact was written with `epss_status=unavailable` | `0`, with a `warn` line |
 | The EPSS feed failed where a rule of the ecosystem reads EPSS scores, the ecosystem is not mounted, or no `advisories.url` is set | `1`. The previous artifact stays in place |
 | The OSV export failed or was refused | `1`. The previous artifact stays in place |
+| The publication guard refused the upload, or the store could not serve it | `1`. The previous artifact stays in place, in the store and in `DIR` |
 
 Run the one-shot as a Kubernetes `CronJob` with `concurrencyPolicy: Forbid`, which keeps it a
 single instance, and schedule it less often than the proxy polls. Give the pod its role identity

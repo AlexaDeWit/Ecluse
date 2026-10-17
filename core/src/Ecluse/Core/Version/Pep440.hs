@@ -164,7 +164,13 @@ consumeDev s =
              in (Just (numOr0 digits), rest)
         Nothing -> (Nothing, s)
 
--- | Render as @packaging.utils.canonicalize_version@, without trailing release zeros.
+{- | Render as @packaging.utils.canonicalize_version@, without trailing release zeros.
+
+>>> renderPep440 <$> parsePep440 "1.0.0"
+Just "1"
+>>> renderPep440 <$> parsePep440 "1!2.0ALPHA1-1.dev2+Ubuntu.7"
+Just "1!2a1.post1.dev2+ubuntu.7"
+-}
 renderPep440 :: Pep440Key -> Text
 renderPep440 k =
     epoch <> release <> pre <> post <> dev <> localSegment

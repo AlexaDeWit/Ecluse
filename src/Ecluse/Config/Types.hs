@@ -78,6 +78,7 @@ import Ecluse.Config.Resolve (mountDocRef, mountKeyRef)
 import Ecluse.Config.Rule (PolicyError (SuppressUnknownRule), renderPolicyError)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
+import Ecluse.Core.Osv.Publication (Percent)
 import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Registry.Maintenance.Budget (QuotaDimension, RequestKind)
@@ -374,18 +375,22 @@ newtype EgressSettings = EgressSettings
 -- | The @advisories@ group: the OSV/CVE pipeline's store, cadences, and upstream feeds.
 data AdvisoriesSettings = AdvisoriesSettings
     { advUrl :: Maybe AdvisoryStoreUrl
-    -- ^ The object store the compiled databases sync from, its provider from the URL's scheme. 'Nothing' leaves the advisory stack off.
+    -- ^ The store the compiled databases sync from, its provider taken from the scheme. 'Nothing' leaves the advisory stack off.
     , advPollInterval :: NominalDiffTime
     , advCompileInterval :: NominalDiffTime
     , advDataDir :: FilePath
     , advOsvExportBaseUrl :: Url
     , advEpssFeedUrl :: Url
     , advQuietTime :: Map Ecosystem NominalDiffTime
-    -- ^ Pilot only: how long an ecosystem's export may go unchanged before the quiet-time alarm. The default is seven days.
+    -- ^ Pilot only: how long one ecosystem's export may go unchanged before the quiet-time alarm. Unlisted, seven days.
     , advEpssQuietTime :: NominalDiffTime
     -- ^ Pilot only: the same threshold for the EPSS feed's declared score date.
     , advMaxAgeSeconds :: Maybe NominalDiffTime
     -- ^ How old a published advisory artifact may be before advisory denial refuses. Unset, each mount derives it from its quarantine rules.
+    , advMaxShrink :: Percent
+    -- ^ Pilot only: how far below its size baseline one publication may shrink the artifact.
+    , advEpssLossCap :: Percent
+    -- ^ Pilot only: the most an optional EPSS outage may credit, as a share of the previous artifact.
     }
     deriving stock (Eq, Show)
 

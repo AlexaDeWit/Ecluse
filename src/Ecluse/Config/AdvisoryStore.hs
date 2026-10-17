@@ -18,6 +18,7 @@ module Ecluse.Config.AdvisoryStore (
     mkAdvisoryStoreUrl,
     advisoryStoreBucket,
     advisoryObjectKey,
+    advisoryStoreCapability,
 ) where
 
 import Data.Char (isAsciiLower, isDigit)
@@ -29,6 +30,7 @@ import Ecluse.Config.Advisory.Internal (
     advisoryStoreTarget,
     advisoryStoreUrlText,
  )
+import Ecluse.Core.Osv.Publication (BaselineCapability (DurableBaseline))
 import Ecluse.Core.Security (refuseCredentialMaterial)
 import Ecluse.Core.Text (nonBlank)
 
@@ -36,9 +38,7 @@ import Ecluse.Core.Text (nonBlank)
 s3Scheme :: Text
 s3Scheme = "s3://"
 
-{- | Build the 'AdvisoryStoreUrl' an @advisories.url@ key resolves to, the key naming every
-refusal. The credential refusal runs first, because the refusals below it quote the value.
--}
+-- | Build the store an @advisories.url@ key names. The credential refusal runs first, because the later refusals quote the value.
 mkAdvisoryStoreUrl :: Text -> Text -> Either Text AdvisoryStoreUrl
 mkAdvisoryStoreUrl key raw
     | Left reason <- refuseCredentialMaterial key trimmed = Left reason
@@ -92,10 +92,13 @@ advisoryStoreBucket :: AdvisoryStoreUrl -> Text
 advisoryStoreBucket url = case advisoryStoreTarget url of
     S3Store bucket _ -> bucket
 
-{- | The object key one compiled artifact takes in the store: the configured prefix ahead of the
-artifact's own file name.
--}
+-- | The object key one compiled artifact takes: the configured prefix ahead of the artifact's own file name.
 advisoryObjectKey :: AdvisoryStoreUrl -> FilePath -> Text
 advisoryObjectKey url fileName = case advisoryStoreTarget url of
     S3Store _ Nothing -> toText fileName
     S3Store _ (Just prefix) -> prefix <> "/" <> toText fileName
+
+-- | The size baseline the store keeps. S3 carries it in each object's metadata, so it is durable.
+advisoryStoreCapability :: AdvisoryStoreUrl -> BaselineCapability
+advisoryStoreCapability url = case advisoryStoreTarget url of
+    S3Store _ _ -> DurableBaseline

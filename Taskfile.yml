@@ -238,11 +238,11 @@ tasks:
       - cabal run -v0 perf-acceptance -- captures
   doctest:
     desc: Run the Haddock >>> examples as tests
-    # doctest reads one component per repl. Cabal passes the project's -Werror after the repl
-    # options, so a warning while GHCi loads a module fails that library's examples.
+    # doctest reads one component per repl. Cabal passes the project's -Werror after the repl options,
+    # so a load warning fails the examples. GHCi drops the fork's -fspec-constr pragma with a warning.
     cmds:
-      - for: ['lib:ecluse-core', 'lib:ecluse-runtime', 'lib:ecluse']
-        cmd: cabal repl --with-ghc=doctest --repl-options=-Wno-missing-export-lists {{.ITEM}}
+      - for: ['lib:ecluse-json-stream', 'lib:ecluse-core', 'lib:ecluse-runtime', 'lib:ecluse']
+        cmd: cabal repl --with-ghc=doctest --repl-options="-Wno-missing-export-lists -Wno-inconsistent-flags" {{.ITEM}}
   coverage:
     desc: Combined unit and integration coverage matching Codecov
     cmds:

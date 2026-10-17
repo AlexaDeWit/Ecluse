@@ -43,6 +43,7 @@ import Ecluse.Core.Osv.Epss (
  )
 import Ecluse.Core.Osv.Schema (EpssRequirement (..), EpssStatus (..))
 import Ecluse.Test.Osv (runOsvTestM)
+import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Stub (allCaptured, stubBaseUrl, withStub, withStubHeaders)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
@@ -170,6 +171,11 @@ spec = do
         it "passes a whole gzip stream" $
             epssScoreCount . efScores <$> fetchRaw [] maxEpssFeedBytes wholeFeed `shouldReturn` 2
 
+        it "digests the served bytes before decompression, every gzip member included" $ do
+            let served = wholeFeed <> GZip.compress "CVE-2026-10003,0.25,0.5\n"
+            efDigest <$> fetchRaw [] maxEpssFeedBytes served `shouldReturn` digestOf (toStrict served)
+            efDigest <$> fetchRaw [] maxEpssFeedBytes wholeFeed `shouldReturn` digestOf (toStrict wholeFeed)
+
         it "refuses a gzip stream cut in half, whose rows would read as a short table" $
             fetchRaw [] maxEpssFeedBytes (LBS.take (LBS.length wholeFeed `div` 2) wholeFeed)
                 `shouldThrow` (== EpssFeedTruncated)
@@ -255,7 +261,7 @@ spec = do
             classifyEpssFailure (toException (mkIOError doesNotExistErrorType "a local file" Nothing Nothing)) `shouldBe` Nothing
 
     describe "resolveEnrichment" $ do
-        let feed = EpssFeed (mkEpssScores [("CVE-A", 0.5)]) Nothing Nothing Nothing
+        let feed = EpssFeed (mkEpssScores [("CVE-A", 0.5)]) Nothing Nothing Nothing (digestOf "feed")
         it "joins a fetched feed whatever the requirement" $
             for_ [EpssRequired, EpssOptional] $ \requirement ->
                 resolveEnrichment requirement (Right feed) `shouldBe` Right (EpssEnriched feed)

@@ -11,8 +11,15 @@ module Ecluse.Test.OsvDb (
     epssFixtureWith,
     withFixtureOsvDb,
     withOsvZipDb,
+    compileOsvToSqlite,
     compileOsvZipDbTo,
     compileOsvZipDbWithFeedTo,
+
+    -- * Candidates a publication decides on
+    SourceServer,
+    withSourceServer,
+    withServedCandidate,
+    withCompiledCandidate,
 
     -- * Reading an artifact back
     scoresOf,
@@ -27,8 +34,12 @@ module Ecluse.Test.OsvDb (
 ) where
 
 import Codec.Compression.GZip qualified as GZip
+import Conduit (MonadResource)
+import Control.Monad.Catch (MonadMask)
 import Data.Map.Strict qualified as Map
 import Database.SQLite.Simple (Only (fromOnly), query_, withConnection)
+import Network.HTTP.Types (Header)
+import Network.HTTP.Types.Header (hLastModified)
 import Network.HTTP.Types.Status (Status, status200)
 import System.IO.Temp (withSystemTempDirectory)
 import UnliftIO.Exception (bracket)
@@ -37,16 +48,20 @@ import Ecluse.Core.Cve (CveDb (cveDbClose), openCveDb)
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Osv.Compile (CompileSources (..), compileOsvToSqlite)
-import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor)
+import Ecluse.Core.Osv.Compile (CompileSources (..), OsvCandidate, promoteCandidate, withOsvCandidate)
+import Ecluse.Core.Osv.Ecosystem (OsvEcosystem, osvEcosystemFor)
 import Ecluse.Core.Osv.Provenance (QuietTime (..))
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
 import Ecluse.Core.Rules (RuleDeps)
+import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort)
 import Ecluse.Test.Osv (CorpusVersion, osvCorpusZip, runOsvTestM)
 import Ecluse.Test.Port (noopAdvisoryCompileMetricsPort)
 import Ecluse.Test.Rules (slotRuleDeps)
-import Ecluse.Test.Stub (Stub, stubBaseUrl, withStub)
+import Ecluse.Test.Stub (Stub, stubBaseUrl, withRoutedStubIO, withStub)
 import Ecluse.Test.Support (expectRight)
+import Katip (KatipContext)
+import OpenTelemetry.Trace.Core (TracerProvider)
+import UnliftIO (MonadUnliftIO)
 
 -- | The shared EPSS feed slice omits some corpus aliases to cover missing scores.
 epssFixtureFile :: FilePath
@@ -68,6 +83,11 @@ withFixtureOsvDb v use = do
 withOsvZipDb :: Ecosystem -> LByteString -> (FilePath -> IO a) -> IO a
 withOsvZipDb eco zipBytes use =
     withSystemTempDirectory "ecluse-osv-fixture" (compileOsvZipDbTo eco zipBytes >=> use)
+
+-- | Compile one ecosystem into @outDir@ and promote it at once, as a compile with no publication does.
+compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> OsvEcosystem -> EpssRequirement -> CompileSources -> QuietTime -> m FilePath
+compileOsvToSqlite metrics mTracerProvider outDir eco requirement sources quietTime =
+    withOsvCandidate metrics mTracerProvider outDir eco requirement sources quietTime promoteCandidate
 
 -- | Compile into the supplied directory so tests can exercise artifact replacement.
 compileOsvZipDbTo :: Ecosystem -> LByteString -> FilePath -> IO FilePath
@@ -93,6 +113,40 @@ compileOsvZipDbWithFeedTo eco requirement (feedStatus, epssBytes) zipBytes dir =
                         }
                     fixtureQuietTime
                 )
+
+-- | Stable OSV and EPSS URLs, so successive compiles share each source's identity, with an OSV answer a case changes between them.
+data SourceServer = SourceServer
+    { ssAnswer :: IORef (LByteString, [Header])
+    , ssSources :: CompileSources
+    }
+
+-- | Serve the shared EPSS slice and, until a case sets one, an empty OSV answer.
+withSourceServer :: (SourceServer -> IO a) -> IO a
+withSourceServer use = do
+    epssBytes <- readFileLBS epssFixtureFile
+    answer <- newIORef (mempty, [])
+    withRoutedStubIO (\_ -> (\(body, headers) -> (status200, headers, body)) <$> readIORef answer) $ \osvStub ->
+        withStub status200 epssBytes $ \epssStub ->
+            use
+                SourceServer
+                    { ssAnswer = answer
+                    , ssSources =
+                        CompileSources
+                            { csOsvExportUrl = toString (stubBaseUrl osvStub) <> "/all.zip"
+                            , csEpssFeedUrl = toString (stubBaseUrl epssStub) <> "/epss_scores-current.csv.gz"
+                            }
+                    }
+
+-- | Serve this archive under this HTTP @Last-Modified@, and compile it into an unpromoted candidate under @dir@.
+withServedCandidate :: SourceServer -> Ecosystem -> LByteString -> Maybe Text -> FilePath -> (OsvCandidate -> IO a) -> IO a
+withServedCandidate server eco zipBytes lastModified dir use = do
+    writeIORef (ssAnswer server) (zipBytes, [(hLastModified, encodeUtf8 stamp) | stamp <- maybeToList lastModified])
+    runOsvTestM (withOsvCandidate noopAdvisoryCompileMetricsPort Nothing dir (osvEcosystemFor eco) EpssRequired (ssSources server) fixtureQuietTime (liftIO . use))
+
+-- | Compile an archive and the shared EPSS slice into an unpromoted candidate under @dir@, for a publication to decide on.
+withCompiledCandidate :: Ecosystem -> LByteString -> FilePath -> (OsvCandidate -> IO a) -> IO a
+withCompiledCandidate eco zipBytes dir use =
+    withSourceServer $ \server -> withServedCandidate server eco zipBytes Nothing dir use
 
 -- A century, so a committed fixture's own dates never raise the quiet-time alarm in a suite
 -- that is about something else.
