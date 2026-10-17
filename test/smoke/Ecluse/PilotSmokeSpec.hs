@@ -11,15 +11,15 @@ module Ecluse.PilotSmokeSpec (spec) where
 
 import Database.SQLite.Simple (Connection, Only (Only), Query, close, open, query_)
 import Katip (Environment (..), initLogEnv)
-import Network.HTTP.Client (HttpException)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import UnliftIO.Exception (try)
 
 import Ecluse.Config (Config, loadConfig)
+import Ecluse.Core.Fault (HttpFault (HttpStatus, HttpTransport))
 import Ecluse.Core.Fault.Http (isRetryableStatusCode)
-import Ecluse.Core.Osv.Compile (PilotEpssRequired (perFailure))
-import Ecluse.Core.Osv.Epss (EpssFeedFailure (EpssFeedStatus, EpssFeedTransport))
+import Ecluse.Core.Osv.Compile (PilotEpssRequired (perFailure), PilotOsvFetchFailed)
+import Ecluse.Core.Osv.Epss (EpssFeedFailure (EpssFeedFetch))
 import Ecluse.Pilot (PilotCompileOptions (..), UploadRequest (NoUpload), runPilotCompile)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 
@@ -38,8 +38,8 @@ spec = describe "osv.dev npm export (live oracle)" $
                         config
                         PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = outDir, pcoUpload = NoUpload}
             case outcome of
-                Left (e :: HttpException) ->
-                    pendingWith ("osv.dev unreachable: " <> show e)
+                Left (unreachable :: PilotOsvFetchFailed) ->
+                    pendingWith ("osv.dev unreachable: " <> displayException unreachable)
                 Right (Left refusal)
                     | feedUnreachable (perFailure refusal) -> pendingWith ("the EPSS feed is unreachable: " <> displayException refusal)
                     | otherwise -> expectationFailure ("the live EPSS feed no longer decodes: " <> displayException refusal)
@@ -57,9 +57,7 @@ spec = describe "osv.dev npm export (live oracle)" $
                     -- so a zero here means the feed's shape and our parse no longer agree.
                     scored `shouldSatisfy` (>= 1)
 
-{- | The one row a @COUNT@ query answers, so a floor assertion reads the count itself and a
-failure prints it rather than a list.
--}
+-- | The one row a @COUNT@ query answers, so a floor assertion reads the count and a failure prints it, not a list.
 countOf :: Connection -> Query -> IO Int
 countOf conn sql = do
     rows <- query_ conn sql
@@ -77,6 +75,6 @@ defaultConfig = case loadConfig [] Nothing of
 feed (404, 410) and a feed that arrived and failed are regressions. -}
 feedUnreachable :: EpssFeedFailure -> Bool
 feedUnreachable = \case
-    EpssFeedStatus code -> isRetryableStatusCode code
-    EpssFeedTransport _ -> True
+    EpssFeedFetch (HttpStatus code) -> isRetryableStatusCode code
+    EpssFeedFetch (HttpTransport _) -> True
     _ -> False

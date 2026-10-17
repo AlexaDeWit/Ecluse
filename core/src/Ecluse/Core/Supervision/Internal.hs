@@ -26,7 +26,7 @@ import UnliftIO (MonadUnliftIO)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO, tryAny)
 
-import Ecluse.Core.Text (displayExceptionT)
+import Ecluse.Core.Fault.Http (displayFaultT)
 
 -- | Synchronous fault policy. Asynchronous cancellation always propagates.
 data FaultDisposition
@@ -87,7 +87,7 @@ superviseLoopWithDelay delayAction policy step = go 0
             Right () -> go 0
             Left fault -> case spClassify policy fault of
                 Permanent -> do
-                    logFM ErrorS (ls (spLabel policy <> ": permanent fault, failing up: " <> displayExceptionT fault))
+                    logFM ErrorS (ls (spLabel policy <> ": permanent fault, failing up: " <> displayFaultT fault))
                     throwIO fault
                 Transient -> warnAndBackOff delayAction policy consecutiveFaults fault >> go (consecutiveFaults + 1)
 
@@ -96,7 +96,7 @@ superviseLoopWithDelay delayAction policy step = go 0
 warnAndBackOff :: (KatipContext m) => (Int -> m ()) -> SupervisionPolicy -> Int -> SomeException -> m ()
 warnAndBackOff delayAction policy consecutiveFaults fault = do
     let delay = backoffMicros (spBackoff policy) consecutiveFaults
-    logFM WarningS (ls (spLabel policy <> ": iteration faulted (retrying in " <> show delay <> "µs): " <> displayExceptionT fault))
+    logFM WarningS (ls (spLabel policy <> ": iteration faulted (retrying in " <> show delay <> "µs): " <> displayFaultT fault))
     delayAction delay
 
 -- | Retry background faults from one second to a thirty-second cap.

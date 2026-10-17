@@ -29,18 +29,20 @@ import System.Directory (doesFileExist, getFileSize, getModificationTime, listDi
 import System.FilePath (takeFileName, (</>))
 import System.IO.Error (catchIOError)
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldReturn, shouldSatisfy, shouldThrow)
+import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe, shouldNotBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (evaluate, finally, try)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbEpssNotEstablished), CveLookup (..), affecting, fixedAt, openCveDb, packageAdvisories)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
+import Ecluse.Core.Fault (HttpFault (HttpStatus))
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Compile (
     CompileSources,
     OsvCandidate,
     PilotEpssRequired (..),
+    PilotOsvFetchFailed (..),
     candidateDestination,
     candidateFacts,
     candidatePath,
@@ -52,7 +54,7 @@ import Ecluse.Core.Osv.Compile (
     stampCandidateNonce,
     withOsvCandidate,
  )
-import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory), osvEcosystemFor)
+import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory, osvWireName), osvEcosystemFor)
 import Ecluse.Core.Osv.Epss (maxEpssFeedBytes)
 import Ecluse.Core.Osv.Provenance (QuietTime (..), SourcePathRecording (..))
 import Ecluse.Core.Osv.Publication (
@@ -69,6 +71,7 @@ import Ecluse.Core.Osv.Stream (PilotIngestAborted (..))
 import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Security.Authority (authorityLabel)
+import Ecluse.Core.Supervision (FaultDisposition (Permanent, Transient))
 import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),
     AdvisoryDropCause (DropMalformed, DropOversize),
@@ -76,14 +79,16 @@ import Ecluse.Core.Telemetry.Metrics (
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Cve (namesFix)
 import Ecluse.Test.Log (captureJsonLog, newTestLogEnv)
-import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip, osvZipOf, runOsvTestM, runOsvTestMWith)
+import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip, osvZipOf, runOsvJsonLog, runOsvTestM, runOsvTestMWith)
 import Ecluse.Test.OsvDb (compileOsvToSqlite, compileOsvZipDbTo, compileOsvZipDbWithFeedTo, epssFixtureFile, metaOf, scoresOf)
 import Ecluse.Test.Port (RecordedCompile (RecordedCompile), recordingAdvisoryCompileMetricsPort)
 import Ecluse.Test.Snapshot (digestOf)
-import Ecluse.Test.Stub (Stub, stubBaseUrl, withStub, withStubHeaders)
+import Ecluse.Test.Stub (Stub, redirectSecrets, secretAnswer, signedRedirect, stubBaseUrl, withRoutedStubIO, withStub, withStubHeaders)
+import Ecluse.Test.Supervision (superviseBriefly)
 import Network.HTTP.Client (applyBasicAuth, defaultRequest, requestHeaders)
+import Network.HTTP.Types (Header)
 import Network.HTTP.Types.Header (hLastModified)
-import Network.HTTP.Types.Status (Status, status200, status404)
+import Network.HTTP.Types.Status (Status, status200, status404, status503)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp (testWithApplication)
 
@@ -326,6 +331,7 @@ spec = describe "SQLite OSV Compilation" $ do
 
     epssEnrichmentSpec
     candidateSpec
+    fetchFaultSpec
 
     for_ [("empty", osvZipOf []), ("wrong-ecosystem", LBS.readFile "test/unit/fixtures/osv/sample.zip")] $ \(label, rejectedZip) ->
         for_ [False, True] $ \hasPrevious ->
@@ -717,6 +723,56 @@ epssEnrichmentSpec = describe "EPSS enrichment under the ecosystem's requirement
                 map hotStatus compiled `shouldBe` [status]
                 for_ compiled $ \compiledSpan ->
                     (lookupAttribute (hotAttributes compiledSpan) "ecluse.osv.epss_status" >>= fromAttribute) `shouldBe` Just ("unavailable" :: Text)
+
+fetchFaultSpec :: Spec
+fetchFaultSpec = describe "advisory fetch faults behind a redirect to a signed URL" $
+    for_ [Npm, PyPI] $ \eco -> do
+        it ("logs each feed's retry by its status at the feed's host:port, never the signed URL or its answer, " <> show eco) $
+            withSystemTempDirectory "osv-fetch-retry" $ \outDir -> do
+                archive <- factsArchive eco
+                (metrics, _) <- recordingAdvisoryCompileMetricsPort
+                withSignedSource (secretAnswer status503 :| [(status200, [], archive)]) $ \osvUrl ->
+                    withSignedSource (secretAnswer status503 :| [(status200, [], factsFeed)]) $ \epssUrl -> do
+                        logged <- runOsvJsonLog (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor eco) EpssRequired (mkCompileSources FingerprintSourcePath osvUrl epssUrl) testQuietTime)
+                        for_ [osvUrl, epssUrl] $ \url -> logged `shouldSatisfy` T.isInfixOf (authorityLabel (toText url) <> ": HTTP 503")
+                        for_ redirectSecrets $ \secret -> logged `shouldSatisfy` (not . T.isInfixOf secret)
+
+        it ("fails a refused export as a fault naming the feed, which supervision logs without the signed URL or its answer, " <> show eco) $
+            withSystemTempDirectory "osv-fetch-refused" $ \outDir -> do
+                (metrics, _) <- recordingAdvisoryCompileMetricsPort
+                withSignedSource (secretAnswer status404 :| []) $ \osvUrl ->
+                    withStub status200 factsFeed $ \epssStub -> do
+                        let feed = authorityLabel (toText osvUrl)
+                            compile = compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor eco) EpssRequired (mkCompileSources FingerprintSourcePath osvUrl (unpack (stubBaseUrl epssStub) <> "/epss.csv.gz")) testQuietTime
+                        runOsvTestM compile `shouldThrow` (== PilotOsvFetchFailed feed (HttpStatus 404))
+                        for_ [Transient, Permanent] $ \disposition -> do
+                            logged <- runOsvJsonLog (superviseBriefly disposition compile)
+                            logged `shouldSatisfy` T.isInfixOf ("OSV export fetch failed at " <> feed <> ": HTTP 404")
+                            for_ redirectSecrets $ \secret -> logged `shouldSatisfy` (not . T.isInfixOf secret)
+
+        it ("names a refused EPSS feed by its status at the feed's host:port, in the optional warning and the required refusal, " <> show eco) $
+            withSystemTempDirectory "epss-fetch-refused" $ \outDir -> do
+                archive <- factsArchive eco
+                (metrics, _) <- recordingAdvisoryCompileMetricsPort
+                withStub status200 archive $ \osvStub ->
+                    withSignedSource (secretAnswer status404 :| []) $ \epssUrl -> do
+                        let feed = authorityLabel (toText epssUrl)
+                            wire = osvWireName (osvEcosystemFor eco)
+                            compile requirement = compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor eco) requirement (mkCompileSources FingerprintSourcePath (unpack (stubBaseUrl osvStub) <> "/all.zip") epssUrl) testQuietTime
+                        warned <- runOsvJsonLog (compile EpssOptional)
+                        warned `shouldSatisfy` T.isInfixOf ("EPSS enrichment unavailable for " <> wire <> ": " <> feed <> ": HTTP 404")
+                        for_ redirectSecrets $ \secret -> warned `shouldSatisfy` (not . T.isInfixOf secret)
+                        refused <- try (runOsvTestM (compile EpssRequired)) :: IO (Either PilotEpssRequired FilePath)
+                        case refused of
+                            Left refusal -> toText (displayException refusal) `shouldBe` wire <> " requires EPSS enrichment, and the feed failed: " <> feed <> ": HTTP 404"
+                            Right path -> expectationFailure ("a required feed failure published " <> path)
+
+-- A source that redirects to a signed URL, which gives each answer in turn and then repeats the last.
+withSignedSource :: NonEmpty (Status, [Header], LByteString) -> (String -> IO a) -> IO a
+withSignedSource answers use = do
+    pending <- newIORef answers
+    let next = atomicModifyIORef' pending (\(answer :| rest) -> (fromMaybe (answer :| []) (nonEmpty rest), answer))
+    withRoutedStubIO (signedRedirect next) $ \stub -> use (unpack (stubBaseUrl stub) <> "/feed")
 
 -- Each answer the requirement decides on: a status, an empty feed, both byte ceilings, and bad gzip.
 failedFeeds :: [(String, IO (Status, LByteString))]

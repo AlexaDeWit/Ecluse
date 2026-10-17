@@ -28,6 +28,7 @@ module Ecluse.Core.Osv.Compile (
 
     -- * Refusals and rows
     PilotEpssRequired (..),
+    PilotOsvFetchFailed (..),
     osvToRow,
 ) where
 
@@ -42,9 +43,11 @@ import System.Directory (createDirectoryIfMissing, removeFile, renameFile)
 import System.FilePath ((</>))
 import System.IO (hClose, openTempFile)
 import System.IO.Error (catchIOError)
-import UnliftIO.Exception (bracket, throwIO)
+import UnliftIO.Exception (bracket, throwIO, try)
 
 import Ecluse.Core.BuildIdentity (productVersion)
+import Ecluse.Core.Fault (HttpFault, renderHttpFault)
+import Ecluse.Core.Fault.Http (httpFault)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory, osvWireName))
 import Ecluse.Core.Osv.Epss (
@@ -211,10 +214,19 @@ instance Exception PilotEpssRequired where
 renderEpssRequired :: PilotEpssRequired -> Text
 renderEpssRequired refusal =
     perEcosystem refusal
-        <> " requires EPSS enrichment, and the feed at "
-        <> perFeed refusal
-        <> " failed: "
-        <> renderEpssFeedFailure (perFailure refusal)
+        <> " requires EPSS enrichment, and the feed failed: "
+        <> renderEpssFeedFailure (perFeed refusal) (perFailure refusal)
+
+-- | The OSV export fetch failed, after any retries. It names the feed by @host:port@, as a redirect can reach a URL that carries a credential.
+data PilotOsvFetchFailed = PilotOsvFetchFailed
+    { pofFeed :: Text
+    -- ^ The export's @host:port@.
+    , pofFault :: HttpFault
+    }
+    deriving stock (Eq, Show)
+
+instance Exception PilotOsvFetchFailed where
+    displayException failed = toString ("OSV export fetch failed at " <> renderHttpFault (pofFeed failed) (pofFault failed))
 
 -- Fill one candidate file and return what its publication compares.
 compileCandidate :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => CompileRun -> FilePath -> m CandidateFacts
@@ -250,7 +262,7 @@ answeredMarker url declared digest = do
 describeCompile :: (MonadIO m) => CompileRun -> Span -> m ()
 describeCompile run sp = do
     addAttribute sp "ecluse.osv.ecosystem" (osvWireName (crEcosystem run))
-    addAttribute sp "ecluse.osv.source_host" (dialledAuthorityLabel (toText (csOsvExportUrl (crSources run))))
+    addAttribute sp "ecluse.osv.source_host" (osvFeedLabel run)
 
 -- The attempt runs whatever the requirement, so an ecosystem that could publish without scores
 -- still carries them whenever the feed is up.
@@ -261,7 +273,7 @@ enrichOrRefuse run mSpan = do
     enrichment <- either (refuseRequiredEpss run mSpan) pure (resolveEnrichment (crEpss run) acquired)
     case enrichment of
         EpssUnavailable failure ->
-            logFM WarningS (ls ("EPSS enrichment unavailable for " <> ecosystem <> " from " <> epssFeedLabel run <> ": " <> renderEpssFeedFailure failure <> ". No " <> ecosystem <> " rule depends on EPSS, so the artifact publishes without scores"))
+            logFM WarningS (ls ("EPSS enrichment unavailable for " <> ecosystem <> ": " <> renderEpssFeedFailure (epssFeedLabel run) failure <> ". No " <> ecosystem <> " rule depends on EPSS, so the artifact publishes without scores"))
         EpssEnriched _ -> pass
     pure enrichment
   where
@@ -285,26 +297,37 @@ refuseRequiredEpss run mSpan failure = do
 epssFeedLabel :: CompileRun -> Text
 epssFeedLabel run = dialledAuthorityLabel (toText (csEpssFeedUrl (crSources run)))
 
+osvFeedLabel :: CompileRun -> Text
+osvFeedLabel run = dialledAuthorityLabel (toText (csOsvExportUrl (crSources run)))
+
 renderRequirement :: EpssRequirement -> Text
 renderRequirement = \case
     EpssRequired -> "required"
     EpssOptional -> "optional"
 
--- A failed attempt leaves committed batches. NULL bounds defeat deduplication, so each retry
--- clears the table, the tally, and the source metadata before it re-streams.
-ingestAdvisories :: (MonadResource m, MonadMask m, KatipContext m) => CompileRun -> OsvIngest -> Connection -> m ContentDigest
+-- The client's exception holds the request a redirect reached. The typed fault is thrown outside any
+-- handler, so nothing can annotate it with that exception.
+ingestAdvisories :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => CompileRun -> OsvIngest -> Connection -> m ContentDigest
 ingestAdvisories run ingest conn =
-    withOsvRetry defaultOsvRetryPolicy $ do
-        resetIngestStats ingest
-        resetOsvAttempt ingest
-        liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
-        runConduit $
-            fuseUpstream
-                (streamOsvUrl (crTracerProvider run) ingest (csOsvExportUrl (crSources run)))
-                ( CL.filter ((== osvExportDirectory (crEcosystem run)) . extEcosystem)
-                    .| CL.chunksOf 2000
-                    .| sinkSqlite conn
-                )
+    try (withOsvRetry feed defaultOsvRetryPolicy (restreamAdvisories run ingest conn))
+        >>= either (throwIO . PilotOsvFetchFailed feed . httpFault) pure
+  where
+    feed = osvFeedLabel run
+
+-- A failed attempt leaves committed batches. NULL bounds defeat deduplication, so each attempt
+-- clears the table, the tally, and the source metadata before it re-streams.
+restreamAdvisories :: (MonadResource m, MonadThrow m, KatipContext m) => CompileRun -> OsvIngest -> Connection -> m ContentDigest
+restreamAdvisories run ingest conn = do
+    resetIngestStats ingest
+    resetOsvAttempt ingest
+    liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
+    runConduit $
+        fuseUpstream
+            (streamOsvUrl (crTracerProvider run) ingest (csOsvExportUrl (crSources run)))
+            ( CL.filter ((== osvExportDirectory (crEcosystem run)) . extEcosystem)
+                .| CL.chunksOf 2000
+                .| sinkSqlite conn
+            )
 
 data CompileConclusion = CompileConclusion
     { ccEcosystem :: Text
@@ -336,8 +359,8 @@ conclusionOf run now enrichment attempt stats osvMarker epssMarker =
 
 newCandidate :: FilePath -> IO FilePath
 newCandidate outDir = do
-    (path, handle) <- openTempFile outDir ".osv-candidate.db"
-    hClose handle
+    (path, created) <- openTempFile outDir ".osv-candidate.db"
+    hClose created
     pure path
 
 removeCandidate :: FilePath -> IO ()

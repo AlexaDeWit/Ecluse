@@ -8,6 +8,7 @@ module Ecluse.InternalSpec (spec) where
 import Control.Concurrent qualified as Conc
 import Control.Exception (AsyncException (ThreadKilled))
 import Data.Text qualified as T
+import Network.HTTP.Types.Status (status503)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import Test.Hspec
 import UnliftIO (throwIO, timeout, try)
@@ -16,6 +17,7 @@ import UnliftIO.Concurrent (threadDelay)
 import Ecluse.Boot (BootAborted (BootAborted))
 import Ecluse.Internal (ProcessOutcome (..), exitCodeFor, exitReasonFor, superviseProcess)
 import Ecluse.Runtime.Test.CodeArtifact (closedEndpoint, refusedMint)
+import Ecluse.Test.Stub (redirectedStatusException)
 
 spec :: Spec
 spec = do
@@ -36,6 +38,10 @@ spec = do
         it "reports a failed mint by its cause at the dialled host:port, never the signed request" $ do
             outcome <- superviseProcess (refusedMint >> pure ShutdownRequested)
             exitReasonFor outcome `shouldBe` Just ("ecluse: service exited: AWS request failed at " <> closedEndpoint <> ": the peer could not be reached")
+
+        it "renders an escaped HTTP fault by its status at the dialled host:port, never the request or the response" $ do
+            (authority, err) <- redirectedStatusException status503
+            superviseProcess (throwIO err) `shouldReturn` ServiceExited (authority <> ": HTTP 503")
 
         it "classifies a kill delivery (ThreadKilled) as RunCancelled" $
             superviseProcess (Conc.myThreadId >>= \tid -> Conc.throwTo tid ThreadKilled >> pure ShutdownRequested)

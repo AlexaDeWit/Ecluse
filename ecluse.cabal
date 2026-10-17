@@ -460,6 +460,7 @@ library
     Ecluse.Startup
     Ecluse.Boot
     Ecluse.Proxy
+    Ecluse.Proxy.Internal
     Ecluse.Mirror
     Ecluse.Service
     Ecluse.Pilot
@@ -771,6 +772,7 @@ library ecluse-test-support
     Ecluse.Test.EcosystemBench.Types
     Ecluse.Test.Env
     Ecluse.Test.Exposition
+    Ecluse.Test.Fault
     Ecluse.Test.InstalledTree
     Ecluse.Test.Json
     Ecluse.Test.Log
@@ -815,6 +817,7 @@ library ecluse-test-support
     Ecluse.Test.Server.Route
     Ecluse.Test.Server.Transform
     Ecluse.Test.Stub
+    Ecluse.Test.Supervision
     Ecluse.Test.Support
     Ecluse.Test.Snapshot
     Ecluse.Test.Version
@@ -1057,6 +1060,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Cve.SlotSpec
     Ecluse.Core.CveSpec
     Ecluse.Core.EcosystemSpec
+    Ecluse.Core.Fault.HttpSpec
     Ecluse.Core.FaultSpec
     Ecluse.Core.InFlightSpec
     Ecluse.Core.Json.LenientSpec
@@ -1432,6 +1436,7 @@ test-suite ecluse-unit
     Ecluse.Rts.SamplerSpec
     Ecluse.Runtime.EnvSpec
     Ecluse.Runtime.ServerSpec
+    Ecluse.Proxy.InternalSpec
     Ecluse.ProxySpec
     Ecluse.ServiceSpec
     Ecluse.Site.MarkdownSpec

@@ -11,29 +11,26 @@ import Control.Retry (
     limitRetries,
     simulatePolicy,
  )
-import Data.ByteString.Lazy qualified as LBS
+import Data.Text qualified as T
 import Network.HTTP.Client (
     HttpException (..),
     HttpExceptionContent (..),
-    Response,
-    checkResponse,
-    defaultManagerSettings,
     defaultRequest,
-    httpLbs,
-    newManager,
-    parseRequest,
-    throwErrorStatusCodes,
  )
-import Network.HTTP.Types.Status (Status, status404, status502)
+import Network.HTTP.Types.Status (status404, status502, status503)
 import Network.TLS qualified as TLS
 import Test.Hspec
 import UnliftIO.Exception (throwIO, try)
 
-import Ecluse.Core.Fault (TransportFault (tfCause), transportRetryable)
+import Ecluse.Core.Fault (TransportCause (TransportTimeout), TransportFault (tfCause), renderTransportCause, transportRetryable)
 import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Osv.Retry
 import Ecluse.Test.Log (runQuietKatip)
-import Ecluse.Test.Stub (stubBaseUrl, withStub)
+import Ecluse.Test.Stub (redirectSecrets, redirectedStatusException, requestSecrets, signedRequest)
+
+-- | The configured feed's @host:port@, which every retry line names.
+feed :: Text
+feed = "osv.example:443"
 
 -- | A transient (retryable) fetch failure: a connection timeout to osv.dev.
 transientFailure :: HttpException
@@ -43,34 +40,15 @@ transientFailure = HttpExceptionRequest defaultRequest ConnectionTimeout
 permanentFailure :: HttpException
 permanentFailure = InvalidUrlException "http://osv.example/npm/all.zip" "unusable"
 
-{- | A stand-in low-level cause wrapped by a 'ConnectionFailure'. The classifier inspects only the
-constructor, not the wrapped cause.
--}
+-- | A stand-in low-level cause wrapped by a 'ConnectionFailure'. The classifier inspects only the constructor.
 data StubCause = StubCause
     deriving stock (Show)
 
 instance Exception StubCause
 
-{- | A TLS handshake refusal, in the shape @http-client@ delivers it: wrapped in an
-'InternalException'.
--}
+-- | A TLS handshake refusal, in the shape @http-client@ delivers it: wrapped in an 'InternalException'.
 tlsRefusal :: SomeException
 tlsRefusal = toException (TLS.HandshakeFailed (TLS.Error_Misc "handshake refused"))
-
-{- | Drive a real (in-process) request against a stub answering with the given
-status under @throwErrorStatusCodes@, and return the 'HttpException' it throws.
-This yields a genuine 'StatusCodeException' without hand-building a 'Response'.
--}
-statusException :: Status -> IO HttpException
-statusException status =
-    withStub status LBS.empty $ \stub -> do
-        manager <- newManager defaultManagerSettings
-        req0 <- parseRequest (toString (stubBaseUrl stub) <> "/npm/all.zip")
-        let req = req0{checkResponse = throwErrorStatusCodes}
-        outcome <- try (httpLbs req manager) :: IO (Either HttpException (Response LBS.ByteString))
-        case outcome of
-            Left err -> pure err
-            Right _ -> fail ("stub unexpectedly succeeded for status " <> show status)
 
 spec :: Spec
 spec = do
@@ -133,15 +111,15 @@ spec = do
                 `shouldBe` map (transportRetryable . tfCause . classifyTransport) faults
 
         it "classifies a real 502 as retryable and a real 404 as permanent" $ do
-            e502 <- statusException status502
-            e404 <- statusException status404
+            (_, e502) <- redirectedStatusException status502
+            (_, e404) <- redirectedStatusException status404
             isRetryableHttpException e502 `shouldBe` True
             isRetryableHttpException e404 `shouldBe` False
 
-    describe "withOsvRetry -- the fetch wrapper" $ do
+    describe "withOsvRetry, the fetch wrapper" $ do
         it "returns the value on success without retrying" $ do
             attempts <- newIORef (0 :: Int)
-            result <- runQuietKatip $ withOsvRetry (limitRetries 5) $ do
+            result <- runQuietKatip $ withOsvRetry feed (limitRetries 5) $ do
                 modifyIORef' attempts (+ 1)
                 pure ("ok" :: Text)
             result `shouldBe` "ok"
@@ -149,7 +127,7 @@ spec = do
 
         it "retries a transient failure, then succeeds within the budget" $ do
             attempts <- newIORef (0 :: Int)
-            result <- runQuietKatip $ withOsvRetry (limitRetries 5) $ do
+            result <- runQuietKatip $ withOsvRetry feed (limitRetries 5) $ do
                 n <- atomicModifyIORef' attempts (\k -> (k + 1, k + 1))
                 if n < 3 then throwIO transientFailure else pure ("recovered" :: Text)
             result `shouldBe` "recovered"
@@ -157,7 +135,7 @@ spec = do
         it "gives up after the retry budget is spent (no tight loop)" $ do
             attempts <- newIORef (0 :: Int)
             outcome <-
-                try (runQuietKatip (withOsvRetry (limitRetries 3) (modifyIORef' attempts (+ 1) >> throwIO transientFailure))) ::
+                try (runQuietKatip (withOsvRetry feed (limitRetries 3) (modifyIORef' attempts (+ 1) >> throwIO transientFailure))) ::
                     IO (Either HttpException ())
             case outcome of
                 Left err -> isRetryableHttpException err `shouldBe` True
@@ -166,19 +144,31 @@ spec = do
         it "re-throws a permanent failure without retrying" $ do
             attempts <- newIORef (0 :: Int)
             outcome <-
-                try (runQuietKatip (withOsvRetry (limitRetries 5) (modifyIORef' attempts (+ 1) >> throwIO permanentFailure))) ::
+                try (runQuietKatip (withOsvRetry feed (limitRetries 5) (modifyIORef' attempts (+ 1) >> throwIO permanentFailure))) ::
                     IO (Either HttpException ())
             case outcome of
                 Left err -> isRetryableHttpException err `shouldBe` False
                 Right () -> expectationFailure "expected the permanent failure to propagate"
             readIORef attempts `shouldReturn` 1
 
-    describe "transientMessage -- the retry log line" $ do
-        it "counts attempts from one and names the cause" $ do
-            let msg = transientMessage defaultRetryStatus{rsIterNumber = 2} transientFailure
-            msg `shouldContain` "attempt 3"
-            msg `shouldContain` "backing off before the next retry"
-            msg `shouldContain` show transientFailure
+    describe "transientMessage, the retry log line" $ do
+        it "counts attempts from one and names a transport fault by the endpoint it dialled" $ do
+            let msg = transientMessage feed defaultRetryStatus{rsIterNumber = 2} transientFailure
+            msg `shouldSatisfy` T.isInfixOf "attempt 3"
+            msg `shouldSatisfy` T.isInfixOf "backing off before the next retry"
+            msg `shouldSatisfy` T.isSuffixOf ("localhost:80: ConnectionTimeout (" <> renderTransportCause TransportTimeout <> ")")
 
         it "reports the initial attempt as attempt 1, not 0" $
-            transientMessage defaultRetryStatus transientFailure `shouldContain` "attempt 1"
+            transientMessage feed defaultRetryStatus transientFailure `shouldSatisfy` T.isInfixOf "attempt 1"
+
+        it "renders a redirected status by its code, never the request or the response" $ do
+            (_, err) <- redirectedStatusException status503
+            let msg = transientMessage feed defaultRetryStatus err
+            msg `shouldSatisfy` T.isSuffixOf (feed <> ": HTTP 503")
+            for_ redirectSecrets $ \secret -> msg `shouldSatisfy` (not . T.isInfixOf secret)
+
+        it "renders a timeout by its classified cause and the client's reason, never the request" $ do
+            timedOut <- (`HttpExceptionRequest` ConnectionTimeout) <$> signedRequest
+            let msg = transientMessage feed defaultRetryStatus timedOut
+            msg `shouldSatisfy` T.isSuffixOf ("127.0.0.1:1: ConnectionTimeout (" <> renderTransportCause TransportTimeout <> ")")
+            for_ requestSecrets $ \secret -> msg `shouldSatisfy` (not . T.isInfixOf secret)

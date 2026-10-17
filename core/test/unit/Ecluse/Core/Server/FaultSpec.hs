@@ -5,6 +5,7 @@
 module Ecluse.Core.Server.FaultSpec (spec) where
 
 import Data.Text qualified as T
+import Network.HTTP.Types.Status (status503)
 import Test.Hspec
 
 import Ecluse.Core.Server.Fault (
@@ -15,6 +16,7 @@ import Ecluse.Core.Server.Fault (
 import Ecluse.Core.Telemetry.Metrics (
     RequestFaultCause (RenderFault, UnclassifiedFault),
  )
+import Ecluse.Test.Stub (redirectedStatusException)
 
 -- | A typed stand-in for an escape nothing classifies.
 newtype UnknownEscape = UnknownEscape Text
@@ -34,6 +36,10 @@ spec = describe "classifyEscape (the request perimeter's vocabulary)" $ do
         let fault = classifyEscape (toException (UnknownEscape "who goes there"))
         rqCause fault `shouldBe` UnclassifiedFault
         rqDetail fault `shouldSatisfy` T.isInfixOf "who goes there"
+
+    it "renders an HTTP escape by its status at the dialled host:port, never the request or the response" $ do
+        (authority, err) <- redirectedStatusException status503
+        rqDetail (classifyEscape (toException err)) `shouldBe` authority <> ": HTTP 503"
 
     it "bounds the carried detail to the shared log-line budget" $ do
         let fault = classifyEscape (toException (UnknownEscape (T.replicate 10_000 "x")))
