@@ -1,0 +1,80 @@
+{
+  "_note": "Capability count against admission and memory, with no CPU-time quota. Each job runs the anchor, its test arms, and the anchor again on one runner. docs/testing.md, Capability sweeps, owns the fields and the procedure.",
+  "name": "capability-1634",
+  "upstreamLatencyMs": 5,
+  "passes": "loaded",
+  "scenarios": ["npm/merge-cold", "pypi/index-cold", "npm/heavy-private-25pct", "pypi/heavy-private-25pct", "npm/assembled-response-hit", "pypi/assembled-response-hit", "npm/heavy-private", "pypi/heavy-private", "npm/herd", "pypi/herd", "npm/warm-under-cold", "pypi/warm-under-cold"],
+  "scored": ["npm/merge-cold", "pypi/index-cold", "npm/heavy-private-25pct", "pypi/heavy-private-25pct", "npm/assembled-response-hit", "pypi/assembled-response-hit"],
+  "anchor": "anchor",
+  "arms": {
+    "anchor": {"shape": "1gib", "cpus": "2-3", "cores": 2, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 2, "allocAreaMib": 64, "maxHeapMib": 832, "admission": 40}},
+    "a-quota": {"shape": "2cpu-1gib", "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 2, "allocAreaMib": 64, "maxHeapMib": 832, "admission": 40}},
+    "a-derived": {"shape": "1gib", "cpus": "2-3", "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 2, "allocAreaMib": 64, "maxHeapMib": 832, "admission": 40}},
+    "b-n1": {"shape": "1gib", "cpus": "2-3", "cores": 1, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 1, "allocAreaMib": 64, "maxHeapMib": 832, "admission": 20}},
+    "b-n1-held": {"shape": "1gib", "cpus": "2-3", "cores": 1, "serveMaxInFlight": 40, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 1, "allocAreaMib": 64, "maxHeapMib": 832, "admission": 40}},
+    "b-n3": {"shape": "1gib", "cpus": "2-3", "cores": 3, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 3, "allocAreaMib": 42, "maxHeapMib": 854, "admission": 60}},
+    "b-n3-held": {"shape": "1gib", "cpus": "2-3", "cores": 3, "serveMaxInFlight": 40, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 3, "allocAreaMib": 42, "maxHeapMib": 854, "admission": 40}},
+    "b-n4": {"shape": "1gib", "cpus": "2-3", "cores": 4, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 4, "allocAreaMib": 32, "maxHeapMib": 864, "admission": 80}},
+    "b-n4-held": {"shape": "1gib", "cpus": "2-3", "cores": 4, "serveMaxInFlight": 40, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 4, "allocAreaMib": 32, "maxHeapMib": 864, "admission": 40}},
+    "b-n8": {"shape": "1gib", "cpus": "2-3", "cores": 8, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 8, "allocAreaMib": 16, "maxHeapMib": 880, "admission": 160}},
+    "b-n8-held": {"shape": "1gib", "cpus": "2-3", "cores": 8, "serveMaxInFlight": 40, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 8, "allocAreaMib": 16, "maxHeapMib": 880, "admission": 40}},
+    "c-n2": {"shape": "unlimited", "cpus": "2-3", "cores": 2, "maxHeapBytes": 872415232, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 2, "allocAreaMib": 52, "maxHeapMib": 832, "admission": 40}},
+    "c-n3": {"shape": "unlimited", "cpus": "2-3", "cores": 3, "maxHeapBytes": 872415232, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 3, "allocAreaMib": 34, "maxHeapMib": 832, "admission": 60}},
+    "c-n4": {"shape": "unlimited", "cpus": "2-3", "cores": 4, "maxHeapBytes": 872415232, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 4, "allocAreaMib": 26, "maxHeapMib": 832, "admission": 80}},
+    "c-n8": {"shape": "unlimited", "cpus": "2-3", "cores": 8, "maxHeapBytes": 872415232, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 8, "allocAreaMib": 13, "maxHeapMib": 832, "admission": 160}},
+    "c-n8-held": {"shape": "unlimited", "cpus": "2-3", "cores": 8, "maxHeapBytes": 872415232, "serveMaxInFlight": 40, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 8, "allocAreaMib": 13, "maxHeapMib": 832, "admission": 40}},
+    "d-n8": {"shape": "unlimited", "cpus": "2-3", "cores": 8, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 8, "allocAreaMib": 64, "admission": 160}},
+    "d-n4-area32": {"shape": "unlimited", "cpus": "2-3", "cores": 4, "allocAreaMib": 32, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 4, "allocAreaMib": 32, "admission": 80}},
+    "d-n4": {"shape": "unlimited", "cpus": "2-3", "cores": 4, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 4, "allocAreaMib": 64, "admission": 80}},
+    "d-n2": {"shape": "unlimited", "cpus": "2-3", "cores": 2, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 2, "allocAreaMib": 64, "admission": 40}},
+    "e-n2": {"shape": "2gib", "cpus": "2-3", "cores": 2, "podMemoryMib": 2048, "referenceShape": "4cpu-2gib", "expect": {"capabilities": 2, "allocAreaMib": 64, "maxHeapMib": 1728, "admission": 40}},
+    "e-n4": {"shape": "2gib", "cpus": "2-3", "cores": 4, "podMemoryMib": 2048, "referenceShape": "4cpu-2gib", "expect": {"capabilities": 4, "allocAreaMib": 64, "maxHeapMib": 1728, "admission": 80}},
+    "e-n4-held": {"shape": "2gib", "cpus": "2-3", "cores": 4, "serveMaxInFlight": 40, "podMemoryMib": 2048, "referenceShape": "4cpu-2gib", "expect": {"capabilities": 4, "allocAreaMib": 64, "maxHeapMib": 1728, "admission": 40}},
+    "e-n8": {"shape": "2gib", "cpus": "2-3", "cores": 8, "podMemoryMib": 2048, "referenceShape": "4cpu-2gib", "expect": {"capabilities": 8, "allocAreaMib": 32, "maxHeapMib": 1760, "admission": 160}},
+    "e-n8-held": {"shape": "2gib", "cpus": "2-3", "cores": 8, "serveMaxInFlight": 40, "podMemoryMib": 2048, "referenceShape": "4cpu-2gib", "expect": {"capabilities": 8, "allocAreaMib": 32, "maxHeapMib": 1760, "admission": 40}},
+    "f-n1": {"shape": "1gib", "cpus": "3", "cores": 1, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 1, "allocAreaMib": 64, "maxHeapMib": 832, "admission": 20}},
+    "f-n2": {"shape": "1gib", "cpus": "3", "cores": 2, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 2, "allocAreaMib": 64, "maxHeapMib": 832, "admission": 40}},
+    "f-n4": {"shape": "1gib", "cpus": "3", "cores": 4, "podMemoryMib": 1024, "referenceShape": "2cpu-1gib", "expect": {"capabilities": 4, "allocAreaMib": 32, "maxHeapMib": 864, "admission": 80}}
+  },
+  "phases": [
+    {"phase": "A", "jobs": [
+      {"job": "A1", "arms": ["anchor", "a-quota", "a-quota", "anchor"]},
+      {"job": "A2", "arms": ["anchor", "a-derived", "a-derived", "a-derived", "anchor"]}
+    ]},
+    {"phase": "B", "jobs": [
+      {"job": "B1", "arms": ["anchor", "b-n1", "b-n1-held", "b-n3", "anchor"]},
+      {"job": "B2", "arms": ["anchor", "b-n1-held", "b-n3", "b-n3-held", "anchor"]},
+      {"job": "B3", "arms": ["anchor", "b-n3", "b-n3-held", "b-n4", "anchor"]},
+      {"job": "B4", "arms": ["anchor", "b-n3-held", "b-n4", "b-n4-held", "anchor"]},
+      {"job": "B5", "arms": ["anchor", "b-n4", "b-n4-held", "b-n8", "anchor"]},
+      {"job": "B6", "arms": ["anchor", "b-n4-held", "b-n8", "b-n8-held", "anchor"]},
+      {"job": "B7", "arms": ["anchor", "b-n8", "b-n8-held", "b-n1", "anchor"]},
+      {"job": "B8", "arms": ["anchor", "b-n8-held", "b-n1", "b-n1-held", "anchor"]}
+    ]},
+    {"phase": "C", "jobs": [
+      {"job": "C1", "arms": ["anchor", "c-n2", "c-n3", "c-n4", "anchor"]},
+      {"job": "C2", "arms": ["anchor", "c-n3", "c-n4", "c-n8", "anchor"]},
+      {"job": "C3", "arms": ["anchor", "c-n4", "c-n8", "c-n8-held", "anchor"]},
+      {"job": "C4", "arms": ["anchor", "c-n8", "c-n8-held", "c-n2", "anchor"]},
+      {"job": "C5", "arms": ["anchor", "c-n8-held", "c-n2", "c-n3", "anchor"]}
+    ]},
+    {"phase": "D", "jobs": [
+      {"job": "D1", "arms": ["anchor", "d-n8", "d-n4-area32", "d-n4", "anchor"]},
+      {"job": "D2", "arms": ["anchor", "d-n4-area32", "d-n4", "d-n2", "anchor"]},
+      {"job": "D3", "arms": ["anchor", "d-n4", "d-n2", "d-n8", "anchor"]},
+      {"job": "D4", "arms": ["anchor", "d-n2", "d-n8", "d-n4-area32", "anchor"]}
+    ]},
+    {"phase": "E", "jobs": [
+      {"job": "E1", "arms": ["anchor", "e-n2", "e-n4", "e-n4-held", "anchor"]},
+      {"job": "E2", "arms": ["anchor", "e-n4", "e-n4-held", "e-n8", "anchor"]},
+      {"job": "E3", "arms": ["anchor", "e-n4-held", "e-n8", "e-n8-held", "anchor"]},
+      {"job": "E4", "arms": ["anchor", "e-n8", "e-n8-held", "e-n2", "anchor"]},
+      {"job": "E5", "arms": ["anchor", "e-n8-held", "e-n2", "e-n4", "anchor"]}
+    ]},
+    {"phase": "F", "onRequest": true, "jobs": [
+      {"job": "F1", "arms": ["anchor", "f-n1", "f-n2", "f-n4", "anchor"]},
+      {"job": "F2", "arms": ["anchor", "f-n2", "f-n4", "f-n1", "anchor"]},
+      {"job": "F3", "arms": ["anchor", "f-n4", "f-n1", "f-n2", "anchor"]}
+    ]}
+  ]
+}

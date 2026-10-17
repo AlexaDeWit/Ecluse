@@ -12,6 +12,7 @@ module Ecluse.BenchLoad.Oha (
     RunLength (..),
     OhaReport (..),
     runOha,
+    ohaPinned,
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.!=), (.:), (.:?))
@@ -20,6 +21,7 @@ import System.FilePath ((</>))
 import System.Process.Typed (nullStream, proc, runProcess_, setStdout)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
+import Ecluse.BenchLoad.CpuUse (ohaCpu)
 import Ecluse.BenchLoad.Error (benchFail)
 
 -- | How long a run lasts: a fixed duration, or a fixed number of requests.
@@ -59,16 +61,16 @@ instance FromJSON OhaReport where
         errorCounts <- o .:? "errorDistribution" .!= mempty
         pure (OhaReport elapsed statusCounts errorCounts [])
 
--- | Run @oha@, pinned to logical CPU 0 when @BENCH_LOAD_ISOLATE_OHA=1@. The proxy's affinity is unchanged.
+-- | Run @oha@, pinned to the CPU 'ohaPinned' names.
 runOha :: OhaRun -> IO OhaReport
 runOha run = withSystemTempDirectory "ecluse-bench-oha" $ \dir -> do
     let urlsFile = dir </> "urls.txt"
         reportFile = dir </> "report.json"
         requestsFile = dir </> "requests.db"
     writeFileText urlsFile (unlines (orUrls run))
-    isolate <- (== Just "1") <$> lookupEnv "BENCH_LOAD_ISOLATE_OHA"
+    pinned <- ohaPinned
     let args = ohaArgs run reportFile requestsFile urlsFile
-        (command, finalArgs) = if isolate then ("taskset", ["-c", "0", "oha"] <> args) else ("oha", args)
+        (command, finalArgs) = maybe ("oha", args) (\cpu -> ("taskset", ["-c", show cpu, "oha"] <> args)) pinned
     -- With a database, oha writes a progress line to stdout, so the report goes to a file.
     runProcess_ (setStdout nullStream (proc command finalArgs))
     raw <- readFileLBS reportFile
@@ -78,6 +80,10 @@ runOha run = withSystemTempDirectory "ecluse-bench-oha" $ \dir -> do
             then successLatencies requestsFile
             else pure []
     pure report{ohaSuccessLatencies = latencies}
+
+-- | The CPU @oha@ is pinned to: 'ohaCpu' under @BENCH_LOAD_ISOLATE_OHA=1@, and none otherwise.
+ohaPinned :: IO (Maybe Int)
+ohaPinned = (ohaCpu <$) . guard . (== Just "1") <$> lookupEnv "BENCH_LOAD_ISOLATE_OHA"
 
 ohaArgs :: OhaRun -> FilePath -> FilePath -> FilePath -> [String]
 ohaArgs run reportFile requestsFile urlsFile =

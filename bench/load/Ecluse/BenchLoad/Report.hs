@@ -21,8 +21,20 @@ import Data.Text qualified as T
 import Numeric (showFFloat)
 
 import Ecluse.BenchLoad.BootLines (BootLimits (..), LoggedRule (..), bootLimits, loggedRules, metadataCompression, renderMetadataCompression, ruleBootOrders)
+import Ecluse.BenchLoad.CpuUse (
+    CpuWindow (..),
+    cpuBusyShare,
+    foreignCpuSeconds,
+    generatorSaturated,
+    harnessCpuRate,
+    harnessCpuShare,
+    headroomLimit,
+    ohaCpu,
+    proxyCpuRate,
+    proxyCpuShare,
+ )
 import Ecluse.BenchLoad.Exposition (CacheOutcomes (..), GaugeSummary (..))
-import Ecluse.BenchLoad.Floors (Calibration (calConditions), Enforcement, FloorCheck (..), Pass (ConcurrencyOne, Loaded), describeEnforcement, describeRetainedConditions, floorCheck, floorsPath)
+import Ecluse.BenchLoad.Floors (Calibration (calConditions), Enforcement, FloorCheck (..), Pass (ConcurrencyOne, Loaded), PassSelection (LoadedPassOnly), describeEnforcement, describeRetainedConditions, floorCheck, floorsPath)
 import Ecluse.BenchLoad.Harness (LoadKnobs (..), LoadSummary (..), ProxyFigures (..), ScenarioReport (..), windowAttempts, windowRefusals, windowSuccesses)
 import Ecluse.BenchLoad.Latency (Percentiles (..))
 import Ecluse.BenchLoad.Normalise (
@@ -35,7 +47,8 @@ import Ecluse.BenchLoad.Normalise (
     renderSaturation,
  )
 import Ecluse.BenchLoad.PatternReport (renderReplayTotals)
-import Ecluse.BenchLoad.Pod (CgroupReading (..), counter)
+import Ecluse.BenchLoad.Pod (CgroupReading (..), PodShape (Unlimited), ProxyTuning (..), counter, noTuning, proxyCgroupFiles, renderCpuList, renderPodShape)
+import Ecluse.BenchLoad.ReportLabels (admissionRow, generatorHeadroomRow, headroomHeld, headroomSaturated, loadCell, loadRow, memoryEventsRow, memoryPeakColumn, postureRow)
 import Ecluse.BenchLoad.RtsWindow (RtsSnapshot (..), RtsWindow (..), compactionThresholdCrossed, gcCpuShare, meanLiveAtMajors, perSuccess)
 import Ecluse.BenchLoad.Selection (measurementConditionVersion)
 import Ecluse.BenchLoad.Verdict (ProxyEnding (..), describeEnding)
@@ -47,7 +60,7 @@ data Section = Section
     -- ^ The knobs of the loaded pass, with the latency its fixture injects.
     , sectionCapabilities :: Int
     , sectionProcessors :: Int
-    , sectionShape :: Text
+    , sectionShape :: PodShape
     , sectionEcosystem :: Ecosystem
     , sectionEnforcement :: Enforcement
     , sectionConcurrencyOne :: [ScenarioReport]
@@ -68,13 +81,13 @@ renderReports section =
             <> rulePolicyLines c1Reports reports
             <> [ "### At a glance"
                , ""
-               , "| scenario | description | connections | successes | floor | refusals | transport failures | successful req/s | success p50 | success p99 | alloc / success (upper bound) | GC share | memory peak / max | ending |"
+               , "| scenario | description | connections | successes | floor | refusals | transport failures | successful req/s | success p50 | success p99 | alloc / success (upper bound) | GC share | " <> memoryPeakColumn <> " | ending |"
                , "| --- | --- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --- |"
                ]
             <> map (glanceRow (floorOf Loaded)) reports
             <> [""]
             <> costTable (floorOf ConcurrencyOne) c1Reports reports
-            <> concatMap renderScenario reports
+            <> concatMap (renderScenario (lkProxyTuning (sectionKnobs section))) reports
             <> readingNotes
   where
     reports = sectionLoaded section
@@ -88,16 +101,16 @@ renderReports section =
                 <> map ("- " <>) lines'
                 <> [""]
 
-operatingPointTable :: LoadKnobs -> Int -> Int -> Text -> [Text] -> [Text]
+operatingPointTable :: LoadKnobs -> Int -> Int -> PodShape -> [Text] -> [Text]
 operatingPointTable knobs capabilities processors shape boot =
     [ "**Operating point**"
     , ""
     , "| knob | value |"
     , "| --- | --- |"
-    , row "pod shape" (shapeNote shape capabilities)
+    , row "pod shape" (shapeNote shape capabilities (lkProxyTuning knobs))
     , row "runner logical processors" (show processors <> " (oha is pinned to logical CPU 0 when isolated)")
     , row "harness GHC capabilities (-N)" (show capabilities)
-    , row "load" (show (lkConcurrency knobs) <> " connections x " <> show (lkDurationSeconds knobs) <> " s (a scenario may scale its own connections)")
+    , row loadRow (loadCell (lkConcurrency knobs) (lkDurationSeconds knobs))
     , row "measurement conditions" measurementConditionVersion
     , row "injected upstream latency" (fmt1 (fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000) <> " ms")
     , row "serve admission (requests)" (maybe "n/a" show (blCpuAdmission limits) <> origin (lkServeMaxInFlight knobs))
@@ -108,11 +121,25 @@ operatingPointTable knobs capabilities processors shape boot =
     , row "cache-eviction entries" (show (lkCacheMaxEntries knobs))
     , row "working-set cap" (show (lkWorkingSet knobs) <> " projects")
     , row "worker artifact" ("~" <> kib (fromIntegral (lkPayloadBytes knobs)))
-    , ""
     ]
+        <> tuningRows knobs
+        <> [""]
   where
     limits = bootLimits boot
     origin = maybe " (the proxy's computed default)" (const " (explicit)")
+
+-- The rows a run adds when it pins proxy settings or runs the loaded pass alone.
+tuningRows :: LoadKnobs -> [Text]
+tuningRows knobs =
+    [row "proxy CPU placement (cpuset.cpus)" (renderCpuList cpus) | Just cpus <- [ptCpus tuning]]
+        <> [row "proxy runtime settings pinned" (T.intercalate ", " pinned) | not (null pinned)]
+        <> [row "passes" "loaded pass only" | lkPasses knobs == LoadedPassOnly]
+  where
+    tuning = lkProxyTuning knobs
+    pinned =
+        ["runtime.cores " <> show n | Just n <- [ptCores tuning]]
+            <> ["runtime.maxHeapBytes " <> show n | Just n <- [ptMaxHeapBytes tuning]]
+            <> ["-A" <> show n <> "m" | Just n <- [ptAllocAreaMib tuning]]
 
 -- The first scenario's rule policy, and the proxies of either pass that logged a different one.
 rulePolicyLines :: [ScenarioReport] -> [ScenarioReport] -> [Text]
@@ -139,10 +166,17 @@ ruleTable = \case
     ruleRow r = "| " <> T.intercalate " | " [lrName r <> maybe "" (\why -> " (inactive: " <> why <> ")") (lrInactive r), fromMaybe "n/a" (lrType r), settings r, T.intercalate ", " (lrLayers r)] <> " |"
     settings r = bool (T.intercalate ", " [key <> " " <> value | (key, value) <- lrSettings r]) "none" (null (lrSettings r))
 
-shapeNote :: Text -> Int -> Text
-shapeNote shape capabilities
-    | shape == "unlimited" = "unlimited: no harness-imposed cgroup limit, runtime.cores " <> show capabilities <> " (GHC capabilities)"
-    | otherwise = shape <> ": the proxy's own cgroup, CPU-time quota via cpu.max, memory.max set, swap off"
+shapeNote :: PodShape -> Int -> ProxyTuning -> Text
+shapeNote shape capabilities tuning
+    | shape == Unlimited && tuning == noTuning = "unlimited: no harness-imposed cgroup limit, runtime.cores " <> show capabilities <> " (GHC capabilities)"
+    | otherwise = renderPodShape shape <> ": the proxy's own cgroup, " <> T.intercalate ", " (quota <> memory)
+  where
+    written = map fst (proxyCgroupFiles shape tuning)
+    quota = [bool "no CPU-time quota" "CPU-time quota via cpu.max" ("cpu.max" `elem` written)]
+    memory
+        | "memory.max" `elem` written = ["memory.max set, swap off"]
+        | "memory.high" `elem` written = ["no memory.max, memory.high backstop"]
+        | otherwise = ["no memory.max"]
 
 glanceRow :: (Text -> FloorCheck) -> ScenarioReport -> Text
 glanceRow floorOf r =
@@ -215,8 +249,8 @@ withConcurrencyOne c1Reports reports = [(r, Map.lookup (srName r) byName) | r <-
   where
     byName = Map.fromList [(srName r, r) | r <- c1Reports]
 
-renderScenario :: ScenarioReport -> [Text]
-renderScenario r =
+renderScenario :: ProxyTuning -> ScenarioReport -> [Text]
+renderScenario tuning r =
     [ "### " <> srName r
     , ""
     , srDescription r
@@ -229,6 +263,7 @@ renderScenario r =
         <> rtsRows r
         <> maybe [] proxyRows (srProxy r)
         <> [row "memory.peak less RTS max memory in use" (maybe "n/a" signedMib (offHeapGap r)) | isJust (srProxy r)]
+        <> maybe [] (cpuRows (isJust (ptCpus tuning)) r) (pfCpu =<< srProxy r)
         <> [""]
         <> stepsTable (srSteps r)
         <> [maybe "" renderReplayTotals (srReplayTotals r), srEvidence r]
@@ -263,7 +298,8 @@ rtsRows r =
     , row "GCs (total / major) / GC share of CPU / GC wall" (maybe "n/a" gcCell (srRtsWindow r))
     , row "mean live data after the window's major collections" (maybe "n/a" (mib . round) (meanLiveAtMajors =<< srRtsWindow r))
     , row "RTS max live / max memory in use" (maybe "n/a" (\s -> mib (rsMaxLiveBytes s) <> " / " <> mib (rsMaxMemInUseBytes s)) (srRtsEnd r))
-    , row "heap ceiling (-M) / proxy GHC capabilities / allocation area per capability" (maybe "n/a" postureCell (posture r))
+    , row postureRow (maybe "n/a" postureCell (posture r))
+    , row "processors the RTS sees" (maybe "n/a" (show . rsProcessors) (posture r))
     , row "compaction threshold crossed (inferred from the maxima)" (maybe "n/a" compactionCell (srRtsEnd r))
     , row "retained after the run" (maybe "n/a" mib (srRetainedBytes r))
     ]
@@ -277,11 +313,11 @@ proxyRows p =
     [ row "idle floor: live after a major GC / RTS memory in use / cgroup memory.current" idleCell
     , row "cgroup memory.peak / memory.max" (maybe "no cgroup" (\c -> maybe "n/a" (mib . fromIntegral) (crMemoryPeak c) <> " / " <> maybe "max" (mib . fromIntegral) (crMemoryMax c)) cgroup)
     , row "memory.stat at the window's end: anon / file / kernel / sock" (maybe "no cgroup" statCell (pfWindowCgroup p))
-    , row "memory.events oom_kill / oom / max / high" (maybe "no cgroup" eventsCell cgroup)
+    , row memoryEventsRow (maybe "no cgroup" eventsCell cgroup)
     , row "CPU throttled during the window" (maybe "n/a" (\us -> fmt1 (fromIntegral us / 1_000) <> " ms") (pfWindowThrottledUsec p))
     , row "proxy ending" (endingCell (pfEnding p) <> if pfExitedEarly p then ", before the harness stopped it" else "")
     , row "boot attempts" (show (length (pfBootRetries p) + 1))
-    , row "serve admission (requests) / memory admission budget at boot" (maybe "n/a" show (blCpuAdmission limits) <> " / " <> maybe "n/a" bytesCell (blMemoryBudgetBytes limits))
+    , row admissionRow (maybe "n/a" show (blCpuAdmission limits) <> " / " <> maybe "n/a" bytesCell (blMemoryBudgetBytes limits))
     , row "admission in-flight gauge: max / mean / last (samples, missed)" (gaugeCell (pfInFlight p))
     , row "proxy threads (pids.current): max / mean / last (samples, missed)" (gaugeCell (pfTasks p))
     , row "metadata cache hit / miss / collapsed in the window" (maybe "n/a (a scrape failed)" cacheCell (pfCacheWindow p))
@@ -305,6 +341,24 @@ proxyRows p =
             <> ", "
             <> show (gsMissed g)
             <> ")"
+
+-- The CPU time of the window: the proxy against its CPUs, and the load generator's headroom.
+cpuRows :: Bool -> ScenarioReport -> CpuWindow -> [Text]
+cpuRows placed r w =
+    [ row "proxy CPU-seconds per second: cgroup / RTS (share of the cgroup's CPUs)" (rate (proxyCpuRate w) <> " / " <> rate rtsRate <> share (proxyCpuShare w) (cwProxyCpus w))
+    , row "harness cgroup CPU-seconds per second: load generator, stubs, and harness (share of its CPUs)" (rate (harnessCpuRate w) <> share (harnessCpuShare w) (cwHarnessCpus w))
+    , row ("CPU " <> show ohaCpu <> " busy, where oha runs") (maybe "n/a" pct (cpuBusyShare ohaCpu w))
+    , row generatorHeadroomRow (maybe "n/a" (bool headroomHeld ("**" <> headroomSaturated <> "**")) (generatorSaturated w))
+    ]
+        -- An unplaced proxy shares its CPUs with the harness, so their busy time is not foreign to it.
+        <> [row "busy time on the proxy's CPUs that the proxy did not spend" (maybe "n/a" (\seconds -> fmt2 seconds <> " s in " <> fmt1 (cwSeconds w) <> " s") (foreignCpuSeconds w)) | placed]
+  where
+    rtsRate = do
+        window <- srRtsWindow r
+        guard (cwSeconds w > 0)
+        pure (fromIntegral (rwCpuNs window) / 1e9 / cwSeconds w)
+    rate = maybe "n/a" fmt2
+    share value cpus = maybe "" (\v -> " (" <> pct v <> " of CPUs " <> maybe "?" renderCpuList cpus <> ")") value
 
 proxyDetail :: ProxyFigures -> [Text]
 proxyDetail p =
@@ -351,6 +405,7 @@ readingNotes =
     , "- **Each scenario boots its own proxy** from its own cgroup, so the runtime posture and the admission budgets are the ones that pod shape resolves. A boot retried after the runtime could not start a thread gets a fresh cgroup, so its readings exclude the failed attempt."
     , "- **Native metadata gzip is off** in every proxy. The harness sets `ECLUSE_SERVER__METADATA_GZIP=false` and refuses a proxy that logs another posture, so these figures measure identity listings, not gzip-enabled throughput. A report from a build before the setting shows it as unreported."
     , "- **memory.peak** is the kernel's high-water mark for the proxy's cgroup. **RTS max memory in use** is what the heap held, the figure `-M` is compared with. The gap is off-heap and kernel memory."
+    , "- **CPU figures** cover the window. The proxy's come from its cgroup's `cpu.stat` and from the RTS. The harness cgroup holds the load generator, the stubs, and the harness. The generator keeps its headroom while that cgroup and the CPU `oha` runs on each stay below " <> show (round (headroomLimit * 100) :: Int) <> "% busy. For a proxy placed on its own CPUs, busy time on them that the proxy did not spend comes from `/proc/stat`: runner services and the kernel."
     , "- **The in-flight gauge** is `ecluse.serve.admission.in_flight`, sampled each second. Requests that hold admission without finishing show as a flat, nonzero gauge beside zero successes."
     , "- **The rule policy** is what the first scenario's proxy logged at boot: each rule its configuration names, with its type and keys, and the order each mount evaluates the rules in. A proxy of either pass that logged a different policy is named."
     , "- **Allocation per refusal** divides the same window's allocation by its refusals instead of its successes. Each figure charges the whole window to one kind of response, so each is an upper bound on that kind's cost, and a small count makes it large."

@@ -18,7 +18,7 @@ import Data.Text qualified as T
 import Ecluse.Core.Registry.PyPI.Wire (SimpleIndex (..), simpleIndexMediaType)
 import Ecluse.Test.Corpus (cpName, pypiCorpusPackages)
 import GHC.Clock (getMonotonicTime)
-import GHC.Conc (getNumCapabilities, getNumProcessors)
+import GHC.Conc (getNumCapabilities)
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Client.TLS (tlsManagerSettings)
@@ -37,6 +37,7 @@ import Ecluse.BenchLoad.Floors (
     FloorKey,
     Floors (floorsCalibration),
     Pass (ConcurrencyOne, Loaded),
+    PassSelection (EveryPass),
     RunFacts (..),
     Unheld (ThrashProbe),
     enforce,
@@ -57,7 +58,9 @@ import Ecluse.BenchLoad.Harness (
     runScenario,
  )
 import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
-import Ecluse.BenchLoad.Pod (PodShape (Limited), renderPodShape)
+import Ecluse.BenchLoad.Oha (ohaPinned)
+import Ecluse.BenchLoad.Placement (runnerProcessors, withHarnessPlacement)
+import Ecluse.BenchLoad.Pod (PodShape (Limited), ProxyTuning (ptCpus), renderPodShape)
 import Ecluse.BenchLoad.ProxyProcess (podShapeFromEnv, serveProxyFlag, sweepProxyCgroups)
 import Ecluse.BenchLoad.ProxyServe (runServeProxy)
 import Ecluse.BenchLoad.PyPI (pypiLoadNotes)
@@ -84,6 +87,14 @@ runDriver :: IO ()
 runDriver = bracket_ sweepProxyCgroups sweepProxyCgroups $ do
     either benchFail pure (checkFixtureCoverage fixtures)
     knobs <- loadKnobsFromEnv
+    root <- lookupEnv "BENCH_LOAD_CGROUP"
+    pinned <- ohaPinned
+    withHarnessPlacement root pinned (ptCpus (lkProxyTuning knobs)) (measureRun knobs)
+
+-- Run the passes or the GC-thrash probe, print the report, and fail on any broken invariant.
+measureRun :: LoadKnobs -> IO ()
+measureRun knobs = do
+    processors <- runnerProcessors
     shape <- podShapeFromEnv
     selected <- selectedKeys
     thrash <- thrashLimitsFromEnv
@@ -91,7 +102,7 @@ runDriver = bracket_ sweepProxyCgroups sweepProxyCgroups $ do
     (rendered, violations) <- case thrash of
         -- The probe is never held to the floors, which a scheduled run must be.
         Just limits -> second (unheldViolations (triggerIn environment) (NotHeld (ThrashProbe :| [])) <>) <$> runThrashProbe knobs limits
-        Nothing -> runPasses environment knobs shape selected
+        Nothing -> runPasses environment knobs processors shape selected
     -- The probe reads OOM kills and heap overflows as results, so only a broken probe has a verdict.
     let output = T.intercalate "\n" (rendered <> [renderVerdict violations | isNothing thrash || not (null violations)])
     putText output
@@ -111,15 +122,14 @@ data Setup = Setup
     , setupProcessors :: Int
     }
 
-runPasses :: Map Text Text -> LoadKnobs -> PodShape -> Maybe [Text] -> IO ([Text], [Text])
-runPasses environment knobs shape selected = do
+runPasses :: Map Text Text -> LoadKnobs -> Int -> PodShape -> Maybe [Text] -> IO ([Text], [Text])
+runPasses environment knobs processors shape selected = do
     -- Read before any scenario runs, so floors that do not decode cost no load.
     floors <- either benchFail pure =<< loadFloors
     npmBaseline <- probePublicRtt Npm knobs
     pypiBaseline <- probePublicRtt PyPI knobs
     self <- getExecutablePath
     capabilities <- getNumCapabilities
-    processors <- getNumProcessors
     -- One source for what each fixture injects, so the latency compared is the latency injected.
     let baselineOf eco = if eco == PyPI then pypiBaseline else npmBaseline
         facts =
@@ -181,13 +191,13 @@ fixturePasses setup fixture
     | null chosen = pure Nothing
     | otherwise = do
         loaded <- traverse (\s -> (keyOf s,) <$> runScenarioChild Loaded self loadOverrides (keyOf s)) chosen
-        c1 <- traverse (\s -> (keyOf s,) <$> runScenarioChild ConcurrencyOne self loadOverrides (keyOf s)) serviceTime
+        c1 <- traverse (\s -> (keyOf s,) <$> runScenarioChild ConcurrencyOne self loadOverrides (keyOf s)) concurrencyOne
         let section =
                 Section
                     { sectionKnobs = knobs{lkUpstreamLatencyMicros = injMs * 1_000}
                     , sectionCapabilities = capabilities
                     , sectionProcessors = setupProcessors setup
-                    , sectionShape = renderPodShape (setupShape setup)
+                    , sectionShape = setupShape setup
                     , sectionEcosystem = eco
                     , sectionEnforcement = setupEnforcement setup
                     , sectionConcurrencyOne = rights (map snd c1)
@@ -196,10 +206,9 @@ fixturePasses setup fixture
             body =
                 fixtureSection eco $
                     [pypiLoadNotes knobs | eco == PyPI]
-                        <> [ renderReports section
-                           , renderServiceTime baseline (sectionConcurrencyOne section)
-                           , renderLoadSaturation (sectionConcurrencyOne section) (filter ((`elem` map keyOf serviceTime) . srName) (sectionLoaded section))
-                           ]
+                        <> [renderReports section]
+                        <> [renderServiceTime baseline (sectionConcurrencyOne section) | everyPass]
+                        <> [renderLoadSaturation (sectionConcurrencyOne section) (filter ((`elem` map keyOf serviceTime) . srName) (sectionLoaded section)) | everyPass]
         pure (Just (body, map (outcomeOf Loaded) loaded <> map (outcomeOf ConcurrencyOne) c1))
   where
     knobs = setupKnobs setup
@@ -209,6 +218,8 @@ fixturePasses setup fixture
     keyOf = scenarioKey eco . scenarioName
     chosen = filter runsHere (scenariosForSelection (setupSelected setup) fixture)
     serviceTime = filter scenarioServiceTime chosen
+    everyPass = lkPasses knobs == EveryPass
+    concurrencyOne = [s | everyPass, s <- serviceTime]
     runsHere s = maybe True (keyOf s `elem`) (setupSelected setup) && runsUnder (setupShape setup) s
     baseline = setupBaselineOf setup eco
     injMs = baselineInjectedMs baseline
