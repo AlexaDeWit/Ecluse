@@ -35,7 +35,6 @@ import Ecluse.Core.Fault (
     TransportCause (TransportProtocol, TransportTimeout, TransportTls, TransportUnreachable),
     TransportFault,
     renderHttpFault,
-    renderTransportFault,
     transportFault,
  )
 import Ecluse.Core.Security.Authority (dialledAuthorityLabel)
@@ -46,20 +45,17 @@ classifyTransport :: HttpException -> TransportFault
 classifyTransport err = transportFault (causeOf err) (dialledAuthority err <> ": " <> clientReason err)
   where
     causeOf = \case
-        HttpExceptionRequest _ content -> contentCause content
+        HttpExceptionRequest _ content -> case content of
+            ConnectionTimeout -> TransportTimeout
+            ResponseTimeout -> TransportTimeout
+            ConnectionFailure _ -> TransportUnreachable
+            ConnectionClosed -> TransportUnreachable
+            -- The peer hung up before the first response byte, so the request never
+            -- reached a protocol exchange.
+            NoResponseDataReceived -> TransportUnreachable
+            InternalException inner -> internalCause inner
+            _ -> TransportProtocol
         InvalidUrlException _ _ -> TransportProtocol
-
-contentCause :: HttpExceptionContent -> TransportCause
-contentCause = \case
-    ConnectionTimeout -> TransportTimeout
-    ResponseTimeout -> TransportTimeout
-    ConnectionFailure _ -> TransportUnreachable
-    ConnectionClosed -> TransportUnreachable
-    -- The peer hung up before the first response byte, so the request never
-    -- reached a protocol exchange.
-    NoResponseDataReceived -> TransportUnreachable
-    InternalException inner -> internalCause inner
-    _ -> TransportProtocol
 
 -- The TLS manager wraps its connector's refused connection or empty address list here, where plain HTTP raises ConnectionFailure.
 -- A failed socket call classes by its error type on either scheme, inside the TLS handshake or outside it.
@@ -94,12 +90,12 @@ httpFault = \case
 isRetryableStatusCode :: Int -> Bool
 isRetryableStatusCode code = code >= 500 || code == 408 || code == 429
 
--- | An exception for a log line, without GHC's context. A client exception renders as its classified fault, naming the @host:port@ only when it had a request.
+-- | An exception for a log line, without GHC's context. A client exception renders through 'renderHttpFault' at the @host:port@ it dialled, or by its reason alone without a request.
 displayFaultT :: SomeException -> Text
 displayFaultT err
     | Just http <- fromException err = renderHttpFault (dialledAuthority http) (httpFault http)
-    -- http-client raises a fault outside a request, such as a malformed proxy variable when it builds a manager, without an HttpException around it.
-    | Just content <- unHttpExceptionContentWrapper <$> fromException err = renderTransportFault (transportFault (contentCause content) (contentReason content))
+    -- http-client raises a fault outside a request, such as a malformed proxy variable, without an HttpException. No peer exists to name.
+    | Just content <- unHttpExceptionContentWrapper <$> fromException err = contentReason content
     | otherwise = displayWithoutContext err
 
 -- | A dialled host and port as a log line names them, so an IPv6 host keeps its brackets.

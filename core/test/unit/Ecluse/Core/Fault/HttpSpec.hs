@@ -37,7 +37,7 @@ import Ecluse.Core.Fault (
  )
 import Ecluse.Core.Fault.Http (classifyTransport, displayFaultT, httpFault)
 import Ecluse.Core.Text (displayExceptionT)
-import Ecluse.Test.Env (withEnvOverrides)
+import Ecluse.Test.Env (withEnvVars)
 import Ecluse.Test.Fault (httpTransportCause)
 import Ecluse.Test.Stub (closedAuthority, failedFetch, redirectSecrets, redirectedStatusException, refusedFetch, requestSecrets, signedRequest)
 
@@ -74,9 +74,10 @@ spec = do
             for_ requestSecrets $ \secret -> rendered `shouldSatisfy` (not . T.isInfixOf secret)
 
         it "renders a malformed proxy variable that fails a manager's construction by its name, never its value" $ do
-            built <- withEnvOverrides [("https_proxy", "https://user:proxy-secret@proxy.example:3128")] (tryAny (newManager tlsManagerSettings))
+            -- A manager parses http_proxy first, so the test clears any ambient value.
+            built <- withEnvVars ["http_proxy", "HTTP_PROXY"] [("https_proxy", "https://user:proxy-secret@proxy.example:3128")] (tryAny (newManager tlsManagerSettings))
             let rendered = either displayFaultT (const "a manager") built
-            rendered `shouldBe` "InvalidProxyEnvironmentVariable: https_proxy (" <> renderTransportCause TransportProtocol <> ")"
+            rendered `shouldBe` "InvalidProxyEnvironmentVariable: https_proxy"
             rendered `shouldNotSatisfy` T.isInfixOf "proxy-secret"
 
         it "renders any other exception by its own text, without GHC's context" $ do
