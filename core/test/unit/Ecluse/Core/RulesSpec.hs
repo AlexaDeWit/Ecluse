@@ -877,8 +877,8 @@ genSteadySource :: Gen SourceState
 genSteadySource = Gen.filter (/= Faulting) genSourceState
 
 -- | A request's versions of the named packages, interleaved, either side of the quarantine.
-genListing :: Ecosystem -> [Text] -> [Text] -> Gen [RuleEvidence]
-genListing eco names pool = Gen.list (Range.linear 1 10) $ do
+genListing :: Range.Range Int -> Ecosystem -> [Text] -> [Text] -> Gen [RuleEvidence]
+genListing count eco names pool = Gen.list count $ do
     name <- Gen.element names
     release <- Gen.element pool
     age <- Gen.element [0, 30]
@@ -938,16 +938,18 @@ holdsAdvisoryAbstention = \case
 
 evaluatorParitySpec :: Spec
 evaluatorParitySpec = describe "the evaluator against the one frozen at f5f368d31" $ do
+    -- Constant ranges and a two-package majority keep reads of more than one run common. A size-scaled range
+    -- leaves the early tests of each size cycle with no rule or a single version.
     modifyMaxSuccess (const 300) . it "decides, reads and reports as it did over one or two packages in turn, npm and PyPI" $
         hedgehog $ do
             (eco, pool) <- forAll genEcosystem
             standing <- forAll genSourceState
             rows <- forAll (genPackageRows pool)
-            policy <- forAll (Gen.list (Range.linear 0 6) (genPolicyRule pool))
+            policy <- forAll (Gen.list (Range.constant 0 6) (genPolicyRule pool))
             poison <- forAll (Gen.maybe (Poison <$> Gen.int (Range.constant 0 5) <*> Gen.element pool <*> Gen.int (Range.constant 0 (length poisonedVerdicts - 1))))
             evidencePoison <- forAll (Gen.maybe (Gen.choice [PoisonedPublishTime <$> Gen.int (Range.constant 0 9), PoisonedRecord <$> Gen.int (Range.constant 0 9)]))
-            names <- forAll (Gen.element [["thing"], ["thing", "other"]])
-            evidence <- poisonEvidence evidencePoison <$> forAll (genListing eco names pool)
+            names <- forAll (Gen.frequency [(1, pure ["thing"]), (2, pure ["thing", "other"])])
+            evidence <- poisonEvidence evidencePoison <$> forAll (genListing (Range.constant 1 10) eco names pool)
             let inTurn evaluator = liftIO (observe evaluator traverse (sourceStateDeps standing (depsWith rows)) policy (poisonAt eco poison) evidence)
             live <- inTurn liveEvaluator
             asItStood <- inTurn frozen
@@ -971,7 +973,7 @@ evaluatorParitySpec = describe "the evaluator against the one frozen at f5f368d3
             policy <- forAll (Gen.list (Range.linear 0 6) (genPolicyRule pool))
             bomb <- forAll (Gen.maybe (genBomb pool))
             timePoison <- forAll (Gen.maybe (PoisonedPublishTime <$> Gen.int (Range.constant 0 9)))
-            evidence <- poisonEvidence timePoison <$> forAll (genListing eco ["thing"] pool)
+            evidence <- poisonEvidence timePoison <$> forAll (genListing (Range.linear 1 10) eco ["thing"] pool)
             let deps = sourceStateDeps standing (depsWith rows)
                 withBomb = (<> maybeToList (bombRule eco <$> bomb))
             concurrent <- liftIO (observe liveEvaluator mapConcurrently deps policy withBomb evidence)
@@ -993,7 +995,7 @@ evaluatorParitySpec = describe "the evaluator against the one frozen at f5f368d3
             policy <- forAll (Gen.list (Range.linear 0 6) (genPolicyRule pool))
             bomb <- forAll (Gen.maybe (genBomb pool))
             timePoison <- forAll (Gen.maybe (PoisonedPublishTime <$> Gen.int (Range.constant 0 9)))
-            evidence <- poisonEvidence timePoison <$> forAll (genListing eco ["thing", "other"] pool)
+            evidence <- poisonEvidence timePoison <$> forAll (genListing (Range.linear 1 10) eco ["thing", "other"] pool)
             let deps = sourceStateDeps standing (depsWith rows)
                 withBomb = (<> maybeToList (bombRule eco <$> bomb))
                 -- A throw decides its version twice, and each pass can read a package for each rule.
