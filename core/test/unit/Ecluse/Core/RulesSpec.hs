@@ -736,14 +736,14 @@ frozen = Evaluator frozenPrepare frozenEvaluator
 
 -- | What one request did: each version's outcome, the packages its shared reads read, and its source reports, in order.
 data Observed = Observed
-    { obOutcomes :: [Either Text Decision]
+    { obOutcomes :: [Outcome]
     , obReads :: [Either Text PackageName]
     , obReports :: [SourceHealth]
     }
     deriving stock (Eq, Show)
 
 -- | Decide versions through a fresh evaluator. Retries are off, so a faulting read returns at once.
-observe :: Evaluator -> ((RuleEvidence -> IO (Either Text Decision)) -> [RuleEvidence] -> IO [Either Text Decision]) -> RuleDeps -> [PrecededRule] -> ([PreparedRule] -> [PreparedRule]) -> [RuleEvidence] -> IO Observed
+observe :: Evaluator -> ((RuleEvidence -> IO Outcome) -> [RuleEvidence] -> IO [Outcome]) -> RuleDeps -> [PrecededRule] -> ([PreparedRule] -> [PreparedRule]) -> [RuleEvidence] -> IO Observed
 observe (Evaluator prepareWith evaluatorWith) decideAll deps policy adjust evidence = do
     readPackages <- newIORef []
     reports <- newIORef []
@@ -754,9 +754,19 @@ observe (Evaluator prepareWith evaluatorWith) decideAll deps policy adjust evide
     reportOrder <- reverse <$> readIORef reports
     pure (Observed outcomes readOrder (map healthCause reportOrder))
 
--- | The decision, or the cause line of a throw that left the evaluator or hid in the decision for a reader to meet.
-settle :: (RuleEvidence -> IO Decision) -> RuleEvidence -> IO (Either Text Decision)
-settle decideVersion ev = bimap (causeOf . displayExceptionT) decisionCause <$> tryAny (decideVersion ev >>= \decision -> decision <$ evaluate (length (show @String decision)))
+-- | One version's outcome: its decision, a throw that left the evaluator, or a throw the decision hides from a reader.
+data Outcome = Reached Decision | Escaped Text | Hidden Text
+    deriving stock (Eq, Show)
+
+-- | Decide one version, then force the whole decision as a reader that renders it would.
+settle :: (RuleEvidence -> IO Decision) -> RuleEvidence -> IO Outcome
+settle decideVersion ev =
+    tryAny (decideVersion ev) >>= \case
+        Left escaped -> pure (Escaped (causeLine escaped))
+        Right decision ->
+            tryAny (evaluate (length (show @String decision))) <&> \case
+                Left hidden -> Hidden (causeLine hidden)
+                Right _ -> Reached (decisionCause decision)
 
 -- Yielding mid-read lets concurrent callers reach a held cell's lock while the read holds it. A
 -- poisoned record's name is recorded as its cause, without moving where the read forces it.
@@ -764,7 +774,7 @@ recordReads :: IORef [Either Text PackageName] -> PreparedRule -> PreparedRule
 recordReads readPackages = mapPackageRead $ \packageRead ->
     packageRead
         { prRead = \package use -> do
-            named <- first (causeOf . displayExceptionT) <$> tryAny (evaluate package)
+            named <- first causeLine <$> tryAny (evaluate package)
             atomicModifyIORef'_ readPackages (named :) >> yield >> prRead packageRead package use
         }
 
@@ -778,6 +788,9 @@ withoutRetries = mapResilience (\res -> res{resConfig = (resConfig res){ecBackof
 -- GHC can append a runtime backtrace after the exception's own diagnostic line.
 causeOf :: Text -> Text
 causeOf = fst . T.breakOn "\n"
+
+causeLine :: SomeException -> Text
+causeLine = causeOf . displayExceptionT
 
 decisionCause :: Decision -> Decision
 decisionCause = \case
@@ -882,15 +895,45 @@ keptBy rule row = case rule of
     AllowIfRemediatesCve _ -> namesAFix row
     _ -> False
 
-isRuleThrew :: Either Text Decision -> Bool
+isRuleThrew :: Outcome -> Bool
 isRuleThrew = \case
-    Right (Undecidable _ (RuleUnable _ RuleThrew{})) -> True
+    Reached (Undecidable _ (RuleUnable _ RuleThrew{})) -> True
+    _ -> False
+
+isEscaped :: Outcome -> Bool
+isEscaped = \case
+    Escaped _ -> True
+    _ -> False
+
+-- | Each rule's boot-order key, and whether the rule reads the package.
+type RuleKey = ((Down Int, Text), Bool)
+
+policyKeys :: [PrecededRule] -> [RuleKey]
+policyKeys = map (\r -> ((Down (rulePrecedence r), ruleName (prRule r)), readsPackage (prRule r)))
+  where
+    readsPackage rule = case verdictSource rule of
+        FromAdvisories{} -> True
+        FromEvidence _ -> False
+
+bombKeys :: Maybe Bomb -> [RuleKey]
+bombKeys = maybe [] (\(Bomb prec _ _) -> [((Down prec, "PureBomb"), False)])
+
+-- | Whether a per-version rule refused a version by throwing after an advisory rule had passed it.
+perVersionThrowAfterRead :: [RuleKey] -> Outcome -> Bool
+perVersionThrowAfterRead keys = \case
+    Reached (Undecidable _ (RuleUnable name RuleThrew{})) -> or [advisory < thrower | (thrower@(_, rule), False) <- keys, rule == name, (advisory, True) <- keys]
+    _ -> False
+
+-- | Whether an advisory rule refused a version by throwing.
+advisoryRuleThrew :: [RuleKey] -> Outcome -> Bool
+advisoryRuleThrew keys = \case
+    Reached (Undecidable _ (RuleUnable name RuleThrew{})) -> or [rule == name | ((_, rule), True) <- keys]
     _ -> False
 
 -- | Whether the deny-by-default trail holds an advisory rule's abstention.
-holdsAdvisoryAbstention :: Either Text Decision -> Bool
+holdsAdvisoryAbstention :: Outcome -> Bool
 holdsAdvisoryAbstention = \case
-    Right (BlockedByDefault reasons) -> any (\case FixesNoAdvisory -> True; NoKnownMaliciousAdvisory -> True; NotAffectedAtThreshold _ -> True; _ -> False) reasons
+    Reached (BlockedByDefault reasons) -> any (\case FixesNoAdvisory -> True; NoKnownMaliciousAdvisory -> True; NotAffectedAtThreshold _ -> True; _ -> False) reasons
     _ -> False
 
 evaluatorParitySpec :: Spec
@@ -909,8 +952,14 @@ evaluatorParitySpec = describe "the evaluator against the one frozen at f5f368d3
             live <- inTurn liveEvaluator
             asItStood <- inTurn frozen
             H.cover 10 "the request reads more than one run of packages" (length (obReads asItStood) > 1)
+            let keys = policyKeys policy
+                wholeRecordThrows = case evidencePoison of
+                    Just PoisonedRecord{} -> True
+                    _ -> False
             H.cover 10 "a rule's throw refuses a version" (any isRuleThrew (obOutcomes asItStood))
-            H.cover 2 "a throw leaves the evaluator" (any isLeft (obOutcomes asItStood))
+            H.cover 2 "a throw leaves the evaluator" (any isEscaped (obOutcomes asItStood))
+            H.cover 1 "a per-version rule's throw refuses a version an advisory rule read" (any (perVersionThrowAfterRead keys) (obOutcomes asItStood))
+            H.cover 2 "a throw inside a PerPackage verdict refuses a version" (not wholeRecordThrows && any (advisoryRuleThrew keys) (obOutcomes asItStood))
             H.cover 10 "an advisory rule's abstention reaches the trail" (any holdsAdvisoryAbstention (obOutcomes asItStood))
             live === asItStood
 
@@ -930,6 +979,7 @@ evaluatorParitySpec = describe "the evaluator against the one frozen at f5f368d3
             reaching <- liftIO (reachingAdvisoryRules deps policy evidence)
             H.cover 30 "two or more versions reach an advisory rule" (reaching >= 2)
             H.cover 10 "a rule's throw refuses a version" (any isRuleThrew (obOutcomes asItStood))
+            H.cover 2 "a per-version rule's throw refuses a version an advisory rule read" (any (perVersionThrowAfterRead (policyKeys policy <> bombKeys bomb)) (obOutcomes asItStood))
             obOutcomes concurrent === obOutcomes asItStood
             obReads concurrent === obReads asItStood
             H.assert (length (obReads asItStood) <= 1)
@@ -955,6 +1005,7 @@ evaluatorParitySpec = describe "the evaluator against the one frozen at f5f368d3
             H.cover 30 "two or more versions reach an advisory rule" (reaching >= 2)
             H.cover 10 "both packages are read" (length (sortNub (obReads asItStood)) == 2)
             H.cover 10 "a rule's throw refuses a version" (any isRuleThrew (obOutcomes asItStood))
+            H.cover 2 "a per-version rule's throw refuses a version an advisory rule read" (any (perVersionThrowAfterRead (policyKeys policy <> bombKeys bomb)) (obOutcomes asItStood))
             obOutcomes concurrent === obOutcomes asItStood
             sortNub (obReads concurrent) === sortNub (obReads asItStood)
             distinctReports concurrent === distinctReports asItStood

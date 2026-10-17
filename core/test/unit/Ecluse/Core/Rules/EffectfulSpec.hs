@@ -740,14 +740,14 @@ heldThrowSpec = describe "a throw outside the harness is held for the request" $
         (throwing, readings) <- counting (throwIO (TestContractEscape "clock gone"))
         rule <- mapPackageRead (\packageRead -> packageRead{prRead = \_ use -> throwing >>= \freshness -> use freshness (pure Nothing)}) <$> constRule "GateBomb" 300 fastConfig FailNoDecision (Allow remediation)
         decisions <- decideRequest [rule, pureAt 200 (AllowScope (mkScope "myorg"))] requestVersions
-        decisions `shouldSatisfy` all (\case Undecidable _ reason -> "GateBomb: the rule threw" `T.isPrefixOf` renderReason reason; _ -> False)
+        decisions `shouldSatisfy` all (heldThrowRefusal "GateBomb")
         readIORef readings `shouldReturn` 1
 
     it "refuses every version when the source report throws, reporting once" $ do
         (throwing, reports) <- counting (throwIO (TestContractEscape "reporter gone"))
         rule <- mapPackageRead (\packageRead -> packageRead{prReporter = noSourceReporter{reportSource = const throwing}}) <$> constRule "ReportBomb" 300 fastConfig FailNoDecision (Allow remediation)
         decisions <- decideRequest [rule] requestVersions
-        decisions `shouldSatisfy` all (\case Undecidable _ reason -> "ReportBomb: the rule threw" `T.isPrefixOf` renderReason reason; _ -> False)
+        decisions `shouldSatisfy` all (heldThrowRefusal "ReportBomb")
         readIORef reports `shouldReturn` 1
 
     for_ [FailDeny, FailNoDecision] $ \alignment ->
@@ -756,8 +756,14 @@ heldThrowSpec = describe "a throw outside the harness is held for the request" $
             let deps = (advisoryRuleDeps "mal-reporter" "MAL-reporter-control" pass){rdSourceReporter = noSourceReporter{reportSource = const throwing}}
             rules <- prepare deps [atDefaultPrecedence (DenyIfKnownMalicious alignment)]
             decisions <- decideRequest rules requestVersions
-            decisions `shouldSatisfy` all (\case Undecidable _ reason -> "DenyIfKnownMalicious: the rule threw" `T.isPrefixOf` renderReason reason; _ -> False)
+            decisions `shouldSatisfy` all (heldThrowRefusal "DenyIfKnownMalicious")
             readIORef reports `shouldReturn` 1
+
+-- | The fail-closed, retryable refusal that names the rule whose read or report threw.
+heldThrowRefusal :: Text -> Decision -> Bool
+heldThrowRefusal name = \case
+    Undecidable (WillResolve Nothing) (RuleUnable refusing (RuleThrew _)) -> refusing == name
+    _ -> False
 
 breakerSpec :: Spec
 breakerSpec = describe "the breaker counts requests" $ do
