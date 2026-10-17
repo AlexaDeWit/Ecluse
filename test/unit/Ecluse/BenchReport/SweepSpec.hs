@@ -13,22 +13,22 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.BenchLoad.Floors (FloorKey, PassSelection (LoadedPassOnly))
-import Ecluse.BenchLoad.Harness (ProxyFigures (..), ScenarioReport (..))
+import Ecluse.BenchLoad.Floors (PassSelection (LoadedPassOnly))
+import Ecluse.BenchLoad.Harness (LoadKnobs (lkDurationSeconds), ProxyFigures (..), ScenarioReport (..))
 import Ecluse.BenchLoad.Pod (CgroupReading (CgroupReading), PodShape (MemoryOnly), ProxyTuning (..), noTuning, parseCpuList)
-import Ecluse.BenchLoad.Report (renderReports)
+import Ecluse.BenchLoad.Report (Section (sectionKnobs), renderReports)
 import Ecluse.BenchLoad.RtsWindow (RtsSnapshot (..))
 import Ecluse.BenchLoad.Selection (fixtureSection)
 import Ecluse.BenchLoad.Support (floorsAtTwoCores, loadedSection, placedWindow, proxyWithPeak, scenarioReport, twoCores)
 import Ecluse.BenchLoad.Sweep (Arm (..), BootValues (..), Phase (..), Sweep (..), SweepJob (..))
 import Ecluse.BenchLoad.Verdict (ProxyEnding (HeapOverflow))
-import Ecluse.BenchReport.Sweep (ArmResult (..), Failure (MemoryHighEvents), JobComparison (..), ScenarioResult (scrFailures), SlotResult (..), compareJob, renderComparison, slotVoid)
+import Ecluse.BenchReport.Sweep (ArmResult (..), Failure (MemoryHighEvents), JobComparison (..), ReferenceFloor (NotApplicable), ReferenceFloors (ReferenceFloors), ScenarioResult (scrFailures, scrFloor), SlotResult (..), compareJob, renderComparison, slotVoid)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 
 spec :: Spec
 spec = do
-    let rendered = T.lines (renderComparison (compareJob floors sweep job [anchorOf 1000 4000, Right (armReport [arm "npm/merge-cold" 1100, arm "pypi/index-cold" 3600]), anchorOf 1050 4000]))
-        rows reports = T.lines (renderComparison (compareJob floors sweep job reports))
+    let rendered = T.lines (renderComparison (compareJob commit reference sweep job [anchorOf 1000 4000, Right (armReport [arm "npm/merge-cold" 1100, arm "pypi/index-cold" 3600]), anchorOf 1050 4000]))
+        rows reports = T.lines (renderComparison (compareJob commit reference sweep job reports))
         summary reports = T.concat (filter ("| 2 |" `T.isPrefixOf`) (rows reports))
     describe "renderComparison" $ do
         it "sets each scenario's successes beside the mean of the job's anchors and the reference floor" $ do
@@ -53,6 +53,11 @@ spec = do
         it "names each scenario whose load generator lost its headroom" $
             summary [anchorOf 1000 4000, Right (armReport [(arm "npm/merge-cold" 1100){srProxy = Just (figures 300 0){pfCpu = Just (placedWindow 1_800)}}]), anchorOf 1000 4000]
                 `shouldSatisfy` T.isInfixOf "**not held** in npm/merge-cold (saturated)"
+        it "names the commit and the window, and holds no count to a floor calibrated at another window" $ do
+            let short = rows [Right (shortReport [arm "pypi/index-cold" 4000]), Right (shortReport [arm "pypi/index-cold" 900]), Right (shortReport [arm "pypi/index-cold" 4000])]
+            short `shouldSatisfy` elem "Commit `abc123`, 100 connections x 5 s windows."
+            short `shouldSatisfy` elem "| 2 | `test` | as expected | clean | held | 0.225 |"
+            short `shouldSatisfy` elem "| pypi/index-cold | 900 | 4000.0 | 0.225 | 964, not applicable to this window | 100.00 ms | 200.00 ms | 300.0 MiB | clean shutdown |"
         it "voids an arm whose report could not be read, and still compares the rest" $ do
             let missing = rows [anchorOf 1000 4000, Left "could not read slot-2.md", anchorOf 1000 4000]
             missing `shouldSatisfy` any (T.isInfixOf "| 2 | `test` | n/a | **void**: the report could not be read. could not read slot-2.md")
@@ -60,18 +65,35 @@ spec = do
 
     describe "compareJob" $ do
         it "keeps each failure as a fact, and voids only the slot that failed" $ do
-            let compared = compareJob floors sweep job [anchorOf 1000 4000, Right (armReport [(arm "npm/merge-cold" 1100){srProxy = Just (figures 300 2)}]), anchorOf 1000 4000]
+            let compared = compareJob commit reference sweep job [anchorOf 1000 4000, Right (armReport [(arm "npm/merge-cold" 1100){srProxy = Just (figures 300 2)}]), anchorOf 1000 4000]
             map slotVoid (cmSlots compared) `shouldBe` [False, True, False]
+            let short = compareJob commit reference sweep job [Right (shortReport [arm "pypi/index-cold" 900])]
+            map scrFloor (concatMap arScenarios (rights (map slResult (cmSlots short)))) `shouldBe` [NotApplicable 964]
             concatMap (concatMap scrFailures . arScenarios) (rights (map slResult (cmSlots compared))) `shouldBe` [MemoryHighEvents 2]
         it "encodes every slot, scenario, failure, and the drift for analysis across jobs" $ do
-            let encoded = toJSON (compareJob floors sweep job [anchorOf 1000 4000, Right (armReport [(arm "npm/merge-cold" 1100){srProxy = Just (figures 300 2)}]), anchorOf 1050 4000])
+            let encoded = toJSON (compareJob commit reference sweep job [anchorOf 1000 4000, Right (armReport [(arm "npm/merge-cold" 1100){srProxy = Just (figures 300 2)}]), anchorOf 1050 4000])
             field "job" encoded `shouldBe` Just (String "J1")
+            field "commit" encoded `shouldBe` Just (String "abc123")
+            (number <=< field "concurrency") encoded `shouldBe` Just 100
+            (number <=< field "durationSeconds") encoded `shouldBe` Just 30
+            (field "unread" <=< element 1 <=< field "slots") encoded `shouldBe` Just Null
+            (field "unscoredScenarios" <=< element 1 <=< field "slots") encoded `shouldBe` Just (Array mempty)
+            (number <=< field "successes" <=< element 0 <=< field "scenarios" <=< element 1 <=< field "slots") encoded `shouldBe` Just 1100
+            (number <=< field "anchorMean" <=< element 0 <=< field "scenarios" <=< element 1 <=< field "slots") encoded `shouldBe` Just 1025
+            (number <=< field "ratio" <=< element 0 <=< field "scenarios" <=< element 1 <=< field "slots") encoded `shouldSatisfy` maybe False (\ratio -> abs (ratio - 1100 / 1025) < 1e-9)
+            (number <=< field "floor" <=< element 0 <=< field "scenarios" <=< element 1 <=< field "slots") encoded `shouldBe` Just 338
+            (field "floorApplies" <=< element 0 <=< field "scenarios" <=< element 1 <=< field "slots") encoded `shouldBe` Just (Bool True)
             (field "void" <=< element 1 <=< field "slots") encoded `shouldBe` Just (Bool True)
             (number <=< field "score" <=< element 1 <=< field "slots") encoded `shouldSatisfy` maybe False (\score -> abs (score - 1100 / 1025) < 1e-9)
             (field "kind" <=< element 0 <=< field "failures" <=< element 0 <=< field "scenarios" <=< element 1 <=< field "slots") encoded `shouldBe` Just (String "memoryHighEvents")
             (number <=< field "count" <=< element 0 <=< field "failures" <=< element 0 <=< field "scenarios" <=< element 1 <=< field "slots") encoded `shouldBe` Just 2
             (number <=< field "changePercent" <=< element 0 <=< field "scenarios" <=< field "drift") encoded `shouldSatisfy` maybe False (\change -> abs (change - 5) < 1e-9)
             (field "score" <=< element 0 <=< field "slots") encoded `shouldBe` Just Null
+        it "encodes why a slot has no result, and the scored scenarios that left an arm unscored" $ do
+            let unread = toJSON (compareJob commit reference sweep job [anchorOf 1000 4000, Left "could not read slot-2.md", anchorOf 1000 4000])
+                unscored = toJSON (compareJob commit reference sweep job [anchorOf 0 4000, Right (armReport [arm "npm/merge-cold" 1100]), anchorOf 0 4000])
+            (field "unread" <=< element 1 <=< field "slots") unread `shouldBe` Just (String "the report could not be read. could not read slot-2.md")
+            (field "unscoredScenarios" <=< element 1 <=< field "slots") unscored `shouldBe` Just (toJSON ["npm/merge-cold" :: Text])
 
 field :: Text -> Value -> Maybe Value
 field name = \case
@@ -86,8 +108,12 @@ element index = \case
     Array values -> toList values !!? index
     _ -> Nothing
 
-floors :: Map PodShape (Map FloorKey Int)
-floors = Map.singleton twoCores floorsAtTwoCores
+-- The floors at their calibrated 100 connections x 30 s, and the commit the job names.
+reference :: ReferenceFloors
+reference = ReferenceFloors 100 30 (Map.singleton twoCores floorsAtTwoCores)
+
+commit :: Maybe Text
+commit = Just "abc123"
 
 job :: SweepJob
 job = SweepJob "J1" ("anchor" :| ["test", "anchor"])
@@ -114,6 +140,12 @@ anchorOf npm pypi = Right (armReport [arm "npm/merge-cold" npm, arm "pypi/index-
 -- One arm's report, both ecosystems in one section, as the harness renders a loaded pass.
 armReport :: [ScenarioReport] -> Text
 armReport scenarios = fixtureSection Npm [renderReports (loadedSection Npm 5_000 scenarios)]
+
+-- The same report from a short check's 5-second windows.
+shortReport :: [ScenarioReport] -> Text
+shortReport scenarios = fixtureSection Npm [renderReports section{sectionKnobs = (sectionKnobs section){lkDurationSeconds = 5}}]
+  where
+    section = loadedSection Npm 5_000 scenarios
 
 -- A scenario whose proxy showed the anchor's posture, a 300 MiB peak, and no memory.high event.
 arm :: Text -> Int -> ScenarioReport

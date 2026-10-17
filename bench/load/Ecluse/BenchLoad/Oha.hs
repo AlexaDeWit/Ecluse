@@ -61,16 +61,16 @@ instance FromJSON OhaReport where
         errorCounts <- o .:? "errorDistribution" .!= mempty
         pure (OhaReport elapsed statusCounts errorCounts [])
 
--- | Run @oha@, pinned to 'ohaCpu' when @BENCH_LOAD_ISOLATE_OHA=1@.
+-- | Run @oha@, pinned to the CPU 'ohaPinned' names.
 runOha :: OhaRun -> IO OhaReport
 runOha run = withSystemTempDirectory "ecluse-bench-oha" $ \dir -> do
     let urlsFile = dir </> "urls.txt"
         reportFile = dir </> "report.json"
         requestsFile = dir </> "requests.db"
     writeFileText urlsFile (unlines (orUrls run))
-    isolate <- ohaPinned
+    pinned <- ohaPinned
     let args = ohaArgs run reportFile requestsFile urlsFile
-        (command, finalArgs) = if isolate then ("taskset", ["-c", show ohaCpu, "oha"] <> args) else ("oha", args)
+        (command, finalArgs) = maybe ("oha", args) (\cpu -> ("taskset", ["-c", show cpu, "oha"] <> args)) pinned
     -- With a database, oha writes a progress line to stdout, so the report goes to a file.
     runProcess_ (setStdout nullStream (proc command finalArgs))
     raw <- readFileLBS reportFile
@@ -81,9 +81,9 @@ runOha run = withSystemTempDirectory "ecluse-bench-oha" $ \dir -> do
             else pure []
     pure report{ohaSuccessLatencies = latencies}
 
--- | Whether @BENCH_LOAD_ISOLATE_OHA=1@ pins @oha@ to 'ohaCpu'.
-ohaPinned :: IO Bool
-ohaPinned = (== Just "1") <$> lookupEnv "BENCH_LOAD_ISOLATE_OHA"
+-- | The CPU @oha@ is pinned to: 'ohaCpu' under @BENCH_LOAD_ISOLATE_OHA=1@, and none otherwise.
+ohaPinned :: IO (Maybe Int)
+ohaPinned = (ohaCpu <$) . guard . (== Just "1") <$> lookupEnv "BENCH_LOAD_ISOLATE_OHA"
 
 ohaArgs :: OhaRun -> FilePath -> FilePath -> FilePath -> [String]
 ohaArgs run reportFile requestsFile urlsFile =

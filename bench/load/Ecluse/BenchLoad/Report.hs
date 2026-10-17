@@ -48,7 +48,7 @@ import Ecluse.BenchLoad.Normalise (
  )
 import Ecluse.BenchLoad.PatternReport (renderReplayTotals)
 import Ecluse.BenchLoad.Pod (CgroupReading (..), PodShape (Unlimited), ProxyTuning (..), counter, noTuning, proxyCgroupFiles, renderCpuList, renderPodShape)
-import Ecluse.BenchLoad.ReportLabels (admissionRow, generatorHeadroomRow, headroomHeld, headroomSaturated, memoryEventsRow, memoryPeakColumn, postureRow)
+import Ecluse.BenchLoad.ReportLabels (admissionRow, generatorHeadroomRow, headroomHeld, headroomSaturated, loadCell, loadRow, memoryEventsRow, memoryPeakColumn, postureRow)
 import Ecluse.BenchLoad.RtsWindow (RtsSnapshot (..), RtsWindow (..), compactionThresholdCrossed, gcCpuShare, meanLiveAtMajors, perSuccess)
 import Ecluse.BenchLoad.Selection (measurementConditionVersion)
 import Ecluse.BenchLoad.Verdict (ProxyEnding (..), describeEnding)
@@ -110,7 +110,7 @@ operatingPointTable knobs capabilities processors shape boot =
     , row "pod shape" (shapeNote shape capabilities (lkProxyTuning knobs))
     , row "runner logical processors" (show processors <> " (oha is pinned to logical CPU 0 when isolated)")
     , row "harness GHC capabilities (-N)" (show capabilities)
-    , row "load" (show (lkConcurrency knobs) <> " connections x " <> show (lkDurationSeconds knobs) <> " s (a scenario may scale its own connections)")
+    , row loadRow (loadCell (lkConcurrency knobs) (lkDurationSeconds knobs))
     , row "measurement conditions" measurementConditionVersion
     , row "injected upstream latency" (fmt1 (fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000) <> " ms")
     , row "serve admission (requests)" (maybe "n/a" show (blCpuAdmission limits) <> origin (lkServeMaxInFlight knobs))
@@ -348,7 +348,7 @@ cpuRows placed r w =
     [ row "proxy CPU-seconds per second: cgroup / RTS (share of the cgroup's CPUs)" (rate (proxyCpuRate w) <> " / " <> rate rtsRate <> share (proxyCpuShare w) (cwProxyCpus w))
     , row "harness cgroup CPU-seconds per second: load generator, stubs, and harness (share of its CPUs)" (rate (harnessCpuRate w) <> share (harnessCpuShare w) (cwHarnessCpus w))
     , row ("CPU " <> show ohaCpu <> " busy, where oha runs") (maybe "n/a" pct (cpuBusyShare ohaCpu w))
-    , row generatorHeadroomRow (maybe "n/a" (bool headroomHeld headroomSaturated) (generatorSaturated w))
+    , row generatorHeadroomRow (maybe "n/a" (bool headroomHeld ("**" <> headroomSaturated <> "**")) (generatorSaturated w))
     ]
         -- An unplaced proxy shares its CPUs with the harness, so their busy time is not foreign to it.
         <> [row "busy time on the proxy's CPUs that the proxy did not spend" (maybe "n/a" (\seconds -> fmt2 seconds <> " s in " <> fmt1 (cwSeconds w) <> " s") (foreignCpuSeconds w)) | placed]

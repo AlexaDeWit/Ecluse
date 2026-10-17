@@ -16,6 +16,9 @@ module Ecluse.BenchReport.Sweep (
     Failure (..),
     Score (..),
     Drift (..),
+    ReferenceFloor (..),
+    ReferenceFloors (..),
+    referenceFloors,
     compareJob,
     slotVoid,
 
@@ -27,14 +30,15 @@ module Ecluse.BenchReport.Sweep (
 import Data.Aeson (ToJSON (toJSON), encode, object, (.=))
 import Data.Aeson.Types (Pair)
 import Data.Char (isDigit)
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import GHC.Float (log)
 import System.FilePath ((</>))
 
-import Ecluse.BenchLoad.Floors (FloorKey, Pass (Loaded))
+import Ecluse.BenchLoad.Floors (Calibration (calOperatingPoint), FloorKey, Floors (floorsByShape, floorsCalibration), OperatingPoint (opConcurrency, opDurationSeconds), Pass (Loaded))
 import Ecluse.BenchLoad.Pod (PodShape, mib, renderPodShape)
-import Ecluse.BenchLoad.ReportLabels (admissionRow, generatorHeadroomRow, headroomHeld, headroomSaturated, memoryEventsRow, postureRow)
+import Ecluse.BenchLoad.ReportLabels (admissionRow, generatorHeadroomRow, headroomHeld, headroomSaturated, loadRow, memoryEventsRow, parseLoadCell, postureRow)
 import Ecluse.BenchLoad.Sweep (Arm (..), BootValues (..), Sweep (..), SweepJob (..))
 import Ecluse.BenchReport.AgainstMain (percentChange, signedPercent)
 import Ecluse.BenchReport.AgainstMain.Load (Reading (..), Scenario (..), readReport)
@@ -44,6 +48,10 @@ import Ecluse.BenchReport.Markdown (cells, fixed)
 data JobComparison = JobComparison
     { cmSweep :: Text
     , cmJob :: Text
+    , cmCommit :: Maybe Text
+    -- ^ The commit the job measured, as the run names it.
+    , cmWindow :: Maybe (Int, Int)
+    -- ^ The connections and the window length in seconds the first readable report states.
     , cmAnchor :: Text
     , cmSlots :: [SlotResult]
     , cmDrift :: Maybe Drift
@@ -77,7 +85,7 @@ data ScenarioResult = ScenarioResult
     , scrAnchorMean :: Maybe Double
     , scrRatio :: Maybe Double
     -- ^ Successes over the anchors' mean, 'Nothing' without a count or a mean above zero.
-    , scrFloor :: Maybe Int
+    , scrFloor :: ReferenceFloor
     , scrP50Ms :: Maybe Double
     , scrP99Ms :: Maybe Double
     , scrPeakMib :: Maybe Double
@@ -106,7 +114,7 @@ data Failure
 data Score
     = AnchorSlot
     | Scored Double
-    | -- | No score: the scored scenarios the arm ran without an anchor ratio.
+    | -- | No score: the scored scenarios the arm ran without an anchor ratio, none when it ran no scored scenario.
       Unscored [Text]
     deriving stock (Eq, Show)
 
@@ -118,12 +126,36 @@ data Drift = Drift
     }
     deriving stock (Eq, Show)
 
--- | Compare one job's reports, in slot order, with the job's anchors and the floors by pod shape.
-compareJob :: Map PodShape (Map FloorKey Int) -> Sweep -> SweepJob -> [Either Text Text] -> JobComparison
-compareJob floors sweep job reports =
+-- | The reference shape's loaded floor for one scenario, and whether its window can be held to it.
+data ReferenceFloor
+    = NoReferenceFloor
+    | HeldTo Int
+    | -- | The floor, which a window of other connections or seconds than the floors' calibration cannot be held to.
+      NotApplicable Int
+    deriving stock (Eq, Show)
+
+-- | The loaded floors by pod shape, and the connections and window length in seconds they were calibrated at.
+data ReferenceFloors = ReferenceFloors
+    { rfConcurrency :: Int
+    , rfDurationSeconds :: Int
+    , rfByShape :: Map PodShape (Map FloorKey Int)
+    }
+    deriving stock (Eq, Show)
+
+-- | The committed floors as a sweep comparison reads them.
+referenceFloors :: Floors -> ReferenceFloors
+referenceFloors floors = ReferenceFloors (opConcurrency calibrated) (opDurationSeconds calibrated) (floorsByShape floors)
+  where
+    calibrated = calOperatingPoint (floorsCalibration floors)
+
+-- | Compare one job's reports, in slot order, with the job's anchors and the reference floors, for the named commit.
+compareJob :: Maybe Text -> ReferenceFloors -> Sweep -> SweepJob -> [Either Text Text] -> JobComparison
+compareJob commit floors sweep job reports =
     JobComparison
         { cmSweep = swName sweep
         , cmJob = jobName job
+        , cmCommit = commit
+        , cmWindow = listToMaybe (mapMaybe windowOf (rights [reading | (_, _, reading) <- slots]))
         , cmAnchor = swAnchor sweep
         , cmSlots = map (slotResult floors sweep (anchorMeans anchors)) slots
         , cmDrift = driftOf anchors (ordNub [scName scenario | (_, _, Right reading) <- slots, scenario <- readingScenarios reading])
@@ -136,11 +168,16 @@ compareJob floors sweep job reports =
 slotVoid :: SlotResult -> Bool
 slotVoid slot = either (const True) (\arm -> not (null (arBoot arm) && all (null . scrFailures) (arScenarios arm))) (slResult slot)
 
-slotResult :: Map PodShape (Map FloorKey Int) -> Sweep -> Map Text Double -> (Int, Text, Either Text Reading) -> SlotResult
+-- The connections and the window length in seconds a report's load row states.
+windowOf :: Reading -> Maybe (Int, Int)
+windowOf reading = listToMaybe [window | knobs <- Map.elems (readingKnobs reading), Just cell <- [lookup loadRow knobs], Just window <- [parseLoadCell cell]]
+
+slotResult :: ReferenceFloors -> Sweep -> Map Text Double -> (Int, Text, Either Text Reading) -> SlotResult
 slotResult floors sweep means (number, name, reading) = SlotResult number name $ do
     arm <- maybeToRight ("the sweep has no arm " <> name) (Map.lookup name (swArms sweep))
     found <- first ("the report could not be read. " <>) reading
-    let scenarios = map (scenarioResult floors means arm) (readingScenarios found)
+    let calibrated = windowOf found == Just (rfConcurrency floors, rfDurationSeconds floors)
+        scenarios = map (scenarioResult floors calibrated means arm) (readingScenarios found)
     pure
         ArmResult
             { arReferenceShape = armReferenceShape arm
@@ -149,8 +186,8 @@ slotResult floors sweep means (number, name, reading) = SlotResult number name $
             , arScore = if name == swAnchor sweep then AnchorSlot else scoreOf (filter ((`elem` swScored sweep) . scrScenario) scenarios)
             }
 
-scenarioResult :: Map PodShape (Map FloorKey Int) -> Map Text Double -> Arm -> Scenario -> ScenarioResult
-scenarioResult floors means arm scenario =
+scenarioResult :: ReferenceFloors -> Bool -> Map Text Double -> Arm -> Scenario -> ScenarioResult
+scenarioResult floors calibrated means arm scenario =
     ScenarioResult
         { scrScenario = scName scenario
         , scrSuccesses = scSuccesses scenario
@@ -166,10 +203,12 @@ scenarioResult floors means arm scenario =
         }
   where
     mean = Map.lookup (scName scenario) means
-    floor' = Map.lookup (scName scenario, Loaded) =<< Map.lookup (armReferenceShape arm) floors
+    floor' = case Map.lookup (scName scenario, Loaded) =<< Map.lookup (armReferenceShape arm) (rfByShape floors) of
+        Nothing -> NoReferenceFloor
+        Just least -> bool (NotApplicable least) (HeldTo least) calibrated
     saturation shown
         | shown == headroomHeld = Just False
-        | shown == headroomSaturated = Just True
+        | T.filter (/= '*') shown == headroomSaturated = Just True
         | otherwise = Nothing
 
 -- Each scenario's mean successes over the readable anchor slots.
@@ -213,14 +252,14 @@ bootFailures expected figures = case (T.splitOn " / " <$> Map.lookup postureRow 
     mibCell = maybe "none" (\n -> fixed 1 (fromIntegral n) <> " MiB")
 
 -- A scenario's ending, its kernel memory events, its peak against the pod's memory, and its count against its floor.
-scenarioFailures :: Maybe Int -> Int -> Scenario -> [Failure]
+scenarioFailures :: ReferenceFloor -> Int -> Scenario -> [Failure]
 scenarioFailures floor' podBytes scenario =
     [UncleanEnding plain | Just shown <- [scEnding scenario], let plain = T.filter (/= '*') shown, plain /= "clean shutdown"]
         <> case map (readMaybe . toString . T.strip) . T.splitOn " / " <$> Map.lookup memoryEventsRow (scFigures scenario) of
             Just [Just oomKills, _, _, Just high] -> [OomKills oomKills | oomKills > 0] <> [MemoryHighEvents high | high > 0]
             _ -> [NoMemoryEvents]
         <> [PeakAbovePod peak (podBytes `div` mib) | Just peak <- [scMemoryPeakMib scenario], peak * fromIntegral mib > fromIntegral podBytes]
-        <> [BelowFloor count least | Just least <- [floor'], Just count <- [scSuccesses scenario], count < least]
+        <> [BelowFloor count least | HeldTo least <- [floor'], Just count <- [scSuccesses scenario], count < least]
 
 -- | The comparison as Markdown: a row per slot, the anchor drift, and a table per test arm.
 renderComparison :: JobComparison -> Text
@@ -228,7 +267,9 @@ renderComparison comparison =
     T.unlines $
         [ "## Sweep `" <> cmSweep comparison <> "`, job `" <> cmJob comparison <> "`"
         , ""
-        , "Each arm's successes divide by the mean of the anchor's successes in slots " <> inWords (map (show . slNumber) anchorSlots) <> ", scenario by scenario. The score is the geometric mean of those ratios over the scored scenarios the job ran, and a scored scenario without a ratio leaves the arm unscored. A boot value the arm did not show, or a safety check it failed, voids its repeat."
+        , "Commit " <> maybe "unnamed" (\commit -> "`" <> T.take 9 commit <> "`") (cmCommit comparison) <> ", " <> maybe "with no load row" (\(connections, seconds) -> show connections <> " connections x " <> show seconds <> " s windows") (cmWindow comparison) <> "."
+        , ""
+        , "Each arm's successes divide by the mean of the anchor's successes in slots " <> inWords (map (show . slNumber) anchorSlots) <> ", scenario by scenario. The score is the geometric mean of those ratios over the scored scenarios the job ran, and a scored scenario without a ratio leaves the arm unscored. A boot value the arm did not show, or a safety check it failed, voids its repeat. A floor applies only to a window of the connections and length the floors were calibrated at."
         , ""
         , "| slot | arm | boot values | safety | load generator headroom | score |"
         , "| --: | --- | --- | --- | --- | --: |"
@@ -255,7 +296,7 @@ summaryRow slot = cells [show (slNumber slot), "`" <> slArm slot <> "`", boot, s
 headroomCell :: [ScenarioResult] -> Text
 headroomCell results
     | all (isNothing . scrGeneratorSaturated) results = "n/a"
-    | otherwise = case [scrScenario result <> " (" <> maybe "n/a" (bool headroomHeld "saturated") (scrGeneratorSaturated result) <> ")" | result <- results, scrGeneratorSaturated result /= Just False] of
+    | otherwise = case [scrScenario result <> " (" <> maybe "n/a" (bool headroomHeld headroomSaturated) (scrGeneratorSaturated result) <> ")" | result <- results, scrGeneratorSaturated result /= Just False] of
         [] -> headroomHeld
         missed -> "**not held** in " <> T.intercalate ", " missed
 
@@ -293,7 +334,7 @@ armLines slot =
             , countCell (scrSuccesses result)
             , maybe "n/a" (fixed 1) (scrAnchorMean result)
             , maybe "n/a" (fixed 3) (scrRatio result)
-            , countCell (scrFloor result)
+            , floorCell (scrFloor result)
             , maybe "n/a" (\ms -> fixed 2 ms <> " ms") (scrP50Ms result)
             , maybe "n/a" (\ms -> fixed 2 ms <> " ms") (scrP99Ms result)
             , maybe "n/a" (\peak -> fixed 1 peak <> " MiB") (scrPeakMib result)
@@ -317,6 +358,12 @@ driftPercent opening closing = do
     after <- closing
     percentChange (fromIntegral before) (fromIntegral after)
 
+floorCell :: ReferenceFloor -> Text
+floorCell = \case
+    NoReferenceFloor -> "n/a"
+    HeldTo least -> show least
+    NotApplicable least -> show least <> ", not applicable to this window"
+
 countCell :: Maybe Int -> Text
 countCell = maybe "n/a" show
 
@@ -332,6 +379,9 @@ instance ToJSON JobComparison where
         object
             [ "sweep" .= cmSweep comparison
             , "job" .= cmJob comparison
+            , "commit" .= cmCommit comparison
+            , "concurrency" .= fmap fst (cmWindow comparison)
+            , "durationSeconds" .= fmap snd (cmWindow comparison)
             , "anchor" .= cmAnchor comparison
             , "drift" .= fmap driftValue (cmDrift comparison)
             , "slots" .= cmSlots comparison
@@ -374,7 +424,13 @@ instance ToJSON ScenarioResult where
             , "successes" .= scrSuccesses result
             , "anchorMean" .= scrAnchorMean result
             , "ratio" .= scrRatio result
-            , "floor" .= scrFloor result
+            , "floor" .= case scrFloor result of
+                NoReferenceFloor -> Nothing
+                HeldTo least -> Just least
+                NotApplicable least -> Just least
+            , "floorApplies" .= case scrFloor result of
+                HeldTo _ -> True
+                _ -> False
             , "p50Ms" .= scrP50Ms result
             , "p99Ms" .= scrP99Ms result
             , "peakMib" .= scrPeakMib result

@@ -2,8 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Exact load-report labels shared by the report the harness renders and the comparisons that read it back.
+-- | Exact load-report labels and cells shared by the report the harness renders and the comparisons that read it back.
 module Ecluse.BenchLoad.ReportLabels (
+    loadRow,
+    loadCell,
+    parseLoadCell,
     memoryPeakColumn,
     postureRow,
     admissionRow,
@@ -14,6 +17,20 @@ module Ecluse.BenchLoad.ReportLabels (
 ) where
 
 import Ecluse.BenchLoad.CpuUse (headroomLimit)
+
+-- | The operating point row with the connections and the window length.
+loadRow :: Text
+loadRow = "load"
+
+-- | The load row's value for these connections and this window length in seconds.
+loadCell :: Int -> Int -> Text
+loadCell connections seconds = show connections <> " connections x " <> show seconds <> " s (a scenario may scale its own connections)"
+
+-- | The connections and the window length in seconds a load row's value states.
+parseLoadCell :: Text -> Maybe (Int, Int)
+parseLoadCell cell = case words cell of
+    connections : "connections" : "x" : seconds : "s" : _ -> (,) <$> readMaybe (toString connections) <*> readMaybe (toString seconds)
+    _ -> Nothing
 
 -- | The at-a-glance column with the cgroup's @memory.peak@ and @memory.max@.
 memoryPeakColumn :: Text
@@ -39,6 +56,6 @@ generatorHeadroomRow = "load generator headroom (harness cgroup and oha's CPU be
 headroomHeld :: Text
 headroomHeld = "held"
 
--- | The headroom row's value once the load generator reached the limit.
+-- | The headroom row's value, shown in bold, once the load generator reached the limit.
 headroomSaturated :: Text
-headroomSaturated = "**saturated**"
+headroomSaturated = "saturated"

@@ -10,7 +10,7 @@ import Data.Text.Encoding qualified as TE
 import Data.Text.Encoding.Error qualified as TEE
 import System.FilePath (takeFileName, (</>))
 
-import Ecluse.BenchLoad.Floors (Floors (floorsByShape), loadFloors)
+import Ecluse.BenchLoad.Floors (loadFloors)
 import Ecluse.BenchLoad.Sweep (loadSweep, sweepJob)
 import Ecluse.BenchReport (ReportInput (ReportInput, riConsoleLog, riCsv), parseCsv, renderReport)
 import Ecluse.BenchReport.AgainstMain (Baseline (Baseline, NoBaseline), Missing (FileMissing), parseOrigin)
@@ -90,7 +90,10 @@ againstAnchors name job directory reportPaths = do
     floors <- either (die . toString) pure =<< loadFloors
     chosen <- maybe (die ("bench-report: the sweep " <> toString name <> " has no job " <> toString job)) pure (sweepJob sweep job)
     reports <- traverse readTextFile reportPaths
-    let compared = Sweep.compareJob (floorsByShape floors) sweep chosen reports
+    -- Task names the commit it measures, and a workflow step outside Task has the runner's.
+    source <- lookupEnv "ECLTEST_SOURCE"
+    sha <- lookupEnv "GITHUB_SHA"
+    let compared = Sweep.compareJob (toText <$> (source <|> sha)) (Sweep.referenceFloors floors) sweep chosen reports
     Sweep.writeComparison directory compared
     publish (Sweep.renderComparison compared)
 

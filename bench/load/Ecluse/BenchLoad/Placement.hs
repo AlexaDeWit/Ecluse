@@ -27,7 +27,7 @@ import System.FilePath ((</>))
 import System.Posix.Unistd (SysVar (ClockTick), getSysVar)
 import UnliftIO (bracket_)
 
-import Ecluse.BenchLoad.CpuUse (CpuSample (CpuSample), CpuWindow, cpuWindow, ohaCpu, parseProcStat)
+import Ecluse.BenchLoad.CpuUse (CpuSample (CpuSample), CpuWindow, cpuWindow, parseProcStat)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Pod (CgroupReading (crCpuStat, crCpus), CpuList, cpuListMembers, cpusLeft, keyedCounters, parseCpuList, renderCpuList)
 import Ecluse.Rts (readIfExists)
@@ -44,24 +44,25 @@ readCpuList path = (rightToMaybe . parseCpuList =<<) <$> readIfExists path
 runnerProcessors :: IO Int
 runnerProcessors = readCpuList "/sys/devices/system/cpu/online" >>= maybe getNumProcessors (pure . Set.size . cpuListMembers)
 
--- | The CPUs the harness keeps beside a placed proxy, or why the proxy cannot have its CPUs.
-harnessCpus :: Bool -> CpuList -> CpuList -> Either Text CpuList
+-- | The CPUs the harness keeps beside a placed proxy, given the CPU @oha@ is pinned to, or why the proxy cannot have its CPUs.
+harnessCpus :: Maybe Int -> CpuList -> CpuList -> Either Text CpuList
 harnessCpus ohaPinned available proxy
     | not (cpuListMembers proxy `Set.isSubsetOf` cpuListMembers available) = Left (named <> " names CPUs outside BENCH_LOAD_CGROUP's " <> renderCpuList available)
-    | ohaPinned && ohaCpu `Set.member` cpuListMembers proxy = Left (named <> " holds CPU " <> show ohaCpu <> ", where BENCH_LOAD_ISOLATE_OHA=1 pins oha")
+    | Just cpu <- ohaPinned, cpu `Set.member` cpuListMembers proxy = Left (named <> " holds CPU " <> show cpu <> ", where BENCH_LOAD_ISOLATE_OHA=1 pins oha")
     | otherwise = maybeToRight (named <> " leaves the harness no CPU") (cpusLeft available proxy)
   where
     named = "BENCH_LOAD_PROXY_CPUS " <> renderCpuList proxy
 
--- | Run with the harness cgroup off the proxy's CPUs, and give it every CPU back after the run or a killed run's placement.
-withHarnessPlacement :: Maybe FilePath -> Bool -> Maybe CpuList -> IO a -> IO a
+-- | Run with the harness cgroup off the proxy's CPUs, then empty its list, which also undoes a killed run's placement.
+withHarnessPlacement :: Maybe FilePath -> Maybe Int -> Maybe CpuList -> IO a -> IO a
 withHarnessPlacement root ohaPinned proxyCpus action = case (root, proxyCpus) of
     (Nothing, Nothing) -> action
     (Nothing, Just _) -> benchFail "BENCH_LOAD_PROXY_CPUS needs BENCH_LOAD_CGROUP, a cgroup v2 directory delegated to this user"
     (Just base, _) -> do
         let leaf = base </> harnessLeaf </> "cpuset.cpus"
+            -- An empty list makes the cgroup use its parent's CPUs, as one never placed does.
+            restore = writeFileText leaf "\n"
         available <- readCpuList (base </> "cpuset.cpus.effective")
-        let restore = traverse_ (writeFileText leaf . renderCpuList) available
         case (proxyCpus, available) of
             (Nothing, _) -> do
                 placed <- maybe False (not . T.null . T.strip) <$> readIfExists leaf

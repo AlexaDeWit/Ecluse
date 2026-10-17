@@ -12,6 +12,7 @@ import Test.Hspec
 import UnliftIO.Exception (throwIO)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
+import Ecluse.BenchLoad.Error (BenchLoadError (BenchLoadError))
 import Ecluse.BenchLoad.Placement (harnessCpus, harnessLeaf, readCpuList, withHarnessPlacement)
 import Ecluse.BenchLoad.Pod (CpuList, parseCpuList, renderCpuList)
 
@@ -24,35 +25,35 @@ instance Exception Interrupted
 spec :: Spec
 spec = do
     describe "withHarnessPlacement" $ do
-        it "keeps the harness cgroup off the proxy's CPUs during the run, and gives it every CPU back after" $
+        it "keeps the harness cgroup off the proxy's CPUs during the run, and empties its list after" $
             withSubtree "\n" $ \base -> do
-                withHarnessPlacement (Just base) True (cpus "2-3") (leafCpus base) `shouldReturn` "0-1"
-                leafCpus base `shouldReturn` "0-3"
-        it "gives every CPU back when the run fails" $
+                withHarnessPlacement (Just base) pinnedOha (cpus "2-3") (leafCpus base) `shouldReturn` "0-1"
+                leafFile base `shouldReturn` "\n"
+        it "empties the list when the run fails" $
             withSubtree "\n" $ \base -> do
-                withHarnessPlacement (Just base) True (cpus "2-3") (throwIO Interrupted) `shouldThrow` (== Interrupted)
-                leafCpus base `shouldReturn` "0-3"
-        it "leaves an unplaced harness cgroup alone, and gives back the CPUs a killed run's placement kept" $ do
+                withHarnessPlacement (Just base) pinnedOha (cpus "2-3") (throwIO Interrupted) `shouldThrow` (== Interrupted)
+                leafFile base `shouldReturn` "\n"
+        it "leaves an unplaced harness cgroup alone, and empties the list a killed run's placement left" $ do
             withSubtree "\n" $ \base -> do
-                withHarnessPlacement (Just base) True Nothing (leafCpus base) `shouldReturn` ""
-                leafCpus base `shouldReturn` ""
+                withHarnessPlacement (Just base) pinnedOha Nothing (leafCpus base) `shouldReturn` ""
+                leafFile base `shouldReturn` "\n"
             withSubtree "0-1\n" $ \base ->
-                withHarnessPlacement (Just base) True Nothing (leafCpus base) `shouldReturn` "0-3"
-        it "refuses a placement with no delegated cgroup, or one the harness could not keep" $ do
-            withHarnessPlacement Nothing True (cpus "2-3") pass `shouldThrow` anyException
+                withHarnessPlacement (Just base) pinnedOha Nothing (leafFile base) `shouldReturn` "\n"
+        it "refuses a placement with no delegated cgroup, or one that holds oha's pinned CPU, and leaves the list alone" $ do
+            withHarnessPlacement Nothing pinnedOha (cpus "2-3") pass `shouldThrow` failsWith "needs BENCH_LOAD_CGROUP"
             withSubtree "\n" $ \base -> do
-                withHarnessPlacement (Just base) True (cpus "0-1") pass `shouldThrow` anyException
-                leafCpus base `shouldReturn` ""
+                withHarnessPlacement (Just base) pinnedOha (cpus "0-1") pass `shouldThrow` failsWith "holds CPU 0, where BENCH_LOAD_ISOLATE_OHA=1 pins oha"
+                leafFile base `shouldReturn` "\n"
         it "runs as before with neither a delegated cgroup nor a placement" $
-            withHarnessPlacement Nothing True Nothing (pure "ran") `shouldReturn` ("ran" :: Text)
+            withHarnessPlacement Nothing pinnedOha Nothing (pure "ran") `shouldReturn` ("ran" :: Text)
 
     describe "harnessCpus" $ do
         it "keeps the CPUs the proxy does not take" $ do
-            rendered (harnessCpus True <$> every <*> cpus "2-3") `shouldBe` Just (Right "0-1")
-            rendered (harnessCpus True <$> every <*> cpus "3") `shouldBe` Just (Right "0-2")
-            rendered (harnessCpus False <$> every <*> cpus "0-1") `shouldBe` Just (Right "2-3")
-        it "refuses CPUs outside the subtree, every CPU, and oha's CPU while oha is pinned" $
-            for_ [(True, "3-4"), (False, "0-3"), (True, "0")] $ \(pinned, taken) ->
+            rendered (harnessCpus pinnedOha <$> every <*> cpus "2-3") `shouldBe` Just (Right "0-1")
+            rendered (harnessCpus pinnedOha <$> every <*> cpus "3") `shouldBe` Just (Right "0-2")
+            rendered (harnessCpus Nothing <$> every <*> cpus "0-1") `shouldBe` Just (Right "2-3")
+        it "refuses CPUs outside the subtree, every CPU, and the CPU oha is pinned to" $
+            for_ [(pinnedOha, "3-4"), (Nothing, "0-3"), (pinnedOha, "0"), (Just 3, "2-3")] $ \(pinned, taken) ->
                 (harnessCpus pinned <$> every <*> cpus taken) `shouldSatisfy` maybe False isLeft
 
     describe "readCpuList" $
@@ -73,8 +74,17 @@ withSubtree leaf body =
         writeFileText (base </> harnessLeaf </> "cpuset.cpus") leaf
         body base
 
-leafCpus :: FilePath -> IO Text
-leafCpus base = T.strip . decodeUtf8 <$> readFileBS (base </> harnessLeaf </> "cpuset.cpus")
+-- The harness cgroup's cpuset.cpus as written, and as a list.
+leafFile, leafCpus :: FilePath -> IO Text
+leafFile base = decodeUtf8 <$> readFileBS (base </> harnessLeaf </> "cpuset.cpus")
+leafCpus base = T.strip <$> leafFile base
+
+-- oha pinned to CPU 0, as a CI run pins it.
+pinnedOha :: Maybe Int
+pinnedOha = Just 0
+
+failsWith :: Text -> Selector BenchLoadError
+failsWith part (BenchLoadError message) = part `T.isInfixOf` message
 
 cpus :: Text -> Maybe CpuList
 cpus = rightToMaybe . parseCpuList

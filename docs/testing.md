@@ -1058,7 +1058,7 @@ thread at a time. Its count does not reserve a processor or set CPU affinity.
 | Runner logical processors | The runner's online logical CPUs, from `/sys/devices/system/cpu/online`, separate from the capability count and from any placement |
 | Load harness `-N3` | Three GHC capabilities for the harness and each scenario child. The measured proxy resolves its own count at boot. |
 | Unlimited load shape `runtime.cores` | Sets the proxy's GHC capability count to the harness's count, unless `BENCH_LOAD_PROXY_CORES` sets it. The harness imposes no CPU-time quota. |
-| `BENCH_LOAD_PROXY_CPUS` | The CPUs the proxy's cgroup may run on (`cpuset.cpus`), such as `2-3`. The harness cgroup gets the other CPUs until the run ends. The proxy's RTS counts its processors from this affinity, so a derived capability count clamps to it. With `BENCH_LOAD_ISOLATE_OHA=1`, the harness refuses a list that holds CPU 0. |
+| `BENCH_LOAD_PROXY_CPUS` | The CPUs the proxy's cgroup may run on (`cpuset.cpus`), such as `2-3`. The harness cgroup gets the other CPUs until the run ends, and then an empty list, so it uses its parent's CPUs again. The proxy's RTS counts its processors from this affinity, so a derived capability count clamps to it. With `BENCH_LOAD_ISOLATE_OHA=1`, the harness refuses a list that holds CPU 0. |
 | `BENCH_LOAD_PROXY_CORES` | The proxy's `runtime.cores`, under any shape. An explicit count is never clamped, so a placed proxy can emulate a node with more CPUs. |
 | Performance acceptance `-N` | The shipped RTS default selects capabilities from visible processors. The report reads the running count. The harness does not boot a proxy or apply its cgroup-derived runtime plan. |
 | Work-per-request benchmarks | One GHC capability by default. Their Cabal stanza enables `-T`, with no `-N` override in the CI invocation. |
@@ -1332,11 +1332,13 @@ sweep path.
 
 `bench-report sweep` then sets each arm beside the mean of the job's anchors, scenario by scenario.
 It writes `comparison.md` for the run summary, and `comparison.json` with the same facts for
-analysis across jobs: each arm's ratios and failures, its score, and the anchor drift. For each arm
-the comparison shows:
+analysis across jobs. Both name the commit and the window's connections and length, so an analysis
+never mixes a short check or a second commit into one noise band. For each arm the comparison
+shows:
 
 - each scenario's successes, the anchors' mean, the ratio between them, and the reference shape's
-  loaded floor
+  loaded floor. The floor applies only to a window of the connections and length the floors were
+  calibrated at, so a short check marks every floor not applicable
 - the score: the geometric mean of the ratios over the scored scenarios the job ran. A scored
   scenario without an anchor ratio leaves the arm unscored, and the cell names it
 - whether every proxy reported the expected boot values
