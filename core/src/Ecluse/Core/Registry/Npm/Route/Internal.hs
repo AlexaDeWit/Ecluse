@@ -48,6 +48,7 @@ import Network.HTTP.Types (
     status403,
     status404,
     status405,
+    status406,
     status500,
     status501,
     status502,
@@ -235,7 +236,8 @@ packumentRoute =
         "Fetch a package's metadata (packument)"
         "Returns Écluse's merged-and-filtered packument: versions merged across upstreams and gated, \
         \each `dist.tarball` rewritten to resolve back through this proxy. With no surviving version \
-        \the status follows the most recoverable cause."
+        \the status follows the most recoverable cause. The packument is gzipped for a client whose \
+        \`Accept-Encoding` prefers gzip, unless `server.metadataGzip` is off."
         Nothing
         npmPackumentContract
 
@@ -302,7 +304,10 @@ type NpmPackumentResponse =
                         (ResponseValue NpmError)
                         ( ResponseChoice
                             (ResponseValue NpmError)
-                            (ResponseChoice (ResponseValue NpmError) (ResponseValue NpmError))
+                            ( ResponseChoice
+                                (ResponseValue NpmError)
+                                (ResponseChoice (ResponseValue NpmError) (ResponseValue NpmError))
+                            )
                         )
                     )
                 )
@@ -322,10 +327,13 @@ npmPackumentContract =
                     ( chooseContract
                         (jsonContract status404 "A first-party name the private upstream does not have. It is never fetched from the public upstream." npmErrorCodec)
                         ( chooseContract
-                            (jsonContract status500 "A permanent or internal inability to decide." npmErrorCodec)
+                            (jsonContract status406 "The request's `Accept-Encoding` excludes both gzip and identity coding." npmErrorCodec)
                             ( chooseContract
-                                (jsonContract status502 "A responding upstream returned a packument for a different package." npmErrorCodec)
-                                (jsonContract status503 "A transient upstream or advisory condition; retry (see `Retry-After`)." npmErrorCodec)
+                                (jsonContract status500 "A permanent or internal inability to decide." npmErrorCodec)
+                                ( chooseContract
+                                    (jsonContract status502 "A responding upstream returned a packument for a different package." npmErrorCodec)
+                                    (jsonContract status503 "A transient upstream or advisory condition; retry (see `Retry-After`)." npmErrorCodec)
+                                )
                             )
                         )
                     )
@@ -338,13 +346,16 @@ npmPackumentReplies =
     PackumentReplies
         { packumentOk = \headers body -> FirstResponse (responseValue headers body)
         , packumentNotModified = \headers -> SecondResponse (FirstResponse (responseValue headers ()))
-        , packumentUnauthorised = \headers message -> SecondResponse (SecondResponse (FirstResponse (responseValue headers (NpmError (renderRefusal message)))))
-        , packumentForbidden = \headers message -> SecondResponse (SecondResponse (SecondResponse (FirstResponse (responseValue headers (NpmError (renderRefusal message))))))
-        , packumentNotFound = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (responseValue headers (NpmError (renderRefusal message)))))))
-        , packumentInternal = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (responseValue headers (NpmError (renderRefusal message))))))))
-        , packumentBadGateway = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (responseValue headers (NpmError (renderRefusal message)))))))))
-        , packumentUnavailable = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (responseValue headers (NpmError (renderRefusal message)))))))))
+        , packumentUnauthorised = \headers message -> SecondResponse (SecondResponse (FirstResponse (npmRefusal headers message)))
+        , packumentForbidden = \headers message -> SecondResponse (SecondResponse (SecondResponse (FirstResponse (npmRefusal headers message))))
+        , packumentNotFound = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (npmRefusal headers message)))))
+        , packumentNotAcceptable = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (npmRefusal headers message))))))
+        , packumentInternal = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (npmRefusal headers message)))))))
+        , packumentBadGateway = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (npmRefusal headers message))))))))
+        , packumentUnavailable = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (npmRefusal headers message))))))))
         }
+  where
+    npmRefusal headers message = responseValue headers (NpmError (renderRefusal message))
 
 -- | The tarball is deliberately an open relay: the route can forward any upstream status, headers, media type, and bytes.
 npmTarballContract :: ResponseContract PassthroughResponse

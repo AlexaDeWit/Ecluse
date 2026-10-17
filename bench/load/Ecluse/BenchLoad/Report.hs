@@ -20,7 +20,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Numeric (showFFloat)
 
-import Ecluse.BenchLoad.BootLines (BootLimits (..), LoggedRule (..), bootLimits, loggedRules, ruleBootOrders)
+import Ecluse.BenchLoad.BootLines (BootLimits (..), LoggedRule (..), bootLimits, loggedRules, metadataCompression, renderMetadataCompression, ruleBootOrders)
 import Ecluse.BenchLoad.Exposition (CacheOutcomes (..), GaugeSummary (..))
 import Ecluse.BenchLoad.Floors (Calibration (calConditions), Enforcement, FloorCheck (..), Pass (ConcurrencyOne, Loaded), describeEnforcement, describeRetainedConditions, floorCheck, floorsPath)
 import Ecluse.BenchLoad.Harness (LoadKnobs (..), LoadSummary (..), ProxyFigures (..), ScenarioReport (..), windowAttempts, windowRefusals, windowSuccesses)
@@ -63,7 +63,7 @@ renderReports section =
         , "_Successful responses per window are the primary figure. Reading notes are at the end of the report._"
         , ""
         ]
-            <> operatingPointTable (sectionKnobs section) (sectionCapabilities section) (sectionProcessors section) (sectionShape section) (bootLimits (fromMaybe [] firstBoot))
+            <> operatingPointTable (sectionKnobs section) (sectionCapabilities section) (sectionProcessors section) (sectionShape section) (fromMaybe [] firstBoot)
             <> runtimeLines
             <> rulePolicyLines c1Reports reports
             <> [ "### At a glance"
@@ -88,8 +88,8 @@ renderReports section =
                 <> map ("- " <>) lines'
                 <> [""]
 
-operatingPointTable :: LoadKnobs -> Int -> Int -> Text -> BootLimits -> [Text]
-operatingPointTable knobs capabilities processors shape limits =
+operatingPointTable :: LoadKnobs -> Int -> Int -> Text -> [Text] -> [Text]
+operatingPointTable knobs capabilities processors shape boot =
     [ "**Operating point**"
     , ""
     , "| knob | value |"
@@ -102,6 +102,7 @@ operatingPointTable knobs capabilities processors shape limits =
     , row "injected upstream latency" (fmt1 (fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000) <> " ms")
     , row "serve admission (requests)" (maybe "n/a" show (blCpuAdmission limits) <> origin (lkServeMaxInFlight knobs))
     , row "memory admission budget at boot" (maybe "n/a" bytesCell (blMemoryBudgetBytes limits))
+    , row "native metadata gzip" (renderMetadataCompression (metadataCompression boot))
     , row "private pool" (maybe "computed by the proxy from its fd limit" (\n -> show n <> " (explicit)") (lkPrivateConnectionsPerHost knobs))
     , row "public pool" (maybe "computed by the proxy from its fd limit" (\n -> show n <> " (explicit)") (lkPublicConnectionsPerHost knobs))
     , row "cache-eviction entries" (show (lkCacheMaxEntries knobs))
@@ -110,6 +111,7 @@ operatingPointTable knobs capabilities processors shape limits =
     , ""
     ]
   where
+    limits = bootLimits boot
     origin = maybe " (the proxy's computed default)" (const " (explicit)")
 
 -- The first scenario's rule policy, and the proxies of either pass that logged a different one.
@@ -347,6 +349,7 @@ readingNotes =
     , "- **Allocation and collector figures describe the proxy process alone** over the measured window, and divide by every successful request in it: both generators of a paired scenario, every step of a ramp. The stub upstreams and the load generator run outside it."
     , "- **The proxy's cgroup is not charged for its logs.** They go through pipes the harness drains, and only unread pipe buffers, at most 64 KiB per pipe, count against the limit. On CI the build step has just built or restored the executable, so its text pages are already in the page cache when the proxy starts and are not charged to it either. The harness does not enforce that."
     , "- **Each scenario boots its own proxy** from its own cgroup, so the runtime posture and the admission budgets are the ones that pod shape resolves. A boot retried after the runtime could not start a thread gets a fresh cgroup, so its readings exclude the failed attempt."
+    , "- **Native metadata gzip is off** in every proxy. The harness sets `ECLUSE_SERVER__METADATA_GZIP=false` and refuses a proxy that logs another posture, so these figures measure identity listings, not gzip-enabled throughput. A report from a build before the setting shows it as unreported."
     , "- **memory.peak** is the kernel's high-water mark for the proxy's cgroup. **RTS max memory in use** is what the heap held, the figure `-M` is compared with. The gap is off-heap and kernel memory."
     , "- **The in-flight gauge** is `ecluse.serve.admission.in_flight`, sampled each second. Requests that hold admission without finishing show as a flat, nonzero gauge beside zero successes."
     , "- **The rule policy** is what the first scenario's proxy logged at boot: each rule its configuration names, with its type and keys, and the order each mount evaluates the rules in. A proxy of either pass that logged a different policy is named."

@@ -459,6 +459,36 @@ proxy sees nothing to refuse. Name-to-registry bindings are the usual cause, bec
 clients such a binding outranks the per-package publish setting as well as the install route. Keep
 them off a client pointed at Écluse, and let the one endpoint carry both directions.
 
+## Metadata compression
+
+Écluse compresses the metadata it serves itself, so your clients get compressed listings whatever
+sits in front of the proxy. You need no front proxy feature for it: an AWS ALB does not compress
+responses, and Istio compresses only through a resource your cluster may not allow.
+
+| Response | Compressed by Écluse |
+|---|---|
+| An admitted npm packument or PyPI Simple index, to a client whose `Accept-Encoding` prefers gzip | Yes, gzip at level 1 |
+| Artifacts, Core Metadata sidecars, probes, `/-/ping`, refusals, publish replies | No |
+
+With compression on, a listing and its `304` carry `Vary: Accept-Encoding`. A gzip listing carries
+`Content-Encoding: gzip`, its exact `Content-Length`, and a weak `ETag` distinct from the identity
+one. A request that refuses both gzip and identity coding gets `406`.
+
+Each gzip response costs CPU, on a cache hit as on a miss, because the metadata cache holds
+identity bytes. A `HEAD` compresses too, to state the length, and a `304` compresses nothing. The
+response also pays the memory budget for the compression, as
+[Memory admission](@/docs/operations.md#memory-admission) lists.
+
+Set `ECLUSE_SERVER__METADATA_GZIP=false` to turn it off, for example when a front proxy already
+compresses or you would rather spend the CPU elsewhere. Écluse then serves every listing in
+identity coding, ignores `Accept-Encoding`, and sends no `Vary`. The setting governs Écluse alone:
+a front proxy may still compress what Écluse sends.
+
+Compression makes a listing's length depend on its content, and a listing can merge your private
+metadata with public metadata anyone can publish. The
+[threat model](@/docs/threat-model.md) states what an attacker would need to learn from those
+lengths. Turning compression off removes that surface from Écluse's own responses.
+
 ## Network egress
 
 Écluse fetches from the registries you point it at, and some URLs it follows (a version's

@@ -199,6 +199,44 @@ request's own authorised fetch returned, plus each source's surviving versions a
 A changed integrity floor after restart therefore changes the validator when it removes a file but keeps its release.
 No request shares or skips the private fetch and its authorisation.
 
+## Metadata compression
+
+Écluse gzips admitted listings itself, because the proxy in front of it may not. AWS ALB does not
+compress responses, and Istio compresses only through a resource an operator must opt in to and
+may not be allowed to install. `server.metadataGzip` is on by default, and
+`ECLUSE_SERVER__METADATA_GZIP=false` restores the identity responses exactly.
+
+```mermaid
+flowchart LR
+    A[Edge token, private access, policy] --> B{Accept-Encoding}
+    B -->|gzip preferred| C[Weak gzip ETag]
+    B -->|identity| D[Strong identity ETag]
+    B -->|both refused| E[406]
+    C --> F{If-None-Match}
+    D --> F
+    F -->|match| G[304, no render, no compression]
+    F -->|no match| H[Identity bytes from the assembled cache or a render]
+    H -->|gzip| I[Compress at level 1, then send]
+    H -->|identity| J[Send]
+```
+
+- **Only admitted listings.** Artifacts, sidecars, probes, refusals and publish replies are never
+  compressed by Écluse. The coding is chosen after every authority and policy check.
+- **One cached form.** The assembled cache holds identity bytes under the identity tag. Each gzip
+  response compresses them again, on a hit as on a miss, at level 1 for speed.
+- **Validators per coding.** The gzip tag is weak and derived from the identity tag, because a
+  codec change may change the bytes. Listing responses and their `304`s carry
+  `Vary: Accept-Encoding`. A gzip `HEAD` compresses to state the exact length.
+- **Cost.** Compression runs inside the CPU gate, so a gzip response holds its slot longer. Each
+  pays the memory gate 512 KiB for the deflater and 36 KiB per 32 KiB output buffer, and returns
+  both when the request ends.
+
+Compression makes a listing's length depend on its content. A listing that merges private and
+public metadata is therefore a length-observation surface, which the
+[threat model](https://ecluse-proxy.com/docs/threat-model/) assesses. Each response gets its own
+deflater, so no compression history crosses requests. A front proxy's compression is outside this
+setting.
+
 ## Serve admission and upstream pools
 
 Listings and public artifact metadata decisions pass two gates: a memory gate, then a process-wide
@@ -209,7 +247,8 @@ count or an explicit operator pin.
 
 Once admitted, a listing pays for its full reads chunk by chunk and for its response before it
 builds it. A request that joins another's public fetch or render pays nothing for it, and an
-assembled hit or a conditional `304` pays for its reads alone. A public artifact decision reads one
+assembled hit or a conditional `304` pays for its reads alone. A gzip response also pays for its
+compression, hit or miss. A public artifact decision reads one
 selected release, so its entry step is its whole charge. A started request that runs out of budget
 pauses at its next charge, keeping its CPU slot. A pause during an upstream read ends at the
 serve-path cap, and a pause before a render at the request timeout. Both gates stay held through

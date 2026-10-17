@@ -97,6 +97,14 @@ cancellation without a GC. VM growth and allocator-retained growth must each sta
 The Haskell control allocates at least 16 MiB while meeting both gates. Eight simultaneously open
 XZ decoders must exceed both gates before their scopes close.
 
+The metadata deflater has its own probes, which share the archive probes' child process, control
+and allocator counter. They cover the same 64 early exits by return, refused charge and
+cancellation, and a fourth set that cancels at the third output buffer of an incompressible body.
+A workspace probe samples the allocator while a deflater is open and requires the native peak plus
+one output buffer charge to fit the 512 KiB workspace the deflater charges. The peak was 268,192
+bytes on both arm64 CI and the amd64 build host, with 0 bytes left after release. A heap probe
+holds a 1 MiB incompressible body's gzip output within the buffer charges.
+
 The allocator counter adds glibc `mallinfo2` fields `uordblks` and `hblkhd` across all arenas and
 allocator mmap regions. It includes freed thread-cache chunks and allocator overhead, so it does
 not count exact live decoder ownership. ByteString payloads use the GHC heap. The Haskell control
@@ -1127,6 +1135,14 @@ pipe buffers (at most 64 KiB per pipe) but not for the log's page cache. On CI t
 just built or restored the executable, so its text pages are already cached when the proxy starts
 and are not charged to it. The harness does not enforce that.
 
+Every load proxy runs with native metadata gzip off. The shared environment builder sets
+`ECLUSE_SERVER__METADATA_GZIP=false` for every scenario, ecosystem and pod shape, and drops an
+ambient `ECLUSE_*` value. The harness reads the resolved `server.metadataGzip` line back from the
+boot log, refuses a proxy that states another posture or none, and names the posture in the
+report's operating point. The floors therefore measure identity listings. A load run says nothing
+of gzip-enabled throughput: the gzip rows under [Metadata gzip rows](#metadata-gzip-rows) measure
+the enabled path's cost.
+
 `BENCH_LOAD_POD` names the pod shape: `unlimited`, or a CPU-time quota and a memory limit such as
 `2cpu-1gib` or `4cpu-2gib`. Under a limited shape the proxy starts inside its own cgroup, a child
 of the directory `BENCH_LOAD_CGROUP` names, with `memory.max` at the limit, `memory.swap.max` at
@@ -1594,6 +1610,22 @@ pump's output. It also checks that every chunk size cuts the body into equal, di
 The [comparison against main](#comparison-against-main) pairs rows by name, so it lists a row with
 no namesake under "Only in this run" or "Only on `main`" and compares no figure for it. The first
 run on `main` that holds these rows is their baseline. No allocation budget covers them.
+
+### Metadata gzip rows
+
+The `metadata response (gzip enabled, level 1)` group measures native metadata gzip, which the
+shipped defaults turn on. It sits under each ecosystem beside the identity rows, which it leaves
+unchanged. Each capture's production served body is gzipped through the production deflater.
+
+| Row | Timed work |
+|---|---|
+| `held body, gzip` | Compressing a held served body: what an assembled hit adds |
+| `render, then gzip` | A miss's render of the served body, then its compression |
+| `sizes` | A test row whose output states the identity and gzip lengths, their ratio, and the memory the response is charged |
+
+Setup inflates every output and refuses a capture whose bytes do not come back. The native
+workspace is measured by the residency gate, under
+[Residency gate](#residency-gate-ecluse-residency-gating), not by these rows.
 
 ### Request patterns
 

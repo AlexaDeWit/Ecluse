@@ -91,8 +91,14 @@ Each suffix expands to integration.serving.npm and integration.serving.pypi.
 | artifact-integrity | PyPI exact distribution bytes and advertised sha256 checks move here, with npm counterpart. Require fixture bytes, advertised digest and digest of actual response bytes |
 | artifact-head | Successful artifact HEAD returns 200, an empty body and a positive Content-Length for both npm and PyPI. The PyPI instance is new. |
 | conditional-coherence | npm 200 HEAD and matching conditional HEAD examples move here. Require GET 200, HEAD 200, empty HEAD body, matching nonempty ETag, exact Content-Length, GET and HEAD 304 with empty bodies |
+| metadata-gzip | A gzip-accepting GET gets `Content-Encoding: gzip`, its exact Content-Length, and bytes that inflate to the identity GET's body. Both responses carry `Vary: Accept-Encoding` |
+| metadata-gzip-validators | The gzip ETag is weak and differs from the identity ETag. A gzip HEAD states the gzip GET's length and ETag with no body. Only the selected coding's ETag answers 304, on GET and HEAD |
+| metadata-gzip-refusal | A request that refuses both gzip and identity gets 406 with `Vary: Accept-Encoding` |
+| metadata-gzip-opt-out | With native gzip off, gzip-accepting and `*;q=0` requests get the identity response unchanged, with no `Vary` |
+| metadata-gzip-policy | A gzip validator from an admitting policy gets 403, not 304, once policy denies the release |
+| artifact-uncoded | Artifact GET and HEAD under `Accept-Encoding: gzip` match the plain requests in status, headers and bytes, with no Content-Encoding |
 
-Seven native duplicate example bodies are removed. Twenty shared serving examples run.
+Seven native duplicate example bodies are removed. Thirty-two shared serving examples run.
 Native npm tags, weaker/stronger floors, empty digests, retention, mutable cache representations, private authorisation, edge authorisation, origin failures and HEAD refusal cases remain.
 Native PyPI media type, multi-file identity, exact mount-local URLs, canonical sidecar advertisement and legacy-alias removal with adversarial retained-field controls, trailing slash, project-name canonicalization, content negotiation, helpful refusals, indexed-private credential routing, foreign-host refusal and mutable integrity-floor validators remain.
 Native deprecation/yank policy tests from the current baseline remain unchanged.

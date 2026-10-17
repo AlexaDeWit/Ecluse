@@ -33,6 +33,14 @@ server:
   # helpMessage: Contact platform engineering for access
   # Seconds the graceful shutdown waits for in-flight requests and artifact streams.
   shutdownDrainTimeout: 30
+  # Gzip each admitted npm packument and PyPI Simple index for a client whose
+  # Accept-Encoding prefers gzip, at level 1, compressed per response. Artifacts,
+  # probes, refusals, and publish replies stay uncompressed, and the metadata cache
+  # holds identity bytes. The compression costs CPU on every gzipped response, and
+  # each one pays 512 KiB of the memory budget plus its output. false serves every
+  # listing in identity coding and ignores Accept-Encoding, for a front proxy that
+  # compresses instead. A front proxy may compress whatever this setting says.
+  metadataGzip: true
 
 # The mirror queue, read only when a mount mirrors. The shape of url picks the
 # backend. An SQS queue URL (https://sqs.{region}.amazonaws.com/...) selects the

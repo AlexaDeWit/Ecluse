@@ -31,7 +31,7 @@ spec = do
 observedDriver :: (Text -> Text) -> (LByteString -> LByteString) -> ServingDriver
 observedDriver changeDigest changeBytes =
     ServingDriver
-        { withServing = \_ _ releases action -> do
+        { withServing = \_ _ _ releases action -> do
             release <- maybe (fail "contract supplied no public fixture") pure (listToMaybe releases)
             let response =
                     ServingResponse
@@ -44,7 +44,7 @@ observedDriver changeDigest changeBytes =
             action
                 ServingSession
                     { requestMetadata = \_ _ -> pure response
-                    , requestArtifact = \_ _ -> pure response{responseBody = changeBytes (responseBody response)}
+                    , requestArtifact = \_ _ _ -> pure response{responseBody = changeBytes (responseBody response)}
                     }
         , servingIdentity = ("thing@" <>)
         , servingDigest = decodeUtf8

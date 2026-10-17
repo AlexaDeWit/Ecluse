@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE RankNTypes #-}
 
--- | Admission, origin authority and HTTP representation laws over native request drivers.
+-- | Admission, origin authority, HTTP representation and content-coding laws over native request drivers.
 module Ecluse.Test.Contract.Serving (
     ServingDriver (..),
     ServingSession (..),
@@ -15,6 +15,8 @@ module Ecluse.Test.Contract.Serving (
     artifactHeadCase,
 ) where
 
+import Codec.Compression.GZip qualified as GZip
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
@@ -23,6 +25,7 @@ import Network.HTTP.Types (Header, Method, methodGet, methodHead)
 import Test.Hspec
 
 import Ecluse.Core.Rules.Types (Rule (AllowByIdentity, AllowIfOlderThan, DenyByIdentity))
+import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 
 -- | A release fixture with controlled age, bytes and integrity presence.
@@ -43,15 +46,15 @@ data ServingResponse = ServingResponse
     }
     deriving stock (Eq, Show)
 
--- | Requests against one isolated proxy and its upstreams.
+-- | Requests against one isolated proxy and its upstreams. An artifact request names its release's version.
 data ServingSession = ServingSession
     { requestMetadata :: Method -> [Header] -> IO ServingResponse
-    , requestArtifact :: Method -> Text -> IO ServingResponse
+    , requestArtifact :: Method -> [Header] -> Text -> IO ServingResponse
     }
 
--- | Native fixture encoding, resource ownership, requests and digest spelling.
+-- | Native fixture encoding, resource ownership, requests and digest spelling, under a mount's metadata coding.
 data ServingDriver = ServingDriver
-    { withServing :: forall a. [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
+    { withServing :: forall a. MetadataCompression -> [Rule] -> [ServingRelease] -> [ServingRelease] -> (ServingSession -> IO a) -> IO a
     , servingIdentity :: Text -> Text
     , servingDigest :: ByteString -> Text
     }
@@ -63,7 +66,7 @@ servingContract provider driver = describe "shared serving contract" $ do
         run [] [] [old] $ \session -> do
             response <- requestMetadata session methodGet []
             responseStatus response `shouldBe` 403
-            artifact <- requestArtifact session methodGet "1.2.3"
+            artifact <- requestArtifact session methodGet [] "1.2.3"
             responseStatus artifact `shouldBe` 403
     contractExample "identity-precedence" "admits an explicit identity and lets denial take precedence" $ do
         let packageIdentity = servingIdentity driver "1.2.3"
@@ -74,7 +77,7 @@ servingContract provider driver = describe "shared serving contract" $ do
         run [AllowByIdentity packageIdentity, DenyByIdentity packageIdentity] [] [old] $ \session -> do
             response <- requestMetadata session methodGet []
             responseStatus response `shouldBe` 403
-            artifact <- requestArtifact session methodGet "1.2.3"
+            artifact <- requestArtifact session methodGet [] "1.2.3"
             responseStatus artifact `shouldBe` 403
     contractExample "authorised-union" "serves the union of trusted-private and gated-public versions" $
         run agePolicy [old] [old, other] $ \session -> do
@@ -92,7 +95,7 @@ servingContract provider driver = describe "shared serving contract" $ do
             responseStatus response `shouldBe` 200
             responseVersions response `shouldBe` ["1.2.3"]
             Map.lookup "1.2.3" (responseDigests response) `shouldBe` Just [servingDigest driver "private bytes"]
-            artifact <- requestArtifact session methodGet "1.2.3"
+            artifact <- requestArtifact session methodGet [] "1.2.3"
             responseStatus artifact `shouldBe` 200
             responseBody artifact `shouldBe` "private bytes"
     contractExample "public-integrity" "filters a hashless public version from the listing" $
@@ -108,7 +111,7 @@ servingContract provider driver = describe "shared serving contract" $ do
         artifactIntegrityCase driver
     contractExample "artifact-head" "serves artifact HEAD without transferring bytes" $
         run agePolicy [] [old] $ \session ->
-            requestArtifact session methodHead "1.2.3" >>= artifactHeadCase
+            requestArtifact session methodHead [] "1.2.3" >>= artifactHeadCase
     contractExample "conditional-coherence" "keeps GET, HEAD and conditional responses coherent" $
         run agePolicy [] [old] $ \session -> do
             initial <- requestMetadata session methodGet []
@@ -123,9 +126,72 @@ servingContract provider driver = describe "shared serving contract" $ do
                 matched <- requestMetadata session method [("If-None-Match", tag)]
                 responseStatus matched `shouldBe` 304
                 responseBody matched `shouldBe` ""
+    contractExample "metadata-gzip" "gzips the identity listing's exact bytes for a client that accepts gzip" $
+        run agePolicy [] [old, other] $ \session -> do
+            plain <- requestMetadata session methodGet []
+            packed <- requestMetadata session methodGet [("Accept-Encoding", "gzip")]
+            map responseStatus [plain, packed] `shouldBe` [200, 200]
+            lookup "Content-Encoding" (responseHeaders plain) `shouldBe` Nothing
+            lookup "Content-Encoding" (responseHeaders packed) `shouldBe` Just "gzip"
+            map varies [plain, packed] `shouldBe` [True, True]
+            GZip.decompress (responseBody packed) `shouldBe` responseBody plain
+            lookup "Content-Length" (responseHeaders packed) `shouldBe` Just (show (LBS.length (responseBody packed)))
+    contractExample "metadata-gzip-validators" "gives each coding its own validator for HEAD and conditional requests" $
+        run agePolicy [] [old] $ \session -> do
+            plain <- requestMetadata session methodGet []
+            packed <- requestMetadata session methodGet gzipOffer
+            plainTag <- validator plain
+            gzipTag <- validator packed
+            gzipTag `shouldSatisfy` BS.isPrefixOf "W/"
+            gzipTag `shouldNotBe` plainTag
+            headed <- requestMetadata session methodHead gzipOffer
+            responseStatus headed `shouldBe` 200
+            responseBody headed `shouldBe` ""
+            lookup "ETag" (responseHeaders headed) `shouldBe` Just gzipTag
+            lookup "Content-Length" (responseHeaders headed) `shouldBe` Just (show (LBS.length (responseBody packed)))
+            for_ [methodGet, methodHead] $ \method -> do
+                matched <- requestMetadata session method (("If-None-Match", gzipTag) : gzipOffer)
+                responseStatus matched `shouldBe` 304
+                responseBody matched `shouldBe` ""
+                lookup "ETag" (responseHeaders matched) `shouldBe` Just gzipTag
+                varies matched `shouldBe` True
+            crossed <- requestMetadata session methodGet (("If-None-Match", plainTag) : gzipOffer)
+            (responseStatus crossed, lookup "Content-Encoding" (responseHeaders crossed)) `shouldBe` (200, Just "gzip")
+            unpacked <- requestMetadata session methodGet [("If-None-Match", gzipTag)]
+            (responseStatus unpacked, lookup "Content-Encoding" (responseHeaders unpacked)) `shouldBe` (200, Nothing)
+    contractExample "metadata-gzip-refusal" "answers 406 to a request that excludes both codings" $
+        run agePolicy [] [old] $ \session -> do
+            refused <- requestMetadata session methodGet [("Accept-Encoding", "gzip;q=0, identity;q=0")]
+            responseStatus refused `shouldBe` 406
+            varies refused `shouldBe` True
+    contractExample "metadata-gzip-opt-out" "keeps the identity listing unchanged when the operator opts out" $
+        withServing driver IdentityOnly agePolicy [] [old] $ \session -> do
+            plain <- requestMetadata session methodGet []
+            for_ [gzipOffer, [("Accept-Encoding", "*;q=0")]] $ \offered -> do
+                response <- requestMetadata session methodGet offered
+                response `shouldBe` plain
+            varies plain `shouldBe` False
+    contractExample "metadata-gzip-policy" "applies policy before a gzip validator can answer 304" $ do
+        gzipTag <- run agePolicy [] [old] $ \session -> requestMetadata session methodGet gzipOffer >>= validator
+        run [] [] [old] $ \session -> do
+            refused <- requestMetadata session methodGet (("If-None-Match", gzipTag) : gzipOffer)
+            responseStatus refused `shouldBe` 403
+    contractExample "artifact-uncoded" "relays artifact GET and HEAD unchanged to a client that accepts gzip" $
+        run agePolicy [] [old] $ \session ->
+            for_ [methodGet, methodHead] $ \method -> do
+                plain <- requestArtifact session method [] "1.2.3"
+                offered <- requestArtifact session method gzipOffer "1.2.3"
+                responseStatus offered `shouldBe` 200
+                -- The upstream's own Date may tick between the two requests.
+                let undated response = response{responseHeaders = filter ((/= "Date") . fst) (responseHeaders response)}
+                undated offered `shouldBe` undated plain
+                lookup "Content-Encoding" (responseHeaders offered) `shouldBe` Nothing
   where
     contractExample identifier description = it (caseLabel ("integration.serving." <> provider <> "." <> identifier) description)
-    run = withServing driver
+    run = withServing driver GzipWhenAccepted
+    gzipOffer = [("Accept-Encoding", "gzip")]
+    varies response = maybe False (BS.isInfixOf "Accept-Encoding") (lookup "Vary" (responseHeaders response))
+    validator response = maybe (fail "no ETag on admitted metadata") pure (lookup "ETag" (responseHeaders response))
     agePolicy = [AllowIfOlderThan (7 * nominalDay)]
     old = ServingRelease "1.2.3" 30 "release bytes" True
     young = old{releaseAgeDays = 1}
@@ -134,11 +200,11 @@ servingContract provider driver = describe "shared serving contract" $ do
 -- | Require both the fixture bytes and the digest advertised by the native listing.
 artifactIntegrityCase :: ServingDriver -> IO ()
 artifactIntegrityCase driver =
-    withServing driver [AllowIfOlderThan (7 * nominalDay)] [] [release] $ \session -> do
+    withServing driver GzipWhenAccepted [AllowIfOlderThan (7 * nominalDay)] [] [release] $ \session -> do
         response <- requestMetadata session methodGet []
         responseStatus response `shouldBe` 200
         Map.lookup "1.2.3" (responseDigests response) `shouldBe` Just [servingDigest driver (releaseBytes release)]
-        artifact <- requestArtifact session methodGet "1.2.3"
+        artifact <- requestArtifact session methodGet [] "1.2.3"
         artifactDigestCase (servingDigest driver) (servingDigest driver (releaseBytes release)) artifact
         responseBody artifact `shouldBe` LBS.fromStrict (releaseBytes release)
         Map.lookup "1.2.3" (responseDigests response) `shouldBe` Just [servingDigest driver (toStrict (responseBody artifact))]
