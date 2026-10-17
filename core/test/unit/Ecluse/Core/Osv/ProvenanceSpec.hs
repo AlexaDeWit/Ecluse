@@ -7,22 +7,26 @@ module Ecluse.Core.Osv.ProvenanceSpec (spec) where
 
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, secondsToDiffTime)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldSatisfy)
 
 import Ecluse.Core.Osv.Provenance (
     AdvisoryProvenance (..),
     ProvenanceSource (EpssFeed, OsvExport),
     QuietTime (..),
     SourceAge (..),
+    SourcePathRecording (..),
     decodeProvenance,
     noProvenance,
     parseHttpDate,
     parseSourceTime,
     provenanceRows,
+    recordSource,
+    renderRecordedSource,
     renderSourceAge,
     sourceAges,
     sourceQuiet,
  )
+import Ecluse.Core.Security.Authority (dialledAuthorityLabel)
 
 day :: UTCTime
 day = UTCTime (fromGregorian 2026 9 1) 0
@@ -71,6 +75,25 @@ spec = do
 
         it "reads an over-long value as absence, so an artifact cannot hand out an unbounded string" $
             apOsvSource (decodeProvenance [("osv_source", toText (replicate 4096 'u'))]) `shouldBe` Nothing
+
+    describe "recordSource" $ do
+        let source = "https://deploy:hunter2@mirror.example.test/s3cr3t-token/osv/npm/all.zip?sig=abc#frag"
+            stored recording = renderRecordedSource (recordSource recording source)
+            bothChoices = [FingerprintSourcePath, RecordSourcePath]
+
+        it "stores the scheme, host and port, then the path's SHA-256 in place of the path" $
+            stored FingerprintSourcePath
+                `shouldBe` "https://mirror.example.test:443/<sha256:97c5e24e410374c33b61de99db58c862c830dd0ba017d10045d5b837a76f10fd>"
+
+        it "stores the path itself when asked, still without userinfo, query, or fragment" $
+            stored RecordSourcePath `shouldBe` "https://mirror.example.test:443/s3cr3t-token/osv/npm/all.zip"
+
+        it "changes the record when the path changes, under either choice" $
+            for_ bothChoices $ \recording ->
+                recordSource recording (T.replace "all.zip" "other.zip" source) `shouldNotBe` recordSource recording source
+
+        it "leaves the consumer's log label reading the host and port alone" $
+            map (dialledAuthorityLabel . stored) bothChoices `shouldBe` ["mirror.example.test:443", "mirror.example.test:443"]
 
     describe "parseSourceTime" $ do
         it "reads a bare date as that day's UTC start" $

@@ -18,6 +18,13 @@ module Ecluse.Core.Osv.Provenance (
     provenanceRows,
     decodeProvenance,
 
+    -- * How a source is recorded
+    SourcePathRecording (..),
+    RecordedSource (..),
+    RecordedPath (..),
+    recordSource,
+    renderRecordedSource,
+
     -- * Source timestamps
     parseSourceTime,
     parseHttpDate,
@@ -50,20 +57,20 @@ import Ecluse.Core.Osv.Schema (
     ),
     renderMetaKey,
  )
+import Ecluse.Core.Package.Hash (sha256Hex)
+import Ecluse.Core.Security.Authority (credentialFreePath, dialledOrigin)
 import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 
-{- | The sources one artifact was compiled from, as they described themselves. Every field is
-'Nothing' when the source supplied no such value, or when an older artifact predates the key.
--}
+-- | The sources one artifact was compiled from. A field is 'Nothing' when the source supplied no value or the artifact predates the key.
 data AdvisoryProvenance = AdvisoryProvenance
     { apOsvSource :: Maybe Text
-    -- ^ The advisory export's credential-free URL.
+    -- ^ The advisory export in its stored form ('renderRecordedSource'). Older artifacts carry a credential-free URL.
     , apOsvLastModified :: Maybe UTCTime
     -- ^ The @Last-Modified@ the export answered the successful fetch with.
     , apOsvNewestModified :: Maybe UTCTime
     -- ^ The newest @modified@ across the advisory records the pass read.
     , apEpssSource :: Maybe Text
-    -- ^ The EPSS feed's credential-free URL.
+    -- ^ The EPSS feed in its stored form ('renderRecordedSource').
     , apEpssLastModified :: Maybe UTCTime
     -- ^ The @Last-Modified@ the feed answered the successful fetch with.
     , apEpssScoreDate :: Maybe UTCTime
@@ -92,9 +99,7 @@ provenanceRows prov =
   where
     row key = fmap (renderMetaKey key,)
 
-{- | Read the provenance an artifact's @meta@ rows carry. An absent key, an over-long value,
-and an unreadable timestamp all read as absence, never as a fault.
--}
+-- | Read the provenance an artifact's @meta@ rows carry. An absent key, an over-long value, or an unreadable timestamp reads as absence.
 decodeProvenance :: [(Text, Text)] -> AdvisoryProvenance
 decodeProvenance rows =
     noProvenance
@@ -120,9 +125,47 @@ maxSourceLength = 2048
 maxStampLength = 64
 maxLabelLength = 128
 
-{- | An RFC 3339 timestamp, or a bare date read as its UTC start of day. Anything else is
-'Nothing', which records no value rather than an invented one.
--}
+-- | Whether an artifact records each source's path. Every consumer and every reader of the bucket can read the artifact.
+data SourcePathRecording
+    = -- | Record only the path's SHA-256, so a credential written into the path stays out of the artifact.
+      FingerprintSourcePath
+    | -- | Record the path itself.
+      RecordSourcePath
+    deriving stock (Eq, Show)
+
+-- | A source as an artifact records it. Userinfo, the query and the fragment are never part of it.
+data RecordedSource = RecordedSource
+    { rsOrigin :: Text
+    -- ^ The scheme and the dialled @host:port@ ('dialledOrigin').
+    , rsPath :: RecordedPath
+    }
+    deriving stock (Eq, Show)
+
+-- | A source's path, or the fingerprint that stands in for it.
+data RecordedPath
+    = -- | The path as fetched.
+      PathAsFetched Text
+    | -- | The SHA-256 of the path's UTF-8 bytes, in lowercase hex.
+      PathSha256 Text
+    deriving stock (Eq, Show)
+
+-- | Record a fetched URL. A changed path changes the record under either choice.
+recordSource :: SourcePathRecording -> Text -> RecordedSource
+recordSource recording url = RecordedSource{rsOrigin = dialledOrigin url, rsPath = recorded recording}
+  where
+    path = credentialFreePath url
+    recorded = \case
+        FingerprintSourcePath -> PathSha256 (sha256Hex (encodeUtf8 path))
+        RecordSourcePath -> PathAsFetched path
+
+-- | The stored form. A fingerprint follows a slash, so 'Ecluse.Core.Security.Authority.dialledAuthorityLabel' still reads the authority.
+renderRecordedSource :: RecordedSource -> Text
+renderRecordedSource source =
+    rsOrigin source <> case rsPath source of
+        PathAsFetched path -> path
+        PathSha256 hex -> "/<sha256:" <> hex <> ">"
+
+-- | An RFC 3339 timestamp, or a bare date read as its UTC start of day. Anything else is 'Nothing', never an invented value.
 parseSourceTime :: Text -> Maybe UTCTime
 parseSourceTime raw = rfc3339 <|> offsetWithoutColon <|> startOfDay
   where
@@ -140,9 +183,7 @@ parseHttpDate raw = parseTimeM True defaultTimeLocale "%a, %d %b %Y %H:%M:%S %Z"
 lastModifiedOf :: [ByteString] -> Maybe UTCTime
 lastModifiedOf = parseHttpDate . decodeUtf8 <=< listToMaybe
 
-{- | How old each source may be before Pilot raises its alarm. Loud ecosystems take a short
-threshold and slow ones a long threshold, so a quiet feed is not read as a stalled one.
--}
+-- | How old each source may be before Pilot raises its alarm. A slow ecosystem takes a long threshold, so its quiet feed is not read as stalled.
 data QuietTime = QuietTime
     { qtOsv :: NominalDiffTime
     -- ^ The threshold for this ecosystem's advisory export.
@@ -167,15 +208,13 @@ data ProvenanceSource
 data SourceAge = SourceAge
     { saSource :: ProvenanceSource
     , saUrl :: Text
-    -- ^ The credential-free source URL, or @\<unrecorded\>@ when the artifact carries none.
+    -- ^ The source in its stored form, or @\<unrecorded\>@ when the artifact carries none.
     , saAge :: NominalDiffTime
     , saThreshold :: NominalDiffTime
     }
     deriving stock (Eq, Show)
 
-{- | The ages this provenance supports at @now@. A source that recorded no timestamp yields no
-age, because nothing about it can be read as quiet or fresh.
--}
+-- | The ages this provenance supports at @now@. A source that recorded no timestamp yields no age, quiet or fresh.
 sourceAges :: UTCTime -> QuietTime -> AdvisoryProvenance -> [SourceAge]
 sourceAges now quiet prov =
     catMaybes

@@ -39,6 +39,7 @@ import Ecluse.Config.Aeson (parseRuleEntry, parseRulePatch, parseRulesPatch)
 import Ecluse.Config.Rule (RulePatch (..))
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Osv.Provenance (SourcePathRecording (FingerprintSourcePath, RecordSourcePath))
 import Ecluse.Core.Osv.Publication (renderPercent)
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName, PyPIOwnedPrefix), mkPyPIPrefix)
@@ -395,6 +396,21 @@ spec = describe "decodeDocument" $ do
                 it (toString ("refuses advisories." <> key <> " = " <> value)) $
                     loadConfig [] (Just ("{\"advisories\":{\"" <> encodeUtf8 key <> "\":" <> encodeUtf8 value <> "}}"))
                         `shouldSatisfy` decodeErrorMentions ("advisories." <> key)
+
+    describe "advisories source path recording" $ do
+        it "fingerprints source paths by default, and records them when set, through either layer" $ do
+            let recording env doc = advSourcePathRecording <$> advisoriesOf env doc
+            recording [] Nothing `shouldReturn` FingerprintSourcePath
+            recording [] (Just "{\"advisories\":{\"recordSourcePath\":true}}") `shouldReturn` RecordSourcePath
+            recording [("ECLUSE_ADVISORIES__RECORD_SOURCE_PATH", "true")] Nothing `shouldReturn` RecordSourcePath
+            recording [("ECLUSE_ADVISORIES__RECORD_SOURCE_PATH", "false")] (Just "{\"advisories\":{\"recordSourcePath\":true}}")
+                `shouldReturn` FingerprintSourcePath
+
+        it "rejects a non-boolean recordSourcePath, through both layers" $ do
+            loadConfig [] (Just "{\"advisories\":{\"recordSourcePath\":\"yes\"}}")
+                `shouldSatisfy` decodeErrorMentions "advisories.recordSourcePath"
+            loadConfig [("ECLUSE_ADVISORIES__RECORD_SOURCE_PATH", "1")] Nothing
+                `shouldSatisfy` decodeErrorMentions "advisories.recordSourcePath"
 
     describe "deprecated divergence configuration" $ do
         for_ ["ECLUSE_INTEGRITY__DIVERGENCE_POLICY", "ECLUSE_MOUNTS__NPM__INTEGRITY__DIVERGENCE_POLICY"] $ \key -> do

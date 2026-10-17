@@ -26,11 +26,13 @@ module Ecluse.Core.Security.Authority (
     authorityLabel,
     dialledAuthorityLabel,
     credentialFreeUrl,
+    dialledOrigin,
+    credentialFreePath,
 ) where
 
 import Data.Text qualified as T
 
-import Ecluse.Core.Text (afterFirst, httpPrefix, isPrefixOfLowered, readDecimalText, toLowerUnlessAsciiUnchanged)
+import Ecluse.Core.Text (afterFirst, httpPrefix, isPrefixOfLowered, readDecimalText, registryPath, toLowerUnlessAsciiUnchanged)
 
 -- | The authority an outbound fetch dials: a bare host with its effective port. The gate authorises the pair, so an allowlisted host at an attacker-chosen port is not authorised.
 data HostPort = HostPort
@@ -73,13 +75,21 @@ authorityLabelWithDefault portless = maybe unresolvedAuthority renderHostPort . 
 
 -- | Remove userinfo, query and fragment while retaining the fetched URL's scheme, authority and path.
 credentialFreeUrl :: Text -> Text
-credentialFreeUrl raw = scheme <> authorityOf raw <> path
-  where
-    (written, separator) = T.breakOn "://" raw
-    (scheme, afterScheme) = case T.stripPrefix "://" separator of
-        Just rest -> (written <> "://", rest)
-        Nothing -> ("", raw)
-    path = T.takeWhile (`notElem` ['?', '#']) (T.dropWhile (/= '/') afterScheme)
+credentialFreeUrl raw = schemePrefix raw <> authorityOf raw <> credentialFreePath raw
+
+-- | The scheme and the dialled @host:port@, the part of a URL that names where it was fetched from.
+dialledOrigin :: Text -> Text
+dialledOrigin raw = schemePrefix raw <> dialledAuthorityLabel raw
+
+-- | The path a URL fetches, without its query or fragment. Empty when the URL writes none.
+credentialFreePath :: Text -> Text
+credentialFreePath = T.takeWhile (`notElem` ['?', '#']) . registryPath
+
+-- The scheme with its separator, or empty for a URL that writes none.
+schemePrefix :: Text -> Text
+schemePrefix raw = case T.breakOn "://" raw of
+    (written, separator) | not (T.null separator) -> written <> "://"
+    _ -> ""
 
 -- The angle brackets match what the resolved-configuration provenance lines use for a
 -- withheld value.
