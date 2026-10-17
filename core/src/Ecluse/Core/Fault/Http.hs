@@ -14,6 +14,7 @@ module Ecluse.Core.Fault.Http (
     displayFaultT,
 ) where
 
+import Network.Connection (HostCannotConnect, HostNotResolved)
 import Network.HTTP.Client (
     HttpException (HttpExceptionRequest, InvalidUrlException),
     HttpExceptionContent (..),
@@ -33,7 +34,7 @@ import Ecluse.Core.Fault (
 import Ecluse.Core.Security.Authority (dialledAuthorityLabel)
 import Ecluse.Core.Text (displayExceptionT)
 
--- | Classify a client exception, recognising TLS failures by type rather than rendered text. The detail is the dialled @host:port@ and the client's own reason.
+-- | Classify a client exception, recognising TLS and connection failures by type rather than rendered text. The detail is the dialled @host:port@ and the client's own reason.
 classifyTransport :: HttpException -> TransportFault
 classifyTransport err = transportFault (causeOf err) (dialledAuthority err <> ": " <> clientReason err)
   where
@@ -46,8 +47,11 @@ classifyTransport err = transportFault (causeOf err) (dialledAuthority err <> ":
             -- The peer hung up before the first response byte, so the request never
             -- reached a protocol exchange.
             NoResponseDataReceived -> TransportUnreachable
+            -- The TLS manager wraps its connector's refused connection or empty address list here, where plain HTTP raises ConnectionFailure.
             InternalException inner
                 | Just (_ :: TLS.TLSException) <- fromException inner -> TransportTls
+                | Just (_ :: HostCannotConnect) <- fromException inner -> TransportUnreachable
+                | Just (_ :: HostNotResolved) <- fromException inner -> TransportUnreachable
                 | otherwise -> TransportProtocol
             _ -> TransportProtocol
         InvalidUrlException _ _ -> TransportProtocol

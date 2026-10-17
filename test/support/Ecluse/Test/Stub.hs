@@ -25,6 +25,7 @@ module Ecluse.Test.Stub (
     requestSecrets,
     signedRequest,
     refusedFetch,
+    failedFetch,
 ) where
 
 import Data.ByteString.Lazy qualified as LBS
@@ -33,6 +34,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.List (lookup)
 import Network.HTTP.Client (
     HttpException,
+    ManagerSettings,
     Request (checkResponse),
     defaultManagerSettings,
     httpLbs,
@@ -178,9 +180,13 @@ signedRequest = do
 
 -- | The exception a fetch throws when nothing listens at the request's port.
 refusedFetch :: Request -> IO HttpException
-refusedFetch request = do
-    manager <- newManager defaultManagerSettings
+refusedFetch = failedFetch defaultManagerSettings
+
+-- | The exception a fetch through a manager with these settings throws, failing the test if it is answered.
+failedFetch :: ManagerSettings -> Request -> IO HttpException
+failedFetch settings request = do
+    manager <- newManager settings
     outcome <- try (httpNoBody request manager)
     case outcome of
         Left err -> pure err
-        Right _ -> fail "a closed port answered"
+        Right _ -> fail "a fetch expected to fail was answered"

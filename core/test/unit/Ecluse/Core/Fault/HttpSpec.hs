@@ -2,19 +2,40 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Client exceptions classified and rendered, over plain HTTP and through the TLS manager.
 module Ecluse.Core.Fault.HttpSpec (spec) where
 
+import Data.ByteString qualified as BS
 import Data.Text qualified as T
-import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (InternalException, ResponseTimeout))
+import Network.Connection (HostNotResolved (HostNotResolved))
+import Network.HTTP.Client (
+    HttpException (HttpExceptionRequest, InvalidUrlException),
+    HttpExceptionContent (ConnectionClosed, ConnectionFailure, ConnectionTimeout, InternalException, NoResponseDataReceived, ResponseTimeout),
+    Request (secure),
+    defaultRequest,
+    parseRequest,
+ )
+import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types.Status (status404, status503)
+import Network.Socket (accept, close)
+import Network.Socket.ByteString (recv, sendAll)
 import Network.TLS qualified as TLS
+import Network.Wai.Handler.Warp (openFreePort)
 import Test.Hspec
+import UnliftIO.Async (withAsync)
+import UnliftIO.Exception (bracket, finally)
 
-import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportCause (TransportTimeout, TransportTls, TransportUnreachable), TransportFault (tfCause, tfDetail), renderTransportCause)
+import Ecluse.Core.Fault (
+    HttpFault (HttpStatus),
+    TransportCause (TransportProtocol, TransportTimeout, TransportTls, TransportUnreachable),
+    TransportFault (tfCause, tfDetail),
+    renderTransportCause,
+    transportRetryable,
+ )
 import Ecluse.Core.Fault.Http (classifyTransport, displayFaultT, httpFault)
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Test.Fault (httpTransportCause)
-import Ecluse.Test.Stub (redirectSecrets, redirectedStatusException, refusedFetch, requestSecrets, signedRequest)
+import Ecluse.Test.Stub (failedFetch, redirectSecrets, redirectedStatusException, refusedFetch, requestSecrets, signedRequest)
 
 -- | A typed fault outside the HTTP client.
 data OtherFault = OtherFault
@@ -73,3 +94,63 @@ spec = do
             tfDetail fault `shouldSatisfy` T.isPrefixOf "127.0.0.1:1: ConnectionFailure: "
             tfDetail fault `shouldSatisfy` (not . T.isInfixOf "\n")
             for_ requestSecrets $ \secret -> tfDetail fault `shouldSatisfy` (not . T.isInfixOf secret)
+
+    describe "classifyTransport through the TLS manager" $ do
+        it "classes a refused HTTPS connection as unreachable, as plain HTTP is, on one line and without the request" $ do
+            request <- signedRequest
+            fault <- classifyTransport <$> failedFetch tlsManagerSettings request{secure = True}
+            tfCause fault `shouldBe` TransportUnreachable
+            tfDetail fault `shouldSatisfy` T.isPrefixOf "127.0.0.1:1: InternalException: HostCannotConnect "
+            tfDetail fault `shouldSatisfy` (not . T.isInfixOf "\n")
+            for_ requestSecrets $ \secret -> tfDetail fault `shouldSatisfy` (not . T.isInfixOf secret)
+
+        it "classes the connector's empty address list as unreachable" $ do
+            request <- signedRequest
+            tfCause (classifyTransport (HttpExceptionRequest request (InternalException (toException (HostNotResolved "registry.invalid")))))
+                `shouldBe` TransportUnreachable
+
+        it "keeps a real TLS handshake failure as a TLS fault" $
+            withNonTlsServer $ \port -> do
+                fault <- classifyTransport <$> (failedFetch tlsManagerSettings =<< parseRequest ("https://127.0.0.1:" <> show port <> "/feed"))
+                tfCause fault `shouldBe` TransportTls
+
+    transportFaultSpec
+
+-- | 'classifyTransport' folds each @http-client@ exception shape onto the bounded 'TransportCause'.
+transportFaultSpec :: Spec
+transportFaultSpec = describe "transport faults as values" $ do
+    it "classifies timeouts as TransportTimeout" $ do
+        causeOf (HttpExceptionRequest defaultRequest ConnectionTimeout) `shouldBe` TransportTimeout
+        causeOf (HttpExceptionRequest defaultRequest ResponseTimeout) `shouldBe` TransportTimeout
+
+    it "classifies connection failures and resets as TransportUnreachable" $ do
+        causeOf (HttpExceptionRequest defaultRequest (ConnectionFailure (toException OtherFault))) `shouldBe` TransportUnreachable
+        causeOf (HttpExceptionRequest defaultRequest ConnectionClosed) `shouldBe` TransportUnreachable
+        -- A peer that hung up before the first response byte never reached a protocol
+        -- exchange, so it reads as unreachable rather than as a protocol fault.
+        causeOf (HttpExceptionRequest defaultRequest NoResponseDataReceived) `shouldBe` TransportUnreachable
+
+    it "classifies a wrapped TLS exception as TransportTls" $ do
+        let handshake = toException (TLS.HandshakeFailed (TLS.Error_Misc "handshake refused"))
+        causeOf (HttpExceptionRequest defaultRequest (InternalException handshake)) `shouldBe` TransportTls
+
+    it "classifies every other client fault as TransportProtocol" $ do
+        -- The closed catch-all keeps the sum total over whatever http-client reports.
+        causeOf (HttpExceptionRequest defaultRequest (InternalException (toException OtherFault))) `shouldBe` TransportProtocol
+        causeOf (InvalidUrlException "::" "bad") `shouldBe` TransportProtocol
+
+    it "retries a timeout and an unreachable peer, and nothing else" $ do
+        -- One table decides transience for every classifyTransport consumer, so no
+        -- caller re-derives it from the client library's constructors.
+        map transportRetryable [TransportTimeout, TransportUnreachable] `shouldBe` [True, True]
+        map transportRetryable [TransportTls, TransportProtocol] `shouldBe` [False, False]
+  where
+    causeOf = tfCause . classifyTransport
+
+-- Answer every connection with bytes that are not a TLS record, then read until the client hangs up.
+withNonTlsServer :: (Int -> IO a) -> IO a
+withNonTlsServer action = bracket openFreePort (close . snd) $ \(port, listener) ->
+    withAsync (forever (accept listener >>= \(conn, _) -> (sendAll conn "HTTP/1.1 400 not TLS\r\n\r\n" >> drain conn) `finally` close conn)) $ \_ ->
+        action port
+  where
+    drain conn = recv conn 4096 >>= \chunk -> unless (BS.null chunk) (drain conn)
