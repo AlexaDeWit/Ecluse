@@ -52,10 +52,10 @@ on:
   schedule:
     - cron: "17 4 * * *"
 
-# One run per ref and pod-shape choice, or per ref, sweep, and selection of its jobs, so a sweep
-# never waits behind, or replaces, a pod-shape run. Never cancel a scheduled or dispatched run mid-flight.
+# Group by ref, commit and pod-shape choice, or by ref, commit, sweep and job selection.
+# Distinct commit snapshots retain their queued measurements without replacing one another.
 concurrency:
-  group: bench-load-${{ github.ref }}-${{ (inputs.sweep == '' || inputs.sweep == 'none') && (inputs.pod-shape || 'all') || format('sweep-{0}-{1}', inputs.sweep, inputs.sweep-select) }}
+  group: bench-load-${{ github.ref }}-${{ github.sha }}-${{ (inputs.sweep == '' || inputs.sweep == 'none') && (inputs.pod-shape || 'all') || format('sweep-{0}-{1}', inputs.sweep, inputs.sweep-select) }}
   cancel-in-progress: false
 
 # Least privilege: a read-only token is all this workflow needs. Artifact upload uses
