@@ -16,6 +16,10 @@ optional **config document** (YAML) carries the two things flat variables expres
 policy and the mount map. A value resolves as defaults < config document < environment variable,
 so the environment wins. The boot log carries one `config:` line per resolved key, naming the layer
 that supplied it and redacting secrets, and `ecluse check-config` prints the same dump.
+Without `advisories.url`, the shipped `deny-known-malicious` and `remediation-fast-track` rules do
+not run, so each of their keys says so: `(default, inactive: no advisories.url)`. A key you patched
+keeps its own layer, as in `(document, inactive: no advisories.url)`. A rule you activate with
+`enabled: true` or a restated `type` carries no marker.
 
 > **One spelling rule.** Environment variables are the mechanical transliteration of the document
 > schema: `__` descends into an object and `_` joins a camelCase word. So `ECLUSE_CACHE__MAX_BYTES`
@@ -775,8 +779,9 @@ so give Pilot, the proxy, the mirror worker, and Dredger the same rule configura
 copy lacks a consumer's EPSS-reading rule, Pilot can publish an artifact that consumer refuses, and
 the consumer keeps serving its last accepted one until that one ages out. A one-shot `pilot compile`
 with no `advisories.url` requires the feed: no source activates the shipped remediation rule, so the
-compile cannot tell which rules its consumers run. Every role's boot log and `ecluse check-config`
-print this requirement for each mount.
+compile cannot tell which rules its consumers run. Pilot's boot log and `ecluse check-config` print
+this requirement for each mount. Any other role prints it only when it reads an artifact from
+`advisories.url`.
 
 To add a `DenyIfEpss` to a running deployment:
 

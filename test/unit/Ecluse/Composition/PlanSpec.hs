@@ -143,6 +143,18 @@ spec = describe "resolveBootPlan" $ do
             fmap (filter (T.isInfixOf "EPSS feed at") . bpLines) (brOutcome (resolveBootPlan role (bootInputsFor envVars Nothing config noCeiling)))
                 `shouldBe` Right []
 
+    it "reports the EPSS requirement to a role that compiles or reads an advisory artifact, and to no other" $ do
+        -- check-config vets under the Pilot's role, so it prints the line with or without a store.
+        let stored = overrideEnv "ECLUSE_ADVISORIES__URL" "s3://advisories/ecluse" codeArtifactEnvVars
+            epssLines role envVars config = fmap (filter (T.isInfixOf "EPSS enrichment") . bpLines) (brOutcome (resolveBootPlan role (bootInputsFor envVars Nothing config noCeiling)))
+        unsourced <- expectConfig codeArtifactEnvVars Nothing
+        sourced <- expectConfig stored Nothing
+        advisoryEpssLines unsourced `shouldSatisfy` (not . null)
+        advisoryEpssLines sourced `shouldSatisfy` (not . null)
+        for_ everyBootRole $ \role -> do
+            epssLines role codeArtifactEnvVars unsourced `shouldBe` Right (if role == BootWithoutPipeline then advisoryEpssLines unsourced else [])
+            epssLines role stored sourced `shouldBe` Right (advisoryEpssLines sourced)
+
     it "returns the preamble on the refusing path as well as the succeeding one" $ do
         -- A refusal that names a config key stays traceable to the layer that set it.
         let refusingEnv = overrideEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q" staticEnvVars
@@ -150,8 +162,8 @@ spec = describe "resolveBootPlan" $ do
         refused <- expectConfig refusingEnv Nothing
         let okReport = resolveBootPlan BootWithoutPipeline (bootInputsFor staticEnvVars Nothing ok noCeiling)
             refusedReport = resolveBootPlan BootWithoutPipeline (bootInputsFor refusingEnv Nothing refused noCeiling)
-        brProvenance okReport `shouldBe` absentDocumentLine : resolvedKeyProvenance staticEnvVars Nothing
-        brProvenance refusedReport `shouldBe` absentDocumentLine : resolvedKeyProvenance refusingEnv Nothing
+        brProvenance okReport `shouldBe` absentDocumentLine : resolvedKeyProvenance ok staticEnvVars Nothing
+        brProvenance refusedReport `shouldBe` absentDocumentLine : resolvedKeyProvenance refused refusingEnv Nothing
         refusalsOf refusedReport `shouldSatisfy` isLeft
         -- The plan's own lines never repeat the preamble, so no line has two emission sites.
         fmap (any (`elem` brProvenance okReport) . bpLines) (brOutcome okReport) `shouldBe` Right False
