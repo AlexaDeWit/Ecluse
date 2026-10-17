@@ -59,11 +59,11 @@ mkVersion eco raw = Version raw $ case parseVersionKey eco raw of
 renderVersion :: Version -> Text
 renderVersion = versionRaw
 
--- | The canonical ordering key, or 'Nothing' when the text did not parse, so ordering rules abstain.
+-- | The canonical ordering key, or 'Nothing' when the text did not parse for its ecosystem, so ordering rules abstain.
 versionKey :: Version -> Maybe VersionKey
 versionKey = versionKeyField
 
--- | The key 'mkVersion' builds under an ecosystem's grammar, reusing the carried key when it is that ecosystem's.
+-- | The key 'mkVersion' builds under an ecosystem's grammar, reusing the carried key when it is that ecosystem's and parsing otherwise.
 versionKeyIn :: Ecosystem -> Version -> Maybe VersionKey
 versionKeyIn eco version = case versionKey version of
     Just key | keyEcosystem key == eco -> Just key
@@ -80,7 +80,7 @@ data VersionKey
     | RubyGemsKey GemKey
     deriving stock (Eq, Ord, Show)
 
--- | Parse version text under its ecosystem's grammar. The key's 'Ord' holds only within one ecosystem.
+-- | Parse version text under its ecosystem's grammar. The key's 'Ord' is meaningful only within one ecosystem.
 parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey
 parseVersionKey eco raw = case eco of
     Npm -> note (NpmKey <$> parseSemver raw)
