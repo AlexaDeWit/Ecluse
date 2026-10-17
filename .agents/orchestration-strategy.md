@@ -376,7 +376,7 @@ gating jobs are the `needs` of the terminal `gate` job in
 | `static-checks` | Static checks (format, lint, Semgrep, workflows, site) | `task static-checks` (also in `task check`) |
 | `docs` | Haddock builds | `task nix-check`, which builds the same three flake checks |
 | `e2e-prepare` | Prepare E2E image and plan | `task test-e2e-prepare` |
-| `e2e-conformance` | Conformance (`<subject>`) | `task test-e2e-load test-e2e-<subject> test-e2e-<subject>-completion` (Docker, with integration and unit evidence) |
+| `e2e-conformance` | Conformance (`<subject>`) | `task test-e2e-load test-e2e-<subject>` (Docker). npm and PyPI also run `task test-e2e-<subject>-completion` with integration and unit evidence. Shared-system has no completion target. |
 | `backend-conformance` | Conformance (package store `<subject>`) | `task test-conformance-<subject>` (Docker) |
 | `e2e` | E2E execution completeness | `task test-e2e-audit` |
 | `weeder` | Dead-code check (weeder) | `task weeder` (also in `task check`) |
