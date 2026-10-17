@@ -7,6 +7,7 @@ module Ecluse.Core.Fault.HttpSpec (spec) where
 
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
+import Foreign.C.Error (Errno, eCONNRESET, eINVAL, errnoToIOError)
 import Network.Connection (HostNotResolved (HostNotResolved))
 import Network.HTTP.Client (
     HttpException (HttpExceptionRequest, InvalidUrlException),
@@ -17,10 +18,11 @@ import Network.HTTP.Client (
  )
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types.Status (status404, status503)
-import Network.Socket (accept, close)
+import Network.Socket (ShutdownCmd (ShutdownSend), Socket, SocketOption (Linger), StructLinger (StructLinger), accept, close, setSockOpt, shutdown)
 import Network.Socket.ByteString (recv, sendAll)
 import Network.TLS qualified as TLS
 import Network.Wai.Handler.Warp (openFreePort)
+import System.IO.Error (IOError)
 import Test.Hspec
 import UnliftIO.Async (withAsync)
 import UnliftIO.Exception (bracket, finally)
@@ -110,9 +112,21 @@ spec = do
                 `shouldBe` TransportUnreachable
 
         it "keeps a real TLS handshake failure as a TLS fault" $
-            withNonTlsServer $ \port -> do
-                fault <- classifyTransport <$> (failedFetch tlsManagerSettings =<< parseRequest ("https://127.0.0.1:" <> show port <> "/feed"))
+            withRawServer answerNonTls $ \port -> do
+                fault <- httpsFetchFault port
                 tfCause fault `shouldBe` TransportTls
+
+        it "classes a peer that closes before the handshake answer as unreachable, as plain HTTP is" $
+            withRawServer hangUp $ \port -> do
+                fault <- httpsFetchFault port
+                tfCause fault `shouldBe` TransportUnreachable
+                tfDetail fault `shouldBe` "127.0.0.1:" <> show port <> ": InternalException: HandshakeFailed Error_EOF"
+
+        it "classes a peer that resets the handshake as unreachable" $
+            withRawServer resetConnection $ \port -> do
+                fault <- httpsFetchFault port
+                tfCause fault `shouldBe` TransportUnreachable
+                tfDetail fault `shouldSatisfy` T.isPrefixOf ("127.0.0.1:" <> show port <> ": InternalException: HandshakeFailed (Error_Misc ")
 
     transportFaultSpec
 
@@ -129,14 +143,18 @@ transportFaultSpec = describe "transport faults as values" $ do
         -- A peer that hung up before the first response byte never reached a protocol
         -- exchange, so it reads as unreachable rather than as a protocol fault.
         causeOf (HttpExceptionRequest defaultRequest NoResponseDataReceived) `shouldBe` TransportUnreachable
+        causeOf (HttpExceptionRequest defaultRequest (InternalException (toException (socketError eCONNRESET)))) `shouldBe` TransportUnreachable
 
     it "classifies a wrapped TLS exception as TransportTls" $ do
         let handshake = toException (TLS.HandshakeFailed (TLS.Error_Misc "handshake refused"))
+            certificate = toException (TLS.HandshakeFailed (TLS.Error_Protocol "certificate has unknown CA" TLS.UnknownCa))
         causeOf (HttpExceptionRequest defaultRequest (InternalException handshake)) `shouldBe` TransportTls
+        causeOf (HttpExceptionRequest defaultRequest (InternalException certificate)) `shouldBe` TransportTls
 
     it "classifies every other client fault as TransportProtocol" $ do
         -- The closed catch-all keeps the sum total over whatever http-client reports.
         causeOf (HttpExceptionRequest defaultRequest (InternalException (toException OtherFault))) `shouldBe` TransportProtocol
+        causeOf (HttpExceptionRequest defaultRequest (InternalException (toException (socketError eINVAL)))) `shouldBe` TransportProtocol
         causeOf (InvalidUrlException "::" "bad") `shouldBe` TransportProtocol
 
     it "retries a timeout and an unreachable peer, and nothing else" $ do
@@ -147,10 +165,30 @@ transportFaultSpec = describe "transport faults as values" $ do
   where
     causeOf = tfCause . classifyTransport
 
--- Answer every connection with bytes that are not a TLS record, then read until the client hangs up.
-withNonTlsServer :: (Int -> IO a) -> IO a
-withNonTlsServer action = bracket openFreePort (close . snd) $ \(port, listener) ->
-    withAsync (forever (accept listener >>= \(conn, _) -> (sendAll conn "HTTP/1.1 400 not TLS\r\n\r\n" >> drain conn) `finally` close conn)) $ \_ ->
+-- The fault an HTTPS fetch of a local port raises through the TLS manager.
+httpsFetchFault :: Int -> IO TransportFault
+httpsFetchFault port = classifyTransport <$> (failedFetch tlsManagerSettings =<< parseRequest ("https://127.0.0.1:" <> show port <> "/feed"))
+
+-- The IOException network raises for a socket call that failed with this errno.
+socketError :: Errno -> IOError
+socketError errno = errnoToIOError "Network.Socket.recvBuf" errno Nothing Nothing
+
+-- Run the handler on every connection the listener accepts, then close the connection.
+withRawServer :: (Socket -> IO ()) -> (Int -> IO a) -> IO a
+withRawServer handler action = bracket openFreePort (close . snd) $ \(port, listener) ->
+    withAsync (forever (accept listener >>= \(conn, _) -> handler conn `finally` close conn)) $ \_ ->
         action port
-  where
-    drain conn = recv conn 4096 >>= \chunk -> unless (BS.null chunk) (drain conn)
+
+answerNonTls :: Socket -> IO ()
+answerNonTls conn = sendAll conn "HTTP/1.1 400 not TLS\r\n\r\n" >> drain conn
+
+-- Await the ClientHello, then send FIN and read until the client hangs up, so the close sends no RST.
+hangUp :: Socket -> IO ()
+hangUp conn = recv conn 4096 >> shutdown conn ShutdownSend >> drain conn
+
+-- Await the ClientHello, so the reset lands in the handshake and not in connect, then close with a zero linger time, which sends RST.
+resetConnection :: Socket -> IO ()
+resetConnection conn = recv conn 4096 >> setSockOpt conn Linger (StructLinger 1 0)
+
+drain :: Socket -> IO ()
+drain conn = recv conn 4096 >>= \chunk -> unless (BS.null chunk) (drain conn)
