@@ -4,11 +4,12 @@
 
 {- | Exercise npm mirror publication through a recording transport stub.
 Integrity cases connect worker verification to the published document and attachment, and the
-field-rewrite cases pin what the published version object keeps, replaces, and strips.
+field-rewrite cases pin what the published version object keeps, replaces, and strips. The
+upload-guard cases classify the bodies npm clients send to the first-party publish route.
 -}
 module Ecluse.Core.Registry.Npm.PublishSpec (spec) where
 
-import Data.Aeson (Object, Value (Bool, Number, Object, String), object, toJSON, (.:), (.:?), (.=))
+import Data.Aeson (Object, Value (Bool, Null, Number, Object, String), encode, object, toJSON, (.:), (.:?), (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseEither)
@@ -26,13 +27,14 @@ import Ecluse.Core.Package (Artifact (artFilename, artHashes, artSize), HashAlg 
 import Ecluse.Core.Registry (
     FetchFault (FetchTransport),
     MirrorArtifact (maHashes, maSize),
+    PublishBodyFault (PublishUnsupported),
     PublishError (publishErrorMessage),
     PublishFault (PublishFetch, PublishIntegrityMismatch, PublishRejected, PublishSourceUnavailable),
  )
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails, vdRaw))
 import Ecluse.Core.Registry.MirrorUpload (inventoryFiles, verifyMirrorBytes)
-import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, npmPublishDocument, prepareNpmSource, prepareNpmUpload)
+import Ecluse.Core.Registry.Npm.Publish (npmNewReleaseOnly, npmPublishCodec, npmPublishDocument, prepareNpmSource, prepareNpmUpload, uploadClaims)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish,
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintCredential, ptTracing),
@@ -47,7 +49,8 @@ import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityVerified), verify
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, pypiVersion, sriSha256Of, sriSha512Of, unsafeHash, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc, mirrorVersionDoc)
-import Ecluse.Test.Registry.Publish (checkedNpmUpload, publishOnlyFile)
+import Ecluse.Test.Registry.Npm.Publish (npmDeprecateDocument, npmMisfiledVersion, npmProvenanceRelease, npmReleaseDocument, npmRepeatedAttachments, npmStarDocument, npmTaggedRelease)
+import Ecluse.Test.Registry.Publish (checkedNpmUpload, isMalformedBody, publishOnlyFile)
 import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 
@@ -71,6 +74,7 @@ spec = do
     fieldRewriteSpec
     checkedUploadDataSpec
     nativeCompletionSpec
+    uploadGuardSpec
 
 publishSpec :: Spec
 publishSpec = describe "the npm mirror write (codec over the shared transport)" $ do
@@ -342,6 +346,64 @@ nativeCompletionSpec = describe "native atomic npm completion" $ do
     it "refuses malformed filenames, absent digests and negative sizes" $
         for_ [\a -> a{artFilename = "other-1.0.0.tgz"}, \a -> a{artHashes = []}, \a -> a{artSize = Just (-1)}] $ \update ->
             complete (changed (\d -> d{pkgArtifacts = fmap update (pkgArtifacts d)})) `shouldBe` False
+
+uploadGuardSpec :: Spec
+uploadGuardSpec = describe "uploadClaims (the first-party new-release guard)" $ do
+    it "reads every declared name of a real publish, with and without a provenance attachment" $ do
+        uploadClaims (toStrict (npmReleaseDocument widget widget widget)) `shouldBe` Right [widget, widget, widget]
+        uploadClaims (toStrict npmProvenanceRelease) `shouldBe` Right [widget, widget, widget]
+    it "never reads the attachment data" $ do
+        body <- editedRelease (KeyMap.insert "_attachments" (object ["widget.tgz" .= object ["data" .= ("not base64" :: Text)]]))
+        uploadClaims body `shouldBe` Right [widget, widget, widget]
+    for_ [("deprecate", npmDeprecateDocument "use 1.1.0"), ("undeprecate", npmDeprecateDocument ""), ("star", npmStarDocument)] $ \(command, body) ->
+        it ("refuses the body of npm " <> command <> " as a write it does not relay") $
+            uploadClaims (toStrict body) `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
+    it "refuses a release with two versions or none, or with no attachment" $ do
+        twoVersions <- editedRelease (KeyMap.insertWith withVersions "versions" (object ["1.0.0" .= object ["name" .= widget, "version" .= ("1.0.0" :: Text)]]))
+        uploadClaims twoVersions `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
+        noVersions <- editedRelease (KeyMap.insert "versions" (object []))
+        uploadClaims noVersions `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
+        bare <- editedRelease (KeyMap.insert "_attachments" (object []))
+        uploadClaims bare `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
+    it "refuses an undecodable body as malformed" $ do
+        uploadClaims "{\"_id\":" `shouldSatisfy` isMalformedBody
+        uploadClaims "[]" `shouldSatisfy` isMalformedBody
+        uploadClaims (toStrict (npmReleaseDocument widget widget widget) <> " {}") `shouldSatisfy` isMalformedBody
+    it "refuses a body that repeats a key, at the top or inside a version, as malformed" $ do
+        uploadClaims (toStrict npmRepeatedAttachments) `shouldSatisfy` isMalformedBody
+        uploadClaims repeatedVersionName `shouldSatisfy` isMalformedBody
+        uploadClaims escapedRepeat `shouldSatisfy` isMalformedBody
+    it "refuses a release whose tag points at another version or is null" $ do
+        uploadClaims (toStrict (npmTaggedRelease (object ["latest" .= ("1.0.0" :: Text)]))) `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
+        uploadClaims (toStrict (npmTaggedRelease (object ["latest" .= ("2.0.0" :: Text), "beta" .= Null]))) `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
+        uploadClaims (toStrict (npmTaggedRelease (String "2.0.0"))) `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
+    it "refuses a version filed under another key, or without a string version field, as malformed" $ do
+        uploadClaims (toStrict npmMisfiledVersion) `shouldSatisfy` isMalformedBody
+        unversioned <- editedRelease (KeyMap.insert "versions" (object ["2.0.0" .= object ["name" .= widget]]))
+        uploadClaims unversioned `shouldSatisfy` isMalformedBody
+        numbered <- editedRelease (KeyMap.insert "versions" (object ["2.0.0" .= object ["name" .= widget, "version" .= (2 :: Int)]]))
+        uploadClaims numbered `shouldSatisfy` isMalformedBody
+    it "refuses a version document that is not an object as malformed" $ do
+        bare <- editedRelease (KeyMap.insert "versions" (object ["2.0.0" .= ("2.0.0" :: Text)]))
+        uploadClaims bare `shouldSatisfy` isMalformedBody
+    it "relays a release under another tag, or with no dist-tags member" $ do
+        uploadClaims (toStrict (npmTaggedRelease (object ["beta" .= ("2.0.0" :: Text)]))) `shouldBe` Right [widget, widget, widget]
+        untagged <- editedRelease (KeyMap.delete "dist-tags")
+        uploadClaims untagged `shouldBe` Right [widget, widget, widget]
+  where
+    widget :: Text
+    widget = "@acme/widget"
+    -- A last-wins store reads this version's name as the second, out-of-scope copy.
+    repeatedVersionName :: ByteString
+    repeatedVersionName = "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"2.0.0\":{\"name\":\"@acme/widget\",\"name\":\"@victim/target\",\"version\":\"2.0.0\"}},\"_attachments\":{\"widget-2.0.0.tgz\":{\"data\":\"AA==\"}}}"
+    -- The second key spells _attachments with an escape, so only the decoded keys repeat.
+    escapedRepeat :: ByteString
+    escapedRepeat = "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"2.0.0\":{\"name\":\"@acme/widget\",\"version\":\"2.0.0\"}},\"_attachments\":{\"widget-2.0.0.tgz\":{\"data\":\"AA==\"}},\"\\u005fattachments\":{}}"
+    -- Each refused shape differs from a real publish in one place.
+    editedRelease edit = toStrict . encode . edit <$> decodeJsonOrFail @Object (toStrict (npmReleaseDocument widget widget widget))
+    withVersions extra own = case (extra, own) of
+        (Object added, Object versions) -> Object (added <> versions)
+        _ -> extra
 
 isSourceRefusal :: Either PublishFault a -> Bool
 isSourceRefusal = \case

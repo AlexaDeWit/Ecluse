@@ -9,6 +9,7 @@ module Ecluse.E2E.Harness.Npm (
     npmInstall,
     npmInstallIn,
     npmPublishIn,
+    npmDeprecateIn,
     withNpmProject,
     withPublishProject,
     installWithLifecycleProbe,
@@ -33,6 +34,7 @@ module Ecluse.E2E.Harness.Npm (
     publishScope,
     publishInScopeName,
     publishOutOfScopeName,
+    publishDeprecateName,
     publishDredgerName,
     publishVersion,
 ) where
@@ -105,9 +107,7 @@ withPublishProject e2e name version use = do
 runNpm :: NpmProject -> [String] -> IO ClientResult
 runNpm proj = runClient (npDir proj) (npEnv proj) "npm"
 
-{- | The version a project resolved for an installed package, read from its own manifest.
-'Nothing' when the package is absent or its manifest declares no version.
--}
+-- | The version a project installed for a package, read from its manifest. 'Nothing' when absent or undeclared.
 installedVersion :: NpmProject -> Text -> IO (Maybe Text)
 installedVersion proj pkg = do
     present <- doesFileExist manifest
@@ -127,13 +127,15 @@ npmInstallIn proj pkg = runNpm proj ["install", toString pkg]
 npmPublishIn :: NpmProject -> IO ClientResult
 npmPublishIn proj = runNpm proj ["publish"]
 
+-- | @npm deprecate@ the versions a spec selects, with a message, through the configured proxy.
+npmDeprecateIn :: NpmProject -> Text -> Text -> IO ClientResult
+npmDeprecateIn proj spec message = runNpm proj ["deprecate", toString spec, toString message]
+
 -- | Install through the proxy in a temporary project that is removed after the command.
 npmInstall :: E2E -> Text -> IO ClientResult
 npmInstall e2e pkg = withNpmProject e2e (`npmInstallIn` pkg)
 
-{- | Whether the proxy can serve 'publicOnlyPkg', which only the npm public upstream holds:
-'True' while that upstream answers the proxy, 'False' through an outage of it.
--}
+-- | Whether the proxy serves 'publicOnlyPkg', which only the npm public upstream holds: 'False' through its outage.
 npmPublicReachable :: E2E -> IO Bool
 npmPublicReachable e2e = (== 200) <$> proxyStatus e2e ("/npm/" <> psName publicOnlyPkg)
 
@@ -145,9 +147,7 @@ data Resolved = Resolved
     }
     deriving stock (Eq, Ord, Show)
 
-{- | The dependency graph npm resolved for a project, as @npm ls --all@ reports it: ordinary and peer
-edges alike. 'Left' carries the client's output when the listing fails or cannot be read.
--}
+-- | The graph @npm ls --all@ reports, peer edges included. 'Left' carries the client's output for a failed listing.
 resolvedGraph :: NpmProject -> IO (Either Text (Set Resolved))
 resolvedGraph proj = do
     listed <- runNpm proj ["ls", "--all", "--json"]
@@ -173,16 +173,12 @@ edgesFrom :: Text -> Listed -> [Resolved]
 edgesFrom dependent (Listed _ needs) =
     concat [Resolved dependent name version : edgesFrom name need | (name, need@(Listed version _)) <- Map.toList needs]
 
-{- | Load a package from the project with @node@ and decode what its module exports. 'Left' carries the
-runtime's output when the load fails, as it does when a package the module requires is absent.
--}
+-- | What a package's module exports under @node@. 'Left' carries the output of a failed load, such as a missing dependency.
 loadedExport :: NpmProject -> Text -> IO (Either Text Value)
 loadedExport proj package =
     printedValue <$> runClient (npDir proj) (npEnv proj) "node" ["-e", "process.stdout.write(JSON.stringify(require(" <> show package <> ")))"]
 
-{- | Run an executable npm linked into the project, by the name its package's @bin@ gives it, and
-decode the JSON it prints. 'Nothing' when npm linked no executable of that name.
--}
+-- | Run the executable npm linked under its @bin@ name and decode the JSON it prints. 'Nothing' when npm linked none.
 linkedExecutable :: NpmProject -> Text -> IO (Maybe (Either Text Value))
 linkedExecutable proj name = do
     linked <- doesFileExist link
@@ -206,9 +202,7 @@ installedTree e2e proj =
 redactedProxy :: Text
 redactedProxy = "<proxy>"
 
-{- | The location the lockfile of an 'installedTree' records for each installed package, which names
-the registry that supplied it. Empty when the tree holds no readable lockfile.
--}
+-- | The registry location an 'installedTree' lockfile records for each package. Empty without a readable lockfile.
 lockedSources :: InstalledTree -> [Text]
 lockedSources tree = fromMaybe [] $ do
     TreeFile _ bytes <- Map.lookup lockfileName tree
@@ -216,9 +210,7 @@ lockedSources tree = fromMaybe [] $ do
     packages <- parseMaybe (.: "packages") (lockfile :: Object)
     pure (mapMaybe (parseMaybe (.: "resolved")) (Map.elems (packages :: Map Text Object)))
 
-{- | Everything in a project that could supply an install without the registry: npm cache
-entries, a lockfile, and @node_modules@. A new project holds none.
--}
+-- | What could supply an install without the registry: npm cache entries, a lockfile, and @node_modules@.
 localInstallSources :: NpmProject -> IO [FilePath]
 localInstallSources proj = do
     cached <- listDirectory (npDir proj </> cacheDirName)
@@ -279,6 +271,10 @@ publishInScopeName = publishScope <> "/e2e-publish"
 -- | An out-of-scope package whose publication must stop before an upstream write.
 publishOutOfScopeName :: Text
 publishOutOfScopeName = "@rogue/e2e-shadow"
+
+-- | A first-party release that a deprecation through the proxy must leave unchanged at the store.
+publishDeprecateName :: Text
+publishDeprecateName = publishScope <> "/e2e-deprecate"
 
 -- | A first-party package reserved for the Dredger's protection scenario.
 publishDredgerName :: Text

@@ -106,6 +106,7 @@ import Ecluse.Test.Poll (awaitUntil, pollUntil)
 import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, passthroughAdvisorySyncTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, publishedDaysAgo, versionSpec, versionValue)
+import Ecluse.Test.Registry.Npm.Publish (npmReleaseDocument)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps, npmServeDeps, pypiServeDeps)
 import Ecluse.Test.Stub (Captured (capHeaders, capPath), stubLocalhostUrl, withRoutedStub)
@@ -158,6 +159,10 @@ basePublishDeps bodyBudget =
         , pubProjectName = adapterProjectName npmAdapter
         , pubAdapter = npmPublish
         }
+
+-- The in-scope package name the publish cases write to.
+widgetName :: Text
+widgetName = "@acme/widget"
 
 -- One @\/npm@ mount with the given publish deps and a body budget these cases never contend on.
 publishAppWith :: (ByteAdmission -> PublishDeps) -> IO Application
@@ -355,36 +360,36 @@ spec = do
             it "lets an in-scope publish through the guard to the relay (502 when the target is unreachable)" $
                 -- The target is unconnectable, so the 502 proves the guard let the write through to
                 -- the relay rather than refusing it at the scope check.
-                request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 502
+                request methodPut "/npm/@acme/widget" [] (npmReleaseDocument widgetName widgetName widgetName) `shouldRespondWith` 502
 
             -- The unreachable target would answer 502, so 403 proves the guard stopped the relay.
             it "refuses an in-scope publish whose body _id / name disagree with the URL with 403, before any relay" $
-                request methodPut "/npm/@acme/widget" [] "{\"_id\":\"@victim/target\",\"name\":\"@victim/target\",\"versions\":{}}" `shouldRespondWith` 403
+                request methodPut "/npm/@acme/widget" [] (npmReleaseDocument "@victim/target" "@victim/target" widgetName) `shouldRespondWith` 403
 
             it "refuses an in-scope publish whose body versions[].name disagrees with the URL with 403, before any relay" $
-                request methodPut "/npm/@acme/widget" [] "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"1.0.0\":{\"name\":\"@victim/target\",\"version\":\"1.0.0\"}}}" `shouldRespondWith` 403
+                request methodPut "/npm/@acme/widget" [] (npmReleaseDocument widgetName widgetName "@victim/target") `shouldRespondWith` 403
 
             -- The wire manifest is the publish path's other name. A declared name the npm grammar
             -- refuses canonicalises to nothing, which is a disagreement, so it never reaches a write.
             it "refuses an in-scope publish whose body declares a non-ASCII name with 403, before any relay" $
-                request methodPut "/npm/@acme/widget" [] "{\"_id\":\"@acme/widget\",\"name\":\"@acme/wid\\u3164get\",\"versions\":{}}" `shouldRespondWith` 403
+                request methodPut "/npm/@acme/widget" [] (npmReleaseDocument widgetName "@acme/wid\x3164get" widgetName) `shouldRespondWith` 403
 
             it "lets an in-scope publish whose body _id / name / versions[].name all agree with the URL through to the relay (502 when unreachable)" $
                 -- The guard does not over-refuse a body whose every declared name matches
                 -- the URL. It reaches the relay (502 to the unconnectable target), not a 403.
-                request methodPut "/npm/@acme/widget" [] "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"1.0.0\":{\"name\":\"@acme/widget\",\"version\":\"1.0.0\"}}}" `shouldRespondWith` 502
+                request methodPut "/npm/@acme/widget" [] (npmReleaseDocument widgetName widgetName widgetName) `shouldRespondWith` 502
 
         with (publishAppWith (\b -> (basePublishDeps b){pubAdapter = npmPublish{publishRelay = \_ _ _ -> throwIO (RelayContractEscape "simulated relay contract escape")}})) $
             it "answers a relay contract escape with the route's declared 500 (not a torn session, not a 502)" $
                 -- The relay reports its failures as typed values, so a throw is an invariant break.
                 -- The perimeter answers it with the neutral 500 and the session survives.
-                request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 500
+                request methodPut "/npm/@acme/widget" [] (npmReleaseDocument widgetName widgetName widgetName) `shouldRespondWith` 500
 
         with (publishAppWith (\b -> (basePublishDeps b){pubTargetUrl = loopbackRegistryUrl ""})) $
             it "500s an in-scope publish when the publication target URL is unformable (misconfig)" $
                 -- An empty target URL cannot form a request, a configuration fault rather
                 -- than a transient outage, so the publish is a 500 (not a 502).
-                request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 500
+                request methodPut "/npm/@acme/widget" [] (npmReleaseDocument widgetName widgetName widgetName) `shouldRespondWith` 500
 
         with (publishAppWith (\b -> (basePublishDeps b){pubInboundToken = Just (mkSecret "edge-token")})) $ do
             it "401s a publish that fails the edge token gate (before the scope guard)" $
@@ -483,17 +488,17 @@ uncodedRoutesSpec :: Spec
 uncodedRoutesSpec = describe "routes outside native metadata gzip" $ do
     with npmMountApp $
         it "answer probes, ping, search, unrouted paths, and a disabled publish alike under Accept-Encoding gzip" $
-            for_ [(methodGet, "/livez"), (methodGet, "/readyz"), (methodGet, "/npm/-/ping"), (methodHead, "/npm/-/ping"), (methodGet, "/npm/-/v1/search"), (methodGet, "/npm/-/nope/x"), (methodPut, "/npm/widget")] uncoded
+            for_ [(methodGet, "/livez"), (methodGet, "/readyz"), (methodGet, "/npm/-/ping"), (methodHead, "/npm/-/ping"), (methodGet, "/npm/-/v1/search"), (methodGet, "/npm/-/nope/x"), (methodPut, "/npm/widget")] (uncoded "")
     with publishMountApp $
         it "answer a refused and a relayed publish alike under Accept-Encoding gzip" $
-            for_ [(methodPut, "/npm/@other/widget"), (methodPut, "/npm/@acme/widget")] uncoded
+            for_ [(methodPut, "/npm/@other/widget"), (methodPut, "/npm/@acme/widget")] (uncoded (npmReleaseDocument widgetName widgetName widgetName))
     with pypiApp $
         it "answer PyPI distribution, companion, upload, and unrouted refusals alike under Accept-Encoding gzip" $
-            for_ [(methodGet, "/pypi/simple/thing/thing-1.0.tar.gz"), (methodHead, "/pypi/simple/thing/thing-1.0.tar.gz"), (methodGet, "/pypi/simple/thing/thing-1.0-py3-none-any.whl.metadata"), (methodPost, "/pypi/legacy"), (methodGet, "/pypi/nope")] uncoded
+            for_ [(methodGet, "/pypi/simple/thing/thing-1.0.tar.gz"), (methodHead, "/pypi/simple/thing/thing-1.0.tar.gz"), (methodGet, "/pypi/simple/thing/thing-1.0-py3-none-any.whl.metadata"), (methodPost, "/pypi/legacy"), (methodGet, "/pypi/nope")] (uncoded "")
   where
-    uncoded (method, path) = do
-        plain <- request method path [] ""
-        offered <- request method path [("Accept-Encoding", "gzip")] ""
+    uncoded body (method, path) = do
+        plain <- request method path [] body
+        offered <- request method path [("Accept-Encoding", "gzip")] body
         liftIO $ do
             (path, WaiTest.simpleStatus offered) `shouldBe` (path, WaiTest.simpleStatus plain)
             (path, WaiTest.simpleHeaders offered) `shouldBe` (path, WaiTest.simpleHeaders plain)

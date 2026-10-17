@@ -386,8 +386,11 @@ Without `appliesTo`, either deny also applies at revocation. The Dredger reads t
 metadata, so a later public yank or deprecation does not update the stored flag by itself.
 An admission-only rule never authorises deletion. Other revocation rules can still condemn the copy.
 These flags do not detect a malicious release removed from registry metadata.
-`DenyIfKnownMalicious` reads advisory evidence independently of these flags. Withdrawal writes
-([#1098](https://github.com/AlexaDeWit/Ecluse/issues/1098)) remain separate work.
+`DenyIfKnownMalicious` reads advisory evidence independently of these flags. A publisher
+deprecates or yanks a first-party release at the publication target. Écluse answers
+`npm deprecate` with `501`, and PyPI's upload protocol has no yank write. Écluse then serves the
+result: a first-party npm version keeps its `deprecated` member, and a PyPI file keeps its
+`yanked` status.
 
 The npm mount adds `deny-scripts` at precedence 300 with `appliesTo: [admission]`.
 The default applies only when you enable the npm mount. It does not enable a mount itself.

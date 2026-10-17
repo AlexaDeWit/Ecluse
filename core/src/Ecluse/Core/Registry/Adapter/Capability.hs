@@ -33,7 +33,7 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Merge (MergePlan, SourceId)
 import Ecluse.Core.Registry (
     FetchFault,
-    ParseError,
+    PublishBodyFault,
     PublishRelayResponse,
     RegistryResponse,
     UrlFormationError,
@@ -51,14 +51,10 @@ import Ecluse.Core.Server.Admission.Types (ChargeFactors)
 import Ecluse.Core.Snapshot (Snapshot)
 import Ecluse.Core.Version (Version)
 
-{- | Canonicalise a raw package-name string under one ecosystem's own grammar, 'Nothing' for
-a string that grammar refuses. It is the one parser every caller reaches a 'PackageName' through.
--}
+-- | Canonicalise a raw name under one ecosystem's grammar: the one parser every caller reaches a 'PackageName' through.
 type ProjectName = Text -> Maybe PackageName
 
-{- | The ecosystem's metadata capability: reading a package's metadata from an origin,
-assembling the served document, and encoding it ('Ecluse.Core.Server.Context.pdMetadata').
--}
+-- | The ecosystem's metadata read, served-document assembly, and encoding ('Ecluse.Core.Server.Context.pdMetadata').
 data AdapterMetadata = AdapterMetadata
     { metadataRead :: EcosystemRead
     -- ^ The ecosystem's part of a metadata read, which "Ecluse.Core.Registry.Metadata.Fetch" runs for every caller.
@@ -70,20 +66,14 @@ data AdapterMetadata = AdapterMetadata
     -- ^ What this ecosystem's full reads and listings charge the memory budget per source byte.
     }
 
-{- | The ecosystem's artifact request formation, by conventional filename or authoritative URL.
-The serve deps and the worker bundle share it ('Ecluse.Core.Server.Context.pdArtifact').
--}
+-- | Artifact request formation by filename or authoritative URL, shared by serve and worker ('Ecluse.Core.Server.Context.pdArtifact').
 data AdapterArtifact = AdapterArtifact
     { artifactByFile :: OriginClient -> PackageName -> Text -> Either UrlFormationError Request
     -- ^ Address a trusted origin by the conventional filename path under its base URL.
     , artifactByUrl :: Maybe ClientCredential -> Text -> Either UrlFormationError Request
-    {- ^ Build the request at the authoritative upstream URL, which names no origin because the
-    mirror worker's fetch has none to give.
-    -}
+    -- ^ Build the request at the authoritative upstream URL. It names no origin, because the mirror worker has none.
     , artifactHosts :: [Text]
-    {- ^ The hosts the same-host tarball gate admits without the operator naming them. Empty for
-    npm, whose artifacts ride the registry host.
-    -}
+    -- ^ Hosts the same-host tarball gate admits unnamed. Empty for npm, whose artifacts ride the registry host.
     }
 
 -- | Original request bytes and their declared media type, retained under byte admission.
@@ -96,31 +86,23 @@ data PublishRequestBody = PublishRequestBody
 data AdapterPublish = AdapterPublish
     { publishRelay :: OriginClient -> PackageName -> PublishRequestBody -> IO (Either FetchFault PublishRelayResponse)
     -- ^ Relay a client's publish document to the target named as the origin, and return its answer.
-    , publishDeclaredNames :: Limits -> PublishRequestBody -> IO (Either ParseError [Text])
-    -- ^ All readable identity claims, or a malformed-document refusal.
+    , publishUploadClaims :: Limits -> PublishRequestBody -> IO (Either PublishBodyFault [Text])
+    -- ^ Every identity claim of a body shaped as a new-release upload, or why the body is not relayed.
     , publishCodec :: PublishCodec
-    {- ^ Document assembly, request formation, the probe, and the status semantics. The manager,
-    credential mint, and fault classification are the transport's.
-    -}
+    -- ^ The mirror write's document, requests, probe, and status semantics. The transport owns the manager, mint, and fault classification.
     }
 
-{- | The ecosystem's store maintenance verbs, which "Ecluse.Core.Registry.Maintenance.Protocol"
-drives. Each is 'Nothing' for a protocol that spells no such verb, and the Dredger then refuses.
--}
+-- | Store maintenance verbs for "Ecluse.Core.Registry.Maintenance.Protocol". A missing verb makes the Dredger refuse.
 data AdapterMaintenance = AdapterMaintenance
     { maintenanceListing :: Maybe StoreListing
     -- ^ How the protocol enumerates a store's packages, where it can.
     , maintenanceVersionDelete :: Maybe VersionDelete
     -- ^ How the protocol deletes one version, where it can.
     , maintenanceAlphabet :: NameAlphabet
-    {- ^ The characters a name may begin with, which partition the store's name space into the
-    buckets a full walk covers one at a time.
-    -}
+    -- ^ The characters a name may begin with: the buckets a full walk covers one at a time.
     }
 
-{- | Reading every package a store holds. The protocol's own listing endpoint, which a public
-registry may well refuse: a listing that does not answer @200@ is the caller's fault to report.
--}
+-- | The protocol's own listing of a store. A public registry may refuse it, and the caller reports a non-@200@.
 data StoreListing = StoreListing
     { listingRequest :: OriginClient -> Either UrlFormationError Request
     -- ^ Form the listing read against the store.
@@ -128,9 +110,7 @@ data StoreListing = StoreListing
     -- ^ Stream names while skipping unrelated per-package metadata.
     }
 
-{- | Deleting one version, as the request sequence the protocol spells it with. It names its own
-document read, because an install-optimised metadata read may omit the revision the edit needs.
--}
+-- | One version's delete requests and their own document read, since an install-optimised read may omit the revision.
 data VersionDelete = VersionDelete
     { deleteDocumentRequest :: OriginClient -> PackageName -> Either UrlFormationError Request
     -- ^ Form the read of the document the delete requests are built from.
@@ -140,7 +120,5 @@ data VersionDelete = VersionDelete
         Version ->
         RegistryResponse ->
         Either StoreRefusal (NonEmpty Request)
-    {- ^ Form the ordered requests that remove one version, or say why the document admits none.
-    Every one must be sent, in this order, for the version to be gone.
-    -}
+    -- ^ The ordered requests that remove one version, all of them needed, or why the document admits none.
     }

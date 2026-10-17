@@ -265,6 +265,11 @@ integrationObligations =
         , "integration/publication/native-017"
         , "integration/publication/native-018"
         , "integration/publication/native-019"
+        , "integration/publication/native-020"
+        , "integration/publication/native-021"
+        , "integration/publication/native-022"
+        , "integration/publication/native-023"
+        , "integration/publication/native-024"
         , "integration/publication/native-pypi-001"
         , "integration/publication/native-pypi-002/201"
         , "integration/publication/native-pypi-002/400"
@@ -288,6 +293,8 @@ integrationObligations =
         , "integration/publication/native-pypi-010"
         , "integration/publication/native-pypi-011"
         , "integration/publication/native-pypi-012"
+        , "integration/publication/native-pypi-013"
+        , "integration/publication/native-pypi-014"
         ]
     , required
         "integration/pipeline-faults"
