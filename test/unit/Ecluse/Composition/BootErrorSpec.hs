@@ -33,6 +33,7 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UnsafeReason (ConfigurationEvidence, InsufficientPermissions),
  )
 import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyInstallTimeExecutionType))
+import Ecluse.Runtime.Aws.Fault (AwsFault (AwsUndecodable), AwsParty (AwsServiceNamed), AwsRequestFailed (AwsRequestFailed))
 import Ecluse.Runtime.Test.Aws (deliverRefreshFailure, holdsNoPlantedSecret, refreshFailures)
 import Ecluse.Test.Package (unsafeRegistryUrl)
 import Ecluse.Test.Stub (redirectedStatusException)
@@ -83,6 +84,10 @@ refuseOnThrowSpec =
             refuseOnThrow (PrivateUpstreamProbeFailed Npm) (throwIO err :: IO ())
                 `shouldReturn` Left [PrivateUpstreamProbeFailed Npm (authority <> ": HTTP 503")]
 
+        it "refuses a raised AWS fault by its own text, with no exception context after it" $
+            refuseOnThrow (PrivateUpstreamProbeFailed Npm) (throwIO (AwsRequestFailed (AwsServiceNamed "STS") (AwsUndecodable 200)) :: IO ())
+                `shouldReturn` Left [PrivateUpstreamProbeFailed Npm "AWS request failed at STS: HTTP 200, an answer that could not be decoded"]
+
         it "refuses a credential refresh failure handed to its thread by the typed cause, never the request" $ do
             failures <- refreshFailures
             for_ failures $ \failure ->
@@ -90,6 +95,7 @@ refuseOnThrowSpec =
                     Left [PrivateUpstreamProbeFailed Npm detail] -> do
                         detail `shouldSatisfy` T.isPrefixOf "AWS request failed at "
                         detail `shouldSatisfy` holdsNoPlantedSecret
+                        detail `shouldNotSatisfy` T.isInfixOf "\n"
                     other -> expectationFailure ("expected one probe refusal, got " <> show other)
 
 renderBootErrorsSpec :: Spec

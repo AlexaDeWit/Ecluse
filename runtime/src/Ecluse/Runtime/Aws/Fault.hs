@@ -74,7 +74,7 @@ data AwsRequestFailed = AwsRequestFailed
     deriving stock (Eq, Show)
 
 instance Exception AwsRequestFailed where
-    displayException failed = toString ("AWS request failed at " <> renderFailure failed)
+    displayException = toString . renderRequestFailed
 
 -- | Where a failed request went.
 data AwsParty
@@ -125,19 +125,18 @@ data AwsCredentialFault
     deriving stock (Eq, Show)
 
 instance Exception AwsCredentialFault where
-    displayException =
-        toString . \case
-            AwsCredentialMissing reason -> "AWS credentials missing: " <> reason
-            AwsCredentialUnusable reason -> "AWS credentials unusable: " <> reason
-            AwsCredentialsExhausted -> "AWS credential discovery found no credentials"
+    displayException = toString . renderCredentialFault
 
 -- | Rethrow an @amazonka@ error or credential failure escaping the action as its typed fault. Any other exception passes unchanged.
 retypeAmazonkaEscapes :: (MonadUnliftIO m) => m a -> m a
 retypeAmazonkaEscapes action = tryJust amazonkaFault action >>= either throwIO pure
 
--- | 'displayFaultT', with an @amazonka@ error or credential failure rendered through its typed fault.
+-- | 'displayFaultT', with an @amazonka@ error or credential failure rendered as its typed fault's own text. Rendered through 'SomeException', it would gain GHC's exception context.
 displayAwsFaultT :: SomeException -> Text
-displayAwsFaultT err = displayFaultT (fromMaybe err (amazonkaFault err))
+displayAwsFaultT err = fromMaybe (displayFaultT typed) (typedText typed)
+  where
+    typed = fromMaybe err (amazonkaFault err)
+    typedText fault = (renderRequestFailed <$> fromException fault) <|> (renderCredentialFault <$> fromException fault)
 
 -- amazonka's background refresh hands a failure to the thread that discovered the credentials, wrapped in 'AuthError'.
 amazonkaFault :: SomeException -> Maybe SomeException
@@ -202,6 +201,15 @@ firstLine message = case T.takeWhile (`notElem` ['\n', '\r']) message of
 
 serviceName :: AWS.ServiceError -> Text
 serviceName service = service ^. AWS.serviceError_abbrev . AWS._Abbrev
+
+renderCredentialFault :: AwsCredentialFault -> Text
+renderCredentialFault = \case
+    AwsCredentialMissing reason -> "AWS credentials missing: " <> reason
+    AwsCredentialUnusable reason -> "AWS credentials unusable: " <> reason
+    AwsCredentialsExhausted -> "AWS credential discovery found no credentials"
+
+renderRequestFailed :: AwsRequestFailed -> Text
+renderRequestFailed failed = "AWS request failed at " <> renderFailure failed
 
 renderFailure :: AwsRequestFailed -> Text
 renderFailure (AwsRequestFailed party fault) = case fault of

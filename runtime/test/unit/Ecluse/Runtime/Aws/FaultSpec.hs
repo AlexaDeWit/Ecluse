@@ -14,6 +14,7 @@ import Test.Hspec
 import UnliftIO.Exception (throwIO, try)
 
 import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportFault (tfDetail))
+import Ecluse.Core.Fault.Http (displayFaultT)
 import Ecluse.Runtime.Aws.Fault (
     AwsAnswer (AwsAnswer),
     AwsCredentialFault (AwsCredentialsExhausted),
@@ -88,6 +89,7 @@ spec = do
                 let rendered = displayAwsFaultT (toException failure)
                 rendered `shouldSatisfy` T.isPrefixOf "AWS request failed at "
                 rendered `shouldSatisfy` holdsNoPlantedSecret
+                rendered `shouldNotSatisfy` T.isInfixOf "\n"
 
         it "renders a credential failure without a request by amazonka's first line only" $
             map (displayAwsFaultT . toException) [MissingEnvError "Unable to read AWS_ROLE_ARN", MissingFileError "/root/.aws/credentials", InvalidFileError "/root/.aws/config: parse error\naws_session_token = token-secret", InvalidIAMError "Unable to get default IAM Profile from EC2 metadata", CredentialChainExhausted]
@@ -97,6 +99,14 @@ spec = do
                            , "AWS credentials unusable: Unable to get default IAM Profile from EC2 metadata"
                            , "AWS credential discovery found no credentials"
                            ]
+
+        it "renders a raised AWS fault as its own text, with no exception context after it" $
+            displayAwsFaultT (toException (AwsRequestFailed (AwsServiceNamed "STS") (AwsUndecodable 200)))
+                `shouldBe` "AWS request failed at STS: HTTP 200, an answer that could not be decoded"
+
+        it "renders any other exception as displayFaultT does" $ do
+            refused <- refusedFetch =<< signedRequest
+            displayAwsFaultT (toException refused) `shouldBe` displayFaultT (toException refused)
 
     describe "retypeAmazonkaEscapes" $ do
         it "raises a refresh failure thrown to the thread as its typed fault" $ do
