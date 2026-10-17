@@ -2052,10 +2052,17 @@ the whole dev shell before it could run.
 The cabal side keeps two families, because a documentation build wants a doc-variant of every
 dependency and cannot reuse the regular one. `build` writes the regular `cabal-store` and
 `dist-newstyle`. The Pages job writes the doc-variant `cabal-store-docs-v2` and `dist-docs`. A job
-that builds into its own directory under its own flags skips the `dist-newstyle` restore: `coverage`
-builds instrumented into `dist-coverage`, and `weeder` and `stan` build with `-fwrite-ide-info` into
-`dist-analysis`. Each `coverage` leg writes its own `dist-coverage` key, so no two legs race and
-each leg starts warm for the suite it owns.
+that never builds into `dist-newstyle` skips its restore. The jobs that build into a directory of
+their own restore these:
+
+| Job | Build directories it restores |
+| --- | --- |
+| `coverage`, each unit leg | `dist-coverage`, where it builds its suite instrumented |
+| `coverage`, the integration leg | `dist-coverage` for its instrumented suite, and `dist-newstyle` for its manifest and audit tools |
+| `weeder`, `stan` | none: each builds `dist-analysis` with `-fwrite-ide-info` and never caches it |
+
+Each `coverage` leg writes its own `dist-coverage` key, so no two legs race and each leg starts warm
+for the suite it owns.
 
 [`scripts/prune-caches.sh`](../scripts/prune-caches.sh) lists the key families the workflows write.
 A family missing from that list is reaped on the next sweep, which is how a retired key stops

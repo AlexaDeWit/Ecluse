@@ -190,12 +190,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # Every leg builds its suite into dist-coverage. The integration leg also builds its
+      # manifest and audit tools into dist-newstyle, so only that leg restores it.
       - name: Set up toolchain
         id: toolchain
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
-          dist-cache: "false" # this job builds instrumented, into dist-coverage
+          dist-cache: ${{ matrix.suite == 'ecluse-integration' && 'true' || 'false' }}
 
       # One key per suite, so each leg is the sole writer of the builddir it produces.
       # The version family bounds a restore, and the commit makes each main save fresh.
