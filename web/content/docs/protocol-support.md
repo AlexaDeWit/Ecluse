@@ -30,7 +30,7 @@ Content-Type only for an upload with these parts:
 | --- | --- |
 | `:action` | Exactly one, with the value `file_upload`, which every uploader sends. Any other value, such as `remove_pkg` or `doc_upload`, answers `501`. |
 | `name` | One or more, which all name the same project. |
-| `version` | Exactly one. |
+| `version` | Exactly one, a PEP 440 version. |
 | `content` | Exactly one file part, whose file name parses as a wheel or source distribution of that project at that version. |
 
 An upload that breaks any other rule in the table answers `400`. The guard compares versions under

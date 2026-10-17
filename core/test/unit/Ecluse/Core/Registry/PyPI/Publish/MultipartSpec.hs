@@ -84,8 +84,9 @@ releaseSpec = describe "uploadClaims file name" $ do
     for_ [("acme-widget", "1.0", "acme-widget-1.0.tar.gz"), ("acme.co-widget", "1", "acme.co-widget-1.tar.gz"), ("acme", "1.0", "acme_1.0.tar.gz"), ("acme", "1.0", "acme.1.0.tar.gz"), ("acme", "1.0", "_acme-1.0.tar.gz"), ("acme-2x", "1.0", "acme-2x-1.0.tar.gz"), ("acme-widget", "1.0", "Acme_Widget-1.0.tar.gz"), ("acme-widget", "1.0", "acme_widget-1.0.zip"), ("acme-widget", "1.0", "acme_widget-1.0.tgz")] $ \(name, version, file) ->
         it ("refuses " <> show file <> " for " <> show name <> ", naming the PEP 625 sdist form") $
             release name version file `shouldReturn` Left (PublishMalformed (ParseError pypiSdistNameForm))
-    it "names the version field when the declared version is not PEP 440, though the file is a PEP 625 sdist" $
-        release "acme-widget" "nightly" "acme_widget-1.0.tar.gz" `shouldReturn` Left (PublishMalformed (ParseError pypiVersionForm))
+    for_ ["acme_widget-1.0.tar.gz", "acme_widget-1.0-py3-none-any.whl"] $ \file ->
+        it ("names the version field when the declared version is not PEP 440, though " <> show file <> " is well named") $
+            release "acme-widget" "nightly" file `shouldReturn` Left (PublishMalformed (ParseError pypiVersionForm))
     for_ [("1.0.post1", "acme_widget-1.0.post1.tar.gz"), ("1!1.0+local.1", "acme_widget-1!1.0+local.1-py3-none-any.whl")] $ \(version, file) ->
         it ("relays " <> show file <> " as acme-widget " <> show version) $
             upload [part "version" version, contentPart file] `shouldReturn` Right ["acme-widget"]
