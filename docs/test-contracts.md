@@ -333,7 +333,7 @@ Both ecosystem drivers bind concrete providers for every required family.
 PyPI mirror evidence includes whole-version copies, restart recovery, cross-target file selection and retained metadata.
 Cross-target checks prove selected files and installed contents. They do not execute foreign architecture code.
 
-The final functional declarations require 56 PyPI cases, 54 npm cases and one shared-system case.
+The final functional declarations require 57 PyPI cases, 54 npm cases and one shared-system case.
 Unit, integration, residency, allocation, load and smoke evidence remain independent requirements.
 
 Backend completion also requires the PyPI CodeArtifact full-store instance in the existing backend subject.

@@ -62,18 +62,17 @@ namesSpec = describe "uploadClaims names" $ do
 
 delimiterSpec :: Spec
 delimiterSpec = describe "uploadClaims delimiters" $ do
-    for_ [("a bare LF", "\n"), ("a bare CR", "\r")] $ \(label, lineEnd) ->
+    for_ [("a bare LF", "\n", ""), ("a bare CR", "\r", ""), ("a padded delimiter", "\r\n", "  ")] $ \(label, lineEnd, padding) ->
         it ("refuses a content part hidden after " <> label) $
-            upload (contentData ("PK archive" <> lineEnd <> hiddenPart lineEnd)) >>= (`shouldSatisfy` isMalformedBody)
+            upload (contentData ("PK archive" <> lineEnd <> hiddenPart lineEnd padding)) >>= (`shouldSatisfy` isMalformedBody)
     it "refuses a delimiter at the start of a part's data" $
-        upload (contentData (hiddenPart "\r\n")) >>= (`shouldSatisfy` isMalformedBody)
-    it "refuses transport padding after a delimiter" $ do
-        uploadClaims defaultLimits contentType (fileUpload <> part "name" "allowed" <> "--boundary \r\nContent-Disposition: form-data; name=\"version\"\r\n\r\n1.0\r\n" <> filePart <> end) >>= (`shouldSatisfy` isMalformedBody)
+        upload (contentData (hiddenPart "\r\n" "")) >>= (`shouldSatisfy` isMalformedBody)
+    it "refuses a padded closing delimiter" $
         uploadClaims defaultLimits contentType (fileUpload <> part "name" "allowed" <> part "version" "1.0" <> filePart <> "--boundary-- \r\n") >>= (`shouldSatisfy` isMalformedBody)
   where
     upload content = uploadClaims defaultLimits contentType (fileUpload <> part "name" "allowed" <> part "version" "1.0" <> content <> end)
     contentData = fileWith "allowed-1.0.tar.gz"
-    hiddenPart lineEnd = "--boundary" <> lineEnd <> "Content-Disposition: form-data; name=\"content\"; filename=\"victim-9.0.tar.gz\"" <> lineEnd <> lineEnd <> "VICTIM"
+    hiddenPart lineEnd padding = "--boundary" <> padding <> lineEnd <> "Content-Disposition: form-data; name=\"content\"; filename=\"victim-9.0.tar.gz\"" <> lineEnd <> lineEnd <> "VICTIM"
 
 releaseSpec :: Spec
 releaseSpec = describe "uploadClaims file name" $ do

@@ -2,9 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | PyPI coordinate compatibility, projection,
-and allocation growth regressions.
--}
+-- | PyPI coordinate compatibility, projection, and allocation growth regressions.
 module Ecluse.Core.Registry.PyPI.ProjectSpec (spec) where
 
 import Data.Aeson (Value (Array, Null, String), object, toJSON, (.=))
@@ -45,6 +43,7 @@ import Ecluse.Core.Registry.PyPI.Project (
     DistributionKind (Sdist, Wheel),
     FileCoordinate (..),
     FilenameMemo,
+    builtFileCoordinate,
     fcVersionKey,
     fileCoordinate,
     filenameMemo,
@@ -74,6 +73,7 @@ spec = do
     projectNameSpec
     canonicalNameSpec
     coordinateSpec
+    builtCoordinateSpec
     wheelComponentSpec
     memoSpec
     captureSpec
@@ -177,6 +177,29 @@ coordinateSpec = describe "fileCoordinate" $ do
 
     it "refuses a wheel with too few tag parts to be one" $
         fileCoordinate requestsName "requests-2.34.2-py3.whl" `shouldBe` Nothing
+
+builtCoordinateSpec :: Spec
+builtCoordinateSpec = describe "builtFileCoordinate" $ do
+    it "refuses a version not led by a digit, which a build tool never writes" $
+        for_ ["requests-v2.34.2.tar.gz", "requests-v2.34.2-py3-none-any.whl", "requests- 2.34.2.tar.gz"] $ \file -> do
+            fileCoordinate requestsName file `shouldSatisfy` isJust
+            builtFileCoordinate requestsName file `shouldBe` Nothing
+
+    it "refuses a version holding a hyphen, which a store reads as part of the project" $ do
+        fileCoordinate requestsName "requests-2.34.2-1.tar.gz" `shouldSatisfy` isJust
+        builtFileCoordinate requestsName "requests-2.34.2-1.tar.gz" `shouldBe` Nothing
+
+    it "agrees with fileCoordinate on every other file name" $
+        for_ ["requests-2.34.2-py3-none-any.whl", "requests-2.34.2-1-py3-none-any.whl", "requests-2.34.2.tar.gz", "requests-2.34.2.post1.zip", "requests-1!2.0+local.1.tar.gz", "urllib3-2.0.0.tar.gz", "requests-2.34.2.egg"] $ \file ->
+            builtFileCoordinate requestsName file `shouldBe` fileCoordinate requestsName file
+
+    describe "properties" $
+        it "accepts only what fileCoordinate accepts, with the same coordinate" $
+            hedgehog $ do
+                file <- forAll genFilename
+                case builtFileCoordinate azureStorageBlob file of
+                    Nothing -> pass
+                    built -> built === fileCoordinate azureStorageBlob file
 
 wheelComponentSpec :: Spec
 wheelComponentSpec = describe "filename components against base 3384fa96" $ do

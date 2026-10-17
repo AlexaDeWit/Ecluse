@@ -17,6 +17,7 @@ module Ecluse.E2E.Fixtures.PyPI.Mirror (
     mirrorArchitectures,
     distributionFields,
     distributionUploadBody,
+    hiddenPartUploadBody,
     releaseRemovalBody,
     nativeUploadContentType,
     buildMirrorGraph,
@@ -238,12 +239,22 @@ nativeUploadContentType = "multipart/form-data; boundary=fixture-upload"
 
 -- | Encode an actual client upload, with explicit replacement fields for refusal controls.
 distributionUploadBody :: Distribution -> [(Text, Text)] -> ByteString
-distributionUploadBody distribution overrides =
+distributionUploadBody distribution overrides = uploadWithData distribution overrides (distributionBytes distribution)
+
+-- | A client upload whose content data hides a second content part after the given line end and delimiter padding.
+hiddenPartUploadBody :: Distribution -> Distribution -> ByteString -> ByteString -> ByteString
+hiddenPartUploadBody carrier hidden lineEnd padding =
+    uploadWithData carrier [] (distributionBytes carrier <> lineEnd <> "--fixture-upload" <> padding <> lineEnd <> disposition <> lineEnd <> lineEnd <> distributionBytes hidden)
+  where
+    disposition = "Content-Disposition: form-data; name=\"content\"; filename=\"" <> encodeUtf8 (distributionFilename hidden) <> "\""
+
+uploadWithData :: Distribution -> [(Text, Text)] -> ByteString -> ByteString
+uploadWithData distribution overrides bytes =
     BS.concat (map fieldPart (controls <> fields <> replacements))
         <> "--fixture-upload\r\nContent-Disposition: form-data; name=\"content\"; filename=\""
         <> encodeUtf8 (distributionFilename distribution)
         <> "\"\r\nContent-Type: application/octet-stream\r\n\r\n"
-        <> distributionBytes distribution
+        <> bytes
         <> "\r\n--fixture-upload--\r\n"
   where
     replacements = [(encodeUtf8 name, encodeUtf8 value) | (name, value) <- overrides]

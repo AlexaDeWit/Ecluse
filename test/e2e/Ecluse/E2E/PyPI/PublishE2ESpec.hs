@@ -45,6 +45,20 @@ nativePublicationContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \r
                         readTVarIO (ntRequests target) `shouldReturn` 0
                     )
                     plane
+        it (caseLabel "pypi/publish-native/hidden-parts" "refuses a content part hidden after a bare LF, a bare CR or a padded delimiter before contacting the target") $ \plane ->
+            withPublicationFixture plane $ \target distributions ->
+                withE2EWith
+                    publicationConfig
+                    ( \proxy -> do
+                        carrier <- requiredDistribution "e2e-published" distributions
+                        hidden <- requiredDistribution "e2e-unowned" distributions
+                        for_ [("\n", ""), ("\r", ""), ("\r\n", "  ")] $ \(lineEnd, padding) -> do
+                            result <- postUpload proxy ("hidden " <> distributionFilename hidden) (hiddenPartUploadBody carrier hidden lineEnd padding)
+                            crStdout result `shouldBe` "400"
+                        targetFiles target `shouldReturn` Map.empty
+                        readTVarIO (ntRequests target) `shouldReturn` 0
+                    )
+                    plane
         it (caseLabel "pypi/publish-native/unconfigured" "refuses POST without a publication target") $ \plane ->
             withPublicationFixture plane $ \target distributions ->
                 withE2E
