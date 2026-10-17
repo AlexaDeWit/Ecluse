@@ -13,7 +13,6 @@ import Test.Hspec
 import UnliftIO.Exception (throwIO)
 
 import Amazonka qualified as AWS
-import Amazonka.Auth (fromKeys)
 import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
 
@@ -84,15 +83,15 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Support (
     serviceError,
     withNpmStore,
  )
+import Ecluse.Runtime.Test.Aws (loopbackAwsEnv)
 import Ecluse.Test.Contract.Maintenance (MaintenanceProfile (..), maintenanceConsentContract, maintenanceDeletionContract, maintenanceFactsContract, maintenanceInventoryContract)
 import Ecluse.Test.Maintenance (testDeleteGuard, withBucket)
 import Ecluse.Test.Package (lodashName, sampleManifest, unscopedNpm)
 import Ecluse.Test.Rules (denyRule)
+import Ecluse.Test.Stub (closedPort)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recResults), recordingPorts, testMount, testPacing)
 
-{- | The CodeArtifact handle's facts and the sequencing around its calls, driven over 'ControlPlane'
-answers built from @amazonka@'s own types. Each decision is covered in "Ecluse.Runtime.Maintenance.CodeArtifact.DecideSpec".
--}
+-- | The CodeArtifact handle's facts and call sequencing, over 'ControlPlane' answers in @amazonka@'s own types. "Ecluse.Runtime.Maintenance.CodeArtifact.DecideSpec" covers each decision.
 spec :: Spec
 spec = withNpmStore handleCases
 
@@ -682,8 +681,7 @@ listBucket :: CodeArtifactStore -> ControlPlane -> Text -> IO (Either StoreFault
 listBucket store plane raw =
     withBucket raw (collectPages . listPackagesIn (handleOver store plane))
 
--- Dummy static credentials: the handle is held and read, never sent anywhere.
+-- The handle is held and read, and a call it sends reaches a closed port.
 handleFor :: CodeArtifactStore -> IO StoreMaintenance
 handleFor store =
-    AWS.newEnv (pure . fromKeys (AWS.AccessKey "AKIDtestkey") (AWS.SecretKey "testsecretkey"))
-        >>= fmap (handleOver store) . controlPlaneFor
+    loopbackAwsEnv closedPort >>= fmap (handleOver store) . controlPlaneFor

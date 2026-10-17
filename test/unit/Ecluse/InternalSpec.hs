@@ -15,8 +15,9 @@ import UnliftIO (throwIO, timeout, try)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Boot (BootAborted (BootAborted))
-import Ecluse.Internal (ProcessOutcome (..), exitCodeFor, superviseProcess)
-import Ecluse.Test.Stub (redirectedStatusException)
+import Ecluse.Internal (ProcessOutcome (..), exitCodeFor, exitReasonFor, superviseProcess)
+import Ecluse.Runtime.Test.CodeArtifact (refusedMint)
+import Ecluse.Test.Stub (closedAuthority, redirectedStatusException, requestSecrets)
 
 spec :: Spec
 spec = do
@@ -33,6 +34,12 @@ spec = do
             case outcome of
                 ServiceExited detail -> detail `shouldSatisfy` T.isInfixOf "wiring broke"
                 other -> expectationFailure ("expected ServiceExited, got " <> show other)
+
+        it "reports a failed mint by its cause at the dialled host:port, never the signed request" $ do
+            reason <- exitReasonFor <$> superviseProcess (refusedMint >> pure ShutdownRequested)
+            -- GHC appends the exception's context after a line break.
+            T.takeWhile (/= '\n') <$> reason `shouldSatisfy` maybe False (T.isPrefixOf ("ecluse: service exited: AWS request failed at " <> closedAuthority <> ": ConnectionFailure"))
+            for_ requestSecrets $ \secret -> reason `shouldSatisfy` maybe False (not . T.isInfixOf secret)
 
         it "renders an escaped HTTP fault by its status at the dialled host:port, never the request or the response" $ do
             (authority, err) <- redirectedStatusException status503
