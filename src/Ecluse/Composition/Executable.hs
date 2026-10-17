@@ -234,7 +234,6 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
     deferredMetrics <- newDeferredMetrics getCurrentTime
     cveSync <- planAdvisorySync logEnv bootPlan
     credentials <- buildCredentials (credentialReportersOver deferredMetrics) credentialBackends
-    -- 'waitSeconds' keeps the sub-second part: every pace this budget produces is well under one.
     (budgetPort, gateFor) <- newBudgetMeter waitSeconds
     let budget = budgetPortsFor dredger gateFor
     stores <-
