@@ -144,12 +144,14 @@ transportFaultSpec = describe "transport faults as values" $ do
         -- exchange, so it reads as unreachable rather than as a protocol fault.
         causeOf (HttpExceptionRequest defaultRequest NoResponseDataReceived) `shouldBe` TransportUnreachable
         causeOf (HttpExceptionRequest defaultRequest (InternalException (toException (socketError eCONNRESET)))) `shouldBe` TransportUnreachable
+        causeOf (HttpExceptionRequest defaultRequest (InternalException (handshakeSocketError eCONNRESET))) `shouldBe` TransportUnreachable
 
     it "classifies a wrapped TLS exception as TransportTls" $ do
         let handshake = toException (TLS.HandshakeFailed (TLS.Error_Misc "handshake refused"))
             certificate = toException (TLS.HandshakeFailed (TLS.Error_Protocol "certificate has unknown CA" TLS.UnknownCa))
         causeOf (HttpExceptionRequest defaultRequest (InternalException handshake)) `shouldBe` TransportTls
         causeOf (HttpExceptionRequest defaultRequest (InternalException certificate)) `shouldBe` TransportTls
+        causeOf (HttpExceptionRequest defaultRequest (InternalException (handshakeSocketError eINVAL))) `shouldBe` TransportTls
 
     it "classifies every other client fault as TransportProtocol" $ do
         -- The closed catch-all keeps the sum total over whatever http-client reports.
@@ -172,6 +174,10 @@ httpsFetchFault port = classifyTransport <$> (failedFetch tlsManagerSettings =<<
 -- The IOException network raises for a socket call that failed with this errno.
 socketError :: Errno -> IOError
 socketError errno = errnoToIOError "Network.Socket.recvBuf" errno Nothing Nothing
+
+-- The handshake failure tls raises when a socket call fails with this errno: it keeps only the shown error.
+handshakeSocketError :: Errno -> SomeException
+handshakeSocketError errno = toException (TLS.HandshakeFailed (TLS.Error_Misc (show (socketError errno))))
 
 -- Run the handler on every connection the listener accepts, then close the connection.
 withRawServer :: (Socket -> IO ()) -> (Int -> IO a) -> IO a
