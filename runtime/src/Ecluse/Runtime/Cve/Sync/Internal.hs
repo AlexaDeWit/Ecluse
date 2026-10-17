@@ -20,7 +20,6 @@ module Ecluse.Runtime.Cve.Sync.Internal (
     SyncEnv (..),
     SyncOutcome (..),
     syncStep,
-    publishVerified,
 
     -- * The scheduled task
     SyncSchedule (..),
@@ -52,7 +51,7 @@ import Ecluse.Core.Telemetry.Span (AdvisorySyncTracingPort (astpSyncAttemptSpan)
 import Ecluse.Core.Text (readDecimalText)
 import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 import Ecluse.Runtime.Cve.Sync.S3 (OsvDbCapExceeded (..), S3CveSource, cappedAt, newS3CveSource, s3CveFetch, s3CveFetchFor)
-import Ecluse.Runtime.Cve.Sync.Step (CveFetch (..), DbEtag (..), FetchedObject (..), OsvDbFetchFault (..), SyncEnv (..), SyncOutcome (..), publishVerified, syncStep)
+import Ecluse.Runtime.Cve.Sync.Step (CveFetch (..), DbEtag (..), FetchedObject (..), OsvDbFetchFault (..), SyncEnv (..), SyncOutcome (..), syncStep)
 
 -- | The task's timing in microseconds. The composition root ships 'bootBackoffDelays' and the configured poll interval.
 data SyncSchedule = SyncSchedule
