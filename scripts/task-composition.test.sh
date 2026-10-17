@@ -365,7 +365,8 @@ export PERF_ARTIFACT_DIR="$work/performance" BENCH_LOAD_CGROUP="$work/cgroup"
 export BENCH_LOAD_ISOLATE_OHA=1 BENCH_LOAD_DURATION_SECONDS=30 BENCH_LOAD_CONCURRENCY=100
 run_task performance:load-build
 run_task performance:load-cgroup
-[ "$(cat "$BENCH_LOAD_CGROUP/cgroup.subtree_control")" = '+cpu +memory +pids' ]
+[ "$(cat "$(dirname "$BENCH_LOAD_CGROUP")/cgroup.subtree_control")" = '+cpuset' ]
+[ "$(cat "$BENCH_LOAD_CGROUP/cgroup.subtree_control")" = '+cpuset +cpu +memory +pids' ]
 for kind in allocation live-allocation benchmark load; do
   mkdir -p "$PERF_ARTIFACT_DIR/ecosystem-npm" "$PERF_ARTIFACT_DIR/ecosystem-pypi"
   touch "$PERF_ARTIFACT_DIR/ecosystem-npm/receipt.json" "$PERF_ARTIFACT_DIR/ecosystem-pypi/receipt.json"
@@ -381,6 +382,8 @@ for kind in allocation live-allocation benchmark load; do
 done
 test -s "$BENCH_LOAD_CGROUP/harness/cgroup.procs"
 grep -Fxq 'affinity=taskset -c 0 oha' "$PERF_ARTIFACT_DIR/conditions.json"
+grep -Fxq 'loadPasses=every' "$PERF_ARTIFACT_DIR/conditions.json"
+grep -Fxq 'proxyCpus=' "$PERF_ARTIFACT_DIR/conditions.json"
 TEST_FAIL_BUILD=exe:bench-report PERF_NATIVE_OUTCOME=failure reject run_task performance:load-receipt
 [ ! -e "$PERF_ARTIFACT_DIR/ecosystem-npm/receipt.json" ]
 [ ! -e "$PERF_ARTIFACT_DIR/ecosystem-pypi/receipt.json" ]

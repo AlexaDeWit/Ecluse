@@ -26,7 +26,7 @@ import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Control.Concurrent (yield)
 import UnliftIO.Async (mapConcurrently)
-import UnliftIO.Exception (evaluate, finally, impureThrow, throwIO)
+import UnliftIO.Exception (evaluate, finally, impureThrow, throwIO, tryAny)
 
 import Ecluse.Core.Breaker (Breaker, admit, initialBreaker, recordFailure)
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), MissingScorePolicy (..), openCveDb, scoreAtLeast)
@@ -77,6 +77,7 @@ import Ecluse.Core.Rules.Effectful (EffectfulConfig (ecBackoff, ecBreakerCooldow
 import Ecluse.Core.Rules.Freshness
 import Ecluse.Core.Rules.Render (renderDecision, renderInability, renderReason)
 import Ecluse.Core.Rules.Types
+import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Rules.FrozenEvaluator (frozenEvaluator, frozenPrepare)
 import Ecluse.Rules.Remediation.Support (genEcosystem, genRemediation, genRows, genTenths, referenceRemediation)
 import Ecluse.Rules.Support (SourceState (Faulting, Loaded), ctx, normaliseVerdictIds, now, pkg, sixDayLimit, sourceStateDeps)
@@ -733,29 +734,49 @@ liveEvaluator, frozen :: Evaluator
 liveEvaluator = Evaluator prepare newEvaluator
 frozen = Evaluator frozenPrepare frozenEvaluator
 
--- | What one request did: its decisions, the packages its shared reads read, and its source reports, in order.
+-- | What one request did: each version's outcome, the packages its shared reads read, and its source reports, in order.
 data Observed = Observed
-    { obDecisions :: [Decision]
-    , obReads :: [PackageName]
+    { obOutcomes :: [Outcome]
+    , obReads :: [Either Text PackageName]
     , obReports :: [SourceHealth]
     }
     deriving stock (Eq, Show)
 
 -- | Decide versions through a fresh evaluator. Retries are off, so a faulting read returns at once.
-observe :: Evaluator -> ((RuleEvidence -> IO Decision) -> [RuleEvidence] -> IO [Decision]) -> RuleDeps -> [PrecededRule] -> ([PreparedRule] -> [PreparedRule]) -> [RuleEvidence] -> IO Observed
+observe :: Evaluator -> ((RuleEvidence -> IO Outcome) -> [RuleEvidence] -> IO [Outcome]) -> RuleDeps -> [PrecededRule] -> ([PreparedRule] -> [PreparedRule]) -> [RuleEvidence] -> IO Observed
 observe (Evaluator prepareWith evaluatorWith) decideAll deps policy adjust evidence = do
     readPackages <- newIORef []
     reports <- newIORef []
     let reporting = deps{rdSourceReporter = noSourceReporter{reportSource = \health -> atomicModifyIORef'_ reports (health :)}}
     rules <- adjust . map (recordReads readPackages . withoutRetries) <$> prepareWith reporting policy
-    decisions <- evaluatorWith ctx rules >>= (`decideAll` evidence)
+    outcomes <- evaluatorWith ctx rules >>= \decideVersion -> decideAll (settle decideVersion) evidence
     readOrder <- reverse <$> readIORef readPackages
     reportOrder <- reverse <$> readIORef reports
-    pure (Observed (map decisionCause decisions) readOrder (map healthCause reportOrder))
+    pure (Observed outcomes readOrder (map healthCause reportOrder))
 
--- Yielding mid-read lets concurrent callers reach a held cell's lock while the read holds it.
-recordReads :: IORef [PackageName] -> PreparedRule -> PreparedRule
-recordReads readPackages = mapPackageRead (\packageRead -> packageRead{prRead = \package use -> atomicModifyIORef'_ readPackages (package :) >> yield >> prRead packageRead package use})
+-- | One version's outcome: its decision, a throw that left the evaluator, or a throw the decision hides from a reader.
+data Outcome = Reached Decision | Escaped Text | Hidden Text
+    deriving stock (Eq, Show)
+
+-- | Decide one version, then force the whole decision as a reader that renders it would.
+settle :: (RuleEvidence -> IO Decision) -> RuleEvidence -> IO Outcome
+settle decideVersion ev =
+    tryAny (decideVersion ev) >>= \case
+        Left escaped -> pure (Escaped (causeLine escaped))
+        Right decision ->
+            tryAny (evaluate (length (show @String decision))) <&> \case
+                Left hidden -> Hidden (causeLine hidden)
+                Right _ -> Reached (decisionCause decision)
+
+-- Yielding mid-read lets concurrent callers reach a held cell's lock while the read holds it. A
+-- poisoned record's name is recorded as its cause, without moving where the read forces it.
+recordReads :: IORef [Either Text PackageName] -> PreparedRule -> PreparedRule
+recordReads readPackages = mapPackageRead $ \packageRead ->
+    packageRead
+        { prRead = \package use -> do
+            named <- first causeLine <$> tryAny (evaluate package)
+            atomicModifyIORef'_ readPackages (named :) >> yield >> prRead packageRead package use
+        }
 
 -- | How many versions reach an advisory rule, each decided alone by a fresh frozen evaluator.
 reachingAdvisoryRules :: RuleDeps -> [PrecededRule] -> [RuleEvidence] -> IO Int
@@ -767,6 +788,9 @@ withoutRetries = mapResilience (\res -> res{resConfig = (resConfig res){ecBackof
 -- GHC can append a runtime backtrace after the exception's own diagnostic line.
 causeOf :: Text -> Text
 causeOf = fst . T.breakOn "\n"
+
+causeLine :: SomeException -> Text
+causeLine = causeOf . displayExceptionT
 
 decisionCause :: Decision -> Decision
 decisionCause = \case
@@ -795,6 +819,29 @@ poisonRule :: Version -> RuleVerdict -> PreparedRule -> PreparedRule
 poisonRule version verdict rule = case prepEval rule of
     PerVersion eval -> rule{prepEval = PerVersion (\c ev -> if evVersion ev == version then pure verdict else eval c ev)}
     PerPackage packageRead -> rule{prepEval = PerPackage packageRead{prVerdict = \rows ev -> if evVersion ev == version then verdict else prVerdict packageRead rows ev}}
+
+-- | A per-version rule at a precedence that returns one of 'poisonedVerdicts' for a release and abstains on every other.
+data Bomb = Bomb Int Text Int
+    deriving stock (Show)
+
+bombRule :: Ecosystem -> Bomb -> PreparedRule
+bombRule eco (Bomb prec release position) =
+    maybe id (poisonRule (mkVersion eco release) . snd) (poisonedVerdicts !!? position) (constRule "PureBomb" (NoDecision FixesNoAdvisory)){prepPrecedence = prec}
+
+genBomb :: [Text] -> Gen Bomb
+genBomb pool = Bomb <$> genPrecedence <*> Gen.element pool <*> Gen.int (Range.constant 0 (length poisonedVerdicts - 1))
+
+-- | Which listed version's evidence throws: its publish time, which only the quarantine reads, or the whole record.
+data EvidencePoison = PoisonedPublishTime Int | PoisonedRecord Int
+    deriving stock (Show)
+
+poisonEvidence :: Maybe EvidencePoison -> [RuleEvidence] -> [RuleEvidence]
+poisonEvidence poison evidence = case poison of
+    Nothing -> evidence
+    Just (PoisonedPublishTime index) -> poisonedAt index (\ev -> ev{evPublishedAt = Known (Just (impureThrow thrownVerdict))})
+    Just (PoisonedRecord index) -> poisonedAt index (const (impureThrow thrownVerdict))
+  where
+    poisonedAt index change = zipWith (\i ev -> if i == index `mod` max 1 (length evidence) then change ev else ev) [0 ..] evidence
 
 -- | One rule of a generated policy, at its default precedence or another.
 genPolicyRule :: [Text] -> Gen PrecededRule
@@ -848,15 +895,45 @@ keptBy rule row = case rule of
     AllowIfRemediatesCve _ -> namesAFix row
     _ -> False
 
-isRuleThrew :: Decision -> Bool
+isRuleThrew :: Outcome -> Bool
 isRuleThrew = \case
-    Undecidable _ (RuleUnable _ RuleThrew{}) -> True
+    Reached (Undecidable _ (RuleUnable _ RuleThrew{})) -> True
+    _ -> False
+
+isEscaped :: Outcome -> Bool
+isEscaped = \case
+    Escaped _ -> True
+    _ -> False
+
+-- | Each rule's boot-order key, and whether the rule reads the package.
+type RuleKey = ((Down Int, Text), Bool)
+
+policyKeys :: [PrecededRule] -> [RuleKey]
+policyKeys = map (\r -> ((Down (rulePrecedence r), ruleName (prRule r)), readsPackage (prRule r)))
+  where
+    readsPackage rule = case verdictSource rule of
+        FromAdvisories{} -> True
+        FromEvidence _ -> False
+
+bombKeys :: Maybe Bomb -> [RuleKey]
+bombKeys = maybe [] (\(Bomb prec _ _) -> [((Down prec, "PureBomb"), False)])
+
+-- | Whether a per-version rule refused a version by throwing after an advisory rule had passed it.
+perVersionThrowAfterRead :: [RuleKey] -> Outcome -> Bool
+perVersionThrowAfterRead keys = \case
+    Reached (Undecidable _ (RuleUnable name RuleThrew{})) -> or [advisory < thrower | (thrower@(_, rule), False) <- keys, rule == name, (advisory, True) <- keys]
+    _ -> False
+
+-- | Whether an advisory rule refused a version by throwing.
+advisoryRuleThrew :: [RuleKey] -> Outcome -> Bool
+advisoryRuleThrew keys = \case
+    Reached (Undecidable _ (RuleUnable name RuleThrew{})) -> or [rule == name | ((_, rule), True) <- keys]
     _ -> False
 
 -- | Whether the deny-by-default trail holds an advisory rule's abstention.
-holdsAdvisoryAbstention :: Decision -> Bool
+holdsAdvisoryAbstention :: Outcome -> Bool
 holdsAdvisoryAbstention = \case
-    BlockedByDefault reasons -> any (\case FixesNoAdvisory -> True; NoKnownMaliciousAdvisory -> True; NotAffectedAtThreshold _ -> True; _ -> False) reasons
+    Reached (BlockedByDefault reasons) -> any (\case FixesNoAdvisory -> True; NoKnownMaliciousAdvisory -> True; NotAffectedAtThreshold _ -> True; _ -> False) reasons
     _ -> False
 
 evaluatorParitySpec :: Spec
@@ -868,14 +945,22 @@ evaluatorParitySpec = describe "the evaluator against the one frozen at f5f368d3
             rows <- forAll (genPackageRows pool)
             policy <- forAll (Gen.list (Range.linear 0 6) (genPolicyRule pool))
             poison <- forAll (Gen.maybe (Poison <$> Gen.int (Range.constant 0 5) <*> Gen.element pool <*> Gen.int (Range.constant 0 (length poisonedVerdicts - 1))))
+            evidencePoison <- forAll (Gen.maybe (Gen.choice [PoisonedPublishTime <$> Gen.int (Range.constant 0 9), PoisonedRecord <$> Gen.int (Range.constant 0 9)]))
             names <- forAll (Gen.element [["thing"], ["thing", "other"]])
-            evidence <- forAll (genListing eco names pool)
+            evidence <- poisonEvidence evidencePoison <$> forAll (genListing eco names pool)
             let inTurn evaluator = liftIO (observe evaluator traverse (sourceStateDeps standing (depsWith rows)) policy (poisonAt eco poison) evidence)
             live <- inTurn liveEvaluator
             asItStood <- inTurn frozen
             H.cover 10 "the request reads more than one run of packages" (length (obReads asItStood) > 1)
-            H.cover 5 "a rule's throw refuses a version" (any isRuleThrew (obDecisions asItStood))
-            H.cover 10 "an advisory rule's abstention reaches the trail" (any holdsAdvisoryAbstention (obDecisions asItStood))
+            let keys = policyKeys policy
+                wholeRecordThrows = case evidencePoison of
+                    Just PoisonedRecord{} -> True
+                    _ -> False
+            H.cover 10 "a rule's throw refuses a version" (any isRuleThrew (obOutcomes asItStood))
+            H.cover 2 "a throw leaves the evaluator" (any isEscaped (obOutcomes asItStood))
+            H.cover 1 "a per-version rule's throw refuses a version an advisory rule read" (any (perVersionThrowAfterRead keys) (obOutcomes asItStood))
+            H.cover 2 "a throw inside a PerPackage verdict refuses a version" (not wholeRecordThrows && any (advisoryRuleThrew keys) (obOutcomes asItStood))
+            H.cover 10 "an advisory rule's abstention reaches the trail" (any holdsAdvisoryAbstention (obOutcomes asItStood))
             live === asItStood
 
     modifyMaxSuccess (const 200) . it "decides one package's versions concurrently as it did in turn, reading the package at most once" $
@@ -884,13 +969,18 @@ evaluatorParitySpec = describe "the evaluator against the one frozen at f5f368d3
             standing <- forAll genSourceState
             rows <- forAll (genPackageRows pool)
             policy <- forAll (Gen.list (Range.linear 0 6) (genPolicyRule pool))
-            evidence <- forAll (genListing eco ["thing"] pool)
+            bomb <- forAll (Gen.maybe (genBomb pool))
+            timePoison <- forAll (Gen.maybe (PoisonedPublishTime <$> Gen.int (Range.constant 0 9)))
+            evidence <- poisonEvidence timePoison <$> forAll (genListing eco ["thing"] pool)
             let deps = sourceStateDeps standing (depsWith rows)
-            concurrent <- liftIO (observe liveEvaluator mapConcurrently deps policy id evidence)
-            asItStood <- liftIO (observe frozen traverse deps policy id evidence)
+                withBomb = (<> maybeToList (bombRule eco <$> bomb))
+            concurrent <- liftIO (observe liveEvaluator mapConcurrently deps policy withBomb evidence)
+            asItStood <- liftIO (observe frozen traverse deps policy withBomb evidence)
             reaching <- liftIO (reachingAdvisoryRules deps policy evidence)
             H.cover 30 "two or more versions reach an advisory rule" (reaching >= 2)
-            obDecisions concurrent === obDecisions asItStood
+            H.cover 10 "a rule's throw refuses a version" (any isRuleThrew (obOutcomes asItStood))
+            H.cover 2 "a per-version rule's throw refuses a version an advisory rule read" (any (perVersionThrowAfterRead (policyKeys policy <> bombKeys bomb)) (obOutcomes asItStood))
+            obOutcomes concurrent === obOutcomes asItStood
             obReads concurrent === obReads asItStood
             H.assert (length (obReads asItStood) <= 1)
             sortOn (show @Text) (obReports concurrent) === sortOn (show @Text) (obReports asItStood)
@@ -901,16 +991,22 @@ evaluatorParitySpec = describe "the evaluator against the one frozen at f5f368d3
             standing <- forAll genSteadySource
             rows <- forAll (genPackageRows pool)
             policy <- forAll (Gen.list (Range.linear 0 6) (genPolicyRule pool))
-            evidence <- forAll (genListing eco ["thing", "other"] pool)
+            bomb <- forAll (Gen.maybe (genBomb pool))
+            timePoison <- forAll (Gen.maybe (PoisonedPublishTime <$> Gen.int (Range.constant 0 9)))
+            evidence <- poisonEvidence timePoison <$> forAll (genListing eco ["thing", "other"] pool)
             let deps = sourceStateDeps standing (depsWith rows)
-                bound = length evidence * length policy
+                withBomb = (<> maybeToList (bombRule eco <$> bomb))
+                -- A throw decides its version twice, and each pass can read a package for each rule.
+                bound = 2 * length evidence * (length policy + 1)
                 distinctReports = sortNub . map (show @Text) . obReports
-            concurrent <- liftIO (observe liveEvaluator mapConcurrently deps policy id evidence)
-            asItStood <- liftIO (observe frozen traverse deps policy id evidence)
+            concurrent <- liftIO (observe liveEvaluator mapConcurrently deps policy withBomb evidence)
+            asItStood <- liftIO (observe frozen traverse deps policy withBomb evidence)
             reaching <- liftIO (reachingAdvisoryRules deps policy evidence)
             H.cover 30 "two or more versions reach an advisory rule" (reaching >= 2)
             H.cover 10 "both packages are read" (length (sortNub (obReads asItStood)) == 2)
-            obDecisions concurrent === obDecisions asItStood
+            H.cover 10 "a rule's throw refuses a version" (any isRuleThrew (obOutcomes asItStood))
+            H.cover 2 "a per-version rule's throw refuses a version an advisory rule read" (any (perVersionThrowAfterRead (policyKeys policy <> bombKeys bomb)) (obOutcomes asItStood))
+            obOutcomes concurrent === obOutcomes asItStood
             sortNub (obReads concurrent) === sortNub (obReads asItStood)
             distinctReports concurrent === distinctReports asItStood
             H.assert (length (obReads concurrent) <= bound && length (obReports concurrent) <= bound)

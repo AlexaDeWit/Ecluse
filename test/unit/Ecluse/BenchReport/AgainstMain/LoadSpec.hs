@@ -8,14 +8,11 @@ module Ecluse.BenchReport.AgainstMain.LoadSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.BenchLoad.Exposition (summariseGauge)
-import Ecluse.BenchLoad.Harness (LoadKnobs (lkUpstreamLatencyMicros), ProxyFigures (..), ScenarioReport (..), defaultLoadKnobs)
-import Ecluse.BenchLoad.Pod (CgroupReading (..))
-import Ecluse.BenchLoad.Report (Section (..), renderLoadSaturation, renderReports, renderThrash)
+import Ecluse.BenchLoad.Harness (ScenarioReport (..))
+import Ecluse.BenchLoad.Report (renderLoadSaturation, renderReports, renderThrash)
 import Ecluse.BenchLoad.RtsWindow (RtsWindow (RtsWindow))
 import Ecluse.BenchLoad.Selection (fixtureSection)
-import Ecluse.BenchLoad.Support (scenarioReport, slowNetwork)
-import Ecluse.BenchLoad.Verdict (ProxyEnding (CleanShutdown))
+import Ecluse.BenchLoad.Support (loadedSection, proxyWithPeak, scenarioReport)
 import Ecluse.BenchReport.AgainstMain (Baseline (Baseline, NoBaseline), Missing (DownloadFailed), Origin (Origin), sharedBaselineNote)
 import Ecluse.BenchReport.AgainstMain.Load (againstMain)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -51,7 +48,7 @@ spec = do
                 `shouldBe` rendered
 
         it "compares no memory: proxy memory changes leave the comparison unchanged" $ do
-            let withMemory peak = map (\r -> r{srProxy = Just (proxyMemory peak)})
+            let withMemory peak = map (\r -> r{srProxy = Just (proxyWithPeak peak)})
                 memoryReport peak = report 12 (withMemory peak hereNpm) (withMemory peak herePyPI)
                 baseline = Baseline origin (memoryReport (64 * 1024 * 1024))
             memoryReport (128 * 1024 * 1024) `shouldSatisfy` T.isInfixOf "128.0 MiB / 1024.0 MiB"
@@ -100,22 +97,9 @@ report :: Int -> [ScenarioReport] -> [ScenarioReport] -> Text
 report npmLatencyMs npm pypi =
     T.intercalate
         "\n"
-        [ fixtureSection Npm [renderReports (section Npm (npmLatencyMs * 1_000) npm), renderLoadSaturation [] npm]
-        , fixtureSection PyPI [renderReports (section PyPI 5_000 pypi)]
+        [ fixtureSection Npm [renderReports (loadedSection Npm (npmLatencyMs * 1_000) npm), renderLoadSaturation [] npm]
+        , fixtureSection PyPI [renderReports (loadedSection PyPI 5_000 pypi)]
         ]
-
-section :: Ecosystem -> Int -> [ScenarioReport] -> Section
-section ecosystem latencyMicros loaded =
-    Section
-        { sectionKnobs = defaultLoadKnobs{lkUpstreamLatencyMicros = latencyMicros}
-        , sectionCapabilities = 3
-        , sectionProcessors = 4
-        , sectionShape = "2cpu-1gib"
-        , sectionEcosystem = ecosystem
-        , sectionEnforcement = slowNetwork
-        , sectionConcurrencyOne = []
-        , sectionLoaded = loaded
-        }
 
 onMainNpm, hereNpm, onMainPyPI, herePyPI :: [ScenarioReport]
 onMainNpm = [scenarioReport "npm/merge-cold" 1000 300 1000 2000, scenarioReport "npm/tarball-hot-path" 16000 0 180 200, ramp "npm/ramp" 800 50 1400 2400]
@@ -128,23 +112,3 @@ ramp :: Text -> Int -> Int -> Double -> Double -> ScenarioReport
 ramp name successes refusals p50 p99 = single{srSteps = [srLoad single]}
   where
     single = scenarioReport name successes refusals p50 p99
-
-proxyMemory :: Int -> ProxyFigures
-proxyMemory peak =
-    ProxyFigures
-        { pfIdleRts = Nothing
-        , pfIdleCgroupBytes = Nothing
-        , pfCgroup = Just (CgroupReading (Just (1024 * 1024 * 1024)) (Just peak) Nothing mempty mempty mempty)
-        , pfWindowCgroup = Nothing
-        , pfWindowThrottledUsec = Nothing
-        , pfEnding = CleanShutdown
-        , pfExitedEarly = False
-        , pfStderrTail = ""
-        , pfBootLines = []
-        , pfRuleLines = []
-        , pfBootRetries = []
-        , pfInFlight = summariseGauge []
-        , pfTasks = summariseGauge []
-        , pfAdmissionSeries = []
-        , pfCacheWindow = Nothing
-        }

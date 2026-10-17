@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE ImportQualifiedPost #-}
 
 -- | First-party multipart publication through the product image and its native target.
 module Ecluse.E2E.PyPI.PublishE2ESpec (pypiPublicationFamily, nativePublicationContract) where
@@ -14,6 +13,7 @@ import System.FilePath ((</>))
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
+import Ecluse.Core.Registry.PyPI.Publish.Multipart (pypiFileUploadOnly)
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..), concreteFamily)
 import Ecluse.E2E.Fixtures.PyPI (pypiDistInfoFor)
 import Ecluse.E2E.Fixtures.PyPI.Mirror
@@ -25,6 +25,7 @@ import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Publication
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Ecluse.Test.Contract.Types (Group)
+import Ecluse.Test.Package (hexSha256Of)
 
 -- | Native boundary and disabled-route controls supplement the shared publication laws.
 nativePublicationContract :: ConcreteFixture Group -> DeclaredGroup
@@ -63,6 +64,7 @@ pypiPublicationFamily fixture = concreteFamily fixture $ \recorder action plane 
                     mirrorVersion
                     (publicationDriver proxy target distributions "e2e-published")
                     (publicationDriver proxy target distributions "e2e-unowned")
+                    (removalDriver proxy target distributions)
                 )
 
 publicationDriver :: E2E -> NativeTarget -> [Distribution] -> Text -> PublicationDriver
@@ -82,6 +84,27 @@ publicationDriver proxy target distributions project =
         , publicationSettle = awaitNativeIdle target
         }
 
+-- No PyPI client sends a removal, but pypiserver deletes the named release on a raw remove_pkg.
+removalDriver :: E2E -> NativeTarget -> [Distribution] -> NonUploadDriver
+removalDriver proxy target distributions =
+    NonUploadDriver
+        { nonUploadRelease = do
+            published <- publishProject proxy [distribution | distribution <- distributions, distributionProject distribution == retainedProject]
+            when (crExit published == ExitSuccess) (awaitProjectFiles target distributions retainedProject `shouldReturn` True)
+            pure published
+        , nonUploadWrite = postUpload proxy ("remove_pkg " <> retainedProject) (releaseRemovalBody retainedProject mirrorVersion)
+        , nonUploadRefusal = ["501", pypiFileUploadOnly]
+        , nonUploadDestination = do
+            files <- targetFiles target
+            uploads <- readTVarIO (ntRequests target)
+            pure (["file " <> name <> " " <> hexSha256Of bytes | (name, bytes) <- Map.toList files] <> ["uploads received " <> show uploads])
+        , nonUploadSettle = awaitNativeIdle target
+        }
+
+-- A first-party project whose release a removal through the proxy must leave in place.
+retainedProject :: Text
+retainedProject = "e2e-retained"
+
 requiredDistribution :: Text -> [Distribution] -> IO Distribution
 requiredDistribution project = maybe (fail "publication fixture is empty") pure . find ((== project) . distributionProject)
 
@@ -98,7 +121,7 @@ publicationConfig =
     defaultE2EConfig
         { ecExtraEnv =
             [ ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", stubUrl PyPIMirror)
-            , ("ECLUSE_MOUNTS__PYPI__FIRST_PARTY", "e2e-published")
+            , ("ECLUSE_MOUNTS__PYPI__FIRST_PARTY", "e2e-published," <> retainedProject)
             , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__URL", stubUrl PyPIMirror <> "legacy/")
             , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__TOKEN", "fixture-password")
             , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__USERNAME", "fixture-user")
@@ -108,7 +131,7 @@ publicationConfig =
 
 withPublicationFixture :: GlobalDataPlane -> (NativeTarget -> [Distribution] -> IO a) -> IO a
 withPublicationFixture plane action = do
-    distributions <- buildNativeProjects (gdpWorkDir plane </> "pypi") ["e2e-published", "e2e-unowned"]
+    distributions <- buildNativeProjects (gdpWorkDir plane </> "pypi") ["e2e-published", "e2e-unowned", retainedProject]
     withNativeTarget PreserveUploadFields distributions $ \target ->
         withStubFault plane (PyPIMirrorBackend (ntPort target) False) (action target distributions)
 
@@ -118,7 +141,11 @@ sendUpload proxy distribution extra = do
     maybe (fail "upload response omitted its status") pure (readMaybe (toString (crStdout result)))
 
 uploadClient :: E2E -> Distribution -> [(Text, Text)] -> IO ClientResult
-uploadClient proxy distribution extra = do
+uploadClient proxy distribution extra = postUpload proxy (distributionFilename distribution) (distributionUploadBody distribution extra)
+
+-- POST a multipart form to the upload route with the edge credential, as a raw client.
+postUpload :: E2E -> Text -> ByteString -> IO ClientResult
+postUpload proxy label body = do
     base <- parseRequest (toString (e2eBaseUrl proxy <> "/pypi/legacy/"))
     let request =
             applyBasicAuth
@@ -127,13 +154,13 @@ uploadClient proxy distribution extra = do
                 base
                     { method = "POST"
                     , requestHeaders = [("Content-Type", nativeUploadContentType)]
-                    , requestBody = RequestBodyBS (distributionUploadBody distribution extra)
+                    , requestBody = RequestBodyBS body
                     }
     response <- httpLbs request (e2eManager proxy)
     let status = statusCode (responseStatus response)
     pure
         ClientResult
-            { crCommand = "POST " <> e2eBaseUrl proxy <> "/pypi/legacy/ " <> distributionFilename distribution
+            { crCommand = "POST " <> e2eBaseUrl proxy <> "/pypi/legacy/ " <> label
             , crExit = if status >= 200 && status < 300 then ExitSuccess else ExitFailure 1
             , crStdout = show status
             , crStderr = decodeUtf8 (responseBody response)

@@ -3,10 +3,10 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Publication fixtures pass through production inventory and byte verification.
-module Ecluse.Test.Registry.Publish (publishOnlyFile, checkedNpmUpload) where
+module Ecluse.Test.Registry.Publish (publishOnlyFile, checkedNpmUpload, isMalformedBody) where
 
 import Ecluse.Core.Package (PackageDetails (pkgName, pkgVersion))
-import Ecluse.Core.Registry (PublishFault (PublishSourceUnavailable))
+import Ecluse.Core.Registry (PublishBodyFault (PublishMalformed), PublishFault (PublishSourceUnavailable))
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.Npm.Publish (NpmUploadMetadata, prepareNpmSource, prepareNpmUpload)
@@ -33,3 +33,9 @@ checkedNpmUpload doc bytes = do
         _ -> Left (PublishSourceUnavailable "the npm fixture requires one physical file")
   where
     details = vdDetails doc
+
+-- | Whether the upload guard refused a client's publish body as unreadable, the @400@ case.
+isMalformedBody :: Either PublishBodyFault a -> Bool
+isMalformedBody = \case
+    Left (PublishMalformed _) -> True
+    _ -> False

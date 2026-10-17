@@ -20,6 +20,7 @@ import Ecluse.BenchLoad.Floors (
     LatencyCeiling (LatencyCeiling),
     OperatingPoint (..),
     Pass (ConcurrencyOne, Loaded),
+    PassSelection (EveryPass, LoadedPassOnly),
     RunFacts (..),
     RunnerKind (RunnerKind),
     RunnerReading (RunnerReading),
@@ -36,7 +37,7 @@ import Ecluse.BenchLoad.Floors (
     triggerIn,
     unheldViolations,
  )
-import Ecluse.BenchLoad.Pod (PodShape (Unlimited))
+import Ecluse.BenchLoad.Pod (PodShape (Unlimited), ProxyTuning (..), noTuning, parseCpuList)
 import Ecluse.BenchLoad.Support (floorsAtTwoCores, slowNetwork, twoCores)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 
@@ -181,7 +182,7 @@ firstRun = "https://example.test/runs/1"
 secondRun = "https://example.test/runs/2"
 
 calibrated :: OperatingPoint
-calibrated = OperatingPoint 30 100 363520 5 3 64 Nothing Nothing Nothing Nothing []
+calibrated = OperatingPoint 30 100 363520 5 3 64 Nothing Nothing Nothing Nothing [] EveryPass noTuning
 
 calibratedRunner :: RunnerKind
 calibratedRunner = RunnerKind "Linux" "ARM64"
@@ -227,6 +228,11 @@ offCalibration =
     , ("privateConnectionsPerHost", calibrated{opPrivateConnectionsPerHost = Just 8})
     , ("scenarios", calibrated{opScenarios = Just ["pypi/index-cold"]})
     , ("patternOverrides", calibrated{opPatternOverrides = ["BENCH_PATTERN_NAMES"]})
+    , ("passes", calibrated{opPasses = LoadedPassOnly})
+    , ("proxyCpus", calibrated{opProxyTuning = noTuning{ptCpus = rightToMaybe (parseCpuList "2-3")}})
+    , ("proxyCores", calibrated{opProxyTuning = noTuning{ptCores = Just 2}})
+    , ("proxyMaxHeapBytes", calibrated{opProxyTuning = noTuning{ptMaxHeapBytes = Just 872415232}})
+    , ("proxyAllocAreaMib", calibrated{opProxyTuning = noTuning{ptAllocAreaMib = Just 32}})
     ]
 
 twoCoreFloors :: [Pair]
