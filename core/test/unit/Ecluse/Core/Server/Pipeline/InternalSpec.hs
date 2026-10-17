@@ -41,7 +41,7 @@ import Ecluse.Core.Rules.Types (
     FailureAlignment (FailDeny),
     Inability (EvaluationFailed, NoDatabaseLoaded, RuleThrew),
     LimitShortfall (RemainingUnscored),
-    Reason (AffectedBy, FixStillApplies, FixesButStillAffected, FixesNoAdvisory, KnownMalicious, PublishedTooRecently, RemediatesWithinLimits, RemediationBeyondLimits, RuleUnable, RunsOnInstall, ScopeNotAllowListed),
+    Reason (AffectedBy, FixStillApplies, FixesButStillAffected, FixesNoAdvisory, KnownMalicious, PublishedTooRecently, Remediates, RemediatesWithinLimits, RemediationBeyondLimits, RuleUnable, RunsOnInstall, ScopeNotAllowListed),
     Rule (AllowIfOlderThan),
     RuleEvidence (evName, evVersion),
     RuleVerdict (NoDecision),
@@ -96,6 +96,7 @@ import Ecluse.Test.Package (
  )
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, packageRule)
+import Ecluse.Test.Server.Response (reasonOf, rejectionOf)
 
 spec :: Spec
 spec = do
@@ -146,9 +147,7 @@ spec = do
             compared = ScoreComparison ids ids (ScoreSides (Scored 9.8) Unscored) (ScoreSides Unscored (Scored 0.005)) defaultDifferentialLimits
             refusal = Undecidable (WillResolve Nothing) (RuleUnable "AllowIfRemediatesCve" NoDatabaseLoaded)
             evidence = completeEvidence (detailsWith leftpadName (npmVersion "1.0.0") [])
-            labelsOf decision = case serveDecisionOf evidence decision of
-                Admit -> Nothing
-                Reject (Rejection reason _) -> Just (denialLabels reason)
+            labelsOf decision = denialLabels <$> reasonOf (serveDecisionOf evidence decision)
         it "records no denial labels for a remediation admission" $
             labelsOf (Admitted "AllowIfRemediatesCve" (RemediatesWithinLimits compared) []) `shouldBe` Nothing
         it "labels every remediation refusal without an advisory identifier"
@@ -220,15 +219,14 @@ spec = do
                     beyond = RemediationBeyondLimits partialComparison (mkLimitShortfalls (RemainingUnscored Epss (mkAdvisoryIds ("GHSA-open-0002" :| [])) :| []))
                     stillApplies = FixStillApplies (mkAdvisoryIds ("GHSA-open-0002" :| []))
                     denied reason = BlockedByDefault [reason, quarantine]
-                it "records exactly the identifiers its reasons carry" $ do
-                    auditCve evidence (denied partialFix) `shouldReturn` [Just "GHSA-fixed-0001, GHSA-open-0002"]
-                    auditCve evidence (denied beyond) `shouldReturn` [Just "GHSA-fixed-0001, GHSA-open-0002"]
-                    auditCve evidence (denied stillApplies) `shouldReturn` [Just "GHSA-open-0002"]
-                it "renders the denial message and its metric labels as before" $ do
-                    fmap rejectionMessage (rejectionOf evidence (denied partialFix))
+                it "records the advisories still affecting the version, never the one it fixes" $
+                    for_ [partialFix, beyond, stillApplies] $ \reason ->
+                        auditCve evidence (denied reason) `shouldReturn` [Just "GHSA-open-0002"]
+                it "renders the message from its reasons and labels the metric by rule, with no advisory identifier" $ do
+                    fmap rejectionMessage (rejectionOf (serveDecisionOf evidence (denied partialFix)))
                         `shouldBe` Just (subject <> " was denied (no rule allowed it): fixes GHSA-fixed-0001 with GHSA-open-0002 remaining; published only 1 day ago, minimum age is 7 days")
                     for_ [partialFix, beyond, stillApplies] $ \reason ->
-                        fmap (\(Rejection cause _) -> denialLabels cause) (rejectionOf evidence (denied reason))
+                        denialLabels <$> reasonOf (serveDecisionOf evidence (denied reason))
                             `shouldBe` Just (Just "BlockedByDefault", Metric.ReasonPolicy)
 
     describe "logSkippedChecks" $ do
@@ -272,9 +270,9 @@ spec = do
             KeyMap.lookup "active_advisory_db_etag" (toObject (denialAuditPayload (audit Nothing mempty)))
                 `shouldBe` Nothing
 
-        it "names each advisory its reasons carry once, in the order the reasons give them" $
-            KeyMap.lookup "cve" (toObject (denialAuditPayload (audit Nothing [FixesButStillAffected (mkAdvisoryIds ("A-1" :| [])) (mkAdvisoryIds ("B-2" :| [])), AffectedBy Cvss 7.0 (mkAdvisoryIds ("B-2" :| ["C-3"]))])))
-                `shouldBe` Just (String "A-1, B-2, C-3")
+        it "names each advisory still affecting the version once, in reason order, and none it fixes" $
+            KeyMap.lookup "cve" (toObject (denialAuditPayload (audit Nothing [Remediates (mkAdvisoryIds ("A-1" :| [])), FixesButStillAffected (mkAdvisoryIds ("A-1" :| [])) (mkAdvisoryIds ("B-2" :| [])), AffectedBy Cvss 7.0 (mkAdvisoryIds ("B-2" :| ["C-3"]))])))
+                `shouldBe` Just (String "B-2, C-3")
 
         it "omits the advisory field when no reason names one" $
             KeyMap.lookup "cve" (toObject (denialAuditPayload (audit Nothing [quarantine]))) `shouldBe` Nothing
@@ -315,12 +313,6 @@ auditCve :: RuleEvidence -> Decision -> IO [Maybe Text]
 auditCve evidence decision = do
     logged <- runJsonLog (logDenials (evName evidence) Nothing [VersionVerdict (renderVersion (evVersion evidence)) (serveDecisionOf evidence decision)])
     pure [join (parseMaybe (\entry -> entry .: "data" >>= (.:? "cve")) line) | Just line <- map (decodeStrict @Object . encodeUtf8) (lines logged)]
-
--- | The refusal a decision serves as, or 'Nothing' for an admission.
-rejectionOf :: RuleEvidence -> Decision -> Maybe Rejection
-rejectionOf evidence decision = case serveDecisionOf evidence decision of
-    Admit -> Nothing
-    Reject rejection -> Just rejection
 
 npmEvidence, pypiEvidence :: RuleEvidence
 npmEvidence = completeEvidence (detailsWith leftpadName (npmVersion "1.0.0") [])

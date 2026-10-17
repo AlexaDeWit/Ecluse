@@ -47,7 +47,7 @@ import OpenTelemetry.Util (appendOnlyBoundedCollectionValues)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Queue (RemoteSpanContext (RemoteSpanContext))
-import Ecluse.Core.Rules.Types (Reason (RunsOnInstall))
+import Ecluse.Core.Rules.Types (AdvisoryScore (Cvss), Reason (AffectedBy, RunsOnInstall), mkAdvisoryIds)
 import Ecluse.Core.Server.Response (
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (Rejection),
@@ -101,6 +101,14 @@ verdictMappingSpec = describe "ruleVerdictFields" $ do
                        , ("ecluse.rule.reason_class", "by_policy")
                        , ("ecluse.rule.message", "denied: runs install scripts")
                        , ("ecluse.rule.name", "DenyInstallTimeExecution")
+                       ]
+
+    it "adds no span field for the advisories a policy denial names" $
+        ruleVerdictFields (Reject (Rejection (ByPolicy (RuleName "DenyIfCve") [AffectedBy Cvss 7.0 (mkAdvisoryIds ("GHSA-span-0001" :| []))]) "denied: affected"))
+            `shouldBe` [ ("ecluse.rule.decision", "deny")
+                       , ("ecluse.rule.reason_class", "by_policy")
+                       , ("ecluse.rule.message", "denied: affected")
+                       , ("ecluse.rule.name", "DenyIfCve")
                        ]
 
     it "maps a missing-integrity refusal to its reason class, with no rule name" $

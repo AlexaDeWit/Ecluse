@@ -369,7 +369,7 @@ the severe one (CVSS 9.8). A minor one (CVSS 4.2, EPSS 0.005) still affects that
 
 | Case ID | Partial-fix evidence |
 | --- | --- |
-| `npm/advisories/partial-fix` | Under the shipped default, npm installs the young release. Under `remainingAdvisories: abstain`, the listing keeps the old release alone, and npm and a direct read refuse the young one by default. |
+| `npm/advisories/partial-fix` | Under the shipped default, npm installs the young release. Under `remainingAdvisories: abstain`, the listing keeps the old release alone, and npm and a direct read refuse the young one by default. The structured denial record names the minor advisory that still affects it. |
 | `pypi/advisories/partial-fix` | The same pair of policies for the Flask releases through pip. |
 
 Both clients run the same `Install.Advisory` law through native `AdvisoryDriver` observations.

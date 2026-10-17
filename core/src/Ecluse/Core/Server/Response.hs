@@ -67,7 +67,7 @@ data Rejection = Rejection
     }
     deriving stock (Eq, Show)
 
--- | Why a request was refused. A policy refusal is final. An /inability to decide/ carries a 'Transience' for @503@ or @500@.
+-- | Why a request was refused. A policy refusal is final for this request. An /inability to decide/ carries a 'Transience' for @503@ or @500@.
 data RejectReason
     = -- | A rule denied the version (deny-by-default included): the deciding rule, and the reasons the decision gave.
       ByPolicy RuleName [Reason]
@@ -144,7 +144,7 @@ artifactHttpStatus = \case
 data PackumentStatus
     = -- | @200@: at least one version survived, so the proxy serves the merged, filtered packument.
       PackumentOk
-    | -- | @403@: no version survived and every exclusion was a policy denial.
+    | -- | @403@: no version survived and every exclusion was a policy denial. The response body collects the denial reasons.
       PackumentForbidden
     | -- | @503@: no version survived and an exclusion can recover. A suggested delay becomes @Retry-After@.
       PackumentUnavailable (Maybe RetryAfter)

@@ -51,6 +51,7 @@ data AdvisoryCase = AdvisoryCase
     , advisoryAffectedVersion :: Text
     , advisoryFixedVersion :: Text
     , advisoryExpectedId :: Text
+    -- ^ The advisory the policy's denial names: the affecting one, or the one still affecting a partial fix.
     , advisoryRefusalMessage :: Text -> Text
     , advisoryRequiresMirror :: Bool
     }
@@ -83,11 +84,12 @@ advisoryContract prefix = do
             refuse fixture session (advisoryFixedVersion fixture) "BlockedByDefault" Nothing
     it (caseLabel (prefix <> "/partial-fix") "admits a partial fix inside the shipped limits while the abstaining control quarantines it") $ \driver -> do
         let fixture = advisoryCaseForPolicy driver PartialFix
+            control = advisoryCaseForPolicy driver PartialFixAbstaining
         advisoryWithPolicy driver PartialFix $ \session ->
             advisoryRelease session (advisoryFixedVersion fixture) >>= advisoryAdmits
         advisoryWithPolicy driver PartialFixAbstaining $ \session -> do
-            advisoryListedVersions session `shouldReturn` [advisoryAffectedVersion fixture]
-            refuse fixture session (advisoryFixedVersion fixture) "BlockedByDefault" Nothing
+            advisoryListedVersions session `shouldReturn` [advisoryAffectedVersion control]
+            refuse control session (advisoryFixedVersion control) "BlockedByDefault" (Just (advisoryExpectedId control))
 
 -- | A denial retains the unaffected listing and cannot publish into a required mirror.
 advisoryDenies :: AdvisoryCase -> Text -> AdvisorySession -> Expectation

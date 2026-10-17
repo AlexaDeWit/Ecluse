@@ -59,12 +59,9 @@ import Ecluse.Core.Rules (PreparedRule, prepResilience)
 import Ecluse.Core.Rules.Outage (AdmissionIdentity (AdmissionIdentity), logSkippedCheckEvidence)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
-    LimitShortfall (FixedUnscored, GapBelowMinimum, RemainingAboveCeiling, RemainingUnscored),
-    Reason (..),
-    ScoreComparison (scFixed, scRemaining),
+    Reason,
     SkippedCheck (SkippedUnavailable),
-    unAdvisoryIds,
-    unLimitShortfalls,
+    reasonAdvisories,
  )
 import Ecluse.Core.Server.Response (
     PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
@@ -83,7 +80,7 @@ import Ecluse.Core.Version (renderVersion)
 pipelineInternalModule :: Text
 pipelineInternalModule = "Ecluse.Server.Pipeline.Internal"
 
--- | Keep each version's files that meet the floor, so a version drops only when none survives, as at the download gate.
+-- | Keep each version's files whose strongest digest meets the floor, so a version drops only when none survives, as at the download gate.
 admitByIntegrity ::
     (IntegrityFloor floor) =>
     floor ->
@@ -204,7 +201,7 @@ data DenialAudit = DenialAudit
     , daReasonClass :: Metric.ReasonClass
     , daAdvisoryEtag :: Maybe DbEtag
     , daReasons :: [Reason]
-    -- ^ The reasons a policy denial gave. The @cve@ field joins the advisories they name.
+    -- ^ The reasons a policy denial gave. The @cve@ field joins the advisories still affecting the version.
     }
 
 -- | Render a 'DenialAudit' to the structured payload katip folds into the line's @data@ object.
@@ -226,45 +223,6 @@ versionAuditPayload pkg version etag =
         <> sl "version" version
         <> maybe mempty (\(DbEtag e) -> sl "active_advisory_db_etag" e) etag
 
--- Every constructor is matched, so a new reason that names advisories cannot drop out of the audit.
-reasonAdvisories :: Reason -> [Text]
-reasonAdvisories = \case
-    Remediates ids -> named ids
-    RemediatesWithinLimits compared -> comparedAdvisories compared
-    FixesButStillAffected fixed remaining -> named fixed <> named remaining
-    RemediationBeyondLimits compared shortfalls -> comparedAdvisories compared <> concatMap shortfallAdvisories (unLimitShortfalls shortfalls)
-    FixStillApplies ids -> named ids
-    AffectedBy _ _ ids -> named ids
-    KnownMalicious ids -> named ids
-    ScopeAllowListed{} -> []
-    ScopeNotAllowListed{} -> []
-    PublishedLongEnough{} -> []
-    PublishedTooRecently{} -> []
-    PublishTimeUnknown -> []
-    RunsOnInstall{} -> []
-    NothingRunsOnInstall -> []
-    InstallCodeUndetermined -> []
-    VersionYanked -> []
-    VersionNotYanked -> []
-    VersionDeprecated -> []
-    VersionNotDeprecated -> []
-    IdentityRevoked{} -> []
-    IdentityNotRevoked{} -> []
-    IdentityAllowListed{} -> []
-    IdentityNotAllowListed{} -> []
-    FixesNoAdvisory -> []
-    NoKnownMaliciousAdvisory -> []
-    NotAffectedAtThreshold{} -> []
-    RuleUnable{} -> []
-  where
-    named = toList . unAdvisoryIds
-    comparedAdvisories compared = named (scFixed compared) <> named (scRemaining compared)
-    shortfallAdvisories = \case
-        RemainingUnscored _ ids -> named ids
-        RemainingAboveCeiling{} -> []
-        FixedUnscored{} -> []
-        GapBelowMinimum{} -> []
-
 -- | Emit one audit log line per denied version, __denials only__. 'recordDenials' counts the same denials.
 logDenials :: (KatipContext m) => PackageName -> Maybe DbEtag -> [VersionVerdict] -> m ()
 logDenials pkg etag = traverse_ logOne
@@ -285,7 +243,7 @@ policyReasons = \case
     BelowIntegrityFloor -> []
     UpstreamInvalid -> []
 
--- | 'logSkippedChecks' once per package, version and skipped rule set for the life of the advisory source's outage.
+-- | 'logSkippedChecks' once per package, version and skipped rule set for the outage, so a public serve that admits again repeats no line.
 logSkippedChecksOnce :: (KatipContext m) => (AdmissionIdentity -> IO Bool) -> PackageName -> Text -> Maybe DbEtag -> [SkippedCheck] -> m ()
 logSkippedChecksOnce note pkg version etag skipped =
     unless (Set.null rules) $ do
@@ -294,6 +252,6 @@ logSkippedChecksOnce note pkg version etag skipped =
   where
     rules = Set.fromList [rule | SkippedUnavailable rule _ <- skipped]
 
--- | Emit one audit line per check the admission skipped for unavailability. An unreached check gets no line.
+-- | One audit line per check skipped for unavailability. An unreached check gets none. A trusted serve runs no rules, so it never reaches here.
 logSkippedChecks :: (KatipContext m) => PackageName -> Text -> Maybe DbEtag -> [SkippedCheck] -> m ()
 logSkippedChecks pkg version etag = logSkippedCheckEvidence (versionAuditPayload pkg version etag)

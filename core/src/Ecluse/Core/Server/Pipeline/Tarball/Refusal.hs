@@ -84,7 +84,7 @@ upstreamUnavailable :: ServeDecision
 upstreamUnavailable =
     versionUnresolved VersionMetadataUnavailable "the upstream registry was unavailable"
 
--- | A version absent from the public metadata. 'artifactOutcomeStatus' renders it as a @404@ forwarded miss.
+-- | A version absent from the public metadata. Its cause is terminal, and 'artifactOutcomeStatus' overrides it to a @404@ forwarded miss.
 versionAbsent :: ServeDecision
 versionAbsent =
     versionUnresolved VersionMissing "the requested version was not found upstream"

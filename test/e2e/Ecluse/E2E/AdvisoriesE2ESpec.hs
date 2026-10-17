@@ -26,7 +26,7 @@ import System.FilePath ((</>))
 import Test.Hspec (Expectation, expectationFailure, shouldSatisfy)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
-import Ecluse.E2E.Fixtures.Advisories (maliciousAdvisoryId, maliciousExportBase, npmAdvisoryExportBase, npmAdvisoryId, partialFixAdvisoryId, partialFixExportBase, pypiAdvisoryExportBase, pypiAdvisoryId)
+import Ecluse.E2E.Fixtures.Advisories (maliciousAdvisoryId, maliciousExportBase, npmAdvisoryExportBase, npmAdvisoryId, partialFixAdvisoryId, partialFixExportBase, partialFixRemainingAdvisoryId, pypiAdvisoryExportBase, pypiAdvisoryId)
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.E2E.Fixtures.Npm (corpusRevokedPkg, psName, psVersion)
 import Ecluse.E2E.Fixtures.PyPI (pypiDistInfoFor, pypiWheelFor)
@@ -54,7 +54,7 @@ npmAdvisoryFamily resources = scenarioFamily resources Npm dredgerTopology npmAd
     fixture policy = case policy of
         KnownMaliciousDefault -> npmCase (psName corpusRevokedPkg) "1.0.0" (psVersion corpusRevokedPkg) maliciousAdvisoryId True
         PartialFix -> npmCase "e2e-advisory" "1.18.0" "1.19.0" partialFixAdvisoryId False
-        PartialFixAbstaining -> npmCase "e2e-advisory" "1.18.0" "1.19.0" partialFixAdvisoryId False
+        PartialFixAbstaining -> npmCase "e2e-advisory" "1.18.0" "1.19.0" partialFixRemainingAdvisoryId False
         _ -> npmCase "e2e-advisory" "1.18.0" "1.19.0" npmAdvisoryId False
     npmCase name affected fixed advisory mirror =
         AdvisoryCase
@@ -104,7 +104,7 @@ pypiAdvisoryFamily resources = scenarioFamily resources PyPI pypiAdvisoryTopolog
     advisoryFor = \case
         KnownMaliciousDefault -> maliciousAdvisoryId
         PartialFix -> partialFixAdvisoryId
-        PartialFixAbstaining -> partialFixAdvisoryId
+        PartialFixAbstaining -> partialFixRemainingAdvisoryId
         _ -> pypiAdvisoryId
     session _ e2e = AdvisorySession (map (wheelVersion . fst) <$> advertisedFiles e2e "flask") (pypiReleaseDriver e2e "flask") Nothing
     wheelVersion filename = fromMaybe filename (T.stripPrefix "flask-" filename >>= T.stripSuffix "-py3-none-any.whl")

@@ -192,7 +192,7 @@ workerTracingPortOf telemetry =
         { wtpMirrorJobSpan = withMirrorJobSpan telemetry
         }
 
--- | Project 'withAdvisorySyncSpan' onto the 'AdvisorySyncTracingPort' "Ecluse.Runtime.Cve.Sync" brackets through.
+-- | Project 'withAdvisorySyncSpan' onto the 'AdvisorySyncTracingPort' "Ecluse.Runtime.Cve.Sync" brackets through. Inert when telemetry is disabled.
 advisorySyncTracingPortOf :: Telemetry -> AdvisorySyncTracingPort
 advisorySyncTracingPortOf telemetry =
     AdvisorySyncTracingPort

@@ -14,6 +14,7 @@ module Ecluse.E2E.Fixtures.Advisories (
     maliciousAdvisoryId,
     partialFixExportBase,
     partialFixAdvisoryId,
+    partialFixRemainingAdvisoryId,
     buildAdvisoryFixtures,
     ecosystemAdvisory,
 ) where
@@ -72,6 +73,10 @@ partialFixExportBase = "advisories/partial-fix"
 partialFixAdvisoryId :: Text
 partialFixAdvisoryId = "GHSA-e2e-partial-severe"
 
+-- | The minor advisory that still affects the partial fix, which a denial of that release names.
+partialFixRemainingAdvisoryId :: Text
+partialFixRemainingAdvisoryId = "GHSA-e2e-partial-minor"
+
 -- | Write the local OSV archives and shared EPSS slice without reaching public feeds.
 buildAdvisoryFixtures :: FilePath -> IO ()
 buildAdvisoryFixtures root = do
@@ -104,7 +109,7 @@ ecosystemAdvisory ecosystem advisory name fixed =
 -- The partial fix's remaining advisory: CVSS 4.2 and the EPSS 'minorAlias' carries, from the fix on.
 minorAdvisory :: Ecosystem -> Text -> Text -> LByteString
 minorAdvisory ecosystem name fixed =
-    scoredAdvisory ecosystem "GHSA-e2e-partial-minor" minorAlias "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:L/A:N" name [object ["introduced" .= fixed]]
+    scoredAdvisory ecosystem partialFixRemainingAdvisoryId minorAlias "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:L/A:N" name [object ["introduced" .= fixed]]
 
 minorAlias :: Text
 minorAlias = "CVE-2026-10007"
