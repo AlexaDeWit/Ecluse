@@ -256,8 +256,8 @@ publishRoute =
         \self-reported name. Only a document with a non-empty `_attachments` object, exactly one \
         \version, and every `dist-tags` value on that version is relayed: any other body, such as the \
         \one `npm deprecate` sends, answers `501`. A body that repeats a key, is not a JSON object, or \
-        \files its version under a key other than its `version` field answers `400`. The target's status and JSON-labelled bytes \
-        \are relayed transparently."
+        \files its version under a key other than its `version` field answers `400`. The target's \
+        \status and JSON-labelled bytes are relayed transparently."
         (Just publishRequest)
         npmPublishContract
 

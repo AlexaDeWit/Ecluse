@@ -213,7 +213,7 @@ uploadClaims :: ByteString -> Either PublishBodyFault [Text]
 uploadClaims body = case parseOnly (jsonNoDup' <* skipWhile isJsonSpace <* endOfInput) body of
     Right document@(Object fields)
         | not (isNewRelease fields) -> Left (PublishUnsupported npmNewReleaseOnly)
-        | not (versionFiled fields) -> Left (PublishMalformed (ParseError "the publish body files its version under a key that differs from its version field"))
+        | not (keyMatchesVersion fields) -> Left (PublishMalformed (ParseError "the publish body's version document must be an object whose version field equals its key"))
         | otherwise -> Right (declaredNames document)
     _ -> Left (PublishMalformed (ParseError "the publish body is not a JSON object without repeated keys"))
 
@@ -223,17 +223,20 @@ npmNewReleaseOnly = "this proxy relays new-release publish documents only: chang
 
 -- One version and a non-empty @_attachments@, with every tag on that version, so a tag can name only the new version.
 isNewRelease :: KeyMap Value -> Bool
-isNewRelease fields = case (KeyMap.lookup "_attachments" fields, KeyMap.lookup "versions" fields) of
-    (Just (Object attachments), Just (Object versions))
-        | [version] <- KeyMap.keys versions -> not (KeyMap.null attachments) && tagsOnly version (KeyMap.lookup "dist-tags" fields)
+isNewRelease fields = case (KeyMap.lookup "_attachments" fields, singleVersion fields) of
+    (Just (Object attachments), Just (version, _)) -> not (KeyMap.null attachments) && tagsOnly version (KeyMap.lookup "dist-tags" fields)
     _ -> False
 
 -- The key equals the document's own version field, so a store that reads either sees one version.
-versionFiled :: KeyMap Value -> Bool
-versionFiled fields = case KeyMap.lookup "versions" fields of
-    Just (Object versions)
-        | [(version, Object document)] <- KeyMap.toList versions -> KeyMap.lookup "version" document == Just (String (Key.toText version))
+keyMatchesVersion :: KeyMap Value -> Bool
+keyMatchesVersion fields = case singleVersion fields of
+    Just (version, Object document) -> KeyMap.lookup "version" document == Just (String (Key.toText version))
     _ -> False
+
+singleVersion :: KeyMap Value -> Maybe (Key.Key, Value)
+singleVersion fields = case KeyMap.lookup "versions" fields of
+    Just (Object versions) | [entry] <- KeyMap.toList versions -> Just entry
+    _ -> Nothing
 
 tagsOnly :: Key.Key -> Maybe Value -> Bool
 tagsOnly version = \case

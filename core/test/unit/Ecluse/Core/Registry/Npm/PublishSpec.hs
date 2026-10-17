@@ -377,10 +377,15 @@ uploadGuardSpec = describe "uploadClaims (the first-party new-release guard)" $ 
         uploadClaims (toStrict (npmTaggedRelease (object ["latest" .= ("1.0.0" :: Text)]))) `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
         uploadClaims (toStrict (npmTaggedRelease (object ["latest" .= ("2.0.0" :: Text), "beta" .= Null]))) `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
         uploadClaims (toStrict (npmTaggedRelease (String "2.0.0"))) `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
-    it "refuses a version filed under another key, or with no version field, as malformed" $ do
+    it "refuses a version filed under another key, or without a string version field, as malformed" $ do
         uploadClaims (toStrict npmMisfiledVersion) `shouldSatisfy` isMalformedBody
         unversioned <- editedRelease (KeyMap.insert "versions" (object ["2.0.0" .= object ["name" .= widget]]))
         uploadClaims unversioned `shouldSatisfy` isMalformedBody
+        numbered <- editedRelease (KeyMap.insert "versions" (object ["2.0.0" .= object ["name" .= widget, "version" .= (2 :: Int)]]))
+        uploadClaims numbered `shouldSatisfy` isMalformedBody
+    it "refuses a version document that is not an object as malformed" $ do
+        bare <- editedRelease (KeyMap.insert "versions" (object ["2.0.0" .= ("2.0.0" :: Text)]))
+        uploadClaims bare `shouldSatisfy` isMalformedBody
     it "relays a release under another tag, or with no dist-tags member" $ do
         uploadClaims (toStrict (npmTaggedRelease (object ["beta" .= ("2.0.0" :: Text)]))) `shouldBe` Right [widget, widget, widget]
         untagged <- editedRelease (KeyMap.delete "dist-tags")
@@ -389,11 +394,11 @@ uploadGuardSpec = describe "uploadClaims (the first-party new-release guard)" $ 
     widget :: Text
     widget = "@acme/widget"
     -- A last-wins store reads this version's name as the second, out-of-scope copy.
+    repeatedVersionName :: ByteString
+    repeatedVersionName = "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"2.0.0\":{\"name\":\"@acme/widget\",\"name\":\"@victim/target\",\"version\":\"2.0.0\"}},\"_attachments\":{\"widget-2.0.0.tgz\":{\"data\":\"AA==\"}}}"
     -- The second key spells _attachments with an escape, so only the decoded keys repeat.
     escapedRepeat :: ByteString
     escapedRepeat = "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"2.0.0\":{\"name\":\"@acme/widget\",\"version\":\"2.0.0\"}},\"_attachments\":{\"widget-2.0.0.tgz\":{\"data\":\"AA==\"}},\"\\u005fattachments\":{}}"
-    repeatedVersionName :: ByteString
-    repeatedVersionName = "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"2.0.0\":{\"name\":\"@acme/widget\",\"name\":\"@victim/target\",\"version\":\"2.0.0\"}},\"_attachments\":{\"widget-2.0.0.tgz\":{\"data\":\"AA==\"}}}"
     -- Each refused shape differs from a real publish in one place.
     editedRelease edit = toStrict . encode . edit <$> decodeJsonOrFail @Object (toStrict (npmReleaseDocument widget widget widget))
     withVersions extra own = case (extra, own) of

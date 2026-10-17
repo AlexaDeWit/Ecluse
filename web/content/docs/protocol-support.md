@@ -22,8 +22,8 @@ bytes it installs, both gated by the same rules, integrity floors, and egress co
 [Complete PyPI setup](@/docs/pypi-setup.md) explains how to configure these capabilities together.
 
 A `pypi` mount accepts native multipart publication when `publicationTarget` is configured.
-The upload route otherwise answers `405`. The first-party guard validates every declared project
-name before relaying the original bytes and Content-Type. Caller Basic credentials retain both
+The upload route otherwise answers `405`. The first-party guard validates every multipart `name`
+field before relaying the original bytes and Content-Type. Caller Basic credentials retain both
 username and password, including an empty username. The relay accepts only an upload with one
 `:action` part whose value is `file_upload`, which every uploader sends. A missing or repeated
 `:action` answers `400`. Any other value, such as `remove_pkg` or `doc_upload`, answers `501`.
