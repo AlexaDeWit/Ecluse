@@ -18,7 +18,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Text (isAsciiAlphaNum)
 import Ecluse.Core.Version (canonicalPep440, compareVersions, isStable, mkVersion, parseVersionKey, renderVersion)
 import Ecluse.Core.Version.Token (VToken (VNum, VStr), classifyRun, digitRuns, numOr0, parseNumSeg, withinVersionLength)
-import Ecluse.Test.Version (digitRunIs, genPyPI, genPyPINearPlain)
+import Ecluse.Test.Version (digitRunIs, genPyPI, genPyPINearPlain, leadsWithZero)
 
 -- | Preserve complete keys, refusals, rendering and ordering against the base parser.
 spec :: Spec
@@ -34,8 +34,10 @@ spec = describe "PEP 440 against the frozen parser at ec1b8d8" $ do
                 cover 20 "a plain release (the one-pass scanner)" plain
                 cover 10 "a near miss the frozen parser refuses (the full scanner)" (not plain && not accepted)
                 cover 10 "a near miss the frozen parser accepts (the full scanner)" (not plain && accepted)
-                cover 1 "a number of 18 digits" (any (digitRunIs EQ) (digitRuns raw))
-                cover 1 "a number of more than 18 digits" (any (digitRunIs GT) (digitRuns raw))
+                cover 1 "a plain release with an 18-digit number" (plain && any (digitRunIs EQ) (digitRuns raw))
+                cover 1 "a plain release with a leading zero" (plain && any leadsWithZero (digitRuns raw))
+                cover 1 "a near miss with a leading zero" (not plain && any leadsWithZero (digitRuns raw))
+                cover 1 "a near miss with a number over 18 digits" (not plain && any (digitRunIs GT) (digitRuns raw))
                 pep440Snapshot raw === frozenSnapshot raw
     it "keeps release normalisation for nonzero ends, zero suffixes and all-zero lists" $
         take 10 [raw | raw <- releaseNormalisationCases, pep440Snapshot raw /= frozenSnapshot raw] `shouldBe` []
@@ -49,7 +51,7 @@ spec = describe "PEP 440 against the frozen parser at ec1b8d8" $ do
                 /= (compare <$> frozenParsePep440 a <*> frozenParsePep440 b)
             ]
             `shouldBe` []
-    modifyMaxSuccess (const 2000) $
+    modifyMaxSuccess (const 4500) $
         it "keeps ordering for generated valid and malformed pairs" $
             hedgehog $ do
                 (a, b) <- forAll ((,) <$> genPair <*> genPair)

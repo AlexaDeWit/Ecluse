@@ -22,7 +22,7 @@ import Ecluse.Core.Version.Token (digitRuns, withinVersionLength)
 import Ecluse.Test.Corpus (corpusPackages, cpPath)
 import Ecluse.Test.Json (keysAt, objectAt)
 import Ecluse.Test.Support (decodeJsonOrFail)
-import Ecluse.Test.Version (digitRunIs, genNpmNearPlain)
+import Ecluse.Test.Version (digitRunIs, genNpmNearPlain, leadsWithZero)
 
 spec :: Spec
 spec = describe "parseSemver" $ do
@@ -71,8 +71,9 @@ generatedSpec = describe "properties" $
                 cover 20 "a plain release (the one-pass scanner)" plain
                 cover 20 "a near miss the library refuses (the full scanner)" (not plain && not accepted)
                 cover 1 "a near miss the library accepts (the full scanner)" (not plain && accepted)
-                cover 1 "a number of 18 digits" (any (digitRunIs EQ) (digitRuns raw))
-                cover 1 "a number of more than 18 digits" (any (digitRunIs GT) (digitRuns raw))
+                cover 1 "a plain release with an 18-digit number" (plain && any (digitRunIs EQ) (digitRuns raw))
+                cover 1 "a near miss with a leading zero" (not plain && any leadsWithZero (digitRuns raw))
+                cover 1 "a near miss with a number over 18 digits" (not plain && any (digitRunIs GT) (digitRuns raw))
                 scanned raw === libraryParse raw
 
 -- Each rule of the library's grammar that a reader of the semver specification could miss.
@@ -125,7 +126,7 @@ plainRelease raw = case T.split (== '.') raw of
     [major, minor, patch] -> all plainNumber [major, minor, patch]
     _ -> False
   where
-    plainNumber n = (digitRunIs LT n || digitRunIs EQ n) && (n == "0" || not (T.null n || T.isPrefixOf "0" n))
+    plainNumber n = (digitRunIs LT n || digitRunIs EQ n) && not (T.null n || leadsWithZero n)
 
 -- Labels of the raw text alone, so the property fails when a class of text stops being generated.
 coverTextClasses :: (MonadTest m) => Text -> m ()
@@ -141,7 +142,6 @@ coverTextClasses raw = do
     cover 0.1 "a combining mark in a version" (landsInVersion isMark raw)
     cover 0.1 "a letter or digit beyond the basic plane in a version" (landsInVersion (\c -> c > '\xFFFF' && isAlphaNum c) raw)
   where
-    leadsWithZero piece = T.all isDigit piece && T.isPrefixOf "0" piece && T.compareLength piece 1 == GT
     endsVersion c = isAlphaNum c || c == '-'
 
 -- Of the text after the first hyphen or plus sign: whether a dot or a plus sign bounds an empty piece.
