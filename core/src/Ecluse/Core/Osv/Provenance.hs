@@ -58,10 +58,12 @@ import Ecluse.Core.Osv.Schema (
     renderMetaKey,
  )
 import Ecluse.Core.Package.Hash (sha256Hex)
-import Ecluse.Core.Security.Authority (credentialFreePath, dialledOrigin)
+import Ecluse.Core.Security.Authority (credentialFreeOrigin, credentialFreePath, dialledOrigin)
 import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 
--- | The sources one artifact was compiled from. A field is 'Nothing' when the source supplied no value or the artifact predates the key.
+{- | The sources one artifact was compiled from, as they described themselves. Every field is
+'Nothing' when the source supplied no such value, or when an older artifact predates the key.
+-}
 data AdvisoryProvenance = AdvisoryProvenance
     { apOsvSource :: Maybe Text
     -- ^ The advisory export in its stored form ('renderRecordedSource'). Older artifacts carry a credential-free URL.
@@ -99,7 +101,9 @@ provenanceRows prov =
   where
     row key = fmap (renderMetaKey key,)
 
--- | Read the provenance an artifact's @meta@ rows carry. An absent key, an over-long value, or an unreadable timestamp reads as absence.
+{- | Read the provenance an artifact's @meta@ rows carry. An absent key, an over-long value,
+and an unreadable timestamp all read as absence, never as a fault.
+-}
 decodeProvenance :: [(Text, Text)] -> AdvisoryProvenance
 decodeProvenance rows =
     noProvenance
@@ -129,14 +133,14 @@ maxLabelLength = 128
 data SourcePathRecording
     = -- | Record only the path's SHA-256, so a credential written into the path stays out of the artifact.
       FingerprintSourcePath
-    | -- | Record the path itself.
+    | -- | Record the URL as 'Ecluse.Core.Security.Authority.credentialFreeUrl' leaves it, path included.
       RecordSourcePath
     deriving stock (Eq, Show)
 
 -- | A source as an artifact records it. Userinfo, the query and the fragment are never part of it.
 data RecordedSource = RecordedSource
     { rsOrigin :: Text
-    -- ^ The scheme and the dialled @host:port@ ('dialledOrigin').
+    -- ^ The scheme and authority: the dialled @host:port@ before a fingerprint, the authority as written before a path.
     , rsPath :: RecordedPath
     }
     deriving stock (Eq, Show)
@@ -151,12 +155,11 @@ data RecordedPath
 
 -- | Record a fetched URL. A changed path changes the record under either choice.
 recordSource :: SourcePathRecording -> Text -> RecordedSource
-recordSource recording url = RecordedSource{rsOrigin = dialledOrigin url, rsPath = recorded recording}
+recordSource recording url = case recording of
+    FingerprintSourcePath -> RecordedSource{rsOrigin = dialledOrigin url, rsPath = PathSha256 (sha256Hex (encodeUtf8 path))}
+    RecordSourcePath -> RecordedSource{rsOrigin = credentialFreeOrigin url, rsPath = PathAsFetched path}
   where
     path = credentialFreePath url
-    recorded = \case
-        FingerprintSourcePath -> PathSha256 (sha256Hex (encodeUtf8 path))
-        RecordSourcePath -> PathAsFetched path
 
 -- | The stored form. A fingerprint follows a slash, so 'Ecluse.Core.Security.Authority.dialledAuthorityLabel' still reads the authority.
 renderRecordedSource :: RecordedSource -> Text
@@ -165,7 +168,9 @@ renderRecordedSource source =
         PathAsFetched path -> path
         PathSha256 hex -> "/<sha256:" <> hex <> ">"
 
--- | An RFC 3339 timestamp, or a bare date read as its UTC start of day. Anything else is 'Nothing', never an invented value.
+{- | An RFC 3339 timestamp, or a bare date read as its UTC start of day. Anything else is
+'Nothing', which records no value rather than an invented one.
+-}
 parseSourceTime :: Text -> Maybe UTCTime
 parseSourceTime raw = rfc3339 <|> offsetWithoutColon <|> startOfDay
   where
@@ -183,7 +188,9 @@ parseHttpDate raw = parseTimeM True defaultTimeLocale "%a, %d %b %Y %H:%M:%S %Z"
 lastModifiedOf :: [ByteString] -> Maybe UTCTime
 lastModifiedOf = parseHttpDate . decodeUtf8 <=< listToMaybe
 
--- | How old each source may be before Pilot raises its alarm. A slow ecosystem takes a long threshold, so its quiet feed is not read as stalled.
+{- | How old each source may be before Pilot raises its alarm. Loud ecosystems take a short
+threshold and slow ones a long threshold, so a quiet feed is not read as a stalled one.
+-}
 data QuietTime = QuietTime
     { qtOsv :: NominalDiffTime
     -- ^ The threshold for this ecosystem's advisory export.
@@ -214,7 +221,9 @@ data SourceAge = SourceAge
     }
     deriving stock (Eq, Show)
 
--- | The ages this provenance supports at @now@. A source that recorded no timestamp yields no age, quiet or fresh.
+{- | The ages this provenance supports at @now@. A source that recorded no timestamp yields no
+age, because nothing about it can be read as quiet or fresh.
+-}
 sourceAges :: UTCTime -> QuietTime -> AdvisoryProvenance -> [SourceAge]
 sourceAges now quiet prov =
     catMaybes

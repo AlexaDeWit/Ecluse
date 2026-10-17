@@ -148,7 +148,7 @@ artifact's metadata:
 |---|---|
 | `source_url` | The OSV source's `host:port` identity. |
 | `epss_source_url` | The EPSS source's `host:port` identity. |
-| `osv_source` | The OSV source's scheme, host and port, then the SHA-256 of its path as `/<sha256:hex>`. With `advisories.recordSourcePath: true`, the path itself. |
+| `osv_source` | The OSV source's scheme, host and port, then the SHA-256 of its path as `/<sha256:hex>`. With `advisories.recordSourcePath: true`, the URL as written, without userinfo, query, or fragment. |
 | `epss_source` | The EPSS source, in the same form as `osv_source`. |
 | `osv_digest` | The SHA-256 of the OSV export's response body. |
 | `epss_digest` | The SHA-256 of the EPSS feed's response body, when the feed arrived. |

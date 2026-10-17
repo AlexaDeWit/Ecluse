@@ -26,7 +26,7 @@ import Ecluse.Core.Osv.Provenance (
     sourceAges,
     sourceQuiet,
  )
-import Ecluse.Core.Security.Authority (dialledAuthorityLabel)
+import Ecluse.Core.Security.Authority (credentialFreeUrl, dialledAuthorityLabel)
 
 day :: UTCTime
 day = UTCTime (fromGregorian 2026 9 1) 0
@@ -77,7 +77,7 @@ spec = do
             apOsvSource (decodeProvenance [("osv_source", toText (replicate 4096 'u'))]) `shouldBe` Nothing
 
     describe "recordSource" $ do
-        let source = "https://deploy:hunter2@mirror.example.test/s3cr3t-token/osv/npm/all.zip?sig=abc#frag"
+        let source = "https://deploy:hunter2@Mirror.Example.Test/s3cr3t-token/osv/npm/all.zip?sig=abc#frag"
             stored recording = renderRecordedSource (recordSource recording source)
             bothChoices = [FingerprintSourcePath, RecordSourcePath]
 
@@ -85,8 +85,9 @@ spec = do
             stored FingerprintSourcePath
                 `shouldBe` "https://mirror.example.test:443/<sha256:97c5e24e410374c33b61de99db58c862c830dd0ba017d10045d5b837a76f10fd>"
 
-        it "stores the path itself when asked, still without userinfo, query, or fragment" $
-            stored RecordSourcePath `shouldBe` "https://mirror.example.test:443/s3cr3t-token/osv/npm/all.zip"
+        it "stores the URL as written when asked, still without userinfo, query, or fragment" $ do
+            stored RecordSourcePath `shouldBe` "https://Mirror.Example.Test/s3cr3t-token/osv/npm/all.zip"
+            stored RecordSourcePath `shouldBe` credentialFreeUrl source
 
         it "changes the record when the path changes, under either choice" $
             for_ bothChoices $ \recording ->

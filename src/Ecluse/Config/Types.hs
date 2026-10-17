@@ -98,7 +98,9 @@ value exists carrying credential material, another scheme, or an authority the e
 newtype Url = Url Text
     deriving stock (Eq, Ord, Show)
 
--- | Build a 'Url' from a key and the value under it, each refusal naming the key. The credential refusal runs first, as the others quote the value.
+{- | Build a 'Url' from a configuration key and the value written under it, the key naming every
+refusal. The credential refusal runs first, because the two refusals below it quote the value.
+-}
 mkUrl :: Text -> Text -> Either Text Url
 mkUrl key raw
     | Left reason <- refuseCredentialMaterial key trimmed = Left reason
@@ -123,7 +125,9 @@ unUrl (Url u) = u
 data HttpScheme = Http | Https
     deriving stock (Eq, Show)
 
--- | Split an @http@ or @https@ URL into its scheme and the text after the separator. The configuration layer shares this one scheme check.
+{- | Split a URL into the scheme it writes and the text after the separator, or 'Nothing' for
+neither @http@ nor @https@. It is the one scheme check the configuration layer shares.
+-}
 splitHttpScheme :: Text -> Maybe (HttpScheme, Text)
 splitHttpScheme raw =
     ((Https,) <$> T.stripPrefix "https://" raw) <|> ((Http,) <$> T.stripPrefix "http://" raw)

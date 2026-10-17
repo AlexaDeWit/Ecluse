@@ -121,25 +121,29 @@ import Ecluse.Core.Telemetry.Span (withOptionalSpan)
 import OpenTelemetry.Trace.Core (Span, SpanKind (Internal), SpanStatus (Error), TracerProvider, addAttribute, setStatus)
 
 -- | The two upstreams one compile pass reads: the ecosystem's advisories, and the scores it joins onto them.
-data CompileSources = CompileSources
-    { csOsvExportUrl :: String
-    -- ^ The ecosystem's OSV export archive ('Ecluse.Core.Osv.Advisory.osvExportUrl').
-    , csEpssFeedUrl :: String
-    -- ^ The EPSS daily feed, from the configured @advisories.epssFeedUrl@.
-    , csOsvRecorded :: RecordedSource
-    , csEpssRecorded :: RecordedSource
-    }
+data CompileSources = CompileSources String String RecordedSource RecordedSource
     deriving stock (Eq, Show)
 
 -- | The sources one pass reads. Each recorded form derives from its fetched URL, under the one choice given.
 mkCompileSources :: SourcePathRecording -> String -> String -> CompileSources
 mkCompileSources recording osvUrl epssUrl =
-    CompileSources
-        { csOsvExportUrl = osvUrl
-        , csEpssFeedUrl = epssUrl
-        , csOsvRecorded = recordSource recording (toText osvUrl)
-        , csEpssRecorded = recordSource recording (toText epssUrl)
-        }
+    CompileSources osvUrl epssUrl (recordSource recording (toText osvUrl)) (recordSource recording (toText epssUrl))
+
+-- | The ecosystem's OSV export archive ('Ecluse.Core.Osv.Advisory.osvExportUrl').
+csOsvExportUrl :: CompileSources -> String
+csOsvExportUrl (CompileSources url _ _ _) = url
+
+-- | The EPSS daily feed, from the configured @advisories.epssFeedUrl@.
+csEpssFeedUrl :: CompileSources -> String
+csEpssFeedUrl (CompileSources _ url _ _) = url
+
+-- | The export as its artifact records it.
+csOsvRecorded :: CompileSources -> RecordedSource
+csOsvRecorded (CompileSources _ _ recorded _) = recorded
+
+-- | The feed as its artifact records it.
+csEpssRecorded :: CompileSources -> RecordedSource
+csEpssRecorded (CompileSources _ _ _ recorded) = recorded
 
 -- | A compiled artifact in its exclusive temporary file, with the facts its publication compares.
 data OsvCandidate = OsvCandidate

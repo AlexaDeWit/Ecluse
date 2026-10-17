@@ -180,9 +180,10 @@ advisories:
   # Pilot only: whether each artifact records the path of each source URL above. Every
   # consumer, and every principal that can read the advisory bucket, can read the artifact.
   # false records each source as its scheme, host and port, then the SHA-256 of its path.
-  # A credential written into a path then stays out of the artifact. true records the path
-  # itself. A changed path changes the record either way. Switching this does not restart the
-  # publication guard's order, which compares the SHA-256 of each whole source URL.
+  # A credential written into a path then stays out of the artifact. true records each URL
+  # as written, path included. A changed path changes the record either way. Switching
+  # this does not restart the publication guard's order, which compares the SHA-256 of
+  # each whole source URL.
   recordSourcePath: false
   # Pilot only: how long one ecosystem's advisory export may go unchanged, in seconds, before
   # Pilot logs the quiet-time alarm at ERROR after each compile. The key is the ecosystem, as

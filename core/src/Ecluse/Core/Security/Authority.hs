@@ -26,6 +26,7 @@ module Ecluse.Core.Security.Authority (
     authorityLabel,
     dialledAuthorityLabel,
     credentialFreeUrl,
+    credentialFreeOrigin,
     dialledOrigin,
     credentialFreePath,
 ) where
@@ -75,15 +76,19 @@ authorityLabelWithDefault portless = maybe unresolvedAuthority renderHostPort . 
 
 -- | Remove userinfo, query and fragment while retaining the fetched URL's scheme, authority and path.
 credentialFreeUrl :: Text -> Text
-credentialFreeUrl raw = schemePrefix raw <> authorityOf raw <> credentialFreePath raw
+credentialFreeUrl raw = credentialFreeOrigin raw <> credentialFreePath raw
+
+-- | The scheme and the authority as written, without userinfo.
+credentialFreeOrigin :: Text -> Text
+credentialFreeOrigin raw = schemePrefix raw <> authorityOf raw
 
 -- | The scheme and the dialled @host:port@, the part of a URL that names where it was fetched from.
 dialledOrigin :: Text -> Text
 dialledOrigin raw = schemePrefix raw <> dialledAuthorityLabel raw
 
--- | The path a URL fetches, without its query or fragment. Empty when the URL writes none.
+-- | The path a URL fetches. The query and fragment are cut first, so a slash inside them is never read as the path.
 credentialFreePath :: Text -> Text
-credentialFreePath = T.takeWhile (`notElem` ['?', '#']) . registryPath
+credentialFreePath = registryPath . T.takeWhile (`notElem` ['?', '#'])
 
 -- The scheme with its separator, or empty for a URL that writes none.
 schemePrefix :: Text -> Text

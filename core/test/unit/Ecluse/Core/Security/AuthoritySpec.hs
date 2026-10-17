@@ -15,6 +15,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 import Ecluse.Core.Security (
     HostPort (..),
     authorityLabel,
+    credentialFreeOrigin,
     credentialFreePath,
     credentialFreeUrl,
     dialledAuthorityLabel,
@@ -230,15 +231,20 @@ credentialFreeUrlSpec = describe "credentialFreeUrl" $ do
             `shouldBe` "https://[2606:4700::1111]:8443/npm/all.zip"
 
 credentialFreePartsSpec :: Spec
-credentialFreePartsSpec = describe "dialledOrigin and credentialFreePath" $ do
-    it "split a URL into an origin with its dialled port, and a path without query or fragment" $ do
-        let url = "https://deploy:hunter2@osv.example.test/npm/all.zip?sig=abc#frag"
+credentialFreePartsSpec = describe "credentialFreeOrigin, dialledOrigin and credentialFreePath" $ do
+    it "split a URL into an origin and a path without userinfo, query or fragment" $ do
+        let url = "https://deploy:hunter2@Osv.Example.Test/npm/all.zip?sig=abc#frag"
+        credentialFreeOrigin url `shouldBe` "https://Osv.Example.Test"
         dialledOrigin url `shouldBe` "https://osv.example.test:443"
         credentialFreePath url `shouldBe` "/npm/all.zip"
     it "names port 80 for a portless http origin" $
         dialledOrigin "http://mirror.example.test/feed" `shouldBe` "http://mirror.example.test:80"
     it "yields an empty path for a URL that writes none" $
         credentialFreePath "https://osv.example.test?sig=abc" `shouldBe` ""
+    it "never reads a slash inside the query or fragment as the path" $ do
+        credentialFreePath "https://osv.example.test?a=/b" `shouldBe` ""
+        credentialFreePath "https://osv.example.test#/b" `shouldBe` ""
+        credentialFreeUrl "https://osv.example.test?a=/b" `shouldBe` "https://osv.example.test"
 
 {- Every operator-configured URL passes this rule at load. Boot echoes each resolved key, so a
 value that survives the refusal is one the echo can print as written. -}

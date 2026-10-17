@@ -186,22 +186,22 @@ spec = describe "SQLite OSV Compilation" $ do
                                 cveCoveredNames (cveDbLookup db) `shouldReturn` ["hono"]
 
     -- The SHA-256 of /feed stands in for the path under the default recording.
-    for_ [(FingerprintSourcePath, "/<sha256:88af5e07b80709e7fc3d12d4f8e0858b26ba848361018050dcbec50f9d06a280>"), (RecordSourcePath, "/feed")] $ \(recording, storedPath) ->
-        it ("fetches both credential-bearing overrides without persisting or logging their credentials, " <> show recording) $
+    for_ [(eco, recording, storedPath) | eco <- [Npm, PyPI], (recording, storedPath) <- [(FingerprintSourcePath, "/<sha256:88af5e07b80709e7fc3d12d4f8e0858b26ba848361018050dcbec50f9d06a280>"), (RecordSourcePath, "/feed")]] $ \(eco, recording, storedPath) ->
+        it ("fetches both credential-bearing overrides without persisting or logging their credentials, " <> show eco <> ", " <> show recording) $
             withSystemTempDirectory "ecluse-osv-compile" $ \outDir -> do
-                zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+                archive <- factsArchive eco
                 epssData <- LBS.readFile epssFixtureFile
                 (metrics, _) <- recordingAdvisoryCompileMetricsPort
                 (dbFile, logged) <- captureJsonLog $ \logEnv ->
-                    withCredentialSource "OSV" zipData $ \source ->
+                    withCredentialSource "OSV" archive $ \source ->
                         withCredentialSource "EPSS" epssData $ \epssSource -> do
-                            path <- runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) EpssRequired (mkCompileSources recording source epssSource) testQuietTime)
+                            path <- runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor eco) EpssRequired (mkCompileSources recording source epssSource) testQuietTime)
                             meta <- metaOf path
                             Map.lookup "source_url" meta `shouldBe` Just (authorityLabel (toText source))
                             Map.lookup "epss_source_url" meta `shouldBe` Just (authorityLabel (toText epssSource))
                             Map.lookup "osv_source" meta `shouldBe` Just ("http://" <> authorityLabel (toText source) <> storedPath)
                             Map.lookup "epss_source" meta `shouldBe` Just ("http://" <> authorityLabel (toText epssSource) <> storedPath)
-                            Map.lookup "row_count" meta `shouldBe` Just "1"
+                            Map.lookup "row_count" meta `shouldBe` Just "3"
                             pure path
                 bytes <- readFileBS dbFile
                 for_ ["OSV", "EPSS"] $ \tag ->
@@ -588,15 +588,18 @@ candidateSpec = describe "the candidate a publication decides on" $ do
                 archive <- factsArchive eco
                 withStub status200 archive $ \osvStub ->
                     withStub status200 factsFeed $ \epssStub -> do
-                        let factsAt recording path = candidateFactsFrom outDir eco EpssRequired (sourcesRecorded recording osvStub epssStub path)
-                            identityAt path = sourceIdentityOf (stubBaseUrl osvStub <> path)
-                        fingerprinted <- factsAt FingerprintSourcePath "/all.zip"
-                        recorded <- factsAt RecordSourcePath "/all.zip"
+                        let factsAt recording (osvPath, epssPath) = candidateFactsFrom outDir eco EpssRequired (mkCompileSources recording (unpack (stubBaseUrl osvStub) <> osvPath) (unpack (stubBaseUrl epssStub) <> epssPath))
+                            identitiesAt (osvPath, epssPath) = (sourceIdentityOf (stubBaseUrl osvStub <> toText osvPath), Just (sourceIdentityOf (stubBaseUrl epssStub <> toText epssPath)))
+                            identitiesOf facts = (smIdentity (cfOsv facts), smIdentity <$> cfEpss facts)
+                            shipped = ("/all.zip", "/epss.csv.gz")
+                            moved = ("/moved/all.zip", "/moved/epss.csv.gz")
+                        fingerprinted <- factsAt FingerprintSourcePath shipped
+                        recorded <- factsAt RecordSourcePath shipped
                         -- The guard decides on these facts, so the recording choice alone changes no decision.
                         recorded `shouldBe` fingerprinted
-                        smIdentity (cfOsv fingerprinted) `shouldBe` identityAt "/all.zip"
-                        moved <- traverse (fmap (smIdentity . cfOsv) . (`factsAt` "/moved/all.zip")) [FingerprintSourcePath, RecordSourcePath]
-                        moved `shouldBe` replicate 2 (identityAt "/moved/all.zip")
+                        identitiesOf fingerprinted `shouldBe` identitiesAt shipped
+                        movedFacts <- traverse (`factsAt` moved) [FingerprintSourcePath, RecordSourcePath]
+                        map identitiesOf movedFacts `shouldBe` replicate 2 (identitiesAt moved)
 
 epssEnrichmentSpec :: Spec
 epssEnrichmentSpec = describe "EPSS enrichment under the ecosystem's requirement" $ do
@@ -773,11 +776,8 @@ systemicDropZip =
         )
 
 sourcesOf :: Stub -> Stub -> String -> CompileSources
-sourcesOf = sourcesRecorded FingerprintSourcePath
-
-sourcesRecorded :: SourcePathRecording -> Stub -> Stub -> String -> CompileSources
-sourcesRecorded recording osvStub epssStub osvPath =
-    mkCompileSources recording (unpack (stubBaseUrl osvStub) <> osvPath) (unpack (stubBaseUrl epssStub) <> "/epss.csv.gz")
+sourcesOf osvStub epssStub osvPath =
+    mkCompileSources FingerprintSourcePath (unpack (stubBaseUrl osvStub) <> osvPath) (unpack (stubBaseUrl epssStub) <> "/epss.csv.gz")
 
 -- The shared stub omits query strings, so this fixture checks authentication before serving bytes.
 withCredentialSource :: Text -> LByteString -> (String -> IO a) -> IO a
