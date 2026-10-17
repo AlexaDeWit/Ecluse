@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Project decoded PyPI files into releases keyed by canonical PEP 440 versions.
-The same filename parser supplies coordinates for upstream projection and inbound routes.
+The same filename parser supplies coordinates for upstream projection and inbound routes. An upload's file name passes a stricter form of it.
 -}
 module Ecluse.Core.Registry.PyPI.Project (
     -- * Projection
@@ -216,17 +216,19 @@ indexHash (algorithm, digest) = do
 
 -- | Read a filename's coordinate, rejecting another project, an unknown archive, or invalid PEP 440.
 fileCoordinate :: PackageName -> Text -> Maybe FileCoordinate
-fileCoordinate = coordinateWhere (const True)
+fileCoordinate name = partsCoordinate <=< filenameParts (fileProject name)
 
--- | Read as 'fileCoordinate' does, refusing a version a build tool never writes: one not led by a digit, or holding @-@.
+-- | Read as 'fileCoordinate' does, refusing a name no current build tool writes: a non-PEP 625 sdist, or a version not led by a digit or holding @-@.
 builtFileCoordinate :: PackageName -> Text -> Maybe FileCoordinate
-builtFileCoordinate = coordinateWhere (\version -> maybe False (isDigit . fst) (T.uncons version) && not (T.any (== '-') version))
+builtFileCoordinate name file = do
+    parts@(version, _) <- wheelParts project file <|> pep625SdistParts project file
+    guard (maybe False (isDigit . fst) (T.uncons version) && not (T.any (== '-') version))
+    partsCoordinate parts
+  where
+    project = fileProject name
 
-coordinateWhere :: (Text -> Bool) -> PackageName -> Text -> Maybe FileCoordinate
-coordinateWhere accepts name file = do
-    (version, kind) <- filenameParts (fileProject name) file
-    guard (accepts version)
-    (`FileCoordinate` kind) <$> canonicalPep440 version
+partsCoordinate :: (Text, DistributionKind) -> Maybe FileCoordinate
+partsCoordinate (version, kind) = (`FileCoordinate` kind) <$> canonicalPep440 version
 
 -- A project's PEP 503 key, prepared once for reading many of its filenames.
 data FileProject = FileProject
@@ -314,6 +316,13 @@ sdistParts project file = do
 
 sdistSuffixes :: [Text]
 sdistSuffixes = [".tar.gz", ".tgz", ".zip", ".tar.bz2", ".tar.xz"]
+
+-- PEP 625 spells the project as its canonical name with `_` for `-`, so the project part holds no `-`.
+pep625SdistParts :: FileProject -> Text -> Maybe (Text, DistributionKind)
+pep625SdistParts project file = do
+    stem <- T.stripSuffix ".tar.gz" file
+    version <- T.stripPrefix (T.replace "-" "_" (fpCanonical project) <> "-") stem
+    pure (version, Sdist)
 
 -- Compare disjoint chunks so unauthenticated filenames cannot trigger repeated prefix work.
 afterProjectName :: FileProject -> Text -> Maybe Text

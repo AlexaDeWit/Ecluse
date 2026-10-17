@@ -189,9 +189,16 @@ builtCoordinateSpec = describe "builtFileCoordinate" $ do
         fileCoordinate requestsName "requests-2.34.2-1.tar.gz" `shouldSatisfy` isJust
         builtFileCoordinate requestsName "requests-2.34.2-1.tar.gz" `shouldBe` Nothing
 
-    it "agrees with fileCoordinate on every other file name" $
-        for_ ["requests-2.34.2-py3-none-any.whl", "requests-2.34.2-1-py3-none-any.whl", "requests-2.34.2.tar.gz", "requests-2.34.2.post1.zip", "requests-1!2.0+local.1.tar.gz", "urllib3-2.0.0.tar.gz", "requests-2.34.2.egg"] $ \file ->
+    it "refuses an sdist PEP 625 does not name: another project spelling or archive format" $
+        for_ ["azure-storage-blob-12.14.0.tar.gz", "Azure_Storage_Blob-12.14.0.tar.gz", "azure.storage.blob-12.14.0.tar.gz", "_azure_storage_blob-12.14.0.tar.gz", "azure_storage_blob-12.14.0.zip", "azure_storage_blob-12.14.0.tgz", "azure_storage_blob-12.14.0.tar.bz2"] $ \file -> do
+            fileCoordinate azureStorageBlob file `shouldSatisfy` isJust
+            builtFileCoordinate azureStorageBlob file `shouldBe` Nothing
+
+    it "agrees with fileCoordinate on every other file name" $ do
+        for_ ["requests-2.34.2-py3-none-any.whl", "requests-2.34.2-1-py3-none-any.whl", "requests-2.34.2.tar.gz", "requests-1!2.0+local.1.tar.gz", "urllib3-2.0.0.tar.gz", "requests-2.34.2.egg"] $ \file ->
             builtFileCoordinate requestsName file `shouldBe` fileCoordinate requestsName file
+        for_ ["azure_storage_blob-12.14.0.tar.gz", "Azure.Storage_Blob-12.14.0-py3-none-any.whl"] $ \file ->
+            builtFileCoordinate azureStorageBlob file `shouldBe` fileCoordinate azureStorageBlob file
 
     describe "properties" $
         it "accepts only what fileCoordinate accepts, with the same coordinate" $

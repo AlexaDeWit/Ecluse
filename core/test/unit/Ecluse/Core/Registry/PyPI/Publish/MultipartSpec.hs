@@ -8,8 +8,8 @@ module Ecluse.Core.Registry.PyPI.Publish.MultipartSpec (spec) where
 import Data.Text.Encoding qualified as TE
 import Test.Hspec
 
-import Ecluse.Core.Registry (PublishBodyFault (PublishUnsupported))
-import Ecluse.Core.Registry.PyPI.Publish.Multipart (pypiFileUploadOnly, uploadClaims)
+import Ecluse.Core.Registry (ParseError (..), PublishBodyFault (PublishMalformed, PublishUnsupported))
+import Ecluse.Core.Registry.PyPI.Publish.Multipart (pypiFileUploadOnly, pypiSdistNameForm, uploadClaims)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Test.Registry.Publish (isMalformedBody)
 
@@ -23,7 +23,7 @@ spec = do
 namesSpec :: Spec
 namesSpec = describe "uploadClaims names" $ do
     it "accepts repeated canonically equal names, including after the file" $
-        decode (part "name" "Example_Pkg" <> contentPart "Example_Pkg-1.0.tar.gz" <> part "name" "example-pkg") `shouldReturn` Right ["example-pkg"]
+        decode (part "name" "Example_Pkg" <> contentPart "example_pkg-1.0.tar.gz" <> part "name" "example-pkg") `shouldReturn` Right ["example-pkg"]
     it "rejects a conflicting claim after the file" $
         decode (part "name" "allowed" <> filePart <> part "name" "forbidden") >>= (`shouldSatisfy` isMalformedBody)
     for_ ["", "bad/name", "bad\nname"] $ \name ->
@@ -76,9 +76,14 @@ delimiterSpec = describe "uploadClaims delimiters" $ do
 
 releaseSpec :: Spec
 releaseSpec = describe "uploadClaims file name" $ do
-    for_ ["acme_widget-1.0.0-py3-none-any.whl", "acme-widget-1.0.0.tar.gz", "Acme_Widget-1.0.tar.gz"] $ \file ->
+    for_ ["acme_widget-1.0.0-py3-none-any.whl", "Acme.Widget-1.0-py3-none-any.whl", "acme_widget-1.0.tar.gz"] $ \file ->
         it ("relays " <> show file <> " as acme-widget 1.0.0") $
             upload [part "version" "1.0.0", contentPart file] `shouldReturn` Right ["acme-widget"]
+    it "relays the PEP 625 sdist of a dotted project" $
+        release "acme.co-widget" "1" "acme_co_widget-1.tar.gz" `shouldReturn` Right ["acme-co-widget"]
+    for_ [("acme-widget", "1.0", "acme-widget-1.0.tar.gz"), ("acme.co-widget", "1", "acme.co-widget-1.tar.gz"), ("acme", "1.0", "acme_1.0.tar.gz"), ("acme", "1.0", "acme.1.0.tar.gz"), ("acme", "1.0", "_acme-1.0.tar.gz"), ("acme-2x", "1.0", "acme-2x-1.0.tar.gz"), ("acme-widget", "1.0", "Acme_Widget-1.0.tar.gz"), ("acme-widget", "1.0", "acme_widget-1.0.zip"), ("acme-widget", "1.0", "acme_widget-1.0.tgz")] $ \(name, version, file) ->
+        it ("refuses " <> show file <> " for " <> show name <> ", naming the PEP 625 sdist form") $
+            release name version file `shouldReturn` Left (PublishMalformed (ParseError pypiSdistNameForm))
     for_ [("1.0.post1", "acme_widget-1.0.post1.tar.gz"), ("1!1.0+local.1", "acme_widget-1!1.0+local.1-py3-none-any.whl")] $ \(version, file) ->
         it ("relays " <> show file <> " as acme-widget " <> show version) $
             upload [part "version" version, contentPart file] `shouldReturn` Right ["acme-widget"]
@@ -87,7 +92,7 @@ releaseSpec = describe "uploadClaims file name" $ do
             upload [part "version" "1.0.0", contentPart file] >>= (`shouldSatisfy` isMalformedBody)
     for_ [("acme", "1.post1", "acme-1-1.tar.gz"), ("acme", "1", "acme-v1-2-py3-none-any.whl"), ("acme-widget", "1.0", "acme-widget-v1.0.tar.gz")] $ \(name, version, file) ->
         it ("refuses the legacy spelling " <> show file <> ", which a store files under another project or version") $
-            uploadClaims defaultLimits contentType (fileUpload <> part "name" name <> part "version" version <> contentPart file <> end) >>= (`shouldSatisfy` isMalformedBody)
+            release name version file >>= (`shouldSatisfy` isMalformedBody)
     for_ [("a path", "acme_widget-1.0-x-y/victim-9.0.whl"), ("a traversal", "acme_widget-1.0-a-b-c/../../../x.whl"), ("a space before the version", "acme_widget- 1.0.tar.gz"), ("a space after the version", "acme_widget-1.0 .tar.gz"), ("a tab after the version", "acme_widget-1.0\t.tar.gz"), ("a percent sign", "acme_widget-1.0-py3-none-x%2F..%2Fy.whl")] $ \(label, file) ->
         it ("refuses a file name with " <> label <> ": " <> show file) $
             upload [part "version" "1.0", contentPart file] >>= (`shouldSatisfy` isMalformedBody)
@@ -103,6 +108,7 @@ releaseSpec = describe "uploadClaims file name" $ do
         upload ["--boundary\r\nContent-Disposition: form-data; name=\"version\"; filename=\"1.0.0\"\r\n\r\n1.0.0\r\n", contentPart "acme_widget-1.0.0.tar.gz"] >>= (`shouldSatisfy` isMalformedBody)
   where
     upload parts = uploadClaims defaultLimits contentType (fileUpload <> part "name" "acme-widget" <> mconcat parts <> end)
+    release name version file = uploadClaims defaultLimits contentType (fileUpload <> part "name" name <> part "version" version <> contentPart file <> end)
 
 actionSpec :: Spec
 actionSpec = describe "uploadClaims :action" $ do

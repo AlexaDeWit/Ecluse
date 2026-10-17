@@ -4,7 +4,7 @@
 {-# LANGUAGE TupleSections #-}
 
 -- | Bounded reading of the name, version, @:action@ and file name claims in the unchanged PyPI publication relay body.
-module Ecluse.Core.Registry.PyPI.Publish.Multipart (uploadClaims, pypiFileUploadOnly) where
+module Ecluse.Core.Registry.PyPI.Publish.Multipart (uploadClaims, pypiFileUploadOnly, pypiSdistNameForm) where
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BSC
@@ -33,6 +33,10 @@ uploadClaims limits contentType body = case checkedFields limits contentType bod
 -- | The @501@ reason for any other @:action@, such as @remove_pkg@ or @doc_upload@.
 pypiFileUploadOnly :: Text
 pypiFileUploadOnly = "this proxy relays new-release uploads (:action=file_upload) only: change or remove an existing release at the publication target"
+
+-- | The @400@ reason for any upload that is not a wheel and does not name the declared release as PEP 625 names an sdist.
+pypiSdistNameForm :: Text
+pypiSdistNameForm = "multipart file name does not name the declared project and version: an sdist must be named <normalised_name>-<version>.tar.gz (PEP 625)"
 
 -- Uploaders send one file_upload. pypiserver deletes a release on remove_pkg under the same permission.
 uploadAction :: [ByteString] -> Either PublishBodyFault ()
@@ -95,7 +99,8 @@ releaseFile claims name = do
             , Just coordinate <- builtFileCoordinate name . unFilename =<< distributionFilename =<< utf8 file
             , fcVersionKey coordinate == renderVersion declared ->
                 Right [canonicalName name]
-            | otherwise -> bad "multipart file name does not name the declared project and version"
+            | ".whl" `BS.isSuffixOf` file -> bad "multipart file name does not name the declared project and version"
+            | otherwise -> bad pypiSdistNameForm
         ([], _) -> bad "multipart upload has no version"
         (_, []) -> bad "multipart upload has no content file"
         (_, [Nothing]) -> bad "multipart content part has no file name"

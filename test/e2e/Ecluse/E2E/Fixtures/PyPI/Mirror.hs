@@ -97,10 +97,10 @@ buildProject root project = do
         BS.writeFile (path <> ".metadata") companion
         pure (Distribution project mirrorVersion filename bytes companion (encodeUtf8 metadata))
     sources <- forM sourceFormats $ \suffix -> do
-        let filename = project <> "-" <> mirrorVersion <> "." <> suffix
+        let filename = sourceStem project suffix <> "." <> suffix
             metadata = projectMetadata project ("Source " <> suffix)
             work = root </> toString (".build-" <> filename)
-            folder = toString (project <> "-" <> mirrorVersion)
+            folder = toString (sourceStem project suffix)
             path = projectDir </> toString filename
         createDirectoryIfMissing True (work </> folder)
         writeFileText (work </> folder </> "PKG-INFO") metadata
@@ -308,8 +308,12 @@ wheelFiles project architecture =
 sourceFormats :: [Text]
 sourceFormats = ["tar.gz", "tgz", "tar.bz2", "tar.xz", "zip"]
 
+-- A current build tool writes a .tar.gz under its PEP 625 name. The older archive formats keep the legacy spelling.
+sourceStem :: Text -> Text -> Text
+sourceStem project suffix = (if suffix == "tar.gz" then T.replace "-" "_" project else project) <> "-" <> mirrorVersion
+
 -- | The independent expected filenames for every supported wheel and source archive in one release.
 mirrorFileNames :: Text -> [Text]
 mirrorFileNames project =
     map (mirrorWheelFile project) [mirrorPlatformX86, mirrorPlatformArm]
-        <> [project <> "-" <> mirrorVersion <> "." <> suffix | suffix <- sourceFormats]
+        <> [sourceStem project suffix <> "." <> suffix | suffix <- sourceFormats]

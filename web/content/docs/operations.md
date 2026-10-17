@@ -93,7 +93,8 @@ that cannot be read, is not a JSON object, or repeats a key, and for a version f
 that differs from its own `version` field. The PyPI upload route returns `501` for an `:action`
 other than `file_upload`. It returns `400` for an upload without exactly one `version` field and
 one `content` file part. It also returns `400` when the `content` file name does not name the
-declared project and `version` as a build tool spells them. A body that hides a boundary delimiter
+declared project and `version` as a build tool spells them. A source distribution must be named
+`{normalised_name}-{version}.tar.gz`, as PEP 625 defines. A body that hides a boundary delimiter
 inside a part gets `400` too. Mirror, Pilot, and Dredger expose their health probes on
 `ECLUSE_SERVER__PORT`. A separate metrics listener appears only when telemetry is on and
 `OTEL_METRICS_EXPORTER=prometheus`. Co-located Prometheus listeners need distinct ports

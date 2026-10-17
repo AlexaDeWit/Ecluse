@@ -33,13 +33,19 @@ Content-Type only for an upload with these parts:
 | `version` | Exactly one. |
 | `content` | Exactly one file part, whose file name parses as a wheel or source distribution of that project at that version. |
 
-An upload that breaks any other rule in the table answers `400`. The guard compares project names under
-PEP 503 and versions under PEP 440, so `Acme_Widget-1.0.tar.gz` matches `acme-widget` at `1.0.0`.
-It reads the `content` part's file name, never the file data. An upload also answers `400` when
-its file name:
+An upload that breaks any other rule in the table answers `400`. The guard compares versions under
+PEP 440 and wheel project names under PEP 503, so `Acme.Widget-1.0-py3-none-any.whl` matches
+`acme-widget` at `1.0.0`. It reads the `content` part's file name, never the file data. An upload
+also answers `400` when its file name:
 
 - holds a character other than an ASCII letter or digit, `-`, `_`, `.`, `!` or `+`
 - has a version that does not start with a digit, or that holds a `-`, which no build tool writes
+- is not a wheel, and is not the PEP 625 source distribution name `{normalised_name}-{version}.tar.gz`
+
+The normalised name is the PEP 503 name with `_` for each `-`. So `acme.co-widget` at `1.0`
+uploads as `acme_co_widget-1.0.tar.gz`. Build tools that predate PEP 625 write other names, such as
+`acme.co-widget-1.0.tar.gz` or a `.zip` archive. Their uploads answer `400` with the expected
+form. The publisher must upgrade the build tool.
 
 Some stores end a multipart part at a boundary delimiter after a bare CR or LF, or after trailing
 whitespace on the delimiter line. So a body with such a delimiter inside a part answers `400`,
