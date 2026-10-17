@@ -293,7 +293,7 @@ spec = describe "planExecutable" $ do
                 (_, Left errors) -> expectationFailure ("expected the exact target refusals in order, got: " <> show errors)
 
     it "reports a mirror-write mint the live environment refuses" $ do
-        -- The Dredger reads the manifests a deletion rests on with the mirror write's credential,
+        -- The Dredger reads the mirror store's manifests with the mirror write's credential,
         -- so it mints at boot as the proxy does, and an identity that cannot answer refuses here.
         outcome <- planUnder codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue refusingCredentials inertStore
         case outcome of

@@ -169,7 +169,7 @@ completeMountDoc eco =
 scopedName :: Text -> PackageName
 scopedName scope = mkPackageName Npm (Just (mkScope scope)) "thing"
 
--- | An ambient @AWS_ENDPOINT_URL@ with userinfo: both entry points refuse it, and neither may echo its credential.
+-- | An ambient @AWS_ENDPOINT_URL@ with userinfo, which the egress guard refuses: both entry points report it, and neither may echo its credential.
 malformedAwsEndpoint :: String
 malformedAwsEndpoint = "http://operator:s3cr3t@localhost:9000"
 
