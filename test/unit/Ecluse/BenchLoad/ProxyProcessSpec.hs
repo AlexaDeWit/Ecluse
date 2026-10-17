@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Pin the configuration a measured proxy boots from.
+-- | Pin measured-proxy configuration and process cleanup.
 module Ecluse.BenchLoad.ProxyProcessSpec (spec) where
 
 import Data.Aeson (Value (Object), decode, encode, object, (.=))
@@ -15,11 +15,11 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import System.Directory (createDirectory, doesDirectoryExist)
 import System.FilePath ((</>))
-import System.IO.Error (mkIOError, permissionErrorType)
+import System.IO.Error (isDoesNotExistError, isPermissionError, mkIOError, permissionErrorType)
 import System.Process.Typed (proc)
 import Test.Hspec
 import UnliftIO (throwIO)
-import UnliftIO.Async (cancel, withAsync)
+import UnliftIO.Async (async, cancel, poll, withAsync)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.BenchLoad.Advisories (advisoryDenyRules)
@@ -30,6 +30,8 @@ import Ecluse.BenchLoad.ProxyProcess (
     ProxySettings (..),
     bootDiagnostic,
     bootDrained,
+    bootDrainedWith,
+    createConfiguredCgroup,
     guardDiagnostic,
     proxyEnvironment,
     proxyListening,
@@ -51,6 +53,7 @@ spec :: Spec
 spec = do
     environmentSpec
     bootSpec
+    acquisitionSpec
     listeningSpec
 
 listeningSpec :: Spec
@@ -135,6 +138,40 @@ bootSpec = do
             diagnostic <- guardDiagnostic (throwIO (mkIOError permissionErrorType "listDirectory" Nothing (Just "/proc")))
             diagnostic `shouldSatisfy` T.isInfixOf "diagnostic: could not be read"
             diagnostic `shouldSatisfy` T.isInfixOf "/proc"
+
+acquisitionSpec :: Spec
+acquisitionSpec = describe "partial acquisition" $ do
+    it "removes a new cgroup when a control write fails and preserves the write error" $
+        withSystemTempDirectory "ecluse-cgroup-acquire" $ \root -> do
+            let dir = root </> "proxy"
+            createConfiguredCgroup dir (\created -> writeFileText (created </> "absent" </> "memory.max") "1")
+                `shouldThrow` isDoesNotExistError
+            doesDirectoryExist dir `shouldReturn` False
+    for_ ["stdout", "stderr"] $ \failedStream ->
+        it ("stops the process and acquired workers when acquiring " <> toString failedStream <> " fails") $
+            withSystemTempDirectory "ecluse-drain-acquire" $ \dir -> do
+                manager <- newManager defaultManagerSettings
+                port <- freePort
+                workers <- newIORef []
+                child <- newIORef Nothing
+                let pidFile = dir </> "pid"
+                    command = proc "/bin/sh" ["-c", "echo $$ > \"$0\"; exec sleep 60", pidFile]
+                    startWorker stream action
+                        | stream == failedStream = do
+                            pid <- pollUntil 50 100_000 isJust ((readMaybe . toString . T.strip =<<) <$> readIfExists pidFile)
+                            writeIORef child (pid :: Maybe Int)
+                            throwIO (mkIOError permissionErrorType "start drain" Nothing Nothing)
+                        | otherwise = do
+                            worker <- async action
+                            modifyIORef' workers (worker :)
+                            pure worker
+                bootDrainedWith startWorker manager 600 port command `shouldThrow` isPermissionError
+                pid <- readIORef child
+                pid `shouldSatisfy` isJust
+                traverse (\p -> doesDirectoryExist ("/proc/" <> show p)) pid `shouldReturn` Just False
+                acquired <- readIORef workers
+                length acquired `shouldBe` if failedStream == "stdout" then 0 else 1
+                traverse_ (poll >=> (`shouldSatisfy` isJust)) acquired
 
 environmentSpec :: Spec
 environmentSpec = describe "proxyEnvironment" $ do
