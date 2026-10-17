@@ -18,6 +18,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Compile (CompileSources (..))
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor)
 import Ecluse.Core.Osv.Provenance (QuietTime (..), defaultQuietTime)
+import Ecluse.Core.Osv.Publication (ObjectRevision (ObjectRevision), Rebaseline (Rebaseline), ShrinkPolicy (..), mkPercent)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired))
 import Ecluse.Pilot.Plan (
     ExportLoopPlan (ExportIdle, ExportTo),
@@ -25,13 +26,16 @@ import Ecluse.Pilot.Plan (
     PilotCompileOptions (..),
     PilotUploadUnconfigured (PilotUploadUnconfigured),
     UploadPlan (UploadSkipped, UploadTo),
+    UploadRequest (..),
     compileEpssRequirement,
     configuredSources,
     epssAttemptLine,
     exportCadenceMicros,
     exportLoopPlan,
     idleCadenceMicros,
+    pilotPostureLines,
     quietTimeFor,
+    shrinkPolicyOf,
     unmountedCompileWarning,
     uploadPlan,
     uploadTarget,
@@ -54,7 +58,7 @@ advisoriesOf = cfgAdvisories . configApp
 
 -- A one-shot run that compiles npm and does not upload.
 bareOptions :: PilotCompileOptions
-bareOptions = PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = "/tmp/ecluse-pilot", pcoUpload = False}
+bareOptions = PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = "/tmp/ecluse-pilot", pcoUpload = NoUpload}
 
 -- A scheduled target under the requirement a mount without EPSS rules resolves to.
 optionalTarget :: Ecosystem -> ExportTarget
@@ -184,10 +188,37 @@ spec = do
 
         it "uploads to the configured store when the run asks" $ do
             store <- storeAt "s3://advisories"
-            uploadPlan bareOptions{pcoUpload = True} (Just store) `shouldBe` Right (UploadTo store)
+            uploadPlan bareOptions{pcoUpload = Upload} (Just store) `shouldBe` Right (UploadTo store Nothing)
+
+        it "carries an operator's rebaseline to the store's upload, and to no other" $ do
+            store <- storeAt "s3://advisories"
+            approval <- Rebaseline (ObjectRevision "\"abc\"") <$> maybe (fail "fixture percentage") pure (mkPercent 10)
+            uploadPlan bareOptions{pcoUpload = UploadRebaselined approval} (Just store) `shouldBe` Right (UploadTo store (Just approval))
+            uploadPlan bareOptions{pcoUpload = UploadRebaselined approval} Nothing `shouldBe` Left PilotUploadUnconfigured
 
         it "refuses an asked-for upload with no store, rather than exiting 0 having published nothing" $
-            uploadPlan bareOptions{pcoUpload = True} Nothing `shouldBe` Left PilotUploadUnconfigured
+            uploadPlan bareOptions{pcoUpload = Upload} Nothing `shouldBe` Left PilotUploadUnconfigured
+
+    describe "the publication guard -- what every publication is held to" $ do
+        it "takes the shipped 2% shrink and 5% EPSS credit cap, and an operator's own" $ do
+            shipped <- shrinkPolicyOf <$> advisoriesWith []
+            expected <- maybe (fail "fixture percentage") pure (ShrinkPolicy <$> mkPercent 2 <*> mkPercent 5)
+            shipped `shouldBe` expected
+            tuned <- shrinkPolicyOf <$> advisoriesWith [("ECLUSE_ADVISORIES__MAX_SHRINK_PERCENT", "0.5"), ("ECLUSE_ADVISORIES__EPSS_LOSS_CAP_PERCENT", "0")]
+            Just tuned `shouldBe` (ShrinkPolicy <$> mkPercent 0.5 <*> mkPercent 0)
+
+        it "reports only the EPSS egress line while no store is configured" $ do
+            advisories <- advisoriesWith []
+            pilotPostureLines advisories `shouldBe` [epssAttemptLine advisories]
+
+        it "reports the guard and the store's durable baseline beside the EPSS egress line" $ do
+            advisories <- advisoriesWith [("ECLUSE_ADVISORIES__URL", "s3://advisories")]
+            case pilotPostureLines advisories of
+                [egress, guardLine] -> do
+                    egress `shouldBe` epssAttemptLine advisories
+                    for_ ["older than the stored artifact", "2% under its durable baseline", "up to 5% more after an optional EPSS outage"] $ \fragment ->
+                        guardLine `shouldSatisfy` T.isInfixOf fragment
+                other -> expectationFailure ("expected two posture lines, got " <> show other)
 
     describe "uploadTarget -- where one artifact lands in the store" $ do
         it "keys the artifact on its own file name, dropping the local directory" $ do

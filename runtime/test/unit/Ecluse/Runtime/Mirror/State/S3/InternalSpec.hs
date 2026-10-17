@@ -5,14 +5,11 @@
 -- | Wire tests use static credentials and an in-process S3 endpoint.
 module Ecluse.Runtime.Mirror.State.S3.InternalSpec (spec) where
 
-import Amazonka qualified as AWS
-import Amazonka.Auth (fromKeys)
 import Data.ByteString qualified as BS
 import Data.List (lookup)
 import Network.HTTP.Types
 import Network.HTTP.Types.Header (hETag, hIfMatch, hIfNoneMatch)
-import Network.Wai (Application, queryString, requestHeaders, requestMethod, responseLBS, responseRaw, responseStream, strictRequestBody)
-import Network.Wai.Handler.Warp (testWithApplication)
+import Network.Wai (Application, queryString, requestHeaders, requestMethod, responseLBS, responseStream, strictRequestBody)
 import Test.Hspec
 import UnliftIO.Async (AsyncCancelled (AsyncCancelled), cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
@@ -30,6 +27,7 @@ import Ecluse.Core.Server.Admission.Meter (newChargeRegion)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge)
 import Ecluse.Runtime.Mirror.State.S3 (mirrorStateForEnv)
 import Ecluse.Runtime.Mirror.State.S3.Internal
+import Ecluse.Runtime.Test.S3 (brokenResponse, emptyListing, listingReply, populatedListing, reply, withS3, xmlError)
 import Ecluse.Test.Mirror.State (mirrorPackage, mirrorSample)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape), expectRight)
@@ -112,7 +110,7 @@ spec = describe "conditional mirror metadata storage" $ do
     it "charges error and fallback-list bodies without reserving their maximum size" $ do
         paid <- newIORef (0 :: Int)
         charge <- newChargeRegion (\cost -> modifyIORef' paid (+ cost))
-        withS3 (listingReply emptyList) $ \env ->
+        withS3 (listingReply emptyListing) $ \env ->
             readObject charge env defaultLimits "records" "key" Nothing `shouldReturn` Right ObjectAbsent
         total <- readIORef paid
         total `shouldSatisfy` (> 4096)
@@ -328,7 +326,7 @@ spec = describe "conditional mirror metadata storage" $ do
                     else do
                         lookup "prefix" (queryString request) `shouldBe` Just (Just "key")
                         lookup "max-keys" (queryString request) `shouldBe` Just (Just "1")
-                        respond (responseLBS status200 [] emptyList)
+                        respond (responseLBS status200 [] emptyListing)
             )
         $ \env ->
             readObject (const pass) env limits "records" "key" Nothing `shouldReturn` Right ObjectAbsent
@@ -349,7 +347,7 @@ spec = describe "conditional mirror metadata storage" $ do
         withS3 (\_ _ -> expectationFailure "unexpected write" >> fail "unexpected write") $ \env ->
             writeObject (const pass) env limits{maxMetadataBytes = 8} "records" "key" Nothing "123456789" `shouldReturn` Left (ObjectTooLarge 8)
 
-    for_ [("without truncation evidence", "<ListBucketResult><KeyCount>0</KeyCount></ListBucketResult>"), ("with a matching object", populatedList)] $ \(label, listing) ->
+    for_ [("without truncation evidence", "<ListBucketResult><KeyCount>0</KeyCount></ListBucketResult>"), ("with a matching object", populatedListing)] $ \(label, listing) ->
         it ("refuses absence from a listing " <> label) $
             withS3 (listingReply listing) $ \env ->
                 readObject (const pass) env limits "records" "key" Nothing `shouldReturn` Left ObjectUnknownAbsence
@@ -429,47 +427,11 @@ paymentWaitMicros = 5_000_000
 limits :: Limits
 limits = defaultLimits{maxMetadataBytes = 1024}
 
-withS3 :: Application -> (AWS.Env -> IO ()) -> IO ()
-withS3 application action = testWithApplication (pure application) $ \port -> do
-    base <- AWS.newEnv (pure . fromKeys (AWS.AccessKey "AKIDtestkey") (AWS.SecretKey "testsecretkey"))
-    let env = AWS.overrideService (\service -> AWS.setEndpoint False "127.0.0.1" port service{AWS.s3AddressingStyle = AWS.S3AddressingStylePath}) base
-    action (AWS.once env{AWS.retryCheck = \_ _ -> False})
-
-reply :: Status -> ResponseHeaders -> LByteString -> Application
-reply status headers bytes _ respond = respond (responseLBS status headers bytes)
-
-listingReply :: LByteString -> Application
-listingReply bytes request respond =
-    if requestMethod request == "GET" && null (queryString request)
-        then respond (responseLBS status403 [] (xmlError "AccessDenied"))
-        else respond (responseLBS status200 [] bytes)
-
-xmlError :: LByteString -> LByteString
-xmlError code = "<Error><Code>" <> code <> "</Code><Message>refused</Message></Error>"
-
-emptyList :: LByteString
-emptyList = "<ListBucketResult><IsTruncated>false</IsTruncated><KeyCount>0</KeyCount></ListBucketResult>"
-
-populatedList :: LByteString
-populatedList =
-    "<ListBucketResult><IsTruncated>false</IsTruncated><KeyCount>1</KeyCount><Contents>"
-        <> "<ETag>&quot;one&quot;</ETag><Size>8</Size><Key>key</Key>"
-        <> "<StorageClass>STANDARD</StorageClass><LastModified>2026-10-12T00:00:00.000Z</LastModified>"
-        <> "</Contents></ListBucketResult>"
-
 shortLengthBody :: ByteString
 shortLengthBody = "Content-Length: 20\r\n\r\nshort"
 
 interruptedChunkBody :: ByteString
 interruptedChunkBody = "Transfer-Encoding: chunked\r\n\r\n8\r\nshort"
-
-brokenResponse :: ByteString -> ByteString -> Application
-brokenResponse status body _ respond =
-    respond
-        ( responseRaw
-            (\_ send -> send ("HTTP/1.1 " <> status <> "\r\nETag: \"one\"\r\nConnection: close\r\n" <> body))
-            (responseLBS status500 [] "raw response required")
-        )
 
 objectTransportFailure :: Either ObjectFault a -> Bool
 objectTransportFailure (Left (ObjectTransport _)) = True

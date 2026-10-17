@@ -35,6 +35,7 @@ import Ecluse.Core.Osv.Stream (
 import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Test.Osv (OsvTestM, noScores, npmFeed, osvZipOf, runOsvJsonLog, runOsvTestM)
 import Ecluse.Test.Osv.Withdrawal (withdrawalZip)
+import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 
 -- The run clock every ingest here is built with. Nothing in this module reads the record
@@ -81,7 +82,7 @@ ingestedUrl :: String -> IO [ExtractedOsv]
 ingestedUrl url =
     runOsvTestM $ do
         ingest <- newOsvIngest defaultIngestLimits npmFeed noScores ingestClock
-        runConduit (streamOsvUrl Nothing ingest url .| sinkList)
+        runConduit (void (streamOsvUrl Nothing ingest url) .| sinkList)
 
 fanOutRows :: OsvEcosystem -> Int -> IO ([ExtractedOsv], IngestStats)
 fanOutRows feed n = osvZipOf [("fan.json", fanOutAdvisory feed n)] >>= ingestedRows feed
@@ -123,6 +124,16 @@ spec = describe "the OSV ingest stream" $ do
 
     it "throws an exception if the URL is invalid" $
         ingestedUrl "not-a-valid-url" `shouldThrow` anyException
+
+    it "returns the digest of the whole response body, for npm and PyPI archives" $ do
+        npmArchive <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+        let pypiFeed = osvEcosystemFor PyPI
+        pypiArchive <- osvZipOf [("fan.json", fanOutAdvisory pypiFeed 2)]
+        for_ [(npmFeed, npmArchive), (pypiFeed, pypiArchive)] $ \(feed, archive) -> do
+            digest <- withStub status200 archive $ \stub -> runOsvTestM $ do
+                ingest <- newOsvIngest defaultIngestLimits feed noScores ingestClock
+                runConduit (fuseUpstream (streamOsvUrl Nothing ingest (unpack (stubBaseUrl stub) <> "/all.zip")) sinkNull)
+            digest `shouldBe` digestOf (toStrict archive)
 
     for_ [(String "2024-05-14T20:15:44Z", 0), (String "invalid", 1)] $ \(withdrawn, malformed) ->
         it ("preserves the drop accounting for withdrawal " <> show withdrawn) $ do

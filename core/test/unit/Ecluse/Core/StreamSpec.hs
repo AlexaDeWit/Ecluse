@@ -2,20 +2,33 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | The advisory limiters preserve what passes and stop before forwarding excess bytes.
+-- | The advisory limiters preserve what passes and stop before forwarding excess bytes, and the digest covers the whole stream.
 module Ecluse.Core.StreamSpec (spec) where
 
-import Conduit (runConduit, yieldMany, (.|))
+import Conduit (await, fuseBoth, runConduit, yieldMany, (.|))
 import Data.Conduit.Combinators qualified as C
 import Test.Hspec (Spec, describe, expectationFailure, it, shouldReturn)
 
-import Ecluse.Core.Stream (boundBytes, boundLines)
+import Ecluse.Core.Stream (boundBytes, boundLines, digestWhole)
+import Ecluse.Test.Snapshot (digestOf)
 
--- | Exercise the shared caps without a network or decompressor.
+-- | Exercise the shared caps and the digest without a network or decompressor.
 spec :: Spec
 spec = do
     boundBytesSpec
     boundLinesSpec
+    digestWholeSpec
+
+digestWholeSpec :: Spec
+digestWholeSpec = describe "digestWhole" $ do
+    it "digests the concatenated bytes whatever the chunking, and passes every chunk on" $
+        for_ [["abc", "def"], ["a", "", "bcdef"], ["abcdef"]] $ \chunks ->
+            runConduit (fuseBoth (yieldMany chunks .| digestWhole) C.sinkList)
+                `shouldReturn` (digestOf "abcdef", chunks)
+
+    it "covers the bytes a consumer that stops early never read" $
+        runConduit (fst <$> fuseBoth (yieldMany ["abc", "def", "ghi"] .| digestWhole) await)
+            `shouldReturn` digestOf "abcdefghi"
 
 boundBytesSpec :: Spec
 boundBytesSpec = describe "boundBytes" $ do

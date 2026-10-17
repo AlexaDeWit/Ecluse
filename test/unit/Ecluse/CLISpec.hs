@@ -10,12 +10,13 @@ import Test.Hspec
 
 import Ecluse.CLI (AppCommand (..), commandParser)
 import Ecluse.Composition.Types (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
+import Ecluse.Core.Osv.Publication (ObjectRevision (ObjectRevision), Rebaseline (Rebaseline), mkPercent)
 import Ecluse.Dredger.Plan (
     DredgerOptions (DredgerOptions, doMode, doRepetition),
     SweepMode (SweepDeletes, SweepPreviews),
     SweepRepetition (SweepContinuously, SweepOnce),
  )
-import Ecluse.Pilot (PilotCompileOptions (..))
+import Ecluse.Pilot (PilotCompileOptions (..), UploadRequest (..))
 
 parseCLI :: [String] -> ParserResult AppCommand
 parseCLI = execParserPure defaultPrefs (info (commandParser <**> helper) idm)
@@ -38,6 +39,17 @@ spec = describe "CLI commandParser" $ do
             case parseCLI ["pilot", "compile", feedFlag, "https://feed.example.test/all.zip", "--out", "out"] of
                 Failure failure -> fst (renderFailure failure "ecluse") `shouldSatisfy` isInfixOf ("Invalid option `" <> feedFlag <> "'")
                 _ -> expectationFailure "expected an unknown-option failure"
+
+    it "parses a one-shot rebaseline beside an upload, bound to the ETag it names" $ do
+        allowance <- maybe (fail "fixture percentage") pure (mkPercent 12.5)
+        case parseCLI (rebaselineArgs <> ["--upload", "--rebaseline-etag", "\"abc\"", "--rebaseline-max-shrink-percent", "12.5"]) of
+            Success cmd -> cmd `shouldBe` RunPilotCompile PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = "out", pcoUpload = UploadRebaselined (Rebaseline (ObjectRevision "\"abc\"") allowance)}
+            _ -> expectationFailure "expected a rebaselining upload"
+
+    it "rejects a rebaseline without --upload, naming the missing flag" $
+        case parseCLI (rebaselineArgs <> ["--rebaseline-etag", "\"abc\"", "--rebaseline-max-shrink-percent", "10"]) of
+            Failure failure -> fst (renderFailure failure "ecluse") `shouldSatisfy` isInfixOf "Missing: --upload"
+            _ -> expectationFailure "expected the rebaseline refused"
 
 {- Every invocation the parser accepts, and the command it settles on. The name carries what the
 invocation means to an operator, which the argument list alone does not say. -}
@@ -62,12 +74,12 @@ acceptedInvocations =
     ,
         ( "parses 'pilot compile' with the default ecosystem, keeping the artifact local"
         , ["pilot", "compile", "--out", "/tmp/osv"]
-        , RunPilotCompile PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = "/tmp/osv", pcoUpload = False}
+        , RunPilotCompile PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = "/tmp/osv", pcoUpload = NoUpload}
         )
     ,
         ( "parses 'pilot compile' with an ecosystem and an upload"
         , ["pilot", "compile", "--ecosystem", "pypi", "--out", "out", "--upload"]
-        , RunPilotCompile PilotCompileOptions{pcoEcosystem = "pypi", pcoOutDir = "out", pcoUpload = True}
+        , RunPilotCompile PilotCompileOptions{pcoEcosystem = "pypi", pcoOutDir = "out", pcoUpload = Upload}
         )
     ]
 
@@ -76,4 +88,11 @@ refusedInvocations :: [(String, [String])]
 refusedInvocations =
     [ ("rejects --no-worker on the dedicated worker, which has no worker to drop", ["mirror", "--no-worker"])
     , ("rejects 'pilot compile' without --out", ["pilot", "compile"])
+    , ("rejects a rebaseline that names no shrink allowance", rebaselineArgs <> ["--upload", "--rebaseline-etag", "\"abc\""])
+    , ("rejects a rebaseline allowance past 100%", rebaselineArgs <> ["--upload", "--rebaseline-etag", "\"abc\"", "--rebaseline-max-shrink-percent", "101"])
+    , ("rejects a rebaseline allowance that is not a number", rebaselineArgs <> ["--upload", "--rebaseline-etag", "\"abc\"", "--rebaseline-max-shrink-percent", "most"])
+    , ("rejects an allowance without the ETag it binds to", rebaselineArgs <> ["--upload", "--rebaseline-max-shrink-percent", "10"])
     ]
+
+rebaselineArgs :: [String]
+rebaselineArgs = ["pilot", "compile", "--out", "out"]

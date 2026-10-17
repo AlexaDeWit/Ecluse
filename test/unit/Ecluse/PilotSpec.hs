@@ -24,7 +24,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Compile (PilotEpssRequired (perEcosystem))
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional))
 import Ecluse.Core.Supervision (BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros))
-import Ecluse.Pilot (PilotCompileOptions (..), PilotUploadUnconfigured (..), runPilotCompile, superviseExportCycles)
+import Ecluse.Pilot (PilotCompileOptions (..), PilotUploadUnconfigured (..), UploadRequest (..), runPilotCompile, superviseExportCycles)
 import Ecluse.Pilot.Plan (ExportTarget (ExportTarget, etEcosystem, etEpss))
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Log (captureJsonLog, newTestLogEnv, runQuietKatip)
@@ -122,18 +122,18 @@ spec = do
             le <- newTestLogEnv
             withSystemTempDirectory "ecluse-pilot-compile" $ \outDir ->
                 withStubbedSources [] (status200, Nothing) $ \config _ ->
-                    runPilotCompile le telemetryDisabled Nothing config (compileOptions outDir){pcoUpload = True}
+                    runPilotCompile le telemetryDisabled Nothing config (compileOptions outDir){pcoUpload = Upload}
                         `shouldThrow` (== PilotUploadUnconfigured)
 
         it "refuses that upload before it compiles anything" $ do
             le <- newTestLogEnv
             withSystemTempDirectory "ecluse-pilot-compile" $ \dir ->
                 withStubbedSources [] (status200, Nothing) $ \config epssStub -> do
-                    -- A file stands where the output directory's parent would be, so
-                    -- 'compileOsvToSqlite's createDirectoryIfMissing fails if the run reaches it.
+                    -- A file stands where the output directory's parent would be, so the
+                    -- compile's createDirectoryIfMissing fails if the run reaches it.
                     writeFileText (dir </> "blocker") ""
                     let outDir = dir </> "blocker" </> "out"
-                    runPilotCompile le telemetryDisabled Nothing config (compileOptions outDir){pcoUpload = True}
+                    runPilotCompile le telemetryDisabled Nothing config (compileOptions outDir){pcoUpload = Upload}
                         `shouldThrow` (== PilotUploadUnconfigured)
                     allCaptured epssStub `shouldReturn` []
 
@@ -170,4 +170,4 @@ withStubbedSources env (feedStatus, feedBody) use = do
         use config epssStub
 
 compileOptions :: FilePath -> PilotCompileOptions
-compileOptions outDir = PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = outDir, pcoUpload = False}
+compileOptions outDir = PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = outDir, pcoUpload = NoUpload}

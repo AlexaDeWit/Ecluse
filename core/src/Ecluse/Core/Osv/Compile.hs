@@ -5,10 +5,23 @@
 {- | Compile OSV advisories and EPSS scores into the artifact consumed by CVE sync. Every pass
 attempts the EPSS feed, and the ecosystem's 'EpssRequirement' decides whether a failed feed stops
 publication or leaves the artifact recording unavailable enrichment.
+
+A pass compiles into an exclusive temporary file, the candidate, which replaces the canonical file
+only once its caller promotes it, so a refused publication leaves the previous artifact in place.
 -}
 module Ecluse.Core.Osv.Compile (
     CompileSources (..),
-    compileOsvToSqlite,
+
+    -- * The candidate a publication decides on
+    OsvCandidate,
+    candidatePath,
+    candidateDestination,
+    candidateFacts,
+    withOsvCandidate,
+    stampCandidateNonce,
+    promoteCandidate,
+
+    -- * Refusals and rows
     PilotEpssRequired (..),
     osvToRow,
 ) where
@@ -31,7 +44,7 @@ import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory, osvWireName))
 import Ecluse.Core.Osv.Epss (
     EpssEnrichment (EpssEnriched, EpssUnavailable),
-    EpssFeed (efLastModified, efModelVersion, efScoreDate, efScores),
+    EpssFeed (efDigest, efLastModified, efModelVersion, efScoreDate, efScores),
     EpssFeedFailure,
     acquireEpssFeed,
     enrichedFeed,
@@ -49,6 +62,17 @@ import Ecluse.Core.Osv.Provenance (
     renderSourceAge,
     sourceAges,
     sourceQuiet,
+ )
+import Ecluse.Core.Osv.Publication (
+    CandidateFacts (..),
+    PublicationNonce,
+    SourceMarker (..),
+    newPublicationNonce,
+    renderPublicationNonce,
+    sourceDigestHex,
+    sourceDigestOf,
+    sourceIdentityOf,
+    usableLastModified,
  )
 import Ecluse.Core.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
 import Ecluse.Core.Osv.Schema (
@@ -78,6 +102,7 @@ import Ecluse.Core.Osv.Stream (
  )
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, LastAffected, Unbounded))
 import Ecluse.Core.Security.Authority (credentialFreeUrl, dialledAuthorityLabel)
+import Ecluse.Core.Snapshot (ContentDigest)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),
     AdvisoryDropCause (DropMalformed, DropOversize),
@@ -86,9 +111,7 @@ import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (acmpCompileAcce
 import Ecluse.Core.Telemetry.Span (withOptionalSpan)
 import OpenTelemetry.Trace.Core (Span, SpanKind (Internal), SpanStatus (Error), TracerProvider, addAttribute, setStatus)
 
-{- | The two upstreams one compile pass reads: the ecosystem's advisories, and the
-exploitability scores it joins onto them.
--}
+-- | The two upstreams one compile pass reads: the ecosystem's advisories, and the scores it joins onto them.
 data CompileSources = CompileSources
     { csOsvExportUrl :: String
     -- ^ The ecosystem's OSV export archive ('Ecluse.Core.Osv.Advisory.osvExportUrl').
@@ -97,20 +120,24 @@ data CompileSources = CompileSources
     }
     deriving stock (Eq, Show)
 
-{- | Compile one ecosystem into @outDir@, refusing systemic drops, zero relevant rows, or a failed
-EPSS feed the requirement makes fatal. A refusal leaves any previous artifact unchanged.
--}
-compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> OsvEcosystem -> EpssRequirement -> CompileSources -> QuietTime -> m FilePath
-compileOsvToSqlite metrics mTracerProvider outDir eco requirement sources quietTime = do
+-- | A compiled artifact in its exclusive temporary file, with the facts its publication compares.
+data OsvCandidate = OsvCandidate
+    { candidatePath :: FilePath
+    , candidateDestination :: FilePath
+    , candidateFacts :: CandidateFacts
+    }
+
+-- | Compile one ecosystem into a candidate for @use@, which may promote it. A refused compile throws before @use@ runs.
+withOsvCandidate :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> OsvEcosystem -> EpssRequirement -> CompileSources -> QuietTime -> (OsvCandidate -> m a) -> m a
+withOsvCandidate metrics mTracerProvider outDir eco requirement sources quietTime use = do
     let dbFile = outDir </> osvDbFileName (osvWireName eco)
     logFM InfoS (ls ("Compiling OSV data for " <> osvWireName eco <> " to " <> toText dbFile <> ", EPSS enrichment " <> renderRequirement requirement))
 
     liftIO $ createDirectoryIfMissing True outDir
 
     bracket (liftIO $ newCandidate outDir) (liftIO . removeCandidate) $ \candidate -> do
-        compileCandidate run candidate
-        liftIO $ renameFile candidate dbFile
-    pure dbFile
+        facts <- compileCandidate run candidate
+        use OsvCandidate{candidatePath = candidate, candidateDestination = dbFile, candidateFacts = facts}
   where
     run =
         CompileRun
@@ -122,6 +149,18 @@ compileOsvToSqlite metrics mTracerProvider outDir eco requirement sources quietT
             , crQuietTime = quietTime
             }
 
+-- | Write this attempt's nonce into the candidate. The nonce is fixed width, so the file keeps its size.
+stampCandidateNonce :: (MonadIO m) => OsvCandidate -> PublicationNonce -> m ()
+stampCandidateNonce candidate nonce =
+    liftIO $ withConnection (candidatePath candidate) $ \conn ->
+        execute conn "UPDATE meta SET value = ? WHERE key = ?" (renderPublicationNonce nonce, renderMetaKey MetaPublicationNonce)
+
+-- | Replace the canonical artifact with the candidate, and return its path.
+promoteCandidate :: (MonadIO m) => OsvCandidate -> m FilePath
+promoteCandidate candidate = do
+    liftIO (renameFile (candidatePath candidate) (candidateDestination candidate))
+    pure (candidateDestination candidate)
+
 -- What stays fixed across one pass, so each step below takes one parameter rather than six.
 data CompileRun = CompileRun
     { crMetrics :: AdvisoryCompileMetricsPort
@@ -132,9 +171,7 @@ data CompileRun = CompileRun
     , crQuietTime :: QuietTime
     }
 
-{- | A compile whose ecosystem requires EPSS enrichment met a failed feed, so it published nothing.
-It names the feed by host and port alone, because the configured URL can carry a credential.
--}
+-- | A required EPSS feed failed, so the compile published nothing. It names the feed by @host:port@, as the URL can carry a credential.
 data PilotEpssRequired = PilotEpssRequired
     { perEcosystem :: Text
     , perFeed :: Text
@@ -154,8 +191,8 @@ renderEpssRequired refusal =
         <> " failed: "
         <> renderEpssFeedFailure (perFailure refusal)
 
--- Fill one candidate file, which the caller renames into place only once this returns.
-compileCandidate :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => CompileRun -> FilePath -> m ()
+-- Fill one candidate file and return what its publication compares.
+compileCandidate :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => CompileRun -> FilePath -> m CandidateFacts
 compileCandidate run dbFile =
     withOptionalSpan (crTracerProvider run) Internal "ecluse.pilot.osv.compile" $ \mSpan -> do
         forM_ mSpan (describeCompile run)
@@ -166,14 +203,24 @@ compileCandidate run dbFile =
 
         -- The join needs the whole score table before the first advisory row lands.
         enrichment <- enrichOrRefuse run mSpan
+        epssMarker <- traverse (\feed -> answeredMarker (csEpssFeedUrl sources) (efLastModified feed) (efDigest feed)) (enrichedFeed enrichment)
         ingest <- newOsvIngest defaultIngestLimits (crEcosystem run) (maybe (mkEpssScores []) efScores (enrichedFeed enrichment)) now
 
         bracket (liftIO $ open dbFile) (liftIO . close) $ \conn -> do
             liftIO $ initSchema conn
-            ingestAdvisories run ingest conn
+            osvDigest <- ingestAdvisories run ingest conn
             stats <- readIngestStats ingest
             attempt <- readOsvAttempt ingest
-            concludeCompile (crMetrics run) mSpan conn (conclusionOf run now enrichment attempt stats)
+            osvMarker <- answeredMarker (csOsvExportUrl sources) (oaLastModified attempt) osvDigest
+            concludeCompile (crMetrics run) mSpan conn (conclusionOf run now enrichment attempt stats osvMarker epssMarker)
+  where
+    sources = crSources run
+
+-- A retried fetch can answer minutes after the pass began, so a source's date is bounded by a clock read once it answered.
+answeredMarker :: (MonadIO m) => String -> Maybe UTCTime -> ContentDigest -> m SourceMarker
+answeredMarker url declared digest = do
+    answeredAt <- liftIO getCurrentTime
+    pure (SourceMarker (sourceIdentityOf (credentialFreeUrl (toText url))) (usableLastModified answeredAt declared) (sourceDigestOf digest))
 
 describeCompile :: (MonadIO m) => CompileRun -> Span -> m ()
 describeCompile run sp = do
@@ -220,17 +267,19 @@ renderRequirement = \case
 
 -- A failed attempt leaves committed batches. NULL bounds defeat deduplication, so each retry
 -- clears the table, the tally, and the source metadata before it re-streams.
-ingestAdvisories :: (MonadResource m, MonadMask m, KatipContext m) => CompileRun -> OsvIngest -> Connection -> m ()
+ingestAdvisories :: (MonadResource m, MonadMask m, KatipContext m) => CompileRun -> OsvIngest -> Connection -> m ContentDigest
 ingestAdvisories run ingest conn =
     withOsvRetry defaultOsvRetryPolicy $ do
         resetIngestStats ingest
         resetOsvAttempt ingest
         liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
         runConduit $
-            streamOsvUrl (crTracerProvider run) ingest (csOsvExportUrl (crSources run))
-                .| CL.filter ((== osvExportDirectory (crEcosystem run)) . extEcosystem)
-                .| CL.chunksOf 2000
-                .| sinkSqlite conn
+            fuseUpstream
+                (streamOsvUrl (crTracerProvider run) ingest (csOsvExportUrl (crSources run)))
+                ( CL.filter ((== osvExportDirectory (crEcosystem run)) . extEcosystem)
+                    .| CL.chunksOf 2000
+                    .| sinkSqlite conn
+                )
 
 data CompileConclusion = CompileConclusion
     { ccEcosystem :: Text
@@ -238,21 +287,27 @@ data CompileConclusion = CompileConclusion
     , ccStats :: IngestStats
     , ccEpssStatus :: EpssStatus
     , ccProvenance :: AdvisoryProvenance
+    , ccOsvMarker :: SourceMarker
+    , ccEpssMarker :: Maybe SourceMarker
     , ccQuietTime :: QuietTime
     , ccNow :: UTCTime
     }
 
-conclusionOf :: CompileRun -> UTCTime -> EpssEnrichment -> OsvAttempt -> IngestStats -> CompileConclusion
-conclusionOf run now enrichment attempt stats =
+conclusionOf :: CompileRun -> UTCTime -> EpssEnrichment -> OsvAttempt -> IngestStats -> SourceMarker -> Maybe SourceMarker -> CompileConclusion
+conclusionOf run now enrichment attempt stats osvMarker epssMarker =
     CompileConclusion
         { ccEcosystem = osvWireName (crEcosystem run)
-        , ccSources = crSources run
+        , ccSources = sources
         , ccStats = stats
         , ccEpssStatus = enrichmentStatus enrichment
-        , ccProvenance = passProvenance (crSources run) enrichment attempt
+        , ccProvenance = passProvenance sources enrichment attempt
+        , ccOsvMarker = osvMarker
+        , ccEpssMarker = epssMarker
         , ccQuietTime = crQuietTime run
         , ccNow = now
         }
+  where
+    sources = crSources run
 
 newCandidate :: FilePath -> IO FilePath
 newCandidate outDir = do
@@ -279,25 +334,36 @@ passProvenance sources enrichment attempt =
   where
     feed = enrichedFeed enrichment
 
-concludeCompile :: (KatipContext m) => AdvisoryCompileMetricsPort -> Maybe Span -> Connection -> CompileConclusion -> m ()
+concludeCompile :: (KatipContext m) => AdvisoryCompileMetricsPort -> Maybe Span -> Connection -> CompileConclusion -> m CandidateFacts
 concludeCompile metrics mSpan conn conclusion = do
     recordCompileSpan mSpan stats
     liftIO (recordTallies metrics stats)
-    counted <- liftIO (query_ conn "SELECT COUNT(*) FROM package_vulnerability_ranges" :: IO [Only Int])
-    let rowCount = maybe 0 fromOnly (listToMaybe counted)
+    rowCount <- liftIO (countRows conn "SELECT COUNT(*) FROM package_vulnerability_ranges")
     forM_ (compileRefusal stats rowCount) (refuseCompile metrics mSpan ecosystem stats)
 
-    liftIO $ writeMeta conn conclusion rowCount
+    scoredCount <- liftIO (countRows conn "SELECT COUNT(*) FROM package_vulnerability_ranges WHERE epss_score IS NOT NULL")
+    liftIO $ writeMeta conn conclusion rowCount scoredCount
     liftIO (acmpCompileRun metrics CompileCompleted)
     forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.row_count" (show rowCount :: Text)
     katipAddContext (sl "row_count" rowCount <> sl "epss_status" epssStatus <> dropFields ecosystem stats) $
         logFM InfoS (ls ("Compiled " <> show rowCount <> " advisory ranges for " <> ecosystem <> " (" <> renderDrops stats <> "), epss_status=" <> epssStatus))
     warnOnUnusableDates ecosystem stats
     logSourceAges ecosystem (sourceAges (ccNow conclusion) (ccQuietTime conclusion) (ccProvenance conclusion))
+    pure
+        CandidateFacts
+            { cfEcosystem = ecosystem
+            , cfOsv = ccOsvMarker conclusion
+            , cfEpss = ccEpssMarker conclusion
+            , cfRelevantRows = toInteger rowCount
+            , cfScoredRows = toInteger scoredCount
+            }
   where
     ecosystem = ccEcosystem conclusion
     stats = ccStats conclusion
     epssStatus = renderEpssStatus (ccEpssStatus conclusion)
+
+countRows :: Connection -> Query -> IO Int
+countRows conn statement = maybe 0 fromOnly . listToMaybe <$> (query_ conn statement :: IO [Only Int])
 
 recordCompileSpan :: (MonadIO m) => Maybe Span -> IngestStats -> m ()
 recordCompileSpan mSpan stats = forM_ mSpan $ \sp -> do
@@ -380,9 +446,10 @@ initSchema conn = do
 
 -- Written once, after the stream completes and the refusals pass: the row count and the
 -- source provenance are only meaningful for a complete artifact.
-writeMeta :: Connection -> CompileConclusion -> Int -> IO ()
-writeMeta conn conclusion rowCount = do
+writeMeta :: Connection -> CompileConclusion -> Int -> Int -> IO ()
+writeMeta conn conclusion rowCount scoredCount = do
     builtAt <- getCurrentTime
+    nonce <- newPublicationNonce
     executeMany
         conn
         "INSERT INTO meta (key, value) VALUES (?, ?)"
@@ -392,8 +459,12 @@ writeMeta conn conclusion rowCount = do
           , (renderMetaKey MetaSourceUrl, dialledAuthorityLabel (toText (csOsvExportUrl sources)))
           , (renderMetaKey MetaEpssStatus, renderEpssStatus status)
           , (renderMetaKey MetaRowCount, show rowCount)
+          , (renderMetaKey MetaScoredRowCount, show scoredCount)
+          , (renderMetaKey MetaOsvDigest, sourceDigestHex (smDigest (ccOsvMarker conclusion)))
+          , (renderMetaKey MetaPublicationNonce, renderPublicationNonce nonce)
           ]
             <> [(renderMetaKey MetaEpssSourceUrl, dialledAuthorityLabel (toText (csEpssFeedUrl sources))) | status == EnrichmentAvailable]
+            <> [(renderMetaKey MetaEpssDigest, sourceDigestHex (smDigest marker)) | marker <- maybeToList (ccEpssMarker conclusion)]
             <> provenanceRows (ccProvenance conclusion)
         )
   where
@@ -409,9 +480,7 @@ sinkSqlite conn = awaitForever $ \batch ->
                 "INSERT OR IGNORE INTO package_vulnerability_ranges (package_name, cve_id, introduced_version, fixed_version, last_affected_version, severity, epss_score) VALUES (?, ?, ?, ?, ?, ?, ?)"
                 (map osvToRow batch)
 
-{- | One extracted segment as its artifact row. The upper bound spreads over the
-@fixed_version@ and @last_affected_version@ columns, and fills at most one of them.
--}
+-- | One extracted segment as its artifact row. The upper bound fills at most one of @fixed_version@ and @last_affected_version@.
 osvToRow :: ExtractedOsv -> (Text, Text, Maybe Text, Maybe Text, Maybe Text, Maybe Double, Maybe Double)
 osvToRow osv = (extPackage osv, extCveId osv, extIntroduced osv, fixed, lastAffected, extSeverity osv, extEpss osv)
   where
