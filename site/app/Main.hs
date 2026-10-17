@@ -5,7 +5,9 @@
 -- | Build-time OpenAPI fragments and search metadata for the assembled site.
 module Main (main) where
 
+import Control.Exception (throwIO)
 import Data.List (lookup)
+import Data.Text.Encoding qualified as TE
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, listDirectory)
 import System.FilePath (takeBaseName, takeDirectory, takeExtension, takeFileName, (</>))
 
@@ -32,10 +34,10 @@ run (SearchMetadata root) = do
         if directory
             then run (SearchMetadata path)
             else when (takeExtension path == ".html") $ do
-                original <- readFileText path
+                original <- either throwIO pure . TE.decodeUtf8' =<< readFileBS path
                 let sourceLabel = if takeFileName (takeDirectory path) == "src" then " (source)" else ""
                     prepared = prepareSearchMetadata (toText (takeBaseName path) <> sourceLabel) original
-                when (prepared /= original) (writeFileText path prepared)
+                when (prepared /= original) (writeFileBS path (TE.encodeUtf8 prepared))
 
 writePage :: FilePath -> Text -> IO ()
 writePage path body = do

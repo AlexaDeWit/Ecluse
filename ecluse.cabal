@@ -753,6 +753,7 @@ executable site-gen
     , ecluse:ecluse-manifest
     , ecluse:ecluse-site
     , filepath   ^>=1.5
+    , text       ^>=2.1
 
 -- Internal support library shared by tests and performance tools. The common home for
 -- cross-suite helpers, fixtures, and specs. It links against the library under test,
