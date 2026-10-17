@@ -533,7 +533,7 @@ nullable valparse = Parser (moreData value')
     value' _ (JValue AE.Null) ntok = Yield Nothing (Done "" ntok)
     value' tok _ _ = callParse (Just <$> valparse) tok
 
--- | Match values with a 'AE.Parser'.  Returns values for which the given parser succeeds.
+-- | Match values with a t'Data.Aeson.Types.Parser'.  Returns values for which the given parser succeeds.
 valueWith :: (AE.Value -> AE.Parser a) -> Parser a
 valueWith jparser = Parser $ \ntok -> loop (callParse aeValue ntok)
   where
