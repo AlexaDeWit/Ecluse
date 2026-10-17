@@ -47,7 +47,7 @@ classifyTransport err = transportFault (causeOf err) (dialledAuthority err <> ":
             -- The peer hung up before the first response byte, so the request never
             -- reached a protocol exchange.
             NoResponseDataReceived -> TransportUnreachable
-            -- The TLS manager wraps its connector's refused or unresolved host here, where plain HTTP raises ConnectionFailure.
+            -- The TLS manager wraps its connector's refused connection or empty address list here, where plain HTTP raises ConnectionFailure.
             InternalException inner
                 | Just (_ :: TLS.TLSException) <- fromException inner -> TransportTls
                 | Just (_ :: HostCannotConnect) <- fromException inner -> TransportUnreachable
