@@ -38,7 +38,7 @@ import Ecluse.Test.Corpus (corpusPackages, cpPackage, cpPath, npmCaptureUpstream
 import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutputs, rendered, selectedFacts)
 import Ecluse.Test.Json (fieldAt, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sameTexts, sharesKey, sharesString, walkJsonChunks)
+import Ecluse.Test.Registry.JsonStream (byteChunks, parseJsonChunks, sameTexts, sharesKey, sharesString, sliceChunks, walkJsonChunks)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionBytes)
 import Ecluse.Test.Registry.Npm.Streaming (NpmRead (..), npmFields)
@@ -182,7 +182,7 @@ spec = describe "npmFields" $ do
             releaseEvent = VersionField key (Just (object ["license" .= person, "_npmUser" .= person]))
         forM_ [FullRead, SelectedRead key, VersionListRead] $ \mode ->
             forM_ [1, 7, 32768] $ \size -> do
-                let chunks = unfoldr (\rest -> if BS.null rest then Nothing else Just (BS.splitAt size rest)) bytes
+                let chunks = sliceChunks size bytes
                 result <- expectRight (parseJsonChunks (MetadataBodyLimit (BS.length bytes)) (npmFields 12 mode) (\events event -> Right (event : events)) [] chunks)
                 events <- expectRight (streamValue result)
                 events `shouldContain` [releaseEvent]
@@ -200,7 +200,7 @@ spec = describe "npmFields" $ do
                     (npmFields (maxNestingDepth defaultLimits) FullRead)
                     (treeStep defaultLimits name)
                     emptyTreeRead
-                    (map BS.singleton (BS.unpack body))
+                    (byteChunks body)
                 )
         projected <- expectRight (streamValue streamed)
         (info, _) <- expectRight (finishTree defaultLimits name "See source" projected)
@@ -502,7 +502,7 @@ corpusRead =
 extractFields :: Int -> NpmRead -> Value -> IO (StreamResult ())
 extractFields levels mode source = do
     let bytes = toStrict (encode source)
-        chunks = map BS.singleton (BS.unpack bytes)
+        chunks = byteChunks bytes
         bound = MetadataBodyLimit (BS.length bytes)
     reference <- expectRight (parseJsonChunks bound (npmFields levels mode) (\_ _ -> Right ()) () chunks)
     case mode of

@@ -15,12 +15,13 @@ import UnliftIO.Exception (throwIO)
 import "lzma" Codec.Compression.Lzma qualified as Lzma
 
 import Ecluse.Core.Registry.PyPI.Archive.Lzma
+import Ecluse.Test.Registry.JsonStream (byteChunks)
 
 spec :: Spec
 spec = describe "withLzmaChunks" $ do
     it "decodes chunked and concatenated XZ members" $ do
         let bytes = BSL.toStrict (Lzma.compress "one")
-        withLzmaChunks XzArchive (const (pure ())) (map BS.singleton (BS.unpack (bytes <> bytes))) (runExceptT . runConduit . (.| foldC)) `shouldReturn` Right "oneone"
+        withLzmaChunks XzArchive (const (pure ())) (byteChunks (bytes <> bytes)) (runExceptT . runConduit . (.| foldC)) `shouldReturn` Right "oneone"
     it "rejects truncated input and non-padding compressed tails" $ do
         let bytes = BSL.toStrict (Lzma.compress "one")
         for_ [BS.take (BS.length bytes - 1) bytes, bytes <> "junk"] $ \input ->

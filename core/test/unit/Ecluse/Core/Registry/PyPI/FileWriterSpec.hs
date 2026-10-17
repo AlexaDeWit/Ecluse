@@ -13,6 +13,7 @@ import Ecluse.Core.Registry.PyPI.Document (packedSimpleDocument)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIPacked)
 import Ecluse.Core.Security (LimitError (TooManyArtifacts, TooManyVersions), Limits (maxArtifactCount, maxVersionCount), defaultLimits)
 import Ecluse.Test.Package (unscopedPyPI)
+import Ecluse.Test.Registry.JsonStream (byteChunks)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex, projectPyPIPackedChunks)
 
 spec :: Spec
@@ -62,7 +63,7 @@ spec = describe "fileWriter" $ do
     it "keeps scalar facts and served values across single-byte chunks" $ do
         let body = "{\"name\":\"thing\",\"files\":[{\"filename\":\"thing-1.0.tar.gz\",\"url\":\"https://files.example/a.tar.gz\",\"hashes\":{\"custom\":\"\\u00e9\"},\"requires-python\":\">=3\",\"provenance\":\"https://files.example/\\u00e9\",\"size\":12345,\"upload-time\":\"2026-01-01T00:00:00Z\",\"yanked\":\"\"}]}"
             name = unscopedPyPI "thing"
-        (second packedSimpleDocument <$> (projectPyPIPackedChunks defaultLimits name (map BS.singleton (BS.unpack body)) >>= projectPyPIPacked defaultLimits name))
+        (second packedSimpleDocument <$> (projectPyPIPackedChunks defaultLimits name (byteChunks body) >>= projectPyPIPacked defaultLimits name))
             `shouldBe` (second Just <$> projectPyPIIndex defaultLimits name body)
 
     it "keeps the first repeated scalar, hash object and digest" $

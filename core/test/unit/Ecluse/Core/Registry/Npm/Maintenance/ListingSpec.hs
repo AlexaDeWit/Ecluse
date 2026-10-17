@@ -16,7 +16,7 @@ import Ecluse.Core.Registry.Npm.Maintenance.Listing (packageListingWalk)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
 import Ecluse.Test.Package (scopedNpm, unscopedNpm)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genJsonBytes)
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks, readOutcome, walkJsonChunks)
+import Ecluse.Test.Registry.JsonStream (parseJsonChunks, readOutcome, sliceChunks, walkJsonChunks)
 import Ecluse.Test.Registry.Npm.Maintenance (parsePackageListing, referencePackageListingParser)
 
 -- | Compare hostile inputs and explicit boundaries without imposing new enumeration limits.
@@ -62,29 +62,29 @@ spec = describe "packageListingWalk" $ do
     it "skips structures deeper than metadata's retained-depth ceiling" $ do
         let body = "{\"leftpad\":" <> BS.replicate 256 0x5b <> "0" <> BS.replicate 256 0x5d <> "}"
         parsePackageListing body `shouldBe` Right [unscopedNpm "leftpad"]
-        checkChunks (chunksOf 17 body)
+        checkChunks (sliceChunks 17 body)
 
     it "enumerates a large set without a package-count setting" $ do
         let names = ["package" <> show index | index <- [1000 .. 2500 :: Int]]
             body = "{" <> BS.intercalate "," ["\"" <> encodeUtf8 name <> "\":0" | name <- names] <> "}"
         parsePackageListing body `shouldBe` Right (map unscopedNpm names)
-        checkChunks (chunksOf 1024 body)
+        checkChunks (sliceChunks 1024 body)
 
     it "preserves long-key dropping across lexer chunks" $
         forM_ [65535, 65536, 65537, 100000] $ \size -> do
             let body = "{\"" <> BS.replicate size 0x61 <> "\":{},\"leftpad\":0}"
             parsePackageListing body `shouldBe` Right [unscopedNpm "leftpad"]
-            forM_ [1024, 32768] $ \width -> checkChunks (chunksOf width body)
+            forM_ [1024, 32768] $ \width -> checkChunks (sliceChunks width body)
 
     it "preserves the digit ceiling in discarded values" $ do
         let body = "{\"leftpad\":" <> BS.replicate 300000 0x31 <> "}"
-            chunks = chunksOf 32768 body
+            chunks = sliceChunks 32768 body
         checkChunks chunks
         snd (bothReads chunks) `shouldSatisfy` either (const False) (isLeft . snd)
 
     it "counts trailing bytes and enforces the bound after extraction" $ do
         let body = "{\"leftpad\":0}" <> BS.replicate 80 0x20
-            chunks = chunksOf 7 body
+            chunks = sliceChunks 7 body
             bound = MetadataBodyLimit (BS.length body - 1)
         void (walkJsonChunks bound packageListingWalk chunks) `shouldBe` Left (BodyTooLarge bound)
         void (parseJsonChunks bound referencePackageListingParser (\_ names -> Right names) [] chunks)
@@ -120,8 +120,3 @@ checkChunks :: [ByteString] -> Expectation
 checkChunks chunks = do
     let (reference, walked) = bothReads chunks
     walked `shouldBe` reference
-
-chunksOf :: Int -> ByteString -> [ByteString]
-chunksOf width body
-    | BS.null body = []
-    | otherwise = let (chunk, rest) = BS.splitAt width body in chunk : chunksOf width rest
