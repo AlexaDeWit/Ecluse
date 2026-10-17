@@ -120,7 +120,9 @@ unUrl (Url u) = u
 data HttpScheme = Http | Https
     deriving stock (Eq, Show)
 
--- | Split a URL into its scheme and the text after the separator, or 'Nothing' for neither @http@ nor @https@.
+{- | Split a URL into its scheme and the text after the separator, or 'Nothing' for neither @http@ nor
+@https@. It is the one scheme check the configuration layer shares.
+-}
 splitHttpScheme :: Text -> Maybe (HttpScheme, Text)
 splitHttpScheme raw =
     ((Https,) <$> T.stripPrefix "https://" raw) <|> ((Http,) <$> T.stripPrefix "http://" raw)
@@ -220,7 +222,9 @@ data ControlPlane
       ControlNone
     deriving stock (Eq, Show)
 
--- | A mount's store backend, resolved once at load ("Ecluse.Config.Target"). No arm pairs one store's mint with another's plane.
+{- | A mount's store backend, resolved once at load ("Ecluse.Config.Target") so no two roles infer a
+different one. No arm pairs one store's mint with another's plane.
+-}
 data StoreBackend
     = -- | A protocol-speaking host: its static write token, and no control plane.
       BackendRegistry Secret
@@ -269,7 +273,7 @@ newtype MountIntegrity = MountIntegrity
 -- | Endpoint and activation settings for one mount before resolution.
 data MountConfig = MountConfig
     { mntEnabled :: Maybe Bool
-    -- ^ Any declared key activates the mount, so @true@ serves a bare public gate and @false@ switches one off in place.
+    -- ^ Any operator-declared key activates the mount, so @true@ serves a bare public gate and @false@ switches one off in place.
     , mntPrivateUpstream :: Maybe PrivateEndpoint
     , mntPublicUpstream :: RegistryUrl
     -- ^ Only the @registry@ tag is admitted here, so the URL is the whole declaration.
@@ -319,7 +323,9 @@ data QueueSettings = QueueSettings
     , qsMaxMemoryDepth :: Maybe Int
     -- ^ Computed from the runtime posture when unset. A configured value wins.
     , qsMaxReceiveCount :: Int
-    -- ^ Deliveries before the worker retires a message. A __floor__: a dead-letter terminus runs one above it, so it captures first.
+    {- ^ Deliveries before the worker retires a message. A __floor__: the worker runs one above an attached
+    dead-letter terminus's capture count, so the dead-letter queue captures first ("Ecluse.Core.Queue").
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -379,11 +385,13 @@ data AdvisoriesSettings = AdvisoriesSettings
     , advEpssQuietTime :: NominalDiffTime
     -- ^ Pilot only: the same threshold for the EPSS feed's declared score date.
     , advMaxAgeSeconds :: Maybe NominalDiffTime
-    -- ^ How old a published advisory artifact may be before advisory denial refuses. Unset, each mount derives its own.
+    -- ^ How old a published advisory artifact may be before advisory denial refuses. Unset, each mount derives it from its quarantine rules.
     }
     deriving stock (Eq, Show)
 
--- | The @runtime@ group: the process-sizing overrides. Unset, each is computed from cgroups, the RTS, and the file-descriptor limit.
+{- | The @runtime@ group: the process-sizing overrides. Unset, each is computed from cgroups, the RTS, and
+the file-descriptor limit, with its provenance boot-logged.
+-}
 data RuntimeSettings = RuntimeSettings
     { rtCores :: Maybe Int
     , rtCoresCeiling :: Maybe Int
@@ -417,13 +425,19 @@ data DredgerSettings = DredgerSettings
     , drgQuotaOverrides :: Map Text QuotaOverride
     -- ^ Declared request capacity, keyed by the store URL it describes.
     , drgDeletionCap :: Maybe Int
-    -- ^ Versions one cycle may delete, computed per store when unset. Reaching it halts the sweep, so a poisoned generation stops.
+    {- ^ Versions one cycle may delete, computed per store when unset. Reaching it halts the sweep for the life
+    of the process, so a poisoned generation stops there.
+    -}
     , drgFullWalk :: Bool
-    -- ^ Walk every package each cycle, not only the candidates. It covers a rule change, and writes one resumption marker to the store.
+    {- ^ Walk every package each cycle, not only the advisory and identity-deny candidates. It covers a rule
+    change, and writes one resumption marker to the store.
+    -}
     }
     deriving stock (Eq, Show)
 
--- | One store's declared request capacity. A shared scope joins two endpoints of one pool, so the sweep paces them together.
+{- | One store's declared request capacity. It supplies the capacity a backend publishes none of, and a
+shared scope joins two endpoints of one pool so the sweep paces them together.
+-}
 data QuotaOverride = QuotaOverride
     { qoScope :: Maybe Text
     -- ^ The capacity pool this store shares, which defaults to the store's own authority.
@@ -449,7 +463,7 @@ data MountMode
       ServeOnly (Maybe RegistryUrl)
     deriving stock (Eq, Show)
 
--- | A mirrored mount's two required halves: the readable private upstream, and the mirror target with its write credential.
+-- | A mirrored mount's two required halves: the readable private upstream, and the mirror target with its derived write credential.
 data MirroredLegs = MirroredLegs
     { mlPrivateUpstream :: RegistryUrl
     , mlMirrorTarget :: MirrorTarget
@@ -485,16 +499,16 @@ data Mount = Mount
     , mountRegistries :: MountRegistries
     , mountPolicy :: [PrecededRule]
     , mountInactiveRules :: Map Text RuleInactivity
-    -- ^ The source-activated shipped rules this mount does not run, by descriptor name.
+    -- ^ The source-activated shipped rules this mount leaves to an advisory source that is not configured, by name.
     }
     deriving stock (Eq, Show)
 
 -- | The mounts a load resolved, keyed by the ecosystem each was declared under.
 type MountMap = Map Ecosystem Mount
 
--- | Why a shipped rule that an advisory source activates does not run.
+-- | Why a shipped rule an advisory source activates does not run, when no operator patch enabled or disabled it.
 data RuleInactivity
-    = -- | No @advisories.url@ is configured to activate it.
+    = -- | No @advisories.url@ is configured, and no patch decided the rule.
       NoAdvisorySource
     deriving stock (Eq, Show)
 
@@ -503,7 +517,7 @@ data Config = Config
     { configApp :: AppConfig
     , configMounts :: MountMap
     , configInactiveRules :: Map Text RuleInactivity
-    -- ^ The source-activated shipped rules that neither the shared policy nor any mount runs.
+    -- ^ The same for the shared @rules@ map, for a rule some mount leaves to the source and no mount runs.
     }
     deriving stock (Eq, Show)
 
@@ -521,7 +535,9 @@ data ConfigError
       CodeArtifactHostMismatch Ecosystem Text
     | -- | A @codeArtifact@ endpoint on an ecosystem CodeArtifact has no package format for. Carries its key.
       CodeArtifactFormatUnsupported Ecosystem Text
-    | -- | A @codeArtifact@ endpoint whose path names no repository under the mount's format. Carries its key, then the format.
+    | {- | A @codeArtifact@ endpoint whose path names no repository under the mount's own format, whose
+      per-format endpoints are separate stores. Carries its key, then the format token.
+      -}
       CodeArtifactRepositoryMissing Ecosystem Text Text
     deriving stock (Eq, Show)
 

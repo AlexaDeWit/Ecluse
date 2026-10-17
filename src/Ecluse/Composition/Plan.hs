@@ -59,7 +59,6 @@ import Ecluse.Composition.Types (BootRole (BootWithoutPipeline), bootInvocation,
 import Ecluse.Composition.Validate (ValidatedPlan (vpProgressFloor), vetBoot, vetMirrorCapabilities)
 import Ecluse.Composition.Vet (decided, runVet)
 import Ecluse.Config (
-    AdvisoriesSettings (advUrl),
     AppConfig (cfgAdvisories, cfgCache, cfgLimits, cfgMounts, cfgQueue, cfgRuntime),
     Config (configApp, configMounts),
     LimitsSettings (limMaxArtifactCount, limMaxNestingDepth, limMaxVersionCount),
@@ -68,6 +67,7 @@ import Ecluse.Config (
     RuntimeSettings (rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost, rtServeMaxInFlight),
     advisoryAgeLines,
     advisoryEpssLines,
+    advisorySourced,
     mountPostureLines,
     resolvedKeyProvenance,
  )
@@ -132,7 +132,9 @@ data BootPlan = BootPlan
     -- ^ The warning lines, in emission order.
     }
 
--- | Decide everything one role's boot settles from the configuration alone. @ecluse check-config@ runs this whole tier.
+{- | Decide everything one role's boot settles from the configuration alone. @ecluse check-config@ runs
+this whole tier, and a boot adds no pure refusal of its own past it.
+-}
 resolveBootPlan :: BootRole -> BootInputs -> BootReport
 resolveBootPlan role inputs =
     BootReport
@@ -223,7 +225,7 @@ bootPlanFrom role inputs (validated, mirror, s3Endpoint) =
                 , mountPostureLines config
                 , ruleOrderLines config
                 , advisoryAgeLines config
-                , [line | handlesAdvisoryArtifact role (cfgAdvisories app), line <- advisoryEpssLines config]
+                , [line | handlesAdvisoryArtifact role app, line <- advisoryEpssLines config]
                 , [epssAttemptLine (cfgAdvisories app) | role == BootWithoutPipeline]
                 ]
         , bpWarnings = mpDegradations memoryPlan <> mirrorRuntimeWarnings (mdRuntime mirror)
@@ -237,8 +239,8 @@ bootPlanFrom role inputs (validated, mirror, s3Endpoint) =
     (publicConnections, publicLine) = resolvePublicConnections (rtPublicConnectionsPerHost runtimeSettings) (biFdLimit inputs)
 
 -- Pilot compiles an artifact, and check-config vets as Pilot. Any other role reads one only from a configured store.
-handlesAdvisoryArtifact :: BootRole -> AdvisoriesSettings -> Bool
-handlesAdvisoryArtifact role advisories = role == BootWithoutPipeline || isJust (advUrl advisories)
+handlesAdvisoryArtifact :: BootRole -> AppConfig -> Bool
+handlesAdvisoryArtifact role app = role == BootWithoutPipeline || advisorySourced app
 
 {- The memory plan and its lines. The 'publishConfigured' predicate and this settings
 projection live here, so the two entry points cannot disagree on either. -}
@@ -292,7 +294,7 @@ mirrorRuntimeWarnings = \case
 defaultConfigPath :: FilePath
 defaultConfigPath = "/etc/ecluse/config.yaml"
 
--- | The path a non-blank @ECLUSE_CONFIG@ names, trimmed. 'Nothing' leaves 'defaultConfigPath', where no document is no failure.
+-- | The path a non-blank @ECLUSE_CONFIG@ names, trimmed. 'Nothing' leaves 'defaultConfigPath', where an absent document is not a failure.
 explicitConfigPath :: [(String, String)] -> Maybe FilePath
 explicitConfigPath envVars = do
     raw <- lookup "ECLUSE_CONFIG" envVars

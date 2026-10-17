@@ -457,6 +457,29 @@ spec = do
                     anyRuleLines activated provenance `shouldSatisfy` (not . any marked)
                     ruleLines other provenance `shouldSatisfy` (\otherLines -> not (null otherLines) && all marked otherLines)
 
+        for_
+            [ ("deny-known-malicious", "remediation-fast-track", "{\"rules\":{\"deny-known-malicious\":{\"enabled\":false}},\"mounts\":{\"npm\":{\"enabled\":true}}}")
+            , ("deny-known-malicious", "remediation-fast-track", "{\"mounts\":{\"npm\":{\"rules\":{\"deny-known-malicious\":{\"enabled\":false}}}}}")
+            , ("remediation-fast-track", "deny-known-malicious", "{\"rules\":{\"remediation-fast-track\":{\"enabled\":false}},\"mounts\":{\"npm\":{\"enabled\":true}}}")
+            , ("remediation-fast-track", "deny-known-malicious", "{\"mounts\":{\"npm\":{\"rules\":{\"remediation-fast-track\":{\"enabled\":false}}}}}")
+            ]
+            $ \(disabled, other, doc :: Text) ->
+                it ("marks no line of a rule an operator disables, because a source would not run it: " <> toString doc) $ do
+                    provenance <- provenanceOf pubUrlEnv (Just (encodeUtf8 doc))
+                    anyRuleLines disabled provenance `shouldSatisfy` (\disabledLines -> not (null disabledLines) && not (any marked disabledLines))
+                    provenance `shouldSatisfy` any (T.isInfixOf ("rules." <> disabled <> ".enabled = false (document)"))
+                    ruleLines other provenance `shouldSatisfy` (\otherLines -> not (null otherLines) && all marked otherLines)
+
+        it "keeps a shared rule's lines unmarked where one mount activates it, and marks the mount that leaves it to the source" $ do
+            provenance <-
+                provenanceOf
+                    pubUrlEnv
+                    (Just "{\"mounts\":{\"npm\":{\"rules\":{\"deny-known-malicious\":{\"enabled\":true}}},\"pypi\":{\"rules\":{\"deny-known-malicious\":{\"precedence\":310}}}}}")
+            ruleLines "deny-known-malicious" provenance `shouldSatisfy` (\shared -> not (null shared) && not (any marked shared))
+            provenance `shouldSatisfy` elem "config: mounts.npm.rules.deny-known-malicious.enabled = true (document)"
+            provenance `shouldSatisfy` elem "config: mounts.pypi.rules.deny-known-malicious.precedence = 310 (document, inactive: no advisories.url)"
+            ruleLines "remediation-fast-track" provenance `shouldSatisfy` (\shared -> not (null shared) && all marked shared)
+
 -- | The types of a mount's rules that are limited to admission, which the Dredger does not evaluate.
 limitedRules :: Mount -> [Text]
 limitedRules mount = [ruleName (prRule rule) | rule <- mountPolicy mount, ruleReach rule == AdmissionOnly]

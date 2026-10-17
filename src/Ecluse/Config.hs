@@ -64,6 +64,7 @@ module Ecluse.Config (
     emptyPolicy,
     decodeDefaultConfig,
     sourceDefaultNames,
+    advisorySourced,
     ConfigError (..),
     renderConfigError,
     loadConfig,
@@ -120,41 +121,59 @@ decodeDefaultConfig bytes = do
     policy <- first (pure . PolicyErrors) (resolvePolicy emptyPolicy patch)
     pure (ast, policy)
 
--- Each descriptor stays patchable after a disable, until the final mount policy is selected.
-data PendingPolicy = PendingPolicy RulePolicy (Map Text Bool)
+{- Each descriptor stays patchable after a disable, until the final mount policy is selected. The
+middle field is why a rule left to the source does not run, absent when a source is configured. -}
+data PendingPolicy = PendingPolicy RulePolicy (Maybe RuleInactivity) (Map Text Activation)
+
+-- How one scope decides a source-activated rule: left to the source, or enabled or disabled by a patch.
+data Activation = SourceDecides | OperatorEnabled | OperatorDisabled
+    deriving stock (Eq)
 
 -- | The shipped rules an advisory source activates: neither can decide anything without one.
 sourceDefaultNames :: Set Text
 sourceDefaultNames = Set.fromList ["deny-known-malicious", "remediation-fast-track"]
 
 pendingPolicy :: RulePolicy -> Bool -> PendingPolicy
-pendingPolicy policy sourced = PendingPolicy policy (Map.fromSet (const sourced) sourceDefaultNames)
+pendingPolicy policy sourced =
+    PendingPolicy policy (NoAdvisorySource <$ guard (not sourced)) (Map.fromSet (const SourceDecides) sourceDefaultNames)
 
 -- @enabled: false@ deactivates, @enabled: true@ or a restated type activates, and a partial patch keeps the state.
 resolvePendingPolicy :: PendingPolicy -> RulePatch -> Either [PolicyError] PendingPolicy
-resolvePendingPolicy (PendingPolicy policy active) (RulePatch patch) =
-    (`PendingPolicy` Map.mapWithKey nextActive active) <$> resolvePolicy policy (RulePatch descriptorPatch)
+resolvePendingPolicy (PendingPolicy policy unsourced activation) (RulePatch patch) =
+    (\resolved -> PendingPolicy resolved unsourced (Map.mapWithKey decide activation)) <$> resolvePolicy policy (RulePatch descriptorPatch)
   where
-    nextActive name current = case Map.lookup name patch of
+    decide name current = case Map.lookup name patch of
         Nothing -> current
-        Just declared -> fromMaybe (isJust (entryType declared) || current) (entryEnabled declared)
-    descriptorPatch = foldr (Map.adjust (\declared -> declared{entryEnabled = Just True})) patch (Map.keys active)
+        Just declared -> case entryEnabled declared of
+            Just True -> OperatorEnabled
+            Just False -> OperatorDisabled
+            Nothing -> if isJust (entryType declared) then OperatorEnabled else current
+    descriptorPatch = foldr (Map.adjust (\declared -> declared{entryEnabled = Just True})) patch (Map.keys activation)
 
--- A scope's selected rules, and the source-activated rules it leaves out because no source is configured.
+-- A scope's selected rules, and the rules it leaves to a source that is not configured, with why.
 data SettledPolicy = SettledPolicy RulePolicy (Map Text RuleInactivity)
 
-settlePolicy :: Bool -> PendingPolicy -> SettledPolicy
-settlePolicy sourced (PendingPolicy policy active) =
-    SettledPolicy (RulePolicy (Map.withoutKeys (policyRules policy) inactive)) unsourced
+settlePolicy :: PendingPolicy -> SettledPolicy
+settlePolicy (PendingPolicy policy unsourced activation) =
+    SettledPolicy (RulePolicy (Map.withoutKeys (policyRules policy) idle)) waiting
   where
-    inactive = Map.keysSet (Map.filter not active)
-    unsourced = if sourced then Map.empty else Map.fromSet (const NoAdvisorySource) inactive
+    idle = Map.keysSet (Map.filter (not . runs) activation)
+    runs = \case
+        SourceDecides -> isNothing unsourced
+        OperatorEnabled -> True
+        OperatorDisabled -> False
+    waiting = maybe Map.empty (\reason -> reason <$ Map.filter (== SourceDecides) activation) unsourced
 
--- A mount can activate a shared rule on its own, so a shared rule is inactive only where no mount runs it.
-sharedInactivity :: SettledPolicy -> MountMap -> Map Text RuleInactivity
-sharedInactivity (SettledPolicy _ inactive) mounts =
-    Map.filterWithKey (\name _ -> all (Map.member name . mountInactiveRules) mounts) inactive
+-- The source-activated rules a scope runs.
+runningSourceRules :: SettledPolicy -> Set Text
+runningSourceRules (SettledPolicy policy _) = Map.keysSet (Map.restrictKeys (policyRules policy) sourceDefaultNames)
 
+-- A shared rule left to the source is marked only where some mount leaves it to the source too and none runs it.
+sharedInactivity :: MountMap -> Set Text -> SettledPolicy -> Map Text RuleInactivity
+sharedInactivity mounts mountRuns (SettledPolicy _ waiting) =
+    Map.restrictKeys waiting (foldMap (Map.keysSet . mountInactiveRules) mounts `Set.difference` mountRuns)
+
+-- | Whether @advisories.url@ is configured, the source the advisory rules read.
 advisorySourced :: AppConfig -> Bool
 advisorySourced = isJust . advUrl . cfgAdvisories
 
@@ -170,10 +189,10 @@ loadConfig envVars mBytes = do
     let appConfig = parsed{cfgMounts = servedMounts active (cfgMounts parsed)}
     globalPolicy <- resolveGlobalPolicy (pendingPolicy catalogue (advisorySourced appConfig)) overridesAst
     validateMirrorSettings appConfig
-    mounts <- case (publicUrlErrors appConfig, resolveMounts defaultAst overridesAst globalPolicy appConfig) of
+    (mounts, mountRuns) <- case (publicUrlErrors appConfig, resolveMounts defaultAst overridesAst globalPolicy appConfig) of
         ([], resolved) -> resolved
         (errs, resolved) -> Left (errs <> fromLeft [] resolved)
-    Right (Config appConfig mounts (sharedInactivity (settlePolicy (advisorySourced appConfig) globalPolicy) mounts))
+    Right (Config appConfig mounts (sharedInactivity mounts mountRuns (settlePolicy globalPolicy)))
 
 -- enabled: false switches a declared mount off. Anything else declared serves.
 servedMounts :: Set Ecosystem -> Map Ecosystem MountConfig -> Map Ecosystem MountConfig
@@ -234,18 +253,20 @@ sharedPolicyErrors errors
     | SuppressUnknownRule "deny-scripts" `elem` errors = [SharedPolicyErrors errors]
     | otherwise = [PolicyErrors errors]
 
-resolveMounts :: Value -> Value -> PendingPolicy -> AppConfig -> Either [ConfigError] MountMap
+-- The resolved mounts, and the source-activated rules any of them runs.
+resolveMounts :: Value -> Value -> PendingPolicy -> AppConfig -> Either [ConfigError] (MountMap, Set Text)
 resolveMounts defaultAst overridesAst globalPolicy appConfig =
     case partitionEithers (map resolveOne (Map.toAscList (cfgMounts appConfig))) of
-        ([], mounts) -> Right (Map.fromList mounts)
+        ([], resolved) -> Right (Map.fromList (map fst resolved), foldMap snd resolved)
         (errs, _) -> Left (concat errs)
   where
     resolveOne (eco, mcfg) = case lefts (declarationErrors eco mcfg) of
         [] -> do
             shipped <- mountRulePatch defaultAst eco
             declared <- mountRulePatch overridesAst eco
-            pending <- resolveMountPolicy globalPolicy shipped declared
-            (eco,) <$> resolveMode (settlePolicy (advisorySourced appConfig) pending) eco mcfg
+            settled <- settlePolicy <$> resolveMountPolicy globalPolicy shipped declared
+            mount <- resolveMode settled eco mcfg
+            pure ((eco, mount), runningSourceRules settled)
         tagErrs -> Left tagErrs
 
 {- Every endpoint checked against the tag it was declared under, and the private upstream checked

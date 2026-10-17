@@ -42,6 +42,10 @@ bootMessages = filter decision . logMessages
 metadataGzipKey :: Text
 metadataGzipKey = "config: server.metadataGzip = "
 
+-- What follows the layer on the line of a rule that does not run, before the reason.
+inactiveMarker :: Text
+inactiveMarker = ", inactive: "
+
 -- | The native metadata compression a proxy resolved. 'Nothing' for a log that does not state it.
 metadataCompression :: [Text] -> Maybe MetadataCompression
 metadataCompression messages = listToMaybe (mapMaybe (posture <=< listToMaybe . words <=< T.stripPrefix metadataGzipKey) messages)
@@ -107,10 +111,12 @@ data LoggedRule = LoggedRule
     -- ^ Every other key the rule sets, with its value.
     , lrLayers :: [Text]
     -- ^ The layers the keys came from: default, document, or environment.
+    , lrInactive :: Maybe Text
+    -- ^ Why the proxy logged the rule as inactive, when its key lines carry that marker.
     }
     deriving stock (Eq, Show)
 
--- | Group the @config: <key> = <value> (<layer>)@ lines by rule, in the order the log names each rule.
+-- | Group the @config: <key> = <value> (<layer>[, inactive: <why>])@ lines by rule, in the order the log names each rule.
 loggedRules :: [Text] -> [LoggedRule]
 loggedRules messages = map collect (ordNub (map fst keyed))
   where
@@ -119,20 +125,30 @@ loggedRules messages = map collect (ordNub (map fst keyed))
         let fields = [field | (n, field) <- keyed, n == name]
          in LoggedRule
                 { lrName = fromMaybe name (T.stripPrefix "rules." name)
-                , lrType = listToMaybe [value | (key, value, _) <- fields, key == "type"]
-                , lrSettings = [(key, value) | (key, value, _) <- fields, key /= "type"]
-                , lrLayers = ordNub [layer | (_, _, layer) <- fields]
+                , lrType = listToMaybe [rkValue field | field <- fields, rkKey field == "type"]
+                , lrSettings = [(rkKey field, rkValue field) | field <- fields, rkKey field /= "type"]
+                , lrLayers = ordNub (map rkLayer fields)
+                , lrInactive = listToMaybe (mapMaybe rkInactive fields)
                 }
 
--- A rule key's rule path and its field: the key, the value, and the layer.
-ruleKey :: Text -> Maybe (Text, (Text, Text, Text))
+-- One rule key's line: the key, its value, the layer it came from, and why the rule is inactive, if it is.
+data RuleKeyLine = RuleKeyLine
+    { rkKey :: Text
+    , rkValue :: Text
+    , rkLayer :: Text
+    , rkInactive :: Maybe Text
+    }
+
+-- A rule key's rule path and its line.
+ruleKey :: Text -> Maybe (Text, RuleKeyLine)
 ruleKey message = do
     entry <- T.stripPrefix "config: " message
     let (path, assigned) = T.breakOn " = " entry
-    (valued, layer) <- T.stripSuffix ")" (T.drop 3 assigned) >>= splitLast " ("
+    (valued, origin) <- T.stripSuffix ")" (T.drop 3 assigned) >>= splitLast " ("
     (rule, key) <- splitLast "." path
     guard ("rules" `elem` T.splitOn "." rule && not (T.null key))
-    pure (rule, (key, valued, layer))
+    let (layer, marked) = T.breakOn inactiveMarker origin
+    pure (rule, RuleKeyLine key valued layer (T.stripPrefix inactiveMarker marked))
   where
     splitLast separator text = case T.breakOnEnd separator text of
         (before, after) | not (T.null before) -> Just (T.dropEnd (T.length separator) before, after)

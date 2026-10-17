@@ -19,7 +19,8 @@ that supplied it and redacting secrets, and `ecluse check-config` prints the sam
 Without `advisories.url`, the shipped `deny-known-malicious` and `remediation-fast-track` rules do
 not run, so each of their keys says so: `(default, inactive: no advisories.url)`. A key you patched
 keeps its own layer, as in `(document, inactive: no advisories.url)`. A rule you activate with
-`enabled: true` or a restated `type` carries no marker.
+`enabled: true` or a restated `type` carries no marker, and so does a rule you switch off with
+`enabled: false`, because a source would not run it either.
 
 > **One spelling rule.** Environment variables are the mechanical transliteration of the document
 > schema: `__` descends into an object and `_` joins a camelCase word. So `ECLUSE_CACHE__MAX_BYTES`

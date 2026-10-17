@@ -136,7 +136,7 @@ ruleTable = \case
             <> map ruleRow rules
             <> [""]
   where
-    ruleRow r = "| " <> T.intercalate " | " [lrName r, fromMaybe "n/a" (lrType r), settings r, T.intercalate ", " (lrLayers r)] <> " |"
+    ruleRow r = "| " <> T.intercalate " | " [lrName r <> foldMap (\why -> " (inactive: " <> why <> ")") (lrInactive r), fromMaybe "n/a" (lrType r), settings r, T.intercalate ", " (lrLayers r)] <> " |"
     settings r = bool (T.intercalate ", " [key <> " " <> value | (key, value) <- lrSettings r]) "none" (null (lrSettings r))
 
 shapeNote :: Text -> Int -> Text

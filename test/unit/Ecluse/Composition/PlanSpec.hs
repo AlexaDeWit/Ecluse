@@ -145,14 +145,15 @@ spec = describe "resolveBootPlan" $ do
 
     it "reports the EPSS requirement to a role that compiles or reads an advisory artifact, and to no other" $ do
         -- check-config vets under the Pilot's role, so it prints the line with or without a store.
-        let stored = overrideEnv "ECLUSE_ADVISORIES__URL" "s3://advisories/ecluse" codeArtifactEnvVars
+        let bare = overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" codeArtifactEnvVars
+            stored = overrideEnv "ECLUSE_ADVISORIES__URL" "s3://advisories/ecluse" bare
             epssLines role envVars config = fmap (filter (T.isInfixOf "EPSS enrichment") . bpLines) (brOutcome (resolveBootPlan role (bootInputsFor envVars Nothing config noCeiling)))
-        unsourced <- expectConfig codeArtifactEnvVars Nothing
+        unsourced <- expectConfig bare Nothing
         sourced <- expectConfig stored Nothing
-        advisoryEpssLines unsourced `shouldSatisfy` (not . null)
-        advisoryEpssLines sourced `shouldSatisfy` (not . null)
+        map (T.takeWhile (/= ':')) (advisoryEpssLines unsourced) `shouldBe` ["mount \"npm\"", "mount \"pypi\""]
+        advisoryEpssLines sourced `shouldSatisfy` ((== 2) . length)
         for_ everyBootRole $ \role -> do
-            epssLines role codeArtifactEnvVars unsourced `shouldBe` Right (if role == BootWithoutPipeline then advisoryEpssLines unsourced else [])
+            epssLines role bare unsourced `shouldBe` Right (if role == BootWithoutPipeline then advisoryEpssLines unsourced else [])
             epssLines role stored sourced `shouldBe` Right (advisoryEpssLines sourced)
 
     it "returns the preamble on the refusing path as well as the succeeding one" $ do
