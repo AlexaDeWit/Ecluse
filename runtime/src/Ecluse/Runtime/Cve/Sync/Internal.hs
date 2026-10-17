@@ -2,11 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The fetch transport, the one-cycle step and the scheduled task behind
-"Ecluse.Runtime.Cve.Sync", which documents the sync and re-exports the curated surface.
-Importing this module opts out of that stability promise, the convention @text@ and @bytestring@
-use, so production code imports the public one.
--}
+-- | Advisory sync scheduling, observation, and paced operator reports.
 module Ecluse.Runtime.Cve.Sync.Internal (
     -- * The injected transport
     CveFetch (..),
@@ -34,35 +30,20 @@ module Ecluse.Runtime.Cve.Sync.Internal (
     absentReportInterval,
 ) where
 
-import Conduit (ConduitT, runResourceT, (.|))
-import Data.Conduit.Combinators qualified as C
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Katip (KatipContext, Severity (DebugS, ErrorS, InfoS), logFM, ls)
-import Network.HTTP.Client (HttpException)
-import Network.HTTP.Types.Status (statusCode)
-import System.Directory (removeFile, renameFile)
 import UnliftIO (MonadUnliftIO, withRunInIO)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (catch, catchAny, mask, onException, throwIO)
 
-import Amazonka qualified as AWS
-import Amazonka.S3 qualified as S3
-import Amazonka.S3.Lens qualified as S3L
-import Lens.Micro ((^.))
-
-import Ecluse.Core.Cve (CveDb (cveDbClose, cveDbMeta), CveDbRejected)
-import Ecluse.Core.Cve.Internal (transferCveDb)
-import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, observeAdvisoryPublication, swapIn)
-import Ecluse.Core.Cve.Types (DbEtag (..), OsvDbFetchFault (..), renderOsvDbFetchFault)
+import Ecluse.Core.Cve.Slot (AdvisorySource (..), currentAdvisoryEtag, currentAdvisorySource)
+import Ecluse.Core.Cve.Types (renderOsvDbFetchFault)
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apEpssScoreDate, apOsvNewestModified, apOsvSource))
-import Ecluse.Core.Osv.Schema (EpssRequirement, MetaKey (MetaBuiltAt, MetaRowCount), renderMetaKey)
+import Ecluse.Core.Osv.Schema (MetaKey (MetaBuiltAt, MetaRowCount), renderMetaKey)
 import Ecluse.Core.Security.Authority (dialledAuthorityLabel)
-import Ecluse.Core.Stream (boundBytes)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
  )
@@ -70,104 +51,8 @@ import Ecluse.Core.Telemetry.Record (AdvisorySyncMetricsPort (asmpSyncAttempt, a
 import Ecluse.Core.Telemetry.Span (AdvisorySyncTracingPort (astpSyncAttemptSpan))
 import Ecluse.Core.Text (readDecimalText)
 import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
-import Ecluse.Runtime.Aws.Env (AwsEndpoint)
-import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
-import Ecluse.Runtime.Aws.S3 (buildS3Env)
-
--- | The advisory transport supplied to 'syncStep' by 'newS3CveSource'.
-data CveFetch = CveFetch
-    { fetchHead :: IO (Either OsvDbFetchFault (Maybe FetchedObject))
-    -- ^ The object's ETag and publication time. @Right Nothing@ means it does not exist, and a fetch failure is a 'Left'.
-    , fetchDownload :: FilePath -> IO (Either OsvDbFetchFault FetchedObject)
-    -- ^ Download the artifact, byte-bounded, with the download's own ETag, so a racing publish reads true. A 'Left' may leave a partial file.
-    }
-
--- | Metadata from one HEAD or GET response. A download carries its own, so a publication racing HEAD cannot mislabel the bytes.
-data FetchedObject = FetchedObject
-    { foEtag :: DbEtag
-    , foPushedAt :: Maybe UTCTime
-    -- ^ The object's own timestamp, 'Nothing' when the store reported none.
-    }
-    deriving stock (Eq, Show)
-
--- | The __confined__ exception 'cappedAt' throws from inside a conduit, which 's3Download' folds into 'OsvDbTooLarge'.
-newtype OsvDbCapExceeded = OsvDbCapExceeded Int
-    deriving stock (Eq, Show)
-
-instance Exception OsvDbCapExceeded
-
--- | Everything one ecosystem's sync task operates on.
-data SyncEnv = SyncEnv
-    { syncFetch :: CveFetch
-    -- ^ The transport for this ecosystem's object key.
-    , syncEcosystem :: Ecosystem
-    -- ^ The ecosystem the artifact must verify as.
-    , syncEpssRequirement :: EpssRequirement
-    -- ^ Whether this ecosystem requires successful EPSS enrichment.
-    , syncDbPath :: FilePath
-    -- ^ The canonical on-disk artifact path (the stable per-ecosystem name).
-    , syncSlot :: CveSlot
-    -- ^ The slot this task's swaps publish to.
-    , syncStoreRef :: Text
-    -- ^ How the configured store reads back, for the reports that name where an artifact belongs.
-    }
-
--- | What one 'syncStep' concluded. The caller ('runCveSync') logs it and decides scheduling.
-data SyncOutcome
-    = -- | Verification accepted a new artifact and it is now live (its ETag and provenance carried).
-      SyncSwapped DbEtag [(Text, Text)]
-    | -- | No database replacement, though an accepted republication can advance publication time.
-      SyncUnchanged
-    | -- | The object does not exist in the bucket (not yet published).
-      SyncAbsent
-    | -- | The artifact downloaded, and verification __refused__ it. The last-good generation serves on, and the sync remembers the ETag.
-      SyncRejected DbEtag CveDbRejected
-    | -- | The fetch itself failed (carried). The step learned nothing, so the last seen ETag stands and the schedule retries.
-      SyncFetchFaulted OsvDbFetchFault
-    deriving stock (Show)
-
--- | One detect-download-verify-swap cycle against the last seen ETag. A failed fetch and a refused artifact are outcomes, not exceptions.
-syncStep :: SyncEnv -> Maybe DbEtag -> IO SyncOutcome
-syncStep env lastSeen =
-    fetchHead (syncFetch env) >>= \case
-        Left fault -> pure (SyncFetchFaulted fault)
-        Right Nothing -> pure SyncAbsent
-        Right (Just remote)
-            | Just (foEtag remote) == lastSeen -> do
-                observeAdvisoryPublication (syncSlot env) (foEtag remote) (foPushedAt remote)
-                pure SyncUnchanged
-            | otherwise -> syncNewArtifact env
-
-syncNewArtifact :: SyncEnv -> IO SyncOutcome
-syncNewArtifact env = mask $ \restore -> do
-    let temp = syncDbPath env <> ".tmp"
-    downloaded <- restore (fetchDownload (syncFetch env) temp) `onException` discardTemp temp
-    case downloaded of
-        Left fault -> do
-            discardTemp temp
-            pure (SyncFetchFaulted fault)
-        Right fetched -> do
-            opened <-
-                restore (transferCveDb (syncEcosystem env) (syncEpssRequirement env) temp (publishVerified env (restore (renameFile temp (syncDbPath env))) temp fetched))
-                    `onException` discardTemp temp
-            case opened of
-                Left rejection -> do
-                    discardTemp temp
-                    pure (SyncRejected (foEtag fetched) rejection)
-                Right outcome -> pure outcome
-
--- | Transfer under a mask, with a restored rename action. The slot owns the database from swap entry.
-publishVerified :: SyncEnv -> IO () -> FilePath -> FetchedObject -> CveDb -> IO SyncOutcome
-publishVerified env rename temp fetched db = do
-    -- The transfer continuation owns the connection under a mask until 'swapIn' takes it.
-    rename `onException` (cveDbClose db >> discardTemp temp)
-    -- 'swapIn' owns the connection from entry, including cancellation during old-reader draining.
-    swapIn (syncSlot env) (foEtag fetched) (foPushedAt fetched) db
-    pure (SyncSwapped (foEtag fetched) (cveDbMeta db))
-
--- Best-effort: the temp may already be renamed away or never created.
-discardTemp :: FilePath -> IO ()
-discardTemp temp = removeFile temp `catchAny` const pass
+import Ecluse.Runtime.Cve.Sync.S3 (OsvDbCapExceeded (..), S3CveSource, cappedAt, newS3CveSource, s3CveFetch, s3CveFetchFor)
+import Ecluse.Runtime.Cve.Sync.Step (CveFetch (..), DbEtag (..), FetchedObject (..), OsvDbFetchFault (..), SyncEnv (..), SyncOutcome (..), publishVerified, syncStep)
 
 -- | The task's timing in microseconds. The composition root ships 'bootBackoffDelays' and the configured poll interval.
 data SyncSchedule = SyncSchedule
@@ -217,7 +102,6 @@ runCveSync metrics tracing env schedule hooks =
             , slEcosystem = show (syncEcosystem env)
             }
 
--- Everything the loop's arms read. The ecosystem label is rendered once, at the top of the task.
 data SyncLoop = SyncLoop
     { slMetrics :: AdvisorySyncMetricsPort
     , slTracing :: AdvisorySyncTracingPort
@@ -291,14 +175,11 @@ repeatUnloaded loop result elapsed =
 reportLoopUnloaded :: (KatipContext m) => SyncLoop -> AdvisorySyncResult -> m ()
 reportLoopUnloaded loop = reportUnloaded (slEcosystem loop) (syncStoreRef (slEnv loop))
 
--- What one paced fetch outcome reports, if anything.
 data FetchHealth
     = FetchFailing OsvDbFetchFault
     | FetchStillFailing OsvDbFetchFault
     | FetchRecovered
 
-{- Pace the fetch-failure report: the first failure reports at once, a later one only after
-@interval@, and the first fetch that succeeds after a failure reports the recovery. -}
 paceFetchFailure :: Int -> Int -> Maybe OsvDbFetchFault -> Maybe Int -> (Maybe Int, Maybe FetchHealth)
 paceFetchFailure interval delta fault failing = case (fault, failing) of
     (Nothing, Nothing) -> (Nothing, Nothing)
@@ -316,13 +197,10 @@ reportFetchHealth eco = \case
     FetchStillFailing fault -> logFM ErrorS (ls ("cve-sync[" <> eco <> "]: sync fetch still failing: " <> renderOsvDbFetchFault fault))
     FetchRecovered -> logFM InfoS (ls ("cve-sync[" <> eco <> "]: sync fetch recovered"))
 
-{- The line an operator alerts on while nothing is loaded. Its cause separates an artifact never
-published from one verification refused and from an access that keeps failing. -}
 reportUnloaded :: (KatipContext m) => Text -> Text -> AdvisorySyncResult -> m ()
 reportUnloaded eco store result =
     logFM ErrorS (ls ("cve-sync[" <> eco <> "]: " <> unloadedCause store result))
 
--- Why nothing is loaded, worded to name the role or the access that has to change.
 unloadedCause :: Text -> AdvisorySyncResult -> Text
 unloadedCause store = \case
     AdvisoryNonePublished ->
@@ -338,7 +216,6 @@ unloadedCause store = \case
     refusedArtifact =
         "the advisory artifact at " <> store <> " was refused by verification, so nothing is loaded and this ecosystem stays not-ready. The refusal line names what failed, and ecluse pilot must publish an artifact that verifies."
 
--- One observed step as the loop reads it. A fetch fault rides along for the loop's paced report.
 data Stepped = Stepped
     { stResult :: AdvisorySyncResult
     , stSettled :: Bool
@@ -352,7 +229,6 @@ steppedOf :: AdvisorySyncResult -> Bool -> Maybe DbEtag -> Stepped
 steppedOf result settled seen =
     Stepped{stResult = result, stSettled = settled, stSeen = seen, stFault = Nothing}
 
--- One observed step: the attempt, timed and labelled, inside this ecosystem's attempt span.
 observedStep ::
     (MonadUnliftIO m, KatipContext m) =>
     AdvisorySyncMetricsPort ->
@@ -440,7 +316,6 @@ renderAdvisorySource source =
 renderStamp :: Maybe UTCTime -> Text
 renderStamp = maybe unrecordedValue renderIso8601Utc
 
--- What a value the artifact never recorded reads as, so absence is not read as a zero.
 unrecordedValue :: Text
 unrecordedValue = "<unrecorded>"
 
@@ -461,65 +336,3 @@ parseMetadataCount value = do
     count <- readDecimalText value :: Maybe Integer
     guard (count <= toInteger (maxBound :: Word64))
     pure (fromInteger count)
-
--- | An S3-backed advisory-fetch source over one @amazonka@ 'AWS.Env', so every mount's 'CveFetch' shares one credential discovery.
-newtype S3CveSource = S3CveSource
-    { s3CveFetchFor :: Text -> Text -> Int -> CveFetch
-    -- ^ A 'CveFetch' against one bucket, object key, and byte cap, over the captured env.
-    }
-
--- | Build an 'S3CveSource' over one S3 @amazonka@ env, honouring the resolved endpoint override.
-newS3CveSource :: Maybe AwsEndpoint -> IO S3CveSource
-newS3CveSource mEndpoint = do
-    awsEnv <- buildS3Env mEndpoint
-    pure (S3CveSource (s3CveFetch awsEnv))
-
--- | A 'CveFetch' for one bucket, object key and byte cap over an @amazonka@ env.
-s3CveFetch :: AWS.Env -> Text -> Text -> Int -> CveFetch
-s3CveFetch awsEnv bucket key maxBytes =
-    CveFetch
-        { fetchHead = s3Head awsEnv bucket key
-        , fetchDownload = s3Download awsEnv bucket key maxBytes
-        }
-
-s3Head :: AWS.Env -> Text -> Text -> IO (Either OsvDbFetchFault (Maybe FetchedObject))
-s3Head awsEnv bucket key =
-    runResourceT (AWS.sendEither awsEnv (S3.newHeadObject (S3.BucketName bucket) (S3.ObjectKey key))) <&> \case
-        Right resp ->
-            let observed etag = FetchedObject (dbEtag etag) (resp ^. S3L.headObjectResponse_lastModified)
-             in maybe (Left OsvDbNoEtag) (Right . Just . observed) (resp ^. S3L.headObjectResponse_eTag)
-        Left err
-            | isNotFound err -> Right Nothing
-            | otherwise -> Left (OsvDbTransport (classifyAwsTransport err))
-
-s3Download :: AWS.Env -> Text -> Text -> Int -> FilePath -> IO (Either OsvDbFetchFault FetchedObject)
-s3Download awsEnv bucket key maxBytes dest = foldFetchEscapes . runResourceT $ do
-    resp <- AWS.send awsEnv (S3.newGetObject (S3.BucketName bucket) (S3.ObjectKey key))
-    -- The declared length fails fast. The streaming cap is the enforcement: a
-    -- declared length is not a guarantee.
-    for_ (resp ^. S3L.getObjectResponse_contentLength) $ \len ->
-        when (len > fromIntegral maxBytes) (throwIO (OsvDbCapExceeded maxBytes))
-    AWS.sinkBody (resp ^. S3L.getObjectResponse_body) (cappedAt maxBytes .| C.sinkFile dest)
-    let fetched etag = FetchedObject{foEtag = dbEtag etag, foPushedAt = resp ^. S3L.getObjectResponse_lastModified}
-    pure (maybe (Left OsvDbNoEtag) (Right . fetched) (resp ^. S3L.getObjectResponse_eTag))
-
--- The adapter boundary: fold the typed escapes into the value channel. amazonka leaves a failed body
--- read a bare 'HttpException'. Nothing else is caught, so a filesystem fault propagates as residue.
-foldFetchEscapes :: IO (Either OsvDbFetchFault FetchedObject) -> IO (Either OsvDbFetchFault FetchedObject)
-foldFetchEscapes act =
-    act
-        `catch` (\(err :: AWS.Error) -> pure (Left (OsvDbTransport (classifyAwsTransport err))))
-        `catch` (\(err :: HttpException) -> pure (Left (OsvDbTransport (classifyTransport err))))
-        `catch` (\(OsvDbCapExceeded n) -> pure (Left (OsvDbTooLarge n)))
-
-dbEtag :: S3.ETag -> DbEtag
-dbEtag (S3.ETag bytes) = DbEtag (decodeUtf8 bytes)
-
-isNotFound :: AWS.Error -> Bool
-isNotFound = \case
-    AWS.ServiceError se -> statusCode (se ^. AWS.serviceError_status) == 404
-    _ -> False
-
--- | A breach throws 'OsvDbCapExceeded' before yielding the excess chunk. The S3 adapter folds it into 'OsvDbTooLarge'.
-cappedAt :: (MonadIO m) => Int -> ConduitT ByteString ByteString m ()
-cappedAt maxBytes = boundBytes maxBytes (const (throwIO (OsvDbCapExceeded maxBytes)))

@@ -580,6 +580,8 @@ library ecluse-runtime
     Ecluse.Runtime.Credential.CodeArtifact.Internal
     Ecluse.Runtime.Cve.Sync
     Ecluse.Runtime.Cve.Sync.Internal
+    Ecluse.Runtime.Cve.Sync.S3
+    Ecluse.Runtime.Cve.Sync.Step
     Ecluse.Runtime.Env
     Ecluse.Runtime.Log
     Ecluse.Runtime.Log.Internal
@@ -979,6 +981,8 @@ library ecluse-runtime-test-support
     , amazonka          ^>=2.0
     , amazonka-codeartifact ^>=2.0
     , directory         ^>=1.3
+    , filepath          ^>=1.4 || ^>=1.5
+    , hspec             ^>=2.11
     , microlens         ^>=0.4.13
     , hs-opentelemetry-api  ^>=1.0
     , hs-opentelemetry-sdk  ^>=1.0
@@ -1547,6 +1551,9 @@ test-suite ecluse-runtime-unit
     Ecluse.Runtime.Pilot.ExportSpec
     Ecluse.Runtime.Credential.CodeArtifactSpec
     Ecluse.Runtime.Cve.SyncSpec
+    Ecluse.Runtime.Cve.Sync.InternalSpec
+    Ecluse.Runtime.Cve.Sync.S3Spec
+    Ecluse.Runtime.Cve.Sync.StepSpec
     Ecluse.Runtime.LogSpec
     Ecluse.Runtime.Maintenance.CodeArtifact.DecideSpec
     Ecluse.Runtime.Maintenance.CodeArtifact.ReadSpec
