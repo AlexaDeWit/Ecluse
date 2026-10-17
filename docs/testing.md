@@ -2003,11 +2003,12 @@ The Haskell jobs run in parallel where their prerequisites permit it. `build` co
 target and then runs the residency suite, the doctests, and `cabal check`. `coverage` is a matrix
 with one runner per instrumented suite. `allocation`, `docs`, `weeder`, `stan`, and
 `static-checks` each hold their own runner. E2E preparation feeds the ecosystem and
-shared-system subject jobs and their completeness audit. The Verdaccio and CodeArtifact
-package-store subjects run in separate jobs. `codecov-notify` follows the coverage legs
-and releases the Codecov statuses.
-The core unit, runtime unit and integration coverage legs upload their plan and execution reports
-for the ecosystem completion audits.
+shared-system subject jobs, which start without waiting for coverage. The Verdaccio and
+CodeArtifact package-store subjects run in separate jobs. `codecov-notify` follows the coverage
+legs and releases the Codecov statuses.
+The core unit, runtime unit and integration coverage legs upload their plan and execution reports.
+The `e2e` job waits for the subjects and the coverage legs. It audits every subject report
+against the plan, then runs the npm and PyPI completion audits over all four tiers' reports.
 
 CI's primary architecture is arm64: every job that builds or tests the code runs on the
 `ubuntu-26.04-arm` runner. amd64 is also supported: the release dry-run builds and starts the amd64
