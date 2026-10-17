@@ -410,7 +410,10 @@ library ecluse-core
     , exceptions            ^>=0.10
     , sqlite-simple         ^>=0.4
     , http-client           ^>=0.7
-    , http-client-tls       >=0.3.6 && <0.5
+    , http-client-tls       >=0.3.6.2 && <0.5
+    -- The TLS manager's connector, whose refused-host exceptions the fault classifier reads by
+    -- type. It is already in the resolved build plan through http-client-tls.
+    , crypton-connection    ^>=0.4
     , http-conduit          ^>=2.3
     , http-types            ^>=0.12
     , hashable              ^>=1.5
@@ -1285,7 +1288,8 @@ test-suite ecluse-core-unit
     , hspec-core        ^>=2.11
     , hspec-hedgehog    ^>=0.3
     , http-client       ^>=0.7
-    , http-client-tls   >=0.3.6 && <0.5
+    , http-client-tls   >=0.3.6.2 && <0.5
+    , crypton-connection ^>=0.4
     , http-types        ^>=0.12
     , iproute           ^>=1.7
     , katip             ^>=0.8.8
