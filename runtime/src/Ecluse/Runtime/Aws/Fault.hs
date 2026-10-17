@@ -19,6 +19,7 @@ module Ecluse.Runtime.Aws.Fault (
     AwsAnswer (..),
     sendRaising,
     retypeAwsFailure,
+    displayAwsFaultT,
 
     -- * Error codes
     errorCodeText,
@@ -33,7 +34,7 @@ import Network.HTTP.Types.Status (statusCode)
 import UnliftIO.Exception (throwIO, try)
 
 import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportCause (TransportProtocol), TransportFault, boundedDetail, renderHttpFault, transportFault)
-import Ecluse.Core.Fault.Http (classifyTransport, hostPortLabel, httpFault)
+import Ecluse.Core.Fault.Http (classifyTransport, displayFaultT, hostPortLabel, httpFault)
 
 -- | Classify an @amazonka@ error into the core transport vocabulary. A service's answer is detailed as 'AwsAnswer' renders it.
 classifyAwsTransport :: AWS.Error -> TransportFault
@@ -65,7 +66,7 @@ data AwsRequestFailed = AwsRequestFailed
     deriving stock (Eq, Show)
 
 instance Exception AwsRequestFailed where
-    displayException failed = toString ("AWS request failed at " <> renderFailure failed)
+    displayException = toString . renderRequestFailed
 
 -- | Where a failed request went.
 data AwsParty
@@ -108,6 +109,10 @@ retypeAwsFailure action =
         Right (Left httpErr) -> throwIO (raisedHttp httpErr)
         Right (Right value) -> pure value
 
+-- | 'displayFaultT', with a raised AWS fault rendered as its own text. Rendered through 'SomeException', it would gain GHC's exception context.
+displayAwsFaultT :: SomeException -> Text
+displayAwsFaultT err = maybe (displayFaultT err) renderRequestFailed (fromException err)
+
 -- | An error code lowercased, so no comparison turns on a service's own casing.
 errorCodeText :: AWS.ErrorCode -> Text
 errorCodeText code = T.toLower (code ^. AWS._ErrorCode)
@@ -147,6 +152,9 @@ firstLine message = case T.takeWhile (`notElem` ['\n', '\r']) message of
 
 serviceName :: AWS.ServiceError -> Text
 serviceName service = service ^. AWS.serviceError_abbrev . AWS._Abbrev
+
+renderRequestFailed :: AwsRequestFailed -> Text
+renderRequestFailed failed = "AWS request failed at " <> renderFailure failed
 
 renderFailure :: AwsRequestFailed -> Text
 renderFailure (AwsRequestFailed party fault) = case fault of

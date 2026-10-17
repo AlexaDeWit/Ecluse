@@ -12,12 +12,14 @@ import Test.Hspec
 import UnliftIO.Exception (throwIO, try)
 
 import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportFault (tfDetail))
+import Ecluse.Core.Fault.Http (displayFaultT)
 import Ecluse.Runtime.Aws.Fault (
     AwsAnswer (AwsAnswer),
     AwsFault (AwsHttp, AwsStatus, AwsUndecodable),
     AwsParty (AwsServiceNamed),
     AwsRequestFailed (AwsRequestFailed, arfFault),
     classifyAwsTransport,
+    displayAwsFaultT,
     retypeAwsFailure,
  )
 import Ecluse.Runtime.Test.Aws (canonicalRequestMessage, plantedHeader, plantedRefusal, refusedAtClosedPort)
@@ -72,6 +74,15 @@ spec = do
                     failed `shouldBe` AwsRequestFailed (AwsServiceNamed "STS") (AwsUndecodable 200)
                     displayException failed `shouldBe` "AWS request failed at STS: HTTP 200, an answer that could not be decoded"
                 Right () -> expectationFailure "the decoder failure was not raised"
+
+    describe "displayAwsFaultT" $ do
+        it "renders a raised AWS fault as its own text, with no exception context after it" $
+            displayAwsFaultT (toException (AwsRequestFailed (AwsServiceNamed "STS") (AwsUndecodable 200)))
+                `shouldBe` "AWS request failed at STS: HTTP 200, an answer that could not be decoded"
+
+        it "renders any other exception as displayFaultT does" $ do
+            refused <- refusedFetch =<< signedRequest
+            displayAwsFaultT (toException refused) `shouldBe` displayFaultT (toException refused)
   where
     -- An AssumeRole answer amazonka could not decode: its body holds the minted credentials.
     undecodableAnswer =

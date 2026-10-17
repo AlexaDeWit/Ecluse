@@ -20,8 +20,8 @@ import Control.Exception qualified as Exception
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 
 import Ecluse.Boot (BootAborted (BootAborted))
-import Ecluse.Core.Fault.Http (displayFaultT)
 import Ecluse.Core.Text (displayExceptionT)
+import Ecluse.Runtime.Aws.Fault (displayAwsFaultT)
 
 -- | How one whole service run ended. Each constructor owns one exit code ('exitCodeFor'), so an orchestrator reads the ending from the status alone.
 data ProcessOutcome
@@ -51,7 +51,7 @@ superviseProcess service =
                     -- fault of the run, not a cancellation.
                     other -> ServiceExited (displayExceptionT other)
             | Just (_ :: SomeAsyncException) <- fromException err -> Exception.throwIO err
-            | otherwise -> pure (ServiceExited (displayFaultT err))
+            | otherwise -> pure (ServiceExited (displayAwsFaultT err))
 
 {- How a run ends. A failing status is representable only beside the reason it reports, so
 'Ecluse.Startup.runWith' cannot exit non-zero in silence. -}
