@@ -37,7 +37,7 @@ import UnliftIO.STM (swapTVar)
 
 import Ecluse.E2E.Fixtures.PyPI (pypiWheelFor)
 import Ecluse.E2E.Fixtures.PyPI.Dredger (buildDredgerDistributions, firstPartyName)
-import Ecluse.E2E.Fixtures.PyPI.Mirror (Distribution (..))
+import Ecluse.E2E.Fixtures.PyPI.Mirror (Distribution (..), builtByCurrentTool)
 import Ecluse.E2E.Harness.Advisories (advisoryBucket, createAdvisoryBucket)
 import Ecluse.E2E.Harness.CodeArtifact
 import Ecluse.E2E.Harness.Docker (ministackAwsEnv, withE2EWith, withStubFault)
@@ -61,6 +61,8 @@ data PyPISweepStore = PyPISweepStore
     , pssRepository :: Text
     , pssReadUrl :: Text
     , pssPublishUrl :: Text
+    , pssUploads :: [Distribution]
+    -- ^ The files a publish sends here. The proxy's relay takes only the names a current build tool writes.
     }
 
 -- | Both AWS hosts resolve to the test TLS stub, which forwards only to this local fixture.
@@ -124,9 +126,10 @@ physicalInventory distributions target = do
 -- | Read the native mirror through the production proxy and its declared private cache.
 withSweepProxy :: PyPISweepPlane -> [(Text, Text)] -> Maybe Text -> [String] -> (PyPISweepStore -> IO a) -> IO a
 withSweepProxy plane extra queue args action =
-    withE2EWith config (\proxy -> action (PyPISweepStore plane proxy "mirror" (e2eBaseUrl proxy <> "/pypi/") (e2eBaseUrl proxy <> "/pypi/legacy/"))) (pspGlobal plane)
+    withE2EWith config (\proxy -> action (PyPISweepStore plane proxy "mirror" (e2eBaseUrl proxy <> "/pypi/") (e2eBaseUrl proxy <> "/pypi/legacy/") relayed)) (pspGlobal plane)
   where
     config = defaultE2EConfig{ecExtraEnv = proxyRoleEnv <> extra, ecQueueUrl = queue, ecArgs = args}
+    relayed = filter builtByCurrentTool (pspDistributions plane)
 
 -- | A direct client reaches the cache's physical native registry, bypassing its upstreams.
 cacheStore :: PyPISweepStore -> PyPISweepStore
@@ -134,7 +137,7 @@ cacheStore store = directStore store{pssRepository = "cache"}
 
 -- | Native publication and byte observations bypass the product under test.
 directStore :: PyPISweepStore -> PyPISweepStore
-directStore store = store{pssReadUrl = localUrl target, pssPublishUrl = localUrl target <> "legacy/"}
+directStore store = store{pssReadUrl = localUrl target, pssPublishUrl = localUrl target <> "legacy/", pssUploads = pspDistributions (pssPlane store)}
   where
     target = if pssRepository store == "mirror" then pspMirror (pssPlane store) else pspCache (pssPlane store)
 

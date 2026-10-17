@@ -321,9 +321,9 @@ pypiPublicationFixture =
                 }
         }
 
--- | Multipart identity conflicts and a disabled route remain required native controls.
+-- | Multipart identity conflicts, hidden parts and a disabled route remain required native controls.
 pypiPublicationNativeFixture :: ConcreteFixture Group
-pypiPublicationNativeFixture = nativeFixture "pypi/publish-native" ["pypi/publish-native/" <> name | name <- ["conflicting-names", "unconfigured"]] pypiPublicationFixture
+pypiPublicationNativeFixture = nativeFixture "pypi/publish-native" ["pypi/publish-native/" <> name | name <- ["conflicting-names", "hidden-parts", "unconfigured"]] pypiPublicationFixture
 
 -- | Independent native projects provide worker and private-fetch telemetry.
 pypiMirrorTelemetryFixture :: ConcreteFixture FamilyMetadata

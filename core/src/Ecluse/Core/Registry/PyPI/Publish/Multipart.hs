@@ -3,31 +3,44 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE TupleSections #-}
 
--- | Bounded reading of the name and @:action@ claims in the unchanged PyPI publication relay body.
-module Ecluse.Core.Registry.PyPI.Publish.Multipart (uploadClaims, pypiFileUploadOnly) where
+-- | Bounded reading of the name, version, @:action@ and file name claims in the unchanged PyPI publication relay body.
+module Ecluse.Core.Registry.PyPI.Publish.Multipart (uploadClaims, pypiFileUploadOnly, pypiSdistNameForm, pypiVersionForm) where
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BSC
 import Data.Char (toLower)
+import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Network.Wai.Parse qualified as Wai
 import UnliftIO.Exception (tryAny)
 
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (ParseError (..), PublishBodyFault (PublishMalformed, PublishUnsupported))
-import Ecluse.Core.Registry.PyPI.Project (canonicalName, projectName)
+import Ecluse.Core.Registry.PyPI.Project (builtFileCoordinate, canonicalName, fcVersionKey, projectName)
 import Ecluse.Core.Security.Limits (Limits (..))
+import Ecluse.Core.Server.Path (Filename, mkFilename, unFilename)
+import Ecluse.Core.Text (isAsciiAlphaNum)
+import Ecluse.Core.Version (canonicalPep440, renderVersion)
 
--- | The agreed project name of one @file_upload@, read with the declared Content-Type boundary.
+-- | The agreed project name of one @file_upload@ whose file name names that project at the declared version.
 uploadClaims :: Limits -> Maybe ByteString -> ByteString -> IO (Either PublishBodyFault [Text])
 uploadClaims limits contentType body = case checkedFields limits contentType body of
     Left fault -> pure (Left (PublishMalformed fault))
-    Right fields -> case uploadAction [value | (ActionField, value) <- fields] of
+    Right claims -> case first PublishMalformed (formValues ActionField claims) >>= uploadAction of
         Left fault -> pure (Left fault)
-        Right () -> first PublishMalformed <$> agreedName limits [value | (NameField, value) <- fields]
+        Right () -> first PublishMalformed . (>>= releaseFile claims) <$> agreedName limits claims
 
 -- | The @501@ reason for any other @:action@, such as @remove_pkg@ or @doc_upload@.
 pypiFileUploadOnly :: Text
 pypiFileUploadOnly = "this proxy relays new-release uploads (:action=file_upload) only: change or remove an existing release at the publication target"
+
+-- | The @400@ reason for any upload that is not a wheel and does not name the declared release as PEP 625 names an sdist.
+pypiSdistNameForm :: Text
+pypiSdistNameForm = "multipart file name does not name the declared project and version: an sdist must be named <normalised_name>-<version>.tar.gz (PEP 625)"
+
+-- | The @400@ reason for a declared version that is not a PEP 440 version, whatever the file is named.
+pypiVersionForm :: Text
+pypiVersionForm = "multipart version is not a PEP 440 version"
 
 -- Uploaders send one file_upload. pypiserver deletes a release on remove_pkg under the same permission.
 uploadAction :: [ByteString] -> Either PublishBodyFault ()
@@ -38,30 +51,33 @@ uploadAction = \case
     _ -> Left (PublishMalformed (ParseError "multipart upload declares more than one :action"))
 
 -- Conflicting or missing names refuse the relay, as does a name Wai would read differently.
-agreedName :: Limits -> [ByteString] -> IO (Either ParseError [Text])
-agreedName limits raw = case traverse decodeName raw of
+agreedName :: Limits -> [Claim] -> IO (Either ParseError PackageName)
+agreedName limits claims = case formValues NameField claims >>= traverse decodeName of
     Left fault -> pure (Left fault)
-    Right claims -> do
-        let values = map (TE.encodeUtf8 . canonicalName) claims
-            projectedSize = sum (map (\value -> toInteger (BS.length value) + 100) values) + 100
-        if projectedSize > toInteger (maxPublishRequestBytes limits)
-            then pure (bad "multipart name projection exceeds its byte bound")
-            else do
-                chunks <- newIORef (nameProjection values)
-                let readChunk = atomicModifyIORef' chunks (\remaining -> let (chunk, rest) = BS.splitAt 32768 remaining in (rest, chunk))
-                outcome <- tryAny (Wai.sinkRequestBodyEx options discardFile (Wai.Multipart projectionBoundary) readChunk)
-                pure $ case outcome of
-                    Left _ -> bad "malformed or oversized multipart upload"
-                    Right (params, files) -> do
-                        unless (null files && params == map ("name",) values) (bad "multipart name parsers disagree")
-                        case claims of
-                            [] -> bad "multipart upload has no name"
-                            name : remaining
-                                | all (== name) remaining -> Right [canonicalName name]
-                                | otherwise -> bad "multipart upload declares conflicting names"
+    Right names -> do
+        projected <- projectNames limits (map (TE.encodeUtf8 . canonicalName) names)
+        pure $
+            projected >> case names of
+                [] -> bad "multipart upload has no name"
+                name : remaining
+                    | all (== name) remaining -> Right name
+                    | otherwise -> bad "multipart upload declares conflicting names"
   where
-    options = Wai.setMaxRequestParmsSize (maxMetadataBytes limits) Wai.defaultParseRequestBodyOptions
     decodeName bytes = first (const (ParseError "multipart name is not UTF-8")) (TE.decodeUtf8' bytes) >>= projectName
+
+projectNames :: Limits -> [ByteString] -> IO (Either ParseError ())
+projectNames limits values
+    | projectedSize > toInteger (maxPublishRequestBytes limits) = pure (bad "multipart name projection exceeds its byte bound")
+    | otherwise = do
+        chunks <- newIORef (nameProjection values)
+        let readChunk = atomicModifyIORef' chunks (\remaining -> let (chunk, rest) = BS.splitAt 32768 remaining in (rest, chunk))
+        outcome <- tryAny (Wai.sinkRequestBodyEx options discardFile (Wai.Multipart projectionBoundary) readChunk)
+        pure $ case outcome of
+            Left _ -> bad "malformed or oversized multipart upload"
+            Right (params, files) -> unless (null files && params == map ("name",) values) (bad "multipart name parsers disagree")
+  where
+    projectedSize = sum (map (\value -> toInteger (BS.length value) + 100) values) + 100
+    options = Wai.setMaxRequestParmsSize (maxMetadataBytes limits) Wai.defaultParseRequestBodyOptions
 
 -- A checked package name cannot contain a colon, so this delimiter cannot occur in projected values.
 projectionBoundary :: ByteString
@@ -77,11 +93,48 @@ discardFile _ _ readChunk = drain
   where
     drain = readChunk >>= \chunk -> unless (BS.null chunk) drain
 
--- The form fields the guard reads. Every other part passes through unread.
-data GuardField = NameField | ActionField
+-- A store can key the write off the file name, so it must name the agreed project at the declared version.
+releaseFile :: [Claim] -> PackageName -> Either ParseError [Text]
+releaseFile claims name = do
+    versions <- formValues VersionField claims
+    case (versions, [file | ContentClaim file <- claims]) of
+        ([version], [Just file])
+            | Nothing <- declaredVersion version -> bad pypiVersionForm
+            | Just declared <- declaredVersion version
+            , Just coordinate <- builtFileCoordinate name . unFilename =<< distributionFilename =<< utf8 file
+            , fcVersionKey coordinate == renderVersion declared ->
+                Right [canonicalName name]
+            | ".whl" `BS.isSuffixOf` file -> bad "multipart file name does not name the declared project and version"
+            | otherwise -> bad pypiSdistNameForm
+        ([], _) -> bad "multipart upload has no version"
+        (_, []) -> bad "multipart upload has no content file"
+        (_, [Nothing]) -> bad "multipart content part has no file name"
+        _ -> bad "multipart upload declares more than one version or content file"
+  where
+    utf8 = rightToMaybe . TE.decodeUtf8'
+    declaredVersion = canonicalPep440 <=< utf8
+
+-- Wheel and sdist names hold only these characters, so the gate also refuses whitespace and percent signs.
+distributionFilename :: Text -> Maybe Filename
+distributionFilename raw = do
+    guard (T.all (\c -> isAsciiAlphaNum c || c `elem` ("-_.!+" :: String)) raw)
+    mkFilename raw
+
+-- A guarded field sent as a file part is refused, because a store reads file parts apart from form fields.
+formValues :: FormField -> [Claim] -> Either ParseError [ByteString]
+formValues field claims = traverse plainValue [(file, value) | FormClaim found file value <- claims, found == field]
+  where
+    plainValue = \case
+        (Nothing, value) -> Right value
+        (Just _, _) -> bad "multipart name, version, or :action is a file part"
+
+-- The parts the guard reads: a form field with any file name it carries, and the content part's file name, never its data.
+data Claim = FormClaim FormField (Maybe ByteString) ByteString | ContentClaim (Maybe ByteString)
+
+data FormField = NameField | ActionField | VersionField
     deriving stock (Eq)
 
-checkedFields :: Limits -> Maybe ByteString -> ByteString -> Either ParseError [(GuardField, ByteString)]
+checkedFields :: Limits -> Maybe ByteString -> ByteString -> Either ParseError [Claim]
 checkedFields limits contentType body = do
     when (BS.length body > maxPublishRequestBytes limits) (bad "multipart upload exceeds its byte bound")
     header <- maybe (bad "missing multipart Content-Type") Right contentType
@@ -98,34 +151,33 @@ boundaryByte :: Word8 -> Bool
 boundaryByte byte = byte >= 33 && byte <= 126 && byte /= 34 && byte /= 92
 
 -- Wai ignores malformed part headers, so reject ambiguity before it selects a disposition claim.
-checkParts :: Limits -> ByteString -> Int -> ByteString -> Either ParseError [(GuardField, ByteString)]
+checkParts :: Limits -> ByteString -> Int -> ByteString -> Either ParseError [Claim]
 checkParts limits boundary count bytes = do
     when (count >= maxArtifactCount limits) (bad "multipart part count exceeds its bound")
     let (headers, headerSuffix) = BS.breakSubstring "\r\n\r\n" bytes
     when (BS.null headerSuffix || BS.length headers > 16384) (bad "malformed multipart headers")
-    field <- checkHeaders headers
+    claim <- checkHeaders headers
     (value, suffix) <- splitPart boundary (BS.drop 4 headerSuffix)
+    when (hidesDelimiter boundary (BS.take (BS.length headers + 4 + BS.length value) bytes)) (bad "multipart part hides a boundary delimiter")
     later <- case suffix of
         "--\r\n" -> Right []
         "--" -> Right []
         remaining | Just following <- BS.stripPrefix "\r\n" remaining -> checkParts limits boundary (count + 1) following
-        _ -> bad "malformed multipart boundary delimiter"
-    pure (map (,value) (maybeToList field) <> later)
+        _ -> bad "malformed or padded multipart boundary delimiter"
+    pure (map ($ value) (maybeToList claim) <> later)
 
 splitPart :: ByteString -> ByteString -> Either ParseError (ByteString, ByteString)
-splitPart boundary bytes = go 0 bytes
-  where
-    marker = "\r\n--" <> boundary
-    go consumed remaining = case BS.breakSubstring marker remaining of
-        (_, suffix) | BS.null suffix -> bad "multipart closing boundary is missing"
-        (prefix, suffix) ->
-            let after = BS.drop (BS.length marker) suffix
-                offset = consumed + BS.length prefix
-             in if BS.isPrefixOf "\r\n" after || BS.isPrefixOf "--" after
-                    then Right (BS.take offset bytes, after)
-                    else go (offset + BS.length marker) after
+splitPart boundary bytes = case BS.breakSubstring ("\r\n--" <> boundary) bytes of
+    (_, suffix) | BS.null suffix -> bad "multipart closing boundary is missing"
+    (value, suffix) -> Right (value, BS.drop (BS.length boundary + 4) suffix)
 
-checkHeaders :: ByteString -> Either ParseError (Maybe GuardField)
+-- Python's cgi and werkzeug also end a part at a delimiter after a bare CR or LF, so none may sit inside a part.
+hidesDelimiter :: ByteString -> ByteString -> Bool
+hidesDelimiter boundary part = BS.isPrefixOf delimiter part || any (`BS.isInfixOf` part) [BS.cons 10 delimiter, BS.cons 13 delimiter]
+  where
+    delimiter = "--" <> boundary
+
+checkHeaders :: ByteString -> Either ParseError (Maybe (ByteString -> Claim))
 checkHeaders bytes = do
     headers <- traverse parseHeader (BSC.lines bytes)
     disposition <- case [value | ("content-disposition", value) <- headers] of
@@ -133,14 +185,16 @@ checkHeaders bytes = do
         _ -> bad "missing or ambiguous multipart disposition"
     when (BS.elem 92 disposition) (bad "escaped multipart disposition attributes are unsupported")
     let (kind, attributes) = Wai.parseContentType disposition
-        names = [value | ("name", value) <- attributes]
     when (any (BS.elem 34 . snd) attributes) (bad "malformed quoted multipart disposition attribute")
-    unless (kind == "form-data" && length names == 1 && not (any BS.null names)) (bad "malformed multipart disposition name")
-    unless (length [() | ("filename", _) <- attributes] <= 1) (bad "ambiguous multipart filename")
+    name <- case [value | ("name", value) <- attributes] of
+        [value] | kind == "form-data", not (BS.null value) -> Right value
+        _ -> bad "malformed multipart disposition name"
+    filename <- case [value | ("filename", value) <- attributes] of
+        [] -> Right Nothing
+        [value] -> Right (Just value)
+        _ -> bad "ambiguous multipart filename"
     when (any (\(key, _) -> key `notElem` ["name", "filename"]) attributes) (bad "unsupported multipart disposition attribute")
-    let field = guardField names
-    when (isJust field && any ((== "filename") . fst) attributes) (bad "multipart name or :action is a file part")
-    pure field
+    pure (partClaim name filename)
   where
     parseHeader line = do
         let clean = fromMaybe line (BS.stripSuffix "\r" line)
@@ -148,10 +202,13 @@ checkHeaders bytes = do
         when (BS.null key || BS.null rest || BS.any (\c -> c <= 32 || c >= 127) key) (bad "malformed multipart header")
         pure (BSC.map toLower key, BSC.dropWhile (== ' ') (BS.drop 1 rest))
 
-guardField :: [ByteString] -> Maybe GuardField
-guardField = \case
-    ["name"] -> Just NameField
-    [":action"] -> Just ActionField
+-- Every other part passes through unread. The content part's value is its file data, which the guard never reads.
+partClaim :: ByteString -> Maybe ByteString -> Maybe (ByteString -> Claim)
+partClaim name filename = case name of
+    "content" -> Just (const (ContentClaim filename))
+    "name" -> Just (FormClaim NameField filename)
+    ":action" -> Just (FormClaim ActionField filename)
+    "version" -> Just (FormClaim VersionField filename)
     _ -> Nothing
 
 bad :: Text -> Either ParseError a

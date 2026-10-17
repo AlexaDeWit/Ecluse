@@ -22,11 +22,34 @@ bytes it installs, both gated by the same rules, integrity floors, and egress co
 [Complete PyPI setup](@/docs/pypi-setup.md) explains how to configure these capabilities together.
 
 A `pypi` mount accepts native multipart publication when `publicationTarget` is configured.
-The upload route otherwise answers `405`. The first-party guard validates every multipart `name`
-field before relaying the original bytes and Content-Type. Caller Basic credentials retain both
-username and password, including an empty username. The relay accepts only an upload with one
-`:action` part whose value is `file_upload`, which every uploader sends. A missing or repeated
-`:action` answers `400`. Any other value, such as `remove_pkg` or `doc_upload`, answers `501`.
+The upload route otherwise answers `405`. Caller Basic credentials retain both username and
+password, including an empty username. The first-party guard relays the original bytes and
+Content-Type only for an upload with these parts:
+
+| Part | The relay requires |
+| --- | --- |
+| `:action` | Exactly one, with the value `file_upload`, which every uploader sends. Any other value, such as `remove_pkg` or `doc_upload`, answers `501`. |
+| `name` | One or more, which all name the same project. |
+| `version` | Exactly one, a PEP 440 version. |
+| `content` | Exactly one file part, whose file name parses as a wheel or source distribution of that project at that version. |
+
+An upload that breaks any other rule in the table answers `400`. The guard compares versions under
+PEP 440 and wheel project names under PEP 503, so `Acme.Widget-1.0-py3-none-any.whl` matches
+`acme-widget` at `1.0.0`. It reads the `content` part's file name, never the file data. An upload
+also answers `400` when its file name:
+
+- holds a character other than an ASCII letter or digit, `-`, `_`, `.`, `!` or `+`
+- has a version that does not start with a digit, or that holds a `-`, which no build tool writes
+- is not a wheel, and is not the PEP 625 source distribution name `{normalised_name}-{version}.tar.gz`
+
+The normalised name is the PEP 503 name with `_` for each `-`. So `acme.co-widget` at `1.0`
+uploads as `acme_co_widget-1.0.tar.gz`. Build tools that predate PEP 625 write other names, such as
+`acme.co-widget-1.0.tar.gz` or a `.zip` archive. Their uploads answer `400` with the expected
+form. The publisher must build with a tool that writes the PEP 625 name.
+
+Some stores end a multipart part at a boundary delimiter after a bare CR or LF, or after trailing
+whitespace on the delimiter line. So a body with such a delimiter inside a part answers `400`,
+because the guard and the store would read different parts.
 
 PyPI mirroring requires an explicit upload endpoint and a durable mirror-state store. It copies
 all admitted supported wheels and source distributions for a version. A different recorded wheel

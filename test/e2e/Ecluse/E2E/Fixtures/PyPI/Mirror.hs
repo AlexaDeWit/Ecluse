@@ -17,6 +17,8 @@ module Ecluse.E2E.Fixtures.PyPI.Mirror (
     mirrorArchitectures,
     distributionFields,
     distributionUploadBody,
+    builtByCurrentTool,
+    hiddenPartUploadBody,
     releaseRemovalBody,
     nativeUploadContentType,
     buildMirrorGraph,
@@ -96,10 +98,10 @@ buildProject root project = do
         BS.writeFile (path <> ".metadata") companion
         pure (Distribution project mirrorVersion filename bytes companion (encodeUtf8 metadata))
     sources <- forM sourceFormats $ \suffix -> do
-        let filename = project <> "-" <> mirrorVersion <> "." <> suffix
+        let filename = sourceStem project suffix <> "." <> suffix
             metadata = projectMetadata project ("Source " <> suffix)
             work = root </> toString (".build-" <> filename)
-            folder = toString (project <> "-" <> mirrorVersion)
+            folder = toString (sourceStem project suffix)
             path = projectDir </> toString filename
         createDirectoryIfMissing True (work </> folder)
         writeFileText (work </> folder </> "PKG-INFO") metadata
@@ -238,12 +240,28 @@ nativeUploadContentType = "multipart/form-data; boundary=fixture-upload"
 
 -- | Encode an actual client upload, with explicit replacement fields for refusal controls.
 distributionUploadBody :: Distribution -> [(Text, Text)] -> ByteString
-distributionUploadBody distribution overrides =
+distributionUploadBody distribution overrides = uploadWithData distribution overrides (distributionBytes distribution)
+
+-- | Whether a current build tool writes this file, which the publish guard requires: a wheel, or an sdist under its PEP 625 name.
+builtByCurrentTool :: Distribution -> Bool
+builtByCurrentTool distribution = ".whl" `T.isSuffixOf` filename || filename == T.replace "-" "_" (distributionProject distribution) <> "-" <> distributionVersion distribution <> ".tar.gz"
+  where
+    filename = distributionFilename distribution
+
+-- | A client upload whose content data hides a second content part after the given line end and delimiter padding.
+hiddenPartUploadBody :: Distribution -> Distribution -> ByteString -> ByteString -> ByteString
+hiddenPartUploadBody carrier hidden lineEnd padding =
+    uploadWithData carrier [] (distributionBytes carrier <> lineEnd <> "--fixture-upload" <> padding <> lineEnd <> disposition <> lineEnd <> lineEnd <> distributionBytes hidden)
+  where
+    disposition = "Content-Disposition: form-data; name=\"content\"; filename=\"" <> encodeUtf8 (distributionFilename hidden) <> "\""
+
+uploadWithData :: Distribution -> [(Text, Text)] -> ByteString -> ByteString
+uploadWithData distribution overrides bytes =
     BS.concat (map fieldPart (controls <> fields <> replacements))
         <> "--fixture-upload\r\nContent-Disposition: form-data; name=\"content\"; filename=\""
         <> encodeUtf8 (distributionFilename distribution)
         <> "\"\r\nContent-Type: application/octet-stream\r\n\r\n"
-        <> distributionBytes distribution
+        <> bytes
         <> "\r\n--fixture-upload--\r\n"
   where
     replacements = [(encodeUtf8 name, encodeUtf8 value) | (name, value) <- overrides]
@@ -297,8 +315,12 @@ wheelFiles project architecture =
 sourceFormats :: [Text]
 sourceFormats = ["tar.gz", "tgz", "tar.bz2", "tar.xz", "zip"]
 
+-- A current build tool writes a .tar.gz under its PEP 625 name. The older archive formats keep the legacy spelling.
+sourceStem :: Text -> Text -> Text
+sourceStem project suffix = (if suffix == "tar.gz" then T.replace "-" "_" project else project) <> "-" <> mirrorVersion
+
 -- | The independent expected filenames for every supported wheel and source archive in one release.
 mirrorFileNames :: Text -> [Text]
 mirrorFileNames project =
     map (mirrorWheelFile project) [mirrorPlatformX86, mirrorPlatformArm]
-        <> [project <> "-" <> mirrorVersion <> "." <> suffix | suffix <- sourceFormats]
+        <> [sourceStem project suffix <> "." <> suffix | suffix <- sourceFormats]

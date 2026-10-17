@@ -135,7 +135,7 @@ obligations =
         "pypi/publish-native"
         Supported
         ["read", "publication", "client-install"]
-        ["pypi/publish-native/conflicting-names", "pypi/publish-native/unconfigured"]
+        ["pypi/publish-native/conflicting-names", "pypi/publish-native/hidden-parts", "pypi/publish-native/unconfigured"]
     , Obligation
         "pypi/telemetry-write"
         "pypi/write-telemetry"

@@ -1,8 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
--- TupleSections: local convenience for pairing a parsed capture with the remainder in
--- 'takeProject' and 'artifactCoordinate'. See docs/style.md §2.
 {-# LANGUAGE TupleSections #-}
 
 {- | The PyPI route table itself: the router, the table as data, the capture values, and the leaf
@@ -169,7 +167,8 @@ uploadRoute =
         buildUpload
         "Upload a first-party distribution"
         "Relays a bounded multipart upload after authentication and first-party name validation. \
-        \Only `:action=file_upload` is relayed: another action answers `501`, and a missing or repeated one answers `400`."
+        \Only `:action=file_upload` is relayed: another action answers `501`, and a missing or repeated one answers `400`. \
+        \The `content` part's file name must name the declared project at the declared `version`, or the upload answers `400`."
         Nothing
         pypiUploadContract
 

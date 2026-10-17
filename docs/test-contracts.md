@@ -333,7 +333,7 @@ Both ecosystem drivers bind concrete providers for every required family.
 PyPI mirror evidence includes whole-version copies, restart recovery, cross-target file selection and retained metadata.
 Cross-target checks prove selected files and installed contents. They do not execute foreign architecture code.
 
-The final functional declarations require 56 PyPI cases, 54 npm cases and one shared-system case.
+The final functional declarations require 57 PyPI cases, 54 npm cases and one shared-system case.
 Unit, integration, residency, allocation, load and smoke evidence remain independent requirements.
 
 Backend completion also requires the PyPI CodeArtifact full-store instance in the existing backend subject.
@@ -574,7 +574,7 @@ The old wrapper remains as a native source reference, but the runner does not sc
 | `integration/egress` | `native-001` to `native-003` (3) | None | `Ecluse.Core.Security.EgressIntegrationSpec` |
 | `integration/origin` | `native-001` to `native-017` (29) | None | `Ecluse.Core.Server.Pipeline.OriginIntegrationSpec` |
 | `integration/npm-metadata` | `native-001` to `native-035` (37) | 10 serving | `Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec` |
-| `integration/publication` | npm `native-001` to `native-024` and 25 PyPI cases (55) | None | `Ecluse.Core.Server.Pipeline.PublishIntegrationSpec` |
+| `integration/publication` | npm `native-001` to `native-024` and 27 PyPI cases (57) | None | `Ecluse.Core.Server.Pipeline.PublishIntegrationSpec` |
 | `integration/pipeline-faults` | `native-001` to `native-019` (19) | None | `Ecluse.Core.Server.Pipeline.SharedIntegrationSpec` |
 | `integration/npm-artifact` | `native-001` to `native-043` (51) | None | `Ecluse.Core.Server.Pipeline.TarballIntegrationSpec` |
 | `integration/worker` | `native-001` to `native-009` (9) | None | `Ecluse.Core.Worker.LoopIntegrationSpec` |
