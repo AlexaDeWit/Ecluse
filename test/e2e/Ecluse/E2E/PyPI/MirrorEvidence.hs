@@ -8,6 +8,7 @@ module Ecluse.E2E.PyPI.MirrorEvidence (
     publicReads,
     sourceView,
     listedFiles,
+    listedYanks,
     requireFileUrl,
     getUrl,
     awaitWholeMirror,
@@ -23,7 +24,7 @@ module Ecluse.E2E.PyPI.MirrorEvidence (
     normaliseSources,
 ) where
 
-import Data.Aeson (Value (Array, Object, String))
+import Data.Aeson (Value (Array, Bool, Object, String))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
@@ -47,9 +48,7 @@ publicReads plane = filter ((== PyPIPublic) . srRoute) <$> stubReadsNow plane
 -- | Capture supported listing fields and the exact declared companion bytes.
 sourceView :: E2E -> IO [(Text, Value, [(Text, LByteString)])]
 sourceView proxy = forM [mirrorRoot, mirrorDependency] $ \project -> do
-    (status, bytes) <- proxyGet proxy ("/pypi/simple/" <> project)
-    status `shouldBe` 200
-    document <- either (fail . ("invalid Simple JSON: " <>)) pure (Aeson.eitherDecode bytes)
+    document <- servedListing proxy project
     companions <- forM (filter (T.isSuffixOf ".whl" . fst) (fileUrls document)) $ \(filename, url) -> do
         (companionStatus, companion) <- getUrl proxy (url <> ".metadata")
         companionStatus `shouldBe` 200
@@ -58,17 +57,32 @@ sourceView proxy = forM [mirrorRoot, mirrorDependency] $ \project -> do
 
 -- | Read the proxy listing independently from the worker inventory.
 listedFiles :: E2E -> Text -> IO [(Text, Text)]
-listedFiles proxy project = do
+listedFiles proxy project = fileUrls <$> servedListing proxy project
+
+-- | Each listed file's PEP 592 yank member, by filename. A false or absent member reads as 'Nothing'.
+listedYanks :: E2E -> Text -> IO [(Text, Maybe Value)]
+listedYanks proxy project = do
+    document <- servedListing proxy project
+    pure (sortOn fst [(filename, KeyMap.lookup "yanked" entry >>= withdrawal) | entry <- fileEntries document, Just (String filename) <- [KeyMap.lookup "filename" entry]])
+  where
+    withdrawal = \case
+        Bool False -> Nothing
+        value -> Just value
+
+servedListing :: E2E -> Text -> IO Value
+servedListing proxy project = do
     (status, bytes) <- proxyGet proxy ("/pypi/simple/" <> project)
     status `shouldBe` 200
-    document <- either fail pure (Aeson.eitherDecode bytes)
-    pure (fileUrls document)
+    either (fail . ("invalid Simple JSON: " <>)) pure (Aeson.eitherDecode bytes)
 
 fileUrls :: Value -> [(Text, Text)]
-fileUrls (Object document)
-    | Just (Array entries) <- KeyMap.lookup "files" document =
-        [(filename, url) | Object entry <- toList entries, Just (String filename) <- [KeyMap.lookup "filename" entry], Just (String url) <- [KeyMap.lookup "url" entry]]
-fileUrls _ = []
+fileUrls document =
+    [(filename, url) | entry <- fileEntries document, Just (String filename) <- [KeyMap.lookup "filename" entry], Just (String url) <- [KeyMap.lookup "url" entry]]
+
+fileEntries :: Value -> [Aeson.Object]
+fileEntries (Object document)
+    | Just (Array entries) <- KeyMap.lookup "files" document = [entry | Object entry <- toList entries]
+fileEntries _ = []
 
 normaliseUrls :: Value -> Value
 normaliseUrls (Object document) = Object (KeyMap.mapWithKey (\key value -> if key == "files" then normaliseFiles value else value) document)

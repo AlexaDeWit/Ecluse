@@ -333,7 +333,7 @@ Both ecosystem drivers bind concrete providers for every required family.
 PyPI mirror evidence includes whole-version copies, restart recovery, cross-target file selection and retained metadata.
 Cross-target checks prove selected files and installed contents. They do not execute foreign architecture code.
 
-The final functional declarations require 52 PyPI cases, 52 npm cases and one shared-system case.
+The final functional declarations require 55 PyPI cases, 53 npm cases and one shared-system case.
 Unit, integration, residency, allocation, load and smoke evidence remain independent requirements.
 
 Backend completion also requires the PyPI CodeArtifact full-store instance in the existing backend subject.
@@ -379,6 +379,16 @@ The structured log parser is shared.
 The shared sweep lifecycle checks the exact deletion lines and closing tally the fixture names.
 Its MAL case adds the second retaining store and the trusted-read observation before deletion.
 The native drivers supply transport and client operations, not alternative business assertions.
+
+## Mirrored yank cases
+
+After a pinned install, the worker copies the project's greatest release to a native target that lists every file as not yanked.
+The target cannot carry a yank, so a yank on the mirrored listing comes from the durable mirror record.
+
+| Case ID | Mirrored yank evidence |
+| --- | --- |
+| `pypi/mirror-native/yanked-greatest` | The public source yanks every file of the greatest release. With public down, a fresh proxy lists only the mirrored files, each with the source's yank reason. With public up, the listing marks only those files yanked, and an unpinned install with a fresh cache selects the release below. |
+| `pypi/mirror-native/yank-negative-control` | The same lifecycle without the source yank. Both listings offer every file, and the unpinned install selects the mirrored greatest release. |
 
 ## Canonical E2E module index
 

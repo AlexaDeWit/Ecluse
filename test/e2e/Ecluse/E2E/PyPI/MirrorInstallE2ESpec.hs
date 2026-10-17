@@ -6,7 +6,7 @@
 -- | Whole-version copying, physical interruption, and fresh pip installs through the running product.
 module Ecluse.E2E.PyPI.MirrorInstallE2ESpec (pypiMirrorFamily, nativeMirrorContract) where
 
-import Data.Aeson (Value)
+import Data.Aeson (Value (String))
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -39,6 +39,10 @@ nativeMirrorContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \record
                 withMirrorFixture plane $ \target distributions -> completeScenario plane target distributions LoseNextReply
             it (caseLabel "pypi/mirror-native/interruption" "resumes an interrupted native copy") $ \plane ->
                 withMirrorFixture plane $ \target distributions -> interruptedScenario plane target distributions
+            it (caseLabel "pypi/mirror-native/yanked-greatest" "keeps a mirrored greatest release yanked, so an unpinned install selects the release below") $ \plane ->
+                yankScenario plane SourceYanks
+            it (caseLabel "pypi/mirror-native/yank-negative-control" "selects the same mirrored greatest release when the source does not yank it") $ \plane ->
+                yankScenario plane SourceOffers
 
 completeScenario :: GlobalDataPlane -> NativeTarget -> [Distribution] -> UploadFault -> IO ()
 completeScenario plane target distributions fault = do
@@ -161,6 +165,44 @@ verifyHot plane target distributions (cold, tree) =
                 filter (not . publicProjectDiscovery) phaseReads `shouldBe` []
             )
             plane
+
+-- | Whether the public source yanks the greatest release before the mirror copies it.
+data SourceYank = SourceYanks | SourceOffers
+
+-- The target serves no yank. With public down, a yank on the listed copy can come only from durable state.
+yankScenario :: GlobalDataPlane -> SourceYank -> IO ()
+yankScenario plane yank =
+    withReleaseProject yankProject [yankKeptVersion, yankGreatestVersion] (maybe Map.empty (Map.singleton yankGreatestVersion) reason) plane $ \target distributions -> do
+        let greatest = filter ((== yankGreatestVersion) . distributionVersion) distributions
+            listed files = sortOn fst [(distributionFilename file, String <$> reason <* guard (distributionVersion file == yankGreatestVersion)) | file <- files]
+        withE2EWith nativeMirrorConfig (pinGreatest target greatest) plane
+        withStubFault plane (PyPIMirrorBackend (ntPort target) True) $
+            withE2EWith nativeMirrorConfig (\proxy -> listedYanks proxy yankProject `shouldReturn` listed greatest) plane
+        withStubFault plane (PyPIMirrorBackend (ntPort target) False) $
+            withE2EWith
+                nativeMirrorConfig
+                ( \proxy -> do
+                    listedYanks proxy yankProject `shouldReturn` listed distributions
+                    unpinned <- pipInstallRequirement proxy yankProject
+                    installedPythonGraph unpinned `shouldBe` installedRelease (maybe yankGreatestVersion (const yankKeptVersion) reason)
+                )
+                plane
+  where
+    reason = case yank of
+        SourceYanks -> Just yankReason
+        SourceOffers -> Nothing
+
+-- The pin admits the greatest release, and the worker copies its whole version to the target.
+pinGreatest :: NativeTarget -> [Distribution] -> E2E -> IO ()
+pinGreatest target greatest proxy = do
+    pinnedInstall <- pipInstallGraph proxy yankProject yankGreatestVersion
+    installedPythonGraph pinnedInstall `shouldBe` installedRelease yankGreatestVersion
+    awaitProjectFiles target greatest yankProject `shouldReturn` True
+    completed <- mirrorCompleted yankProject <$> canonicalVersion yankGreatestVersion
+    awaitProxyLog proxy completed 120 `shouldReturn` True
+
+installedRelease :: Text -> Either Text PythonGraph
+installedRelease version = Right (Map.singleton yankProject (version, []))
 
 -- | Supply real native installations and target observations to every shared mirror law.
 pypiMirrorFamily :: ConcreteFixture FamilyMetadata -> (MirrorFixture PythonGraph Value, FamilyFixture (MirrorDriver PythonGraph Value))
