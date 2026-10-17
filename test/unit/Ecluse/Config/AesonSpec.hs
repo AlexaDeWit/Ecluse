@@ -42,6 +42,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Publication (renderPercent)
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName, PyPIOwnedPrefix), mkPyPIPrefix)
+import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
 import Ecluse.Runtime.Log (LogLevel (DebugLevel, ErrorLevel, InfoLevel, WarnLevel))
 
 import Ecluse.Test.Package (unscopedPyPI)
@@ -614,6 +615,19 @@ spec = describe "decodeDocument" $ do
                 `shouldSatisfy` decodeErrorMentions "server.port must be a port in 0..65535"
             loadConfig [("ECLUSE_SERVER__PORT", "65536")] Nothing
                 `shouldSatisfy` decodeErrorMentions "server.port must be a port in 0..65535"
+
+        it "gzips metadata by default, and turns it off or on through either layer" $ do
+            let compression env doc = srvMetadataGzip . cfgServer <$> expectAppConfig env doc
+            compression [] Nothing `shouldReturn` GzipWhenAccepted
+            compression [] (Just "{\"server\":{\"metadataGzip\":false}}") `shouldReturn` IdentityOnly
+            compression [("ECLUSE_SERVER__METADATA_GZIP", "false")] Nothing `shouldReturn` IdentityOnly
+            compression [("ECLUSE_SERVER__METADATA_GZIP", "true")] (Just "{\"server\":{\"metadataGzip\":false}}") `shouldReturn` GzipWhenAccepted
+
+        it "rejects a non-boolean metadataGzip, through both layers" $ do
+            loadConfig [] (Just "{\"server\":{\"metadataGzip\":\"off\"}}")
+                `shouldSatisfy` decodeErrorMentions "server.metadataGzip"
+            loadConfig [("ECLUSE_SERVER__METADATA_GZIP", "0")] Nothing
+                `shouldSatisfy` decodeErrorMentions "server.metadataGzip"
 
         it "rejects a non-positive shutdownDrainTimeout, through both layers" $ do
             loadConfig [] (Just "{\"server\":{\"shutdownDrainTimeout\":0}}")

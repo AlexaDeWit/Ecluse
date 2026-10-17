@@ -16,9 +16,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
 import Ecluse.Core.Registry.Adapter (adapterFor, adapterRuleBlocks)
 import Ecluse.Core.Wire (renderWire)
 
-{- | Every operator-facing @ECLUSE_*@ spelling outside a mount's tagged endpoints, paired with a
-value the loader must accept. Each needs its document key in @config\/default.yaml@, and must load.
--}
+-- Each operator-facing spelling outside a mount's tagged endpoints, with a value it must load: each needs its default.yaml key.
 documentedEnvVars :: [(String, String)]
 documentedEnvVars =
     [ ("ECLUSE_SERVER__PORT", "8081")
@@ -26,6 +24,7 @@ documentedEnvVars =
     , ("ECLUSE_SERVER__AUTH_TOKEN", "edge-token")
     , ("ECLUSE_SERVER__HELP_MESSAGE", "ask platform engineering")
     , ("ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT", "5")
+    , ("ECLUSE_SERVER__METADATA_GZIP", "false")
     , ("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
     , ("ECLUSE_QUEUE__MAX_MEMORY_DEPTH", "100")
     , ("ECLUSE_QUEUE__MAX_RECEIVE_COUNT", "8")
@@ -80,9 +79,7 @@ documentedEnvVars =
     , ("ECLUSE_MOUNTS__NPM__INTEGRITY__DIVERGENCE_POLICY", "warn")
     ]
 
-{- | The mount endpoint spellings, one loadable layer per store tag. An endpoint names exactly one
-tag, so the three cannot be set together: two tags on one endpoint is itself a refusal.
--}
+-- The mount endpoint spellings, one loadable layer per store tag, because two tags on one endpoint refuse.
 taggedMountLayers :: [[(String, String)]]
 taggedMountLayers = [registryLayer, codeArtifactLayer, verdaccioLayer]
 
@@ -121,9 +118,7 @@ verdaccioLayer =
     , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__VERDACCIO__TOKEN", "publish-token")
     ]
 
-{- | Process-level and indirection spellings: documented in the operator manual's prose,
-because they are consumed before (or beside) config resolution and have no document key.
--}
+-- Process-level and indirection spellings, read outside config resolution, so only the manual's prose documents them.
 documentedProcessVars :: [String]
 documentedProcessVars =
     [ "ECLUSE_CONFIG"
@@ -132,9 +127,7 @@ documentedProcessVars =
     , "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN_FILE"
     ]
 
-{- | Spellings the loader must refuse: the keys this configuration pass renamed, and a plain
-typo. The loader owns the whole @ECLUSE_@ prefix, so each becomes an unknown document key.
--}
+-- Renamed keys and a typo the loader must refuse: it owns the whole ECLUSE_ prefix, so each is an unknown key.
 retiredEnvVars :: [(String, String)]
 retiredEnvVars =
     [ ("ECLUSE_ADVISORIES__BUCKET", "advisories")
@@ -160,9 +153,7 @@ readOperatorManual = do
     manualDir = "web/content/docs"
     isMarkdown = (== ".md") . takeExtension
 
-{- | The section and leaf a spelling resolves to (@ECLUSE_MOUNTS__NPM__INTEGRITY__MIN_TRUSTED@ is
-@mounts@ and @minTrusted@), camel-cased as the resolver reads them. One segment names the section.
--}
+-- The section and camel-cased leaf a spelling resolves to: ECLUSE_MOUNTS__NPM__INTEGRITY__MIN_TRUSTED is mounts and minTrusted.
 documentKey :: String -> Maybe (Text, Maybe Text)
 documentKey var = do
     body <- T.stripPrefix "ECLUSE_" (T.pack var)
@@ -173,9 +164,7 @@ documentKey var = do
         (w : ws) -> w <> T.concat (map T.toTitle ws)
         [] -> ""
 
-{- | Whether @config/default.yaml@ documents a key: its leaf under the section, or the section
-alone for a spelling with no leaf. A commented @# key:@ counts, being how a computed default reads.
--}
+-- Whether default.yaml documents a key under its section. A commented key counts, as a computed default reads.
 documentsKey :: Text -> (Text, Maybe Text) -> Bool
 documentsKey yaml (section, mLeaf) = case mLeaf of
     Nothing -> any isHeader allLines

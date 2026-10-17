@@ -85,6 +85,7 @@ import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty)
 import Ecluse.Core.Rules.Types (PrecededRule)
 import Ecluse.Core.Security (hostPortAddress, refuseCredentialMaterial)
 import Ecluse.Core.Security.Egress (RegistryUrl)
+import Ecluse.Core.Server.Encoding (MetadataCompression)
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig)
 import Ecluse.Runtime.Log (LogFormat, LogLevel)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore)
@@ -333,6 +334,8 @@ data ServerSettings = ServerSettings
     , srvAuthToken :: Maybe Secret
     , srvHelpMessage :: Maybe Text
     , srvShutdownDrainTimeout :: Int
+    , srvMetadataGzip :: MetadataCompression
+    -- ^ @server.metadataGzip@: whether an admitted listing may be gzipped for a client that accepts it.
     }
     deriving stock (Eq, Show)
 

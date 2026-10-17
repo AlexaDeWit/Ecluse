@@ -3,18 +3,16 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Conditional-GET and @ETag@ handling, split by how the served body relates to upstream's.
-
-A pass-through body (an artifact, unfiltered private metadata) is byte-identical to
-upstream's, so the client's validators are relayed upstream ('forwardValidators') and an
-upstream @304@ is passed back ('isNotModified'). A transformed body (every packument is
-merged and filtered) takes our own strong 'ETag' instead, derived from the serve's inputs
-rather than hashed over its output. It can therefore be stale only in the safe direction, a
-spurious @200@ and never a wrong @304@, and a @304@ costs no assembly at all.
+A pass-through body (an artifact) is upstream's bytes, so the client's validators are relayed
+upstream and an upstream @304@ is passed back. A transformed body (every merged listing) takes our
+own 'ETag', derived from the serve's inputs rather than hashed over its output. It can be stale
+only in the safe direction: a spurious @200@, never a wrong @304@, and a @304@ costs no assembly.
 -}
 module Ecluse.Core.Server.Conditional (
     -- * Our own ETag (transformed bodies)
     ETag,
     mkStrongETag,
+    mkWeakETag,
     renderETag,
     etagHeader,
     Conditional (..),
@@ -31,20 +29,22 @@ import Data.Text qualified as T
 import Network.HTTP.Types (Header, RequestHeaders, Status, statusCode)
 import Network.HTTP.Types.Header (hETag, hIfModifiedSince, hIfNoneMatch)
 
-{- | A strong entity tag in the quoted wire form (@"…"@) the @ETag@ header carries. The
-'newtype' keeps that quoted form from being confused with the bare digest.
--}
+import Ecluse.Core.Server.FieldValue (fieldValues)
+
+-- | An entity tag in the wire form the @ETag@ header carries, kept apart from the bare digest.
 newtype ETag = ETag Text
     deriving stock (Eq, Ord, Show)
 
-{- | Quote a SHA-256 digest as a strong 'ETag', hex-encoded. The digest is whatever
-fingerprint the serving layer stands behind.
--}
+-- | Quote a SHA-256 fingerprint, hex-encoded, as a strong 'ETag': one exact byte representation.
 mkStrongETag :: Digest SHA256 -> ETag
-mkStrongETag digest = ETag ("\"" <> hex <> "\"")
-  where
-    hex :: Text
-    hex = decodeUtf8 (convertToBase Base16 digest :: ByteString)
+mkStrongETag digest = ETag (quotedHex digest)
+
+-- | A weak 'ETag' over a fingerprint, for a representation whose exact bytes the codec may change.
+mkWeakETag :: Digest SHA256 -> ETag
+mkWeakETag digest = ETag ("W/" <> quotedHex digest)
+
+quotedHex :: Digest SHA256 -> Text
+quotedHex digest = "\"" <> decodeUtf8 (convertToBase Base16 digest :: ByteString) <> "\""
 
 -- | The 'ETag's wire form, the quoted opaque tag as it goes into the header.
 renderETag :: ETag -> Text
@@ -54,30 +54,22 @@ renderETag (ETag t) = t
 etagHeader :: ETag -> Header
 etagHeader etag = (hETag, encodeUtf8 (renderETag etag))
 
-{- | The conditional outcome for a transformed body: whether the client's
-validator already matches what we would serve.
--}
+-- | Whether the client's validator already matches the transformed body we would serve.
 data Conditional
-    = {- | The served body is unchanged from the client's validator. Answer @304@
-      with this 'ETag' and no body.
-      -}
+    = -- | Unchanged from the client's validator: answer @304@ with this 'ETag' and no body.
       NotModified ETag
-    | {- | The served body differs, or no validator was sent. Serve @200@ with
-      this 'ETag' header.
-      -}
+    | -- | Changed, or no validator was sent: serve @200@ with this 'ETag'.
       Modified ETag
     deriving stock (Eq, Show)
 
-{- | Evaluate a conditional request against our own 'ETag'. The comparison is __weak__ (RFC
-7232), and @If-Modified-Since@ is not consulted: a merge has no single upstream timestamp.
--}
+-- | Compare weakly (RFC 9110) against our own 'ETag'. A merge has no single timestamp, so @If-Modified-Since@ is ignored.
 evaluateETag :: RequestHeaders -> ETag -> Conditional
 evaluateETag headers etag
     | matches = NotModified etag
     | otherwise = Modified etag
   where
     matches :: Bool
-    matches = any clientMatches (lookupAll hIfNoneMatch headers)
+    matches = any clientMatches (fieldValues hIfNoneMatch headers)
 
     -- One If-None-Match header value matches if it is a wildcard or lists a tag
     -- whose opaque value equals ours (weak comparison).
@@ -99,20 +91,12 @@ splitTags = filter (not . T.null) . map T.strip . T.splitOn ","
 normaliseTag :: Text -> Text
 normaliseTag t = fromMaybe t (T.stripPrefix "W/" t)
 
-{- | The client's conditional validators to relay upstream for a __pass-through__ body. Only
-these two are forwarded, so upstream answers @304@ without receiving any other client header.
--}
+-- | The only two client headers relayed upstream for a __pass-through__ body, so upstream can answer @304@.
 forwardValidators :: RequestHeaders -> RequestHeaders
 forwardValidators = filter (isValidator . fst)
   where
     isValidator name = name == hIfNoneMatch || name == hIfModifiedSince
 
-{- | Whether an upstream response is a @304 Not Modified@ to pass straight back to the
-client. Used on the pass-through path, where upstream's own validator decided.
--}
+-- | Whether a pass-through upstream response is a @304@ to pass back, upstream's own validator having decided.
 isNotModified :: Status -> Bool
 isNotModified s = statusCode s == 304
-
--- All values for a header name (a header may legally repeat).
-lookupAll :: (Eq a) => a -> [(a, b)] -> [b]
-lookupAll name = map snd . filter ((== name) . fst)

@@ -35,6 +35,7 @@ import Ecluse.Core.Registry.Npm.Project (projectScope)
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty, projectFirstPartyEntry)
 import Ecluse.Core.Security (parseBlockedRange)
 import Ecluse.Core.Security.Egress (RegistryUrl)
+import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
 import Ecluse.Core.Text (readDecimalText)
 import Ecluse.Runtime.Log (parseLogFormat, parseLogLevel)
 import Ecluse.Runtime.Telemetry (parseTelemetrySwitch)
@@ -138,6 +139,7 @@ serverDecoder =
         <*> optionalKey "authToken" parseSecret
         <*> optionalPlainKey "helpMessage"
         <*> requiredKey "shutdownDrainTimeout" parsePositiveInt
+        <*> requiredKey "metadataGzip" (\_ enabled -> pure (if enabled then GzipWhenAccepted else IdentityOnly))
 
 queueDecoder :: GroupDecoder QueueSettings
 queueDecoder =

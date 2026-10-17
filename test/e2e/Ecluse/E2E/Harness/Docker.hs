@@ -491,8 +491,7 @@ roleRun gdp env args = do
         base
             { drMounts = [(gdpWorkDir gdp </> "certs", "/certs:ro")]
             , drTmpfs = [advisoryDataTmpfs]
-            , -- The image sets no locale, and boot advice prints non-ASCII text.
-              drEnv = [("LANG", "C.UTF-8"), ("LC_ALL", "C.UTF-8")] <> env
+            , drEnv = env
             , drCmd = args
             }
 

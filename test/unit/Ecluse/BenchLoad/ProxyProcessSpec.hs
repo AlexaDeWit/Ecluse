@@ -34,12 +34,14 @@ import Ecluse.BenchLoad.ProxyProcess (
     proxyEnvironment,
     proxyListening,
     proxySettings,
+    requireIdentityListings,
     retryingBoot,
  )
 import Ecluse.Composition.Support (expectPlanFor, noCeiling)
 import Ecluse.Composition.Types (BootRole (BootMirrorPipeline), MirrorRole (ServeAndMirror))
-import Ecluse.Config (loadConfig, renderConfigError)
+import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvMetadataGzip), loadConfig, renderConfigError)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Server.Encoding (MetadataCompression (IdentityOnly))
 import Ecluse.Rts (readIfExists)
 import Ecluse.Runtime.Server (listeningPrefix, proxyListener)
 import Ecluse.Test.Poll (pollUntil)
@@ -181,6 +183,17 @@ environmentSpec = describe "proxyEnvironment" $ do
     it "derives GHC capabilities from the cgroup under a limited shape, and overrides the count when unlimited" $ do
         lookup "ECLUSE_RUNTIME__CORES" podEnvironment `shouldBe` Nothing
         lookup "ECLUSE_RUNTIME__CORES" (environmentFor Unlimited) `shouldBe` Just "3"
+    it "turns native metadata gzip off for every ecosystem and pod shape, as the configuration parser reads it" $
+        for_ [(ecosystem, shape) | ecosystem <- [Npm, PyPI], shape <- [Limited 2 (512 * 1024 * 1024), Unlimited]] $ \(ecosystem, shape) -> do
+            let environment = proxyEnvironment (proxySettings ecosystem 60) shape 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) [("ECLUSE_SERVER__METADATA_GZIP", "true")]
+            filter ((== "ECLUSE_SERVER__METADATA_GZIP") . fst) environment `shouldBe` [("ECLUSE_SERVER__METADATA_GZIP", "false")]
+            case loadConfig environment Nothing of
+                Left errs -> expectationFailure (toString (unlines (map renderConfigError errs)))
+                Right config -> srvMetadataGzip (cfgServer (configApp config)) `shouldBe` IdentityOnly
+    it "refuses a proxy whose boot log states another gzip posture" $ do
+        requireIdentityListings ["config: server.metadataGzip = false (environment)"]
+        requireIdentityListings ["config: server.metadataGzip = true (default)"] `shouldThrow` anyException
+        requireIdentityListings [] `shouldThrow` anyException
     it "names only keys the proxy's configuration loads, and a boot plan the serve role accepts" $
         for_ [(ecosystem, shape) | ecosystem <- [Npm, PyPI], shape <- [Limited 2 (512 * 1024 * 1024), Unlimited]] $ \(ecosystem, shape) -> do
             let everyPin =

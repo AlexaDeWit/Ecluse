@@ -27,12 +27,11 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..), pdMirror, pdPrivateBaseUrl, pdPublicBaseUrl)
+import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit), mountUpstreams)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 
-{- | A mount's serve dependencies over @adapter@. The upstreams, mirror plan, rules, and clock
-are parameters, and the rest carry defaults.
--}
+-- | A mount's serve dependencies over @adapter@, with the shipped defaults beside its parameters.
 serveDepsFor :: RegistryAdapter -> Maybe RegistryUrl -> RegistryUrl -> MirrorServePlan -> [PreparedRule] -> IO UTCTime -> PackumentDeps
 serveDepsFor adapter privateBaseUrl publicBaseUrl mirror rules clock =
     PackumentDeps
@@ -58,6 +57,7 @@ serveDepsFor adapter privateBaseUrl publicBaseUrl mirror rules clock =
         , pdArtifact = adapterArtifact adapter
         , pdEgressUrl = mkRegistryUrl
         , pdMirrorState = Nothing
+        , pdMetadataCompression = GzipWhenAccepted
         }
 
 -- | 'serveDepsFor' over 'Ecluse.Core.Registry.Npm.Adapter.npmAdapter'.
@@ -86,21 +86,15 @@ inertDepsFor adapter =
 inertPackumentDeps :: PackumentDeps
 inertPackumentDeps = inertDepsFor npmAdapter
 
-{- | Rebind a fixture's upstreams with the private base URL replaced. The rebind drops any declared
-ecosystem artifact hosts.
--}
+-- | Rebind a fixture's upstreams with the private base URL replaced, dropping declared artifact hosts.
 withPrivateBaseUrl :: Maybe RegistryUrl -> PackumentDeps -> PackumentDeps
 withPrivateBaseUrl privateBaseUrl = rebind (const privateBaseUrl) id
 
-{- | 'withPrivateBaseUrl' deriving the new private base URL from the old. A mount with no
-private upstream stays without one, and declared ecosystem artifact hosts are dropped.
--}
+-- | 'withPrivateBaseUrl' deriving the new private base URL from the old. A mount with none keeps none.
 overPrivateBaseUrl :: (RegistryUrl -> RegistryUrl) -> PackumentDeps -> PackumentDeps
 overPrivateBaseUrl f = rebind (fmap f) id
 
-{- | Rebind a fixture's upstreams with the mirror serve plan replaced. It drops any
-declared ecosystem artifact hosts, as 'withPrivateBaseUrl' does.
--}
+-- | Rebind a fixture's upstreams with the mirror serve plan replaced, dropping declared artifact hosts.
 withMirrorPlan :: MirrorServePlan -> PackumentDeps -> PackumentDeps
 withMirrorPlan mirror = rebind id (const mirror)
 

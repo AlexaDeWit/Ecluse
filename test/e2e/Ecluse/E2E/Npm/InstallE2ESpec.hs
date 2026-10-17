@@ -154,8 +154,9 @@ scenarios recorder = do
             ]
         $ \(identifier, policy) ->
             it (caseLabel ("npm/install/" <> identifier) "refuses an active MAL rule without a source at check-config and boot") $ \plane ->
-                for_ [["check-config"], ["proxy"]] $ \args -> do
+                -- "Écluse" in the check-config output shows the image writes non-ASCII text with no locale set.
+                for_ [(["check-config"], ["Écluse"]), (["proxy"], [])] $ \(args, printed) -> do
                     run <- runRoleOnce plane [("ECLUSE_SERVER__PUBLIC_URL", "https://proxy.test"), ("ECLUSE_MOUNTS__NPM__ENABLED", "true"), ("ECLUSE_RULES", policy)] args
                     roleExit run `shouldSatisfy` (/= ExitSuccess)
-                    roleOutput run `shouldSatisfy` T.isInfixOf "DenyIfKnownMalicious"
-                    roleOutput run `shouldSatisfy` T.isInfixOf "advisories.url"
+                    for_ (["DenyIfKnownMalicious", "advisories.url"] <> printed) $ \text ->
+                        roleOutput run `shouldSatisfy` T.isInfixOf text

@@ -65,6 +65,7 @@ import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Contract (ResponseContract)
+import Ecluse.Core.Server.Encoding (MetadataCompression)
 import Ecluse.Core.Server.MirrorView (MirrorView)
 import Ecluse.Core.Server.Response (HelpMessage)
 import Ecluse.Core.Server.Upstream (
@@ -85,21 +86,13 @@ data ServeRuntime = ServeRuntime
     , srMemoryMeter :: MemoryMeter
     -- ^ The memory budget metadata requests pay into as they read and build.
     , srPublicManager :: Manager
-    {- ^ The validating-TLS data-plane manager for the __untrusted__ public-upstream
-    metadata fetch and every artifact stream.
-    -}
+    -- ^ The validating-TLS manager for the __untrusted__ public metadata fetch and every artifact stream.
     , srPrivateManager :: Manager
-    {- ^ The manager for the __trusted__ private upstream. It is the same validating TLS
-    manager: the private origin differs in credential handling, not in the manager.
-    -}
+    -- ^ The __trusted__ private upstream's validating-TLS manager, which differs in credential handling only.
     , srMetadataCache :: MetadataCache
-    {- ^ The short-TTL, size-bounded metadata cache shared by the serve paths
-    (see "Ecluse.Core.Server.Cache").
-    -}
+    -- ^ The short-TTL, size-bounded metadata cache the serve paths share ("Ecluse.Core.Server.Cache").
     , srQueue :: MirrorQueue
-    {- ^ The mirror-queue handle: the durable, best-effort hand-off from the serve
-    path to the mirror worker.
-    -}
+    -- ^ The best-effort hand-off from the serve path to the mirror worker.
     , srMetrics :: MetricsPort
     -- ^ The metric-recording port the serve path emits the @ecluse.*@ catalogue through.
     , srTracing :: TracingPort
@@ -113,13 +106,9 @@ data PackumentDeps = PackumentDeps
     , pdMirrorState :: Maybe MirrorView
     -- ^ Source-only state, validated after each caller authorises the private read.
     , pdFirstParty :: PackageName -> Bool
-    {- ^ Whether a name belongs to a namespace this deployment owns, derived once at the composition root and deny
-    by default. Its one authority is the private upstream: the public leg is never entered, and a private miss is @404@.
-    -}
+    -- ^ Whether this deployment owns the name, derived once at the composition root and deny by default. Only the private upstream serves it, and a private miss is @404@.
     , pdMountBaseUrl :: Text
-    {- ^ The mount's externally-visible base URL, under which served @dist.tarball@
-    URLs are rewritten so artifacts are fetched back through the gate.
-    -}
+    -- ^ The mount's external base URL, under which served artifact URLs route back through the gate.
     , pdRules :: [PreparedRule]
     -- ^ Rules prepared at boot and evaluated against every public version.
     , pdAdditionalBlockedRanges :: [IPRange]
@@ -127,19 +116,13 @@ data PackumentDeps = PackumentDeps
     , pdLimits :: Limits
     -- ^ Fetch and decode limits. A breach discards the whole upstream contribution.
     , pdInboundToken :: Maybe Secret
-    {- ^ The optional inbound token a client must present (@ECLUSE_SERVER__AUTH_TOKEN@).
-    'Nothing' leaves the edge open, and the network layer guards it.
-    -}
+    -- ^ The inbound token a client must present (@ECLUSE_SERVER__AUTH_TOKEN@). 'Nothing' leaves the edge open.
     , pdNow :: IO UTCTime
-    {- ^ The wall-clock "now" for the rules' 'Ecluse.Core.Rules.Types.EvalContext'.
-    Injected so the time-sensitive quarantine is deterministic under test.
-    -}
+    -- ^ The rules' clock, injected so the quarantine is deterministic under test.
     , pdAdvisoryEtag :: IO (Maybe DbEtag)
     -- ^ Non-pinning read of the active advisory etag. 'Nothing' means no database is loaded.
     , pdNoteAdmission :: AdmissionIdentity -> IO Bool
-    {- ^ Whether the gate logs an admission's skipped-check evidence, once per identity for the
-    life of the advisory source's outage ('Ecluse.Core.Rules.Outage.noteAdmission').
-    -}
+    -- ^ Whether to log an admission's skipped checks, once per identity per outage ('Ecluse.Core.Rules.Outage.noteAdmission').
     , pdHelp :: Maybe HelpMessage
     -- ^ The operator help message appended to every denial body, if configured.
     , pdMinIntegrity :: MinIntegrity
@@ -147,15 +130,13 @@ data PackumentDeps = PackumentDeps
     , pdMinTrustedIntegrity :: MinTrustedIntegrity
     -- ^ The minimum integrity hash required for a trusted upstream dependency.
     , pdMetadata :: AdapterMetadata
-    {- ^ The mount ecosystem's metadata capability, carried whole
-    ('Ecluse.Core.Registry.Adapter.Capability.AdapterMetadata'), never copied field by field.
-    -}
+    -- ^ The ecosystem's metadata capability, carried whole, never copied field by field.
     , pdArtifact :: AdapterArtifact
-    {- ^ The mount ecosystem's artifact request formation, carried whole
-    ('Ecluse.Core.Registry.Adapter.Capability.AdapterArtifact'), never copied field by field.
-    -}
+    -- ^ The ecosystem's artifact request formation, carried whole, never copied field by field.
     , pdEgressUrl :: Text -> Either Text RegistryUrl
     -- ^ Validate an artifact URL before enqueueing it. A 'Left' prevents the mirror job.
+    , pdMetadataCompression :: MetadataCompression
+    -- ^ Whether an admitted listing may be gzipped for a client that accepts it.
     }
 
 -- | The private URL bound to the host gate. 'Nothing' skips the private fetch.
@@ -174,9 +155,7 @@ pdMirror = upstreamMirror . pdUpstreams
 pdTarballHostGate :: PackumentDeps -> TarballHostGate
 pdTarballHostGate = upstreamTarballHostGate . pdUpstreams
 
-{- | Apply 'tarballHostAllowed' with this mount's inputs for both serving and mirror re-evaluation.
-A missing authority refuses. Trusted origins bypass only the internal-range block.
--}
+-- | 'tarballHostAllowed' over this mount's inputs. A missing authority refuses, and trusted origins skip only the internal-range block.
 tarballHostHonoured :: Origin -> PackumentDeps -> Maybe HostPort -> Maybe HostPort -> Bool
 tarballHostHonoured origin deps =
     tarballHostAllowed
@@ -188,19 +167,13 @@ tarballHostHonoured origin deps =
 -- | First-party publish inputs. Their presence enables the mount's publish route.
 data PublishDeps = PublishDeps
     { pubTargetUrl :: RegistryUrl
-    {- ^ The publication target endpoint (@mounts.npm.publicationTarget@) a client
-    @npm publish@ is relayed to, as the https-only witness. The package path is appended to it.
-    -}
+    -- ^ The https-only publication target a publish is relayed to, with the package path appended.
     , pubAllowed :: PackageName -> Bool
-    {- ^ Whether this package may publish here, refused before any upstream write: the same
-    first-party predicate the serve path reads as 'pdFirstParty'.
-    -}
+    -- ^ Whether this package may publish here, checked before any upstream write. It is 'pdFirstParty'.
     , pubStaticCredential :: Maybe ClientCredential
     -- ^ Replaces the authenticated edge token on publishes. Requires 'pubInboundToken' at boot.
     , pubInboundToken :: Maybe Secret
-    {- ^ The optional inbound edge token a client must present (@ECLUSE_SERVER__AUTH_TOKEN@),
-    the same gate the read paths apply. 'Nothing' leaves the edge open.
-    -}
+    -- ^ The read paths' inbound edge token (@ECLUSE_SERVER__AUTH_TOKEN@). 'Nothing' leaves the edge open.
     , pubMaxRequestBytes :: Int
     -- ^ The configured per-mount request cap, covered by the shared aggregate budget.
     , pubLimits :: Limits
@@ -212,30 +185,22 @@ data PublishDeps = PublishDeps
     , pubProjectName :: ProjectName
     -- ^ The ecosystem's own name parser, which the anti-shadowing guard reads a declared name through.
     , pubAdapter :: AdapterPublish
-    {- ^ The mount ecosystem's publish capability, carried whole
-    ('Ecluse.Core.Registry.Adapter.Capability.AdapterPublish'), never copied field by field.
-    -}
+    -- ^ The ecosystem's publish capability, carried whole, never copied field by field.
     }
 
 -- | A matched request's action, constrained to its route's response contract.
 data ResponseAction response
     = -- | A pure value admitted by the route's response contract.
       AnswerLocally response
-    | {- | A refusal the route decided, rendered where the mount's help message is known, so a
-      route table carries no configuration of its own.
-      -}
+    | -- | A refusal the route decided, rendered where the mount's help message is known.
       AnswerRefusal (Maybe HelpMessage -> response)
     | -- | A data-plane handler and its pre-commit fallback, both constrained to the route's response type.
       RunPipeline response (Wai.Request -> (response -> IO ResponseReceived) -> Handler ResponseReceived)
 
-{- | A matched route's response contract paired with an action that produces only that contract's
-response type. Dispatch renders the action without knowing an ecosystem's response sum.
--}
+-- | A route's response contract and an action that answers only through it, so dispatch needs no ecosystem's response sum.
 data RouteAction = forall response. RouteAction (ResponseContract response) (ResponseAction response)
 
-{- | An ecosystem's whole routing decision over a mount-relative request, from its adapter. The
-method and the headers are part of the mapping, and segments arrive stripped and decoded.
--}
+-- | An adapter's routing decision over a method, headers, and the stripped, decoded path segments.
 type MountRouter = Method -> RequestHeaders -> [Text] -> RouteAction
 
 -- | Ecosystem wiring under a non-empty prefix, so adding an ecosystem never displaces a root mount.
@@ -245,25 +210,17 @@ data MountBinding = MountBinding
     , bindingRouter :: MountRouter
     -- ^ This mount's routing decision, derived from the adapter's own route table.
     , bindingCredential :: CredentialMapping
-    {- ^ How a client of this mount presents its credential, and how the proxy carries one
-    upstream. The adapter declares it, so the serve path holds no credential scheme of its own.
-    -}
+    -- ^ How the adapter's clients present a credential, and how the proxy carries one upstream.
     , bindingPackumentDeps :: PackumentDeps
-    {- ^ The packument-serve dependencies. A bound mount always serves packuments and artifacts,
-    because a mount exists only for a registered adapter. Only /publish/ is opt-in.
-    -}
+    -- ^ A bound mount always serves listings and artifacts. Only /publish/ is opt-in.
     , bindingPublishDeps :: Maybe PublishDeps
     -- ^ Optional first-party publish dependencies. 'Nothing' makes @PUT \/{pkg}@ answer @405@.
     }
 
-{- | The context one request is served through: the request runtime paired with the 'MountBinding'
-the request matched. Dispatch builds it once per request, and 'Handler' reads it through its reader.
--}
+-- | The runtime and the matched 'MountBinding' one request is served through, built once per request.
 data RequestCtx = RequestCtx
     { ctxRuntime :: ServeRuntime
-    {- ^ The request runtime: the data-plane managers, the caches and queue, and the
-    recording ports.
-    -}
+    -- ^ The data-plane managers, the caches and queue, and the recording ports.
     , ctxMount :: MountBinding
     -- ^ The mount the request matched, carrying its complete ecosystem wiring.
     }

@@ -96,6 +96,12 @@ integrationObligations =
         , "integration.serving.pypi.artifact-integrity"
         , "integration.serving.pypi.artifact-head"
         , "integration.serving.pypi.conditional-coherence"
+        , "integration.serving.pypi.metadata-gzip"
+        , "integration.serving.pypi.metadata-gzip-validators"
+        , "integration.serving.pypi.metadata-gzip-refusal"
+        , "integration.serving.pypi.metadata-gzip-opt-out"
+        , "integration.serving.pypi.metadata-gzip-policy"
+        , "integration.serving.pypi.artifact-uncoded"
         ]
     , required
         "integration/mirror-view"
@@ -223,6 +229,12 @@ integrationObligations =
         , "integration.serving.npm.artifact-integrity"
         , "integration.serving.npm.artifact-head"
         , "integration.serving.npm.conditional-coherence"
+        , "integration.serving.npm.metadata-gzip"
+        , "integration.serving.npm.metadata-gzip-validators"
+        , "integration.serving.npm.metadata-gzip-refusal"
+        , "integration.serving.npm.metadata-gzip-opt-out"
+        , "integration.serving.npm.metadata-gzip-policy"
+        , "integration.serving.npm.artifact-uncoded"
         ]
     , required
         "integration/publication"

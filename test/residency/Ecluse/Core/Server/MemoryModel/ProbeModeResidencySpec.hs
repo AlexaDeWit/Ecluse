@@ -24,7 +24,7 @@ spec = describe "metadata child modes" $ do
         parseProbeMode ["--metadata-selected-retention-probe", "invalid", "", "", "no", "missing"]
             `shouldBe` Just (SelectedRetention "invalid" "" "" "no", "missing")
     it "leaves unrelated, unknown and removed legacy modes to Hspec" $ do
-        for_ [[], ["--archive-probe", "mode", "path"], ["--mirror-state-probe", "mode", "path"], ["--mirror-read-probe", "phase", "directory"], ["--unknown"], ["--metadata-source-probe", "mode", "name", "version", "limit", "path"]] $ \arguments ->
+        for_ [[], ["--archive-probe", "mode", "path"], ["--gzip-probe", "mode", "path"], ["--mirror-state-probe", "mode", "path"], ["--mirror-read-probe", "phase", "directory"], ["--unknown"], ["--metadata-source-probe", "mode", "name", "version", "limit", "path"]] $ \arguments ->
             parseProbeMode arguments `shouldBe` Nothing
     it "keeps both listing RTS groups in their original positions" $ do
         probeArguments Listing "capture.json" `shouldBe` ["--metadata-listing-probe", "+RTS", "-F1", "-A128k", "-RTS", "capture.json", "+RTS", "-T", "-N1", "-RTS"]

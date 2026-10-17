@@ -19,6 +19,7 @@ import Ecluse.Core.Server.MemoryModel.Probe (SelectedShape (SelectedControl, Sel
 import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
 import Ecluse.Core.Server.MemoryModel.ProbeModeResidencySpec qualified as ProbeModeResidencySpec
 import Ecluse.Core.Server.MemoryModelResidencySpec qualified as MemoryModelResidencySpec
+import Ecluse.Core.Server.MetadataGzipResidencySpec qualified as MetadataGzipResidencySpec
 import Ecluse.Core.Server.MirrorViewResidencySpec qualified as MirrorViewResidencySpec
 import Ecluse.Core.Server.Pipeline.TarballResidencySpec qualified as TarballResidencySpec
 import System.Environment qualified as Environment
@@ -29,6 +30,7 @@ main =
     Environment.getArgs >>= \case
         ["--mirror-state-probe", mode, path] -> StateWeightResidencySpec.probeMain mode path
         ["--archive-probe", mode, path] -> ArchiveResidencySpec.probeMain mode path
+        ["--gzip-probe", mode, path] -> MetadataGzipResidencySpec.probeMain mode path
         ["--mirror-read-probe", phase, directory] -> MirrorViewResidencySpec.probeMain phase directory
         arguments | Just (mode, path) <- Mode.parseProbeMode arguments -> runProbe mode path
         _ -> hspec $ do
@@ -36,6 +38,7 @@ main =
             ProbeModeResidencySpec.spec
             StateWeightResidencySpec.spec
             ArchiveResidencySpec.spec
+            MetadataGzipResidencySpec.spec
             MirrorViewResidencySpec.spec
             LexerResidencySpec.spec
             JsonStreamResidencySpec.spec

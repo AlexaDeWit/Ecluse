@@ -303,10 +303,13 @@ library ecluse-core
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
     Ecluse.Core.Server.Contract
+    Ecluse.Core.Server.Encoding
     Ecluse.Core.Server.Fault
+    Ecluse.Core.Server.FieldValue
     Ecluse.Core.Server.Framing
     Ecluse.Core.Server.MemoryModel
     Ecluse.Core.Server.Metadata
+    Ecluse.Core.Server.MetadataGzip
     Ecluse.Core.Server.MirrorView
     Ecluse.Core.Server.Pipeline
     Ecluse.Core.Server.Pipeline.Diagnostics
@@ -352,6 +355,7 @@ library ecluse-core
       Ecluse.Core.Worker.Loop
       Ecluse.Core.Worker.Realise
       Ecluse.Core.Worker.Types
+    Ecluse.Core.Zlib
 
   -- The PEP 440 and RubyGems version grammars. Internal to ecluse-core: VersionKey is
   -- opaque, so callers reach them only through the agnostic Ecluse.Core.Version API.
@@ -805,6 +809,7 @@ library ecluse-test-support
     Ecluse.Test.Security.Limits
     Ecluse.Test.Sweep
     Ecluse.Test.Server.Cache
+    Ecluse.Test.Server.Handler
     Ecluse.Test.Server.Response
     Ecluse.Test.Server.Route
     Ecluse.Test.Server.Transform
@@ -1173,9 +1178,12 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.CacheSpec
     Ecluse.Core.Server.ConditionalSpec
     Ecluse.Core.Server.ContractSpec
+    Ecluse.Core.Server.EncodingSpec
     Ecluse.Core.Server.FaultSpec
+    Ecluse.Core.Server.FieldValueSpec
     Ecluse.Core.Server.FramingSpec
     Ecluse.Core.Server.MemoryModelSpec
+    Ecluse.Core.Server.MetadataGzipSpec
     Ecluse.Core.Server.MetadataSpec
     Ecluse.Core.Server.MirrorViewSpec
     Ecluse.Core.Server.PathSpec
@@ -1216,6 +1224,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Worker.LivenessSpec
     Ecluse.Core.Worker.LoopSpec
     Ecluse.Core.Worker.RealiseSpec
+    Ecluse.Core.ZlibSpec
     Ecluse.Package.Filter.Support
     Ecluse.Rules.Outage.Support
     Ecluse.Rules.Support
@@ -1370,6 +1379,7 @@ test-suite ecluse-unit
     Ecluse.BenchReport.PerformanceCommandSpec
     Ecluse.BenchReport.PerformanceSpec
     Ecluse.BenchReportSpec
+    EcluseSpec
     Ecluse.BootSpec
     Ecluse.CLISpec
     Ecluse.InternalSpec
@@ -1659,9 +1669,10 @@ test-suite ecluse-residency
   type:               exitcode-stdio-1.0
   main-is:            Main.hs
   hs-source-dirs:     test/residency test/integration
-  c-sources:          test/residency/cbits/archive-native-memory.c
+  c-sources:          test/residency/cbits/native-memory.c
   other-modules:
     Data.JsonStream.LexerResidencySpec
+    Ecluse.Core.NativeProbe
     Ecluse.Core.Registry.Json.WalkProbe
     Ecluse.Core.Registry.JsonStreamResidencySpec
     Ecluse.Core.Registry.MetadataResidencySpec
@@ -1675,6 +1686,7 @@ test-suite ecluse-residency
     Ecluse.Core.Server.MemoryModel.ProbeMode
     Ecluse.Core.Server.MemoryModel.ProbeModeResidencySpec
     Ecluse.Core.Server.MemoryModelResidencySpec
+    Ecluse.Core.Server.MetadataGzipResidencySpec
     Ecluse.Core.Server.MirrorViewResidencySpec
     Ecluse.Core.Mirror.State.WeightResidencySpec
     Ecluse.Core.Server.Pipeline.TarballResidencySpec
@@ -2037,6 +2049,7 @@ benchmark ecluse-bench
     Ecluse.Core.DigestBench
     Ecluse.Core.MirrorReadBench
     Ecluse.Core.MergeBench
+    Ecluse.Core.MetadataGzipBench
     Ecluse.Core.PackedBench
     Ecluse.Core.RouteBench
     Ecluse.Core.RulesBench
@@ -2069,6 +2082,7 @@ benchmark ecluse-bench
     , unliftio         ^>=0.2.25
     , wai              ^>=3.2
     , warp             ^>=3.4
+    , zlib             ^>=0.7
 
 -- The load tool links the composed application without entering the shipped library closure.
 -- It is both the harness and, under --serve-proxy, the proxy process each scenario measures.

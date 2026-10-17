@@ -13,9 +13,12 @@ import Ecluse.BenchLoad.BootLines (
     bootLimits,
     bootMessages,
     loggedRules,
+    metadataCompression,
+    renderMetadataCompression,
     ruleBootOrders,
     ruleMessages,
  )
+import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
 
 messages :: [Text]
 messages =
@@ -44,14 +47,27 @@ ruleLines =
 spec :: Spec
 spec = do
     describe "bootMessages" $
-        it "keeps the runtime and memory-plan decisions from the JSON log" $
+        it "keeps the runtime, memory-plan, and metadata gzip decisions from the JSON log" $
             bootMessages
                 [ "{\"message\":\"runtime: capabilities 2 (derived from the cgroup limit)\",\"status\":\"info\"}"
                 , "{\"message\":\"serving packument request for lodash\",\"status\":\"info\"}"
+                , "{\"message\":\"config: server.metadataGzip = false (environment)\"}"
+                , "{\"message\":\"config: server.port = 8080 (environment)\"}"
                 , "{\"message\":\"memory plan: transient budget 1 (built-in default, no heap-ceiling datapoint)\"}"
                 , "not json"
                 ]
-                `shouldBe` ["runtime: capabilities 2 (derived from the cgroup limit)", "memory plan: transient budget 1 (built-in default, no heap-ceiling datapoint)"]
+                `shouldBe` [ "runtime: capabilities 2 (derived from the cgroup limit)"
+                           , "config: server.metadataGzip = false (environment)"
+                           , "memory plan: transient budget 1 (built-in default, no heap-ceiling datapoint)"
+                           ]
+    describe "metadataCompression" $ do
+        it "reads the posture the proxy resolved, from any layer" $ do
+            metadataCompression ["config: server.metadataGzip = false (environment)"] `shouldBe` Just IdentityOnly
+            metadataCompression ["config: server.metadataGzip = true (default)"] `shouldBe` Just GzipWhenAccepted
+        it "reports a log from a build before the setting as unreported" $ do
+            metadataCompression messages `shouldBe` Nothing
+            renderMetadataCompression (metadataCompression messages) `shouldBe` "unreported"
+            map (renderMetadataCompression . Just) [GzipWhenAccepted, IdentityOnly] `shouldBe` ["enabled", "disabled"]
     describe "bootLimits" $ do
         it "reads each limit from its line" $
             bootLimits messages
