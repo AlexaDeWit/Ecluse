@@ -4,6 +4,7 @@
 
 module Ecluse.PilotSpec (spec) where
 
+import Amazonka.S3 qualified as S3
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -18,7 +19,6 @@ import UnliftIO (timeout)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
 
-import Amazonka.S3 qualified as S3
 import Ecluse.Composition.Support (expectConfig)
 import Ecluse.Config (Config)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
