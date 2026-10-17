@@ -47,6 +47,7 @@ import OpenTelemetry.Util (appendOnlyBoundedCollectionValues)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Queue (RemoteSpanContext (RemoteSpanContext))
+import Ecluse.Core.Rules.Types (AdvisoryScore (Cvss), Reason (AffectedBy, RunsOnInstall), mkAdvisoryIds)
 import Ecluse.Core.Server.Response (
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (Rejection),
@@ -72,10 +73,7 @@ import Ecluse.Runtime.Telemetry.Tracing.Internal (
     withRuleEvalSpan,
  )
 
-{- | Tests the request-lifecycle tracing layer: the verdict attribute mapping is exact, a
-domain span is inert when telemetry is off, and the forwarded client token and the
-@Authorization@ header never reach a captured span attribute.
--}
+-- | The verdict mapping is exact, a domain span is inert without telemetry, and no token or @Authorization@ header reaches a span.
 spec :: Spec
 spec = do
     verdictMappingSpec
@@ -98,11 +96,19 @@ verdictMappingSpec = describe "ruleVerdictFields" $ do
         ruleVerdictFields Admit `shouldBe` [("ecluse.rule.decision", "admit")]
 
     it "maps a policy denial to the rule name, reason class, and message" $
-        ruleVerdictFields (Reject (Rejection (ByPolicy (RuleName "DenyInstallTimeExecution")) "denied: runs install scripts"))
+        ruleVerdictFields (Reject (Rejection (ByPolicy (RuleName "DenyInstallTimeExecution") [RunsOnInstall "install scripts"]) "denied: runs install scripts"))
             `shouldBe` [ ("ecluse.rule.decision", "deny")
                        , ("ecluse.rule.reason_class", "by_policy")
                        , ("ecluse.rule.message", "denied: runs install scripts")
                        , ("ecluse.rule.name", "DenyInstallTimeExecution")
+                       ]
+
+    it "adds no span field for the advisories a policy denial names" $
+        ruleVerdictFields (Reject (Rejection (ByPolicy (RuleName "DenyIfCve") [AffectedBy Cvss 7.0 (mkAdvisoryIds ("GHSA-span-0001" :| []))]) "denied: affected"))
+            `shouldBe` [ ("ecluse.rule.decision", "deny")
+                       , ("ecluse.rule.reason_class", "by_policy")
+                       , ("ecluse.rule.message", "denied: affected")
+                       , ("ecluse.rule.name", "DenyIfCve")
                        ]
 
     it "maps a missing-integrity refusal to its reason class, with no rule name" $
@@ -258,11 +264,10 @@ textAttribute attributes key = lookupAttribute attributes key >>= fromAttribute
 ecluseAttributeCount :: Attributes -> Int
 ecluseAttributeCount = T.count "(\"ecluse." . show
 
-{- The @ecluse.mirror.job@ span must link back to the @ecluse.mirror.enqueue@ span's trace.
-That proves the job is linked to the enqueueing request, not merely correlated by
-package\/version. -}
+-- The @ecluse.mirror.job@ span links back to the @ecluse.mirror.enqueue@ span's trace, so the job is
+-- linked to the enqueueing request, not merely correlated by package and version.
 crossAsyncLinkSpec :: Spec
-crossAsyncLinkSpec = describe "cross-async span link (enqueue → worker job)" $ do
+crossAsyncLinkSpec = describe "cross-async span link (enqueue to worker job)" $ do
     it "links the worker-job span back to the enqueueing span's trace"
         $ withTelemetrySpans
             ( \telemetry -> do

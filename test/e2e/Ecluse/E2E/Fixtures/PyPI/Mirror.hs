@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | A dependency graph with distinct wheel metadata and every supported source archive format.
+-- | Native PyPI releases: a dependency graph with every supported archive format, and plain wheel-and-sdist releases.
 module Ecluse.E2E.Fixtures.PyPI.Mirror (
     Distribution (..),
     mirrorRoot,
@@ -21,12 +21,17 @@ module Ecluse.E2E.Fixtures.PyPI.Mirror (
     nativeUploadContentType,
     buildMirrorGraph,
     buildNativeProjects,
+    buildRelease,
     mirrorFileNames,
-    distributionEntry,
     distributionIndex,
+    yankedIndex,
+    yankProject,
+    yankKeptVersion,
+    yankGreatestVersion,
+    yankReason,
 ) where
 
-import Data.Aeson (Value, object, (.=))
+import Data.Aeson (Value (Bool, String), object, (.=))
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -35,7 +40,7 @@ import System.FilePath ((</>))
 import System.Info qualified as System
 import System.Process.Typed (proc, runProcess_, setWorkingDir)
 
-import Ecluse.E2E.Fixtures.PyPI (WheelCompression (Bzip2Wheel, LzmaWheel), buildWheelWithCompression, pypiDistInfoFor)
+import Ecluse.E2E.Fixtures.PyPI (WheelCompression (Bzip2Wheel, LzmaWheel), buildSdistFor, buildWheelFor, buildWheelWithCompression, metadataFileFor, pypiDistInfoFor, pypiWheelFor)
 import Ecluse.Test.Package (hexSha256Of)
 
 -- | Original bytes and supported source fields for one distribution.
@@ -106,6 +111,22 @@ buildProject root project = do
         pure (Distribution project mirrorVersion filename bytes (encodeUtf8 metadata) (encodeUtf8 metadata))
     pure (wheels <> sources)
 
+-- | Build one release as a pure-Python wheel with its metadata companion and a source archive.
+buildRelease :: FilePath -> Text -> Text -> IO [Distribution]
+buildRelease root project version = do
+    let filename = pypiWheelFor project version
+        sourceName = project <> "-" <> version <> ".tar.gz"
+        metadata = metadataFileFor project version
+        directory = root </> "simple" </> toString project
+        path = directory </> toString filename
+        sourcePath = directory </> toString sourceName
+    createDirectoryIfMissing True directory
+    buildWheelFor project version metadata (root </> toString (".wheel-" <> filename)) path
+    buildSdistFor project version metadata (root </> toString (".source-" <> sourceName)) sourcePath
+    bytes <- BS.readFile path
+    sourceBytes <- BS.readFile sourcePath
+    pure [Distribution project version filename bytes (encodeUtf8 metadata) (encodeUtf8 metadata), Distribution project version sourceName sourceBytes (encodeUtf8 metadata) (encodeUtf8 metadata)]
+
 compressionFlag :: Text -> String
 compressionFlag = \case
     "tar.bz2" -> "-cjf"
@@ -127,9 +148,9 @@ projectMetadata project summary =
             <> ["Requires-Dist: " <> mirrorDependency <> "==" <> mirrorVersion | project == mirrorRoot]
             <> ["", "Fixture description with a second line.", "Retain this body verbatim."]
 
--- | The public Simple entry retains fields the native target deliberately loses.
-distributionEntry :: Text -> Distribution -> Value
-distributionEntry base distribution =
+-- | The public Simple entry, yanked when given a reason, retains fields the native target deliberately loses.
+distributionEntry :: Text -> Maybe Text -> Distribution -> Value
+distributionEntry base yank distribution =
     object $
         [ "filename" .= distributionFilename distribution
         , "url" .= (base <> "simple/" <> distributionProject distribution <> "/" <> distributionFilename distribution)
@@ -137,20 +158,42 @@ distributionEntry base distribution =
         , "requires-python" .= (">=3.8" :: Text)
         , "upload-time" .= ("2020-01-01T00:00:00Z" :: Text)
         , "size" .= BS.length (distributionBytes distribution)
-        , "yanked" .= False
+        , "yanked" .= maybe (Bool False) String yank
         , "fixture-field" .= ("preserved source value" :: Text)
         ]
             <> ["core-metadata" .= object ["sha256" .= hexSha256Of (distributionMetadata distribution)] | ".whl" `T.isSuffixOf` distributionFilename distribution]
 
 -- | Render one project's full expected inventory.
 distributionIndex :: Text -> Text -> [Distribution] -> Value
-distributionIndex base project distributions =
+distributionIndex base = yankedIndex base Map.empty
+
+-- | Render the inventory with every file of each keyed version yanked for that version's reason.
+yankedIndex :: Text -> Map Text Text -> Text -> [Distribution] -> Value
+yankedIndex base yanks project distributions =
     object
         [ "name" .= project
         , "meta" .= object ["api-version" .= ("1.1" :: Text)]
-        , "versions" .= ordNub [distributionVersion distribution | distribution <- distributions, distributionProject distribution == project]
-        , "files" .= map (distributionEntry base) (filter ((== project) . distributionProject) distributions)
+        , "versions" .= ordNub (map distributionVersion released)
+        , "files" .= [distributionEntry base (Map.lookup (distributionVersion distribution) yanks) distribution | distribution <- released]
         ]
+  where
+    released = filter ((== project) . distributionProject) distributions
+
+-- | A project whose source can yank its greatest release before the mirror copies it.
+yankProject :: Text
+yankProject = "e2e-mirror-yank"
+
+-- | The release an unpinned install must select while the greatest release is yanked.
+yankKeptVersion :: Text
+yankKeptVersion = "1.0.0"
+
+-- | The greatest release. A pin on it copies its whole version to the mirror target.
+yankGreatestVersion :: Text
+yankGreatestVersion = "2.0.0"
+
+-- | The source's reason for yanking the greatest release.
+yankReason :: Text
+yankReason = "withdrawn before the mirror copy"
 
 -- | The Linux x86_64 compatibility tag used for the first cross-target installation.
 mirrorPlatformX86 :: Text

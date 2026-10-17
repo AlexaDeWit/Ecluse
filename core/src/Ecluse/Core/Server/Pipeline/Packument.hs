@@ -637,7 +637,7 @@ firstPartyMissDecision :: PackageName -> OriginMiss -> ServeDecision
 firstPartyMissDecision name miss = Reject (Rejection reason (firstPartyMissMessage name miss))
   where
     reason = case miss of
-        MissAbsent -> ByPolicy firstPartyRule
+        MissAbsent -> ByPolicy firstPartyRule []
         MissUnresolved -> Unavailable (WillResolve Nothing)
 
 -- | Render a settled absence as @404@ and an unread origin as @503@ without @Retry-After@.

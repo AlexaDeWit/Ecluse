@@ -4,12 +4,12 @@
 
 module Ecluse.Core.Server.Pipeline.InternalSpec (spec) where
 
-import Data.Aeson (Value (String))
+import Data.Aeson (Value (String), decodeStrict')
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (getCurrentTime)
+import Data.Time (getCurrentTime, nominalDay)
 import Hedgehog (Gen, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -25,6 +25,7 @@ import Ecluse.Core.Package (
     HashAlg (SHA1, SHA256),
     PackageDetails (..),
     PackageInfo (..),
+    mkScope,
  )
 import Ecluse.Core.Package.Integrity (VersionIntegrity (MeetsFloor), classifyDigests)
 import Ecluse.Core.Rules (
@@ -34,13 +35,14 @@ import Ecluse.Core.Rules (
  )
 import Ecluse.Core.Rules.Effectful (defaultEffectfulConfig, newBreaker)
 import Ecluse.Core.Rules.Types (
-    AdvisoryScore (Cvss),
-    Decision (Admitted, BlockedByDefault, Undecidable),
+    AdvisoryScore (Cvss, Epss),
+    Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     FailureAlignment (FailDeny),
-    Inability (EvaluationFailed, NoDatabaseLoaded),
+    Inability (EvaluationFailed, NoDatabaseLoaded, RuleThrew),
     LimitShortfall (RemainingUnscored),
-    Reason (FixStillApplies, FixesButStillAffected, FixesNoAdvisory, RemediatesWithinLimits, RemediationBeyondLimits, RuleUnable),
+    Reason (AffectedBy, FixStillApplies, FixesButStillAffected, FixesNoAdvisory, KnownMalicious, PublishedTooRecently, Remediates, RemediatesWithinLimits, RemediationBeyondLimits, RuleUnable, RunsOnInstall, ScopeNotAllowListed),
     Rule (AllowIfOlderThan),
+    RuleEvidence (evName, evVersion),
     RuleVerdict (NoDecision),
     ScoreComparison (ScoreComparison),
     ScoreReading (Scored, Unscored),
@@ -53,7 +55,6 @@ import Ecluse.Core.Rules.Types (
  )
 import Ecluse.Core.Server.Pipeline.Internal (
     DenialAudit (..),
-    Metadata (..),
     VersionVerdict (VersionVerdict),
     admitByIntegrity,
     denialAuditPayload,
@@ -69,7 +70,7 @@ import Ecluse.Core.Server.Pipeline.Internal (
  )
 import Ecluse.Core.Server.Response (
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
-    Rejection (Rejection),
+    Rejection (Rejection, rejectionMessage),
     RuleName (RuleName),
     ServeDecision (Admit, Reject),
     Transience (WillResolve, WontResolve),
@@ -78,6 +79,7 @@ import Ecluse.Core.Server.Response (
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpRuleEffectfulFailure))
 import Ecluse.Core.Version (renderVersion)
+import Ecluse.Test.Json (textAtPath)
 import Ecluse.Test.Log (runJsonLog)
 import Ecluse.Test.Package (
     artifactsWith,
@@ -94,6 +96,7 @@ import Ecluse.Test.Package (
  )
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, packageRule)
+import Ecluse.Test.Server.Response (reasonOf, rejectionOf)
 
 spec :: Spec
 spec = do
@@ -103,7 +106,7 @@ spec = do
         it "an admit in the set is an admit" $
             packumentServeDecision [Admit] `shouldBe` Metric.Admit
         it "an all-policy-denial set is a deny" $
-            packumentServeDecision [Reject (Rejection (ByPolicy (RuleName "min-age")) "denied")]
+            packumentServeDecision [Reject (Rejection (ByPolicy (RuleName "min-age") []) "denied")]
                 `shouldBe` Metric.Deny
         it "a transient-outage set is an unavailability" $
             packumentServeDecision [Reject (Rejection (Unavailable (WillResolve Nothing)) "down")]
@@ -113,7 +116,7 @@ spec = do
         it "maps an admit to admit" $
             serveDecisionClass Admit `shouldBe` Metric.Admit
         it "maps a policy or integrity refusal to deny" $ do
-            serveDecisionClass (Reject (Rejection (ByPolicy (RuleName "r")) "m")) `shouldBe` Metric.Deny
+            serveDecisionClass (Reject (Rejection (ByPolicy (RuleName "r") []) "m")) `shouldBe` Metric.Deny
             serveDecisionClass (Reject (Rejection MissingIntegrity "m")) `shouldBe` Metric.Deny
             serveDecisionClass (Reject (Rejection BelowIntegrityFloor "m")) `shouldBe` Metric.Deny
         it "maps an upstream outage or invalid response to unavailability" $ do
@@ -122,7 +125,7 @@ spec = do
 
     describe "denialLabels (rule-denial labels)" $ do
         it "carries the deciding rule name only for a policy denial" $ do
-            denialLabels (ByPolicy (RuleName "min-age")) `shouldBe` (Just "min-age", Metric.ReasonPolicy)
+            denialLabels (ByPolicy (RuleName "min-age") [ScopeNotAllowListed (mkScope "myorg")]) `shouldBe` (Just "min-age", Metric.ReasonPolicy)
             denialLabels MissingIntegrity `shouldBe` (Nothing, Metric.ReasonMissingIntegrity)
             denialLabels BelowIntegrityFloor `shouldBe` (Nothing, Metric.ReasonMissingIntegrity)
             denialLabels (Unavailable (WillResolve Nothing)) `shouldBe` (Nothing, Metric.ReasonUnavailable)
@@ -144,9 +147,7 @@ spec = do
             compared = ScoreComparison ids ids (ScoreSides (Scored 9.8) Unscored) (ScoreSides Unscored (Scored 0.005)) defaultDifferentialLimits
             refusal = Undecidable (WillResolve Nothing) (RuleUnable "AllowIfRemediatesCve" NoDatabaseLoaded)
             evidence = completeEvidence (detailsWith leftpadName (npmVersion "1.0.0") [])
-            labelsOf decision = case serveDecisionOf evidence decision of
-                Admit -> Nothing
-                Reject (Rejection reason _) -> Just (denialLabels reason)
+            labelsOf decision = denialLabels <$> reasonOf (serveDecisionOf evidence decision)
         it "records no denial labels for a remediation admission" $
             labelsOf (Admitted "AllowIfRemediatesCve" (RemediatesWithinLimits compared) []) `shouldBe` Nothing
         it "labels every remediation refusal without an advisory identifier"
@@ -174,7 +175,7 @@ spec = do
             recordDenials
                 noopMetricsPort
                 [ Admit
-                , Reject (Rejection (ByPolicy (RuleName "min-age")) "denied")
+                , Reject (Rejection (ByPolicy (RuleName "min-age") []) "denied")
                 , Reject (Rejection (Unavailable (WillResolve Nothing)) "down")
                 ]
 
@@ -199,6 +200,35 @@ spec = do
             logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
             logged `shouldSatisfy` T.isInfixOf "\"package\":\"is-odd\""
 
+    describe "logDenials (the advisories an audit line names)" $ do
+        it "records the advisories a scored or a malicious denial names" $ do
+            auditCve npmEvidence (Blocked "DenyIfCve" (Just (DbEtag "etag-1")) (AffectedBy Cvss 7.0 (mkAdvisoryIds ("CVE-2026-0001" :| ["GHSA-aaaa-bbbb-cccc"]))))
+                `shouldReturn` [Just "CVE-2026-0001, GHSA-aaaa-bbbb-cccc"]
+            auditCve pypiEvidence (Blocked "DenyIfKnownMalicious" (Just (DbEtag "etag-1")) (KnownMalicious (mkAdvisoryIds ("MAL-one" :| ["MAL-two"]))))
+                `shouldReturn` [Just "MAL-one, MAL-two"]
+        it "records no advisory where no reason names one, whatever the rendered text reads"
+            $ for_
+                [ Blocked "DenyInstallTimeExecution" Nothing (RunsOnInstall "affected by GHSA-text-0001 (CVSS >= 7.0)")
+                , BlockedByDefault [ScopeNotAllowListed (mkScope "myorg"), quarantine]
+                , Undecidable (WillResolve Nothing) (RuleUnable "DenyIfCve" (RuleThrew "affected by GHSA-text-0001 (CVSS >= 7.0)"))
+                ]
+            $ \decision -> auditCve npmEvidence decision `shouldReturn` [Nothing]
+        for_ [("npm", npmEvidence, "leftpad@1.0.0"), ("PyPI", pypiEvidence, "requests@1.0.0")] $ \(ecosystem, evidence, subject) ->
+            describe ("a default denial joining a remediation reason with the quarantine, for " <> ecosystem) $ do
+                let partialFix = FixesButStillAffected (mkAdvisoryIds ("GHSA-fixed-0001" :| [])) (mkAdvisoryIds ("GHSA-open-0002" :| []))
+                    beyond = RemediationBeyondLimits partialComparison (mkLimitShortfalls (RemainingUnscored Epss (mkAdvisoryIds ("GHSA-open-0002" :| [])) :| []))
+                    stillApplies = FixStillApplies (mkAdvisoryIds ("GHSA-open-0002" :| []))
+                    denied reason = BlockedByDefault [reason, quarantine]
+                it "records the advisories still affecting the version, never the one it fixes" $
+                    for_ [partialFix, beyond, stillApplies] $ \reason ->
+                        auditCve evidence (denied reason) `shouldReturn` [Just "GHSA-open-0002"]
+                it "renders the message from its reasons and labels the metric by rule, with no advisory identifier" $ do
+                    fmap rejectionMessage (rejectionOf (serveDecisionOf evidence (denied partialFix)))
+                        `shouldBe` Just (subject <> " was denied (no rule allowed it): fixes GHSA-fixed-0001 with GHSA-open-0002 remaining; published only 1 day ago, minimum age is 7 days")
+                    for_ [partialFix, beyond, stillApplies] $ \reason ->
+                        denialLabels <$> reasonOf (serveDecisionOf evidence (denied reason))
+                            `shouldBe` Just (Just "BlockedByDefault", Metric.ReasonPolicy)
+
     describe "logSkippedChecks" $ do
         it "records a check skipped for unavailability once, at WARNING, with the package, version, rule, and cause" $ do
             logged <-
@@ -220,14 +250,14 @@ spec = do
             logged `shouldBe` ""
 
     describe "denialAuditPayload" $ do
-        let audit etag extra =
+        let audit etag reasons =
                 DenialAudit
                     { daPackage = unscopedNpm "left-pad"
                     , daVersion = "1.2.3"
                     , daRule = Just "DenyIfCve"
                     , daReasonClass = Metric.ReasonPolicy
                     , daAdvisoryEtag = etag
-                    , daExtra = extra
+                    , daReasons = reasons
                     }
 
         it "names the version, deciding rule, and active advisory ETag" $ do
@@ -240,9 +270,12 @@ spec = do
             KeyMap.lookup "active_advisory_db_etag" (toObject (denialAuditPayload (audit Nothing mempty)))
                 `shouldBe` Nothing
 
-        it "folds the extension metadata bag into the payload" $
-            KeyMap.lookup "cve" (toObject (denialAuditPayload (audit Nothing (Metadata (Map.fromList [("cve", "CVE-2024-1")])))))
-                `shouldBe` Just (String "CVE-2024-1")
+        it "names each advisory still affecting the version once, in reason order, and none it fixes" $
+            KeyMap.lookup "cve" (toObject (denialAuditPayload (audit Nothing [Remediates (mkAdvisoryIds ("A-1" :| [])), FixesButStillAffected (mkAdvisoryIds ("A-1" :| [])) (mkAdvisoryIds ("B-2" :| [])), AffectedBy Cvss 7.0 (mkAdvisoryIds ("B-2" :| ["C-3"]))])))
+                `shouldBe` Just (String "B-2, C-3")
+
+        it "omits the advisory field when no reason names one" $
+            KeyMap.lookup "cve" (toObject (denialAuditPayload (audit Nothing [quarantine]))) `shouldBe` Nothing
 
     -- Pin the refusal order the single pass must preserve: every below-floor refusal precedes
     -- every missing-integrity refusal, however the two classes interleave by version key.
@@ -274,6 +307,25 @@ spec = do
                     infoVersions admissible === Map.intersectionWith (\details kept -> details{pkgArtifacts = kept}) (infoVersions info) listed
                     refusals === (belowFloorMarker <$ Map.elems weak) <> (missingMarker <$ Map.elems digestless)
                     infoDistTags admissible === Map.filter ((`Map.member` listed) . renderVersion) (infoDistTags info)
+
+-- | The @cve@ field of each audit line 'logDenials' writes for one version's decision.
+auditCve :: RuleEvidence -> Decision -> IO [Maybe Text]
+auditCve evidence decision = do
+    logged <- runJsonLog (logDenials (evName evidence) Nothing [VersionVerdict (renderVersion (evVersion evidence)) (serveDecisionOf evidence decision)])
+    pure [textAtPath ["data", "cve"] =<< decodeStrict' (encodeUtf8 line) | line <- lines logged]
+
+npmEvidence, pypiEvidence :: RuleEvidence
+npmEvidence = completeEvidence (detailsWith leftpadName (npmVersion "1.0.0") [])
+pypiEvidence = completeEvidence (detailsWith requestsName (pypiVersion "1.0.0") [])
+
+-- | The quarantine's abstention for a version one day old.
+quarantine :: Reason
+quarantine = PublishedTooRecently nominalDay (7 * nominalDay)
+
+-- | A partial fix of GHSA-fixed-0001 with GHSA-open-0002 remaining, outside the shipped limits.
+partialComparison :: ScoreComparison
+partialComparison =
+    ScoreComparison (mkAdvisoryIds ("GHSA-fixed-0001" :| [])) (mkAdvisoryIds ("GHSA-open-0002" :| [])) (ScoreSides (Scored 9.8) (Scored 7.0)) (ScoreSides Unscored Unscored) defaultDifferentialLimits
 
 -- | Three integrity classes interleaved by key, so the assertion pins the bucket order and not the key order.
 mixedIntegrityInfo :: PackageInfo

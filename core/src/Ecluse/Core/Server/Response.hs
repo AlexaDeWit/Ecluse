@@ -44,14 +44,13 @@ import Network.HTTP.Types (Status, status200, status403, status404, status500, s
 import Ecluse.Core.Rules.Render (renderDecision)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
+    Reason,
     RetryAfter (..),
     RuleEvidence,
     Transience (..),
  )
 
-{- | The outcome of deciding a request: serve it, or refuse it with a reason. Every client-facing
-reply renders one of these.
--}
+-- | The outcome of deciding a request: serve it, or refuse it with a reason. Every client-facing reply renders one.
 data ServeDecision
     = -- | Serve the request (the @200@ stream for an artifact).
       Admit
@@ -68,27 +67,17 @@ data Rejection = Rejection
     }
     deriving stock (Eq, Show)
 
-{- | Why a request was refused. A policy refusal is final for this request. An unavailability is
-an /inability to decide/, whose 'Transience' separates a retryable @503@ from a terminal @500@.
--}
+-- | Why a request was refused. A policy refusal is final for this request. An /inability to decide/ carries a 'Transience' for @503@ or @500@.
 data RejectReason
-    = {- | A rule denied the version (deny-by-default included). The 'RuleName' is the rule that
-      decided, for the audit trail and the denial body.
-      -}
-      ByPolicy RuleName
+    = -- | A rule denied the version (deny-by-default included): the deciding rule, and the reasons the decision gave.
+      ByPolicy RuleName [Reason]
     | -- | The version could not be vetted. Refuse it, with transience indicating whether a retry can help.
       Unavailable Transience
-    | {- | A public artifact lacks a digest, so admission cannot verify its bytes and refuses with @403@.
-      Trusted private artifacts are exempt.
-      -}
+    | -- | A public artifact lacks a digest, so admission cannot verify its bytes. Trusted private artifacts are exempt.
       MissingIntegrity
-    | {- | A public artifact's strongest digest falls below the configured floor, so admission refuses with @403@.
-      Trusted private artifacts are exempt.
-      -}
+    | -- | A public artifact's strongest digest falls below the configured floor. Trusted private artifacts are exempt.
       BelowIntegrityFloor
-    | {- | An upstream packument names a different package and cannot enter the merge.
-      When no valid origin remains, the packument request returns @502@.
-      -}
+    | -- | An upstream packument names a different package and cannot enter the merge.
       UpstreamInvalid
     deriving stock (Eq, Show)
 
@@ -101,8 +90,8 @@ serveDecisionOf :: RuleEvidence -> Decision -> ServeDecision
 -- Strict in the evidence, so a caller's 'completeEvidence' is read as two fields and never built.
 serveDecisionOf !evidence decision = case decision of
     Admitted{} -> Admit
-    Blocked name _ _ -> Reject (rejectAs (ByPolicy (RuleName name)))
-    BlockedByDefault{} -> Reject (rejectAs (ByPolicy (RuleName "BlockedByDefault")))
+    Blocked name _ reason -> Reject (rejectAs (ByPolicy (RuleName name) [reason]))
+    BlockedByDefault reasons -> Reject (rejectAs (ByPolicy (RuleName "BlockedByDefault") reasons))
     Undecidable transience _ -> rejectUnavailable transience rendered
   where
     rendered = renderDecision evidence decision
@@ -110,15 +99,11 @@ serveDecisionOf !evidence decision = case decision of
     rejectAs :: RejectReason -> Rejection
     rejectAs reason = Rejection reason rendered
 
-{- | Refuse a request that could not be decided. The 'Transience' it carries is what
-'artifactStatus' renders as a @503@ or a @500@, so a caller states that rather than a status.
--}
+-- | Refuse a request that could not be decided. A caller states the 'Transience', and 'artifactStatus' picks the status.
 rejectUnavailable :: Transience -> Text -> ServeDecision
 rejectUnavailable transience message = Reject (Rejection (Unavailable transience) message)
 
-{- | The HTTP status a __concrete-artifact__ request renders to. A packument request has no single
-status, because the pipeline chooses one over the survivors: 'PackumentStatus' models that.
--}
+-- | The HTTP status a __concrete-artifact__ request renders to. 'PackumentStatus' chooses a packument's over its survivors.
 data ArtifactStatus
     = -- | @200@: admitted, so the proxy streams the artifact.
       Ok
@@ -132,9 +117,7 @@ data ArtifactStatus
       NotFound
     deriving stock (Eq, Show)
 
-{- | Map a serve outcome to its concrete-artifact status: @503@ only where it will resolve, so a
-'WontResolve' unavailability is a @500@. An upstream @404@ is no serve decision and never appears.
--}
+-- | A serve outcome's concrete-artifact status: @503@ only where it will resolve. It never yields 'NotFound'.
 artifactStatus :: ServeDecision -> ArtifactStatus
 artifactStatus = \case
     Admit -> Ok
@@ -157,33 +140,21 @@ artifactHttpStatus = \case
     ServerError -> status500
     NotFound -> status404
 
-{- | The HTTP status a __packument__ request renders to, chosen over the merged survivor set. There
-is no @404@: the package exists, and a genuine absence is decided before the merge.
--}
+-- | The HTTP status a __packument__ request renders to. There is no @404@: absence is decided before the merge.
 data PackumentStatus
     = -- | @200@: at least one version survived, so the proxy serves the merged, filtered packument.
       PackumentOk
-    | {- | @403@: no version survived and every exclusion was a policy denial. The response body
-      collects the denial reasons.
-      -}
+    | -- | @403@: no version survived and every exclusion was a policy denial. The response body collects the denial reasons.
       PackumentForbidden
-    | {- | @503@: no version survived and an exclusion can recover.
-      A suggested delay becomes the @Retry-After@ header.
-      -}
+    | -- | @503@: no version survived and an exclusion can recover. A suggested delay becomes @Retry-After@.
       PackumentUnavailable (Maybe RetryAfter)
-    | {- | @502@: no valid origin remained and an upstream packument named a different package.
-      This gateway fault differs from absence or a retryable outage.
-      -}
+    | -- | @502@: no valid origin remained and an upstream packument named a different package.
       PackumentBadGateway
-    | {- | @500@: no version survived, no exclusion is retryable, and at least one is
-      a permanent or internal inability to decide. Retrying cannot help.
-      -}
+    | -- | @500@: no version survived, no exclusion is retryable, and one is a permanent or internal inability to decide. Retrying cannot help.
       PackumentServerError
     deriving stock (Eq, Show)
 
-{- | A packument's status from the per-version outcomes: with no survivor the most recoverable cause
-wins, @502@ under @503@ as a transient origin may yet answer, and an empty input is a @403@.
--}
+-- | With no survivor the most recoverable cause wins (@503@ over @502@, as an origin may yet answer). An empty input is a @403@.
 packumentStatus :: [ServeDecision] -> PackumentStatus
 packumentStatus decisions
     | tallyAdmit tally = PackumentOk
@@ -214,8 +185,8 @@ weighDecision acc = \case
         MissingIntegrity -> acc
         BelowIntegrityFloor -> acc
 
-{- The signals 'packumentStatus' weighs, accumulated in one pass. The fields are strict, so the
-tally does not thunk across a large survivor set. -}
+-- The signals 'packumentStatus' weighs, accumulated in one pass. Strict fields keep the tally from
+-- building thunks across a large survivor set.
 data PackumentTally = PackumentTally
     { tallyAdmit :: Bool
     -- ^ At least one 'Admit' was seen, so the merged document has a survivor.
@@ -227,15 +198,11 @@ data PackumentTally = PackumentTally
     -- ^ An exclusion was a permanent ('WontResolve') inability to decide.
     }
 
-{- | The longest suggested 'RetryAfter' among transient causes, or 'Nothing' when
-none of them suggested a delay.
--}
+-- | The longest suggested 'RetryAfter' among transient causes, or 'Nothing' when none suggested one.
 longestRetry :: [Maybe RetryAfter] -> Maybe RetryAfter
 longestRetry = fmap getMax . foldMap (fmap Max)
 
-{- | An operator-configured message appended to every denial, typically where to ask for help.
-Stored trimmed, so an all-blank value contributes nothing.
--}
+-- | An operator-configured message appended to every denial. Stored trimmed, so an all-blank value contributes nothing.
 newtype HelpMessage = HelpMessage Text
     deriving stock (Eq, Show)
 
@@ -243,15 +210,11 @@ newtype HelpMessage = HelpMessage Text
 mkHelpMessage :: Text -> HelpMessage
 mkHelpMessage = HelpMessage . T.strip
 
-{- | Append a non-blank operator 'HelpMessage' to a denial message, separated by a single space.
-A blank or absent help message contributes nothing.
--}
+-- | Append a non-blank operator 'HelpMessage' to a denial message, separated by a single space.
 appendHelp :: Maybe HelpMessage -> Text -> Text
 appendHelp help = renderRefusal . mkRefusal help
 
-{- | A refusal's text in its two parts, so an ecosystem renders whichever its own denial surface
-carries and the help message is not dropped for one with no envelope to hold both.
--}
+-- | A refusal's text in two parts, so an ecosystem without an envelope for both still keeps the help message.
 data Refusal = Refusal
     { refusalReason :: Text
     -- ^ Why Écluse refused, in its own words. Always present.

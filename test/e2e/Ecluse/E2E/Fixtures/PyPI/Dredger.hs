@@ -25,14 +25,12 @@ module Ecluse.E2E.Fixtures.PyPI.Dredger (
 ) where
 
 import Data.Aeson qualified as Aeson
-import Data.ByteString qualified as BS
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.E2E.Fixtures.Advisories (ecosystemAdvisory)
-import Ecluse.E2E.Fixtures.PyPI (buildSdistFor, buildWheelFor, metadataFileFor, pypiWheelFor)
-import Ecluse.E2E.Fixtures.PyPI.Mirror (Distribution (..), distributionIndex)
+import Ecluse.E2E.Fixtures.PyPI.Mirror (Distribution, buildRelease, distributionIndex)
 import Ecluse.E2E.Harness.Stub (StubRoute (PyPIPublic), stubUrl)
 import Ecluse.Test.Contract.Sweep.Types (PackageFixture (..))
 import Ecluse.Test.Osv (CorpusVersion (..), osvZipOf)
@@ -41,20 +39,7 @@ import Ecluse.Test.Osv.Withdrawal (maliciousZip)
 -- | Each native version holds both a real installable wheel and a source archive.
 buildDredgerDistributions :: FilePath -> IO [Distribution]
 buildDredgerDistributions work = do
-    distributions <- fmap concat $ forM coordinates $ \(name, version) -> do
-        let filename = pypiWheelFor name version
-            sourceName = name <> "-" <> version <> ".tar.gz"
-            metadata = metadataFileFor name version
-            directory = work </> "pypi" </> "simple" </> toString name
-            path = directory </> toString filename
-            sourcePath = directory </> toString sourceName
-        createDirectoryIfMissing True directory
-        buildWheelFor name version metadata (work </> toString (".wheel-" <> filename)) path
-        buildSdistFor name version metadata (work </> toString (".source-" <> sourceName)) sourcePath
-        bytes <- BS.readFile path
-        sourceBytes <- BS.readFile sourcePath
-        BS.writeFile (path <> ".metadata") (encodeUtf8 metadata)
-        pure [Distribution name version filename bytes (encodeUtf8 metadata) (encodeUtf8 metadata), Distribution name version sourceName sourceBytes (encodeUtf8 metadata) (encodeUtf8 metadata)]
+    distributions <- concat <$> traverse (uncurry (buildRelease (work </> "pypi"))) coordinates
     for_ (map packageName dredgerPackages <> [firstPartyName]) $ \name ->
         writeFileLBS
             (work </> "pypi" </> "simple" </> toString name </> "index.json")

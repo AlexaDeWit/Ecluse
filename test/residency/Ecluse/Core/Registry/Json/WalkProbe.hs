@@ -14,6 +14,7 @@ import UnliftIO.Exception (evaluate)
 import Ecluse.Core.Registry.Json.Walk (Step, Steps, readJsonWalk, readJsonWalkST)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit))
 import Ecluse.Core.Server.MemoryModel.HeapSample qualified as Heap
+import Ecluse.Test.Registry.JsonStream (sliceChunks)
 
 -- | Peak live growth at 32 KiB chunk boundaries above the baseline, which includes the input body.
 heldDuring :: (Cursor -> Step s) -> ByteString -> IO Integer
@@ -29,7 +30,7 @@ heldReading readBody body = do
     unless enabled (fail "walk residency requires RTS -T")
     size <- evaluate (BS.length body)
     before <- liveBytes
-    remaining <- newIORef (pieces body)
+    remaining <- newIORef (sliceChunks fixtureChunkBytes body)
     peak <- newIORef before
     let next = do
             live <- liveBytes
@@ -44,11 +45,6 @@ heldReading readBody body = do
 -- | The most a walk's held bytes may rise when its input repeats eight times more of what it drops.
 allowance :: Integer
 allowance = 256 * 1024
-
-pieces :: ByteString -> [ByteString]
-pieces body
-    | BS.null body = []
-    | otherwise = BS.take fixtureChunkBytes body : pieces (BS.drop fixtureChunkBytes body)
 
 liveBytes :: IO Word64
 liveBytes = Heap.live <$> Heap.sample

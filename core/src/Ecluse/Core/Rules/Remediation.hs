@@ -13,12 +13,17 @@ import Data.Foldable1 qualified as Foldable1
 import Data.Map.Strict qualified as Map
 import Data.Scientific (Scientific, fromFloatDigits)
 
-import Ecluse.Core.Cve (AdvisoryRange (arCveId, arEpss, arSeverity), PackageAdvisories, advisoryIdsOf, affecting, fixedAt)
+import Ecluse.Core.Cve (AdvisoryRange (arCveId, arEpss, arSeverity), PackageAdvisories, advisoryIdsOf, affecting, fixedAt, hasFixes)
 import Ecluse.Core.Rules.Types
 
--- | Decide each version. The limits convert to decimals once, when the mode is applied.
+-- | Decide each version. The limits convert to decimals once, and a package no row fixes shares one abstention.
 remediationVerdict :: RemainingAdvisories -> PackageAdvisories -> RuleEvidence -> RuleVerdict
-remediationVerdict remaining = classify (partialVerdict remaining)
+remediationVerdict remaining = forPackage
+  where
+    onPartial = partialVerdict remaining
+    forPackage advisories
+        | hasFixes advisories = classify onPartial advisories
+        | otherwise = const (NoDecision FixesNoAdvisory)
 
 -- An exact fix that another advisory still affects: the advisories it genuinely fixes, with their
 -- rows, and those still affecting it, with their rows grouped by advisory.

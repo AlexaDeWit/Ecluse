@@ -20,6 +20,7 @@ import UnliftIO.Exception (throwIO)
 import Ecluse.Core.Registry.PyPI.Archive.Tar (extractTar)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Test.Package (pypiVersion, unscopedPyPI)
+import Ecluse.Test.Registry.JsonStream (byteChunks)
 import Ecluse.Test.Registry.PyPI.Archive (metadata, paxRecord, tarBytes)
 import Ecluse.Test.Support (expectRight)
 
@@ -73,7 +74,7 @@ spec = describe "extractTar" $ do
             header = BS.take 512 (BS.drop 1024 bytes)
             patched = zeroSizeHeader header
             archive = BS.take 1024 bytes <> patched <> BS.drop 1536 bytes
-        readChunks defaultLimits (map BS.singleton (BS.unpack archive)) `shouldReturn` Right metadata
+        readChunks defaultLimits (byteChunks archive) `shouldReturn` Right metadata
     it "applies PAX path and linkpath and ignores unrelated extension metadata" $ do
         extended <- pax 'x' (paxRecord "path=example-1/PKG-INFO\n" <> paxRecord "linkpath=metadata.txt\n" <> paxRecord "VENDOR.annotation=opaque\n")
         alias <- link True "placeholder" "unused"

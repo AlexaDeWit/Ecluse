@@ -82,7 +82,7 @@ import Ecluse.Test.Corpus (CorpusPackage (cpPath), corpusPackages, cpName)
 import Ecluse.Test.Json (fieldAt, isObject, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genPackumentBytes, genServablePackumentBytes)
-import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks, walkWritingChunks)
+import Ecluse.Test.Registry.JsonStream (byteChunks, testTable, walkJsonChunks, walkWritingChunks)
 import Ecluse.Test.Registry.Npm.Metadata (npmFullTestWalk, projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Packed (walkedLength)
 import Ecluse.Test.Snapshot (digestOf, readDetails)
@@ -294,7 +294,7 @@ integratedFactsSpec = describe "production direct facts against the frozen base"
                 evaluateETag [] actualTag `shouldBe` Modified tag
 
 assertIntegrated :: Limits -> ByteString -> Expectation
-assertIntegrated limits body = for_ [[body], map BS.singleton (BS.unpack body)] $ \chunks ->
+assertIntegrated limits body = for_ [[body], byteChunks body] $ \chunks ->
     directFullRead limits name (bodyLimit chunks) chunks `shouldBe` baseFullRead limits name (bodyLimit chunks) chunks
   where
     name = unscopedNpm "thing"

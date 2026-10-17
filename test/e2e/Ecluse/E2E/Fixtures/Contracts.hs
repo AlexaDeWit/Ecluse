@@ -303,9 +303,9 @@ pypiMirrorFixture =
                 }
         }
 
--- | Native field preservation, restart and lost-response cases retain separate identities.
+-- | Native field preservation, restart, lost-response and mirrored-yank cases retain separate identities.
 pypiMirrorNativeFixture :: ConcreteFixture Group
-pypiMirrorNativeFixture = nativeFixture "pypi/mirror-native" ["pypi/mirror-native/" <> name | name <- ["read-roundtrip", "lost-reply", "interruption"]] pypiMirrorFixture
+pypiMirrorNativeFixture = nativeFixture "pypi/mirror-native" ["pypi/mirror-native/" <> name | name <- ["read-roundtrip", "lost-reply", "interruption", "yanked-greatest", "yank-negative-control"]] pypiMirrorFixture
 
 -- | First-party publication needs native HTTP storage and a fresh pip client, without AWS.
 pypiPublicationFixture :: ConcreteFixture FamilyMetadata
