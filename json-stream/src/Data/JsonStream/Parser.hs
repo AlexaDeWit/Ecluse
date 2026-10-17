@@ -196,13 +196,13 @@ instance Semigroup (Parser a) where
 >>> let parser = arrayOf $ "key1" .: (arrayOf value) <|> "key2" .: (arrayOf value)
 >>> parseByteString parser json :: [Int]
 [1,2]
->>> let parser = arrayOf $ "key-non" .: (arrayOf value) <|> "key2" .: (arrayOf value)
->>> parseByteString parser json :: [Int]
+>>> let fallback = arrayOf $ "key-non" .: (arrayOf value) <|> "key2" .: (arrayOf value)
+>>> parseByteString fallback json :: [Int]
 [5,6]
 
->>> let json = "[{\"keys\":[1,2], \"values\":[5,6]}, {\"keys\":[9,8], \"values\":[7,6]}]"
->>> let parser = arrayOf $ (,) <$> many ("keys" .: arrayOf integer) <*> many ("values" .: arrayOf integer)
->>> parseByteString parser json :: [([Int], [Int])]
+>>> let pairs = "[{\"keys\":[1,2], \"values\":[5,6]}, {\"keys\":[9,8], \"values\":[7,6]}]"
+>>> let collect = arrayOf $ (,) <$> many ("keys" .: arrayOf integer) <*> many ("values" .: arrayOf integer)
+>>> parseByteString collect pairs :: [([Int], [Int])]
 [([1,2],[5,6]),([9,8],[7,6])]
 -}
 instance Alternative Parser where
@@ -549,7 +549,7 @@ valueWith jparser = Parser $ \ntok -> loop (callParse aeValue ntok)
 
 >>> let json = "[{\"key1\": [1,2], \"key2\": [5,6]}]"
 >>> parseByteString (arrayOf value) json :: [AE.Value]
-[Object (fromList [("key2",Array [Number 5.0,Number 6.0]),("key1",Array [Number 1.0,Number 2.0])])]
+[Object (fromList [("key1",Array [Number 1.0,Number 2.0]),("key2",Array [Number 5.0,Number 6.0])])]
 -}
 value :: (AE.FromJSON a) => Parser a
 value = valueWith AE.parseJSON
@@ -677,7 +677,7 @@ class OnObject o a where
 
     >>> let json = "{\"key1\": {\"nested-key\": 3}}"
     >>> parseByteString ("key1" .: "nested-key" .: integer) json :: [Int]
-    > [3]
+    [3]
     >>> let test = "[{\"name\": \"test1\", \"value\": 1}, {\"name\": \"test2\", \"value\": null}, {\"name\": \"test3\"}]"
     >>> let person = objectOf $ (,) <$> "name" .: string <*> "value" .: integer .| (-1)
     >>> let people = arrayOf person

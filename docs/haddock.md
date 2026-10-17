@@ -235,11 +235,11 @@ decision messages. Always non-negative.
 renderDuration :: NominalDiffTime -> Text
 ```
 
-- **`task doctest`** runs every `>>>` example in the `ecluse-core`, `ecluse-runtime`, and `ecluse`
-  libraries as a test, and so does the CI gate. An example that disagrees with the code fails the
-  build. It runs one `cabal repl --with-ghc=doctest` per library. Each repl inherits the library's
-  build configuration, including the `relude` prelude, so examples see the same names the module
-  does.
+- **`task doctest`** runs every `>>>` example in the `ecluse-json-stream`, `ecluse-core`,
+  `ecluse-runtime`, and `ecluse` libraries as a test, and so does the CI gate. An example that
+  disagrees with the code fails the build. It runs one `cabal repl --with-ghc=doctest` per library.
+  Each repl inherits the library's build configuration, so examples see the same names the module
+  does, including the `relude` prelude outside the json-stream fork.
 - **Keep examples pure, total, and deterministic**. They run in a plain GHCi session with no `IO`
   setup, so the pure core (`Ecluse.Core.Rules`, `Ecluse.Core.Version`, `Ecluse.Core.Package`) is
   their natural home. `doctest` compares output to GHCi's printed form: a `Text` shows with quotes
