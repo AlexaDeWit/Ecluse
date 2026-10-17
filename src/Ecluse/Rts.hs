@@ -2,8 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Resolving and applying the process's runtime posture: the capability count, the allocation
-area and the heap ceiling.
+{- | Resolving and applying the process's runtime posture: capabilities, allocation area and heap ceiling.
 
 The RTS sizes itself from the /machine/, not the pod. Bare @-N@ claims a capability per visible
 processor, a cgroup CPU quota does not shrink that count, and the heap is unbounded unless @-M@
@@ -75,18 +74,14 @@ data RtsPosture = RtsPosture
     }
     deriving stock (Eq, Show)
 
-{- | What the cgroup (v2) grants this process: the CPU quota in cores and the memory ceiling in
-bytes. 'Nothing' per axis when the file is absent or carries the unlimited @max@ sentinel.
--}
+-- | The cgroup v2 grant per axis: CPU quota in cores, @memory.max@ in bytes, 'Nothing' when absent or @max@.
 data CgroupLimits = CgroupLimits
     { cgCpuCores :: Maybe Double
     , cgMemoryMaxBytes :: Maybe Int
     }
     deriving stock (Eq, Show)
 
-{- | The @runtime@ configuration the resolution reads. Each unset field falls to the next rung,
-and 'roCoresCeiling' bounds the last rung alone.
--}
+-- | The @runtime@ keys the resolution reads. An unset field falls to the next rung, and 'roCoresCeiling' caps the last.
 data RuntimeOverrides = RuntimeOverrides
     { roCores :: Maybe Int
     , roCoresCeiling :: Maybe Int
@@ -110,9 +105,7 @@ data Provenance
       FromRts
     deriving stock (Eq, Show)
 
-{- | The resolved runtime posture: the capability count, allocation area and heap ceiling to run
-with, each with its provenance. A 'FromRts' entry means leave the live posture alone.
--}
+-- | The resolved runtime posture, each axis with its provenance. A 'FromRts' entry leaves the live posture alone.
 data RuntimePlan = RuntimePlan
     { planCapabilities :: (Int, Provenance)
     , planAllocAreaBytes :: (Int, Provenance)
@@ -120,9 +113,7 @@ data RuntimePlan = RuntimePlan
     }
     deriving stock (Eq, Show)
 
-{- | Resolve the runtime plan: capabilities down the four-rung ladder, the heap ceiling from
-@maxHeapBytes@, else the cgroup limit, else @GHCRTS@, and the allocation area to fit either bound.
--}
+-- | Resolve capabilities down the four-rung ladder, the heap ceiling from config, else the cgroup limit, else @GHCRTS@, and an area to fit.
 resolveRuntimePlan :: RuntimeOverrides -> CgroupLimits -> RtsPosture -> RuntimePlan
 resolveRuntimePlan overrides cgroup rts =
     RuntimePlan
@@ -167,9 +158,8 @@ resolveRuntimePlan overrides cgroup rts =
 defaultCoresCeiling :: Int
 defaultCoresCeiling = 8
 
-{- | The capability count a memory budget can feed. The nursery charge is capabilities x the
-allocation area, and a count the budget cannot feed is the surge shape that overflows the heap.
--}
+-- The capability count a memory budget can feed. A nursery the budget cannot feed is the surge
+-- shape that overflows the heap.
 nurseryFittedCapabilities :: Int -> Int -> Int
 nurseryFittedCapabilities budgetBytes allocAreaBytes =
     max 1 (budgetBytes `div` nurseryCeilingShareDiv `div` max 1 allocAreaBytes)
@@ -179,9 +169,7 @@ nurseryFittedCapabilities budgetBytes allocAreaBytes =
 nurseryCeilingShareDiv :: Int
 nurseryCeilingShareDiv = 4
 
-{- | The per-capability allocation area for a memory limit: an eighth of the limit across the
-capabilities, in whole MiB from 4 to 64. A smaller nursery costs collector time, not a core.
--}
+-- | The per-capability allocation area: an eighth of the memory limit across the capabilities, in whole MiB from 4 to 64.
 deriveAllocAreaBytes :: Int -> Int -> Int
 deriveAllocAreaBytes memMax capabilities =
     clamp (4 * mebibyte, shippedAllocAreaBytes) share `div` mebibyte * mebibyte
@@ -199,9 +187,7 @@ shippedAllocAreaBytes = 64 * mebibyte
 mebibyte :: Int
 mebibyte = 1024 * 1024
 
-{- | The heap ceiling derived from a cgroup memory limit, floored at half the limit. The nursery
-counts inside @-M@ (GHC 9.6 and later), so only an overshoot allowance and off-heap memory come off.
--}
+-- | The heap ceiling for a memory limit, floored at half of it. The nursery counts inside @-M@ (GHC 9.6 and later).
 deriveMaxHeapBytes :: Int -> Int -> Int
 deriveMaxHeapBytes memMax allocAreaBytes =
     alignToBlock (max (memMax - overshoot - offHeap) (memMax `div` 2))
@@ -217,9 +203,7 @@ blocks, so a non-multiple would read back rounded and the plan would look unappl
 alignToBlock :: Int -> Int
 alignToBlock bytes = max rtsBlockBytes (bytes - bytes `mod` rtsBlockBytes)
 
-{- | One axis of the runtime posture after the boot applied the plan. An apply can fail, so
-downstream sizings read 'effectiveCapabilities' and 'effectiveHeapCeiling', never the desired plan.
--}
+-- | One axis after the boot applied the plan. An apply can fail, so sizing never reads the desired side alone.
 data EffectiveAxis a = EffectiveAxis
     { axDesired :: a
     -- ^ What the resolution wanted ('resolveRuntimePlan').
@@ -234,9 +218,7 @@ data EffectiveAxis a = EffectiveAxis
 axEnforced :: (Eq a) => EffectiveAxis a -> Bool
 axEnforced ax = axDesired ax == axObserved ax
 
-{- | The runtime plan reconciled with the posture the RTS actually runs: each planned axis as a
-desired\/observed pair, plus the observed-only datapoints downstream sizing needs.
--}
+-- | The runtime plan reconciled with the live RTS: desired\/observed axes, plus observed-only datapoints for sizing.
 data EffectiveRuntimePlan = EffectiveRuntimePlan
     { erpCapabilities :: EffectiveAxis Int
     , erpMaxHeapBytes :: EffectiveAxis (Maybe Int)
@@ -274,9 +256,7 @@ reconcileRuntimePlan cgroup plan posture =
         , erpContainerMemoryBytes = cgMemoryMaxBytes cgroup
         }
 
-{- | The effective plan a successful application would produce, observed equal to desired.
-@check-config@ sizes from this because it applies nothing, so its own posture is not the boot's.
--}
+-- | The effective plan a successful apply would produce, for @check-config@, which applies nothing.
 appliedRuntimePlan :: CgroupLimits -> RuntimePlan -> RtsPosture -> EffectiveRuntimePlan
 appliedRuntimePlan cgroup plan posture =
     (reconcileRuntimePlan cgroup plan posture)
@@ -288,17 +268,13 @@ appliedRuntimePlan cgroup plan posture =
   where
     enforced (v, prov) = EffectiveAxis{axDesired = v, axObserved = v, axProvenance = prov}
 
-{- | The live capability count: budgets must never exceed what the RTS actually runs with, so the
-observed side is authoritative. An unenforced count degrades the provenance to 'FromRts'.
--}
+-- | The live capability count, which budgets must not exceed. An unenforced count reads as 'FromRts'.
 effectiveCapabilities :: EffectiveRuntimePlan -> (Int, Provenance)
 effectiveCapabilities p =
     let ax = erpCapabilities p
      in (axObserved ax, if axEnforced ax then axProvenance ax else FromRts)
 
-{- | The sizing ceiling: the __tighter__ of desired and observed. An observed @-M@ below the plan
-binds, and an absent one leaves the desired ceiling standing on the cgroup limit's OOM backstop.
--}
+-- | The sizing ceiling: the __tighter__ of desired and observed, so an observed @-M@ below the plan binds.
 effectiveHeapCeiling :: EffectiveRuntimePlan -> (Maybe Int, Provenance)
 effectiveHeapCeiling p =
     let ax = erpMaxHeapBytes p
@@ -308,9 +284,7 @@ effectiveHeapCeiling p =
             (Nothing, Just observed) -> (Just observed, FromRts)
             (desired, _) -> (desired, axProvenance ax)
 
-{- | The RTS flags the plan requires beyond the live posture, in @GHCRTS@ syntax. A 'FromRts'
-entry never contributes a flag, because it /is/ the live posture.
--}
+-- | The @GHCRTS@ flags the plan needs beyond the live posture. A 'FromRts' entry is the live posture, so it adds none.
 requiredRtsFlags :: RtsPosture -> RuntimePlan -> [Text]
 requiredRtsFlags rts plan =
     catMaybes [capsFlag, allocFlag, heapFlag]
@@ -334,9 +308,7 @@ requiredRtsFlags rts plan =
             | Just bytes == rpMaxHeapBytes rts -> Nothing
             | otherwise -> Just ("-M" <> show bytes)
 
-{- | The boot log's posture lines, one decision per line with its provenance. The allocation area
-has no config key: the cgroup limit or an operator @GHCRTS@ sets it.
--}
+-- | The boot log's posture lines, one decision per line with its provenance.
 renderEffectivePosture :: EffectiveRuntimePlan -> [Text]
 renderEffectivePosture p =
     [ "runtime: capabilities " <> show capabilities <> renderProvenance capsProvenance
@@ -352,9 +324,7 @@ renderEffectivePosture p =
   where
     (capabilities, capsProvenance) = effectiveCapabilities p
 
-{- | The boot log's posture warnings: an axis the RTS is not enforcing, and a capability count
-no entitlement backs.
--}
+-- | The boot log's posture warnings: an axis the RTS is not enforcing, and a count no entitlement backs.
 renderPostureWarnings :: EffectiveRuntimePlan -> [Text]
 renderPostureWarnings p = unenforcedWarnings p <> capabilityAdvice p
 
@@ -365,12 +335,12 @@ capabilityAdvice p = case effectiveCapabilities p of
     (n, FromCgroupMemory) ->
         [ advice
             ("no cgroup CPU quota binds this process, so capabilities are bounded at " <> show n <> " by what the cgroup memory limit can feed")
-            "If this container has a CPU request but no limit, set runtime.cores (ECLUSE_RUNTIME__CORES) to the whole cores requested."
+            cpuRequestAdvice
         ]
     (n, FromCoresCeiling) ->
         [ advice
             ("found no cgroup CPU or memory limit, so capabilities are capped at " <> show n <> " by runtime.coresCeiling")
-            "If a limit exists but Écluse cannot read it, set runtime.cores (ECLUSE_RUNTIME__CORES) and the heap ceiling runtime.maxHeapBytes (ECLUSE_RUNTIME__MAX_HEAP_BYTES) by hand."
+            ("If this container has a memory request but no limit, set a memory limit, ideally equal to the request, for Écluse to size itself to. " <> cpuRequestAdvice <> " If a limit exists but Écluse cannot read it, set runtime.cores (ECLUSE_RUNTIME__CORES) by hand.")
         ]
     -- Listed rather than wildcarded, so a new rung has to decide whether it warns.
     (_, FromConfig) -> []
@@ -379,6 +349,7 @@ capabilityAdvice p = case effectiveCapabilities p of
     (_, FromRts) -> []
   where
     advice reason suffix = "runtime: " <> reason <> ". " <> suffix
+    cpuRequestAdvice = "If this container has a CPU request but no limit, set runtime.cores (ECLUSE_RUNTIME__CORES) to the whole cores requested."
 
 {- One warning per axis the RTS is not enforcing. The budgets size from the effective value, so a
 divergence must be legible in the boot log rather than silently absorbed. -}
@@ -427,9 +398,7 @@ renderMiB bytes =
 showRounded :: Double -> String
 showRounded x = show (fromIntegral (round (x * 10) :: Int) / 10 :: Double)
 
-{- | Parse @quota period@ from cgroup-v2 @cpu.max@ as granted cores, dividing quota by period.
-The @max@ sentinel or malformed input yields 'Nothing'.
--}
+-- | Parse a cgroup v2 @cpu.max@ body into granted cores. The @max@ sentinel or a malformed body yields 'Nothing'.
 parseCpuMax :: Text -> Maybe Double
 parseCpuMax body = case T.words (T.strip body) of
     [quota, period] -> do
@@ -439,9 +408,7 @@ parseCpuMax body = case T.words (T.strip body) of
         pure (q / p)
     _ -> Nothing
 
-{- | Parse a cgroup-v2 @memory.max@ body: a byte count, or the unlimited @max@
-sentinel ('Nothing'). A malformed body yields 'Nothing'.
--}
+-- | Parse a cgroup v2 @memory.max@ body into bytes. The @max@ sentinel or a malformed body yields 'Nothing'.
 parseMemoryMax :: Text -> Maybe Int
 parseMemoryMax body = do
     n <- readMaybe (toString (T.strip body)) :: Maybe Int
@@ -458,9 +425,7 @@ parseInactiveFile body =
         , Just n <- [readMaybe (toString value)]
         ]
 
-{- | A reader for this process's cgroup memory use less reclaimable file pages, in thousandths of
-the tightest @memory.max@ above it. It reads 'Nothing' when no limit binds or a read fails.
--}
+-- | A reader for cgroup memory use less inactive file pages, in thousandths of the tightest @memory.max@, else 'Nothing'.
 cgroupMemoryUse :: IO (IO (Maybe Int))
 cgroupMemoryUse = do
     selfCgroup <- readIfExists "/proc/self/cgroup"
@@ -481,9 +446,7 @@ readUse dir limit = do
 usePermille :: Int -> Maybe Int -> Int -> Int
 usePermille limit inactive current = max 0 (current - fromMaybe 0 inactive) * 1000 `div` max 1 limit
 
-{- | Resolve the runtime plan and apply it, first thing at boot. It never aborts the boot, and the
-plan it returns is the effective one, so downstream sizing computes from what the RTS runs with.
--}
+-- | Resolve and apply the runtime plan at boot. It never aborts, and returns the plan the RTS runs with.
 applyRuntimePosture :: (Text -> IO ()) -> (Text -> IO ()) -> RuntimeOverrides -> IO EffectiveRuntimePlan
 applyRuntimePosture logInfo logWarning overrides = do
     rts <- currentRtsPosture
@@ -584,16 +547,12 @@ readIfExists :: FilePath -> IO (Maybe Text)
 readIfExists path =
     rightToMaybe <$> tryJust (guard . isDoesNotExistError) (decodeUtf8 <$> readFileBS path)
 
-{- The process's cgroup-v2 path from a @\/proc\/self\/cgroup@ body: the @0::@ line's path
-(@"0::\/a\/b"@ yields @"\/a\/b"@). 'Nothing' on a pure cgroup-v1 host.
--}
+-- The cgroup v2 path on the @0::@ line of @\/proc\/self\/cgroup@. 'Nothing' on a pure cgroup v1 host.
 parseCgroupSelfPath :: Text -> Maybe Text
 parseCgroupSelfPath body =
     listToMaybe (mapMaybe (T.stripPrefix "0::") (lines (T.strip body)))
 
-{- A cgroup path and its ancestors, leaf first, ending at the root (the empty suffix).
-@"\/a\/b"@ yields @["\/a\/b", "\/a", ""]@, and @"\/"@ yields just @[""]@.
--}
+-- A cgroup path and its ancestors, leaf first: @"\/a\/b"@ yields @["\/a\/b", "\/a", ""]@.
 ancestorPaths :: Text -> [Text]
 ancestorPaths path = case filter (not . T.null) (T.splitOn "/" (T.strip path)) of
     [] -> [""]
