@@ -31,10 +31,9 @@ import OpenTelemetry.Trace (
 import OpenTelemetry.Trace.Core (
     Event (eventAttributes, eventName),
     ImmutableSpan (spanHot),
-    SpanHot (hotEvents, hotStatus),
+    SpanHot (hotStatus),
     SpanStatus (Error),
  )
-import OpenTelemetry.Util (appendOnlyBoundedCollectionValues)
 import UnliftIO.Exception (throwIO, tryAny)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -55,6 +54,7 @@ import Ecluse.Runtime.Telemetry.Internal (
     withTelemetry,
  )
 import Ecluse.Runtime.Telemetry.Tracing.Internal (withAdvisorySyncSpan)
+import Ecluse.Runtime.Test.Telemetry (spanEvents)
 
 -- | The switch parses strictly, the off handle builds no SDK, and the on handle's provider records an escape by its typed fault.
 spec :: Spec
@@ -156,7 +156,7 @@ escapeWiringSpec = describe "withTelemetry on" $
             for_ (telemetryTracerProvider telemetry) (`forceFlushTracerProvider` Nothing)
         hots <- traverse (readIORef . spanHot) =<< readIORef exported
         map hotStatus hots `shouldBe` replicate 2 (Error (displayFaultT (toException refused)))
-        let events = concatMap (toList . appendOnlyBoundedCollectionValues . hotEvents) hots
+        let events = concatMap spanEvents hots
         map eventName events `shouldBe` replicate 2 "exception"
         for_ requestSecrets $ \secret -> show (map eventAttributes events) `shouldSatisfy` (not . T.isInfixOf secret)
 

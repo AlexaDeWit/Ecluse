@@ -843,7 +843,7 @@ diagrams:
 mitigations:
   - id: mit-secret-redaction
     title: Credentials are redacted and request-scoped
-    prose: Écluse holds a token in the `Secret` type, whose `Show` instance renders a fixed placeholder, so a token never reaches a log field. A token lives for one request, and the code unwraps it only to attach the bearer to an outbound request. Neither the data-plane nor the WAI span instrumentation records an `Authorization` header, although the WAI layer records benign headers such as `User-Agent`. A regression test keeps the `Authorization` header off the server span. A span records an escaping HTTP client or AWS SDK exception by its typed fault, and an upstream fetch's client span by the client's reason, never by the request's path, query or headers.
+    prose: Écluse holds a token in the `Secret` type, whose `Show` instance renders a fixed placeholder, so a token never reaches a log field. A token lives for one request, and the code unwraps it only to attach the bearer to an outbound request. Neither the data-plane nor the WAI span instrumentation records an `Authorization` header, although the WAI layer records benign headers such as `User-Agent`. A regression test keeps the `Authorization` header off the server span. A span records an escaping HTTP client or AWS SDK exception by its typed fault, and an upstream fetch's client span by the client's reason, never by the request's path, query or headers. An upstream fetch's client span records the URL it fetched, path and query included, and never a request header.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000101
