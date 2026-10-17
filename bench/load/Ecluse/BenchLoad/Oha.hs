@@ -12,6 +12,7 @@ module Ecluse.BenchLoad.Oha (
     RunLength (..),
     OhaReport (..),
     runOha,
+    ohaPinned,
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.!=), (.:), (.:?))
@@ -67,7 +68,7 @@ runOha run = withSystemTempDirectory "ecluse-bench-oha" $ \dir -> do
         reportFile = dir </> "report.json"
         requestsFile = dir </> "requests.db"
     writeFileText urlsFile (unlines (orUrls run))
-    isolate <- (== Just "1") <$> lookupEnv "BENCH_LOAD_ISOLATE_OHA"
+    isolate <- ohaPinned
     let args = ohaArgs run reportFile requestsFile urlsFile
         (command, finalArgs) = if isolate then ("taskset", ["-c", show ohaCpu, "oha"] <> args) else ("oha", args)
     -- With a database, oha writes a progress line to stdout, so the report goes to a file.
@@ -79,6 +80,10 @@ runOha run = withSystemTempDirectory "ecluse-bench-oha" $ \dir -> do
             then successLatencies requestsFile
             else pure []
     pure report{ohaSuccessLatencies = latencies}
+
+-- | Whether @BENCH_LOAD_ISOLATE_OHA=1@ pins @oha@ to 'ohaCpu'.
+ohaPinned :: IO Bool
+ohaPinned = (== Just "1") <$> lookupEnv "BENCH_LOAD_ISOLATE_OHA"
 
 ohaArgs :: OhaRun -> FilePath -> FilePath -> FilePath -> [String]
 ohaArgs run reportFile requestsFile urlsFile =

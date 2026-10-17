@@ -15,7 +15,6 @@ module Ecluse.BenchLoad.ProxyProcess (
     proxyEnvironment,
     requireIdentityListings,
     sweepProxyCgroups,
-    placeHarness,
 
     -- * A running proxy
     ProxyProcess,
@@ -30,8 +29,6 @@ module Ecluse.BenchLoad.ProxyProcess (
     proxySnapshot,
     proxyCgroupNow,
     proxyTasksNow,
-    proxyCpuNow,
-    proxyCpuSince,
     proxyScrape,
 
     -- * Stopping
@@ -53,13 +50,10 @@ import Data.Aeson.Types (Pair)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
 import Data.List (lookup)
-import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import GHC.Clock (getMonotonicTime)
 import GHC.Conc (getNumCapabilities)
 import Network.HTTP.Client (
     HttpException,
@@ -79,7 +73,6 @@ import System.Environment (getEnvironment, getExecutablePath)
 import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.Posix.Process (getProcessID)
 import System.Posix.Signals (sigKILL, signalProcess)
-import System.Posix.Unistd (SysVar (ClockTick), getSysVar)
 import System.Posix.User (getRealUserID)
 import System.Process (getPid, terminateProcess)
 import System.Process.Typed (
@@ -106,25 +99,20 @@ import UnliftIO.Async (Async, async, cancel, link, poll)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.BenchLoad.BootLines (bootMessages, logMessages, metadataCompression, renderMetadataCompression, ruleMessages)
-import Ecluse.BenchLoad.CpuUse (CpuSample (CpuSample), CpuWindow, cpuWindow, parseProcStat)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Exposition (Sample, advisoryDatabaseInstalled, parseExposition)
+import Ecluse.BenchLoad.Placement (readCpuList)
 import Ecluse.BenchLoad.Pod (
     CgroupReading (..),
-    CpuList,
     PodShape (Unlimited),
     ProxyTuning (..),
     counter,
-    cpuListMembers,
-    cpusLeft,
     keyedCounters,
     needsCgroup,
     noTuning,
-    parseCpuList,
     parsePodShape,
     podMemoryLimit,
     proxyCgroupFiles,
-    renderCpuList,
     renderPodShape,
  )
 import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
@@ -266,28 +254,6 @@ acquireCgroup shape tuning root attempt = case root of
         swapFile <- doesFileExist (dir </> "memory.swap.max")
         when (swapFile && isJust (podMemoryLimit shape)) (writeFileText (dir </> "memory.swap.max") "0")
         pure (Just dir)
-
--- The cgroup scripts/load-cgroup.sh places the harness in, under @BENCH_LOAD_CGROUP@.
-harnessLeaf :: FilePath
-harnessLeaf = "harness"
-
--- | Keep the harness cgroup off the proxy's CPUs, or give it every CPU back when the proxy has none of its own.
-placeHarness :: Maybe CpuList -> IO ()
-placeHarness proxyCpus = lookupEnv "BENCH_LOAD_CGROUP" >>= traverse_ place
-  where
-    place base = do
-        let file = base </> harnessLeaf </> "cpuset.cpus"
-        available <- (rightToMaybe . parseCpuList =<<) <$> readIfExists (base </> "cpuset.cpus.effective")
-        placed <- maybe False (not . T.null . T.strip) <$> readIfExists file
-        case (proxyCpus, available) of
-            (Just cpus, Just every)
-                | not (cpuListMembers cpus `Set.isSubsetOf` cpuListMembers every) ->
-                    benchFail ("BENCH_LOAD_PROXY_CPUS " <> renderCpuList cpus <> " names CPUs outside BENCH_LOAD_CGROUP's " <> renderCpuList every)
-                | otherwise ->
-                    maybe (benchFail ("BENCH_LOAD_PROXY_CPUS " <> renderCpuList cpus <> " leaves the harness no CPU")) (writeFileText file . renderCpuList) (cpusLeft every cpus)
-            (Just _, Nothing) -> benchFail "BENCH_LOAD_PROXY_CPUS needs the cpuset controller enabled on BENCH_LOAD_CGROUP"
-            (Nothing, Just every) | placed -> writeFileText file (renderCpuList every)
-            _ -> pass
 
 -- Kill anything left in the cgroup, wait for it to empty, and remove it.
 retireCgroup :: FilePath -> IO ()
@@ -463,28 +429,6 @@ proxySnapshot proxy collection = do
 proxyCgroupNow :: ProxyProcess -> IO (Maybe CgroupReading)
 proxyCgroupNow = traverse readCgroup . ppCgroup
 
--- | The CPU counters now: the proxy cgroup's and the harness cgroup's usage, and each logical CPU's ticks.
-proxyCpuNow :: ProxyProcess -> IO CpuSample
-proxyCpuNow proxy = do
-    now <- getMonotonicTime
-    proxyUsage <- traverse usage (ppCgroup proxy)
-    harnessUsage <- traverse (usage . (</> harnessLeaf)) =<< lookupEnv "BENCH_LOAD_CGROUP"
-    ticks <- maybe mempty parseProcStat <$> readIfExists "/proc/stat"
-    pure (CpuSample now (join proxyUsage) (join harnessUsage) ticks)
-  where
-    usage dir = (Map.lookup "usage_usec" . keyedCounters =<<) <$> readIfExists (dir </> "cpu.stat")
-
--- | The CPU window from a sample taken at its start, with the CPUs the proxy and the harness may run on.
-proxyCpuSince :: ProxyProcess -> CpuSample -> IO CpuWindow
-proxyCpuSince proxy start = do
-    end <- proxyCpuNow proxy
-    proxyCpus <- traverse effectiveCpus (ppCgroup proxy)
-    harnessCpus <- traverse (effectiveCpus . (</> harnessLeaf)) =<< lookupEnv "BENCH_LOAD_CGROUP"
-    ticksPerSecond <- getSysVar ClockTick
-    pure (cpuWindow (fromIntegral ticksPerSecond) (join proxyCpus) (join harnessCpus) start end)
-  where
-    effectiveCpus dir = (rightToMaybe . parseCpuList =<<) <$> readIfExists (dir </> "cpuset.cpus.effective")
-
 -- | The proxy's thread count from @pids.current@ alone, cheap enough to read every second.
 proxyTasksNow :: ProxyProcess -> IO (Maybe Int)
 proxyTasksNow proxy = case ppCgroup proxy of
@@ -516,7 +460,8 @@ readCgroup dir = do
     events <- maybe mempty keyedCounters <$> readIfExists (dir </> "memory.events")
     stat <- maybe mempty keyedCounters <$> readIfExists (dir </> "memory.stat")
     cpu <- maybe mempty keyedCounters <$> readIfExists (dir </> "cpu.stat")
-    pure (CgroupReading maxBytes peak current events stat cpu)
+    cpus <- readCpuList (dir </> "cpuset.cpus.effective")
+    pure (CgroupReading maxBytes peak current events stat cpu cpus)
   where
     bytesAt file = (>>= parseMemoryMax) <$> readIfExists (dir </> file)
 

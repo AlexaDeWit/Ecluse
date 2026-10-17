@@ -190,8 +190,8 @@ jobs:
           SWEEP_SELECT: ${{ inputs.sweep-select }}
         run: bash scripts/load-sweep.sh plan "$SWEEP" "$SWEEP_SELECT" >> "$GITHUB_OUTPUT"
 
-  # Each job measures the anchor, its test arms, and the anchor again on one runner. Six run at
-  # once at most, so pull-request CI keeps runners.
+  # Each job measures the anchor, its test arms, and the anchor again on one runner. Six jobs of
+  # one dispatch run at once at most, so pull-request CI keeps runners.
   sweep:
     name: Load sweep (${{ inputs.sweep }} ${{ matrix.job }}, inform-only)
     needs: sweep-plan

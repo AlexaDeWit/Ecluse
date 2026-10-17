@@ -18,7 +18,7 @@ import Data.Text qualified as T
 import Ecluse.Core.Registry.PyPI.Wire (SimpleIndex (..), simpleIndexMediaType)
 import Ecluse.Test.Corpus (cpName, pypiCorpusPackages)
 import GHC.Clock (getMonotonicTime)
-import GHC.Conc (getNumCapabilities, getNumProcessors)
+import GHC.Conc (getNumCapabilities)
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Client.TLS (tlsManagerSettings)
@@ -58,8 +58,10 @@ import Ecluse.BenchLoad.Harness (
     runScenario,
  )
 import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
+import Ecluse.BenchLoad.Oha (ohaPinned)
+import Ecluse.BenchLoad.Placement (runnerProcessors, withHarnessPlacement)
 import Ecluse.BenchLoad.Pod (PodShape (Limited), ProxyTuning (ptCpus), renderPodShape)
-import Ecluse.BenchLoad.ProxyProcess (placeHarness, podShapeFromEnv, serveProxyFlag, sweepProxyCgroups)
+import Ecluse.BenchLoad.ProxyProcess (podShapeFromEnv, serveProxyFlag, sweepProxyCgroups)
 import Ecluse.BenchLoad.ProxyServe (runServeProxy)
 import Ecluse.BenchLoad.PyPI (pypiLoadNotes)
 import Ecluse.BenchLoad.Report (Section (..), renderFloors, renderLoadSaturation, renderReports, renderServiceTime, renderThrash, renderVerdict)
@@ -85,9 +87,14 @@ runDriver :: IO ()
 runDriver = bracket_ sweepProxyCgroups sweepProxyCgroups $ do
     either benchFail pure (checkFixtureCoverage fixtures)
     knobs <- loadKnobsFromEnv
-    -- The runner's processors, read before the placement confines this process to the harness's CPUs.
-    processors <- getNumProcessors
-    placeHarness (ptCpus (lkProxyTuning knobs))
+    root <- lookupEnv "BENCH_LOAD_CGROUP"
+    pinned <- ohaPinned
+    withHarnessPlacement root pinned (ptCpus (lkProxyTuning knobs)) (measureRun knobs)
+
+-- Run the passes or the GC-thrash probe, print the report, and fail on any broken invariant.
+measureRun :: LoadKnobs -> IO ()
+measureRun knobs = do
+    processors <- runnerProcessors
     shape <- podShapeFromEnv
     selected <- selectedKeys
     thrash <- thrashLimitsFromEnv

@@ -3,7 +3,8 @@
 #   plan <sweep> [<selection>]  print jobs=<JSON list> for the workflow matrix. The selection names
 #                               phases or jobs, comma-separated. Blank selects every phase not on request.
 #   run <sweep> <job>           measure the job's arms in order, one directory each under
-#                               sweep-results/<job>, then set them beside the job's anchors.
+#                               sweep-results/<job>, then set them beside the job's anchors in
+#                               comparison.md and comparison.json there.
 # Needs jq, and for run, task and cabal (the dev shells).
 set -euo pipefail
 
@@ -79,7 +80,7 @@ run() {
     done
     reports+=("$dir/bench-load-results.md")
   done
-  "$(cabal list-bin exe:bench-report)" sweep "$name" "$job" "${reports[@]}" | tee "$out/comparison.md" || failed=1
+  "$(cabal list-bin exe:bench-report)" sweep "$name" "$job" "$out" "${reports[@]}" || failed=1
   return "$failed"
 }
 

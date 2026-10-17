@@ -83,7 +83,7 @@ check 'pins the request-only arms with no memory limit' \
   "$(grep '^PERF' "$work/trace" | sed -n '2,4p' | cut -d' ' -f2-4,6 | paste -sd'|' | sed 's/|/ | /g')"
 check 'records the failed arm as a failed native outcome' 'receipt PERF_ARTIFACT_DIR=sweep-results/D1/3-d-n4-area32/receipt failure' "$(grep '3-d-n4-area32' "$work/trace" | grep '^receipt')"
 check 'keeps each arm in its own directory and compares them in slot order' \
-  "report sweep capability-1634 D1 sweep-results/D1/1-anchor/bench-load-results.md sweep-results/D1/2-d-n8/bench-load-results.md sweep-results/D1/3-d-n4-area32/bench-load-results.md sweep-results/D1/4-d-n4/bench-load-results.md sweep-results/D1/5-anchor/bench-load-results.md" \
+  "report sweep capability-1634 D1 sweep-results/D1 sweep-results/D1/1-anchor/bench-load-results.md sweep-results/D1/2-d-n8/bench-load-results.md sweep-results/D1/3-d-n4-area32/bench-load-results.md sweep-results/D1/4-d-n4/bench-load-results.md sweep-results/D1/5-anchor/bench-load-results.md" \
   "$(grep '^report' "$work/trace")"
 check 'leaves the arm report beside its observations' 'report of unlimited' "$(cat "$work/repo/sweep-results/D1/2-d-n8/bench-load-results.md")"
 check 'narrows every arm to the scenarios a dispatch names' 'scenarios=npm/herd' \

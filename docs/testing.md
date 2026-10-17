@@ -1011,7 +1011,7 @@ The load test alone stores reviewed minimums, its [success floors](#success-floo
 |---|---|---|
 | [Work per request](../.github/workflows/bench.yml) | Time and allocations for the benchmark groups over committed and synthetic corpora | `bench-results.csv`, `bench-output.txt`, per-ecosystem receipts, and `against-main.md` off `main` |
 | [Performance acceptance](../.github/workflows/perf-acceptance.yml) | Allocation and time for each [allocation leg](#allocation-budgets-perf-allocation-gating) over live registry documents, with no budget | `perf-acceptance-report.md`, native observations, per-ecosystem receipts or an unavailable diagnostic, and `against-main.md` off `main` |
-| [Load](../.github/workflows/bench-load.yml) | npm and PyPI successes, latency, memory, and collector cost through a proxy process under each pod shape, with separate ecosystem sections and baseline sources | `bench-load-results.md`, native observations and per-ecosystem receipts for complete runs, a diagnostic record for selected or GC-thrash runs, and `against-main.md` off `main`. A [sweep](#capability-sweeps) job uploads a directory per arm and `comparison.md` |
+| [Load](../.github/workflows/bench-load.yml) | npm and PyPI successes, latency, memory, and collector cost through a proxy process under each pod shape, with separate ecosystem sections and baseline sources | `bench-load-results.md`, native observations and per-ecosystem receipts for complete runs, a diagnostic record for selected or GC-thrash runs, and `against-main.md` off `main`. A [sweep](#capability-sweeps) job uploads a directory per arm, `comparison.md`, and `comparison.json` |
 
 Each workflow calls a fixed Task measurement target, then a receipt target after the native process exits.
 Task records the options it passes before measurement. The native producer records its own measurement conditions.
@@ -1055,10 +1055,10 @@ thread at a time. Its count does not reserve a processor or set CPU affinity.
 | Setting or report label | Meaning |
 |---|---|
 | `2cpu` or `4cpu` in a load pod shape, and `BENCH_LOAD_THRASH_CPUS` | CPU-time quota in CPU equivalents. `2cpu` writes `200000 100000` to `cpu.max`, allowing 200 ms of CPU time per 100 ms period. It assigns no specific CPUs. |
-| Runner logical processors | Logical CPUs visible to the RTS, read with `getNumProcessors`, separate from the capability count |
+| Runner logical processors | The runner's online logical CPUs, from `/sys/devices/system/cpu/online`, separate from the capability count and from any placement |
 | Load harness `-N3` | Three GHC capabilities for the harness and each scenario child. The measured proxy resolves its own count at boot. |
 | Unlimited load shape `runtime.cores` | Sets the proxy's GHC capability count to the harness's count, unless `BENCH_LOAD_PROXY_CORES` sets it. The harness imposes no CPU-time quota. |
-| `BENCH_LOAD_PROXY_CPUS` | The CPUs the proxy's cgroup may run on (`cpuset.cpus`), such as `2-3`. The harness cgroup gets the other CPUs. The proxy's RTS counts its processors from this affinity, so a derived capability count clamps to it. |
+| `BENCH_LOAD_PROXY_CPUS` | The CPUs the proxy's cgroup may run on (`cpuset.cpus`), such as `2-3`. The harness cgroup gets the other CPUs until the run ends. The proxy's RTS counts its processors from this affinity, so a derived capability count clamps to it. With `BENCH_LOAD_ISOLATE_OHA=1`, the harness refuses a list that holds CPU 0. |
 | `BENCH_LOAD_PROXY_CORES` | The proxy's `runtime.cores`, under any shape. An explicit count is never clamped, so a placed proxy can emulate a node with more CPUs. |
 | Performance acceptance `-N` | The shipped RTS default selects capabilities from visible processors. The report reads the running count. The harness does not boot a proxy or apply its cgroup-derived runtime plan. |
 | Work-per-request benchmarks | One GHC capability by default. Their Cabal stanza enables `-T`, with no `-N` override in the CI invocation. |
@@ -1208,9 +1208,10 @@ Each scenario reports:
   the window. A collapsed request waited for another request's fetch instead of making its own
 - the CPU time of the window. The proxy's CPU-seconds per second come from its cgroup's `cpu.stat`
   and from the RTS, with the cgroup's share of the CPUs it may run on. The harness cgroup's figures
-  cover the load generator, the stubs, and the harness. `/proc/stat` gives CPU 0's busy share, and
-  the busy time on the proxy's CPUs that the proxy did not spend. The load generator keeps its
-  headroom while the harness cgroup and CPU 0 each stay below 85% busy
+  cover the load generator, the stubs, and the harness. `/proc/stat` gives CPU 0's busy share. For
+  a proxy placed on CPUs of its own, it also gives the busy time on them that the proxy did not
+  spend. The load generator keeps its headroom while the harness cgroup and CPU 0 each stay below
+  85% busy
 
 Each ecosystem section also shows:
 
@@ -1321,18 +1322,23 @@ arms, and the anchor again, so the runner's speed moves every arm of a job alike
 
 Dispatch the load workflow with `sweep` set to the file's name and `sweep-select` set to phases or
 jobs, such as `A` or `B1,B2`. A blank selection runs every phase not marked `onRequest`. A plan job
-lists the jobs with `scripts/load-sweep.sh plan`, and each job runs on a runner of its own, six at
-most at once. `scripts/load-sweep.sh run` measures the job's arms in order through
-`task performance:load-measure`. Each arm's report, native observations, and diagnostic-only
-receipt go to `sweep-results/<job>/<slot>-<arm>/`. A `scenarios` input narrows every arm, and
-`duration-seconds` shortens every window, for a short check of the sweep path.
+lists the jobs with `scripts/load-sweep.sh plan`, and each job runs on a runner of its own. One
+dispatch runs six jobs at most at once, so two dispatches can run twelve. `scripts/load-sweep.sh
+run` measures the job's arms in order through `task performance:load-measure`. Each arm's report,
+native observations, and diagnostic-only receipt go to `sweep-results/<job>/<slot>-<arm>/`. The
+receipt's `conditions.json` records the arm's pinned settings, passes, and latency. A `scenarios`
+input narrows every arm, and `duration-seconds` shortens every window, for a short check of the
+sweep path.
 
 `bench-report sweep` then sets each arm beside the mean of the job's anchors, scenario by scenario.
-It writes `comparison.md` and the run summary. For each arm it shows:
+It writes `comparison.md` for the run summary, and `comparison.json` with the same facts for
+analysis across jobs: each arm's ratios and failures, its score, and the anchor drift. For each arm
+the comparison shows:
 
 - each scenario's successes, the anchors' mean, the ratio between them, and the reference shape's
   loaded floor
-- the score: the geometric mean of the ratios over the scored scenarios the job ran
+- the score: the geometric mean of the ratios over the scored scenarios the job ran. A scored
+  scenario without an anchor ratio leaves the arm unscored, and the cell names it
 - whether every proxy reported the expected boot values
 - each safety failure:
   - an ending other than a clean shutdown, such as an OOM kill

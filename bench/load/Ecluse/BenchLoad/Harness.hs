@@ -63,7 +63,8 @@ import Ecluse.BenchLoad.Latency (Percentiles, isSuccessStatus, percentiles)
 import Ecluse.BenchLoad.Oha (OhaReport (..), OhaRun (..), RunLength (ForRequests, ForSeconds), runOha)
 import Ecluse.BenchLoad.PatternReport (ReplayTotals (..))
 import Ecluse.BenchLoad.Patterns (RequestTrace (rtClients))
-import Ecluse.BenchLoad.Pod (CgroupReading (..), ProxyTuning (..), counter, noTuning, parseCpuList, renderPodShape)
+import Ecluse.BenchLoad.Placement (cpuSampleNow, cpuWindowSince)
+import Ecluse.BenchLoad.Pod (CgroupReading (..), ProxyTuning (..), counter, noTuning, parseCpuList, positive, renderPodShape)
 import Ecluse.BenchLoad.ProxyProcess (
     AdvisoryFeed,
     ProxyEnd (..),
@@ -72,8 +73,6 @@ import Ecluse.BenchLoad.ProxyProcess (
     proxyBootLines,
     proxyBootRetries,
     proxyCgroupNow,
-    proxyCpuNow,
-    proxyCpuSince,
     proxyIdleCgroupBytes,
     proxyIdleRts,
     proxyRuleLines,
@@ -151,9 +150,9 @@ loadKnobsFromEnv = do
     tuning <-
         ProxyTuning
             <$> setting "BENCH_LOAD_PROXY_CPUS" parseCpuList
-            <*> setting "BENCH_LOAD_PROXY_CORES" positive
-            <*> setting "BENCH_LOAD_PROXY_MAX_HEAP_BYTES" positive
-            <*> setting "BENCH_LOAD_PROXY_ALLOC_AREA_MIB" positive
+            <*> setting "BENCH_LOAD_PROXY_CORES" count
+            <*> setting "BENCH_LOAD_PROXY_MAX_HEAP_BYTES" count
+            <*> setting "BENCH_LOAD_PROXY_ALLOC_AREA_MIB" count
     pure
         LoadKnobs
             { lkConcurrency = max 1 concurrency
@@ -178,7 +177,7 @@ loadKnobsFromEnv = do
         lookupEnv name >>= \case
             Just raw | not (T.null (T.strip (toText raw))) -> either (\problem -> benchFail (toText name <> ": " <> problem)) (pure . Just) (parse (T.strip (toText raw)))
             _ -> pure Nothing
-    positive raw = maybeToRight ("expected a positive whole number, not " <> show raw) (mfilter (> 0) (readMaybe (toString raw)))
+    count raw = maybeToRight ("expected a positive whole number, not " <> show raw) (positive raw)
 
 -- | The operating point of a run with these knobs, scenarios ('Nothing' is all of them), and pattern overrides.
 operatingPoint :: LoadKnobs -> Maybe [Text] -> [Text] -> OperatingPoint
@@ -381,11 +380,11 @@ measure knobs s shape (Target proxy driver) = do
     startScrape <- scrapeOf proxy
     before <- snapshotOf proxy MajorCollection
     cgroupBefore <- cgroupOf proxy
-    cpuStart <- traverse (\p -> (p,) <$> proxyCpuNow p) proxy
+    cpuStart <- forM proxy (const (cpuSampleNow cgroupBefore))
     (outcome, (inFlight, tasks)) <- sampling proxy (drive knobs driver)
     after <- snapshotOf proxy MinorCollection
     cgroupAfter <- cgroupOf proxy
-    cpu <- traverse (uncurry proxyCpuSince) cpuStart
+    cpu <- traverse (`cpuWindowSince` cgroupAfter) cpuStart
     endScrape <- scrapeOf proxy
     replayed <- case driver of
         DriveReplay replay -> replayEvidence replay

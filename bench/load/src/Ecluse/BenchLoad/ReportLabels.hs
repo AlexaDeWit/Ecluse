@@ -9,6 +9,8 @@ module Ecluse.BenchLoad.ReportLabels (
     admissionRow,
     memoryEventsRow,
     generatorHeadroomRow,
+    headroomHeld,
+    headroomSaturated,
 ) where
 
 import Ecluse.BenchLoad.CpuUse (headroomLimit)
@@ -32,3 +34,11 @@ memoryEventsRow = "memory.events oom_kill / oom / max / high"
 -- | The scenario row that says whether the load generator kept its CPU headroom.
 generatorHeadroomRow :: Text
 generatorHeadroomRow = "load generator headroom (harness cgroup and oha's CPU below " <> show (round (headroomLimit * 100) :: Int) <> "% busy)"
+
+-- | The headroom row's value while the load generator kept its headroom.
+headroomHeld :: Text
+headroomHeld = "held"
+
+-- | The headroom row's value once the load generator reached the limit.
+headroomSaturated :: Text
+headroomSaturated = "**saturated**"

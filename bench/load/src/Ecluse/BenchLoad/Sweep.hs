@@ -27,7 +27,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 
 import Ecluse.BenchLoad.Floors (PassSelection, parsePassSelection)
-import Ecluse.BenchLoad.Pod (PodShape, ProxyTuning (..), parsePodShape)
+import Ecluse.BenchLoad.Pod (PodShape, ProxyTuning (..), mib, parsePodShape)
 
 -- | One sweep: what every arm shares, the arms by name, and the phases of jobs.
 data Sweep = Sweep
@@ -102,7 +102,7 @@ armOf o =
         <$> (shapeOf =<< o .: "shape")
         <*> tuningOf
         <*> o .:? "serveMaxInFlight"
-        <*> ((* mebibyte) <$> o .: "podMemoryMib")
+        <*> ((* mib) <$> o .: "podMemoryMib")
         <*> (shapeOf =<< o .: "referenceShape")
         <*> (bootValuesOf =<< o .: "expect")
   where
@@ -151,6 +151,3 @@ loadSweep name = do
 -- | The job of this name in any phase.
 sweepJob :: Sweep -> Text -> Maybe SweepJob
 sweepJob sweep name = find ((== name) . jobName) (concatMap (toList . phaseJobs) (swPhases sweep))
-
-mebibyte :: Int
-mebibyte = 1024 * 1024

@@ -13,7 +13,7 @@ import Data.Set qualified as Set
 import Test.Hspec
 
 import Ecluse.BenchLoad.Floors (PassSelection (LoadedPassOnly))
-import Ecluse.BenchLoad.Pod (ProxyTuning (..), cpuListMembers, podCpuQuota, podMemoryLimit)
+import Ecluse.BenchLoad.Pod (ProxyTuning (..), cpuListMembers, mib, podCpuQuota, podMemoryLimit)
 import Ecluse.BenchLoad.Sweep (Arm (..), BootValues (..), Phase (..), Sweep (..), SweepJob (..), decodeSweep, loadSweep, sweepJob)
 import Ecluse.Composition.Sizing (resolveServeAdmission)
 import Ecluse.Rts (CgroupLimits (CgroupLimits), RtsPosture (..), RuntimeOverrides (RuntimeOverrides), RuntimePlan (..), resolveRuntimePlan)
@@ -78,20 +78,17 @@ resolved :: Arm -> BootValues
 resolved arm =
     BootValues
         { bvCapabilities = capabilities
-        , bvAllocAreaMib = fst (planAllocAreaBytes plan) `div` mebibyte
-        , bvMaxHeapMib = (`div` mebibyte) <$> fst (planMaxHeapBytes plan)
+        , bvAllocAreaMib = fst (planAllocAreaBytes plan) `div` mib
+        , bvMaxHeapMib = (`div` mib) <$> fst (planMaxHeapBytes plan)
         , bvAdmission = fst (resolveServeAdmission (armServeMaxInFlight arm) capabilities)
         }
   where
     tuning = armTuning arm
     processors = maybe 4 (Set.size . cpuListMembers) (ptCpus tuning)
-    posture = RtsPosture{rpCapabilities = processors, rpProcessors = processors, rpAllocAreaBytes = fromMaybe 64 (ptAllocAreaMib tuning) * mebibyte, rpNurseryChunkBytes = Just (4 * mebibyte), rpMaxHeapBytes = Nothing}
+    posture = RtsPosture{rpCapabilities = processors, rpProcessors = processors, rpAllocAreaBytes = fromMaybe 64 (ptAllocAreaMib tuning) * mib, rpNurseryChunkBytes = Just (4 * mib), rpMaxHeapBytes = Nothing}
     limits = CgroupLimits (fromIntegral <$> podCpuQuota (armShape arm)) (podMemoryLimit (armShape arm))
     plan = resolveRuntimePlan (RuntimeOverrides (ptCores tuning) Nothing (ptMaxHeapBytes tuning)) limits posture
     capabilities = fst (planCapabilities plan)
-
-mebibyte :: Int
-mebibyte = 1024 * 1024
 
 -- A sweep with an anchor arm and one test arm, the given keys replaced, and the given jobs added to its one phase.
 decoded :: [Pair] -> [Value] -> Either Text Sweep

@@ -19,6 +19,7 @@ import Ecluse.BenchReport.AgainstMain.Bench qualified as Bench
 import Ecluse.BenchReport.AgainstMain.Load qualified as Load
 import Ecluse.BenchReport.PerformanceCommand qualified as Performance
 import Ecluse.BenchReport.PerformanceReceipt qualified as Receipt
+import Ecluse.BenchReport.Sweep qualified as Sweep
 
 main :: IO ()
 main =
@@ -36,7 +37,7 @@ main =
         [csvPath, logPath] -> run csvPath (Just logPath)
         ["against-main", kind, baselineDir, reportPath]
             | Just compareWith <- comparison kind -> againstMain compareWith baselineDir reportPath
-        "sweep" : name : job : reportPaths -> againstAnchors (toText name) (toText job) reportPaths
+        "sweep" : name : job : directory : reportPaths -> againstAnchors (toText name) (toText job) directory reportPaths
         _ ->
             die . toString . unlines $
                 [ "usage: bench-report <results.csv> [<console-log>]"
@@ -46,7 +47,7 @@ main =
                 , "       bench-report performance-receipt <request.json> <native-results> <receipt.json>"
                 , "       bench-report performance-audit <request.json> <receipt.json>"
                 , "       bench-report against-main (bench | acceptance | load) <baseline-dir> <report>"
-                , "       bench-report sweep <sweep> <job> <report> ..."
+                , "       bench-report sweep <sweep> <job> <job-dir> <report> ..."
                 ]
 
 run :: FilePath -> Maybe FilePath -> IO ()
@@ -82,14 +83,16 @@ publish output = do
     putText output
     lookupEnv "GITHUB_STEP_SUMMARY" >>= traverse_ (`appendFileText` output)
 
--- One sweep job's reports, in slot order, beside the job's anchors.
-againstAnchors :: Text -> Text -> [FilePath] -> IO ()
-againstAnchors name job reportPaths = do
+-- One sweep job's reports, in slot order, beside the job's anchors, written into the job's directory.
+againstAnchors :: Text -> Text -> FilePath -> [FilePath] -> IO ()
+againstAnchors name job directory reportPaths = do
     sweep <- either (die . toString) pure =<< loadSweep name
     floors <- either (die . toString) pure =<< loadFloors
     chosen <- maybe (die ("bench-report: the sweep " <> toString name <> " has no job " <> toString job)) pure (sweepJob sweep job)
     reports <- traverse readTextFile reportPaths
-    publish (Load.againstAnchors (floorsByShape floors) sweep chosen reports)
+    let compared = Sweep.compareJob (floorsByShape floors) sweep chosen reports
+    Sweep.writeComparison directory compared
+    publish (Sweep.renderComparison compared)
 
 -- Lenient UTF-8, and a described failure instead of a throw, so an unreadable file becomes a note in the output.
 readTextFile :: FilePath -> IO (Either Text Text)

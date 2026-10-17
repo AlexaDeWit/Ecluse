@@ -17,6 +17,8 @@ module Ecluse.BenchLoad.Pod (
     podCpuQuota,
     podMemoryLimit,
     cpuMaxValue,
+    mib,
+    positive,
 
     -- * CPU placement and runtime settings
     CpuList,
@@ -58,8 +60,11 @@ data PodShape
 scheduledPodShapes :: [PodShape]
 scheduledPodShapes = [Unlimited, Limited 2 gib, Limited 4 gib, Limited 4 (2 * gib)]
 
-mib, gib :: Int
+-- | A mebibyte in bytes.
+mib :: Int
 mib = 1024 * 1024
+
+gib :: Int
 gib = 1024 * mib
 
 -- | Parse @unlimited@, a CPU-time quota such as @2cpu@, a memory limit such as @1gib@ or @512mib@, or both, as @2cpu-1gib@.
@@ -72,7 +77,6 @@ parsePodShape raw = maybeToRight refusal $ case T.splitOn "-" (T.toLower (T.stri
   where
     cpuEquivalents part = T.stripSuffix "cpu" part >>= positive
     memory part = (* gib) <$> (T.stripSuffix "gib" part >>= positive) <|> (* mib) <$> (T.stripSuffix "mib" part >>= positive)
-    positive = mfilter (> 0) . natural
     refusal = "pod shape " <> show raw <> " is not unlimited, <cpu-equivalents>cpu, <size>mib or <size>gib, or <cpu-equivalents>cpu-<size>mib or <cpu-equivalents>cpu-<size>gib"
 
 -- | The inverse of 'parsePodShape', in gibibytes when the limit is a whole number of them.
@@ -191,6 +195,10 @@ natural digits
     | not (T.null digits) && T.all isDigit digits = readMaybe (toString digits)
     | otherwise = Nothing
 
+-- | A run of decimal digits as a number above zero.
+positive :: Text -> Maybe Int
+positive = mfilter (> 0) . natural
+
 -- | What the proxy's cgroup reported. Byte counts are 'Nothing' where the file is absent or unlimited.
 data CgroupReading = CgroupReading
     { crMemoryMax :: Maybe Int
@@ -202,6 +210,8 @@ data CgroupReading = CgroupReading
     -- ^ @memory.stat@: @anon@, the memory an OOM kill follows, beside @file@, @kernel@, and @sock@.
     , crCpuStat :: Map Text Int
     -- ^ @cpu.stat@: @usage_usec@, @nr_throttled@, @throttled_usec@ and the rest.
+    , crCpus :: Maybe CpuList
+    -- ^ @cpuset.cpus.effective@: the CPUs the cgroup may run on, 'Nothing' without the cpuset controller.
     }
     deriving stock (Eq, Show, Generic)
     deriving anyclass (FromJSON, ToJSON)

@@ -48,7 +48,7 @@ import Ecluse.BenchLoad.Normalise (
  )
 import Ecluse.BenchLoad.PatternReport (renderReplayTotals)
 import Ecluse.BenchLoad.Pod (CgroupReading (..), PodShape (Unlimited), ProxyTuning (..), counter, noTuning, proxyCgroupFiles, renderCpuList, renderPodShape)
-import Ecluse.BenchLoad.ReportLabels (admissionRow, generatorHeadroomRow, memoryEventsRow, memoryPeakColumn, postureRow)
+import Ecluse.BenchLoad.ReportLabels (admissionRow, generatorHeadroomRow, headroomHeld, headroomSaturated, memoryEventsRow, memoryPeakColumn, postureRow)
 import Ecluse.BenchLoad.RtsWindow (RtsSnapshot (..), RtsWindow (..), compactionThresholdCrossed, gcCpuShare, meanLiveAtMajors, perSuccess)
 import Ecluse.BenchLoad.Selection (measurementConditionVersion)
 import Ecluse.BenchLoad.Verdict (ProxyEnding (..), describeEnding)
@@ -87,7 +87,7 @@ renderReports section =
             <> map (glanceRow (floorOf Loaded)) reports
             <> [""]
             <> costTable (floorOf ConcurrencyOne) c1Reports reports
-            <> concatMap renderScenario reports
+            <> concatMap (renderScenario (lkProxyTuning (sectionKnobs section))) reports
             <> readingNotes
   where
     reports = sectionLoaded section
@@ -249,8 +249,8 @@ withConcurrencyOne c1Reports reports = [(r, Map.lookup (srName r) byName) | r <-
   where
     byName = Map.fromList [(srName r, r) | r <- c1Reports]
 
-renderScenario :: ScenarioReport -> [Text]
-renderScenario r =
+renderScenario :: ProxyTuning -> ScenarioReport -> [Text]
+renderScenario tuning r =
     [ "### " <> srName r
     , ""
     , srDescription r
@@ -263,7 +263,7 @@ renderScenario r =
         <> rtsRows r
         <> maybe [] proxyRows (srProxy r)
         <> [row "memory.peak less RTS max memory in use" (maybe "n/a" signedMib (offHeapGap r)) | isJust (srProxy r)]
-        <> maybe [] (cpuRows r) (pfCpu =<< srProxy r)
+        <> maybe [] (cpuRows (isJust (ptCpus tuning)) r) (pfCpu =<< srProxy r)
         <> [""]
         <> stepsTable (srSteps r)
         <> [maybe "" renderReplayTotals (srReplayTotals r), srEvidence r]
@@ -343,14 +343,15 @@ proxyRows p =
             <> ")"
 
 -- The CPU time of the window: the proxy against its CPUs, and the load generator's headroom.
-cpuRows :: ScenarioReport -> CpuWindow -> [Text]
-cpuRows r w =
+cpuRows :: Bool -> ScenarioReport -> CpuWindow -> [Text]
+cpuRows placed r w =
     [ row "proxy CPU-seconds per second: cgroup / RTS (share of the cgroup's CPUs)" (rate (proxyCpuRate w) <> " / " <> rate rtsRate <> share (proxyCpuShare w) (cwProxyCpus w))
     , row "harness cgroup CPU-seconds per second: load generator, stubs, and harness (share of its CPUs)" (rate (harnessCpuRate w) <> share (harnessCpuShare w) (cwHarnessCpus w))
     , row ("CPU " <> show ohaCpu <> " busy, where oha runs") (maybe "n/a" pct (cpuBusyShare ohaCpu w))
-    , row generatorHeadroomRow (maybe "n/a" (bool "held" "**saturated**") (generatorSaturated w))
-    , row "busy time on the proxy's CPUs that the proxy did not spend" (maybe "n/a" (\seconds -> fmt2 seconds <> " s in " <> fmt1 (cwSeconds w) <> " s") (foreignCpuSeconds w))
+    , row generatorHeadroomRow (maybe "n/a" (bool headroomHeld headroomSaturated) (generatorSaturated w))
     ]
+        -- An unplaced proxy shares its CPUs with the harness, so their busy time is not foreign to it.
+        <> [row "busy time on the proxy's CPUs that the proxy did not spend" (maybe "n/a" (\seconds -> fmt2 seconds <> " s in " <> fmt1 (cwSeconds w) <> " s") (foreignCpuSeconds w)) | placed]
   where
     rtsRate = do
         window <- srRtsWindow r
@@ -404,7 +405,7 @@ readingNotes =
     , "- **Each scenario boots its own proxy** from its own cgroup, so the runtime posture and the admission budgets are the ones that pod shape resolves. A boot retried after the runtime could not start a thread gets a fresh cgroup, so its readings exclude the failed attempt."
     , "- **Native metadata gzip is off** in every proxy. The harness sets `ECLUSE_SERVER__METADATA_GZIP=false` and refuses a proxy that logs another posture, so these figures measure identity listings, not gzip-enabled throughput. A report from a build before the setting shows it as unreported."
     , "- **memory.peak** is the kernel's high-water mark for the proxy's cgroup. **RTS max memory in use** is what the heap held, the figure `-M` is compared with. The gap is off-heap and kernel memory."
-    , "- **CPU figures** cover the window. The proxy's come from its cgroup's `cpu.stat` and from the RTS. The harness cgroup holds the load generator, the stubs, and the harness. The generator keeps its headroom while that cgroup and the CPU `oha` runs on each stay below " <> show (round (headroomLimit * 100) :: Int) <> "% busy. Busy time on the proxy's CPUs that the proxy did not spend comes from `/proc/stat`: runner services and the kernel."
+    , "- **CPU figures** cover the window. The proxy's come from its cgroup's `cpu.stat` and from the RTS. The harness cgroup holds the load generator, the stubs, and the harness. The generator keeps its headroom while that cgroup and the CPU `oha` runs on each stay below " <> show (round (headroomLimit * 100) :: Int) <> "% busy. For a proxy placed on its own CPUs, busy time on them that the proxy did not spend comes from `/proc/stat`: runner services and the kernel."
     , "- **The in-flight gauge** is `ecluse.serve.admission.in_flight`, sampled each second. Requests that hold admission without finishing show as a flat, nonzero gauge beside zero successes."
     , "- **The rule policy** is what the first scenario's proxy logged at boot: each rule its configuration names, with its type and keys, and the order each mount evaluates the rules in. A proxy of either pass that logged a different policy is named."
     , "- **Allocation per refusal** divides the same window's allocation by its refusals instead of its successes. Each figure charges the whole window to one kind of response, so each is an upper bound on that kind's cost, and a small count makes it large."
