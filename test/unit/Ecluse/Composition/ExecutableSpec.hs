@@ -28,7 +28,7 @@ import Ecluse.Composition.BootError (
     ),
     StoreMaintenanceReason (ClientBuildFailed, PrivateCacheUnavailable),
  )
-import Ecluse.Composition.Credential (CredentialTarget (MirrorCredential), initTargetCredentialProviders, noCredentialProviders)
+import Ecluse.Composition.Credential (CredentialTarget (MirrorCredential, PrivateCacheCredential), initTargetCredentialProviders, noCredentialProviders)
 import Ecluse.Composition.Executable (
     BuildCredentials,
     BuildMirrorQueue,
@@ -45,7 +45,7 @@ import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePreview, BootStorePruner, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
  )
-import Ecluse.Config (StoreBackend (BackendRegistry))
+import Ecluse.Config (MintPlan (MintCodeArtifact, MintStatic), StoreBackend (BackendRegistry), sbMint)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired))
@@ -68,6 +68,7 @@ import Ecluse.Core.Server.Context (MountBinding (bindingPrefix))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Cve.Sync (CveSyncHandle (csEnv))
 import Ecluse.Pilot.Plan (ExportLoopPlan (ExportIdle, ExportTo), ExportTarget (etEcosystem, etEpss))
+import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (CodeArtifactConfig, caDomain, caDomainOwner, caDurationSeconds, caRegion))
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEpssRequirement))
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Env (withAmbientAws)
@@ -185,19 +186,22 @@ spec = describe "planExecutable" $ do
     it "plans the store pruner a sweepable mount per cleared store" $ do
         -- The build carries a sweep, so the arm yields the plan rather than refusing: one mount
         -- per store the pass cleared, carrying what decides for it.
-        pruner <- expectExecutableWith codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue inertStore
-        plannedArm (epRoleWiring pruner) `shouldBe` "store pruner"
-        case epRoleWiring pruner of
-            StorePrunerWiring wiring -> map smEcosystem (pwMounts wiring) `shouldBe` [Npm]
-            other -> expectationFailure ("expected the store pruner arm, got the " <> toString (plannedArm other) <> " arm")
+        pruner <- expectExecutableWith codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue inertStore >>= expectPrunerWiring
+        map smEcosystem (pwMounts pruner) `shouldBe` [Npm]
 
     it "plans the preview role through the observing build alone" $ do
         -- The role picks its own build, so a preview's boot never runs the one holding a delete.
         preview <-
             expectExecutableWith (withObservablePrivate codeArtifactEnvVars) BootStorePreview (\_ _ _ -> Nothing) refusingQueue observingOnly
-        case epRoleWiring preview of
-            StorePrunerWiring wiring -> map smEcosystem (pwMounts wiring) `shouldBe` [Npm]
-            other -> expectationFailure ("expected the store pruner arm, got the " <> toString (plannedArm other) <> " arm")
+                >>= expectPrunerWiring
+        map smEcosystem (pwMounts preview) `shouldBe` [Npm]
+
+    for_ [(BootStorePruner, inertStore), (BootStorePreview, observingOnly)] $ \(role, builds) ->
+        it ("hands the supplied credential build both swept stores in one call, under " <> show role) $ do
+            (buildCredentials, calls) <- recordingCredentials inertCredentials
+            pruner <- expectRightIO (planUnder codeArtifactEnvVars role (\_ _ _ -> Nothing) refusingQueue buildCredentials builds) >>= expectPrunerWiring
+            map (map (second sbMint)) <$> calls `shouldReturn` [codeArtifactMintTargets]
+            map smEcosystem (pwMounts pruner) `shouldBe` [Npm]
 
     it "builds both observing targets and drives their real grouped preview without a deleting builder" $ do
         mirror <- previewFixture ["1.0.0", "3.0.0"]
@@ -211,16 +215,13 @@ spec = describe "planExecutable" $ do
                         modifyIORef' builds (url :)
                         pure (fakeObservation (if url == privateUpstreamUrl then cache else mirror))
                     }
-        executable <- expectExecutableWith env BootStorePreview (\_ _ _ -> Nothing) refusingQueue onlyReads
+        wiring <- expectExecutableWith env BootStorePreview (\_ _ _ -> Nothing) refusingQueue onlyReads >>= expectPrunerWiring
         beforeMirror <- readFakeContents mirror
         beforeCache <- readFakeContents cache
         recorded <- recordingPortsUnder previewingReport Nothing
-        case epRoleWiring executable of
-            StorePrunerWiring wiring -> do
-                outcome <- sweepCycle testPacing (recPorts recorded) (pwMounts wiring)
-                tallyDeleted (outcomeTally outcome) `shouldBe` 3
-                length (outcomePrerequisites outcome) `shouldBe` 2
-            _ -> expectationFailure "expected the preview role"
+        outcome <- sweepCycle testPacing (recPorts recorded) (pwMounts wiring)
+        tallyDeleted (outcomeTally outcome) `shouldBe` 3
+        length (outcomePrerequisites outcome) `shouldBe` 2
         built <- readIORef builds
         length built `shouldBe` 2
         length (ordNub built) `shouldBe` 2
@@ -243,16 +244,15 @@ spec = describe "planExecutable" $ do
                             { sbObserving = \_ _ backend ->
                                 pure (fakeObservation (if registryUrlText (cbUrl backend) == privateUpstreamUrl then cache else mirror))
                             }
-                executable <- expectExecutableWith (overrideEnv "ECLUSE_RULES" revoke (withObservablePrivate codeArtifactEnvVars)) BootStorePreview (\_ _ _ -> Nothing) refusingQueue onlyReads
+                wiring <-
+                    expectExecutableWith (overrideEnv "ECLUSE_RULES" revoke (withObservablePrivate codeArtifactEnvVars)) BootStorePreview (\_ _ _ -> Nothing) refusingQueue onlyReads
+                        >>= expectPrunerWiring
                 recorded <- recordingPortsUnder previewingReport Nothing
-                case epRoleWiring executable of
-                    StorePrunerWiring wiring -> do
-                        map (sort . map ruleName . smConfigured) (pwMounts wiring) `shouldBe` [evaluated]
-                        -- The prepared list is the one the evaluator runs, on a full walk too.
-                        map (sort . map prepName . smRules) (pwMounts wiring) `shouldBe` [evaluated]
-                        outcome <- sweepCycle testPacing (recPorts recorded) (pwMounts wiring)
-                        tallyDeleted (outcomeTally outcome) `shouldBe` selected
-                    _ -> expectationFailure "expected the preview role"
+                map (sort . map ruleName . smConfigured) (pwMounts wiring) `shouldBe` [evaluated]
+                -- The prepared list is the one the evaluator runs, on a full walk too.
+                map (sort . map prepName . smRules) (pwMounts wiring) `shouldBe` [evaluated]
+                outcome <- sweepCycle testPacing (recPorts recorded) (pwMounts wiring)
+                tallyDeleted (outcomeTally outcome) `shouldBe` selected
 
     it "reports a store maintenance client the live environment cannot build" $ do
         -- The client discovers an AWS identity when it is built, so an environment with none
@@ -498,6 +498,13 @@ npmAndPypiMirrorTargets =
     , ((PyPI, MirrorCredential), BackendRegistry (mkSecret "fixture-token"))
     ]
 
+-- What a store role's credential build mints from for 'codeArtifactEnvVars': the mirror target, then the private cache.
+codeArtifactMintTargets :: [((Ecosystem, CredentialTarget), MintPlan)]
+codeArtifactMintTargets =
+    [ ((Npm, MirrorCredential), MintCodeArtifact CodeArtifactConfig{caRegion = "eu-west-1", caDomain = "acme", caDomainOwner = Just "111122223333", caDurationSeconds = Nothing})
+    , ((Npm, PrivateCacheCredential), MintStatic (mkSecret "private-maintenance-token"))
+    ]
+
 -- An advisory data directory beneath a non-directory, so the sync throws on every host before any credential lookup.
 unwritableAdvisoryEnv :: [(String, String)]
 unwritableAdvisoryEnv =
@@ -579,6 +586,12 @@ expectPilotPlan :: ExecutablePlan -> IO ExportLoopPlan
 expectPilotPlan plan = case epRoleWiring plan of
     PilotWiring exportPlan -> pure exportPlan
     other -> fail ("expected the pilot arm, got the " <> toString (plannedArm other) <> " arm")
+
+-- | The store roles' arm of a plan, failing the test on any other arm.
+expectPrunerWiring :: ExecutablePlan -> IO PrunerWiring
+expectPrunerWiring plan = case epRoleWiring plan of
+    StorePrunerWiring pruner -> pure pruner
+    other -> fail ("expected the store pruner arm, got the " <> toString (plannedArm other) <> " arm")
 
 -- | The mirror-pipeline arm of a plan, failing the test on any other arm.
 expectMirrorWiring :: ExecutablePlan -> IO MirrorWiring
