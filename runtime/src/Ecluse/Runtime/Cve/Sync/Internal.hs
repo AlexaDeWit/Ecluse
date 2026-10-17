@@ -463,7 +463,7 @@ parseMetadataCount value = do
     guard (count <= toInteger (maxBound :: Word64))
     pure (fromInteger count)
 
--- | An S3-backed advisory-fetch source over one @amazonka@ 'AWS.Env', so every mount's 'CveFetch' shares one credential discovery.
+-- | An S3-backed advisory-fetch source over one @amazonka@ 'Amazonka.Env', so every mount's 'CveFetch' shares one credential discovery.
 newtype S3CveSource = S3CveSource
     { s3CveFetchFor :: Text -> Text -> Int -> CveFetch
     -- ^ A 'CveFetch' against one bucket, object key, and byte cap, over the captured env.

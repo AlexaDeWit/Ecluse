@@ -112,7 +112,7 @@ defaultSqsConfig queueUrl region =
         , sqsMaxReceiveCount = defaultDeliveryBudget
         }
 
-{- | Build an SQS-backed 'MirrorQueue'. The @amazonka@ 'AWS.Env' is built once here and
+{- | Build an SQS-backed 'MirrorQueue'. The @amazonka@ 'Amazonka.Env' is built once here and
 the returned handle's closures capture it.
 -}
 newSqsQueue :: LogEnv -> (Text -> Either Text RegistryUrl) -> SqsConfig -> IO MirrorQueue
