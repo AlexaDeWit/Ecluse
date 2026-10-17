@@ -19,7 +19,7 @@ import System.IO.Error (doesNotExistErrorType, mkIOError)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Exception (evaluate)
 
-import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportTimeout, TransportUnreachable))
+import Ecluse.Core.Fault (HttpFault (HttpStatus, HttpTransport), TransportCause (TransportProtocol, TransportTimeout, TransportUnreachable), TransportFault (tfCause))
 import Ecluse.Core.Osv.Epss (
     EpssEnrichment (..),
     EpssFeed (..),
@@ -82,6 +82,12 @@ wholeFeed = GZip.compress (feedPreamble <> mconcat (replicate 2000 "CVE-2026-100
 -- A request-scoped client failure, as http-client wraps one.
 requestFailure :: HttpExceptionContent -> SomeException
 requestFailure = toException . HttpExceptionRequest defaultRequest
+
+-- The transport cause of a classified fetch failure, so a case reads the class and not the client's wording.
+fetchCause :: SomeException -> Maybe TransportCause
+fetchCause err = case classifyEpssFailure err of
+    Just (EpssFeedFetch (HttpTransport fault)) -> Just (tfCause fault)
+    _ -> Nothing
 
 spec :: Spec
 spec = do
@@ -212,7 +218,7 @@ spec = do
             requests `shouldBe` 1
 
         for_
-            [ ("a 404", maxEpssFeedBytes, status404, "", EpssFeedStatus 404)
+            [ ("a 404", maxEpssFeedBytes, status404, "", EpssFeedFetch (HttpStatus 404))
             , ("a scoreless feed", maxEpssFeedBytes, status200, GZip.compress feedPreamble, EpssFeedNoScores)
             , ("a stream that is not gzip", maxEpssFeedBytes, status200, "not gzip", EpssFeedUndecodable)
             , ("a cut stream", maxEpssFeedBytes, status200, LBS.take (LBS.length wholeFeed `div` 2) wholeFeed, EpssFeedUndecodable)
@@ -235,14 +241,14 @@ spec = do
 
     describe "classifyEpssFailure" $ do
         it "reads a transport failure through its shared cause" $ do
-            classifyEpssFailure (requestFailure ConnectionTimeout) `shouldBe` Just (EpssFeedTransport TransportTimeout)
-            classifyEpssFailure (requestFailure ResponseTimeout) `shouldBe` Just (EpssFeedTransport TransportTimeout)
-            classifyEpssFailure (requestFailure (ConnectionFailure (toException (TestContractEscape "refused")))) `shouldBe` Just (EpssFeedTransport TransportUnreachable)
-            classifyEpssFailure (requestFailure ConnectionClosed) `shouldBe` Just (EpssFeedTransport TransportUnreachable)
+            fetchCause (requestFailure ConnectionTimeout) `shouldBe` Just TransportTimeout
+            fetchCause (requestFailure ResponseTimeout) `shouldBe` Just TransportTimeout
+            fetchCause (requestFailure (ConnectionFailure (toException (TestContractEscape "refused")))) `shouldBe` Just TransportUnreachable
+            fetchCause (requestFailure ConnectionClosed) `shouldBe` Just TransportUnreachable
 
         it "tolerates every other request failure http-client reports" $
             for_ [TooManyRedirects [], OverlongHeaders, InvalidStatusLine "bad", InvalidHeader "bad", InvalidChunkHeaders, IncompleteHeaders, InvalidDestinationHost "bad", TlsNotSupported] $ \content ->
-                classifyEpssFailure (requestFailure content) `shouldBe` Just (EpssFeedTransport TransportProtocol)
+                fetchCause (requestFailure content) `shouldBe` Just TransportProtocol
 
         it "names the feed's own failures" $ do
             classifyEpssFailure (toException (CompressedTooLarge 1 2)) `shouldBe` Just (EpssFeedOversize (CompressedTooLarge 1 2))

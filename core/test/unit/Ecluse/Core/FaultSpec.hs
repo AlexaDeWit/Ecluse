@@ -11,10 +11,31 @@ import Data.Text.Internal qualified as Text
 import GHC.Exts (Int (I#), sizeofByteArray#)
 import Test.Hspec
 
-import Ecluse.Core.Fault (boundedDetail)
+import Ecluse.Core.Fault (
+    HttpFault (HttpStatus, HttpTransport),
+    TransportCause (TransportTimeout),
+    boundedDetail,
+    renderHttpFault,
+    renderTransportCause,
+    transportFault,
+ )
 
 spec :: Spec
-spec = describe "boundedDetail" $ do
+spec = do
+    boundedDetailSpec
+    renderHttpFaultSpec
+
+renderHttpFaultSpec :: Spec
+renderHttpFaultSpec = describe "renderHttpFault" $ do
+    it "renders a status by its code after the source's host:port" $
+        renderHttpFault "osv.example:443" (HttpStatus 503) `shouldBe` "osv.example:443: HTTP 503"
+
+    it "renders a transport fault by its cause, then its detail" $
+        renderHttpFault "osv.example:443" (HttpTransport (transportFault TransportTimeout "ResponseTimeout"))
+            `shouldBe` "osv.example:443: " <> renderTransportCause TransportTimeout <> " (ResponseTimeout)"
+
+boundedDetailSpec :: Spec
+boundedDetailSpec = describe "boundedDetail" $ do
     it "owns only the bounded ASCII allocation" $ do
         let backing = T.replicate 65536 "x"
         textAllocationBytes (boundedDetail backing) `shouldSatisfy` (<= 512)

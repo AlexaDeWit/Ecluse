@@ -33,8 +33,8 @@ import Control.Retry (
 import Katip (KatipContext, Severity (WarningS), logFM, ls)
 import Network.HTTP.Client (HttpException)
 
-import Ecluse.Core.Fault (transportRetryable)
-import Ecluse.Core.Fault.Http (HttpFault (HttpStatus, HttpTransport), httpFault, isRetryableStatusCode, renderHttpFault)
+import Ecluse.Core.Fault (HttpFault (HttpStatus, HttpTransport), TransportFault (tfCause), renderHttpFault, transportRetryable)
+import Ecluse.Core.Fault.Http (httpFault, isRetryableStatusCode)
 
 -- | Full jitter from a 1s base to a 60s ceiling, with five retries (six attempts).
 defaultOsvRetryPolicy :: (MonadIO m) => RetryPolicyM m
@@ -44,7 +44,7 @@ defaultOsvRetryPolicy = limitRetries 5 <> capDelay 60_000_000 (fullJitterBackoff
 isRetryableHttpException :: HttpException -> Bool
 isRetryableHttpException err = case httpFault err of
     HttpStatus code -> isRetryableStatusCode code
-    HttpTransport cause -> transportRetryable cause
+    HttpTransport fault -> transportRetryable (tfCause fault)
 
 -- | Retry temporary HTTP failures within the policy budget, warning under the feed's @host:port@. Other failures propagate immediately.
 withOsvRetry :: (MonadMask m, KatipContext m) => Text -> RetryPolicyM m -> m a -> m a

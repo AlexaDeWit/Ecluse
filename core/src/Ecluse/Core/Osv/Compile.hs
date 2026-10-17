@@ -41,7 +41,8 @@ import System.IO.Error (catchIOError)
 import UnliftIO.Exception (bracket, handle, throwIO)
 
 import Ecluse.Core.BuildIdentity (productVersion)
-import Ecluse.Core.Fault.Http (HttpFault, httpFault, renderHttpFault)
+import Ecluse.Core.Fault (HttpFault, renderHttpFault)
+import Ecluse.Core.Fault.Http (httpFault)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory, osvWireName))
 import Ecluse.Core.Osv.Epss (
@@ -188,12 +189,10 @@ instance Exception PilotEpssRequired where
 renderEpssRequired :: PilotEpssRequired -> Text
 renderEpssRequired refusal =
     perEcosystem refusal
-        <> " requires EPSS enrichment, and the feed at "
-        <> perFeed refusal
-        <> " failed: "
-        <> renderEpssFeedFailure (perFailure refusal)
+        <> " requires EPSS enrichment, and the feed failed: "
+        <> renderEpssFeedFailure (perFeed refusal) (perFailure refusal)
 
--- | The OSV export fetch failed past its retries. It names the feed by @host:port@, as a redirect can reach a URL that carries a credential.
+-- | The OSV export fetch failed, after any retries. It names the feed by @host:port@, as a redirect can reach a URL that carries a credential.
 data PilotOsvFetchFailed = PilotOsvFetchFailed
     { pofFeed :: Text
     -- ^ The export's @host:port@.
@@ -249,7 +248,7 @@ enrichOrRefuse run mSpan = do
     enrichment <- either (refuseRequiredEpss run mSpan) pure (resolveEnrichment (crEpss run) acquired)
     case enrichment of
         EpssUnavailable failure ->
-            logFM WarningS (ls ("EPSS enrichment unavailable for " <> ecosystem <> " from " <> epssFeedLabel run <> ": " <> renderEpssFeedFailure failure <> ". No " <> ecosystem <> " rule depends on EPSS, so the artifact publishes without scores"))
+            logFM WarningS (ls ("EPSS enrichment unavailable for " <> ecosystem <> ": " <> renderEpssFeedFailure (epssFeedLabel run) failure <> ". No " <> ecosystem <> " rule depends on EPSS, so the artifact publishes without scores"))
         EpssEnriched _ -> pass
     pure enrichment
   where

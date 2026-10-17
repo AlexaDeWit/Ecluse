@@ -16,9 +16,10 @@ import Test.Hspec
 import UnliftIO.Exception (try)
 
 import Ecluse.Config (Config, loadConfig)
+import Ecluse.Core.Fault (HttpFault (HttpStatus, HttpTransport))
 import Ecluse.Core.Fault.Http (isRetryableStatusCode)
 import Ecluse.Core.Osv.Compile (PilotEpssRequired (perFailure), PilotOsvFetchFailed)
-import Ecluse.Core.Osv.Epss (EpssFeedFailure (EpssFeedStatus, EpssFeedTransport))
+import Ecluse.Core.Osv.Epss (EpssFeedFailure (EpssFeedFetch))
 import Ecluse.Pilot (PilotCompileOptions (..), UploadRequest (NoUpload), runPilotCompile)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 
@@ -74,6 +75,6 @@ defaultConfig = case loadConfig [] Nothing of
 feed (404, 410) and a feed that arrived and failed are regressions. -}
 feedUnreachable :: EpssFeedFailure -> Bool
 feedUnreachable = \case
-    EpssFeedStatus code -> isRetryableStatusCode code
-    EpssFeedTransport _ -> True
+    EpssFeedFetch (HttpStatus code) -> isRetryableStatusCode code
+    EpssFeedFetch (HttpTransport _) -> True
     _ -> False

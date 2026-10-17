@@ -8,6 +8,7 @@ module Ecluse.InternalSpec (spec) where
 import Control.Concurrent qualified as Conc
 import Control.Exception (AsyncException (ThreadKilled))
 import Data.Text qualified as T
+import Network.HTTP.Types.Status (status503)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import Test.Hspec
 import UnliftIO (throwIO, timeout, try)
@@ -15,6 +16,7 @@ import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Boot (BootAborted (BootAborted))
 import Ecluse.Internal (ProcessOutcome (..), exitCodeFor, superviseProcess)
+import Ecluse.Test.Stub (redirectedStatusException)
 
 spec :: Spec
 spec = do
@@ -31,6 +33,10 @@ spec = do
             case outcome of
                 ServiceExited detail -> detail `shouldSatisfy` T.isInfixOf "wiring broke"
                 other -> expectationFailure ("expected ServiceExited, got " <> show other)
+
+        it "renders an escaped HTTP fault by its status at the dialled host:port, never the request or the response" $ do
+            (authority, err) <- redirectedStatusException status503
+            superviseProcess (throwIO err) `shouldReturn` ServiceExited (authority <> ": HTTP 503")
 
         it "classifies a kill delivery (ThreadKilled) as RunCancelled" $
             superviseProcess (Conc.myThreadId >>= \tid -> Conc.throwTo tid ThreadKilled >> pure ShutdownRequested)

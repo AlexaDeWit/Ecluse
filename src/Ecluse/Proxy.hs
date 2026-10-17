@@ -8,6 +8,7 @@
 module Ecluse.Proxy (
     runProxy,
     runServer,
+    warpExceptionHook,
 ) where
 
 import Katip (LogEnv, Severity (ErrorS), SimpleLogPayload, katipAddContext, logFM, runKatipContextT, sl)
@@ -59,8 +60,7 @@ proxyServerConfig runtime =
 runServer :: ServerConfig -> Env -> IO ()
 runServer cfg env = Server.runWarp (envLogEnv env) Server.proxyListener cfg (`Server.tracedApplication` env)
 
-{- Warp's exception hook over the process logger. 'Warp.defaultShouldDisplayException'
-filters routine client disconnects, so an aborted download does not spam the log. -}
+-- | Warp's exception hook over the process logger. Routine client disconnects stay out of the log, so an aborted download does not spam it.
 warpExceptionHook :: LogEnv -> Maybe Wai.Request -> SomeException -> IO ()
 warpExceptionHook logEnv mRequest err =
     when (Warp.defaultShouldDisplayException err) $

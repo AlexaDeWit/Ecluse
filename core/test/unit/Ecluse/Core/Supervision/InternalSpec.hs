@@ -12,13 +12,13 @@ import Test.Hspec
 import UnliftIO (timeout)
 import UnliftIO.Async (asyncWithUnmask, cancel, waitCatch)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (throwIO, try, tryAny)
+import UnliftIO.Exception (throwIO, try)
 
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), renderTransportCause)
 import Ecluse.Core.Supervision.Internal (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
     FaultDisposition (Permanent, Transient),
-    SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
+    SupervisionPolicy (spBackoff, spClassify, spLabel),
     backoffMicros,
     delayListPolicy,
     superviseLoop,
@@ -27,21 +27,13 @@ import Ecluse.Core.Supervision.Internal (
  )
 import Ecluse.Test.Log (runJsonLog, runQuietKatip)
 import Ecluse.Test.Stub (redirectSecrets, redirectedStatusException, refusedFetch, requestSecrets, signedRequest)
+import Ecluse.Test.Supervision (fastPolicy, superviseBriefly)
 
 -- | A typed fault for the loop under test to throw, never stringly.
 newtype StepFault = StepFault Text
     deriving stock (Eq, Show)
 
 instance Exception StepFault
-
--- | A policy over the given classifier with a tiny backoff, so a test never sleeps long.
-fastPolicy :: (SomeException -> FaultDisposition) -> SupervisionPolicy
-fastPolicy classify =
-    SupervisionPolicy
-        { spLabel = "test-loop"
-        , spClassify = classify
-        , spBackoff = BackoffSchedule{bsBaseMicros = 1_000, bsCapMicros = 8_000}
-        }
 
 spec :: Spec
 spec = do
@@ -159,21 +151,15 @@ spec = do
         for_ [Transient, Permanent] $ \disposition ->
             it ("renders a redirected status by its code at the dialled host:port, never the request or the response, " <> show disposition) $ do
                 (authority, err) <- redirectedStatusException status503
-                logged <- supervisedLog disposition err
+                logged <- runJsonLog (superviseBriefly disposition (throwIO err))
                 logged `shouldSatisfy` T.isInfixOf (authority <> ": HTTP 503")
                 for_ redirectSecrets $ \secret -> logged `shouldSatisfy` (not . T.isInfixOf secret)
 
         it "renders a refused connection by its classified cause at the dialled host:port, never the request" $ do
             refused <- refusedFetch =<< signedRequest
-            logged <- supervisedLog Transient refused
+            logged <- runJsonLog (superviseBriefly Transient (throwIO refused))
             logged `shouldSatisfy` T.isInfixOf ("127.0.0.1:1: " <> renderTransportCause TransportUnreachable)
             for_ requestSecrets $ \secret -> logged `shouldSatisfy` (not . T.isInfixOf secret)
-
--- | What the loop logs for a step that always throws @fault@, under one disposition.
-supervisedLog :: (Exception e) => FaultDisposition -> e -> IO Text
-supervisedLog disposition fault =
-    runJsonLog . void . timeout 200_000 . tryAny $
-        superviseLoop (fastPolicy (const disposition)) (throwIO fault)
 
 requestedDelays :: [Bool] -> IO [Int]
 requestedDelays outcomes = do

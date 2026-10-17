@@ -156,7 +156,7 @@ spec = do
             let msg = transientMessage feed defaultRetryStatus{rsIterNumber = 2} transientFailure
             msg `shouldSatisfy` T.isInfixOf "attempt 3"
             msg `shouldSatisfy` T.isInfixOf "backing off before the next retry"
-            msg `shouldSatisfy` T.isSuffixOf (feed <> ": " <> renderTransportCause TransportTimeout)
+            msg `shouldSatisfy` T.isSuffixOf (feed <> ": " <> renderTransportCause TransportTimeout <> " (ConnectionTimeout)")
 
         it "reports the initial attempt as attempt 1, not 0" $
             transientMessage feed defaultRetryStatus transientFailure `shouldSatisfy` T.isInfixOf "attempt 1"
@@ -167,8 +167,8 @@ spec = do
             msg `shouldSatisfy` T.isSuffixOf (feed <> ": HTTP 503")
             for_ redirectSecrets $ \secret -> msg `shouldSatisfy` (not . T.isInfixOf secret)
 
-        it "renders a timeout by its classified cause, never the request" $ do
+        it "renders a timeout by its classified cause and the client's reason, never the request" $ do
             timedOut <- (`HttpExceptionRequest` ConnectionTimeout) <$> signedRequest
             let msg = transientMessage feed defaultRetryStatus timedOut
-            msg `shouldSatisfy` T.isSuffixOf (feed <> ": " <> renderTransportCause TransportTimeout)
+            msg `shouldSatisfy` T.isSuffixOf (feed <> ": " <> renderTransportCause TransportTimeout <> " (ConnectionTimeout)")
             for_ requestSecrets $ \secret -> msg `shouldSatisfy` (not . T.isInfixOf secret)

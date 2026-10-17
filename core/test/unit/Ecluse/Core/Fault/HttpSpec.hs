@@ -9,16 +9,22 @@ import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionC
 import Network.HTTP.Types.Status (status404, status503)
 import Test.Hspec
 
-import Ecluse.Core.Fault (TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause, tfDetail), renderTransportCause)
-import Ecluse.Core.Fault.Http (HttpFault (HttpStatus, HttpTransport), classifyTransport, displayFaultT, httpFault)
+import Ecluse.Core.Fault (HttpFault (HttpStatus, HttpTransport), TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause, tfDetail), renderTransportCause)
+import Ecluse.Core.Fault.Http (classifyTransport, displayFaultT, httpFault)
+import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Test.Stub (redirectSecrets, redirectedStatusException, refusedFetch, requestSecrets, signedRequest)
 
--- | A typed fault outside the HTTP client, which renders as its own 'displayException'.
+-- | A typed fault outside the HTTP client.
 data OtherFault = OtherFault
     deriving stock (Show)
 
-instance Exception OtherFault where
-    displayException OtherFault = "another fault"
+instance Exception OtherFault
+
+-- | The transport cause a fault carries, when the transport failed.
+transportCause :: HttpFault -> Maybe TransportCause
+transportCause = \case
+    HttpStatus _ -> Nothing
+    HttpTransport fault -> Just (tfCause fault)
 
 spec :: Spec
 spec = do
@@ -27,9 +33,9 @@ spec = do
             (_, err) <- redirectedStatusException status503
             httpFault err `shouldBe` HttpStatus 503
 
-        it "keeps the transport cause when nothing answered" $ do
+        it "keeps the transport fault when nothing answered" $ do
             refused <- refusedFetch =<< signedRequest
-            httpFault refused `shouldBe` HttpTransport TransportUnreachable
+            transportCause (httpFault refused) `shouldBe` Just TransportUnreachable
 
     describe "displayFaultT" $ do
         it "renders a status by its code at the dialled host:port, never the request or the response" $ do
@@ -38,25 +44,27 @@ spec = do
             rendered `shouldBe` authority <> ": HTTP 404"
             for_ redirectSecrets $ \secret -> rendered `shouldSatisfy` (not . T.isInfixOf secret)
 
-        it "renders a refused connection by its classified cause at the dialled host:port" $ do
+        it "renders a refused connection by its cause and the client's reason at the dialled host:port, never the request" $ do
             refused <- refusedFetch =<< signedRequest
-            displayFaultT (toException refused) `shouldBe` "127.0.0.1:1: " <> renderTransportCause TransportUnreachable
+            let rendered = displayFaultT (toException refused)
+            rendered `shouldSatisfy` T.isPrefixOf ("127.0.0.1:1: " <> renderTransportCause TransportUnreachable <> " (ConnectionFailure: ")
+            for_ requestSecrets $ \secret -> rendered `shouldSatisfy` (not . T.isInfixOf secret)
 
-        it "renders any other exception as its own displayException" $
-            displayFaultT (toException OtherFault) `shouldBe` "another fault"
+        it "renders any other exception as displayExceptionT does" $
+            displayFaultT (toException OtherFault) `shouldBe` displayExceptionT (toException OtherFault)
 
     describe "classifyTransport" $ do
-        it "details a timeout by the dialled host:port and the client's cause, never the request" $ do
+        it "details a timeout by the client's reason alone, never the request" $ do
             request <- signedRequest
             let fault = classifyTransport (HttpExceptionRequest request ResponseTimeout)
             tfCause fault `shouldBe` TransportTimeout
-            tfDetail fault `shouldBe` "127.0.0.1:1: ResponseTimeout"
+            tfDetail fault `shouldBe` "ResponseTimeout"
 
-        it "details a redirected status by its code at the dialled host:port, never the response" $ do
-            (authority, err) <- redirectedStatusException status503
-            tfDetail (classifyTransport err) `shouldBe` authority <> ": StatusCodeException: HTTP 503"
+        it "details a redirected status by its code, never the response" $ do
+            (_, err) <- redirectedStatusException status503
+            tfDetail (classifyTransport err) `shouldBe` "StatusCodeException: HTTP 503"
 
         it "keeps a refused connection's own reason, and none of the request's path, query or headers" $ do
             fault <- classifyTransport <$> (refusedFetch =<< signedRequest)
-            tfDetail fault `shouldSatisfy` T.isPrefixOf "127.0.0.1:1: ConnectionFailure: "
+            tfDetail fault `shouldSatisfy` T.isPrefixOf "ConnectionFailure: "
             for_ requestSecrets $ \secret -> tfDetail fault `shouldSatisfy` (not . T.isInfixOf secret)

@@ -6,9 +6,10 @@
 module Ecluse.ProxySpec (spec) where
 
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Katip (LogEnv)
 import Network.HTTP.Client (HttpException, Manager, Response, defaultManagerSettings, httpNoBody, newManager, parseRequest, responseStatus)
-import Network.HTTP.Types (statusCode)
+import Network.HTTP.Types (status503, statusCode)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
@@ -27,7 +28,7 @@ import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Queue (noMirrorQueue)
 import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
 import Ecluse.Cve.Sync (CveSyncHandle (csClock, csEnv, csReady), cveSyncTasks)
-import Ecluse.Proxy (runProxy)
+import Ecluse.Proxy (runProxy, warpExceptionHook)
 import Ecluse.Runtime.Cve.Sync.Internal (CveFetch (..), OsvDbFetchFault (OsvDbTransport), SyncEnv (..), SyncSchedule (SyncSchedule))
 import Ecluse.Runtime.Env (envMetrics)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
@@ -37,10 +38,21 @@ import Ecluse.Test.Log (captureJsonLog)
 import Ecluse.Test.Osv (mkDbWithWrongEpoch, mkMinimalValidDbWithMeta)
 import Ecluse.Test.Poll (awaitUntil, pollUntil)
 import Ecluse.Test.Port (passthroughTracingPort)
+import Ecluse.Test.Stub (redirectSecrets, redirectedStatusException)
 import Ecluse.Test.Wai (freePort)
 
 spec :: Spec
-spec = describe "runProxy advisory startup lifecycle" $
+spec = do
+    describe "warpExceptionHook" $
+        it "logs an escaped HTTP fault by its status at the dialled host:port, never the request or the response" $ do
+            (authority, err) <- redirectedStatusException status503
+            (_, logged) <- captureJsonLog (\logEnv -> warpExceptionHook logEnv Nothing (toException err))
+            logged `shouldSatisfy` T.isInfixOf (authority <> ": HTTP 503")
+            for_ redirectSecrets $ \secret -> logged `shouldSatisfy` (not . T.isInfixOf secret)
+    runProxySpec
+
+runProxySpec :: Spec
+runProxySpec = describe "runProxy advisory startup lifecycle" $
     for_ ["unavailable S3", "missing object", "rejected artifact"] $ \failure ->
         it ("keeps the listener alive through " <> failure <> " and recovers without restart") $
             withSystemTempDirectory "proxy-startup" $ \dir -> do

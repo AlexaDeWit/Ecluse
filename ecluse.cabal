@@ -815,6 +815,7 @@ library ecluse-test-support
     Ecluse.Test.Server.Route
     Ecluse.Test.Server.Transform
     Ecluse.Test.Stub
+    Ecluse.Test.Supervision
     Ecluse.Test.Support
     Ecluse.Test.Snapshot
     Ecluse.Test.Version

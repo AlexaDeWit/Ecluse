@@ -31,12 +31,12 @@ import System.IO.Error (catchIOError)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (evaluate, finally, try, tryAny)
+import UnliftIO.Exception (evaluate, finally, try)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbEpssNotEstablished), CveLookup (..), affecting, fixedAt, openCveDb, packageAdvisories)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
-import Ecluse.Core.Fault.Http (HttpFault (HttpStatus))
+import Ecluse.Core.Fault (HttpFault (HttpStatus))
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Compile (
     CompileSources (..),
@@ -67,12 +67,7 @@ import Ecluse.Core.Osv.Schema (EpssRequirement (..), osvDbFileName, osvSchemaEpo
 import Ecluse.Core.Osv.Stream (PilotIngestAborted (..))
 import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Core.Security.Authority (authorityLabel)
-import Ecluse.Core.Supervision (
-    BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
-    FaultDisposition (Permanent, Transient),
-    SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
-    superviseLoop,
- )
+import Ecluse.Core.Supervision (FaultDisposition (Permanent, Transient))
 import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),
     AdvisoryDropCause (DropMalformed, DropOversize),
@@ -80,11 +75,12 @@ import Ecluse.Core.Telemetry.Metrics (
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Cve (namesFix)
 import Ecluse.Test.Log (captureJsonLog, newTestLogEnv)
-import Ecluse.Test.Osv (CorpusVersion (CorpusV1), OsvTestM, osvCorpusZip, osvZipOf, runOsvJsonLog, runOsvTestM, runOsvTestMWith)
+import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip, osvZipOf, runOsvJsonLog, runOsvTestM, runOsvTestMWith)
 import Ecluse.Test.OsvDb (compileOsvToSqlite, compileOsvZipDbTo, compileOsvZipDbWithFeedTo, epssFixtureFile, metaOf, scoresOf)
 import Ecluse.Test.Port (RecordedCompile (RecordedCompile), recordingAdvisoryCompileMetricsPort)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Stub (Stub, redirectSecrets, secretAnswer, signedRedirect, stubBaseUrl, withRoutedStubIO, withStub, withStubHeaders)
+import Ecluse.Test.Supervision (superviseBriefly)
 import Network.HTTP.Client (applyBasicAuth, defaultRequest, requestHeaders)
 import Network.HTTP.Types (Header)
 import Network.HTTP.Types.Header (hLastModified)
@@ -713,7 +709,7 @@ fetchFaultSpec = describe "advisory fetch faults behind a redirect to a signed U
                             compile = compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor eco) EpssRequired (CompileSources osvUrl (unpack (stubBaseUrl epssStub) <> "/epss.csv.gz")) testQuietTime
                         runOsvTestM compile `shouldThrow` (== PilotOsvFetchFailed feed (HttpStatus 404))
                         for_ [Transient, Permanent] $ \disposition -> do
-                            logged <- supervisedCompileLog disposition compile
+                            logged <- runOsvJsonLog (superviseBriefly disposition compile)
                             logged `shouldSatisfy` T.isInfixOf ("OSV export fetch failed at " <> feed <> ": HTTP 404")
                             for_ redirectSecrets $ \secret -> logged `shouldSatisfy` (not . T.isInfixOf secret)
 
@@ -723,14 +719,6 @@ withSignedSource answers use = do
     pending <- newIORef answers
     let next = atomicModifyIORef' pending (\(answer :| rest) -> (fromMaybe (answer :| []) (nonEmpty rest), answer))
     withRoutedStubIO (signedRedirect next) $ \stub -> use (unpack (stubBaseUrl stub) <> "/feed")
-
--- The log of a compile that a fast supervision loop reruns, where every fault takes @disposition@.
-supervisedCompileLog :: FaultDisposition -> OsvTestM a -> IO Text
-supervisedCompileLog disposition compile =
-    runOsvJsonLog . void . timeout 300_000 . tryAny $
-        superviseLoop policy (void compile)
-  where
-    policy = SupervisionPolicy{spLabel = "pilot-export", spClassify = const disposition, spBackoff = BackoffSchedule{bsBaseMicros = 1_000, bsCapMicros = 8_000}}
 
 -- Each answer the requirement decides on: a status, an empty feed, both byte ceilings, and bad gzip.
 failedFeeds :: [(String, IO (Status, LByteString))]

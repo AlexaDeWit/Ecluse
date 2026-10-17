@@ -6,12 +6,15 @@ module Ecluse.Composition.BootErrorSpec (spec) where
 
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Network.HTTP.Types.Status (status503)
 import Test.Hspec
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Composition.BootError (
     Advisory (DredgerQuotaOverrideUnmatched, MirrorTargetOnOwnPublicationTarget, MirrorTargetOnPrivateUpstream, PrivateUpstreamUndecided, RemediationSkipsWithoutStore),
     BootError (..),
     StoreMaintenanceReason (ClientBuildFailed, NoControlPlane),
+    refuseOnThrow,
     renderAdvisory,
     renderBootError,
     renderBootErrors,
@@ -31,6 +34,7 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
  )
 import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyInstallTimeExecutionType))
 import Ecluse.Test.Package (unsafeRegistryUrl)
+import Ecluse.Test.Stub (redirectedStatusException)
 
 spec :: Spec
 spec = do
@@ -38,6 +42,7 @@ spec = do
     renderBootErrorSpec
     renderBootErrorsSpec
     renderAdvisorySpec
+    refuseOnThrowSpec
     forM_ [(Npm, "NPM"), (PyPI, "PYPI")] $ \(eco, envName) ->
         it ("names the first-party dependency and fix for " <> show eco) $
             TE.encodeUtf8 (renderBootError (FirstPartyWithoutPrivateUpstream eco))
@@ -68,6 +73,14 @@ ruleBlockRenderSpec = describe "blocked-rule remedies" $ do
     it "retains both block lines beside an independent refusal" $
         renderBootErrors ([RuleBlockedOnMount PyPI ty reason | (ty, _, reason) <- entries] <> [MissingAdapter RubyGems])
             `shouldBe` T.unlines ([expected name reason | (_, name, reason) <- entries] <> ["mount rubygems has no adapter wired in this build"])
+
+refuseOnThrowSpec :: Spec
+refuseOnThrowSpec =
+    describe "refuseOnThrow" $
+        it "refuses an HTTP fault by its status at the dialled host:port, never the request or the response" $ do
+            (authority, err) <- redirectedStatusException status503
+            refuseOnThrow (PrivateUpstreamProbeFailed Npm) (throwIO err :: IO ())
+                `shouldReturn` Left [PrivateUpstreamProbeFailed Npm (authority <> ": HTTP 503")]
 
 renderBootErrorsSpec :: Spec
 renderBootErrorsSpec =
