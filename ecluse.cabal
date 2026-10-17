@@ -731,6 +731,7 @@ library ecluse-site
   exposed-modules:
     Ecluse.Site.Markdown
     Ecluse.Site.OpenApi
+    Ecluse.Site.Search
 
   build-depends:
     , ecluse:ecluse-report-format
@@ -1455,6 +1456,7 @@ test-suite ecluse-unit
     Ecluse.ServiceSpec
     Ecluse.Site.MarkdownSpec
     Ecluse.Site.OpenApiSpec
+    Ecluse.Site.SearchSpec
     Ecluse.Test.Corpus.AdvisoriesSpec
     Ecluse.Test.InstalledTreeSpec
     Ecluse.Test.OsvSpec
