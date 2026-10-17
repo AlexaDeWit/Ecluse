@@ -353,7 +353,11 @@ overwrite each other's work. It orders the OSV export and the EPSS feed separate
 | An earlier `Last-Modified` | Refuses. |
 | The same `Last-Modified` with other bytes, or other bytes and no date to compare | Refuses. |
 | A source URL other than the stored one | Publishes, and starts a new order for that source. |
-| A `Last-Modified` more than five minutes after Pilot's clock | Counts as no `Last-Modified`, so the same bytes refresh and changed bytes are refused. Pilot never stores that date. |
+| A `Last-Modified` more than five minutes after Pilot's clock | Counts as no `Last-Modified`, so the same bytes refresh and changed bytes are refused. Pilot never stores that date as its ordering marker. |
+
+On a first publication, or after a source URL changes, a future date leaves that source's stored marker
+unknown. Changed bytes from that source are then refused as different bytes without a `Last-Modified`
+on both sides, until you replace or delete the stored object.
 
 The new artifact must also stay within `advisories.maxShrinkPercent` of the size baseline, 2% by
 default. The baseline is the largest size accepted under the object key, and it travels in the
@@ -373,7 +377,7 @@ cycle. The local artifact under `advisories.dataDir` changes only after a public
 |---|---|
 | An older snapshot | The source served data older than what is published. A mirror can serve stale data. The next snapshot with a later `Last-Modified` publishes. |
 | Different bytes under the published `Last-Modified` | Nothing orders the two snapshots. This clears by itself: the next snapshot with a later `Last-Modified` publishes. |
-| Different bytes without a `Last-Modified` on both sides | Pilot orders a changed snapshot only when the new snapshot and the published artifact both carry that source's `Last-Modified`, so a source must send the header for a changed snapshot to publish. Neither a later run nor a rebaseline gets past it. Point `advisories.osvExportBaseUrl` or `advisories.epssFeedUrl` at a source that sends the header, which starts a new order, or replace or delete the stored object yourself. |
+| Different bytes without a `Last-Modified` on both sides | Pilot orders a changed snapshot only when the new snapshot and the published artifact both carry that source's `Last-Modified`, so a source must send the header for a changed snapshot to publish. Neither a later run nor a rebaseline gets past it. A refusal caused by a future `Last-Modified` is the exception, if the published artifact carries a date. The next snapshot with a later, current date clears it. Point `advisories.osvExportBaseUrl` or `advisories.epssFeedUrl` at a source that sends the header, which starts a new order, or replace or delete the stored object yourself. |
 | A shrink under the baseline | The feed lost coverage, or legitimately shrank more than the allowance. Check the feed before you [rebaseline](#rebaselining). |
 | Missing publication metadata | The stored object lacks one or more of the guard's metadata keys, so Pilot cannot order against it and does not replace it. |
 | A refused read, or an absence the listing could not prove | Pilot lacks a permission from [Role identities and least privilege](@/docs/deployment.md#role-identities-and-least-privilege). |

@@ -203,6 +203,7 @@ compileCandidate run dbFile =
 
         -- The join needs the whole score table before the first advisory row lands.
         enrichment <- enrichOrRefuse run mSpan
+        epssMarker <- traverse (\feed -> answeredMarker (csEpssFeedUrl sources) (efLastModified feed) (efDigest feed)) (enrichedFeed enrichment)
         ingest <- newOsvIngest defaultIngestLimits (crEcosystem run) (maybe (mkEpssScores []) efScores (enrichedFeed enrichment)) now
 
         bracket (liftIO $ open dbFile) (liftIO . close) $ \conn -> do
@@ -210,7 +211,16 @@ compileCandidate run dbFile =
             osvDigest <- ingestAdvisories run ingest conn
             stats <- readIngestStats ingest
             attempt <- readOsvAttempt ingest
-            concludeCompile (crMetrics run) mSpan conn (conclusionOf run now enrichment attempt osvDigest stats)
+            osvMarker <- answeredMarker (csOsvExportUrl sources) (oaLastModified attempt) osvDigest
+            concludeCompile (crMetrics run) mSpan conn (conclusionOf run now enrichment attempt stats osvMarker epssMarker)
+  where
+    sources = crSources run
+
+-- A retried fetch can answer minutes after the pass began, so a source's date is bounded by a clock read once it answered.
+answeredMarker :: (MonadIO m) => String -> Maybe UTCTime -> ContentDigest -> m SourceMarker
+answeredMarker url declared digest = do
+    answeredAt <- liftIO getCurrentTime
+    pure (SourceMarker (sourceIdentityOf (credentialFreeUrl (toText url))) (usableLastModified answeredAt declared) (sourceDigestOf digest))
 
 describeCompile :: (MonadIO m) => CompileRun -> Span -> m ()
 describeCompile run sp = do
@@ -283,22 +293,21 @@ data CompileConclusion = CompileConclusion
     , ccNow :: UTCTime
     }
 
-conclusionOf :: CompileRun -> UTCTime -> EpssEnrichment -> OsvAttempt -> ContentDigest -> IngestStats -> CompileConclusion
-conclusionOf run now enrichment attempt osvDigest stats =
+conclusionOf :: CompileRun -> UTCTime -> EpssEnrichment -> OsvAttempt -> IngestStats -> SourceMarker -> Maybe SourceMarker -> CompileConclusion
+conclusionOf run now enrichment attempt stats osvMarker epssMarker =
     CompileConclusion
         { ccEcosystem = osvWireName (crEcosystem run)
         , ccSources = sources
         , ccStats = stats
         , ccEpssStatus = enrichmentStatus enrichment
         , ccProvenance = passProvenance sources enrichment attempt
-        , ccOsvMarker = SourceMarker (identityOf (csOsvExportUrl sources)) (usableLastModified now (oaLastModified attempt)) (sourceDigestOf osvDigest)
-        , ccEpssMarker = (\feed -> SourceMarker (identityOf (csEpssFeedUrl sources)) (usableLastModified now (efLastModified feed)) (sourceDigestOf (efDigest feed))) <$> enrichedFeed enrichment
+        , ccOsvMarker = osvMarker
+        , ccEpssMarker = epssMarker
         , ccQuietTime = crQuietTime run
         , ccNow = now
         }
   where
     sources = crSources run
-    identityOf = sourceIdentityOf . credentialFreeUrl . toText
 
 newCandidate :: FilePath -> IO FilePath
 newCandidate outDir = do

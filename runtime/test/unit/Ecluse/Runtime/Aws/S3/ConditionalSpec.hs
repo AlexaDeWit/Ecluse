@@ -78,7 +78,7 @@ spec = do
                 cappedList env `shouldThrow` (== ResponseTooLarge maxCappedResponseBytes)
 
         it "throws past the bound on an error body" $
-            withS3 (reply status403 [] (xmlError "AccessDenied" <> LBS.replicate (fromIntegral maxCappedResponseBytes) 0x20)) $ \env ->
+            withS3 (reply status403 [] (paddedError (maxCappedResponseBytes + 1))) $ \env ->
                 runResourceT (AWS.sendEither env (Capped (artifactPut IfAbsent))) `shouldThrow` (== ResponseTooLarge maxCappedResponseBytes)
   where
     artifactPut precondition = ConditionalPut precondition (S3.newPutObject (S3.BucketName "records") (S3.ObjectKey "key") (AWS.toBody ("artifact" :: ByteString)))
@@ -90,3 +90,5 @@ spec = do
         let opening = "<ListBucketResult><IsTruncated>false</IsTruncated><KeyCount>0</KeyCount>"
             closing = "</ListBucketResult>"
          in opening <> LBS.replicate (fromIntegral size - LBS.length opening - LBS.length closing) 0x20 <> closing
+    -- An access-denied error body followed by white space, to exactly this many bytes.
+    paddedError size = let body = xmlError "AccessDenied" in body <> LBS.replicate (fromIntegral size - LBS.length body) 0x20
