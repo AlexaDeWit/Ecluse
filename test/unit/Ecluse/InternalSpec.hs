@@ -81,6 +81,8 @@ spec = do
                 handler (toException (AWS.TransportError refused))
             reported `shouldSatisfy` T.isPrefixOf ("ecluse: uncaught exception: AWS request failed at " <> closedAuthority)
             reported `shouldSatisfy` holdsNoPlantedSecret
+            -- One line, as hPutStrLn ends it: no exception context follows the typed text.
+            length (T.lines reported) `shouldBe` 1
 
         it "reports an amazonka error that ends a forked thread the same way" $ do
             refused <- refusedFetch =<< signedRequest
@@ -90,6 +92,8 @@ spec = do
                 void (awaitUntil 1_000_000 1_000 (threadEnded thread))
             reported `shouldSatisfy` T.isPrefixOf ("ecluse: uncaught exception: AWS request failed at " <> closedAuthority)
             reported `shouldSatisfy` holdsNoPlantedSecret
+            -- One line, as hPutStrLn ends it: no exception context follows the typed text.
+            length (T.lines reported) `shouldBe` 1
 
     describe "exitCodeFor (the operator-visible exit table)" $
         it "maps each outcome onto its documented status" $ do
