@@ -8,23 +8,37 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
 import Test.Hspec
 
+import Ecluse.Test.Env (withEnvVars)
 import Ecluse.Test.Log (newTestLogEnv)
+import Ecluse.Test.Stub (refusedFetch, requestSecrets, signedRequest)
 import Ecluse.Test.WireVocab (wireRoundTrips)
 import Katip (Severity (WarningS))
 import OpenTelemetry.Exporter.Metric (MetricExporter (..))
-import OpenTelemetry.Exporter.Span (ExportResult (Failure), SpanExporter (..))
+import OpenTelemetry.Exporter.Span (ExportResult (Failure, Success), SpanExporter (..))
 import OpenTelemetry.Log.Core (createLoggerProvider, emptyLoggerProviderOptions)
 import OpenTelemetry.Metric (
     FlushResult (FlushSuccess),
     ShutdownResult (ShutdownSuccess),
     noopMeterProvider,
  )
+import OpenTelemetry.Registry (registerSpanExporterFactory)
 import OpenTelemetry.SDK (OTelSignals (..))
 import OpenTelemetry.Trace (
     createTracerProvider,
     emptyTracerProviderOptions,
+    forceFlushTracerProvider,
  )
+import OpenTelemetry.Trace.Core (
+    Event (eventAttributes, eventName),
+    ImmutableSpan (spanHot),
+    SpanHot (hotStatus),
+    SpanStatus (Error),
+ )
+import UnliftIO.Exception (throwIO, tryAny)
 
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Fault.Http (displayFaultT)
+import Ecluse.Core.Telemetry.Metrics (AdvisorySyncResult (AdvisoryRefused))
 import Ecluse.Runtime.Telemetry.ExportFailure.Internal (newExportFailureSink)
 import Ecluse.Runtime.Telemetry.Internal (
     Telemetry (..),
@@ -39,17 +53,17 @@ import Ecluse.Runtime.Telemetry.Internal (
     telemetryTracerProvider,
     withTelemetry,
  )
+import Ecluse.Runtime.Telemetry.Tracing.Internal (withAdvisorySyncSpan)
+import Ecluse.Runtime.Test.Telemetry (spanEvents)
 
-{- | Tests the OpenTelemetry substrate: the @ECLUSE_OBSERVABILITY__TELEMETRY@ switch parses
-strictly, the off handle initialises no SDK, and 'telemetryEnabled' wires the SDK providers
-through. The live @on@ path opens a real exporter, so the integration tier covers it.
--}
+-- | The switch parses strictly, the off handle builds no SDK, and the on handle's provider records an escape by its typed fault.
 spec :: Spec
 spec = do
     switchSpec
     handleSpec
     enabledHandleSpec
     lifecycleSpec
+    escapeWiringSpec
     exportObservationSpec
 
 switchSpec :: Spec
@@ -75,9 +89,7 @@ handleSpec =
             isNothing (telemetryTracerProvider telemetryDisabled) `shouldBe` True
             isNothing (telemetryMeterProvider telemetryDisabled) `shouldBe` True
 
-{- | An 'OTelSignals' of inert providers, so a test drives 'telemetryEnabled' without the real
-SDK. It reads only the tracer and meter fields, the rest keep the value total.
--}
+-- | An 'OTelSignals' of inert providers, so a test drives 'telemetryEnabled' without the real SDK.
 offlineSignals :: IO OTelSignals
 offlineSignals = do
     tracerProvider <- createTracerProvider [] emptyTracerProviderOptions
@@ -129,6 +141,41 @@ lifecycleSpec = describe "withTelemetry" $ do
         logEnv <- newTestLogEnv
         result <- withTelemetry TelemetryOff logEnv (const (pure (42 :: Int)))
         result `shouldBe` 42
+
+{- The provider the on switch builds tells the library to ignore a request-carrying exception, so a
+domain span records it once, by its typed fault. Without that, the library adds the request. -}
+escapeWiringSpec :: Spec
+escapeWiringSpec = describe "withTelemetry on" $
+    it "builds a tracer provider that records an escaping HTTP exception by its typed fault, never its request" $ do
+        exported <- newIORef []
+        registerSpanExporterFactory keepingExporterName (pure (keepingSpanExporter exported))
+        refused <- refusedFetch =<< signedRequest
+        logEnv <- newTestLogEnv
+        withEnvVars ["OTEL_SDK_DISABLED", "OTEL_TRACES_SAMPLER"] onlyKeptTraces . withTelemetry TelemetryOn logEnv $ \telemetry -> do
+            for_ [Npm, PyPI] $ \eco -> tryAny (withAdvisorySyncSpan telemetry eco (const (AdvisoryRefused, Nothing)) (throwIO refused))
+            for_ (telemetryTracerProvider telemetry) (`forceFlushTracerProvider` Nothing)
+        hots <- traverse (readIORef . spanHot) =<< readIORef exported
+        map hotStatus hots `shouldBe` replicate 2 (Error (displayFaultT (toException refused)))
+        let events = concatMap spanEvents hots
+        map eventName events `shouldBe` replicate 2 "exception"
+        for_ requestSecrets $ \secret -> show (map eventAttributes events) `shouldSatisfy` (not . T.isInfixOf secret)
+
+-- The registry name the escape-wiring case exports its spans under.
+keepingExporterName :: Text
+keepingExporterName = "ecluse-unit-kept"
+
+-- The SDK environment that sends traces to 'keepingSpanExporter' alone, and metrics and logs nowhere.
+onlyKeptTraces :: [(String, String)]
+onlyKeptTraces = [("OTEL_TRACES_EXPORTER", toString keepingExporterName), ("OTEL_METRICS_EXPORTER", "none"), ("OTEL_LOGS_EXPORTER", "none")]
+
+-- A span exporter that keeps every span it receives. The SDK's environment-driven init takes an exporter, never a processor.
+keepingSpanExporter :: IORef [ImmutableSpan] -> SpanExporter
+keepingSpanExporter kept =
+    SpanExporter
+        { spanExporterExport = \batches -> Success <$ modifyIORef' kept (<> concatMap toList (toList batches))
+        , spanExporterShutdown = pure ShutdownSuccess
+        , spanExporterForceFlush = pure FlushSuccess
+        }
 
 {- The wrapper surfaces the first export failure, suppresses repeats inside the throttle
 window, then heartbeats the suppressed count off an injected clock. -}

@@ -15,6 +15,7 @@ module Ecluse.Core.Server.Stream (
     UpstreamResult (..),
     withUpstreamWhen,
     withUpstreamResult,
+    UpstreamBodyFailed (..),
 
     -- * The pump
     pumpBody,
@@ -26,8 +27,10 @@ import Network.HTTP.Client (BodyReader, Manager, Request, brRead, responseClose,
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (ResponseHeaders, Status)
 import Network.Wai (StreamingBody)
-import UnliftIO.Exception (finally, mask, tryAny)
+import UnliftIO.Exception (finally, mask, throwIO, try, tryAny)
 
+import Ecluse.Core.Fault (TransportFault, renderTransportFault)
+import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Registry.Progress (meteredReader, watchedRaising)
 import Ecluse.Core.Security (ProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
@@ -76,6 +79,13 @@ data UpstreamResult a
       UpstreamTransportFailure
     deriving stock (Eq, Show)
 
+-- | The upstream body failed after the relay committed its response, so the connection can only be torn down. It never carries the upstream request.
+newtype UpstreamBodyFailed = UpstreamBodyFailed TransportFault
+    deriving stock (Eq, Show)
+
+instance Exception UpstreamBodyFailed where
+    displayException (UpstreamBodyFailed fault) = toString ("the upstream body failed after the response was committed: " <> renderTransportFault fault)
+
 -- | Relay accepted responses, preserving pre-commit misses and propagating failures after the commit.
 withUpstreamResult ::
     Manager ->
@@ -106,8 +116,10 @@ withUpstreamResult manager progress request body accept relay respond =
       where
         upstreamStatus = responseStatus upstream
         bodiless = body == NoBody || isNotModified upstreamStatus
+        -- A body read fails with the upstream request inside, so the fault is typed before it leaves.
         pump write flush =
-            watchedRaising progress (\watch -> pumpBody (meteredReader watch (brRead (HTTP.responseBody upstream))) write flush)
+            try (watchedRaising progress (\watch -> pumpBody (meteredReader watch (brRead (HTTP.responseBody upstream))) write flush))
+                >>= either (throwIO . UpstreamBodyFailed . classifyTransport) pure
 
 -- | Pump chunks with one opening flush. An empty chunk marks the end of the body.
 pumpBody :: BodyReader -> (Builder -> IO ()) -> IO () -> IO ()
