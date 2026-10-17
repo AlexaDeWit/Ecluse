@@ -88,6 +88,7 @@ import Ecluse.E2E.Harness.Stub (
     stubUrl,
  )
 import Ecluse.E2E.Harness.Types
+import Ecluse.Test.Collector (collectorConfig)
 import Ecluse.Test.Container.Image (
     ImageRef (LocallyBuilt),
     collectorImage,
@@ -394,7 +395,7 @@ withOptionalCollector cfg labelArgs net coll body
         let collectorRun =
                 (dockerRun coll net image)
                     { drAliases = [toString collectorAlias]
-                    , drEnv = [("OTELCOL_CONFIG", collectorConfig)]
+                    , drEnv = [("OTELCOL_CONFIG", collectorConfig ["traces", "metrics"])]
                     , drCmd = ["--config", "env:OTELCOL_CONFIG"]
                     }
         withDockerContainer labelArgs collectorRun $ \_ -> do
@@ -444,16 +445,6 @@ datadogCollectorEnv =
     , ("DD_AGENT_HOST", collectorAlias)
     ]
         <> telemetryExportTuning
-
-{- The collector configuration as a single-line flow-style YAML document. It arrives through
-the @env:@ provider, so the distroless image needs no shell, file, or bind mount. -}
-collectorConfig :: Text
-collectorConfig =
-    "{receivers: {otlp: {protocols: {http: {endpoint: \"0.0.0.0:4318\"}}}}, "
-        <> "exporters: {debug: {verbosity: detailed}}, "
-        <> "service: {pipelines: {"
-        <> "traces: {receivers: [otlp], exporters: [debug]}, "
-        <> "metrics: {receivers: [otlp], exporters: [debug]}}}}"
 
 -- | The exit status and JSONL logs from a completed product-image invocation.
 data RoleRun = RoleRun
