@@ -32,7 +32,12 @@ module Ecluse.Runtime.Telemetry.Tracing.Internal (
     ruleVerdictFields,
 ) where
 
-import Network.HTTP.Client (ManagerSettings)
+import Network.HTTP.Client (
+    HttpException (HttpExceptionRequest),
+    HttpExceptionContent (InternalException),
+    ManagerSettings (managerWrapException),
+ )
+import Network.HTTP.Client.Internal (throwHttp)
 import Network.Wai (Middleware)
 import OpenTelemetry.Instrumentation.HttpClient (
     HttpClientInstrumentationConfig,
@@ -56,8 +61,9 @@ import OpenTelemetry.Trace (
     tracerOptions,
  )
 import UnliftIO (MonadUnliftIO, withRunInIO)
-import UnliftIO.Exception (withException)
+import UnliftIO.Exception (catch, throwIO, withException)
 
+import Ecluse.Core.Cve.Types (OsvDbFetchFault, renderOsvDbFetchFault)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Queue (RemoteSpanContext (RemoteSpanContext, rscTraceparent, rscTracestate))
@@ -92,7 +98,17 @@ instrumentDataPlaneManagerSettings :: Telemetry -> ManagerSettings -> IO Manager
 instrumentDataPlaneManagerSettings telemetry settings =
     case telemetryTracerProvider telemetry of
         Nothing -> pure settings
-        Just _ -> instrumentManagerSettings dataPlaneInstrumentationConfig settings
+        Just _ -> instrumentManagerSettings dataPlaneInstrumentationConfig (wrapWithoutRequest settings)
+
+{- The client span records what the base wrapper raises, and the TLS wrapper tags a connection fault
+with its request. Raise it untagged: @responseOpen@ tags it again with the same request. -}
+wrapWithoutRequest :: ManagerSettings -> ManagerSettings
+wrapWithoutRequest settings =
+    settings{managerWrapException = \request action -> managerWrapException settings request action `catch` untagged}
+  where
+    untagged = \case
+        HttpExceptionRequest _ content@(InternalException _) -> throwHttp content
+        other -> throwIO other
 
 -- | The data plane's http-client instrumentation. It records __no__ headers, so an @Authorization@ header never reaches a span.
 dataPlaneInstrumentationConfig :: HttpClientInstrumentationConfig
@@ -155,7 +171,7 @@ withAdvisorySyncSpan ::
     (MonadUnliftIO m) =>
     Telemetry ->
     Ecosystem ->
-    (a -> (AdvisorySyncResult, Maybe Text)) ->
+    (a -> (AdvisorySyncResult, Maybe OsvDbFetchFault)) ->
     m a ->
     m a
 withAdvisorySyncSpan telemetry eco project action =
@@ -164,7 +180,7 @@ withAdvisorySyncSpan telemetry eco project action =
         result <- action
         let (outcome, failure) = project result
         recordFields mSpan [("ecluse.advisory.sync.result", advisorySyncResultName outcome)]
-        whenJust mSpan $ \theSpan -> whenJust failure (setStatus theSpan . Error)
+        whenJust mSpan $ \theSpan -> whenJust failure (setStatus theSpan . Error . renderOsvDbFetchFault)
         pure result
 
 -- A domain span over one package alone: the packument gate and the two metadata legs.

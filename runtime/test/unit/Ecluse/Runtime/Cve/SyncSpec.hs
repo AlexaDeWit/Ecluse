@@ -34,7 +34,7 @@ import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbEpssNotEstablished, CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (..))
 import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, swapIn, withSlotGeneration)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apOsvNewestModified, apOsvSource), noProvenance)
 import Ecluse.Core.Osv.Schema (EpssRequirement (..), osvDbFileName, osvSchemaEpoch)
@@ -92,34 +92,39 @@ import Ecluse.Test.Sweep (RecordedSweep (recPorts), recordingPorts, testMount, t
 -- attempt span and the fetch report carry its typed fault, never the object key or a signed header.
 resetDownloadSpec :: Spec
 resetDownloadSpec = describe "a GetObject body that resets mid-download" $
-    it "is a typed transport fault on the attempt span and in the fetch report, never the signed request" $
-        withSyncEnv $ \_ _ envWith ->
-            withS3 (brokenResponse "200 OK" "Content-Length: 20\r\n\r\nshort") $ \awsEnv -> do
-                (processor, spansRef) <- inMemoryListExporter
-                tracerProvider <- createTracerProvider [processor] (withEscapeHandler emptyTracerProviderOptions)
-                (logEnv, readMessages) <- memoryLogEnv
-                let tracing = advisorySyncTracingPortOf (TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider))
-                    env = envWith (s3CveFetch awsEnv "test-advisories" "npm.db" 1_000_000)
-                    reported = find (T.isInfixOf "sync fetch failed") <$> readMessages
-                runKatipContextT logEnv () mempty . withAsync (runCveSync noopAdvisorySyncMetricsPort tracing env oneAttempt (notifyOnly pass)) $ \_ ->
-                    liftIO (waitFor "the fetch report" (isJust <$> reported))
-                report <- fromMaybe "" <$> reported
-                report `shouldSatisfy` T.isInfixOf "sync fetch failed: 127.0.0.1:"
-                for_ ["npm.db", "X-Amz-"] $ \leak -> report `shouldSatisfy` (not . T.isInfixOf leak)
-                _ <- forceFlushTracerProvider tracerProvider Nothing
-                statuses <- traverse (fmap hotStatus . readIORef . spanHot) =<< readIORef spansRef
-                statuses `shouldSatisfy` any (\case Error message -> T.isSuffixOf message report; _ -> False)
+    for_ [(Npm, "npm.db"), (PyPI, "pypi.db")] $ \(eco, key) ->
+        it ("is a typed transport fault on the " <> toString (ecosystemName eco) <> " attempt span and in the fetch report, never the signed request") $
+            withSyncEnvFor eco $ \_ _ envWith ->
+                withS3 (brokenResponse "200 OK" "Content-Length: 20\r\n\r\nshort") $ \awsEnv -> do
+                    (processor, spansRef) <- inMemoryListExporter
+                    tracerProvider <- createTracerProvider [processor] (withEscapeHandler emptyTracerProviderOptions)
+                    (logEnv, readMessages) <- memoryLogEnv
+                    let tracing = advisorySyncTracingPortOf (TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider))
+                        env = envWith (s3CveFetch awsEnv "test-advisories" key 1_000_000)
+                        reported = find (T.isInfixOf "sync fetch failed") <$> readMessages
+                    runKatipContextT logEnv () mempty . withAsync (runCveSync noopAdvisorySyncMetricsPort tracing env oneAttempt (notifyOnly pass)) $ \_ ->
+                        liftIO (waitFor "the fetch report" (isJust <$> reported))
+                    report <- fromMaybe "" <$> reported
+                    report `shouldSatisfy` T.isInfixOf "sync fetch failed: 127.0.0.1:"
+                    for_ [key, "X-Amz-"] $ \leak -> report `shouldSatisfy` (not . T.isInfixOf leak)
+                    _ <- forceFlushTracerProvider tracerProvider Nothing
+                    statuses <- traverse (fmap hotStatus . readIORef . spanHot) =<< readIORef spansRef
+                    statuses `shouldSatisfy` any (\case Error message -> T.isPrefixOf "127.0.0.1:" message && T.isSuffixOf message report; _ -> False)
 
 withSyncEnv :: (FilePath -> CveSlot -> (CveFetch -> SyncEnv) -> IO a) -> IO a
-withSyncEnv use =
+withSyncEnv = withSyncEnvFor Npm
+
+-- 'withSyncEnv' for one ecosystem's sync task.
+withSyncEnvFor :: Ecosystem -> (FilePath -> CveSlot -> (CveFetch -> SyncEnv) -> IO a) -> IO a
+withSyncEnvFor eco use =
     withSystemTempDirectory "ecluse-cve-sync" $ \dir -> do
         slot <- newCveSlot
         let envWith fetch =
                 SyncEnv
                     { syncFetch = fetch
-                    , syncEcosystem = Npm
+                    , syncEcosystem = eco
                     , syncEpssRequirement = EpssOptional
-                    , syncDbPath = dir </> osvDbFileName "npm"
+                    , syncDbPath = dir </> osvDbFileName (ecosystemName eco)
                     , syncSlot = slot
                     , syncStoreRef = testStoreRef
                     }

@@ -30,6 +30,7 @@ import Ecluse.Core.Security (Limits (progressFloor), ProgressFloor, defaultLimit
 import Ecluse.Core.Server.Conditional (isNotModified)
 import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamBody (NoBody, StreamBody), UpstreamBodyFailed (UpstreamBodyFailed), pumpBody, withUpstreamWhen)
 import Ecluse.Test.Registry.JsonStream (sliceChunks)
+import Ecluse.Test.Stub (requestSecrets, signedRequest)
 import Ecluse.Test.Wai (pacedBody)
 
 spec :: Spec
@@ -133,7 +134,7 @@ spec = do
                     fromException err `shouldSatisfy` \case
                         Just (UpstreamBodyFailed _) -> True
                         Nothing -> False
-                    for_ ["path-secret", "query-secret"] $ \secret -> toText (displayException err) `shouldSatisfy` (not . T.isInfixOf secret)
+                    for_ requestSecrets $ \secret -> toText (displayException err) `shouldSatisfy` (not . T.isInfixOf secret)
                 Nothing -> expectationFailure "no fault escaped the committed relay"
 
     describe "withUpstreamWhen, a bodiless relay (HEAD, no pump)" $
@@ -168,7 +169,7 @@ relayProxy progress body accept method manager upPort _req respond = do
 -- A relay of a signed upstream URL that records whatever escapes it, so a case reads what a committed failure carries.
 recordingSignedRelay :: IORef (Maybe SomeException) -> ProxyApp
 recordingSignedRelay escaped manager upPort _req respond = do
-    upstream <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/path-secret/all.tgz?X-Amz-Signature=query-secret")
+    upstream <- (\request -> request{HTTP.port = upPort}) <$> signedRequest
     outcome <-
         withUpstreamWhen manager (progressFloor defaultLimits) upstream StreamBody statusIsSuccessful relayVerbatim (waiRelayResponder respond)
             `withException` (writeIORef escaped . Just)

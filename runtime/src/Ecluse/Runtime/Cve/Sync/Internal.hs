@@ -13,7 +13,6 @@ module Ecluse.Runtime.Cve.Sync.Internal (
     FetchedObject (..),
     DbEtag (..),
     OsvDbFetchFault (..),
-    renderOsvDbFetchFault,
     OsvDbCapExceeded (..),
     S3CveSource,
     newS3CveSource,
@@ -55,9 +54,8 @@ import Lens.Micro ((^.))
 
 import Ecluse.Core.Cve (CveDb (cveDbClose, cveDbMeta), CveDbRejected, openCveDb)
 import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, observeAdvisoryPublication, swapIn)
-import Ecluse.Core.Cve.Types (DbEtag (..))
+import Ecluse.Core.Cve.Types (DbEtag (..), OsvDbFetchFault (..), renderOsvDbFetchFault)
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Fault (TransportFault, renderTransportFault)
 import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apEpssScoreDate, apOsvNewestModified, apOsvSource))
 import Ecluse.Core.Osv.Schema (EpssRequirement, MetaKey (MetaBuiltAt, MetaRowCount), renderMetaKey)
@@ -89,23 +87,6 @@ data FetchedObject = FetchedObject
     -- ^ The object's own timestamp, 'Nothing' when the store reported none.
     }
     deriving stock (Eq, Show)
-
--- | Why an artifact fetch did not yield usable bytes: a value on the 'CveFetch' channel, never an exception, which 'syncStep' folds in.
-data OsvDbFetchFault
-    = -- | The object exceeds the configured byte cap (carried, in bytes).
-      OsvDbTooLarge Int
-    | -- | The response carried no ETag, so there is nothing truthful to record.
-      OsvDbNoEtag
-    | -- | The transport could not deliver the object (carried, classified).
-      OsvDbTransport TransportFault
-    deriving stock (Eq, Show)
-
--- | A fetch fault as a report line or a span status reads it. It never names the object URL or the request.
-renderOsvDbFetchFault :: OsvDbFetchFault -> Text
-renderOsvDbFetchFault = \case
-    OsvDbTooLarge cap -> "the object passed its " <> show cap <> "-byte cap"
-    OsvDbNoEtag -> "the store answered without an ETag"
-    OsvDbTransport fault -> renderTransportFault fault
 
 -- | The __confined__ exception 'cappedAt' throws from inside a conduit, which 's3Download' folds into 'OsvDbTooLarge'.
 newtype OsvDbCapExceeded = OsvDbCapExceeded Int
@@ -387,7 +368,7 @@ observedStep metrics tracing env eco notifyFirstSync lastSeen =
         astpSyncAttemptSpan
             tracing
             ecosystem
-            (\stepped -> (stResult stepped, renderOsvDbFetchFault <$> stFault stepped))
+            (\stepped -> (stResult stepped, stFault stepped))
             (meteredStep metrics ecosystem (runInIO (attemptStep env eco notifyFirstSync lastSeen)))
   where
     ecosystem = syncEcosystem env

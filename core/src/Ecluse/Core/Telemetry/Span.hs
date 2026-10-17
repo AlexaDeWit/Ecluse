@@ -42,6 +42,7 @@ import OpenTelemetry.Trace.Core (
  )
 import UnliftIO (MonadUnliftIO, bracket)
 
+import Ecluse.Core.Cve.Types (OsvDbFetchFault)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Queue (RemoteSpanContext)
@@ -109,7 +110,7 @@ newtype AdvisorySyncTracingPort = AdvisorySyncTracingPort
     { astpSyncAttemptSpan ::
         forall a.
         Ecosystem ->
-        (a -> (AdvisorySyncResult, Maybe Text)) ->
+        (a -> (AdvisorySyncResult, Maybe OsvDbFetchFault)) ->
         IO a ->
         IO a
     -- ^ Bracket one attempt, recording the projected result and, for a failed fetch, its typed fault as the error status.
