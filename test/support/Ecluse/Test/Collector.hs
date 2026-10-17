@@ -24,8 +24,9 @@ collectorConfig pipelines =
         <> "service: {pipelines: {"
         <> T.intercalate ", " (map debugPipeline pipelines)
         <> "}}}"
-  where
-    debugPipeline name = name <> ": {receivers: [otlp], exporters: [debug]}"
+
+debugPipeline :: Text -> Text
+debugPipeline name = name <> ": {receivers: [otlp], exporters: [debug]}"
 
 -- | One span as the debug exporter printed it.
 data ExportedSpan = ExportedSpan
