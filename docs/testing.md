@@ -1875,7 +1875,7 @@ completion only when its lower-tier obligations and execution reports also pass.
 npm and PyPI both register the full ecosystem composition. The separately named read-only foundation
 remains an API for incomplete providers, not either ecosystem's active completion claim.
 CI uploads actual plan and report pairs from the instrumented core unit, runtime unit and
-integration legs. Each ecosystem job downloads all three pairs and audits them with its own E2E report.
+integration legs. The `e2e` job downloads all three pairs and audits each ecosystem against its subject's E2E report.
 All four tiers share the workflow run and attempt identity and use `arm64` as the architecture name.
 The lower tiers have no product image, while E2E binds the prepared image digest.
 
