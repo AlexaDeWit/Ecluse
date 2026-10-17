@@ -48,9 +48,7 @@ artifactOutcomeStatus decision
     | decision `elem` [versionAbsent, firstPartyAbsent] = NotFound
     | otherwise = artifactStatus decision
 
-{- | Render a non-admit artifact outcome as the serve error model. A transient status carries no
-suggested delay, because the single-artifact path has none to offer.
--}
+-- | Render a non-admit artifact outcome as the serve error model. A transient status suggests no delay.
 artifactError :: TarballReplies response -> PackumentDeps -> ServeDecision -> response
 artifactError replies deps decision =
     tarballError replies (artifactHttpStatus status) retryHeaders (mkRefusal (pdHelp deps) message)
@@ -86,9 +84,7 @@ upstreamUnavailable :: ServeDecision
 upstreamUnavailable =
     versionUnresolved VersionMetadataUnavailable "the upstream registry was unavailable"
 
-{- | A version absent from the public metadata. Its cause is terminal, and 'artifactOutcomeStatus'
-overrides that status to a @404@ forwarded miss.
--}
+-- | A version absent from the public metadata. 'artifactOutcomeStatus' renders it as a @404@ forwarded miss.
 versionAbsent :: ServeDecision
 versionAbsent =
     versionUnresolved VersionMissing "the requested version was not found upstream"
@@ -105,7 +101,7 @@ firstPartyAbsent :: ServeDecision
 firstPartyAbsent =
     Reject
         ( Rejection
-            (ByPolicy firstPartyRule)
+            (ByPolicy firstPartyRule [])
             "the requested artifact is first-party to this deployment, so it is served from the private upstream only and is never fetched from the public registry"
         )
 
