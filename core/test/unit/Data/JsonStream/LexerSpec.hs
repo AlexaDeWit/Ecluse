@@ -5,6 +5,7 @@
 -- | Recorded C lexer outputs remain independent of the replacement scanner.
 module Data.JsonStream.LexerSpec (spec) where
 
+import Control.Monad (foldM)
 import Data.Aeson ((.:), (.=))
 import Data.Aeson qualified as Aeson
 import Data.ByteString qualified as BS
