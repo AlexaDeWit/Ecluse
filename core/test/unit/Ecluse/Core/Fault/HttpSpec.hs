@@ -11,15 +11,15 @@ import Test.Hspec
 
 import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause, tfDetail), renderTransportCause)
 import Ecluse.Core.Fault.Http (classifyTransport, displayFaultT, httpFault)
+import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Test.Fault (httpTransportCause)
 import Ecluse.Test.Stub (redirectSecrets, redirectedStatusException, refusedFetch, requestSecrets, signedRequest)
 
--- | A typed fault outside the HTTP client, which renders as its own 'displayException'.
+-- | A typed fault outside the HTTP client.
 data OtherFault = OtherFault
     deriving stock (Show)
 
-instance Exception OtherFault where
-    displayException OtherFault = "another fault"
+instance Exception OtherFault
 
 spec :: Spec
 spec = do
@@ -47,8 +47,8 @@ spec = do
             rendered `shouldSatisfy` (not . T.isInfixOf "\n")
             for_ requestSecrets $ \secret -> rendered `shouldSatisfy` (not . T.isInfixOf secret)
 
-        it "renders any other exception as its own displayException, without GHC's context" $
-            displayFaultT (toException OtherFault) `shouldBe` "another fault"
+        it "renders any other exception as displayExceptionT does today" $
+            displayFaultT (toException OtherFault) `shouldBe` displayExceptionT (toException OtherFault)
 
     describe "classifyTransport" $ do
         it "details a timeout by the dialled host:port and the client's reason, never the request" $ do

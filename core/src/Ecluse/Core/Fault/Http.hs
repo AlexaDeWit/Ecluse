@@ -62,9 +62,9 @@ httpFault = \case
 isRetryableStatusCode :: Int -> Bool
 isRetryableStatusCode code = code >= 500 || code == 408 || code == 429
 
--- | An exception for a log line, without GHC's context. An 'HttpException' renders through 'renderHttpFault' at the @host:port@ it dialled.
+-- | 'displayExceptionT' for a log line, except that an 'HttpException' renders through 'renderHttpFault' at the @host:port@ it dialled.
 displayFaultT :: SomeException -> Text
-displayFaultT err@(SomeException inner) = maybe (displayExceptionT inner) renderDialled (fromException err)
+displayFaultT err = maybe (displayExceptionT err) renderDialled (fromException err)
   where
     renderDialled http = renderHttpFault (dialledAuthority http) (httpFault http)
 
