@@ -7,6 +7,7 @@ module Ecluse.Core.Osv.PublicationSpec (spec) where
 
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
+import Data.Traversable (mapAccumM)
 import Test.Hspec
 
 import Ecluse.Core.Osv.Provenance (ProvenanceSource (EpssFeed, OsvExport))
@@ -25,6 +26,7 @@ spec = do
         predecessorSpec fx
         shrinkSpec fx
         epssCreditSpec fx
+        futureDateSpec fx
         rebaselineSpec fx
     capabilitySpec fixture
 
@@ -170,6 +172,23 @@ epssCreditSpec fx = describe "the EPSS outage credit" $ do
         secondOutage <- plState <$> expectPlan (planWith fx (requestFor fx (osvAt (Just (hour 13)) "osv-d") Nothing 931) (present 1000 recovered))
         (psBaselineBytes secondOutage, psEpssCreditBytes secondOutage) `shouldBe` (1000, 50)
 
+    it "keeps the full margin after an overstated credit, because the credit never raises the baseline" $ do
+        let stored = scored{psBaselineBytes = 7180288, psScoredRows = 27115}
+        lost <- plState <$> expectPlan (planWith fx (requestFor fx (osvAt (Just (hour 11)) "osv-b") Nothing 6959104) (StorePresent revision 7180288 (Right stored)))
+        (psBaselineBytes lost, psEpssCreditBytes lost) `shouldBe` (7180288, 325380)
+        let back bytes = planWith fx (recovery bytes) (StorePresent revision 6959104 (Right lost))
+        psBaselineBytes . plState <$> back 7180288 `shouldBe` Right 7180288
+        isRight (back 7036683) `shouldBe` True
+        back 7036682 `shouldBe` Left (ShrinkPastBaseline (ShrinkReading 7036682 7036683 7180288 0))
+
+    it "never lowers the stored baseline over repeated outages and recoveries" $ do
+        let cycleOnce (stored, previousBytes, at) (lostBytes, backBytes) = do
+                lost <- plState <$> expectPlan (planWith fx (requestFor fx (osvAt (Just (hour at)) "osv-x") Nothing lostBytes) (present previousBytes stored))
+                back <- plState <$> expectPlan (planWith fx (requestFor fx (osvAt (Just (hour (at + 1))) "osv-y") (Just (epssAt (Just (hour (at + 1))) "epss-y")) backBytes) (present lostBytes lost))
+                pure ((back, backBytes, at + 2), [psBaselineBytes lost, psBaselineBytes back])
+        (_, baselines) <- mapAccumM cycleOnce (scored, 1000, 11) [(931, 1000), (940, 990), (935, 985)]
+        concat baselines `shouldBe` replicate 6 1000
+
     it "grants no credit when the cap is zero" $ do
         noCredit <- policyOf 2 0
         planPublication noCredit DurableBaseline (requestFor fx (osvAt (Just (hour 11)) "osv-b") Nothing 931) (present 1000 scored)
@@ -178,6 +197,34 @@ epssCreditSpec fx = describe "the EPSS outage credit" $ do
     it "grants no credit for fewer scores in a feed that arrived" $
         planWith fx (requestFor fx (osvAt (Just (hour 11)) "osv-b") (Just (epssAt (Just (hour 11)) "epss-b")) 931) (present 1000 scored)
             `shouldBe` Left (ShrinkPastBaseline (ShrinkReading 931 980 1000 0))
+
+futureDateSpec :: Fixture -> Spec
+futureDateSpec fx = describe "a Last-Modified past the run's clock" $
+    for_ [("the OSV export", OsvExport), ("the EPSS feed", EpssFeed)] $ \(label, source) -> do
+        let stored = baseState fx (osvAt (Just (hour 10)) "osv-a") (Just (epssAt (Just (hour 10)) "epss-a"))
+            -- The compile hands the model a marker it built against its own clock.
+            candidate stamp body = case source of
+                OsvExport -> requestFor fx (osvAt (usableLastModified runClock stamp) body) (Just (epssAt (Just (hour 10)) "epss-a")) 5000
+                EpssFeed -> requestFor fx (osvAt (Just (hour 10)) "osv-a") (Just (epssAt (usableLastModified runClock stamp) body)) 5000
+            same = if source == OsvExport then "osv-a" else "epss-a"
+            sourceMarker = if source == OsvExport then Just . psOsv else psLastEpss
+            outcome stamp body = planWith fx (candidate stamp body) (present 5000 stored)
+            past seconds = Just (addUTCTime seconds runClock)
+        it ("refreshes equal bytes from " <> label <> " and keeps the stored date") $
+            (sourceMarker . plState <$> outcome (past 86400) same) `shouldBe` Right (sourceMarker stored)
+        it ("refuses changed bytes from " <> label <> " that only a future date would order") $
+            outcome (past 86400) "changed" `shouldBe` Left (SourceOutOfOrder source UnorderedSnapshot)
+        it ("orders changed bytes from " <> label <> " up to five minutes past the clock, and not a second more") $ do
+            (orderOf source <$> outcome (past 300) "changed") `shouldBe` Right (Just OrderedForward)
+            outcome (past 301) "changed" `shouldBe` Left (SourceOutOfOrder source UnorderedSnapshot)
+        it ("publishes a later sane snapshot from " <> label <> " normally") $
+            (orderOf source <$> outcome (Just (hour 11)) "changed") `shouldBe` Right (Just OrderedForward)
+  where
+    orderOf source plan = if source == OsvExport then Just (plOsvOrder plan) else plEpssOrder plan
+
+-- The compile's clock in the future-date cases, two hours after the stored snapshots.
+runClock :: UTCTime
+runClock = hour 12
 
 rebaselineSpec :: Fixture -> Spec
 rebaselineSpec fx = describe "an operator rebaseline" $ do

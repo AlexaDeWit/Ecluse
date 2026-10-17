@@ -220,7 +220,7 @@ receiveUntilWithin attempts queue =
     arrived = either (const False) (not . null)
 
 -- | The user metadata the object at @key@ carries, keyed in lower case as S3 stores the keys.
-objectMetadata :: AWS.Env -> Text -> Text -> IO (HashMap.HashMap Text Text)
+objectMetadata :: AWS.Env -> Text -> S3.ObjectKey -> IO (HashMap.HashMap Text Text)
 objectMetadata aws bucket key = do
-    response <- runResourceT (AWS.send aws (S3.newHeadObject (S3.BucketName bucket) (S3.ObjectKey key)))
+    response <- runResourceT (AWS.send aws (S3.newHeadObject (S3.BucketName bucket) key))
     pure (HashMap.fromList (map (first T.toLower) (HashMap.toList (response ^. S3L.headObjectResponse_metadata))))

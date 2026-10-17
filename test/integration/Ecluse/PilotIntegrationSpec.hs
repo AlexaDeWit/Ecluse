@@ -172,7 +172,7 @@ spec = aroundAll withMinistack $ do
                     snapshot aws bucket `shouldReturn` before
                     stored <- maybe (fail "no stored revision") pure (listToMaybe (map objectTag before))
                     void (compile small (UploadRebaselined (Rebaseline (ObjectRevision (decodeUtf8 (unETag stored))) allowance)))
-                    metadata <- objectMetadata aws bucket (toText (osvDbFileName (ecosystemName eco)))
+                    metadata <- objectMetadata aws bucket (artifactKey eco)
                     rebaselined <- snapshot aws bucket
                     (HashMap.lookup "baseline-adjustment" metadata, HashMap.lookup "baseline-bytes" metadata)
                         `shouldBe` (Just "operator-rebaseline", show . objectSize <$> listToMaybe rebaselined)

@@ -17,6 +17,8 @@ module Ecluse.Core.Osv.Publication.Types (
     sourceDigestHex,
     parseSourceDigestHex,
     SourceMarker (..),
+    lastModifiedAllowance,
+    usableLastModified,
 
     -- * Revisions
     PublicationNonce,
@@ -49,7 +51,7 @@ module Ecluse.Core.Osv.Publication.Types (
 import Crypto.Random (getRandomBytes)
 import Data.Char (isHexDigit, isUpper)
 import Data.Text qualified as T
-import Data.Time (UTCTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.Universe.Class (Universe (..))
 import Data.Universe.Generic (universeGeneric)
 
@@ -93,10 +95,20 @@ parseSourceDigestHex = fmap SourceDigest . sha256HexText
 data SourceMarker = SourceMarker
     { smIdentity :: SourceIdentity
     , smLastModified :: Maybe UTCTime
-    -- ^ The @Last-Modified@ the source answered with, at the precision it supplied.
+    -- ^ The source's usable @Last-Modified@ ('usableLastModified'), at the precision it supplied.
     , smDigest :: SourceDigest
     }
     deriving stock (Eq, Show)
+
+-- | Five minutes: how far past the run's clock a source's @Last-Modified@ may sit. It bounds input and never orders.
+lastModifiedAllowance :: NominalDiffTime
+lastModifiedAllowance = 300
+
+-- | A @Last-Modified@ as ordering evidence. One later than the run's clock plus 'lastModifiedAllowance' counts as missing.
+usableLastModified :: UTCTime -> Maybe UTCTime -> Maybe UTCTime
+usableLastModified now stamp = do
+    declared <- stamp
+    declared <$ guard (declared <= addUTCTime lastModifiedAllowance now)
 
 -- | A fixed-width value inside each attempted artifact. An ETag follows content, so this gives every publication its own revision.
 newtype PublicationNonce = PublicationNonce Text

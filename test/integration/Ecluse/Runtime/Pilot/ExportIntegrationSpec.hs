@@ -198,7 +198,7 @@ headObject :: Store -> IO S3.HeadObjectResponse
 headObject store = runResourceT (AWS.send (stAws store) (S3.newHeadObject (S3.BucketName (bucketOf store)) (S3.ObjectKey (stKey store))))
 
 storedMetadata :: Store -> IO (HashMap.HashMap Text Text)
-storedMetadata store = objectMetadata (stAws store) (bucketOf store) (stKey store)
+storedMetadata store = objectMetadata (stAws store) (bucketOf store) (S3.ObjectKey (stKey store))
 
 storedEtag :: Store -> IO (Maybe S3.ETag)
 storedEtag store = (^. S3L.headObjectResponse_eTag) <$> headObject store

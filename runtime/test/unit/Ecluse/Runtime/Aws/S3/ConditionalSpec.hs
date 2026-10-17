@@ -9,6 +9,7 @@ import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 import Conduit (runResourceT)
 import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Network.HTTP.Types
 import Network.HTTP.Types.Header (hETag, hIfMatch, hIfNoneMatch)
@@ -66,7 +67,26 @@ spec = do
                 it ("proves absence from " <> label <> ": " <> show absent) $
                     withS3 (reply status200 [] listing) $ \env ->
                         list env `shouldReturn` absent
+
+    describe "Capped" $ do
+        it "decodes a body exactly at the bound" $
+            withS3 (reply status200 [] (paddedListing maxCappedResponseBytes)) $ \env ->
+                cappedList env `shouldReturn` True
+
+        it "throws past the bound on a success body, before the decoder reads it" $
+            withS3 (reply status200 [] (paddedListing (maxCappedResponseBytes + 1))) $ \env ->
+                cappedList env `shouldThrow` (== ResponseTooLarge maxCappedResponseBytes)
+
+        it "throws past the bound on an error body" $
+            withS3 (reply status403 [] (xmlError "AccessDenied" <> LBS.replicate (fromIntegral maxCappedResponseBytes) 0x20)) $ \env ->
+                runResourceT (AWS.sendEither env (Capped (artifactPut IfAbsent))) `shouldThrow` (== ResponseTooLarge maxCappedResponseBytes)
   where
-    putArtifact env precondition =
-        runResourceT (AWS.sendEither env (ConditionalPut precondition (S3.newPutObject (S3.BucketName "records") (S3.ObjectKey "key") (AWS.toBody ("artifact" :: ByteString)))))
+    artifactPut precondition = ConditionalPut precondition (S3.newPutObject (S3.BucketName "records") (S3.ObjectKey "key") (AWS.toBody ("artifact" :: ByteString)))
+    putArtifact env precondition = runResourceT (AWS.sendEither env (artifactPut precondition))
     list env = runResourceT (AWS.sendEither env (absenceListing "records" "records/key")) >>= either (fail . show) (pure . listingProvesAbsence)
+    cappedList env = runResourceT (AWS.sendEither env (Capped (absenceListing "records" "records/key"))) >>= either (fail . show) (pure . listingProvesAbsence)
+    -- An empty, complete listing padded with white space inside its root to exactly this many bytes.
+    paddedListing size =
+        let opening = "<ListBucketResult><IsTruncated>false</IsTruncated><KeyCount>0</KeyCount>"
+            closing = "</ListBucketResult>"
+         in opening <> LBS.replicate (fromIntegral size - LBS.length opening - LBS.length closing) 0x20 <> closing

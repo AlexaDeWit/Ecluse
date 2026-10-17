@@ -447,12 +447,16 @@ with, and the SHA-256 of the whole response body. A later `Last-Modified` moves 
 earlier one is refused. Equal timestamps with equal bytes refresh the artifact. Equal timestamps
 with other bytes, and changed bytes with no timestamp to compare, are refused rather than guessed.
 Compilation time orders nothing, because a slow run over older data finishes last. A changed
-source URL starts a fresh order for that source.
+source URL starts a fresh order for that source. A `Last-Modified` more than five minutes past
+Pilot's own clock counts as missing, so a source cannot claim a future date and outrank every
+later snapshot.
 
 The size guard is a damage alarm, not a completeness proof, since withdrawn advisories shrink a
 feed legitimately. The metadata carries the largest accepted size as a durable baseline, so small
 shrinks cannot add up, and no object version history is needed. An optional EPSS outage earns a
-bounded credit once, and the feed's return clears it without lowering the baseline. An operator
+bounded credit once, and the feed's return clears it without lowering the baseline. The credit only
+lowers the comparison: the baseline records the larger of itself and the accepted size, so an
+estimate that overstates the scores' bytes cannot inflate it. An operator
 who expects a smaller artifact rebaselines one upload against the revision they inspected.
 
 Each publication writes a fresh nonce into the database, because an S3 ETag follows content and

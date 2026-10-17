@@ -201,7 +201,7 @@ advisories:
   # artifact's object key, kept in that object's metadata, so repeated small shrinks cannot add up
   # past it. Withdrawn advisories shrink a feed legitimately, so this is a damage alarm, not a
   # completeness proof. A refusal logs at ERROR and leaves the stored artifact in place. After a
-  # deliberate change, `ecluse pilot compile --upload --rebaseline-etag <etag>
+  # deliberate change, `ecluse pilot compile --out <dir> --upload --rebaseline-etag <etag>
   # --rebaseline-max-shrink-percent <percent>` restarts the baseline.
   maxShrinkPercent: 2
   # Pilot only: the extra shrink one optional EPSS outage may earn, in percent of the previous

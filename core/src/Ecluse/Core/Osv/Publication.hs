@@ -183,15 +183,15 @@ orderSource (Just stored) candidate
 -- The baseline and credit an accepted size records, and how it set them.
 data Sized = Sized Integer Integer Adjustment
 
--- The effective baseline is the baseline less any EPSS outage credit. A durable baseline never
--- falls on an ordinary publication, so repeated small shrinks cannot walk it down.
+-- The effective baseline is the baseline less any EPSS outage credit. A durable baseline keeps the
+-- larger of itself and the accepted size, so neither small shrinks nor an overstated credit move it.
 sizeAgainst :: ShrinkPolicy -> BaselineCapability -> PublicationRequest -> PublishedState -> Integer -> Either ShrinkReading Sized
 sizeAgainst policy capability request previous previousBytes = case capability of
     NoBaseline -> Right (Sized candidate 0 OrdinaryBaseline)
     _
         | candidate < minimumBytes -> Left (ShrinkReading candidate minimumBytes baseline credit)
         | isJust (prRebaseline request) -> Right (Sized candidate 0 OperatorRebaseline)
-        | capability == DurableBaseline -> Right (Sized (max baseline (candidate + credit)) credit (creditAdjustment credit))
+        | capability == DurableBaseline -> Right (Sized (max baseline candidate) credit (creditAdjustment credit))
         | otherwise -> Right (Sized candidate credit (creditAdjustment credit))
   where
     candidate = prBytes request

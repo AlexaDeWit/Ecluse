@@ -135,7 +135,7 @@ Its independent Aeson readers inspect native wire version and artifact digest fi
 | Protocol exact package listing and new shared CodeArtifact inventory | maintenance/protocol/inventory/packages, maintenance/codeartifact/inventory/packages, maintenance/codeartifact/inventory/versions | Full inventory against independent names/versions, pagination remains native too |
 | Additional successful deletion law | maintenance/protocol/delete/removed and maintenance/codeartifact/delete/removed | Exact submitted version identities, order and one VersionRemoved per version. CodeArtifact crosses its 100-version ceiling |
 | Runtime Cve.SyncSpec refused artifact retains last-good generation | advisory/local/last-good | Full byte, ETag, provenance, install age, remediation and temporary-file snapshot before/after exact epoch refusal |
-| Additional real S3 conformance | advisory/s3/last-good | Same canonical body through production exportToS3, raw SDK producer HEAD identity, real S3 fetch and syncStep |
+| Additional real S3 conformance | advisory/s3/last-good | Same canonical body through a direct operator write (an unconditional SDK PutObject, its ETag the producer identity), real S3 fetch and syncStep |
 
 ### Full package-store subjects
 

@@ -6,6 +6,7 @@
 module Ecluse.Core.Osv.Publication.TypesSpec (spec) where
 
 import Data.Text qualified as T
+import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
 import Test.Hspec
 
 import Ecluse.Core.Osv.Publication.Types
@@ -28,6 +29,18 @@ spec = do
         it "carries a body digest unchanged through its hex form" $ do
             let digest = sourceDigestOf (digestOf "export bytes")
             parseSourceDigestHex (sourceDigestHex digest) `shouldBe` Just digest
+
+    describe "usable Last-Modified" $ do
+        let now = UTCTime (fromGregorian 2026 10 16) 0
+            later seconds = addUTCTime seconds now
+        it "keeps a date up to five minutes past the run's clock, and drops one a second later" $ do
+            lastModifiedAllowance `shouldBe` 300
+            usableLastModified now (Just (later 300)) `shouldBe` Just (later 300)
+            usableLastModified now (Just (later 301)) `shouldBe` Nothing
+
+        it "keeps a past date, and records nothing for no date" $ do
+            usableLastModified now (Just (later (-86400))) `shouldBe` Just (later (-86400))
+            usableLastModified now Nothing `shouldBe` Nothing
 
     describe "publication nonces" $ do
         it "draws a fresh 32-digit nonce each time, which reads back" $ do

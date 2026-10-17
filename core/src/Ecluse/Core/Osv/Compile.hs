@@ -72,6 +72,7 @@ import Ecluse.Core.Osv.Publication (
     sourceDigestHex,
     sourceDigestOf,
     sourceIdentityOf,
+    usableLastModified,
  )
 import Ecluse.Core.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
 import Ecluse.Core.Osv.Schema (
@@ -290,8 +291,8 @@ conclusionOf run now enrichment attempt osvDigest stats =
         , ccStats = stats
         , ccEpssStatus = enrichmentStatus enrichment
         , ccProvenance = passProvenance sources enrichment attempt
-        , ccOsvMarker = SourceMarker (identityOf (csOsvExportUrl sources)) (oaLastModified attempt) (sourceDigestOf osvDigest)
-        , ccEpssMarker = (\feed -> SourceMarker (identityOf (csEpssFeedUrl sources)) (efLastModified feed) (sourceDigestOf (efDigest feed))) <$> enrichedFeed enrichment
+        , ccOsvMarker = SourceMarker (identityOf (csOsvExportUrl sources)) (usableLastModified now (oaLastModified attempt)) (sourceDigestOf osvDigest)
+        , ccEpssMarker = (\feed -> SourceMarker (identityOf (csEpssFeedUrl sources)) (usableLastModified now (efLastModified feed)) (sourceDigestOf (efDigest feed))) <$> enrichedFeed enrichment
         , ccQuietTime = crQuietTime run
         , ccNow = now
         }

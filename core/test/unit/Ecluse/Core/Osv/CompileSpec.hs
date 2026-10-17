@@ -544,6 +544,15 @@ candidateSpec = describe "the candidate a publication decides on" $ do
                 (smDigest <$> cfEpss facts) `shouldBe` Just (sourceDigestOf (digestOf (toStrict factsFeed)))
                 (smLastModified <$> cfEpss facts) `shouldBe` Just Nothing
 
+        it ("counts a Last-Modified past the run's clock as missing, for both sources, " <> show eco) $
+            withSystemTempDirectory "ecluse-osv-facts" $ \outDir -> do
+                archive <- factsArchive eco
+                let future = [(hLastModified, "Fri, 01 Jan 2100 00:00:00 GMT")]
+                facts <- withStubHeaders status200 future archive $ \osvStub ->
+                    withStubHeaders status200 future factsFeed $ \epssStub ->
+                        candidateFactsFrom outDir eco EpssRequired (sourcesOf osvStub epssStub "/all.zip")
+                (smLastModified (cfOsv facts), smLastModified <$> cfEpss facts) `shouldBe` (Nothing, Just Nothing)
+
         it ("records no EPSS marker when an optional feed fails, " <> show eco) $
             withSystemTempDirectory "ecluse-osv-facts" $ \outDir -> do
                 archive <- factsArchive eco
