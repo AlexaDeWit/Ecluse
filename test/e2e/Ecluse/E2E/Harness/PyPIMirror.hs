@@ -23,6 +23,7 @@ module Ecluse.E2E.Harness.PyPIMirror (
     nativeMirrorConfig,
     withMirrorFixture,
     withMirrorProjects,
+    withReleaseProject,
     advertiseMissingFile,
     PublicWorkCounters (..),
     publicWorkCounters,
@@ -279,13 +280,24 @@ withMirrorFixture = withMirrorProjects ChangeSourceFields [mirrorRoot, mirrorDep
 withMirrorProjects :: TargetFields -> [Text] -> GlobalDataPlane -> (NativeTarget -> [Distribution] -> IO a) -> IO a
 withMirrorProjects fieldsMode projects plane action = do
     distributions <- buildNativeProjects (gdpWorkDir plane </> "pypi") projects
-    for_ projects $ \project ->
-        writeFileLBS
-            (gdpWorkDir plane </> "pypi" </> "simple" </> toString project </> "index.json")
-            (Aeson.encode (distributionIndex (stubUrl PyPIPublic) project distributions))
+    for_ projects $ \project -> publishIndex plane project (distributionIndex (stubUrl PyPIPublic) project distributions)
+    withMirrorTarget fieldsMode plane distributions (`action` distributions)
+
+-- | Publish plain releases of one project, yanking each keyed version, behind a target that serves no yank.
+withReleaseProject :: Text -> [Text] -> Map Text Text -> GlobalDataPlane -> (NativeTarget -> [Distribution] -> IO a) -> IO a
+withReleaseProject project versions yanks plane action = do
+    distributions <- concat <$> traverse (buildRelease (gdpWorkDir plane </> "pypi") project) versions
+    publishIndex plane project (yankedIndex (stubUrl PyPIPublic) yanks project distributions)
+    withMirrorTarget PreserveUploadFields plane distributions (`action` distributions)
+
+withMirrorTarget :: TargetFields -> GlobalDataPlane -> [Distribution] -> (NativeTarget -> IO a) -> IO a
+withMirrorTarget fieldsMode plane distributions action = do
     createAdvisoryBucket plane
     withNativeTarget fieldsMode distributions $ \target ->
-        withStubFault plane (PyPIMirrorBackend (ntPort target) False) (action target distributions)
+        withStubFault plane (PyPIMirrorBackend (ntPort target) False) (action target)
+
+publishIndex :: GlobalDataPlane -> Text -> Aeson.Value -> IO ()
+publishIndex plane project = writeFileLBS (gdpWorkDir plane </> "pypi" </> "simple" </> toString project </> "index.json") . Aeson.encode
 
 -- | Synchronously collected rule evaluations and mirror enqueues within one product process.
 data PublicWorkCounters = PublicWorkCounters
