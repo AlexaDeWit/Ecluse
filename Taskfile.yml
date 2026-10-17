@@ -406,6 +406,7 @@ tasks:
       - 'taskfiles/*.yml'
       - 'Taskfile.yml'
       - 'bench/corpus/**/*.json'
+      - 'bench/load/sweeps/*.json'
       - 'flake.lock'
     cmds:
       - bash scripts/ci-build-diagnostics.test.sh
@@ -420,6 +421,7 @@ tasks:
       - bash scripts/docs-open.test.sh
       - bash scripts/gen-bench-corpus.test.sh
       - bash scripts/image-archive.test.sh
+      - bash scripts/load-sweep.test.sh
       - bash scripts/perf-baseline.test.sh
       - bash scripts/release-assets.test.sh
       - bash scripts/release-version.test.sh

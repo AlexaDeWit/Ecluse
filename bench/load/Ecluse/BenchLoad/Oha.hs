@@ -20,6 +20,7 @@ import System.FilePath ((</>))
 import System.Process.Typed (nullStream, proc, runProcess_, setStdout)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
+import Ecluse.BenchLoad.CpuUse (ohaCpu)
 import Ecluse.BenchLoad.Error (benchFail)
 
 -- | How long a run lasts: a fixed duration, or a fixed number of requests.
@@ -59,7 +60,7 @@ instance FromJSON OhaReport where
         errorCounts <- o .:? "errorDistribution" .!= mempty
         pure (OhaReport elapsed statusCounts errorCounts [])
 
--- | Run @oha@, pinned to logical CPU 0 when @BENCH_LOAD_ISOLATE_OHA=1@. The proxy's affinity is unchanged.
+-- | Run @oha@, pinned to 'ohaCpu' when @BENCH_LOAD_ISOLATE_OHA=1@.
 runOha :: OhaRun -> IO OhaReport
 runOha run = withSystemTempDirectory "ecluse-bench-oha" $ \dir -> do
     let urlsFile = dir </> "urls.txt"
@@ -68,7 +69,7 @@ runOha run = withSystemTempDirectory "ecluse-bench-oha" $ \dir -> do
     writeFileText urlsFile (unlines (orUrls run))
     isolate <- (== Just "1") <$> lookupEnv "BENCH_LOAD_ISOLATE_OHA"
     let args = ohaArgs run reportFile requestsFile urlsFile
-        (command, finalArgs) = if isolate then ("taskset", ["-c", "0", "oha"] <> args) else ("oha", args)
+        (command, finalArgs) = if isolate then ("taskset", ["-c", show ohaCpu, "oha"] <> args) else ("oha", args)
     -- With a database, oha writes a progress line to stdout, so the report goes to a file.
     runProcess_ (setStdout nullStream (proc command finalArgs))
     raw <- readFileLBS reportFile

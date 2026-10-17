@@ -23,7 +23,7 @@ import UnliftIO.Async (cancel, withAsync)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.BenchLoad.Advisories (advisoryDenyRules)
-import Ecluse.BenchLoad.Pod (PodShape (Limited, Unlimited))
+import Ecluse.BenchLoad.Pod (PodShape (Limited, MemoryOnly, Unlimited), ProxyTuning (..), noTuning)
 import Ecluse.BenchLoad.ProxyProcess (
     AdvisoryFeed (AdvisoryFeed),
     BootFailure (..),
@@ -183,6 +183,19 @@ environmentSpec = describe "proxyEnvironment" $ do
     it "derives GHC capabilities from the cgroup under a limited shape, and overrides the count when unlimited" $ do
         lookup "ECLUSE_RUNTIME__CORES" podEnvironment `shouldBe` Nothing
         lookup "ECLUSE_RUNTIME__CORES" (environmentFor Unlimited) `shouldBe` Just "3"
+    it "pins the runtime settings a run tunes, over the unlimited shape's count, as the configuration parser reads them" $
+        for_ [Unlimited, MemoryOnly (1024 * 1024 * 1024)] $ \shape -> do
+            let tuned = settings{psTuning = noTuning{ptCores = Just 8, ptMaxHeapBytes = Just 872415232, ptAllocAreaMib = Just 32}}
+                environment = proxyEnvironment tuned shape 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) base
+            lookup "ECLUSE_RUNTIME__CORES" environment `shouldBe` Just "8"
+            lookup "ECLUSE_RUNTIME__MAX_HEAP_BYTES" environment `shouldBe` Just "872415232"
+            filter ((== "GHCRTS") . fst) environment `shouldBe` [("GHCRTS", "-T -A32m")]
+            case loadConfig environment Nothing of
+                Left errs -> expectationFailure (toString (unlines (map renderConfigError errs)))
+                Right config -> void (expectPlanFor (BootMirrorPipeline ServeAndMirror) environment Nothing config noCeiling)
+    it "leaves the heap ceiling and the allocation area to the boot when a run tunes neither" $ do
+        lookup "ECLUSE_RUNTIME__MAX_HEAP_BYTES" (environmentFor Unlimited) `shouldBe` Nothing
+        lookup "ECLUSE_RUNTIME__MAX_HEAP_BYTES" podEnvironment `shouldBe` Nothing
     it "turns native metadata gzip off for every ecosystem and pod shape, as the configuration parser reads it" $
         for_ [(ecosystem, shape) | ecosystem <- [Npm, PyPI], shape <- [Limited 2 (512 * 1024 * 1024), Unlimited]] $ \(ecosystem, shape) -> do
             let environment = proxyEnvironment (proxySettings ecosystem 60) shape 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) [("ECLUSE_SERVER__METADATA_GZIP", "true")]

@@ -45,6 +45,8 @@ import Data.Text qualified as T
 import GHC.Clock (getMonotonicTime)
 import UnliftIO.Async (concurrently, withAsync)
 
+import Ecluse.BenchLoad.CpuUse (CpuWindow)
+import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Exposition (
     CacheOutcomes,
     GaugeSummary,
@@ -56,12 +58,12 @@ import Ecluse.BenchLoad.Exposition (
     seriesTotal,
     summariseGauge,
  )
-import Ecluse.BenchLoad.Floors (OperatingPoint (..), Pass (ConcurrencyOne, Loaded))
+import Ecluse.BenchLoad.Floors (OperatingPoint (..), Pass (ConcurrencyOne, Loaded), PassSelection (EveryPass), parsePassSelection)
 import Ecluse.BenchLoad.Latency (Percentiles, isSuccessStatus, percentiles)
 import Ecluse.BenchLoad.Oha (OhaReport (..), OhaRun (..), RunLength (ForRequests, ForSeconds), runOha)
 import Ecluse.BenchLoad.PatternReport (ReplayTotals (..))
 import Ecluse.BenchLoad.Patterns (RequestTrace (rtClients))
-import Ecluse.BenchLoad.Pod (CgroupReading (..), counter, renderPodShape)
+import Ecluse.BenchLoad.Pod (CgroupReading (..), ProxyTuning (..), counter, noTuning, parseCpuList, renderPodShape)
 import Ecluse.BenchLoad.ProxyProcess (
     AdvisoryFeed,
     ProxyEnd (..),
@@ -70,6 +72,8 @@ import Ecluse.BenchLoad.ProxyProcess (
     proxyBootLines,
     proxyBootRetries,
     proxyCgroupNow,
+    proxyCpuNow,
+    proxyCpuSince,
     proxyIdleCgroupBytes,
     proxyIdleRts,
     proxyRuleLines,
@@ -107,6 +111,9 @@ data LoadKnobs = LoadKnobs
     -- ^ Private pool capacity. 'Nothing' leaves it to the proxy's computed default.
     , lkAdvisories :: Maybe AdvisoryFeed
     -- ^ The advisory store the proxy syncs from. 'Nothing' configures none, as the shipped default does.
+    , lkPasses :: PassSelection
+    , lkProxyTuning :: ProxyTuning
+    -- ^ The CPU placement and runtime settings pinned on every measured proxy.
     }
     deriving stock (Eq, Show)
 
@@ -124,9 +131,11 @@ defaultLoadKnobs =
         , lkPublicConnectionsPerHost = Nothing
         , lkPrivateConnectionsPerHost = Nothing
         , lkAdvisories = Nothing
+        , lkPasses = EveryPass
+        , lkProxyTuning = noTuning
         }
 
--- | Read @BENCH_LOAD_*@ overrides. A malformed value keeps the default.
+-- | Read @BENCH_LOAD_*@ overrides. A malformed load knob keeps its default, and a malformed pass or proxy setting fails the run.
 loadKnobsFromEnv :: IO LoadKnobs
 loadKnobsFromEnv = do
     concurrency <- readEnvInt "BENCH_LOAD_CONCURRENCY" (lkConcurrency defaultLoadKnobs)
@@ -138,6 +147,13 @@ loadKnobsFromEnv = do
     serveMaxInFlight <- (>>= readMaybe) <$> lookupEnv "BENCH_LOAD_SERVE_MAX_IN_FLIGHT"
     publicConnections <- (>>= readMaybe) <$> lookupEnv "BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST"
     privateConnections <- (>>= readMaybe) <$> lookupEnv "BENCH_LOAD_PRIVATE_CONNECTIONS_PER_HOST"
+    passes <- setting "BENCH_LOAD_PASSES" parsePassSelection
+    tuning <-
+        ProxyTuning
+            <$> setting "BENCH_LOAD_PROXY_CPUS" parseCpuList
+            <*> setting "BENCH_LOAD_PROXY_CORES" positive
+            <*> setting "BENCH_LOAD_PROXY_MAX_HEAP_BYTES" positive
+            <*> setting "BENCH_LOAD_PROXY_ALLOC_AREA_MIB" positive
     pure
         LoadKnobs
             { lkConcurrency = max 1 concurrency
@@ -150,10 +166,19 @@ loadKnobsFromEnv = do
             , lkPublicConnectionsPerHost = max 1 <$> publicConnections
             , lkPrivateConnectionsPerHost = max 1 <$> privateConnections
             , lkAdvisories = Nothing
+            , lkPasses = fromMaybe EveryPass passes
+            , lkProxyTuning = tuning
             }
   where
     readEnvInt :: String -> Int -> IO Int
     readEnvInt name fallback = maybe fallback (fromMaybe fallback . readMaybe) <$> lookupEnv name
+    -- A blank value is unset, as a workflow input left empty sets it.
+    setting :: String -> (Text -> Either Text a) -> IO (Maybe a)
+    setting name parse =
+        lookupEnv name >>= \case
+            Just raw | not (T.null (T.strip (toText raw))) -> either (\problem -> benchFail (toText name <> ": " <> problem)) (pure . Just) (parse (T.strip (toText raw)))
+            _ -> pure Nothing
+    positive raw = maybeToRight ("expected a positive whole number, not " <> show raw) (mfilter (> 0) (readMaybe (toString raw)))
 
 -- | The operating point of a run with these knobs, scenarios ('Nothing' is all of them), and pattern overrides.
 operatingPoint :: LoadKnobs -> Maybe [Text] -> [Text] -> OperatingPoint
@@ -170,6 +195,8 @@ operatingPoint knobs selected patternOverrides =
         , opPrivateConnectionsPerHost = lkPrivateConnectionsPerHost knobs
         , opScenarios = selected
         , opPatternOverrides = patternOverrides
+        , opPasses = lkPasses knobs
+        , opProxyTuning = lkProxyTuning knobs
         }
 
 -- | A per-ecosystem fixture: the ecosystem it serves and its scenarios.
@@ -277,6 +304,8 @@ data ProxyFigures = ProxyFigures
     -- ^ Read as the window closed, while @memory.stat@ still shows what the proxy held.
     , pfWindowThrottledUsec :: Maybe Int
     -- ^ CPU time the quota withheld during the window.
+    , pfCpu :: Maybe CpuWindow
+    -- ^ CPU time over the window: the proxy, the harness cgroup, and each logical CPU.
     , pfEnding :: ProxyEnding
     , pfExitedEarly :: Bool
     , pfStderrTail :: Text
@@ -352,14 +381,17 @@ measure knobs s shape (Target proxy driver) = do
     startScrape <- scrapeOf proxy
     before <- snapshotOf proxy MajorCollection
     cgroupBefore <- cgroupOf proxy
+    cpuStart <- traverse (\p -> (p,) <$> proxyCpuNow p) proxy
     (outcome, (inFlight, tasks)) <- sampling proxy (drive knobs driver)
     after <- snapshotOf proxy MinorCollection
     cgroupAfter <- cgroupOf proxy
+    cpu <- traverse (uncurry proxyCpuSince) cpuStart
     endScrape <- scrapeOf proxy
     replayed <- case driver of
         DriveReplay replay -> replayEvidence replay
         _ -> pure ""
     let evidence = T.intercalate "\n\n" (filter (not . T.null) [replayed, maybe "" ruleFailureNote (ruleFailuresWindow <$> startScrape <*> endScrape)])
+        window = ProxyWindow cgroupBefore cgroupAfter cpu inFlight tasks startScrape endScrape
     retained <- snapshotOf proxy MajorCollection
     ends <- traverse (\p -> (p,) <$> stopProxy p) proxy
     pure
@@ -376,34 +408,43 @@ measure knobs s shape (Target proxy driver) = do
             , srRtsWindow = rtsWindow <$> before <*> after
             , srRtsEnd = after
             , srRetainedBytes = rsLiveBytes <$> retained
-            , srProxy = (\(p, end) -> proxyFigures p end cgroupAfter (throttled cgroupBefore cgroupAfter) (inFlight, tasks) (startScrape, endScrape)) <$> ends
+            , srProxy = (\(p, end) -> proxyFigures p end window) <$> ends
             , srEvidence = evidence
             }
-  where
-    throttled a b = do
-        start <- a
-        stop <- b
-        pure (counter "throttled_usec" (crCpuStat stop) - counter "throttled_usec" (crCpuStat start))
 
-proxyFigures :: ProxyProcess -> ProxyEnd -> Maybe CgroupReading -> Maybe Int -> ([Maybe Double], [Maybe Double]) -> (Maybe [Sample], Maybe [Sample]) -> ProxyFigures
-proxyFigures proxy end windowCgroup throttledUsec (inFlight, tasks) (startScrape, endScrape) =
+-- What the harness read from the proxy at each end of the window, and the gauges it sampled in between.
+data ProxyWindow = ProxyWindow
+    { pwCgroupBefore :: Maybe CgroupReading
+    , pwCgroupAfter :: Maybe CgroupReading
+    , pwCpu :: Maybe CpuWindow
+    , pwInFlight :: [Maybe Double]
+    , pwTasks :: [Maybe Double]
+    , pwStartScrape :: Maybe [Sample]
+    , pwEndScrape :: Maybe [Sample]
+    }
+
+proxyFigures :: ProxyProcess -> ProxyEnd -> ProxyWindow -> ProxyFigures
+proxyFigures proxy end window =
     ProxyFigures
         { pfIdleRts = proxyIdleRts proxy
         , pfIdleCgroupBytes = proxyIdleCgroupBytes proxy
         , pfCgroup = peCgroup end
-        , pfWindowCgroup = windowCgroup
-        , pfWindowThrottledUsec = throttledUsec
+        , pfWindowCgroup = pwCgroupAfter window
+        , pfWindowThrottledUsec = throttled <$> pwCgroupBefore window <*> pwCgroupAfter window
+        , pfCpu = pwCpu window
         , pfEnding = peEnding end
         , pfExitedEarly = peExitedEarly end
         , pfStderrTail = if peEnding end == CleanShutdown then "" else peStderrTail end
         , pfBootLines = proxyBootLines proxy
         , pfRuleLines = proxyRuleLines proxy
         , pfBootRetries = proxyBootRetries proxy
-        , pfInFlight = summariseGauge inFlight
-        , pfTasks = summariseGauge tasks
-        , pfAdmissionSeries = maybe ["(the final scrape failed)"] admissionSeries endScrape
-        , pfCacheWindow = cacheWindow <$> startScrape <*> endScrape
+        , pfInFlight = summariseGauge (pwInFlight window)
+        , pfTasks = summariseGauge (pwTasks window)
+        , pfAdmissionSeries = maybe ["(the final scrape failed)"] admissionSeries (pwEndScrape window)
+        , pfCacheWindow = cacheWindow <$> pwStartScrape window <*> pwEndScrape window
         }
+  where
+    throttled start stop = counter "throttled_usec" (crCpuStat stop) - counter "throttled_usec" (crCpuStat start)
 
 -- A fail-closed rule answers an undecidable version with 503, which the refusals then include.
 ruleFailureNote :: Int -> Text

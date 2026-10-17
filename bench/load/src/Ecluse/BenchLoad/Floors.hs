@@ -9,6 +9,8 @@ module Ecluse.BenchLoad.Floors (
     -- * The committed floors
     Pass (..),
     passKey,
+    PassSelection (..),
+    parsePassSelection,
     FloorKey,
     OperatingPoint (..),
     RunnerKind (..),
@@ -52,7 +54,7 @@ import Data.Text qualified as T
 import Data.Universe.Class (Universe (universe))
 import Data.Universe.Generic (universeGeneric)
 
-import Ecluse.BenchLoad.Pod (PodShape, parsePodShape, renderPodShape)
+import Ecluse.BenchLoad.Pod (PodShape, ProxyTuning (..), noTuning, parsePodShape, renderPodShape)
 import Ecluse.BenchLoad.Selection (measurementConditionVersion)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
 
@@ -75,6 +77,19 @@ passKey = \case
 -- | A count the floors cover: a scenario's ecosystem-qualified key, and the pass.
 type FloorKey = (Text, Pass)
 
+-- | The passes a run makes: both, or the loaded pass alone.
+data PassSelection
+    = EveryPass
+    | LoadedPassOnly
+    deriving stock (Eq, Show)
+
+-- | Read @every@ or @loaded@.
+parsePassSelection :: Text -> Either Text PassSelection
+parsePassSelection = \case
+    "every" -> Right EveryPass
+    "loaded" -> Right LoadedPassOnly
+    raw -> Left ("expected every or loaded, not " <> show raw)
+
 -- | Compare knobs, selected scenarios, and pattern overrides. 'Nothing' keeps computed bounds or selects all scenarios.
 data OperatingPoint = OperatingPoint
     { opDurationSeconds :: Int
@@ -90,6 +105,8 @@ data OperatingPoint = OperatingPoint
     , opScenarios :: Maybe [Text]
     , opPatternOverrides :: [Text]
     -- ^ The @BENCH_PATTERN_*@ variables the run sets, by name.
+    , opPasses :: PassSelection
+    , opProxyTuning :: ProxyTuning
     }
     deriving stock (Eq, Show)
 
@@ -107,8 +124,11 @@ instance FromJSON OperatingPoint where
             <*> o .: "privateConnectionsPerHost"
             <*> o .: "scenarios"
             <*> o .: "patternOverrides"
+            -- The floors are calibrated on both passes of an untuned proxy, so the file records neither.
+            <*> pure EveryPass
+            <*> pure noTuning
 
--- The settings in which two operating points differ, by their keys in the floors file.
+-- The settings in which two operating points differ, by name.
 differingSettings :: OperatingPoint -> OperatingPoint -> [Text]
 differingSettings calibrated ran =
     [ key
@@ -124,6 +144,11 @@ differingSettings calibrated ran =
         , ("privateConnectionsPerHost", same opPrivateConnectionsPerHost)
         , ("scenarios", same opScenarios)
         , ("patternOverrides", same opPatternOverrides)
+        , ("passes", same opPasses)
+        , ("proxyCpus", same (ptCpus . opProxyTuning))
+        , ("proxyCores", same (ptCores . opProxyTuning))
+        , ("proxyMaxHeapBytes", same (ptMaxHeapBytes . opProxyTuning))
+        , ("proxyAllocAreaMib", same (ptAllocAreaMib . opProxyTuning))
         ]
     , not agrees
     ]

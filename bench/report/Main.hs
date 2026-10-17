@@ -10,6 +10,8 @@ import Data.Text.Encoding qualified as TE
 import Data.Text.Encoding.Error qualified as TEE
 import System.FilePath (takeFileName, (</>))
 
+import Ecluse.BenchLoad.Floors (Floors (floorsByShape), loadFloors)
+import Ecluse.BenchLoad.Sweep (loadSweep, sweepJob)
 import Ecluse.BenchReport (ReportInput (ReportInput, riConsoleLog, riCsv), parseCsv, renderReport)
 import Ecluse.BenchReport.AgainstMain (Baseline (Baseline, NoBaseline), Missing (FileMissing), parseOrigin)
 import Ecluse.BenchReport.AgainstMain.Acceptance qualified as Acceptance
@@ -34,6 +36,7 @@ main =
         [csvPath, logPath] -> run csvPath (Just logPath)
         ["against-main", kind, baselineDir, reportPath]
             | Just compareWith <- comparison kind -> againstMain compareWith baselineDir reportPath
+        "sweep" : name : job : reportPaths -> againstAnchors (toText name) (toText job) reportPaths
         _ ->
             die . toString . unlines $
                 [ "usage: bench-report <results.csv> [<console-log>]"
@@ -43,6 +46,7 @@ main =
                 , "       bench-report performance-receipt <request.json> <native-results> <receipt.json>"
                 , "       bench-report performance-audit <request.json> <receipt.json>"
                 , "       bench-report against-main (bench | acceptance | load) <baseline-dir> <report>"
+                , "       bench-report sweep <sweep> <job> <report> ..."
                 ]
 
 run :: FilePath -> Maybe FilePath -> IO ()
@@ -77,6 +81,15 @@ publish :: Text -> IO ()
 publish output = do
     putText output
     lookupEnv "GITHUB_STEP_SUMMARY" >>= traverse_ (`appendFileText` output)
+
+-- One sweep job's reports, in slot order, beside the job's anchors.
+againstAnchors :: Text -> Text -> [FilePath] -> IO ()
+againstAnchors name job reportPaths = do
+    sweep <- either (die . toString) pure =<< loadSweep name
+    floors <- either (die . toString) pure =<< loadFloors
+    chosen <- maybe (die ("bench-report: the sweep " <> toString name <> " has no job " <> toString job)) pure (sweepJob sweep job)
+    reports <- traverse readTextFile reportPaths
+    publish (Load.againstAnchors (floorsByShape floors) sweep chosen reports)
 
 -- Lenient UTF-8, and a described failure instead of a throw, so an unreadable file becomes a note in the output.
 readTextFile :: FilePath -> IO (Either Text Text)

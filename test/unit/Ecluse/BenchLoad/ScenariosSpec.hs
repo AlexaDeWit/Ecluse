@@ -2,19 +2,22 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | The counts a run checks, and the committed floors against the scenarios and pod shapes a scheduled run measures.
+-- | The counts a run checks, and the committed floors and sweeps against the scenarios and pod shapes a run measures.
 module Ecluse.BenchLoad.ScenariosSpec (spec) where
 
+import Data.Aeson (decodeStrict)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.BenchLoad.Floors (Calibration (calNpmLatency, calOperatingPoint, calPypiLatency, calRuns), Enforcement (Enforced), Floors (floorsByShape, floorsCalibration), LatencyCeiling (lcCeilingMs), Pass (ConcurrencyOne, Loaded), RunFacts (..), RunnerReading (RunnerReading), Trigger (Scheduled), enforce, loadFloors, unheldViolations)
 import Ecluse.BenchLoad.Harness (UpstreamFixture (fixtureScenarios), defaultLoadKnobs, operatingPoint)
-import Ecluse.BenchLoad.Pod (PodShape (Unlimited), scheduledPodShapes)
+import Ecluse.BenchLoad.Pod (PodShape (Unlimited), renderPodShape, scheduledPodShapes)
 import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScenario, fixtures)
 import Ecluse.BenchLoad.Selection (measurementConditionVersion)
 import Ecluse.BenchLoad.Support (twoCores)
+import Ecluse.BenchLoad.Sweep (Sweep (swScenarios), loadSweep)
 
 spec :: Spec
 spec = do
@@ -78,6 +81,23 @@ spec = do
         it "record at least the ten runs they were calibrated from" $
             withCommitted $ \floors ->
                 length (calRuns (floorsCalibration floors)) `shouldSatisfy` (>= 10)
+        it "key the shapes the workflow's scheduled matrix names, and so its baseline artifacts" $ do
+            workflow <- decodeUtf8 <$> readFileBS ".github/workflows/bench-load.yml"
+            scheduledMatrix workflow `shouldBe` Just (map renderPodShape scheduledPodShapes)
+
+    describe "the committed capability sweep" $
+        it "names only scenarios the harness defines" $
+            loadSweep "capability-1634" >>= \case
+                Left problem -> expectationFailure (toString problem)
+                Right sweep -> filter (isNothing . findScenario) (toList (swScenarios sweep)) `shouldBe` []
+
+-- The shapes the workflow's matrix lists when a run names none: the first quoted JSON list on its matrix line.
+scheduledMatrix :: Text -> Maybe [Text]
+scheduledMatrix workflow = listToMaybe $ do
+    line <- lines workflow
+    guard ("pod-shape: ${{ fromJSON(" `T.isInfixOf` line)
+    listed <- maybeToList (T.stripPrefix "'" (snd (T.breakOn "'[" line)))
+    maybeToList (decodeStrict (encodeUtf8 (T.takeWhile (/= '\'') listed)))
 
 withCommitted :: (Floors -> Expectation) -> Expectation
 withCommitted check = loadFloors >>= either (expectationFailure . toString) check

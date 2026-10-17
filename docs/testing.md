@@ -1011,7 +1011,7 @@ The load test alone stores reviewed minimums, its [success floors](#success-floo
 |---|---|---|
 | [Work per request](../.github/workflows/bench.yml) | Time and allocations for the benchmark groups over committed and synthetic corpora | `bench-results.csv`, `bench-output.txt`, per-ecosystem receipts, and `against-main.md` off `main` |
 | [Performance acceptance](../.github/workflows/perf-acceptance.yml) | Allocation and time for each [allocation leg](#allocation-budgets-perf-allocation-gating) over live registry documents, with no budget | `perf-acceptance-report.md`, native observations, per-ecosystem receipts or an unavailable diagnostic, and `against-main.md` off `main` |
-| [Load](../.github/workflows/bench-load.yml) | npm and PyPI successes, latency, memory, and collector cost through a proxy process under each pod shape, with separate ecosystem sections and baseline sources | `bench-load-results.md`, native observations and per-ecosystem receipts for complete runs, a diagnostic record for selected or GC-thrash runs, and `against-main.md` off `main` |
+| [Load](../.github/workflows/bench-load.yml) | npm and PyPI successes, latency, memory, and collector cost through a proxy process under each pod shape, with separate ecosystem sections and baseline sources | `bench-load-results.md`, native observations and per-ecosystem receipts for complete runs, a diagnostic record for selected or GC-thrash runs, and `against-main.md` off `main`. A [sweep](#capability-sweeps) job uploads a directory per arm and `comparison.md` |
 
 Each workflow calls a fixed Task measurement target, then a receipt target after the native process exits.
 Task records the options it passes before measurement. The native producer records its own measurement conditions.
@@ -1057,14 +1057,17 @@ thread at a time. Its count does not reserve a processor or set CPU affinity.
 | `2cpu` or `4cpu` in a load pod shape, and `BENCH_LOAD_THRASH_CPUS` | CPU-time quota in CPU equivalents. `2cpu` writes `200000 100000` to `cpu.max`, allowing 200 ms of CPU time per 100 ms period. It assigns no specific CPUs. |
 | Runner logical processors | Logical CPUs visible to the RTS, read with `getNumProcessors`, separate from the capability count |
 | Load harness `-N3` | Three GHC capabilities for the harness and each scenario child. The measured proxy resolves its own count at boot. |
-| Unlimited load shape `runtime.cores` | Sets the proxy's GHC capability count to the harness's count. The harness imposes no CPU-time quota. |
+| Unlimited load shape `runtime.cores` | Sets the proxy's GHC capability count to the harness's count, unless `BENCH_LOAD_PROXY_CORES` sets it. The harness imposes no CPU-time quota. |
+| `BENCH_LOAD_PROXY_CPUS` | The CPUs the proxy's cgroup may run on (`cpuset.cpus`), such as `2-3`. The harness cgroup gets the other CPUs. The proxy's RTS counts its processors from this affinity, so a derived capability count clamps to it. |
+| `BENCH_LOAD_PROXY_CORES` | The proxy's `runtime.cores`, under any shape. An explicit count is never clamped, so a placed proxy can emulate a node with more CPUs. |
 | Performance acceptance `-N` | The shipped RTS default selects capabilities from visible processors. The report reads the running count. The harness does not boot a proxy or apply its cgroup-derived runtime plan. |
 | Work-per-request benchmarks | One GHC capability by default. Their Cabal stanza enables `-T`, with no `-N` override in the CI invocation. |
 | Serve admission (requests) | Concurrent-request limit, explicit or derived from the proxy's resolved GHC capabilities. It is neither a CPU quota nor a capability count. |
 | GC share of CPU, and CPU throttled during the window | Time measurements from RTS counters and `cpu.stat`, respectively |
 
-`BENCH_LOAD_ISOLATE_OHA=1` pins only `oha` to logical CPU 0 with `taskset`. The harness and
-proxy retain their inherited CPU affinity, so they can also run on CPU 0.
+`BENCH_LOAD_ISOLATE_OHA=1` pins only `oha` to logical CPU 0 with `taskset`. Without
+`BENCH_LOAD_PROXY_CPUS`, the harness and proxy keep their inherited CPU affinity, so they can also
+run on CPU 0.
 The [GHC RTS guide](https://downloads.haskell.org/ghc/9.10.3/docs/users_guide/using-concurrent.html#rts-options-for-smp-parallelism)
 defines capabilities and affinity. The [cgroup v2 reference](https://docs.kernel.org/admin-guide/cgroup-v2.html#cpu-interface-files)
 defines CPU bandwidth quotas.
@@ -1143,22 +1146,38 @@ report's operating point. The floors therefore measure identity listings. A load
 of gzip-enabled throughput: the gzip rows under [Metadata gzip rows](#metadata-gzip-rows) measure
 the enabled path's cost.
 
-`BENCH_LOAD_POD` names the pod shape: `unlimited`, or a CPU-time quota and a memory limit such as
-`2cpu-1gib` or `4cpu-2gib`. Under a limited shape the proxy starts inside its own cgroup, a child
-of the directory `BENCH_LOAD_CGROUP` names, with `memory.max` at the limit, `memory.swap.max` at
-zero, and `cpu.max` at the quota. The load generator and the stubs stay outside that cgroup. The
+`BENCH_LOAD_POD` names the pod shape: `unlimited`, a CPU-time quota such as `2cpu`, a memory limit
+such as `1gib`, or both, such as `2cpu-1gib` or `4cpu-2gib`. Under any shape but `unlimited` the
+proxy starts inside its own cgroup, a child of the directory `BENCH_LOAD_CGROUP` names. That cgroup
+gets `cpu.max` at the quota, and `memory.max` at the limit with `memory.swap.max` at zero. The load
+generator and the stubs stay outside that cgroup. The
 proxy links the shipped RTS options and gets only `-T`, for its statistics, through `GHCRTS` at
 launch. Its boot reads the cgroup and derives its capabilities, its heap ceiling, and its memory
 plan as it would in a pod. The unlimited shape sets `runtime.cores` to the harness's capability
 count instead. The workflow delegates the cgroup subtree with `sudo` before the run, enables the
-cpu, memory, and pids controllers for it without a task limit, and turns swap off. The cgroup
+cpuset, cpu, memory, and pids controllers for it without a task limit, and turns swap off. The cgroup
 outlives the proxy, so an OOM kill stays countable after the process is gone, and the harness
 retires any proxy cgroup a killed run left. A scheduled run measures `unlimited`, `2cpu-1gib`,
 `4cpu-1gib`, and `4cpu-2gib` in a matrix. A dispatch picks one shape, `all`, or `thrash` for the
 GC-thrash probe. To measure a branch, dispatch the workflow on that branch after merging this
 harness into it.
-Hosted runners have four logical processors. A four-CPU quota still shares those processors
-with `oha` and the stubs.
+Hosted runners have four logical processors. Without a placement, a four-CPU quota still shares
+those processors with `oha` and the stubs.
+
+A run can also pin settings on every measured proxy. A scheduled run sets none of them, and a run
+that sets any of them is not held to the [success floors](#success-floors):
+
+| Variable | Effect |
+|---|---|
+| `BENCH_LOAD_PROXY_CPUS` | Places the proxy on these CPUs and the harness cgroup on the rest, as the [CPU table](#cpu-quotas-processors-and-ghc-capabilities) describes |
+| `BENCH_LOAD_PROXY_CORES` | Sets `runtime.cores` |
+| `BENCH_LOAD_PROXY_MAX_HEAP_BYTES` | Sets `runtime.maxHeapBytes` |
+| `BENCH_LOAD_PROXY_ALLOC_AREA_MIB` | Adds `-A<n>m` to the proxy's `GHCRTS`. The boot keeps an area that is neither the shipped one nor the one it derives. |
+| `BENCH_LOAD_PASSES=loaded` | Runs the loaded pass alone, which roughly halves the run |
+
+Every proxy without a memory limit gets `memory.high` at 4 GiB, which protects the runner. The
+untuned `unlimited` control is the exception. The proxy's runtime sizing reads `memory.max` alone,
+so the backstop does not change its posture.
 
 Each scenario reports:
 
@@ -1168,8 +1187,8 @@ Each scenario reports:
   of successful responses only
 - the proxy's allocation per successful request beside the attempt count, its GC share of CPU,
   its major collections and the mean live data they left, its RTS `max_live_bytes` and
-  `max_mem_in_use_bytes`, and whether its small-object live data crossed the compaction threshold.
-  A paired scenario or a ramp divides by every success in the window
+  `max_mem_in_use_bytes`, whether its small-object live data crossed the compaction threshold, and
+  the processors its RTS sees. A paired scenario or a ramp divides by every success in the window
 - the allocation per refusal: the same window's allocation divided by its `429` and `503`
   responses. It and the allocation per success each charge the whole window to one kind of
   response, so each is an upper bound
@@ -1187,6 +1206,11 @@ Each scenario reports:
 - the metadata cache's hit, miss, and collapsed request counts in the window for the full,
   version, and assembled stores, from scrapes of the proxy's Prometheus exposition at each end of
   the window. A collapsed request waited for another request's fetch instead of making its own
+- the CPU time of the window. The proxy's CPU-seconds per second come from its cgroup's `cpu.stat`
+  and from the RTS, with the cgroup's share of the CPUs it may run on. The harness cgroup's figures
+  cover the load generator, the stubs, and the harness. `/proc/stat` gives CPU 0's busy share, and
+  the busy time on the proxy's CPUs that the proxy did not spend. The load generator keeps its
+  headroom while the harness cgroup and CPU 0 each stay below 85% busy
 
 Each ecosystem section also shows:
 
@@ -1279,6 +1303,51 @@ that 503 with the admission refusals. When the proxy records such a failure in
 first. The probe records OOM kills and
 heap overflows as its reading, so they do not fail it. It fails only when no limit produced a report.
 
+#### Capability sweeps
+
+Use a sweep to compare proxy configurations on one runner, where separate dispatches would land on
+different runners. A file under [bench/load/sweeps/](../bench/load/sweeps/) defines arms and jobs.
+Each arm is a pod shape with the proxy settings it pins. Each job runs the anchor arm, its test
+arms, and the anchor again, so the runner's speed moves every arm of a job alike.
+
+| Field | Meaning |
+|---|---|
+| `upstreamLatencyMs`, `passes`, `scenarios` | What every arm shares. The runner turns the round-trip probe off and injects the fixed latency for both ecosystems. |
+| `anchor`, `scored` | The arm every job opens and closes with, and the scenarios whose anchor ratios make an arm's score |
+| `arms.<name>`: `shape`, `cpus`, `cores`, `maxHeapBytes`, `allocAreaMib`, `serveMaxInFlight` | The arm's pod shape, its proxy settings, and an explicit admission. The proxy's boot resolves any it leaves out. |
+| `arms.<name>.expect` | The capabilities, allocation area, heap ceiling, and admission every proxy of the arm must report |
+| `arms.<name>`: `podMemoryMib`, `referenceShape` | The memory the arm's peak is judged against, and the scheduled shape whose loaded floors its counts sit beside |
+| `phases` | Groups of jobs. A phase marked `onRequest` runs only when a dispatch names it. |
+
+Dispatch the load workflow with `sweep` set to the file's name and `sweep-select` set to phases or
+jobs, such as `A` or `B1,B2`. A blank selection runs every phase not marked `onRequest`. A plan job
+lists the jobs with `scripts/load-sweep.sh plan`, and each job runs on a runner of its own, six at
+most at once. `scripts/load-sweep.sh run` measures the job's arms in order through
+`task performance:load-measure`. Each arm's report, native observations, and diagnostic-only
+receipt go to `sweep-results/<job>/<slot>-<arm>/`. A `scenarios` input narrows every arm, and
+`duration-seconds` shortens every window, for a short check of the sweep path.
+
+`bench-report sweep` then sets each arm beside the mean of the job's anchors, scenario by scenario.
+It writes `comparison.md` and the run summary. For each arm it shows:
+
+- each scenario's successes, the anchors' mean, the ratio between them, and the reference shape's
+  loaded floor
+- the score: the geometric mean of the ratios over the scored scenarios the job ran
+- whether every proxy reported the expected boot values
+- each safety failure:
+  - an ending other than a clean shutdown, such as an OOM kill
+  - a `memory.high` event
+  - a peak above the arm's pod memory
+  - a count below its reference floor
+- whether the load generator kept its headroom in every scenario
+
+A boot value or a safety failure voids that repeat of the arm. The comparison also shows how far
+the closing anchor drifted from the opening one. Sweep runs are never held to the floors.
+
+`capability-1634` compares capability counts, admission, and memory with no CPU-time quota. Its
+arms place the proxy on CPUs 2-3 and the harness cgroup on 0-1. Phase `F` places the proxy on CPU 3
+alone, and phase `A` also measures the `2cpu-1gib` shape with no placement.
+
 ### Success floors
 
 [bench/load/floors.json](../bench/load/floors.json) holds a reviewed minimum for every count of
@@ -1310,9 +1379,8 @@ The check fails closed, and it covers every scenario the zero-success check cove
 - `Ecluse.BenchLoad.ScenariosSpec`, in the gating unit suite, compares the file with the harness's
   scenarios and the four scheduled pod shapes. A scenario added without floors therefore fails its
   pull request instead of the next scheduled run.
-- No check ties those four shapes to the workflow's matrix. A shape added to the matrix fails its
-  scheduled job, because the file holds no entry for it. A shape dropped from the matrix goes
-  unnoticed.
+- The same spec compares the four shapes with the workflow's scheduled matrix, which names the
+  baseline artifacts. A shape added to or dropped from the matrix alone fails its pull request.
 
 A run is held to the floors only when it matches what they were calibrated at. The file's
 `calibration` record holds each part, and the harness reads the run's side from its environment:
@@ -1320,7 +1388,7 @@ A run is held to the floors only when it matches what they were calibrated at. T
 | Part | A held run | The harness reads |
 |---|---|---|
 | Runner | Runs on GitHub Actions under `runnerOs` and `runnerArch` (Linux, ARM64) | `GITHUB_ACTIONS`, `RUNNER_OS`, `RUNNER_ARCH` |
-| Settings | Equals `operatingPoint`: every load knob at its default (30 seconds, 100 connections, the default payload, the proxy's computed admission and pools), every scenario, and no `BENCH_PATTERN_*` variable set | The `BENCH_LOAD_*` knobs, `BENCH_LOAD_SCENARIOS`, and the names of the `BENCH_PATTERN_*` variables that are set |
+| Settings | Equals `operatingPoint`. Every load knob is at its default: 30 seconds, 100 connections, the default payload, and the proxy's computed admission and pools. Both passes run, over every scenario, with no pinned proxy setting and no `BENCH_PATTERN_*` variable set | The `BENCH_LOAD_*` knobs, `BENCH_LOAD_SCENARIOS`, `BENCH_LOAD_PASSES`, the `BENCH_LOAD_PROXY_*` settings, and the names of the `BENCH_PATTERN_*` variables that are set |
 | Pod shape | Runs under a shape that `floors` holds | `BENCH_LOAD_POD` |
 | Measurement conditions | Matches `measurementConditions` | The harness reports `unified-v2` |
 | Native injected latency | Each ecosystem stays below its own ceiling | Each native public RTT, or the declared configured fallback |
@@ -1341,7 +1409,8 @@ After the calibration conditions match, the harness compares nothing else:
 - `BENCH_LOAD_PROBE_RTT` only swaps the probed latency for the configured 5 ms, which is under the
   ceiling. A run with the probe off, or with a probe that failed, is therefore held, and at 5 ms its
   latency-bound counts sit so far above their floors (more than thirty times in the concurrency-one
-  pass) that those floors detect nothing on it.
+  pass) that those floors detect nothing on it. The `upstream-latency-ms` dispatch input turns the
+  probe off, and any value but 5 keeps the run off the floors.
 - The workflow fixes `BENCH_LOAD_ISOLATE_OHA` and the harness's `-N`, and no dispatch input changes
   them.
 - The harness reads the runner's operating system and architecture, not its label, so any Linux
