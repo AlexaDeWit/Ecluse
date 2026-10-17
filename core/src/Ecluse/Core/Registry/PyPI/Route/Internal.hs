@@ -153,7 +153,8 @@ simpleIndexRoute =
         \`/simple/{project}/` and `/simple/{project}` both match, because the router strips a \
         \trailing empty segment. A non-canonical (non-PEP-503) project name matches no route and \
         \takes the `404`, with no redirect. A client that requires HTML and admits no JSON gets \
-        \`406`: Écluse serves the JSON form alone."
+        \`406`: Écluse serves the JSON form alone. The index is gzipped for a client whose \
+        \`Accept-Encoding` prefers gzip, unless `server.metadataGzip` is off."
         Nothing
         pypiIndexContract
 
@@ -212,7 +213,7 @@ pypiIndexContract =
                     ( chooseContract
                         (refusalContract status404 "A first-party project the private upstream does not have. It is never fetched from the public upstream.")
                         ( chooseContract
-                            (refusalContract status406 "The request requires a representation this index does not serve; only the PEP 691 JSON form exists.")
+                            (refusalContract status406 "The request admits no representation this index serves: only the PEP 691 JSON form exists, in gzip or identity coding.")
                             ( chooseContract
                                 (refusalContract status500 "A permanent or internal inability to decide.")
                                 ( chooseContract
@@ -239,15 +240,16 @@ pypiIndexReplies =
         , packumentUnauthorised = \headers refusal -> SecondResponse (SecondResponse (FirstResponse (helpBody headers refusal)))
         , packumentForbidden = \headers refusal -> SecondResponse (SecondResponse (SecondResponse (FirstResponse (helpBody headers refusal))))
         , packumentNotFound = \headers refusal -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (helpBody headers refusal)))))
+        , packumentNotAcceptable = \headers refusal -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (helpBody headers refusal))))))
         , packumentInternal = \headers refusal -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (helpBody headers refusal)))))))
         , packumentBadGateway = \headers refusal -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (helpBody headers refusal))))))))
         , packumentUnavailable = \headers refusal -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (helpBody headers refusal))))))))
         }
 
--- The @406@ arm, which the router selects before any handler runs.
+-- The router's @406@, for an @Accept@ that admits no JSON form, before any handler runs.
 notAcceptable :: ResponseHeaders -> Maybe HelpMessage -> PyPIIndexResponse
 notAcceptable headers help =
-    SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (declaredRefusal "no representation this index serves is acceptable" headers help))))))
+    packumentNotAcceptable pypiIndexReplies headers (mkRefusal help "no representation this index serves is acceptable")
 
 -- Upstream-controlled artifact responses and local refusals share one open response contract.
 pypiArtifactContract :: ResponseContract PassthroughResponse

@@ -99,13 +99,13 @@ spec = do
             (statusCodes <$> deleteOp "/npm/-/package/{package}/dist-tags/{tag}") `shouldBe` Just [501]
         it "the deny-by-default catch-all carries 404" $
             (statusCodes <$> getOp "/npm/{unsupportedPath}") `shouldBe` Just [404]
-        it "the packument GET documents the gate statuses" $
-            (statusCodes <$> getOp "/npm/{package}") `shouldBe` Just [200, 304, 401, 403, 404, 500, 502, 503]
+        it "the packument GET documents the gate statuses and its coding refusal" $
+            (statusCodes <$> getOp "/npm/{package}") `shouldBe` Just [200, 304, 401, 403, 404, 406, 500, 502, 503]
         it "the derived packument HEAD documents the same statuses with no bodies" $
             case headOp "/npm/{package}" of
                 Nothing -> expectationFailure "packument HEAD was not rendered"
                 Just op -> do
-                    statusCodes op `shouldBe` [200, 304, 401, 403, 404, 500, 502, 503]
+                    statusCodes op `shouldBe` [200, 304, 401, 403, 404, 406, 500, 502, 503]
                     responsesAreBodiless op `shouldBe` True
         it "the tarball GET honestly documents its transparent upstream relay" $
             (defaultMediaTypes <$> getOp "/npm/{package}/-/{filename}")
@@ -164,9 +164,7 @@ spec = do
         responses = _operationResponses op
         exact = InsOrd.elems (_responsesResponses responses)
 
-{- | The agreement cases for one registered ecosystem, generic in it so a second adapter is held
-to the same agreement the day it registers.
--}
+-- One registered ecosystem's agreement cases, generic so a new adapter is held to them when it registers.
 agreesWithClassifier :: Ecosystem -> Spec
 agreesWithClassifier eco =
     describe (toString (ecosystemName eco)) $ do
@@ -185,17 +183,13 @@ agreesWithClassifier eco =
     specs = specsFor eco
     lookupPath rs = InsOrd.lookup (renderedKeyFor eco rs) (_openApiPaths agreementDoc)
 
-{- | Every ecosystem this build registers an adapter for. npm heads the list because 'adapterFor'
-answers for it unconditionally, which keeps the value non-empty without a partial construction.
--}
+-- Every ecosystem with an adapter. npm heads it, because 'adapterFor' always answers for npm.
 registeredEcosystems :: NonEmpty Ecosystem
 registeredEcosystems = Npm :| filter registeredBeside universe
   where
     registeredBeside eco = eco /= Npm && isJust (adapterFor eco)
 
-{- | The document the agreement cases read: the canonical source widened to every registered
-adapter, so a newly registered one is checked before the canonical mount list catches up.
--}
+-- The canonical source widened to every registered adapter, so a new one is checked before the mount list catches up.
 agreementDoc :: OpenApi
 agreementDoc = buildOpenApi canonicalManifestSource{manifestEcosystems = registeredEcosystems}
 

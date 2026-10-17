@@ -47,6 +47,10 @@ data Completion = Completion
     deriving stock (Eq, Show, Generic)
     deriving anyclass (ToJSON, FromJSON)
 
+-- The shared serving contract's content-coding laws, which a proxying ecosystem satisfies.
+contentCodingLaws :: [Text]
+contentCodingLaws = ["metadata-gzip", "metadata-gzip-validators", "metadata-gzip-refusal", "metadata-gzip-opt-out", "artifact-uncoded"]
+
 -- | This normative list is independent of concrete drivers, registration tables and scheduling.
 requiredFamilyLaws :: CompletionScope -> [(Text, [Text])]
 requiredFamilyLaws FullPackageStore =
@@ -58,9 +62,9 @@ requiredFamilyLaws FullPackageStore =
     , ("recovery", ["publish-retry", "reopen", "delete-retry"])
     ]
 requiredFamilyLaws scope =
-    [ ("proxying", ["identity-precedence", "authorised-union", "private-divergence", "artifact-integrity", "artifact-head", "conditional-coherence"] <> map ("metadata-fetch/" <>) metadataFetchLaws <> map ("metadata-projection/" <>) metadataProjectionLaws)
+    [ ("proxying", ["identity-precedence", "authorised-union", "private-divergence", "artifact-integrity", "artifact-head", "conditional-coherence"] <> contentCodingLaws <> map ("metadata-fetch/" <>) metadataFetchLaws <> map ("metadata-projection/" <>) metadataProjectionLaws)
     , ("installation", ["accepted-install", "default-denial", "artifact-integrity", "artifact-head"])
-    , ("policy", ["default-denial", "quarantine-private-authority", "public-integrity", "trusted-integrity"])
+    , ("policy", ["default-denial", "quarantine-private-authority", "public-integrity", "trusted-integrity", "metadata-gzip-policy"])
     , ("advisories", ["exact-fix", "deny-cve", "deny-epss", "mal-denial", "last-good-generation"])
     , ("telemetry", ["signals", "disabled", "export-failure", "datadog"] <> [law | scope == FullEcosystem, law <- ["domain-spans", "private-fetch"]])
     ]

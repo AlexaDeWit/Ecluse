@@ -50,7 +50,7 @@ pypiServingDriver = nativeDriver PyPI pypiAdapter "/pypi" "/simple/thing" pypiAr
 nativeDriver :: Ecosystem -> RegistryAdapter -> ByteString -> ByteString -> (Text -> ByteString) -> (Text -> [ServingRelease] -> Value) -> (SResponse -> ServingResponse) -> (ByteString -> Text) -> ServingDriver
 nativeDriver ecosystem adapter mount metadataPath artifactPath document observe digest =
     ServingDriver
-        { withServing = \rules privateReleases publicReleases action ->
+        { withServing = \compression rules privateReleases publicReleases action ->
             testWithApplication (pure (upstream privateReleases)) $ \privatePort ->
                 testWithApplication (pure (upstream publicReleases)) $ \publicPort -> do
                     queue <- newTestMemoryQueue
@@ -61,13 +61,14 @@ nativeDriver ecosystem adapter mount metadataPath artifactPath document observe 
                             (serveDepsFor adapter (Just (loopbackRegistryUrl (localhost privatePort))) (loopbackRegistryUrl (localhost publicPort)) NoMirrorWrite prepared (pure now))
                                 { pdMountBaseUrl = "http://ecluse.test" <> decodeUtf8 mount
                                 , pdEgressUrl = Right . loopbackRegistryUrl
+                                , pdMetadataCompression = compression
                                 }
                         app = application (mkServerConfig (maybeToList (mountBindingFor ecosystem deps Nothing))) env
                         request method path headers = observe <$> requestAt method (mount <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
                     action
                         ServingSession
                             { requestMetadata = (`request` metadataPath)
-                            , requestArtifact = \method version -> request method (artifactPath version) []
+                            , requestArtifact = \method headers version -> request method (artifactPath version) headers
                             }
         , servingIdentity = ("thing@" <>)
         , servingDigest = digest

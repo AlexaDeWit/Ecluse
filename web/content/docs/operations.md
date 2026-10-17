@@ -495,6 +495,7 @@ listing and each public artifact decision for the memory it uses, as it uses it,
 | A listing's response | Per byte of its output basis, before assembly: 2.0 bytes for npm, 1.6 bytes for PyPI |
 | A selected read, which a public artifact decision makes | Nothing beyond the entry step |
 | An assembled hit or a `304` | Its reads, but no response charge |
+| A gzip listing response, hit or miss | 512 KiB for the deflater, then 36 KiB for each 32 KiB output buffer |
 | A request that joins another request's public fetch or render | Nothing for that fetch or render |
 
 A listing's output basis is the larger of two estimates. One starts from the largest document the

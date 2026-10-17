@@ -13,7 +13,7 @@
 #endif
 
 /* Keep the libc struct layout inside C. Unsupported platforms cannot report a passing zero. */
-int ecluse_archive_allocator_snapshot(size_t *arena_bytes, size_t *mapped_bytes)
+int ecluse_native_allocator_snapshot(size_t *arena_bytes, size_t *mapped_bytes)
 {
 #if defined(ECLUSE_HAS_MALLINFO2)
     const struct mallinfo2 snapshot = mallinfo2();
