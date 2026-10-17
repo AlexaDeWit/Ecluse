@@ -102,7 +102,7 @@ spec = do
             request <- signedRequest
             fault <- classifyTransport <$> failedFetch tlsManagerSettings request{secure = True}
             tfCause fault `shouldBe` TransportUnreachable
-            tfDetail fault `shouldSatisfy` T.isPrefixOf "127.0.0.1:1: InternalException: HostCannotConnect "
+            tfDetail fault `shouldSatisfy` T.isPrefixOf (closedAuthority <> ": InternalException: HostCannotConnect ")
             tfDetail fault `shouldSatisfy` (not . T.isInfixOf "\n")
             for_ requestSecrets $ \secret -> tfDetail fault `shouldSatisfy` (not . T.isInfixOf secret)
 

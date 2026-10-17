@@ -24,6 +24,7 @@ import Ecluse.Runtime.Aws.Fault (
  )
 import Ecluse.Runtime.Test.Aws (canonicalRequestMessage, plantedHeader, plantedRefusal, refusedAtClosedPort)
 import Ecluse.Test.Stub (redirectSecrets, redirectedStatusException, refusedFetch, signedRequest)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 spec :: Spec
 spec = do
@@ -80,9 +81,10 @@ spec = do
             displayAwsFaultT (toException (AwsRequestFailed (AwsServiceNamed "STS") (AwsUndecodable 200)))
                 `shouldBe` "AWS request failed at STS: HTTP 200, an answer that could not be decoded"
 
-        it "renders any other exception as displayFaultT does" $ do
+        it "renders any other exception as displayFaultT does, exception context included" $ do
             refused <- refusedFetch =<< signedRequest
-            displayAwsFaultT (toException refused) `shouldBe` displayFaultT (toException refused)
+            for_ [toException refused, toException (TestContractEscape "a fault from outside AWS")] $ \err ->
+                displayAwsFaultT err `shouldBe` displayFaultT err
   where
     -- An AssumeRole answer amazonka could not decode: its body holds the minted credentials.
     undecodableAnswer =
