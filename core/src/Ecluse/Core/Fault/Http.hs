@@ -13,6 +13,7 @@ module Ecluse.Core.Fault.Http (
     httpFault,
     isRetryableStatusCode,
     displayFaultT,
+    isClientFault,
     hostPortLabel,
 
     -- * Managers
@@ -105,9 +106,16 @@ isRetryableStatusCode code = code >= 500 || code == 408 || code == 429
 displayFaultT :: SomeException -> Text
 displayFaultT err
     | Just http <- fromException err = renderHttpFault (dialledAuthority http) (httpFault http)
-    -- http-client raises a fault outside a request, such as a malformed proxy variable, without an HttpException. No peer exists to name.
-    | Just content <- unHttpExceptionContentWrapper <$> fromException err = contentReason content
+    | Just content <- outsideRequest err = contentReason content
     | otherwise = displayWithoutContext err
+
+-- | Whether 'displayFaultT' renders the exception as an http-client fault, with a request or without one.
+isClientFault :: SomeException -> Bool
+isClientFault err = isJust (fromException @HttpException err) || isJust (outsideRequest err)
+
+-- A fault http-client raises outside a request, such as a malformed proxy variable, carries no HttpException and no peer to name.
+outsideRequest :: SomeException -> Maybe HttpExceptionContent
+outsideRequest err = unHttpExceptionContentWrapper <$> fromException err
 
 -- | A dialled host and port as a log line names them, so an IPv6 host keeps its brackets.
 hostPortLabel :: Text -> Int -> Text
