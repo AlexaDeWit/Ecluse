@@ -25,7 +25,8 @@ module Ecluse.BenchLoad.Normalise (
 ) where
 
 import Data.Text qualified as T
-import Numeric (showFFloat)
+
+import Ecluse.Report.Markdown (cells, fixed)
 
 -- | One public round trip per request, with concurrent origin legs and a single-flight public leg.
 publicLegMultiple :: Double
@@ -106,15 +107,12 @@ renderNormalised source rows =
 
 renderRow :: Double -> NormalisedRow -> Text
 renderRow rttMs row =
-    "| "
-        <> T.intercalate
-            " | "
-            ( nrName row
-                : cellsFor (nrP50Ms row)
-                    <> cellsFor (nrP99Ms row)
-                    <> [maybe "available" ("unavailable: " <>) (nrPublicLegUnavailableReason row)]
-            )
-        <> " |"
+    cells
+        ( nrName row
+            : cellsFor (nrP50Ms row)
+                <> cellsFor (nrP99Ms row)
+                <> [maybe "available" ("unavailable: " <>) (nrPublicLegUnavailableReason row)]
+        )
   where
     cellsFor :: Maybe Double -> [Text]
     cellsFor Nothing = ["n/a", "n/a", "n/a"]
@@ -161,7 +159,7 @@ data Saturation = Saturation
     }
     deriving stock (Eq, Show)
 
--- | Derive saturation. A missing p50 leaves delay and dominance undefined.
+-- | A missing p50 leaves the delay and fraction undefined.
 deriveSaturation :: Double -> SaturationInput -> Saturation
 deriveSaturation threshold si =
     Saturation
@@ -181,7 +179,7 @@ deriveSaturation threshold si =
         loaded <- siLoadedP50Ms si
         if loaded > 0 then Just (d / loaded) else Nothing
 
--- | Render saturation, with a summary when any scenario is queuing-bound.
+-- | Summarise usable queuing fractions and identify unavailable comparisons.
 renderSaturation :: Double -> [Saturation] -> Text
 renderSaturation threshold sats =
     T.unlines $
@@ -202,32 +200,36 @@ renderSaturation threshold sats =
             <> ["", summaryLine]
             <> [unmeasuredLine | not (null unmeasured)]
   where
-    bound = filter satQueuingDominates sats
-    unmeasured = filter (isNothing . satLoadedP50Ms) sats
+    measured = filter (isJust . satQueuingFraction) sats
+    bound = filter satQueuingDominates measured
+    unmeasured = filter (isNothing . satQueuingFraction) sats
     summaryLine
+        | null measured = "No usable queuing comparison is available."
         | null bound =
-            "No measured scenario is queuing-bound: the loaded latency is upstream plus per-request overhead, not backlog."
+            "No measured queuing fraction exceeds " <> pctCell threshold <> ". This observation does not rule out backlog."
         | otherwise =
             "FLAG, queuing-bound: "
                 <> T.intercalate ", " (map satName bound)
                 <> ". The loaded latency is mostly backlog (connection-pool or admission-bound), not per-request work."
     unmeasuredLine =
-        "No successful response under load, so no queuing reading: " <> T.intercalate ", " (map satName unmeasured) <> "."
+        "Queuing comparison unavailable: " <> T.intercalate ", " (map unavailableLabel unmeasured) <> "."
+    unavailableLabel s = satName s <> " (" <> reason s <> ")"
+    reason s
+        | isNothing (satLoadedP50Ms s) = "no successful response under load"
+        | isNothing (satC1ServiceP50Ms s) = "concurrency-1 service p50 unavailable"
+        | otherwise = "loaded p50 is not positive"
 
 renderSat :: Saturation -> Text
 renderSat s =
-    "| "
-        <> T.intercalate
-            " | "
-            [ satName s
-            , fmt1 (satThroughput s) <> " req/s"
-            , show (satDeadlineAborts s)
-            , msMaybe (satC1ServiceP50Ms s)
-            , msMaybe (satLoadedP50Ms s)
-            , delayCell
-            , flag
-            ]
-        <> " |"
+    cells
+        [ satName s
+        , fmt1 (satThroughput s) <> " req/s"
+        , show (satDeadlineAborts s)
+        , msMaybe (satC1ServiceP50Ms s)
+        , msMaybe (satLoadedP50Ms s)
+        , delayCell
+        , flag
+        ]
   where
     flag
         | satQueuingDominates s = "queuing-bound"
@@ -256,5 +258,5 @@ baselineLabel = \case
         "injected fallback " <> fmt1 ms <> " ms (live probe unavailable)"
 
 fmt0, fmt1 :: Double -> Text
-fmt0 x = toText (showFFloat (Just 0) x "")
-fmt1 x = toText (showFFloat (Just 1) x "")
+fmt0 = fixed 0
+fmt1 = fixed 1
