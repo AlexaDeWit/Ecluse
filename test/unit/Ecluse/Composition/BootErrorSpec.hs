@@ -9,7 +9,7 @@ import Data.Text.Encoding qualified as TE
 import Test.Hspec
 
 import Ecluse.Composition.BootError (
-    Advisory (DredgerQuotaOverrideUnmatched, MirrorTargetOnOwnPublicationTarget, MirrorTargetOnPrivateUpstream, PrivateUpstreamUndecided),
+    Advisory (DredgerQuotaOverrideUnmatched, MirrorTargetOnOwnPublicationTarget, MirrorTargetOnPrivateUpstream, PrivateUpstreamUndecided, RemediationSkipsWithoutStore),
     BootError (..),
     StoreMaintenanceReason (ClientBuildFailed, NoControlPlane),
     renderAdvisory,
@@ -174,7 +174,9 @@ renderBootErrorSpec = describe "renderBootError" $
         renderBootError PilotWithoutEcosystem
             `shouldSatisfy` infixed "ECLUSE_MOUNTS__<ECOSYSTEM>__"
         renderBootError (AdvisoryDenyWithoutStore Npm ("DenyIfCve" :| ["DenyIfEpss"]))
-            `shouldSatisfy` infixed "mount \"npm\" enables the advisory deny rules DenyIfCve, DenyIfEpss"
+            `shouldSatisfy` infixed "mount \"npm\" enables rules that refuse without advisory evidence (DenyIfCve, DenyIfEpss)"
+        renderBootError (AdvisoryDenyWithoutStore PyPI ("DenyIfKnownMalicious" :| ["AllowIfRemediatesCve"]))
+            `shouldSatisfy` infixed "mount \"pypi\" enables rules that refuse without advisory evidence (DenyIfKnownMalicious, AllowIfRemediatesCve)"
         renderBootError (AdvisoryDenyWithoutStore Npm ("DenyIfCve" :| []))
             `shouldSatisfy` infixed "ECLUSE_ADVISORIES__URL (advisories.url) is unset"
         renderBootError (AdvisoryDenyWithoutStore Npm ("DenyIfCve" :| []))
@@ -203,9 +205,7 @@ renderBootErrorSpec = describe "renderBootError" $
     infixed :: Text -> Text -> Bool
     infixed needle hay = needle `T.isInfixOf` hay
 
-{- | Every advisory constructor's rendered bytes. A writing role boots on these, so the line is
-all an operator gets, and rewording one is a change to the operator-facing contract.
--}
+-- | Every advisory constructor's rendered bytes: the line is all an operator gets, so a reword changes the contract.
 renderAdvisorySpec :: Spec
 renderAdvisorySpec = describe "renderAdvisory" $ do
     it "names the pair and the registry a mount's own private upstream collapsed onto" $
@@ -229,5 +229,9 @@ renderAdvisorySpec = describe "renderAdvisory" $ do
     it "reduces a declared capacity that names no store to its dialled authority, and says it paces nothing" $
         advisoryBytes (DredgerQuotaOverrideUnmatched "https://deploy:hunter2@gone.example.test/npm/")
             `shouldBe` "dredger.quotaOverrides: gone.example.test:443 names no store this deployment declares, so it paces nothing"
+
+    it "names the mount whose remediation rule skips without a store, and what that costs" $
+        advisoryBytes (RemediationSkipsWithoutStore PyPI)
+            `shouldBe` "mount \"pypi\" enables AllowIfRemediatesCve with onUnavailable: skip, but ECLUSE_ADVISORIES__URL (advisories.url) is unset: the rule admits no fix, and every admitted artifact logs a skipped remediation check. Set the advisory store, or disable the rule"
   where
     advisoryBytes = TE.encodeUtf8 . renderAdvisory

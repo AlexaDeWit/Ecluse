@@ -47,7 +47,7 @@ import Ecluse.Config (
     MountMap,
     advisoryObjectKey,
     advisoryStoreBucket,
-    mountEpssRequirement,
+    compileMountEpssRequirement,
     unUrl,
  )
 import Ecluse.Config.AdvisoryStore (advisoryStoreCapability)
@@ -77,29 +77,21 @@ data ExportTarget = ExportTarget
     }
     deriving stock (Eq, Show)
 
-{- | A configured store turns exporting on, as it does for the proxy's sync, and each mounted
-ecosystem earns an artifact. 'Nothing' is a store with no ecosystem to compile, which the boot refuses.
--}
+-- | A configured store turns exporting on, one artifact per mounted ecosystem. 'Nothing' is a store with no ecosystem, which the boot refuses.
 exportLoopPlan :: AdvisoriesSettings -> [ExportTarget] -> Maybe ExportLoopPlan
 exportLoopPlan advisories targets = case advUrl advisories of
     Nothing -> Just ExportIdle
     Just store -> ExportTo store <$> nonEmpty targets
 
-{- | The delay between export cycles. The config decoder bounds @compileInterval@ to
-@maxBound \`div\` 1000000@ seconds, so this conversion cannot wrap to a negative delay.
--}
+-- | The delay between export cycles. The decoder bounds @compileInterval@ to @maxBound \`div\` 1000000@ seconds, so it cannot wrap negative.
 exportCadenceMicros :: AdvisoriesSettings -> Int
 exportCadenceMicros = secondsToMicros . advCompileInterval
 
-{- | How long the idle loop sleeps between wakeups. Nothing observes the wakeup, because an
-added store only takes effect on the next boot, so the sleep is deliberately long.
--}
+-- | The idle loop's sleep. An added store takes effect only on the next boot, so nothing observes the wakeup.
 idleCadenceMicros :: Int
 idleCadenceMicros = secondsToMicros (24 * 60 * 60)
 
-{- | The upstreams a compile reads, scheduled or one-shot. Both are configured keys, so a moved or
-mirrored feed never needs a new binary.
--}
+-- | The upstreams a compile reads. Both are configured keys, so a moved or mirrored feed never needs a new binary.
 configuredSources :: AdvisoriesSettings -> OsvEcosystem -> CompileSources
 configuredSources advisories eco =
     CompileSources
@@ -131,9 +123,7 @@ pilotPostureLines advisories = epssAttemptLine advisories : maybe [] (pure . gua
             <> renderPercent (advEpssLossCap advisories)
             <> " more after an optional EPSS outage"
 
-{- | The quiet-time thresholds one compile is judged against. An ecosystem with no configured
-threshold, and a one-shot compile of a name this build does not serve, take 'defaultQuietTime'.
--}
+-- | The quiet-time thresholds of one compile. An unconfigured ecosystem, or one this build does not serve, takes 'defaultQuietTime'.
 quietTimeFor :: AdvisoriesSettings -> Maybe Ecosystem -> QuietTime
 quietTimeFor advisories mEco =
     QuietTime
@@ -160,11 +150,9 @@ data UploadRequest
       UploadRebaselined Rebaseline
     deriving stock (Eq, Show)
 
-{- | The EPSS requirement a one-shot compile runs under. A mounted ecosystem takes its resolved
-policy's. An unmounted one prepares a dataset ahead of its mount, so it requires the feed.
--}
-compileEpssRequirement :: MountMap -> PilotCompileOptions -> EpssRequirement
-compileEpssRequirement mounts = maybe EpssRequired mountEpssRequirement . compiledMount mounts
+-- | The compiled mount's own requirement. A compile for no mount may serve a policy that needs EPSS.
+compileEpssRequirement :: AdvisoriesSettings -> MountMap -> PilotCompileOptions -> EpssRequirement
+compileEpssRequirement advisories mounts opts = maybe EpssRequired (compileMountEpssRequirement advisories) (compiledMount mounts opts)
 
 -- | The warning a one-shot compile logs for an ecosystem the loaded configuration does not mount.
 unmountedCompileWarning :: MountMap -> PilotCompileOptions -> Maybe Text
@@ -180,9 +168,7 @@ unmountedCompileWarning mounts opts = case compiledMount mounts opts of
 compiledMount :: MountMap -> PilotCompileOptions -> Maybe Mount
 compiledMount mounts opts = (`Map.lookup` mounts) =<< parseEcosystem (pcoEcosystem opts)
 
-{- | Requesting an upload without a configured advisory store. It is a wiring fault at the
-composition root, so it throws rather than returning a value the caller could only re-raise.
--}
+-- | An upload requested without an advisory store: a wiring fault, so it throws rather than return a value to re-raise.
 data PilotUploadUnconfigured = PilotUploadUnconfigured
     deriving stock (Eq, Show)
 
@@ -196,7 +182,7 @@ data UploadPlan
       UploadTo AdvisoryStoreUrl (Maybe Rebaseline)
     deriving stock (Eq, Show)
 
--- | Plan a one-shot upload. Asking for one with no store is refused, so a scripted run cannot exit 0 having published nothing.
+-- | Plan a one-shot run's upload. One asked for with no store is refused, so a scripted run cannot succeed having published nothing.
 uploadPlan :: PilotCompileOptions -> Maybe AdvisoryStoreUrl -> Either PilotUploadUnconfigured UploadPlan
 uploadPlan opts mStore = case pcoUpload opts of
     NoUpload -> Right UploadSkipped
@@ -205,9 +191,7 @@ uploadPlan opts mStore = case pcoUpload opts of
   where
     uploadingTo approval = maybe (Left PilotUploadUnconfigured) (\store -> Right (UploadTo store approval)) mStore
 
-{- | Where one compiled artifact lands: the store's bucket, and the object key its own file
-name takes under the store's prefix. The proxy's sync reads that same key.
--}
+-- | Where one compiled artifact lands: the store's bucket and its file's key under the prefix, which the proxy's sync reads.
 uploadTarget :: AdvisoryStoreUrl -> FilePath -> (Text, Text)
 uploadTarget store dbPath =
     (advisoryStoreBucket store, advisoryObjectKey store (takeFileName dbPath))

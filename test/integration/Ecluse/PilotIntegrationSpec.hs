@@ -47,7 +47,7 @@ import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (aiOsvZip), fillerTargets, 
 import Ecluse.Test.Cve (namesFix)
 import Ecluse.Test.Log (memoryLogEnv, runQuietKatip)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2), mkMinimalValidDb, osvCorpusZip, osvZipOf)
-import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, stubSourceEnv, withSourceStubs)
+import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, epssFreeRules, stubSourceEnv, withSourceStubs)
 import Ecluse.Test.Poll (pollUntil, retryingIO)
 import Ecluse.Test.Stub (Captured (capMethod, capPath), Stub, allCaptured, stubBaseUrl, withStub)
 
@@ -87,35 +87,36 @@ spec = aroundAll withMinistack $ do
     describe "one-shot EPSS failure under the mount's rules" $
         for_ [True, False] $ \epssRule ->
             it (caseLabel ("integration/pilot/native-002/" <> (if epssRule then "epss-required" else "epss-unused")) (toText ("publishes only where no rule depends on EPSS, EPSS rule=" <> show epssRule :: String))) $ \container ->
-                withSystemTempDirectory "ecluse-pilot-epss-upload" $ \outDir -> do
-                    let endpoint = endpointFor container
-                        bucket = if epssRule then "pilot-epss-required" else "pilot-epss-optional"
-                    aws <- createStore endpoint bucket
-                    logEnv <- quietLogEnv
-                    epss <- LBS.readFile epssFixtureFile
-                    let compile target version (feedStatus, feed) = do
-                            archive <- osvCorpusZip version
-                            withSourceStubs archive (feedStatus, feed) $ \sources epssStub -> do
-                                config <- either (fail . show) pure (loadConfig (oneShotEnv bucket epssRule sources) Nothing)
-                                outcome <- try (runPilotCompile logEnv telemetryDisabled (Just target) config (uploadOptions outDir))
-                                map capPath <$> allCaptured epssStub `shouldReturn` ["/epss.csv.gz"]
-                                pure (outcome :: Either PilotEpssRequired FilePath)
-                    path <- compile endpoint CorpusV1 (status200, epss) >>= either (fail . displayException) pure
-                    before <- snapshot aws bucket
-                    length before `shouldBe` 1
-                    if epssRule
-                        then withStub status200 LBS.empty $ \observer -> do
-                            target <- either (fail . show) pure (parseEndpointUrl (stubBaseUrl observer))
-                            compile target CorpusV2 (status404, "") >>= (`shouldSatisfy` isLeft)
-                            allCaptured observer `shouldReturn` []
-                            snapshot aws bucket `shouldReturn` before
-                        else do
-                            compile endpoint CorpusV2 (status404, "") `shouldReturn` Right path
-                            after <- snapshot aws bucket
-                            map objectTag after `shouldNotBe` map objectTag before
-                            withPublished endpoint bucket Npm EpssOptional path $ \lookup' -> do
-                                namesFix lookup' "corpus-revoked" "1.2.0" `shouldReturn` True
-                                map arEpss <$> cveAdvisoriesFor lookup' "corpus-revoked" `shouldReturn` [Nothing]
+                -- An EPSS deny and the shipped differential remediation both read EPSS scores.
+                for_ (if epssRule then [("pilot-epss-required", Just denyIfEpssRules), ("pilot-epss-shipped", Nothing)] else [("pilot-epss-optional", Just epssFreeRules)]) $ \(bucket, rules) ->
+                    withSystemTempDirectory "ecluse-pilot-epss-upload" $ \outDir -> do
+                        let endpoint = endpointFor container
+                        aws <- createStore endpoint bucket
+                        logEnv <- quietLogEnv
+                        epss <- LBS.readFile epssFixtureFile
+                        let compile target version (feedStatus, feed) = do
+                                archive <- osvCorpusZip version
+                                withSourceStubs archive (feedStatus, feed) $ \sources epssStub -> do
+                                    config <- either (fail . show) pure (loadConfig (oneShotEnv bucket rules sources) Nothing)
+                                    outcome <- try (runPilotCompile logEnv telemetryDisabled (Just target) config (uploadOptions outDir))
+                                    map capPath <$> allCaptured epssStub `shouldReturn` ["/epss.csv.gz"]
+                                    pure (outcome :: Either PilotEpssRequired FilePath)
+                        path <- compile endpoint CorpusV1 (status200, epss) >>= either (fail . displayException) pure
+                        before <- snapshot aws bucket
+                        length before `shouldBe` 1
+                        if epssRule
+                            then withStub status200 LBS.empty $ \observer -> do
+                                target <- either (fail . show) pure (parseEndpointUrl (stubBaseUrl observer))
+                                compile target CorpusV2 (status404, "") >>= (`shouldSatisfy` isLeft)
+                                allCaptured observer `shouldReturn` []
+                                snapshot aws bucket `shouldReturn` before
+                            else do
+                                compile endpoint CorpusV2 (status404, "") `shouldReturn` Right path
+                                after <- snapshot aws bucket
+                                map objectTag after `shouldNotBe` map objectTag before
+                                withPublished endpoint bucket Npm EpssOptional path $ \lookup' -> do
+                                    namesFix lookup' "corpus-revoked" "1.2.0" `shouldReturn` True
+                                    map arEpss <$> cveAdvisoriesFor lookup' "corpus-revoked" `shouldReturn` [Nothing]
 
     describe "scheduled EPSS enrichment per ecosystem" $
         for_ [True, False] $ \feedUp ->
@@ -205,17 +206,17 @@ spec = aroundAll withMinistack $ do
 scheduledFeed :: LByteString
 scheduledFeed = GZip.compress "cve,epss,percentile\nCVE-2026-10001,0.875,0.9\nCVE-2026-10006,0.75,0.9\n"
 
--- An npm mount, with or without an EPSS rule, reading its advisory sources from @sources@.
-oneShotEnv :: Text -> Bool -> [(String, String)] -> [(String, String)]
-oneShotEnv bucket epssRule sources =
+-- An npm mount under these rule patches, reading its advisory sources from @sources@.
+oneShotEnv :: Text -> Maybe String -> [(String, String)] -> [(String, String)]
+oneShotEnv bucket rules sources =
     [ ("ECLUSE_SERVER__PUBLIC_URL", "https://proxy.example.test")
     , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
     , ("ECLUSE_ADVISORIES__URL", toString ("s3://" <> bucket))
     ]
-        <> [("ECLUSE_MOUNTS__NPM__RULES", denyIfEpssRules) | epssRule]
+        <> [("ECLUSE_MOUNTS__NPM__RULES", patch) | Just patch <- [rules]]
         <> sources
 
--- One mounted ecosystem with no EPSS rule, uploading to @bucket@.
+-- One mounted ecosystem under the shipped rules, uploading to @bucket@.
 oneShotEnvFor :: Ecosystem -> Text -> [(String, String)] -> [(String, String)]
 oneShotEnvFor eco bucket sources =
     [ ("ECLUSE_SERVER__PUBLIC_URL", "https://proxy.example.test")
@@ -233,13 +234,14 @@ loopEnvFor eco bucket dataDir sources =
 unETag :: S3.ETag -> ByteString
 unETag (S3.ETag tag) = tag
 
--- npm with an EPSS rule beside PyPI without one, on an interval no case waits out.
+-- npm with an EPSS rule beside PyPI with none, on an interval no case waits out.
 scheduledEnv :: Text -> FilePath -> Stub -> Stub -> [(String, String)]
 scheduledEnv bucket dataDir osvStub epssStub =
     [ ("ECLUSE_SERVER__PUBLIC_URL", "https://proxy.example.test")
     , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
     , ("ECLUSE_MOUNTS__NPM__RULES", denyIfEpssRules)
     , ("ECLUSE_MOUNTS__PYPI__ENABLED", "true")
+    , ("ECLUSE_MOUNTS__PYPI__RULES", epssFreeRules)
     , ("ECLUSE_ADVISORIES__URL", toString ("s3://" <> bucket))
     , ("ECLUSE_ADVISORIES__DATA_DIR", dataDir)
     , ("ECLUSE_ADVISORIES__COMPILE_INTERVAL", "3600")
@@ -255,7 +257,7 @@ seedNpm endpoint bucket dir osvStub = do
     logEnv <- quietLogEnv
     epss <- LBS.readFile epssFixtureFile
     withStub status200 epss $ \epssStub -> do
-        config <- either (fail . show) pure (loadConfig (oneShotEnv bucket True (stubSourceEnv osvStub epssStub)) Nothing)
+        config <- either (fail . show) pure (loadConfig (oneShotEnv bucket (Just denyIfEpssRules) (stubSourceEnv osvStub epssStub)) Nothing)
         void (runPilotCompile logEnv telemetryDisabled (Just endpoint) config (uploadOptions (dir </> "seed")))
 
 createStore :: AwsEndpoint -> Text -> IO AWS.Env
@@ -285,9 +287,7 @@ objectSize (_, _, _, size) = size
 artifactKey :: Ecosystem -> S3.ObjectKey
 artifactKey = S3.ObjectKey . toText . osvDbFileName . ecosystemName
 
-{- | Download the ecosystem's stored object as the sync does, check it is the local artifact byte
-for byte, and open it under the given requirement.
--}
+-- | Download the stored object as the sync does, check it equals the local artifact, and open it under the requirement.
 withPublished :: AwsEndpoint -> Text -> Ecosystem -> EpssRequirement -> FilePath -> (CveLookup -> IO a) -> IO a
 withPublished endpoint bucket eco requirement compiled use = do
     source <- newS3CveSource (Just endpoint)

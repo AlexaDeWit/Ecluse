@@ -8,6 +8,7 @@ the shared EPSS feed slice.
 -}
 module Ecluse.Test.OsvDb (
     epssFixtureFile,
+    epssFixtureWith,
     withFixtureOsvDb,
     withOsvZipDb,
     compileOsvToSqlite,
@@ -29,8 +30,10 @@ module Ecluse.Test.OsvDb (
     stubSourceEnv,
     withSourceStubs,
     denyIfEpssRules,
+    epssFreeRules,
 ) where
 
+import Codec.Compression.GZip qualified as GZip
 import Conduit (MonadResource)
 import Control.Monad.Catch (MonadMask)
 import Data.Map.Strict qualified as Map
@@ -63,6 +66,12 @@ import UnliftIO (MonadUnliftIO)
 -- | The shared EPSS feed slice omits some corpus aliases to cover missing scores.
 epssFixtureFile :: FilePath
 epssFixtureFile = "test/unit/fixtures/epss/sample-epss.csv.gz"
+
+-- | The fixture feed with these CVE aliases and scores appended, for a case that needs a score it lacks.
+epssFixtureWith :: [(Text, Text)] -> IO LByteString
+epssFixtureWith rows = do
+    fixture <- GZip.decompress <$> readFileLBS epssFixtureFile
+    pure (GZip.compress (fixture <> foldMap (\(cve, score) -> encodeUtf8 (cve <> "," <> score <> ",0.10000\n")) rows))
 
 -- | Compile a committed corpus version into a temporary artifact through local HTTP stubs.
 withFixtureOsvDb :: CorpusVersion -> (FilePath -> IO a) -> IO a
@@ -171,7 +180,7 @@ stubSourceEnv osvStub epssStub =
     , ("ECLUSE_ADVISORIES__EPSS_FEED_URL", toString (stubBaseUrl epssStub) <> "/epss.csv.gz")
     ]
 
--- | Serve this OSV archive and an EPSS feed answering this status and body. The case gets their 'stubSourceEnv' and the EPSS stub.
+-- | Serve this OSV archive and an EPSS feed of this status and body from stubs, handing the case their 'stubSourceEnv'.
 withSourceStubs :: LByteString -> (Status, LByteString) -> ([(String, String)] -> Stub -> IO a) -> IO a
 withSourceStubs zipBytes (feedStatus, feedBytes) use =
     withStub status200 zipBytes $ \osvStub ->
@@ -181,3 +190,7 @@ withSourceStubs zipBytes (feedStatus, feedBytes) use =
 -- | A rule set with one @DenyIfEpss@, at the threshold and alignment that still require the feed.
 denyIfEpssRules :: String
 denyIfEpssRules = "{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":1,\"onUnavailable\":\"skip\"}}"
+
+-- | A patch under which no rule reads EPSS: the shipped remediation rule abstains on partial fixes.
+epssFreeRules :: String
+epssFreeRules = "{\"remediation-fast-track\":{\"remainingAdvisories\":\"abstain\"}}"

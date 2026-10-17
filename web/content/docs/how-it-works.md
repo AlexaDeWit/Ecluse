@@ -155,7 +155,7 @@ above every allow by default.
 | Rule | Band | On by default | What it decides |
 |------|------|----------------|-----------------|
 | `min-age` | Allow | Yes | Admits a public version older than seven days: the quarantine |
-| `remediation-fast-track` | Allow | Yes | Admits a version a synced advisory names as the exact fix for a vulnerability, as long as no other advisory still affects it |
+| `remediation-fast-track` | Allow | With an advisory source | Admits a version a synced advisory names as the exact fix for a vulnerability. A fix that another advisory still affects passes only when that advisory's stored scores sit inside the limits. Refuses while advisory evidence is unavailable |
 | `AllowScope` | Allow | No | Allow-lists every package under a scope you name |
 | `AllowByIdentity` | Allow | No | Pins a package or a `package@version` by exact name |
 | `DenyByIdentity` | Deny | No | Revokes a package or version |
@@ -163,8 +163,11 @@ above every allow by default.
 | `DenyIfCve` | Deny | No | Denies versions with a known vulnerability above a severity you choose |
 | `DenyIfEpss` | Deny | No | Denies versions with a known vulnerability whose exploitation probability (EPSS) is at or above a threshold you choose |
 
-`remediation-fast-track` abstains until a first advisory database syncs, so without one only the
-quarantine supplies the shared allow. The npm mount also denies install scripts by default.
+An advisory source (`advisories.url`) activates `remediation-fast-track`, together with the
+`deny-known-malicious` MAL deny. Without a source, only the quarantine supplies the shared allow.
+With one, the fast lane refuses a version it reaches while the advisory database is missing,
+unreadable, or too old, so an outage also holds back old versions until the database recovers. The
+npm mount also denies install scripts by default.
 Disable `deny-scripts` under `mounts.npm.rules`, or add an `AllowByIdentity` pin with precedence above 300.
 The off rules opt in by name, and
 [Rule policy](@/docs/configuration.md#rule-policy) has their knobs.

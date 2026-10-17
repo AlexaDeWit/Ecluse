@@ -28,7 +28,7 @@ import Ecluse.Pilot (PilotCompileOptions (..), PilotUploadUnconfigured (..), Upl
 import Ecluse.Pilot.Plan (ExportTarget (ExportTarget, etEcosystem, etEpss))
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Log (captureJsonLog, newTestLogEnv, runQuietKatip)
-import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, metaOf, scoresOf, withSourceStubs)
+import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, epssFreeRules, metaOf, scoresOf, withSourceStubs)
 import Ecluse.Test.Stub (Captured (capPath), Stub, allCaptured)
 
 spec :: Spec
@@ -69,7 +69,7 @@ spec = do
                 -- read the configured feed rather than the shipped upstream.
                 rows `shouldBe` [("hono", Just 0.75)]
 
-        for_ [("with", Just denyIfEpssRules), ("without", Nothing)] $ \(label, rule) ->
+        for_ [("with", Just denyIfEpssRules), ("without", Just epssFreeRules)] $ \(label, rule) ->
             it ("joins the feed's scores " <> label <> " an EPSS rule, fetching the feed once") $
                 withSystemTempDirectory "ecluse-pilot-policy" $ \outDir ->
                     withPolicyCompile outDir rule (status200, Nothing) $ \compile epssStub -> do
@@ -78,19 +78,20 @@ spec = do
                         Map.lookup "epss_status" <$> metaOf dbFile `shouldReturn` Just "available"
                         map capPath <$> allCaptured epssStub `shouldReturn` ["/epss.csv.gz"]
 
-        it "publishes nothing and fails when a mount with an EPSS rule meets a failed feed" $
-            withSystemTempDirectory "ecluse-pilot-policy" $ \outDir -> do
-                dbFile <- withPolicyCompile outDir (Just denyIfEpssRules) (status200, Nothing) $ \compile _ -> newTestLogEnv >>= compile
-                published <- readFileBS dbFile
-                withPolicyCompile outDir (Just denyIfEpssRules) (status404, Just "") $ \failing epssStub -> do
-                    (newTestLogEnv >>= failing) `shouldThrow` (\refusal -> perEcosystem refusal == "npm")
-                    map capPath <$> allCaptured epssStub `shouldReturn` ["/epss.csv.gz"]
-                readFileBS dbFile `shouldReturn` published
-                listDirectory outDir `shouldReturn` [takeFileName dbFile]
+        for_ [("an EPSS deny", Just denyIfEpssRules), ("the shipped differential remediation", Nothing)] $ \(label, rule) ->
+            it ("publishes nothing and fails when a mount with " <> label <> " meets a failed feed") $
+                withSystemTempDirectory "ecluse-pilot-policy" $ \outDir -> do
+                    dbFile <- withPolicyCompile outDir rule (status200, Nothing) $ \compile _ -> newTestLogEnv >>= compile
+                    published <- readFileBS dbFile
+                    withPolicyCompile outDir rule (status404, Just "") $ \failing epssStub -> do
+                        (newTestLogEnv >>= failing) `shouldThrow` (\refusal -> perEcosystem refusal == "npm")
+                        map capPath <$> allCaptured epssStub `shouldReturn` ["/epss.csv.gz"]
+                    readFileBS dbFile `shouldReturn` published
+                    listDirectory outDir `shouldReturn` [takeFileName dbFile]
 
-        it "publishes OSV data with unavailable enrichment, and returns, when a mount without one meets a failed feed" $
+        it "publishes OSV data with unavailable enrichment, and returns, when no rule of the mount reads EPSS" $
             withSystemTempDirectory "ecluse-pilot-policy" $ \outDir ->
-                withPolicyCompile outDir Nothing (status404, Just "") $ \compile epssStub -> do
+                withPolicyCompile outDir (Just epssFreeRules) (status404, Just "") $ \compile epssStub -> do
                     (dbFile, logged) <- captureJsonLog compile
                     scoresOf dbFile `shouldReturn` [Nothing]
                     Map.lookup "epss_status" <$> metaOf dbFile `shouldReturn` Just "unavailable"
@@ -107,6 +108,14 @@ spec = do
                             `shouldThrow` (\refusal -> perEcosystem refusal == "npm")
                     filter (T.isInfixOf "mounts no npm ecosystem") (lines logged)
                         `shouldSatisfy` \warned -> length warned == 1 && all (T.isInfixOf "\"sev\":\"Warning\"") warned
+                    doesFileExist (outDir </> "npm-osv-schema5.db") `shouldReturn` False
+
+        it "requires the feed for a mounted ecosystem with no advisory store, whose artifact may serve a policy that reads EPSS" $
+            withSystemTempDirectory "ecluse-pilot-source-free" $ \outDir ->
+                withStubbedSources [("ECLUSE_SERVER__PUBLIC_URL", "https://proxy.example.test"), ("ECLUSE_MOUNTS__NPM__ENABLED", "true"), ("ECLUSE_MOUNTS__NPM__RULES", epssFreeRules)] (status404, Just "") $ \config _ -> do
+                    newTestLogEnv >>= \logEnv ->
+                        runPilotCompile logEnv telemetryDisabled Nothing config (compileOptions outDir)
+                            `shouldThrow` (\refusal -> perEcosystem refusal == "npm")
                     doesFileExist (outDir </> "npm-osv-schema5.db") `shouldReturn` False
 
         it "fails loudly when an upload is requested without a configured advisory store" $ do
@@ -143,6 +152,8 @@ withPolicyCompile outDir rule feed use =
     policyEnv =
         [ ("ECLUSE_SERVER__PUBLIC_URL", "https://proxy.example.test")
         , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
+        , -- The store the artifact's consumers sync from, which activates the shipped advisory rules.
+          ("ECLUSE_ADVISORIES__URL", "s3://advisories.example.test")
         , -- A century, so the fixture's fixed advisory dates never raise the quiet-time ERROR.
           ("ECLUSE_ADVISORIES__QUIET_TIME__NPM", "3153600000")
         ]

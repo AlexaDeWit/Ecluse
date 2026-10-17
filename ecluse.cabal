@@ -272,6 +272,7 @@ library ecluse-core
     Ecluse.Core.Rules.Freshness
     Ecluse.Core.Rules.Outage
     Ecluse.Core.Rules.Outage.Internal
+    Ecluse.Core.Rules.Remediation
     Ecluse.Core.Rules.Render
     Ecluse.Core.Rules.Types
     Ecluse.Core.Security
@@ -1154,6 +1155,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Rules.FreshnessSpec
     Ecluse.Core.Rules.Outage.InternalSpec
     Ecluse.Core.Rules.OutageSpec
+    Ecluse.Core.Rules.RemediationSpec
     Ecluse.Core.Rules.RenderSpec
     Ecluse.Core.Rules.TypesSpec
     Ecluse.Core.RulesSpec
@@ -1227,6 +1229,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.ZlibSpec
     Ecluse.Package.Filter.Support
     Ecluse.Rules.Outage.Support
+    Ecluse.Rules.Remediation.Support
     Ecluse.Rules.Support
     Ecluse.Security.Support
     Ecluse.Test.CollectorSpec

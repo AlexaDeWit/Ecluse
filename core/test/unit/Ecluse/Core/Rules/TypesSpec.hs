@@ -2,9 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | What the two evidence builders carry, what a reason's advisory list guarantees, and which rules
-the Dredger evaluates. A determined absence and an unread fact must stay distinguishable, and the
-rules that apply at revocation must never block a version the whole policy admits.
+{- | What the two evidence builders carry, what a reason's payload guarantees, what each rule's
+advisory predicates answer, and which rules the Dredger evaluates. A determined absence and an
+unread fact must stay distinguishable, and the rules that apply at revocation must never block a
+version the whole policy admits.
 -}
 module Ecluse.Core.Rules.TypesSpec (spec) where
 
@@ -34,30 +35,41 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Rules (RuleDeps (rdAdvisoryDatabase), evalRules, prepare)
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh, AdvisoryUndated))
 import Ecluse.Core.Rules.Types (
-    AdvisoryScore (Cvss),
+    AdvisoryScore (Cvss, Epss),
     Decision,
     DenyIfCveParams (DenyIfCveParams),
     DenyIfEpssParams (DenyIfEpssParams),
     Fact (Known, Unread),
     FailureAlignment (FailDeny, FailNoDecision),
+    LimitShortfall (GapBelowMinimum, RemainingUnscored),
     PrecededRule (PrecededRule, prRule, rulePrecedence, ruleReach),
-    Reason (AffectedBy, FixesButStillAffected, Remediates),
+    Reason (AffectedBy, FixStillApplies, FixesButStillAffected, Remediates, RemediatesWithinLimits, RemediationBeyondLimits),
+    RemainingAdvisories (AbstainOnRemaining),
     Rule (..),
     RuleEvidence (evAvailability, evInstallCode, evName, evPublishedAt, evVersion),
     RuleReach (AdmissionAndRevocation, AdmissionOnly),
+    ScoreComparison (ScoreComparison),
+    ScoreReading (Scored, Unscored),
+    ScoreSides (ScoreSides),
     completeEvidence,
+    defaultDifferentialLimits,
     defaultPrecedence,
+    deniesOnAdvisories,
     identityEvidence,
     mkAdvisoryIds,
+    mkLimitShortfalls,
+    readsAdvisories,
+    requiresEpss,
     revocationRules,
     ruleDenies,
     unAdvisoryIds,
  )
 import Ecluse.Core.Version (mkVersion)
+import Ecluse.Rules.Remediation.Support (genRemediation)
 import Ecluse.Rules.Support (ctx, now)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, unscopedPyPI, v1_0_0)
-import Ecluse.Test.Rules (admissionOnly, atPrecedence, blockedBy, evalRule, inertRuleDeps, isAllow, isApproved, isUndecidable, servingRuleDeps, staticAdvisoryDatabase, withAdvisoryFreshness)
+import Ecluse.Test.Rules (admissionOnly, atPrecedence, blockedBy, differentialRemediation, evalRule, inertRuleDeps, isAllow, isApproved, isUndecidable, remediationWith, servingRuleDeps, shippedRemediation, staticAdvisoryDatabase, withAdvisoryFreshness)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 import Ecluse.Core.Rules.Types qualified as Types
@@ -73,6 +85,7 @@ spec = do
     identitySpec
     distinctionSpec
     ruleDeniesSpec
+    advisoryPredicateSpec
     revocationSpec
     advisoryIdsSpec
 
@@ -82,7 +95,7 @@ vocabularySpec = describe "RuleType" $ do
             [ (Types.AllowScopeType, "AllowScope", AllowScope (mkScope "acme"))
             , (Types.AllowIfOlderThanType, "AllowIfOlderThan", AllowIfOlderThan nominalDay)
             , (Types.AllowByIdentityType, "AllowByIdentity", AllowByIdentity "thing")
-            , (Types.AllowIfRemediatesCveType, "AllowIfRemediatesCve", AllowIfRemediatesCve)
+            , (Types.AllowIfRemediatesCveType, "AllowIfRemediatesCve", shippedRemediation)
             , (Types.DenyIfCveType, "DenyIfCve", DenyIfCve (DenyIfCveParams 8 FailDeny))
             , (Types.DenyIfKnownMaliciousType, "DenyIfKnownMalicious", DenyIfKnownMalicious FailDeny)
             , (Types.DenyIfEpssType, "DenyIfEpss", DenyIfEpss (DenyIfEpssParams 0.5 FailDeny))
@@ -160,6 +173,34 @@ ruleDeniesSpec = describe "ruleDenies" $
                 H.cover 30 "a deny is evaluated" (ruleDenies rule)
                 H.annotateShow verdict
                 H.assert (not (ruleDenies rule && isAllow verdict))
+
+-- | Whether each rule reads advisories, refuses without them, and reads EPSS, over every type.
+advisoryPredicates :: [(Rule, (Bool, Bool, Bool))]
+advisoryPredicates =
+    [ (AllowScope (mkScope "acme"), (False, False, False))
+    , (AllowIfOlderThan nominalDay, (False, False, False))
+    , (AllowByIdentity "thing", (False, False, False))
+    , (shippedRemediation, (True, True, True))
+    , (remediationWith FailDeny AbstainOnRemaining, (True, True, False))
+    , (differentialRemediation FailNoDecision, (True, False, True))
+    , (remediationWith FailNoDecision AbstainOnRemaining, (True, False, False))
+    , (DenyIfCve (DenyIfCveParams 8 FailDeny), (True, True, False))
+    , (DenyIfCve (DenyIfCveParams 8 FailNoDecision), (True, True, False))
+    , (DenyIfKnownMalicious FailNoDecision, (True, True, False))
+    , (DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision), (True, True, True))
+    , (DenyIfYanked, (False, False, False))
+    , (DenyIfDeprecated, (False, False, False))
+    , (DenyInstallTimeExecution, (False, False, False))
+    , (DenyByIdentity "thing", (False, False, False))
+    ]
+
+advisoryPredicateSpec :: Spec
+advisoryPredicateSpec = describe "advisory predicates" $ do
+    it "covers every rule type" $
+        ordNub (map (Types.ruleType . fst) advisoryPredicates) `shouldMatchList` (universe :: [Types.RuleType])
+    for_ advisoryPredicates $ \(rule, expected) ->
+        it ("answers for " <> show rule) $
+            (readsAdvisories rule, deniesOnAdvisories rule, requiresEpss rule) `shouldBe` expected
 
 revocationSpec :: Spec
 revocationSpec = describe "revocationRules" $ do
@@ -252,7 +293,7 @@ genRule =
         [ pure (AllowScope (mkScope "acme"))
         , pure (AllowIfOlderThan (7 * nominalDay))
         , AllowByIdentity <$> genIdentity
-        , pure AllowIfRemediatesCve
+        , genRemediation
         , pure DenyIfYanked
         , pure DenyIfDeprecated
         , pure DenyInstallTimeExecution
@@ -271,7 +312,7 @@ generated rule = case rule of
     AllowScope{} -> rule
     AllowIfOlderThan{} -> rule
     AllowByIdentity{} -> rule
-    AllowIfRemediatesCve -> rule
+    AllowIfRemediatesCve{} -> rule
     DenyIfYanked -> rule
     DenyIfDeprecated -> rule
     DenyInstallTimeExecution -> rule
@@ -301,7 +342,13 @@ deferredReasons =
     [ ("a later identifier", Remediates (mkAdvisoryIds ("GHSA-a" :| [impureThrow laterAdvisory])))
     , ("the rest of the list", AffectedBy Cvss 7.0 (mkAdvisoryIds ("GHSA-a" :| "GHSA-b" : impureThrow laterAdvisory)))
     , ("the advisories still affecting a fix", FixesButStillAffected (mkAdvisoryIds ("GHSA-a" :| [])) (mkAdvisoryIds ("GHSA-b" :| [impureThrow laterAdvisory])))
+    , ("the advisories still holding a named fix", FixStillApplies (mkAdvisoryIds ("GHSA-a" :| [impureThrow laterAdvisory])))
+    , ("the remaining advisories a differential admission compared", RemediatesWithinLimits (compared (mkAdvisoryIds ("GHSA-b" :| [impureThrow laterAdvisory]))))
+    , ("a later condition a partial fix failed", RemediationBeyondLimits (compared (mkAdvisoryIds ("GHSA-b" :| []))) (mkLimitShortfalls (GapBelowMinimum Cvss :| [impureThrow laterAdvisory])))
+    , ("the unscored advisories a failed condition names", RemediationBeyondLimits (compared (mkAdvisoryIds ("GHSA-b" :| []))) (mkLimitShortfalls (RemainingUnscored Epss (mkAdvisoryIds ("GHSA-b" :| [impureThrow laterAdvisory])) :| [])))
     ]
+  where
+    compared remaining = ScoreComparison (mkAdvisoryIds ("GHSA-a" :| [])) remaining (ScoreSides (Scored 9.8) (Scored 4.2)) (ScoreSides Unscored (Scored 0.005)) defaultDifferentialLimits
 
 -- A rule finds the later advisories by matching ranges lazily. Left unevaluated, that matching
 -- would run where the reason is rendered, outside the handler that evaluated the verdict.

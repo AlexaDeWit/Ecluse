@@ -45,14 +45,14 @@ import Ecluse.Core.Rules.Types (
     DenyIfEpssParams (DenyIfEpssParams),
     FailureAlignment (FailDeny),
     PrecededRule,
-    Rule (AllowIfOlderThan, AllowIfRemediatesCve, DenyIfCve, DenyIfEpss, DenyIfKnownMalicious),
+    Rule (AllowIfOlderThan, DenyIfCve, DenyIfEpss, DenyIfKnownMalicious),
  )
 import Ecluse.Core.Version (parseVersionKey)
 import Ecluse.Test.Corpus (FilePin (..), readCorpusPins, readPinned)
 import Ecluse.Test.Osv (osvZipOf)
 import Ecluse.Test.Osv.Withdrawal (maliciousEntries, maliciousZip)
 import Ecluse.Test.OsvDb (compileOsvZipDbWithFeedTo, scoresOf)
-import Ecluse.Test.Rules (atDefaultPrecedence)
+import Ecluse.Test.Rules (atDefaultPrecedence, shippedRemediation)
 
 -- | One ecosystem's OSV export archive and the gzipped EPSS feed that scores it.
 data AdvisoryInputs = AdvisoryInputs
@@ -115,13 +115,13 @@ rowsTheRulesRead deps package = do
     void (withCveLookup spied (readAdvisories package))
     readIORef seen
 
--- | The shared shipped policy: the minimum-age quarantine and the remediation fast lane.
+-- | The shared shipped policy without an advisory source: the minimum-age quarantine alone.
 shippedPolicy :: [PrecededRule]
-shippedPolicy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve]
+shippedPolicy = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
 
--- | The shared shipped policy selected when advisories.url is present.
+-- | The shared shipped policy an advisory source activates: the MAL deny and the remediation fast lane join the quarantine.
 configuredShippedPolicy :: [PrecededRule]
-configuredShippedPolicy = atDefaultPrecedence (DenyIfKnownMalicious FailDeny) : shippedPolicy
+configuredShippedPolicy = shippedPolicy <> map atDefaultPrecedence [DenyIfKnownMalicious FailDeny, shippedRemediation]
 
 -- | The source-configured shared policy with both scored advisory denies, at the suggested thresholds.
 allAdvisoryRules :: [PrecededRule]

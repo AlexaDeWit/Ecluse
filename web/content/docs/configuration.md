@@ -346,7 +346,7 @@ one:
 | `DenyIfCve` | No | Denies a version that a synced advisory marks as affected at or above a CVSS threshold. | `minCvss` (0-10), `onUnavailable` |
 | `DenyIfEpss` | No | Denies a version that a synced advisory marks as affected when its EPSS score meets a threshold. Ties with `DenyIfCve`. | `minEpss` (0-1), `onUnavailable` |
 | `AllowScope` | No | Admits every version under an npm scope you trust, past the quarantine, after any higher-precedence advisory rule. | `scope`, without the leading `@` |
-| `AllowIfRemediatesCve` | Yes | Provided by default with the name `remediation-fast-track`. Admits the exact fixed version a synced advisory names, ahead of the quarantine, if no other advisory still affects it. | None |
+| `AllowIfRemediatesCve` | With `advisories.url` | Named `remediation-fast-track`, precedence 150. Admits the exact fixed version a synced advisory names, ahead of the quarantine. A fix that another advisory still affects passes only inside its limits. | `onUnavailable`, `remainingAdvisories`, `maxRemainingCvss` (0-10), `maxRemainingEpss` (0-1), `minCvssGap` (0-10), `minEpssGap` (0-1) |
 | `AllowIfOlderThan` | Yes | Provided by default with the name `min-age`. Holds each new public version for the quarantine window, so a malicious publish is usually found and yanked before a build can install it. | `ageSeconds` (7 days by default) |
 
 `DenyIfYanked` and `DenyIfDeprecated` are opt-in and default to precedence 300, above every default allow.
@@ -468,18 +468,20 @@ PyPI's install-code signal and the served source distributions and wheels remain
 
 The advisory rules carry details the table leaves out:
 
-- `remediation-fast-track` abstains until a first advisory database syncs, so without one only the
-  quarantine governs. Set `ECLUSE_ADVISORIES__URL` and run Pilot to sync one.
+- `remediation-fast-track` needs an advisory source to activate. Set `ECLUSE_ADVISORIES__URL` and
+  run Pilot to sync one. [The remediation fast lane](@/docs/configuration.md#the-remediation-fast-lane)
+  covers its choices and limits.
 - Every advisory deny (`DenyIfKnownMalicious`, `DenyIfCve` and `DenyIfEpss`) needs an advisory
   store. A mount that enables one with `advisories.url` unset refuses the boot, whatever
-  `onUnavailable` says, and `ecluse check-config` reports the same refusal.
+  `onUnavailable` says, and `ecluse check-config` reports the same refusal. So does an
+  `AllowIfRemediatesCve` under `onUnavailable: deny`.
 - The npm malware feed carries no score, so `DenyIfCve` counts a malware entry as above every
   threshold. Enabling it also blocks known-malicious packages.
 - EPSS is FIRST.org's estimate of the probability that attackers exploit a vulnerability within 30
   days. `DenyIfEpss` gates on that likelihood, where `DenyIfCve` gates on severity. A missing EPSS
   score makes the rule abstain for that advisory.
-- `onUnavailable` decides what advisory denies do when the advisory database cannot answer:
-  `deny` by default, or `skip`.
+- `onUnavailable` decides what an advisory rule does when the advisory database cannot answer:
+  `deny` or `skip`. An advisory deny defaults to `deny`. An `AllowIfRemediatesCve` rule states it.
 
 Before you enable `DenyIfCve` or `DenyIfEpss`, read
 [Onboarding the advisory denies](@/docs/configuration.md#onboarding-the-advisory-denies).
@@ -565,14 +567,15 @@ refusals:
 | An unknown word, an empty string, an empty value, or a value that is not a list | It names no phase Écluse has. An empty value does not read as both phases |
 
 Every role's boot log, and `ecluse check-config`, print each mount's rules in evaluation order with
-the phases each applies at. A `pypi` mount under the policy above keeps the shared `[admission]`,
-so it logs:
+the phases each applies at. A `pypi` mount under the policy above, with the advisory store it needs,
+keeps the shared `[admission]`, so it logs:
 
 ```txt
 rule boot order for mount pypi:
-rule 1: DenyIfCve (precedence 225, applies at admission only)
-rule 2: AllowIfRemediatesCve (precedence 150, applies at admission and revocation)
-rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)
+rule 1: DenyIfKnownMalicious (precedence 300, applies at admission and revocation)
+rule 2: DenyIfCve (precedence 225, applies at admission only)
+rule 3: AllowIfRemediatesCve (precedence 150, applies at admission and revocation)
+rule 4: AllowIfOlderThan (precedence 100, applies at admission and revocation)
 ```
 
 The Dredger evaluates the rules that apply at revocation, in that order, and passes over the
@@ -614,7 +617,8 @@ admission on the mount, scope and identity allows included. Under the default `d
 read, an open breaker, or a missing first generation does the same. Only an allow ordered before
 the rule still admits: one above 300, or one at 300 whose name sorts first. Trusted private reads
 still serve. A deployment that set `onUnavailable: skip` on `DenyIfCve` or `DenyIfEpss` refuses
-during an advisory outage unless it also sets `onUnavailable: skip` on `deny-known-malicious`.
+during an advisory outage unless it also sets `onUnavailable: skip` on `deny-known-malicious` and
+`remediation-fast-track`.
 
 Publish a valid artifact for each ecosystem before configuring its source. Roll admission and
 writer roles forward before enabling Dredger revocation. Preview deletions and retain target-local
@@ -629,6 +633,54 @@ A failed poll retains the last-good generation until its publication age expires
 Missing or late MAL records remain an evidence gap. Use `DenyByIdentity` for an earlier finding.
 The configured source can supply false positives. It remains a trusted authority, and the rule
 adds no guarantee for client-held bytes or the accepted worker-transfer window.
+
+## The remediation fast lane
+
+Configuring `advisories.url` activates `remediation-fast-track`, on the same terms as
+`deny-known-malicious`. `enabled: false` deactivates it, `enabled: true` or a restated `type`
+activates it, and a partial patch keeps the current state. Without a source the rule is inactive,
+so a source-free deployment boots and decides on the quarantine alone.
+
+The rule admits a version a synced advisory names as its exact fix, ahead of the quarantine. A
+version no advisory names as its fix gets no exception. A **partial fix** is an exact fix that
+another advisory still affects. These keys decide the rest, and the shipped rule states each one:
+
+| Key | Values | Shipped | What it decides |
+|---|---|---|---|
+| `onUnavailable` | `deny`, `skip` | `deny` | What the rule does while advisory evidence is unavailable |
+| `remainingAdvisories` | `abstain`, `differential` | `differential` | Whether a partial fix can pass. `abstain` leaves it to the quarantine |
+| `maxRemainingCvss` | A CVSS score, 0 to 10 | `6.9` | The CVSS every remaining advisory must stay at or below |
+| `maxRemainingEpss` | A probability, 0 to 1 | `0.01` | The EPSS every remaining advisory must stay strictly below. `0.01` is one percent |
+| `minCvssGap` | CVSS points, 0 to 10 | `1.0` | How far the highest fixed CVSS must exceed the highest remaining one. `0` removes the condition |
+| `minEpssGap` | Probability points, 0 to 1 | `0` | The same for EPSS. `0.05` means five points, not a relative 5% |
+
+A patch to `remediation-fast-track` inherits every key it leaves out. A newly named
+`AllowIfRemediatesCve` rule must state `onUnavailable` and `remainingAdvisories`, and takes the
+shipped limits for those it omits. Switching to `abstain` drops the inherited limits, and the load
+refuses a limit written beside `abstain`. It also refuses an unknown value, a limit outside its
+range, and a number that is not finite. Each refusal names the rule and the key.
+
+In `differential` mode, every enabled condition must hold. A missing score that a condition needs
+makes the rule abstain, because an unknown score is not zero. The conditions compare the highest
+score on each side, so repeated advisory rows cannot change the outcome. The admission or the
+abstention names the fixed and remaining advisories, the compared scores, and the failed conditions.
+
+The comparison reads the scores the advisory artifact stores. Pilot stores the highest valid CVSS
+vector score, or a qualitative label's upper limit when no vector exists. So the differential proves
+no exact severity reduction, and no reduced exposure against the version a client already has. The
+shipped numbers are chosen product defaults, not validated safety boundaries. Many PyPI advisories
+carry no CVSS score, so the differential rarely admits a PyPI partial fix. A partial fix the rule
+admits is mirrored and trusted like any admitted version. A later rescoring does not revoke it unless
+a deny that applies at revocation decides. `differential` reads EPSS scores, so it makes EPSS
+enrichment required ([When the EPSS feed fails](@/docs/configuration.md#when-the-epss-feed-fails)).
+
+Under `deny`, the rule refuses a version it reaches while advisory evidence is unavailable: before
+the first sync, after a failed or timed-out read, behind an open breaker, and on an expired or
+undated push. During an advisory outage an old public version therefore cannot pass the quarantine
+either. Only an allow that ranks above 150 still admits, such as a scope or identity allow. `deny`
+also makes an advisory store mandatory and makes readiness wait for the first artifact. Under
+`skip`, the rule abstains, lower rules decide, and an admission records the skipped check.
+Unavailable evidence never supplies an exception, and the rule never authorises Dredger deletion.
 
 ## Onboarding the advisory denies
 
@@ -688,16 +740,19 @@ to the mirror, and the log's retention is yours. The outage itself is reported a
 request, at `error`, as [Advisory outages](@/docs/operations.md#advisory-outages) describes.
 
 `onUnavailable: skip` does not waive the maximum push age. Once the serving artifact is older
-than that maximum, every advisory deny refuses, and `AllowIfRemediatesCve` abstains. See
+than that maximum, every advisory deny refuses, and `AllowIfRemediatesCve` follows its own
+`onUnavailable`: the shipped `deny` refuses too. See
 [Advisory push age](@/docs/operations.md#advisory-push-age) for the maximum, its default
 derivation, and the alarm that precedes it. Individual missing scores differ from whole-feed
 failure, which the rest of this section covers.
 
 ### When the EPSS feed fails
 
-Each ecosystem with an active `DenyIfEpss` requires `epss_status=available` in its artifact metadata.
-The requirement follows that ecosystem's resolved policy, including inherited rules and mount additions.
-Removed rules create no requirement. `onUnavailable: skip` and a threshold of 1 still require the marker.
+Each ecosystem whose resolved policy holds a rule that reads EPSS scores requires
+`epss_status=available` in its artifact metadata. Those rules are an active `DenyIfEpss` and an
+active `AllowIfRemediatesCve` in differential mode, the shipped `remediation-fast-track` included.
+The requirement follows inherited rules and mount additions. Removed rules create no requirement.
+`onUnavailable: skip` and a threshold of 1 still require the marker.
 The consumer rejects missing, unavailable, or unrecognised markers before installation.
 A successful marker establishes whole-feed enrichment, not an individual score or a new timestamp.
 Optional feed dates and individual scores can remain absent.
@@ -707,8 +762,8 @@ whatever the rules. When the feed fails:
 
 | The ecosystem's resolved policy | What Pilot does |
 |---|---|
-| Has an active `DenyIfEpss` | Fails the compile and publishes nothing. Consumers keep their last accepted artifact. |
-| Has no active `DenyIfEpss` | Publishes the OSV data with `epss_status=unavailable` and no scores, so new advisories and their fixes still reach consumers. |
+| Has a rule that reads EPSS scores | Fails the compile and publishes nothing. Consumers keep their last accepted artifact. |
+| Has no rule that reads EPSS scores | Publishes the OSV data with `epss_status=unavailable` and no scores, so new advisories and their fixes still reach consumers. |
 
 The publication that loses the scores may shrink by up to `advisories.epssLossCapPercent` beyond the
 usual allowance ([Advisory publication guard](@/docs/operations.md#advisory-publication-guard)).
@@ -720,8 +775,11 @@ A restarted consumer starts with an empty slot and does not recover the local ca
 
 Pilot reads the requirement from its own loaded configuration. It cannot see what a consumer runs,
 so give Pilot, the proxy, the mirror worker, and Dredger the same rule configuration. If Pilot's
-copy lacks a consumer's `DenyIfEpss`, Pilot can publish an artifact that consumer refuses, and the
-consumer keeps serving its last accepted one until that one ages out.
+copy lacks a consumer's EPSS-reading rule, Pilot can publish an artifact that consumer refuses, and
+the consumer keeps serving its last accepted one until that one ages out. A one-shot `pilot compile`
+with no `advisories.url` requires the feed: no source activates the shipped remediation rule, so the
+compile cannot tell which rules its consumers run. Every role's boot log and `ecluse check-config`
+print this requirement for each mount.
 
 To add a `DenyIfEpss` to a running deployment:
 

@@ -20,7 +20,7 @@ module Ecluse.Composition.Validate (
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Composition.BootError (
-    Advisory (DredgerQuotaOverrideUnmatched),
+    Advisory (DredgerQuotaOverrideUnmatched, RemediationSkipsWithoutStore),
     BootError (
         AdvisoryDenyWithoutStore,
         DredgerChunkPauseBeneathFloor,
@@ -76,7 +76,13 @@ import Ecluse.Core.Credential (ClientCredential (ClientCredential), Secret)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor, adapterPublish, adapterRuleBlocks)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
-import Ecluse.Core.Rules.Types (PrecededRule (prRule), ruleType)
+import Ecluse.Core.Rules.Types (
+    AllowIfRemediatesCveParams (aircOnUnavailable),
+    FailureAlignment (FailNoDecision),
+    PrecededRule (prRule),
+    Rule (AllowIfRemediatesCve),
+    ruleType,
+ )
 import Ecluse.Core.Security (
     ProgressFloor,
     ProgressFloorError (MinBytesNotPositive, WindowNotBelowServeCap, WindowNotPositive),
@@ -85,9 +91,7 @@ import Ecluse.Core.Security (
  )
 import Ecluse.Core.Security.Egress (registryUrlText)
 
-{- | What the pure boot pass cleared: the mounts a role may serve, the endpoints it may use, and
-the settings no rule vets.
--}
+-- | What the pure boot pass cleared: the mounts a role may serve, the endpoints it may use, and the settings no rule vets.
 data ValidatedPlan = ValidatedPlan
     { vpMounts :: [VettedMount]
     -- ^ Every active mount, in ascending ecosystem order, with the adapter that serves it.
@@ -100,9 +104,7 @@ data ValidatedPlan = ValidatedPlan
     , vpProgressFloor :: ProgressFloor
     -- ^ The upstream progress floor the configured window and byte count make under the serve-path cap.
     , vpSettings :: AppConfig
-    {- ^ The settings no rule vets. The mounts it carries are the raw declarations, and 'vpMounts'
-    holds the vetted ones the runtime reads.
-    -}
+    -- ^ The settings no rule vets. Its mounts are the raw declarations, and 'vpMounts' holds the vetted ones.
     }
 
 -- | One active mount, paired with the adapter this build ships for its ecosystem.
@@ -113,9 +115,7 @@ data VettedMount = VettedMount
     , vmConfig :: MountConfig
     }
 
-{- | A mount's cleared publish path: the vetted endpoint, the first-party namespaces the
-anti-shadowing guard enforces, and the static credential the inbound edge gate covers.
--}
+-- | A mount's cleared publish path: the endpoint, the first-party namespaces, and the static credential the edge gate covers.
 data VettedPublication = VettedPublication
     { vpubTarget :: PublicationTarget
     , vpubFirstParty :: FirstParty
@@ -160,6 +160,7 @@ vetBootWith resolveAdapter config =
         <*> vetProgressFloor app
         <* vetSweepPacing app
         <* vetAdvisoryStore config
+        <* vetRemediationStore config
         <* vetRuleBlocks resolveAdapter config
         <* vetQuotaOverrides config
         <* vetQuotaScopes app
@@ -199,8 +200,8 @@ vetSweepPacing app = rule severity beneathFloor (drgChunkPause (cfgDredger app))
 
     beneathFloor configured = configured <$ guard (configured < minimumChunkPause)
 
-{- An advisory deny cannot decide without a database, whatever its onUnavailable says, so every
-role that evaluates rules refuses the pairing rather than serving a mount that denies everything. -}
+-- A rule that refuses without advisory evidence can never decide without a store, so every role
+-- refuses the pairing rather than serve a mount that refuses everything.
 vetAdvisoryStore :: Config -> Vet ()
 vetAdvisoryStore config =
     traverse_ (rule (const (Refuse (uncurry AdvisoryDenyWithoutStore))) denyingWithoutStore) mounts
@@ -211,6 +212,18 @@ vetAdvisoryStore config =
     denyingWithoutStore (eco, mount)
         | stored = Nothing
         | otherwise = (,) eco <$> nonEmpty (mountAdvisoryDenials mount)
+
+-- A skipping remediation rule boots without a store, but admits no fix and logs every admission's skip.
+vetRemediationStore :: Config -> Vet ()
+vetRemediationStore config = traverse_ (rule (const (Advise RemediationSkipsWithoutStore)) skippingWithoutStore) mounts
+  where
+    stored = isJust (advUrl (cfgAdvisories (configApp config)))
+    mounts = Map.toAscList (configMounts config)
+
+    skippingWithoutStore (eco, mount) = eco <$ guard (not stored && any (skips . prRule) (mountPolicy mount))
+    skips = \case
+        AllowIfRemediatesCve params -> aircOnUnavailable params == FailNoDecision
+        _ -> False
 
 -- A blocked declaration refuses every role, even when another rule outranks it.
 vetRuleBlocks :: ResolveMaintenanceAdapter -> Config -> Vet ()

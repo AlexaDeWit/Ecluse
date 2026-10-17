@@ -76,27 +76,37 @@ command. Examples are `ecluse mirror` without a durable queue or without any `mi
 Only the rules that read advisories need Pilot. `advisories.url` ships unset, so the advisory stack
 is off until you point it at a bucket of your own. Without an advisory store:
 
-- The fast lane abstains, so every public version waits out the quarantine.
-- A mount whose rules include `DenyIfCve` or `DenyIfEpss` refuses the boot, whatever
-  `onUnavailable` says. Those rules cannot decide without a database, so every version they
-  evaluate would refuse. `ecluse check-config` reports the same refusal.
+- The shipped `deny-known-malicious` and `remediation-fast-track` rules stay inactive, so every
+  public version waits out the quarantine.
+- A mount whose rules refuse without advisory evidence refuses the boot. Those rules are
+  `DenyIfKnownMalicious`, `DenyIfCve`, and `DenyIfEpss` under either `onUnavailable`, and
+  `AllowIfRemediatesCve` under `onUnavailable: deny`. They cannot decide without a database, so
+  every version they evaluate would refuse. `ecluse check-config` reports the same refusal.
+- An `AllowIfRemediatesCve` rule under `onUnavailable: skip` boots with a warning. It admits no fix,
+  and every admitted artifact logs its skipped check.
 - Dredger's default sweep considers only the names a `DenyByIdentity` rule pins. A full walk still
   covers every name.
 - Every other rule works unchanged, and readiness does not wait for advisories.
 
-The shipped policy reads advisories only through the fast lane. So it runs without Pilot, and it
-gives up only the fast lane.
+The shipped policy activates its advisory rules only with a source. So it runs without Pilot, on
+the quarantine alone.
 
 With a store configured, run Pilot before the roles that need a database. Readiness follows each
-mount's own rules. A mount whose rules include `DenyIfCve` or `DenyIfEpss` reports not ready until
-an artifact syncs, and answers `/readyz` with `503` naming the missing database and Pilot as its
-producer. A mount with no such rule is ready before any artifact exists. The role keeps polling and
+mount's own rules. A mount whose rules refuse without advisory evidence reports not ready until an
+artifact syncs, and answers `/readyz` with `503` naming the missing database and Pilot as its
+producer. The shipped policy is such a policy once a source activates it. A mount with no such rule
+is ready before any artifact exists. The role keeps polling and
 never exits. Once the boot retry budget is spent it logs an `ERROR` naming Pilot and the store, and
 repeats that line every 15 minutes until an artifact loads.
 
 If Pilot stops later, the last artifact keeps serving until it passes the maximum advisory age. The
-advisory denies then refuse, whatever `onUnavailable` says
-([Advisory push age](@/docs/operations.md#advisory-push-age)).
+advisory denies then refuse, whatever `onUnavailable` says, and the shipped fast lane refuses under
+its `deny` ([Advisory push age](@/docs/operations.md#advisory-push-age)). An outage therefore keeps
+an old public version from passing the quarantine too, unless a higher-ranked allow admits it.
+
+The shipped fast lane compares EPSS scores, so Pilot needs the EPSS feed for every ecosystem that
+runs it. A failed feed publishes no artifact for such an ecosystem, and its consumers keep the last
+one they accepted. If the feed stays down past the maximum advisory age, the advisory rules refuse.
 
 ## The recommended topology
 
@@ -245,14 +255,16 @@ Neither URL may carry a credential ([Secrets](@/docs/configuration.md#secrets)).
 
 The loaded configuration decides what a failed EPSS feed means, as it does for the scheduled loop
 ([When the EPSS feed fails](@/docs/configuration.md#when-the-epss-feed-fails)). An ecosystem the
-configuration does not mount counts as one with a `DenyIfEpss`, because a compile run ahead of a new
-mount should hold the full dataset. Pilot logs a warning naming that ecosystem.
+configuration does not mount counts as one with an EPSS-reading rule, because a compile run ahead of
+a new mount should hold the full dataset. Pilot logs a warning naming that ecosystem. A compile with
+no `advisories.url` counts the same way, because no source activates the shipped remediation rule
+there, so the compile cannot tell whether its artifact's consumer reads EPSS.
 
 | Outcome | Exit status |
 |---|---|
 | The artifact was written, and uploaded if asked | `0` |
-| The EPSS feed failed where the ecosystem has no `DenyIfEpss`, and the artifact was written with `epss_status=unavailable` | `0`, with a `warn` line |
-| The EPSS feed failed where the ecosystem has a `DenyIfEpss`, or is not mounted | `1`. The previous artifact stays in place |
+| The EPSS feed failed where no rule of the ecosystem reads EPSS scores, and the artifact was written with `epss_status=unavailable` | `0`, with a `warn` line |
+| The EPSS feed failed where a rule of the ecosystem reads EPSS scores, the ecosystem is not mounted, or no `advisories.url` is set | `1`. The previous artifact stays in place |
 | The OSV export failed or was refused | `1`. The previous artifact stays in place |
 | The publication guard refused the upload, or the store could not serve it | `1`. The previous artifact stays in place, in the store and in `DIR` |
 

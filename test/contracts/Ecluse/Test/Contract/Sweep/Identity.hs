@@ -59,13 +59,13 @@ identityScenarios IdentityFixture{..} stores@StoreOps{..} ClientOps{..} SweepOps
         initial <- storeSnapshot e2e
         privateInitial <- storeSnapshot cache
         run <- runSweep plane Preview (FullIdentity (packageName identityPreview))
-        sweepExit run `shouldSatisfy` (/= ExitSuccess)
+        sweepExit run `shouldBe` ExitSuccess
         let output = sweepOutput run
         output `shouldSatisfy` T.isInfixOf identityMirrorDiagnostic
         output `shouldSatisfy` T.isInfixOf identityCacheDiagnostic
         output `shouldSatisfy` T.isInfixOf ("dry run, would delete " <> packageName identityPreview <> "@" <> identityPreviewVersion)
         output `shouldSatisfy` T.isInfixOf "deleted 2"
-        output `shouldSatisfy` T.isInfixOf "counted from partial evidence"
+        output `shouldSatisfy` (not . T.isInfixOf "counted from partial evidence")
         output `shouldSatisfy` T.isInfixOf "previewing only: this run holds nothing that could delete"
         output `shouldSatisfy` T.isInfixOf "This preview deleted nothing, so it proves no authority to delete"
         output `shouldSatisfy` (not . T.isInfixOf ("would delete " <> identityFirstPartyName))
@@ -130,7 +130,4 @@ assertFullSweep firstPartyName pkg initial run = do
             <> " is revoked by operator); advisory generation none"
 
 cycleLine :: [Text] -> Text
-cycleLine fields =
-    "mirror sweep cycle complete: "
-        <> T.intercalate ", " fields
-        <> "; counted from partial evidence: 1 mount decided without an advisory generation"
+cycleLine fields = "mirror sweep cycle complete: " <> T.intercalate ", " fields

@@ -12,7 +12,7 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Composition.Support (expectAppConfig, expectConfig)
-import Ecluse.Config (AdvisoriesSettings, AdvisoryStoreUrl, AppConfig (cfgAdvisories), Config (configMounts))
+import Ecluse.Config (AdvisoriesSettings, AdvisoryStoreUrl, AppConfig (cfgAdvisories), Config (configApp, configMounts))
 import Ecluse.Config.AdvisoryStore (mkAdvisoryStoreUrl)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Compile (CompileSources (..))
@@ -49,6 +49,13 @@ advisoriesWith env = cfgAdvisories <$> expectAppConfig env Nothing
 storeAt :: Text -> IO AdvisoryStoreUrl
 storeAt raw = either (fail . toString) pure (mkAdvisoryStoreUrl "advisories.url" raw)
 
+-- The advisory store a source-configured deployment declares.
+sourceEnv :: (String, String)
+sourceEnv = ("ECLUSE_ADVISORIES__URL", "s3://advisories/ecluse")
+
+advisoriesOf :: Config -> AdvisoriesSettings
+advisoriesOf = cfgAdvisories . configApp
+
 -- A one-shot run that compiles npm and does not upload.
 bareOptions :: PilotCompileOptions
 bareOptions = PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = "/tmp/ecluse-pilot", pcoUpload = NoUpload}
@@ -57,28 +64,35 @@ bareOptions = PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = "/tmp/ecluse
 optionalTarget :: Ecosystem -> ExportTarget
 optionalTarget eco = ExportTarget{etEcosystem = eco, etEpss = EpssOptional}
 
-{- A global EPSS rule npm inherits and PyPI switches off, beside a RubyGems mount that adds its own
-under the skip alignment and the maximum threshold. -}
+{- A global EPSS rule npm inherits and PyPI switches off, with PyPI's remediation abstaining, beside
+a RubyGems mount that adds its own EPSS rule under the skip alignment and the maximum threshold. -}
 mixedPolicyDoc :: ByteString
 mixedPolicyDoc =
-    "{\"rules\":{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true,\"rules\":{\"risk\":{\"enabled\":false}}},\"rubygems\":{\"enabled\":true,\"rules\":{\"risk\":{\"enabled\":false},\"local-risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":1,\"onUnavailable\":\"skip\"}}}}}"
+    "{\"rules\":{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true,\"rules\":{\"risk\":{\"enabled\":false},\"remediation-fast-track\":{\"remainingAdvisories\":\"abstain\"}}},\"rubygems\":{\"enabled\":true,\"rules\":{\"risk\":{\"enabled\":false},\"local-risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":1,\"onUnavailable\":\"skip\"}}}}}"
 
 spec :: Spec
 spec = do
     describe "compileEpssRequirement -- what a failed EPSS feed means for a one-shot compile" $ do
-        it "takes each mounted ecosystem's resolved policy, inherited, removed, or added" $ do
-            mounts <- configMounts <$> expectConfig [("ECLUSE_SERVER__PUBLIC_URL", "https://proxy.example.test")] (Just mixedPolicyDoc)
-            map (\name -> compileEpssRequirement mounts bareOptions{pcoEcosystem = name}) ["npm", "pypi", "rubygems"]
+        it "takes each source-configured mount's resolved policy, inherited, removed, or added" $ do
+            config <- expectConfig [("ECLUSE_SERVER__PUBLIC_URL", "https://proxy.example.test"), sourceEnv] (Just mixedPolicyDoc)
+            let mounts = configMounts config
+            map (\name -> compileEpssRequirement (advisoriesOf config) mounts bareOptions{pcoEcosystem = name}) ["npm", "pypi", "rubygems"]
                 `shouldBe` [EpssRequired, EpssOptional, EpssRequired]
             map (\name -> unmountedCompileWarning mounts bareOptions{pcoEcosystem = name}) ["npm", "pypi", "rubygems"]
                 `shouldBe` [Nothing, Nothing, Nothing]
 
-        it "requires the feed, with a warning, for an ecosystem the configuration does not mount" $ do
-            mounts <- configMounts <$> expectConfig [] Nothing
-            for_ ["npm", "go"] $ \name -> do
-                let opts = bareOptions{pcoEcosystem = name}
-                compileEpssRequirement mounts opts `shouldBe` EpssRequired
-                unmountedCompileWarning mounts opts `shouldSatisfy` maybe False (T.isInfixOf ("mounts no " <> name <> " ecosystem"))
+        it "requires the feed for every mount without an advisory store, whose artifact may serve a policy that reads EPSS" $ do
+            config <- expectConfig [("ECLUSE_SERVER__PUBLIC_URL", "https://proxy.example.test")] (Just mixedPolicyDoc)
+            map (\name -> compileEpssRequirement (advisoriesOf config) (configMounts config) bareOptions{pcoEcosystem = name}) ["npm", "pypi", "rubygems"]
+                `shouldBe` [EpssRequired, EpssRequired, EpssRequired]
+
+        it "requires the feed, with a warning, for an ecosystem the configuration does not mount" $
+            for_ [[], [sourceEnv]] $ \env -> do
+                config <- expectConfig env Nothing
+                for_ ["npm", "go"] $ \name -> do
+                    let opts = bareOptions{pcoEcosystem = name}
+                    compileEpssRequirement (advisoriesOf config) (configMounts config) opts `shouldBe` EpssRequired
+                    unmountedCompileWarning (configMounts config) opts `shouldSatisfy` maybe False (T.isInfixOf ("mounts no " <> name <> " ecosystem"))
 
     describe "epssAttemptLine -- the egress every compile attempts" $ do
         it "names the configured feed by host and port, never its path" $ do

@@ -12,13 +12,17 @@ import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
+import Hedgehog (evalIO, forAll)
+import Hedgehog qualified as H
+import Hedgehog.Gen qualified as Gen
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog)
 import UnliftIO.Exception (impureThrow)
 
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
+import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, Unbounded))
 import Ecluse.Core.Package (
     Availability (Deprecated, Yanked),
     CodeExecSignal (RunsCodeOnInstall),
@@ -79,12 +83,14 @@ import Ecluse.Core.Rules.Types (
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (..))
 import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Rules.Remediation.Support (genRemediation)
+import Ecluse.Rules.Support (SourceState (..), sourceStateDeps)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation), FakeStoreConfig (..), heldVersions, newFakeStore, seededStoreConfig, servedVersions)
 import Ecluse.Test.Package (leftPadName, npmVersion, pypiVersion, requestsName, sampleManifest)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
-import Ecluse.Test.Rules (admitRule, atDefaultPrecedence, cannotVetRule, denyRule, exposure, inertRuleDeps, servingRuleDeps, withAdvisoryFreshness)
+import Ecluse.Test.Rules (admitRule, atDefaultPrecedence, cannotVetRule, denyRule, exposure, inertRuleDeps, servingRuleDeps, shippedRemediation, withAdvisoryFreshness)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape), expectRight)
 import Ecluse.Test.Sweep (RecordedSweep (..), previewMount, previewingReport, recordingPorts, recordingPortsUnder, testMount, testPacing)
@@ -106,6 +112,7 @@ spec = do
     revocationSpec
     canonicalMetadataSpec
     nativeIdentitySpec
+    remediationSpec
 
 -- Only a named decisive deny deletes. Deny by default and a rule that could not vet both keep,
 -- because the store may hold the only surviving copy.
@@ -728,6 +735,47 @@ nativeIdentitySpec = describe "native PyPI identity with and without metadata" $
                 (recorded, remaining) <- revocationStep inertRuleDeps policy requestsName nativeVersion storedManifest
                 recResults recorded `shouldReturn` [SweepExamined, if kept then SweepKept else SweepDeleted]
                 remaining `shouldBe` [nativeVersion | kept]
+
+-- A remediation allow is no deletion authority: whatever its choices, rank, and source, it never
+-- condemns a version the denies would keep.
+remediationSpec :: Spec
+remediationSpec = describe "the remediation allow at revocation" $ do
+    for_ [(leftPadName, map npmVersion ["1.0.0", "1.5.0", "2.0.0", "2.5.0"]), (requestsProject, map (mkVersion PyPI) ["1.0", "1.5", "2.0", "2.5"])] $ \(name, versions) ->
+        it ("condemns no more " <> show (pkgEcosystem name) <> " versions than the denies alone, in every source state") $
+            hedgehog $ do
+                remediation <- forAll genRemediation
+                precedence <- forAll (Gen.element [150, 260, 350])
+                standing <- forAll (Gen.frequency [(1, pure Loaded), (1, Gen.enumBounded)])
+                version <- forAll (Gen.element versions)
+                let deps = depsIn standing name
+                    denies = map atDefaultPrecedence [DenyIfKnownMalicious FailDeny, denyCveRule]
+                    manifest = Just (sampleManifest name [version])
+                (_, without) <- evalIO (revocationStep deps denies name version manifest)
+                (_, with) <- evalIO (revocationStep deps (PrecededRule precedence AdmissionAndRevocation remediation : denies) name version manifest)
+                H.cover 10 "the denies alone condemn the version" (null without)
+                H.cover 5 "the source cannot answer" (standing `elem` [NoSource, Unloaded, Faulting, Expired, Undated])
+                when (null with) (H.assert (null without))
+
+    it "keeps an affected version a fail-closed remediation rule above the deny cannot vet" $ do
+        (rec', left) <- revocationStep (depsIn Expired leftPadName) [PrecededRule 350 AdmissionAndRevocation shippedRemediation, atDefaultPrecedence denyCveRule] leftPadName (npmVersion "1.0.0") (Just (sampleManifest leftPadName [npmVersion "1.0.0"]))
+        recResults rec' `shouldReturn` [SweepExamined, SweepKept]
+        left `shouldBe` [npmVersion "1.0.0"]
+  where
+    requestsProject = mkPackageName PyPI Nothing "requests"
+    depsIn standing name = sourceStateDeps standing (loaded name)
+    -- A severe advisory below 2.0.0 that 1.5.0 fixes, and a minor one from 1.0.0 that nothing fixes.
+    loaded name =
+        servingRuleDeps
+            (DbEtag "etag-1")
+            ( fakeCveLookup
+                [ (pkgKey name, AdvisoryRange "GHSA-severe" (Just 9.8) (Just "0") (FixedBefore (fixAt name)) (Just 0.5))
+                , (pkgKey name, affectingRange)
+                , (pkgKey name, AdvisoryRange "GHSA-minor" (Just 4.2) (Just (firstAt name)) Unbounded (Just 0.005))
+                ]
+            )
+    pkgKey name = if pkgEcosystem name == PyPI then "requests" else "left-pad"
+    fixAt name = if pkgEcosystem name == PyPI then "1.5" else "1.5.0"
+    firstAt name = if pkgEcosystem name == PyPI then "1.0" else "1.0.0"
 
 yankedPyPIManifest :: Text -> IO Manifest
 yankedPyPIManifest rawVersion = do
