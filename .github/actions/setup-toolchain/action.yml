@@ -21,10 +21,11 @@ inputs:
   dist-cache:
     description: >-
       Also restore dist-newstyle, the regular-variant build directory. Needs
-      cabal-cache. Set "false" for a job that builds into its own directory under its
-      own flags, because a restore it never reads is a download it never uses:
-      `coverage` builds instrumented into dist-coverage, `weeder` and `stan` build
-      with -fwrite-ide-info into dist-analysis.
+      cabal-cache. Set "false" for a job that never builds into dist-newstyle, because
+      a restore it never reads is a download it never uses. The unit `coverage` legs
+      build only into dist-coverage, and `weeder` and `stan` only into dist-analysis.
+      The integration `coverage` leg also builds its tools into dist-newstyle, so it
+      keeps the restore.
     default: "true"
   save-nix-store:
     description: >-
@@ -110,11 +111,8 @@ runs:
         echo "setup-toolchain: the Nix database stayed locked for 60 s" >&2
         exit 1
 
-    # One entry, keyed on the flake, that ci.yml's docs job writes on arm64 and every
-    # arm64 job restores. A job on another architecture finds no entry and starts cold.
-    # The prefix restore-key keeps a lockfile bump warm: the run takes the previous
-    # epoch and rebuilds only the delta. An entry is immutable, so widening what it
-    # holds takes a fresh epoch: v2 carries the dev shell and the Haskell closure both.
+    # The prefix restore keeps a flake.lock bump warm. An entry is immutable, so widening
+    # what it holds takes a new epoch: v2 holds both the dev shell and the Haskell closure.
     - name: Cache Nix store
       uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
       with:
@@ -150,10 +148,8 @@ runs:
         restore-keys: |
           cabal-store-${{ runner.os }}-${{ runner.arch }}-
 
-    # Small and fast-moving, so a separate key from the store. The key ends in the
-    # commit, so each main run saves a fresh entry instead of meeting one that already
-    # exists. A restore takes the newest entry of the version family through the prefix
-    # and recompiles only the changed local modules, never the closure.
+    # Kept apart from the store because it is small and changes often. Each main run saves a
+    # fresh entry, and a restore takes the newest one in the version family.
     - name: Restore dist-newstyle
       if: inputs.cabal-cache == 'true' && inputs.dist-cache == 'true'
       id: restore-dist

@@ -23,6 +23,8 @@ module Ecluse.Test.Stub (
     secretAnswer,
     redirectedStatusException,
     requestSecrets,
+    closedPort,
+    closedAuthority,
     signedRequest,
     refusedFetch,
     failedFetch,
@@ -168,14 +170,22 @@ redirectedStatusException status =
             Left err -> pure ("127.0.0.1:" <> show (stubPort stub), err)
             Right _ -> fail ("the signed URL unexpectedly answered " <> show status)
 
--- | Every secret 'signedRequest' carries: a path token, a query signature and a session-token header.
+-- | Every secret a planted request carries: a path token, a query signature and a session-token header.
 requestSecrets :: [Text]
 requestSecrets = ["path-secret", "query-secret", "token-secret"]
 
--- | A request for the signed URL at the closed port @127.0.0.1:1@, with the session-token header an AWS signer adds.
+-- | A loopback port where nothing listens.
+closedPort :: Int
+closedPort = 1
+
+-- | The @host:port@ of 'closedPort', as a fault renders it.
+closedAuthority :: Text
+closedAuthority = "127.0.0.1:" <> show closedPort
+
+-- | A request for the signed URL at 'closedAuthority', with the session-token header an AWS signer adds.
 signedRequest :: IO Request
 signedRequest = do
-    request <- parseRequest ("http://127.0.0.1:1" <> decodeUtf8 (signedPath <> signedQuery))
+    request <- parseRequest ("http://" <> toString closedAuthority <> decodeUtf8 (signedPath <> signedQuery))
     pure request{Client.requestHeaders = [("X-Amz-Security-Token", "token-secret")]}
 
 -- | The exception a fetch throws when nothing listens at the request's port.

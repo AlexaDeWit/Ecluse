@@ -190,12 +190,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # Every leg builds its suite into dist-coverage. The integration leg also builds its
+      # manifest and audit tools into dist-newstyle, so only that leg restores it.
       - name: Set up toolchain
         id: toolchain
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
-          dist-cache: "false" # this job builds instrumented, into dist-coverage
+          dist-cache: ${{ matrix.suite == 'ecluse-integration' && 'true' || 'false' }}
 
       # One key per suite, so each leg is the sole writer of the builddir it produces.
       # The version family bounds a restore, and the commit makes each main save fresh.
@@ -370,9 +372,8 @@ jobs:
 
   e2e-conformance:
     name: Conformance (${{ matrix.subject }})
-    needs: [changes, coverage, e2e-prepare]
-    # Run after a coverage failure, but do not start subjects on a cancelled run.
-    if: ${{ !cancelled() && needs.changes.outputs.docs-only != 'true' && needs.e2e-prepare.result == 'success' }}
+    needs: [changes, e2e-prepare]
+    if: ${{ needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 120
     strategy:
@@ -431,36 +432,6 @@ jobs:
           SUBJECT: ${{ matrix.subject }}
         run: nix develop .#ci --command task "test-e2e-$SUBJECT"
 
-      - name: Download integration execution evidence
-        if: ${{ !cancelled() && matrix.subject != 'shared-system' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: integration-evidence
-          path: scratchpad/integration/${{ github.run_id }}-${{ github.run_attempt }}
-
-      - name: Download core unit execution evidence
-        if: ${{ !cancelled() && matrix.subject != 'shared-system' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: unit-evidence-ecluse-core-unit
-          path: scratchpad/unit/core
-
-      - name: Download runtime unit execution evidence
-        if: ${{ !cancelled() && matrix.subject != 'shared-system' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: unit-evidence-ecluse-runtime-unit
-          path: scratchpad/unit/runtime
-
-      - name: Audit ecosystem completion across tiers
-        if: ${{ !cancelled() && matrix.subject != 'shared-system' }}
-        env:
-          SUBJECT: ${{ matrix.subject }}
-          ECLTEST_CORE_UNIT_ARTIFACT_DIR: scratchpad/unit/core
-          ECLTEST_RUNTIME_UNIT_ARTIFACT_DIR: scratchpad/unit/runtime
-          ECLTEST_INTEGRATION_ARTIFACT_DIR: scratchpad/integration/${{ github.run_id }}-${{ github.run_attempt }}
-        run: nix develop .#ci --command task "test-e2e-$SUBJECT-completion"
-
       - name: Record shard outcome
         if: always()
         env:
@@ -478,8 +449,8 @@ jobs:
 
   e2e:
     name: E2E execution completeness
-    needs: [changes, e2e-prepare, e2e-conformance]
-    # Audit failed subjects without starting a new audit after cancellation.
+    needs: [changes, coverage, e2e-prepare, e2e-conformance]
+    # Audit after a failed subject or coverage leg, but not after cancellation.
     if: ${{ !cancelled() && needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 60
@@ -490,6 +461,10 @@ jobs:
       ECLTEST_ARTIFACT_DIR: scratchpad/e2e
       ECLTEST_SOURCE: ${{ github.sha }}
       ECLTEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      ECLTEST_ARCHITECTURE: arm64
+      ECLTEST_CORE_UNIT_ARTIFACT_DIR: scratchpad/unit/core
+      ECLTEST_RUNTIME_UNIT_ARTIFACT_DIR: scratchpad/unit/runtime
+      ECLTEST_INTEGRATION_ARTIFACT_DIR: scratchpad/integration/${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -524,6 +499,43 @@ jobs:
       - name: Audit all required groups and cases
         if: ${{ !cancelled() }}
         run: nix develop .#ci --command task test-e2e-audit
+
+      # The completion audits re-verify the prepared identity, which digests the archive.
+      - name: Download exact image archive
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: e2e-image
+          path: scratchpad/e2e
+
+      - name: Download integration execution evidence
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: integration-evidence
+          path: ${{ env.ECLTEST_INTEGRATION_ARTIFACT_DIR }}
+
+      - name: Download core unit execution evidence
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: unit-evidence-ecluse-core-unit
+          path: ${{ env.ECLTEST_CORE_UNIT_ARTIFACT_DIR }}
+
+      - name: Download runtime unit execution evidence
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: unit-evidence-ecluse-runtime-unit
+          path: ${{ env.ECLTEST_RUNTIME_UNIT_ARTIFACT_DIR }}
+
+      - name: Audit npm completion across tiers
+        if: ${{ !cancelled() }}
+        run: nix develop .#ci --command task test-e2e-npm-completion
+
+      - name: Audit PyPI completion across tiers
+        if: ${{ !cancelled() }}
+        run: nix develop .#ci --command task test-e2e-pypi-completion
 
   backend-conformance:
     name: Conformance (package store ${{ matrix.subject }})

@@ -14,6 +14,7 @@ module Ecluse.Runtime.Queue.Sqs.Internal (
 
     -- * The backend
     newSqsQueue,
+    sqsQueueOver,
 
     -- * Received-message lifting
     ReceivedMessage (..),
@@ -65,36 +66,24 @@ import Ecluse.Runtime.Aws.Env (AwsEndpoint, newAwsEnv)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport, sendClassified)
 import Ecluse.Runtime.Log (logLine, moduleField)
 
-{- | What the SQS backend needs. The provider knobs take their defaults from
-'defaultSqsConfig' (see "Ecluse.Core.Queue").
--}
+-- | What the SQS backend needs. The provider knobs take their defaults from 'defaultSqsConfig' (see "Ecluse.Core.Queue").
 data SqsConfig = SqsConfig
     { sqsQueueUrl :: Text
     -- ^ The fully-qualified SQS queue URL mirror jobs are sent to and received from.
     , sqsRegion :: Text
     -- ^ The AWS region the queue lives in (e.g. @"us-east-1"@).
     , sqsEndpoint :: Maybe AwsEndpoint
-    {- ^ An endpoint override for an emulator or VPC endpoint. 'Nothing' uses
-    @amazonka@'s default resolution and the ambient credential chain.
-    -}
+    -- ^ An endpoint override for an emulator or VPC endpoint. 'Nothing' keeps @amazonka@'s own resolution.
     , sqsBatchSize :: Int
     -- ^ Maximum messages to pull per 'receive' (SQS caps this at 10).
     , sqsWaitSeconds :: Int
-    {- ^ The long-poll window in seconds (SQS caps this at 20). A 'receive' waits this long
-    for a message before returning @[]@, so an idle worker does not hot-loop on empty polls.
-    -}
+    -- ^ The long-poll window in seconds (SQS caps it at 20), so an idle worker does not hot-loop on empty polls.
     , sqsVisibilityTimeout :: Seconds
-    {- ^ How long a received message stays hidden before SQS redelivers it: the budget for
-    processing-then-'ack', extendable per message via 'extendVisibility'.
-    -}
+    -- ^ How long a received message stays hidden before SQS redelivers it. 'extendVisibility' renews it per message.
     , sqsTerminalBackoff :: Seconds
-    {- ^ The visibility timeout 'deadLetter' applies to a __terminal__ message. It exceeds the
-    processing window, so the worker does not re-fetch an unmirrorable artifact in a hot loop.
-    -}
+    -- ^ The visibility 'deadLetter' gives a terminal message, longer than processing so an unmirrorable artifact is not re-fetched in a hot loop.
     , sqsMaxReceiveCount :: DeliveryBudget
-    {- ^ The configured __floor__ on deliveries before the worker retires a message. 'newSqsQueue'
-    raises the budget past a redrive policy's count, so it never pre-empts a dead-letter capture.
-    -}
+    -- ^ The floor on deliveries before the worker retires a message. A redrive policy's higher count raises it, so a dead-letter capture is never pre-empted.
     }
     deriving stock (Eq, Show)
 
@@ -112,12 +101,13 @@ defaultSqsConfig queueUrl region =
         , sqsMaxReceiveCount = defaultDeliveryBudget
         }
 
-{- | Build an SQS-backed 'MirrorQueue'. The @amazonka@ t'Amazonka.Env.Env' is built once here and
-the returned handle's closures capture it.
--}
+-- | Build an SQS-backed 'MirrorQueue' over one @amazonka@ env, which the handle's closures capture.
 newSqsQueue :: LogEnv -> (Text -> Either Text RegistryUrl) -> SqsConfig -> IO MirrorQueue
-newSqsQueue logEnv egressUrl cfg = do
-    env <- mkEnv cfg
+newSqsQueue logEnv egressUrl cfg = mkEnv cfg >>= \env -> sqsQueueOver logEnv egressUrl env cfg
+
+-- | 'newSqsQueue' over a caller's @amazonka@ env, so a test can drive the handle against a stub endpoint.
+sqsQueueOver :: LogEnv -> (Text -> Either Text RegistryUrl) -> AWS.Env -> SqsConfig -> IO MirrorQueue
+sqsQueueOver logEnv egressUrl env cfg = do
     -- Every operation reports its failure as the handle's 'TransportFault' value, never
     -- through the exception channel.
     let run :: (AWS.AWSRequest a) => a -> IO (Either TransportFault (AWS.AWSResponse a))
@@ -194,9 +184,7 @@ terminusOfResponse response =
 soleValue :: (Foldable t) => t Text -> Maybe Text
 soleValue = listToMaybe . toList
 
-{- | Classify a queue's raw @RedrivePolicy@ into its dead-letter terminus. No policy or a
-blank one is absent, and any other is attached, with @maxReceiveCount@ only when it reads.
--}
+-- | Classify a queue's raw @RedrivePolicy@. A blank or missing one is absent, and any other is attached, with @maxReceiveCount@ when it reads.
 deadLetterTerminusOf :: Maybe Text -> DeadLetterTerminus
 deadLetterTerminusOf raw =
     maybe TerminusAbsent (TerminusAttached . captureCountOf) (nonBlank =<< raw)
@@ -216,9 +204,7 @@ countOf = \case
         Aeson.Success count -> Just count
         Aeson.Error _ -> Nothing
 
-{- | The fields of a received SQS message the backend reads. Lifting them out of the
-@amazonka@ 'SQS.Message' keeps the 'QueueMessage' mapping free of the AWS type.
--}
+-- | The fields of a received SQS message the backend reads, so the 'QueueMessage' mapping stays free of the AWS type.
 data ReceivedMessage = ReceivedMessage
     { rmBody :: Maybe Text
     -- ^ The message body carrying the encoded job (SQS always supplies one).
@@ -227,9 +213,7 @@ data ReceivedMessage = ReceivedMessage
     , rmMessageId :: Maybe Text
     -- ^ The SQS-assigned message id, for the drop log. Not part of the untrusted body.
     , rmReceiveCount :: Maybe Text
-    {- ^ The raw @ApproximateReceiveCount@ system attribute, which the poll asks for
-    explicitly. 'Nothing' when SQS supplied none, which reads as a first delivery.
-    -}
+    -- ^ The raw @ApproximateReceiveCount@ the poll asks for. 'Nothing' reads as a first delivery.
     }
     deriving stock (Eq, Show)
 
@@ -273,9 +257,7 @@ toQueueMessage egressUrl lease received = do
 receiveCountOf :: Maybe Text -> Int
 receiveCountOf raw = max 1 (fromMaybe 1 (readDecimalText =<< raw))
 
-{- | Lift a received batch into deliverable 'QueueMessage's under one poll's lease. A drop is
-logged, omitted, and left un-'ack'ed, so redelivery and dead-letter behaviour are unchanged.
--}
+-- | Lift a received batch under one poll's lease. A drop is logged and left un-'ack'ed, so redelivery and dead-lettering are unchanged.
 liftReceivedMessages :: LogEnv -> (Text -> Either Text RegistryUrl) -> ReceiptLease -> [ReceivedMessage] -> IO [QueueMessage]
 liftReceivedMessages logEnv egressUrl lease =
     fmap catMaybes . traverse (liftReceivedMessage logEnv egressUrl lease)
@@ -306,9 +288,7 @@ dropReasonLabel = \case
     MissingReceipt -> "missing receipt"
     UndecodableBody -> "undecodable body"
 
-{- | Read a queue payload's package identity through its ecosystem's own grammar, the gate
-'Ecluse.Core.Queue.decodeJob' applies at the trust boundary. Only npm has one to read it through.
--}
+-- | Read a payload's package identity through its ecosystem's grammar, the gate 'Ecluse.Core.Queue.decodeJob' applies. Only npm has one.
 mirrorJobPackage :: Ecosystem -> Maybe Text -> Text -> Either Text PackageName
 mirrorJobPackage eco namespace rawName = case eco of
     Npm -> first parseErrorMessage (projectName npmWireName)

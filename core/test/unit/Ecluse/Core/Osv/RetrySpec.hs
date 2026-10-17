@@ -26,7 +26,7 @@ import Ecluse.Core.Fault (TransportCause (TransportTimeout), TransportFault (tfC
 import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Osv.Retry
 import Ecluse.Test.Log (runQuietKatip)
-import Ecluse.Test.Stub (redirectSecrets, redirectedStatusException, requestSecrets, signedRequest)
+import Ecluse.Test.Stub (closedAuthority, redirectSecrets, redirectedStatusException, requestSecrets, signedRequest)
 
 -- | The configured feed's @host:port@, which every retry line names.
 feed :: Text
@@ -170,5 +170,5 @@ spec = do
         it "renders a timeout by its classified cause and the client's reason, never the request" $ do
             timedOut <- (`HttpExceptionRequest` ConnectionTimeout) <$> signedRequest
             let msg = transientMessage feed defaultRetryStatus timedOut
-            msg `shouldSatisfy` T.isSuffixOf ("127.0.0.1:1: ConnectionTimeout (" <> renderTransportCause TransportTimeout <> ")")
+            msg `shouldSatisfy` T.isSuffixOf (closedAuthority <> ": ConnectionTimeout (" <> renderTransportCause TransportTimeout <> ")")
             for_ requestSecrets $ \secret -> msg `shouldSatisfy` (not . T.isInfixOf secret)

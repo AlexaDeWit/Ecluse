@@ -73,6 +73,7 @@ case "$suite" in
     # gating tier covers each one, merged into the Codecov total under its flag.
     unscoped=(
       # Re-exports declare no expressions. HPC covers their implementation modules.
+      ./runtime/src/Ecluse/Runtime/Aws/Env.hs
       ./runtime/src/Ecluse/Runtime/Credential/CodeArtifact.hs
       ./runtime/src/Ecluse/Runtime/Cve/Sync.hs
       ./runtime/src/Ecluse/Runtime/Log.hs

@@ -26,7 +26,7 @@ import Ecluse.Core.Supervision.Internal (
     transientPolicy,
  )
 import Ecluse.Test.Log (runJsonLog, runQuietKatip)
-import Ecluse.Test.Stub (redirectSecrets, redirectedStatusException, refusedFetch, requestSecrets, signedRequest)
+import Ecluse.Test.Stub (closedAuthority, redirectSecrets, redirectedStatusException, refusedFetch, requestSecrets, signedRequest)
 import Ecluse.Test.Supervision (fastPolicy, superviseBriefly)
 
 -- | A typed fault for the loop under test to throw, never stringly.
@@ -158,7 +158,7 @@ spec = do
         it "renders a refused connection by the client's reason at the dialled host:port, then its cause, never the request" $ do
             refused <- refusedFetch =<< signedRequest
             logged <- runJsonLog (superviseBriefly Transient (throwIO refused))
-            logged `shouldSatisfy` T.isInfixOf "127.0.0.1:1: ConnectionFailure: "
+            logged `shouldSatisfy` T.isInfixOf (closedAuthority <> ": ConnectionFailure: ")
             logged `shouldSatisfy` T.isInfixOf ("(" <> renderTransportCause TransportUnreachable <> ")")
             for_ requestSecrets $ \secret -> logged `shouldSatisfy` (not . T.isInfixOf secret)
 
