@@ -17,9 +17,13 @@ printf '%s' "${STUB_FILES:-}"
 STUB
 cat > "$work/bin/git" <<'STUB'
 #!/usr/bin/env bash
-case "$1" in
-  rev-parse) [ -z "${STUB_PARENT_FAIL:-}" ] || exit 1; printf '%s\n' "${STUB_PARENT-head}" ;;
-  diff) [ -z "${STUB_DIFF_FAIL:-}" ] || exit 1; printf '%s' "${STUB_DIFF:-}" ;;
+case "$*" in
+  "rev-parse -q --verify HEAD^2")
+    [ -z "${STUB_PARENT_FAIL:-}" ] || exit 1
+    printf '%s\n' "${STUB_PARENT-head}" ;;
+  "diff --no-color --no-ext-diff --no-textconv --unified=1000000 HEAD^1 HEAD -- ecluse.cabal")
+    [ -z "${STUB_DIFF_FAIL:-}" ] || exit 1
+    printf '%s' "${STUB_DIFF:-}" ;;
   *) exit 1 ;;
 esac
 STUB

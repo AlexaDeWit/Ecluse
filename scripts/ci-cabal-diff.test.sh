@@ -58,6 +58,15 @@ test-suite demo-unit
     , demo
     , hspec ^>=2.11
 
+test-suite demo-e2e
+  if !flag(dev)
+    buildable: False
+  type:           exitcode-stdio-1.0
+  main-is:        E2E.hs
+  hs-source-dirs: e2e
+  build-depends:
+    , demo
+
 benchmark demo-bench
   import:         shared
   type:           exitcode-stdio-1.0
@@ -102,7 +111,7 @@ check_edit() {
 module_list='/^    Demo.Core$/a\    Demo.Extra
 /^    DemoSpec$/a\    Demo.ExtraSpec'
 
-unit='/^test-suite demo-unit$/,/^benchmark /'
+unit='/^test-suite demo-unit$/,/^test-suite demo-e2e$/'
 
 check_edit "a module-list edit skips the dry-run" 0 "$module_list"
 check_edit "a module list under a conditional skips the dry-run" 0 \
@@ -115,6 +124,25 @@ check_edit "a comment in a library's build-depends skips the dry-run" 0 \
   '/^    , text ^>=2.1$/a\  -- Text handling.'
 check_edit "a test-suite build-depends edit runs the dry-run" 1 \
   '/^    , hspec/a\    , tls ^>=2.1'
+check_edit "a test-suite build-tool-depends edit runs the dry-run" 1 \
+  "$unit"' s/^  hs-source-dirs: test$/&\n  build-tool-depends: hspec-discover:hspec-discover/'
+check_edit "a test-suite build-tools edit runs the dry-run" 1 \
+  "$unit"' s/^  hs-source-dirs: test$/&\n  build-tools: alex/'
+check_edit "a test-suite pkgconfig-depends edit runs the dry-run" 1 \
+  "$unit"' s/^  hs-source-dirs: test$/&\n  pkgconfig-depends: zlib/'
+check_edit "a test-suite extra-libraries edit runs the dry-run" 1 \
+  "$unit"' s/^  hs-source-dirs: test$/&\n  extra-libraries: z/'
+check_edit "a test-suite frameworks edit runs the dry-run" 1 \
+  "$unit"' s/^  hs-source-dirs: test$/&\n  frameworks: Foundation/'
+check_edit "a deleted buildable: False in a test-suite runs the dry-run" 1 \
+  '/^    buildable: False$/d'
+check_edit "a buildable: False turned True in a test-suite runs the dry-run" 1 \
+  's/^    buildable: False$/    buildable: True/'
+check_edit "a new test-suite header that takes over another's dependencies runs the dry-run" 1 \
+  '/^  hs-source-dirs: e2e$/a\
+test-suite demo-e2e-deps\
+  type:           exitcode-stdio-1.0\
+  main-is:        Deps.hs'
 check_edit "a test-suite import edit runs the dry-run" 1 \
   "$unit"' s/^  import:         shared$/&\n  import:         extra/'
 check_edit "a test-suite conditional edit runs the dry-run" 1 \

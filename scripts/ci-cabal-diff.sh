@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Decide whether a full-context `git diff` of ecluse.cabal, read on stdin, can change the release
 # image. Exit 0 when every changed line is a comment, a blank line, a module-list entry, or a
-# field of a test-suite or benchmark stanza that names no dependency. Exit 1 on any other change,
-# and on input this script cannot parse. The image build compiles no test or benchmark, but
-# evaluating it resolves the names they depend on. e2e-prepare builds the arm64 image, which
-# covers a module-list change.
+# field of a test-suite or benchmark stanza that leaves its dependencies alone. Exit 1 on any other
+# change, and on input this script cannot parse. The image build compiles no test or benchmark, but
+# evaluating it resolves the names a buildable one depends on. e2e-prepare builds the arm64 image,
+# which covers a module-list change.
 set -euo pipefail
 export LC_ALL=C
 
@@ -61,8 +61,8 @@ harmless() {
   ! blank_or_comment "$text" || return 0
   case "${field[$side]}" in
     exposed-modules | other-modules) return 0 ;;
-    # Evaluating the image resolves every dependency name, a test's or a benchmark's included.
-    build-depends | build-tool-depends | build-tools | pkgconfig-depends) return 1 ;;
+    # Evaluating the image resolves each buildable stanza's dependency names, a test's included.
+    build-depends | build-tool-depends | build-tools | pkgconfig-depends | buildable) return 1 ;;
     extra-libraries | frameworks | import | conditional | unknown) return 1 ;;
   esac
   case "${kind[$side]}" in test-suite | benchmark) return 0 ;; esac
@@ -84,7 +84,7 @@ change() {
 context() {
   track old "$1"
   track new "$1"
-  [ "${kind[old]} ${field[old]}" != "${kind[new]} ${field[new]}" ] || return 0
+  [ "${stanza[old]} ${field[old]}" != "${stanza[new]} ${field[new]}" ] || return 0
   require old "$1"
   require new "$1"
 }
@@ -114,4 +114,4 @@ done
 [ "$hunk" = "${line[old]} ${line[new]}" ] ||
   reaches "the hunk counts ${hunk} do not match the lines read (${line[old]} ${line[new]})"
 echo "cabal: each of the ${changed} changed lines is a comment, a blank line, a module-list entry,"
-echo "cabal: or a test-suite or benchmark field that names no dependency"
+echo "cabal: or a test-suite or benchmark field that leaves its dependencies alone"
