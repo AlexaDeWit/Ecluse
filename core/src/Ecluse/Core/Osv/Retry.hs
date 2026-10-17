@@ -31,7 +31,7 @@ import Control.Retry (
     recovering,
  )
 import Katip (KatipContext, Severity (WarningS), logFM, ls)
-import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (IncompleteHeaders, ResponseBodyTooShort))
+import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (IncompleteHeaders, InvalidChunkHeaders, ResponseBodyTooShort))
 
 import Ecluse.Core.Fault (HttpFault (HttpStatus, HttpTransport), TransportFault (tfCause), renderHttpFault, transportRetryable)
 import Ecluse.Core.Fault.Http (httpFault, isRetryableStatusCode)
@@ -52,6 +52,7 @@ cutShort :: HttpException -> Bool
 cutShort = \case
     HttpExceptionRequest _ ResponseBodyTooShort{} -> True
     HttpExceptionRequest _ IncompleteHeaders -> True
+    HttpExceptionRequest _ InvalidChunkHeaders -> True
     _ -> False
 
 -- | Retry temporary HTTP failures within the policy budget, warning before each retry. Other failures propagate immediately.

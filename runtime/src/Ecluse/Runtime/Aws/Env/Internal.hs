@@ -16,10 +16,9 @@ import Amazonka qualified as AWS
 import Amazonka.Data.Headers (hAMZToken)
 import Amazonka.Env.Hooks qualified as Hooks
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types (HeaderName)
 
-import Ecluse.Core.Fault.Http (typedBodyReads)
+import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
 import Ecluse.Runtime.Aws.Fault (retypeAwsFailure)
 
 -- | An AWS-compatible endpoint on a non-default host: a local emulator (@ministack@) in tests, or a VPC endpoint.
@@ -37,10 +36,10 @@ data AwsEndpoint = AwsEndpoint
 newAwsEnv :: Maybe Text -> Maybe AwsEndpoint -> AWS.Service -> IO AWS.Env
 newAwsEnv = newAwsEnvWith AWS.discover
 
--- | 'newAwsEnv' over a caller's discovery, so a test can fail it at a stub. Discovery and every call read bodies under 'typedBodyReads'.
+-- | 'newAwsEnv' over a caller's discovery, so a test can fail it at a stub. Discovery and every call read through 'typedTlsManagerSettings'.
 newAwsEnvWith :: (AWS.EnvNoAuth -> IO AWS.Env) -> Maybe Text -> Maybe AwsEndpoint -> AWS.Service -> IO AWS.Env
 newAwsEnvWith discovery mRegion mEndpoint service = do
-    manager <- HTTP.newManager (typedBodyReads tlsManagerSettings)
+    manager <- HTTP.newManager typedTlsManagerSettings
     base <- retypeAwsFailure (AWS.newEnvNoAuthFromManager manager >>= discovery . redactingCredentialHeaders)
     pure (overridden (scoped base))
   where

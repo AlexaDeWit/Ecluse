@@ -37,7 +37,7 @@ import UnliftIO.Timeout (timeout)
 import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbEpssNotEstablished), CveLookup (..), affecting, fixedAt, openCveDb, packageAdvisories)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Fault (HttpFault (HttpStatus))
-import Ecluse.Core.Fault.Http (typedBodyReads)
+import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Compile (
     CompileSources,
@@ -87,10 +87,9 @@ import Ecluse.Test.OsvDb (compileOsvToSqlite, compileOsvZipDbTo, compileOsvZipDb
 import Ecluse.Test.Port (RecordedCompile (RecordedCompile), recordingAdvisoryCompileMetricsPort)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Stub (Stub, redirectSecrets, secretAnswer, signedRedirect, stubBaseUrl, withRoutedStubIO, withStub, withStubHeaders)
-import Ecluse.Test.Stub.Socket (Cut (CloseMidBody, ResetMidBody), cutHalfwayThenServe, withRawServer)
+import Ecluse.Test.Stub.Socket (Cut (CloseMidBody, CloseMidChunk, ResetMidBody), cutHalfwayThenServe, withRawServer)
 import Ecluse.Test.Supervision (superviseBriefly)
 import Network.HTTP.Client (Manager, ManagerSettings (managerModifyResponse), applyBasicAuth, defaultRequest, newManager, requestHeaders, responseStatus)
-import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types (Header)
 import Network.HTTP.Types.Header (hLastModified)
 import Network.HTTP.Types.Status (Status, status200, status404, status503, statusCode)
@@ -776,7 +775,7 @@ fetchFaultSpec = describe "advisory fetch faults behind a redirect to a signed U
 -- A download the source cuts off halfway through its body is retried in place, whether the cut is a reset or a clean close.
 downloadCutSpec :: Spec
 downloadCutSpec = describe "a download the source cuts off halfway through its body" $
-    for_ [(eco, cut) | eco <- [Npm, PyPI], cut <- [ResetMidBody, CloseMidBody]] $ \(eco, cut) -> do
+    for_ [(eco, cut) | eco <- [Npm, PyPI], cut <- [ResetMidBody, CloseMidBody, CloseMidChunk]] $ \(eco, cut) -> do
         it ("retries the OSV export in place and compiles from the clean answer, " <> show eco <> ", " <> show cut) $
             withSystemTempDirectory "osv-cut" $ \outDir -> do
                 (source, requests) <- cutHalfwayThenServe cut 1 =<< factsArchive eco
@@ -805,12 +804,12 @@ compileVia :: Manager -> AdvisoryCompileMetricsPort -> Ecosystem -> EpssRequirem
 compileVia feeds metrics eco requirement sources outDir =
     runOsvTestM (withOsvCandidate metrics Nothing feeds outDir (osvEcosystemFor eco) requirement sources testQuietTime promoteCandidate)
 
--- A feed manager under the same body-read wrap as Pilot's, with a reader of each answered status, so a case shows the cut came after the headers.
+-- A manager from Pilot's feed settings, with a reader of each answered status, so a case shows the cut came after the headers.
 recordingFeedManager :: IO (Manager, IO [Int])
 recordingFeedManager = do
     seen <- newIORef []
     let record response = response <$ modifyIORef' seen (<> [statusCode (responseStatus response)])
-    feeds <- newManager (typedBodyReads tlsManagerSettings{managerModifyResponse = record})
+    feeds <- newManager typedTlsManagerSettings{managerModifyResponse = managerModifyResponse typedTlsManagerSettings >=> record}
     pure (feeds, readIORef seen)
 
 loopbackUrl :: Int -> String -> String

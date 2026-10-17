@@ -27,7 +27,6 @@ module Ecluse.Service (
 
 import Katip (LogEnv, Namespace (Namespace), SimpleLogPayload, katipAddNamespace, runKatipContextT)
 import Network.HTTP.Client (Manager, ManagerSettings)
-import Network.HTTP.Client.TLS (tlsManagerSettings)
 
 import Ecluse.Boot (BootEnv (beLogEnv, beTelemetry), logBootWarning)
 import Ecluse.Composition (BootWiring (bwBindings, bwPublishTargets))
@@ -56,7 +55,7 @@ import Ecluse.Composition.Worker (workerPoliciesWithState)
 import Ecluse.Config (AppConfig)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured))
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
-import Ecluse.Core.Fault.Http (typedBodyReads)
+import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Queue.Buffer (newEnqueueBuffer, reportWorthy)
 import Ecluse.Core.Registry.Adapter (
@@ -212,9 +211,9 @@ dataPlaneManagers telemetry bootPlan = do
     privateManager <- newPooledManager (bpPrivateConnections bootPlan) privateSettings
     pure (manager, privateManager)
 
--- | The settings each data-plane manager pools from: 'typedBodyReads' over TLS, under the client span when telemetry is on.
+-- | The settings each data-plane manager pools from: 'typedTlsManagerSettings', under the client span when telemetry is on.
 dataPlaneManagerSettings :: Telemetry -> IO ManagerSettings
-dataPlaneManagerSettings telemetry = instrumentDataPlaneManagerSettings telemetry (typedBodyReads tlsManagerSettings)
+dataPlaneManagerSettings telemetry = instrumentDataPlaneManagerSettings telemetry typedTlsManagerSettings
 
 -- | The @\/livez@ arm a process answers from, given whether it runs the worker ('spawnsWorker'): the consume-loop heartbeat where it does, the listener alone where it does not.
 workerLiveness :: Bool -> WorkerHeartbeat -> IO Liveness

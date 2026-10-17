@@ -44,7 +44,9 @@ spec = describe "newAwsEnvWith" $ do
             case outcome of
                 Left err@(AWS.TransportError (HttpExceptionRequest _ (InternalException _))) -> do
                     tfCause (classifyAwsTransport err) `shouldBe` TransportUnreachable
-                    displayAwsFaultT (toException err) `shouldSatisfy` holdsNoPlantedSecret
+                    let rendered = displayAwsFaultT (toException err)
+                    rendered `shouldSatisfy` T.isPrefixOf ("AWS request failed at 127.0.0.1:" <> show port <> ": ")
+                    rendered `shouldSatisfy` holdsNoPlantedSecret
                 Left err -> expectationFailure ("expected a typed body-read reset, got " <> show err)
                 Right _ -> expectationFailure "a reset body was read as a listing"
 

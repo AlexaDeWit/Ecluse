@@ -144,7 +144,9 @@ spec = do
             manager <- trustingTlsManager
             void (tryAny (withTlsServer resetAfterPartialBody (askProxy manager . recordingSignedRelay overTls escaped manager)))
             readIORef escaped >>= \case
-                Just err -> fmap (\(UpstreamBodyFailed fault) -> tfCause fault) (fromException err) `shouldBe` Just TransportUnreachable
+                Just err -> do
+                    fmap (\(UpstreamBodyFailed fault) -> tfCause fault) (fromException err) `shouldBe` Just TransportUnreachable
+                    for_ requestSecrets $ \secret -> toText (displayException err) `shouldSatisfy` (not . T.isInfixOf secret)
                 Nothing -> expectationFailure "no fault escaped the committed relay"
 
     describe "withUpstreamWhen, a bodiless relay (HEAD, no pump)" $

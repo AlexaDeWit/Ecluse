@@ -40,6 +40,7 @@ import Network.Socket (Socket, SocketOption (Linger), StructLinger (StructLinger
 import Network.Socket.ByteString (recv, sendAll)
 import Network.TLS qualified as TLS
 import Network.Wai.Handler.Warp (openFreePort)
+import Numeric (showHex)
 import UnliftIO.Async (withAsync)
 import UnliftIO.Exception (bracket, finally)
 
@@ -86,6 +87,8 @@ data Cut
       ResetMidBody
     | -- | FIN, which the client reads as a body shorter than its length.
       CloseMidBody
+    | -- | FIN inside the data of a chunked answer, which the client reads as broken chunk framing.
+      CloseMidChunk
     deriving stock (Eq, Show)
 
 -- | A 'withRawServer' handler that serves @body@, but cuts the first @cuts@ answers off halfway through it, and a reader of the requests it took.
@@ -96,11 +99,17 @@ cutHalfwayThenServe cut cuts body = do
             attempt <- atomicModifyIORef' answered (\n -> (n + 1, n))
             awaitRequestHead conn ""
             if attempt < cuts
-                then sendAll conn (heading <> LBS.toStrict (LBS.take (LBS.length body `div` 2) body)) >> when (cut == ResetMidBody) (resetOnClose conn)
-                else sendAll conn (heading <> LBS.toStrict body)
+                then sendAll conn (cutAnswer cut body) >> when (cut == ResetMidBody) (resetOnClose conn)
+                else sendAll conn ("HTTP/1.1 200 OK\r\nContent-Length: " <> show (LBS.length body) <> "\r\nConnection: close\r\n\r\n" <> LBS.toStrict body)
     pure (serve, readIORef answered)
+
+-- The first half of the answer: the length, or one chunk's size, promises the whole body.
+cutAnswer :: Cut -> LByteString -> ByteString
+cutAnswer cut body = heading <> LBS.toStrict (LBS.take (LBS.length body `div` 2) body)
   where
-    heading = "HTTP/1.1 200 OK\r\nContent-Length: " <> show (LBS.length body) <> "\r\nConnection: close\r\n\r\n"
+    heading = case cut of
+        CloseMidChunk -> "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n" <> encodeUtf8 (toText (showHex (LBS.length body) "")) <> "\r\n"
+        _ -> "HTTP/1.1 200 OK\r\nContent-Length: " <> show (LBS.length body) <> "\r\nConnection: close\r\n\r\n"
 
 -- The request head in full, so a clean close leaves nothing unread that would turn it into a reset.
 awaitRequestHead :: Socket -> ByteString -> IO ()

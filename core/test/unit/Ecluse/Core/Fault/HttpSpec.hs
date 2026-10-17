@@ -40,7 +40,7 @@ import Ecluse.Core.Fault (
     renderTransportCause,
     transportRetryable,
  )
-import Ecluse.Core.Fault.Http (classifyTransport, displayFaultT, httpFault, typedBodyReads)
+import Ecluse.Core.Fault.Http (classifyTransport, displayFaultT, httpFault, typedBodyReads, typedTlsManagerSettings)
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Test.Fault (httpTransportCause)
 import Ecluse.Test.Stub (closedAuthority, failedFetch, redirectSecrets, redirectedStatusException, refusedFetch, requestSecrets, signedRequest, stubBaseUrl, withStub)
@@ -185,9 +185,9 @@ transportFaultSpec = describe "transport faults as values" $ do
 -- | 'typedBodyReads' raises a socket or TLS failure in a body read as the client's own exception, which 'classifyTransport' types.
 bodyReadSpec :: Spec
 bodyReadSpec = describe "typedBodyReads" $ do
-    it "types a plain-HTTP reset after the status arrived as unreachable" $
+    it "types a plain-HTTP reset after the status arrived as unreachable, under the settings every manager starts from" $
         withRawServer resetAfterPartialBodyOverTcp $ \port -> do
-            manager <- newManager (typedBodyReads defaultManagerSettings)
+            manager <- newManager typedTlsManagerSettings
             request <- parseRequest ("http://127.0.0.1:" <> show port <> "/feed")
             status <- newIORef Nothing
             outcome <- try (withResponse request manager (\response -> writeIORef status (Just (responseStatus response)) >> brConsume (responseBody response)))

@@ -5,8 +5,8 @@
 {- | Shared HTTP fault classification for registry, queue, and advisory adapters.
 Client exceptions become "Ecluse.Core.Fault" values at the adapter boundary. Neither a value nor
 its rendering carries the request or the response: a header, a query a redirect reached, or a
-cookie can carry a credential. Every manager the roles build applies 'typedBodyReads', so a failed
-body read raises a client exception too.
+cookie can carry a credential. Every manager the roles build starts from 'typedTlsManagerSettings',
+so a failed body read raises a client exception too.
 -}
 module Ecluse.Core.Fault.Http (
     classifyTransport,
@@ -17,6 +17,7 @@ module Ecluse.Core.Fault.Http (
 
     -- * Managers
     typedBodyReads,
+    typedTlsManagerSettings,
 ) where
 
 import Data.List (lookup)
@@ -33,6 +34,7 @@ import Network.HTTP.Client (
     getOriginalRequest,
     responseStatus,
  )
+import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types.Status (statusCode)
 import Network.TLS qualified as TLS
 import System.IO.Error (IOError, ioeGetErrorType)
@@ -112,6 +114,10 @@ hostPortLabel dialledHost dialledPort = dialledAuthorityLabel (dialledHost <> ":
 typedBodyReads :: ManagerSettings -> ManagerSettings
 typedBodyReads settings = settings{managerModifyResponse = fmap typedReads . managerModifyResponse settings}
 
+-- | 'tlsManagerSettings' under 'typedBodyReads': every manager the roles build starts from this value.
+typedTlsManagerSettings :: ManagerSettings
+typedTlsManagerSettings = typedBodyReads tlsManagerSettings
+
 -- http-client wraps an exception only until the response arrives, so a failure in the body reaches the reader bare.
 typedReads :: Response BodyReader -> Response BodyReader
 typedReads response = rewrap <$> response
@@ -123,7 +129,7 @@ bareFault err
     | isJust (fromException @IOError err) || isJust (fromException @TLS.TLSException err) = Just err
     | otherwise = Nothing
 
--- A status carries the request a redirect reached, and a transport fault the request first sent.
+-- A status and a failed body read carry the request a redirect reached, and any other transport fault the request first sent.
 dialledAuthority :: HttpException -> Text
 dialledAuthority = \case
     HttpExceptionRequest request _ -> hostPortLabel (decodeUtf8 (host request)) (port request)

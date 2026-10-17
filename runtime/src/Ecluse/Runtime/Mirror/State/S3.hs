@@ -10,9 +10,9 @@ module Ecluse.Runtime.Mirror.State.S3 (
 
 import Amazonka qualified as AWS
 import Data.Text qualified as T
-import Network.HTTP.Client.TLS (newTlsManagerWith, tlsManagerSettings)
+import Network.HTTP.Client.TLS (newTlsManagerWith)
 
-import Ecluse.Core.Fault.Http (typedBodyReads)
+import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, chargedEncodeProjectRecord)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..), VerifiedCompanionBytes (..), projectKey)
@@ -27,7 +27,7 @@ import Ecluse.Runtime.Mirror.State.S3.Internal
 newS3MirrorState :: Maybe AwsEndpoint -> Limits -> Text -> Text -> StateTarget -> IO MirrorState
 newS3MirrorState endpoint limits bucket prefix target = do
     env <- buildS3Env endpoint
-    manager <- newTlsManagerWith (singleAttemptSettings (typedBodyReads tlsManagerSettings))
+    manager <- newTlsManagerWith (singleAttemptSettings typedTlsManagerSettings)
     pure (mirrorStateForEnv limits bucket prefix target env{AWS.manager = manager})
 
 -- | Bind one configured namespace to a single-attempt environment, including deterministic signed-wire tests.

@@ -132,6 +132,7 @@ tlsResetDownloadSpec = describe "a GetObject body that resets mid-download over 
                     report <- fromMaybe "" <$> reported
                     report `shouldSatisfy` T.isInfixOf "sync fetch failed: 127.0.0.1:"
                     report `shouldSatisfy` T.isSuffixOf (" (" <> renderTransportCause TransportUnreachable <> ")")
+                    for_ [key, "X-Amz-"] $ \leak -> report `shouldSatisfy` (not . T.isInfixOf leak)
 
 withSyncEnv :: (FilePath -> CveSlot -> (CveFetch -> SyncEnv) -> IO a) -> IO a
 withSyncEnv = withSyncEnvFor Npm
