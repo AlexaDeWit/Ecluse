@@ -7,7 +7,7 @@ module Ecluse.Core.Fault.HttpSpec (spec) where
 
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
-import Foreign.C.Error (Errno, eCONNRESET, eINVAL, errnoToIOError)
+import Foreign.C.Error (Errno, eCONNRESET, eINVAL, eTIMEDOUT, errnoToIOError)
 import Network.Connection (HostNotResolved (HostNotResolved))
 import Network.HTTP.Client (
     HttpException (HttpExceptionRequest, InvalidUrlException),
@@ -137,11 +137,15 @@ transportFaultSpec = describe "transport faults as values" $ do
         causeOf (HttpExceptionRequest defaultRequest ConnectionTimeout) `shouldBe` TransportTimeout
         causeOf (HttpExceptionRequest defaultRequest ResponseTimeout) `shouldBe` TransportTimeout
 
+    it "classifies a socket that timed out after connect over plain HTTP as TransportTimeout" $
+        causeOf (HttpExceptionRequest defaultRequest (InternalException (toException (socketError eTIMEDOUT)))) `shouldBe` TransportTimeout
+
+    it "classifies a socket that timed out in the TLS handshake as TransportTimeout" $
+        causeOf (HttpExceptionRequest defaultRequest (InternalException (handshakeSocketError eTIMEDOUT))) `shouldBe` TransportTimeout
+
     it "classifies connection failures and resets as TransportUnreachable" $ do
         causeOf (HttpExceptionRequest defaultRequest (ConnectionFailure (toException OtherFault))) `shouldBe` TransportUnreachable
         causeOf (HttpExceptionRequest defaultRequest ConnectionClosed) `shouldBe` TransportUnreachable
-        -- A peer that hung up before the first response byte never reached a protocol
-        -- exchange, so it reads as unreachable rather than as a protocol fault.
         causeOf (HttpExceptionRequest defaultRequest NoResponseDataReceived) `shouldBe` TransportUnreachable
         causeOf (HttpExceptionRequest defaultRequest (InternalException (toException (socketError eCONNRESET)))) `shouldBe` TransportUnreachable
         causeOf (HttpExceptionRequest defaultRequest (InternalException (handshakeSocketError eCONNRESET))) `shouldBe` TransportUnreachable

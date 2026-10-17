@@ -42,7 +42,7 @@ transportFault cause detail = TransportFault cause (boundedDetail detail)
 
 -- | Why the transport could not deliver. Coarse on purpose: each constructor reads differently to an operator, and the rest goes in 'tfDetail'.
 data TransportCause
-    = -- | The peer did not answer in time (a connect or response timeout).
+    = -- | The peer did not answer in time (a connect, response, or socket timeout).
       TransportTimeout
     | -- | The peer could not be reached at all: a refused connection, a failed lookup, or a peer that closed or reset before answering.
       TransportUnreachable
