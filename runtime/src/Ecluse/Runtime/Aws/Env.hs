@@ -2,12 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The @amazonka@ environment every AWS adapter builds: credentials discovered the
-standard AWS way, an optional region, and an optional endpoint override.
-
-'AwsEndpoint' is the one endpoint-override record in the tree. The SQS backend, the S3
-advisory client, and the CodeArtifact mint all reach @amazonka@ through 'newAwsEnv', so an
-emulator or a VPC endpoint is configured the same way on every path.
+{- | The @amazonka@ environment every AWS adapter builds. The SQS backend, the S3 clients, and the
+CodeArtifact mint all reach @amazonka@ through 'newAwsEnv', so an emulator or a VPC endpoint is
+configured the same way on every path.
 -}
 module Ecluse.Runtime.Aws.Env (
     AwsEndpoint (..),
@@ -16,9 +13,9 @@ module Ecluse.Runtime.Aws.Env (
 
 import Amazonka qualified as AWS
 
-{- | Where an AWS-compatible endpoint lives, for pointing an adapter at a non-default host:
-a local emulator (@ministack@) in tests, or a VPC endpoint.
--}
+import Ecluse.Runtime.Aws.Fault (retypeAwsFailure)
+
+-- | An AWS-compatible endpoint on a non-default host: a local emulator (@ministack@) in tests, or a VPC endpoint.
 data AwsEndpoint = AwsEndpoint
     { endpointSecure :: Bool
     -- ^ Whether to connect over HTTPS (an emulator is usually plain HTTP).
@@ -29,12 +26,10 @@ data AwsEndpoint = AwsEndpoint
     }
     deriving stock (Eq, Show)
 
-{- | Build an env for @service@. A region scopes it only when given, and an override
-reconfigures @service@ only when given, so an absent value keeps @amazonka@'s own resolution.
--}
+-- | An env for @service@ over discovered credentials. An absent region or override keeps @amazonka@'s own resolution, and a failed discovery raises 'Ecluse.Runtime.Aws.Fault.AwsRequestFailed'.
 newAwsEnv :: Maybe Text -> Maybe AwsEndpoint -> AWS.Service -> IO AWS.Env
 newAwsEnv mRegion mEndpoint service = do
-    base <- AWS.newEnv AWS.discover
+    base <- retypeAwsFailure (AWS.newEnv AWS.discover)
     pure (overridden (scoped base))
   where
     scoped env = maybe env (\region -> env{AWS.region = AWS.Region' region}) mRegion

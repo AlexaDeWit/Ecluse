@@ -950,6 +950,7 @@ library ecluse-runtime-test-support
   hs-source-dirs:  runtime/test-support
   exposed-modules:
     Ecluse.Runtime.Test.Advisory
+    Ecluse.Runtime.Test.CodeArtifact
     Ecluse.Runtime.Test.Contract.UnitCatalogue
     Ecluse.Runtime.Test.Cve
     Ecluse.Runtime.Test.S3
@@ -1522,6 +1523,7 @@ test-suite ecluse-runtime-unit
     SpecHook
     Ecluse.Runtime.Test.Contract.UnitCatalogueSpec
     Ecluse.Runtime.Test.PackageStoreSpec
+    Ecluse.Runtime.Aws.FaultSpec
     Ecluse.Runtime.Aws.S3.ConditionalSpec
     Ecluse.Runtime.Mirror.State.S3.InternalSpec
     Ecluse.Runtime.Pilot.ExportSpec

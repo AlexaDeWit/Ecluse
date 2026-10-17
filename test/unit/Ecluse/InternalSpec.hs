@@ -14,7 +14,8 @@ import UnliftIO (throwIO, timeout, try)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Boot (BootAborted (BootAborted))
-import Ecluse.Internal (ProcessOutcome (..), exitCodeFor, superviseProcess)
+import Ecluse.Internal (ProcessOutcome (..), exitCodeFor, exitReasonFor, superviseProcess)
+import Ecluse.Runtime.Test.CodeArtifact (closedEndpoint, refusedMint)
 
 spec :: Spec
 spec = do
@@ -31,6 +32,10 @@ spec = do
             case outcome of
                 ServiceExited detail -> detail `shouldSatisfy` T.isInfixOf "wiring broke"
                 other -> expectationFailure ("expected ServiceExited, got " <> show other)
+
+        it "reports a failed mint by its cause at the dialled host:port, never the signed request" $ do
+            outcome <- superviseProcess (refusedMint >> pure ShutdownRequested)
+            exitReasonFor outcome `shouldBe` Just ("ecluse: service exited: AWS request failed at " <> closedEndpoint <> ": the peer could not be reached")
 
         it "classifies a kill delivery (ThreadKilled) as RunCancelled" $
             superviseProcess (Conc.myThreadId >>= \tid -> Conc.throwTo tid ThreadKilled >> pure ShutdownRequested)
