@@ -99,7 +99,7 @@ data AwsAnswer = AwsAnswer
 sendRaising :: (AWS.AWSRequest a) => AWS.Env -> a -> IO (AWS.AWSResponse a)
 sendRaising env request = sendClassified (raised (const (requestEndpoint env request))) env request >>= either throwIO pure
 
--- | Raise the @amazonka@ or http-client failure of an action whose request the caller never holds, such as credential discovery, as 'AwsRequestFailed'.
+-- | Raise the @amazonka@ or http-client failure of an action whose request the caller never holds, such as credential discovery, as 'AwsRequestFailed'. An unparseable URL leaves as http-client's own exception.
 retypeAwsFailure :: IO a -> IO a
 retypeAwsFailure action =
     -- Thrown outside any handler, so no annotation of the throw carries the original along.
@@ -165,8 +165,8 @@ renderAnswer source answer =
     boundedDetail $
         renderHttpFault source (HttpStatus (aaStatus answer))
             <> (" " <> aaCode answer)
-            <> foldMap (\requestId -> " (request " <> requestId <> ")") (aaRequestId answer)
-            <> foldMap (": " <>) (aaMessage answer)
+            <> maybe "" (\requestId -> " (request " <> requestId <> ")") (aaRequestId answer)
+            <> maybe "" (": " <>) (aaMessage answer)
 
 renderUndecodable :: Text -> Int -> Text
 renderUndecodable source status = renderHttpFault source (HttpStatus status) <> ", an answer that could not be decoded"
