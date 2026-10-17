@@ -35,9 +35,10 @@ import OpenTelemetry.Trace (
     setGlobalTracerProvider,
  )
 import OpenTelemetry.Trace.Core (
+    Event (eventAttributes, eventName),
     ImmutableSpan (spanContext, spanHot),
     Link (frozenLinkContext),
-    SpanHot (hotAttributes, hotLinks, hotName, hotStatus),
+    SpanHot (hotAttributes, hotEvents, hotLinks, hotName, hotStatus),
     SpanStatus (Error, Unset),
  )
 import OpenTelemetry.Trace.Core qualified as TraceCore
@@ -45,6 +46,7 @@ import OpenTelemetry.Trace.Id (TraceId)
 import OpenTelemetry.Util (appendOnlyBoundedCollectionValues)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Fault.Http (displayFaultT)
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Queue (RemoteSpanContext (RemoteSpanContext))
 import Ecluse.Core.Rules.Types (AdvisoryScore (Cvss), Reason (AffectedBy, RunsOnInstall), mkAdvisoryIds)
@@ -55,8 +57,9 @@ import Ecluse.Core.Server.Response (
     ServeDecision (Admit, Reject),
     Transience (WontResolve),
  )
-import Ecluse.Core.Telemetry.Metrics (AdvisorySyncResult (AdvisoryRefused))
+import Ecluse.Core.Telemetry.Metrics (AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryRefused))
 import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Runtime.Telemetry.Escape (withEscapeHandler)
 import Ecluse.Runtime.Telemetry.Internal (
     Telemetry (TelemetryEnabled),
     TelemetryProviders (TelemetryProviders),
@@ -72,6 +75,9 @@ import Ecluse.Runtime.Telemetry.Tracing.Internal (
     withMirrorJobSpan,
     withRuleEvalSpan,
  )
+import Ecluse.Test.Stub (refusedFetch, requestSecrets, signedRequest)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
+import UnliftIO.Exception (throwIO, tryAny)
 
 -- | The verdict mapping is exact, a domain span is inert without telemetry, and no token or @Authorization@ header reaches a span.
 spec :: Spec
@@ -80,6 +86,7 @@ spec = do
     gatingSpec
     scrubSpec
     advisorySyncSpanSpec
+    escapedExceptionSpec
     crossAsyncLinkSpec
     enqueueStatusSpec
     enqueueAuthoritySpec
@@ -152,7 +159,7 @@ gatingSpec = describe "domain-span brackets (telemetry disabled)" $ do
     it "runs the advisory-sync attempt and returns its result, opening no span" $ do
         -- The sync loop brackets unconditionally, so the disabled bracket must never
         -- reach for a provider and never change what the attempt concluded.
-        result <- withAdvisorySyncSpan telemetryDisabled Npm (const AdvisoryRefused) (pure (7 :: Int))
+        result <- withAdvisorySyncSpan telemetryDisabled Npm (const (AdvisoryRefused, Nothing)) (pure (7 :: Int))
         result `shouldBe` 7
 
 scrubSpec :: Spec
@@ -209,7 +216,7 @@ span the body never opened reads as missing rather than filtered. -}
 withSpanCapture :: (TracerProvider -> IO ()) -> (IORef [ImmutableSpan] -> IO a) -> IO a
 withSpanCapture emit inspect = do
     (processor, ref) <- inMemoryListExporter
-    tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
+    tracerProvider <- createTracerProvider [processor] (withEscapeHandler emptyTracerProviderOptions)
     emit tracerProvider
     _ <- forceFlushTracerProvider tracerProvider Nothing
     inspect ref
@@ -242,7 +249,7 @@ attributes are the ones the metric labels join on. A third added later fails her
 advisorySyncSpanSpec :: Spec
 advisorySyncSpanSpec = describe "advisory sync span" $
     it "opens one span per attempt whose attributes are exactly the ecosystem and the result" $
-        withTelemetrySpans (\telemetry -> withAdvisorySyncSpan telemetry Npm (const AdvisoryRefused) pass) $ \ref -> do
+        withTelemetrySpans (\telemetry -> withAdvisorySyncSpan telemetry Npm (const (AdvisoryRefused, Nothing)) pass) $ \ref -> do
             spans <- readIORef ref
             names <- traverse (fmap hotName . readIORef . spanHot) spans
             names `shouldBe` ["ecluse.advisory.sync.attempt"]
@@ -253,6 +260,63 @@ advisorySyncSpanSpec = describe "advisory sync span" $
             ecluseAttributeCount attributes `shouldBe` 2
             textAttribute attributes "ecluse.ecosystem" `shouldBe` Just "npm"
             textAttribute attributes "ecluse.advisory.sync.result" `shouldBe` Just "refused"
+
+{- An exception escaping a span is recorded by its typed cause when its own rendering would print a
+request. Every capture here runs the production 'withEscapeHandler', as 'withSpanCapture' does. -}
+escapedExceptionSpec :: Spec
+escapedExceptionSpec = describe "an exception escaping a span" $ do
+    it "records a request-carrying HTTP exception on a domain span by its typed cause, never its request" $ do
+        refused <- refusedFetch =<< signedRequest
+        withTelemetrySpans (escapeFrom (\telemetry -> withAdvisorySyncSpan telemetry Npm (const (AdvisoryRefused, Nothing)) (throwIO refused))) $ \ref -> do
+            syncSpan <- findSpan ref "ecluse.advisory.sync.attempt"
+            hot <- readIORef (spanHot syncSpan)
+            hotStatus hot `shouldBe` Error (displayFaultT (toException refused))
+            map eventName (exceptionEvents hot) `shouldBe` ["exception"]
+            spanDump ref >>= \dump -> for_ requestSecrets $ \secret -> dump `shouldSatisfy` (not . T.isInfixOf secret)
+
+    it "records one escaping the application on the WAI server span by its typed cause, never its request" $ do
+        refused <- refusedFetch =<< signedRequest
+        withTelemetrySpans (throwingBehindMiddleware (toException refused)) $ \ref -> do
+            statuses <- traverse (fmap hotStatus . readIORef . spanHot) =<< readIORef ref
+            statuses `shouldSatisfy` elem (Error (displayFaultT (toException refused)))
+            spanDump ref >>= \dump -> for_ requestSecrets $ \secret -> dump `shouldSatisfy` (not . T.isInfixOf secret)
+
+    it "leaves any other exception to the library, which records it as before" $
+        withTelemetrySpans (escapeFrom (\telemetry -> withAdvisorySyncSpan telemetry Npm (const (AdvisoryRefused, Nothing)) (throwIO (TestContractEscape "contract broken")))) $ \ref -> do
+            hot <- readIORef . spanHot =<< findSpan ref "ecluse.advisory.sync.attempt"
+            hotStatus hot `shouldSatisfy` \case
+                Error message -> T.isInfixOf "contract broken" message
+                _ -> False
+            map eventName (exceptionEvents hot) `shouldBe` ["exception"]
+
+    it "marks an attempt span errored with the fetch fault its result projects" $
+        withTelemetrySpans (\telemetry -> withAdvisorySyncSpan telemetry Npm (const (AdvisoryFetchFailed, Just "127.0.0.1:1: ResponseTimeout (the peer did not answer in time)")) pass) $ \ref -> do
+            hot <- readIORef . spanHot =<< findSpan ref "ecluse.advisory.sync.attempt"
+            hotStatus hot `shouldBe` Error "127.0.0.1:1: ResponseTimeout (the peer did not answer in time)"
+
+-- Serve an application that throws @err@ behind the telemetry WAI middleware, and send it one request.
+throwingBehindMiddleware :: SomeException -> Telemetry -> IO ()
+throwingBehindMiddleware err telemetry = do
+    middleware <- telemetryWaiMiddleware telemetry
+    manager <- newManager defaultManagerSettings
+    void (tryAny (callWithBearer (middleware (\_ _ -> throwIO err)) manager))
+
+-- Run a span body that throws, and swallow the throw, so the capture reads what the span recorded.
+escapeFrom :: (Telemetry -> IO ()) -> Telemetry -> IO ()
+escapeFrom emit telemetry = void (tryAny (emit telemetry))
+
+-- The events a span holds, the library's own @exception@ event included.
+exceptionEvents :: SpanHot -> [Event]
+exceptionEvents = toList . appendOnlyBoundedCollectionValues . hotEvents
+
+-- Every captured span's status, attributes, and event attributes, for a search that must find no secret.
+spanDump :: IORef [ImmutableSpan] -> IO Text
+spanDump ref = do
+    spans <- readIORef ref
+    parts <- forM spans $ \theSpan -> do
+        hot <- readIORef (spanHot theSpan)
+        pure (show (hotStatus hot) <> " " <> show (hotAttributes hot) <> " " <> show (map eventAttributes (exceptionEvents hot)))
+    pure (T.intercalate "\n" parts)
 
 -- Read one span attribute back as text, 'Nothing' when the key is absent or holds
 -- another type.

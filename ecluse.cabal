@@ -600,6 +600,7 @@ library ecluse-runtime
     Ecluse.Runtime.Telemetry
     Ecluse.Runtime.Telemetry.Correlation
     Ecluse.Runtime.Telemetry.Correlation.Internal
+    Ecluse.Runtime.Telemetry.Escape
     Ecluse.Runtime.Telemetry.ExportFailure
     Ecluse.Runtime.Telemetry.ExportFailure.Internal
     Ecluse.Runtime.Telemetry.Instruments
@@ -1555,6 +1556,7 @@ test-suite ecluse-runtime-unit
     Ecluse.Runtime.Server.DrainSpec
     Ecluse.Runtime.Server.HaltSpec
     Ecluse.Runtime.Telemetry.CorrelationSpec
+    Ecluse.Runtime.Telemetry.EscapeSpec
     Ecluse.Runtime.Telemetry.ExportFailureSpec
     Ecluse.Runtime.Telemetry.InstrumentsSpec
     Ecluse.Runtime.Telemetry.ReportersSpec

@@ -34,9 +34,7 @@ import Ecluse.Core.Telemetry.Metrics (AdvisoryCompileResult, AdvisoryDropCause, 
 import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (..), AdvisorySyncMetricsPort (..), MetricsPort (..), WorkerMetricsPort (..))
 import Ecluse.Core.Telemetry.Span (AdvisorySyncTracingPort (..), TracingPort (..), WorkerTracingPort (..))
 
-{- | A 'MetricsPort' that discards every measurement, for a spec that drives the serve
-path but asserts nothing about metrics.
--}
+-- | A 'MetricsPort' that discards every measurement, for a spec that drives the serve path but asserts nothing about metrics.
 noopMetricsPort :: MetricsPort
 noopMetricsPort =
     MetricsPort
@@ -69,9 +67,7 @@ noopMetricsPort =
         , mpMirrorEnqueueFailure = pass
         }
 
-{- | A 'MetricsPort' that captures the serve decisions it records, with a reader for them in record
-order. Every other field is inert.
--}
+-- | A 'MetricsPort' that captures the serve decisions it records, with a reader for them in record order. Every other field is inert.
 recordingMetricsPort :: IO (MetricsPort, IO [Decision])
 recordingMetricsPort = do
     seen <- newTVarIO []
@@ -85,9 +81,7 @@ recordingDivergenceMetricsPort = do
     let port = noopMetricsPort{mpMergeDivergence = atomically (modifyTVar' seen (+ 1))}
     pure (port, readTVarIO seen)
 
-{- | A 'TracingPort' that opens no span and runs the bracketed body, for a spec that
-drives the serve path's span sites without a tracer.
--}
+-- | A 'TracingPort' that opens no span and runs the bracketed body, for a spec that drives the serve path's span sites without a tracer.
 passthroughTracingPort :: TracingPort
 passthroughTracingPort =
     TracingPort
@@ -98,9 +92,7 @@ passthroughTracingPort =
         , spanMetadataDecode = \_ action -> action
         }
 
-{- | A 'WorkerMetricsPort' that discards every measurement, for a spec that drives the
-worker loop but asserts nothing about metrics.
--}
+-- | A 'WorkerMetricsPort' that discards every measurement, for a spec that drives the worker loop but asserts nothing about metrics.
 noopWorkerMetricsPort :: WorkerMetricsPort
 noopWorkerMetricsPort =
     WorkerMetricsPort
@@ -108,18 +100,14 @@ noopWorkerMetricsPort =
         , wmpMirrorPublishDuration = const pass
         }
 
-{- | A 'WorkerMetricsPort' that captures the per-job results it records, with a reader for them in
-record order. The publish-duration field is inert.
--}
+-- | A 'WorkerMetricsPort' that captures the per-job results it records, with a reader for them in record order. The publish-duration field is inert.
 recordingWorkerMetricsPort :: IO (WorkerMetricsPort, IO [MirrorResult])
 recordingWorkerMetricsPort = do
     seen <- newTVarIO []
     let port = noopWorkerMetricsPort{wmpMirrorJobProcessed = \r -> atomically (modifyTVar' seen (<> [r]))}
     pure (port, readTVarIO seen)
 
-{- | A 'WorkerTracingPort' that opens no span and runs the bracketed body, for a spec
-that drives the worker's per-job span site without a tracer.
--}
+-- | A 'WorkerTracingPort' that opens no span and runs the bracketed body, for a spec that drives the worker's per-job span site without a tracer.
 passthroughWorkerTracingPort :: WorkerTracingPort
 passthroughWorkerTracingPort =
     WorkerTracingPort
@@ -127,9 +115,7 @@ passthroughWorkerTracingPort =
           wtpMirrorJobSpan = \_ _ _ _ action -> action
         }
 
-{- | An 'AdvisorySyncMetricsPort' that discards every measurement, for a spec that drives
-the advisory sync loop but asserts nothing about metrics.
--}
+-- | An 'AdvisorySyncMetricsPort' that discards every measurement, for a spec that drives the advisory sync loop but asserts nothing about metrics.
 noopAdvisorySyncMetricsPort :: AdvisorySyncMetricsPort
 noopAdvisorySyncMetricsPort =
     AdvisorySyncMetricsPort
@@ -137,9 +123,7 @@ noopAdvisorySyncMetricsPort =
         , asmpSyncDuration = \_ _ _ -> pass
         }
 
-{- | An 'AdvisorySyncMetricsPort' that captures every attempt and every latency sample it receives,
-in record order, with a reader for each.
--}
+-- | An 'AdvisorySyncMetricsPort' that captures every attempt and every latency sample it receives, in record order, with a reader for each.
 recordingAdvisorySyncMetricsPort ::
     IO
         ( AdvisorySyncMetricsPort
@@ -156,9 +140,7 @@ recordingAdvisorySyncMetricsPort = do
                 }
     pure (port, readTVarIO attempts, readTVarIO durations)
 
-{- | An 'AdvisoryCompileMetricsPort' that discards every measurement, for a spec that compiles an
-artifact but asserts nothing about metrics.
--}
+-- | An 'AdvisoryCompileMetricsPort' that discards every measurement, for a spec that compiles an artifact but asserts nothing about metrics.
 noopAdvisoryCompileMetricsPort :: AdvisoryCompileMetricsPort
 noopAdvisoryCompileMetricsPort =
     AdvisoryCompileMetricsPort
@@ -167,9 +149,7 @@ noopAdvisoryCompileMetricsPort =
         , acmpCompileRun = const pass
         }
 
-{- | What one compile pass recorded through 'recordingAdvisoryCompileMetricsPort', each list in
-record order.
--}
+-- | What one compile pass recorded through 'recordingAdvisoryCompileMetricsPort', each list in record order.
 data RecordedCompile = RecordedCompile
     { rcAccepted :: [Int]
     , rcDropped :: [(AdvisoryDropCause, Int)]
@@ -177,9 +157,7 @@ data RecordedCompile = RecordedCompile
     }
     deriving stock (Eq, Show)
 
-{- | An 'AdvisoryCompileMetricsPort' that captures every tally and verdict it receives, with one
-reader for the lot.
--}
+-- | An 'AdvisoryCompileMetricsPort' that captures every tally and verdict it receives, with one reader for the lot.
 recordingAdvisoryCompileMetricsPort :: IO (AdvisoryCompileMetricsPort, IO RecordedCompile)
 recordingAdvisoryCompileMetricsPort = do
     seen <- newTVarIO (RecordedCompile [] [] [])
@@ -195,9 +173,7 @@ recordingAdvisoryCompileMetricsPort = do
 bump :: TVar a -> (a -> a) -> IO ()
 bump seen f = atomically (modifyTVar' seen f)
 
-{- | An 'AdvisorySyncTracingPort' that opens no span and runs the bracketed attempt, for
-a spec that drives the sync loop without a tracer.
--}
+-- | An 'AdvisorySyncTracingPort' that opens no span and runs the bracketed attempt, for a spec that drives the sync loop without a tracer.
 passthroughAdvisorySyncTracingPort :: AdvisorySyncTracingPort
 passthroughAdvisorySyncTracingPort =
     AdvisorySyncTracingPort
@@ -212,7 +188,7 @@ recordingAdvisorySyncTracingPort = do
             AdvisorySyncTracingPort
                 { astpSyncAttemptSpan = \eco project action -> do
                     result <- action
-                    atomically (modifyTVar' seen (<> [(eco, project result)]))
+                    atomically (modifyTVar' seen (<> [(eco, fst (project result))]))
                     pure result
                 }
     pure (port, readTVarIO seen)
