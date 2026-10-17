@@ -475,7 +475,7 @@ mountDatabaseRequirement = bool DatabaseRequired DatabaseOptional . null . mount
 advisoryAgeLines :: Config -> [Text]
 advisoryAgeLines config =
     [ ageLine eco (mountAdvisoryAge advisories mount)
-    | isJust (advUrl advisories)
+    | advisorySourced (configApp config)
     , (eco, mount) <- Map.toAscList (configMounts config)
     , any readsAdvisories (mountRulesOf mount)
     ]

@@ -92,7 +92,9 @@ import Ecluse.Runtime.Log (LogFormat, LogLevel)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore)
 import Ecluse.Runtime.Telemetry (TelemetrySwitch)
 
--- | An operator-configured @http(s)@ URL, trimmed. 'mkUrl' is the only builder, so none carries credentials, another scheme, or an authority egress misses.
+{- | An operator-configured @http(s)@ URL, whitespace-trimmed. 'mkUrl' is the only builder, so no
+value exists carrying credential material, another scheme, or an authority the egress gate misses.
+-}
 newtype Url = Url Text
     deriving stock (Eq, Ord, Show)
 
@@ -123,8 +125,8 @@ unUrl (Url u) = u
 data HttpScheme = Http | Https
     deriving stock (Eq, Show)
 
-{- | Split a URL into its scheme and the text after the separator, or 'Nothing' for neither @http@ nor
-@https@. It is the one scheme check the configuration layer shares.
+{- | Split a URL into the scheme it writes and the text after the separator, or 'Nothing' for
+neither @http@ nor @https@. It is the one scheme check the configuration layer shares.
 -}
 splitHttpScheme :: Text -> Maybe (HttpScheme, Text)
 splitHttpScheme raw =
@@ -227,8 +229,8 @@ data ControlPlane
       ControlNone
     deriving stock (Eq, Show)
 
-{- | A mount's store backend, resolved once at load ("Ecluse.Config.Target") so no two roles infer a
-different one. No arm pairs one store's mint with another's plane.
+{- | A mount's store backend, resolved once at load ("Ecluse.Config.Target"), so no two roles infer
+a different one. The tag discriminates, so no arm pairs one store's mint with another's plane.
 -}
 data StoreBackend
     = -- | A protocol-speaking host: its static write token, and no control plane.
@@ -330,8 +332,8 @@ data QueueSettings = QueueSettings
     , qsMaxMemoryDepth :: Maybe Int
     -- ^ Computed from the runtime posture when unset. A configured value wins.
     , qsMaxReceiveCount :: Int
-    {- ^ Deliveries before the worker retires a message. A __floor__: the worker runs one above an attached
-    dead-letter terminus's capture count, so the dead-letter queue captures first ("Ecluse.Core.Queue").
+    {- ^ Deliveries one message gets before the worker retires it. A __floor__: the worker runs one above an
+    attached dead-letter terminus's capture count, so the terminus captures first ("Ecluse.Core.Queue").
     -}
     }
     deriving stock (Eq, Show)
@@ -400,8 +402,8 @@ data AdvisoriesSettings = AdvisoriesSettings
     }
     deriving stock (Eq, Show)
 
-{- | The @runtime@ group: the process-sizing overrides. Unset, each is computed from cgroups, the RTS, and
-the file-descriptor limit, with its provenance boot-logged.
+{- | The @runtime@ group: the process-sizing overrides. Unset, each is computed from the runtime
+posture (cgroups, RTS, file-descriptor limit), with its provenance boot-logged.
 -}
 data RuntimeSettings = RuntimeSettings
     { rtCores :: Maybe Int
@@ -440,8 +442,8 @@ data DredgerSettings = DredgerSettings
     Reaching it halts the sweep for the life of the process, so a poisoned generation stops there.
     -}
     , drgFullWalk :: Bool
-    {- ^ Walk every package each cycle, not only the advisory and identity-deny candidates. It covers a rule
-    change, and writes one resumption marker to the store.
+    {- ^ Walk every package each cycle rather than the advisory and identity-deny candidates. It
+    covers a rule-configuration change, and it writes one resumption marker to the store.
     -}
     }
     deriving stock (Eq, Show)
@@ -528,7 +530,9 @@ data Config = Config
     { configApp :: AppConfig
     , configMounts :: MountMap
     , configInactiveRules :: Map Text RuleInactivity
-    -- ^ The same for the shared @rules@ map, for a rule some mount leaves to the source and no mount runs.
+    {- ^ The source-activated shipped rules the shared @rules@ map leaves to an unconfigured advisory
+    source, where some mount leaves them to the source too and no mount runs them.
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -548,8 +552,8 @@ data ConfigError
       CodeArtifactHostMismatch Ecosystem Text
     | -- | A @codeArtifact@ endpoint on an ecosystem CodeArtifact has no package format for. Carries its key.
       CodeArtifactFormatUnsupported Ecosystem Text
-    | {- | A @codeArtifact@ endpoint whose path names no repository under the mount's own format, whose
-      per-format endpoints are separate stores. Carries its key, then the format token.
+    | {- | A @codeArtifact@ endpoint whose path addresses no repository under the mount's own
+      format, whose per-format endpoints are separate stores. Carries its key, then the format token.
       -}
       CodeArtifactRepositoryMissing Ecosystem Text Text
     deriving stock (Eq, Show)

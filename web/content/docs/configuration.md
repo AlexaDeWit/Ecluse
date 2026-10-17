@@ -20,8 +20,8 @@ Without `advisories.url`, the shipped `deny-known-malicious` and `remediation-fa
 not run, so each of their keys says so: `(default, inactive: no advisories.url)`. A key you patched
 keeps its own layer, as in `(document, inactive: no advisories.url)`. A rule you activate with
 `enabled: true` or a restated `type` carries no marker, and so does a rule you switch off with
-`enabled: false`, because a source would not run it either. A shared key under `rules` carries no
-marker while any mount runs the rule.
+`enabled: false`, because a source would not run it either. A shared key under `rules` carries the
+marker only while some mount leaves the rule to the source and no mount runs it.
 
 > **One spelling rule.** Environment variables are the mechanical transliteration of the document
 > schema: `__` descends into an object and `_` joins a camelCase word. So `ECLUSE_CACHE__MAX_BYTES`
