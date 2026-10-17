@@ -28,6 +28,7 @@ import Ecluse.Config (
 import Ecluse.Config.Resolve (mountDocRef, mountKeyRef)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
+import Ecluse.Core.Fault.Http (displayFaultT)
 import Ecluse.Core.Registry.Maintenance.Upstream (
     ExternalConnection (externalConnectionText),
     PermissionName (permissionNameText),
@@ -38,7 +39,6 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
 import Ecluse.Core.Rules.Types (RuleType)
 import Ecluse.Core.Security (authorityLabel)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
-import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Wire (renderWire)
 
 -- | A reason the composition root refuses to start. The root aggregates them, so one run reports every problem.
@@ -151,7 +151,7 @@ data Advisory
 
 -- | Fold a thrown fault into the named boot error, so a phase that dials a live environment refuses through the aggregate.
 refuseOnThrow :: (Text -> BootError) -> IO a -> IO (Either [BootError] a)
-refuseOnThrow refusal action = first (pure . refusal . displayExceptionT) <$> tryAny action
+refuseOnThrow refusal action = first (pure . refusal . displayFaultT) <$> tryAny action
 
 -- | Render an aggregated refusal as the one block a failed launch reports.
 renderBootErrors :: [BootError] -> Text

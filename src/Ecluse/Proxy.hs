@@ -18,7 +18,7 @@ import UnliftIO.Async (mapConcurrently_)
 
 import Ecluse.Boot (applyServerSettings)
 import Ecluse.Config (AppConfig (cfgServer))
-import Ecluse.Core.Text (displayExceptionT)
+import Ecluse.Core.Fault.Http (displayFaultT)
 import Ecluse.Runtime.Env (Env, envLogEnv)
 import Ecluse.Runtime.Server (
     ServerConfig (scCheckLive, scCheckReady, scOnException),
@@ -70,4 +70,4 @@ warpExceptionHook logEnv mRequest err =
   where
     payload =
         sl "path" (maybe ("unknown" :: Text) (decodeUtf8 . Wai.rawPathInfo) mRequest)
-            <> sl "detail" (displayExceptionT err)
+            <> sl "detail" (displayFaultT err)

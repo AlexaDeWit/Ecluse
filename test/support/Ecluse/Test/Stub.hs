@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Loopback HTTP responses and independent request captures.
+-- | Loopback HTTP responses, independent request captures, and fetch faults that carry secrets.
 module Ecluse.Test.Stub (
     Captured (..),
     Stub (..),
@@ -16,14 +16,33 @@ module Ecluse.Test.Stub (
     withRoutedStubIO,
     stubConfig,
     headerValue,
+
+    -- * Fetches that carry secrets
+    redirectSecrets,
+    signedRedirect,
+    secretAnswer,
+    redirectedStatusException,
+    requestSecrets,
+    signedRequest,
+    refusedFetch,
 ) where
 
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive (CI)
 import Data.CaseInsensitive qualified as CI
 import Data.List (lookup)
-import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (Header, Status)
+import Network.HTTP.Client (
+    HttpException,
+    Request (checkResponse),
+    defaultManagerSettings,
+    httpLbs,
+    httpNoBody,
+    newManager,
+    parseRequest,
+    throwErrorStatusCodes,
+ )
+import Network.HTTP.Client qualified as Client
+import Network.HTTP.Types (Header, Status, hLocation, status302)
 import Network.Wai (
     Application,
     rawPathInfo,
@@ -33,6 +52,7 @@ import Network.Wai (
     strictRequestBody,
  )
 import Network.Wai.Handler.Warp (Port, testWithApplication)
+import UnliftIO.Exception (try)
 
 import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Security (defaultLimits)
@@ -114,3 +134,53 @@ stubConfig egressUrl stub = do
 -- | Look up a header (case-insensitively) in a captured request.
 headerValue :: ByteString -> Captured -> Maybe ByteString
 headerValue name cap = lookup (CI.mk name) (capHeaders cap)
+
+-- | Every secret 'signedRedirect' and 'secretAnswer' plant: a path token, a query signature, a response header, a cookie and a body.
+redirectSecrets :: [Text]
+redirectSecrets = ["path-secret", "query-secret", "header-secret", "cookie-secret", "body-secret"]
+
+-- | A 'withRoutedStubIO' route: redirect every other path to a signed URL, as a presigned object store does, and answer that URL with @answer@.
+signedRedirect :: IO (Status, [Header], LBS.ByteString) -> Captured -> IO (Status, [Header], LBS.ByteString)
+signedRedirect answer captured
+    | capPath captured == signedPath = answer
+    | otherwise = pure (status302, [(hLocation, signedPath <> signedQuery)], "")
+
+-- | An answer that carries a secret in a header, a cookie and its body.
+secretAnswer :: Status -> (Status, [Header], LBS.ByteString)
+secretAnswer status = (status, [("Set-Cookie", "session=cookie-secret"), ("X-Amz-Request-Id", "header-secret")], "body-secret")
+
+signedPath :: ByteString
+signedPath = "/signed/path-secret/all.zip"
+
+signedQuery :: ByteString
+signedQuery = "?X-Amz-Signature=query-secret"
+
+-- | A stub's @host:port@, and the exception a status-checked fetch from it throws once its redirect reaches a signed URL answering @status@.
+redirectedStatusException :: Status -> IO (Text, HttpException)
+redirectedStatusException status =
+    withRoutedStubIO (signedRedirect (pure (secretAnswer status))) $ \stub -> do
+        manager <- newManager defaultManagerSettings
+        request <- parseRequest (toString (stubBaseUrl stub) <> "/feed")
+        outcome <- try (httpLbs request{checkResponse = throwErrorStatusCodes} manager)
+        case outcome of
+            Left err -> pure ("127.0.0.1:" <> show (stubPort stub), err)
+            Right _ -> fail ("the signed URL unexpectedly answered " <> show status)
+
+-- | Every secret 'signedRequest' carries: a path token, a query signature and a session-token header.
+requestSecrets :: [Text]
+requestSecrets = ["path-secret", "query-secret", "token-secret"]
+
+-- | A request for the signed URL at the closed port @127.0.0.1:1@, with the session-token header an AWS signer adds.
+signedRequest :: IO Request
+signedRequest = do
+    request <- parseRequest ("http://127.0.0.1:1" <> decodeUtf8 (signedPath <> signedQuery))
+    pure request{Client.requestHeaders = [("X-Amz-Security-Token", "token-secret")]}
+
+-- | The exception a fetch throws when nothing listens at the request's port.
+refusedFetch :: Request -> IO HttpException
+refusedFetch request = do
+    manager <- newManager defaultManagerSettings
+    outcome <- try (httpNoBody request manager)
+    case outcome of
+        Left err -> pure err
+        Right _ -> fail "a closed port answered"

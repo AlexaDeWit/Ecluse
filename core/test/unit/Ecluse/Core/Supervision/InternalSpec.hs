@@ -7,12 +7,14 @@ module Ecluse.Core.Supervision.InternalSpec (spec) where
 
 import Control.Retry (simulatePolicy)
 import Data.Text qualified as T
+import Network.HTTP.Types.Status (status503)
 import Test.Hspec
 import UnliftIO (timeout)
 import UnliftIO.Async (asyncWithUnmask, cancel, waitCatch)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (throwIO, try)
+import UnliftIO.Exception (throwIO, try, tryAny)
 
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable), renderTransportCause)
 import Ecluse.Core.Supervision.Internal (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
     FaultDisposition (Permanent, Transient),
@@ -24,6 +26,7 @@ import Ecluse.Core.Supervision.Internal (
     transientPolicy,
  )
 import Ecluse.Test.Log (runJsonLog, runQuietKatip)
+import Ecluse.Test.Stub (redirectSecrets, redirectedStatusException, refusedFetch, requestSecrets, signedRequest)
 
 -- | A typed fault for the loop under test to throw, never stringly.
 newtype StepFault = StepFault Text
@@ -56,7 +59,7 @@ spec = do
             backoffMicros schedule 10_000 `shouldBe` backoffMicros schedule 12
             backoffMicros schedule 10_000 `shouldSatisfy` (> 0)
 
-    describe "delayListPolicy -- a delay list as a retry policy" $ do
+    describe "delayListPolicy, a delay list as a retry policy" $ do
         -- 'simulatePolicy' walks the policy without sleeping. The list's length is the
         -- retry budget, and the policy yields 'Nothing' once it runs out.
         it "waits the nth delay at the nth retry, then stops" $ do
@@ -151,6 +154,26 @@ spec = do
             case outcome of
                 Left _cancelled -> pass
                 Right v -> absurd v
+
+    describe "superviseLoop, rendering an HTTP fault" $ do
+        for_ [Transient, Permanent] $ \disposition ->
+            it ("renders a redirected status by its code at the dialled host:port, never the request or the response, " <> show disposition) $ do
+                (authority, err) <- redirectedStatusException status503
+                logged <- supervisedLog disposition err
+                logged `shouldSatisfy` T.isInfixOf (authority <> ": HTTP 503")
+                for_ redirectSecrets $ \secret -> logged `shouldSatisfy` (not . T.isInfixOf secret)
+
+        it "renders a refused connection by its classified cause at the dialled host:port, never the request" $ do
+            refused <- refusedFetch =<< signedRequest
+            logged <- supervisedLog Transient refused
+            logged `shouldSatisfy` T.isInfixOf ("127.0.0.1:1: " <> renderTransportCause TransportUnreachable)
+            for_ requestSecrets $ \secret -> logged `shouldSatisfy` (not . T.isInfixOf secret)
+
+-- | What the loop logs for a step that always throws @fault@, under one disposition.
+supervisedLog :: (Exception e) => FaultDisposition -> e -> IO Text
+supervisedLog disposition fault =
+    runJsonLog . void . timeout 200_000 . tryAny $
+        superviseLoop (fastPolicy (const disposition)) (throwIO fault)
 
 requestedDelays :: [Bool] -> IO [Int]
 requestedDelays outcomes = do

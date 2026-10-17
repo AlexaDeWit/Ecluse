@@ -62,14 +62,13 @@ import Data.Streaming.Zlib (
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Katip (KatipContext, Severity (InfoS), logFM, ls)
-import Network.HTTP.Client (HttpException (HttpExceptionRequest, InvalidUrlException), HttpExceptionContent (StatusCodeException), responseStatus)
+import Network.HTTP.Client (HttpException (InvalidUrlException))
 import Network.HTTP.Simple (getResponseBody, getResponseHeader, httpSource, parseRequest, setRequestCheckStatus)
 import Network.HTTP.Types.Header (hLastModified)
-import Network.HTTP.Types.Status (statusCode)
 import UnliftIO.Exception (tryJust)
 
-import Ecluse.Core.Fault (TransportCause, TransportFault (tfCause), renderTransportCause)
-import Ecluse.Core.Fault.Http (classifyTransport)
+import Ecluse.Core.Fault (TransportCause, renderTransportCause)
+import Ecluse.Core.Fault.Http (HttpFault (HttpStatus, HttpTransport), httpFault)
 import Ecluse.Core.Osv.Provenance (lastModifiedOf, parseSourceTime)
 import Ecluse.Core.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired), EpssStatus (EnrichmentAvailable, EnrichmentUnavailable))
@@ -307,12 +306,13 @@ classifyEpssFailure err
 httpFailure :: HttpException -> Maybe EpssFeedFailure
 httpFailure = \case
     InvalidUrlException{} -> Nothing
-    HttpExceptionRequest _ (StatusCodeException response _) -> Just (EpssFeedStatus (statusCode (responseStatus response)))
-    other -> Just (EpssFeedTransport (tfCause (classifyTransport other)))
+    other -> Just $ case httpFault other of
+        HttpStatus code -> EpssFeedStatus code
+        HttpTransport cause -> EpssFeedTransport cause
 
 -- | Fetch the feed under the advisory retry policy. A failure 'classifyEpssFailure' names is a value. Anything else propagates.
 acquireEpssFeed :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Int -> String -> m (Either EpssFeedFailure EpssFeed)
-acquireEpssFeed cap url = tryJust classifyEpssFailure (withOsvRetry defaultOsvRetryPolicy (fetchEpssScores cap url))
+acquireEpssFeed cap url = tryJust classifyEpssFailure (withOsvRetry (dialledAuthorityLabel (toText url)) defaultOsvRetryPolicy (fetchEpssScores cap url))
 
 -- | What one compile joins onto its advisories.
 data EpssEnrichment

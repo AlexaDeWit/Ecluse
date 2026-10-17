@@ -23,6 +23,7 @@ module Ecluse.Core.Osv.Compile (
 
     -- * Refusals and rows
     PilotEpssRequired (..),
+    PilotOsvFetchFailed (..),
     osvToRow,
 ) where
 
@@ -37,9 +38,10 @@ import System.Directory (createDirectoryIfMissing, removeFile, renameFile)
 import System.FilePath ((</>))
 import System.IO (hClose, openTempFile)
 import System.IO.Error (catchIOError)
-import UnliftIO.Exception (bracket, throwIO)
+import UnliftIO.Exception (bracket, handle, throwIO)
 
 import Ecluse.Core.BuildIdentity (productVersion)
+import Ecluse.Core.Fault.Http (HttpFault, httpFault, renderHttpFault)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory, osvWireName))
 import Ecluse.Core.Osv.Epss (
@@ -191,6 +193,17 @@ renderEpssRequired refusal =
         <> " failed: "
         <> renderEpssFeedFailure (perFailure refusal)
 
+-- | The OSV export fetch failed past its retries. It names the feed by @host:port@, as a redirect can reach a URL that carries a credential.
+data PilotOsvFetchFailed = PilotOsvFetchFailed
+    { pofFeed :: Text
+    -- ^ The export's @host:port@.
+    , pofFault :: HttpFault
+    }
+    deriving stock (Eq, Show)
+
+instance Exception PilotOsvFetchFailed where
+    displayException failed = toString ("OSV export fetch failed at " <> renderHttpFault (pofFeed failed) (pofFault failed))
+
 -- Fill one candidate file and return what its publication compares.
 compileCandidate :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => CompileRun -> FilePath -> m CandidateFacts
 compileCandidate run dbFile =
@@ -225,7 +238,7 @@ answeredMarker url declared digest = do
 describeCompile :: (MonadIO m) => CompileRun -> Span -> m ()
 describeCompile run sp = do
     addAttribute sp "ecluse.osv.ecosystem" (osvWireName (crEcosystem run))
-    addAttribute sp "ecluse.osv.source_host" (dialledAuthorityLabel (toText (csOsvExportUrl (crSources run))))
+    addAttribute sp "ecluse.osv.source_host" (osvFeedLabel run)
 
 -- The attempt runs whatever the requirement, so an ecosystem that could publish without scores
 -- still carries them whenever the feed is up.
@@ -260,6 +273,9 @@ refuseRequiredEpss run mSpan failure = do
 epssFeedLabel :: CompileRun -> Text
 epssFeedLabel run = dialledAuthorityLabel (toText (csEpssFeedUrl (crSources run)))
 
+osvFeedLabel :: CompileRun -> Text
+osvFeedLabel run = dialledAuthorityLabel (toText (csOsvExportUrl (crSources run)))
+
 renderRequirement :: EpssRequirement -> Text
 renderRequirement = \case
     EpssRequired -> "required"
@@ -267,9 +283,10 @@ renderRequirement = \case
 
 -- A failed attempt leaves committed batches. NULL bounds defeat deduplication, so each retry
 -- clears the table, the tally, and the source metadata before it re-streams.
-ingestAdvisories :: (MonadResource m, MonadMask m, KatipContext m) => CompileRun -> OsvIngest -> Connection -> m ContentDigest
+ingestAdvisories :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => CompileRun -> OsvIngest -> Connection -> m ContentDigest
 ingestAdvisories run ingest conn =
-    withOsvRetry defaultOsvRetryPolicy $ do
+    -- The client's exception holds the request a redirect reached, so the fault leaves without it.
+    handle (throwIO . PilotOsvFetchFailed feed . httpFault) . withOsvRetry feed defaultOsvRetryPolicy $ do
         resetIngestStats ingest
         resetOsvAttempt ingest
         liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
@@ -280,6 +297,8 @@ ingestAdvisories run ingest conn =
                     .| CL.chunksOf 2000
                     .| sinkSqlite conn
                 )
+  where
+    feed = osvFeedLabel run
 
 data CompileConclusion = CompileConclusion
     { ccEcosystem :: Text
@@ -311,8 +330,8 @@ conclusionOf run now enrichment attempt stats osvMarker epssMarker =
 
 newCandidate :: FilePath -> IO FilePath
 newCandidate outDir = do
-    (path, handle) <- openTempFile outDir ".osv-candidate.db"
-    hClose handle
+    (path, created) <- openTempFile outDir ".osv-candidate.db"
+    hClose created
     pure path
 
 removeCandidate :: FilePath -> IO ()

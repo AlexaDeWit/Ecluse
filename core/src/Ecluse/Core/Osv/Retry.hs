@@ -31,15 +31,10 @@ import Control.Retry (
     recovering,
  )
 import Katip (KatipContext, Severity (WarningS), logFM, ls)
-import Network.HTTP.Client (
-    HttpException (HttpExceptionRequest),
-    HttpExceptionContent (StatusCodeException),
-    responseStatus,
- )
-import Network.HTTP.Types.Status (statusCode)
+import Network.HTTP.Client (HttpException)
 
-import Ecluse.Core.Fault (TransportFault (tfCause), transportRetryable)
-import Ecluse.Core.Fault.Http (classifyTransport, isRetryableStatusCode)
+import Ecluse.Core.Fault (transportRetryable)
+import Ecluse.Core.Fault.Http (HttpFault (HttpStatus, HttpTransport), httpFault, isRetryableStatusCode, renderHttpFault)
 
 -- | Full jitter from a 1s base to a 60s ceiling, with five retries (six attempts).
 defaultOsvRetryPolicy :: (MonadIO m) => RetryPolicyM m
@@ -47,29 +42,26 @@ defaultOsvRetryPolicy = limitRetries 5 <> capDelay 60_000_000 (fullJitterBackoff
 
 -- | Classify status failures by HTTP code and other exceptions by transport cause.
 isRetryableHttpException :: HttpException -> Bool
-isRetryableHttpException = \case
-    HttpExceptionRequest _ (StatusCodeException response _) ->
-        isRetryableStatusCode (statusCode (responseStatus response))
-    other -> transportRetryable (tfCause (classifyTransport other))
+isRetryableHttpException err = case httpFault err of
+    HttpStatus code -> isRetryableStatusCode code
+    HttpTransport cause -> transportRetryable cause
 
--- | Retry temporary HTTP failures within the policy budget. Other failures propagate immediately.
-withOsvRetry :: (MonadMask m, KatipContext m) => RetryPolicyM m -> m a -> m a
-withOsvRetry policy fetch =
-    recovering policy [retryHandler] (const fetch)
+-- | Retry temporary HTTP failures within the policy budget, warning under the feed's @host:port@. Other failures propagate immediately.
+withOsvRetry :: (MonadMask m, KatipContext m) => Text -> RetryPolicyM m -> m a -> m a
+withOsvRetry feed policy fetch =
+    recovering policy [retryHandler feed] (const fetch)
 
 -- Declining a permanent 'HttpException' makes 'recovering' re-throw it.
-retryHandler :: (KatipContext m) => RetryStatus -> Handler m Bool
-retryHandler status = Handler $ \e ->
+retryHandler :: (KatipContext m) => Text -> RetryStatus -> Handler m Bool
+retryHandler feed status = Handler $ \e ->
     if isRetryableHttpException e
-        then logFM WarningS (ls (transientMessage status e)) >> pure True
+        then logFM WarningS (ls (transientMessage feed status e)) >> pure True
         else pure False
 
-{- | The warning logged before a retry of a transient fetch failure. The attempt number is
-1-based, because 'rsIterNumber' counts retries from zero.
--}
-transientMessage :: RetryStatus -> HttpException -> String
-transientMessage status err =
+-- | The warning before a retry, naming the feed by @host:port@. The attempt number is 1-based, because 'rsIterNumber' counts retries from zero.
+transientMessage :: Text -> RetryStatus -> HttpException -> Text
+transientMessage feed status err =
     "advisory-source fetch failed transiently on attempt "
         <> show (1 + rsIterNumber status)
-        <> "; backing off before the next retry. Cause: "
-        <> show err
+        <> ", backing off before the next retry: "
+        <> renderHttpFault feed (httpFault err)
