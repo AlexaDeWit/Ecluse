@@ -12,9 +12,6 @@ module Ecluse.Core.Rules.Render (
     renderReason,
     renderInability,
     renderDuration,
-
-    -- * Reading a rendered denial back
-    cveIdsInReason,
 ) where
 
 import Data.Scientific (FPFormat (Fixed), formatScientific, fromFloatDigits)
@@ -74,7 +71,6 @@ renderReason = \case
     IdentityNotRevoked ident -> "identity is not the revoked " <> ident
     IdentityAllowListed ident -> "identity " <> ident <> " is allow-listed by operator"
     IdentityNotAllowListed ident -> "identity is not the allow-listed " <> ident
-    -- No remediation sentence holds "affected by ", which 'cveIdsInReason' reads as a denial's advisories.
     Remediates ids -> "remediates " <> listed ids
     RemediatesWithinLimits compared ->
         "remediates " <> listed (scFixed compared) <> " with " <> listed (scRemaining compared) <> " remaining inside the limits" <> renderComparison compared
@@ -186,15 +182,3 @@ durationComponents = go durationLadder
 -- Render one @(unit, count)@ component, pluralising the unit (@1 minute@, @30 seconds@).
 renderDurationPart :: (Text, Integer) -> Text
 renderDurationPart (unit, n) = show n <> " " <> unit <> (if n == 1 then "" else "s")
-
--- | Read the advisory identifiers from a scored or MAL denial's rendered message, or return none.
-cveIdsInReason :: Text -> [Text]
-cveIdsInReason message
-    | T.null afterThreshold = []
-    | otherwise = filter (not . T.null) (map T.strip (T.splitOn ", " ids))
-  where
-    -- 'stripPrefix' drops the marker without an O(n) 'Data.Text.length' on it (STAN-0208).
-    -- An absent marker leaves the body empty, so the guard yields @[]@.
-    (_, afterAffected) = T.breakOn "affected by " message
-    body = fromMaybe "" (T.stripPrefix "affected by " afterAffected)
-    (ids, afterThreshold) = T.breakOn " (" body

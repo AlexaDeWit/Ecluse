@@ -32,7 +32,6 @@ spec = do
     inabilitySpec
     durationSpec
     decisionSpec
-    readBackSpec
     oracleSpec
 
 -- | Every 'Reason' constructor, with its facts at their edges, beside the sentence it reads as.
@@ -313,40 +312,6 @@ decisionSpec = describe "renderDecision" $ do
         renderDecision pd (Undecidable (WillResolve Nothing) (RuleUnable "DenyIfCve" SourceBreakerOpen))
             `shouldBe` "@myorg/thing@1.0.0 could not be evaluated: DenyIfCve: the rule source circuit breaker is open"
 
-readBackSpec :: Spec
-readBackSpec = describe "cveIdsInReason -- recovering advisory ids for the denial audit line" $ do
-    -- The audit layer reads the ids back from the rendered deny reason, so a reword of either
-    -- fails one of these.
-    let denyReason = "affected by GHSA-affect-0001 (CVSS >= 8.0)"
-    it "recovers the id a DenyIfCve denial named" $
-        cveIdsInReason denyReason `shouldBe` ["GHSA-affect-0001"]
-    it "recovers the id a DenyIfEpss denial named" $
-        cveIdsInReason "affected by GHSA-affect-0001 (EPSS >= 0.5)" `shouldBe` ["GHSA-affect-0001"]
-    it "recovers MAL ids without a score threshold" $
-        cveIdsInReason "affected by MAL-one, MAL-two (known malicious)" `shouldBe` ["MAL-one", "MAL-two"]
-    it "recovers several ids" $
-        cveIdsInReason "affected by CVE-2026-0001, GHSA-aaaa-bbbb-cccc (CVSS >= 7.0)"
-            `shouldBe` ["CVE-2026-0001", "GHSA-aaaa-bbbb-cccc"]
-    it "recovers them from the wrapped decision message the audit line carries" $
-        -- The audit layer sees the rendered decision's wrapping, not the raw reason.
-        cveIdsInReason ("thing@1.0.0 was denied by DenyIfCve: " <> denyReason)
-            `shouldBe` ["GHSA-affect-0001"]
-    it "yields nothing for a non-CVE denial" $ do
-        cveIdsInReason "runs code on install: postinstall" `shouldBe` []
-        cveIdsInReason "thing@1.0.0 was denied by DenyInstallTimeExecution: runs code on install"
-            `shouldBe` []
-    it "recovers every id an advisory denial names from the decision it renders to" $
-        hedgehog $ do
-            score <- forAll genScore
-            threshold <- forAll genThreshold
-            ids <- forAll genIds
-            let denial = Blocked "DenyIfCve" (Just (DbEtag "etag-1")) (AffectedBy score threshold ids)
-            cveIdsInReason (renderDecision (pkg Nothing 0) denial) === toList (unAdvisoryIds ids)
-    it "reads no advisory from a default denial the remediation reasons explain" $
-        hedgehog $ do
-            reasons <- forAll (Gen.list (Range.linear 1 4) genRemediationReason)
-            cveIdsInReason (renderDecision (pkg Nothing 0) (BlockedByDefault reasons)) === []
-
 oracleSpec :: Spec
 oracleSpec = describe "properties" . modifyMaxSuccess (const 1000) $ do
     it "renders a generated reason of every constructor as the second copy of its sentence does" $
@@ -535,18 +500,6 @@ genIds = mkAdvisoryIds <$> Gen.nonEmpty (Range.linear 1 5) (Gen.text (Range.line
 
 genScore :: Gen AdvisoryScore
 genScore = Gen.element [Cvss, Epss]
-
--- | The reasons the remediation rule returns, which a default denial's trail can carry.
-genRemediationReason :: Gen Reason
-genRemediationReason =
-    Gen.choice
-        [ Remediates <$> genIds
-        , RemediatesWithinLimits <$> genComparison
-        , FixesButStillAffected <$> genIds <*> genIds
-        , RemediationBeyondLimits <$> genComparison <*> genShortfalls
-        , FixStillApplies <$> genIds
-        , pure FixesNoAdvisory
-        ]
 
 genComparison :: Gen ScoreComparison
 genComparison = ScoreComparison <$> genIds <*> genIds <*> genSides <*> genSides <*> genLimits

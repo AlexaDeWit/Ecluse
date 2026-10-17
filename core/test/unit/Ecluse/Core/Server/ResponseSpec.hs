@@ -27,7 +27,7 @@ import Ecluse.Core.Rules.Types (
     EvalContext (EvalContext),
     Inability (EvaluationFailed),
     PrecededRule,
-    Reason (RuleUnable),
+    Reason (RuleUnable, RunsOnInstall),
     Rule (AllowScope, DenyInstallTimeExecution),
     RuleEvidence,
     completeEvidence,
@@ -53,7 +53,7 @@ import Ecluse.Core.Server.Response (
  )
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Package (sampleDetails, v1_0_0)
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, remediation, revocation)
+import Ecluse.Test.Rules (atDefaultPrecedence, blockedBy, inertRuleDeps, isBlockedByDefault, remediation, revocation)
 
 -- | A fixed "now" so age-based fixtures are deterministic.
 now :: UTCTime
@@ -63,9 +63,7 @@ now = UTCTime (fromGregorian 2026 6 20) 0
 decideAt :: [PrecededRule] -> RuleEvidence -> IO Decision
 decideAt prs evidence = prepare inertRuleDeps prs >>= \prepared -> evalRules (EvalContext now Nothing) prepared evidence
 
-{- | The evidence of a scoped package version published @ageDays@ before 'now'. The caller supplies
-the install-code signal, so a case can exercise a deny rule.
--}
+-- | A scoped package version published @ageDays@ before 'now', with the install-code signal a deny rule reads.
 pkg :: Text -> Integer -> CodeExecSignal -> RuleEvidence
 pkg scope ageDays code =
     completeEvidence
@@ -86,7 +84,7 @@ spec = do
         it "Admit streams a 200" $
             artifactStatus Admit `shouldBe` Ok
         it "a policy rejection is a 403" $
-            artifactStatus (Reject (Rejection (ByPolicy (RuleName "DenyInstallTimeExecution")) "no"))
+            artifactStatus (Reject (Rejection (ByPolicy (RuleName "DenyInstallTimeExecution") []) "no"))
                 `shouldBe` Forbidden
         it "a will-resolve rejection (no Retry-After) is a 503 with no delay" $
             artifactStatus (Reject (Rejection (Unavailable (WillResolve Nothing)) "down"))
@@ -125,7 +123,7 @@ spec = do
             artifactStatus (rejectUnavailable WontResolve "an internal fault") `shouldBe` ServerError
 
     describe "packumentStatus -- status over the merged survivor set" $ do
-        let denied = Reject (Rejection (ByPolicy (RuleName "DenyInstallTimeExecution")) "no")
+        let denied = Reject (Rejection (ByPolicy (RuleName "DenyInstallTimeExecution") []) "no")
             transient d = Reject (Rejection (Unavailable (WillResolve d)) "down")
             broken = Reject (Rejection (Unavailable WontResolve) "broken")
             invalid = Reject (Rejection UpstreamInvalid "wrong package")
@@ -191,12 +189,12 @@ spec = do
             appendHelp (Just (mkHelpMessage " \t ")) "denied" `shouldBe` "denied"
 
     describe "serveDecisionOf -- a rules Decision becomes a serve outcome" $ do
-        it "a deny-rule decision rejects ByPolicy, naming the rule, with the rendered why" $ do
+        it "a deny-rule decision rejects ByPolicy, naming the rule and its reason, with the rendered why" $ do
             let pd = pkg "public" 30 (RunsCodeOnInstall "preinstall hook")
             decision <- decideAt [atDefaultPrecedence DenyInstallTimeExecution] pd
             case serveDecisionOf pd decision of
                 Reject rej -> do
-                    rejectionReason rej `shouldBe` ByPolicy (RuleName "DenyInstallTimeExecution")
+                    rejectionReason rej `shouldBe` ByPolicy (RuleName "DenyInstallTimeExecution") [RunsOnInstall "preinstall hook"]
                     rejectionMessage rej `shouldSatisfy` T.isInfixOf "DenyInstallTimeExecution"
                     rejectionMessage rej `shouldSatisfy` T.isInfixOf "preinstall hook"
                 Admit -> expectationFailure "a deny decision must reject, not admit"
@@ -205,7 +203,7 @@ spec = do
             decision <- decideAt [] pd
             case serveDecisionOf pd decision of
                 Reject rej -> do
-                    rejectionReason rej `shouldBe` ByPolicy (RuleName "BlockedByDefault")
+                    rejectionReason rej `shouldBe` ByPolicy (RuleName "BlockedByDefault") []
                     rejectionMessage rej `shouldSatisfy` T.isInfixOf "denied"
                 Admit -> expectationFailure "deny-by-default must reject, not admit"
         it "an approved decision admits -- only denials reject" $ do
@@ -221,7 +219,7 @@ spec = do
             let pd = pkg "public" 30 NoCodeOnInstall
             case serveDecisionOf pd (Blocked "DenyAdvisory" Nothing revocation) of
                 Reject rej -> do
-                    rejectionReason rej `shouldBe` ByPolicy (RuleName "DenyAdvisory")
+                    rejectionReason rej `shouldBe` ByPolicy (RuleName "DenyAdvisory") [revocation]
                     rejectionMessage rej `shouldSatisfy` T.isInfixOf "DenyAdvisory"
                 Admit -> expectationFailure "an effectful denial must reject, not admit"
 
@@ -242,8 +240,8 @@ spec = do
                     policy <- forAll Gen.enumBounded
                     decision <- evalIO (decideUnder policy version)
                     cover 2 "admitted" (isNothing (refusalReason decision))
-                    cover 5 "denied by a rule" (refusalReason decision == Just (ByPolicy (RuleName "DenyInstallTimeExecution")))
-                    cover 20 "denied by default" (refusalReason decision == Just (ByPolicy (RuleName "BlockedByDefault")))
+                    cover 5 "denied by a rule" (blockedBy decision == Just "DenyInstallTimeExecution")
+                    cover 20 "denied by default" (isBlockedByDefault decision)
                     cover 10 "undecidable" (refusalReason decision == Just (Unavailable (WillResolve Nothing)))
                     cover 20 "an npm version" (pkgName version `elem` map pkgName npmVersions)
                     cover 20 "a PyPI version" (pkgName version `elem` map pkgName pypiVersions)
@@ -263,12 +261,12 @@ spec = do
 refusalOf :: PackageDetails -> Decision -> ServeDecision
 refusalOf pd = serveDecisionOf (completeEvidence pd)
 
--- The reason a decision refuses with, or none for an admission.
+-- The reason a decision refuses with, its typed reasons included, or none for an admission.
 refusalReason :: Decision -> Maybe RejectReason
 refusalReason = \case
     Admitted{} -> Nothing
-    Blocked name _ _ -> Just (ByPolicy (RuleName name))
-    BlockedByDefault{} -> Just (ByPolicy (RuleName "BlockedByDefault"))
+    Blocked name _ reason -> Just (ByPolicy (RuleName name) [reason])
+    BlockedByDefault reasons -> Just (ByPolicy (RuleName "BlockedByDefault") reasons)
     Undecidable transience _ -> Just (Unavailable transience)
 
 -- How a refusal names a version.

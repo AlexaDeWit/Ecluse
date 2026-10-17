@@ -30,7 +30,6 @@ module Ecluse.Core.Server.Pipeline.Internal (
 
     -- * Denial audit trail (structured log)
     VersionVerdict (..),
-    Metadata (..),
     DenialAudit (..),
     denialAuditPayload,
     logDenials,
@@ -58,10 +57,11 @@ import Ecluse.Core.Package.Integrity (
  )
 import Ecluse.Core.Rules (PreparedRule, prepResilience)
 import Ecluse.Core.Rules.Outage (AdmissionIdentity (AdmissionIdentity), logSkippedCheckEvidence)
-import Ecluse.Core.Rules.Render (cveIdsInReason)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
+    Reason,
     SkippedCheck (SkippedUnavailable),
+    reasonAdvisories,
  )
 import Ecluse.Core.Server.Response (
     PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
@@ -76,22 +76,17 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort, mpRuleDenial, mpRuleEffectfulFailure)
 import Ecluse.Core.Version (renderVersion)
 
-{- | The @module@ field every line in this family carries. It is held stable as this value
-rather than the source module path, so an operator's saved filter keeps matching.
--}
+-- | The @module@ field every line in this family carries, held stable so an operator's saved filter keeps matching.
 pipelineInternalModule :: Text
 pipelineInternalModule = "Ecluse.Server.Pipeline.Internal"
 
-{- | Keep each version's artifacts whose strongest digest meets the integrity floor, per artifact,
-so a version drops only when no file of it survives and the listing matches the download gate.
--}
+-- | Keep each version's files whose strongest digest meets the floor, so a version drops only when none survives, as at the download gate.
 admitByIntegrity ::
     (IntegrityFloor floor) =>
     floor ->
-    -- The refusal projected for a present-but-too-weak digest ('BelowFloor') …
+    -- The refusal for a version whose digest is too weak ('BelowFloor').
     ServeDecision ->
-    -- … and for a version carrying no digest at all ('NoIntegrity'). The public and
-    -- trusted gates pass their own context-worded decisions.
+    -- The refusal for a version with no digest ('NoIntegrity'). Each gate passes its own wording.
     ServeDecision ->
     PackageInfo ->
     (PackageInfo, [ServeDecision])
@@ -126,15 +121,11 @@ admitByIntegrity floorSpec belowFloorRefusal missingRefusal info =
         bucket (Left MeetsFloor) acc = acc
         bucket (Right _) acc = acc
 
-{- | Classify a no-survivors packument outcome into the bounded @ecluse.serve.decision@
-value: a forbidden set is a denial, any other non-served status a transient unavailability.
--}
+-- | The bounded @ecluse.serve.decision@ value of a no-survivors packument: forbidden is a denial, the rest unavailable.
 packumentServeDecision :: [ServeDecision] -> Metric.Decision
 packumentServeDecision = statusServeDecision . packumentStatus
 
-{- | 'packumentServeDecision' over an already-folded status, so the no-survivors path pays for
-one traversal of the decision list rather than two.
--}
+-- | 'packumentServeDecision' over a folded status, so the no-survivors path walks the decisions once.
 statusServeDecision :: PackumentStatus -> Metric.Decision
 statusServeDecision = \case
     PackumentOk -> Metric.Admit
@@ -154,34 +145,26 @@ serveDecisionClass = \case
         Unavailable{} -> Metric.Unavailable
         UpstreamInvalid -> Metric.Unavailable
 
-{- | Map a reject reason to the @ecluse.rule.denials@ labels: the deciding rule (only a
-policy denial names one) and the bounded reason class.
--}
+-- | The @ecluse.rule.denials@ labels: the deciding rule of a policy denial, and the bounded reason class.
 denialLabels :: RejectReason -> (Maybe Text, Metric.ReasonClass)
 denialLabels = \case
-    ByPolicy (RuleName name) -> (Just name, Metric.ReasonPolicy)
+    ByPolicy (RuleName name) _ -> (Just name, Metric.ReasonPolicy)
     MissingIntegrity -> (Nothing, Metric.ReasonMissingIntegrity)
     BelowIntegrityFloor -> (Nothing, Metric.ReasonMissingIntegrity)
     Unavailable _ -> (Nothing, Metric.ReasonUnavailable)
     UpstreamInvalid -> (Nothing, Metric.ReasonUnavailable)
 
-{- | The rule-evaluation tier a duration is attributed to: effectful when any prepared rule reads
-through a resilience policy.
--}
+-- | The rule-evaluation tier of a duration: effectful when any prepared rule reads through a resilience policy.
 evalTier :: [PreparedRule] -> Metric.Tier
 evalTier rules = if any (isJust . prepResilience) rules then Metric.Effectful else Metric.Structural
 
-{- | Map an undecidable verdict's transience to the bounded @ecluse.rule.effectful.failures@
-cause.
--}
+-- | Map an undecidable verdict's transience to the bounded @ecluse.rule.effectful.failures@ cause.
 transienceCause :: Transience -> Metric.Cause
 transienceCause = \case
     WillResolve _ -> Metric.Connection
     WontResolve -> Metric.OtherCause
 
-{- | Record the @ecluse.rule.denials@ counter for each rejected decision, labelled by the
-bounded reason class and, for a policy denial, the deciding rule.
--}
+-- | Count @ecluse.rule.denials@ once per rejected decision, labelled by 'denialLabels'.
 recordDenials :: MetricsPort -> [ServeDecision] -> IO ()
 recordDenials metrics = traverse_ recordOne
   where
@@ -192,9 +175,7 @@ recordDenials metrics = traverse_ recordOne
             let (rule, reasonClass) = denialLabels reason
              in mpRuleDenial metrics rule reasonClass
 
-{- | Count each 'Undecidable' among a packument's per-version decisions, the signal that an
-effectful rule could not consult its source.
--}
+-- | Count each 'Undecidable' decision, the signal that an effectful rule could not consult its source.
 recordEffectfulFailures :: MetricsPort -> [Decision] -> IO ()
 recordEffectfulFailures metrics = traverse_ recordOne
   where
@@ -205,37 +186,22 @@ recordEffectfulFailures metrics = traverse_ recordOne
         Blocked{} -> pass
         BlockedByDefault{} -> pass
 
-{- | A per-version serve outcome that keeps the version alongside its decision, so a denial's
-audit line can name the version it refused.
--}
+-- | A per-version serve outcome beside its version, so a denial's audit line can name the version it refused.
 data VersionVerdict = VersionVerdict
     { vvVersion :: Text
     , vvDecision :: ServeDecision
     }
     deriving stock (Eq, Show)
 
-{- | An extensible bag of audit fields folded into a denial line's JSON at emit time. It lives at
-the audit boundary, never on the pure 'Ecluse.Core.Rules.Types.Decision'.
--}
-newtype Metadata = Metadata (Map Text Text)
-    deriving stock (Eq, Show)
-
-instance Semigroup Metadata where
-    Metadata a <> Metadata b = Metadata (a <> b)
-
-instance Monoid Metadata where
-    mempty = Metadata Map.empty
-
-{- | Everything one denial audit line records. The advisory 'DbEtag' is the one active at emit,
-which a shadow swap during the request can make differ from the one the decision read.
--}
+-- | Everything one denial audit line records. A shadow swap can make the emit-time 'DbEtag' differ from the decision's.
 data DenialAudit = DenialAudit
     { daPackage :: PackageName
     , daVersion :: Text
     , daRule :: Maybe Text
     , daReasonClass :: Metric.ReasonClass
     , daAdvisoryEtag :: Maybe DbEtag
-    , daExtra :: Metadata
+    , daReasons :: [Reason]
+    -- ^ The reasons a policy denial gave. The @cve@ field joins the advisories still affecting the version.
     }
 
 -- | Render a 'DenialAudit' to the structured payload katip folds into the line's @data@ object.
@@ -244,9 +210,9 @@ denialAuditPayload da =
     versionAuditPayload (daPackage da) (daVersion da) (daAdvisoryEtag da)
         <> maybe mempty (sl "rule") (daRule da)
         <> sl "reason_class" (show (daReasonClass da) :: Text)
-        <> metadataPayload (daExtra da)
-  where
-    metadataPayload (Metadata m) = Map.foldrWithKey (\k v acc -> sl k v <> acc) mempty m
+        <> case ordNub (concatMap reasonAdvisories (daReasons da)) of
+            [] -> mempty
+            ids -> sl "cve" (T.intercalate ", " ids)
 
 -- The fields every per-version audit line carries, so the denial and the skipped-check lines
 -- are queried by the same names.
@@ -257,31 +223,27 @@ versionAuditPayload pkg version etag =
         <> sl "version" version
         <> maybe mempty (\(DbEtag e) -> sl "active_advisory_db_etag" e) etag
 
-{- | The advisory ids a denial named, recovered from its rendered message into a comma-joined
-@cve@ field. A non-CVE denial yields none, so the line carries no field.
--}
-cveMetadata :: Text -> Metadata
-cveMetadata message = case cveIdsInReason message of
-    [] -> mempty
-    ids -> Metadata (Map.singleton "cve" (T.intercalate ", " ids))
-
-{- | Emit one audit log line per denied version, __denials only__. 'recordDenials' counts the
-same denials as metrics.
--}
+-- | Emit one audit log line per denied version, __denials only__. 'recordDenials' counts the same denials.
 logDenials :: (KatipContext m) => PackageName -> Maybe DbEtag -> [VersionVerdict] -> m ()
 logDenials pkg etag = traverse_ logOne
   where
     logOne vv = case vvDecision vv of
         Admit -> pass
-        Reject (Rejection reason message) ->
+        Reject (Rejection reason _) ->
             let (rule, reasonClass) = denialLabels reason
-                audit = DenialAudit pkg (vvVersion vv) rule reasonClass etag (cveMetadata message)
+                audit = DenialAudit pkg (vvVersion vv) rule reasonClass etag (policyReasons reason)
              in katipAddContext (denialAuditPayload audit) $
                     logFM WarningS (ls ("denied" :: Text))
 
-{- | 'logSkippedChecks' once per admission identity (package, version, skipped rule set) for the
-life of the advisory source's outage, so a public serve that admits again repeats no line.
--}
+policyReasons :: RejectReason -> [Reason]
+policyReasons = \case
+    ByPolicy _ reasons -> reasons
+    Unavailable{} -> []
+    MissingIntegrity -> []
+    BelowIntegrityFloor -> []
+    UpstreamInvalid -> []
+
+-- | 'logSkippedChecks' once per package, version and skipped rule set for the outage, so a public serve that admits again repeats no line.
 logSkippedChecksOnce :: (KatipContext m) => (AdmissionIdentity -> IO Bool) -> PackageName -> Text -> Maybe DbEtag -> [SkippedCheck] -> m ()
 logSkippedChecksOnce note pkg version etag skipped =
     unless (Set.null rules) $ do
@@ -290,8 +252,6 @@ logSkippedChecksOnce note pkg version etag skipped =
   where
     rules = Set.fromList [rule | SkippedUnavailable rule _ <- skipped]
 
-{- | Emit one audit line per check the admission skipped for unavailability. An unreached check
-gets no line, and a trusted serve runs no rules, so it never reaches here.
--}
+-- | One audit line per check skipped for unavailability. An unreached check gets none. A trusted serve runs no rules, so it never reaches here.
 logSkippedChecks :: (KatipContext m) => PackageName -> Text -> Maybe DbEtag -> [SkippedCheck] -> m ()
 logSkippedChecks pkg version etag = logSkippedCheckEvidence (versionAuditPayload pkg version etag)

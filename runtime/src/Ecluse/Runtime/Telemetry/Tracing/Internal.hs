@@ -76,9 +76,7 @@ import Ecluse.Runtime.Telemetry (
     telemetryTracerProvider,
  )
 
-{- | Build the WAI server-span middleware, or 'id' when telemetry is disabled. It belongs
-__outermost__ in the stack, so the span covers the whole request (see "Ecluse.Runtime.Server").
--}
+-- | The WAI server-span middleware, or 'id' without telemetry. It belongs __outermost__, so the span covers the request.
 telemetryWaiMiddleware :: Telemetry -> IO Middleware
 telemetryWaiMiddleware telemetry =
     case (telemetryTracerProvider telemetry, telemetryMeterProvider telemetry) of
@@ -87,24 +85,18 @@ telemetryWaiMiddleware telemetry =
             newOpenTelemetryWaiMiddleware' tracerProvider meter
         _ -> pure id
 
-{- | Instrument a data-plane 'ManagerSettings' so upstream fetches open a client span and carry
-W3C trace-context headers. Return the settings untouched when telemetry is disabled.
--}
+-- | Make upstream fetches open a client span and carry W3C trace-context headers, when telemetry is enabled.
 instrumentDataPlaneManagerSettings :: Telemetry -> ManagerSettings -> IO ManagerSettings
 instrumentDataPlaneManagerSettings telemetry settings =
     case telemetryTracerProvider telemetry of
         Nothing -> pure settings
         Just _ -> instrumentManagerSettings dataPlaneInstrumentationConfig settings
 
-{- | The http-client instrumentation configuration for the data plane. It records __no__ request
-or response headers, so an @Authorization@ header never reaches a span.
--}
+-- | The data plane's http-client instrumentation. It records __no__ headers, so an @Authorization@ header never reaches a span.
 dataPlaneInstrumentationConfig :: HttpClientInstrumentationConfig
 dataPlaneInstrumentationConfig = httpClientInstrumentationConfig
 
-{- | Run a rule-evaluation domain span around an action that yields its result and the verdict to
-record ('ruleVerdictFields').
--}
+-- | Run a rule-evaluation span around an action that yields its result and the verdict to record ('ruleVerdictFields').
 withRuleEvalSpan ::
     (MonadUnliftIO m) =>
     Telemetry ->
@@ -119,9 +111,7 @@ withRuleEvalSpan telemetry name version action =
         recordFields mSpan (ruleVerdictFields verdict)
         pure result
 
-{- | Run a mirror-enqueue 'Producer' span, handing the body this span's trace context to stamp onto
-the job. It records the artifact authority alone: a URL can carry a credential in userinfo or query.
--}
+-- | Run a mirror-enqueue 'Producer' span that hands the body its trace context. It records only the artifact authority, as a URL can carry a credential.
 withMirrorEnqueueSpan ::
     (MonadUnliftIO m) =>
     Telemetry ->
@@ -139,9 +129,7 @@ withMirrorEnqueueSpan telemetry name version artifactUrl project body =
         whenJust mSpan $ \theSpan -> whenJust (project result) (setStatus theSpan . Error)
         pure result
 
-{- | Run a mirror-worker-job 'Consumer' span around the worker's fetch, verify, and publish,
-linking back to the enqueueing producer span through the carried trace context.
--}
+-- | Run a mirror-job 'Consumer' span around the worker's fetch, verify and publish, linked to the enqueueing span.
 withMirrorJobSpan ::
     (MonadUnliftIO m) =>
     Telemetry ->
@@ -160,9 +148,7 @@ withMirrorJobSpan telemetry name version remoteContext project action =
         whenJust mSpan $ \theSpan -> whenJust mDetail (setStatus theSpan . Error)
         pure result
 
-{- | Run an advisory-sync 'Internal' span around one sync attempt. The ecosystem and the result are
-the vocabulary the @ecluse.advisory.sync.*@ metrics label with, so a trace and a series join on one.
--}
+-- | Run an advisory-sync 'Internal' span around one attempt, with the labels the @ecluse.advisory.sync.*@ metrics use, so the two join.
 withAdvisorySyncSpan ::
     (MonadUnliftIO m) =>
     Telemetry ->
@@ -206,18 +192,14 @@ workerTracingPortOf telemetry =
         { wtpMirrorJobSpan = withMirrorJobSpan telemetry
         }
 
-{- | Project 'withAdvisorySyncSpan' onto the core 'AdvisorySyncTracingPort' that
-"Ecluse.Runtime.Cve.Sync" brackets through. Inert when telemetry is disabled.
--}
+-- | Project 'withAdvisorySyncSpan' onto the 'AdvisorySyncTracingPort' "Ecluse.Runtime.Cve.Sync" brackets through. Inert when telemetry is disabled.
 advisorySyncTracingPortOf :: Telemetry -> AdvisorySyncTracingPort
 advisorySyncTracingPortOf telemetry =
     AdvisorySyncTracingPort
         { astpSyncAttemptSpan = withAdvisorySyncSpan telemetry
         }
 
-{- | Map a serve verdict to the rule-evaluation span's attribute fields. None can carry a secret:
-the rule name and reason class are a closed vocabulary, and the message is the rendered decision.
--}
+-- | A serve verdict's span fields. None carries a secret: the rule and class are closed sets, and the message is the rendered decision.
 ruleVerdictFields :: ServeDecision -> [(Text, Text)]
 ruleVerdictFields = \case
     Admit -> [("ecluse.rule.decision", "admit")]
@@ -230,7 +212,7 @@ ruleVerdictFields = \case
 
 reasonClass :: RejectReason -> Text
 reasonClass = \case
-    ByPolicy _ -> "by_policy"
+    ByPolicy{} -> "by_policy"
     Unavailable _ -> "unavailable"
     MissingIntegrity -> "missing_integrity"
     BelowIntegrityFloor -> "below_integrity_floor"
@@ -239,7 +221,7 @@ reasonClass = \case
 -- Only a policy denial has a rule to attribute, so no other refusal carries the field.
 ruleNameField :: RejectReason -> [(Text, Text)]
 ruleNameField = \case
-    ByPolicy (RuleName ruleName) -> [("ecluse.rule.name", ruleName)]
+    ByPolicy (RuleName ruleName) _ -> [("ecluse.rule.name", ruleName)]
     Unavailable _ -> []
     MissingIntegrity -> []
     BelowIntegrityFloor -> []

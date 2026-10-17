@@ -55,6 +55,7 @@ module Ecluse.Core.Rules.Types (
 
     -- * Why a rule reached its result
     Reason (..),
+    reasonAdvisories,
     AdvisoryIds,
     mkAdvisoryIds,
     unAdvisoryIds,
@@ -440,9 +441,7 @@ data RuleVerdict
       CannotVet FailureAlignment Inability
     deriving stock (Eq, Show)
 
-{- | One rule's evaluation. The harness alone creates 'Unavailable', from faults. Decisive verdicts
-and fail-closed faults decide the version, and other outcomes join the audit trail.
--}
+-- | One rule's evaluation. Only the harness creates 'Unavailable', from faults. Decisive outcomes decide the version, and the rest join the audit trail.
 data RuleEvaluation
     = -- | The rule returned a verdict, and the harness takes it at face value.
       Decided RuleVerdict
@@ -543,6 +542,40 @@ data Reason
     | -- | The named rule could not vet the version. The engine's fold builds this, never a rule.
       RuleUnable Text Inability
     deriving stock (Eq, Show)
+
+-- | The advisories still affecting the version, never one it fixes. Every constructor is matched, so a new reason cannot drop out.
+reasonAdvisories :: Reason -> [Text]
+reasonAdvisories = \case
+    Remediates _ -> []
+    RemediatesWithinLimits compared -> remaining compared
+    FixesButStillAffected _ open -> named open
+    RemediationBeyondLimits compared _ -> remaining compared
+    FixStillApplies ids -> named ids
+    AffectedBy _ _ ids -> named ids
+    KnownMalicious ids -> named ids
+    ScopeAllowListed{} -> []
+    ScopeNotAllowListed{} -> []
+    PublishedLongEnough{} -> []
+    PublishedTooRecently{} -> []
+    PublishTimeUnknown -> []
+    RunsOnInstall{} -> []
+    NothingRunsOnInstall -> []
+    InstallCodeUndetermined -> []
+    VersionYanked -> []
+    VersionNotYanked -> []
+    VersionDeprecated -> []
+    VersionNotDeprecated -> []
+    IdentityRevoked{} -> []
+    IdentityNotRevoked{} -> []
+    IdentityAllowListed{} -> []
+    IdentityNotAllowListed{} -> []
+    FixesNoAdvisory -> []
+    NoKnownMaliciousAdvisory -> []
+    NotAffectedAtThreshold{} -> []
+    RuleUnable{} -> []
+  where
+    named = toList . unAdvisoryIds
+    remaining = named . scRemaining
 
 -- | The advisories a reason names, at least one. 'mkAdvisoryIds' evaluates every identifier, so no matching is deferred.
 newtype AdvisoryIds = AdvisoryIds (NonEmpty Text)
