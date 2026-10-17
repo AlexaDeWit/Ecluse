@@ -5,6 +5,8 @@
 -- | An in-process S3 endpoint, for wire tests of the S3 adapters.
 module Ecluse.Runtime.Test.S3 (
     withS3,
+    withTlsS3,
+    recordingStatuses,
     reply,
     listingReply,
     xmlError,
@@ -15,15 +17,35 @@ module Ecluse.Runtime.Test.S3 (
 ) where
 
 import Amazonka qualified as AWS
-import Network.HTTP.Types (ResponseHeaders, Status, status200, status403, status500)
+import Amazonka.Env.Hooks qualified as Hooks
+import Network.HTTP.Client qualified as HTTP
+import Network.HTTP.Types (ResponseHeaders, Status, status200, status403, status500, statusCode)
 import Network.Wai (Application, queryString, requestMethod, responseLBS, responseRaw)
 import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.Runtime.Test.Aws (loopbackAwsEnv)
+import Ecluse.Test.Stub.Socket (trustingTlsManager)
 
 -- | Serve the application and hand the test a single-attempt env that signs against it.
 withS3 :: Application -> (AWS.Env -> IO ()) -> IO ()
 withS3 application action = testWithApplication (pure application) (loopbackAwsEnv >=> action)
+
+-- | 'withS3' over TLS: an env that signs against the listener @listen@ starts, trusting its certificate.
+withTlsS3 :: ((Int -> IO a) -> IO a) -> (AWS.Env -> IO a) -> IO a
+withTlsS3 listen action = listen $ \port -> do
+    manager <- trustingTlsManager
+    env <- AWS.overrideService (\service -> AWS.setEndpoint True "127.0.0.1" port service{AWS.s3AddressingStyle = AWS.S3AddressingStylePath}) <$> loopbackAwsEnv port
+    action env{AWS.manager = manager}
+
+-- | The env, with a reader of each response status in arrival order, so a case can show a failure came after the headers.
+recordingStatuses :: AWS.Env -> IO (AWS.Env, IO [Int])
+recordingStatuses env = do
+    seen <- newIORef []
+    let hooks =
+            Hooks.clientResponseHook
+                (\previous current exchange@(_, response) -> modifyIORef' seen (<> [statusCode (HTTP.responseStatus response)]) >> previous current exchange)
+                (AWS.hooks env)
+    pure (env{AWS.hooks = hooks}, readIORef seen)
 
 -- | Answer every request alike.
 reply :: Status -> ResponseHeaders -> LByteString -> Application

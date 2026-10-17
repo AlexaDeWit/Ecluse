@@ -12,21 +12,26 @@ import Network.Connection (HostNotResolved (HostNotResolved))
 import Network.HTTP.Client (
     HttpException (HttpExceptionRequest, InvalidUrlException),
     HttpExceptionContent (ConnectionClosed, ConnectionFailure, ConnectionTimeout, InternalException, NoResponseDataReceived, ResponseTimeout),
+    ManagerSettings (managerModifyResponse),
     Request (secure),
+    brConsume,
+    brRead,
+    defaultManagerSettings,
     defaultRequest,
     newManager,
     parseRequest,
+    responseBody,
+    responseStatus,
+    withResponse,
  )
 import Network.HTTP.Client.TLS (tlsManagerSettings)
-import Network.HTTP.Types.Status (status404, status503)
-import Network.Socket (ShutdownCmd (ShutdownSend), Socket, SocketOption (Linger), StructLinger (StructLinger), accept, close, setSockOpt, shutdown)
+import Network.HTTP.Types.Status (status200, status404, status503)
+import Network.Socket (ShutdownCmd (ShutdownSend), Socket, shutdown)
 import Network.Socket.ByteString (recv, sendAll)
 import Network.TLS qualified as TLS
-import Network.Wai.Handler.Warp (openFreePort)
 import System.IO.Error (IOError)
 import Test.Hspec
-import UnliftIO.Async (withAsync)
-import UnliftIO.Exception (bracket, finally, throwIO, tryAny)
+import UnliftIO.Exception (throwIO, try, tryAny)
 
 import Ecluse.Core.Fault (
     HttpFault (HttpStatus),
@@ -35,11 +40,12 @@ import Ecluse.Core.Fault (
     renderTransportCause,
     transportRetryable,
  )
-import Ecluse.Core.Fault.Http (classifyTransport, displayFaultT, httpFault)
+import Ecluse.Core.Fault.Http (classifyTransport, displayFaultT, httpFault, typedBodyReads, typedTlsManagerSettings)
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Test.Env (withEnvVars)
 import Ecluse.Test.Fault (httpTransportCause)
-import Ecluse.Test.Stub (closedAuthority, failedFetch, redirectSecrets, redirectedStatusException, refusedFetch, requestSecrets, signedRequest)
+import Ecluse.Test.Stub (closedAuthority, failedFetch, redirectSecrets, redirectedStatusException, refusedFetch, requestSecrets, signedRequest, stubBaseUrl, withStub)
+import Ecluse.Test.Stub.Socket (resetAfterPartialBodyOverTcp, resetOnClose, withRawServer)
 
 -- | A typed fault outside the HTTP client.
 data OtherFault = OtherFault
@@ -139,6 +145,7 @@ spec = do
                 tfDetail fault `shouldSatisfy` T.isPrefixOf ("127.0.0.1:" <> show port <> ": InternalException: HandshakeFailed (Error_Misc ")
 
     transportFaultSpec
+    bodyReadSpec
 
 -- | 'classifyTransport' folds each @http-client@ exception shape onto the bounded 'TransportCause'.
 transportFaultSpec :: Spec
@@ -184,6 +191,35 @@ transportFaultSpec = describe "transport faults as values" $ do
   where
     causeOf = tfCause . classifyTransport
 
+-- | 'typedBodyReads' raises a socket or TLS failure in a body read as the client's own exception, which 'classifyTransport' types.
+bodyReadSpec :: Spec
+bodyReadSpec = describe "typedBodyReads" $ do
+    it "types a plain-HTTP reset after the status arrived as unreachable, under the settings every manager starts from" $
+        withRawServer resetAfterPartialBodyOverTcp $ \port -> do
+            manager <- newManager typedTlsManagerSettings
+            request <- parseRequest ("http://127.0.0.1:" <> show port <> "/feed")
+            status <- newIORef Nothing
+            outcome <- try (withResponse request manager (\response -> writeIORef status (Just (responseStatus response)) >> brConsume (responseBody response)))
+            readIORef status `shouldReturn` Just status200
+            either (Just . tfCause . classifyTransport) (const Nothing) outcome `shouldBe` Just TransportUnreachable
+
+    it "types a socket timeout in a body read as a timeout, and a TLS alert as TLS" $ do
+        causes <- traverse (fmap typedCause . typedReadOf) [toException (socketError eTIMEDOUT), fatalAlert]
+        causes `shouldBe` [Just TransportTimeout, Just TransportTls]
+
+    it "leaves any other exception from a body read as it is" $
+        typedReadOf (toException OtherFault) >>= (`shouldSatisfy` isJust . fromException @OtherFault)
+  where
+    typedCause = fmap (tfCause . classifyTransport) . fromException
+    fatalAlert = toException (TLS.Terminated True "received fatal error: BadRecordMac" (TLS.Error_Protocol "remote side fatal error" TLS.BadRecordMac))
+
+-- What a body read raises through 'typedBodyReads' when the read itself raises this exception.
+typedReadOf :: SomeException -> IO SomeException
+typedReadOf err = withStub status200 "body" $ \stub -> do
+    manager <- newManager (typedBodyReads defaultManagerSettings{managerModifyResponse = pure . (throwIO err <$)})
+    request <- parseRequest (toString (stubBaseUrl stub))
+    tryAny (withResponse request manager (brRead . responseBody)) >>= either pure (const (fail "the body read succeeded"))
+
 -- The fault an HTTPS fetch of a local port raises through the TLS manager.
 httpsFetchFault :: Int -> IO TransportFault
 httpsFetchFault port = classifyTransport <$> (failedFetch tlsManagerSettings =<< parseRequest ("https://127.0.0.1:" <> show port <> "/feed"))
@@ -196,12 +232,6 @@ socketError errno = errnoToIOError "Network.Socket.recvBuf" errno Nothing Nothin
 handshakeSocketError :: Errno -> SomeException
 handshakeSocketError errno = toException (TLS.HandshakeFailed (TLS.Error_Misc (show (socketError errno))))
 
--- Run the handler on every connection the listener accepts, then close the connection.
-withRawServer :: (Socket -> IO ()) -> (Int -> IO a) -> IO a
-withRawServer handler action = bracket openFreePort (close . snd) $ \(port, listener) ->
-    withAsync (forever (accept listener >>= \(conn, _) -> handler conn `finally` close conn)) $ \_ ->
-        action port
-
 answerNonTls :: Socket -> IO ()
 answerNonTls conn = sendAll conn "HTTP/1.1 400 not TLS\r\n\r\n" >> drain conn
 
@@ -209,9 +239,9 @@ answerNonTls conn = sendAll conn "HTTP/1.1 400 not TLS\r\n\r\n" >> drain conn
 hangUp :: Socket -> IO ()
 hangUp conn = recv conn 4096 >> shutdown conn ShutdownSend >> drain conn
 
--- Await the ClientHello, so the reset lands in the handshake and not in connect, then close with a zero linger time, which sends RST.
+-- Await the ClientHello, so the reset lands in the handshake and not in connect.
 resetConnection :: Socket -> IO ()
-resetConnection conn = recv conn 4096 >> setSockOpt conn Linger (StructLinger 1 0)
+resetConnection conn = recv conn 4096 >> resetOnClose conn
 
 drain :: Socket -> IO ()
 drain conn = recv conn 4096 >>= \chunk -> unless (BS.null chunk) (drain conn)
