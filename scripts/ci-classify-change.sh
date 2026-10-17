@@ -26,8 +26,9 @@ tool_scripts=(
   process-status prune-caches reap-hls-caches rm-worktree sarif-locations source-inventory
   test-containers verify-release
 )
+tool_path="$(printf '%s|' "${tool_scripts[@]}")"
 source_path="$source_path"'|^taskfiles/|^scripts/[a-z0-9-]+\.test\.sh$'
-source_path="$source_path|^scripts/($(IFS='|' && echo "${tool_scripts[*]}"))\\.sh\$"
+source_path="$source_path|^scripts/(${tool_path%|})\\.sh\$"
 
 # Paths inside source_path that still run the dry-run: test/oracles/ feeds the `.#ci`
 # shell the release build enters.
