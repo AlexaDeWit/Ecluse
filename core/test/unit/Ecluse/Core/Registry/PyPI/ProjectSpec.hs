@@ -2,9 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | PyPI coordinate compatibility, projection,
-and allocation growth regressions.
--}
+-- | PyPI coordinate compatibility, projection, and allocation growth regressions.
 module Ecluse.Core.Registry.PyPI.ProjectSpec (spec) where
 
 import Data.Aeson (Value (Array, Null, String), object, toJSON, (.=))
@@ -45,6 +43,7 @@ import Ecluse.Core.Registry.PyPI.Project (
     DistributionKind (Sdist, Wheel),
     FileCoordinate (..),
     FilenameMemo,
+    builtFileCoordinate,
     fcVersionKey,
     fileCoordinate,
     filenameMemo,
@@ -74,6 +73,7 @@ spec = do
     projectNameSpec
     canonicalNameSpec
     coordinateSpec
+    builtCoordinateSpec
     wheelComponentSpec
     memoSpec
     captureSpec
@@ -177,6 +177,36 @@ coordinateSpec = describe "fileCoordinate" $ do
 
     it "refuses a wheel with too few tag parts to be one" $
         fileCoordinate requestsName "requests-2.34.2-py3.whl" `shouldBe` Nothing
+
+builtCoordinateSpec :: Spec
+builtCoordinateSpec = describe "builtFileCoordinate" $ do
+    it "refuses a version not led by a digit, which a build tool never writes" $
+        for_ ["requests-v2.34.2.tar.gz", "requests-v2.34.2-py3-none-any.whl", "requests- 2.34.2.tar.gz"] $ \file -> do
+            fileCoordinate requestsName file `shouldSatisfy` isJust
+            builtFileCoordinate requestsName file `shouldBe` Nothing
+
+    it "refuses a version holding a hyphen, which a store reads as part of the project" $ do
+        fileCoordinate requestsName "requests-2.34.2-1.tar.gz" `shouldSatisfy` isJust
+        builtFileCoordinate requestsName "requests-2.34.2-1.tar.gz" `shouldBe` Nothing
+
+    it "refuses an sdist PEP 625 does not name: another project spelling or archive format" $
+        for_ ["azure-storage-blob-12.14.0.tar.gz", "Azure_Storage_Blob-12.14.0.tar.gz", "azure.storage.blob-12.14.0.tar.gz", "_azure_storage_blob-12.14.0.tar.gz", "azure_storage_blob-12.14.0.zip", "azure_storage_blob-12.14.0.tgz", "azure_storage_blob-12.14.0.tar.bz2", "azure_storage_blob-12.14.0.tar.xz"] $ \file -> do
+            fileCoordinate azureStorageBlob file `shouldSatisfy` isJust
+            builtFileCoordinate azureStorageBlob file `shouldBe` Nothing
+
+    it "agrees with fileCoordinate on every other file name" $ do
+        for_ ["requests-2.34.2-py3-none-any.whl", "requests-2.34.2-1-py3-none-any.whl", "requests-2.34.2.tar.gz", "requests-1!2.0+local.1.tar.gz", "urllib3-2.0.0.tar.gz", "requests-2.34.2.egg"] $ \file ->
+            builtFileCoordinate requestsName file `shouldBe` fileCoordinate requestsName file
+        for_ ["azure_storage_blob-12.14.0.tar.gz", "Azure.Storage_Blob-12.14.0-py3-none-any.whl"] $ \file ->
+            builtFileCoordinate azureStorageBlob file `shouldBe` fileCoordinate azureStorageBlob file
+
+    describe "properties" $
+        it "accepts only what fileCoordinate accepts, with the same coordinate" $
+            hedgehog $ do
+                file <- forAll genFilename
+                case builtFileCoordinate azureStorageBlob file of
+                    Nothing -> pass
+                    built -> built === fileCoordinate azureStorageBlob file
 
 wheelComponentSpec :: Spec
 wheelComponentSpec = describe "filename components against base 3384fa96" $ do

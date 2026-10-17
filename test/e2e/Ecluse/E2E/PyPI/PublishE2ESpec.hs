@@ -37,8 +37,24 @@ nativePublicationContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \r
                     publicationConfig
                     ( \proxy -> do
                         distribution <- requiredDistribution "e2e-published" distributions
-                        sendUpload proxy distribution [("name", "unowned-project")] `shouldReturn` 403
+                        unowned <- requiredDistribution "e2e-unowned" distributions
+                        sendUpload proxy unowned [] `shouldReturn` 403
+                        sendUpload proxy unowned [("name", "e2e-published")] `shouldReturn` 400
                         sendUpload proxy distribution [("name", "e2e-published"), ("name", "e2e-published-other")] `shouldReturn` 400
+                        targetFiles target `shouldReturn` Map.empty
+                        readTVarIO (ntRequests target) `shouldReturn` 0
+                    )
+                    plane
+        it (caseLabel "pypi/publish-native/hidden-parts" "refuses a content part hidden after a bare LF, a bare CR or a padded delimiter before contacting the target") $ \plane ->
+            withPublicationFixture plane $ \target distributions ->
+                withE2EWith
+                    publicationConfig
+                    ( \proxy -> do
+                        carrier <- requiredDistribution "e2e-published" distributions
+                        hidden <- requiredDistribution "e2e-unowned" distributions
+                        for_ [("\n", ""), ("\r", ""), ("\r\n", "  ")] $ \(lineEnd, padding) -> do
+                            result <- postUpload proxy ("hidden " <> distributionFilename hidden) (hiddenPartUploadBody carrier hidden lineEnd padding)
+                            crStdout result `shouldBe` "400"
                         targetFiles target `shouldReturn` Map.empty
                         readTVarIO (ntRequests target) `shouldReturn` 0
                     )
@@ -131,7 +147,7 @@ publicationConfig =
 
 withPublicationFixture :: GlobalDataPlane -> (NativeTarget -> [Distribution] -> IO a) -> IO a
 withPublicationFixture plane action = do
-    distributions <- buildNativeProjects (gdpWorkDir plane </> "pypi") ["e2e-published", "e2e-unowned", retainedProject]
+    distributions <- filter builtByCurrentTool <$> buildNativeProjects (gdpWorkDir plane </> "pypi") ["e2e-published", "e2e-unowned", retainedProject]
     withNativeTarget PreserveUploadFields distributions $ \target ->
         withStubFault plane (PyPIMirrorBackend (ntPort target) False) (action target distributions)
 

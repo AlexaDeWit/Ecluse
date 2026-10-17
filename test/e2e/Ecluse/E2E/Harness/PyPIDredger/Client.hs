@@ -80,7 +80,7 @@ fetchStorePath store path = do
 
 publish :: PyPISweepStore -> Text -> Text -> IO ClientResult
 publish store name version = do
-    distributions <- case filter (\d -> distributionProject d == name && distributionVersion d == version) (pspDistributions (pssPlane store)) of
+    distributions <- case filter (\d -> distributionProject d == name && distributionVersion d == version) (pssUploads store) of
         [] -> fail "the independent fixture corpus has no requested publication"
         values -> pure values
     results <- traverse (publishDistribution store) distributions

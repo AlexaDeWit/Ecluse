@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Project decoded PyPI files into releases keyed by canonical PEP 440 versions.
-The same filename parser supplies coordinates for upstream projection and inbound routes.
+The same filename parser supplies coordinates for upstream projection and inbound routes. An upload's file name passes a stricter form of it.
 -}
 module Ecluse.Core.Registry.PyPI.Project (
     -- * Projection
@@ -17,6 +17,7 @@ module Ecluse.Core.Registry.PyPI.Project (
     fcVersionKey,
     DistributionKind (..),
     fileCoordinate,
+    builtFileCoordinate,
     FilenameMemo,
     filenameMemo,
     readCoordinate,
@@ -31,7 +32,7 @@ module Ecluse.Core.Registry.PyPI.Project (
 ) where
 
 import Data.Aeson (toJSON)
-import Data.Char (isAlphaNum, isAscii)
+import Data.Char (isAlphaNum, isAscii, isDigit)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -116,9 +117,7 @@ projectedEntryKey = \case
     ReleaseFile file -> artEntryKey (frArtifact file)
     UncoordinatedFile key _ -> key
 
-{- | Group files supplied in reverse source order, retaining original artifact and diagnostic order.
-Decode errors precede filename errors.
--}
+-- | Group files supplied in reverse source order, keeping artifact and diagnostic order. Decode errors come first.
 projectSimpleIndex :: PackageName -> [InvalidEntry] -> [ProjectedFile] -> PackageInfo
 projectSimpleIndex name invalid files =
     PackageInfo
@@ -217,9 +216,19 @@ indexHash (algorithm, digest) = do
 
 -- | Read a filename's coordinate, rejecting another project, an unknown archive, or invalid PEP 440.
 fileCoordinate :: PackageName -> Text -> Maybe FileCoordinate
-fileCoordinate name file = do
-    (version, kind) <- filenameParts (fileProject name) file
-    (`FileCoordinate` kind) <$> canonicalPep440 version
+fileCoordinate name = partsCoordinate <=< filenameParts (fileProject name)
+
+-- | Read as 'fileCoordinate' does, refusing a name no current build tool writes: a non-PEP 625 sdist, or a version not led by a digit or holding @-@.
+builtFileCoordinate :: PackageName -> Text -> Maybe FileCoordinate
+builtFileCoordinate name file = do
+    parts@(version, _) <- wheelParts project file <|> pep625SdistParts project file
+    guard (maybe False (isDigit . fst) (T.uncons version) && not (T.any (== '-') version))
+    partsCoordinate parts
+  where
+    project = fileProject name
+
+partsCoordinate :: (Text, DistributionKind) -> Maybe FileCoordinate
+partsCoordinate (version, kind) = (`FileCoordinate` kind) <$> canonicalPep440 version
 
 -- A project's PEP 503 key, prepared once for reading many of its filenames.
 data FileProject = FileProject
@@ -307,6 +316,13 @@ sdistParts project file = do
 
 sdistSuffixes :: [Text]
 sdistSuffixes = [".tar.gz", ".tgz", ".zip", ".tar.bz2", ".tar.xz"]
+
+-- PEP 625 spells the project as its canonical name with `_` for `-`, so the project part holds no `-`.
+pep625SdistParts :: FileProject -> Text -> Maybe (Text, DistributionKind)
+pep625SdistParts project file = do
+    stem <- T.stripSuffix ".tar.gz" file
+    version <- T.stripPrefix (T.replace "-" "_" (fpCanonical project) <> "-") stem
+    pure (version, Sdist)
 
 -- Compare disjoint chunks so unauthenticated filenames cannot trigger repeated prefix work.
 afterProjectName :: FileProject -> Text -> Maybe Text
