@@ -20,6 +20,7 @@ import Test.Tasty.HUnit (assertBool, assertFailure, (@?=))
 
 import Ecluse.Bench.Corpus (LoadedEntry (..), entryName)
 import Ecluse.Core.Ecosystem (ecosystemName)
+import Ecluse.Core.Fault.Http (typedBodyReads)
 import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
@@ -42,7 +43,7 @@ withBenchmarks :: [EcosystemBench] -> ([Benchmark] -> IO a) -> IO a
 withBenchmarks ecosystems action = do
     responses <- fmap Map.fromList (traverse replayResponse [(ecosystem, entry) | ecosystem <- ecosystems, entry <- ebCorpus ecosystem])
     testWithApplication (pure (replayApplication responses)) $ \port -> do
-        manager <- HTTP.newManager (HTTP.managerSetProxy HTTP.noProxy HTTP.defaultManagerSettings{HTTP.managerModifyRequest = pure . redirect port})
+        manager <- HTTP.newManager (typedBodyReads (HTTP.managerSetProxy HTTP.noProxy HTTP.defaultManagerSettings{HTTP.managerModifyRequest = pure . redirect port}))
         groups <- traverse (ecosystemGroup manager) ecosystems
         action groups
   where

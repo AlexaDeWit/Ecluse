@@ -21,6 +21,7 @@ module Ecluse.Pilot (
 import Conduit (MonadResource, runResourceT)
 import Control.Monad.Catch (MonadMask)
 import Katip (KatipContext, LogEnv, Severity (InfoS, WarningS), logFM, ls)
+import Network.HTTP.Client (Manager)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Async (mapConcurrently_)
 import UnliftIO.Concurrent (threadDelay)
@@ -37,7 +38,7 @@ import Ecluse.Config (
  )
 import Ecluse.Config.AdvisoryStore (advisoryStoreCapability)
 import Ecluse.Core.Ecosystem (ecosystemName, parseEcosystem)
-import Ecluse.Core.Osv.Compile (OsvCandidate, candidateDestination, promoteCandidate, withOsvCandidate)
+import Ecluse.Core.Osv.Compile (OsvCandidate, candidateDestination, newFeedManager, promoteCandidate, withOsvCandidate)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor, osvEcosystemNamed)
 import Ecluse.Core.Osv.Publication (Rebaseline)
 import Ecluse.Core.Supervision (
@@ -92,8 +93,9 @@ runExportLoop telemetry s3Endpoint config = \case
         -- One instrument set for the whole loop. Rebuilding it per cycle would register
         -- the catalogue again and split each signal across two streams.
         metrics <- liftIO (newMetrics telemetry)
+        feeds <- liftIO newFeedManager
         superviseExportCycles schedule targets $ \target -> do
-            runResourceT (exportEcosystem metrics target telemetry s3Endpoint advisories store)
+            runResourceT (exportEcosystem metrics feeds target telemetry s3Endpoint advisories store)
             threadDelay cadence
   where
     advisories = cfgAdvisories (configApp config)
@@ -109,12 +111,13 @@ superviseExportCycles schedule targets runCycle =
     policyFor target = transientPolicy ("pilot-export-" <> ecosystemName (etEcosystem target)) schedule
 
 -- One full cycle for one ecosystem: compile its OSV artifact, publish it, then keep it locally.
-exportEcosystem :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Metrics -> ExportTarget -> Telemetry -> Maybe AwsEndpoint -> AdvisoriesSettings -> AdvisoryStoreUrl -> m ()
-exportEcosystem metrics target telemetry s3Endpoint advisories store = do
+exportEcosystem :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Metrics -> Manager -> ExportTarget -> Telemetry -> Maybe AwsEndpoint -> AdvisoriesSettings -> AdvisoryStoreUrl -> m ()
+exportEcosystem metrics feeds target telemetry s3Endpoint advisories store = do
     logFM InfoS (ls ("Starting " <> ecosystemName eco <> " OSV database compilation"))
     withOsvCandidate
         (advisoryCompileMetricsPortOf metrics (Just eco))
         (telemetryTracerProvider telemetry)
+        feeds
         (advDataDir advisories)
         osvEco
         (etEpss target)
@@ -144,6 +147,7 @@ runUploadPlan telemetry s3Endpoint advisories plan candidate = case plan of
 runPilotCompile :: LogEnv -> Telemetry -> Maybe AwsEndpoint -> Config -> PilotCompileOptions -> IO FilePath
 runPilotCompile logEnv telemetry s3Endpoint config opts = do
     metrics <- newMetrics telemetry
+    feeds <- newFeedManager
     -- The metric label domain is the closed 'Ecosystem' enum. A one-shot compile of a name
     -- outside it still writes its artifact, and records no series.
     let compileMetrics = advisoryCompileMetricsPortOf metrics (parseEcosystem (pcoEcosystem opts))
@@ -156,6 +160,7 @@ runPilotCompile logEnv telemetry s3Endpoint config opts = do
             withOsvCandidate
                 compileMetrics
                 (telemetryTracerProvider telemetry)
+                feeds
                 (pcoOutDir opts)
                 osvEco
                 (compileEpssRequirement advisories (configMounts config) opts)

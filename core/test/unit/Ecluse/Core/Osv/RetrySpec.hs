@@ -110,6 +110,11 @@ spec = do
             map isRetryableHttpException faults
                 `shouldBe` map (transportRetryable . tfCause . classifyTransport) faults
 
+        it "retries a download cut short, which the shared transport table leaves permanent" $ do
+            let cut = [HttpExceptionRequest defaultRequest (ResponseBodyTooShort 20 5), HttpExceptionRequest defaultRequest IncompleteHeaders]
+            map isRetryableHttpException cut `shouldBe` [True, True]
+            map (transportRetryable . tfCause . classifyTransport) cut `shouldBe` [False, False]
+
         it "classifies a real 502 as retryable and a real 404 as permanent" $ do
             (_, e502) <- redirectedStatusException status502
             (_, e404) <- redirectedStatusException status404

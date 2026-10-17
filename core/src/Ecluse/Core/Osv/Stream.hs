@@ -38,7 +38,8 @@ import Data.Aeson (decodeStrict)
 import Data.ByteString qualified as BS
 import Data.Time (UTCTime)
 import Katip (KatipContext, Severity (..), logFM, ls)
-import Network.HTTP.Simple (getResponseBody, getResponseHeader, httpSource, parseRequest, setRequestCheckStatus)
+import Network.HTTP.Client (Manager)
+import Network.HTTP.Simple (getResponseBody, getResponseHeader, httpSource, parseRequest, setRequestCheckStatus, setRequestManager)
 import Network.HTTP.Types.Header (hLastModified)
 import OpenTelemetry.Trace.Core (SpanKind (Internal), TracerProvider, addAttribute)
 
@@ -153,8 +154,8 @@ newtype PilotIngestAborted = PilotIngestAborted IngestStats
 instance Exception PilotIngestAborted
 
 -- | Fetch the OSV zip and stream its contents, bounded by @ingest@. It returns the digest of the whole response body.
-streamOsvUrl :: (MonadResource m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> OsvIngest -> String -> ConduitT i ExtractedOsv m ContentDigest
-streamOsvUrl mTracerProvider ingest urlStr = do
+streamOsvUrl :: (MonadResource m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> Manager -> OsvIngest -> String -> ConduitT i ExtractedOsv m ContentDigest
+streamOsvUrl mTracerProvider manager ingest urlStr = do
     lift $ logFM InfoS (ls ("Initializing OSV stream from " <> dialledAuthorityLabel (toText urlStr)))
     bracketP
         (openOptionalSpan mTracerProvider Internal "ecluse.pilot.osv.stream")
@@ -162,7 +163,7 @@ streamOsvUrl mTracerProvider ingest urlStr = do
         ( \mSpan -> do
             forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.source_host" (dialledAuthorityLabel (toText urlStr))
             -- Reject non-2xx responses before unzip so the retry policy sees HTTP failures.
-            req <- liftIO $ setRequestCheckStatus <$> parseRequest urlStr
+            req <- liftIO $ setRequestManager manager . setRequestCheckStatus <$> parseRequest urlStr
             httpSource req $ \res -> do
                 recordResponseDate ingest (getResponseHeader hLastModified res)
                 fst <$> fuseBoth (getResponseBody res .| digestWhole) (parseOsvStream mTracerProvider ingest)

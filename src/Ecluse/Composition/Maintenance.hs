@@ -68,6 +68,7 @@ import Ecluse.Config.Target (resolvePrivateBackend)
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), CredentialProvider, Secret, bareCredential, mintSecret)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
+import Ecluse.Core.Fault.Http (typedBodyReads)
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
@@ -365,7 +366,7 @@ buildStoreMaintenance ports limits cleared = budgeted ports cleared <$> built
             ClearedCodeArtifact store -> newCodeArtifactMaintenance (maxVersionCount limits) (cbAlphabet cleared) readManifest store
             ClearedCodeArtifactCache store -> newCodeArtifactCacheMaintenance (maxVersionCount limits) (cbAlphabet cleared) readManifest store
             ClearedProtocol store -> do
-                deletionManager <- newPooledManager storeConnections (singleAttemptSettings tlsManagerSettings)
+                deletionManager <- newPooledManager storeConnections (singleAttemptSettings (typedBodyReads tlsManagerSettings))
                 pure (newProtocolMaintenance (protocolStore limits cleared store readManifest manager deletionManager))
 
 -- Resolve the capacity pool before metering requests against it.
@@ -454,7 +455,7 @@ storeOrigin limits cleared manager = originClient limits manager (cbUrl cleared)
 
 -- Disable hidden HTTP replay so every attempt consumes the store's request budget.
 storeManager :: IO Manager
-storeManager = newPooledManager storeConnections (singleAttemptSettings tlsManagerSettings)
+storeManager = newPooledManager storeConnections (singleAttemptSettings (typedBodyReads tlsManagerSettings))
 
 -- One store, swept package by package, so the pool holds what one in-flight request needs.
 storeConnections :: Int

@@ -5,7 +5,8 @@
 {- | Shared HTTP fault classification for registry, queue, and advisory adapters.
 Client exceptions become "Ecluse.Core.Fault" values at the adapter boundary. Neither a value nor
 its rendering carries the request or the response: a header, a query a redirect reached, or a
-cookie can carry a credential.
+cookie can carry a credential. Every manager the roles build applies 'typedBodyReads', so a failed
+body read raises a client exception too.
 -}
 module Ecluse.Core.Fault.Http (
     classifyTransport,
@@ -13,6 +14,9 @@ module Ecluse.Core.Fault.Http (
     isRetryableStatusCode,
     displayFaultT,
     hostPortLabel,
+
+    -- * Managers
+    typedBodyReads,
 ) where
 
 import Data.List (lookup)
@@ -20,14 +24,19 @@ import Data.Text qualified as T
 import GHC.IO.Exception (IOErrorType (ResourceVanished, TimeExpired))
 import Network.Connection (HostCannotConnect, HostNotResolved)
 import Network.HTTP.Client (
+    BodyReader,
     HttpException (HttpExceptionRequest, InvalidUrlException),
     HttpExceptionContent (..),
+    ManagerSettings (managerModifyResponse),
     Request (host, port),
+    Response,
+    getOriginalRequest,
     responseStatus,
  )
 import Network.HTTP.Types.Status (statusCode)
 import Network.TLS qualified as TLS
-import System.IO.Error (ioeGetErrorType)
+import System.IO.Error (IOError, ioeGetErrorType)
+import UnliftIO.Exception (catchJust, throwIO)
 
 import Ecluse.Core.Fault (
     HttpFault (HttpStatus, HttpTransport),
@@ -98,6 +107,21 @@ displayFaultT err = maybe (displayExceptionT err) renderDialled (fromException e
 -- | A dialled host and port as a log line names them, so an IPv6 host keeps its brackets.
 hostPortLabel :: Text -> Int -> Text
 hostPortLabel dialledHost dialledPort = dialledAuthorityLabel (dialledHost <> ":" <> show dialledPort)
+
+-- | Raise a socket or TLS failure in a response body read as the 'HttpException' the client raises for one before the body.
+typedBodyReads :: ManagerSettings -> ManagerSettings
+typedBodyReads settings = settings{managerModifyResponse = fmap typedReads . managerModifyResponse settings}
+
+-- http-client wraps an exception only until the response arrives, so a failure in the body reaches the reader bare.
+typedReads :: Response BodyReader -> Response BodyReader
+typedReads response = rewrap <$> response
+  where
+    rewrap bodyRead = catchJust bareFault bodyRead (throwIO . HttpExceptionRequest (getOriginalRequest response) . InternalException)
+
+bareFault :: SomeException -> Maybe SomeException
+bareFault err
+    | isJust (fromException @IOError err) || isJust (fromException @TLS.TLSException err) = Just err
+    | otherwise = Nothing
 
 -- A status carries the request a redirect reached, and a transport fault the request first sent.
 dialledAuthority :: HttpException -> Text

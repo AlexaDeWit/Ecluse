@@ -26,11 +26,13 @@ import Test.Hspec
 import UnliftIO (concurrently)
 import UnliftIO.Exception (tryAny, withException)
 
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable), TransportFault (tfCause))
 import Ecluse.Core.Security (Limits (progressFloor), ProgressFloor, defaultLimits, mkProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
 import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamBody (NoBody, StreamBody), UpstreamBodyFailed (UpstreamBodyFailed), pumpBody, withUpstreamWhen)
 import Ecluse.Test.Registry.JsonStream (sliceChunks)
 import Ecluse.Test.Stub (requestSecrets, signedRequest)
+import Ecluse.Test.Stub.Socket (resetAfterPartialBody, trustingTlsManager, withTlsServer)
 import Ecluse.Test.Wai (pacedBody)
 
 spec :: Spec
@@ -125,16 +127,24 @@ spec = do
             outcome `shouldSatisfy` isLeft
             (finished - started) `shouldSatisfy` (\seconds -> seconds >= 0.5 && seconds < 10)
 
-    describe "withUpstreamWhen, an upstream body that breaks after the commit" $
+    describe "withUpstreamWhen, an upstream body that breaks after the commit" $ do
         it "raises a typed fault that never carries the upstream request" $ do
             escaped <- newIORef Nothing
-            void (tryAny (throughProxy truncatedUpstream (recordingSignedRelay escaped)))
+            void (tryAny (throughProxy truncatedUpstream (recordingSignedRelay id escaped)))
             readIORef escaped >>= \case
                 Just err -> do
                     fromException err `shouldSatisfy` \case
                         Just (UpstreamBodyFailed _) -> True
                         Nothing -> False
                     for_ requestSecrets $ \secret -> toText (displayException err) `shouldSatisfy` (not . T.isInfixOf secret)
+                Nothing -> expectationFailure "no fault escaped the committed relay"
+
+        it "raises a typed unreachable fault when a TLS upstream resets mid-body" $ do
+            escaped <- newIORef Nothing
+            manager <- trustingTlsManager
+            void (tryAny (withTlsServer resetAfterPartialBody (askProxy manager . recordingSignedRelay overTls escaped manager)))
+            readIORef escaped >>= \case
+                Just err -> fmap (\(UpstreamBodyFailed fault) -> tfCause fault) (fromException err) `shouldBe` Just TransportUnreachable
                 Nothing -> expectationFailure "no fault escaped the committed relay"
 
     describe "withUpstreamWhen, a bodiless relay (HEAD, no pump)" $
@@ -167,15 +177,18 @@ relayProxy progress body accept method manager upPort _req respond = do
         Nothing -> respond (responseLBS status200 [] fellThroughMarker)
 
 -- A relay of a signed upstream URL that records whatever escapes it, so a case reads what a committed failure carries.
-recordingSignedRelay :: IORef (Maybe SomeException) -> ProxyApp
-recordingSignedRelay escaped manager upPort _req respond = do
-    upstream <- (\request -> request{HTTP.port = upPort}) <$> signedRequest
+recordingSignedRelay :: (HTTP.Request -> HTTP.Request) -> IORef (Maybe SomeException) -> ProxyApp
+recordingSignedRelay scheme escaped manager upPort _req respond = do
+    upstream <- (\request -> scheme request{HTTP.port = upPort}) <$> signedRequest
     outcome <-
         withUpstreamWhen manager (progressFloor defaultLimits) upstream StreamBody statusIsSuccessful relayVerbatim (waiRelayResponder respond)
             `withException` (writeIORef escaped . Just)
     case outcome of
         Just (_, received) -> pure received
         Nothing -> respond (responseLBS status200 [] fellThroughMarker)
+
+overTls :: HTTP.Request -> HTTP.Request
+overTls request = request{HTTP.secure = True}
 
 -- An upstream that promises twenty bytes, sends five, and closes, so the relay fails after it commits.
 truncatedUpstream :: Application

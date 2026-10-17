@@ -20,10 +20,13 @@ module Ecluse.Service (
 
     -- * npm front door
     mountBindingFor,
+
+    -- * Data-plane managers
+    dataPlaneManagerSettings,
 ) where
 
 import Katip (LogEnv, Namespace (Namespace), SimpleLogPayload, katipAddNamespace, runKatipContextT)
-import Network.HTTP.Client (Manager)
+import Network.HTTP.Client (Manager, ManagerSettings)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 
 import Ecluse.Boot (BootEnv (beLogEnv, beTelemetry), logBootWarning)
@@ -53,6 +56,7 @@ import Ecluse.Composition.Worker (workerPoliciesWithState)
 import Ecluse.Config (AppConfig)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured))
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
+import Ecluse.Core.Fault.Http (typedBodyReads)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Queue.Buffer (newEnqueueBuffer, reportWorthy)
 import Ecluse.Core.Registry.Adapter (
@@ -95,16 +99,12 @@ import Ecluse.Runtime.Telemetry.Reporters (
  )
 import Ecluse.Runtime.Telemetry.Tracing (instrumentDataPlaneManagerSettings)
 
-{- | Everything a role needs to start its own tasks, built once by 'withServiceRuntime'. The
-background tasks arrive already wrapped in their supervision policy.
--}
+-- | Everything a role needs to start its own tasks, built once by 'withServiceRuntime'. The background tasks arrive already wrapped in their supervision policy.
 data ServiceRuntime = ServiceRuntime
     { svcRole :: MirrorRole
     -- ^ The mirror-pipeline half this runtime serves, taken from the boot plan.
     , svcRunsWorker :: Bool
-    {- ^ Whether this process runs the mirror worker ('spawnsWorker'), the one fact both the spawn
-    decision and the @\/livez@ arm derive from.
-    -}
+    -- ^ Whether this process runs the mirror worker ('spawnsWorker'), the one fact both the spawn decision and the @\/livez@ arm derive from.
     , svcEnv :: Env
     , svcAppConfig :: AppConfig
     , svcBindings :: [MountBinding]
@@ -120,9 +120,7 @@ data ServiceRuntime = ServiceRuntime
     , svcCheckLive :: IO Liveness
     }
 
-{- | Assemble the role's runtime and run @action@ within it. The plan it takes is post-gating, so
-this only builds and allocates: nothing here can refuse the boot.
--}
+-- | Assemble the role's runtime and run @action@ within it. The plan it takes is post-gating, so this only builds and allocates: nothing here can refuse the boot.
 withServiceRuntime :: BootEnv -> ExecutablePlan -> MirrorWiring -> (ServiceRuntime -> IO ()) -> IO ()
 withServiceRuntime bootEnv plan mirror action = do
     let logEnv = beLogEnv bootEnv
@@ -208,15 +206,17 @@ memoryAdmission memoryPlan = do
 because public reads are anonymous and private reads forward the caller's credential. -}
 dataPlaneManagers :: Telemetry -> BootPlan -> IO (Manager, Manager)
 dataPlaneManagers telemetry bootPlan = do
-    publicSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
-    privateSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
+    publicSettings <- dataPlaneManagerSettings telemetry
+    privateSettings <- dataPlaneManagerSettings telemetry
     manager <- newPooledManager (bpPublicConnections bootPlan) publicSettings
     privateManager <- newPooledManager (bpPrivateConnections bootPlan) privateSettings
     pure (manager, privateManager)
 
-{- | The @\/livez@ arm a process answers from, given whether it runs the worker
-('spawnsWorker'): the consume-loop heartbeat where it does, the listener alone where it does not.
--}
+-- | The settings each data-plane manager pools from: 'typedBodyReads' over TLS, under the client span when telemetry is on.
+dataPlaneManagerSettings :: Telemetry -> IO ManagerSettings
+dataPlaneManagerSettings telemetry = instrumentDataPlaneManagerSettings telemetry (typedBodyReads tlsManagerSettings)
+
+-- | The @\/livez@ arm a process answers from, given whether it runs the worker ('spawnsWorker'): the consume-loop heartbeat where it does, the listener alone where it does not.
 workerLiveness :: Bool -> WorkerHeartbeat -> IO Liveness
 workerLiveness runningWorker heartbeat
     | runningWorker = heartbeatLivenessNow heartbeat
@@ -265,9 +265,7 @@ superviseBackground label builtEnv task =
     void . runKatipContextT (envLogEnv builtEnv) (mempty :: SimpleLogPayload) (Namespace [label]) $
         superviseLoop (transientPolicy label backgroundLoopBackoff) (liftIO task)
 
-{- | Run the supervised mirror worker over the composition-root 'Env' and the per-ecosystem
-bundles. The loop re-runs current policy against a job before it mirrors.
--}
+-- | Run the supervised mirror worker over the composition-root 'Env' and the per-ecosystem bundles. The loop re-runs current policy against a job before it mirrors.
 runWorker :: WorkerPolicies -> Env -> IO ()
 runWorker policies env = do
     dd <- ddPayloadNow (envDdContext env)
@@ -287,9 +285,7 @@ workerSupervision =
         | Just (Unconfigured _) <- fromException fault = Permanent
         | otherwise = Transient
 
-{- | Resolve an 'Ecosystem' to its complete 'MountBinding', or 'Nothing' when that ecosystem
-has no registered adapter. The path prefix derives from the ecosystem ('prefixFor'), never config.
--}
+-- | Resolve an 'Ecosystem' to its complete 'MountBinding', or 'Nothing' when that ecosystem has no registered adapter. The path prefix derives from the ecosystem ('prefixFor'), never config.
 mountBindingFor :: Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
 mountBindingFor eco packumentDeps publishDeps =
     adapterFor eco <&> \adapter -> mountOf adapter packumentDeps publishDeps

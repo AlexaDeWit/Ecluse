@@ -27,7 +27,7 @@ import System.Directory (copyFile, doesFileExist)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Expectation, Spec, anyException, around, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
-import UnliftIO.Async (AsyncCancelled (AsyncCancelled), async, cancel, waitCatch, withAsync)
+import UnliftIO.Async (AsyncCancelled (AsyncCancelled), async, cancel, poll, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
 import UnliftIO.Timeout (timeout)
@@ -35,7 +35,7 @@ import UnliftIO.Timeout (timeout)
 import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbEpssNotEstablished, CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (..))
 import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, swapIn, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
-import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable), renderTransportCause, transportFault)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apOsvNewestModified, apOsvSource), noProvenance)
 import Ecluse.Core.Osv.Schema (EpssRequirement (..), osvDbFileName, osvSchemaEpoch)
 import Ecluse.Core.Osv.Stream (IngestStats (IngestStats), PilotIngestAborted (PilotIngestAborted))
@@ -68,7 +68,7 @@ import Ecluse.Runtime.Telemetry.Internal (Telemetry (TelemetryEnabled), Telemetr
 import Ecluse.Runtime.Telemetry.Tracing.Internal (advisorySyncTracingPortOf)
 import Ecluse.Runtime.Test.Advisory (advisoryDriver)
 import Ecluse.Runtime.Test.Cve (fetchServing, fetchServingAt, headOnlyFetch)
-import Ecluse.Runtime.Test.S3 (brokenResponse, withS3)
+import Ecluse.Runtime.Test.S3 (brokenResponse, recordingStatuses, withS3, withTlsS3)
 import Ecluse.Test.Contract.Advisory (AdvisoryFixture (..), advisoryContract)
 import Ecluse.Test.Cve (fakeCveLookup, namesFix)
 import Ecluse.Test.Log (memoryLogEnv, runJsonLog, runQuietKatip)
@@ -85,6 +85,7 @@ import Ecluse.Test.Port (
     recordingAdvisorySyncTracingPort,
  )
 import Ecluse.Test.Rules (atDefaultPrecedence, evalRule, isAllow, isDeny, isNoDecision, remediationWith, shippedRemediation, slotRuleDeps)
+import Ecluse.Test.Stub.Socket (resetAfterPartialBody, withTlsServer)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Test.Sweep (RecordedSweep (recPorts), recordingPorts, testMount, testPacing)
 
@@ -110,6 +111,27 @@ resetDownloadSpec = describe "a GetObject body that resets mid-download" $
                     _ <- forceFlushTracerProvider tracerProvider Nothing
                     statuses <- traverse (fmap hotStatus . readIORef . spanHot) =<< readIORef spansRef
                     statuses `shouldSatisfy` any (\case Error message -> T.isPrefixOf "127.0.0.1:" message && T.isSuffixOf message report; _ -> False)
+
+-- A TLS body reset after the GetObject's 200 counts as a failed fetch, and the task keeps polling.
+tlsResetDownloadSpec :: Spec
+tlsResetDownloadSpec = describe "a GetObject body that resets mid-download over TLS" $
+    for_ [(Npm, "npm.db"), (PyPI, "pypi.db")] $ \(eco, key) ->
+        it ("counts a typed unreachable fault on the " <> toString (ecosystemName eco) <> " sync, which keeps running") $
+            withSyncEnvFor eco $ \_ _ envWith ->
+                withTlsS3 (withTlsServer resetAfterPartialBody) $ \plainEnv -> do
+                    (awsEnv, statuses) <- recordingStatuses plainEnv
+                    (metrics, readAttempts, _) <- recordingAdvisorySyncMetricsPort
+                    (logEnv, readMessages) <- memoryLogEnv
+                    let env = envWith (s3CveFetch awsEnv "test-advisories" key 1_000_000)
+                        reported = find (T.isInfixOf "sync fetch failed") <$> readMessages
+                    running <- runKatipContextT logEnv () mempty . withAsync (runCveSync metrics passthroughAdvisorySyncTracingPort env oneAttempt (notifyOnly pass)) $ \task ->
+                        liftIO (waitFor "the fetch report" (isJust <$> reported) >> isNothing <$> poll task)
+                    running `shouldBe` True
+                    statuses `shouldReturn` [200, 200]
+                    readAttempts `shouldReturn` [(eco, AdvisoryFetchFailed)]
+                    report <- fromMaybe "" <$> reported
+                    report `shouldSatisfy` T.isInfixOf "sync fetch failed: 127.0.0.1:"
+                    report `shouldSatisfy` T.isSuffixOf (" (" <> renderTransportCause TransportUnreachable <> ")")
 
 withSyncEnv :: (FilePath -> CveSlot -> (CveFetch -> SyncEnv) -> IO a) -> IO a
 withSyncEnv = withSyncEnvFor Npm
@@ -417,6 +439,7 @@ spec = do
     withdrawalSpec
     unavailableEnrichmentSpec
     resetDownloadSpec
+    tlsResetDownloadSpec
     describe "sync provenance logging" $ do
         for_ [("2026-09-08T12:34:56Z", "42", "(Just 2026-09-08 12:34:56 UTC,Just 42)"), ("SECRET-time", "SECRET-count", "(Nothing,Nothing)"), (T.replicate 65 "9", T.replicate 21 "9", "(Nothing,Nothing)"), ("invalid", "18446744073709551616", "(Nothing,Nothing)"), ("invalid", "-1", "(Nothing,Nothing)"), ("invalid", "", "(Nothing,Nothing)")] $ \(builtAt, rowCount, summary) ->
             it ("logs only parsed values for built_at=" <> toString builtAt <> " and row_count=" <> toString rowCount) $

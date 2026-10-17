@@ -15,11 +15,12 @@ import Network.HTTP.Client (HttpException (HttpExceptionRequest, InvalidUrlExcep
 import Network.HTTP.Types (Header)
 import Network.HTTP.Types.Header (hLastModified)
 import Network.HTTP.Types.Status (Status, status200, status404)
-import System.IO.Error (doesNotExistErrorType, mkIOError)
+import System.IO.Error (doesNotExistErrorType, mkIOError, resourceVanishedErrorType)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Exception (evaluate)
 
 import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportCause (TransportProtocol, TransportTimeout, TransportUnreachable))
+import Ecluse.Core.Osv.Compile (newFeedManager)
 import Ecluse.Core.Osv.Epss (
     EpssEnrichment (..),
     EpssFeed (..),
@@ -66,13 +67,14 @@ fetchFeedWith extraHeaders cap body = fetchRaw extraHeaders cap (GZip.compress b
 fetchRaw :: [Header] -> Int -> LByteString -> IO EpssFeed
 fetchRaw extraHeaders cap served =
     withStubHeaders status200 extraHeaders served $ \stub ->
-        runOsvTestM (fetchEpssScores cap (toString (stubBaseUrl stub) <> "/epss.csv.gz"))
+        newFeedManager >>= \feeds -> runOsvTestM (fetchEpssScores feeds cap (toString (stubBaseUrl stub) <> "/epss.csv.gz"))
 
 -- One attempt under the retry policy, with the number of requests the stub saw.
 acquireServed :: Int -> Status -> LByteString -> IO (Either EpssFeedFailure EpssFeed, Int)
 acquireServed cap status served =
     withStub status served $ \stub -> do
-        outcome <- runOsvTestM (acquireEpssFeed cap (toString (stubBaseUrl stub) <> "/epss.csv.gz"))
+        feeds <- newFeedManager
+        outcome <- runOsvTestM (acquireEpssFeed feeds cap (toString (stubBaseUrl stub) <> "/epss.csv.gz"))
         requests <- length <$> allCaptured stub
         pure (outcome, requests)
 
@@ -237,8 +239,9 @@ spec = do
                     requests `shouldBe` 1
 
         it "propagates an invalid feed URL, a configuration fault rather than an outage" $
-            runOsvTestM (acquireEpssFeed maxEpssFeedBytes "not a url")
-                `shouldThrow` (\case InvalidUrlException{} -> True; _ -> False)
+            newFeedManager >>= \feeds ->
+                runOsvTestM (acquireEpssFeed feeds maxEpssFeedBytes "not a url")
+                    `shouldThrow` (\case InvalidUrlException{} -> True; _ -> False)
 
     describe "classifyEpssFailure" $ do
         it "reads a transport failure through its shared cause" $ do
@@ -280,6 +283,13 @@ spec = do
             let resolved = resolveEnrichment EpssOptional (Left EpssFeedNoScores)
             resolved `shouldBe` Right (EpssUnavailable EpssFeedNoScores)
             fmap enrichmentStatus resolved `shouldSatisfy` (== Right EnrichmentUnavailable)
+
+        it "publishes without scores once a feed that resets mid-body spends its retries, where enrichment is optional" $ do
+            let reset = requestFailure (InternalException (toException (mkIOError resourceVanishedErrorType "Network.Socket.recvBuf" Nothing Nothing)))
+            fetchCause reset `shouldBe` Just TransportUnreachable
+            fmap (resolveEnrichment EpssOptional . Left) (classifyEpssFailure reset) `shouldSatisfy` \case
+                Just (Right (EpssUnavailable _)) -> True
+                _ -> False
 
     describe "parseEpssPreamble" $ do
         it "reads the score date and the model version FIRST.org writes" $ do
