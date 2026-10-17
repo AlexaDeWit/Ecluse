@@ -118,11 +118,9 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
  )
 import Ecluse.Core.Text (nonBlank, readDecimalText)
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
+import Ecluse.Runtime.Aws.Fault (classifyAwsTransport, errorCodeText)
 
-{- | Where one CodeArtifact repository lives. The composition root parses these from the
-vetted mirror-store URL, so the leaf never sees a URL.
--}
+-- | Where one CodeArtifact repository lives. The composition root parses these from the vetted mirror-store URL, so the leaf never sees a URL.
 data CodeArtifactStore = CodeArtifactStore
     { casDomain :: Text
     , casDomainOwner :: Text
@@ -133,9 +131,7 @@ data CodeArtifactStore = CodeArtifactStore
     }
     deriving stock (Eq, Show)
 
-{- | The format token CodeArtifact addresses an ecosystem by, held with the ecosystem it
-came from, so a coordinate cannot name one format and mean another ecosystem.
--}
+-- | The format token CodeArtifact addresses an ecosystem by, held with the ecosystem it came from, so a coordinate cannot name one format and mean another ecosystem.
 data CodeArtifactFormat = CodeArtifactFormat Ecosystem CA.PackageFormat
     deriving stock (Eq, Show)
 
@@ -150,9 +146,7 @@ codeArtifactFormat = \case
 formatEcosystem :: CodeArtifactFormat -> Ecosystem
 formatEcosystem (CodeArtifactFormat eco _) = eco
 
-{- | The format as CodeArtifact spells it, which is also the first path segment of a
-repository's per-format endpoint.
--}
+-- | The format as CodeArtifact spells it, which is also the first path segment of a repository's per-format endpoint.
 formatToken :: CodeArtifactFormat -> Text
 formatToken (CodeArtifactFormat _ token) = CA.fromPackageFormat token
 
@@ -161,9 +155,7 @@ storePackageFormat :: CodeArtifactStore -> CA.PackageFormat
 storePackageFormat store = case casFormat store of
     CodeArtifactFormat _ token -> token
 
-{- | What CodeArtifact does: it re-admits a version published again after a delete, and has applied
-it by the time it answers. The alphabet is the mount ecosystem's, whose grammar spells the names.
--}
+-- | What CodeArtifact does: it re-admits a version published again after a delete, and has applied it by the time it answers. The alphabet is the mount ecosystem's, whose grammar spells the names.
 codeArtifactFacts :: NameAlphabet -> CodeArtifactStore -> StoreFacts
 codeArtifactFacts alphabet store =
     StoreFacts
@@ -175,15 +167,11 @@ codeArtifactFacts alphabet store =
         , factBudget = codeArtifactBudget{bgScope = codeArtifactScope store}
         }
 
-{- | The pool a repository's requests debit: the account that owns the domain, in the Region the
-repository answers in. Every repository of that account and Region shares one set of quotas.
--}
+-- | The pool a repository's requests debit: the account that owns the domain, in the Region the repository answers in. Every repository of that account and Region shares one set of quotas.
 codeArtifactScope :: CodeArtifactStore -> QuotaScope
 codeArtifactScope store = mkQuotaScope (casDomainOwner store <> "." <> casRegion store)
 
-{- | The capacity a CodeArtifact account and Region is taken to have: the per-Region defaults AWS
-publishes, which this build reads from its documentation rather than discovering.
--}
+-- | The capacity a CodeArtifact account and Region is taken to have: the per-Region defaults AWS publishes, which this build reads from its documentation rather than discovering.
 codeArtifactBudget :: StoreBudget
 codeArtifactBudget =
     StoreBudget
@@ -217,21 +205,15 @@ codeArtifactCosts =
 deleteCeiling :: DeleteCeiling
 deleteCeiling = AtMost 100
 
-{- | The namespace and package CodeArtifact addresses a name by. An npm scope is the
-namespace, without its sigil, and the unscoped name is the package.
--}
+-- | The namespace and package CodeArtifact addresses a name by. An npm scope is the namespace, without its sigil, and the unscoped name is the package.
 packageCoordinates :: PackageName -> (Maybe Text, Text)
 packageCoordinates name = (unScope <$> pkgNamespace name, unscopedName name)
 
-{- | Rebuild a name from the namespace and package a listing returned. A blank namespace
-reads as none, so an empty string cannot become an empty scope.
--}
+-- | Rebuild a name from the namespace and package a listing returned. A blank namespace reads as none, so an empty string cannot become an empty scope.
 packageNameFrom :: Ecosystem -> Maybe Text -> Text -> PackageName
 packageNameFrom eco namespace = mkPackageName eco (mkScope <$> (nonBlank =<< namespace))
 
-{- | One page of one bucket, continuing from a page token when there is one. @packagePrefix@
-matches the package component alone and never a namespace, and the empty bucket filters nothing.
--}
+-- | One page of one bucket, continuing from a page token when there is one. @packagePrefix@ matches the package component alone and never a namespace, and the empty bucket filters nothing.
 listPackagesRequest :: CodeArtifactStore -> NamePrefix -> Maybe Text -> CA.ListPackages
 listPackagesRequest store prefix token =
     CA.newListPackages (casDomain store) (casRepository store)
@@ -258,9 +240,7 @@ listVersionsResult = \case
             Right (CA.newListPackageVersionsResponse 200)
     result -> first classifyStoreFault result
 
-{- | Delete one chunk of a package's versions. The caller has already split the batch to
-'deleteCeiling', because CodeArtifact refuses a larger one outright.
--}
+-- | Delete one chunk of a package's versions. The caller has already split the batch to 'deleteCeiling', because CodeArtifact refuses a larger one outright.
 deleteRequest :: CodeArtifactStore -> PackageName -> [Version] -> CA.DeletePackageVersions
 deleteRequest store name versions =
     CA.newDeletePackageVersions (casDomain store) (casRepository store) (storePackageFormat store) package
@@ -290,15 +270,11 @@ repositoryOfStore = RepositoryName . casRepository
 listTagsRequest :: Text -> CA.ListTagsForResource
 listTagsRequest = CA.newListTagsForResource
 
-{- | The one tag key the Dredger writes, per ecosystem, so two mounts sharing one repository as
-their mirror target keep their own walk. The grant admits this prefix and nothing else.
--}
+-- | The one tag key the Dredger writes, per ecosystem, so two mounts sharing one repository as their mirror target keep their own walk. The grant admits this prefix and nothing else.
 cursorTagKey :: Ecosystem -> Text
 cursorTagKey eco = "ecluse-dredger-cursor-" <> ecosystemName eco
 
-{- | Record a completed bucket. @TagResource@ adds and updates the keys it names and replaces no
-others, so this cannot disturb the consent tag beside it.
--}
+-- | Record a completed bucket. @TagResource@ adds and updates the keys it names and replaces no others, so this cannot disturb the consent tag beside it.
 cursorTagRequest :: Ecosystem -> Text -> NamePrefix -> CA.TagResource
 cursorTagRequest eco arn prefix =
     CA.newTagResource arn
@@ -309,26 +285,20 @@ cursorUntagRequest :: Ecosystem -> Text -> CA.UntagResource
 cursorUntagRequest eco arn =
     CA.newUntagResource arn & (CAL.untagResource_tagKeys .~ [cursorTagKey eco])
 
-{- | The bucket a repository's tags record, 'Nothing' when none is recorded or when the recorded
-one is no prefix this alphabet spells, which is how an alphabet change restarts the walk.
--}
+-- | The bucket a repository's tags record, 'Nothing' when none is recorded or when the recorded one is no prefix this alphabet spells, which is how an alphabet change restarts the walk.
 cursorOfTags :: NameAlphabet -> Ecosystem -> [CA.Tag] -> Maybe NamePrefix
 cursorOfTags alphabet eco tags = do
     tag <- find ((== cursorTagKey eco) . (^. CAL.tag_key)) tags
     parseNamePrefix alphabet =<< nonBlank (tag ^. CAL.tag_value)
 
-{- | The description @DescribeRepository@ carried. It is optional on the wire, and a verdict
-on a repository the store did not describe would be invented rather than read.
--}
+-- | The description @DescribeRepository@ carried. It is optional on the wire, and a verdict on a repository the store did not describe would be invented rather than read.
 repositoryOfResponse :: CA.DescribeRepositoryResponse -> Either StoreFault CA.RepositoryDescription
 repositoryOfResponse response =
     maybeToRight
         (descriptionFault "the store described no repository")
         (response ^. CAL.describeRepositoryResponse_repository)
 
-{- | The repository ARN, which is how CodeArtifact addresses a tag read. It is optional on
-the wire, and without it there is no marker to read and so no verdict to give.
--}
+-- | The repository ARN, which is how CodeArtifact addresses a tag read. It is optional on the wire, and without it there is no marker to read and so no verdict to give.
 arnOfDescription :: CA.RepositoryDescription -> Either StoreFault Text
 arnOfDescription description =
     maybeToRight
@@ -343,9 +313,7 @@ descriptionFault detail =
         , faultRetry = RetryFutile
         }
 
-{- | The names in one listing page. CodeArtifact types a summary's package name optional,
-and an entry without one names nothing to sweep, so it is dropped rather than guessed at.
--}
+-- | The names in one listing page. CodeArtifact types a summary's package name optional, and an entry without one names nothing to sweep, so it is dropped rather than guessed at.
 packagesOfPage :: Ecosystem -> [CA.PackageSummary] -> [PackageName]
 packagesOfPage eco = mapMaybe named
   where
@@ -353,18 +321,14 @@ packagesOfPage eco = mapMaybe named
         packageNameFrom eco (summary ^. CAL.packageSummary_namespace)
             <$> (nonBlank =<< summary ^. CAL.packageSummary_package)
 
-{- | Whether the store still serves an install of a version in this status. @Published@ and
-@Unlisted@ are the two statuses it does, and every other status is a record it keeps.
--}
+-- | Whether the store still serves an install of a version in this status. @Published@ and @Unlisted@ are the two statuses it does, and every other status is a record it keeps.
 presenceOf :: CA.PackageVersionStatus -> VersionPresence
 presenceOf status
     | status == CA.PackageVersionStatus_Published = VersionServed
     | status == CA.PackageVersionStatus_Unlisted = VersionServed
     | otherwise = VersionWithdrawn
 
-{- | Read a delete response back against the versions submitted, so each gets one outcome.
-CodeArtifact may report a version neither way, which is a refusal, never a silent success.
--}
+-- | Read a delete response back against the versions submitted, so each gets one outcome. CodeArtifact may report a version neither way, which is a refusal, never a silent success.
 foldDeleteResponse :: [Version] -> CA.DeletePackageVersionsResponse -> [(Version, VersionOutcome)]
 foldDeleteResponse submitted response =
     [(version, outcomeOf (renderVersion version)) | version <- submitted]
@@ -387,9 +351,7 @@ refusalOf failure =
         (maybe "UNKNOWN" CA.fromPackageVersionErrorCode (failure ^. CAL.packageVersionError_errorCode))
         (fromMaybe "" (failure ^. CAL.packageVersionError_errorMessage))
 
-{- | Whether deleting from this repository destroys anything. An external connection or an
-upstream serves a deleted version again from elsewhere, so neither is worth sweeping.
--}
+-- | Whether deleting from this repository destroys anything. An external connection or an upstream serves a deleted version again from elsewhere, so neither is worth sweeping.
 classifyRepository :: CA.RepositoryDescription -> StoreClass
 classifyRepository description
     | not (null connections) =
@@ -410,9 +372,7 @@ classifyRepository description
     connections = map externalConnectionText (rlConnections links)
     upstreams = map repositoryNameText (rlUpstreams links)
 
-{- | What one description says about the content it admits: the public registries it connects to,
-and the repositories it forwards a miss to. An entry the store named nothing in carries no name.
--}
+-- | What one description says about the content it admits: the public registries it connects to, and the repositories it forwards a miss to. An entry the store named nothing in carries no name.
 upstreamLinksOf :: CA.RepositoryDescription -> RepositoryLinks
 upstreamLinksOf description =
     RepositoryLinks
@@ -450,9 +410,7 @@ consentOfTags tags
     marker tag =
         tag ^. CAL.tag_key == consentTagKey && tag ^. CAL.tag_value == consentTagValue
 
-{- | Classify an @amazonka@ error for a maintenance call, refining the shared transport
-classification, which reports a throttle and a denied permission as the same fault.
--}
+-- | Classify an @amazonka@ error for a maintenance call, refining the shared transport classification, which reports a throttle and a denied permission as the same fault.
 classifyStoreFault :: AWS.Error -> StoreFault
 classifyStoreFault err =
     StoreFault{faultTransport = fault, faultRetry = advice}
@@ -463,9 +421,7 @@ classifyStoreFault err =
         _ | transportRetryable (tfCause fault) -> RetryWorthwhile
         _ -> RetryFutile
 
-{- | Read a failed probe read. An identity that may not ask cannot clear the repository, so its
-refusal is an unsafe answer rather than a fault, and every other failure leaves the question open.
--}
+-- | Read a failed probe read. An identity that may not ask cannot clear the repository, so its refusal is an unsafe answer rather than a fault, and every other failure leaves the question open.
 describeUpstreamRefusal :: AWS.Error -> UpstreamSafety
 describeUpstreamRefusal = \case
     AWS.ServiceError service
@@ -506,10 +462,6 @@ serviceRetryAdvice service
 @ThrottlingException@ arrives as @Throttling@. -}
 isThrottlingCode :: AWS.ErrorCode -> Bool
 isThrottlingCode code = errorCodeText code `elem` throttlingCodes
-
--- Lowercased, so no comparison here turns on a service's own casing.
-errorCodeText :: AWS.ErrorCode -> Text
-errorCodeText (AWS.ErrorCode code) = T.toLower code
 
 throttlingCodes :: [Text]
 throttlingCodes =

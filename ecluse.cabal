@@ -570,6 +570,7 @@ library ecluse-runtime
     Ecluse.Runtime.Mirror.State.S3
     Ecluse.Runtime.Mirror.State.S3.Internal
     Ecluse.Runtime.Aws.Env
+    Ecluse.Runtime.Aws.Env.Internal
     Ecluse.Runtime.Aws.Fault
     Ecluse.Runtime.Aws.S3
     Ecluse.Runtime.Aws.S3.Conditional
@@ -1463,6 +1464,7 @@ test-suite ecluse-unit
     , ecluse:ecluse-report-format
     , zlib ^>=0.7
     , amazonka ^>=2.0
+    , amazonka-s3 ^>=2.0
     , ecluse
     , ecluse:ecluse-acceptance
     , ecluse:ecluse-bench-load
@@ -1539,7 +1541,7 @@ test-suite ecluse-runtime-unit
     SpecHook
     Ecluse.Runtime.Test.Contract.UnitCatalogueSpec
     Ecluse.Runtime.Test.PackageStoreSpec
-    Ecluse.Runtime.Aws.EnvSpec
+    Ecluse.Runtime.Aws.Env.InternalSpec
     Ecluse.Runtime.Aws.FaultSpec
     Ecluse.Runtime.Aws.S3.ConditionalSpec
     Ecluse.Runtime.Mirror.State.S3.InternalSpec

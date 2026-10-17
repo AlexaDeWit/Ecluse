@@ -7,7 +7,7 @@ module Ecluse.Runtime.Test.Aws (
     -- * Loopback envs
     loopbackAwsEnv,
     loopbackDiscovery,
-    withRefusedDiscovery,
+    refusedDiscovery,
 
     -- * Planted answers
     canonicalRequestMessage,
@@ -25,15 +25,14 @@ module Ecluse.Runtime.Test.Aws (
 import Amazonka qualified as AWS
 import Amazonka.Auth (fromSession)
 import Amazonka.Auth.Exception (AuthError (AuthServiceError, OtherAuthError, RetrievalError))
-import Amazonka.Auth.STS (fromWebIdentity)
+import Amazonka.Auth.STS (fromAssumedRole)
 import Control.Concurrent (myThreadId)
 import Control.Exception qualified as Exception
 import Data.Text qualified as T
 import Network.HTTP.Types (Header, status403)
-import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable))
-import Ecluse.Runtime.Aws.Fault (AwsFault (AwsHttp, AwsStatus), AwsParty (AwsEndpointAt), AwsRequestFailed (arfFault, arfParty))
+import Ecluse.Runtime.Aws.Fault (AwsFault (AwsHttp, AwsStatus, AwsUndecodable), AwsParty (AwsEndpointAt), AwsRequestFailed (arfFault, arfParty))
 import Ecluse.Test.Fault (httpTransportCause)
 import Ecluse.Test.Stub (closedPort, refusedFetch, requestSecrets, signedRequest)
 
@@ -45,13 +44,9 @@ loopbackAwsEnv = AWS.newEnv . loopbackDiscovery
 loopbackDiscovery :: Int -> AWS.EnvNoAuth -> IO AWS.Env
 loopbackDiscovery port = pure . pointedAtLoopback port . fromSession (AWS.AccessKey "AKIDtestkey") (AWS.SecretKey "testsecretkey") (AWS.SessionToken "token-secret")
 
--- | Hand the action a credential discovery that asks STS for a web identity's credentials at 'closedPort'.
-withRefusedDiscovery :: ((AWS.EnvNoAuth -> IO AWS.Env) -> IO a) -> IO a
-withRefusedDiscovery use =
-    withSystemTempDirectory "web-identity" $ \dir -> do
-        let tokenFile = dir <> "/token"
-        writeFileText tokenFile "token-secret"
-        use (fromWebIdentity tokenFile "arn:aws:iam::123456789012:role/ecluse" Nothing . pointedAtLoopback closedPort)
+-- | A discovery that assumes a role over session credentials at 'closedPort', so its refused STS call carries the session token in a header.
+refusedDiscovery :: AWS.EnvNoAuth -> IO AWS.Env
+refusedDiscovery = fromAssumedRole "arn:aws:iam::123456789012:role/ecluse" "ecluse" <=< loopbackDiscovery closedPort
 
 -- | A signature refusal's message: its first line, then the canonical request AWS expected, session token included.
 canonicalRequestMessage :: Text
@@ -80,6 +75,7 @@ refreshFailures = do
 awsTransportCause :: AwsFault -> Maybe TransportCause
 awsTransportCause = \case
     AwsStatus _ -> Nothing
+    AwsUndecodable _ -> Nothing
     AwsHttp http -> httpTransportCause http
 
 -- | Whether a request failed unanswered at 'closedPort', and renders with no planted secret.

@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | How the env builder fails a discovery, and how its requests render: typed, and with no session token.
-module Ecluse.Runtime.Aws.EnvSpec (spec) where
+module Ecluse.Runtime.Aws.Env.InternalSpec (spec) where
 
 import Amazonka qualified as AWS
 import Amazonka.CodeArtifact.GetAuthorizationToken qualified as CA
@@ -15,15 +15,14 @@ import Network.HTTP.Client (parseRequest, requestHeaders)
 import Test.Hspec
 import UnliftIO.Exception (try)
 
-import Ecluse.Runtime.Aws.Env (newAwsEnvWith)
-import Ecluse.Runtime.Test.Aws (loopbackDiscovery, refusedAtClosedPort, withRefusedDiscovery)
+import Ecluse.Runtime.Aws.Env.Internal (newAwsEnvWith)
+import Ecluse.Runtime.Test.Aws (loopbackDiscovery, refusedAtClosedPort, refusedDiscovery)
 import Ecluse.Test.Stub (closedAuthority, closedPort)
 
 spec :: Spec
 spec = describe "newAwsEnvWith" $ do
-    it "raises a discovery whose STS call is refused by its transport cause at the dialled host:port, never the request" $
-        withRefusedDiscovery $ \discovery ->
-            void (newAwsEnvWith discovery Nothing Nothing S3.defaultService) `shouldThrow` refusedAtClosedPort
+    it "raises a discovery whose signed STS call is refused by its transport cause at the dialled host:port, never the request" $
+        void (newAwsEnvWith refusedDiscovery Nothing Nothing S3.defaultService) `shouldThrow` refusedAtClosedPort
 
     it "redacts the session-token header in the show of a request the env signs" $ do
         env <- newAwsEnvWith (loopbackDiscovery closedPort) Nothing Nothing CAT.defaultService
