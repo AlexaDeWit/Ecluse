@@ -2,16 +2,19 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The advisory lookup's internals: the hardened SQLite open and the raw queries
-"Ecluse.Core.Cve" curates into the public handle.
-
-Importing this module opts out of the public surface's stability promises. It exists so a test
-can pin the hardening properties against the connection the handle actually uses.
+{- | Advisory handles, SQLite verification, and masked ownership transfer.
+The public "Ecluse.Core.Cve" module curates these operations.
 -}
 module Ecluse.Core.Cve.Internal (
     AdvisoryRange (..),
     CveDbRejected (..),
     openHardenedConnection,
+    acceptConnection,
+    openCveDb,
+    transferCveDb,
+    CveDb (..),
+    CveLookup (..),
+    CveQueryFault (..),
     advisoriesQuery,
     coveredNamesQuery,
     toRange,
@@ -19,9 +22,10 @@ module Ecluse.Core.Cve.Internal (
 ) where
 
 import Database.SQLite.Simple (Connection, Only (..), SQLError, close, execute_, open, query, query_)
-import UnliftIO.Exception (onException, try)
+import UnliftIO.Exception (catch, catchAny, mask, onException, throwIO, try)
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Osv.Provenance (AdvisoryProvenance, decodeProvenance)
 import Ecluse.Core.Osv.Schema (ColumnSpec (..), EpssEvidence (EpssAvailable, EpssNotEstablished), EpssRequirement (EpssOptional, EpssRequired), MetaKey (MetaEcosystem, MetaEpssStatus), TableSpec (..), decodeEpssEvidence, osvSchemaEpoch, osvTableSpecs, renderMetaKey)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, LastAffected, Unbounded))
 
@@ -57,18 +61,34 @@ data CveDbRejected
 Rejection and opening faults close the connection before returning.
 -}
 openHardenedConnection :: Ecosystem -> EpssRequirement -> FilePath -> IO (Either CveDbRejected Connection)
-openHardenedConnection eco epssRequirement dbFile = do
-    conn <- open dbFile
-    -- The 'onException' guard closes the connection when a statement throws instead, for
-    -- example a non-SQLite file whose first file-touching pragma raises.
-    accepted <-
-        (hardenConnection conn >> acceptArtifact eco epssRequirement conn)
-            `onException` close conn
+openHardenedConnection eco epssRequirement dbFile =
+    acceptConnection (open dbFile) close (verifyConnection eco epssRequirement) (\conn () -> pure conn)
+
+-- | Acquire masked, verify under the caller's mask state, then transfer ownership to the masked continuation.
+acceptConnection :: IO Connection -> (Connection -> IO ()) -> (Connection -> IO (Either CveDbRejected a)) -> (Connection -> a -> IO b) -> IO (Either CveDbRejected b)
+acceptConnection acquire release verify use = mask $ \restore -> do
+    conn <- acquire
+    accepted <- restore (verify conn) `onException` release conn
     case accepted of
-        Left rejection -> do
-            close conn
-            pure (Left rejection)
-        Right () -> pure (Right conn)
+        Left rejection -> release conn $> Left rejection
+        Right value -> Right <$> use conn value
+
+verifyConnection :: Ecosystem -> EpssRequirement -> Connection -> IO (Either CveDbRejected ())
+verifyConnection eco epssRequirement conn = hardenConnection conn >> acceptArtifact eco epssRequirement conn
+
+-- | Reject incompatible artifacts as values. The caller must protect the returned database's ownership.
+openCveDb :: Ecosystem -> EpssRequirement -> FilePath -> IO (Either CveDbRejected CveDb)
+openCveDb eco epssRequirement dbFile = transferCveDb eco epssRequirement dbFile pure
+
+-- | Transfer an accepted database to a masked owner. Verification retains the caller's masking state.
+transferCveDb :: Ecosystem -> EpssRequirement -> FilePath -> (CveDb -> IO a) -> IO (Either CveDbRejected a)
+transferCveDb eco epssRequirement dbFile use =
+    acceptConnection (open dbFile) close verify (\conn meta -> use (mkCveDb conn meta))
+  where
+    verify conn =
+        verifyConnection eco epssRequirement conn >>= \case
+            Left rejection -> pure (Left rejection)
+            Right () -> Right <$> provenanceQuery conn
 
 hardenConnection :: Connection -> IO ()
 hardenConnection conn = do
@@ -186,3 +206,52 @@ It runs only on an accepted connection, so the @(Text, Text)@ decode cannot thro
 -}
 provenanceQuery :: Connection -> IO [(Text, Text)]
 provenanceQuery conn = query_ conn "SELECT key, value FROM meta ORDER BY key"
+
+-- | Query by canonical package key, with an npm scope inline. A display name is never a query key.
+data CveLookup = CveLookup
+    { cveAdvisoriesFor :: Text -> IO [AdvisoryRange]
+    -- ^ Every advisory range recorded against a package name. Every field throws 'CveQueryFault' on a query fault.
+    , cveCoveredNames :: IO [Text]
+    -- ^ Every package name this generation records an advisory against, for a store sweep.
+    }
+
+-- | A database query fault for the rule's resilience policy to classify.
+data CveQueryFault = CveQueryFault
+    { cqfQuery :: Text
+    -- ^ Which handle field was asked (@advisories-for@ or @covered-names@).
+    , cqfDetail :: Text
+    -- ^ The rendered 'SQLError', for the operator's outage report. Never parsed.
+    }
+    deriving stock (Eq, Show)
+
+instance Exception CveQueryFault
+
+-- | One opened artifact. Its holder owns the connection's lifetime, and hands a consumer 'cveDbLookup' only.
+data CveDb = CveDb
+    { cveDbLookup :: CveLookup
+    -- ^ The view consumers query through.
+    , cveDbClose :: IO ()
+    -- ^ Release the connection. Owner-only, and __never throws__, since the connection is going away either way.
+    , cveDbMeta :: [(Text, Text)]
+    -- ^ The artifact's @meta@ provenance rows, snapshotted at open and key-sorted for the audit trail.
+    , cveDbProvenance :: AdvisoryProvenance
+    -- ^ What the artifact records about its sources. An artifact written before those keys decodes as absence.
+    }
+
+mkCveDb :: Connection -> [(Text, Text)] -> CveDb
+mkCveDb conn meta =
+    CveDb
+        { cveDbLookup =
+            CveLookup
+                { cveAdvisoriesFor = taggedQuery "advisories-for" . advisoriesQuery conn
+                , cveCoveredNames = taggedQuery "covered-names" (coveredNamesQuery conn)
+                }
+        , cveDbClose = close conn `catchAny` const pass
+        , cveDbMeta = meta
+        , cveDbProvenance = decodeProvenance meta
+        }
+
+-- The SQLite edge: the driver's 'SQLError' never escapes the handle, only this module's
+-- confined 'CveQueryFault'.
+taggedQuery :: Text -> IO a -> IO a
+taggedQuery tag act = act `catch` \(err :: SQLError) -> throwIO (CveQueryFault tag (show err))

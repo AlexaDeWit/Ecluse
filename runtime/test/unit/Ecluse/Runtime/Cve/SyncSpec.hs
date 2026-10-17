@@ -29,7 +29,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Expectation, Spec, anyException, around, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Async (AsyncCancelled (AsyncCancelled), async, cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (throwIO)
+import UnliftIO.Exception (mask, throwIO)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbEpssNotEstablished, CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (..))
@@ -59,6 +59,7 @@ import Ecluse.Runtime.Cve.Sync.Internal (
     SyncOutcome (..),
     SyncSchedule (..),
     cappedAt,
+    publishVerified,
     runCveSync,
     s3CveFetch,
     syncStep,
@@ -481,6 +482,51 @@ spec = do
                 logged `shouldSatisfy` (not . T.isInfixOf "reported no publication time")
 
     describe "syncStep" $ do
+        it "discards a completed download when cancellation interrupts its return" $
+            withSyncEnv $ \_ slot envWith -> do
+                downloaded <- newEmptyMVar
+                blocked <- newEmptyMVar
+                let fetch = fetchServing (Just "e1") $ \dest -> do
+                        mkMinimalValidDb dest "pkg-a"
+                        putMVar downloaded ()
+                        takeMVar blocked
+                    env = envWith fetch
+                withAsync (syncStep env Nothing) $ \worker -> do
+                    takeMVar downloaded
+                    cancel worker
+                doesFileExist (syncDbPath env <> ".tmp") `shouldReturn` False
+                currentAdvisoryEtag slot `shouldReturn` Nothing
+
+        it "closes once and discards the file when publication fails before slot ownership" $
+            withSyncEnv $ \_ slot envWith -> do
+                closes <- newIORef (0 :: Int)
+                let env = envWith (headOnlyFetch (Right Nothing))
+                    temp = syncDbPath env <> ".tmp"
+                    db = CveDb (fakeCveLookup []) (modifyIORef' closes (+ 1)) [] noProvenance
+                writeFileBS temp "downloaded"
+                mask (\restore -> publishVerified env (restore (throwIO (TestContractEscape "rename"))) temp (FetchedObject (DbEtag "e1") Nothing) db)
+                    `shouldThrow` (\(TestContractEscape _) -> True)
+                readIORef closes `shouldReturn` 1
+                doesFileExist temp `shouldReturn` False
+                currentAdvisoryEtag slot `shouldReturn` Nothing
+
+        it "closes once when cancellation interrupts publication before slot ownership" $
+            withSyncEnv $ \_ slot envWith -> do
+                closes <- newIORef (0 :: Int)
+                renaming <- newEmptyMVar
+                blocked <- newEmptyMVar
+                let env = envWith (headOnlyFetch (Right Nothing))
+                    temp = syncDbPath env <> ".tmp"
+                    db = CveDb (fakeCveLookup []) (modifyIORef' closes (+ 1)) [] noProvenance
+                    rename = putMVar renaming () >> takeMVar blocked
+                writeFileBS temp "downloaded"
+                withAsync (mask (\restore -> publishVerified env (restore rename) temp (FetchedObject (DbEtag "e1") Nothing) db)) $ \worker -> do
+                    takeMVar renaming
+                    cancel worker
+                readIORef closes `shouldReturn` 1
+                doesFileExist temp `shouldReturn` False
+                currentAdvisoryEtag slot `shouldReturn` Nothing
+
         it "reports the object absent without attempting a download" $
             withSyncEnv $ \_ _ envWith -> do
                 let fetch = headOnlyFetch (Right Nothing)

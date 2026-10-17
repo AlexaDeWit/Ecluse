@@ -24,6 +24,7 @@ module Ecluse.Runtime.Cve.Sync.Internal (
     SyncEnv (..),
     SyncOutcome (..),
     syncStep,
+    publishVerified,
 
     -- * The scheduled task
     SyncSchedule (..),
@@ -52,7 +53,8 @@ import Amazonka.S3 qualified as S3
 import Amazonka.S3.Lens qualified as S3L
 import Lens.Micro ((^.))
 
-import Ecluse.Core.Cve (CveDb (cveDbClose, cveDbMeta), CveDbRejected, openCveDb)
+import Ecluse.Core.Cve (CveDb (cveDbClose, cveDbMeta), CveDbRejected)
+import Ecluse.Core.Cve.Internal (transferCveDb)
 import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, observeAdvisoryPublication, swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (..), OsvDbFetchFault (..), renderOsvDbFetchFault)
 import Ecluse.Core.Ecosystem (Ecosystem)
@@ -136,33 +138,30 @@ syncStep env lastSeen =
                 pure SyncUnchanged
             | otherwise -> syncNewArtifact env
 
--- Nothing unverified is renamed onto the name the read path opens. The 'onException' guards
--- absorb nothing: they discard the temp file when a filesystem fault escapes, then re-propagate.
 syncNewArtifact :: SyncEnv -> IO SyncOutcome
-syncNewArtifact env = do
+syncNewArtifact env = mask $ \restore -> do
     let temp = syncDbPath env <> ".tmp"
-    downloaded <- fetchDownload (syncFetch env) temp `onException` discardTemp temp
+    downloaded <- restore (fetchDownload (syncFetch env) temp) `onException` discardTemp temp
     case downloaded of
         Left fault -> do
-            -- A byte-cap failure can leave a partial file.
             discardTemp temp
             pure (SyncFetchFaulted fault)
         Right fetched -> do
-            opened <- openCveDb (syncEcosystem env) (syncEpssRequirement env) temp `onException` discardTemp temp
+            opened <-
+                restore (transferCveDb (syncEcosystem env) (syncEpssRequirement env) temp (publishVerified env (restore (renameFile temp (syncDbPath env))) temp fetched))
+                    `onException` discardTemp temp
             case opened of
                 Left rejection -> do
                     discardTemp temp
                     pure (SyncRejected (foEtag fetched) rejection)
-                Right db -> publishVerified env temp fetched db
+                Right outcome -> pure outcome
 
-publishVerified :: SyncEnv -> FilePath -> FetchedObject -> CveDb -> IO SyncOutcome
-publishVerified env temp fetched db = mask $ \restore -> do
-    -- The verified connection follows the inode through the rename. This side still owns it,
-    -- so a failure closes the connection and discards the download.
-    restore (renameFile temp (syncDbPath env))
-        `onException` (cveDbClose db >> discardTemp temp)
-    -- 'swapIn' owns the connection from entry, so nothing wraps it: a failure while the displaced
-    -- generation drains must never close the newly live database. The mask pins the handoff.
+-- | Transfer under a mask, with a restored rename action. The slot owns the database from swap entry.
+publishVerified :: SyncEnv -> IO () -> FilePath -> FetchedObject -> CveDb -> IO SyncOutcome
+publishVerified env rename temp fetched db = do
+    -- The transfer continuation owns the connection under a mask until 'swapIn' takes it.
+    rename `onException` (cveDbClose db >> discardTemp temp)
+    -- 'swapIn' owns the connection from entry, including cancellation during old-reader draining.
     swapIn (syncSlot env) (foEtag fetched) (foPushedAt fetched) db
     pure (SyncSwapped (foEtag fetched) (cveDbMeta db))
 
