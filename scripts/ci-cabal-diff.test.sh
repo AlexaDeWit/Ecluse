@@ -116,6 +116,8 @@ unit='/^test-suite demo-unit$/,/^test-suite demo-e2e$/'
 check_edit "a module-list edit skips the dry-run" 0 "$module_list"
 check_edit "a module list under a conditional skips the dry-run" 0 \
   's/exposed-modules: Demo.Dev$/exposed-modules: Demo.Dev Demo.Dev.Http/'
+check_edit "a library other-modules edit skips the dry-run" 0 \
+  's/^    Demo.Core$/&\n  other-modules:\n    Demo.Internal/'
 check_edit "a test-suite field that names no dependency skips the dry-run" 0 \
   's/^  main-is:        Spec\.hs$/  main-is:        Main.hs/'
 check_edit "a benchmark stanza edit skips the dry-run" 0 \
