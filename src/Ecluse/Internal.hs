@@ -20,11 +20,10 @@ import Control.Exception qualified as Exception
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 
 import Ecluse.Boot (BootAborted (BootAborted))
+import Ecluse.Core.Fault.Http (displayFaultT)
 import Ecluse.Core.Text (displayExceptionT)
 
-{- | How one whole service run ended. Each constructor owns one exit code ('exitCodeFor'), so
-an orchestrator reads the ending from the status alone.
--}
+-- | How one whole service run ended. Each constructor owns one exit code ('exitCodeFor'), so an orchestrator reads the ending from the status alone.
 data ProcessOutcome
     = -- | The services drained and returned (a graceful shutdown): exit 0.
       ShutdownRequested
@@ -36,9 +35,7 @@ data ProcessOutcome
       RunCancelled
     deriving stock (Eq, Show)
 
-{- | Run the service under the typed process perimeter and classify its ending. The base
-'Exception.try' and 'Exception.throwIO' are deliberate: what leaves here async must leave async.
--}
+-- | Classify how the service run ends. The base 'Exception.try' and 'Exception.throwIO' are deliberate: what leaves here async must leave async.
 superviseProcess :: IO ProcessOutcome -> IO ProcessOutcome
 superviseProcess service =
     Exception.try service >>= \case
@@ -54,7 +51,7 @@ superviseProcess service =
                     -- fault of the run, not a cancellation.
                     other -> ServiceExited (displayExceptionT other)
             | Just (_ :: SomeAsyncException) <- fromException err -> Exception.throwIO err
-            | otherwise -> pure (ServiceExited (displayExceptionT err))
+            | otherwise -> pure (ServiceExited (displayFaultT err))
 
 {- How a run ends. A failing status is representable only beside the reason it reports, so
 'Ecluse.Startup.runWith' cannot exit non-zero in silence. -}

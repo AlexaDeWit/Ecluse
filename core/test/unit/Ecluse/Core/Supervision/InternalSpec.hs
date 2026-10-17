@@ -7,16 +7,18 @@ module Ecluse.Core.Supervision.InternalSpec (spec) where
 
 import Control.Retry (simulatePolicy)
 import Data.Text qualified as T
+import Network.HTTP.Types.Status (status503)
 import Test.Hspec
 import UnliftIO (timeout)
 import UnliftIO.Async (asyncWithUnmask, cancel, waitCatch)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO, try)
 
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable), renderTransportCause)
 import Ecluse.Core.Supervision.Internal (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
     FaultDisposition (Permanent, Transient),
-    SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
+    SupervisionPolicy (spBackoff, spClassify, spLabel),
     backoffMicros,
     delayListPolicy,
     superviseLoop,
@@ -24,21 +26,14 @@ import Ecluse.Core.Supervision.Internal (
     transientPolicy,
  )
 import Ecluse.Test.Log (runJsonLog, runQuietKatip)
+import Ecluse.Test.Stub (redirectSecrets, redirectedStatusException, refusedFetch, requestSecrets, signedRequest)
+import Ecluse.Test.Supervision (fastPolicy, superviseBriefly)
 
 -- | A typed fault for the loop under test to throw, never stringly.
 newtype StepFault = StepFault Text
     deriving stock (Eq, Show)
 
 instance Exception StepFault
-
--- | A policy over the given classifier with a tiny backoff, so a test never sleeps long.
-fastPolicy :: (SomeException -> FaultDisposition) -> SupervisionPolicy
-fastPolicy classify =
-    SupervisionPolicy
-        { spLabel = "test-loop"
-        , spClassify = classify
-        , spBackoff = BackoffSchedule{bsBaseMicros = 1_000, bsCapMicros = 8_000}
-        }
 
 spec :: Spec
 spec = do
@@ -56,7 +51,7 @@ spec = do
             backoffMicros schedule 10_000 `shouldBe` backoffMicros schedule 12
             backoffMicros schedule 10_000 `shouldSatisfy` (> 0)
 
-    describe "delayListPolicy -- a delay list as a retry policy" $ do
+    describe "delayListPolicy, a delay list as a retry policy" $ do
         -- 'simulatePolicy' walks the policy without sleeping. The list's length is the
         -- retry budget, and the policy yields 'Nothing' once it runs out.
         it "waits the nth delay at the nth retry, then stops" $ do
@@ -151,6 +146,21 @@ spec = do
             case outcome of
                 Left _cancelled -> pass
                 Right v -> absurd v
+
+    describe "superviseLoop, rendering an HTTP fault" $ do
+        for_ [Transient, Permanent] $ \disposition ->
+            it ("renders a redirected status by its code at the dialled host:port, never the request or the response, " <> show disposition) $ do
+                (authority, err) <- redirectedStatusException status503
+                logged <- runJsonLog (superviseBriefly disposition (throwIO err))
+                logged `shouldSatisfy` T.isInfixOf (authority <> ": HTTP 503")
+                for_ redirectSecrets $ \secret -> logged `shouldSatisfy` (not . T.isInfixOf secret)
+
+        it "renders a refused connection by the client's reason at the dialled host:port, then its cause, never the request" $ do
+            refused <- refusedFetch =<< signedRequest
+            logged <- runJsonLog (superviseBriefly Transient (throwIO refused))
+            logged `shouldSatisfy` T.isInfixOf "127.0.0.1:1: ConnectionFailure: "
+            logged `shouldSatisfy` T.isInfixOf ("(" <> renderTransportCause TransportUnreachable <> ")")
+            for_ requestSecrets $ \secret -> logged `shouldSatisfy` (not . T.isInfixOf secret)
 
 requestedDelays :: [Bool] -> IO [Int]
 requestedDelays outcomes = do

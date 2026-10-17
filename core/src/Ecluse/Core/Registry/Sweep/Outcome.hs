@@ -39,7 +39,7 @@ import Data.Text qualified as T
 
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
-import Ecluse.Core.Fault (renderTransportCause, tfCause, tfDetail)
+import Ecluse.Core.Fault (renderTransportFault)
 import Ecluse.Core.Registry.Maintenance (StoreFault (faultTransport))
 
 -- | What one cycle did with the versions it examined.
@@ -86,24 +86,18 @@ data CycleOutcome = CycleOutcome
     { outcomeHalt :: Maybe CycleHalt
     , outcomeTally :: SweepTally
     , outcomePrerequisites :: [TargetPrerequisites]
-    {- ^ What a preview found of each target's standing permissions, in mount order. A run that
-    refuses on them instead reports none.
-    -}
+    -- ^ What a preview found of each target's standing permissions, in mount order. A run that refuses on them reports none.
     , outcomeEvidence :: EvidenceGaps
     -- ^ What the cycle could not read, which is separate from whether a real sweep may delete.
     }
     deriving stock (Eq, Show)
 
-{- | Whether a cycle's counts cover what they claim to: it walked the whole store it was given,
-and every rule that decided read the facts it needed. Nothing about permission enters here.
--}
+-- | Whether a cycle's counts cover what they claim: it walked the whole store it was given, and every deciding rule read its facts. Permission plays no part.
 outcomeComplete :: CycleOutcome -> Bool
 outcomeComplete outcome =
     isNothing (outcomeHalt outcome) && evidenceComplete (outcomeEvidence outcome)
 
-{- | Whether a halt stops the Dredger for the life of the process. Only the cap does, because a
-breaker that re-closes itself is not a breaker. Every other halt is re-read next cycle.
--}
+-- | Whether a halt stops the Dredger for the life of the process. Only the cap does: a breaker that re-closes itself is no breaker. Others are re-read next cycle.
 latches :: CycleHalt -> Bool
 latches = \case
     HaltDeletionCap{} -> True
@@ -152,11 +146,9 @@ renderTally tally =
         <> ", guard-skipped "
         <> show (tallyGuardSkipped tally)
 
--- | A store fault as an operator reads it: the transport's own cause and its bounded detail.
+-- | A store fault as an operator reads it, through 'renderTransportFault'.
 renderStoreFault :: StoreFault -> Text
-renderStoreFault fault = renderTransportCause (tfCause transport) <> ": " <> tfDetail transport
-  where
-    transport = faultTransport fault
+renderStoreFault = renderTransportFault . faultTransport
 
 -- | Name a store without assuming whether it is the mirror or private target.
 storeSubject :: Ecosystem -> Text -> Text
@@ -173,9 +165,7 @@ data TargetPrerequisites = TargetPrerequisites
     }
     deriving stock (Eq, Show)
 
-{- | What a preview could see of one standing permission. A preview exercises none of them, so an
-unmet one is reported and never acted on.
--}
+-- | What a preview could see of one standing permission. A preview exercises none, so an unmet one is reported and never acted on.
 data PrerequisiteStatus
     = -- | The store answered, and a real sweep would pass this one.
       PrerequisiteMet
@@ -189,9 +179,7 @@ data PrerequisiteStatus
 prerequisitesMet :: TargetPrerequisites -> Bool
 prerequisitesMet target = all (== PrerequisiteMet) [tpConsent target, tpClassification target]
 
-{- | One target's line, which a preview prints above its counts. It closes on what no read
-settles: a preview deletes nothing, so it proves no authority to delete.
--}
+-- | One target's line, printed above its counts. It closes on what no read settles: a preview deletes nothing, so it proves no authority to delete.
 renderPrerequisites :: TargetPrerequisites -> Text
 renderPrerequisites target =
     storeSubject (tpEcosystem target) (tpBackend target)
@@ -207,9 +195,7 @@ renderPrerequisite = \case
     PrerequisiteUnmet detail -> "is not met: " <> detail
     PrerequisiteUnread detail -> "could not be read: " <> detail
 
-{- | What one cycle could not read. A count taken with a gap open describes part of the store, so
-it is reported apart from the counts themselves rather than folded into them.
--}
+-- | What one cycle could not read. A count taken with a gap open describes part of the store, so it is reported apart from the counts.
 data EvidenceGaps = EvidenceGaps
     { gapAdvisoryGeneration :: Int
     -- ^ Mounts that decided with no advisory generation loaded, so every advisory rule abstained.

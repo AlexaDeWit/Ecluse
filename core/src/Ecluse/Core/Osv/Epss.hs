@@ -62,14 +62,13 @@ import Data.Streaming.Zlib (
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Katip (KatipContext, Severity (InfoS), logFM, ls)
-import Network.HTTP.Client (HttpException (HttpExceptionRequest, InvalidUrlException), HttpExceptionContent (StatusCodeException), responseStatus)
+import Network.HTTP.Client (HttpException (InvalidUrlException))
 import Network.HTTP.Simple (getResponseBody, getResponseHeader, httpSource, parseRequest, setRequestCheckStatus)
 import Network.HTTP.Types.Header (hLastModified)
-import Network.HTTP.Types.Status (statusCode)
 import UnliftIO.Exception (tryJust)
 
-import Ecluse.Core.Fault (TransportCause, TransportFault (tfCause), renderTransportCause)
-import Ecluse.Core.Fault.Http (classifyTransport)
+import Ecluse.Core.Fault (HttpFault, renderHttpFault)
+import Ecluse.Core.Fault.Http (httpFault)
 import Ecluse.Core.Osv.Provenance (lastModifiedOf, parseSourceTime)
 import Ecluse.Core.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired), EpssStatus (EnrichmentAvailable, EnrichmentUnavailable))
@@ -271,10 +270,8 @@ addLine acc line
 
 -- | Why one attempt at the feed produced no scores.
 data EpssFeedFailure
-    = -- | The feed host answered with this non-2xx status.
-      EpssFeedStatus Int
-    | -- | The transport could not deliver the feed.
-      EpssFeedTransport TransportCause
+    = -- | The fetch failed: the feed host's status, or the transport's fault.
+      EpssFeedFetch HttpFault
     | -- | The feed passed a byte ceiling.
       EpssFeedOversize EpssFeedTooLarge
     | -- | The feed is not valid gzip, or its stream ended early.
@@ -283,16 +280,19 @@ data EpssFeedFailure
       EpssFeedNoScores
     deriving stock (Eq, Show)
 
--- | The failure as an operator reads it. It never names the feed URL, which can carry a credential.
-renderEpssFeedFailure :: EpssFeedFailure -> Text
-renderEpssFeedFailure = \case
-    EpssFeedStatus code -> "the feed answered HTTP " <> show code
-    EpssFeedTransport cause -> renderTransportCause cause
-    EpssFeedOversize (CompressedTooLarge cap _) -> "the served feed passed its " <> show cap <> "-byte ceiling"
-    EpssFeedOversize (DecompressedTooLarge cap _) -> "the decompressed feed passed its " <> show cap <> "-byte ceiling"
-    EpssFeedOversize (LineTooLarge cap _) -> "a feed line passed its " <> show cap <> "-byte ceiling"
-    EpssFeedUndecodable -> "the feed is not a complete gzip stream"
-    EpssFeedNoScores -> "the feed carried no scores"
+-- | The failure as an operator reads it, after the feed's @host:port@. It never names the feed URL, which can carry a credential.
+renderEpssFeedFailure :: Text -> EpssFeedFailure -> Text
+renderEpssFeedFailure feed = \case
+    EpssFeedFetch fault -> renderHttpFault feed fault
+    EpssFeedOversize tooLarge -> feed <> ": " <> renderTooLarge tooLarge
+    EpssFeedUndecodable -> feed <> ": the feed is not a complete gzip stream"
+    EpssFeedNoScores -> feed <> ": the feed carried no scores"
+
+renderTooLarge :: EpssFeedTooLarge -> Text
+renderTooLarge = \case
+    CompressedTooLarge cap _ -> "the served feed passed its " <> show cap <> "-byte ceiling"
+    DecompressedTooLarge cap _ -> "the decompressed feed passed its " <> show cap <> "-byte ceiling"
+    LineTooLarge cap _ -> "a feed line passed its " <> show cap <> "-byte ceiling"
 
 -- | The feed failures a compile can continue past. An invalid URL or an unnamed exception is a fault, never an outage.
 classifyEpssFailure :: SomeException -> Maybe EpssFeedFailure
@@ -307,12 +307,11 @@ classifyEpssFailure err
 httpFailure :: HttpException -> Maybe EpssFeedFailure
 httpFailure = \case
     InvalidUrlException{} -> Nothing
-    HttpExceptionRequest _ (StatusCodeException response _) -> Just (EpssFeedStatus (statusCode (responseStatus response)))
-    other -> Just (EpssFeedTransport (tfCause (classifyTransport other)))
+    other -> Just (EpssFeedFetch (httpFault other))
 
 -- | Fetch the feed under the advisory retry policy. A failure 'classifyEpssFailure' names is a value. Anything else propagates.
 acquireEpssFeed :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Int -> String -> m (Either EpssFeedFailure EpssFeed)
-acquireEpssFeed cap url = tryJust classifyEpssFailure (withOsvRetry defaultOsvRetryPolicy (fetchEpssScores cap url))
+acquireEpssFeed cap url = tryJust classifyEpssFailure (withOsvRetry (dialledAuthorityLabel (toText url)) defaultOsvRetryPolicy (fetchEpssScores cap url))
 
 -- | What one compile joins onto its advisories.
 data EpssEnrichment
