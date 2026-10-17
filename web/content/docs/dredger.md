@@ -159,6 +159,8 @@ capacity than the share allows, the Dredger logs a warning naming the share the 
 and the share in force, then runs the next cycle at its ceiling. When the cycle's own work already
 fills the allowance, the warning says that no request budget reaches the window. The sweep never
 refuses over pacing, because a refused cycle leaves the denied version served.
+The request quota sets the minimum delay, even when one request needs more time than the cycle allowance.
+The cycle allowance caps only extra slowdown above that minimum.
 
 **One Dredger per store.** The budget reserves capacity from this sweep alone. It guarantees
 nothing against unrelated workloads, and two Dredger processes sharing one account need shares you

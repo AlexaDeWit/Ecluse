@@ -49,11 +49,10 @@ spec = do
     fractionSpec
     demandSpec
     decisionSpec
+    quotaFloorSpec
     warningSpec
     bootLineSpec
 
-{- The window covers the rest of the running cycle, the pause, and the next cycle, so a complete
-cycle gets half of what the pause leaves. -}
 windowSpec :: Spec
 windowSpec = describe "the target cycle window" $ do
     it "grants each active cycle the same allowance as the idle interval" $ do
@@ -63,8 +62,6 @@ windowSpec = describe "the target cycle window" $ do
     it "leaves a window no wider than the cycle pause with nothing to spend" $
         cycleAllowance shipped{swpCycleWindow = 3600} `shouldBe` 0
 
-{- A backend that publishes no quota is paced at the sweep's own package pace, so the chunk keys
-stay the one dial an operator has over how hard a cycle leans on such a store. -}
 derivedSpec :: Spec
 derivedSpec = describe "the capacity a backend publishing no quota is derived" $ do
     it "reads the nominal package pace off the chunk keys, under the chunk-pause floor" $ do
@@ -106,8 +103,6 @@ fractionSpec = describe "the request budget fraction" $ do
             `shouldBe` Map.fromList
                 [(NameListing, 50), (VersionListing, 50), (AccountReads, 200), (AccountWrites, 25), (TokenReads, 300)]
 
-{- One attempt costs the longest its own dimensions hold it to, and a cycle makes them one at a
-time, so the costs add. -}
 demandSpec :: Spec
 demandSpec = describe "what a cycle's requests demand" $ do
     it "adds each kind's own serial cost at the ceiling" $
@@ -143,15 +138,57 @@ decisionSpec = describe "the pace the next cycle runs at" $ do
         pdShortfall (decidePace shipped codeArtifact (Just (sampleCycle, 4000)))
             `shouldBe` Just WorkFillsAllowance
 
+quotaFloorSpec :: Spec
+quotaFloorSpec = describe "quota delays when the cycle allowance is too short" $ do
+    it "keeps the two-second quota delay before the first measurement" $ do
+        let decision = decidePace tight (declaredAt 1) Nothing
+        pdShortfall decision `shouldBe` Nothing
+        paceSeconds (pdPace decision) ListingPage `shouldBe` 2
+
+    it "warns and keeps the two-second quota delay for an impossible measured window" $ do
+        let decision = decidePace tight (declaredAt 1) (Just (oneRequest ListingPage, 0))
+        pdShortfall decision `shouldBe` Just (NeedsFraction 1)
+        paceSeconds (pdPace decision) ListingPage `shouldBe` 2
+
+    it "keeps the two-second quota delay when work fills the allowance" $ do
+        let decision = decidePace tight (declaredAt 1) (Just (oneRequest ListingPage, 1))
+        pdShortfall decision `shouldBe` Just WorkFillsAllowance
+        paceSeconds (pdPace decision) ListingPage `shouldBe` 2
+
+    it "preserves the largest weighted dimension while capping optional slowdown" $ do
+        let weighted =
+                (declaredAt 1)
+                    { bgQuotas = Map.fromList [(StoreRequests, 1), (AccountReads, 2)]
+                    , bgCosts =
+                        Map.fromList
+                            [ (ListingPage, Map.fromList [(StoreRequests, 1), (AccountReads, 3)])
+                            , (ManifestRead, Map.singleton AccountReads (1 % 4))
+                            ]
+                    }
+            initial = decidePace tight weighted Nothing
+            measured = decidePace tight weighted (Just (oneRequest ManifestRead, 0))
+        paceSeconds (pdPace initial) ListingPage `shouldBe` 3
+        paceSeconds (pdPace initial) ManifestRead `shouldBe` 0.25
+        pdShortfall measured `shouldBe` Nothing
+        paceSeconds (pdPace measured) ListingPage `shouldBe` 3
+        paceSeconds (pdPace measured) ManifestRead `shouldBe` 1
+  where
+    tight = shipped{swpCycleWindow = 3602, swpBudgetFraction = Just (1 % 2)}
+
 warningSpec :: Spec
 warningSpec = describe "the warning an unattainable window earns" $ do
     it "says nothing about a cycle the window fits" $
         renderPaceDecision shipped (decidePace shipped codeArtifact (Just (sampleCycle, 600)))
             `shouldBe` Nothing
 
-    it "holds no one request longer than a whole cycle's allowance" $ do
+    it "caps optional slowdown at a whole cycle's allowance" $ do
         let tiny = decidePace shipped (declaredAt 1) (Just (oneRequest ListingPage, 0))
-        paceSeconds (pdPace tiny) ListingPage `shouldSatisfy` (<= fromRational (cycleAllowance shipped))
+        paceSeconds (pdPace tiny) ListingPage `shouldBe` 3600
+
+    it "caps slowdown for a request kind absent from the measured cycle" $ do
+        let decision = decidePace shipped codeArtifact (Just (oneRequest ListingPage, 0))
+        paceSeconds (pdPace decision) ListingPage `shouldBe` 3600
+        paceSeconds (pdPace decision) DeleteBatch `shouldBe` 3600
 
     it "names the share the window would need and the one in force" $ do
         let tight = shipped{swpCycleWindow = 5000}
@@ -166,8 +203,6 @@ warningSpec = describe "the warning an unattainable window earns" $ do
             (renderPaceDecision shipped (decidePace shipped codeArtifact (Just (sampleCycle, 4000))))
             `shouldBe` Just True
 
-{- The boot line every store gets: where its capacity came from, the share in force and where that
-came from, and the ceilings the share yields. -}
 bootLineSpec :: Spec
 bootLineSpec = describe "the capacity line a boot records per store" $ do
     it "names the derived inputs, the computed share, and the ceilings" $ do
