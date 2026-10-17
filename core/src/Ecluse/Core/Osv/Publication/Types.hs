@@ -46,15 +46,15 @@ module Ecluse.Core.Osv.Publication.Types (
     epssBytesPerScoredRow,
 ) where
 
-import Crypto.Hash (Digest, SHA256, hash)
 import Crypto.Random (getRandomBytes)
-import Data.ByteArray qualified as BA
 import Data.Char (isHexDigit, isUpper)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
+import Data.Universe.Class (Universe (..))
+import Data.Universe.Generic (universeGeneric)
 
 import Ecluse.Core.Osv.Schema (EpssStatus)
-import Ecluse.Core.Package.Hash (hexDigestText)
+import Ecluse.Core.Package.Hash (hexDigestText, sha256Hex)
 import Ecluse.Core.Snapshot (ContentDigest, digestBytes)
 
 -- | A source's fixed-width identity: the SHA-256 of its credential-free URL.
@@ -163,7 +163,9 @@ data Adjustment
       EpssOutageCredit
     | -- | An operator's one-shot rebaseline, which resets the baseline to this artifact's size.
       OperatorRebaseline
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+instance Universe Adjustment where universe = universeGeneric
 
 -- | The adjustment's stored and logged spelling.
 renderAdjustment :: Adjustment -> Text
@@ -259,13 +261,10 @@ data Rebaseline = Rebaseline
 epssBytesPerScoredRow :: Integer
 epssBytesPerScoredRow = 12
 
-sha256Hex :: ByteString -> Text
-sha256Hex bytes = hexDigestText (BA.convert (hash bytes :: Digest SHA256))
-
 sha256HexText :: Text -> Maybe Text
 sha256HexText = lowerHexOfLength 64
 
 lowerHexOfLength :: Int -> Text -> Maybe Text
 lowerHexOfLength width raw
-    | T.length raw == width && T.all (\c -> isHexDigit c && not (isUpper c)) raw = Just raw
+    | T.compareLength raw width == EQ && T.all (\c -> isHexDigit c && not (isUpper c)) raw = Just raw
     | otherwise = Nothing

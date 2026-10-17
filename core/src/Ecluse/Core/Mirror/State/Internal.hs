@@ -43,7 +43,6 @@ module Ecluse.Core.Mirror.State.Internal (
     declaredCompanion,
 ) where
 
-import Crypto.Hash (Digest, SHA256, hash)
 import Data.Aeson (Object)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
@@ -53,6 +52,7 @@ import Data.Traversable (for)
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Package
+import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorFragment)
 import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
@@ -66,7 +66,7 @@ newtype StateTarget = StateTarget Text
 
 -- | Bind records and object keys to the exact configured target identity.
 stateTarget :: Text -> StateTarget
-stateTarget = StateTarget . sha256 . encodeUtf8
+stateTarget = StateTarget . sha256Hex . encodeUtf8
 
 -- | Opaque storage revision bound to the project it came from.
 data StateRevision = StateRevision StateTarget PackageName ByteString
@@ -230,13 +230,13 @@ verifyCompanionBytes limits file bytes = do
     for_ (nonEmpty digests) $ \expected -> case verifyIntegrity expected bytes of
         IntegrityVerified -> Right ()
         IntegrityMismatch detail -> Left (StateInvalid detail)
-    digest <- first StateInvalid (mkHash SHA256 (sha256 bytes))
+    digest <- first StateInvalid (mkHash SHA256 (sha256Hex bytes))
     pure (VerifiedCompanionBytes artifact (CompanionRef digest (BS.length bytes)) bytes)
 
 -- | Actual reads verify immutable content identity, including the recorded size.
 verifyRetainedCompanion :: CompanionRef -> ByteString -> Either MirrorStateFault ByteString
 verifyRetainedCompanion (CompanionRef digest size) bytes = do
-    unless (size == BS.length bytes && hashValue digest == sha256 bytes) (Left (StateInvalid "retained companion identity mismatch"))
+    unless (size == BS.length bytes && hashValue digest == sha256Hex bytes) (Left (StateInvalid "retained companion identity mismatch"))
     pure bytes
 
 -- | Bind durable bytes only to the same admitted declaration and parent identity.
@@ -314,7 +314,7 @@ targetKey (StateTarget digest) = digest
 
 -- | Length-independent components bind the schema, target, ecosystem, and canonical package.
 projectKey :: StateTarget -> PackageName -> Text
-projectKey target name = "v1/" <> targetKey target <> "/" <> ecosystemName (pkgEcosystem name) <> "/" <> sha256 (encodeUtf8 (TS.toText (pkgCanonical name)))
+projectKey target name = "v1/" <> targetKey target <> "/" <> ecosystemName (pkgEcosystem name) <> "/" <> sha256Hex (encodeUtf8 (TS.toText (pkgCanonical name)))
 
 -- | A missing or false declaration creates no retention authority.
 declaredCompanion :: Artifact -> Bool
@@ -322,6 +322,3 @@ declaredCompanion artifact = case artCoreMetadata artifact of
     Just (MetadataAvailable available) -> available
     Just (MetadataDigests values) -> not (Map.null values)
     Nothing -> False
-
-sha256 :: ByteString -> Text
-sha256 bytes = show (hash bytes :: Digest SHA256)

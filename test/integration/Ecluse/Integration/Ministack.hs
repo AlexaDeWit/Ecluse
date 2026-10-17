@@ -25,16 +25,23 @@ module Ecluse.Integration.Ministack (
     -- * Endpoint
     endpointFor,
 
+    -- * Stored objects
+    objectMetadata,
+
     -- * Logging
     quietLogEnv,
 ) where
 
 import Amazonka qualified as AWS
+import Amazonka.S3 qualified as S3
+import Amazonka.S3.Lens qualified as S3L
 import Amazonka.SQS.CreateQueue qualified as SQS
 import Amazonka.SQS.GetQueueAttributes qualified as SQS
 import Amazonka.SQS.SetQueueAttributes qualified as SQS
 import Amazonka.SQS.Types qualified as SQS
 import Control.Monad.Trans.Resource (runResourceT)
+import Data.HashMap.Strict qualified as HashMap
+import Data.Text qualified as T
 import Ecluse.Test.Log (newTestLogEnv)
 import Katip (LogEnv)
 import Lens.Micro ((.~), (?~), (^.))
@@ -103,19 +110,13 @@ data QueueOptions = QueueOptions
     , qoWaitSeconds :: Int
     -- ^ The long-poll window for a @receive@.
     , qoTerminalBackoff :: Seconds
-    {- ^ The backoff window @deadLetter@ returns a terminal message with (a short one
-    lets a test observe the not-deleted redelivery within its patience).
-    -}
+    -- ^ The backoff @deadLetter@ returns a terminal message with. A short one shows the redelivery within a test's patience.
     , qoDeadLetterAfter :: Maybe Int
-    {- ^ Attach a redrive policy to a fresh dead-letter queue, capturing at this
-    @maxReceiveCount@. 'Nothing' leaves the queue with no dead-letter terminus.
-    -}
+    -- ^ Attach a fresh dead-letter queue at this @maxReceiveCount@. 'Nothing' leaves the queue without one.
     }
     deriving stock (Eq, Show)
 
-{- | Defaults for a queue roundtrip. The short long poll keeps an empty poll from stalling
-a test, and the terminal backoff matches the production default.
--}
+-- | Defaults for a queue roundtrip. The short long poll keeps an empty poll from stalling a test.
 defaultQueueOptions :: QueueOptions
 defaultQueueOptions =
     QueueOptions
@@ -125,9 +126,7 @@ defaultQueueOptions =
         , qoDeadLetterAfter = Nothing
         }
 
-{- | A scribe-free 'LogEnv' for a layer that needs a logger where the spec does not assert
-on the log.
--}
+-- | A scribe-free 'LogEnv' for a layer that needs a logger the spec does not read.
 quietLogEnv :: IO LogEnv
 quietLogEnv = newTestLogEnv
 
@@ -204,15 +203,11 @@ createQueueWithRetry env queueName attempts =
                         Right
                         (response ^. SQS.createQueueResponse_queueUrl)
 
-{- | Poll until a non-empty batch arrives, bounded at about 10s, so an empty long poll does
-not flake and a genuinely empty queue fails the test rather than hanging.
--}
+-- | Poll until a non-empty batch arrives, for about 10s, so an empty queue fails the test rather than hanging.
 receiveUntil :: MirrorQueue -> IO [QueueMessage]
 receiveUntil = receiveUntilWithin 20
 
-{- | 'receiveUntil' with an explicit attempt budget, for a case that must wait out a longer
-visibility window. Each attempt waits the queue's long poll plus about 500ms.
--}
+-- | 'receiveUntil' with its own attempt budget, each the queue's long poll plus about 500ms, for a longer visibility window.
 receiveUntilWithin :: Int -> MirrorQueue -> IO [QueueMessage]
 receiveUntilWithin attempts queue =
     pollUntil attempts 500_000 arrived (receive queue) >>= \case
@@ -223,3 +218,9 @@ receiveUntilWithin attempts queue =
         Right [] -> fail "receiveUntilWithin: no message arrived within the retry budget"
   where
     arrived = either (const False) (not . null)
+
+-- | The user metadata the object at @key@ carries, keyed in lower case as S3 stores the keys.
+objectMetadata :: AWS.Env -> Text -> Text -> IO (HashMap.HashMap Text Text)
+objectMetadata aws bucket key = do
+    response <- runResourceT (AWS.send aws (S3.newHeadObject (S3.BucketName bucket) (S3.ObjectKey key)))
+    pure (HashMap.fromList (map (first T.toLower) (HashMap.toList (response ^. S3L.headObjectResponse_metadata))))

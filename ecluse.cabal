@@ -838,6 +838,7 @@ library ecluse-test-support
     , hspec             ^>=2.11
     , hspec-wai         ^>=0.11
     , http-client       ^>=0.7
+    , hs-opentelemetry-api  ^>=1.0
     , http-types        ^>=0.12
     , exceptions        ^>=0.10
     , katip             ^>=0.8.8

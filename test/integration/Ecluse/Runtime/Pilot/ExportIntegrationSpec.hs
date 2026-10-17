@@ -33,7 +33,7 @@ import Ecluse.Core.Osv.Compile (OsvCandidate, candidatePath)
 import Ecluse.Core.Osv.Provenance (ProvenanceSource (OsvExport))
 import Ecluse.Core.Osv.Publication
 import Ecluse.Core.Osv.Schema (EpssRequirement (..), osvDbFileName, osvSchemaEpoch)
-import Ecluse.Integration.Ministack (withMinistack)
+import Ecluse.Integration.Ministack (objectMetadata, withMinistack)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Cve.Sync.Internal (SyncEnv (..), SyncOutcome (..), newS3CveSource, s3CveFetchFor, syncStep)
@@ -186,7 +186,7 @@ withGuarded container eco name use =
         withSourceServer $ \server -> use store{stKey = toText (osvDbFileName (ecosystemName eco))} server dir
 
 publish :: Store -> OsvCandidate -> IO (Either PublicationStop Published)
-publish store candidate = runQuietKatip (publishCandidate Nothing (stAws store) (stPolicy store) Nothing (bucketOf store) (stKey store) candidate)
+publish store candidate = runQuietKatip (publishCandidate Nothing (stAws store) (stPolicy store) DurableBaseline Nothing (bucketOf store) (stKey store) candidate)
 
 expectPublished :: Either PublicationStop Published -> IO Published
 expectPublished = either (fail . show) pure
@@ -198,7 +198,7 @@ headObject :: Store -> IO S3.HeadObjectResponse
 headObject store = runResourceT (AWS.send (stAws store) (S3.newHeadObject (S3.BucketName (bucketOf store)) (S3.ObjectKey (stKey store))))
 
 storedMetadata :: Store -> IO (HashMap.HashMap Text Text)
-storedMetadata store = HashMap.fromList . map (first T.toLower) . HashMap.toList . (^. S3L.headObjectResponse_metadata) <$> headObject store
+storedMetadata store = objectMetadata (stAws store) (bucketOf store) (stKey store)
 
 storedEtag :: Store -> IO (Maybe S3.ETag)
 storedEtag store = (^. S3L.headObjectResponse_eTag) <$> headObject store

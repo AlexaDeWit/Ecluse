@@ -9,6 +9,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Data.List (lookup)
+import Data.Text qualified as T
 import Network.HTTP.Types
 import Network.HTTP.Types.Header (hETag, hIfMatch, hIfNoneMatch)
 import Network.Wai (Application, Request, queryString, requestHeaders, requestMethod, responseLBS, responseRaw, strictRequestBody)
@@ -16,10 +17,12 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Fault (TransportFault (tfDetail))
 import Ecluse.Core.Osv.Compile (OsvCandidate, candidatePath)
 import Ecluse.Core.Osv.Publication
+import Ecluse.Runtime.Aws.S3.Conditional (maxCappedResponseBytes)
 import Ecluse.Runtime.Pilot.Export
-import Ecluse.Runtime.Test.S3 (emptyListing, listingHolding, withS3, xmlError)
+import Ecluse.Runtime.Test.S3 (emptyListing, listingHolding, reply, withS3, xmlError)
 import Ecluse.Test.Log (runQuietKatip)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip)
 import Ecluse.Test.OsvDb (withCompiledCandidate)
@@ -65,10 +68,20 @@ spec = describe "guarded advisory publication over S3" $
                 lookup nonceHeader (storedMeta stored) `shouldBe` Just (encodeUtf8 (renderPublicationNonce (psNonce (plState (pubPlan published)))))
                 fmap seenMethod . latest <$> readIORef (fakeLog fake) `shouldReturn` Just methodHead
 
-        it "reports an unknown outcome when the reread finds no write of its own" $
+        it "reports an unknown outcome, and that the reread found no object, when no write landed" $
             withPublication eco (\_ seen -> Break <$ guard (seenMethod seen == methodPut)) $ \fake _ publish -> do
-                publish >>= (`shouldSatisfy` uncertain)
+                publish >>= (`shouldSatisfy` uncertainWith RereadNoObject)
                 isNothing <$> readIORef (fakeObject fake) `shouldReturn` True
+
+        it "names the other revision a reread finds after an unanswered write" $
+            withPublication eco (\_ seen -> StoreOtherThenBreak <$ guard (seenMethod seen == methodPut)) $ \_ _ publish ->
+                publish >>= (`shouldSatisfy` uncertainWith (RereadOtherRevision (ObjectRevision "\"someone-else\"")))
+
+        it "bounds an error body before the decoder reads it, then lets the reread decide" $
+            withPublication eco (\_ seen -> Serve (reply status500 [] (LBS.replicate 70000 0x78)) <$ guard (seenMethod seen == methodPut)) $ \_ _ publish ->
+                publish >>= \case
+                    Left (PublicationFaulted (StoreWriteUncertain fault RereadNoObject)) -> tfDetail fault `shouldSatisfy` T.isInfixOf (show maxCappedResponseBytes <> "-byte bound")
+                    other -> expectationFailure ("expected a bounded, unproven write, got " <> show other)
 
         it "refuses to replace an object without publication metadata, and writes nothing" $
             withPublication eco noHooks $ \fake _ publish -> do
@@ -88,17 +101,19 @@ spec = describe "guarded advisory publication over S3" $
                 publish `shouldReturn` Left (PublicationFaulted StoreConditionalWriteUnsupported)
 
         for_
-            [ ("an empty listing proves the key absent", emptyListing, Right CreateOnly)
-            , ("a listing holding the key is a denied read", listingHolding "advisories/artifact.db", Left (PublicationFaulted StoreReadDenied))
-            , ("a truncated listing proves nothing", "<ListBucketResult><IsTruncated>true</IsTruncated></ListBucketResult>", Left (PublicationFaulted StoreAbsenceUnknown))
+            [ ("an empty listing proves the key absent", reply status200 [] emptyListing, Right CreateOnly)
+            , ("a listing holding the key is a denied read", reply status200 [] (listingHolding "advisories/artifact.db"), Left (PublicationFaulted StoreReadDenied))
+            , ("a truncated listing proves nothing", reply status200 [] "<ListBucketResult><IsTruncated>true</IsTruncated></ListBucketResult>", Left (PublicationFaulted StoreAbsenceUnknown))
+            , ("a refused listing names the permissions", reply status403 [] (xmlError "AccessDenied"), Left (PublicationFaulted StoreListDenied))
+            , ("an oversized listing is refused unread", reply status200 [] (LBS.replicate 70000 0x20), Left (PublicationFaulted (StoreResponseTooLarge maxCappedResponseBytes)))
             ]
             $ \(label, listing, expected) ->
                 it ("after a refused HEAD, " <> label) $
                     withPublication eco (deniedHead listing) $ \_ _ publish ->
                         fmap (plPrecondition . pubPlan) <$> publish `shouldReturn` expected
   where
-    uncertain = \case
-        Left (PublicationFaulted (StoreWriteUncertain _)) -> True
+    uncertainWith finding = \case
+        Left (PublicationFaulted (StoreWriteUncertain _ found)) -> found == finding
         _ -> False
     tooLarge = \case
         Left (PublicationRefused (PredecessorUnreadable (EnvelopeTooLarge _))) -> True
@@ -129,7 +144,7 @@ data Fake = Fake
     }
 
 -- What a hooked request answers in place of the fake's conditional store.
-data Override = Respond Status | StoreThenBreak | Break | Serve Application
+data Override = Respond Status | StoreThenBreak | StoreOtherThenBreak | Break | Serve Application
 
 -- A hook sees each request with the count of PUTs so far, this one included.
 type Hooks = Int -> Seen -> Maybe Override
@@ -140,10 +155,10 @@ noHooks _ _ = Nothing
 onPut :: Int -> Override -> Hooks
 onPut nth override puts seen = override <$ guard (seenMethod seen == methodPut && puts == nth)
 
-deniedHead :: LByteString -> Hooks
+deniedHead :: Application -> Hooks
 deniedHead listing _ seen
     | seenMethod seen == methodHead = Just (Respond status403)
-    | not (null (seenQuery seen)) = Just (Serve (\_ respond -> respond (responseLBS status200 [] listing)))
+    | not (null (seenQuery seen)) = Just (Serve listing)
     | otherwise = Nothing
 
 withPublication :: Ecosystem -> Hooks -> (Fake -> OsvCandidate -> IO (Either PublicationStop Published) -> IO ()) -> IO ()
@@ -153,7 +168,7 @@ withPublication eco hooks body = withSystemTempDirectory "ecluse-export-spec" $ 
     policy <- maybe (fail "fixture policy") pure (ShrinkPolicy <$> mkPercent 2 <*> mkPercent 5)
     withCompiledCandidate eco archive dir $ \candidate ->
         withS3 (fakeS3 fake hooks) $ \env ->
-            body fake candidate (runQuietKatip (publishCandidate Nothing env policy Nothing "records" "advisories/artifact.db" candidate))
+            body fake candidate (runQuietKatip (publishCandidate Nothing env policy DurableBaseline Nothing "records" "advisories/artifact.db" candidate))
 
 -- An S3 that keeps one object, enforces both preconditions, and returns the metadata it stored.
 fakeS3 :: Fake -> Hooks -> Application
@@ -165,6 +180,7 @@ fakeS3 fake hooks request respond = do
         Just (Respond status) -> respond (responseLBS status [] (if seenMethod seen == methodHead then "" else xmlError "Refused"))
         Just (Serve application) -> application request respond
         Just StoreThenBreak -> store puts seen >> lostResponse request respond
+        Just StoreOtherThenBreak -> writeIORef (fakeObject fake) (Just (Stored "\"someone-else\"" "other bytes" [])) >> lostResponse request respond
         Just Break -> lostResponse request respond
         Nothing
             | seenMethod seen == methodHead ->

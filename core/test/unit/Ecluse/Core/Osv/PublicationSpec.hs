@@ -138,6 +138,12 @@ epssCreditSpec fx = describe "the EPSS outage credit" $ do
         (psEpssCreditBytes accepted, psAdjustment accepted, psBaselineBytes accepted) `shouldBe` (50, EpssOutageCredit, 1000)
         outage scored 930 `shouldBe` Left (ShrinkPastBaseline (ShrinkReading 930 931 1000 50))
 
+    for_ [(800, 40, 941), (1200, 60, 922)] $ \(previousBytes, credit, minimumBytes) ->
+        it ("caps the credit at 5% of the stored object's " <> show previousBytes <> " bytes, not of its 1000-byte baseline") $ do
+            let lost bytes = planWith fx (requestFor fx (osvAt (Just (hour 11)) "osv-b") Nothing bytes) (StorePresent revision previousBytes (Right scored))
+            psEpssCreditBytes . plState <$> lost minimumBytes `shouldBe` Right credit
+            lost (minimumBytes - 1) `shouldBe` Left (ShrinkPastBaseline (ShrinkReading (minimumBytes - 1) minimumBytes 1000 credit))
+
     it "sizes the credit at 12 bytes per scored range when that is under the cap" $ do
         accepted <- plState <$> expectPlan (outage scored{psScoredRows = 2} 957)
         psEpssCreditBytes accepted `shouldBe` 24

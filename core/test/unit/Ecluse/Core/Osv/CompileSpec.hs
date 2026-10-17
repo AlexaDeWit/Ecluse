@@ -44,7 +44,6 @@ import Ecluse.Core.Osv.Compile (
     candidateDestination,
     candidateFacts,
     candidatePath,
-    compileOsvToSqlite,
     osvToRow,
     promoteCandidate,
     stampCandidateNonce,
@@ -74,7 +73,7 @@ import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Cve (namesFix)
 import Ecluse.Test.Log (captureJsonLog, newTestLogEnv)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip, osvZipOf, runOsvTestM, runOsvTestMWith)
-import Ecluse.Test.OsvDb (compileOsvZipDbTo, compileOsvZipDbWithFeedTo, epssFixtureFile, metaOf, scoresOf)
+import Ecluse.Test.OsvDb (compileOsvToSqlite, compileOsvZipDbTo, compileOsvZipDbWithFeedTo, epssFixtureFile, metaOf, scoresOf)
 import Ecluse.Test.Port (RecordedCompile (RecordedCompile), recordingAdvisoryCompileMetricsPort)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Stub (Stub, stubBaseUrl, withStub, withStubHeaders)

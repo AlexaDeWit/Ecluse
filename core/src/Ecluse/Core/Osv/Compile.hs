@@ -11,7 +11,6 @@ only once its caller promotes it, so a refused publication leaves the previous a
 -}
 module Ecluse.Core.Osv.Compile (
     CompileSources (..),
-    compileOsvToSqlite,
 
     -- * The candidate a publication decides on
     OsvCandidate,
@@ -119,11 +118,6 @@ data CompileSources = CompileSources
     -- ^ The EPSS daily feed, from the configured @advisories.epssFeedUrl@.
     }
     deriving stock (Eq, Show)
-
--- | Compile one ecosystem into @outDir@ and promote the result at once, with no publication in between.
-compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> OsvEcosystem -> EpssRequirement -> CompileSources -> QuietTime -> m FilePath
-compileOsvToSqlite metrics mTracerProvider outDir eco requirement sources quietTime =
-    withOsvCandidate metrics mTracerProvider outDir eco requirement sources quietTime promoteCandidate
 
 -- | A compiled artifact in its exclusive temporary file, with the facts its publication compares.
 data OsvCandidate = OsvCandidate

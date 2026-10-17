@@ -9,7 +9,6 @@ module Ecluse.PilotIntegrationSpec (spec) where
 
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
-import Amazonka.S3.Lens qualified as S3L
 import Amazonka.S3.ListObjectsV2 qualified as S3
 import Amazonka.S3.Types.Object qualified as S3Object
 import Codec.Compression.GZip qualified as GZip
@@ -20,7 +19,6 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Katip (runKatipContextT)
-import Lens.Micro ((^.))
 import Network.HTTP.Types.Status (status200, status404)
 import System.Directory (doesFileExist)
 import System.FilePath ((</>))
@@ -37,7 +35,7 @@ import Ecluse.Core.Osv.Compile (PilotEpssRequired)
 import Ecluse.Core.Osv.Publication (ObjectRevision (ObjectRevision), PublicationRefusal (..), Rebaseline (Rebaseline), mkPercent)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired), osvDbFileName)
 import Ecluse.Core.Osv.Stream (PilotIngestAborted (..))
-import Ecluse.Integration.Ministack (endpointFor, quietLogEnv, withMinistack)
+import Ecluse.Integration.Ministack (endpointFor, objectMetadata, quietLogEnv, withMinistack)
 import Ecluse.Pilot (PilotCompileOptions (..), UploadRequest (..), runExportLoop, runPilotCompile)
 import Ecluse.Pilot.Plan (ExportTarget (ExportTarget), exportLoopPlan)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
@@ -174,7 +172,7 @@ spec = aroundAll withMinistack $ do
                     snapshot aws bucket `shouldReturn` before
                     stored <- maybe (fail "no stored revision") pure (listToMaybe (map objectTag before))
                     void (compile small (UploadRebaselined (Rebaseline (ObjectRevision (decodeUtf8 (unETag stored))) allowance)))
-                    metadata <- storedMetadata aws bucket (artifactKey eco)
+                    metadata <- objectMetadata aws bucket (toText (osvDbFileName (ecosystemName eco)))
                     rebaselined <- snapshot aws bucket
                     (HashMap.lookup "baseline-adjustment" metadata, HashMap.lookup "baseline-bytes" metadata)
                         `shouldBe` (Just "operator-rebaseline", show . objectSize <$> listToMaybe rebaselined)
@@ -231,11 +229,6 @@ loopEnvFor :: Ecosystem -> Text -> FilePath -> [(String, String)] -> [(String, S
 loopEnvFor eco bucket dataDir sources =
     oneShotEnvFor eco bucket sources
         <> [("ECLUSE_ADVISORIES__DATA_DIR", dataDir), ("ECLUSE_ADVISORIES__COMPILE_INTERVAL", "3600")]
-
-storedMetadata :: AWS.Env -> Text -> S3.ObjectKey -> IO (HashMap.HashMap Text Text)
-storedMetadata aws bucket key = do
-    response <- runResourceT (AWS.send aws (S3.newHeadObject (S3.BucketName bucket) key))
-    pure (HashMap.fromList (map (first T.toLower) (HashMap.toList (response ^. S3L.headObjectResponse_metadata))))
 
 unETag :: S3.ETag -> ByteString
 unETag (S3.ETag tag) = tag

@@ -20,6 +20,9 @@ import Data.ByteString qualified as BS
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
+import Data.Universe.Class (Universe (..))
+import Data.Universe.Class qualified as Universe
+import Data.Universe.Generic (universeGeneric)
 
 import Ecluse.Core.Osv.Publication.Types (
     Adjustment,
@@ -63,7 +66,9 @@ data EnvelopeKey
     | KeyEpssCreditBytes
     | KeyNonce
     | KeyAdjustment
-    deriving stock (Bounded, Enum, Eq)
+    deriving stock (Eq, Generic)
+
+instance Universe EnvelopeKey where universe = universeGeneric
 
 -- S3 stores metadata keys in lower case, so every key is written that way.
 renderKey :: EnvelopeKey -> Text
@@ -91,7 +96,7 @@ encodeEnvelope published = do
     for_ pairs $ \(key, value) -> unless (T.all printableAscii value) (Left (EnvelopeMalformed key))
     within pairs
   where
-    pairs = [(renderKey key, renderValue published key) | key <- [minBound .. maxBound]]
+    pairs = [(renderKey key, renderValue published key) | key <- Universe.universe]
 
 renderValue :: PublishedState -> EnvelopeKey -> Text
 renderValue published = \case
@@ -122,7 +127,7 @@ decodeEnvelope raw = do
     void (within raw)
     whenJust (lookupKey KeyVersion) $ \version ->
         unless (version == envelopeVersion) (Left (EnvelopeUnsupported (T.take 32 version)))
-    whenJust (nonEmpty [renderKey key | key <- [minBound .. maxBound], isNothing (lookupKey key)]) (Left . EnvelopeMissing)
+    whenJust (nonEmpty [renderKey key | key <- Universe.universe, isNothing (lookupKey key)]) (Left . EnvelopeMissing)
     osv <- marker KeyOsvSource KeyOsvLastModified KeyOsvDigest
     status <- field KeyEpssStatus epssStatusOf
     lastEpss <- epssMarker
@@ -171,7 +176,7 @@ epssStatusOf :: Text -> Maybe EpssStatus
 epssStatusOf value = find ((== value) . renderEpssStatus) [EnrichmentAvailable, EnrichmentUnavailable]
 
 ecosystemOf :: Text -> Maybe Text
-ecosystemOf value = value <$ guard (not (T.null value) && T.length value <= 64 && T.all printableAscii value)
+ecosystemOf value = value <$ guard (not (T.null value) && T.compareLength value 64 /= GT && T.all printableAscii value)
 
 -- Counts fit 'Int64', which also bounds what a hostile value can make the comparison hold.
 boundedCount :: Text -> Maybe Integer
@@ -180,7 +185,7 @@ boundedCount value = do
     count <$ guard (count <= toInteger (maxBound :: Int64))
 
 adjustmentOf :: Text -> Maybe Adjustment
-adjustmentOf value = find ((== value) . renderAdjustment) [minBound .. maxBound]
+adjustmentOf value = find ((== value) . renderAdjustment) Universe.universe
 
 printableAscii :: Char -> Bool
 printableAscii c = c >= ' ' && c <= '~'

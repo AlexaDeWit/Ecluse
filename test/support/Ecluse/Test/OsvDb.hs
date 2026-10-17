@@ -10,6 +10,7 @@ module Ecluse.Test.OsvDb (
     epssFixtureFile,
     withFixtureOsvDb,
     withOsvZipDb,
+    compileOsvToSqlite,
     compileOsvZipDbTo,
     compileOsvZipDbWithFeedTo,
 
@@ -30,6 +31,8 @@ module Ecluse.Test.OsvDb (
     denyIfEpssRules,
 ) where
 
+import Conduit (MonadResource)
+import Control.Monad.Catch (MonadMask)
 import Data.Map.Strict qualified as Map
 import Database.SQLite.Simple (Only (fromOnly), query_, withConnection)
 import Network.HTTP.Types (Header)
@@ -42,16 +45,20 @@ import Ecluse.Core.Cve (CveDb (cveDbClose), openCveDb)
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Osv.Compile (CompileSources (..), OsvCandidate, compileOsvToSqlite, withOsvCandidate)
-import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor)
+import Ecluse.Core.Osv.Compile (CompileSources (..), OsvCandidate, promoteCandidate, withOsvCandidate)
+import Ecluse.Core.Osv.Ecosystem (OsvEcosystem, osvEcosystemFor)
 import Ecluse.Core.Osv.Provenance (QuietTime (..))
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
 import Ecluse.Core.Rules (RuleDeps)
+import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort)
 import Ecluse.Test.Osv (CorpusVersion, osvCorpusZip, runOsvTestM)
 import Ecluse.Test.Port (noopAdvisoryCompileMetricsPort)
 import Ecluse.Test.Rules (slotRuleDeps)
 import Ecluse.Test.Stub (Stub, stubBaseUrl, withRoutedStubIO, withStub)
 import Ecluse.Test.Support (expectRight)
+import Katip (KatipContext)
+import OpenTelemetry.Trace.Core (TracerProvider)
+import UnliftIO (MonadUnliftIO)
 
 -- | The shared EPSS feed slice omits some corpus aliases to cover missing scores.
 epssFixtureFile :: FilePath
@@ -67,6 +74,11 @@ withFixtureOsvDb v use = do
 withOsvZipDb :: Ecosystem -> LByteString -> (FilePath -> IO a) -> IO a
 withOsvZipDb eco zipBytes use =
     withSystemTempDirectory "ecluse-osv-fixture" (compileOsvZipDbTo eco zipBytes >=> use)
+
+-- | Compile one ecosystem into @outDir@ and promote it at once, as a compile with no publication does.
+compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> OsvEcosystem -> EpssRequirement -> CompileSources -> QuietTime -> m FilePath
+compileOsvToSqlite metrics mTracerProvider outDir eco requirement sources quietTime =
+    withOsvCandidate metrics mTracerProvider outDir eco requirement sources quietTime promoteCandidate
 
 -- | Compile into the supplied directory so tests can exercise artifact replacement.
 compileOsvZipDbTo :: Ecosystem -> LByteString -> FilePath -> IO FilePath
@@ -159,9 +171,7 @@ stubSourceEnv osvStub epssStub =
     , ("ECLUSE_ADVISORIES__EPSS_FEED_URL", toString (stubBaseUrl epssStub) <> "/epss.csv.gz")
     ]
 
-{- | Serve this OSV archive, and an EPSS feed answering this status and body, from stubs. The case
-gets their 'stubSourceEnv' and the EPSS stub.
--}
+-- | Serve this OSV archive and an EPSS feed answering this status and body. The case gets their 'stubSourceEnv' and the EPSS stub.
 withSourceStubs :: LByteString -> (Status, LByteString) -> ([(String, String)] -> Stub -> IO a) -> IO a
 withSourceStubs zipBytes (feedStatus, feedBytes) use =
     withStub status200 zipBytes $ \osvStub ->

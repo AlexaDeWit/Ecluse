@@ -649,7 +649,7 @@ diagrams:
       - kind: flow
         id: 0fae263a-780c-4ded-a335-da3a438c29f7
         name: publish advisory artifacts
-        description: Pilot uploads each ecosystem's compiled advisory SQLite artifact to the advisory store with PutObject.
+        description: Pilot reads each ecosystem's stored artifact metadata with HEAD, and with a one-key ListObjectsV2 when that HEAD is refused. It then uploads the compiled advisory SQLite artifact and its publication metadata with a conditional PutObject over the revision it read.
         outOfScope: false
         reasonOutOfScope: ""
         protocol: HTTPS
@@ -1127,7 +1127,7 @@ mitigations:
       - b74d9df0-8947-4e67-bf50-1c5e688a09f1
   - id: mit-role-separation
     title: Pilot runs as its own role
-    prose: Pilot runs in its own process and container with its own identity, apart from the proxy, and its only S3 call is the artifact upload. A Pilot failure, memory exhaustion included, delays advisory updates and does not stop the proxy.
+    prose: Pilot runs in its own process and container with its own identity, apart from the proxy. Its S3 calls are a metadata-only HEAD of each artifact, a one-key listing when that HEAD is refused, and the conditional PutObject that publishes the artifact. A Pilot failure, memory exhaustion included, delays advisory updates and does not stop the proxy.
     status: implemented
     threats:
       - b1a6332d-8def-4df9-922e-53718c920155

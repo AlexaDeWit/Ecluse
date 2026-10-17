@@ -13,8 +13,8 @@ module Ecluse.Runtime.Pilot.Export (
     Published (..),
     PublicationStop (..),
     StoreFault (..),
+    RereadFinding (..),
     renderPublicationStop,
-    s3BaselineCapability,
     maxPublicationAttempts,
     publishCandidate,
 ) where
@@ -29,15 +29,16 @@ import Katip (KatipContext, Severity (..), katipAddContext, logFM, ls, sl)
 import Lens.Micro ((.~), (^.))
 import System.Directory (getFileSize)
 import UnliftIO (MonadUnliftIO)
+import UnliftIO.Exception (handle, try)
 
-import Ecluse.Core.Fault (TransportFault (tfCause, tfDetail), renderTransportCause)
+import Ecluse.Core.Fault (TransportCause (TransportProtocol), TransportFault (tfCause, tfDetail), renderTransportCause, transportFault)
 import Ecluse.Core.Osv.Compile (OsvCandidate, candidateFacts, candidatePath, stampCandidateNonce)
 import Ecluse.Core.Osv.Publication
 import Ecluse.Core.Osv.Publication.Envelope (decodeEnvelope, encodeEnvelope)
 import Ecluse.Core.Telemetry.Record (timedSeconds)
 import Ecluse.Core.Telemetry.Span (withOptionalSpan)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport, serviceStatus)
-import Ecluse.Runtime.Aws.S3.Conditional (ConditionalPut (..), WritePrecondition (..), absenceListing, isWriteConflict, listingProvesAbsence)
+import Ecluse.Runtime.Aws.S3.Conditional (Capped (..), ConditionalPut (..), ResponseTooLarge (..), WritePrecondition (..), absenceListing, isWriteConflict, listingProvesAbsence)
 import OpenTelemetry.Trace.Core (Span, SpanKind (Client), SpanStatus (Error), TracerProvider, addAttribute, setStatus)
 
 -- | A publication that landed: the revision the store reported, and the decision it carried out.
@@ -66,6 +67,10 @@ data StoreFault
       StoreReadDenied
     | -- | HEAD was refused, and the listing could not prove the key absent.
       StoreAbsenceUnknown
+    | -- | Both HEAD and the one-key listing were refused.
+      StoreListDenied
+    | -- | A HEAD or listing response passed its byte bound, carried.
+      StoreResponseTooLarge Int
     | -- | HEAD answered without an ETag or a length.
       StoreNoRevision
     | -- | The store refused a conditional write as unimplemented.
@@ -74,13 +79,16 @@ data StoreFault
       StoreEnvelopeRefused EnvelopeFault
     | -- | Every attempt lost a race to another writer.
       StoreConflictsExhausted Int
-    | -- | The write's outcome stayed unknown after a reread showed another revision.
-      StoreWriteUncertain TransportFault
+    | -- | The write failed without proof either way, and the reread found no write of this publication.
+      StoreWriteUncertain TransportFault RereadFinding
     deriving stock (Eq, Show)
 
--- | The S3 adapter keeps the baseline in each object's metadata.
-s3BaselineCapability :: BaselineCapability
-s3BaselineCapability = DurableBaseline
+-- | What the reread after an unproven write found.
+data RereadFinding
+    = RereadNoObject
+    | RereadOtherRevision ObjectRevision
+    | RereadFailed StoreFault
+    deriving stock (Eq, Show)
 
 -- | How many conditional writes one publication attempts before it gives up a race.
 maxPublicationAttempts :: Int
@@ -97,18 +105,26 @@ renderStoreFault = \case
     StoreTransport fault -> "the store request failed: " <> renderFault fault
     StoreReadDenied -> "the store refused HEAD on an existing object, so its publication metadata cannot be read. Pilot needs s3:GetObject"
     StoreAbsenceUnknown -> "the store refused HEAD, and its listing did not prove the key absent. Pilot needs s3:GetObject and prefix-scoped s3:ListBucket"
+    StoreListDenied -> "the store refused HEAD and the one-key listing, so a missing object and a denied read look alike. Pilot needs s3:GetObject and s3:ListBucket limited to the advisory prefix"
+    StoreResponseTooLarge bytes -> "the store's response passed its " <> show bytes <> "-byte bound"
     StoreNoRevision -> "the store answered HEAD without an ETag or a length"
     StoreConditionalWriteUnsupported -> "the store does not implement conditional writes, which guarded publication requires"
     StoreEnvelopeRefused fault -> "the new artifact's metadata cannot be written: " <> renderEnvelopeFault fault
     StoreConflictsExhausted attempts -> "another writer replaced the object during each of " <> show attempts <> " attempts"
-    StoreWriteUncertain fault -> "the write's outcome is unknown, and a reread found another revision: " <> renderFault fault
+    StoreWriteUncertain fault finding -> "the write failed without proof either way (" <> renderFault fault <> "), and a reread " <> renderFinding finding
+
+renderFinding :: RereadFinding -> Text
+renderFinding = \case
+    RereadNoObject -> "found no object"
+    RereadOtherRevision (ObjectRevision tag) -> "found revision " <> tag <> ", which no attempt of this publication wrote"
+    RereadFailed fault -> "could not read the object: " <> renderStoreFault fault
 
 renderFault :: TransportFault -> Text
 renderFault fault = renderTransportCause (tfCause fault) <> " (" <> tfDetail fault <> ")"
 
 -- | Publish the candidate under @bucket@ and @key@, deciding each attempt on a fresh HEAD. Each attempt's nonce identifies it if it lands unseen.
-publishCandidate :: (MonadUnliftIO m, KatipContext m) => Maybe TracerProvider -> AWS.Env -> ShrinkPolicy -> Maybe Rebaseline -> Text -> Text -> OsvCandidate -> m (Either PublicationStop Published)
-publishCandidate mTracerProvider env policy rebaseline bucket key candidate =
+publishCandidate :: (MonadUnliftIO m, KatipContext m) => Maybe TracerProvider -> AWS.Env -> ShrinkPolicy -> BaselineCapability -> Maybe Rebaseline -> Text -> Text -> OsvCandidate -> m (Either PublicationStop Published)
+publishCandidate mTracerProvider env policy capability rebaseline bucket key candidate =
     withOptionalSpan mTracerProvider Client "ecluse.pilot.osv.upload" $ \mSpan -> do
         size <- liftIO (getFileSize (candidatePath candidate))
         stampUploadSpan mSpan bucket key size
@@ -127,15 +143,16 @@ publishCandidate mTracerProvider env policy rebaseline bucket key candidate =
                     stampCandidateNonce candidate nonce
                     bytes <- liftIO (getFileSize (candidatePath candidate))
                     let request = PublicationRequest (candidateFacts candidate) bytes nonce rebaseline
-                    case planPublication policy s3BaselineCapability request observed of
+                    case planPublication policy capability request observed of
                         Left refusal -> pure (Left (PublicationRefused refusal))
                         Right plan -> writePlanned number (plan : attempted) plan
     writePlanned number attempted plan = case encodeEnvelope (plState plan) of
         Left fault -> pure (Left (PublicationFaulted (StoreEnvelopeRefused fault)))
         Right envelope ->
             liftIO (putCandidate env bucket key (candidatePath candidate) (plPrecondition plan) envelope) >>= \case
-                Right revision -> pure (Right (Published revision plan))
-                Left err
+                Right (Right revision) -> pure (Right (Published revision plan))
+                Left (ResponseTooLarge bytes) -> reconcile attempted (transportFault TransportProtocol ("the response passed its " <> show bytes <> "-byte bound"))
+                Right (Left err)
                     | isWriteConflict err && number < maxPublicationAttempts -> do
                         logFM WarningS (ls ("Another writer replaced " <> key <> " during publication, so Pilot rereads it and decides again"))
                         attempt (number + 1) attempted
@@ -146,7 +163,11 @@ publishCandidate mTracerProvider env policy rebaseline bucket key candidate =
     reconcile attempted fault =
         liftIO (observeStore env bucket key) <&> \case
             Right observed | Just landed <- ownPublication attempted observed -> Right landed
-            _ -> Left (PublicationFaulted (StoreWriteUncertain fault))
+            Right StoreAbsent -> uncertain RereadNoObject
+            Right (StorePresent revision _ _) -> uncertain (RereadOtherRevision revision)
+            Left readFault -> uncertain (RereadFailed readFault)
+      where
+        uncertain = Left . PublicationFaulted . StoreWriteUncertain fault
 
 -- An object that carries the nonce of one of this publication's own attempts is that attempt, landed.
 ownPublication :: [PublicationPlan] -> StoreObservation -> Maybe Published
@@ -159,12 +180,15 @@ ownPublication attempted = \case
 -- falls back on a one-key listing, so a missing key is told apart from a denied read.
 observeStore :: AWS.Env -> Text -> Text -> IO (Either StoreFault StoreObservation)
 observeStore env bucket key =
-    runResourceT (AWS.sendEither env (S3.newHeadObject (S3.BucketName bucket) (S3.ObjectKey key))) >>= \case
-        Right response -> pure (presentObject response)
-        Left err
-            | serviceStatus err == Just 404 -> pure (Right StoreAbsent)
-            | serviceStatus err == Just 403 -> deniedHead env bucket key
-            | otherwise -> pure (Left (StoreTransport (classifyAwsTransport err)))
+    capped $
+        runResourceT (AWS.sendEither env (Capped (S3.newHeadObject (S3.BucketName bucket) (S3.ObjectKey key)))) >>= \case
+            Right response -> pure (presentObject response)
+            Left err
+                | serviceStatus err == Just 404 -> pure (Right StoreAbsent)
+                | serviceStatus err == Just 403 -> deniedHead env bucket key
+                | otherwise -> pure (Left (StoreTransport (classifyAwsTransport err)))
+  where
+    capped = handle (\(ResponseTooLarge bytes) -> pure (Left (StoreResponseTooLarge bytes)))
 
 presentObject :: S3.HeadObjectResponse -> Either StoreFault StoreObservation
 presentObject response = case (response ^. S3L.headObjectResponse_eTag, response ^. S3L.headObjectResponse_contentLength) of
@@ -175,20 +199,22 @@ presentObject response = case (response ^. S3L.headObjectResponse_eTag, response
 
 deniedHead :: AWS.Env -> Text -> Text -> IO (Either StoreFault StoreObservation)
 deniedHead env bucket key =
-    runResourceT (AWS.sendEither env (absenceListing bucket key)) <&> \case
+    runResourceT (AWS.sendEither env (Capped (absenceListing bucket key))) <&> \case
         Right listing
             | listingProvesAbsence listing -> Right StoreAbsent
             | any ((== S3.ObjectKey key) . (^. S3L.object_key)) (fromMaybe [] (listing ^. S3L.listObjectsV2Response_contents)) -> Left StoreReadDenied
             | otherwise -> Left StoreAbsenceUnknown
-        Left err -> Left (StoreTransport (classifyAwsTransport err))
+        Left err
+            | serviceStatus err == Just 403 -> Left StoreListDenied
+            | otherwise -> Left (StoreTransport (classifyAwsTransport err))
 
 -- The body streams from the candidate file, and amazonka's own retry is off: a resent PUT would
 -- reread the file, and the guard rereads the store itself before it tries again.
-putCandidate :: AWS.Env -> Text -> Text -> FilePath -> Precondition -> [(Text, Text)] -> IO (Either AWS.Error (Maybe ObjectRevision))
-putCandidate env bucket key path precondition envelope = do
+putCandidate :: AWS.Env -> Text -> Text -> FilePath -> Precondition -> [(Text, Text)] -> IO (Either ResponseTooLarge (Either AWS.Error (Maybe ObjectRevision)))
+putCandidate env bucket key path precondition envelope = try $ do
     body <- AWS.chunkedFile 1048576 path
     let native = S3.newPutObject (S3.BucketName bucket) (S3.ObjectKey key) body & S3L.putObject_metadata .~ HashMap.fromList envelope
-    result <- runResourceT (AWS.sendEither (AWS.once env{AWS.retryCheck = \_ _ -> False}) (ConditionalPut (writePrecondition precondition) native))
+    result <- runResourceT (AWS.sendEither (AWS.once env{AWS.retryCheck = \_ _ -> False}) (Capped (ConditionalPut (writePrecondition precondition) native)))
     pure (fmap (\response -> (\(S3.ETag tag) -> ObjectRevision (decodeUtf8 tag)) <$> response ^. S3L.putObjectResponse_eTag) result)
 
 writePrecondition :: Precondition -> WritePrecondition

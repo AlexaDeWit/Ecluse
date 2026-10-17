@@ -35,6 +35,7 @@ import Ecluse.Config (
     Config (configApp, configMounts),
     advisoryStoreUrlText,
  )
+import Ecluse.Config.AdvisoryStore (advisoryStoreCapability)
 import Ecluse.Core.Ecosystem (ecosystemName, parseEcosystem)
 import Ecluse.Core.Osv.Compile (OsvCandidate, candidateDestination, promoteCandidate, withOsvCandidate)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor, osvEcosystemNamed)
@@ -128,7 +129,7 @@ publishToStore :: (MonadUnliftIO m, KatipContext m) => Telemetry -> Maybe AwsEnd
 publishToStore telemetry s3Endpoint advisories store rebaseline candidate = do
     env <- liftIO (buildS3Env s3Endpoint)
     let (bucket, key) = uploadTarget store (candidateDestination candidate)
-    publishCandidate (telemetryTracerProvider telemetry) env (shrinkPolicyOf advisories) rebaseline bucket key candidate
+    publishCandidate (telemetryTracerProvider telemetry) env (shrinkPolicyOf advisories) (advisoryStoreCapability store) rebaseline bucket key candidate
         >>= either throwIO (const pass)
 
 -- Act on a planned upload. A skipped one is the caller's success path, not an error.

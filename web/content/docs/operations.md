@@ -338,10 +338,11 @@ acts under its usual guards.
 
 ## Advisory publication guard
 
-Pilot replaces a published advisory artifact only when the new compile is newer and has not shrunk
-sharply. It reads the stored object's metadata first, then writes only over the revision it read,
-so two Pilot runs cannot overwrite each other's work. It orders the OSV export and the EPSS feed
-separately, each by the `Last-Modified` its server answered with:
+Pilot replaces a published advisory artifact only when each source's snapshot is newer than the
+published one or the same, and the artifact has not shrunk sharply. It reads the stored object's
+metadata first, then writes only over the revision it read, so two Pilot runs cannot overwrite each
+other's work. It orders the OSV export and the EPSS feed separately, each by the `Last-Modified` its
+server answered with:
 
 | What a source answered | What Pilot does |
 |---|---|
@@ -366,9 +367,10 @@ cycle. The local artifact under `advisories.dataDir` changes only after a public
 
 | The reason names | What it means |
 |---|---|
-| An older or unordered snapshot | The source served data that is not newer than what is published. A mirror can serve stale data. The next newer snapshot publishes. |
+| An older snapshot | The source served data older than what is published. A mirror can serve stale data. The next snapshot with a later `Last-Modified` publishes. |
+| An unordered snapshot | The source sent changed bytes under the same `Last-Modified`, or with no `Last-Modified` to compare. Pilot cannot order changed data without that header, so a source must send `Last-Modified` for a changed snapshot to publish. Neither a later run nor a rebaseline gets past it. Point `advisories.osvExportBaseUrl` or `advisories.epssFeedUrl` at a source that sends the header, which starts a new order, or replace or delete the stored object yourself. |
 | A shrink under the baseline | The feed lost coverage, or legitimately shrank more than the allowance. Check the feed before you [rebaseline](#rebaselining). |
-| Missing publication metadata | The stored object carries none of the guard's metadata, so Pilot cannot order against it and does not replace it. |
+| Missing publication metadata | The stored object lacks one or more of the guard's metadata keys, so Pilot cannot order against it and does not replace it. |
 | A refused read, or an absence the listing could not prove | Pilot lacks a permission from [Role identities and least privilege](@/docs/deployment.md#role-identities-and-least-privilege). |
 | A store without conditional writes | Pilot publishes only to a store that enforces `If-Match` and `If-None-Match` on writes. |
 

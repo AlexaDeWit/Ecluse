@@ -50,6 +50,7 @@ import Ecluse.Config (
     mountEpssRequirement,
     unUrl,
  )
+import Ecluse.Config.AdvisoryStore (advisoryStoreCapability)
 import Ecluse.Core.Clock (secondsToMicros)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Osv.Advisory (osvExportUrl)
@@ -59,7 +60,6 @@ import Ecluse.Core.Osv.Provenance (QuietTime (..), defaultQuietTime)
 import Ecluse.Core.Osv.Publication (Rebaseline, ShrinkPolicy (..), renderBaselineCapability, renderPercent)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
 import Ecluse.Core.Security.Authority (dialledAuthorityLabel)
-import Ecluse.Runtime.Pilot.Export (s3BaselineCapability)
 
 -- | What the scheduled export loop does with the advisory settings and the mounted ecosystems.
 data ExportLoopPlan
@@ -118,18 +118,18 @@ epssAttemptLine advisories =
 shrinkPolicyOf :: AdvisoriesSettings -> ShrinkPolicy
 shrinkPolicyOf advisories = ShrinkPolicy{spMaxShrink = advMaxShrink advisories, spEpssLossCap = advEpssLossCap advisories}
 
--- | What every Pilot boot reports: the egress it attempts, and the guard each publication passes.
+-- | What every Pilot boot reports: the egress it attempts, and, with a store to publish to, the guard each publication passes.
 pilotPostureLines :: AdvisoriesSettings -> [Text]
-pilotPostureLines advisories =
-    [ epssAttemptLine advisories
-    , "pilot: a publication must not be older than the stored artifact, by source, nor shrink more than "
-        <> renderPercent (advMaxShrink advisories)
-        <> " under its "
-        <> renderBaselineCapability s3BaselineCapability
-        <> ", with up to "
-        <> renderPercent (advEpssLossCap advisories)
-        <> " more after an optional EPSS outage"
-    ]
+pilotPostureLines advisories = epssAttemptLine advisories : maybe [] (pure . guardLine . advisoryStoreCapability) (advUrl advisories)
+  where
+    guardLine capability =
+        "pilot: a publication must not be older than the stored artifact, by source, nor shrink more than "
+            <> renderPercent (advMaxShrink advisories)
+            <> " under its "
+            <> renderBaselineCapability capability
+            <> ", with up to "
+            <> renderPercent (advEpssLossCap advisories)
+            <> " more after an optional EPSS outage"
 
 {- | The quiet-time thresholds one compile is judged against. An ecosystem with no configured
 threshold, and a one-shot compile of a name this build does not serve, take 'defaultQuietTime'.

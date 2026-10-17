@@ -193,8 +193,12 @@ spec = do
             tuned <- shrinkPolicyOf <$> advisoriesWith [("ECLUSE_ADVISORIES__MAX_SHRINK_PERCENT", "0.5"), ("ECLUSE_ADVISORIES__EPSS_LOSS_CAP_PERCENT", "0")]
             Just tuned `shouldBe` (ShrinkPolicy <$> mkPercent 0.5 <*> mkPercent 0)
 
-        it "reports the guard and the store's durable baseline beside the EPSS egress line" $ do
+        it "reports only the EPSS egress line while no store is configured" $ do
             advisories <- advisoriesWith []
+            pilotPostureLines advisories `shouldBe` [epssAttemptLine advisories]
+
+        it "reports the guard and the store's durable baseline beside the EPSS egress line" $ do
+            advisories <- advisoriesWith [("ECLUSE_ADVISORIES__URL", "s3://advisories")]
             case pilotPostureLines advisories of
                 [egress, guardLine] -> do
                     egress `shouldBe` epssAttemptLine advisories
