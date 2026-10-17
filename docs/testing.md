@@ -1875,7 +1875,7 @@ completion only when its lower-tier obligations and execution reports also pass.
 npm and PyPI both register the full ecosystem composition. The separately named read-only foundation
 remains an API for incomplete providers, not either ecosystem's active completion claim.
 CI uploads actual plan and report pairs from the instrumented core unit, runtime unit and
-integration legs. Each ecosystem job downloads all three pairs and audits them with its own E2E report.
+integration legs. The `e2e` job downloads all three pairs and audits each ecosystem against its subject's E2E report.
 All four tiers share the workflow run and attempt identity and use `arm64` as the architecture name.
 The lower tiers have no product image, while E2E binds the prepared image digest.
 
@@ -2003,11 +2003,12 @@ The Haskell jobs run in parallel where their prerequisites permit it. `build` co
 target and then runs the residency suite, the doctests, and `cabal check`. `coverage` is a matrix
 with one runner per instrumented suite. `allocation`, `docs`, `weeder`, `stan`, and
 `static-checks` each hold their own runner. E2E preparation feeds the ecosystem and
-shared-system subject jobs and their completeness audit. The Verdaccio and CodeArtifact
-package-store subjects run in separate jobs. `codecov-notify` follows the coverage legs
-and releases the Codecov statuses.
-The core unit, runtime unit and integration coverage legs upload their plan and execution reports
-for the ecosystem completion audits.
+shared-system subject jobs, which start without waiting for coverage. The Verdaccio and
+CodeArtifact package-store subjects run in separate jobs. `codecov-notify` follows the coverage
+legs and releases the Codecov statuses.
+The core unit, runtime unit and integration coverage legs upload their plan and execution reports.
+The `e2e` job waits for the subjects and the coverage legs. It audits every subject report
+against the plan, then runs the npm and PyPI completion audits over all four tiers' reports.
 
 CI's primary architecture is arm64: every job that builds or tests the code runs on the
 `ubuntu-26.04-arm` runner. amd64 is also supported: the release dry-run builds and starts the amd64
@@ -2051,10 +2052,17 @@ the whole dev shell before it could run.
 The cabal side keeps two families, because a documentation build wants a doc-variant of every
 dependency and cannot reuse the regular one. `build` writes the regular `cabal-store` and
 `dist-newstyle`. The Pages job writes the doc-variant `cabal-store-docs-v2` and `dist-docs`. A job
-that builds into its own directory under its own flags skips the `dist-newstyle` restore: `coverage`
-builds instrumented into `dist-coverage`, and `weeder` and `stan` build with `-fwrite-ide-info` into
-`dist-analysis`. Each `coverage` leg writes its own `dist-coverage` key, so no two legs race and
-each leg starts warm for the suite it owns.
+that never builds into `dist-newstyle` skips its restore. The jobs that build into a directory of
+their own restore these:
+
+| Job | Build directories it restores |
+| --- | --- |
+| `coverage`, each unit leg | `dist-coverage`, where it builds its suite instrumented |
+| `coverage`, the integration leg | `dist-coverage` for its instrumented suite, and `dist-newstyle` for its manifest and audit tools |
+| `weeder`, `stan` | none: each builds `dist-analysis` with `-fwrite-ide-info` and never caches it |
+
+Each `coverage` leg writes its own `dist-coverage` key, so no two legs race and each leg starts warm
+for the suite it owns.
 
 [`scripts/prune-caches.sh`](../scripts/prune-caches.sh) lists the key families the workflows write.
 A family missing from that list is reaped on the next sweep, which is how a retired key stops
