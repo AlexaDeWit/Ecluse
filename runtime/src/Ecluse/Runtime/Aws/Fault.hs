@@ -131,12 +131,9 @@ instance Exception AwsCredentialFault where
 retypeAmazonkaEscapes :: (MonadUnliftIO m) => m a -> m a
 retypeAmazonkaEscapes action = tryJust amazonkaFault action >>= either throwIO pure
 
--- | 'displayFaultT', with an @amazonka@ error or credential failure rendered as its typed fault's own text. Rendered through 'SomeException', it would gain GHC's exception context.
+-- | 'displayFaultT', with an @amazonka@ error or credential failure rendered as its typed fault's own text.
 displayAwsFaultT :: SomeException -> Text
-displayAwsFaultT err = fromMaybe (displayFaultT typed) (typedText typed)
-  where
-    typed = fromMaybe err (amazonkaFault err)
-    typedText fault = (renderRequestFailed <$> fromException fault) <|> (renderCredentialFault <$> fromException fault)
+displayAwsFaultT err = displayFaultT (fromMaybe err (amazonkaFault err))
 
 -- amazonka's background refresh hands a failure to the thread that discovered the credentials, wrapped in 'AuthError'.
 amazonkaFault :: SomeException -> Maybe SomeException

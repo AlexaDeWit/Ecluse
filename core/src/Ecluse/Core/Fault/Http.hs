@@ -25,6 +25,7 @@ import Network.HTTP.Client (
     Request (host, port),
     responseStatus,
  )
+import Network.HTTP.Client.Internal (unHttpExceptionContentWrapper)
 import Network.HTTP.Types.Status (statusCode)
 import Network.TLS qualified as TLS
 import System.IO.Error (ioeGetErrorType)
@@ -34,6 +35,7 @@ import Ecluse.Core.Fault (
     TransportCause (TransportProtocol, TransportTimeout, TransportTls, TransportUnreachable),
     TransportFault,
     renderHttpFault,
+    renderTransportFault,
     transportFault,
  )
 import Ecluse.Core.Security.Authority (dialledAuthorityLabel)
@@ -44,17 +46,20 @@ classifyTransport :: HttpException -> TransportFault
 classifyTransport err = transportFault (causeOf err) (dialledAuthority err <> ": " <> clientReason err)
   where
     causeOf = \case
-        HttpExceptionRequest _ content -> case content of
-            ConnectionTimeout -> TransportTimeout
-            ResponseTimeout -> TransportTimeout
-            ConnectionFailure _ -> TransportUnreachable
-            ConnectionClosed -> TransportUnreachable
-            -- The peer hung up before the first response byte, so the request never
-            -- reached a protocol exchange.
-            NoResponseDataReceived -> TransportUnreachable
-            InternalException inner -> internalCause inner
-            _ -> TransportProtocol
+        HttpExceptionRequest _ content -> contentCause content
         InvalidUrlException _ _ -> TransportProtocol
+
+contentCause :: HttpExceptionContent -> TransportCause
+contentCause = \case
+    ConnectionTimeout -> TransportTimeout
+    ResponseTimeout -> TransportTimeout
+    ConnectionFailure _ -> TransportUnreachable
+    ConnectionClosed -> TransportUnreachable
+    -- The peer hung up before the first response byte, so the request never
+    -- reached a protocol exchange.
+    NoResponseDataReceived -> TransportUnreachable
+    InternalException inner -> internalCause inner
+    _ -> TransportProtocol
 
 -- The TLS manager wraps its connector's refused connection or empty address list here, where plain HTTP raises ConnectionFailure.
 -- A failed socket call classes by its error type on either scheme, inside the TLS handshake or outside it.
@@ -89,11 +94,13 @@ httpFault = \case
 isRetryableStatusCode :: Int -> Bool
 isRetryableStatusCode code = code >= 500 || code == 408 || code == 429
 
--- | 'displayExceptionT' for a log line, except that an 'HttpException' renders through 'renderHttpFault' at the @host:port@ it dialled.
+-- | An exception for a log line, without GHC's context. A client exception renders as its classified fault, naming the @host:port@ only when it had a request.
 displayFaultT :: SomeException -> Text
-displayFaultT err = maybe (displayExceptionT err) renderDialled (fromException err)
-  where
-    renderDialled http = renderHttpFault (dialledAuthority http) (httpFault http)
+displayFaultT err
+    | Just http <- fromException err = renderHttpFault (dialledAuthority http) (httpFault http)
+    -- http-client raises a fault outside a request, such as a malformed proxy variable when it builds a manager, without an HttpException around it.
+    | Just content <- unHttpExceptionContentWrapper <$> fromException err = renderTransportFault (transportFault (contentCause content) (contentReason content))
+    | otherwise = displayWithoutContext err
 
 -- | A dialled host and port as a log line names them, so an IPv6 host keeps its brackets.
 hostPortLabel :: Text -> Int -> Text
@@ -120,11 +127,11 @@ contentReason = \case
     TooManyHeaderFields -> "TooManyHeaderFields"
     ResponseTimeout -> "ResponseTimeout"
     ConnectionTimeout -> "ConnectionTimeout"
-    ConnectionFailure (SomeException inner) -> "ConnectionFailure: " <> displayExceptionT inner
+    ConnectionFailure inner -> "ConnectionFailure: " <> displayWithoutContext inner
     InvalidStatusLine _ -> "InvalidStatusLine"
     InvalidHeader _ -> "InvalidHeader"
     InvalidRequestHeader _ -> "InvalidRequestHeader"
-    InternalException (SomeException inner) -> "InternalException: " <> displayExceptionT inner
+    InternalException inner -> "InternalException: " <> displayWithoutContext inner
     ProxyConnectException{} -> "ProxyConnectException"
     NoResponseDataReceived -> "NoResponseDataReceived"
     TlsNotSupported -> "TlsNotSupported"
@@ -137,3 +144,7 @@ contentReason = \case
     InvalidProxyEnvironmentVariable name _ -> "InvalidProxyEnvironmentVariable: " <> name
     ConnectionClosed -> "ConnectionClosed"
     InvalidProxySettings _ -> "InvalidProxySettings"
+
+-- GHC 9.10 appends the exception context, a backtrace, to a SomeException's display. The exception inside renders without it.
+displayWithoutContext :: SomeException -> Text
+displayWithoutContext (SomeException inner) = displayExceptionT inner

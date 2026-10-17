@@ -14,6 +14,7 @@ import Network.HTTP.Client (
     HttpExceptionContent (ConnectionClosed, ConnectionFailure, ConnectionTimeout, InternalException, NoResponseDataReceived, ResponseTimeout),
     Request (secure),
     defaultRequest,
+    newManager,
     parseRequest,
  )
 import Network.HTTP.Client.TLS (tlsManagerSettings)
@@ -25,7 +26,7 @@ import Network.Wai.Handler.Warp (openFreePort)
 import System.IO.Error (IOError)
 import Test.Hspec
 import UnliftIO.Async (withAsync)
-import UnliftIO.Exception (bracket, finally)
+import UnliftIO.Exception (bracket, finally, throwIO, tryAny)
 
 import Ecluse.Core.Fault (
     HttpFault (HttpStatus),
@@ -36,6 +37,7 @@ import Ecluse.Core.Fault (
  )
 import Ecluse.Core.Fault.Http (classifyTransport, displayFaultT, httpFault)
 import Ecluse.Core.Text (displayExceptionT)
+import Ecluse.Test.Env (withEnvOverrides)
 import Ecluse.Test.Fault (httpTransportCause)
 import Ecluse.Test.Stub (closedAuthority, failedFetch, redirectSecrets, redirectedStatusException, refusedFetch, requestSecrets, signedRequest)
 
@@ -71,8 +73,15 @@ spec = do
             rendered `shouldSatisfy` (not . T.isInfixOf "\n")
             for_ requestSecrets $ \secret -> rendered `shouldSatisfy` (not . T.isInfixOf secret)
 
-        it "renders any other exception as displayExceptionT does today" $
-            displayFaultT (toException OtherFault) `shouldBe` displayExceptionT (toException OtherFault)
+        it "renders a malformed proxy variable that fails a manager's construction by its name, never its value" $ do
+            built <- withEnvOverrides [("https_proxy", "https://user:proxy-secret@proxy.example:3128")] (tryAny (newManager tlsManagerSettings))
+            let rendered = either displayFaultT (const "a manager") built
+            rendered `shouldBe` "InvalidProxyEnvironmentVariable: https_proxy (" <> renderTransportCause TransportProtocol <> ")"
+            rendered `shouldNotSatisfy` T.isInfixOf "proxy-secret"
+
+        it "renders any other exception by its own text, without GHC's context" $ do
+            thrown <- tryAny (throwIO OtherFault :: IO ())
+            either displayFaultT (const "no fault") thrown `shouldBe` displayExceptionT OtherFault
 
     describe "classifyTransport" $ do
         it "details a timeout by the dialled host:port and the client's reason, never the request" $ do
