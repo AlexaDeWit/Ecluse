@@ -100,7 +100,7 @@ cutHalfwayThenServe cut cuts body = do
             awaitRequestHead conn ""
             if attempt < cuts
                 then sendAll conn (cutAnswer cut body) >> when (cut == ResetMidBody) (resetOnClose conn)
-                else sendAll conn ("HTTP/1.1 200 OK\r\nContent-Length: " <> show (LBS.length body) <> "\r\nConnection: close\r\n\r\n" <> LBS.toStrict body)
+                else sendAll conn (lengthHeading body <> LBS.toStrict body)
     pure (serve, readIORef answered)
 
 -- The first half of the answer: the length, or one chunk's size, promises the whole body.
@@ -109,7 +109,11 @@ cutAnswer cut body = heading <> LBS.toStrict (LBS.take (LBS.length body `div` 2)
   where
     heading = case cut of
         CloseMidChunk -> "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n" <> encodeUtf8 (toText (showHex (LBS.length body) "")) <> "\r\n"
-        _ -> "HTTP/1.1 200 OK\r\nContent-Length: " <> show (LBS.length body) <> "\r\nConnection: close\r\n\r\n"
+        _ -> lengthHeading body
+
+-- The head of a closing answer whose length promises the whole body.
+lengthHeading :: LByteString -> ByteString
+lengthHeading body = "HTTP/1.1 200 OK\r\nContent-Length: " <> show (LBS.length body) <> "\r\nConnection: close\r\n\r\n"
 
 -- The request head in full, so a clean close leaves nothing unread that would turn it into a reset.
 awaitRequestHead :: Socket -> ByteString -> IO ()

@@ -129,7 +129,7 @@ bareFault err
     | isJust (fromException @IOError err) || isJust (fromException @TLS.TLSException err) = Just err
     | otherwise = Nothing
 
--- A status and a failed body read carry the request a redirect reached, and any other transport fault the request first sent.
+-- A status and a socket or TLS failure in a body read carry the request a redirect reached. Any other fault carries the request first sent.
 dialledAuthority :: HttpException -> Text
 dialledAuthority = \case
     HttpExceptionRequest request _ -> hostPortLabel (decodeUtf8 (host request)) (port request)

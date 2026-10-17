@@ -316,7 +316,7 @@ renderRequirement = \case
     EpssRequired -> "required"
     EpssOptional -> "optional"
 
--- The client's exception holds the request a redirect reached. The typed fault is thrown outside any
+-- The client's exception can hold the request a redirect reached. The typed fault is thrown outside any
 -- handler, so nothing can annotate it with that exception.
 ingestAdvisories :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => CompileRun -> OsvIngest -> Connection -> m ContentDigest
 ingestAdvisories run ingest conn =
