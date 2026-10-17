@@ -74,6 +74,6 @@ observeSpec = describe "observeExportResult" $
                     for_ requestSecrets $ \secret -> line `shouldNotSatisfy` T.isInfixOf secret
             other -> expectationFailure ("expected a first line and a heartbeat, got " <> show (length other))
 
--- The injected clock's start. The throttle keys on differences, so the instant is arbitrary.
+-- The fixed start instant. The throttle keys on differences, so the instant is arbitrary.
 t0 :: UTCTime
 t0 = UTCTime (fromGregorian 2026 1 1) 0
