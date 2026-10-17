@@ -50,7 +50,7 @@ sliceChunks size bytes
     | BS.null bytes = []
     | otherwise = case BS.splitAt (max 1 size) bytes of (!piece, rest) -> piece : sliceChunks size rest
 
--- | One-byte chunks held apart from the body's buffer, so a read past a chunk's end cannot see the next body byte.
+-- | One-byte chunks that do not share the body's buffer.
 byteChunks :: ByteString -> [ByteString]
 byteChunks = map BS.singleton . BS.unpack
 
