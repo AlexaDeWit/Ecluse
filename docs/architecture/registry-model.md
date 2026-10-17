@@ -80,8 +80,7 @@ trigger, content, and credential from the mirror write.
   check keys on the URL-path name. An npm publish document declares its own identity (`_id`,
   top-level `name`, every `versions[].name`), so the guard validates those names too. Any present
   declared name that disagrees is a `403` before any relay, under the same `PackageName` equality
-  the route uses. An absent name is no claim. The guard reads names only and never decodes the
-  base64 `_attachments`.
+  the route uses. An absent name is no claim. The guard never decodes the base64 `_attachments`.
 PyPI publication uses the same guard with native multipart name declarations. Pathless uploads
 require one consistent canonical project identity. Framing and name checks run after edge
 authentication within the mount's request bound. The relay preserves the incoming body and exact
@@ -91,12 +90,12 @@ Content-Type, including its boundary. It does not rebuild the client's distribut
   object, every `dist-tags` value must name that version, and no object may repeat a key. A PyPI
   upload must carry exactly one `:action` part, with the value `file_upload`. Any other readable
   body, such as the one `npm deprecate` or `npm star` sends, a null tag or a tag on another
-  version, or a PyPI `remove_pkg`, is a `501` before any relay. `npm deprecate` sends back Écluse's served document,
-  which omits the stored versions Écluse hides and carries its own `latest`. Verdaccio applies
-  that document over its own, and pypiserver deletes a release on `remove_pkg`. A repeated key is
-  a `400`, because a store that keeps the last copy would read a different body from the one the
-  guard checked. An unreadable body, or a missing or repeated `:action`, is also a `400`. The
-  check reads the parsed document, never the attachment data.
+  version, or a PyPI `remove_pkg`, is a `501` before any relay. `npm deprecate` sends back
+  Écluse's served document, which omits the stored versions Écluse hides and carries its own
+  `latest`. Verdaccio applies that document over its own, and pypiserver deletes a release on
+  `remove_pkg`. A repeated key is a `400`, because a store that keeps the last copy would read a
+  different body from the one the guard checked. An unreadable body, or a missing or repeated
+  `:action`, is also a `400`. The check reads the parsed document, never the attachment data.
 
 - **Credential.** See [Credential flow and authority](#credential-flow-and-authority).
 - **No read-back role.** Write-only from the proxy's view. Published packages read back through

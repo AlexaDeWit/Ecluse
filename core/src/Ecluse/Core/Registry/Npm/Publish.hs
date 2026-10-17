@@ -220,7 +220,7 @@ uploadClaims body = case parseOnly (jsonNoDup' <* skipWhile isJsonSpace <* endOf
 npmNewReleaseOnly :: Text
 npmNewReleaseOnly = "this proxy relays new-release publish documents only: change an existing package's metadata, such as a deprecation, at the publication target"
 
--- One version, a non-empty @_attachments@, and every tag on that version, so no stored tag moves.
+-- One version and a non-empty @_attachments@, with every tag on that version, so a tag can name only the new version.
 isNewRelease :: KeyMap Value -> Bool
 isNewRelease fields = case (KeyMap.lookup "_attachments" fields, KeyMap.lookup "versions" fields) of
     (Just (Object attachments), Just (Object versions))

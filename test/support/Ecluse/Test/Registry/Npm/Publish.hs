@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | The bodies npm 11.17.0 sent to a publish route for @\@acme/widget@, against a stub serving Écluse's view.
+-- | The bodies npm 11.17.0 sent to a publish route for @\@acme/widget@, against a stub serving Écluse's view, and hand-built variants.
 module Ecluse.Test.Registry.Npm.Publish (
     npmReleaseDocument,
     npmTaggedRelease,

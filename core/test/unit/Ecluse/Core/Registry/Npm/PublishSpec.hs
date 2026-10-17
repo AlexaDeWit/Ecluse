@@ -368,12 +368,15 @@ uploadGuardSpec = describe "uploadClaims (the first-party new-release guard)" $ 
     it "refuses an undecodable body as malformed" $ do
         uploadClaims "{\"_id\":" `shouldSatisfy` isMalformedBody
         uploadClaims "[]" `shouldSatisfy` isMalformedBody
+        uploadClaims (toStrict (npmReleaseDocument widget widget widget) <> " {}") `shouldSatisfy` isMalformedBody
     it "refuses a body that repeats a key, at the top or inside a version, as malformed" $ do
         uploadClaims (toStrict npmRepeatedAttachments) `shouldSatisfy` isMalformedBody
         uploadClaims repeatedVersionName `shouldSatisfy` isMalformedBody
+        uploadClaims escapedRepeat `shouldSatisfy` isMalformedBody
     it "refuses a release whose tag points at another version or is null" $ do
         uploadClaims (toStrict (npmTaggedRelease (object ["latest" .= ("1.0.0" :: Text)]))) `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
         uploadClaims (toStrict (npmTaggedRelease (object ["latest" .= ("2.0.0" :: Text), "beta" .= Null]))) `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
+        uploadClaims (toStrict (npmTaggedRelease (String "2.0.0"))) `shouldBe` Left (PublishUnsupported npmNewReleaseOnly)
     it "relays a release under another tag, or with no dist-tags member" $ do
         uploadClaims (toStrict (npmTaggedRelease (object ["beta" .= ("2.0.0" :: Text)]))) `shouldBe` Right [widget, widget, widget]
         untagged <- editedRelease (KeyMap.delete "dist-tags")
@@ -382,6 +385,9 @@ uploadGuardSpec = describe "uploadClaims (the first-party new-release guard)" $ 
     widget :: Text
     widget = "@acme/widget"
     -- A last-wins store reads this version's name as the second, out-of-scope copy.
+    -- The second key spells _attachments with an escape, so only the decoded keys repeat.
+    escapedRepeat :: ByteString
+    escapedRepeat = "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"2.0.0\":{\"name\":\"@acme/widget\",\"version\":\"2.0.0\"}},\"_attachments\":{\"widget-2.0.0.tgz\":{\"data\":\"AA==\"}},\"\\u005fattachments\":{}}"
     repeatedVersionName :: ByteString
     repeatedVersionName = "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"2.0.0\":{\"name\":\"@acme/widget\",\"name\":\"@victim/target\",\"version\":\"2.0.0\"}},\"_attachments\":{\"widget-2.0.0.tgz\":{\"data\":\"AA==\"}}}"
     -- Each refused shape differs from a real publish in one place.
