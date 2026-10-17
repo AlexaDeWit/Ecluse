@@ -15,9 +15,9 @@ import Ecluse.Composition.Support (expectAppConfig, expectConfig)
 import Ecluse.Config (AdvisoriesSettings, AdvisoryStoreUrl, AppConfig (cfgAdvisories), Config (configApp, configMounts))
 import Ecluse.Config.AdvisoryStore (mkAdvisoryStoreUrl)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Osv.Compile (CompileSources (..))
+import Ecluse.Core.Osv.Compile (csEpssFeedUrl, csEpssRecorded, csOsvExportUrl, csOsvRecorded)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor)
-import Ecluse.Core.Osv.Provenance (QuietTime (..), defaultQuietTime)
+import Ecluse.Core.Osv.Provenance (QuietTime (..), defaultQuietTime, renderRecordedSource)
 import Ecluse.Core.Osv.Publication (ObjectRevision (ObjectRevision), Rebaseline (Rebaseline), ShrinkPolicy (..), mkPercent)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired))
 import Ecluse.Pilot.Plan (
@@ -179,6 +179,22 @@ spec = do
             advisories <- advisoriesWith [("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", "https://osv.example.test")]
             csOsvExportUrl (configuredSources advisories (osvEcosystemFor PyPI))
                 `shouldBe` "https://osv.example.test/PyPI/all.zip"
+
+        -- Each hex is the SHA-256 of /s3cr3t-token/osv/<directory>/all.zip.
+        for_ [(Npm, "npm", "97c5e24e410374c33b61de99db58c862c830dd0ba017d10045d5b837a76f10fd"), (PyPI, "PyPI", "0e10e1b9d059fca99aee600c19baa9531b7148e59ab53ded21464c8a932081bc")] $ \(eco, directory, osvHex) ->
+            it ("records each source path as its SHA-256, or the URL as written under advisories.recordSourcePath, " <> show eco) $ do
+                let mirror = ("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", "https://mirror.example.test/s3cr3t-token/osv")
+                    stored env = do
+                        sources <- (`configuredSources` osvEcosystemFor eco) <$> advisoriesWith env
+                        pure (map renderRecordedSource [csOsvRecorded sources, csEpssRecorded sources])
+                stored [mirror]
+                    `shouldReturn` [ "https://mirror.example.test:443/<sha256:" <> osvHex <> ">"
+                                   , "https://epss.empiricalsecurity.com:443/<sha256:824221ac4902ee00a3299bd03131d89df370443ae18f0818de852199317b867c>"
+                                   ]
+                stored [mirror, ("ECLUSE_ADVISORIES__RECORD_SOURCE_PATH", "true")]
+                    `shouldReturn` [ "https://mirror.example.test/s3cr3t-token/osv/" <> directory <> "/all.zip"
+                                   , "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
+                                   ]
 
     describe "uploadPlan -- whether a one-shot run publishes" $ do
         it "skips the upload the run did not ask for, store or no store" $ do

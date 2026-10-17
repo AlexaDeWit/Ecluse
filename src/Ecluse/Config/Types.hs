@@ -78,6 +78,7 @@ import Ecluse.Config.Resolve (mountDocRef, mountKeyRef)
 import Ecluse.Config.Rule (PolicyError (SuppressUnknownRule), renderPolicyError)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
+import Ecluse.Core.Osv.Provenance (SourcePathRecording)
 import Ecluse.Core.Osv.Publication (Percent)
 import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
@@ -389,6 +390,8 @@ data AdvisoriesSettings = AdvisoriesSettings
     , advDataDir :: FilePath
     , advOsvExportBaseUrl :: Url
     , advEpssFeedUrl :: Url
+    , advSourcePathRecording :: SourcePathRecording
+    -- ^ Pilot only: @advisories.recordSourcePath@, whether an artifact records each source's path or only its SHA-256.
     , advQuietTime :: Map Ecosystem NominalDiffTime
     -- ^ Pilot only: how long one ecosystem's export may go unchanged before the quiet-time alarm. Unlisted, seven days.
     , advEpssQuietTime :: NominalDiffTime

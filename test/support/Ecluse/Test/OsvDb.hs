@@ -48,9 +48,9 @@ import Ecluse.Core.Cve (CveDb (cveDbClose), openCveDb)
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Osv.Compile (CompileSources (..), OsvCandidate, promoteCandidate, withOsvCandidate)
+import Ecluse.Core.Osv.Compile (CompileSources, OsvCandidate, mkCompileSources, promoteCandidate, withOsvCandidate)
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem, osvEcosystemFor)
-import Ecluse.Core.Osv.Provenance (QuietTime (..))
+import Ecluse.Core.Osv.Provenance (QuietTime (..), SourcePathRecording (FingerprintSourcePath))
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
 import Ecluse.Core.Rules (RuleDeps)
 import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort)
@@ -107,10 +107,7 @@ compileOsvZipDbWithFeedTo eco requirement (feedStatus, epssBytes) zipBytes dir =
                     dir
                     (osvEcosystemFor eco)
                     requirement
-                    CompileSources
-                        { csOsvExportUrl = toString (stubBaseUrl osvStub) <> "/all.zip"
-                        , csEpssFeedUrl = toString (stubBaseUrl epssStub) <> "/epss_scores-current.csv.gz"
-                        }
+                    (stubSources osvStub epssStub)
                     fixtureQuietTime
                 )
 
@@ -130,12 +127,16 @@ withSourceServer use = do
             use
                 SourceServer
                     { ssAnswer = answer
-                    , ssSources =
-                        CompileSources
-                            { csOsvExportUrl = toString (stubBaseUrl osvStub) <> "/all.zip"
-                            , csEpssFeedUrl = toString (stubBaseUrl epssStub) <> "/epss_scores-current.csv.gz"
-                            }
+                    , ssSources = stubSources osvStub epssStub
                     }
+
+-- The shipped default recording, at the paths the public feeds serve.
+stubSources :: Stub -> Stub -> CompileSources
+stubSources osvStub epssStub =
+    mkCompileSources
+        FingerprintSourcePath
+        (toString (stubBaseUrl osvStub) <> "/all.zip")
+        (toString (stubBaseUrl epssStub) <> "/epss_scores-current.csv.gz")
 
 -- | Serve this archive under this HTTP @Last-Modified@, and compile it into an unpromoted candidate under @dir@.
 withServedCandidate :: SourceServer -> Ecosystem -> LByteString -> Maybe Text -> FilePath -> (OsvCandidate -> IO a) -> IO a

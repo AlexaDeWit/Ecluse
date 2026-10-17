@@ -148,15 +148,17 @@ artifact's metadata:
 |---|---|
 | `source_url` | The OSV source's `host:port` identity. |
 | `epss_source_url` | The EPSS source's `host:port` identity. |
-| `osv_source` | The OSV source URL with its path kept. |
-| `epss_source` | The EPSS source URL with its path kept. |
+| `osv_source` | The OSV source's scheme, host and port, then the SHA-256 of its path as `/<sha256:hex>`. With `advisories.recordSourcePath: true`, the URL as written, without userinfo, query, or fragment. |
+| `epss_source` | The EPSS source, in the same form as `osv_source`. |
 | `osv_digest` | The SHA-256 of the OSV export's response body. |
 | `epss_digest` | The SHA-256 of the EPSS feed's response body, when the feed arrived. |
 | `publication_nonce` | A random value that gives each publication its own bytes. |
 | `built_at` | When compilation finished, not how old the source snapshot is. |
 
-A credential in userinfo, the query, or the fragment never reaches the artifact. One written into
-the path does. Sync logs parsed compilation time and row count from metadata, including when
+A credential in userinfo, the query, or the fragment never reaches the artifact. By default, one
+written into the path does not reach it either. With `advisories.recordSourcePath: true`, the
+artifact records the path, so a credential written into it reaches every consumer and every reader
+of the advisory bucket. Sync logs parsed compilation time and row count from metadata, including when
 it reads older artifacts with complete source URLs. On each swap it adds one `info` line naming
 where the serving artifact came from: the object's publication time, the OSV source as
 `host:port`, its newest advisory date, and the EPSS score date. A value the artifact never
@@ -267,7 +269,7 @@ Pilot reads how old its sources say their data is, and tells you when one stops 
 each compile it logs the age of the ecosystem's newest advisory record and of the EPSS feed's
 declared score date, at `info`. A compile that published with `epss_status=unavailable` has no
 EPSS score date, so it logs no EPSS age. When either age passes its threshold, the same line repeats at
-`error` and names the ecosystem, the credential-free source URL, the age in seconds, and the
+`error` and names the ecosystem, the source as the artifact records it, the age in seconds, and the
 threshold in seconds.
 
 The thresholds are `advisories.quietTime.<ecosystem>` and `advisories.epssQuietTime`, both in

@@ -1209,7 +1209,7 @@ mitigations:
       - 6a368fa6-e4c8-446e-8e24-0685bb0980ef
   - id: mit-source-authority-labels
     title: Credential-free advisory source labels
-    prose: Pilot fetches the complete source URL and stores two forms of it. `source_url` and `epss_source_url` hold the host and port. `osv_source` and `epss_source` hold the URL with its path kept and its userinfo, query, and fragment removed. A credential in userinfo, the query, or the fragment never reaches the artifact. A credential written into the path does. Consumer sync logs fixed fields, such as compile time, row count, push time, source authority, and source dates, and never arbitrary metadata, even from older artifacts. A malformed display value does not change artifact acceptance.
+    prose: Pilot fetches the complete source URL and stores two forms of it. `source_url` and `epss_source_url` hold the host and port. By default, `osv_source` and `epss_source` hold the scheme, host, and port, followed by the SHA-256 of the path in place of the path. A credential in userinfo, the query, or the fragment never reaches the artifact. By default, one written into the path does not reach it either. The SHA-256 does not hide a path value that can be guessed. An operator who sets `advisories.recordSourcePath` stores each source URL as written, path included. A credential written into the path then reaches every consumer and every reader of the advisory bucket. Consumer sync logs fixed fields, such as compile time, row count, push time, source authority, and source dates, and never arbitrary metadata, even from older artifacts. A malformed display value does not change artifact acceptance.
     status: implemented
     threats:
       - 9d92a448-e04d-46b6-8b8d-bc353dacdb97
@@ -1739,7 +1739,7 @@ threats:
       category: information-disclosure
     severity: medium
     status: mitigated
-    description: Custom advisory source URLs can carry userinfo and query credentials. Pilot writes source identities into artifact metadata, and consumer sync writes that metadata into INFO logs, so a complete URL in either place would disclose its credentials. The default public feeds need no credentials.
+    description: Custom advisory source URLs can carry credentials in userinfo, the query, or the path. Pilot writes source identities into artifact metadata, and consumer sync writes that metadata into INFO logs, so a complete URL in either place would disclose its credentials. The default public feeds need no credentials.
     elements:
       - f1646094-9885-422a-b7e7-7888c72905ef
   - id: 36f3684d-f2b4-4cd4-a017-6b390bc77a46

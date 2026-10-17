@@ -112,13 +112,13 @@ data MetaKey
       MetaSourceUrl
     | -- | The EPSS source's host:port identity. Older artifacts can carry a complete URL.
       MetaEpssSourceUrl
-    | -- | The advisory source's credential-free URL, which identifies the export where the host alone cannot.
+    | -- | The advisory source's origin, then its path or the path's SHA-256 ('Ecluse.Core.Osv.Provenance.renderRecordedSource').
       MetaOsvSource
     | -- | The @Last-Modified@ the advisory export answered the fetch with.
       MetaOsvLastModified
     | -- | The newest @modified@ of the advisory records the artifact was compiled from.
       MetaOsvNewestModified
-    | -- | The EPSS feed's credential-free URL.
+    | -- | The EPSS feed in the same form as 'MetaOsvSource'.
       MetaEpssSource
     | -- | The @Last-Modified@ the EPSS feed answered the fetch with.
       MetaEpssLastModified

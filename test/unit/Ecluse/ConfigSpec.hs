@@ -175,6 +175,7 @@ spec = do
             [ ("server.port", "ECLUSE_SERVER__PORT", "{\"server\":{\"port\":\"bad\"}}")
             , ("server.shutdownDrainTimeout", "ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT", "{\"server\":{\"shutdownDrainTimeout\":\"bad\"}}")
             , ("server.metadataGzip", "ECLUSE_SERVER__METADATA_GZIP", "{\"server\":{\"metadataGzip\":\"bad\"}}")
+            , ("advisories.recordSourcePath", "ECLUSE_ADVISORIES__RECORD_SOURCE_PATH", "{\"advisories\":{\"recordSourcePath\":\"bad\"}}")
             , ("limits.maxVersionCount", "ECLUSE_LIMITS__MAX_VERSION_COUNT", "{\"limits\":{\"maxVersionCount\":\"bad\"}}")
             , ("limits.progressWindow", "ECLUSE_LIMITS__PROGRESS_WINDOW", "{\"limits\":{\"progressWindow\":\"bad\"}}")
             , ("limits.minProgressBytes", "ECLUSE_LIMITS__MIN_PROGRESS_BYTES", "{\"limits\":{\"minProgressBytes\":\"bad\"}}")
@@ -404,6 +405,11 @@ spec = do
             provenance `shouldSatisfy` elem "config: server.port = 4873 (environment)"
             provenance `shouldSatisfy` elem "config: server.helpMessage = ask platform-eng (document)"
             provenance `shouldSatisfy` elem "config: observability.logFormat = json (default)"
+
+        it "names the source path recording and the layer that set it" $ do
+            resolvedKeyProvenance [] Nothing `shouldSatisfy` elem "config: advisories.recordSourcePath = false (default)"
+            resolvedKeyProvenance [("ECLUSE_ADVISORIES__RECORD_SOURCE_PATH", "true")] Nothing
+                `shouldSatisfy` elem "config: advisories.recordSourcePath = true (environment)"
 
         it "redacts secret-typed keys whatever layer supplies them" $ do
             provenance <- provenanceOf (("ECLUSE_SERVER__AUTH_TOKEN", "hunter2") : staticEnvVars) Nothing

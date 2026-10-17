@@ -27,6 +27,7 @@ import Ecluse.Config.Types
 
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..), ecosystemName, parseEcosystem)
+import Ecluse.Core.Osv.Provenance (SourcePathRecording (FingerprintSourcePath, RecordSourcePath))
 import Ecluse.Core.Osv.Publication (Percent, mkPercent)
 import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrity)
@@ -199,6 +200,7 @@ advisoriesDecoder =
         <*> plainKey "dataDir"
         <*> requiredKey "osvExportBaseUrl" parseHttpUrl
         <*> requiredKey "epssFeedUrl" parseHttpUrl
+        <*> requiredKey "recordSourcePath" (\_ recordPath -> pure (if recordPath then RecordSourcePath else FingerprintSourcePath))
         <*> nestedKey "quietTime" parseQuietTimes
         <*> requiredKey "epssQuietTime" parseDelaySeconds
         <*> optionalKey "maxAgeSeconds" parseDelaySeconds

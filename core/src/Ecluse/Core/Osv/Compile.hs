@@ -10,7 +10,12 @@ A pass compiles into an exclusive temporary file, the candidate, which replaces 
 only once its caller promotes it, so a refused publication leaves the previous artifact in place.
 -}
 module Ecluse.Core.Osv.Compile (
-    CompileSources (..),
+    CompileSources,
+    mkCompileSources,
+    csOsvExportUrl,
+    csEpssFeedUrl,
+    csOsvRecorded,
+    csEpssRecorded,
 
     -- * The candidate a publication decides on
     OsvCandidate,
@@ -57,8 +62,12 @@ import Ecluse.Core.Osv.Epss (
 import Ecluse.Core.Osv.Provenance (
     AdvisoryProvenance (..),
     QuietTime,
+    RecordedSource,
     SourceAge,
+    SourcePathRecording,
     provenanceRows,
+    recordSource,
+    renderRecordedSource,
     renderSourceAge,
     sourceAges,
     sourceQuiet,
@@ -112,13 +121,29 @@ import Ecluse.Core.Telemetry.Span (withOptionalSpan)
 import OpenTelemetry.Trace.Core (Span, SpanKind (Internal), SpanStatus (Error), TracerProvider, addAttribute, setStatus)
 
 -- | The two upstreams one compile pass reads: the ecosystem's advisories, and the scores it joins onto them.
-data CompileSources = CompileSources
-    { csOsvExportUrl :: String
-    -- ^ The ecosystem's OSV export archive ('Ecluse.Core.Osv.Advisory.osvExportUrl').
-    , csEpssFeedUrl :: String
-    -- ^ The EPSS daily feed, from the configured @advisories.epssFeedUrl@.
-    }
+data CompileSources = CompileSources String String RecordedSource RecordedSource
     deriving stock (Eq, Show)
+
+-- | The sources one pass reads. Each recorded form derives from its fetched URL, under the one choice given.
+mkCompileSources :: SourcePathRecording -> String -> String -> CompileSources
+mkCompileSources recording osvUrl epssUrl =
+    CompileSources osvUrl epssUrl (recordSource recording (toText osvUrl)) (recordSource recording (toText epssUrl))
+
+-- | The ecosystem's OSV export archive ('Ecluse.Core.Osv.Advisory.osvExportUrl').
+csOsvExportUrl :: CompileSources -> String
+csOsvExportUrl (CompileSources url _ _ _) = url
+
+-- | The EPSS daily feed, from the configured @advisories.epssFeedUrl@.
+csEpssFeedUrl :: CompileSources -> String
+csEpssFeedUrl (CompileSources _ url _ _) = url
+
+-- | The export as its artifact records it.
+csOsvRecorded :: CompileSources -> RecordedSource
+csOsvRecorded (CompileSources _ _ recorded _) = recorded
+
+-- | The feed as its artifact records it.
+csEpssRecorded :: CompileSources -> RecordedSource
+csEpssRecorded (CompileSources _ _ _ recorded) = recorded
 
 -- | A compiled artifact in its exclusive temporary file, with the facts its publication compares.
 data OsvCandidate = OsvCandidate
@@ -318,15 +343,15 @@ newCandidate outDir = do
 removeCandidate :: FilePath -> IO ()
 removeCandidate path = catchIOError (removeFile path) (const $ pure ())
 
--- The sources as they described themselves, credential-free because the artifact reaches every
--- consumer. A feed that never arrived described nothing, so it records no EPSS source or date.
+-- Each source in the form 'CompileSources' recorded, because the artifact reaches every consumer.
+-- A feed that never arrived described nothing, so it records no EPSS source or date.
 passProvenance :: CompileSources -> EpssEnrichment -> OsvAttempt -> AdvisoryProvenance
 passProvenance sources enrichment attempt =
     AdvisoryProvenance
-        { apOsvSource = Just (credentialFreeUrl (toText (csOsvExportUrl sources)))
+        { apOsvSource = Just (renderRecordedSource (csOsvRecorded sources))
         , apOsvLastModified = oaLastModified attempt
         , apOsvNewestModified = oaNewestModified attempt
-        , apEpssSource = credentialFreeUrl (toText (csEpssFeedUrl sources)) <$ feed
+        , apEpssSource = renderRecordedSource (csEpssRecorded sources) <$ feed
         , apEpssLastModified = efLastModified =<< feed
         , apEpssScoreDate = efScoreDate =<< feed
         , apEpssModelVersion = efModelVersion =<< feed
