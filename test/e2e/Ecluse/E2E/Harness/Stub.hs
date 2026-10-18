@@ -86,11 +86,11 @@ stubConfig fault =
         ["server_names_hash_bucket_size 128;", readLogFormat]
             <> concatMap (serverBlock fault) universe
 
-{- One line for each finished request, in the fields 'stubReads' reads back. The request's
-Accept-Encoding comes last because its value can hold spaces. nginx writes "-" for an absent field.
+{- One line for each finished request, in the fields 'stubReads' reads back. Each coding field is
+named, so an empty value keeps its place, and Accept-Encoding comes last because it can hold spaces.
 -}
 readLogFormat :: Text
-readLogFormat = "log_format stub_read '" <> readMarker <> " $server_name $request_method $status $request_uri $sent_http_content_encoding $http_accept_encoding';"
+readLogFormat = "log_format stub_read '" <> readMarker <> " $server_name $request_method $status $request_uri coding=$sent_http_content_encoding accepts=$http_accept_encoding';"
 
 readMarker :: Text
 readMarker = "stub-read"
@@ -120,7 +120,7 @@ forwarded limit port =
     , "    location / { proxy_pass http://203.0.113.1:" <> show port <> "; }"
     ]
 
--- Gzip every response a request permits: a superset of a registry CDN, which gzips JSON and companions.
+-- Gzip any response a request permits: more than a registry CDN, which gzips JSON and companions.
 publicCoding :: [Text]
 publicCoding = ["    gzip on;", "    gzip_types *;"]
 
@@ -237,14 +237,16 @@ stubReads = mapMaybe (readOf . words) . lines
         marker : host : method : status : path : coding : accepted | marker == readMarker -> do
             route <- find ((== host) . stubHost) universe
             answered <- readMaybe (toString status)
+            responseCoding <- T.stripPrefix "coding=" coding
+            requestCodings <- T.stripPrefix "accepts=" (unwords accepted)
             pure
                 StubRead
                     { srRoute = route
                     , srMethod = method
                     , srStatus = answered
                     , srPath = path
-                    , srContentEncoding = logged coding
-                    , srAcceptEncoding = logged (unwords accepted)
+                    , srContentEncoding = logged responseCoding
+                    , srAcceptEncoding = logged requestCodings
                     }
         _ -> Nothing
     -- nginx logs "-" for an absent field and nothing for an empty one.
