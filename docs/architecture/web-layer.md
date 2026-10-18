@@ -64,7 +64,7 @@ body, while a `POST` over those paths takes the deny-by-default `404`.
 
 ## OpenAPI spec
 
-Écluse speaks npm and PyPI read protocols, with npm-only publication, not a bespoke HTTP API.
+Écluse speaks npm and PyPI read and publication protocols rather than a bespoke HTTP API.
 Package clients use those protocols rather than an API description, so the
 published OpenAPI spec is not a client-integration contract. It states which protocols this
 server speaks, and what each ecosystem does and does not support. That stops being self-evident as mounts multiply.

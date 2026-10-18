@@ -251,6 +251,9 @@ and `advisories.epssFeedUrl`. To point one run at a mirror or a moved feed, set
 `ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL` or `ECLUSE_ADVISORIES__EPSS_FEED_URL` in its environment.
 Neither URL may carry a credential ([Secrets](@/docs/configuration.md#secrets)).
 
+Pilot uses `HTTP_PROXY` and `HTTPS_PROXY` for OSV and EPSS downloads.
+A `socks5://` or `socks5h://` URL in `HTTPS_PROXY` or `https_proxy` makes HTTPS feed downloads connect directly.
+
 The loaded configuration decides what a failed EPSS feed means, as it does for the scheduled loop
 ([When the EPSS feed fails](@/docs/configuration.md#when-the-epss-feed-fails)). An ecosystem the
 configuration does not mount counts as one with an EPSS-reading rule, because a compile run ahead of
@@ -313,20 +316,22 @@ reads them.
 
 Some deviations warn, and others refuse startup. The
 [endpoint collision table](@/docs/configuration.md#endpoint-collisions) gives each outcome. The
-wiring inside a private registry is different: Écluse cannot inspect it, so a public uplink there
-can bypass public admission without a warning.
+private-upstream check depends on the backend. Proxy boot and both Dredger modes reject detected
+public aggregation. CodeArtifact checks its upstream chain. An undecidable result warns once.
+Mirror-only and Pilot roles do not run this private-read check.
 
 | Deviation | What you lose | Warning |
 |---|---|---|
 | One store for two roles | Provenance separation and per-store governance can be lost | Startup warns or refuses, depending on the pair |
-| A private upstream that draws directly from public | Public rules, the quarantine, and the public-admission integrity floor | **None. Écluse cannot detect this wiring.** |
+| A private upstream that draws directly from public | Public rules, the quarantine, and the public-admission integrity floor | Boot refuses detected public aggregation. Undecidable evidence warns once |
 | A closed edge: `ECLUSE_SERVER__AUTH_TOKEN` set | Per-caller passthrough, and per-caller publication with a static publication token | None. The posture is your own explicit setting |
 | A static publication token without an edge token | Nothing at runtime, because it never boots | The boot fails closed |
 | A static mirror-write secret | The short-lived token minted from the role identity | None. The secret is visible in the configuration you wrote |
 
 With a private upstream that draws from public, the trusted listing floor still applies, but
-conventional private npm artifact hits bypass metadata admission. That row has one remedy:
-aggregate **trusted stores only** into the private upstream. With a closed edge, every caller
+conventional private npm artifact hits bypass metadata admission. You must aggregate
+**trusted stores only** into the private upstream, including when the backend cannot prove its wiring.
+With a closed edge, every caller
 presents the one edge token and reaches the private upstream as one identity. The
 [threat model](@/docs/threat-model.md) records both store-level deviations.
 

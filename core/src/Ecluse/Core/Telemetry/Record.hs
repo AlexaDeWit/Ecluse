@@ -95,7 +95,7 @@ data MetricsPort = MetricsPort
     , mpAssembledCacheRequest :: CacheResult -> IO ()
     -- ^ Assembled-response requests (@ecluse.metadata_cache.assembled.requests@).
     , mpCacheRefused :: CacheStore -> IO ()
-    -- ^ Capacity refusals and external backend failures (@ecluse.metadata_cache.refused@).
+    -- ^ Capacity refusals and backend failures (@ecluse.metadata_cache.refused@).
     , mpCacheEntries :: Int -> IO ()
     -- ^ Record the metadata cache's current occupancy (@ecluse.metadata_cache.entries@).
     , mpCacheResidentBytes :: Int -> IO ()

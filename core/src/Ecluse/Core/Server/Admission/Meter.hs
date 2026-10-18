@@ -200,8 +200,12 @@ readView meter = do
         <$> readTVar (mmBudget meter)
         <*> readTVar (mmCharged meter)
         <*> readTVar (mmToken meter)
-        <*> pure (smallest (IntSet.fromList [oldestOf interest waiter serves | (waiter, serves) <- Map.toList waiters]))
+        <*> pure (Map.foldlWithKey' (oldestWaiter interest) Nothing waiters)
   where
+    oldestWaiter interest oldest waiter serves =
+        let !priority = maybe effective (min effective) oldest
+            effective = oldestOf interest waiter serves
+         in Just priority
     oldestOf interest waiter serves = maybe waiter (min waiter) (smallest (waitingOn interest serves))
 
 smallest :: IntSet -> Maybe Int

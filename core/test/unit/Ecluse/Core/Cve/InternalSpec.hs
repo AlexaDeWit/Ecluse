@@ -5,28 +5,65 @@
 -- | The read-only connection the artifact is opened on, and the row decode behind 'CveLookup'.
 module Ecluse.Core.Cve.InternalSpec (spec) where
 
-import Database.SQLite.Simple (Connection, Only (..), SQLError, close, execute_, query_)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldThrow)
+import Control.Exception (MaskingState (MaskedInterruptible, Unmasked), getMaskingState)
+import Database.SQLite.Simple (Connection, Only (..), SQLError, close, execute_, open, query_)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
+import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldThrow)
+import UnliftIO.Async (cancel, withAsync)
+import UnliftIO.Exception (bracket, throwIO)
 
 import Ecluse.Core.Cve (AdvisoryRange (..))
-import Ecluse.Core.Cve.Internal (openHardenedConnection, toRange)
+import Ecluse.Core.Cve.Internal (CveDbRejected (CveDbWrongEpoch), acceptConnection, toRange, verifyConnection)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1))
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
 
--- Hand the body a hardened connection over the fixture artifact. A rejection of the
--- fixture is a loud test failure. The connection closes on the body's normal exit.
 withHardenedConnection :: (Connection -> IO ()) -> IO ()
 withHardenedConnection body =
-    withFixtureOsvDb CorpusV1 $
-        openHardenedConnection Npm EpssOptional >=> \case
-            Left rejection -> fail ("fixture artifact unexpectedly rejected: " <> show rejection)
-            Right conn -> body conn >> close conn
+    withFixtureOsvDb CorpusV1 $ \path ->
+        bracket (open path) close $ \conn ->
+            verifyConnection Npm EpssOptional conn >>= \case
+                Left rejection -> fail ("fixture artifact unexpectedly rejected: " <> show rejection)
+                Right () -> body conn
 
 spec :: Spec
 spec = do
+    describe "connection ownership" $ do
+        it "acquires and transfers masked while verification remains unmasked" $ do
+            states <- newIORef []
+            let record = getMaskingState >>= \maskingState -> modifyIORef' states (<> [maskingState])
+            result <- acceptConnection (record >> open ":memory:") close (\_ -> record $> Right ()) (\conn () -> record >> close conn)
+            result `shouldBe` Right ()
+            readIORef states `shouldReturn` [MaskedInterruptible, Unmasked, MaskedInterruptible]
+
+        it "closes a rejected connection once" $ do
+            closes <- newIORef (0 :: Int)
+            let release conn = close conn >> modifyIORef' closes (+ 1)
+            result <- acceptConnection (open ":memory:") release (\_ -> pure (Left (CveDbWrongEpoch 0) :: Either CveDbRejected ())) (\_ () -> pass)
+            result `shouldBe` Left (CveDbWrongEpoch 0)
+            readIORef closes `shouldReturn` 1
+
+        it "closes once when verification throws" $ do
+            closes <- newIORef (0 :: Int)
+            let release conn = close conn >> modifyIORef' closes (+ 1)
+                verify _ = throwIO (TestContractEscape "verification") :: IO (Either CveDbRejected ())
+            acceptConnection (open ":memory:") release verify (\_ () -> pass)
+                `shouldThrow` (\(TestContractEscape _) -> True)
+            readIORef closes `shouldReturn` 1
+
+        it "closes once when cancellation interrupts verification" $ do
+            closes <- newIORef (0 :: Int)
+            verifying <- newEmptyMVar
+            blocked <- newEmptyMVar
+            let release conn = close conn >> modifyIORef' closes (+ 1)
+                verify _ = putMVar verifying () >> takeMVar blocked $> Right ()
+            withAsync (acceptConnection (open ":memory:") release verify (\_ () -> pass)) $ \worker -> do
+                takeMVar verifying
+                cancel worker
+            readIORef closes `shouldReturn` 1
+
     describe "the hardened connection" $ do
         it "refuses writes outright, so no trigger can ever fire through it" $
             withHardenedConnection $ \conn ->

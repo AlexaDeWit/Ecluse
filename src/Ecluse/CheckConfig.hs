@@ -2,13 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | @ecluse check-config@: run the boot's config-decidable tier and print the resolved posture,
-without starting anything. It runs 'Ecluse.Composition.Plan.resolveBootPlan' once for its own pass
-and once per other boot role, and prints the plan's lines, applying none of it: no socket opens, no
-capability count changes, no re-exec, no cloud call. It predicts the posture from
-'appliedRuntimePlan', because the checker's own process posture is not the boot's. It exits @0@ on
-a valid configuration and @2@ where its own pass refuses, and a refusal only some roles earn prints
-as a warning naming the command that earns it.
+{- | Check configuration without starting services or making cloud calls.
+Print predicted runtime posture and role-specific refusals. Exit @2@ when the checker's pass refuses.
 -}
 module Ecluse.CheckConfig (runCheckConfig) where
 
@@ -26,14 +21,8 @@ import Ecluse.Composition.Plan (
 import Ecluse.Composition.Sizing (openFileSoftLimit)
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline))
 import Ecluse.Config (AppConfig (cfgRuntime), Config (configApp))
-import Ecluse.Rts (
-    appliedRuntimePlan,
-    currentRtsPosture,
-    readCgroupLimits,
-    renderEffectivePosture,
-    renderPostureWarnings,
-    resolveRuntimePlan,
- )
+import Ecluse.Rts (appliedRuntimePlan, currentRtsPosture, renderEffectivePosture, renderPostureWarnings, resolveRuntimePlan)
+import Ecluse.Rts.Cgroup (readCgroupLimits)
 
 {- | Validate the configuration and print the resolved posture. A valid configuration
 returns (exit @0@) and a refused one aborts (exit @2@).

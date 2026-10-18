@@ -8,7 +8,6 @@ Package keys are canonical per ecosystem.
 module Ecluse.Core.Cve (
     -- * The opened artifact
     CveDb (..),
-    openCveDb,
     CveDbRejected (..),
 
     -- * The consumer view
@@ -31,76 +30,11 @@ module Ecluse.Core.Cve (
 
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
-import UnliftIO.Exception (catch, catchAny, onException, throwIO)
 
-import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDbRejected (..), advisoriesQuery, coveredNamesQuery, openHardenedConnection, provenanceQuery)
+import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDb (..), CveDbRejected (..), CveLookup (..), CveQueryFault (..))
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Osv.Provenance (AdvisoryProvenance, decodeProvenance)
-import Ecluse.Core.Osv.Schema (EpssRequirement)
 import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Core.Version (Version, VersionKey, parseVersionKey, renderVersion, renderVersionKey, versionKeyIn)
-
-import Database.SQLite.Simple (Connection, SQLError, close)
-
--- | Query by canonical package key, with an npm scope inline. A display name is never a query key.
-data CveLookup = CveLookup
-    { cveAdvisoriesFor :: Text -> IO [AdvisoryRange]
-    -- ^ Every advisory range recorded against a package name. Every field throws 'CveQueryFault' on a query fault.
-    , cveCoveredNames :: IO [Text]
-    -- ^ Every package name this generation records an advisory against, for a store sweep.
-    }
-
--- | A database query fault for the rule's resilience policy to classify.
-data CveQueryFault = CveQueryFault
-    { cqfQuery :: Text
-    -- ^ Which handle field was asked (@advisories-for@ or @covered-names@).
-    , cqfDetail :: Text
-    -- ^ The rendered 'SQLError', for the operator's outage report. Never parsed.
-    }
-    deriving stock (Eq, Show)
-
-instance Exception CveQueryFault
-
--- | One opened artifact. Its holder owns the connection's lifetime, and hands a consumer 'cveDbLookup' only.
-data CveDb = CveDb
-    { cveDbLookup :: CveLookup
-    -- ^ The view consumers query through.
-    , cveDbClose :: IO ()
-    -- ^ Release the connection. Owner-only, and __never throws__, since the connection is going away either way.
-    , cveDbMeta :: [(Text, Text)]
-    -- ^ The artifact's @meta@ provenance rows, snapshotted at open and key-sorted for the audit trail.
-    , cveDbProvenance :: AdvisoryProvenance
-    -- ^ What the artifact records about its sources. An artifact written before those keys decodes as absence.
-    }
-
--- | Reject incompatible artifacts as values. Opening faults leave no connection behind.
-openCveDb :: Ecosystem -> EpssRequirement -> FilePath -> IO (Either CveDbRejected CveDb)
-openCveDb eco epssRequirement dbFile =
-    openHardenedConnection eco epssRequirement dbFile >>= \case
-        Left rejection -> pure (Left rejection)
-        Right conn -> do
-            -- No-leak backstop for a fault below the artifact contract. Acceptance already made the
-            -- provenance decode itself total.
-            meta <- provenanceQuery conn `onException` close conn
-            pure (Right (mkCveDb conn meta))
-
-mkCveDb :: Connection -> [(Text, Text)] -> CveDb
-mkCveDb conn meta =
-    CveDb
-        { cveDbLookup =
-            CveLookup
-                { cveAdvisoriesFor = taggedQuery "advisories-for" . advisoriesQuery conn
-                , cveCoveredNames = taggedQuery "covered-names" (coveredNamesQuery conn)
-                }
-        , cveDbClose = close conn `catchAny` const pass
-        , cveDbMeta = meta
-        , cveDbProvenance = decodeProvenance meta
-        }
-
--- The SQLite edge: the driver's 'SQLError' never escapes the handle, only this module's
--- confined 'CveQueryFault'.
-taggedQuery :: Text -> IO a -> IO a
-taggedQuery tag act = act `catch` \(err :: SQLError) -> throwIO (CveQueryFault tag (show err))
 
 -- | One package's advisory segments, each with its bounds parsed once under the package's ecosystem.
 data PackageAdvisories = PackageAdvisories

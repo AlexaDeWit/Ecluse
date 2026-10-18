@@ -17,6 +17,8 @@ module Ecluse.Core.Server.Pipeline.Tarball.Relay (
     relayUpstreamWhen,
     relayUpstreamResult,
     acceptArtifact,
+    acceptPrivateArtifact,
+    privateArtifactResponder,
     relayUnjudged,
     relayJudged,
 
@@ -32,9 +34,10 @@ import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hContentType
 
 import Data.ByteString qualified as BS
 import Ecluse.Core.Package (PackageName, renderPackageName)
+import Ecluse.Core.Registry (isAuthorisationFailure)
 import Ecluse.Core.Security (ProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
-import Ecluse.Core.Server.Stream (RelayResponder, UpstreamBody (NoBody, StreamBody), UpstreamResult, withUpstreamResult, withUpstreamWhen)
+import Ecluse.Core.Server.Stream (RelayResponder (..), UpstreamBody (NoBody, StreamBody), UpstreamResult, withUpstreamResult, withUpstreamWhen)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpPublicRelayAnomaly))
 import Ecluse.Core.Version (Version, renderVersion)
@@ -92,6 +95,21 @@ upstreamBody = \case
 -- | A successful artifact response, including a matching conditional validator.
 acceptArtifact :: Status -> Bool
 acceptArtifact s = statusIsSuccessful s || isNotModified s
+
+-- | Private authorisation failures commit a local refusal instead of allowing public fallback.
+acceptPrivateArtifact :: Status -> Bool
+acceptPrivateArtifact status = acceptArtifact status || isAuthorisationFailure (statusCode status)
+
+-- | Replace private access refusals without invoking either upstream responder.
+privateArtifactResponder :: IO result -> (response -> result) -> RelayResponder response -> RelayResponder result
+privateArtifactResponder refuse admitted responder =
+    RelayResponder
+        (\status headers body -> answer status (relayStreamResponse responder status headers body))
+        (\status headers -> answer status (relayEmptyResponse responder status headers))
+  where
+    answer status response
+        | isAuthorisationFailure (statusCode status) = refuse
+        | otherwise = admitted <$> response
 
 -- | Forward private headers without the public leg's anomaly scan.
 relayUnjudged :: Status -> ResponseHeaders -> IO (Status, ResponseHeaders, ())

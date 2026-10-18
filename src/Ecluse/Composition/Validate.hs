@@ -44,7 +44,7 @@ import Ecluse.Composition.Endpoints (
     VettedEndpoints (vePublicationTargets),
     vetEndpoints,
  )
-import Ecluse.Composition.Maintenance (ClearedBackend, ResolveMaintenanceAdapter, overrideKey, vetPrivateCaches, vetStoreBackends)
+import Ecluse.Composition.Maintenance.Plan (ClearedBackend, ResolveMaintenanceAdapter, overrideKey, vetPrivateCaches, vetStoreBackends)
 import Ecluse.Composition.Types (BootRole, MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly), pipelineRoleOf)
 import Ecluse.Composition.Vet (Severity (Advise, Ignore, Refuse), Vet, byStoreRole, decided, rule)
 import Ecluse.Config (

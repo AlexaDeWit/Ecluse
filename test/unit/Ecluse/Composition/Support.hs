@@ -2,10 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared fixtures for the specs that load a real configuration: the minimal valid
-environment layers, their targeted mutations, the expect-helpers that load them, and the capture of
-a whole boot's refusal.
--}
+-- | Configuration fixtures, targeted overrides and boot-refusal capture for composition tests.
 module Ecluse.Composition.Support (
     NoCredentials (NoCredentials),
     fixedNow,
@@ -61,7 +58,7 @@ import UnliftIO (timeout, try)
 
 import Ecluse.Composition.BootError (BootError (MirrorTargetOnMountEndpoint, StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane, PrivateCacheUnavailable))
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders, initTargetCredentialProviders)
-import Ecluse.Composition.Maintenance (ClearedBackend (cbUrl))
+import Ecluse.Composition.Maintenance.Plan (ClearedBackend (cbUrl))
 import Ecluse.Composition.Plan (
     BootInputs (BootInputs, biConfig, biDocument, biEnvVars, biFdLimit, biRuntimePlan),
     BootPlan,

@@ -73,7 +73,7 @@ import Ecluse.Core.Security (
     defaultLimits,
  )
 import Ecluse.Core.Server.Conditional (Conditional (..), ETag, evaluateETag, renderETag)
-import Ecluse.Core.Server.Pipeline.Packument (packumentETag)
+import Ecluse.Core.Server.Pipeline.Packument.Representation (packumentETag)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, mkVersion)

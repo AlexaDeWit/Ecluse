@@ -23,8 +23,9 @@ import Data.JsonStream.Lexer (Cursor)
 import Data.Vector qualified as V
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, tableTexts)
-import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, Piece (..), Pieces (ArrayPieces), RenderPlan (..), UrlPrefix, docTable, encodedLength, opArray, opFalse, opNull, opObject, opShared, opTrue, packedBlob, readVarint, renderPlan, separators)
+import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, Piece (..), Pieces (ArrayPieces), RenderPlan (..), UrlPrefix, docTable, opArray, opFalse, opNull, opObject, opShared, opTrue, packedBlob, readVarint, renderPlan, separators)
 import Ecluse.Core.Registry.Json.Shape (Mode (Share), Shape, readShape)
+import Ecluse.Core.Registry.Json.StringEncoding (encodedLength)
 import Ecluse.Core.Registry.Json.Walk (Steps (Finished), withElement)
 import Ecluse.Core.Registry.Json.Writer (newWriter, sealValue)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))

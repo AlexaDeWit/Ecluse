@@ -22,7 +22,7 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc, pypiPacked, pypiRendered,
 import Ecluse.Core.Registry.Json.Packed (Piece (..), Pieces (ArrayPieces), RenderPlan (..), hasHole, renderPlan, urlPrefix)
 import Ecluse.Core.Registry.PyPI.Document (PackedSimple (..), SimpleDocument, packedSimplePlan, simpleDocument, simpleEncoding, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Route (distributionPath)
-import Ecluse.Core.Registry.ServedDocument (RenderRefused (RenderRefused), overlaySurvivors, rebaseArtifactUrl, serialiseAcross, stringField)
+import Ecluse.Core.Registry.ServedDocument (RenderRefused (RenderRefused), assembleAcross, overlaySurvivors, rebaseArtifactUrl, serialiseAcross, stringField)
 import Ecluse.Core.Snapshot (Snapshot, snapshotValue)
 import Ecluse.Core.Text (joinUrlPath)
 
@@ -72,18 +72,7 @@ assembleSimpleDocument :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan
 assembleSimpleDocument mountBase bySource plan base =
     case (traverse (traverse (snd pypiPacked)) bySource, traverse (snd pypiPacked) base) of
         (Just packed, Just packedBase) -> fst pypiRendered (assemblePackedIndex mountBase packed plan packedBase)
-        _ -> assembleValues mountBase bySource plan base
-
-assembleValues :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
-assembleValues mountBase bySource plan base =
-    fst
-        pypiSimpleCached
-        ( assembleSimpleIndex
-            mountBase
-            (Map.mapMaybe (traverse (snd pypiSimpleCached)) bySource)
-            plan
-            (fromMaybe (simpleDocument mempty []) (snd pypiSimpleCached =<< base))
-        )
+        _ -> assembleAcross pypiSimpleCached (simpleDocument mempty []) assembleSimpleIndex mountBase bySource plan base
 
 -- | Serialise a PyPI document to compact JSON, or an empty object for another ecosystem.
 serialiseSimpleDocument :: CachedDoc -> Either RenderRefused LByteString

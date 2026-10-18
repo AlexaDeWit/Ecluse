@@ -27,15 +27,15 @@ import UnliftIO (withRunInIO)
 import UnliftIO.Exception (catch, throwIO)
 
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), TransportFault, transportFault)
-import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Mirror.State.Codec (saturatingStateCharge, stateExchangeCharge)
 import Ecluse.Core.Mirror.State.Internal (StateCharge)
-import Ecluse.Core.Registry.Exchange (chargedRead)
+import Ecluse.Core.Registry.Exchange (accumulatingChargeFrom, chargedRead)
 import Ecluse.Core.Registry.Progress (Watch, meteredReader, meteredUpload, watched)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (..), boundedRead)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
 import Ecluse.Core.Stream (boundBytes)
-import Ecluse.Runtime.Aws.Fault (classifyAwsTransport, serviceStatus)
+import Ecluse.Runtime.Aws.Env (singleAttemptEnv)
+import Ecluse.Runtime.Aws.Fault (classifyAwsTransport, foldTransportEscapes, serviceStatus)
 import Ecluse.Runtime.Aws.S3.Conditional (ConditionalPut (..), WritePrecondition (..), absenceListing, isWriteConflict, listingProvesAbsence)
 
 -- | A 304 carries only the exact revision supplied to this exchange.
@@ -103,7 +103,7 @@ sendBounded charge requestCharge consumesBody env limits request native = do
                             )
                             (AWS.hooks env)
                     }
-        AWS.sendEither (AWS.once metered{AWS.retryCheck = \_ _ -> False}) request >>= \case
+        AWS.sendEither (singleAttemptEnv metered) request >>= \case
             Left err -> pure (Left err)
             Right (RawResponse service response) -> do
                 (wireCharge, bytes) <- readSource charge requestCharge watch limits (HTTP.responseBody response)
@@ -118,10 +118,8 @@ sendBounded charge requestCharge consumesBody env limits request native = do
 
 readSource :: StateCharge -> Int -> Watch -> Limits -> Types.ClientBody -> ResourceT IO (Int, ByteString)
 readSource charge requestCharge watch limits source = withRunInIO $ \run -> do
-    wireCharge <- newIORef (toInteger stateExchangeCharge + toInteger requestCharge)
-    let payChunk size = do
-            total <- atomicModifyIORef' wireCharge (\previous -> let nextCharge = previous + toInteger (bufferedChunkCharge size) in (nextCharge, nextCharge))
-            charge (saturatingStateCharge total)
+    (addCharge, wireCharge) <- accumulatingChargeFrom (toInteger stateExchangeCharge + toInteger requestCharge) charge
+    let payChunk = addCharge . bufferedChunkCharge
     pending <- newIORef (sealConduitT source)
     let next = do
             current <- readIORef pending
@@ -134,7 +132,7 @@ readSource charge requestCharge watch limits source = withRunInIO $ \run -> do
                     | otherwise -> pure bytes
     boundedRead (MetadataBodyLimit (maxMetadataBytes limits)) (chargedRead payChunk (meteredReader watch next)) >>= \case
         Left _ -> throwIO (ObjectLimit (maxMetadataBytes limits))
-        Right (_, bytes) -> (,bytes) . saturatingStateCharge <$> readIORef wireCharge
+        Right (_, bytes) -> (,bytes) <$> wireCharge
 
 data ObjectProgress = ObjectProgress
     deriving stock (Show)
@@ -206,8 +204,7 @@ serviceCode _ = Nothing
 
 boundedCall :: IO (Either ObjectFault a) -> IO (Either ObjectFault a)
 boundedCall action =
-    action
-        `catch` (\(ObjectLimit cap) -> pure (Left (ObjectTooLarge cap)))
-        `catch` (\ObjectProgress -> pure (Left (ObjectTransport (transportFault TransportTimeout "the mirror state exchange fell below its progress floor"))))
-        `catch` (\(err :: AWS.Error) -> pure (Left (ObjectTransport (classifyAwsTransport err))))
-        `catch` (\(err :: HTTP.HttpException) -> pure (Left (ObjectTransport (classifyTransport err))))
+    foldTransportEscapes ObjectTransport $
+        action
+            `catch` (\(ObjectLimit cap) -> pure (Left (ObjectTooLarge cap)))
+            `catch` (\ObjectProgress -> pure (Left (ObjectTransport (transportFault TransportTimeout "the mirror state exchange fell below its progress floor"))))

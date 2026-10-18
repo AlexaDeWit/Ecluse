@@ -2,14 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The OTLP Collector harness the telemetry integration specs share.
-
-The tracing and metrics specs each export one signal into a real Collector container and
-watch its @debug@ exporter output. They differ only in which pipeline the Collector runs
-and which @OTEL_*@ exporter the SDK enables, so both are parameters here. 'withSdkEnv'
-restores the process environment on exit: @setEnv@ is process-global and the suite runs
-every spec in one process, so an unrestored exporter would steer a later spec.
--}
+-- | Collector lifecycle and SDK environment isolation for telemetry integration tests.
 module Ecluse.Integration.Collector (
     -- * The container
     Collector (collectorEndpoint),
@@ -21,12 +14,12 @@ module Ecluse.Integration.Collector (
 ) where
 
 import Data.ByteString qualified as BS
-import Data.Text qualified as T
 import TestContainers (Container, containerAddress)
 import TestContainers qualified as TC
 import TestContainers.Docker (fromDockerfile, withLabels)
 import TestContainers.Hspec (withContainers)
 
+import Ecluse.Test.Collector (collectorConfig)
 import Ecluse.Test.Container.Image (PinnedImageRef, collectorImage, renderPinnedImageRef)
 import Ecluse.Test.Containers (testContainerLabels)
 import Ecluse.Test.Env (withEnvOverrides)
@@ -38,14 +31,11 @@ data Collector = Collector
     , collectorLogs :: IORef [ByteString]
     }
 
-{- | Start an OTLP Collector container running the named signal pipelines (@traces@, @metrics@)
-and follow its logs into a buffer. The body runs once the OTLP port accepts connections.
--}
+-- | Run with the named signal pipelines once the OTLP port accepts connections.
 withCollector :: [Text] -> (Collector -> IO ()) -> IO ()
 withCollector pipelines action = do
     logsRef <- newIORef []
     labels <- testContainerLabels "integration"
-    -- The harness's IO idiom: an unpinned literal aborts the suite before it pulls.
     image <- either (fail . toString) pure collectorImage
     withContainers (collectorContainer labels logsRef image pipelines) $ \container -> do
         let (host, mappedPort) = containerAddress container collectorPort
@@ -55,9 +45,7 @@ withCollector pipelines action = do
                 , collectorLogs = logsRef
                 }
 
-{- | Poll the Collector's accumulated logs for @needle@, up to @attempts@ times at ~250ms.
-The @debug@ exporter at detailed verbosity prints a span's attributes and a metric's name.
--}
+-- | Poll detailed debug output up to @attempts@ times, with 250 ms pauses.
 awaitCollectorLine :: Collector -> Text -> Int -> IO Bool
 awaitCollectorLine collector needle attempts =
     pollUntil attempts 250_000 id (any (needleBytes `BS.isInfixOf`) <$> readIORef (collectorLogs collector))
@@ -65,9 +53,7 @@ awaitCollectorLine collector needle attempts =
     needleBytes :: ByteString
     needleBytes = encodeUtf8 needle
 
-{- | Point the SDK at the Collector through the standard @OTEL_*@ environment for the action,
-then put every key it touched back. @signal@ names the exporter under test and its schedule knob.
--}
+-- | Set the SDK endpoint and signal exporter settings, restoring the environment on exit.
 withSdkEnv :: Text -> [(String, String)] -> IO a -> IO a
 withSdkEnv endpoint signal = withEnvOverrides settings
   where
@@ -84,7 +70,6 @@ withSdkEnv endpoint signal = withEnvOverrides settings
         ]
             <> signal
 
--- The OTLP HTTP receiver port the Collector serves on.
 collectorPort :: TC.Port
 collectorPort = 4318
 
@@ -108,18 +93,5 @@ collectorDockerfile image =
         <> "\nCMD [\"--config\", \"env:OTELCOL_CONFIG\"]\n"
         <> "LABEL com.ecluse.test=integration\n"
 
-{- The whole Collector configuration as one flow-style YAML document. It arrives through
-the @env:@ config provider, so the distroless image needs no shell, file, or bind mount. -}
-collectorConfig :: [Text] -> Text
-collectorConfig pipelines =
-    "{receivers: {otlp: {protocols: {http: {endpoint: \"0.0.0.0:4318\"}}}}, "
-        <> "exporters: {debug: {verbosity: detailed}}, "
-        <> "service: {pipelines: {"
-        <> T.intercalate ", " (map debugPipeline pipelines)
-        <> "}}}"
-  where
-    debugPipeline name = name <> ": {receivers: [otlp], exporters: [debug]}"
-
--- Accumulate each emitted Collector log line into the shared buffer (newest first).
 accumulateLogs :: IORef [ByteString] -> TC.LogConsumer
 accumulateLogs logsRef _pipe line = atomicModifyIORef' logsRef (\acc -> (line : acc, ()))

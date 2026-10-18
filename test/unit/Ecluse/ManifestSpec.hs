@@ -6,7 +6,7 @@ module Ecluse.ManifestSpec (spec) where
 
 import Prelude hiding (universe)
 
-import Data.Aeson (Value (Object), decode)
+import Data.Aeson (Value (Object, String), decode)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.HashMap.Strict.InsOrd qualified as InsOrd
 import Data.HashSet.InsOrd qualified as InsOrdSet
@@ -32,6 +32,7 @@ import Data.OpenApi (
 import Network.HTTP.Types.Method (StdMethod (DELETE, GET, HEAD, POST, PUT), renderStdMethod)
 import Test.Hspec
 
+import Ecluse.Core.BuildIdentity (productVersion)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
@@ -52,11 +53,13 @@ import Ecluse.Manifest (
 spec :: Spec
 spec = do
     describe "buildOpenApi (canonical npm mount)" $ do
-        it "renders a well-formed OpenAPI document (openapi/info/paths present)" $
+        it "renders required OpenAPI fields and the product release identity" $
             case decode (renderManifest doc) :: Maybe Value of
                 Just (Object o) -> do
                     KeyMap.member "openapi" o `shouldBe` True
-                    KeyMap.member "info" o `shouldBe` True
+                    case KeyMap.lookup "info" o of
+                        Just (Object info) -> KeyMap.lookup "version" info `shouldBe` Just (String productVersion)
+                        _ -> expectationFailure "the manifest info did not render as a JSON object"
                     KeyMap.member "paths" o `shouldBe` True
                 _ -> expectationFailure "the manifest did not render as a JSON object"
 

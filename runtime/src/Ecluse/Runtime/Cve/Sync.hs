@@ -23,15 +23,7 @@ module Ecluse.Runtime.Cve.Sync (
     absentReportInterval,
 ) where
 
-import Ecluse.Runtime.Cve.Sync.Internal (
-    DbEtag (..),
-    S3CveSource,
-    SyncEnv (..),
-    SyncHooks (..),
-    SyncSchedule (..),
-    absentReportInterval,
-    bootBackoffDelays,
-    newS3CveSource,
-    runCveSync,
-    s3CveFetchFor,
- )
+import Ecluse.Core.Cve.Types (DbEtag (..))
+import Ecluse.Runtime.Cve.Sync.Internal (SyncHooks (..), SyncSchedule (..), absentReportInterval, bootBackoffDelays, runCveSync)
+import Ecluse.Runtime.Cve.Sync.S3 (S3CveSource, newS3CveSource, s3CveFetchFor)
+import Ecluse.Runtime.Cve.Sync.Step (SyncEnv (..))

@@ -2,12 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Generated registry bodies for differential reader tests. Most are well formed, and each can
-carry escapes of every code unit, lone surrogates, invalid and overlong UTF-8, raw control bytes
-from 0x00, deep nesting, long and malformed numbers, exponents past 'Int', duplicate keys, the
-separators json-stream's lexer skips, and truncation or stray bytes.
+{- | Registry JSON bodies, hostile text and frozen string encodings for independent comparisons.
+Generated bodies include malformed input and duplicate keys.
 -}
 module Ecluse.Test.Registry.JsonBytes (
+    genHostileText,
+    legacyStringEncodings,
     genJsonBytes,
     genPackumentBytes,
     genServablePackumentBytes,
@@ -19,11 +19,33 @@ module Ecluse.Test.Registry.JsonBytes (
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder qualified as Builder
+import Data.Text qualified as T
 import Hedgehog (Gen)
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 
 import Ecluse.Test.Package (validSha1, validSha512Sri)
+
+-- | Every escape and control character, astral and other multi-byte characters, and plain text.
+genHostileText :: Gen Text
+genHostileText = toText <$> Gen.list (Range.linear 0 16) (Gen.frequency [(3, Gen.unicode), (3, Gen.element hostile), (3, Gen.alphaNum)])
+  where
+    hostile = ['\0' .. '\x1f'] <> "\"\\/\x7f\x80\x9f\x2028\x2029\xfeff\x1F600\x10FFFF"
+
+-- | Frozen string bytes of the writer at 978f32cc169e7eafc400385f1f60bb9157b6fdda, independent of its replacement.
+legacyStringEncodings :: [(Text, ByteString)]
+legacyStringEncodings =
+    [ ("", "\"\"")
+    , ("abc/def", "\"abc/def\"")
+    , ("\xe9\x6c34\x1f600", BS.pack [34, 195, 169, 230, 176, 180, 240, 159, 152, 128, 34])
+    , ("\"\\/\n\r\t\b\f", "\"\\\"\\\\/\\n\\r\\t\\u0008\\u000c\"")
+    ,
+        ( toText ['\0' .. '\x1f']
+        , "\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\u0008\\t\\n\\u000b\\u000c\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f\""
+        )
+    , (T.replicate 80 "a", "\"" <> BS.replicate 80 0x61 <> "\"")
+    , (T.replicate 80 "a" <> "\n", "\"" <> BS.replicate 80 0x61 <> "\\n\"")
+    ]
 
 -- | Any JSON value, with member names drawn from the given pool as often as not.
 genJsonBytes :: [ByteString] -> Gen ByteString

@@ -16,7 +16,8 @@ import Ecluse.BenchLoad.Floors (PassSelection (LoadedPassOnly))
 import Ecluse.BenchLoad.Pod (ProxyTuning (..), cpuListMembers, mib, podCpuQuota, podMemoryLimit)
 import Ecluse.BenchLoad.Sweep (Arm (..), BootValues (..), Phase (..), Sweep (..), SweepJob (..), decodeSweep, loadSweep, sweepJob)
 import Ecluse.Composition.Sizing (resolveServeAdmission)
-import Ecluse.Rts (CgroupLimits (CgroupLimits), RtsPosture (..), RuntimeOverrides (RuntimeOverrides), RuntimePlan (..), resolveRuntimePlan)
+import Ecluse.Rts (RtsPosture (..), RuntimeOverrides (RuntimeOverrides), RuntimePlan (..), resolveRuntimePlan)
+import Ecluse.Rts.Cgroup (CgroupLimits (CgroupLimits))
 
 spec :: Spec
 spec = do

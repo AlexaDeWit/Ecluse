@@ -48,7 +48,6 @@ spec = do
             attrUpstreamFraction a + attrOverheadFraction a `shouldBe` 1.0
 
         it "caps the upstream at the total so the overhead is never negative" $ do
-            -- A path faster than the live registry (or measurement noise) below the baseline.
             let a = attribute 150 120
             attrUpstreamMs a `shouldBe` 120
             attrOverheadMs a `shouldBe` 0
@@ -107,6 +106,14 @@ spec = do
             T.lines rendered `shouldSatisfy` elem "| private relay | n/a | n/a | n/a | n/a | n/a | n/a | unavailable: no public leg |"
 
     describe "renderSaturation" $ do
+        it "reports no usable comparison for an empty result" $ do
+            let rendered = renderSaturation 0.5 []
+            T.lines rendered `shouldSatisfy` elem "No usable queuing comparison is available."
+            rendered `shouldNotSatisfy` T.isInfixOf "No measured queuing fraction exceeds"
+            rendered `shouldNotSatisfy` T.isInfixOf "not backlog"
+            rendered `shouldNotSatisfy` T.isInfixOf "FLAG, queuing-bound:"
+            rendered `shouldNotSatisfy` T.isInfixOf "Queuing comparison unavailable:"
+
         it "calls out the queuing-bound scenarios in a loud summary line" $ do
             let bound = deriveSaturation 0.5 (SaturationInput "merge-cold" 42 50 (Just 255) (Just 1090))
                 rendered = renderSaturation 0.5 [bound]
@@ -119,14 +126,54 @@ spec = do
             renderSaturation 0.5 [bound] `shouldSatisfy` T.isInfixOf "| 50 |"
             renderSaturation 0.5 [ok] `shouldSatisfy` T.isInfixOf "| 0 |"
 
-        it "states no scenario is queuing-bound when none dominates" $ do
+        it "qualifies an under-threshold observation without ruling out backlog" $ do
             let ok = deriveSaturation 0.5 (SaturationInput "worker" 130 0 (Just 153) (Just 160))
                 rendered = renderSaturation 0.5 [ok]
-            rendered `shouldSatisfy` T.isInfixOf "No measured scenario is queuing-bound"
+            rendered `shouldSatisfy` T.isInfixOf "No measured queuing fraction exceeds 50%"
+            rendered `shouldSatisfy` T.isInfixOf "This observation does not rule out backlog."
+            T.lines rendered `shouldSatisfy` elem "| worker | 130.0 req/s | 0 | 153.0 ms | 160.0 ms | 7.0 ms (4%) | ok |"
 
         it "marks a scenario with no successful response instead of calling it ok" $ do
             let unmeasured = deriveSaturation 0.5 (SaturationInput "merge-cold" 0 0 (Just 255) Nothing)
                 rendered = renderSaturation 0.5 [unmeasured]
-            rendered `shouldSatisfy` T.isInfixOf "| no successes |"
-            rendered `shouldSatisfy` T.isInfixOf "no queuing reading: merge-cold"
+            satQueuingDelayMs unmeasured `shouldBe` Nothing
+            satQueuingFraction unmeasured `shouldBe` Nothing
+            T.lines rendered `shouldSatisfy` elem "| merge-cold | 0.0 req/s | 0 | 255.0 ms | n/a | n/a | no successes |"
+            rendered `shouldSatisfy` T.isInfixOf "No usable queuing comparison is available."
+            rendered `shouldSatisfy` T.isInfixOf "merge-cold (no successful response under load)"
             rendered `shouldNotSatisfy` T.isInfixOf "| ok |"
+
+        it "retains loaded measurements when the concurrency-one latency is missing" $ do
+            let unavailable = deriveSaturation 0.5 (SaturationInput "loaded-only" 42 50 Nothing (Just 1090))
+                rendered = renderSaturation 0.5 [unavailable]
+            T.lines rendered `shouldSatisfy` elem "| loaded-only | 42.0 req/s | 50 | n/a | 1090.0 ms | n/a | n/a |"
+            rendered `shouldSatisfy` T.isInfixOf "No usable queuing comparison is available."
+            rendered `shouldSatisfy` T.isInfixOf "loaded-only (concurrency-1 service p50 unavailable)"
+            rendered `shouldNotSatisfy` T.isInfixOf "No measured queuing fraction exceeds"
+
+        it "keeps a zero loaded latency without treating its undefined fraction as measured" $ do
+            let unavailable = deriveSaturation 0.5 (SaturationInput "zero" 10 3 (Just 255) (Just 0))
+                rendered = renderSaturation 0.5 [unavailable]
+            satQueuingDelayMs unavailable `shouldBe` Just 0
+            satQueuingFraction unavailable `shouldBe` Nothing
+            T.lines rendered `shouldSatisfy` elem "| zero | 10.0 req/s | 3 | 255.0 ms | 0.0 ms | 0.0 ms | n/a |"
+            rendered `shouldSatisfy` T.isInfixOf "No usable queuing comparison is available."
+            rendered `shouldSatisfy` T.isInfixOf "zero (loaded p50 is not positive)"
+
+        it "summarises measured rows and names every unavailable comparison" $ do
+            let measured = deriveSaturation 0.5 (SaturationInput "worker" 130 0 (Just 153) (Just 160))
+                missingService = deriveSaturation 0.5 (SaturationInput "missing-service" 42 50 Nothing (Just 1090))
+                missingLoaded = deriveSaturation 0.5 (SaturationInput "missing-loaded" 0 9 (Just 255) Nothing)
+                zero = deriveSaturation 0.5 (SaturationInput "zero" 10 3 (Just 255) (Just 0))
+                rendered = renderSaturation 0.5 [measured, missingService, missingLoaded, zero]
+            rendered `shouldSatisfy` T.isInfixOf "No measured queuing fraction exceeds 50%"
+            rendered `shouldNotSatisfy` T.isInfixOf "No usable queuing comparison is available."
+            rendered `shouldSatisfy` T.isInfixOf "Queuing comparison unavailable: missing-service (concurrency-1 service p50 unavailable), missing-loaded (no successful response under load), zero (loaded p50 is not positive)."
+
+        it "retains a flagged observation beside an unavailable comparison" $ do
+            let bound = deriveSaturation 0.5 (SaturationInput "merge-cold" 42 50 (Just 255) (Just 1090))
+                unavailable = deriveSaturation 0.5 (SaturationInput "missing-service" 12 4 Nothing (Just 200))
+                rendered = renderSaturation 0.5 [bound, unavailable]
+            rendered `shouldSatisfy` T.isInfixOf "FLAG, queuing-bound: merge-cold."
+            rendered `shouldSatisfy` T.isInfixOf "missing-service (concurrency-1 service p50 unavailable)"
+            T.lines rendered `shouldSatisfy` elem "| merge-cold | 42.0 req/s | 50 | 255.0 ms | 1090.0 ms | 835.0 ms (77%) | queuing-bound |"

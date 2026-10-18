@@ -11,6 +11,7 @@ import Data.Aeson.Encoding qualified as Encoding
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Scientific (scientific)
+import Data.Set qualified as Set
 import Hedgehog (forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -19,7 +20,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Json.Packed (docTable)
-import Ecluse.Core.Registry.PyPI.Document (PackedSimple (..), SimpleDocument, packedSimpleDocument, simpleDocument, simpleEncoding, simpleEnvelope, simpleFiles)
+import Ecluse.Core.Registry.PyPI.Document (PackedSimple (..), SimpleDocument, packedSimpleDocument, restrictSimpleFiles, simpleDocument, simpleEncoding, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIPacked)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), pypiCorpusPackages)
@@ -31,6 +32,14 @@ import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = describe "simpleEncoding" $ do
+    it "restricts exact coordinates without changing gaps, repeated entries or the envelope" $ do
+        let envelope = KeyMap.fromList [("name", String "requests"), ("meta", Null)]
+            document = simpleDocument envelope [(ArrayEntry 9, String "first"), (ArrayEntry 2, Null), (ArrayEntry 9, String "repeat"), (ArrayEntry 14, String "last")]
+            retained = restrictSimpleFiles (Set.fromList [ArrayEntry 9, ArrayEntry 14]) document
+        simpleFiles retained `shouldBe` [(ArrayEntry 9, String "first"), (ArrayEntry 9, String "repeat"), (ArrayEntry 14, String "last")]
+        simpleEnvelope retained `shouldBe` envelope
+        restrictSimpleFiles Set.empty document `shouldBe` simpleDocument envelope []
+
     it "encodes an empty document as an object with an empty file array" $
         encoded (simpleDocument mempty []) `shouldBe` "{\"files\":[]}"
 

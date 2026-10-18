@@ -2,13 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Resolving and applying the process's runtime posture: capabilities, allocation area and heap ceiling.
-
-The RTS sizes itself from the /machine/, not the pod. Bare @-N@ claims a capability per visible
-processor, a cgroup CPU quota does not shrink that count, and the heap is unbounded unless @-M@
-says so, leaving the kernel OOM killer as the only backstop. Neither @-A@ nor @-M@ has an in-process
-setter, so applying one re-executes this binary in place once, guarded by 'reexecMarker'. Sizes are
-bytes throughout.
+{- | Resolve and apply capabilities, allocation area and heap ceiling from runtime observations.
+Applying allocation or heap flags re-executes the process once because GHC exposes no setter.
 -}
 module Ecluse.Rts (
     -- * Applying the resolved posture at boot
@@ -16,14 +11,12 @@ module Ecluse.Rts (
 
     -- * The pure resolution core
     RtsPosture (..),
-    CgroupLimits (..),
     RuntimeOverrides (..),
     Provenance (..),
     RuntimePlan (..),
     provenanceClause,
     resolveRuntimePlan,
     currentRtsPosture,
-    readCgroupLimits,
     deriveMaxHeapBytes,
     deriveAllocAreaBytes,
     requiredRtsFlags,
@@ -38,16 +31,6 @@ module Ecluse.Rts (
     effectiveHeapCeiling,
     renderEffectivePosture,
     renderPostureWarnings,
-
-    -- * Cgroup v2 parsing
-    parseCpuMax,
-    parseMemoryMax,
-    readIfExists,
-    parseInactiveFile,
-    usePermille,
-
-    -- * Cgroup memory use
-    cgroupMemoryUse,
 ) where
 
 import Data.Ord (clamp)
@@ -55,9 +38,10 @@ import Data.Text qualified as T
 import GHC.Conc (getNumCapabilities, getNumProcessors, setNumCapabilities)
 import GHC.RTS.Flags (GCFlags (maxHeapSize, minAllocAreaSize, nurseryChunkSize), getGCFlags)
 import System.Environment (getEnvironment, getExecutablePath)
-import System.IO.Error (isDoesNotExistError)
 import System.Posix.Process (executeFile)
-import UnliftIO (tryIO, tryJust)
+import UnliftIO (tryIO)
+
+import Ecluse.Rts.Cgroup (CgroupLimits (..), readCgroupLimits)
 
 -- | The RTS posture the process is actually running with, read at boot by 'currentRtsPosture'.
 data RtsPosture = RtsPosture
@@ -71,13 +55,6 @@ data RtsPosture = RtsPosture
     -- ^ The nursery chunk size (@-n@), bytes. 'Nothing' when unset.
     , rpMaxHeapBytes :: Maybe Int
     -- ^ The heap ceiling (@-M@), bytes. 'Nothing' when unlimited.
-    }
-    deriving stock (Eq, Show)
-
--- | The cgroup v2 grant per axis: CPU quota in cores, @memory.max@ in bytes, 'Nothing' when absent or @max@.
-data CgroupLimits = CgroupLimits
-    { cgCpuCores :: Maybe Double
-    , cgMemoryMaxBytes :: Maybe Int
     }
     deriving stock (Eq, Show)
 
@@ -398,54 +375,6 @@ renderMiB bytes =
 showRounded :: Double -> String
 showRounded x = show (fromIntegral (round (x * 10) :: Int) / 10 :: Double)
 
--- | Parse a cgroup v2 @cpu.max@ body into granted cores. The @max@ sentinel or a malformed body yields 'Nothing'.
-parseCpuMax :: Text -> Maybe Double
-parseCpuMax body = case T.words (T.strip body) of
-    [quota, period] -> do
-        q <- readMaybe (toString quota) :: Maybe Double
-        p <- readMaybe (toString period) :: Maybe Double
-        guard (q > 0 && p > 0)
-        pure (q / p)
-    _ -> Nothing
-
--- | Parse a cgroup v2 @memory.max@ body into bytes. The @max@ sentinel or a malformed body yields 'Nothing'.
-parseMemoryMax :: Text -> Maybe Int
-parseMemoryMax body = do
-    n <- readMaybe (toString (T.strip body)) :: Maybe Int
-    guard (n > 0)
-    pure n
-
--- | The @inactive_file@ bytes in a cgroup-v2 @memory.stat@ body: page cache the kernel reclaims first.
-parseInactiveFile :: Text -> Maybe Int
-parseInactiveFile body =
-    listToMaybe
-        [ n
-        | line <- lines body
-        , ["inactive_file", value] <- [T.words line]
-        , Just n <- [readMaybe (toString value)]
-        ]
-
--- | A reader for cgroup memory use less inactive file pages, in thousandths of the tightest @memory.max@, else 'Nothing'.
-cgroupMemoryUse :: IO (IO (Maybe Int))
-cgroupMemoryUse = do
-    selfCgroup <- readIfExists "/proc/self/cgroup"
-    let relative = fromMaybe "/" (selfCgroup >>= parseCgroupSelfPath)
-        dirs = [cgroupRoot <> toString suffix | suffix <- ancestorPaths relative]
-    limits <- traverse (\dir -> fmap (dir,) <$> limitAt parseMemoryMax "/memory.max" dir) dirs
-    pure $ case sortOn snd (catMaybes limits) of
-        [] -> pure Nothing
-        (dir, limit) : _ -> readUse dir limit
-
-readUse :: FilePath -> Int -> IO (Maybe Int)
-readUse dir limit = do
-    current <- fromRight Nothing <$> tryIO (limitAt parseMemoryMax "/memory.current" dir)
-    inactive <- fromRight Nothing <$> tryIO ((>>= parseInactiveFile) <$> readIfExists (dir <> "/memory.stat"))
-    pure (usePermille limit inactive <$> current)
-
--- | Memory in use less reclaimable page cache, in thousandths of the limit, from a cgroup's readings.
-usePermille :: Int -> Maybe Int -> Int -> Int
-usePermille limit inactive current = max 0 (current - fromMaybe 0 inactive) * 1000 `div` max 1 limit
-
 -- | Resolve and apply the runtime plan at boot. It never aborts, and returns the plan the RTS runs with.
 applyRuntimePosture :: (Text -> IO ()) -> (Text -> IO ()) -> RuntimeOverrides -> IO EffectiveRuntimePlan
 applyRuntimePosture logInfo logWarning overrides = do
@@ -515,49 +444,6 @@ currentRtsPosture = do
 -- this many bytes (GHC 9.10: -A64m reads back as 16384, -M500m as 128000).
 rtsBlockBytes :: Int
 rtsBlockBytes = 4096
-
-{- The cgroup-v2 limits binding this process: its own cgroup and every ancestor up to the mount
-root, each axis taking the tightest. The leaf alone would miss a limit sitting on a parent slice. -}
-readCgroupLimits :: IO CgroupLimits
-readCgroupLimits = do
-    selfCgroup <- readIfExists "/proc/self/cgroup"
-    let relative = fromMaybe "/" (selfCgroup >>= parseCgroupSelfPath)
-        dirs = [cgroupRoot <> toString suffix | suffix <- ancestorPaths relative]
-    cpus <- traverse (limitAt parseCpuMax "/cpu.max") dirs
-    memories <- traverse (limitAt parseMemoryMax "/memory.max") dirs
-    pure
-        CgroupLimits
-            { cgCpuCores = tightest cpus
-            , cgMemoryMaxBytes = tightest memories
-            }
-
-cgroupRoot :: FilePath
-cgroupRoot = "/sys/fs/cgroup"
-
-limitAt :: (Text -> Maybe a) -> String -> FilePath -> IO (Maybe a)
-limitAt parse file dir = (>>= parse) <$> readIfExists (dir <> file)
-
-tightest :: (Ord a) => [Maybe a] -> Maybe a
-tightest found = case catMaybes found of
-    [] -> Nothing
-    (x : xs) -> Just (foldl' min x xs)
-
--- | Read a file that may be absent, as off a cgroup-v2 host. Every other IO error propagates.
-readIfExists :: FilePath -> IO (Maybe Text)
-readIfExists path =
-    rightToMaybe <$> tryJust (guard . isDoesNotExistError) (decodeUtf8 <$> readFileBS path)
-
--- The cgroup v2 path on the @0::@ line of @\/proc\/self\/cgroup@. 'Nothing' on a pure cgroup v1 host.
-parseCgroupSelfPath :: Text -> Maybe Text
-parseCgroupSelfPath body =
-    listToMaybe (mapMaybe (T.stripPrefix "0::") (lines (T.strip body)))
-
--- A cgroup path and its ancestors, leaf first: @"\/a\/b"@ yields @["\/a\/b", "\/a", ""]@.
-ancestorPaths :: Text -> [Text]
-ancestorPaths path = case filter (not . T.null) (T.splitOn "/" (T.strip path)) of
-    [] -> [""]
-    segments ->
-        [T.concat ["/" <> seg | seg <- take n segments] | n <- [length segments, length segments - 1 .. 1]] <> [""]
 
 {- The one-shot guard for the exec-in-place. It sits outside the @ECLUSE_@ prefix because the
 environment config layer rejects every unknown key under that prefix. -}
