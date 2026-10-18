@@ -6,11 +6,11 @@
 module Main (main) where
 
 import Ecluse.Core.Registry.SweepBench (measure)
-import System.Environment (getArgs)
+import System.Environment qualified as Environment
 
 main :: IO ()
 main = do
-    arguments <- getArgs
+    arguments <- Environment.getArgs
     case arguments of
         [raw] | Just count <- readMaybe raw, count > 0 -> measure count
         _ -> fail "usage: ecluse-dredger-bench POSITIVE_SAMPLE_COUNT"

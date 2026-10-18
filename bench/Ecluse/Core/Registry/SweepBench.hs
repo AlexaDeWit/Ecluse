@@ -259,20 +259,20 @@ selectedNames scenario
 qualifySelections :: Scenario -> Maybe DbEtag -> [Text] -> IO Value
 qualifySelections scenario generation messages = do
     isJust generation @?= (scCatalogue scenario > 0)
-    proposed @?= expectedProposed
-    retained @?= expectedRetained
+    proposed @?= map ("mirror",) expectedProposed
+    retained @?= map ("mirror",) expectedRetained
     pure
         ( object
-            [ "proposed_identities" .= map identity proposed
-            , "retained_identities" .= retained
-            , "denial_evidence" .= map (fst . T.breakOn "; advisory generation ") proposed
-            , "serving_generation_identities" .= [identity line | line <- proposed, not ("; advisory generation none" `T.isSuffixOf` line)]
+            [ "proposed_identities" .= map (selectionIdentity . second packageVersion) proposed
+            , "retained_identities" .= map selectionIdentity retained
+            , "denial_evidence" .= [object ["target" .= target, "denial" .= fst (T.breakOn "; advisory generation " line)] | (target, line) <- proposed]
+            , "serving_generation_identities" .= [selectionIdentity (target, packageVersion line) | (target, line) <- proposed, not ("; advisory generation none" `T.isSuffixOf` line)]
             ]
         )
   where
-    proposed = mapMaybe (T.stripPrefix "dry run, would delete ") messages
-    retained = mapMaybe (T.stripPrefix "dry run, keeping ") messages
-    identity = fst . T.breakOn ": blocked by "
+    proposed = mapMaybe (targetedPreview "dry run, would delete ") messages
+    retained = mapMaybe (targetedPreview "dry run, keeping ") messages
+    packageVersion = fst . T.breakOn ": blocked by "
     serving = maybe "none" (\(DbEtag etag) -> etag) generation
     expectedProposed =
         [ "left-pad@1.0.0: blocked by DenyIfCve (affected by ECLUSE-BENCH-0 (CVSS >= 8.0)); advisory generation " <> serving
@@ -284,6 +284,16 @@ qualifySelections scenario generation messages = do
             <> ["left-pad@1.0.0" | scCatalogue scenario == 0 && scShape scenario == SweepEverything]
             <> ["left-pad@2.0.0" | scCatalogue scenario > 0 || scShape scenario == SweepEverything]
             <> ["zulu@2.0.0"]
+
+targetedPreview :: Text -> Text -> Maybe (Text, Text)
+targetedPreview opening message =
+    (target,) <$> T.stripPrefix marker rest
+  where
+    marker = ": " <> opening
+    (target, rest) = T.breakOn marker message
+
+selectionIdentity :: (Text, Text) -> Value
+selectionIdentity (target, packageVersion) = object ["target" .= target, "package_version" .= packageVersion]
 
 expectedCalls :: Scenario -> [Text] -> [Text]
 expectedCalls scenario selected =
@@ -317,7 +327,7 @@ reportSample scenario sample outcome calls covered cost quota chunks timing sele
         , "kept_versions" .= tallyKept tally
         , "selections" .= selections
         , "store_calls" .= calls
-        , "request_counts" .= [(show kind :: Text, count) | tally <- Map.elems (ccRequests cost), (kind, count) <- tallyCounts tally]
+        , "request_counts" .= [(show kind :: Text, count) | requestTally <- Map.elems (ccRequests cost), (kind, count) <- tallyCounts requestTally]
         , "configured_requests_per_second" .= (1000 :: Int)
         , "configured_budget_fraction" .= (0.5 :: Double)
         , "chunk_size" .= swpChunkSize (pacingFor scenario)
