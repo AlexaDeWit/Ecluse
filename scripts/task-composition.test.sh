@@ -226,7 +226,7 @@ STUB
 chmod +x bin/*
 
 run_task() {
-  task --exit-code --silent "$@" > "$work/task.log" 2>&1
+  NO_COLOR=1 task --exit-code --silent "$@" > "$work/task.log" 2>&1
 }
 
 reject() {
