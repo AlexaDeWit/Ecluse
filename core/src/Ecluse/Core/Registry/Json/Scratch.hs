@@ -31,7 +31,8 @@ import Data.Primitive.ByteArray (ByteArray, MutableByteArray, copyMutableByteArr
 import Data.Primitive.MutVar (MutVar, newMutVar, readMutVar, writeMutVar)
 import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 
-import Ecluse.Core.Registry.Json.Packed (encodedLength, quote, varintSize, writeEncodedSized, writeVarint)
+import Ecluse.Core.Registry.Json.Packed (varintSize, writeVarint)
+import Ecluse.Core.Registry.Json.StringEncoding (encodedLength, quote, writeEncodedSized)
 import Ecluse.Core.Text (writeDigits)
 
 -- | The buffer and the offset of its next byte.

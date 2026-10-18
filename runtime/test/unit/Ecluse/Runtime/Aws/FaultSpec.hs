@@ -16,7 +16,7 @@ import System.FilePath ((</>))
 import System.IO.Error (isDoesNotExistError)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
-import UnliftIO.Exception (throwIO, try)
+import UnliftIO.Exception (throwIO, try, tryAny)
 
 import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportCause (TransportUnreachable), TransportFault (tfCause, tfDetail))
 import Ecluse.Core.Fault.Http (displayFaultT)
@@ -133,11 +133,12 @@ spec = do
                            , "AWS credential discovery found no credentials"
                            ]
 
-        it "renders a raised AWS fault as its own text, with no exception context after it" $
-            displayAwsFaultT (toException (AwsRequestFailed (AwsServiceNamed "STS") (AwsUndecodable 200)))
+        it "renders a raised AWS fault as its own text, with no exception context after it" $ do
+            raised <- tryAny (throwIO (AwsRequestFailed (AwsServiceNamed "STS") (AwsUndecodable 200)) :: IO ())
+            either displayAwsFaultT (const "no fault") raised
                 `shouldBe` "AWS request failed at STS: HTTP 200, an answer that could not be decoded"
 
-        it "renders any other exception as displayFaultT does, exception context included" $ do
+        it "renders any other exception as displayFaultT does" $ do
             refused <- refusedFetch =<< signedRequest
             for_ [toException refused, toException (TestContractEscape "a fault from outside AWS")] $ \err ->
                 displayAwsFaultT err `shouldBe` displayFaultT err

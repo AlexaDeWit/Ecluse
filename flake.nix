@@ -6,7 +6,9 @@
     # docs/architecture/release-supply-chain.md.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     flake-utils.url = "github:numtide/flake-utils";
-    saerskriven.url = "github:AlexaDeWit/Saerskriven";
+    # The v0.10.0 packaging commit, one after the tag. A release tag's Nix
+    # package still installs the previous release's binary.
+    saerskriven.url = "github:AlexaDeWit/Saerskriven/b1ade081654a0cfbd4c6e965605db2e34748d4e9";
     saerskriven.inputs.nixpkgs.follows = "nixpkgs";
     saerskriven.inputs.flake-utils.follows = "flake-utils";
   };
@@ -50,9 +52,8 @@
         otelOverlay = hself: _hsuper:
           let fromHackage = hackageNoCheck hself;
           in {
-            # cvss 0.3 adds CVSS v4 parsing and fixes v2 scoring. The base set pins
-            # 0.2.0.1, which rejects the v4 vectors that about a third of the scored
-            # npm OSV advisories carry.
+            # 0.3 parses CVSS v4 and fixes v2 scoring. The base set's 0.2.0.1 rejects
+            # the v4 vectors that about a third of scored npm OSV advisories carry.
             cvss = fromHackage "cvss" "0.3.0.0"
               "sha256-fRdZv2yVIAgBz9R36+V69GHc5h91/4lPXU4RU5Q2Q4Q=";
             hs-opentelemetry-api-types =
@@ -67,10 +68,8 @@
             hs-opentelemetry-semantic-conventions =
               fromHackage "hs-opentelemetry-semantic-conventions" "1.40.0.0"
                 "sha256-7cIC9dTrd5bJjAsiEyyupi1xSZyc17FpjbACnm0p5ik=";
-            # The SDK 1.0 re-exports the standard propagators, so they travel with it
-            # on the 1.0 line. W3C TraceContext is the default, and B3, Jaeger, X-Ray,
-            # and Datadog are alternates a deployment selects. The Datadog one is the
-            # optional, vendor-specific propagator from the observability design.
+            # The SDK 1.0 re-exports these, so they stay on its line. W3C TraceContext
+            # is the default. B3, Jaeger, X-Ray, and Datadog are alternates to select.
             hs-opentelemetry-propagator-b3 =
               fromHackage "hs-opentelemetry-propagator-b3" "1.0.0.0"
                 "sha256-gsNe818CprXM9l61mLUsdnePxIQChfml9kegmCDoAmw=";
@@ -97,23 +96,18 @@
             hs-opentelemetry-sdk =
               fromHackage "hs-opentelemetry-sdk" "1.0.0.0"
                 "sha256-kG8gmP8Lr9mPCnJjukCduFI/tADgKCfuelxcQZcXyA8=";
-            # HTTP/protobuf is the default. The gRPC path would pull in grapesy, and
-            # it stays behind the package's cabal flag, off, matching the `-grpc` flag
-            # the cabal freeze resolves. We need no gRPC.
+            # HTTP/protobuf only. The gRPC flag stays off, as on the cabal path,
+            # because gRPC pulls in grapesy.
             hs-opentelemetry-exporter-otlp =
               fromHackage "hs-opentelemetry-exporter-otlp" "1.0.0.0"
                 "sha256-rHgsisH2d45CI9woEDb/j0WnTzllxaE2Mkx5/OmWn0c=";
-            # The pull-side metrics transport. The pinned SDK resolves
-            # OTEL_METRICS_EXPORTER=prometheus to a no-op push exporter and leaves the
-            # endpoint to the application, so renderPrometheusText has to come from
-            # here. Same monorepo and same 1.0 line as the OTLP exporter above.
+            # The pinned SDK maps OTEL_METRICS_EXPORTER=prometheus to a no-op push
+            # exporter, so the pull endpoint's renderPrometheusText comes from here.
             hs-opentelemetry-exporter-prometheus =
               fromHackage "hs-opentelemetry-exporter-prometheus" "1.0.0.0"
                 "sha256-6yCjTQ/1hriFD2n3zprJDHKBsjLAD5jzlSfOuN/3ej0=";
-            # Request-lifecycle instrumentation: the WAI server span and the
-            # http-client data-plane child spans. The http-client instrumentation pulls
-            # the conduit instrumentation as a 1.0 dependency, so it travels on the line
-            # too. Their only OTel deps, api and semantic-conventions, are above.
+            # The WAI server span and the http-client child spans. The http-client one
+            # needs the conduit one at 1.0, so the three move together.
             hs-opentelemetry-instrumentation-wai =
               fromHackage "hs-opentelemetry-instrumentation-wai" "1.0.0.0"
                 "sha256-gPU9k2H1MpMEGh0F1Oi5ri8gdsZMCvQBRTnXgDhVAa0=";
@@ -125,14 +119,8 @@
                 "sha256-/+XwCJzMYtmBoHBuDGkmHR8ETKkxpMMtWNNWpbAGPYQ=";
           };
 
-        # amazonka, built from source at the exact rev the cabal path pins in
-        # cabal.project (source-repository-package). The Hackage release stops at
-        # 2.0/2023 (GHC <= 9.6), so it must come from the upstream monorepo. Pinning
-        # our own rev here, rather than riding nixpkgs' internal amazonkaSrc pin,
-        # keeps amazonka steady. A flake.lock refresh can never move it out from
-        # under the cabal path. `checks.amazonka-lockstep` holds this rev and
-        # cabal.project's tag together: bump both in the same commit, then run
-        # `task freeze`.
+        # The rev cabal.project pins, not nixpkgs' (Hackage's amazonka stops at GHC 9.6).
+        # checks.amazonka-lockstep keeps the two equal: bump both, then run `task freeze`.
         amazonkaRev = "b562aa3f24845e34b95748daae671860017426be";
         amazonkaSrc = pkgs.fetchFromGitHub {
           owner = "brendanhay";
@@ -151,7 +139,7 @@
           in {
             amazonka = fromMonorepo "amazonka" "lib/amazonka";
             # amazonka-core at this rev caps crypton below 1.2 and compiles against
-            # 2.1. Drop the jailbreak when a rev admits crypton 2.
+            # 2.2. Drop the jailbreak when a rev admits crypton 2.2.
             amazonka-core =
               hlib.doJailbreak (fromMonorepo "amazonka-core" "lib/amazonka-core");
             amazonka-sso = fromMonorepo "amazonka-sso" "lib/services/amazonka-sso";
@@ -163,7 +151,7 @@
           };
 
         # Fixes for HSEC-2026-0007 (JSON decoding DoS) and HSEC-2026-0008 (X.509 Name Constraints).
-        # tls 2.4.10 needs hpke 0.3 and x509 1.10. tls, hpke, and x509 need crypton 2.1.8 or later.
+        # tls 2.4.11 needs hpke 0.3, x509 1.10, and crypton 2.1.9 or later.
         advisoryOverlay = hself: hsuper:
           let fromHackage = hackageNoCheck hself;
           in {
@@ -182,15 +170,17 @@
               "sha256-CweEELCYvhtGiodo7x0PK4lr8xxD6khrXsI5/ZLqHb8=";
             crypton-x509-validation = fromHackage "crypton-x509-validation" "1.10.0"
               "sha256-PTK9YMG+MGpHCnDDuIBKH2IzafLNJoK45iyTpoTSQo4=";
-            tls = fromHackage "tls" "2.4.10"
-              "sha256-nWYWYiiTwP07/Rnh3udM1KLWkWNEF5L06B3XRnUWQ3E=";
+            tls = fromHackage "tls" "2.4.11"
+              "sha256-X/BL0b3b+gNIn9Sy7fXce76jJ7JZlUPhUtsFEs8lYqc=";
             # Drop the jailbreak when crypton-connection admits x509 1.10. It also
             # strips the tls <2.4 cap that Hackage revision 1 already lifts.
             crypton-connection = hlib.doJailbreak
               (fromHackage "crypton-connection" "0.4.6"
                 "sha256-B+fGwEBaChFx9mrrG5JbIjTnCSfiwuPetOOoua5FMGA=");
-            crypton = fromHackage "crypton" "2.1.8"
-              "sha256-AXgeI/nVn7mZDgL3Vag3ifIt3NGIHo4XKC4Dj919Oow=";
+            # At least 2.2.1. From 2.1.8 to 2.2.0, crypton compiles all of its C with
+            # AVX2 and BMI2 on x86-64, so the binary fails on older processors.
+            crypton = fromHackage "crypton" "2.2.1"
+              "sha256-GuTj0ChGkqAYER//1drYRnwEoozCBnJVn/31neRMPJg=";
             hpke = fromHackage "hpke" "0.3.0"
               "sha256-nOLaB+4hq66QKM5Fftn0QNRxDXjM57rB5oJQqPcYRD4=";
             http-client-tls = fromHackage "http-client-tls" "0.4.0"
@@ -279,31 +269,21 @@
           ];
         };
 
-        # Tools use the unmodified, binary-cached ghc910 set. Its compiler
-        # matches the app's, so HIE consumers and doctest remain compatible.
-        # Use static executables to avoid pulling a second Haskell library
-        # closure past the CI cache trim cap. Only compiler-coupled tools
-        # (ghc, doctest, hspec-discover) remain set packages.
+        # The unmodified, binary-cached set, on the app's compiler. Tools not coupled to the
+        # compiler are static, so no second library closure passes the CI cache cap.
         toolHpkgs = pkgs.haskell.packages.ghc910;
 
-        # The cabal package, built by Nix. callCabal2nix reads ecluse.cabal and
-        # resolves dependencies from the nixpkgs GHC 9.10 set that flake.lock pins,
-        # not from Hackage. This is the build and CI artifact. `cabal` in the dev
-        # shell stays the incremental inner loop, because Nix rebuilds the whole
-        # package on any change and is poor for edit-compile cycles.
+        # The build and CI artifact: ecluse.cabal against the pinned set, not Hackage. The
+        # dev shell's cabal stays the inner loop, because Nix rebuilds the whole package.
         ecluseRaw = hpkgs.callCabal2nix "ecluse" ./. { };
 
-        # Dep-extraction variant of ecluseRaw: cabal2nix omits benchmark
-        # components unless asked, and the freeze must pin the bench deps too.
-        # This variant feeds getCabalDeps below and is never built, so enabling
-        # benchmarks here costs the artifact nothing.
+        # Only for getCabalDeps, never built. cabal2nix omits benchmarks unless asked,
+        # and the freeze must pin their dependencies too.
         ecluseForDeps =
           hpkgs.callCabal2nixWithOptions "ecluse" ./. "--benchmark" { };
 
-        # Every Haskell dependency of every ecluse component (library, executable,
-        # test suites, benchmarks, build tools) as one GHC package environment.
-        # `ghc-pkg` can then report the exact resolved closure, boot libraries
-        # included.
+        # Every dependency of every ecluse component as one GHC package environment, so
+        # ghc-pkg reports the resolved closure, boot libraries included.
         ecluseDepEnv =
           let d = ecluseForDeps.getCabalDeps;
           in noUpstreamSuites [ ecluseForDeps ] (hpkgs.ghcWithPackages (_:
@@ -320,10 +300,8 @@
               (d.benchmarkToolDepends or [ ])
             ])));
 
-        # The freeze projects the Nix package versions onto the cabal path.
-        # Flags keep each resolver's defaults. cabal.project owns index-state.
-        # Filter ghc-pkg's internal z- sublibraries from solver targets.
-        # Regenerate with task freeze. checks.freeze-sync detects drift.
+        # The set's versions as cabal constraints, without flags, sublibraries or index-state.
+        # `task freeze` regenerates it, and checks.freeze-sync catches drift.
         cabalFreeze = pkgs.runCommand "cabal.project.freeze" { } ''
           ${ecluseDepEnv}/bin/ghc-pkg list --simple-output \
             | tr ' ' '\n' \
@@ -466,9 +444,6 @@
           # output into the search bundle. Both the publish and the site gate run them.
           pkgs.zola
           pkgs.pagefind
-          # d2 renders web/diagrams/*.d2 to SVG in the site build (`task site` and
-          # the site-stub gate). A single Go binary: no npm closure, no client JS.
-          pkgs.d2
           saerskriven.packages.${system}.saerskriven
         ];
 

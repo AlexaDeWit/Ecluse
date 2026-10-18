@@ -43,6 +43,8 @@ the cache paired with it. Every refusal names the mount key and the reason.
 
 The Dredger takes no ingress. It exposes only `/livez` and `/readyz` on `ECLUSE_SERVER__PORT`.
 
+{{ diagram(name="revocation-cleanup", alt="Dredger reads independent inventories and consent for B and C, applies current revocation rules, and removes eligible copies under the cap. First-party store A remains protected.") }}
+
 ## What one cycle does
 
 A mirrored version's metadata never changes after it is published. So a version Écluse once

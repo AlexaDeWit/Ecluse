@@ -2,16 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Resolve metadata origins with their credential posture and typed outcomes.
-Private reads forward the caller's credential without caching. Public reads are anonymous.
-Explicit access refusals remain distinct for the packument pipeline, and an origin that
-answered 404 stays distinct from one that could not be read.
+{- | Resolve caller-authorised private metadata and anonymous public metadata.
+Access refusals, absent packages and unread origins retain distinct outcomes.
 -}
 module Ecluse.Core.Server.Pipeline.Origin (
-    -- * A resolved contribution
-    Contribution (..),
-    fingerprintPiece,
-
     -- * The per-origin outcome
     OriginResult (..),
     OriginMiss (..),
@@ -28,20 +22,15 @@ module Ecluse.Core.Server.Pipeline.Origin (
     mountOrigin,
 ) where
 
-import Data.Map.Strict qualified as Map
 import Katip (Severity (DebugS), logFM, ls)
 import Network.HTTP.Client (Manager)
 import UnliftIO (withRunInIO)
 import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Credential (ClientCredential)
-import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, renderPackageName)
-import Ecluse.Core.Package.Entry (EntryKey)
-import Ecluse.Core.Package.Merge (Provenance)
+import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
-    ContentDigest,
     Manifest,
     MetadataClient (fetchFullManifest),
     MetadataError (
@@ -74,24 +63,6 @@ import Ecluse.Core.Server.Metadata (MetadataReads, ecosystemMetadataReads, prepa
 import Ecluse.Core.Server.Pipeline.Diagnostics (logInvalidEntries, logMetadataFailure)
 import Ecluse.Core.Server.Pipeline.Shared (flightOf)
 import Ecluse.Core.Version (Version)
-
--- | A parsed contribution with opaque source bytes and a digest for the derived validator.
-data Contribution = Contribution
-    { srcProvenance :: Provenance
-    , srcInfo :: PackageInfo
-    , srcValue :: CachedDoc
-    , srcDigest :: ContentDigest
-    , srcBodyBytes :: Int
-    -- ^ The decompressed source size, from which the listing's output charge takes its basis.
-    }
-
--- | Scope surviving versions and exact artifact coordinates to their source digest and provenance.
-fingerprintPiece :: Contribution -> (Provenance, ContentDigest, [(Text, [EntryKey])])
-fingerprintPiece s =
-    ( srcProvenance s
-    , srcDigest s
-    , [(version, map artEntryKey (toList (pkgArtifacts details))) | (version, details) <- Map.toList (infoVersions (srcInfo s))]
-    )
 
 -- | One origin's contribution, access refusal, identity mismatch, or absence.
 data OriginResult
@@ -157,7 +128,7 @@ fetchPrivateOrigin deps rt ticket token name = case pdPrivateBaseUrl deps of
         let origin = chargingFullReads (fullReadCharge deps ticket) (privateOrigin rt deps privateBase token)
         originResultOf <$> tryAny (withMetadataClient rt deps privateMetadataClient origin (`fetchFullManifest` name))
 
--- | Resolve the public (gated, anonymous) upstream origin through the metadata cache, keyed by the origin's base URL as its 'Source'.
+-- | Cache anonymous public metadata under the origin's base URL.
 fetchPublicOrigin :: PackumentDeps -> ServeRuntime -> MemoryTicket -> PackageName -> Handler OriginResult
 fetchPublicOrigin deps rt ticket name = do
     logFM DebugS (ls ("fetching public origin for " <> renderPackageName name))
@@ -189,7 +160,6 @@ withMetadataClient rt deps settle origin k =
   where
     baseUrl = originBaseUrl (originClientOf origin)
 
--- The ticket pays for each full-read chunk at the ecosystem's factor.
 fullReadCharge :: PackumentDeps -> MemoryTicket -> Int -> IO ()
 fullReadCharge deps ticket = charge ticket . scaleCharge (cfFullReadPermille (metadataChargeFactors (pdMetadata deps)))
 
@@ -209,7 +179,6 @@ privateOrigin rt deps = perCallerOrigin (pdLimits deps) (srPrivateManager rt)
 publicOrigin :: ServeRuntime -> PackumentDeps -> OriginFor Public
 publicOrigin rt deps = anonymousOrigin (pdLimits deps) (srPublicManager rt) (pdPublicBaseUrl deps)
 
--- The public origin's partition of the shared metadata cache.
 publicSource :: PackumentDeps -> Source
 publicSource deps = Source (registryUrlText (pdPublicBaseUrl deps))
 

@@ -80,9 +80,11 @@ pinned CLI runs.
 nix develop --command saer validate threat-modelling/ecluse.yaml
 ```
 
-After Saerskriven publishes and reviews a packaging update, update its input
-with `nix flake update saerskriven` and review `flake.lock` in a PR. Run
-`task site-stub` to test the new CLI against the model.
+The input pins a Saerskriven commit, not a release tag. A release tag's Nix package still
+installs the previous release's binary. Saerskriven's packaging commit after the tag moves it to
+the new binary. To take a new release, point the input's URL at that packaging commit, run
+`nix flake update saerskriven`, and review `flake.lock` in a PR. Run `task site-stub` to test the
+new CLI against the model.
 [Saerskriven's Nix guide](https://github.com/AlexaDeWit/Saerskriven/blob/main/docs/nix.md)
 records the upstream release update process and platform execution coverage.
 
