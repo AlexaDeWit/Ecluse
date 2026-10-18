@@ -14,11 +14,7 @@ front of it, and the network around it.
 container command selects the role. Every role reads the same configuration, so you write it once
 and run the roles your deployment needs.
 
-The image is built for `linux/amd64` and `linux/arm64`. The amd64 image needs a processor with AVX2
-and BMI2. On a processor without either, the process stops with an illegal instruction and prints
-no message. That covers Intel processors older than Haswell, AMD processors older than Excavator,
-many Atom-class processors, and a virtual machine whose hypervisor presents an older processor
-model: QEMU's default model has no AVX2. The arm64 image has no such requirement.
+The image is built for `linux/amd64` and `linux/arm64`.
 
 | Command | What it does | How to run it |
 |---|---|---|
