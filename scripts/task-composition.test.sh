@@ -61,7 +61,7 @@ if [ -n "${TEST_OVERLAP:-}" ]; then
   touch "$TEST_WORK/image-started"
   timeout 5 bash -c 'until [ -e "$TEST_WORK/plan-started" ]; do sleep 0.01; done'
 fi
-[ -z "${TEST_FAIL_IMAGE:-}" ] || { echo 'image build failed' >&2; exit 9; }
+[ -z "${TEST_FAIL_IMAGE:-}" ] || { echo 'image build failed' >&2; exit 8; }
 printf '%s/image.tar\n' "$TEST_WORK"
 STUB
 cat > bin/docker <<'STUB'
@@ -286,10 +286,16 @@ ECLTEST_ARTIFACT_DIR="$work/bootstrap-failure" TEST_FAIL_BUILD=exe:ecluse-artifa
 ECLTEST_ARTIFACT_DIR="$work/bootstrap-failure" reject run_task test-e2e-prepare
 ECLTEST_ARTIFACT_DIR="$work/overlap" TEST_OVERLAP=1 run_task test-e2e-prepare
 test -s "$work/overlap/identity.json"
-ECLTEST_ARTIFACT_DIR="$work/image-failure" TEST_FAIL_IMAGE=1 reject run_task test-e2e-prepare
+status=0
+ECLTEST_ARTIFACT_DIR="$work/image-failure" TEST_FAIL_IMAGE=1 run_task test-e2e-prepare || status=$?
+[ "$status" = 8 ]
 grep -Fxq 'image build failed' "$work/task.log"
-[ ! -e "$work/image-failure/docker-image.tar" ] && [ ! -e "$work/image-failure/identity.json" ]
-ECLTEST_ARTIFACT_DIR="$work/plan-failure" TEST_FAIL_BUILD=ecluse-e2e-manifest TEST_FAIL_IMAGE=1 reject run_task test-e2e-prepare
+[ ! -e "$work/image-failure/archive-path" ]
+[ ! -e "$work/image-failure/docker-image.tar" ]
+[ ! -e "$work/image-failure/identity.json" ]
+status=0
+ECLTEST_ARTIFACT_DIR="$work/plan-failure" TEST_FAIL_BUILD=ecluse-e2e-manifest TEST_FAIL_IMAGE=1 run_task test-e2e-prepare || status=$?
+[ "$status" = 9 ]
 grep -Fxq 'image build failed' "$work/task.log"
 : > "$TEST_TRACE"
 ECLTEST_ARTIFACT_DIR="$work/full-failed" TEST_FAILED_SUBJECT=pypi reject run_task test-e2e

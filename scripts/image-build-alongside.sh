@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the release image while a command runs. Print the build log, then return the first failure.
+# Build the release image while a command runs. Print the build log, then return the command's failure, else the build's.
 #   image-build-alongside.sh <archive-path-file> <command...>
 set -euo pipefail
 archive_path="${1:?archive path file}"
@@ -8,7 +8,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$here/process-group.sh"
 work="$(mktemp -d)"
 child_pid=
-trap '[ -z "$child_pid" ] || stop_child 143; rm -rf "$work"' EXIT
+trap '[ -z "$child_pid" ] || { stop_child 143; cat "$work/build.log" >&2; }; rm -rf "$work"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
