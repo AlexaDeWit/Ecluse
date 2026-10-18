@@ -27,7 +27,6 @@ module Ecluse.Core.Osv.Compile (
     promoteCandidate,
 
     -- * Feed downloads
-    newFeedManager,
     newFeedManagerWithIdentity,
 
     -- * Refusals and rows
@@ -51,7 +50,7 @@ import System.IO (hClose, openTempFile)
 import System.IO.Error (catchIOError)
 import UnliftIO.Exception (bracket, throwIO, try)
 
-import Ecluse.Core.BuildIdentity (identityManagerSettings, productVersion, userAgent)
+import Ecluse.Core.BuildIdentity (identityManagerSettings, productVersion)
 import Ecluse.Core.Fault (HttpFault, renderHttpFault)
 import Ecluse.Core.Fault.Http (httpFault, typedTlsManagerSettings)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
@@ -183,10 +182,6 @@ withOsvCandidate metrics mTracerProvider manager outDir eco requirement sources 
             , crSources = sources
             , crQuietTime = quietTime
             }
-
--- | Identify feed requests while retaining typed transport faults and HTTP proxy support.
-newFeedManager :: IO Manager
-newFeedManager = newFeedManagerWithIdentity userAgent
 
 -- | Reuse a precomputed outbound identity for both advisory feeds.
 newFeedManagerWithIdentity :: ByteString -> IO Manager

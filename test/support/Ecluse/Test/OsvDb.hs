@@ -45,12 +45,13 @@ import Network.HTTP.Types.Status (Status, status200)
 import System.IO.Temp (withSystemTempDirectory)
 import UnliftIO.Exception (bracket)
 
+import Ecluse.Core.BuildIdentity (userAgent)
 import Ecluse.Core.Cve (CveDb (cveDbClose), CveDbRejected)
 import Ecluse.Core.Cve.Internal (transferCveDb)
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Osv.Compile (CompileSources, OsvCandidate, mkCompileSources, newFeedManager, promoteCandidate, withOsvCandidate)
+import Ecluse.Core.Osv.Compile (CompileSources, OsvCandidate, mkCompileSources, newFeedManagerWithIdentity, promoteCandidate, withOsvCandidate)
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem, osvEcosystemFor)
 import Ecluse.Core.Osv.Provenance (QuietTime (..), SourcePathRecording (FingerprintSourcePath))
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
@@ -93,7 +94,7 @@ withOsvZipDb eco zipBytes use =
 -- | Compile one ecosystem into @outDir@ through Pilot's feed manager and promote it at once, as a compile with no publication does.
 compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> OsvEcosystem -> EpssRequirement -> CompileSources -> QuietTime -> m FilePath
 compileOsvToSqlite metrics mTracerProvider outDir eco requirement sources quietTime = do
-    feeds <- liftIO newFeedManager
+    feeds <- liftIO (newFeedManagerWithIdentity userAgent)
     withOsvCandidate metrics mTracerProvider feeds outDir eco requirement sources quietTime promoteCandidate
 
 -- | Compile into the supplied directory so tests can exercise artifact replacement.
@@ -149,7 +150,7 @@ stubSources osvStub epssStub =
 withServedCandidate :: SourceServer -> Ecosystem -> LByteString -> Maybe Text -> FilePath -> (OsvCandidate -> IO a) -> IO a
 withServedCandidate server eco zipBytes lastModified dir use = do
     writeIORef (ssAnswer server) (zipBytes, [(hLastModified, encodeUtf8 stamp) | stamp <- maybeToList lastModified])
-    feeds <- newFeedManager
+    feeds <- newFeedManagerWithIdentity userAgent
     runOsvTestM (withOsvCandidate noopAdvisoryCompileMetricsPort Nothing feeds dir (osvEcosystemFor eco) EpssRequired (ssSources server) fixtureQuietTime (liftIO . use))
 
 -- | Compile an archive and the shared EPSS slice into an unpromoted candidate under @dir@, for a publication to decide on.

@@ -57,7 +57,7 @@ spec = describe "the proxy's build identity" $ do
             twice <- managerModifyRequest settings once
             requestHeaders twice `shouldBe` [(hUserAgent, renderedAgent)]
 
-    for_ ["custom/1", "aws-sdk-haskell/1"] $ \custom ->
+    for_ (["custom/1", "aws-sdk-haskell/1"] :: [Text]) $ \custom ->
         it ("preserves configured caller identity " <> toString custom) $ do
             contact <- either (fail . toString) pure (parseOperatorContact "platform@example.com")
             let renderedAgent = renderUserAgent (Just contact)

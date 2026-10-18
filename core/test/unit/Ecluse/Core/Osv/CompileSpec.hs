@@ -34,6 +34,7 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (evaluate, finally, try)
 import UnliftIO.Timeout (timeout)
 
+import Ecluse.Core.BuildIdentity (userAgent)
 import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbEpssNotEstablished), CveLookup (..), affecting, fixedAt, packageAdvisories)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Fault (HttpFault (HttpStatus))
@@ -50,7 +51,7 @@ import Ecluse.Core.Osv.Compile (
     csEpssFeedUrl,
     csOsvExportUrl,
     mkCompileSources,
-    newFeedManager,
+    newFeedManagerWithIdentity,
     osvToRow,
     promoteCandidate,
     stampCandidateNonce,
@@ -942,7 +943,7 @@ withCandidate :: FilePath -> LByteString -> (OsvCandidate -> IO a) -> IO a
 withCandidate outDir zipData use = do
     epssData <- LBS.readFile epssFixtureFile
     (metrics, _) <- recordingAdvisoryCompileMetricsPort
-    feeds <- newFeedManager
+    feeds <- newFeedManagerWithIdentity userAgent
     withStub status200 zipData $ \stub ->
         withStub status200 epssData $ \epssStub ->
             runOsvTestM (withOsvCandidate metrics Nothing feeds outDir (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") testQuietTime (liftIO . use))
@@ -950,7 +951,7 @@ withCandidate outDir zipData use = do
 candidateFactsFrom :: FilePath -> Ecosystem -> EpssRequirement -> CompileSources -> IO CandidateFacts
 candidateFactsFrom outDir eco requirement sources = do
     (metrics, _) <- recordingAdvisoryCompileMetricsPort
-    feeds <- newFeedManager
+    feeds <- newFeedManagerWithIdentity userAgent
     runOsvTestM (withOsvCandidate metrics Nothing feeds outDir (osvEcosystemFor eco) requirement sources testQuietTime (pure . candidateFacts))
 
 -- One advisory scored through its CVE alias across two packages, and one the feed does not score.

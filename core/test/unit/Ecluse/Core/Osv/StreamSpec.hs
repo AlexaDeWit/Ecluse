@@ -18,7 +18,7 @@ import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldReturn, sho
 import Ecluse.Core.BuildIdentity (parseOperatorContact, renderUserAgent, userAgent)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
-import Ecluse.Core.Osv.Compile (newFeedManager, newFeedManagerWithIdentity)
+import Ecluse.Core.Osv.Compile (newFeedManagerWithIdentity)
 import Ecluse.Core.Osv.Ecosystem (
     OsvEcosystem (osvExportDirectory, osvMaxAdvisoryFanOut, osvWireName),
     osvEcosystemFor,
@@ -82,7 +82,7 @@ ingestedUrl :: String -> IO [ExtractedOsv]
 ingestedUrl url =
     runOsvTestM $ do
         ingest <- newOsvIngest defaultIngestLimits npmFeed noScores ingestClock
-        feeds <- liftIO newFeedManager
+        feeds <- liftIO (newFeedManagerWithIdentity userAgent)
         runConduit (void (streamOsvUrl Nothing feeds ingest url) .| sinkList)
 
 fanOutRows :: OsvEcosystem -> Int -> IO ([ExtractedOsv], IngestStats)
@@ -148,7 +148,7 @@ spec = describe "the OSV ingest stream" $ do
         for_ [(npmFeed, npmArchive), (pypiFeed, pypiArchive)] $ \(feed, archive) -> do
             digest <- withStub status200 archive $ \stub -> runOsvTestM $ do
                 ingest <- newOsvIngest defaultIngestLimits feed noScores ingestClock
-                feeds <- liftIO newFeedManager
+                feeds <- liftIO (newFeedManagerWithIdentity userAgent)
                 runConduit (fuseUpstream (streamOsvUrl Nothing feeds ingest (unpack (stubBaseUrl stub) <> "/all.zip")) sinkNull)
             digest `shouldBe` digestOf (toStrict archive)
 
