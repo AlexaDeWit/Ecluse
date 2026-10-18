@@ -147,7 +147,7 @@ withFixtureDir topology action = withSystemTempDirectory "ecluse-e2e-fixtures" $
 withGlobalDataPlane :: (GlobalDataPlane -> IO ()) -> IO ()
 withGlobalDataPlane = withDataPlane npmTopology
 
--- | Acquire the concrete resources declared by a group, releasing them on every exit path.
+-- | Wait for the registry stub before yielding a group, releasing resources on every exit path.
 withDataPlane :: Topology -> (GlobalDataPlane -> IO ()) -> IO ()
 withDataPlane topology action =
     usingExistingPlane >>= \case
@@ -181,7 +181,9 @@ withDataPlane topology action =
                 -- The production egress guard accepts this documentation range without a bypass.
                 withDockerNetwork labels net ["--subnet", "203.0.113.0/24"] $ \_ ->
                     withStore topology labels net workDir $ \store ->
-                        withDockerContainer labels stubRun $ \_ ->
+                        withDockerContainer labels stubRun $ \_ -> do
+                            ready <- awaitContainerLog stub ((> 0) . startedWorkers) 40
+                            unless ready (fail "the registry stub did not start a worker within the timeout")
                             withAws topology labels net $ \aws ->
                                 action
                                     GlobalDataPlane
