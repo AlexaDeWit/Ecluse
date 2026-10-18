@@ -34,10 +34,9 @@ import Network.HTTP.Types.Header (
     RequestHeaders,
     hAcceptEncoding,
     hAuthorization,
-    hUserAgent,
  )
 
-import Ecluse.Core.BuildIdentity (userAgent)
+import Ecluse.Core.BuildIdentity (identifyRequest)
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Text (joinUrlPath)
@@ -46,15 +45,7 @@ import Ecluse.Core.Text (joinUrlPath)
 re-send a credential cross-host or steer an anonymous fetch past the host allowlist.
 -}
 sealRequest :: Request -> Request
-sealRequest request =
-    request
-        { redirectCount = 0
-        , requestHeaders = identify (requestHeaders request)
-        }
-  where
-    identify headers
-        | any ((== hUserAgent) . fst) headers = headers
-        | otherwise = (hUserAgent, userAgent) : headers
+sealRequest request = identifyRequest request{redirectCount = 0}
 
 {- | Apply the ecosystem's injected credential attach, then seal the result through
 'sealRequest'. The attach runs first, so it cannot reopen redirect following.

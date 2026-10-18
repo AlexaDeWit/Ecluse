@@ -37,6 +37,7 @@ import Ecluse.Config (
  )
 import Ecluse.Config.Aeson (parseRuleEntry, parseRulePatch, parseRulesPatch)
 import Ecluse.Config.Rule (RulePatch (..))
+import Ecluse.Core.BuildIdentity (parseOperatorContact)
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Provenance (SourcePathRecording (FingerprintSourcePath, RecordSourcePath))
@@ -480,6 +481,27 @@ spec = describe "decodeDocument" $ do
             `shouldSatisfy` decodeErrorMentions "publicConnectionsPerHost must be a positive integer"
         loadConfig [("ECLUSE_RUNTIME__PRIVATE_CONNECTIONS_PER_HOST", "0")] Nothing
             `shouldSatisfy` decodeErrorMentions "privateConnectionsPerHost must be a positive integer"
+
+    it "leaves the operator contact unset by default" $
+        egrOperatorContact . cfgEgress <$> expectAppConfig [] Nothing `shouldReturn` Nothing
+
+    it "parses the operator contact from the environment" $ do
+        configured <- egrOperatorContact . cfgEgress <$> expectAppConfig [("ECLUSE_EGRESS__OPERATOR_CONTACT", "platform@example.com")] Nothing
+        traverse parseOperatorContact (Just "platform@example.com") `shouldBe` Right configured
+
+    for_ ["1", "true", "null"] $ \value ->
+        it ("keeps an environment contact as text: " <> value) $ do
+            configured <- egrOperatorContact . cfgEgress <$> expectAppConfig [("ECLUSE_EGRESS__OPERATOR_CONTACT", value)] Nothing
+            traverse parseOperatorContact (Just (toText value)) `shouldBe` Right configured
+
+    it "parses the operator contact from the document" $ do
+        configured <- egrOperatorContact . cfgEgress <$> expectAppConfig [] (Just "{\"egress\":{\"operatorContact\":\"https://example.com/contact\"}}")
+        traverse parseOperatorContact (Just "https://example.com/contact") `shouldBe` Right configured
+
+    for_ ["", replicate 257 'a', "(", ")", "\\", "\r", "\n", "\t", "\0", "\DEL", "é"] $ \value ->
+        it ("refuses invalid operator contact and names its key: " <> show value) $
+            loadConfig [("ECLUSE_EGRESS__OPERATOR_CONTACT", value)] Nothing
+                `shouldSatisfy` decodeErrorMentions "egress.operatorContact"
 
     it "leaves additionalBlockedRanges empty by default" $
         egrAdditionalBlockedRanges . cfgEgress <$> expectAppConfig [] Nothing `shouldReturn` []

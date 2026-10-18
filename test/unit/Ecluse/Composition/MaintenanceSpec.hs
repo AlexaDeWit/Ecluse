@@ -15,12 +15,13 @@ import UnliftIO.Exception (throwIO)
 import Ecluse.Composition.BootError (Advisory (PrivateUpstreamUndecided), BootError (PrivateUpstreamProbeFailed, PrivateUpstreamUnsafe, StoreMaintenanceUnavailable), StoreMaintenanceReason (ClientBuildFailed))
 import Ecluse.Composition.Credential (noCredentialProviders)
 import Ecluse.Composition.Maintenance (BudgetPorts (BudgetPorts, bpGateFor, bpNominalPace, bpOverrides), StorePorts (..), buildStoreMaintenance, buildStoreObservation, buildUpstreamProbe, planStoreMaintenance, readUpstreamSafety, resolvedBudget, storeScope, upstreamFindings)
-import Ecluse.Composition.Maintenance.Plan (ClearedBackend (cbFetchManifest), vetStoreBackends)
+import Ecluse.Composition.Maintenance.Plan (ClearedBackend (cbFetchManifest, cbUrl), vetStoreBackends)
 import Ecluse.Composition.Maintenance.Support (clearedBackendsFor, mountsFor, noAdapter, privateCaches, refusalsOf, unaddressablePrivateUpstream, verdaccioEnv, vetted, withoutPrivateAuthority)
 import Ecluse.Composition.Support (NoCredentials (NoCredentials), clearedUrl, codeArtifactEnvVars, expectConfig, staticEnvVars, twoStoreEnv, withObservablePrivate)
 import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner))
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig (cfgMounts), Config (configApp, configMounts), MountConfig (mntPrivateUpstream), PrivateEndpoint, QuotaOverride (QuotaOverride, qoQuotas, qoScope, qoWeights))
+import Ecluse.Core.BuildIdentity (parseOperatorContact, renderUserAgent, userAgent)
 import Ecluse.Core.Credential (AuthToken (AuthToken), CredentialProvider (CredentialProvider), mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
@@ -28,18 +29,21 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
-import Ecluse.Core.Registry.Maintenance (CompletionNotion (CompletesOnCall), ConsentVerdict (ConsentGranted, ConsentWithheld), DeleteCeiling (AtMost), RefillPosture (RefillPermitted), RetryAdvice (RetryWorthwhile), StoreFacts (..), StoreFault (faultRetry), StoreMaintenance (readStoreManifest, storeFacts, verifyConsent), StoreManifestRead, StoreObservation (obFacts, obReadManifest, obVerifyConsent))
+import Ecluse.Core.Registry.Maintenance (CompletionNotion (CompletesOnCall), ConsentVerdict (ConsentGranted, ConsentWithheld), DeleteCeiling (AtMost), RefillPosture (RefillPermitted), RetryAdvice (RetryWorthwhile), StoreFacts (..), StoreFault (faultRetry), StoreMaintenance (deleteVersions, readStoreManifest, storeFacts, verifyConsent), StoreManifestRead, StoreObservation (obFacts, obReadManifest, obVerifyConsent), VersionOutcome (VersionRemoved))
 import Ecluse.Core.Registry.Maintenance.Budget (QuotaDimension (StoreRequests), QuotaOrigin (QuotaDeclared, QuotaDerived), RequestGate (RequestGate, gateSpend), RequestKind (CursorWrite, DeleteBatch, ListingPage), StoreBudget (bgCosts, bgOrigin, bgQuotas, bgScope), mkQuotaScope, requestKinds, undeclaredBudget)
 import Ecluse.Core.Registry.Maintenance.Upstream (ExternalConnection (ExternalConnection), RepositoryName (RepositoryName), UndecidabilityReason (NetworkFailure, NoMechanism), UnsafeReason (ConfigurationEvidence), UpstreamSafety (Safe, Undecidable, Unsafe))
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent, MetadataFetch))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl, originClient)
 import Ecluse.Core.Security (Limits, defaultLimits)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Text (joinUrlPath, registryPath)
 import Ecluse.Test.Env (withAmbientAws)
-import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
-import Ecluse.Test.Package (unsafeRegistryUrl, unscopedNpm)
+import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore, testDeleteGuard)
+import Ecluse.Test.Package (npmVersion, unsafeRegistryUrl, unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
+import Ecluse.Test.Stub (Captured (capMethod), allCaptured, headerValue, stubBaseUrl, withRoutedStub)
+import Network.HTTP.Types.Status (status200, status201)
 
 spec :: Spec
 spec = do
@@ -68,6 +72,24 @@ buildSpec = describe "buildStoreMaintenance -- a store swept through the ecosyst
         handle <- protocolHandleFor MirrorPruner "true"
         (fmap faultRetry . leftToMaybe <$> readStoreManifest handle aPackage)
             `shouldReturn` Just RetryWorthwhile
+
+    it "sends the configured contact on maintenance reads and deletion" $ do
+        contact <- either (fail . toString) pure (parseOperatorContact "platform@example.com")
+        let renderedAgent = renderUserAgent (Just contact)
+            answer captured
+                | capMethod captured == "GET" = (status200, [], "{\"_rev\":\"1-abc\",\"versions\":{\"1.0.0\":{}}}")
+                | otherwise = (status201, [], "{}")
+        withRoutedStub answer $ \stub -> do
+            cleared <- clearedBackendsFor MirrorPruner (verdaccioEnv "true")
+            case Map.elems cleared of
+                [backend] -> do
+                    handle <- buildStoreMaintenance anonymousPorts{spUserAgent = renderedAgent} defaultLimits backend{cbUrl = loopbackRegistryUrl (stubBaseUrl stub)}
+                    let version = npmVersion "1.0.0"
+                    deleteVersions handle testDeleteGuard aPackage [version] `shouldReturn` [(version, VersionRemoved)]
+                    captured <- allCaptured stub
+                    map capMethod captured `shouldBe` ["GET", "DELETE"]
+                    map (headerValue "User-Agent") captured `shouldBe` replicate 2 (Just renderedAgent)
+                _ -> expectationFailure "expected one cleared protocol store"
 
     it "grants consent on the store the pass cleared" $ do
         handle <- protocolHandleFor MirrorPruner "true"
@@ -151,6 +173,7 @@ anonymousPorts :: StorePorts
 anonymousPorts =
     StorePorts
         { spTracing = passthroughTracingPort
+        , spUserAgent = userAgent
         , spCredential = Nothing
         , spBudget = unpacedBudget
         }
@@ -180,6 +203,7 @@ planSpec = describe "planStoreMaintenance" $ do
             planStoreMaintenance
                 (\_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig)
                 passthroughTracingPort
+                userAgent
                 unpacedBudget
                 noCredentialProviders
                 defaultLimits
@@ -193,6 +217,7 @@ planSpec = describe "planStoreMaintenance" $ do
             planStoreMaintenance
                 (\_ _ _ -> throwIO NoCredentials)
                 passthroughTracingPort
+                userAgent
                 unpacedBudget
                 noCredentialProviders
                 defaultLimits

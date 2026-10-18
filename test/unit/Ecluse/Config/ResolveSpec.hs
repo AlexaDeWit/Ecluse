@@ -63,6 +63,11 @@ spec = do
             merged `shouldBe` expected
 
     describe "buildEnvAst" $ do
+        for_ ["1", "true", "null", "platform@example.com"] $ \contact ->
+            it ("preserves operator contact text in the environment: " <> contact) $
+                buildEnvAst [("ECLUSE_EGRESS__OPERATOR_CONTACT", contact)]
+                    `shouldBe` Object (KeyMap.singleton "egress" (Object (KeyMap.singleton "operatorContact" (String (toText contact)))))
+
         it "filters and nests environment variables" $ do
             let env =
                     [ ("IGNORE_ME", "1")

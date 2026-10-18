@@ -91,9 +91,9 @@ envVarValue (key, value) =
     nest segments (leafValue (T.pack value))
   where
     segments = map toCamelCase (T.splitOn "__" key)
-    -- Credentials remain text even when a username or password looks like JSON.
+    -- Credentials and operator contacts remain text even when their values look like JSON.
     leafValue
-        | maybe False ((`elem` ("username" : secretLeafKeys)) . Key.toText) (listToMaybe (reverse segments)) = String
+        | maybe False ((`elem` ("operatorContact" : "username" : secretLeafKeys)) . Key.toText) (listToMaybe (reverse segments)) = String
         | otherwise = parseEnvValue
 
 toCamelCase :: Text -> Key.Key

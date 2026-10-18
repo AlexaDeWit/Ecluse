@@ -58,7 +58,8 @@ import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPrivateCaches, vpSettings),
     VettedMount (vmAdapter, vmConfig, vmEcosystem, vmMount),
  )
-import Ecluse.Config (AppConfig (cfgAdvisories, cfgDredger), DredgerSettings (drgChunkPause, drgChunkSize, drgQuotaOverrides), Mount (mountPolicy), MountConfig (mntFirstParty, mntPrivateUpstream), PrivateEndpoint, StoreTag, mountAdvisoryAge, mountDatabaseRequirement, mountEpssRequirement)
+import Ecluse.Config (AppConfig (cfgAdvisories, cfgDredger, cfgEgress), DredgerSettings (drgChunkPause, drgChunkSize, drgQuotaOverrides), EgressSettings (egrOperatorContact), Mount (mountPolicy), MountConfig (mntFirstParty, mntPrivateUpstream), PrivateEndpoint, StoreTag, mountAdvisoryAge, mountDatabaseRequirement, mountEpssRequirement)
+import Ecluse.Core.BuildIdentity (renderUserAgent)
 import Ecluse.Core.Clock (waitSeconds)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem)
@@ -227,6 +228,7 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
         planStoreMaintenance
             buildStore
             tracing
+            renderedAgent
             budget
             (fromRight noCredentialProviders credentials)
             (bpLimits bootPlan)
@@ -236,6 +238,7 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
             PrivateCacheCredential
             buildStore
             tracing
+            renderedAgent
             budget
             (fromRight noCredentialProviders credentials)
             (bpLimits bootPlan)
@@ -259,6 +262,7 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
             <* eitherToValidation probed
   where
     validated = bpValidated bootPlan
+    renderedAgent = renderUserAgent (egrOperatorContact (cfgEgress (vpSettings validated)))
     dredger = cfgDredger (vpSettings validated)
     prunerMounts = map vmMount (vpMounts validated)
     credentialBackends =

@@ -19,8 +19,9 @@ import System.IO.Error (doesNotExistErrorType, mkIOError, resourceVanishedErrorT
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Exception (evaluate)
 
+import Ecluse.Core.BuildIdentity (parseOperatorContact, renderUserAgent, userAgent)
 import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportCause (TransportProtocol, TransportTimeout, TransportUnreachable))
-import Ecluse.Core.Osv.Compile (newFeedManager)
+import Ecluse.Core.Osv.Compile (newFeedManagerWithIdentity)
 import Ecluse.Core.Osv.Epss (
     EpssEnrichment (..),
     EpssFeed (..),
@@ -46,7 +47,7 @@ import Ecluse.Core.Osv.Schema (EpssRequirement (..), EpssStatus (..))
 import Ecluse.Test.Fault (httpTransportCause)
 import Ecluse.Test.Osv (runOsvTestM)
 import Ecluse.Test.Snapshot (digestOf)
-import Ecluse.Test.Stub (allCaptured, stubBaseUrl, withStub, withStubHeaders)
+import Ecluse.Test.Stub (allCaptured, headerValue, lastCaptured, stubBaseUrl, withStub, withStubHeaders)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 -- The feed's own preamble, in the shape FIRST.org publishes: a metadata comment, then a header.
@@ -67,13 +68,13 @@ fetchFeedWith extraHeaders cap body = fetchRaw extraHeaders cap (GZip.compress b
 fetchRaw :: [Header] -> Int -> LByteString -> IO EpssFeed
 fetchRaw extraHeaders cap served =
     withStubHeaders status200 extraHeaders served $ \stub ->
-        newFeedManager >>= \feeds -> runOsvTestM (fetchEpssScores feeds cap (toString (stubBaseUrl stub) <> "/epss.csv.gz"))
+        newFeedManagerWithIdentity userAgent >>= \feeds -> runOsvTestM (fetchEpssScores feeds cap (toString (stubBaseUrl stub) <> "/epss.csv.gz"))
 
 -- One attempt under the retry policy, with the number of requests the stub saw.
 acquireServed :: Int -> Status -> LByteString -> IO (Either EpssFeedFailure EpssFeed, Int)
 acquireServed cap status served =
     withStub status served $ \stub -> do
-        feeds <- newFeedManager
+        feeds <- newFeedManagerWithIdentity userAgent
         outcome <- runOsvTestM (acquireEpssFeed feeds cap (toString (stubBaseUrl stub) <> "/epss.csv.gz"))
         requests <- length <$> allCaptured stub
         pure (outcome, requests)
@@ -134,6 +135,16 @@ spec = do
             epssForIds (mkEpssScores []) ["CVE-A"] `shouldBe` Nothing
 
     describe "fetchEpssScores" $ do
+        for_ [Nothing, Just "platform@example.com"] $ \contactText ->
+            it ("identifies the proxy to the feed server with contact " <> show contactText) $ do
+                contact <- either (fail . toString) pure (traverse parseOperatorContact contactText)
+                let renderedAgent = renderUserAgent contact
+                withStub status200 wholeFeed $ \stub -> do
+                    feeds <- newFeedManagerWithIdentity renderedAgent
+                    void (runOsvTestM (fetchEpssScores feeds maxEpssFeedBytes (toString (stubBaseUrl stub) <> "/epss.csv.gz")))
+                    captured <- lastCaptured stub
+                    headerValue "User-Agent" captured `shouldBe` Just renderedAgent
+
         it "fetches, decompresses, and decodes a served feed" $
             fetchServed maxEpssFeedBytes (feedPreamble <> "CVE-2026-10001,0.875,0.995\nCVE-2026-10002,0.5,0.900\n")
                 `shouldReturn` 2
@@ -239,7 +250,7 @@ spec = do
                     requests `shouldBe` 1
 
         it "propagates an invalid feed URL, a configuration fault rather than an outage" $
-            newFeedManager >>= \feeds ->
+            newFeedManagerWithIdentity userAgent >>= \feeds ->
                 runOsvTestM (acquireEpssFeed feeds maxEpssFeedBytes "not a url")
                     `shouldThrow` (\case InvalidUrlException{} -> True; _ -> False)
 

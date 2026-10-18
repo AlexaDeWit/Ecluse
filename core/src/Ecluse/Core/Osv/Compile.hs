@@ -27,7 +27,7 @@ module Ecluse.Core.Osv.Compile (
     promoteCandidate,
 
     -- * Feed downloads
-    newFeedManager,
+    newFeedManagerWithIdentity,
 
     -- * Refusals and rows
     PilotEpssRequired (..),
@@ -50,7 +50,7 @@ import System.IO (hClose, openTempFile)
 import System.IO.Error (catchIOError)
 import UnliftIO.Exception (bracket, throwIO, try)
 
-import Ecluse.Core.BuildIdentity (productVersion)
+import Ecluse.Core.BuildIdentity (identityManagerSettings, productVersion)
 import Ecluse.Core.Fault (HttpFault, renderHttpFault)
 import Ecluse.Core.Fault.Http (httpFault, typedTlsManagerSettings)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
@@ -183,9 +183,9 @@ withOsvCandidate metrics mTracerProvider manager outDir eco requirement sources 
             , crQuietTime = quietTime
             }
 
--- | The manager a pass downloads its feeds through, from 'typedTlsManagerSettings' so a reset mid-body reaches the retry. It honours the HTTP proxy variables.
-newFeedManager :: IO Manager
-newFeedManager = newTlsManagerWith typedTlsManagerSettings
+-- | Reuse a precomputed outbound identity for both advisory feeds.
+newFeedManagerWithIdentity :: ByteString -> IO Manager
+newFeedManagerWithIdentity renderedAgent = newTlsManagerWith (identityManagerSettings renderedAgent typedTlsManagerSettings)
 
 -- | Write this attempt's nonce into the candidate. The nonce is fixed width, so the file keeps its size.
 stampCandidateNonce :: (MonadIO m) => OsvCandidate -> PublicationNonce -> m ()

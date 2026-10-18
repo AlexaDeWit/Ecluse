@@ -15,9 +15,10 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Types.Status (status200)
 import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 
+import Ecluse.Core.BuildIdentity (parseOperatorContact, renderUserAgent, userAgent)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
-import Ecluse.Core.Osv.Compile (newFeedManager)
+import Ecluse.Core.Osv.Compile (newFeedManagerWithIdentity)
 import Ecluse.Core.Osv.Ecosystem (
     OsvEcosystem (osvExportDirectory, osvMaxAdvisoryFanOut, osvWireName),
     osvEcosystemFor,
@@ -37,7 +38,7 @@ import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Test.Osv (OsvTestM, noScores, npmFeed, osvZipOf, runOsvJsonLog, runOsvTestM)
 import Ecluse.Test.Osv.Withdrawal (withdrawalZip)
 import Ecluse.Test.Snapshot (digestOf)
-import Ecluse.Test.Stub (stubBaseUrl, withStub)
+import Ecluse.Test.Stub (headerValue, lastCaptured, stubBaseUrl, withStub)
 
 -- The run clock every ingest here is built with. Nothing in this module reads the record
 -- dates it judges, so its only job is to be a clock.
@@ -81,7 +82,7 @@ ingestedUrl :: String -> IO [ExtractedOsv]
 ingestedUrl url =
     runOsvTestM $ do
         ingest <- newOsvIngest defaultIngestLimits npmFeed noScores ingestClock
-        feeds <- liftIO newFeedManager
+        feeds <- liftIO (newFeedManagerWithIdentity userAgent)
         runConduit (void (streamOsvUrl Nothing feeds ingest url) .| sinkList)
 
 fanOutRows :: OsvEcosystem -> Int -> IO ([ExtractedOsv], IngestStats)
@@ -118,9 +119,24 @@ spec = describe "the OSV ingest stream" $ do
 
     it "fetches and streams an OSV zip archive over HTTP" $ do
         zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
-        results <- withStub status200 zipData $ \stub ->
-            ingestedUrl (unpack (stubBaseUrl stub) <> "/sample.zip")
+        results <- withStub status200 zipData $ \stub -> do
+            rows <- ingestedUrl (unpack (stubBaseUrl stub) <> "/sample.zip")
+            captured <- lastCaptured stub
+            headerValue "User-Agent" captured `shouldBe` Just userAgent
+            pure rows
         theSampleRow results
+
+    it "sends the configured contact to the OSV source" $ do
+        contact <- either (fail . toString) pure (parseOperatorContact "platform@example.com")
+        let renderedAgent = renderUserAgent (Just contact)
+        zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+        withStub status200 zipData $ \stub -> do
+            feeds <- newFeedManagerWithIdentity renderedAgent
+            runOsvTestM $ do
+                ingest <- newOsvIngest defaultIngestLimits npmFeed noScores ingestClock
+                runConduit (void (streamOsvUrl Nothing feeds ingest (unpack (stubBaseUrl stub) <> "/sample.zip")) .| sinkNull)
+            captured <- lastCaptured stub
+            headerValue "User-Agent" captured `shouldBe` Just renderedAgent
 
     it "throws an exception if the URL is invalid" $
         ingestedUrl "not-a-valid-url" `shouldThrow` anyException
@@ -132,7 +148,7 @@ spec = describe "the OSV ingest stream" $ do
         for_ [(npmFeed, npmArchive), (pypiFeed, pypiArchive)] $ \(feed, archive) -> do
             digest <- withStub status200 archive $ \stub -> runOsvTestM $ do
                 ingest <- newOsvIngest defaultIngestLimits feed noScores ingestClock
-                feeds <- liftIO newFeedManager
+                feeds <- liftIO (newFeedManagerWithIdentity userAgent)
                 runConduit (fuseUpstream (streamOsvUrl Nothing feeds ingest (unpack (stubBaseUrl stub) <> "/all.zip")) sinkNull)
             digest `shouldBe` digestOf (toStrict archive)
 
