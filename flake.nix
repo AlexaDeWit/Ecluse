@@ -380,12 +380,24 @@
           inherit (pkgs) nodejs;
         };
 
+        # Remove when the registry publishes semgrep/semgrep-rules#4042.
+        semgrepActionPinningSource =
+          "https://raw.githubusercontent.com/nopcorn/semgrep-rules/734df2ec594a19c83b0694b9cf70feb7af012258/yaml/github-actions/security/github-actions-mutable-action-tag";
+
         # ---- Dev-shell composition -------------------------------------------
         shellEnv = {
           LANG = "C.UTF-8";
           LC_ALL = "C.UTF-8";
           NODE_PATH = "${oracleNodeModules}/node_modules";
           AWS_EC2_METADATA_DISABLED = "true";
+          ECLTEST_SEMGREP_ACTION_RULE = pkgs.fetchurl {
+            url = "${semgrepActionPinningSource}.yaml";
+            hash = "sha256-VxpbQCJKLOcb8IJA3qE3VT9qXy9U3WthoMl0d7lGil8=";
+          };
+          ECLTEST_SEMGREP_ACTION_TEST = pkgs.fetchurl {
+            url = "${semgrepActionPinningSource}.test.yaml";
+            hash = "sha256-I7rd0RSbR4JDW+jYiiJ7Ec3Zq0bUVZD0NJ5CGE7TigY=";
+          };
           # GHC loads archive libraries while evaluating compile-time splices.
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.zlib pkgs.bzip2 pkgs.xz ];
         };
