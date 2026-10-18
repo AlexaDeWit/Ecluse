@@ -51,6 +51,7 @@ import Ecluse.Test.Support (expectRight)
 -- | Pin PyPI source selection, artifact rebasing, sidecar declarations, and served bytes.
 spec :: Spec
 spec = do
+    fallbackAssemblySpec
     relaySpec
     survivorSpec
     admissionSpec
@@ -59,6 +60,32 @@ spec = do
     serialiseSpec
     packedSerialiseSpec
     packedAdverseSpec
+
+fallbackAssemblySpec :: Spec
+fallbackAssemblySpec = describe "cached PyPI fallback assembly" $
+    it "renders plain and mixed sources with absent or foreign bases using exact snapshot selection" $ do
+        let filename = "requests-2.34.2.tar.gz"
+            file = simpleFile filename
+            raw = indexOf [file]
+            foreignDoc = fst npmCached (object ["name" .= ("foreign" :: Text)])
+            plan = planFor requestsName [(0, raw)] [("2.34.2", 0)] [("2.34.2", [filename])]
+            expected files = object ["versions" .= ["2.34.2" :: Text], "files" .= files]
+            expectedFile = withFileKeys [("url", String (mountBase <> "/simple/requests/" <> filename))] file
+        (_, tree) <- expectRight (projectPyPIIndex defaultLimits requestsName (encodeStrict raw))
+        (_, packed) <- expectRight (projectPackedIndex (encodeStrict raw))
+        let source = jsonSnapshot raw
+            plainSources = Map.singleton 0 (fst pypiSimpleCached tree <$ source)
+            mixedSources = Map.insert 2 (foreignDoc <$ source) (Map.insert 1 (fst pypiPacked packed <$ source) plainSources)
+        for_ [plainSources, mixedSources] $ \sources ->
+            for_ [Nothing, Just foreignDoc] $ \baseDocument -> do
+                let render inputs = do
+                        let served = Filter.assembleSimpleDocument mountBase inputs plan baseDocument
+                        snd pypiRendered served `shouldSatisfy` isNothing
+                        bytes <- expectRight (Filter.serialiseSimpleDocument served)
+                        expectRight (eitherDecode bytes)
+                render sources `shouldReturn` expected [expectedFile]
+                render (Map.adjust (\snapshot -> snapshot{snapshotDigest = digestOf "different source"}) 0 sources)
+                    `shouldReturn` expected ([] :: [Value])
 
 packedAdverseSpec :: Spec
 packedAdverseSpec = describe "packed adverse assembly" $ do

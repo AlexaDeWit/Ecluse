@@ -23,9 +23,11 @@ import Ecluse.Core.Package (InvalidEntry (invalidKey, invalidKind), InvalidEntry
 import Ecluse.Core.Package.Entry (AdmittedEntry (..), EntryKey (..))
 import Ecluse.Core.Package.Filter (enforceArtifactLocations)
 import Ecluse.Core.Package.Merge (MergePlan (..), Provenance (GatedSource), SourceId, mergePackuments)
+import Ecluse.Core.Registry.CachedDocument (npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
+import Ecluse.Core.Registry.PyPI.Document (simpleDocument)
 import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleIndex)
-import Ecluse.Core.Registry.ServedDocument (overlayObjectSurvivors, overlaySurvivors, rebaseArtifactUrl, safeDocumentName)
+import Ecluse.Core.Registry.ServedDocument (assembleAcross, overlayObjectSurvivors, overlaySurvivors, rebaseArtifactUrl, safeDocumentName)
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (ecosystemArtifactAuthorities)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (..))
@@ -43,6 +45,7 @@ import Ecluse.Test.Support (expectRight)
 -- | Pin source selection, name gates, and artifact rebasing after location admission.
 spec :: Spec
 spec = do
+    assemblyBoundarySpec
     overlaySpec
     entryContractSpec
     objectOverlaySpec
@@ -51,6 +54,22 @@ spec = do
     rebaseSpec
     rebaseDifferentialSpec
     droppedArtifactSpec
+
+assemblyBoundarySpec :: Spec
+assemblyBoundarySpec = describe "cached assembly boundary" $
+    it "drops foreign sources, preserves snapshot identity and substitutes only missing or foreign bases" $ do
+        let raw = String "source"
+            source = jsonSnapshot raw
+            foreignDoc = fst pypiSimpleCached (simpleDocument mempty [])
+            sources = Map.fromList [(0, fst npmCached <$> source), (1, foreignDoc <$ source)]
+            emptySource = Object mempty
+            plan = planOver mempty mempty
+            assemble expectedBase _ actualSources _ actualBase =
+                String (if actualSources == Map.singleton 0 source && actualBase == expectedBase then "matched" else "mismatch")
+            run expectedBase = assembleAcross npmCached emptySource (assemble expectedBase) "mount" sources plan
+        for_ [Nothing, Just foreignDoc] $ \base ->
+            snd npmCached (run emptySource base) `shouldBe` Just (String "matched")
+        snd npmCached (run (String "base") (Just (fst npmCached (String "base")))) `shouldBe` Just (String "matched")
 
 droppedArtifactSpec :: Spec
 droppedArtifactSpec = describe "served artifact filename refusals" $
