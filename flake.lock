@@ -51,16 +51,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1789514858,
-        "narHash": "sha256-pHMw2lZKzMnqmcqqT5v1wtVJlwCyqIpeFBMI8HiZBbo=",
+        "lastModified": 1792284136,
+        "narHash": "sha256-tvvZrXMXf1BTHyrmBIzjiPpuF8kjwiuM1Xv0t4fgiyc=",
         "owner": "AlexaDeWit",
         "repo": "Saerskriven",
-        "rev": "96bb4cba403421c2b5634739a7686264f0d115c8",
+        "rev": "b1ade081654a0cfbd4c6e965605db2e34748d4e9",
         "type": "github"
       },
       "original": {
         "owner": "AlexaDeWit",
         "repo": "Saerskriven",
+        "rev": "b1ade081654a0cfbd4c6e965605db2e34748d4e9",
         "type": "github"
       }
     },
