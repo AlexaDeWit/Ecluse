@@ -25,7 +25,7 @@ import Data.Map.Strict qualified as Map
 import Data.Primitive.SmallArray (smallArrayFromList)
 import Data.Text.Encoding qualified as TE
 import Data.Time (NominalDiffTime)
-import Data.Traversable (for)
+import Data.Traversable (for, mapAccumM)
 import UnliftIO (evaluate, tryAny)
 
 import Ecluse.Core.Mirror.State
@@ -38,7 +38,7 @@ import Ecluse.Core.Registry.Json.Packed (docTable)
 import Ecluse.Core.Registry.Json.Writer (packTree)
 import Ecluse.Core.Registry.Metadata (Manifest (..), VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (..), expectedTargetMatchesWith)
-import Ecluse.Core.Registry.PyPI.Document (packedSimple, simpleDocument, simpleEnvelope, simpleFiles, urlHole)
+import Ecluse.Core.Registry.PyPI.Document (packedSimple, simpleDocument, simpleFiles, urlHole)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, charge, newChargeRegion)
 import Ecluse.Core.Server.Cache.Backend (Recency (RefreshRecency), RetentionOperations (..))
@@ -108,28 +108,18 @@ mirrorProjectViews revision record private = do
         complete version mirror = checkMirrorCompletion mirror (maybe [] (toList . pkgArtifacts) (Map.lookup version current)) == MirrorComplete
         (ready, pending) = Map.partitionWithKey complete (recordVersions record)
         unmanaged = fmap (\manifest -> manifest{manifestInfo = (manifestInfo manifest){infoVersions = Map.withoutKeys current (Map.keysSet (recordVersions record))}}) private
-    restored <- for (Map.toAscList ready) $ \(version, mirror) -> do
-        let files = maybe [] (toList . pkgArtifacts) (Map.lookup version current)
-        doc <- maybeToRight (StateInvalid "cannot restore paired mirror source") (restoreVersion mirror files)
-        pure (version, doc)
-    let (_, rebased) = mapAccumL rekeyVersion 0 restored
-        details = Map.fromList [(key, vdDetails doc) | (key, doc) <- rebased]
-        files = concat [simpleFiles document | (_, doc) <- rebased, Just raw <- [vdRaw doc], Just document <- [snd pypiSimpleCached raw]]
+    (_, restored) <- mapAccumM (restore current) 0 (Map.toAscList ready)
+    let details = Map.fromList [(key, vdDetails doc) | (key, doc) <- restored]
+        files = concat [simpleFiles document | (_, doc) <- restored, Just raw <- [vdRaw doc], Just document <- [snd pypiSimpleCached raw]]
         packed = packedSimple (recordEnvelope record) (docTable (smallArrayFromList [])) [(key, packTree urlHole value) | (key, value) <- files]
         fingerprint = TE.encodeUtf8 (show revision) <> maybe mempty (digestBytes . manifestDigest) private
         managed = Manifest (PackageInfo (recordPackage record) details Map.empty []) (fst pypiPacked packed) (fromIntegral (weighCachedDoc (fst pypiPacked packed))) (digestFromContext (hashUpdate hashInit fingerprint))
     pure (unmanaged, managed <$ guard (not (Map.null details)), pending)
-
-rekeyVersion :: Int -> (Text, VersionDoc) -> (Int, (Text, VersionDoc))
-rekeyVersion start (version, doc) =
-    let artifacts = pkgArtifacts (vdDetails doc)
-        indexed = zip (map ArrayEntry [start ..]) (toList artifacts)
-        keys = Map.fromList [(artEntryKey artifact, key) | (key, artifact) <- indexed]
-        changed = fmap (\artifact -> artifact{artEntryKey = Map.findWithDefault (artEntryKey artifact) (artEntryKey artifact) keys}) artifacts
-        raw = do
-            old <- vdRaw doc >>= snd pypiSimpleCached
-            pure (fst pypiSimpleCached (simpleDocument (simpleEnvelope old) [(Map.findWithDefault key key keys, value) | (key, value) <- simpleFiles old]))
-     in (start + length artifacts, (version, doc{vdDetails = (vdDetails doc){pkgArtifacts = changed}, vdRaw = raw}))
+  where
+    restore current start (version, mirror) = do
+        let files = maybe [] (toList . pkgArtifacts) (Map.lookup version current)
+        (next, doc) <- maybeToRight (StateInvalid "cannot restore paired mirror source") (restoreVersion start mirror files)
+        pure (next, (version, doc))
 
 -- | An unmanaged version keeps its existing path. A managed version requires the shared complete proof.
 mirrorVersionView :: Version -> ProjectMirrorRecord -> Maybe VersionDoc -> Either MirrorStateFault (Maybe VersionDoc)
@@ -138,17 +128,16 @@ mirrorVersionView version record current = case recordVersion version record of
     Just mirror -> do
         let files = maybe [] (toList . pkgArtifacts . vdDetails) current
         unless (checkMirrorCompletion mirror files == MirrorComplete) (Left (StateInvalid "managed mirror version is incomplete"))
-        Just <$> maybeToRight (StateInvalid "cannot restore paired mirror source") (restoreVersion mirror files)
+        Just <$> maybeToRight (StateInvalid "cannot restore paired mirror source") (snd <$> restoreVersion 0 mirror files)
 
-restoreVersion :: MirrorVersion -> [Artifact] -> Maybe VersionDoc
-restoreVersion mirror current = do
+restoreVersion :: Int -> MirrorVersion -> [Artifact] -> Maybe (Int, VersionDoc)
+restoreVersion start mirror current = do
     let target = Map.fromList [(artFilename artifact, artifact) | artifact <- current]
-    let (_, tasks) = mapAccumL (\start fragment -> (start + length (pkgArtifacts (fragmentDetails fragment)), restoreFragment target start fragment)) 0 (toList (versionFragments mirror))
-    fragments <- traverse (fmap snd) tasks
+    (next, fragments) <- mapAccumM (restoreFragment target) start (toList (versionFragments mirror))
     firstDoc <- listToMaybe fragments
     artifacts <- nonEmpty (concatMap (toList . pkgArtifacts . vdDetails) fragments)
     documents <- traverse (vdRaw >=> snd pypiSimpleCached) fragments
-    pure VersionDoc{vdDetails = (vdDetails firstDoc){pkgArtifacts = artifacts}, vdRaw = Just (fst pypiSimpleCached (simpleDocument mempty (concatMap simpleFiles documents)))}
+    pure (next, VersionDoc{vdDetails = (vdDetails firstDoc){pkgArtifacts = artifacts}, vdRaw = Just (fst pypiSimpleCached (simpleDocument mempty (concatMap simpleFiles documents)))})
 
 restoreFragment :: Map Text Artifact -> Int -> StoredMirrorFragment -> Maybe (Int, VersionDoc)
 restoreFragment current start fragment = do
