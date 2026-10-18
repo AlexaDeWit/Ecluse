@@ -1,0 +1,1013 @@
+[
+  {
+    "id": "traffic_value",
+    "group": "overview",
+    "title": "HTTP traffic, including probes",
+    "unit": "req/s",
+    "role": "proxy",
+    "section": "always",
+    "type": "query_value",
+    "queries": [
+      {
+        "metric": "http.server.request.count",
+        "alias": "Requests",
+        "aggregation": "sum",
+        "modifier": "rate"
+      }
+    ],
+    "time_aggregation": "avg"
+  },
+  {
+    "id": "http_errors_value",
+    "group": "overview",
+    "title": "HTTP 5xx fraction",
+    "unit": "%",
+    "role": "proxy",
+    "section": "always",
+    "type": "query_value",
+    "queries": [
+      {
+        "metric": "http.server.request.count",
+        "alias": "5xx",
+        "aggregation": "sum",
+        "modifier": "count",
+        "filters": [
+          "@status@:5*"
+        ]
+      },
+      {
+        "metric": "http.server.request.count",
+        "alias": "All responses",
+        "aggregation": "sum",
+        "modifier": "count"
+      }
+    ],
+    "time_aggregation": "sum",
+    "formulas": [
+      {
+        "formula": "100 * q0 / q1",
+        "alias": "5xx / all responses"
+      }
+    ]
+  },
+  {
+    "id": "latency_value",
+    "group": "overview",
+    "title": "Mean HTTP latency",
+    "unit": "ms",
+    "role": "proxy",
+    "section": "always",
+    "type": "query_value",
+    "queries": [
+      {
+        "metric": "http.server.request.duration",
+        "alias": "Total duration",
+        "aggregation": "sum",
+        "modifier": "count"
+      },
+      {
+        "metric": "http.server.request.duration",
+        "alias": "Observations",
+        "aggregation": "count",
+        "modifier": "count"
+      }
+    ],
+    "time_aggregation": "sum",
+    "formulas": [
+      {
+        "formula": "1000 * q0 / q1",
+        "alias": "Mean latency"
+      }
+    ]
+  },
+  {
+    "id": "memory_value",
+    "group": "overview",
+    "title": "Metadata memory charged, fleet total",
+    "unit": "B",
+    "role": "proxy",
+    "section": "always",
+    "type": "query_value",
+    "queries": [
+      {
+        "metric": "ecluse.serve.admission.memory.charged_bytes",
+        "alias": "Charged",
+        "aggregation": "sum",
+        "modifier": "gauge"
+      }
+    ],
+    "time_aggregation": "last"
+  },
+  {
+    "id": "traffic",
+    "group": "serving",
+    "title": "HTTP responses by status",
+    "unit": "responses/s",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "http.server.request.count",
+        "alias": "Responses",
+        "aggregation": "sum",
+        "modifier": "rate",
+        "group_by": [
+          "@status@"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "http_latency",
+    "group": "serving",
+    "title": "HTTP latency, including probes",
+    "unit": "ms",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "http.server.request.duration",
+        "alias": "HTTP",
+        "aggregation": "avg",
+        "modifier": "histogram",
+        "statistics": true
+      }
+    ]
+  },
+  {
+    "id": "decisions",
+    "group": "serving",
+    "title": "Serve decisions",
+    "unit": "decisions/s",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.serve.decision",
+        "alias": "Decisions",
+        "aggregation": "sum",
+        "modifier": "rate",
+        "group_by": [
+          "decision"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "denials",
+    "group": "serving",
+    "title": "Recorded version denials",
+    "unit": "denials/s",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.rule.denials",
+        "alias": "Policy denials",
+        "aggregation": "sum",
+        "modifier": "rate",
+        "filters": [
+          "reason_class:policy"
+        ],
+        "group_by": [
+          "rule"
+        ]
+      },
+      {
+        "metric": "ecluse.rule.denials",
+        "alias": "Other refusals",
+        "aggregation": "sum",
+        "modifier": "rate",
+        "filters": [
+          "NOT reason_class:policy"
+        ],
+        "group_by": [
+          "reason_class"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "invariants",
+    "group": "serving",
+    "title": "Perimeter, relay, and integrity faults",
+    "unit": "events/s",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.serve.perimeter.faults",
+        "alias": "Perimeter",
+        "aggregation": "sum",
+        "modifier": "rate",
+        "group_by": [
+          "cause"
+        ]
+      },
+      {
+        "metric": "ecluse.serve.relay.anomalies",
+        "alias": "Relay",
+        "aggregation": "sum",
+        "modifier": "rate",
+        "group_by": [
+          "cause"
+        ]
+      },
+      {
+        "metric": "ecluse.registry.merge.divergence",
+        "alias": "Merge divergence",
+        "aggregation": "sum",
+        "modifier": "rate"
+      }
+    ]
+  },
+  {
+    "id": "in_flight",
+    "group": "capacity",
+    "title": "In-flight HTTP and metadata work",
+    "unit": "requests",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "http.server.active_requests",
+        "alias": "All requests",
+        "aggregation": "sum",
+        "modifier": "gauge"
+      },
+      {
+        "metric": "ecluse.serve.admission.in_flight",
+        "alias": "Metadata",
+        "aggregation": "sum",
+        "modifier": "gauge"
+      }
+    ]
+  },
+  {
+    "id": "memory_ratio",
+    "group": "capacity",
+    "title": "Metadata memory budget use",
+    "unit": "%",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.serve.admission.memory.charged_bytes",
+        "alias": "Charged",
+        "aggregation": "sum",
+        "modifier": "gauge",
+        "group_by": [
+          "@instance@"
+        ]
+      },
+      {
+        "metric": "ecluse.serve.admission.memory.budget_bytes",
+        "alias": "Budget",
+        "aggregation": "sum",
+        "modifier": "gauge",
+        "group_by": [
+          "@instance@"
+        ]
+      }
+    ],
+    "formulas": [
+      {
+        "formula": "100 * q0 / q1",
+        "alias": "Charged / budget"
+      }
+    ]
+  },
+  {
+    "id": "brake",
+    "group": "capacity",
+    "title": "Memory brake state: 0 calm, 1 holding, 2 braking",
+    "unit": "state",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.serve.admission.memory.brake_level",
+        "alias": "Brake",
+        "aggregation": "max",
+        "modifier": "gauge",
+        "group_by": [
+          "@instance@"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "memory_waiting",
+    "group": "capacity",
+    "title": "Memory waiters and paused requests",
+    "unit": "requests",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.serve.admission.memory.waiting",
+        "alias": "Waiting",
+        "aggregation": "sum",
+        "modifier": "gauge"
+      },
+      {
+        "metric": "ecluse.serve.admission.memory.paused_now",
+        "alias": "Paused",
+        "aggregation": "sum",
+        "modifier": "gauge"
+      }
+    ]
+  },
+  {
+    "id": "admission_events",
+    "group": "capacity",
+    "title": "Admission waits, shedding, and pauses",
+    "unit": "events/s",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.serve.admission.queued",
+        "alias": "Slot waits",
+        "aggregation": "sum",
+        "modifier": "rate"
+      },
+      {
+        "metric": "ecluse.serve.admission.memory.queued",
+        "alias": "Memory waits",
+        "aggregation": "sum",
+        "modifier": "rate"
+      },
+      {
+        "metric": "ecluse.serve.admission.memory.shed",
+        "alias": "Shed",
+        "aggregation": "sum",
+        "modifier": "rate"
+      },
+      {
+        "metric": "ecluse.serve.admission.memory.pauses",
+        "alias": "Pauses",
+        "aggregation": "sum",
+        "modifier": "rate"
+      },
+      {
+        "metric": "ecluse.serve.admission.memory.overdraws",
+        "alias": "Overdraws",
+        "aggregation": "sum",
+        "modifier": "rate"
+      }
+    ]
+  },
+  {
+    "id": "publish_bytes",
+    "group": "capacity",
+    "title": "Publish bytes reserved",
+    "unit": "B",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.publish.body.in_flight_bytes",
+        "alias": "Reserved",
+        "aggregation": "sum",
+        "modifier": "gauge"
+      }
+    ]
+  },
+  {
+    "id": "publish_shed",
+    "group": "capacity",
+    "title": "Publishes shed at the byte budget",
+    "unit": "requests/s",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.publish.body.shed",
+        "alias": "Shed",
+        "aggregation": "sum",
+        "modifier": "rate"
+      }
+    ]
+  },
+  {
+    "id": "cache_full",
+    "group": "capacity",
+    "title": "Full cache hit and collapsed fractions",
+    "unit": "%",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.metadata_cache.requests",
+        "alias": "Hit",
+        "aggregation": "sum",
+        "modifier": "count",
+        "filters": [
+          "result:hit"
+        ]
+      },
+      {
+        "metric": "ecluse.metadata_cache.requests",
+        "alias": "All lookups",
+        "aggregation": "sum",
+        "modifier": "count"
+      },
+      {
+        "metric": "ecluse.metadata_cache.requests",
+        "alias": "Collapsed",
+        "aggregation": "sum",
+        "modifier": "count",
+        "filters": [
+          "result:collapsed"
+        ]
+      }
+    ],
+    "formulas": [
+      {
+        "formula": "100 * q0 / q1",
+        "alias": "Hit fraction"
+      },
+      {
+        "formula": "100 * q2 / q1",
+        "alias": "Collapsed fraction"
+      }
+    ]
+  },
+  {
+    "id": "cache_version",
+    "group": "capacity",
+    "title": "Version cache hit and collapsed fractions",
+    "unit": "%",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.metadata_cache.version.requests",
+        "alias": "Hit",
+        "aggregation": "sum",
+        "modifier": "count",
+        "filters": [
+          "result:hit"
+        ]
+      },
+      {
+        "metric": "ecluse.metadata_cache.version.requests",
+        "alias": "All lookups",
+        "aggregation": "sum",
+        "modifier": "count"
+      },
+      {
+        "metric": "ecluse.metadata_cache.version.requests",
+        "alias": "Collapsed",
+        "aggregation": "sum",
+        "modifier": "count",
+        "filters": [
+          "result:collapsed"
+        ]
+      }
+    ],
+    "formulas": [
+      {
+        "formula": "100 * q0 / q1",
+        "alias": "Hit fraction"
+      },
+      {
+        "formula": "100 * q2 / q1",
+        "alias": "Collapsed fraction"
+      }
+    ]
+  },
+  {
+    "id": "cache_assembled",
+    "group": "capacity",
+    "title": "Assembled cache hit and collapsed fractions",
+    "unit": "%",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.metadata_cache.assembled.requests",
+        "alias": "Hit",
+        "aggregation": "sum",
+        "modifier": "count",
+        "filters": [
+          "result:hit"
+        ]
+      },
+      {
+        "metric": "ecluse.metadata_cache.assembled.requests",
+        "alias": "All lookups",
+        "aggregation": "sum",
+        "modifier": "count"
+      },
+      {
+        "metric": "ecluse.metadata_cache.assembled.requests",
+        "alias": "Collapsed",
+        "aggregation": "sum",
+        "modifier": "count",
+        "filters": [
+          "result:collapsed"
+        ]
+      }
+    ],
+    "formulas": [
+      {
+        "formula": "100 * q0 / q1",
+        "alias": "Hit fraction"
+      },
+      {
+        "formula": "100 * q2 / q1",
+        "alias": "Collapsed fraction"
+      }
+    ]
+  },
+  {
+    "id": "cache_bytes",
+    "group": "capacity",
+    "title": "Cache resident bytes, fleet total",
+    "unit": "B",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.metadata_cache.resident_bytes",
+        "alias": "Full",
+        "aggregation": "sum",
+        "modifier": "gauge"
+      },
+      {
+        "metric": "ecluse.metadata_cache.version.resident_bytes",
+        "alias": "Version",
+        "aggregation": "sum",
+        "modifier": "gauge"
+      },
+      {
+        "metric": "ecluse.metadata_cache.assembled.resident_bytes",
+        "alias": "Assembled",
+        "aggregation": "sum",
+        "modifier": "gauge"
+      }
+    ]
+  },
+  {
+    "id": "cache_entries",
+    "group": "capacity",
+    "title": "Full cache entries, fleet total",
+    "unit": "entries",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.metadata_cache.entries",
+        "alias": "Entries",
+        "aggregation": "sum",
+        "modifier": "gauge"
+      }
+    ]
+  },
+  {
+    "id": "cache_refusals",
+    "group": "capacity",
+    "title": "Cache capacity refusals and backend failures",
+    "unit": "events/s",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.metadata_cache.refused",
+        "alias": "Refused",
+        "aggregation": "sum",
+        "modifier": "rate",
+        "group_by": [
+          "store"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "upstream_latency",
+    "group": "dependencies",
+    "title": "Upstream metadata latency",
+    "unit": "ms",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.upstream.fetch.duration",
+        "alias": "Metadata fetch",
+        "aggregation": "avg",
+        "modifier": "histogram",
+        "statistics": true,
+        "group_by": [
+          "upstream"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "upstream_errors",
+    "group": "dependencies",
+    "title": "Upstream metadata errors, including absences",
+    "unit": "errors/s",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.upstream.fetch.errors",
+        "alias": "Errors",
+        "aggregation": "sum",
+        "modifier": "rate",
+        "group_by": [
+          "upstream",
+          "cause"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "rule_latency",
+    "group": "dependencies",
+    "title": "Rule evaluation latency",
+    "unit": "ms",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.rule.eval.duration",
+        "alias": "Rule evaluation",
+        "aggregation": "avg",
+        "modifier": "histogram",
+        "statistics": true,
+        "group_by": [
+          "tier"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "rule_failures",
+    "group": "dependencies",
+    "title": "Effectful rule failures",
+    "unit": "failures/s",
+    "role": "proxy",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.rule.effectful.failures",
+        "alias": "Failures",
+        "aggregation": "sum",
+        "modifier": "rate",
+        "group_by": [
+          "cause"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "breakers",
+    "group": "dependencies",
+    "title": "Breaker state: 0 closed, 1 half-open, 2 open",
+    "unit": "state",
+    "role": "consumer",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.rule.breaker.state",
+        "alias": "Breaker",
+        "aggregation": "max",
+        "modifier": "gauge",
+        "group_by": [
+          "source",
+          "@instance@"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "credential_ttl",
+    "group": "dependencies",
+    "title": "Lowest credential TTL by provider",
+    "unit": "s",
+    "role": "consumer",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.credential.token.ttl.seconds",
+        "alias": "Remaining lifetime",
+        "aggregation": "min",
+        "modifier": "gauge",
+        "group_by": [
+          "provider"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "credential_refresh",
+    "group": "dependencies",
+    "title": "Credential refresh outcomes",
+    "unit": "attempts/s",
+    "role": "consumer",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.credential.refresh",
+        "alias": "Refresh",
+        "aggregation": "sum",
+        "modifier": "rate",
+        "group_by": [
+          "provider",
+          "result"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "advisory_age",
+    "group": "advisories",
+    "title": "Advisory publication age",
+    "unit": "s",
+    "role": "consumer",
+    "section": "advisories",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.advisory.source.age.seconds",
+        "alias": "Publication age",
+        "aggregation": "max",
+        "modifier": "gauge",
+        "group_by": [
+          "ecosystem",
+          "@instance@"
+        ],
+        "ecosystem": true
+      }
+    ]
+  },
+  {
+    "id": "advisory_install_age",
+    "group": "advisories",
+    "title": "Time since advisory installation",
+    "unit": "s",
+    "role": "consumer",
+    "section": "advisories",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.advisory.database.age.seconds",
+        "alias": "Installation age",
+        "aggregation": "max",
+        "modifier": "gauge",
+        "group_by": [
+          "ecosystem",
+          "@instance@"
+        ],
+        "ecosystem": true
+      }
+    ]
+  },
+  {
+    "id": "advisory_sync",
+    "group": "advisories",
+    "title": "Advisory sync outcomes",
+    "unit": "attempts/s",
+    "role": "consumer",
+    "section": "advisories",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.advisory.sync.attempts",
+        "alias": "Sync",
+        "aggregation": "sum",
+        "modifier": "rate",
+        "group_by": [
+          "ecosystem",
+          "result"
+        ],
+        "ecosystem": true
+      }
+    ]
+  },
+  {
+    "id": "advisory_sync_latency",
+    "group": "advisories",
+    "title": "Advisory sync latency",
+    "unit": "ms",
+    "role": "consumer",
+    "section": "advisories",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.advisory.sync.duration",
+        "alias": "Sync",
+        "aggregation": "avg",
+        "modifier": "histogram",
+        "statistics": true,
+        "group_by": [
+          "ecosystem",
+          "result"
+        ],
+        "ecosystem": true
+      }
+    ]
+  },
+  {
+    "id": "pilot_entries",
+    "group": "advisories",
+    "title": "Pilot accepted and dropped entries",
+    "unit": "entries",
+    "role": "pilot",
+    "section": "pilot",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.advisory.compile.accepted",
+        "alias": "Accepted",
+        "aggregation": "sum",
+        "modifier": "count",
+        "ecosystem": true,
+        "group_by": [
+          "ecosystem"
+        ]
+      },
+      {
+        "metric": "ecluse.advisory.compile.dropped",
+        "alias": "Dropped",
+        "aggregation": "sum",
+        "modifier": "count",
+        "ecosystem": true,
+        "group_by": [
+          "ecosystem",
+          "cause"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "pilot_drop_fraction",
+    "group": "advisories",
+    "title": "Pilot drop fraction",
+    "unit": "%",
+    "role": "pilot",
+    "section": "pilot",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.advisory.compile.accepted",
+        "alias": "Accepted",
+        "aggregation": "sum",
+        "modifier": "count",
+        "ecosystem": true,
+        "group_by": [
+          "ecosystem"
+        ]
+      },
+      {
+        "metric": "ecluse.advisory.compile.dropped",
+        "alias": "Dropped",
+        "aggregation": "sum",
+        "modifier": "count",
+        "ecosystem": true,
+        "group_by": [
+          "ecosystem"
+        ]
+      }
+    ],
+    "formulas": [
+      {
+        "formula": "100 * q1 / (q0 + q1)",
+        "alias": "Dropped / processed"
+      }
+    ]
+  },
+  {
+    "id": "pilot_runs",
+    "group": "advisories",
+    "title": "Pilot compile outcomes",
+    "unit": "runs",
+    "role": "pilot",
+    "section": "pilot",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.advisory.compile.runs",
+        "alias": "Compile",
+        "aggregation": "sum",
+        "modifier": "count",
+        "ecosystem": true,
+        "group_by": [
+          "ecosystem",
+          "result"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "mirror_enqueue",
+    "group": "background",
+    "title": "Mirror buffer hand-offs and enqueue failures",
+    "unit": "events/s",
+    "role": "proxy",
+    "section": "mirror",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.mirror.enqueued",
+        "alias": "Buffer accepted",
+        "aggregation": "sum",
+        "modifier": "rate"
+      },
+      {
+        "metric": "ecluse.mirror.enqueue.failures",
+        "alias": "Enqueue failed",
+        "aggregation": "sum",
+        "modifier": "rate"
+      }
+    ]
+  },
+  {
+    "id": "mirror_outcomes",
+    "group": "background",
+    "title": "Mirror processed jobs by result",
+    "unit": "jobs/s",
+    "role": "mirror",
+    "section": "mirror",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.mirror.jobs.processed",
+        "alias": "Processed",
+        "aggregation": "sum",
+        "modifier": "rate",
+        "group_by": [
+          "result"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "mirror_latency",
+    "group": "background",
+    "title": "Mirror publication latency",
+    "unit": "ms",
+    "role": "mirror",
+    "section": "mirror",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.mirror.publish.duration",
+        "alias": "Publish",
+        "aggregation": "avg",
+        "modifier": "histogram",
+        "statistics": true
+      }
+    ]
+  },
+  {
+    "id": "dredger",
+    "group": "background",
+    "title": "Dredger examined versions and dispositions",
+    "unit": "versions",
+    "role": "dredger",
+    "section": "dredger",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.dredger.versions",
+        "alias": "Disposition",
+        "aggregation": "sum",
+        "modifier": "count",
+        "group_by": [
+          "target",
+          "result"
+        ]
+      }
+    ]
+  }
+]

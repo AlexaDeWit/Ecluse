@@ -637,6 +637,11 @@
       '';
 
       devShells = {
+        datadog = pkgs.mkShell {
+          name = "ecluse-datadog-example";
+          packages = [ pkgs.go-task pkgs.opentofu pkgs.nodejs pkgs.resvg ];
+        };
+
         # The shell every CI job enters. See `ciShellInputs` for why it is one
         # closure rather than a per-job set.
         ci = pkgs.mkShell (shellEnv // {

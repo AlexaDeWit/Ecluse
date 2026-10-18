@@ -1,0 +1,61 @@
+{
+  "description": "Illustrative 30-day workloads. Replace inputs with deployment measurements.",
+  "pricing_checked": "2026-10-18",
+  "pricing_source": "https://www.datadoghq.com/pricing/list/",
+  "currency": "USD",
+  "monthly_budget_usd": null,
+  "metric_billing_model": "cardinality",
+  "seconds_per_month": 2592000,
+  "export_interval_seconds": 60,
+  "log": {
+    "metadata_fraction": 0.5,
+    "info_events_per_metadata_request": 1,
+    "denial_events_per_metadata_request": 5,
+    "background_events_per_second": 0,
+    "bytes_per_event": 1000,
+    "ingested_fraction": 1,
+    "indexed_fraction_of_ingested": 1,
+    "ingest_usd_per_gb": 0.1,
+    "index_usd_per_million": 1.27,
+    "retention_days": 7
+  },
+  "metrics": {
+    "scalar_combinations_per_producer": 100,
+    "histogram_combinations_per_producer": 30,
+    "percentile_combinations_per_producer": 0,
+    "indexed_usd_per_100": 5,
+    "remaining_indexed_allowance": 0,
+    "metrics_without_limits": false,
+    "remaining_ingested_allowance": 0,
+    "ingested_usd_per_100": 0.1
+  },
+  "traces": {
+    "spans_per_request": 10,
+    "head_sample_fraction": 1,
+    "bytes_per_span": 1000,
+    "indexed_fraction": 0.01,
+    "remaining_ingest_allowance_gb": 0,
+    "remaining_indexed_allowance": 0,
+    "ingest_usd_per_gb": 0.1,
+    "index_usd_per_million": 1.27,
+    "apm_hosts": null,
+    "usd_per_apm_host": 31
+  },
+  "scenarios": [
+    {
+      "name": "Small illustrative workload",
+      "requests_per_second": 10,
+      "metric_producers": 2
+    },
+    {
+      "name": "Medium illustrative workload",
+      "requests_per_second": 100,
+      "metric_producers": 10
+    },
+    {
+      "name": "Large illustrative workload",
+      "requests_per_second": 1000,
+      "metric_producers": 50
+    }
+  ]
+}

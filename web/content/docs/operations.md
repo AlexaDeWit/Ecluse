@@ -425,6 +425,11 @@ written without that metadata stops Pilot's publications, as above.
 
 ## Telemetry (opt-in)
 
+The repository provides a [Datadog Terraform example](https://github.com/AlexaDeWit/Ecluse/tree/main/examples/datadog)
+with a deployment-scoped dashboard, visual mockup, signal inventory, and cost worksheet.
+Copy and adapt it for your deployment. It does not configure collection or retention.
+
+
 Metadata reads record HTTP refusals on `ecluse.upstream.fetch.errors` with cause
 `upstream_status`, including `404`. A malformed successful response records `decode` instead.
 Explicit `401` and `403` refusals retain `other` and their existing warning log.

@@ -1,0 +1,577 @@
+[
+  {
+    "name": "ecluse.serve.decision",
+    "instrument": "counter",
+    "unit": "{decision}",
+    "labels": {
+      "decision": [
+        "admit",
+        "deny",
+        "unavailable"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.serve.admission.in_flight",
+    "instrument": "upDownCounter",
+    "unit": "{request}",
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.serve.admission.queued",
+    "instrument": "counter",
+    "unit": "{request}",
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.publish.body.in_flight_bytes",
+    "instrument": "upDownCounter",
+    "unit": "By",
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.publish.body.shed",
+    "instrument": "counter",
+    "unit": "{request}",
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.registry.merge.divergence",
+    "instrument": "counter",
+    "unit": "{divergence}",
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.rule.denials",
+    "instrument": "counter",
+    "unit": "{denial}",
+    "labels": {
+      "reason_class": [
+        "policy",
+        "missing_integrity",
+        "unavailable"
+      ],
+      "rule": [
+        "built-in rule names",
+        "BlockedByDefault",
+        "absent for non-policy refusals"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.rule.eval.duration",
+    "instrument": "histogram",
+    "unit": "s",
+    "labels": {
+      "tier": [
+        "structural",
+        "effectful"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.rule.effectful.failures",
+    "instrument": "counter",
+    "unit": "{failure}",
+    "labels": {
+      "cause": [
+        "timeout",
+        "connection",
+        "decode",
+        "upstream_status",
+        "other"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.rule.breaker.state",
+    "instrument": "gauge",
+    "unit": null,
+    "labels": {
+      "source": [
+        "effectful_rule",
+        "credential_mint"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.upstream.fetch.duration",
+    "instrument": "histogram",
+    "unit": "s",
+    "labels": {
+      "upstream": [
+        "private",
+        "public"
+      ],
+      "status_class": [
+        "2xx",
+        "3xx",
+        "4xx",
+        "5xx",
+        "other"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.upstream.fetch.errors",
+    "instrument": "counter",
+    "unit": "{error}",
+    "labels": {
+      "upstream": [
+        "private",
+        "public"
+      ],
+      "cause": [
+        "timeout",
+        "connection",
+        "decode",
+        "upstream_status",
+        "other"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.metadata_cache.requests",
+    "instrument": "counter",
+    "unit": "{request}",
+    "labels": {
+      "result": [
+        "hit",
+        "miss",
+        "collapsed"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.metadata_cache.version.requests",
+    "instrument": "counter",
+    "unit": "{request}",
+    "labels": {
+      "result": [
+        "hit",
+        "miss",
+        "collapsed"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.metadata_cache.assembled.requests",
+    "instrument": "counter",
+    "unit": "{request}",
+    "labels": {
+      "result": [
+        "hit",
+        "miss",
+        "collapsed"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.metadata_cache.refused",
+    "instrument": "counter",
+    "unit": "{entry}",
+    "labels": {
+      "store": [
+        "full",
+        "version",
+        "assembled"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.metadata_cache.entries",
+    "instrument": "gauge",
+    "unit": null,
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.metadata_cache.resident_bytes",
+    "instrument": "gauge",
+    "unit": null,
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.metadata_cache.version.resident_bytes",
+    "instrument": "gauge",
+    "unit": null,
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.metadata_cache.assembled.resident_bytes",
+    "instrument": "gauge",
+    "unit": null,
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.serve.relay.anomalies",
+    "instrument": "counter",
+    "unit": "{relay}",
+    "labels": {
+      "cause": [
+        "odd_shape",
+        "non_success"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.serve.perimeter.faults",
+    "instrument": "counter",
+    "unit": "{fault}",
+    "labels": {
+      "cause": [
+        "render",
+        "unclassified"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.mirror.enqueued",
+    "instrument": "counter",
+    "unit": "{job}",
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.mirror.enqueue.failures",
+    "instrument": "counter",
+    "unit": "{failure}",
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.mirror.jobs.processed",
+    "instrument": "counter",
+    "unit": "{job}",
+    "labels": {
+      "result": [
+        "published",
+        "failed",
+        "discarded"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.mirror.publish.duration",
+    "instrument": "histogram",
+    "unit": "s",
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.dredger.versions",
+    "instrument": "counter",
+    "unit": "{version}",
+    "labels": {
+      "target": [
+        "mirrorTarget",
+        "privateUpstream"
+      ],
+      "result": [
+        "examined",
+        "deleted",
+        "would_delete",
+        "kept",
+        "guard_skipped"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.credential.refresh",
+    "instrument": "counter",
+    "unit": "{refresh}",
+    "labels": {
+      "provider": [
+        "registry",
+        "codeArtifact",
+        "verdaccio"
+      ],
+      "result": [
+        "refreshed",
+        "failed"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.credential.token.ttl.seconds",
+    "instrument": "observableGauge",
+    "unit": null,
+    "labels": {
+      "provider": [
+        "registry",
+        "codeArtifact",
+        "verdaccio"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.advisory.sync.attempts",
+    "instrument": "counter",
+    "unit": "{attempt}",
+    "labels": {
+      "ecosystem": [
+        "npm",
+        "pypi",
+        "rubygems"
+      ],
+      "result": [
+        "swapped",
+        "unchanged",
+        "none_published",
+        "fetch_failed",
+        "refused"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.advisory.sync.duration",
+    "instrument": "histogram",
+    "unit": "s",
+    "labels": {
+      "ecosystem": [
+        "npm",
+        "pypi",
+        "rubygems"
+      ],
+      "result": [
+        "swapped",
+        "unchanged",
+        "none_published",
+        "fetch_failed",
+        "refused"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.advisory.database.age.seconds",
+    "instrument": "observableGauge",
+    "unit": null,
+    "labels": {
+      "ecosystem": [
+        "npm",
+        "pypi",
+        "rubygems"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.advisory.source.age.seconds",
+    "instrument": "observableGauge",
+    "unit": null,
+    "labels": {
+      "ecosystem": [
+        "npm",
+        "pypi",
+        "rubygems"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.advisory.compile.accepted",
+    "instrument": "counter",
+    "unit": "{advisory}",
+    "labels": {
+      "ecosystem": [
+        "npm",
+        "pypi",
+        "rubygems"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.advisory.compile.dropped",
+    "instrument": "counter",
+    "unit": "{advisory}",
+    "labels": {
+      "ecosystem": [
+        "npm",
+        "pypi",
+        "rubygems"
+      ],
+      "cause": [
+        "oversize",
+        "malformed"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.advisory.compile.runs",
+    "instrument": "counter",
+    "unit": "{run}",
+    "labels": {
+      "ecosystem": [
+        "npm",
+        "pypi",
+        "rubygems"
+      ],
+      "result": [
+        "completed",
+        "aborted"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.serve.admission.memory.budget_bytes",
+    "instrument": "observableGauge",
+    "unit": null,
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.serve.admission.memory.charged_bytes",
+    "instrument": "observableGauge",
+    "unit": null,
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.serve.admission.memory.brake_level",
+    "instrument": "observableGauge",
+    "unit": null,
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.serve.admission.memory.waiting",
+    "instrument": "observableGauge",
+    "unit": null,
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.serve.admission.memory.paused_now",
+    "instrument": "observableGauge",
+    "unit": null,
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.serve.admission.memory.queued",
+    "instrument": "counter",
+    "unit": "{request}",
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.serve.admission.memory.shed",
+    "instrument": "counter",
+    "unit": "{request}",
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.serve.admission.memory.pauses",
+    "instrument": "counter",
+    "unit": "{pause}",
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "ecluse.serve.admission.memory.overdraws",
+    "instrument": "counter",
+    "unit": "{step}",
+    "labels": {},
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
+    "name": "http.server.request.duration",
+    "instrument": "histogram",
+    "unit": "s",
+    "labels": {
+      "http.request.method": [
+        "raw HTTP method"
+      ],
+      "url.scheme": [
+        "http",
+        "https"
+      ],
+      "http.response.status_code": [
+        "HTTP status code"
+      ],
+      "network.protocol.version": [
+        "HTTP protocol version"
+      ],
+      "error.type": [
+        "5xx status code, otherwise absent"
+      ],
+      "http.route": [
+        "only when set by instrumentation"
+      ]
+    },
+    "source": "hs-opentelemetry-instrumentation-wai 1.0.0.0"
+  },
+  {
+    "name": "http.server.request.count",
+    "instrument": "counter",
+    "unit": "{request}",
+    "labels": {
+      "http.request.method": [
+        "raw HTTP method"
+      ],
+      "url.scheme": [
+        "http",
+        "https"
+      ],
+      "http.response.status_code": [
+        "HTTP status code"
+      ],
+      "network.protocol.version": [
+        "HTTP protocol version"
+      ],
+      "error.type": [
+        "5xx status code, otherwise absent"
+      ],
+      "http.route": [
+        "only when set by instrumentation"
+      ]
+    },
+    "source": "hs-opentelemetry-instrumentation-wai 1.0.0.0"
+  },
+  {
+    "name": "http.server.active_requests",
+    "instrument": "upDownCounter",
+    "unit": "{request}",
+    "labels": {
+      "http.request.method": [
+        "raw HTTP method"
+      ],
+      "url.scheme": [
+        "http",
+        "https"
+      ]
+    },
+    "source": "hs-opentelemetry-instrumentation-wai 1.0.0.0"
+  }
+]
