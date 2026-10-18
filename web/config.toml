@@ -26,6 +26,8 @@ internal_level = "error"
 external_level = "warn"
 
 [extra]
+author = "Alexandra de Wit"
+author_url = "https://github.com/AlexaDeWit"
 source_url = "https://github.com/AlexaDeWit/Ecluse"
 
 [[extra.docs_navigation]]

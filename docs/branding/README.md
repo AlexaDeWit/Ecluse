@@ -23,6 +23,11 @@ PNG exports accompany the card, banner, lettermark, and wordmarks.
 `favicon-32.png` is a 32px render of the lettermark.
 `social-preview.svg` and `social-preview.png` are copies of the social card that preserve the existing website asset path.
 
+The site build publishes another copy with its SHA256 in the filename and uses that URL in Open Graph metadata.
+Changing the image changes its URL, so social platforms can fetch it without reusing the previous image URL.
+The author comes from the site configuration. The publication timestamp records the latest site build in UTC.
+The Pages workflow computes that timestamp during its Zola build.
+
 Use the card's 1200 × 630 dimensions in Open Graph metadata.
 Upload [`../social-card.png`](../social-card.png) in GitHub's repository settings to change the social preview.
 Changing the tracked file does not change that setting automatically.

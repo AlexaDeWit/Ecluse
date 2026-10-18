@@ -602,7 +602,13 @@ tasks:
     internal: true
     cmds:
       - rm -rf web/public
-      - zola --root web build
+      - |
+        set -euo pipefail
+        social_card_hash="$(sha256sum docs/social-preview.png | cut -d' ' -f1)"
+        ECLUSE_SITE_PUBLICATION_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          ECLUSE_SITE_SOCIAL_IMAGE="social-preview-${social_card_hash}.png" \
+          zola --root web build
+        cp docs/social-preview.png "web/public/social-preview-${social_card_hash}.png"
       - cp docs/branding/logo.svg docs/branding/favicon-32.png docs/branding/lock-illustration.svg docs/branding/wordmark.svg docs/branding/wordmark-inverse.svg docs/social-preview.png web/public/
   # The three Haddock trees and the spec sit under /api. The Zola pages, the API
   # hub page among them, land over the top.
