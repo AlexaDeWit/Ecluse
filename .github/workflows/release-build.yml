@@ -72,9 +72,8 @@ jobs:
           ARCH: ${{ matrix.platform.arch }}
         run: bash scripts/image-archive.sh executables "image-${ARCH}.tar"
 
-      # .#ecluse-bin is this architecture's binary, so its closure and its SBOM are
-      # architecture-specific. release.yml attests the SPDX document to the platform
-      # digest, and ci.yml's nightly grype scan reads the CycloneDX one.
+      # The SBOM covers this architecture's .#ecluse-bin closure. release.yml attests the SPDX
+      # document to the platform digest, and ci.yml's nightly grype scan reads the CycloneDX one.
       - name: Generate SBOM
         if: ${{ inputs.sbom }}
         run: nix develop .#ci --command task sbom
