@@ -481,6 +481,7 @@ library
     Ecluse.Composition.Endpoints
     Ecluse.Composition.Executable
     Ecluse.Composition.Maintenance
+    Ecluse.Composition.Maintenance.Plan
     Ecluse.Composition.MemoryPlan
     Ecluse.Composition.MemoryPlan.Bounds
     Ecluse.Composition.MemoryPlan.Demands
@@ -1431,6 +1432,8 @@ test-suite ecluse-unit
     Ecluse.Composition.EndpointsSpec
     Ecluse.Composition.ExecutableSpec
     Ecluse.Composition.MaintenanceSpec
+    Ecluse.Composition.Maintenance.PlanSpec
+    Ecluse.Composition.Maintenance.Support
     Ecluse.Composition.MemoryPlan.OverrideSpec
     Ecluse.Composition.MemoryPlan.ShedSpec
     Ecluse.Composition.MemoryPlan.TransientSpec
