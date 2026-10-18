@@ -2,15 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | PyPI's own request facts, composed through the agnostic mechanics in
-"Ecluse.Core.Registry.Request".
-
-Two protocol details are load-bearing. The index path carries its trailing slash, and its
-project segment the PEP 503 canonical name, because PyPI redirects both and no data-plane
-request follows a redirect. The index read asks for @gzip@ while an artifact request advertises
-no encoding at all, so the bytes a client verifies against the served @sha256@ are the bytes
-that arrived.
--}
+-- | PyPI request paths, metadata negotiation and credentials over shared HTTP mechanics.
 module Ecluse.Core.Registry.PyPI.Request (
     -- * The ecosystem's artifact hosts
     pypiArtifactHosts,
@@ -26,7 +18,7 @@ module Ecluse.Core.Registry.PyPI.Request (
     artifactPath,
 ) where
 
-import Network.HTTP.Client (Request (decompress, requestHeaders))
+import Network.HTTP.Client (Request (requestHeaders))
 import Network.HTTP.Types.Header (hAccept, hAcceptEncoding)
 
 import Ecluse.Core.Credential (ClientCredential)
@@ -76,10 +68,7 @@ artifactRequestByFile ::
     Either UrlFormationError Request
 artifactRequestByFile baseUrl credential name filename = do
     url <- artifactFileUrl baseUrl name filename
-    base <- parseRequestEither url
-    pure
-        . attachCredential pypiCredential credential
-        $ base{decompress = const False}
+    artifactRequestByUrl credential url
 
 {- | Build PyPI's artifact @GET@ for the absolute @url@ the projection preserved from the index's
 own @files[].url@, so it names no base URL of its own.

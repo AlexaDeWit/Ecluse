@@ -49,7 +49,7 @@ document keys, and each one has a deliberately narrow reach:
 |---|---|---|
 | `AWS_REGION` | Scoping SQS, only under an `AWS_ENDPOINT_URL_SQS` override | CodeArtifact, whose region comes from the mirror-target host |
 | `AWS_ENDPOINT_URL_SQS` | The SQS endpoint, and it forces the SQS reading of `queue.url` | S3 |
-| `AWS_ENDPOINT_URL` | The S3 advisory client, including against an emulator or a VPC endpoint | SQS |
+| `AWS_ENDPOINT_URL` | The S3 advisory and durable mirror-state clients, including against an emulator or a VPC endpoint | SQS |
 
 Écluse ignores `AWS_REGION` for SQS without the override, because a real SQS URL carries its own
 region. The AWS SDK still reads `AWS_REGION` on its own to region every other client.

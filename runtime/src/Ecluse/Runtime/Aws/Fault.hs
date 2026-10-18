@@ -11,7 +11,9 @@ line.
 module Ecluse.Runtime.Aws.Fault (
     -- * Faults as values
     classifyAwsTransport,
+    classifyEscapedTransport,
     sendClassified,
+    foldTransportEscapes,
     serviceStatus,
 
     -- * Faults raised past the adapter
@@ -59,6 +61,18 @@ sendClassified ::
     a ->
     IO (Either e (AWS.AWSResponse a))
 sendClassified classify env = fmap (first classify) . runResourceT . AWS.sendEither env
+
+-- | Classify only escaping AWS errors and bare HTTP exceptions, excluding credential and typed wrapper exceptions.
+classifyEscapedTransport :: SomeException -> Maybe TransportFault
+classifyEscapedTransport err
+    | Just http <- fromException err = Just (classifyTransport http)
+    | Just aws <- fromException err = Just (classifyAwsTransport aws)
+    | otherwise = Nothing
+
+-- | Fold AWS and bare body-read transport exceptions into values. Other exceptions propagate.
+foldTransportEscapes :: (TransportFault -> fault) -> IO (Either fault a) -> IO (Either fault a)
+foldTransportEscapes inject action =
+    tryJust classifyEscapedTransport action >>= either (pure . Left . inject) pure
 
 -- | The HTTP status a service answered with, or 'Nothing' when the request never got an answer.
 serviceStatus :: AWS.Error -> Maybe Int

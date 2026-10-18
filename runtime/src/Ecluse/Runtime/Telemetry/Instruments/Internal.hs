@@ -2,10 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The instrument handle and the typed @record*@ helpers behind
-"Ecluse.Runtime.Telemetry.Instruments", which documents the catalogue and re-exports the curated
-surface. Importing this module opts out of that stability promise, the convention @text@ and
-@bytestring@ use, so production code imports the public one.
+{- | Instrument handles and recording helpers behind "Ecluse.Runtime.Telemetry.Instruments".
+Production callers use the public module's curated interface.
 -}
 module Ecluse.Runtime.Telemetry.Instruments.Internal (
     -- * The instrument handle
@@ -175,52 +173,99 @@ newMetrics telemetry = do
     let meterProvider :: MeterProvider
         meterProvider = fromMaybe noopMeterProvider (telemetryMeterProvider telemetry)
     meter <- getMeter meterProvider ecluseScope
-    Metrics
-        <$> counter meter ServeDecision "{decision}" "serve decisions by admit/deny/unavailable"
-        <*> upDownCounter meter ServeAdmissionInFlight "{request}" "in-flight metadata parses"
-        <*> counter meter ServeAdmissionQueued "{request}" "admissions that waited for a slot"
-        <*> upDownCounter meter PublishBodyInFlightBytes "By" "bytes reserved for buffered publish bodies"
-        <*> counter meter PublishBodyShed "{request}" "publishes shed at the body-byte budget"
-        <*> counter meter MergeDivergence "{divergence}" "cross-upstream integrity divergences detected in the packument merge"
-        <*> counter meter RuleDenials "{denial}" "rule denials by rule and reason class"
-        <*> histogram meter RuleEvalDuration "rule-evaluation latency by tier"
-        <*> counter meter RuleEffectfulFailures "{failure}" "effectful-rule failures by cause"
-        <*> gauge meter RuleBreakerState "circuit-breaker state by source (0 closed, 1 half-open, 2 open)"
-        <*> histogram meter UpstreamFetchDuration "upstream metadata-fetch latency by upstream and status class"
-        <*> counter meter UpstreamFetchErrors "{error}" "upstream metadata-fetch errors by upstream and cause"
-        <*> counter meter MetadataCacheRequests "{request}" "full-store requests by hit/miss/collapsed"
-        <*> counter meter SingleVersionCacheRequests "{request}" "selected-version requests by hit/miss/collapsed"
-        <*> counter meter AssembledCacheRequests "{request}" "assembled-response requests by hit/miss/collapsed"
-        <*> counter meter MetadataCacheRefused "{entry}" "capacity refusals and external backend failures by store"
-        <*> gauge meter MetadataCacheEntries "metadata-cache occupancy"
-        <*> gauge meter MetadataCacheResidentBytes "full-packument metadata-cache resident bytes"
-        <*> gauge meter SingleVersionCacheResidentBytes "single-version metadata-cache resident bytes"
-        <*> gauge meter AssembledCacheResidentBytes "assembled-representation store resident bytes"
-        <*> counter meter ServeRelayAnomalies "{relay}" "public relays that were not the admitted artifact, by class"
-        <*> counter meter ServePerimeterFaults "{fault}" "pre-commit handler escapes answered by the request perimeter, by cause"
-        <*> counter meter MirrorEnqueued "{job}" "mirror jobs enqueued"
-        <*> counter meter MirrorEnqueueFailures "{failure}" "mirror enqueue failures"
-        <*> counter meter MirrorJobsProcessed "{job}" "mirror jobs processed by result"
-        <*> histogram meter MirrorPublishDuration "mirror publish latency"
-        <*> counter meter DredgerVersions "{version}" "versions a sweep cycle disposed of, by target and result"
-        <*> counter meter CredentialRefresh "{refresh}" "credential refreshes by result and provider"
-        <*> observableGauge meter CredentialTokenTtlSeconds "remaining outbound-token lifetime by provider"
-        <*> counter meter AdvisorySyncAttempts "{attempt}" "advisory sync attempts by ecosystem and result"
-        <*> histogram meter AdvisorySyncDuration "advisory sync attempt latency by ecosystem and result"
-        <*> observableGauge meter AdvisoryDatabaseAgeSeconds "seconds since this ecosystem's serving advisory database was installed"
-        <*> observableGauge meter AdvisorySourceAgeSeconds "seconds since this ecosystem's serving advisory artifact was published"
-        <*> counter meter AdvisoryCompileAccepted "{advisory}" "advisory entries a compile pass accepted, by ecosystem"
-        <*> counter meter AdvisoryCompileDropped "{advisory}" "advisory entries a compile pass dropped, by ecosystem and cause"
-        <*> counter meter AdvisoryCompileRuns "{run}" "advisory compile passes by ecosystem and result"
-        <*> observableGauge meter MemoryAdmissionBudgetBytes "the metadata memory budget in bytes"
-        <*> observableGauge meter MemoryAdmissionChargedBytes "bytes metadata requests hold against the memory budget"
-        <*> observableGauge meter MemoryAdmissionBrakeLevel "memory brake level (0 calm, 1 holding, 2 braking)"
-        <*> observableGauge meter MemoryAdmissionWaiting "new requests waiting at the memory gate"
-        <*> observableGauge meter MemoryAdmissionPausedNow "started requests paused for memory"
-        <*> counter meter MemoryAdmissionQueued "{request}" "requests that waited for their memory entry step"
-        <*> counter meter MemoryAdmissionShed "{request}" "requests shed at the memory gate"
-        <*> counter meter MemoryAdmissionPauses "{pause}" "times a started request paused for memory"
-        <*> counter meter MemoryAdmissionOverdraws "{step}" "steps the overdraw token holder took past the memory budget"
+    serveDecision <- counter meter ServeDecision "{decision}" "serve decisions by admit/deny/unavailable"
+    serveAdmissionInFlight <- upDownCounter meter ServeAdmissionInFlight "{request}" "in-flight metadata parses"
+    serveAdmissionQueued <- counter meter ServeAdmissionQueued "{request}" "admissions that waited for a slot"
+    publishBodyInFlightBytes <- upDownCounter meter PublishBodyInFlightBytes "By" "bytes reserved for buffered publish bodies"
+    publishBodyShed <- counter meter PublishBodyShed "{request}" "publishes shed at the body-byte budget"
+    mergeDivergence <- counter meter MergeDivergence "{divergence}" "cross-upstream integrity divergences detected in the packument merge"
+    ruleDenials <- counter meter RuleDenials "{denial}" "rule denials by rule and reason class"
+    ruleEvalDuration <- histogram meter RuleEvalDuration "rule-evaluation latency by tier"
+    ruleEffectfulFailures <- counter meter RuleEffectfulFailures "{failure}" "effectful-rule failures by cause"
+    ruleBreakerState <- gauge meter RuleBreakerState "circuit-breaker state by source (0 closed, 1 half-open, 2 open)"
+    upstreamFetchDuration <- histogram meter UpstreamFetchDuration "upstream metadata-fetch latency by upstream and status class"
+    upstreamFetchErrors <- counter meter UpstreamFetchErrors "{error}" "upstream metadata-fetch errors by upstream and cause"
+    metadataCacheRequests <- counter meter MetadataCacheRequests "{request}" "full-store requests by hit/miss/collapsed"
+    singleVersionCacheRequests <- counter meter SingleVersionCacheRequests "{request}" "selected-version requests by hit/miss/collapsed"
+    assembledCacheRequests <- counter meter AssembledCacheRequests "{request}" "assembled-response requests by hit/miss/collapsed"
+    metadataCacheRefused <- counter meter MetadataCacheRefused "{entry}" "capacity refusals and backend failures by store"
+    metadataCacheEntries <- gauge meter MetadataCacheEntries "metadata-cache occupancy"
+    metadataCacheResidentBytes <- gauge meter MetadataCacheResidentBytes "full-packument metadata-cache resident bytes"
+    singleVersionCacheResidentBytes <- gauge meter SingleVersionCacheResidentBytes "single-version metadata-cache resident bytes"
+    assembledCacheResidentBytes <- gauge meter AssembledCacheResidentBytes "assembled-representation store resident bytes"
+    serveRelayAnomalies <- counter meter ServeRelayAnomalies "{relay}" "public relays that were not the admitted artifact, by class"
+    servePerimeterFaults <- counter meter ServePerimeterFaults "{fault}" "pre-commit handler escapes answered by the request perimeter, by cause"
+    mirrorEnqueued <- counter meter MirrorEnqueued "{job}" "mirror jobs enqueued"
+    mirrorEnqueueFailures <- counter meter MirrorEnqueueFailures "{failure}" "mirror enqueue failures"
+    mirrorJobsProcessed <- counter meter MirrorJobsProcessed "{job}" "mirror jobs processed by result"
+    mirrorPublishDuration <- histogram meter MirrorPublishDuration "mirror publish latency"
+    dredgerVersions <- counter meter DredgerVersions "{version}" "versions a sweep cycle disposed of, by target and result"
+    credentialRefresh <- counter meter CredentialRefresh "{refresh}" "credential refreshes by result and provider"
+    credentialTokenTtlSeconds <- observableGauge meter CredentialTokenTtlSeconds "remaining outbound-token lifetime by provider"
+    advisorySyncAttempts <- counter meter AdvisorySyncAttempts "{attempt}" "advisory sync attempts by ecosystem and result"
+    advisorySyncDuration <- histogram meter AdvisorySyncDuration "advisory sync attempt latency by ecosystem and result"
+    advisoryDatabaseAgeSeconds <- observableGauge meter AdvisoryDatabaseAgeSeconds "seconds since this ecosystem's serving advisory database was installed"
+    advisorySourceAgeSeconds <- observableGauge meter AdvisorySourceAgeSeconds "seconds since this ecosystem's serving advisory artifact was published"
+    advisoryCompileAccepted <- counter meter AdvisoryCompileAccepted "{advisory}" "advisory entries a compile pass accepted, by ecosystem"
+    advisoryCompileDropped <- counter meter AdvisoryCompileDropped "{advisory}" "advisory entries a compile pass dropped, by ecosystem and cause"
+    advisoryCompileRuns <- counter meter AdvisoryCompileRuns "{run}" "advisory compile passes by ecosystem and result"
+    memoryAdmissionBudgetBytes <- observableGauge meter MemoryAdmissionBudgetBytes "the metadata memory budget in bytes"
+    memoryAdmissionChargedBytes <- observableGauge meter MemoryAdmissionChargedBytes "bytes metadata requests hold against the memory budget"
+    memoryAdmissionBrakeLevel <- observableGauge meter MemoryAdmissionBrakeLevel "memory brake level (0 calm, 1 holding, 2 braking)"
+    memoryAdmissionWaiting <- observableGauge meter MemoryAdmissionWaiting "new requests waiting at the memory gate"
+    memoryAdmissionPausedNow <- observableGauge meter MemoryAdmissionPausedNow "started requests paused for memory"
+    memoryAdmissionQueued <- counter meter MemoryAdmissionQueued "{request}" "requests that waited for their memory entry step"
+    memoryAdmissionShed <- counter meter MemoryAdmissionShed "{request}" "requests shed at the memory gate"
+    memoryAdmissionPauses <- counter meter MemoryAdmissionPauses "{pause}" "times a started request paused for memory"
+    memoryAdmissionOverdraws <- counter meter MemoryAdmissionOverdraws "{step}" "steps the overdraw token holder took past the memory budget"
+    pure
+        Metrics
+            { mServeDecision = serveDecision
+            , mServeAdmissionInFlight = serveAdmissionInFlight
+            , mServeAdmissionQueued = serveAdmissionQueued
+            , mPublishBodyInFlightBytes = publishBodyInFlightBytes
+            , mPublishBodyShed = publishBodyShed
+            , mMergeDivergence = mergeDivergence
+            , mRuleDenials = ruleDenials
+            , mRuleEvalDuration = ruleEvalDuration
+            , mRuleEffectfulFailures = ruleEffectfulFailures
+            , mRuleBreakerState = ruleBreakerState
+            , mUpstreamFetchDuration = upstreamFetchDuration
+            , mUpstreamFetchErrors = upstreamFetchErrors
+            , mMetadataCacheRequests = metadataCacheRequests
+            , mSingleVersionCacheRequests = singleVersionCacheRequests
+            , mAssembledCacheRequests = assembledCacheRequests
+            , mMetadataCacheRefused = metadataCacheRefused
+            , mMetadataCacheEntries = metadataCacheEntries
+            , mMetadataCacheResidentBytes = metadataCacheResidentBytes
+            , mSingleVersionCacheResidentBytes = singleVersionCacheResidentBytes
+            , mAssembledCacheResidentBytes = assembledCacheResidentBytes
+            , mServeRelayAnomalies = serveRelayAnomalies
+            , mServePerimeterFaults = servePerimeterFaults
+            , mMirrorEnqueued = mirrorEnqueued
+            , mMirrorEnqueueFailures = mirrorEnqueueFailures
+            , mMirrorJobsProcessed = mirrorJobsProcessed
+            , mMirrorPublishDuration = mirrorPublishDuration
+            , mDredgerVersions = dredgerVersions
+            , mCredentialRefresh = credentialRefresh
+            , mCredentialTokenTtlSeconds = credentialTokenTtlSeconds
+            , mAdvisorySyncAttempts = advisorySyncAttempts
+            , mAdvisorySyncDuration = advisorySyncDuration
+            , mAdvisoryDatabaseAgeSeconds = advisoryDatabaseAgeSeconds
+            , mAdvisorySourceAgeSeconds = advisorySourceAgeSeconds
+            , mAdvisoryCompileAccepted = advisoryCompileAccepted
+            , mAdvisoryCompileDropped = advisoryCompileDropped
+            , mAdvisoryCompileRuns = advisoryCompileRuns
+            , mMemoryAdmissionBudgetBytes = memoryAdmissionBudgetBytes
+            , mMemoryAdmissionChargedBytes = memoryAdmissionChargedBytes
+            , mMemoryAdmissionBrakeLevel = memoryAdmissionBrakeLevel
+            , mMemoryAdmissionWaiting = memoryAdmissionWaiting
+            , mMemoryAdmissionPausedNow = memoryAdmissionPausedNow
+            , mMemoryAdmissionQueued = memoryAdmissionQueued
+            , mMemoryAdmissionShed = memoryAdmissionShed
+            , mMemoryAdmissionPauses = memoryAdmissionPauses
+            , mMemoryAdmissionOverdraws = memoryAdmissionOverdraws
+            }
 
 counter :: Meter -> MetricName -> Text -> Text -> IO (Counter Int64)
 counter meter name unit description =

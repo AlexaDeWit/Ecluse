@@ -11,12 +11,13 @@ import Amazonka.CodeArtifact.Types qualified as CAT
 import Amazonka.Env.Hooks qualified as Hooks
 import Amazonka.S3 qualified as S3
 import Data.Text qualified as T
-import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (InternalException), parseRequest, requestHeaders)
+import Lens.Micro ((^.))
+import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (ConnectionTimeout, InternalException), parseRequest, requestHeaders)
 import Test.Hspec
 import UnliftIO.Exception (try)
 
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), TransportFault (tfCause))
-import Ecluse.Runtime.Aws.Env.Internal (newAwsEnvWith)
+import Ecluse.Runtime.Aws.Env.Internal (newAwsEnvWith, singleAttemptEnv)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport, displayAwsFaultT)
 import Ecluse.Runtime.Test.Aws (holdsNoPlantedSecret, loopbackDiscovery, refusedAtClosedPort, refusedDiscovery)
 import Ecluse.Test.Stub (closedAuthority, closedPort)
@@ -24,6 +25,21 @@ import Ecluse.Test.Stub.Socket (resetAfterPartialBodyOverTcp, withRawServer)
 
 spec :: Spec
 spec = describe "newAwsEnvWith" $ do
+    it "disables both SDK retries while retaining endpoint, region and request hooks" $ do
+        base <- newAwsEnvWith (loopbackDiscovery closedPort) (Just "ca-central-1") Nothing S3.defaultService
+        request <- parseRequest "http://example.test/"
+        let original = base{AWS.retryCheck = \_ _ -> True}
+            env = singleAttemptEnv original
+            service = AWS.overrides env S3.defaultService
+            endpoint = (service ^. AWS.service_endpoint) (AWS.region env)
+        AWS.retryCheck env 0 (HttpExceptionRequest request ConnectionTimeout) `shouldBe` False
+        service ^. AWS.service_retry . AWS.retry_attempts `shouldBe` 0
+        AWS.region env `shouldBe` AWS.Region' "ca-central-1"
+        endpoint ^. AWS.endpoint_host `shouldBe` "127.0.0.1"
+        endpoint ^. AWS.endpoint_port `shouldBe` closedPort
+        hooked <- Hooks.clientRequest (AWS.hooks env) env request{requestHeaders = [("x-amz-sso_bearer_token", "token-secret")]}
+        (show hooked :: Text) `shouldNotSatisfy` T.isInfixOf "token-secret"
+
     it "raises a discovery whose signed STS call is refused by its transport cause at the dialled host:port, never the request" $
         void (newAwsEnvWith refusedDiscovery Nothing Nothing S3.defaultService) `shouldThrow` refusedAtClosedPort
 

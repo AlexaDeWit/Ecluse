@@ -77,7 +77,7 @@ renderOpenApiPage doc =
         )
 
 infoLines :: Info -> [Text]
-infoLines info = prose (_infoDescription info) <> [bold "API version" <> ": " <> code (_infoVersion info), ""]
+infoLines info = prose (_infoDescription info) <> [bold "Écluse version" <> ": " <> code (_infoVersion info), ""]
 
 serverLines :: [Server] -> [Text]
 serverLines servers

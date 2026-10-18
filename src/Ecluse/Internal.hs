@@ -40,7 +40,7 @@ data ProcessOutcome
       RunCancelled
     deriving stock (Eq, Show)
 
--- | Classify how the service run ends. The base 'Exception.try' and 'Exception.throwIO' are deliberate: what leaves here async must leave async.
+-- | Classify how the service run ends. The base 'Control.Exception.try' and 'Control.Exception.throwIO' are deliberate: what leaves here async must leave async.
 superviseProcess :: IO ProcessOutcome -> IO ProcessOutcome
 superviseProcess service =
     Exception.try service >>= \case

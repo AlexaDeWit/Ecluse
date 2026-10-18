@@ -14,7 +14,6 @@ module Ecluse.Runtime.Telemetry.Escape (
     escapeRecordingMiddleware,
 ) where
 
-import Amazonka qualified as AWS
 import Data.HashMap.Strict qualified as HashMap
 import Data.Typeable (typeOf)
 import Network.Wai (Middleware)
@@ -35,14 +34,13 @@ import UnliftIO.Exception (withException)
 
 import Ecluse.Core.Fault (renderTransportFault)
 import Ecluse.Core.Fault.Http (displayFaultT, isClientFault)
-import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
+import Ecluse.Runtime.Aws.Fault (classifyEscapedTransport)
 
 -- | The typed cause of an exception whose own rendering can print a request or a proxy credential, or 'Nothing' for any other.
 escapedRequestCause :: SomeException -> Maybe Text
 escapedRequestCause err
     | isClientFault err = Just (displayFaultT err)
-    | Just (aws :: AWS.Error) <- fromException err = Just (renderTransportFault (classifyAwsTransport aws))
-    | otherwise = Nothing
+    | otherwise = renderTransportFault <$> classifyEscapedTransport err
 
 -- | Make the library ignore an exception 'escapedRequestCause' knows, so only 'recordEscape' records it.
 withEscapeHandler :: TracerProviderOptions -> TracerProviderOptions

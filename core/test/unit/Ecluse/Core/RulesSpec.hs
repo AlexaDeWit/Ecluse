@@ -29,7 +29,7 @@ import UnliftIO.Async (mapConcurrently)
 import UnliftIO.Exception (evaluate, finally, impureThrow, throwIO, tryAny)
 
 import Ecluse.Core.Breaker (Breaker, admit, initialBreaker, recordFailure)
-import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), MissingScorePolicy (..), openCveDb, scoreAtLeast)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), MissingScorePolicy (..), scoreAtLeast)
 import Ecluse.Core.Cve.Internal (toRange)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
@@ -40,7 +40,7 @@ import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
 import Ecluse.Test.Cve (fakeCveLookup, namesFix, referenceInside, unscoredEpssCases)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV2), RangeRow, mkValidDbWithRows)
 import Ecluse.Test.Osv.Withdrawal (maliciousZip, withdrawalZip)
-import Ecluse.Test.OsvDb (withFixtureOsvDb, withOsvZipDb, withServedArtifact)
+import Ecluse.Test.OsvDb (openCveDb, withFixtureOsvDb, withOsvZipDb, withServedArtifact)
 import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Rules (
     admissionOnly,

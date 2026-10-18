@@ -2,9 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Pacing one sweep cycle inside the target cycle window. Every decision here is a pure function
-of the last complete cycle's measured request counts and the capacity the store declared.
--}
+-- | Pure sweep pacing from measured requests and declared capacity, with quotas taking priority over the target window.
 module Ecluse.Core.Registry.Sweep.Pacing (
     -- * The window and the capacity a cycle is paced against
     defaultCycleWindow,
@@ -50,15 +48,11 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepPacing (swpBudgetFraction, swpChunkPause, swpChunkSize, swpCycleWindow),
  )
 
-{- | The window a cycle is paced to finish inside when the configuration names none: three cycle
-pauses, so each active cycle is granted the same allowance as the idle interval between them.
--}
+-- | Default window granting each active cycle the same allowance as the pause between cycles.
 defaultCycleWindow :: NominalDiffTime -> NominalDiffTime
 defaultCycleWindow cyclePause = 3 * cyclePause
 
-{- | The capacity a backend that publishes no quota is taken to have: the nominal package pace, on
-the one request dimension. Raising the chunk pause lowers it, and a declared capacity replaces it.
--}
+-- | Use the nominal package pace where the backend declares no capacity.
 derivedCapacity :: Rational -> StoreBudget -> StoreBudget
 derivedCapacity pace budget
     | budgetDeclared budget = budget
@@ -74,9 +68,7 @@ data PaceDecision = PaceDecision
     }
     deriving stock (Eq, Show)
 
-{- | Pace one scope's next cycle from the last complete one: its measured requests, and the seconds
-that cycle spent outside its own budget waits. With no sample it runs at the ceiling and measures.
--}
+-- | Pace the next cycle from measured requests and work outside budget waits. With no sample, use the ceiling.
 decidePace :: SweepPacing -> StoreBudget -> Maybe (RequestTally, Rational) -> PaceDecision
 decidePace pacing budget sample
     | not (budgetDeclared budget) = decision 1 Nothing
@@ -105,19 +97,16 @@ decidePace pacing budget sample
 -- A share below one stretches every request's own cost by the same factor.
 paceAtShare :: SweepPacing -> StoreBudget -> Map QuotaDimension Rational -> Rational -> CyclePace
 paceAtShare pacing budget ceilings share =
-    paceOf (Map.fromList [(kind, held (seconds kind / share)) | kind <- requestKinds, seconds kind > 0])
+    paceOf (Map.fromList [(kind, held baseCost) | kind <- requestKinds, let baseCost = seconds kind, baseCost > 0])
   where
-    held = min (paceBound pacing)
+    held baseCost = max baseCost (min (paceBound pacing) (baseCost / share))
     seconds kind = cycleDemand ceilings budget (oneRequest kind)
 
-{- The longest one request is ever held. A wait past a whole cycle's allowance cannot land that
-cycle inside the window, and an unbounded one would overrun the thread delay. -}
+-- Cap optional slowdown at the cycle allowance. The quota delay still takes priority.
 paceBound :: SweepPacing -> Rational
 paceBound pacing = max 1 (cycleAllowance pacing)
 
-{- | The warning an unattainable window earns, naming the budget it would need. The sweep runs on
-at its ceiling, because a refused cycle leaves the denied version served.
--}
+-- | Warn about an unattainable window while the sweep continues at its request ceiling.
 renderPaceDecision :: SweepPacing -> PaceDecision -> Maybe Text
 renderPaceDecision pacing decision = shortfall <$> pdShortfall decision
   where
@@ -144,9 +133,7 @@ renderPaceDecision pacing decision = shortfall <$> pdShortfall decision
                 <> closing
     share value = show (toHundredths value)
 
-{- | What one store's capacity resolved to, for the boot line: where each figure came from, the
-share in force, and the per-second ceilings that share yields.
--}
+-- | Report the resolved capacity, its origin, the share in force, and the per-second ceilings at boot.
 renderScopeBudget :: SweepPacing -> StoreBudget -> Text
 renderScopeBudget pacing budget =
     "paced against "

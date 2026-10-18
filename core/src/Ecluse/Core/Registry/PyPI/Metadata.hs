@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (MetadataError, VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk, EcosystemRead (..))
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
-import Ecluse.Core.Registry.PyPI.Document (PackedSimple, SimpleDocument, simpleDocument, simpleEnvelope, simpleFiles)
+import Ecluse.Core.Registry.PyPI.Document (PackedSimple, SimpleDocument, restrictSimpleFiles)
 import Ecluse.Core.Registry.PyPI.FileWriter (FileWriter, fileWriter)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiFullWalk, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequest)
@@ -44,26 +44,21 @@ import Ecluse.Core.Version (Version, renderVersion)
 
 -- | Full and selected reads share the Simple-index request and field policy.
 pypiRead :: EcosystemRead
-pypiRead =
-    EcosystemRead
-        { erRequest = simpleIndexRequest
-        , erUniqueFields = fileUniqueFields
-        , erWalkFull = \limits name _ -> readPyPIFull limits name
-        , erFinishFull = finishPyPIFull
-        , erWalkSelected = \limits name version -> readPyPIIndex limits name (SelectedRead name (renderVersion version))
-        , erFinishSelected = finishPyPIVersion
-        }
+pypiRead = pypiReadWith SelectedRead (const (const Nothing))
 
 -- | Workers retain the supported envelope beside selected files without changing ordinary serve reads.
 pypiMirrorRead :: EcosystemRead
-pypiMirrorRead =
+pypiMirrorRead = pypiReadWith MirrorRead (\details -> Just . mirrorDocument details)
+
+pypiReadWith :: (PackageName -> Text -> PyPIRead) -> (PackageDetails -> SimpleDocument -> Maybe CachedDoc) -> EcosystemRead
+pypiReadWith mode retain =
     EcosystemRead
         { erRequest = simpleIndexRequest
         , erUniqueFields = fileUniqueFields
         , erWalkFull = \limits name _ -> readPyPIFull limits name
         , erFinishFull = finishPyPIFull
-        , erWalkSelected = \limits name version -> readPyPIIndex limits name (MirrorRead name (renderVersion version))
-        , erFinishSelected = finishPyPIMirrorVersion
+        , erWalkSelected = \limits name version -> readPyPIIndex limits name (mode name (renderVersion version))
+        , erFinishSelected = finishPyPIVersion retain
         }
 
 -- | Charges per 1000 source or output-basis bytes, calibrated with native memory probes. See @docs/testing.md@.
@@ -86,7 +81,7 @@ readPyPIFull limits name bound table readChunk = do
     build <- stToIO (fileWriter writer)
     readJsonWalkST stToIO bound (pypiPackedWalk writer build limits name table) readChunk
 
--- | The production full-read walk over the caller's table and scratch writer.
+-- | Full reads use the supplied table and writer without materialising file trees.
 pypiPackedWalk :: Writer st -> FileWriter st -> Limits -> PackageName -> InternTable -> Cursor -> ST st (Steps (ST st) PyPIFullRead)
 pypiPackedWalk writer build limits name table =
     pypiFullWalk build (maxNestingDepth limits) (pureStep (collectField limits FullRead)) keepsFile (packedFileStep writer limits) table (emptyProjection name)
@@ -102,34 +97,24 @@ finishPyPIFull :: Limits -> PackageName -> Text -> StreamResult PyPIFullRead -> 
 finishPyPIFull limits name base streamed =
     bimap (enforceArtifactLocations pypiArtifactAuthorities base) (fst pypiPacked) <$> projectPyPIPacked limits name streamed
 
--- PyPI retains no publication object for a selected release, and its documents declare no latest tag.
-finishPyPIVersion :: Limits -> PackageName -> Text -> Version -> StreamResult PyPIProjection -> Either MetadataError VersionRead
-finishPyPIVersion limits name base version streamed = do
-    (info, _) <- projectPyPIStream limits name streamed
-    pure
-        VersionRead
-            { vrVersion = do
-                details <- Map.lookup (renderVersion version) (infoVersions info)
-                located <- enforceArtifactLocationsOf pypiArtifactAuthorities base details
-                pure VersionDoc{vdDetails = located, vdRaw = Nothing}
-            , vrBodyBytes = streamBytes streamed
-            , vrUpstreamLatest = Nothing
-            }
-
-finishPyPIMirrorVersion :: Limits -> PackageName -> Text -> Version -> StreamResult PyPIProjection -> Either MetadataError VersionRead
-finishPyPIMirrorVersion limits name base version streamed = do
+finishPyPIVersion :: (PackageDetails -> SimpleDocument -> Maybe CachedDoc) -> Limits -> PackageName -> Text -> Version -> StreamResult PyPIProjection -> Either MetadataError VersionRead
+finishPyPIVersion retain limits name base version streamed = do
     (info, document) <- projectPyPIStream limits name streamed
     pure
         VersionRead
             { vrVersion = do
                 details <- Map.lookup (renderVersion version) (infoVersions info)
                 located <- enforceArtifactLocationsOf pypiArtifactAuthorities base details
-                let keys = Set.fromList (map artEntryKey (toList (pkgArtifacts located)))
-                    retained = simpleDocument (simpleEnvelope document) (filter ((`Set.member` keys) . fst) (simpleFiles document))
-                pure VersionDoc{vdDetails = located, vdRaw = Just (fst pypiSimpleCached retained)}
+                pure VersionDoc{vdDetails = located, vdRaw = retain located document}
             , vrBodyBytes = streamBytes streamed
             , vrUpstreamLatest = Nothing
             }
+
+mirrorDocument :: PackageDetails -> SimpleDocument -> CachedDoc
+mirrorDocument details document = fst pypiSimpleCached retained
+  where
+    keys = Set.fromList (map artEntryKey (toList (pkgArtifacts details)))
+    retained = restrictSimpleFiles keys document
 
 -- | Finish a tree read, keeping files linked to their source coordinates.
 projectPyPIStream :: Limits -> PackageName -> StreamResult PyPIProjection -> Either MetadataError (PackageInfo, SimpleDocument)

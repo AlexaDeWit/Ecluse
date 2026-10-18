@@ -43,7 +43,7 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
     renderNamePrefix,
  )
 import Ecluse.Core.Registry.Sweep.Candidates (CandidateSet, candidateSet, inCandidates)
-import Ecluse.Core.Registry.Sweep.Group (boundedVersions, collectGroupBucket, groupAlphabet)
+import Ecluse.Core.Registry.Sweep.Group (InventoryLocation (..), boundedVersions, collectGroupBucket, groupAlphabet)
 import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt (HaltBucketUnsplittable, HaltConsentWithheld, HaltStoreFault, HaltStorePreserved),
     CycleOutcome (CycleOutcome, outcomeEvidence, outcomeHalt, outcomePrerequisites, outcomeTally),
@@ -287,7 +287,7 @@ walkGroup pacing ports counters mount cache = do
 
 {- One name of a bucket: the chunk pause falls here, before the enumeration reads, so a pause
 never lands between the two locations of a single name. -}
-sweepOneName :: GroupWalk -> EvalContext -> (PackageName, [Bool]) -> IO (Maybe CycleHalt)
+sweepOneName :: GroupWalk -> EvalContext -> (PackageName, [InventoryLocation]) -> IO (Maybe CycleHalt)
 sweepOneName walk ctx (name, slots) = do
     paceName (gwPacing walk) (gwPorts walk) (gwCounters walk)
     readGroupVersions walk name slots >>= \case
@@ -298,10 +298,13 @@ sweepOneName walk ctx (name, slots) = do
             Right bounded -> groupOutcome walk ctx name bounded
 
 -- What each of a name's locations holds, in slot order. The first store fault halts the cycle.
-readGroupVersions :: GroupWalk -> PackageName -> [Bool] -> IO (Either CycleHalt [(SweepStore, [StoredVersion])])
+readGroupVersions :: GroupWalk -> PackageName -> [InventoryLocation] -> IO (Either CycleHalt [(SweepStore, [StoredVersion])])
 readGroupVersions walk name slots = sequence <$> traverse readOne locations
   where
-    locations = map (\slot -> if slot then gwCache walk else smStore (gwMount walk)) slots
+    locations = map locatedStore slots
+    locatedStore = \case
+        MirrorInventory -> smStore (gwMount walk)
+        PrivateCacheInventory -> gwCache walk
     readOne store =
         fmap (store,)
             <$> withStoreRetry
