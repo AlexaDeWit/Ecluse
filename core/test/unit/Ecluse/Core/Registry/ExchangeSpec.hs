@@ -21,7 +21,7 @@ import Network.Wai.Handler.Warp (defaultSettings, setOnOpen, testWithApplication
 import Test.Hspec
 import UnliftIO.Async (async, wait)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (tryAny)
+import UnliftIO.Exception (throwIO, tryAny)
 
 import Ecluse.Core.Fault (TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause, tfDetail))
 import Ecluse.Core.Registry (BodyOutcome (SuccessBody), FetchFault (FetchTransport))
@@ -62,8 +62,9 @@ chargeSpec = describe "cumulative charging" $ do
         total `shouldReturn` maxBound
 
     it "retains the addition when the charge callback fails" $ do
-        (add, total) <- accumulatingChargeFrom 7 (const (fail "charge refused"))
-        tryAny (add 4) >>= (`shouldSatisfy` isLeft)
+        -- The callback exposes failure through exceptions.
+        (add, total) <- accumulatingChargeFrom 7 (const (throwIO ChargeRefused))
+        add 4 `shouldThrow` (== ChargeRefused)
         total `shouldReturn` 11
 
     it "keeps the zero-seeded wrapper's nonpositive suppression" $ do
@@ -71,6 +72,11 @@ chargeSpec = describe "cumulative charging" $ do
         add <- accumulatingCharge (\n -> modifyIORef' paid (<> [n]))
         mapM_ add [0, -3, 4, 0, 2]
         readIORef paid `shouldReturn` [4, 6]
+
+data ChargeRefused = ChargeRefused
+    deriving stock (Eq, Show)
+
+instance Exception ChargeRefused
 
 singleAttemptSpec :: Spec
 singleAttemptSpec = do
