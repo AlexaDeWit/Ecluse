@@ -159,7 +159,7 @@ jobs:
       # Preserve partial output when the harness fails.
       - name: Upload this run's results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-load-results-${{ runner.arch }}-${{ matrix.pod-shape }}-${{ github.sha }}
           path: |
@@ -233,7 +233,7 @@ jobs:
       # Preserve every finished arm when a later one fails.
       - name: Upload the sweep job's results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-load-sweep-${{ runner.arch }}-${{ inputs.sweep }}-${{ matrix.job }}-${{ github.sha }}
           path: sweep-results/
