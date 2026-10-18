@@ -14,9 +14,10 @@ module Ecluse.Core.Server.MemoryModel.Probe (
     Measurement (..),
     packages,
     Residency (..),
-    PeakLimits (..),
     residencyFor,
     requireResidency,
+    requireFigures,
+    retainedFigure,
     probe,
     Evaluated (..),
     probeEvaluation,
@@ -75,14 +76,14 @@ import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, boundedRead,
 import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
-import Ecluse.Core.Server.MemoryModel.Calibration
+import Ecluse.Core.Server.MemoryModel.Calibration (Calibration, Figures (..), npmCalibration, npmFigures, pypiCalibration, pypiFigures)
 import Ecluse.Core.Server.MemoryModel.HeapSample (HeapSample (..), sample)
 import Ecluse.Core.Server.MemoryModel.ProbeMode (ProbeMode, probeArguments)
 import Ecluse.Core.Server.Pipeline.Origin (Contribution (..))
 import Ecluse.Core.Server.Pipeline.Packument (assembleServedBody, outputBasisBytes)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
-import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), corpusPackages, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, syntheticProxyBase)
+import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), corpusPackages, cpName, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, syntheticProxyBase)
 import Ecluse.Test.Corpus qualified as Corpus
 import Ecluse.Test.Corpus.Merge (MergeDocument (Captured, Rewritten), MergeShape, captureDocuments)
 import Ecluse.Test.Port (passthroughTracingPort)
@@ -188,20 +189,12 @@ data Residency = Residency
     , residencyMetadata :: AdapterMetadata
     , residencyUpstream :: CaptureUpstream
     , residencyCalibration :: Calibration
-    , residencyEnvelope :: Shape -> Integer
-    , residencyPeakLimits :: PeakLimits
+    , residencyFigures :: Map Text Figures
     , residencyEntryBelowSource :: Bool
     , residencyLegacyProject :: PackageName -> Value -> Either ParseError (Projection PackageInfo)
     , residencyLegacyHeld :: PackageInfo -> Value -> Int -> ContentDigest -> Held
     , residencyIdentity :: String -> String -> IO (PackageName, Version)
     , residencyVersionList :: Limits -> IO ByteString -> IO (Either Text (Held, Int, Maybe ContentDigest))
-    }
-
--- | Regression limits per source byte, in thousandths.
-data PeakLimits = PeakLimits
-    { readPeakLimit :: Integer
-    , outputLimit :: Integer
-    -- ^ Per byte of the output basis.
     }
 
 -- | RubyGems has no registered adapter and stays outside the residency tier.
@@ -214,8 +207,7 @@ residencyFor = \case
                 , residencyMetadata = adapterMetadata npmAdapter
                 , residencyUpstream = npmCaptureUpstream
                 , residencyCalibration = npmCalibration
-                , residencyEnvelope = calibratedEnvelope npmCalibration (regressionLimit (rawMaximum npmCalibration))
-                , residencyPeakLimits = calibratedPeaks npmCalibration
+                , residencyFigures = npmFigures
                 , residencyEntryBelowSource = True
                 , residencyLegacyProject = parsePackageInfoFromValue
                 , residencyLegacyHeld = \info raw size digest -> HeldShared (CacheEntry info (fst npmCached raw) size digest)
@@ -229,8 +221,7 @@ residencyFor = \case
                 , residencyMetadata = adapterMetadata pypiAdapter
                 , residencyUpstream = pypiCaptureUpstream
                 , residencyCalibration = pypiCalibration
-                , residencyEnvelope = calibratedEnvelope pypiCalibration pypiRawLimit
-                , residencyPeakLimits = calibratedPeaks pypiCalibration
+                , residencyFigures = pypiFigures
                 , residencyEntryBelowSource = False
                 , residencyLegacyProject = projectSimpleIndexFromValue
                 , residencyLegacyHeld = \info raw _ _ -> HeldLegacy info raw
@@ -239,19 +230,23 @@ residencyFor = \case
                 }
     RubyGems -> Nothing
 
-calibratedEnvelope :: Calibration -> Integer -> Shape -> Integer
-calibratedEnvelope calibration rawLimit = \case
-    Wire -> regressionLimit (wireMaximum calibration)
-    Raw -> rawLimit
-    Typed -> regressionLimit (typedMaximum calibration)
-    Shared -> regressionLimit (sharedMaximum calibration)
-
-calibratedPeaks :: Calibration -> PeakLimits
-calibratedPeaks calibration = PeakLimits (regressionLimit (singleReadMaximum calibration)) (regressionLimit (outputMaximum calibration))
-
 -- | Missing residency wiring fails a probe instead of skipping its checks.
 requireResidency :: Ecosystem -> IO Residency
 requireResidency ecosystem = maybe (fail ("no metadata residency record for " <> toString (ecosystemName ecosystem))) pure (residencyFor ecosystem)
+
+-- | A capture without measured figures fails its probe instead of skipping its limits.
+requireFigures :: CorpusPackage -> IO Figures
+requireFigures package = do
+    record <- requireResidency (pkgEcosystem (cpPackage package))
+    maybe (fail ("no residency figures for " <> toString (cpName package))) pure (Map.lookup (cpName package) (residencyFigures record))
+
+-- | The measured figure that a retained shape's limit derives from.
+retainedFigure :: Shape -> Figures -> Rational
+retainedFigure = \case
+    Wire -> retainedWire
+    Raw -> retainedRaw
+    Typed -> retainedTyped
+    Shared -> retainedShared
 
 -- | Measure one capture in a fresh process of this executable, on one capability with RTS statistics.
 measureInChild :: (FromJSON a) => ProbeMode -> CorpusPackage -> IO (Either String a)
