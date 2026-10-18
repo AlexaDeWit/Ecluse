@@ -14,10 +14,8 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Foreign.StablePtr (deRefStablePtr, freeStablePtr, newStablePtr)
 import GHC.Stats (GCDetails (gcdetails_live_bytes), RTSStats (allocated_bytes, gc, max_live_bytes), getRTSStats)
-import System.Directory (getFileSize)
 import System.Environment (getExecutablePath)
 import System.Exit (ExitCode (ExitSuccess))
-import System.FilePath ((</>))
 import System.Mem (performMajorGC)
 import System.Process (readProcessWithExitCode)
 import Test.Hspec
@@ -37,7 +35,7 @@ import Ecluse.Test.Mirror.State (mirrorPackage)
 import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex)
 import Ecluse.Test.Support (expectRight)
 
--- | Absolute counters preserve the distinction between allocation and live heap.
+-- Absolute counters preserve the distinction between allocation and live heap.
 data Sample = Sample
     { sampleLive :: Word64
     , samplePeak :: Word64
@@ -50,6 +48,30 @@ instance ToJSON Sample
 
 data Phase = Cold | Warm | Replacement
     deriving stock (Eq, Show, Read, Enum, Bounded)
+
+-- The child's heap samples, output size, and metered charge. The parent derives the modelled charges.
+data Observed = Observed
+    { obsBaseline :: Sample
+    , obsReady :: Sample
+    , obsHeld :: Sample
+    , obsReleased :: Sample
+    , obsOutputBytes :: Int
+    , obsAdmissionBytes :: Int
+    }
+    deriving stock (Generic, Show)
+
+instance FromJSON Observed
+instance ToJSON Observed
+
+-- The 1000-version fixture on disk, with the sizes and retention charges derived from it once.
+data Prepared = Prepared
+    { prepDirectory :: FilePath
+    , prepOldBytes :: Int
+    , prepNewBytes :: Int
+    , prepNativeBytes :: Int
+    , prepOldCharge :: Int
+    , prepNewCharge :: Int
+    }
 
 data Measurement = Measurement
     { phase :: Text
@@ -68,52 +90,66 @@ data Measurement = Measurement
     }
     deriving stock (Generic, Show)
 
-instance FromJSON Measurement
 instance ToJSON Measurement
 
 -- | The recurring tier checks exchange counts, complete output, and reports admission evidence.
 spec :: Spec
-spec = do
-    describe "managed mirror project requests" $
-        for_ [1, 1000] $ \count -> it (show count <> " versions use one exchange per request") $ do
-            fixture <- makeReadFixture count
-            session <- newReadSession fixture
-            initialRead <- readManagedProject session
-            cachedRead <- readManagedProject session
-            advanceReadSession session
-            third <- readManagedProject session
-            checkResult count (3 * count + 3) initialRead
-            checkResult count (3 * count + 3) cachedRead
-            checkResult count (3 * count + 4) third
-            readBody cachedRead `shouldBe` readBody initialRead
-            exchanges <- readExchanges session
-            case exchanges of
-                (3, [Nothing, Just old, Just same]) -> old `shouldBe` same
-                other -> expectationFailure ("unexpected state exchanges: " <> show other)
-    it "charges a 304 for one cached record and the conditional exchange" $ do
-        fixture <- makeReadFixture 1000
-        retained <- readRetainedCharge fixture
-        session <- newReadSession fixture
-        coldCharge <- validateManagedProject session
-        warmCharge <- validateManagedProject session
-        advanceReadSession session
-        changedCharge <- validateManagedProject session
-        let target = fixtureTarget fixture
-            key = fullKey (Source (show target)) mirrorPackage
-            entryWeight = mirrorRetentionWeight key (StateRevision target mirrorPackage "one") retained
-        warmCharge `shouldBe` roundUpToStep 1_048_576 (entryWeight + stateExchangeCharge)
-        coldCharge `shouldSatisfy` (> warmCharge)
-        changedCharge `shouldSatisfy` (> warmCharge)
+spec = aroundAll withPrepared $ do
+    describe "managed mirror project requests" $ do
+        it "1 versions use one exchange per request" $ \_ -> makeReadFixture 1 >>= checkExchanges 1
+        it "1000 versions use one exchange per request" $ \prepared -> loadReadFixture (prepDirectory prepared) >>= checkExchanges 1000
+    it "charges a 304 for one cached record and the conditional exchange" checkConditionalCharge
     for_ [Cold, Warm, Replacement] $ \mode ->
-        it (show mode <> " retains transport, cached state, and output within their charges") $
-            withSystemTempDirectory "ecluse-mirror-read" $ \directory -> do
-                makeReadFixture 1000 >>= writeReadFixture directory
-                executable <- getExecutablePath
-                (status, output, errors) <- readProcessWithExitCode executable ["--mirror-read-probe", show mode, directory, "+RTS", "-T", "-N1", "-F1", "-A128k", "-RTS"] ""
-                unless (status == ExitSuccess) (expectationFailure (show status <> ": " <> errors))
-                measured <- expectRight (eitherDecodeStrict (encodeUtf8 (toText output)))
-                putStrLn ("managed-mirror-residency " <> output)
-                checkMeasurement measured
+        it (show mode <> " retains transport, cached state, and output within their charges") (checkPhase mode)
+
+-- Write the fixture once for every child, and decode both revisions once under default RTS flags.
+withPrepared :: (Prepared -> IO ()) -> IO ()
+withPrepared action = withSystemTempDirectory "ecluse-mirror-read" $ \directory -> do
+    fixture <- makeReadFixture 1000
+    writeReadFixture directory fixture
+    oldCharge <- readRetainedCharge fixture
+    newCharge <- readRetainedCharge fixture{fixtureOld = fixtureNew fixture}
+    action (Prepared directory (BS.length (fixtureOld fixture)) (BS.length (fixtureNew fixture)) (BS.length (fixturePrivate fixture)) oldCharge newCharge)
+
+checkExchanges :: Int -> ReadFixture -> Expectation
+checkExchanges count fixture = do
+    session <- newReadSession fixture
+    initialRead <- readManagedProject session
+    cachedRead <- readManagedProject session
+    advanceReadSession session
+    third <- readManagedProject session
+    checkResult count (3 * count + 3) initialRead
+    checkResult count (3 * count + 3) cachedRead
+    checkResult count (3 * count + 4) third
+    readBody cachedRead `shouldBe` readBody initialRead
+    exchanges <- readExchanges session
+    case exchanges of
+        (3, [Nothing, Just old, Just same]) -> old `shouldBe` same
+        other -> expectationFailure ("unexpected state exchanges: " <> show other)
+
+checkConditionalCharge :: Prepared -> Expectation
+checkConditionalCharge prepared = do
+    fixture <- loadReadFixture (prepDirectory prepared)
+    session <- newReadSession fixture
+    coldCharge <- validateManagedProject session
+    warmCharge <- validateManagedProject session
+    advanceReadSession session
+    changedCharge <- validateManagedProject session
+    let target = fixtureTarget fixture
+        key = fullKey (Source (show target)) mirrorPackage
+        entryWeight = mirrorRetentionWeight key (StateRevision target mirrorPackage "one") (prepOldCharge prepared)
+    warmCharge `shouldBe` roundUpToStep 1_048_576 (entryWeight + stateExchangeCharge)
+    coldCharge `shouldSatisfy` (> warmCharge)
+    changedCharge `shouldSatisfy` (> warmCharge)
+
+checkPhase :: Phase -> Prepared -> Expectation
+checkPhase mode prepared = do
+    executable <- getExecutablePath
+    (status, output, errors) <- readProcessWithExitCode executable ["--mirror-read-probe", show mode, prepDirectory prepared, "+RTS", "-T", "-N1", "-F1", "-A128k", "-RTS"] ""
+    unless (status == ExitSuccess) (expectationFailure (show status <> ": " <> errors))
+    measured <- measurement prepared mode <$> expectRight (eitherDecodeStrict (encodeUtf8 (toText output)))
+    putStrLn ("managed-mirror-residency " <> decodeUtf8 (encode measured))
+    checkMeasurement measured
 
 checkResult :: Int -> Int -> ReadResult -> Expectation
 checkResult versions files result = do
@@ -129,6 +165,31 @@ checkResult versions files result = do
     length [() | fields <- entries, KeyMap.lookup "requires-python" fields == Just (String ">=3.8")] `shouldBe` files - 3
     length [() | fields <- entries, KeyMap.lookup "upload-time" fields == Just (String "2020-01-01T00:00:00Z")] `shouldBe` files - 3
     length [() | fields <- entries, KeyMap.lookup "requires-python" fields == Just (String ">=3.9")] `shouldBe` 3
+
+measurement :: Prepared -> Phase -> Observed -> Measurement
+measurement prepared mode observed =
+    Measurement
+        { phase = show mode
+        , inputBytes = prepNativeBytes prepared + primedWire + requestWire
+        , baseline = obsBaseline observed
+        , beforeRequest = obsReady observed
+        , held = obsHeld observed
+        , released = obsReleased observed
+        , outputBytes = obsOutputBytes observed
+        , admissionBytes = obsAdmissionBytes observed
+        , nativeCharge = roundUpToStep 1_048_576 (scaleCharge (cfFullReadPermille pypiChargeFactors) (prepNativeBytes prepared))
+        , oldRetainedBudget = if mode == Cold then 0 else prepOldCharge prepared
+        , newRetainedBudget = if mode == Replacement then prepNewCharge prepared else prepOldCharge prepared
+        , requestAllocated = allocated (obsHeld observed) (obsReady observed)
+        , preparationAllocated = allocated (obsReady observed) (obsBaseline observed)
+        }
+  where
+    primedWire = if mode == Cold then 0 else prepOldBytes prepared
+    requestWire = case mode of
+        Cold -> prepOldBytes prepared
+        Warm -> 0
+        Replacement -> prepNewBytes prepared
+    allocated high low = toInteger (sampleAllocated high) - toInteger (sampleAllocated low)
 
 checkMeasurement :: Measurement -> Expectation
 checkMeasurement measured = do
@@ -155,30 +216,7 @@ probeMain rawPhase directory = do
     baselineSample <- sample
     (ready, result, size, paid) <- measure mode directory
     finalSample <- sample
-    fixture <- loadReadFixture directory
-    oldWeight <- readRetainedCharge fixture
-    newWeight <- readRetainedCharge fixture{fixtureOld = fixtureNew fixture}
-    nativeSize <- fromInteger <$> getFileSize (directory </> "private.json")
-    let oldBudget = if mode == Cold then 0 else oldWeight
-        primedWire = if mode == Cold then 0 else BS.length (fixtureOld fixture)
-        requestWire = if mode == Warm then 0 else BS.length (if mode == Cold then fixtureOld fixture else fixtureNew fixture)
-        wire = nativeSize + primedWire + requestWire
-        allocated high low = toInteger (sampleAllocated high) - toInteger (sampleAllocated low)
-    LBS.putStr . encode $
-        Measurement
-            (show mode)
-            wire
-            baselineSample
-            ready
-            result
-            finalSample
-            size
-            paid
-            (roundUpToStep 1_048_576 (scaleCharge (cfFullReadPermille pypiChargeFactors) nativeSize))
-            oldBudget
-            (if mode == Replacement then newWeight else oldWeight)
-            (allocated result ready)
-            (allocated ready baselineSample)
+    LBS.putStr (encode (Observed baselineSample ready result finalSample size paid))
 
 measure :: Phase -> FilePath -> IO (Sample, Sample, Int, Int)
 measure mode directory = do
