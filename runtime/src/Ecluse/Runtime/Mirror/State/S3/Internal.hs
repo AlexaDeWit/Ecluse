@@ -27,7 +27,6 @@ import UnliftIO (withRunInIO)
 import UnliftIO.Exception (catch, throwIO)
 
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), TransportFault, transportFault)
-import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Mirror.State.Codec (saturatingStateCharge, stateExchangeCharge)
 import Ecluse.Core.Mirror.State.Internal (StateCharge)
 import Ecluse.Core.Registry.Exchange (accumulatingChargeFrom, chargedRead)
@@ -36,7 +35,7 @@ import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (..), bounded
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
 import Ecluse.Core.Stream (boundBytes)
 import Ecluse.Runtime.Aws.Env (singleAttemptEnv)
-import Ecluse.Runtime.Aws.Fault (classifyAwsTransport, serviceStatus)
+import Ecluse.Runtime.Aws.Fault (classifyAwsTransport, foldTransportEscapes, serviceStatus)
 import Ecluse.Runtime.Aws.S3.Conditional (ConditionalPut (..), WritePrecondition (..), absenceListing, isWriteConflict, listingProvesAbsence)
 
 -- | A 304 carries only the exact revision supplied to this exchange.
@@ -205,8 +204,7 @@ serviceCode _ = Nothing
 
 boundedCall :: IO (Either ObjectFault a) -> IO (Either ObjectFault a)
 boundedCall action =
-    action
-        `catch` (\(ObjectLimit cap) -> pure (Left (ObjectTooLarge cap)))
-        `catch` (\ObjectProgress -> pure (Left (ObjectTransport (transportFault TransportTimeout "the mirror state exchange fell below its progress floor"))))
-        `catch` (\(err :: AWS.Error) -> pure (Left (ObjectTransport (classifyAwsTransport err))))
-        `catch` (\(err :: HTTP.HttpException) -> pure (Left (ObjectTransport (classifyTransport err))))
+    foldTransportEscapes ObjectTransport $
+        action
+            `catch` (\(ObjectLimit cap) -> pure (Left (ObjectTooLarge cap)))
+            `catch` (\ObjectProgress -> pure (Left (ObjectTransport (transportFault TransportTimeout "the mirror state exchange fell below its progress floor"))))

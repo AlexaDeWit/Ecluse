@@ -12,6 +12,7 @@ module Ecluse.Runtime.Aws.Fault (
     -- * Faults as values
     classifyAwsTransport,
     sendClassified,
+    foldTransportEscapes,
     serviceStatus,
 
     -- * Faults raised past the adapter
@@ -39,7 +40,7 @@ import Lens.Micro ((^.))
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types.Status (statusCode)
 import UnliftIO (MonadUnliftIO)
-import UnliftIO.Exception (throwIO, tryJust)
+import UnliftIO.Exception (catch, throwIO, tryJust)
 
 import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportCause (TransportProtocol), TransportFault, boundedDetail, renderHttpFault, transportFault)
 import Ecluse.Core.Fault.Http (classifyTransport, displayFaultT, hostPortLabel, httpFault)
@@ -59,6 +60,13 @@ sendClassified ::
     a ->
     IO (Either e (AWS.AWSResponse a))
 sendClassified classify env = fmap (first classify) . runResourceT . AWS.sendEither env
+
+-- | Fold AWS and bare body-read transport exceptions into values. Other exceptions propagate.
+foldTransportEscapes :: (TransportFault -> fault) -> IO (Either fault a) -> IO (Either fault a)
+foldTransportEscapes inject action =
+    action
+        `catch` (\(err :: AWS.Error) -> pure (Left (inject (classifyAwsTransport err))))
+        `catch` (\(err :: HTTP.HttpException) -> pure (Left (inject (classifyTransport err))))
 
 -- | The HTTP status a service answered with, or 'Nothing' when the request never got an answer.
 serviceStatus :: AWS.Error -> Maybe Int

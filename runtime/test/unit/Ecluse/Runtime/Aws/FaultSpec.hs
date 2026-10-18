@@ -7,13 +7,14 @@ module Ecluse.Runtime.Aws.FaultSpec (spec) where
 
 import Amazonka qualified as AWS
 import Amazonka.Auth.Exception (AuthError (..))
+import Control.Exception (AsyncException (ThreadKilled))
 import Data.Text qualified as T
 import Network.HTTP.Client (HttpException)
 import Network.HTTP.Types.Status (status200, status404)
 import Test.Hspec
 import UnliftIO.Exception (throwIO, try)
 
-import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportFault (tfDetail))
+import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportCause (TransportUnreachable), TransportFault (tfCause, tfDetail))
 import Ecluse.Core.Fault.Http (displayFaultT)
 import Ecluse.Runtime.Aws.Fault (
     AwsAnswer (AwsAnswer),
@@ -23,6 +24,7 @@ import Ecluse.Runtime.Aws.Fault (
     AwsRequestFailed (AwsRequestFailed, arfFault),
     classifyAwsTransport,
     displayAwsFaultT,
+    foldTransportEscapes,
     retypeAmazonkaEscapes,
     retypeAwsFailure,
  )
@@ -49,6 +51,28 @@ spec = do
 
         it "details a decoder failure by its status, never the body it read or the decoder's message" $
             tfDetail (classifyAwsTransport undecodableAnswer) `shouldBe` "STS: HTTP 200, an answer that could not be decoded"
+
+    describe "foldTransportEscapes" $ do
+        it "folds service and decoder failures into the caller's value type" $ do
+            for_ [(plantedRefusal "STS" "AccessDenied" accessDenial, "STS: HTTP 403 AccessDenied (request req-1): " <> accessDenial), (undecodableAnswer, "STS: HTTP 200, an answer that could not be decoded")] $ \(err, expected) ->
+                (foldTransportEscapes tfDetail (throwIO err) :: IO (Either Text ()))
+                    `shouldReturn` Left expected
+
+        it "folds bare body failures and wrapped AWS transport failures alike" $ do
+            err <- refusedFetch =<< signedRequest
+            (foldTransportEscapes tfCause (throwIO err) :: IO (Either TransportCause ())) `shouldReturn` Left TransportUnreachable
+            (foldTransportEscapes tfCause (throwIO (AWS.TransportError err)) :: IO (Either TransportCause ())) `shouldReturn` Left TransportUnreachable
+
+        it "preserves returned values and domain refusals" $ do
+            foldTransportEscapes tfDetail (pure (Right (3 :: Int))) `shouldReturn` Right 3
+            (foldTransportEscapes tfDetail (pure (Left "domain refusal")) :: IO (Either Text ())) `shouldReturn` Left "domain refusal"
+
+        it "propagates filesystem, credential, unknown and asynchronous exceptions" $ do
+            let folded action = foldTransportEscapes tfDetail action :: IO (Either Text ())
+            folded (ioError (userError "filesystem failure")) `shouldThrow` anyIOException
+            folded (throwIO CredentialChainExhausted) `shouldThrow` isCredentialExhaustion
+            folded (throwIO (TestContractEscape "unknown failure")) `shouldThrow` (== TestContractEscape "unknown failure")
+            folded (throwIO ThreadKilled) `shouldThrow` (== ThreadKilled)
 
     describe "retypeAwsFailure" $ do
         it "raises a refused connection by its transport cause at the dialled host:port, never the request" $
@@ -126,3 +150,7 @@ spec = do
     detailOf code message = tfDetail (classifyAwsTransport (plantedRefusal "SQS" code message))
     signatureCode code = fromMaybe code (T.stripSuffix "Exception" code)
     accessDenial = "User: arn:aws:sts::123456789012:assumed-role/ecluse is not authorized to perform: sqs:ReceiveMessage on resource: arn:aws:sqs:us-east-1:123456789012:mirror"
+
+isCredentialExhaustion :: AuthError -> Bool
+isCredentialExhaustion CredentialChainExhausted = True
+isCredentialExhaustion _ = False

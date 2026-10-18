@@ -14,7 +14,6 @@ module Ecluse.Runtime.Cve.Sync.S3 (
 
 import Conduit (ConduitT, runResourceT, (.|))
 import Data.Conduit.Combinators qualified as C
-import Network.HTTP.Client (HttpException)
 import UnliftIO.Exception (catch, throwIO)
 
 import Amazonka qualified as AWS
@@ -23,10 +22,9 @@ import Amazonka.S3.Lens qualified as S3L
 import Lens.Micro ((^.))
 
 import Ecluse.Core.Cve.Types (DbEtag (..), OsvDbFetchFault (..))
-import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Stream (boundBytes)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
-import Ecluse.Runtime.Aws.Fault (classifyAwsTransport, serviceStatus)
+import Ecluse.Runtime.Aws.Fault (classifyAwsTransport, foldTransportEscapes, serviceStatus)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Cve.Sync.Step (CveFetch (..), FetchedObject (..))
 
@@ -77,13 +75,9 @@ s3Download awsEnv bucket key maxBytes dest = foldFetchEscapes . runResourceT $ d
     let fetched etag = FetchedObject{foEtag = dbEtag etag, foPushedAt = resp ^. S3L.getObjectResponse_lastModified}
     pure (maybe (Left OsvDbNoEtag) (Right . fetched) (resp ^. S3L.getObjectResponse_eTag))
 
--- The adapter boundary: fold the typed escapes into the value channel. amazonka leaves a failed body
--- read a bare 'HttpException'. Nothing else is caught, so a filesystem fault propagates as residue.
 foldFetchEscapes :: IO (Either OsvDbFetchFault FetchedObject) -> IO (Either OsvDbFetchFault FetchedObject)
 foldFetchEscapes act =
-    act
-        `catch` (\(err :: AWS.Error) -> pure (Left (OsvDbTransport (classifyAwsTransport err))))
-        `catch` (\(err :: HttpException) -> pure (Left (OsvDbTransport (classifyTransport err))))
+    foldTransportEscapes OsvDbTransport act
         `catch` (\(OsvDbCapExceeded n) -> pure (Left (OsvDbTooLarge n)))
 
 dbEtag :: S3.ETag -> DbEtag
