@@ -45,24 +45,25 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (..))
 import Ecluse.Core.Text (urlFilename)
 
-{- | Run an ecosystem's plain-'Value' assembly across its own cached-document boundary.
+{- | Run ecosystem assembly across its cached-document boundary.
 A source or base that another ecosystem injected contributes nothing.
 -}
 assembleAcross ::
-    (Value -> CachedDoc, CachedDoc -> Maybe Value) ->
-    (Text -> Map SourceId (Snapshot Value) -> MergePlan -> Value -> Value) ->
+    (source -> CachedDoc, CachedDoc -> Maybe source) ->
+    source ->
+    (Text -> Map SourceId (Snapshot source) -> MergePlan -> source -> source) ->
     Text ->
     Map SourceId (Snapshot CachedDoc) ->
     MergePlan ->
     Maybe CachedDoc ->
     CachedDoc
-assembleAcross (inject, project) assemble mountBase bySource plan base =
+assembleAcross (inject, project) empty assemble mountBase bySource plan base =
     inject
         ( assemble
             mountBase
             (Map.mapMaybe (traverse project) bySource)
             plan
-            (fromMaybe (Object mempty) (project =<< base))
+            (fromMaybe empty (project =<< base))
         )
 
 -- | Encode a served document to its compact wire bytes, an empty object for a foreign one.
