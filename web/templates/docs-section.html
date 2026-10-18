@@ -1,16 +1,11 @@
 {% extends "base.html" %}
 {% import "macros/docs.html" as docs %}
-
 {% block title %}{{ section.title }} | Écluse{% endblock title %}
 {% block description %}{{ section.description }}{% endblock description %}
-
 {% block content %}
-<div class="docs-layout">
-  {{ docs::sidebar(current=section.permalink) }}
-  <main class="docs-main" id="content">
-    <h1>{{ section.title }}</h1>
-    {{ docs::toc(headings=section.toc) }}
-    {{ section.content | safe }}
-  </main>
+<div class="docs-shell">
+  {{ docs::sidebar(current=section.permalink, group="Set up") }}
+  <main class="doc" id="content" data-pagefind-body><h1>{{ section.title }}</h1><p class="doc-deck">{{ section.description }}</p><div class="doc-content">{{ section.content | safe }}</div></main>
+  {{ docs::outline(headings=section.toc) }}
 </div>
 {% endblock content %}

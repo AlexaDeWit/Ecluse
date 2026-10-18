@@ -1,140 +1,92 @@
 # Why Écluse?
 
-Écluse is a supply-chain policy proxy. It holds fresh public packages behind a short
-quarantine, under a deny-by-default policy, at a single chokepoint that CI and
-developers both pass through. This document is the reasoning behind that design. The *how*
-is in the [architecture docs](docs/architecture.md), and
-[`ALTERNATIVES.md`](ALTERNATIVES.md) maps the other tools in this space.
+Écluse gives a platform, DevOps, or IT team one package policy across an organisation's
+developer machines and CI. It sits in front of public registries and works with the package
+managers and private repositories the organisation already uses.
 
-## The blast radius of a bad publish
+The [setup guide](https://ecluse-proxy.com/docs/setup/) covers deployment.
+The [architecture documents](docs/architecture.md) explain the implementation choices.
+[Alternatives](ALTERNATIVES.md) compares other places to apply package policy.
 
-A modern dependency graph is huge, and almost all of it is other people's code. That's fine
-until an attacker hijacks or maliciously republishes one popular package. A single bad
-version then reaches a vast number of builds before anyone notices.
+<a id="the-blast-radius-of-a-bad-publish"></a>
+## Reduce exposure to new public releases
 
-The threat has automated on both sides. Self-propagating campaigns harvest credentials from
-each machine they land on and republish through any token they find, which compresses
-propagation from weeks to hours. On the consuming side, automated and AI-assisted
-development installs at machine speed. That removes the human "that doesn't look right"
-pause that used to catch some of this by accident.
+A compromised public package can reach many builds before maintainers or registry operators
+remove it. Écluse's default minimum age holds a new public version for seven days.
+That gives the ecosystem time to discover a bad release before your builds adopt it.
 
-The danger is time-bounded. A malicious version is dangerous only between publication and
-the moment the ecosystem notices and pulls it. The ecosystem catches most of them fast, and
-the harm falls on whoever installed one inside that window.
+<a id="the-bet-resilience-not-detection"></a>
+Age is not a malware verdict. A harmful version can remain available beyond the waiting period.
+Advisories, explicit denies, and other configured rules provide additional decisions.
+Qualifying exact security fixes can skip the wait when the advisory evidence supports that exception.
 
-## The bet: resilience, not detection
+The delay prevents exposure to a version removed before it becomes eligible only when the
+request follows that policy. Exceptions, trusted private copies, and routes around the proxy
+must be considered separately. An incident still requires investigation of the deployment and
+its actual requests.
 
-You can try to *detect* malicious packages: scan, score, analyse behaviour. That's a hard,
-never-certain target, and "we think it's clean" isn't the same as knowing.
+<a id="the-bar-a-chokepoint-you-cant-step-around"></a>
+## Enforce the policy at the network
 
-Écluse makes a narrower bet: don't adjudicate whether a version is malicious, just arrange
-for nothing to reach a build *inside its dangerous window*. The plainest form is a
-**quarantine**. A public version stays ineligible until it ages in public long
-enough that the ecosystem very likely already found and pulled a malicious one. The premise
-rests on a real regularity: analyses of past attacks put most exploitation windows under a
-week. The name comes from that: *écluse* is French for a canal lock, the controlled passage
-every dependency clears before it goes forward. The goal is resilience: shrinking the blast
-radius of a bad publish, not detecting malware.
+Package-manager cooldowns help when you can keep client configuration consistent.
+An organisation can also have many toolchains, project-level settings, containers, and CI jobs.
+Those clients can use different settings even on the same machine.
 
-The payoff is operational. When the ecosystem discloses a malicious package, you shouldn't
-need to convene a response, comb logs, and trace egress to learn whether it reached you. If
-your quarantine window is longer than the package's lifetime (published to pulled), Écluse
-never served it to you. The question becomes arithmetic, not forensics. The guarantee is
-exactly as strong as that one comparison.
+Écluse moves the common policy into a service the operating team controls.
+Clients use its registry address. Network rules prevent protected builds from fetching packages
+directly from public registry and artifact hosts.
 
-## The bar: a chokepoint you can't step around
+The proxy cannot enforce that network boundary itself.
+[Client egress restrictions](https://ecluse-proxy.com/docs/deployment/#locking-down-ci-egress)
+are part of the deployment, alongside access control on the proxy's own endpoints.
 
-The guarantee has a precondition: enforcement has to be total. It only holds if nothing can
-fetch a package by another route, and that rules out most of the obvious answers.
+<a id="why-you-cant-naively-build-it-either"></a>
+## Serve admitted packages before mirroring finishes
 
-The ecosystem does offer freshness controls at the package-manager level: minimum-release-age
-settings, and resolver flags that refuse versions newer than a date. They're useful but
-advisory and per-project. Shipping a "secure" configuration to every machine doesn't hold
-either. Version managers, Nix shells, containers, and committed project-local config each
-bring their own toolchain and ignore what you set globally. The one layer you can centrally
-configure is the layer projects are built to override.
+A complete mirror of every eligible public package can require substantial storage and transfer.
+Predicting every package a developer will request is another operational burden.
 
-So enforcement has to live *below* the toolchain, at the one place every install crosses: the
-network. A single proxy that all package traffic resolves through, with direct egress to the
-public registries closed off, can't be side-stepped. Whatever `npm` or `pnpm` a project
-conjures up, its fetches still cross the network, and only the chokepoint answers. That turns
-"please install safely" into "you can only install through here". The egress lockdown is an
-operator concern: see
-[Locking down CI egress](https://ecluse-proxy.com/docs/deployment/#locking-down-ci-egress).
+Écluse instead copies admitted versions on demand. A public artifact request passes policy,
+streams to the client, and can enqueue background mirroring. The worker rechecks current
+policy before copying.
 
-## Why you can't naively build it either
+The next request is not guaranteed to find a completed mirror. PyPI copies can include multiple
+wheels, a source distribution, and metadata companions. Écluse requires a complete managed
+version or a validated public alternative before it serves that view.
 
-Self-hosting doesn't make this simple. The naive constructions all fail, and their failures
-map the design:
+See the rendered [download](https://ecluse-proxy.com/docs/threat-model/#artifact-downloads)
+and [mirror completion](https://ecluse-proxy.com/docs/threat-model/#mirror-writes-and-completion)
+diagrams for those paths.
 
-1. **Add a delay to the managed registry.** It has no such control.
-2. **Put a proxy in front and let the registry pull through it.** The pull caches the fetched
-   version into your trusted store. An unvetted version lands in the clean registry before
-   anything can stop it.
-3. **Invert it: a worker that pushes only approved packages in.** Now you must predict every
-   package a developer might want, an unbounded complexity. Mirroring the whole safe subset
-   instead is an unbounded bill.
+<a id="the-design-thats-left-three-registries"></a>
+## Keep private trust and public admission separate
 
-A simple mirror fails on two more constraints. First, **internal packages can't wait**: your
-own packages have to flow without quarantine, or the safeguard becomes a tax nobody
-tolerates. So the policy has to be source-aware. Second, **a simple mirror forces a
-lose-lose**:
+Private packages do not need the public release-age policy. They use a trusted read path with
+caller authorisation and applicable integrity checks. Declared first-party names never fall back
+to a public registry.
 
-```mermaid
-flowchart TD
-    R(["request for a public package"]) --> N{"a simple mirror must choose"}
-    N -->|"serve only what's mirrored"| A1["miss until replication catches up"]
-    A1 --> AB(["a legitimate package is 404'd"])
-    N -->|"serve eagerly, cull on detection"| B1["an unvetted version is served"]
-    B1 --> BB(["malware reaches the build,<br/>pruned only afterwards"])
-```
+For a deployment with mirroring and internal publication, the recommended topology separates:
 
-Serve only what's replicated and a legitimate package 404s until the mirror catches up. Serve
-eagerly and an unvetted version reaches the build, culled only afterwards. Neither is
-acceptable.
+- The first-party repository, which receives the organisation's publications.
+- The mirror repository, which receives admitted public versions.
+- The private read repository, which combines those two sources for clients.
 
-### The design that's left: three registries
+The private read repository must not have a direct or transitive public connection.
+Otherwise ungated public packages can enter through a trusted source.
+The [registry topology](https://ecluse-proxy.com/docs/threat-model/#registry-topology-and-trust)
+shows the relationships and trust boundaries.
 
-What survives is a model of three **roles**[^publish-target], not necessarily three servers.
-A **private upstream** is the vetted store developers pull from. Écluse consults a
-**public upstream** but never trusts it blindly. A **mirror target** holds approved
-packages, replicated there for fast serving later.
+A trusted copy does not repeat public admission on every read. Removing it requires a named
+revocation deny and authorised cleanup of every eligible serving copy.
+The cleanup service requires consent and applies a deletion cap.
+It does not recall installed packages or client caches.
 
-```mermaid
-flowchart TD
-    R(["install request"]) --> P{"in the private upstream?"}
-    P -->|"hit, already vetted"| HIT(["serve as-is"])
-    P -->|"miss"| PUB["consult the public upstream"]
-    PUB --> POL{"clears policy?<br/>deny-by-default + quarantine"}
-    POL -->|"too fresh / known-bad"| DENY(["denied, never served"])
-    POL -->|"aged & clean"| SERVE(["serve now"])
-    SERVE --> MIR["enqueue demand-driven mirror"]
-    MIR -.->|"next request"| HIT
-```
+<a id="what-ecluse-is-not"></a>
+## Keep the responsibilities explicit
 
-- A hit in the private upstream is already vetted, so Écluse serves it as-is.
-- On a miss, Écluse consults the public upstream and serves the version *only if it clears
-  the policy, quarantine included*. A sufficiently-aged package never 404s, and Écluse
-  denies a too-fresh or known-bad one. "No false 404" and "no serving fresh malware" both
-  hold at once.
-- Serving on a miss enqueues demand-driven replication. The worker copies only what's used,
-  with no prediction and no wholesale mirror, so the next request is a hot hit.
-- Internal packages take the trusted path and are never gated.
-- A version later found malicious is pruned from the mirror and the private upstream.
+Écluse applies package policy. Registries store archives and control private package access.
+The operating platform controls network reachability and service identities.
+Advisory sources provide evidence, with freshness and availability limits that affect admission.
 
-Écluse delegates storage to the registry you already run, so it composes in front of your
-existing setup instead of replacing it. The [architecture docs](docs/architecture.md) cover
-the *how*: packument merging, the rules engine, mirroring, and credentials.
-
-## What Écluse is not
-
-- **Not a malware detector.** It reduces blast radius. It doesn't recognise malice.
-- **Not a registry.** It hosts nothing. It delegates storage to the backend you choose.
-- **Not a wall.** Legitimate dependencies pass, on a controlled delay, under an explicit
-  policy.
-- **Not finished.** It's early: pre-MVP, under active development, not yet proven in the
-  world. I'm confident in the strategy. The software hasn't earned that confidence yet.
-- **Not novel, or the only option.** Several people have independently reached the
-  freshness-quarantine idea. [`ALTERNATIVES.md`](ALTERNATIVES.md) maps them.
-
-[^publish-target]: The architecture carries a fourth registry role, a *publication target* for first-party `npm publish`, the write counterpart to the private read. It's an opt-in convenience for internal publishing, not part of the resilience argument. See [Registry Model → Publishing first-party packages](docs/architecture/registry-model.md#publishing-first-party-packages-the-publication-target).
+Écluse does not inspect package code to identify malware. Its supported assumptions and residual
+risks belong to the [rendered threat model](https://ecluse-proxy.com/docs/threat-model/).

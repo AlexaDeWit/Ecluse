@@ -1,47 +1,55 @@
 <!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{% block title %}{{ config.title }}{% endblock title %}</title>
-    <meta name="description" content="{% block description %}{{ config.description }}{% endblock description %}" />
-    <link rel="canonical" href="{% block canonical %}{{ current_url | default(value=config.base_url ~ '/') | safe }}{% endblock canonical %}" />
-    <link rel="icon" href="{{ get_url(path='favicon-32.png') }}" sizes="32x32" />
-    <link rel="stylesheet" href="{{ get_url(path='style.css') }}" />
-    <link rel="stylesheet" href="{{ get_url(path='pagefind/pagefind-ui.css') }}" />
-    {% block head %}{% endblock head %}
-  </head>
-  <body>
-    <a class="skip-link" href="#content" data-pagefind-ignore>Skip to content</a>
-    <header class="site-header" data-pagefind-ignore>
-      <div class="header-shell">
-        <a class="brand" href="{{ get_url(path='@/_index.md') }}">
-          <img src="{{ get_url(path='logo.svg') }}" alt="" width="28" height="28" />
-          <span>Écluse</span>
-        </a>
-        <nav class="site-nav" aria-label="Site">
-          <a href="{{ get_url(path='@/_index.md') }}">Home</a>
-          <a href="{{ get_url(path='@/docs/_index.md') }}">Docs</a>
-          <a href="{{ get_url(path='@/docs/threat-model.md') }}">Threat model</a>
-          <a href="{{ get_url(path='@/api/_index.md') }}">API</a>
-          <a href="{{ config.extra.source_url | safe }}">GitHub</a>
-        </nav>
-        <div class="site-search" id="search" hidden></div>
+<html lang="en-CA">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}{{ config.title }}{% endblock title %}</title>
+  <meta name="description" content="{% block description %}{{ config.description }}{% endblock description %}" />
+  <link rel="canonical" href="{{ current_url | default(value=config.base_url ~ '/') | safe }}" />
+  <link rel="icon" href="{{ get_url(path='favicon-32.png') }}" sizes="32x32" />
+  <script>
+    try {
+      var theme = localStorage.getItem("ecluse-theme") || "system";
+      document.documentElement.dataset.theme = theme === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : theme;
+    } catch (_) {
+      document.documentElement.dataset.theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    }
+  </script>
+  <link rel="stylesheet" href="{{ get_url(path='style.css') }}" />
+  <link rel="stylesheet" href="{{ get_url(path='pagefind/pagefind-ui.css') }}" />
+  {% block head %}{% endblock head %}
+</head>
+<body>
+  <a class="skip" href="#content" data-pagefind-ignore>Skip to content</a>
+  <header class="header" data-pagefind-ignore>
+    <div class="header-inner">
+      <a class="brand" href="{{ get_url(path='@/_index.md') }}" aria-label="Écluse home">
+        <img src="{{ get_url(path='logo.svg') }}" alt="" width="28" height="28" /><span>Écluse</span>
+      </a>
+      <nav id="site-nav" class="global-nav" aria-label="Main navigation">
+        <a href="{{ get_url(path='@/docs/understand.md') }}">Why Écluse?</a>
+        <a href="{{ get_url(path='@/docs/setup.md') }}">Set up</a>
+        <a href="{{ get_url(path='@/docs/behaviour.md') }}">Reference</a>
+        <a href="{{ config.extra.source_url | safe }}">GitHub ↗</a>
+      </nav>
+      <div class="header-tools">
+        <button class="search-launch" type="button" aria-haspopup="dialog" hidden><span>Search docs</span><kbd>Ctrl K</kbd></button>
+        <label class="theme-label"><span class="sr-only">Colour theme</span><select id="theme" aria-label="Colour theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+        <button class="mobile-menu" type="button" hidden aria-expanded="false" aria-controls="site-nav">Menu</button>
       </div>
-    </header>
-    {% block content %}{% endblock content %}
-    <footer class="site-footer" data-pagefind-ignore>
-      <div class="footer-shell">
-        <p>
-          <a href="{{ config.extra.source_url | safe }}">Source repository</a> &middot;
-          <a href="{{ get_url(path='@/api/_index.md') }}">API reference</a> &middot;
-          <a href="{{ get_url(path='@/docs/threat-model.md') }}">Threat model</a>
-        </p>
-        <p>Écluse is free and open source &middot; under active development.</p>
-        <p class="made-in">Proudly built in Québec&nbsp;⚜</p>
-      </div>
-    </footer>
-    <script src="{{ get_url(path='pagefind/pagefind-ui.js') }}"></script>
-    <script src="{{ get_url(path='site.js') }}"></script>
-  </body>
+    </div>
+  </header>
+  {% block content %}{% endblock content %}
+  <footer class="footer" data-pagefind-ignore>
+    <span>Écluse · Open source · Built in Québec</span>
+    <span><a href="{{ config.extra.source_url | safe }}">Source repository</a> · <a href="{{ get_url(path='@/docs/threat-model.md') }}">Threat model</a> · <a href="{{ get_url(path='@/api/_index.md') }}">API reference</a></span>
+  </footer>
+  <dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title" data-pagefind-ignore>
+    <h2 id="search-title" class="sr-only">Search documentation</h2>
+    <button class="dialog-close" id="close-search" type="button" aria-label="Close search">Close</button>
+    <div id="search"></div>
+  </dialog>
+  <script src="{{ get_url(path='pagefind/pagefind-ui.js') }}"></script>
+  <script src="{{ get_url(path='site.js') }}"></script>
+</body>
 </html>

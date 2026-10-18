@@ -1,16 +1,20 @@
 {% extends "base.html" %}
 {% import "macros/docs.html" as docs %}
-
 {% block title %}{{ page.title }} | Écluse{% endblock title %}
 {% block description %}{{ page.description }}{% endblock description %}
-
 {% block content %}
-<div class="docs-layout">
-  {{ docs::sidebar(current=page.permalink) }}
-  <main class="docs-main" id="content">
+{% set group = page.extra.group | default(value="Full technical reference") %}
+<div class="docs-shell">
+  {{ docs::sidebar(current=page.permalink, group=group) }}
+  <main class="doc" id="content" data-pagefind-body>
+    <div class="breadcrumb" data-pagefind-ignore><a href="{{ get_url(path='@/docs/_index.md') }}">Docs</a> / {{ group }}</div>
     <h1>{{ page.title }}</h1>
-    {{ docs::toc(headings=page.toc) }}
-    {{ page.content | safe }}
+    {% if page.extra.group is defined %}<p class="doc-deck">{{ page.description }}</p>{% endif %}
+    {% if page.extra.kind is defined %}<div class="doc-meta" data-pagefind-ignore><span>{{ page.extra.kind }}</span><span>{{ page.reading_time }} min read</span></div>{% endif %}
+    {% if page.slug in ["plan-deployment", "configure", "connect", "verify"] %}{{ docs::progress(current=page.permalink) }}{% endif %}
+    <div class="doc-content">{{ page.content | safe }}</div>
+    {% if page.extra.reference is defined %}<div class="doc-footer" data-pagefind-ignore><a href="{{ page.extra.reference | safe }}">Full reference</a></div>{% endif %}
   </main>
+  {{ docs::outline(headings=page.toc) }}
 </div>
 {% endblock content %}

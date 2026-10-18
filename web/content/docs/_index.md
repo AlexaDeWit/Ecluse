@@ -1,40 +1,25 @@
 +++
 title = "Documentation"
-description = "Deploy, configure, and operate Écluse, and read the threat model and the registry protocol it speaks."
+description = "Understand Écluse, deploy it for your organisation, or investigate its detailed behaviour."
 sort_by = "weight"
 template = "docs-section.html"
 page_template = "docs-page.html"
 +++
 
-This section is the operator manual. It reads in the order below, and each page also
-stands alone.
+{{ task_link(path="@/docs/understand.md", title="Understand Écluse", description="What it controls, where it fits, and what your platform team provides.") }}
 
-**New to Écluse?** [What Écluse is](@/docs/how-it-works.md) covers the model on one page:
-the quarantine, the four registry roles, and the deny-by-default policy.
+{{ task_link(path="@/docs/setup.md", title="Set up Écluse", description="Choose a deployment, package its configuration, connect clients, and verify the result.") }}
 
-**Trying it out?** The [Quick start](@/docs/quick-start.md) puts a serve-only gate in front
-of real installs, with no mirror and no cloud account.
+{{ task_link(path="@/docs/behaviour.md", title="Look up detailed behaviour", description="Policy decisions, advisory outages, private reads, mirror completion, and revocation.") }}
 
-**Taking it to production?** Read [Deploying Écluse](@/docs/deployment.md) for the topology
-and the network fences, [Configuring Écluse](@/docs/configuration.md) for the layers,
-secrets, and rule policy, and [Operating Écluse](@/docs/operations.md) for the probes, logs,
-and sizing. [Running the Dredger](@/docs/dredger.md) covers the one role that deletes.
+## Operate an existing deployment
 
-**Looking something up?** [Protocol support](@/docs/protocol-support.md) says exactly what
-the server speaks, and the [Threat model](@/docs/threat-model.md) records what Écluse
-defends against and what it assumes of your deployment.
+{{ task_link(path="@/docs/install-failed.md", title="Investigate a failed install", description="Trace a report from a developer or CI job to the request and its result.") }}
 
-If you are reading or extending the code instead, the [API reference](@/api/_index.md)
-holds the Haddock for each library.
+{{ task_link(path="@/docs/operate.md", title="Operate and upgrade", description="Monitor background work and prepare changes to images, policies, and data formats.") }}
 
-## Design documents on GitHub
+## Security and contributor references
 
-The pages above say how to run Écluse. The design documents in the repository carry the
-_why_, and each link below leaves the site for GitHub:
-
-- [Architecture overview](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture.md)
-- [Configuration and authentication](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/configuration.md)
-- [Security posture](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/security.md)
-- [Rules engine](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/rules-engine.md)
-- [Multi-ecosystem hosting and URL rewriting](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/web-layer.md#web-layer)
-- [Release and supply-chain operations](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/release-supply-chain.md)
+The [rendered threat model](@/docs/threat-model.md) holds the system diagrams, controls, assumptions, and accepted risks.
+The [architecture documents](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture.md) explain design decisions.
+The [API reference](@/api/_index.md) documents contributor interfaces.
