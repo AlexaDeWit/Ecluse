@@ -23,6 +23,7 @@ rolloutScenarios fixture@RolloutFixture{..} stores@StoreOps{..} clients@ClientOp
         let target = packageName rolloutTarget
             version = packageVersion rolloutTarget
             unaffected = packageName rolloutUnaffected
+            denied = IdentityPolicy [target, rolloutFirstPartyName <> "@" <> rolloutFirstPartyVersion]
         withServingRole plane queueUrl PermissivePolicy $ \old -> do
             for_ [target, unaffected] $ \name -> void (clientInstall old name Nothing >>= shouldSucceed)
             void $ clientPublish old rolloutFirstPartyName rolloutFirstPartyVersion >>= shouldSucceed
@@ -30,25 +31,27 @@ rolloutScenarios fixture@RolloutFixture{..} stores@StoreOps{..} clients@ClientOp
             storeVersions old target `shouldReturn` []
         withServingRole plane queueUrl (IdentityPolicy [target]) $ \strict -> do
             refusedNext clients strict target version
-            withWorkerRole plane queueUrl $ \worker ->
-                for_ [target <> "@" <> version, unaffected <> "@" <> packageVersion rolloutUnaffected] (\release -> awaitPublished worker release `shouldReturn` True)
+            -- One worker spans the sweep. The emulator hands the next job to a stopped worker's
+            -- pending long poll, so a fresh worker would wait out the visibility timeout.
+            withWorkerRole plane queueUrl $ \worker -> do
+                outsideSweeps plane $ do
+                    for_ [target <> "@" <> version, unaffected <> "@" <> packageVersion rolloutUnaffected] (\release -> awaitPublished worker release `shouldReturn` True)
+                    storeAwaitVersions strict target [version] `shouldReturn` [version]
+                    storeVersions cache target `shouldReturn` [version]
 
-            storeAwaitVersions strict target [version] `shouldReturn` [version]
-            storeVersions cache target `shouldReturn` [version]
-
-            clientWithProject strict $ \project -> do
-                void $ clientInstallIn project target (Just version) >>= shouldSucceed
-                clientInstalledVersion project target `shouldReturn` Just version
-            served <- clientArtifact strict target version
-            second LBS.length served `shouldSatisfy` servedBytes
-            let denied = IdentityPolicy [target, rolloutFirstPartyName <> "@" <> rolloutFirstPartyVersion]
-            swept <- runSweep plane Apply denied
-            sweepExit swept `shouldBe` ExitSuccess
-            inventoriesEmpty stores strict cache target
-            storeVersions strict unaffected `shouldReturn` [packageVersion rolloutUnaffected]
-            storeVersions strict rolloutFirstPartyName `shouldReturn` [rolloutFirstPartyVersion]
-            refusedNext clients strict target version
-            nothingQueued fixture clients roles plane queueUrl strict (target <> "@" <> version)
+                    clientWithProject strict $ \project -> do
+                        void $ clientInstallIn project target (Just version) >>= shouldSucceed
+                        clientInstalledVersion project target `shouldReturn` Just version
+                    served <- clientArtifact strict target version
+                    second LBS.length served `shouldSatisfy` servedBytes
+                swept <- runSweep plane Apply denied
+                sweepExit swept `shouldBe` ExitSuccess
+                outsideSweeps plane $ do
+                    inventoriesEmpty stores strict cache target
+                    storeVersions strict unaffected `shouldReturn` [packageVersion rolloutUnaffected]
+                    storeVersions strict rolloutFirstPartyName `shouldReturn` [rolloutFirstPartyVersion]
+                    refusedNext clients strict target version
+                    nothingQueued fixture clients roles worker strict (target <> "@" <> version)
             rescanned <- runSweep plane Apply denied
             sweepExit rescanned `shouldBe` ExitSuccess
             inventoriesEmpty stores strict cache target
@@ -92,12 +95,10 @@ rolloutScenarios fixture@RolloutFixture{..} stores@StoreOps{..} clients@ClientOp
             awaitWrites
             inventoriesEmpty stores proxy cache name
 
--- A permissive drain must publish the sentinel and never the refused release.
-nothingQueued :: RolloutFixture -> ClientOps store project -> RolloutOps plane store -> plane -> Text -> store -> Text -> IO ()
-nothingQueued RolloutFixture{..} ClientOps{..} RolloutOps{..} plane queue proxy denied = do
+-- The sentinel proves a drain after the refusal. The refused release completes once, in the drain before the sweep.
+nothingQueued :: RolloutFixture -> ClientOps store project -> RolloutOps plane store -> String -> store -> Text -> IO ()
+nothingQueued RolloutFixture{..} ClientOps{..} RolloutOps{..} worker proxy denied = do
     void $ clientInstall proxy (packageName rolloutSentinel) Nothing >>= shouldSucceed
-    withWorkerRole plane queue $ \worker -> do
-        awaitPublished worker (packageName rolloutSentinel <> "@" <> packageVersion rolloutSentinel) `shouldReturn` True
-        coordinate <- publicationCoordinate denied
-        logs <- workerLogs worker
-        logs `shouldSatisfy` (not . T.isInfixOf ("mirrored artifact published: " <> coordinate))
+    awaitPublished worker (packageName rolloutSentinel <> "@" <> packageVersion rolloutSentinel) `shouldReturn` True
+    coordinate <- publicationCoordinate denied
+    (T.count ("mirror version complete: " <> coordinate) <$> workerLogs worker) `shouldReturn` 1

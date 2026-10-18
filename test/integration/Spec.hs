@@ -15,6 +15,7 @@ import Ecluse.Core.Server.Pipeline.PublishIntegrationSpec qualified as Publicati
 import Ecluse.Core.Server.Pipeline.SharedIntegrationSpec qualified as PipelineFaults
 import Ecluse.Core.Server.Pipeline.TarballIntegrationSpec qualified as NpmArtifact
 import Ecluse.Core.Worker.LoopIntegrationSpec qualified as Worker
+import Ecluse.Integration.Ministack (withMinistackPool)
 import Ecluse.PilotIntegrationSpec qualified as Pilot
 import Ecluse.Runtime.Cve.SyncIntegrationSpec qualified as AdvisorySync
 import Ecluse.Runtime.Mirror.State.S3.InternalIntegrationSpec qualified as MirrorStateS3Internal
@@ -33,10 +34,10 @@ import Test.Hspec (Spec)
 
 -- | Missing Docker fails during fixture acquisition and cannot become pending coverage.
 main :: IO ()
-main = do
+main = withMinistackPool $ \pool -> do
     declarations <-
         sequence
-            [ discover Coverage.awsComposition AwsComposition.spec
+            [ discover Coverage.awsComposition (AwsComposition.spec pool)
             , discover Coverage.pypiHttp PyPI.spec
             , discover Coverage.mirrorViewHttp MirrorView.spec
             , discover Coverage.egressHttp Egress.spec
@@ -45,13 +46,13 @@ main = do
             , discover Coverage.publicationHttp Publication.spec
             , discover Coverage.pipelineFaultsHttp PipelineFaults.spec
             , discover Coverage.npmArtifactHttp NpmArtifact.spec
-            , discover Coverage.workerSqs Worker.spec
-            , discover Coverage.pilotS3 Pilot.spec
-            , discover Coverage.advisorySyncS3 AdvisorySync.spec
-            , discover Coverage.mirrorStateS3Internal MirrorStateS3Internal.spec
-            , discover Coverage.mirrorStateS3 MirrorStateS3.spec
-            , discover Coverage.advisoryExportS3 AdvisoryExport.spec
-            , discover Coverage.queueSqs SqsQueue.spec
+            , discover Coverage.workerSqs (Worker.spec pool)
+            , discover Coverage.pilotS3 (Pilot.spec pool)
+            , discover Coverage.advisorySyncS3 (AdvisorySync.spec pool)
+            , discover Coverage.mirrorStateS3Internal (MirrorStateS3Internal.spec pool)
+            , discover Coverage.mirrorStateS3 (MirrorStateS3.spec pool)
+            , discover Coverage.advisoryExportS3 (AdvisoryExport.spec pool)
+            , discover Coverage.queueSqs (SqsQueue.spec pool)
             , discover Coverage.serverShutdownHttp ServerShutdown.spec
             , discover Coverage.collectorMetrics TelemetryMetrics.spec
             , discover Coverage.telemetryScrapeHttp TelemetryScrape.spec

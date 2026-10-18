@@ -41,7 +41,7 @@ import Ecluse.Core.Rules.Types (
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
-import Ecluse.Integration.Ministack (endpointFor, quietLogEnv, withMinistack)
+import Ecluse.Integration.Ministack (MinistackPool, endpointFor, quietLogEnv, withMinistack)
 import Ecluse.Pilot (PilotCompileOptions (..), UploadRequest (Upload), runPilotCompile)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Cve.Sync.Internal (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncHooks (SyncHooks, hookFirstSync, hookPushAge), SyncSchedule (..), newS3CveSource, runCveSync, s3CveFetchFor)
@@ -66,9 +66,9 @@ import Ecluse.Test.Wai (rebaseAuthority, selfBaseUrlOf, status)
 
 import Ecluse.Runtime.Aws.Env (AwsEndpoint (endpointHost, endpointPort))
 
-spec :: Spec
-spec =
-    aroundAll withMinistack $
+spec :: MinistackPool -> Spec
+spec pool =
+    aroundAll (withMinistack pool) $
         describe "advisory sync + shadow swap (ministack S3, one proxy, two phases)" $
             it (caseLabel "integration/advisory-sync/native-001" "refuses or quarantines the young fix with no database, then admits it once the synced artifact swaps in") $ \container ->
                 withSystemTempDir $ \dataDir ->

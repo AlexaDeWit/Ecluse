@@ -50,7 +50,8 @@ before `Spec`: `IntegrationSpec`, `E2ESpec`, `SmokeSpec`, `ResidencySpec`. The i
 
 Exercise the mirror queue and advisory transport against a real emulator, driven by `testcontainers`.
 The AWS backend runs against a **ministack** container, a lightweight LocalStack alternative, with `amazonka` pointed at `http://<container>:4566` and
-throwaway credentials. The telemetry specs run a real OTLP **Collector** container the same way. Both
+throwaway credentials. One ministack container serves the whole test process, so each spec names its
+own queues and buckets. The telemetry specs run a real OTLP **Collector** container the same way. Both
 are hermetic: no real cloud account, no real credentials.
 
 The complete tier needs a running Docker daemon. CI's `ubuntu-26.04-arm` runner provides one.

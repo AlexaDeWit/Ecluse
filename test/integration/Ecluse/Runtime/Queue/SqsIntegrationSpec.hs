@@ -27,6 +27,7 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker.Lease (queueLeaseOps, whileLeased, withLeasedBatch)
 import Ecluse.Integration.Ministack (
+    MinistackPool,
     QueueOptions (qoDeadLetterAfter, qoTerminalBackoff, qoVisibilityTimeout),
     defaultQueueOptions,
     freshQueue,
@@ -45,9 +46,9 @@ import Ecluse.Test.Package (unsafeFilename)
 import Ecluse.Test.Support (expectRightIO)
 
 -- | Run shared delivery contracts and SQS lease and fault assertions against ministack.
-spec :: Spec
-spec =
-    aroundAll withMinistack $
+spec :: MinistackPool -> Spec
+spec pool =
+    aroundAll (withMinistack pool) $
         describe "mirror queue (ministack)" $ do
             beforeWith sqsQueueDriver $ do
                 queueContract "queue/sqs"

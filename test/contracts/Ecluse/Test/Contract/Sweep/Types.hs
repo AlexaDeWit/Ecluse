@@ -53,6 +53,8 @@ data ClientOps store project = ClientOps
     { clientInstall :: store -> Text -> Maybe Text -> IO ClientResult
     , clientWithProject :: forall a. store -> (project -> IO a) -> IO a
     , clientInstallIn :: project -> Text -> Maybe Text -> IO ClientResult
+    , clientRefusedIn :: project -> Text -> Maybe Text -> IO ClientResult
+    -- ^ One attempt at an install the proxy refuses, so the client does not retry a 503 refusal.
     , clientInstalledVersion :: project -> Text -> IO (Maybe Text)
     , clientPublish :: store -> Text -> Text -> IO ClientResult
     , clientArtifact :: store -> Text -> Text -> IO (Int, LBS.ByteString)
@@ -105,6 +107,8 @@ data RolloutOps plane store = RolloutOps
     , awaitPublished :: String -> Text -> IO Bool
     , workerLogs :: String -> IO Text
     , publicationCoordinate :: Text -> IO Text
+    , outsideSweeps :: forall a. plane -> IO a -> IO a
+    -- ^ Steps with no Dredger running. A provider that observes store deletes fails the steps on one.
     }
 
 -- | Generation publication returns process evidence and waits for the proxy's observed swap.

@@ -33,7 +33,7 @@ import Ecluse.Core.Osv.Compile (OsvCandidate, candidatePath)
 import Ecluse.Core.Osv.Provenance (ProvenanceSource (OsvExport))
 import Ecluse.Core.Osv.Publication
 import Ecluse.Core.Osv.Schema (EpssRequirement (..), osvDbFileName, osvSchemaEpoch)
-import Ecluse.Integration.Ministack (objectMetadata, withMinistack)
+import Ecluse.Integration.Ministack (MinistackPool, objectMetadata, withMinistack)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Cve.Sync.Internal (SyncEnv (..), SyncOutcome (..), newS3CveSource, s3CveFetchFor, syncStep)
@@ -48,10 +48,10 @@ import Ecluse.Test.Poll (pollUntil, retryingIO)
 import Lens.Micro ((.~), (?~), (^.))
 
 -- | The last-good contract over operator writes, and guarded publication against ministack.
-spec :: Spec
-spec =
+spec :: MinistackPool -> Spec
+spec pool =
     describe "S3 Export Integration" $
-        aroundAll withMinistack $ do
+        aroundAll (withMinistack pool) $ do
             aroundWith withS3AdvisoryDriver $
                 advisoryContract "advisory/s3" (CveDbWrongEpoch (osvSchemaEpoch + 1))
             for_ [Npm, PyPI] guardedPublicationSpec

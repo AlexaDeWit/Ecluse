@@ -12,15 +12,15 @@ import Test.Hspec
 import UnliftIO.Async (concurrently)
 
 import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Integration.Ministack (endpointFor, withMinistack)
+import Ecluse.Integration.Ministack (MinistackPool, endpointFor, withMinistack)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Mirror.State.S3.Internal
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Poll (retryingIO)
 import Ecluse.Test.Support (expectRight)
 
-spec :: Spec
-spec = aroundAll withMinistack $
+spec :: MinistackPool -> Spec
+spec pool = aroundAll (withMinistack pool) $
     describe "S3 mirror state conditional persistence" $
         it (caseLabel "integration/mirror-state-s3-internal/native-001" "enforces create, stale revision refusal, and read-after-write across fresh clients") $ \container -> do
             let endpoint = Just (endpointFor container)

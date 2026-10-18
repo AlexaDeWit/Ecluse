@@ -266,7 +266,7 @@ sharedMirrorDriver plane target distributions config =
                         ( \proxy -> do
                             reachable <- publicProjectReachable proxy
                             ((_, platform), _) <- either (fail . toString) pure mirrorArchitectures
-                            attempted <- pipInstallForPlatform proxy mirrorRoot mirrorVersion platform
+                            attempted <- pipRefusedForPlatform proxy mirrorRoot mirrorVersion platform
                             ptiTree attempted `shouldBe` Map.empty
                             pure (reachable, ptiClient attempted)
                         )

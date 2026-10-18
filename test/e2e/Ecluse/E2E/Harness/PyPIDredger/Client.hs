@@ -18,7 +18,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.E2E.Fixtures.PyPI (pypiWheelFor)
 import Ecluse.E2E.Fixtures.PyPI.Mirror (Distribution (..), distributionUploadBody, nativeUploadContentType)
 import Ecluse.E2E.Harness.Client (runClient)
-import Ecluse.E2E.Harness.Pip (pipCredentialUrl, withPipProject)
+import Ecluse.E2E.Harness.Pip (pipCredentialUrl, pipSingleAttempt, withPipProject)
 import Ecluse.E2E.Harness.PyPIDredger
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Contract.Sweep.Types (ClientOps (..))
@@ -27,9 +27,10 @@ import Ecluse.Test.Contract.Sweep.Types (ClientOps (..))
 pypiSweepClientOps :: ClientOps PyPISweepStore PipProject
 pypiSweepClientOps =
     ClientOps
-        { clientInstall = \store name version -> withProject store (\project -> installIn project name version)
+        { clientInstall = \store name version -> withProject store (\project -> installIn [] project name version)
         , clientWithProject = withProject
-        , clientInstallIn = installIn
+        , clientInstallIn = installIn []
+        , clientRefusedIn = installIn pipSingleAttempt
         , clientInstalledVersion = installedVersion
         , clientPublish = publish
         , clientArtifact = \store name version -> fetchStorePath store ("simple/" <> name <> "/" <> pypiWheelFor name version)
@@ -41,26 +42,25 @@ withProject store = withPipProject proxy "unused-fixture" "0" "unused"
   where
     proxy = (pssProxy store){e2eClientEndpoints = Map.singleton PyPI (pipCredentialUrl "aws" "fixture-token" (pssReadUrl store <> "simple/"))}
 
-installIn :: PipProject -> Text -> Maybe Text -> IO ClientResult
-installIn project name version =
+installIn :: [String] -> PipProject -> Text -> Maybe Text -> IO ClientResult
+installIn attempts project name version =
     runClient
         (ppDir project)
         (ppEnv project)
         "python3"
-        [ "-m"
-        , "pip"
-        , "--isolated"
-        , "install"
-        , "--no-cache-dir"
-        , "--disable-pip-version-check"
-        , "--no-input"
-        , "--only-binary=:all:"
-        , "--index-url"
-        , toString (ppIndex project)
-        , "--target"
-        , ppDir project </> "site"
-        , toString (name <> maybe "" ("==" <>) version)
-        ]
+        ( ["-m", "pip", "--isolated", "install"]
+            <> attempts
+            <> [ "--no-cache-dir"
+               , "--disable-pip-version-check"
+               , "--no-input"
+               , "--only-binary=:all:"
+               , "--index-url"
+               , toString (ppIndex project)
+               , "--target"
+               , ppDir project </> "site"
+               , toString (name <> maybe "" ("==" <>) version)
+               ]
+        )
 
 installedVersion :: PipProject -> Text -> IO (Maybe Text)
 installedVersion project name = do

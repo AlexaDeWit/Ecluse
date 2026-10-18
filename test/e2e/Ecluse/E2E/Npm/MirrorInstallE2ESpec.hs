@@ -48,7 +48,7 @@ mirrorDriver plane =
         , mirrorOfflineInstall = withPublicUpstreamsDown plane (withE2E installFromMirror plane)
         , mirrorEmptyInstall =
             withPublicUpstreamsDown plane $
-                withE2EWith emptyPrivateStore (\proxy -> (,) <$> npmPublicReachable proxy <*> npmInstall proxy rootRequest) plane
+                withE2EWith emptyPrivateStore (\proxy -> (,) <$> npmPublicReachable proxy <*> npmRefused proxy rootRequest) plane
         }
 
 installFromPublic :: E2E -> IO (PublicPhase (Set Resolved) Value)

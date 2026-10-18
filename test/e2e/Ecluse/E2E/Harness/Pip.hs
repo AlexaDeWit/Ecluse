@@ -19,6 +19,8 @@ module Ecluse.E2E.Harness.Pip (
     pipObserveGraph,
     PipTargetInstall (..),
     pipInstallForPlatform,
+    pipRefusedForPlatform,
+    pipSingleAttempt,
 
     -- * The served index
     advertisedFiles,
@@ -324,7 +326,18 @@ data PipTargetInstall = PipTargetInstall
 
 -- | Install the complete dependency graph for a named platform into a fresh target directory.
 pipInstallForPlatform :: E2E -> Text -> Text -> Text -> IO PipTargetInstall
-pipInstallForPlatform proxy project version platform = withPipClient proxy $ \client -> do
+pipInstallForPlatform = platformInstall []
+
+-- | 'pipInstallForPlatform' in one attempt, for an install the proxy refuses with a 503.
+pipRefusedForPlatform :: E2E -> Text -> Text -> Text -> IO PipTargetInstall
+pipRefusedForPlatform = platformInstall pipSingleAttempt
+
+-- | pip's options for one attempt. Its default retries back off for about 8 s on a 503.
+pipSingleAttempt :: [String]
+pipSingleAttempt = ["--retries", "0"]
+
+platformInstall :: [String] -> E2E -> Text -> Text -> Text -> IO PipTargetInstall
+platformInstall attempts proxy project version platform = withPipClient proxy $ \client -> do
     let destination = ppDir client </> "target"
         report = ppDir client </> "report.json"
     result <-
@@ -332,28 +345,27 @@ pipInstallForPlatform proxy project version platform = withPipClient proxy $ \cl
             (ppDir client)
             (ppEnv client)
             "python3"
-            [ "-m"
-            , "pip"
-            , "--isolated"
-            , "install"
-            , "--no-cache-dir"
-            , "--no-compile"
-            , "--disable-pip-version-check"
-            , "--no-input"
-            , "--ignore-installed"
-            , "--platform"
-            , toString platform
-            , "--python-version"
-            , "3.12"
-            , "--only-binary=:all:"
-            , "--index-url"
-            , toString (ppIndex client)
-            , "--target"
-            , destination
-            , "--report"
-            , report
-            , toString (pinned project version)
-            ]
+            ( ["-m", "pip", "--isolated", "install"]
+                <> attempts
+                <> [ "--no-cache-dir"
+                   , "--no-compile"
+                   , "--disable-pip-version-check"
+                   , "--no-input"
+                   , "--ignore-installed"
+                   , "--platform"
+                   , toString platform
+                   , "--python-version"
+                   , "3.12"
+                   , "--only-binary=:all:"
+                   , "--index-url"
+                   , toString (ppIndex client)
+                   , "--target"
+                   , destination
+                   , "--report"
+                   , report
+                   , toString (pinned project version)
+                   ]
+            )
     exists <- doesDirectoryExist destination
     roots <- if exists then listDirectory destination else pure []
     tree <- snapshotTree destination roots

@@ -35,7 +35,7 @@ import Ecluse.Core.Osv.Compile (PilotEpssRequired)
 import Ecluse.Core.Osv.Publication (ObjectRevision (ObjectRevision), PublicationRefusal (..), Rebaseline (Rebaseline), mkPercent)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired), osvDbFileName)
 import Ecluse.Core.Osv.Stream (PilotIngestAborted (..))
-import Ecluse.Integration.Ministack (endpointFor, objectMetadata, quietLogEnv, withMinistack)
+import Ecluse.Integration.Ministack (MinistackPool, endpointFor, objectMetadata, quietLogEnv, withMinistack)
 import Ecluse.Pilot (PilotCompileOptions (..), UploadRequest (..), runExportLoop, runPilotCompile)
 import Ecluse.Pilot.Plan (ExportTarget (ExportTarget), exportLoopPlan)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
@@ -51,8 +51,8 @@ import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, epssFreeRules, stubS
 import Ecluse.Test.Poll (pollUntil, retryingIO)
 import Ecluse.Test.Stub (Captured (capMethod, capPath), Stub, allCaptured, stubBaseUrl, withStub)
 
-spec :: Spec
-spec = aroundAll withMinistack $ do
+spec :: MinistackPool -> Spec
+spec pool = aroundAll (withMinistack pool) $ do
     describe "Pilot refuses zero relevant rows before S3 publication" $
         for_ [("empty", osvZipOf []), ("wrong-ecosystem", LBS.readFile "test/unit/fixtures/osv/sample.zip")] $ \(label, rejectedZip) ->
             for_ [False, True] $ \hasPrevious ->

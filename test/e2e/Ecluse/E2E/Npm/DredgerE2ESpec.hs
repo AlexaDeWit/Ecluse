@@ -247,6 +247,7 @@ clientOps =
         { clientInstall = \store name version -> npmInstall store (installCoordinate name version)
         , clientWithProject = withNpmProject
         , clientInstallIn = \project name version -> npmInstallIn project (installCoordinate name version)
+        , clientRefusedIn = \project name version -> npmRefusedIn project (installCoordinate name version)
         , clientInstalledVersion = installedVersion
         , clientPublish = \store name version -> withPublishProject store name version npmPublishIn
         , clientArtifact = \store name version -> proxyGet store (npmTarballPath name version)
@@ -290,6 +291,7 @@ rolloutOps =
         , awaitPublished = \worker release -> awaitContainerLog worker (T.isInfixOf (publishedLine release)) 240
         , workerLogs = containerLogs
         , publicationCoordinate = pure
+        , outsideSweeps = const id
         }
   where
     servingEnvironment PermissivePolicy = permissiveEnv <> publishTargetEnv

@@ -191,7 +191,7 @@ rolloutOps =
                 (servingEnvironment policy <> [("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", Native.repositoryUrl "mirror")])
                 (Just queue)
                 ["proxy", "--no-worker"]
-        , withWorkerRole = withObservedWorker
+        , withWorkerRole = \plane queue -> withMirrorRole (Native.pspGlobal plane) (workerEnvironment queue)
         , awaitPublished = \worker release -> do
             (name, version) <- workerRelease release
             awaitContainerLog worker (mirrorCompleted name version) 240
@@ -199,6 +199,7 @@ rolloutOps =
         , publicationCoordinate = \release -> do
             (name, version) <- workerRelease release
             pure (name <> "@" <> version)
+        , outsideSweeps = withoutDeletes
         }
   where
     servingEnvironment (IdentityPolicy names) = [("ECLUSE_RULES", denyingRules names)]
@@ -209,18 +210,21 @@ workerRelease release = case T.splitOn "@" release of
     [name, version] | not (T.null name) -> (name,) <$> canonicalVersion version
     _ -> fail "expected a PyPI package@version fixture coordinate"
 
-withObservedWorker :: Native.PyPISweepPlane -> Text -> (String -> IO a) -> IO a
-withObservedWorker plane queue action = do
-    priorDeletes <- deletes
-    result <- withMirrorRole (Native.pspGlobal plane) environment action
-    deletes `shouldReturn` priorDeletes
+workerEnvironment :: Text -> [(Text, Text)]
+workerEnvironment queue =
+    Native.proxyRoleEnv
+        <> permissiveEnv
+        <> [("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873"), ("ECLUSE_QUEUE__URL", queue), ("AWS_ENDPOINT_URL_SQS", "http://ministack:4566")]
+
+-- | Fail the steps on any CodeArtifact delete, which only a Dredger may issue.
+withoutDeletes :: Native.PyPISweepPlane -> IO a -> IO a
+withoutDeletes plane steps = do
+    prior <- deletes
+    result <- steps
+    deletes `shouldReturn` prior
     pure result
   where
     deletes = filter ((== "v1/package/versions/delete") . snd) <$> readTVarIO (cafRequests (Native.pspControl plane))
-    environment =
-        Native.proxyRoleEnv
-            <> permissiveEnv
-            <> [("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873"), ("ECLUSE_QUEUE__URL", queue), ("AWS_ENDPOINT_URL_SQS", "http://ministack:4566")]
 
 advisoryOps :: AdvisoryOps Native.PyPISweepPlane Native.PyPISweepStore
 advisoryOps =
