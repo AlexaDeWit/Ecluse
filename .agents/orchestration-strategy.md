@@ -371,16 +371,15 @@ gating jobs are the `needs` of the terminal `gate` job in
 | `changes` | Classify the change | none, it classifies the PR's changed paths |
 | `build` | Build & compile checks (all targets, residency, doctest) | `task build test-residency doctest cabal-check` |
 | `allocation` | Allocation budgets (committed captures) | `task perf-allocation` |
-| `coverage` | Coverage (`<suite>`), one leg per suite | `task coverage-unit SUITE=<suite>`, or `task coverage-integration` (Docker) for the integration leg |
+| `coverage` | Coverage (`<suite>`) for the core unit and integration legs, and Coverage (ecluse-runtime-unit, ecluse-unit) | `task coverage-unit SUITE=<suite>` per suite, or `task coverage-integration` (Docker) for the integration leg |
 | `codecov-notify` | Codecov statuses | none, it only releases the Codecov statuses |
 | `static-checks` | Static checks (format, lint, Semgrep, workflows, site) | `task static-checks` (also in `task check`) |
 | `docs` | Haddock builds | `task nix-check`, which builds the same three flake checks |
 | `e2e-prepare` | Prepare E2E image and plan | `task test-e2e-prepare` |
 | `e2e-conformance` | Conformance (`<subject>`), one leg per subject | `task test-e2e-load test-e2e-<subject>` (Docker) |
 | `e2e` | E2E execution completeness | `task test-e2e-audit`, then `task test-e2e-<ecosystem>-completion` over the unit and integration reports |
-| `backend-conformance` | Conformance (package store `<subject>`), one leg per subject | `task test-conformance-<subject>` (Docker) |
-| `weeder` | Dead-code check (weeder) | `task weeder` (also in `task check`) |
-| `stan` | Haskell static analysis (stan) | `task stan` (also in `task check`) |
+| `backend-conformance` | Conformance (package stores verdaccio, codeartifact) | `task test-conformance-verdaccio`, then `task test-conformance-codeartifact` (Docker) |
+| `analysis` | Dead-code and static analysis (weeder, stan) | `task analysis-checks` (also in `task check`) |
 | `release-dry-run` | Release dry-run / Build image (`<arch>`), one leg per architecture | `task docker-build`, then `task sbom`, for the host's architecture |
 | `release-dry-run-assemble` | Release dry-run (multi-arch index) | none, it needs the image archives of both architectures |
 | `release-dry-run-boot` | Release dry-run (start `<arch>`), one leg per architecture | none, it starts each built image with `--version` |
