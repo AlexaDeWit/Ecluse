@@ -1,3 +1,5 @@
+{# Keep missing generated diagrams as build errors. #}
+{%- set diagram_contents = load_data(path="static/diagrams/" ~ name ~ ".svg", format="plain") -%}
 {%- set asset = get_url(path="diagrams/" ~ name ~ ".svg") -%}
 <figure class="diagram">
   <a href="{{ asset }}" aria-label="Open full-size diagram: {{ alt }}">

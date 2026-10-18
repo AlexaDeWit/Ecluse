@@ -111,79 +111,6 @@
   fill: #38342E;
 }
 
-.saer-diagram-accent-1 .saer-diagram-shape {
-  stroke: #AA6A89;
-}
-.saer-diagram-accent-1 .saer-diagram-flow-arrow,
-.saer-diagram-accent-1 .saer-diagram-note-bar {
-  fill: #AA6A89;
-}
-.saer-diagram-accent-1 .saer-diagram-tinted {
-  fill: #EDE1E1;
-}
-.saer-diagram-accent-2 .saer-diagram-shape {
-  stroke: #9370CE;
-}
-.saer-diagram-accent-2 .saer-diagram-flow-arrow,
-.saer-diagram-accent-2 .saer-diagram-note-bar {
-  fill: #9370CE;
-}
-.saer-diagram-accent-2 .saer-diagram-tinted {
-  fill: #EAE2EC;
-}
-.saer-diagram-accent-3 .saer-diagram-shape {
-  stroke: #93814F;
-}
-.saer-diagram-accent-3 .saer-diagram-flow-arrow,
-.saer-diagram-accent-3 .saer-diagram-note-bar {
-  fill: #93814F;
-}
-.saer-diagram-accent-3 .saer-diagram-tinted {
-  fill: #EAE5D8;
-}
-.saer-diagram-accent-4 .saer-diagram-shape {
-  stroke: #5C8A8F;
-}
-.saer-diagram-accent-4 .saer-diagram-flow-arrow,
-.saer-diagram-accent-4 .saer-diagram-note-bar {
-  fill: #5C8A8F;
-}
-.saer-diagram-accent-4 .saer-diagram-tinted {
-  fill: #E1E6E2;
-}
-.saer-diagram-store-band,
-.saer-diagram-note-ground {
-  stroke: none;
-}
-.saer-diagram-accent-strong .saer-diagram-note {
-  fill: #38342E;
-}
-.saer-diagram-accent-strong .saer-diagram-shape {
-  stroke-width: 3;
-}
-.saer-diagram-accent-strong .saer-diagram-boundary-box,
-.saer-diagram-accent-strong .saer-diagram-boundary-curve {
-  stroke-width: 3.5;
-}
-.saer-diagram-accent-strong .saer-diagram-flow {
-  stroke-width: 4;
-}
-.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-shape {
-  stroke-dasharray: 0 7.5;
-}
-.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-boundary-box,
-.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-boundary-curve {
-  stroke-dasharray: 0 8.75;
-}
-.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-flow {
-  stroke-dasharray: 0 10;
-}
-.saer-diagram-out-of-scope .saer-diagram-shape.saer-diagram-note-frame {
-  stroke: #6B655C;
-  stroke-width: 2;
-  stroke-dasharray: 0 5;
-}
-
 .saer-diagram-tone-low { fill: #4B6B50; stroke: #4B6B50; stroke-width: 3; }
 .saer-diagram-tone-low ~ .saer-diagram-badge-count, .saer-diagram-tone-low ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
 .saer-diagram-tone-medium { fill: #46788A; stroke: #46788A; stroke-width: 3; }
@@ -195,4 +122,4 @@
 .saer-diagram-tone-neutral { fill: #756E63; stroke: #756E63; stroke-width: 3; }
 .saer-diagram-tone-neutral ~ .saer-diagram-badge-count, .saer-diagram-tone-neutral ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
 .saer-diagram-tone-flag { fill: #38342E; stroke: #38342E; stroke-width: 3; }
-.saer-diagram-tone-flag ~ .saer-diagram-badge-count, .saer-diagram-tone-flag ~ .saer-diagram-badge-mark { fill: #FAF8F2; }</style><g transform="translate(10, 10)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-boundary-box" width="850" height="770"></rect><text class="saer-diagram-label" x="425" y="11"><tspan x="425" dy="0">Operator trust zone</tspan></text></g></g><g transform="translate(30, 65)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">Advisory store</tspan><tspan x="80" dy="12.5">(S3)</tspan></text></g></g><g transform="translate(345, 55)"><g class="saer-diagram-element saer-diagram-accent-1"><ellipse class="saer-diagram-shape saer-diagram-process" cx="80" cy="60" rx="80" ry="60"></ellipse><text class="saer-diagram-label" x="80" y="60"><tspan x="80" dy="0">Dredger</tspan></text></g></g><g transform="translate(630, 65)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">B: public-derived</tspan><tspan x="80" dy="12.5">mirror store</tspan></text></g></g><g transform="translate(630, 365)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">C: private read</tspan><tspan x="80" dy="12.5">endpoint</tspan></text></g></g><g transform="translate(30, 365)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">A: first-party</tspan><tspan x="80" dy="12.5">publication store</tspan></text></g></g><g transform="translate(30, 495)"><g class="saer-diagram-element saer-diagram-accent-1"><rect class="saer-diagram-note-bar" width="4" height="100"></rect><text class="saer-diagram-note" x="6" y="13.5"><tspan x="6" dy="0">A is not a deletion target.</tspan><tspan x="6" dy="15">First-party names are excluded.</tspan></text></g></g><g transform="translate(330, 530)"><g class="saer-diagram-element saer-diagram-accent-1"><rect class="saer-diagram-note-bar" width="4" height="220"></rect><text class="saer-diagram-note" x="6" y="13.5"><tspan x="6" dy="0">Read both inventories, apply current revocation rules, require a named</tspan><tspan x="6" dy="15">denial, and recheck target consent.</tspan><tspan x="6" dy="15">Charge the logical deletion cap. Remove C only after B no longer serves</tspan><tspan x="6" dy="15">the denied copy.</tspan><tspan x="6" dy="15">Re-read for residual copies. Preview cannot delete.</tspan><tspan x="6" dy="15">Older writers and policy rollout can delay convergence.</tspan></text></g></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 190 110 L 345 115"></path><path class="saer-diagram-flow-arrow" d="M 345 115 L 326.784 121.416 L 327.235 107.423 Z"></path><rect class="saer-diagram-flow-backing" x="227.75" y="97.25" width="79.5" height="30.5"></rect><text class="saer-diagram-flow-label" x="267.5" y="106.25"><tspan x="267.5" dy="0">Read advisory</tspan><tspan x="267.5" dy="12.5">artifacts</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 505 115 L 630 110"></path><path class="saer-diagram-flow-arrow" d="M 630 110 L 612.294 117.714 L 611.735 103.725 Z"></path><rect class="saer-diagram-flow-backing" x="517.412" y="76.38" width="90.5" height="30.5"></rect><text class="saer-diagram-flow-label" x="562.662" y="85.38"><tspan x="562.662" dy="0">Delete denied</tspan><tspan x="562.662" dy="12.5">versions from B</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 425 175 L 425 410 L 630 410"></path><path class="saer-diagram-flow-arrow" d="M 630 410 L 612 417 L 612 403 Z"></path><rect class="saer-diagram-flow-backing" x="379.75" y="277.25" width="90.5" height="30.5"></rect><text class="saer-diagram-flow-label" x="425" y="286.25"><tspan x="425" dy="0">Delete retained</tspan><tspan x="425" dy="12.5">copies from C</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 710 65 L 710 35 L 425 35 L 425 55"></path><path class="saer-diagram-flow-arrow" d="M 425 55 L 418 37 L 432 37 Z"></path><rect class="saer-diagram-flow-backing" x="527.75" y="19.75" width="79.5" height="30.5"></rect><text class="saer-diagram-flow-label" x="567.5" y="28.75"><tspan x="567.5" dy="0">Inventory and</tspan><tspan x="567.5" dy="12.5">B consent</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 710 365 L 710 260 L 540 260 L 540 145 L 505 115"></path><path class="saer-diagram-flow-arrow" d="M 505 115 L 523.222 121.399 L 514.111 132.029 Z"></path><rect class="saer-diagram-flow-backing" x="585.25" y="244.75" width="79.5" height="30.5"></rect><text class="saer-diagram-flow-label" x="625" y="253.75"><tspan x="625" dy="0">Inventory and</tspan><tspan x="625" dy="12.5">C consent</tspan></text></g></svg>
+.saer-diagram-tone-flag ~ .saer-diagram-badge-count, .saer-diagram-tone-flag ~ .saer-diagram-badge-mark { fill: #FAF8F2; }</style><g transform="translate(10, 10)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-boundary-box" width="850" height="770"></rect><text class="saer-diagram-label" x="425" y="11"><tspan x="425" dy="0">Operator trust zone</tspan></text></g></g><g transform="translate(30, 125)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">Advisory store</tspan><tspan x="80" dy="12.5">(S3)</tspan></text></g></g><g transform="translate(345, 90)"><g class="saer-diagram-element"><ellipse class="saer-diagram-shape saer-diagram-process" cx="80" cy="80" rx="80" ry="80"></ellipse><text class="saer-diagram-label" x="80" y="80"><tspan x="80" dy="0">Dredger</tspan></text></g></g><g transform="translate(630, 125)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">B: public-derived</tspan><tspan x="80" dy="12.5">mirror store</tspan></text></g></g><g transform="translate(630, 365)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">C: private read</tspan><tspan x="80" dy="12.5">endpoint</tspan></text></g></g><g transform="translate(30, 365)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">A: first-party</tspan><tspan x="80" dy="12.5">publication store</tspan></text></g></g><g transform="translate(30, 495)"><g class="saer-diagram-element"><text class="saer-diagram-note" x="6" y="13.5"><tspan x="6" dy="0">A is not a deletion target.</tspan><tspan x="6" dy="15">First-party names are excluded.</tspan></text></g></g><g transform="translate(330, 530)"><g class="saer-diagram-element"><text class="saer-diagram-note" x="6" y="13.5"><tspan x="6" dy="0">Read both inventories, apply current revocation rules, require a named</tspan><tspan x="6" dy="15">denial, and recheck target consent.</tspan><tspan x="6" dy="15">Charge the logical deletion cap. Remove C only after B no longer serves</tspan><tspan x="6" dy="15">the denied copy.</tspan><tspan x="6" dy="15">Re-read for residual copies. Preview cannot delete.</tspan><tspan x="6" dy="15">Older writers and policy rollout can delay convergence.</tspan></text></g></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 190 170 L 345 170"></path><path class="saer-diagram-flow-arrow" d="M 345 170 L 327 177 L 327 163 Z"></path><rect class="saer-diagram-flow-backing" x="206" y="161" width="107" height="18"></rect><text class="saer-diagram-flow-label" x="259.5" y="170"><tspan x="259.5" dy="0">Advisory artifacts</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 505 170 L 630 170"></path><path class="saer-diagram-flow-arrow" d="M 630 170 L 612 177 L 612 163 Z"></path><path class="saer-diagram-flow-arrow" d="M 505 170 L 523 163 L 523 177 Z"></path><rect class="saer-diagram-flow-backing" x="505.75" y="129.5" width="123.5" height="30.5"></rect><text class="saer-diagram-flow-label" x="567.5" y="138.5"><tspan x="567.5" dy="0">B inventory / consent</tspan><tspan x="567.5" dy="12.5">and deletion requests</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 425 250 L 425 410 L 630 410"></path><path class="saer-diagram-flow-arrow" d="M 630 410 L 612 417 L 612 403 Z"></path><path class="saer-diagram-flow-arrow" d="M 425 250 L 432 268 L 418 268 Z"></path><rect class="saer-diagram-flow-backing" x="465.75" y="394.75" width="123.5" height="30.5"></rect><text class="saer-diagram-flow-label" x="527.5" y="403.75"><tspan x="527.5" dy="0">C inventory / consent</tspan><tspan x="527.5" dy="12.5">and deletion requests</tspan></text></g></svg>

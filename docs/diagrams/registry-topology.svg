@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="2 2 866 841" width="866" height="841"><title>Registry topology and trust</title><rect x="2" y="2" width="866" height="841" fill="#F9F6F0"></rect><style>.saer-diagram-element {
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="2 2 966 841" width="966" height="841"><title>Registry topology and trust</title><rect x="2" y="2" width="966" height="841" fill="#F9F6F0"></rect><style>.saer-diagram-element {
   font-family: "Liberation Sans";
 }
 .saer-diagram-shape {
@@ -111,79 +111,6 @@
   fill: #38342E;
 }
 
-.saer-diagram-accent-1 .saer-diagram-shape {
-  stroke: #AA6A89;
-}
-.saer-diagram-accent-1 .saer-diagram-flow-arrow,
-.saer-diagram-accent-1 .saer-diagram-note-bar {
-  fill: #AA6A89;
-}
-.saer-diagram-accent-1 .saer-diagram-tinted {
-  fill: #EDE1E1;
-}
-.saer-diagram-accent-2 .saer-diagram-shape {
-  stroke: #9370CE;
-}
-.saer-diagram-accent-2 .saer-diagram-flow-arrow,
-.saer-diagram-accent-2 .saer-diagram-note-bar {
-  fill: #9370CE;
-}
-.saer-diagram-accent-2 .saer-diagram-tinted {
-  fill: #EAE2EC;
-}
-.saer-diagram-accent-3 .saer-diagram-shape {
-  stroke: #93814F;
-}
-.saer-diagram-accent-3 .saer-diagram-flow-arrow,
-.saer-diagram-accent-3 .saer-diagram-note-bar {
-  fill: #93814F;
-}
-.saer-diagram-accent-3 .saer-diagram-tinted {
-  fill: #EAE5D8;
-}
-.saer-diagram-accent-4 .saer-diagram-shape {
-  stroke: #5C8A8F;
-}
-.saer-diagram-accent-4 .saer-diagram-flow-arrow,
-.saer-diagram-accent-4 .saer-diagram-note-bar {
-  fill: #5C8A8F;
-}
-.saer-diagram-accent-4 .saer-diagram-tinted {
-  fill: #E1E6E2;
-}
-.saer-diagram-store-band,
-.saer-diagram-note-ground {
-  stroke: none;
-}
-.saer-diagram-accent-strong .saer-diagram-note {
-  fill: #38342E;
-}
-.saer-diagram-accent-strong .saer-diagram-shape {
-  stroke-width: 3;
-}
-.saer-diagram-accent-strong .saer-diagram-boundary-box,
-.saer-diagram-accent-strong .saer-diagram-boundary-curve {
-  stroke-width: 3.5;
-}
-.saer-diagram-accent-strong .saer-diagram-flow {
-  stroke-width: 4;
-}
-.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-shape {
-  stroke-dasharray: 0 7.5;
-}
-.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-boundary-box,
-.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-boundary-curve {
-  stroke-dasharray: 0 8.75;
-}
-.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-flow {
-  stroke-dasharray: 0 10;
-}
-.saer-diagram-out-of-scope .saer-diagram-shape.saer-diagram-note-frame {
-  stroke: #6B655C;
-  stroke-width: 2;
-  stroke-dasharray: 0 5;
-}
-
 .saer-diagram-tone-low { fill: #4B6B50; stroke: #4B6B50; stroke-width: 3; }
 .saer-diagram-tone-low ~ .saer-diagram-badge-count, .saer-diagram-tone-low ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
 .saer-diagram-tone-medium { fill: #46788A; stroke: #46788A; stroke-width: 3; }
@@ -195,4 +122,4 @@
 .saer-diagram-tone-neutral { fill: #756E63; stroke: #756E63; stroke-width: 3; }
 .saer-diagram-tone-neutral ~ .saer-diagram-badge-count, .saer-diagram-tone-neutral ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
 .saer-diagram-tone-flag { fill: #38342E; stroke: #38342E; stroke-width: 3; }
-.saer-diagram-tone-flag ~ .saer-diagram-badge-count, .saer-diagram-tone-flag ~ .saer-diagram-badge-mark { fill: #FAF8F2; }</style><g transform="translate(290, 10)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-boundary-box" width="570" height="660"></rect><text class="saer-diagram-label" x="285" y="11"><tspan x="285" dy="0">Operator trust zone</tspan></text></g></g><g transform="translate(10, 295)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-boundary-box" width="225" height="180"></rect><text class="saer-diagram-label" x="112.5" y="11"><tspan x="112.5" dy="0">Public internet</tspan></text></g></g><g transform="translate(30, 70)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-actor" width="160" height="90"></rect><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">Package client</tspan><tspan x="80" dy="12.5">(developer / CI)</tspan></text></g></g><g transform="translate(330, 60)"><g class="saer-diagram-element saer-diagram-accent-1"><ellipse class="saer-diagram-shape saer-diagram-process" cx="80" cy="60" rx="80" ry="60"></ellipse><text class="saer-diagram-label" x="80" y="60"><tspan x="80" dy="0">Écluse proxy</tspan></text></g></g><g transform="translate(30, 345)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-actor" width="160" height="90"></rect><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">Public registry</tspan><tspan x="80" dy="12.5">(npm / PyPI)</tspan></text></g></g><g transform="translate(640, 70)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">C: private read</tspan><tspan x="80" dy="12.5">endpoint</tspan></text></g></g><g transform="translate(640, 335)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">A: first-party</tspan><tspan x="80" dy="12.5">publication store</tspan></text></g></g><g transform="translate(640, 535)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">B: public-derived</tspan><tspan x="80" dy="12.5">mirror store</tspan></text></g></g><g transform="translate(30, 715)"><g class="saer-diagram-element saer-diagram-accent-1"><rect class="saer-diagram-note-bar" width="4" height="120"></rect><text class="saer-diagram-note" x="6" y="13.5"><tspan x="6" dy="0">C unions A and B only. A direct public upstream on C bypasses admission.</tspan><tspan x="6" dy="15">CodeArtifact boot checks refuse a detected public connection. Other inspection gaps remain an operator responsibility.</tspan></text></g></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 190 115 L 330 120"></path><path class="saer-diagram-flow-arrow" d="M 330 120 L 311.762 126.353 L 312.261 112.362 Z"></path><rect class="saer-diagram-flow-backing" x="209.218" y="68.684" width="79.5" height="43"></rect><text class="saer-diagram-flow-label" x="248.968" y="77.684"><tspan x="248.968" dy="0">Requests with</tspan><tspan x="248.968" dy="12.5">caller</tspan><tspan x="248.968" dy="12.5">credentials</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 490 120 L 640 115"></path><path class="saer-diagram-flow-arrow" d="M 640 115 L 622.243 122.596 L 621.777 108.604 Z"></path><rect class="saer-diagram-flow-backing" x="508.047" y="81.146" width="112.5" height="30.5"></rect><text class="saer-diagram-flow-label" x="564.297" y="90.146"><tspan x="564.297" dy="0">Private read</tspan><tspan x="564.297" dy="12.5">(caller credential)</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 190 390 L 410 390 L 410 180"></path><path class="saer-diagram-flow-arrow" d="M 410 180 L 417 198 L 403 198 Z"></path><rect class="saer-diagram-flow-backing" x="290.5" y="374.75" width="107" height="30.5"></rect><text class="saer-diagram-flow-label" x="344" y="383.75"><tspan x="344" dy="0">Anonymous public</tspan><tspan x="344" dy="12.5">metadata and bytes</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 720 335 L 720 160"></path><path class="saer-diagram-flow-arrow" d="M 720 160 L 727 178 L 713 178 Z"></path><rect class="saer-diagram-flow-backing" x="661" y="238.5" width="118" height="18"></rect><text class="saer-diagram-flow-label" x="720" y="247.5"><tspan x="720" dy="0">First-party packages</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 800 580 L 840 580 L 840 115 L 800 115"></path><path class="saer-diagram-flow-arrow" d="M 800 115 L 818 108 L 818 122 Z"></path><rect class="saer-diagram-flow-backing" x="806.5" y="74.5" width="52" height="30.5"></rect><text class="saer-diagram-flow-label" x="832.5" y="83.5"><tspan x="832.5" dy="0">Mirrored</tspan><tspan x="832.5" dy="12.5">packages</tspan></text></g></svg>
+.saer-diagram-tone-flag ~ .saer-diagram-badge-count, .saer-diagram-tone-flag ~ .saer-diagram-badge-mark { fill: #FAF8F2; }</style><g transform="translate(290, 10)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-boundary-box" width="670" height="660"></rect><text class="saer-diagram-label" x="335" y="11"><tspan x="335" dy="0">Operator trust zone</tspan></text></g></g><g transform="translate(10, 295)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-boundary-box" width="225" height="180"></rect><text class="saer-diagram-label" x="112.5" y="11"><tspan x="112.5" dy="0">Public internet</tspan></text></g></g><g transform="translate(30, 70)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-actor" width="160" height="90"></rect><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">Package client</tspan><tspan x="80" dy="12.5">(developer / CI)</tspan></text></g></g><g transform="translate(330, 35)"><g class="saer-diagram-element"><ellipse class="saer-diagram-shape saer-diagram-process" cx="80" cy="80" rx="80" ry="80"></ellipse><text class="saer-diagram-label" x="80" y="80"><tspan x="80" dy="0">Écluse proxy</tspan></text></g></g><g transform="translate(30, 345)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-actor" width="160" height="90"></rect><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">Public registry</tspan><tspan x="80" dy="12.5">(npm / PyPI)</tspan></text></g></g><g transform="translate(640, 70)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">C: private read</tspan><tspan x="80" dy="12.5">endpoint</tspan></text></g></g><g transform="translate(640, 335)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">A: first-party</tspan><tspan x="80" dy="12.5">publication store</tspan></text></g></g><g transform="translate(640, 535)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">B: public-derived</tspan><tspan x="80" dy="12.5">mirror store</tspan></text></g></g><g transform="translate(30, 715)"><g class="saer-diagram-element"><text class="saer-diagram-note" x="6" y="13.5"><tspan x="6" dy="0">C unions A and B only. A direct public upstream on C bypasses admission.</tspan><tspan x="6" dy="15">CodeArtifact boot checks refuse a detected public connection. Other inspection gaps remain an operator responsibility.</tspan></text></g></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 190 115 L 330 115"></path><path class="saer-diagram-flow-arrow" d="M 330 115 L 312 122 L 312 108 Z"></path><path class="saer-diagram-flow-arrow" d="M 190 115 L 208 108 L 208 122 Z"></path><rect class="saer-diagram-flow-backing" x="215" y="68" width="74" height="43"></rect><text class="saer-diagram-flow-label" x="252" y="77"><tspan x="252" dy="0">Requests and</tspan><tspan x="252" dy="12.5">package</tspan><tspan x="252" dy="12.5">responses</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 640 115 L 490 115"></path><path class="saer-diagram-flow-arrow" d="M 490 115 L 508 108 L 508 122 Z"></path><rect class="saer-diagram-flow-backing" x="511.5" y="80.5" width="107" height="30.5"></rect><text class="saer-diagram-flow-label" x="565" y="89.5"><tspan x="565" dy="0">Authorised private</tspan><tspan x="565" dy="12.5">metadata and bytes</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 190 390 L 410 390 L 410 195"></path><path class="saer-diagram-flow-arrow" d="M 410 195 L 417 213 L 403 213 Z"></path><rect class="saer-diagram-flow-backing" x="290.5" y="374.75" width="107" height="30.5"></rect><text class="saer-diagram-flow-label" x="344" y="383.75"><tspan x="344" dy="0">Anonymous public</tspan><tspan x="344" dy="12.5">metadata and bytes</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 720 335 L 720 160"></path><path class="saer-diagram-flow-arrow" d="M 720 160 L 727 178 L 713 178 Z"></path><rect class="saer-diagram-flow-backing" x="661" y="238.5" width="118" height="18"></rect><text class="saer-diagram-flow-label" x="720" y="247.5"><tspan x="720" dy="0">First-party packages</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 800 580 L 880 580 L 880 115 L 800 115"></path><path class="saer-diagram-flow-arrow" d="M 800 115 L 818 108 L 818 122 Z"></path><rect class="saer-diagram-flow-backing" x="829.25" y="338.5" width="101.5" height="18"></rect><text class="saer-diagram-flow-label" x="880" y="347.5"><tspan x="880" dy="0">Mirrored packages</tspan></text></g></svg>
