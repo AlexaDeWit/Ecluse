@@ -88,13 +88,13 @@ spec = do
 
         it "matches independently constructed project fields across versions, fragments and coordinate gaps" $ do
             (record, private, expected) <- projectFixture
-            (unmanaged, managed, pending) <- expectRight (mirrorProjectViews revision record (Just private))
+            (unmanaged, managed, incompleteVersions) <- expectRight (mirrorProjectViews revision record (Just private))
             fmap manifestInfo managed `shouldBe` Just (manifestInfo expected)
             (managed >>= snd pypiPacked . manifestRaw >>= packedSimpleDocument) `shouldBe` snd pypiSimpleCached (manifestRaw expected)
-            fmap manifestBodyBytes managed `shouldBe` Just (weighCachedDoc (packDocument (fromMaybe (simpleDocument mempty []) (snd pypiSimpleCached (manifestRaw expected)))))
+            fmap (fromIntegral . manifestBodyBytes) managed `shouldBe` Just (weighCachedDoc (packDocument (fromMaybe (simpleDocument mempty []) (snd pypiSimpleCached (manifestRaw expected)))))
             fmap manifestRaw unmanaged `shouldBe` Just (manifestRaw private)
             fmap (Map.keys . infoVersions . manifestInfo) unmanaged `shouldBe` Just ["3"]
-            Map.keys pending `shouldBe` ["4"]
+            Map.keys incompleteVersions `shouldBe` ["4"]
             let selected = Map.lookup "2" (infoVersions (manifestInfo private))
             restored <- expectRight (mirrorVersionView (pypiVersion "2") record (fmap (`VersionDoc` Nothing) selected))
             fmap (map artEntryKey . toList . pkgArtifacts . vdDetails) restored `shouldBe` Just [ArrayEntry 0]
@@ -104,9 +104,9 @@ spec = do
             let withoutFile details = details{pkgArtifacts = fmap identityArtifact (pkgArtifacts details)}
                 identityArtifact artifact = artifact{artHashes = []}
                 shortened = private{manifestInfo = (manifestInfo private){infoVersions = Map.adjust withoutFile "1" (infoVersions (manifestInfo private))}}
-            (_, managed, pending) <- expectRight (mirrorProjectViews revision record (Just shortened))
+            (_, managed, incompleteVersions) <- expectRight (mirrorProjectViews revision record (Just shortened))
             fmap (Map.keys . infoVersions . manifestInfo) managed `shouldBe` Just ["2"]
-            Map.keys pending `shouldBe` ["1", "4"]
+            Map.keys incompleteVersions `shouldBe` ["1", "4"]
             let missing = private{manifestInfo = (manifestInfo private){infoVersions = Map.delete "1" (infoVersions (manifestInfo private))}}
             (_, _, absent) <- expectRight (mirrorProjectViews revision record (Just missing))
             Map.keys absent `shouldBe` ["1", "4"]
@@ -177,16 +177,16 @@ spec = do
 
 projectFixture :: IO (ProjectMirrorRecord, Manifest, Manifest)
 projectFixture = do
-    first <- fixtureInventory "1" [1] False "https://public.test/" "first"
+    firstFragment <- fixtureInventory "1" [1] False "https://public.test/" "first"
     later <- fixtureInventory "1" [2, 3] False "https://public.test/" "later"
-    second <- fixtureInventory "2" [1] False "https://public.test/" "second"
+    secondVersion <- fixtureInventory "2" [1] False "https://public.test/" "second"
     incomplete <- fixtureInventory "4" [1] True "https://public.test/" "pending"
-    initial <- expectRight (extendProjectRecord defaultLimits target first Nothing)
-    record <- foldM (\held inventory -> expectRight (extendProjectRecord defaultLimits target inventory (Just held))) initial [later, second, incomplete]
+    initial <- expectRight (extendProjectRecord defaultLimits target firstFragment Nothing)
+    record <- foldM (\held inventory -> expectRight (extendProjectRecord defaultLimits target inventory (Just held))) initial [later, secondVersion, incomplete]
     privateVersions <- traverse (\(version, numbers) -> fixtureInventory version numbers False "https://private.test/moved/" "stripped") [("1", [1, 2, 3]), ("2", [1]), ("3", [1]), ("4", [1])]
     let privateDocument = simpleDocument (recordEnvelope record) (concat [simpleFiles document | inventory <- privateVersions, PyPIMirrorRead document <- [inventoryReadData inventory]])
         private = Manifest (PackageInfo mirrorPackage (Map.fromList [(renderVersion (pkgVersion details), details) | inventory <- privateVersions, let details = inventoryDetails inventory]) Map.empty []) (packDocument privateDocument) 1024 (digestOf "private")
-        expectedEntries = concat [simpleFiles document | (start, note, inventory) <- [(0, "first", first), (1, "later", later), (3, "second", second)], PyPIMirrorRead document <- [expectedSource start note inventory]]
+        expectedEntries = concat [simpleFiles document | (start, note, inventory) <- [(0, "first", firstFragment), (1, "later", later), (3, "second", secondVersion)], PyPIMirrorRead document <- [expectedSource start note inventory]]
         expectedSource start note inventory = mirrorSource (numberedArtifacts start (fmap privateLocation (pkgArtifacts (inventoryDetails inventory)))) note
         privateLocation artifact = artifact{artUrl = "https://private.test/moved/" <> artFilename artifact}
         numberedArtifacts start (artifact :| rest) = artifact{artEntryKey = ArrayEntry start} :| zipWith (\position item -> item{artEntryKey = ArrayEntry position}) [start + 1 ..] rest
@@ -204,7 +204,7 @@ fixtureInventory version numbers companion location note = do
     let change position artifact =
             let filename = T.replace "1.0" (version <> ".0") (artFilename artifact)
              in artifact{artEntryKey = ArrayEntry (position * 3 + 5), artFilename = filename, artUrl = location <> filename}
-        artifacts = case pkgArtifacts (inventoryDetails base) of first :| rest -> change 0 first :| zipWith change [1 ..] rest
+        artifacts = case pkgArtifacts (inventoryDetails base) of firstArtifact :| rest -> change 0 firstArtifact :| zipWith change [1 ..] rest
         details = (inventoryDetails base){pkgVersion = pypiVersion version, pkgArtifacts = artifacts}
     expectRight (restoreMirrorInventory details (mirrorSource artifacts note))
 
