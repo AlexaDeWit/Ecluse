@@ -8,6 +8,7 @@ module Ecluse.Runtime.Aws.FaultSpec (spec) where
 import Amazonka qualified as AWS
 import Amazonka.Auth.Exception (AuthError (..))
 import Control.Exception (AsyncException (ThreadKilled))
+import Control.Exception qualified as Exception
 import Data.Text qualified as T
 import Network.HTTP.Client (HttpException)
 import Network.HTTP.Types.Status (status200, status404)
@@ -79,7 +80,7 @@ spec = do
             let folded action = foldTransportEscapes tfDetail action :: IO (Either Text ())
             folded (throwIO CredentialChainExhausted) `shouldThrow` isCredentialExhaustion
             folded (throwIO (TestContractEscape "unknown failure")) `shouldThrow` (== TestContractEscape "unknown failure")
-            folded (throwIO ThreadKilled) `shouldThrow` (== ThreadKilled)
+            folded (Exception.throwIO ThreadKilled) `shouldThrow` (== ThreadKilled)
 
     describe "retypeAwsFailure" $ do
         it "raises a refused connection by its transport cause at the dialled host:port, never the request" $
