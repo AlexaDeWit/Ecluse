@@ -2212,6 +2212,12 @@ mitigations:
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010f
+  - id: mit-upstream-request-store
+    title: Built-in Valkey-backed store for high request rates
+    prose: High-request-rate organisations would use a Valkey-backed store built into Écluse to reduce repeated upstream requests. This proposed mitigation depends on [#1821](https://github.com/AlexaDeWit/Ecluse/issues/1821) and is not implemented. The threat remains open.
+    status: proposed
+    threats:
+      - 7d7144df-c350-4c8c-94dd-51fb1c0bd120
 threats:
   - id: 0ec10e5e-0000-4000-8000-000000000101
     number: 1
@@ -2730,4 +2736,17 @@ threats:
     elements:
       - 0ec10e5e-0000-4000-8000-000000000020
       - 0ec10e5e-0000-4000-8000-000000000040
-lastIssuedThreatNumber: 119
+  - id: 7d7144df-c350-4c8c-94dd-51fb1c0bd120
+    number: 120
+    title: Centralised upstream traffic triggers rate limits
+    category:
+      methodology: STRIDE
+      category: denial-of-service
+    severity: medium
+    status: open
+    description: Écluse concentrates package requests that previously came from GitHub Actions and laptops in different locations. These requests likely share a network address translation (NAT) gateway. At high traffic volumes, upstream registries can throttle or block that shared source. Failed metadata or artifact requests then delay or prevent package installations across the organisation.
+    elements:
+      - 0ec10e5e-0000-4000-8000-000000000020
+      - public-listing
+      - public-artifact
+lastIssuedThreatNumber: 120
