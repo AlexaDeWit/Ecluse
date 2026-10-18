@@ -5,10 +5,8 @@
 {- | Digest-pinned image references for the container test tiers, plus the pins themselves.
 
 An attacker can re-point a mutable tag at a poisoned image between two pulls, so every
-image the harness pulls or builds @FROM@ names an immutable @\@sha256:@ digest.
-'mkPinnedImageRef' is the only way to obtain a 'PinnedImageRef' and a pull site accepts
-nothing else, so an unpinned reference cannot reach one. 'ImageRef' separates an image the
-run pulls, which must be pinned, from one the run builds, which has no digest to pin.
+image the harness pulls or builds @FROM@ names an immutable @\@sha256:@ digest. The CI
+pre-pull steps in @.github/workflows/ci.yml@ repeat each pin, so a bump edits both files.
 -}
 module Ecluse.Test.Container.Image (
     -- * A pinned reference
@@ -30,16 +28,11 @@ module Ecluse.Test.Container.Image (
 import Data.Char (isDigit)
 import Data.Text qualified as T
 
-{- | A container image reference nailed to an immutable digest: @\<name\>\@sha256:\<64 lowercase
-hex\>@. The constructor is hidden and 'mkPinnedImageRef' rejects a bare tag, so no unpinned
-reference can reach a pull site.
--}
+-- | An image reference fixed to an immutable digest. The constructor is hidden, so a pull site receives only what 'mkPinnedImageRef' accepted.
 newtype PinnedImageRef = PinnedImageRef Text
     deriving stock (Eq, Show)
 
-{- | Validate a raw reference as @\<name\>\@sha256:\<64 lowercase hex\>@. Rejects a bare tag, an
-empty repository name, and a digest that is not exactly 64 lowercase hexadecimal characters.
--}
+-- | Validate a raw reference as @\<name\>\@sha256:\<64 lowercase hex\>@, refusing a bare tag, an empty name, or a malformed digest.
 mkPinnedImageRef :: Text -> Either Text PinnedImageRef
 mkPinnedImageRef raw =
     case T.breakOn digestMarker raw of
@@ -66,9 +59,7 @@ isLowerHex c = isDigit c || (c >= 'a' && c <= 'f')
 renderPinnedImageRef :: PinnedImageRef -> Text
 renderPinnedImageRef (PinnedImageRef ref) = ref
 
-{- | An image a harness names at a @docker run@ or @docker build FROM@ site. A locally built image
-carries no digest because the run produces it itself and never pulls it.
--}
+-- | An image a harness names at a @docker run@ or @docker build FROM@ site. A pulled image must be pinned, and one the run builds has no digest.
 data ImageRef
     = -- | An external image pulled from a registry, digest-pinned by construction.
       PinnedExternal PinnedImageRef
@@ -82,20 +73,18 @@ renderImageRef = \case
     PinnedExternal ref -> renderPinnedImageRef ref
     LocallyBuilt name -> name
 
-{- | The OTLP Collector, version 0.119.0, by its multi-arch index digest. The specs assert on
-this image's exact @debug@ exporter output and readiness line, so the reference cannot move.
--}
+-- | The OTLP Collector 0.162.0. The specs parse the text its @debug@ exporter prints, and the e2e run waits for its readiness log line.
 collectorImage :: Either Text PinnedImageRef
-collectorImage = mkPinnedImageRef "otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373"
+collectorImage = mkPinnedImageRef "otel/opentelemetry-collector@sha256:310a800ad69ee430e7c541796852a242c9c7db97aaad4daa5ccf843c525fbdb2"
 
--- | @ministack@, tag @1.3-full@: the SQS and S3 emulator both container tiers run against.
+-- | @ministack@ 1.5.24-full: the SQS and S3 emulator both container tiers run against.
 ministackImage :: Either Text PinnedImageRef
-ministackImage = mkPinnedImageRef "ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594"
+ministackImage = mkPinnedImageRef "ministackorg/ministack@sha256:8862a8488307284427c831f8ac3940c8d19e8fe4d023d8057b668e3eb4eb4ee1"
 
--- | The nginx the e2e run terminates TLS with, in front of both registry stubs.
+-- | nginx 1.31.6-alpine: the e2e stub that answers over TLS for every registry name the product dials.
 nginxImage :: Either Text PinnedImageRef
-nginxImage = mkPinnedImageRef "nginx@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa"
+nginxImage = mkPinnedImageRef "nginx@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2"
 
--- | The Verdaccio the e2e run uses as its private upstream and mirror target.
+-- | Verdaccio 5.33.0: the e2e run's private upstream, mirror target, and Dredger private cache.
 verdaccioImage :: Either Text PinnedImageRef
 verdaccioImage = mkPinnedImageRef "verdaccio/verdaccio@sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c"
