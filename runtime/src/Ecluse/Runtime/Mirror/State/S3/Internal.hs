@@ -30,7 +30,7 @@ import Ecluse.Core.Fault (TransportCause (TransportTimeout), TransportFault, tra
 import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Mirror.State.Codec (saturatingStateCharge, stateExchangeCharge)
 import Ecluse.Core.Mirror.State.Internal (StateCharge)
-import Ecluse.Core.Registry.Exchange (chargedRead)
+import Ecluse.Core.Registry.Exchange (accumulatingChargeFrom, chargedRead)
 import Ecluse.Core.Registry.Progress (Watch, meteredReader, meteredUpload, watched)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (..), boundedRead)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
@@ -118,10 +118,8 @@ sendBounded charge requestCharge consumesBody env limits request native = do
 
 readSource :: StateCharge -> Int -> Watch -> Limits -> Types.ClientBody -> ResourceT IO (Int, ByteString)
 readSource charge requestCharge watch limits source = withRunInIO $ \run -> do
-    wireCharge <- newIORef (toInteger stateExchangeCharge + toInteger requestCharge)
-    let payChunk size = do
-            total <- atomicModifyIORef' wireCharge (\previous -> let nextCharge = previous + toInteger (bufferedChunkCharge size) in (nextCharge, nextCharge))
-            charge (saturatingStateCharge total)
+    (addCharge, wireCharge) <- accumulatingChargeFrom (toInteger stateExchangeCharge + toInteger requestCharge) charge
+    let payChunk = addCharge . bufferedChunkCharge
     pending <- newIORef (sealConduitT source)
     let next = do
             current <- readIORef pending
@@ -134,7 +132,7 @@ readSource charge requestCharge watch limits source = withRunInIO $ \run -> do
                     | otherwise -> pure bytes
     boundedRead (MetadataBodyLimit (maxMetadataBytes limits)) (chargedRead payChunk (meteredReader watch next)) >>= \case
         Left _ -> throwIO (ObjectLimit (maxMetadataBytes limits))
-        Right (_, bytes) -> (,bytes) . saturatingStateCharge <$> readIORef wireCharge
+        Right (_, bytes) -> (,bytes) <$> wireCharge
 
 data ObjectProgress = ObjectProgress
     deriving stock (Show)

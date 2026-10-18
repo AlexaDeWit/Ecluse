@@ -25,7 +25,7 @@ import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Fault (TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause, tfDetail))
 import Ecluse.Core.Registry (BodyOutcome (SuccessBody), FetchFault (FetchTransport))
-import Ecluse.Core.Registry.Exchange (boundedExchange, digestingRead, singleAttemptSettings, withSuccessBody, withinServeCap)
+import Ecluse.Core.Registry.Exchange (accumulatingCharge, accumulatingChargeFrom, boundedExchange, digestingRead, singleAttemptSettings, withSuccessBody, withinServeCap)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream, retainedValue)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), ProgressFloor, boundedRead, mkProgressFloor)
 import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlightWithBackend, resolveSingleFlight)
@@ -38,10 +38,39 @@ import Ecluse.Test.Wai (countingUpstream, pacedBody)
 
 spec :: Spec
 spec = do
+    chargeSpec
     singleAttemptSpec
     digestingReadSpec
     floorSpec
     bodyResetSpec
+
+chargeSpec :: Spec
+chargeSpec = describe "cumulative charging" $ do
+    it "retains the seed and charges zero additions" $ do
+        paid <- newIORef []
+        (add, total) <- accumulatingChargeFrom 19 (\n -> modifyIORef' paid (<> [n]))
+        readIORef paid `shouldReturn` []
+        mapM_ add [0, 3, 5, 0]
+        readIORef paid `shouldReturn` [19, 22, 27, 27]
+        total `shouldReturn` 27
+
+    it "saturates additions beyond Int without wrapping" $ do
+        paid <- newIORef []
+        (add, total) <- accumulatingChargeFrom (toInteger (maxBound :: Int) - 1) (\n -> modifyIORef' paid (<> [n]))
+        mapM_ add [2, maxBound]
+        readIORef paid `shouldReturn` [maxBound, maxBound]
+        total `shouldReturn` maxBound
+
+    it "retains the addition when the charge callback fails" $ do
+        (add, total) <- accumulatingChargeFrom 7 (const (fail "charge refused"))
+        tryAny (add 4) >>= (`shouldSatisfy` isLeft)
+        total `shouldReturn` 11
+
+    it "keeps the zero-seeded wrapper's nonpositive suppression" $ do
+        paid <- newIORef []
+        add <- accumulatingCharge (\n -> modifyIORef' paid (<> [n]))
+        mapM_ add [0, -3, 4, 0, 2]
+        readIORef paid `shouldReturn` [4, 6]
 
 singleAttemptSpec :: Spec
 singleAttemptSpec = describe "singleAttemptSettings" $

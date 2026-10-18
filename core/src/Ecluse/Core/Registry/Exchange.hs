@@ -27,6 +27,7 @@ module Ecluse.Core.Registry.Exchange (
     chargedRead,
     chargedReadWith,
     accumulatingCharge,
+    accumulatingChargeFrom,
     boundedChargedRead,
 
     -- * Request formation
@@ -170,10 +171,20 @@ chargedReadWith charge readChunk = do
 -- | Convert per-chunk costs to an absolute requirement within one read operation.
 accumulatingCharge :: (Int -> IO ()) -> IO (Int -> IO ())
 accumulatingCharge charge = do
-    held <- newIORef (0 :: Integer)
-    pure $ \bytes -> when (bytes > 0) $ do
-        required <- atomicModifyIORef' held (\previous -> let next = previous + toInteger bytes in (next, next))
-        charge (fromInteger (min (toInteger (maxBound :: Int)) required))
+    (add, _) <- accumulatingChargeFrom 0 charge
+    pure $ \bytes -> when (bytes > 0) (add bytes)
+
+{- | Start from an existing reservation and report the saturated total, including after callback failure.
+Every addition invokes the callback, including zero. Construction does not charge the seed.
+-}
+accumulatingChargeFrom :: Integer -> (Int -> IO ()) -> IO (Int -> IO (), IO Int)
+accumulatingChargeFrom initial charge = do
+    held <- newIORef initial
+    let total = fromInteger . min (toInteger (maxBound :: Int))
+        add bytes = do
+            required <- atomicModifyIORef' held (\previous -> let next = previous + toInteger bytes in (next, next))
+            charge (total required)
+    pure (add, total <$> readIORef held)
 
 -- | Reserve buffered chunks and their final strict copy before the bounded reader retains them.
 boundedChargedRead :: (Int -> IO ()) -> BodyLimit -> IO ByteString -> IO (Either LimitError (Int, ByteString))
