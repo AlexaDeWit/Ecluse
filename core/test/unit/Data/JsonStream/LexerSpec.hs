@@ -5,6 +5,7 @@
 -- | Recorded C lexer outputs remain independent of the replacement scanner.
 module Data.JsonStream.LexerSpec (spec) where
 
+import Control.Monad (foldM)
 import Data.Aeson ((.:), (.=))
 import Data.Aeson qualified as Aeson
 import Data.ByteString qualified as BS
@@ -112,6 +113,35 @@ guardSpec = describe "immutable lexer" $ do
                     remainingTokens (Lexer.feed waiting "right\"") `shouldBe` [StringContent "right", StringEnd]
                 _ -> expectationFailure "expected a chunk boundary"
             _ -> expectationFailure "expected partial string content"
+
+    it "checks the retained number limit before appending each incomplete piece" $
+        case Lexer.next (Lexer.start (BS.replicate 200000 48)) of
+            More waiting -> case Lexer.next (Lexer.feed waiting "0") of
+                More overLimit -> do
+                    isFailed (Lexer.next (Lexer.feed overLimit "0")) `shouldBe` True
+                    remainingTokens (Lexer.feed overLimit "]") `shouldBe` [JValue (Aeson.Number 0), ArrayEnd]
+                    isFailed (Lexer.next (Lexer.feed waiting "00")) `shouldBe` False
+                _ -> expectationFailure "expected the piece crossing the retained limit to wait"
+            _ -> expectationFailure "expected the initial number piece to wait"
+
+    it "does not apply the retained limit to an initial piece or a completed number" $
+        case Lexer.next (Lexer.start (BS.replicate 200001 48)) of
+            More waiting -> do
+                isFailed (Lexer.next (Lexer.feed waiting "0")) `shouldBe` True
+                remainingTokens (Lexer.feed waiting "]") `shouldBe` [JValue (Aeson.Number 0), ArrayEnd]
+            _ -> expectationFailure "expected the oversized initial number piece to wait"
+
+    it "keeps number continuations independent after many tiny pieces" $ do
+        let consume cursor = case Lexer.next (Lexer.feed cursor "0") of
+                More waiting -> pure waiting
+                _ -> expectationFailure "expected another incomplete number piece" >> pure cursor
+        case Lexer.next (Lexer.start "0") of
+            More initial -> do
+                waiting <- foldM (\cursor _ -> consume cursor) initial [1 .. 4096 :: Int]
+                remainingTokens (Lexer.feed waiting "]") `shouldBe` [JValue (Aeson.Number 0), ArrayEnd]
+                remainingTokens (Lexer.feed waiting "1]") `shouldBe` [JValue (Aeson.Number 1), ArrayEnd]
+                remainingTokens (Lexer.feed initial "2]") `shouldBe` [JValue (Aeson.Number 2), ArrayEnd]
+            _ -> expectationFailure "expected a partial number"
 
     it "reads dense tokens in pieces larger than the bounded body's chunk size" $ do
         let body = "[" <> BS.intercalate "," (replicate denseCount "0") <> "]"

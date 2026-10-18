@@ -65,7 +65,7 @@ lookupLocal recordOccupancy recordRefused sf key = case sfBackend sf of
     _ -> pure Nothing
 
 {- | Share active work and release waiters on failure or cancellation.
-Capacity refusals and external backend faults use the refusal callback.
+Capacity refusals and backend failures use the refusal callback.
 -}
 resolveSingleFlight ::
     (Ord k) =>

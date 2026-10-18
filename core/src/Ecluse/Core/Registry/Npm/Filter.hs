@@ -76,7 +76,6 @@ assembleMergedPackument mountBase bySource plan base =
             | (version, object) <- overlayObjectSurvivors versionEntries bySource plan
             ]
 
--- The base's top-level members with the plan's tags and times, before the served versions go in.
 servedMembers :: MergePlan -> KeyMap Value -> KeyMap Value
 servedMembers plan baseObject =
     baseObject
@@ -137,7 +136,7 @@ assembleMergedDocument :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan
 assembleMergedDocument mountBase bySource plan base =
     case (traverse (traverse (snd npmPacked)) bySource, traverse (snd npmPacked) base) of
         (Just packed, Just packedBase) -> fst npmRendered (assemblePackedPackument mountBase packed plan packedBase)
-        _ -> assembleAcross npmCached assembleMergedPackument mountBase bySource plan base
+        _ -> assembleAcross npmCached (Object mempty) assembleMergedPackument mountBase bySource plan base
 
 -- | npm's 'Ecluse.Core.Registry.Adapter.Capability.metadataSerialise'. Another ecosystem's document serialises as @{}@.
 serialiseMergedDocument :: CachedDoc -> Either RenderRefused LByteString

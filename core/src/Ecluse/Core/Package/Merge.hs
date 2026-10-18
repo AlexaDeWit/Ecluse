@@ -135,15 +135,11 @@ instance Eq Candidate where
 instance Ord Candidate where
     compare a b = compare (candKey a) (candKey b)
 
--- Ordering ignores the value so precedence resolves collisions before content.
 data Ranked a = Ranked
     { rankedRank :: (Provenance, SourceId)
     , rankedValue :: a
     }
     deriving stock (Eq, Show)
-
-instance (Eq a) => Ord (Ranked a) where
-    compare a b = compare (rankedRank a) (rankedRank b)
 
 -- Keeps the higher-precedence (smaller-rank) value. Associative and commutative, so a
 -- 'Map.unionWith' over it resolves a key's collision independent of input order.

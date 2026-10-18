@@ -74,16 +74,19 @@ For S3, readers need `s3:GetObject` and prefix-scoped `s3:ListBucket`. Workers a
 See [role permissions](@/docs/deployment.md) and [CodeArtifact permissions](@/docs/dredger.md#permissions).
 
 Run Pilot for the PyPI advisory database.
-Before enabling advisory denies, publish the artifact with `ecluse pilot compile --ecosystem pypi --out DIR --upload`.
+Publish the artifact with `ecluse pilot compile --ecosystem pypi --out DIR --upload`
+before starting admission roles with `advisories.url` configured.
 [Running Pilot](@/docs/deployment.md#running-pilot) describes qualified generations and storage.
 Use `ecluse check-config` to detect configuration refusals. It makes no cloud call and cannot verify repository aggregation or permissions.
 Check [per-mount readiness](@/docs/operations.md#health-probes), worker progress and [telemetry](@/docs/operations.md) after startup.
-A PyPI mount with an advisory deny waits for its first accepted advisory generation.
+The supplied example activates advisory rules and waits for its first accepted advisory generation.
 Readiness does not prove that every repository or state operation succeeds.
 
 ## Choose policy and first-party names
 
-The shipped policy admits old releases and exact advisory fixes. Advisory denies are opt-in.
+The shipped policy admits old releases and qualified exact advisory fixes. Configuring
+`advisories.url` activates the known-malicious deny unless you disable it. Scored CVSS and EPSS
+denies are opt-in.
 PyPI refuses `AllowScope`, `DenyInstallTimeExecution` and `DenyIfDeprecated` in an active policy.
 Do not copy npm-only rules into shared rules.
 The [rule policy](@/docs/configuration.md#rule-policy) defines precedence, unavailable-data behaviour and admission versus revocation.
@@ -93,7 +96,7 @@ The example reserves `acme` and `acme-*` for private reads and publication.
 A missing first-party project never falls back to public PyPI. The worker does not mirror first-party projects, including older queued jobs.
 Declare the same names in every role.
 Review existing public-derived copies before adding a declaration, because Dredger then protects those names.
-[MAL advisory behaviour](@/docs/configuration.md#pypi-uploads-and-mirror-state) follows configured rules, not an unconditional malware deny.
+[MAL advisory behaviour](@/docs/configuration.md#known-malicious-packages-and-upgrades) follows the configured rule and its precedence.
 
 ## Completion, outages and recovery
 

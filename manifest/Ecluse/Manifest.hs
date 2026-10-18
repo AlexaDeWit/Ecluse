@@ -72,6 +72,7 @@ import Network.HTTP.Media (MediaType)
 import Network.HTTP.Types.Method (StdMethod (..))
 import Network.HTTP.Types.Status (statusCode)
 
+import Ecluse.Core.BuildIdentity (productVersion)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName, prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
@@ -133,7 +134,7 @@ manifestInfo :: Info
 manifestInfo =
     (mempty :: Info)
         { _infoTitle = "Écluse OpenAPI spec"
-        , _infoVersion = "0.1.0"
+        , _infoVersion = productVersion
         , _infoDescription =
             Just
                 "Which registry protocols this Écluse server speaks, and exactly what is and is not \

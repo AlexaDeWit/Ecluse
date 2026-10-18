@@ -15,6 +15,7 @@ module Ecluse.BenchLoad.ProxyProcess (
     proxyEnvironment,
     requireIdentityListings,
     sweepProxyCgroups,
+    createConfiguredCgroup,
 
     -- * A running proxy
     ProxyProcess,
@@ -38,6 +39,7 @@ module Ecluse.BenchLoad.ProxyProcess (
     -- * A drained process
     Drained,
     bootDrained,
+    bootDrainedWith,
     BootFailure (..),
     retryingBoot,
     bootDiagnostic,
@@ -94,7 +96,7 @@ import System.Process.Typed (
     unsafeProcessHandle,
     waitExitCode,
  )
-import UnliftIO (bracket, finally, onException, try, tryAny, tryIO)
+import UnliftIO (bracket, bracketOnError, finally, mask, onException, try, tryAny, tryIO)
 import UnliftIO.Async (Async, async, cancel, link, poll)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
@@ -120,7 +122,7 @@ import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection), RtsSnapshot, co
 import Ecluse.BenchLoad.Verdict (ProxyEnding, classifyEnding)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Server.Encoding (MetadataCompression (IdentityOnly))
-import Ecluse.Rts (parseMemoryMax, readIfExists)
+import Ecluse.Rts.Cgroup (parseMemoryMax, readIfExists)
 import Ecluse.Runtime.Server (listeningPrefix, proxyListener)
 import Ecluse.Test.Env (ambientAwsEntries)
 import Ecluse.Test.Poll (awaitUntil, pollUntil)
@@ -249,11 +251,20 @@ acquireCgroup shape tuning root attempt = case root of
     Just base -> do
         pid <- getProcessID
         let dir = base </> ("proxy-" <> show pid <> "-" <> show attempt)
-        createDirectory dir
-        for_ (proxyCgroupFiles shape tuning) $ \(file, value) -> writeFileText (dir </> file) value
-        swapFile <- doesFileExist (dir </> "memory.swap.max")
-        when (swapFile && isJust (podMemoryLimit shape)) (writeFileText (dir </> "memory.swap.max") "0")
-        pure (Just dir)
+        Just
+            <$> createConfiguredCgroup
+                dir
+                ( \created -> do
+                    for_ (proxyCgroupFiles shape tuning) $ \(file, value) -> writeFileText (created </> file) value
+                    swapFile <- doesFileExist (created </> "memory.swap.max")
+                    when (swapFile && isJust (podMemoryLimit shape)) (writeFileText (created </> "memory.swap.max") "0")
+                )
+
+-- | Retire a newly created cgroup if writing its controls fails.
+createConfiguredCgroup :: FilePath -> (FilePath -> IO ()) -> IO FilePath
+createConfiguredCgroup dir configure =
+    bracketOnError (createDirectory dir) (const (retireCgroup dir)) $ \() ->
+        configure dir $> dir
 
 -- Kill anything left in the cgroup, wait for it to empty, and remove it.
 retireCgroup :: FilePath -> IO ()
@@ -514,24 +525,37 @@ renderBootFailure failure =
 
 -- | Drain process output while polling readiness every 100 ms, returning bounded diagnostics on failure.
 bootDrained :: Manager -> Int -> Int -> ProcessConfig () () () -> IO (Either BootFailure Drained)
-bootDrained manager attempts port command = do
-    process <- startProcess (setStdin nullStream (setStdout createPipe (setStderr createPipe command)))
+bootDrained = bootDrainedWith (const async)
+
+-- | Supply drain-worker creation for deterministic acquisition-failure tests.
+bootDrainedWith :: (Text -> IO () -> IO (Async ())) -> Manager -> Int -> Int -> ProcessConfig () () () -> IO (Either BootFailure Drained)
+bootDrainedWith startWorker manager attempts port command = mask $ \restore -> do
     out <- newIORef emptyCaptured
     err <- newIORef emptyCaptured
-    drains <- traverse startDrain [("stdout", getStdout process, out), ("stderr", getStderr process, err)]
-    let drained = Drained process out err drains
-    -- A drain failure or an interrupt during the wait must not leave the process behind.
-    readiness <- pollUntil attempts 100_000 settled (probe drained) `onException` stopDrained drained
-    case readiness of
-        Ready -> pure (Right drained)
-        ExitedDuringBoot code -> Left <$> failBoot drained ("exited during boot with " <> show code)
-        Booting -> Left <$> failBoot drained ("did not become ready within " <> show (attempts `div` 10) <> " s")
+    bracketOnError
+        (startProcess (setStdin nullStream (setStdout createPipe (setStderr createPipe command))))
+        (\process -> void (stopDrained (Drained process out err [])))
+        $ \process -> do
+            let partial = Drained process out err
+                startDrain stream source captured = do
+                    worker <- startWorker stream (restore (drain stream source captured))
+                    link worker `onException` cancel worker
+                    pure worker
+            stdoutWorker <- startDrain "stdout" (getStdout process) out
+            stderrWorker <-
+                startDrain "stderr" (getStderr process) err
+                    `onException` stopDrained (partial [stdoutWorker])
+            let drained = partial [stdoutWorker, stderrWorker]
+            restore
+                ( do
+                    readiness <- pollUntil attempts 100_000 settled (probe drained)
+                    case readiness of
+                        Ready -> pure (Right drained)
+                        ExitedDuringBoot code -> Left <$> failBoot drained ("exited during boot with " <> show code)
+                        Booting -> Left <$> failBoot drained ("did not become ready within " <> show (attempts `div` 10) <> " s")
+                )
+                `onException` stopDrained drained
   where
-    -- A failed read would leave the pipe full and stall the proxy, so it fails the scenario at once.
-    startDrain (stream, source, captured) = do
-        worker <- async (drain stream source captured)
-        link worker
-        pure worker
     probe drained =
         getExitCode (drProcess drained) >>= \case
             Just code -> pure (ExitedDuringBoot code)

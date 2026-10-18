@@ -38,7 +38,8 @@ import Ecluse.Composition.Executable (
     RoleWiring (MirrorPipelineWiring, PilotWiring, StorePrunerWiring),
     planExecutable,
  )
-import Ecluse.Composition.Maintenance (ClearedBackend (cbUrl), StoreBuilds (StoreBuilds, sbDeleting, sbObserving, sbProbing), StorePorts (spCredential))
+import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving, sbProbing), StorePorts (spCredential))
+import Ecluse.Composition.Maintenance.Plan (ClearedBackend (cbUrl))
 import Ecluse.Composition.Plan (BootPlan (bpRole))
 import Ecluse.Composition.Support (NoCredentials (NoCredentials), clearedUrl, codeArtifactEnvVars, codeArtifactMirrorUrl, codeArtifactPypiCacheUrl, codeArtifactPypiMirrorUrl, expectConfig, expectPlanFor, noCeiling, overrideEnv, privateUpstreamUrl, pypiMirrorEnv, staticEnvVars, twoStoreEnv, withObservablePrivate)
 import Ecluse.Composition.Types (

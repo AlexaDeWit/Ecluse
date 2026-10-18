@@ -81,9 +81,9 @@ collectorImage = mkPinnedImageRef "otel/opentelemetry-collector@sha256:310a800ad
 ministackImage :: Either Text PinnedImageRef
 ministackImage = mkPinnedImageRef "ministackorg/ministack@sha256:8862a8488307284427c831f8ac3940c8d19e8fe4d023d8057b668e3eb4eb4ee1"
 
--- | nginx 1.31.6-alpine: the e2e stub that answers over TLS for every registry name the product dials.
+-- | nginx 1.31.2-alpine: the e2e stub that answers over TLS for every registry name the product dials.
 nginxImage :: Either Text PinnedImageRef
-nginxImage = mkPinnedImageRef "nginx@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2"
+nginxImage = mkPinnedImageRef "nginx@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa"
 
 -- | Verdaccio 5.33.0: the e2e run's private upstream, mirror target, and Dredger private cache.
 verdaccioImage :: Either Text PinnedImageRef

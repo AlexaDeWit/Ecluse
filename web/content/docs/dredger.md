@@ -161,6 +161,8 @@ capacity than the share allows, the Dredger logs a warning naming the share the 
 and the share in force, then runs the next cycle at its ceiling. When the cycle's own work already
 fills the allowance, the warning says that no request budget reaches the window. The sweep never
 refuses over pacing, because a refused cycle leaves the denied version served.
+The request quota sets the minimum delay, even when one request needs more time than the cycle allowance.
+The cycle allowance caps only extra slowdown above that minimum.
 
 **One Dredger per store.** The budget reserves capacity from this sweep alone. It guarantees
 nothing against unrelated workloads, and two Dredger processes sharing one account need shares you
@@ -169,9 +171,8 @@ allocate between them.
 **Not every physical attempt is counted.** The sweep counts the calls it makes. A retry the AWS SDK
 makes inside one call is not counted, and a version enumeration counts as one request however many
 pages the store takes to answer it. A maintenance client replays no request on a reused connection
-below that accounting. So every physical attempt is one the budget counted. A connection that fails
-reaches the store-fault policy, and a metadata read that fails keeps its package until a later
-cycle.
+below that accounting. A connection failure that remains after backend retry handling reaches the
+store-fault policy. A metadata read that fails keeps its package until a later cycle.
 
 ## What is deleted, and what never is
 

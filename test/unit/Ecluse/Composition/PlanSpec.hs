@@ -65,17 +65,8 @@ import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, RubyGems))
 import Ecluse.Core.Security (Limits (progressFloor), mkProgressFloor, serveCapSeconds)
 import Ecluse.Pilot.Plan (pilotPostureLines)
-import Ecluse.Rts (
-    CgroupLimits (..),
-    EffectiveAxis (..),
-    EffectiveRuntimePlan (..),
-    Provenance (FromCgroup),
-    RtsPosture (..),
-    RuntimeOverrides (..),
-    appliedRuntimePlan,
-    reconcileRuntimePlan,
-    resolveRuntimePlan,
- )
+import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromCgroup), RtsPosture (..), RuntimeOverrides (..), appliedRuntimePlan, reconcileRuntimePlan, resolveRuntimePlan)
+import Ecluse.Rts.Cgroup (CgroupLimits (..))
 import Ecluse.Test.Package (unsafeRegistryUrl)
 
 -- | Verify boot reporting and refusals against the resolved configuration.

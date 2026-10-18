@@ -9,15 +9,17 @@ import Amazonka qualified as AWS
 import Data.Text qualified as T
 import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (InvalidProxyEnvironmentVariable, ResponseTimeout))
 import Network.HTTP.Client.Internal (throwHttp)
+import Network.HTTP.Types.Status (status404)
 import OpenTelemetry.Trace (TracerProviderOptions (tracerProviderOptionsExceptionHandlers), emptyTracerProviderOptions)
 import OpenTelemetry.Trace.Core (ExceptionClassification (IgnoredException), ExceptionResponse (ExceptionResponse))
 import Test.Hspec
 import UnliftIO.Exception (tryAny)
 
-import Ecluse.Core.Fault (TransportCause (TransportTimeout), renderTransportCause)
+import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportTimeout), renderTransportCause)
 import Ecluse.Core.Fault.Http (displayFaultT)
+import Ecluse.Runtime.Aws.Fault (classifyEscapedTransport)
 import Ecluse.Runtime.Telemetry.Escape (escapedRequestCause, withEscapeHandler)
-import Ecluse.Test.Stub (requestSecrets, signedRequest)
+import Ecluse.Test.Stub (redirectedStatusException, requestSecrets, signedRequest)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 spec :: Spec
@@ -33,10 +35,17 @@ spec = do
             escapedRequestCause (toException (AWS.TransportError timedOut))
                 `shouldBe` Just ("127.0.0.1:1: ResponseTimeout (" <> renderTransportCause TransportTimeout <> ")")
 
+        it "retains distinct HTTP status text for bare and AWS-wrapped exceptions" $ do
+            (authority, err) <- redirectedStatusException status404
+            escapedRequestCause (toException err) `shouldBe` Just (authority <> ": HTTP 404")
+            escapedRequestCause (toException (AWS.TransportError err))
+                `shouldBe` Just (authority <> ": StatusCodeException: HTTP 404 (" <> renderTransportCause TransportProtocol <> ")")
+
         it "renders a client fault raised outside a request through its typed cause, never its proxy value, and the library ignores it" $ do
             raised <- tryAny (throwHttp (InvalidProxyEnvironmentVariable "https_proxy" "https://user:proxy-secret@proxy.example:3128") :: IO ())
             case raised of
                 Left wrapper -> do
+                    classifyEscapedTransport wrapper `shouldBe` Nothing
                     escapedRequestCause wrapper `shouldBe` Just (displayFaultT wrapper)
                     displayFaultT wrapper `shouldNotSatisfy` T.isInfixOf "proxy-secret"
                     ignored wrapper `shouldBe` True

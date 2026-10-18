@@ -29,7 +29,7 @@ import UnliftIO.Exception (finally, try)
 
 import Ecluse.Config (AppConfig (cfgAdvisories), Config (configApp, configMounts), loadConfig, mountEpssRequirement)
 import Ecluse.Config.Ambient (parseEndpointUrl)
-import Ecluse.Core.Cve (AdvisoryRange (arEpss), CveDb (..), CveLookup (..), openCveDb)
+import Ecluse.Core.Cve (AdvisoryRange (arEpss), CveDb (..), CveLookup (..))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
 import Ecluse.Core.Osv.Compile (PilotEpssRequired)
 import Ecluse.Core.Osv.Publication (ObjectRevision (ObjectRevision), PublicationRefusal (..), Rebaseline (Rebaseline), mkPercent)
@@ -47,7 +47,7 @@ import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (aiOsvZip), fillerTargets, 
 import Ecluse.Test.Cve (namesFix)
 import Ecluse.Test.Log (memoryLogEnv, runQuietKatip)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2), mkMinimalValidDb, osvCorpusZip, osvZipOf)
-import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, epssFreeRules, stubSourceEnv, withSourceStubs)
+import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, epssFreeRules, openCveDb, stubSourceEnv, withSourceStubs)
 import Ecluse.Test.Poll (pollUntil, retryingIO)
 import Ecluse.Test.Stub (Captured (capMethod, capPath), Stub, allCaptured, stubBaseUrl, withStub)
 

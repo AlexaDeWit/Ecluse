@@ -23,6 +23,10 @@ case "$1" in
   build)
     printf 'build:%s\n' "$2" >> "$TEST_TRACE"
     [ "${TEST_FAIL_BUILD:-}" != "$2" ] || exit 9
+    if [ -n "${TEST_OVERLAP:-}" ] && [ "$2" = ecluse-e2e-manifest ]; then
+      touch "$TEST_WORK/plan-started"
+      timeout 5 bash -c 'until [ -e "$TEST_WORK/image-started" ]; do sleep 0.01; done'
+    fi
     ;;
   list-bin) printf '%s/bin/%s\n' "$TEST_WORK" "${2#exe:}" ;;
   run|bench)
@@ -49,10 +53,30 @@ case "$1" in
   *) exit 2 ;;
 esac
 STUB
+cat > bin/git <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  'rev-parse HEAD') printf 'fallback-source\n' ;;
+  'rev-parse --show-toplevel') printf '%s\n' "$TEST_WORK" ;;
+  *) exit 2 ;;
+esac
+STUB
+cat > bin/uname <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "$*" = -m ]
+printf 'fallback-architecture\n'
+STUB
 cat > bin/nix <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'image-build\n' >> "$TEST_TRACE"
+if [ -n "${TEST_OVERLAP:-}" ]; then
+  touch "$TEST_WORK/image-started"
+  timeout 5 bash -c 'until [ -e "$TEST_WORK/plan-started" ]; do sleep 0.01; done'
+fi
+[ -z "${TEST_FAIL_IMAGE:-}" ] || { echo 'image build failed' >&2; exit 8; }
 printf '%s/image.tar\n' "$TEST_WORK"
 STUB
 cat > bin/docker <<'STUB'
@@ -77,6 +101,9 @@ STUB
 cat > bin/ecluse-artifact <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
+[ "$ECLTEST_SOURCE" = "${TEST_EXPECT_SOURCE:-test-source}" ]
+[ "$ECLTEST_ARCHITECTURE" = "${TEST_EXPECT_ARCHITECTURE:-arm64}" ]
+[ "$ECLTEST_REQUIRED" = 1 ]
 operation="$1"
 root="$2"
 case "$operation" in
@@ -117,6 +144,9 @@ STUB
 cat > bin/runner <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
+[ "$ECLTEST_SOURCE" = "${TEST_EXPECT_SOURCE:-test-source}" ]
+[ "$ECLTEST_ARCHITECTURE" = "${TEST_EXPECT_ARCHITECTURE:-arm64}" ]
+[ "$ECLTEST_REQUIRED" = 1 ]
 component="$(basename "$0")"
 case "$component" in
   *-manifest)
@@ -134,6 +164,9 @@ case "$component" in
     ;;
   ecluse-completion-*-audit)
     [ "$#" = 8 ]
+    subject="${component#ecluse-completion-}"
+    subject="${subject%-audit}"
+    [ "$8" = "$ECLTEST_ARTIFACT_DIR/reports/$subject.json" ]
     for report in "$@"; do test -s "$report"; done
     ;;
   *-audit)
@@ -217,7 +250,8 @@ STUB
 chmod +x bin/*
 
 run_task() {
-  task --exit-code --silent "$@" > "$work/task.log" 2>&1
+  # Nested Task colour resets must not prefix diagnostics checked as complete lines.
+  NO_COLOR=1 task --exit-code --silent "$@" > "$work/task.log" 2>&1
 }
 
 reject() {
@@ -275,6 +309,19 @@ done
 
 ECLTEST_ARTIFACT_DIR="$work/bootstrap-failure" TEST_FAIL_BUILD=exe:ecluse-artifact reject run_task test-e2e-prepare
 ECLTEST_ARTIFACT_DIR="$work/bootstrap-failure" reject run_task test-e2e-prepare
+ECLTEST_ARTIFACT_DIR="$work/overlap" TEST_OVERLAP=1 run_task test-e2e-prepare
+test -s "$work/overlap/identity.json"
+status=0
+ECLTEST_ARTIFACT_DIR="$work/image-failure" TEST_FAIL_IMAGE=1 run_task test-e2e-prepare || status=$?
+[ "$status" = 8 ]
+grep -Fxq 'image build failed' "$work/task.log"
+[ ! -e "$work/image-failure/archive-path" ]
+[ ! -e "$work/image-failure/docker-image.tar" ]
+[ ! -e "$work/image-failure/identity.json" ]
+status=0
+ECLTEST_ARTIFACT_DIR="$work/plan-failure" TEST_FAIL_BUILD=ecluse-e2e-manifest TEST_FAIL_IMAGE=1 run_task test-e2e-prepare || status=$?
+[ "$status" = 9 ]
+grep -Fxq 'image build failed' "$work/task.log"
 : > "$TEST_TRACE"
 ECLTEST_ARTIFACT_DIR="$work/full-failed" TEST_FAILED_SUBJECT=pypi reject run_task test-e2e
 for subject in npm pypi shared-system; do test -s "$work/full-failed/reports/$subject.json"; done
@@ -352,14 +399,40 @@ for tier in core runtime; do
   printf 'passed\n' > "$work/$tier/unit-report.json"
 done
 run_task test-integration
-ECLTEST_COMPONENT=ecluse-e2e-pypi ECLTEST_SHARD=pypi run_task test-e2e-npm
-[ "$(cat "$work/prepared/reports/npm.json")" = passed ]
-run_task test-e2e-npm-completion
-for path in "$work/core/unit-report.json" "$work/runtime/unit-report.json" "$work/integration/report.json" "$work/prepared/reports/npm.json"; do
-  mv "$path" "$path.saved"
-  reject run_task test-e2e-npm-completion
-  mv "$path.saved" "$path"
+for subject in npm pypi shared-system; do
+  : > "$TEST_TRACE"
+  ECLTEST_COMPONENT=ambient-component ECLTEST_SHARD=ambient-shard run_task "test-e2e-$subject"
+  [ "$(grep '^run:' "$TEST_TRACE")" = "run:$subject" ]
+  [ "$(cat "$work/prepared/reports/$subject.json")" = passed ]
 done
+for subject in npm pypi; do
+  run_task "test-e2e-$subject-completion"
+  for path in "$work/core/unit-report.json" "$work/runtime/unit-report.json" "$work/integration/report.json" "$work/prepared/reports/$subject.json"; do
+    mv "$path" "$path.saved"
+    reject run_task "test-e2e-$subject-completion"
+    mv "$path.saved" "$path"
+  done
+done
+
+for target in test-e2e-prepare test-e2e; do
+  ECLTEST_ARTIFACT_DIR="$work/rejected-$target" reject run_task "$target" -- --group forbidden
+  [ ! -e "$work/rejected-$target/.bootstrap" ]
+done
+for target in test-e2e-load test-e2e-npm test-e2e-pypi test-e2e-shared-system \
+  test-e2e-audit test-e2e-npm-completion test-e2e-pypi-completion \
+  test-conformance-verdaccio test-conformance-codeartifact test-integration; do
+  reject run_task "$target" -- --group forbidden
+done
+(
+  unset ECLTEST_SOURCE ECLTEST_ARCHITECTURE
+  export TEST_EXPECT_SOURCE=fallback-source TEST_EXPECT_ARCHITECTURE=fallback-architecture
+  export ECLTEST_ARTIFACT_DIR="$work/fallback-identity"
+  run_task test-e2e-prepare
+  run_task test-e2e-load
+  run_task test-e2e-npm
+  run_task test-conformance-codeartifact
+  run_task test-integration
+)
 
 export PERF_ARTIFACT_DIR="$work/performance" BENCH_LOAD_CGROUP="$work/cgroup"
 export BENCH_LOAD_ISOLATE_OHA=1 BENCH_LOAD_DURATION_SECONDS=30 BENCH_LOAD_CONCURRENCY=100
@@ -387,4 +460,4 @@ grep -Fxq 'proxyCpus=' "$PERF_ARTIFACT_DIR/conditions.json"
 TEST_FAIL_BUILD=exe:bench-report PERF_NATIVE_OUTCOME=failure reject run_task performance:load-receipt
 [ ! -e "$PERF_ARTIFACT_DIR/ecosystem-npm/receipt.json" ]
 [ ! -e "$PERF_ARTIFACT_DIR/ecosystem-pypi/receipt.json" ]
-printf 'ok - Task sequence, current failures, aggregate evidence, locks, cancellation, coverage and fixed backend contracts\n'
+printf 'ok - Task sequence, image build overlap, current failures, aggregate evidence, locks, cancellation, coverage and fixed backend contracts\n'

@@ -56,7 +56,7 @@ data Cursor = Cursor !BS.ByteString {-# UNPACK #-} !Int !Mode ~[BS.ByteString]
 data Mode
     = Base
     | StringPart !Bool !Bool
-    | NumberPart
+    | NumberPart {-# UNPACK #-} !Int
     | LiteralPart !Literal {-# UNPACK #-} !Int
     | StringFinish
     | Broken
@@ -100,7 +100,7 @@ next (Cursor bytes offset mode numbers) = case mode of
     _ | offset >= BS.length bytes -> More (Cursor bytes offset mode numbers)
     Base -> base bytes offset numbers
     StringPart continued escaped -> string bytes offset continued escaped numbers
-    NumberPart -> number bytes offset True numbers
+    NumberPart retainedBytes -> number bytes offset True retainedBytes numbers
     LiteralPart literal matched -> identifier bytes offset literal matched numbers
 {-# INLINE next #-}
 
@@ -123,7 +123,7 @@ base bytes = skipSpace
         | byte == trueInitial = identifierStart TrueLiteral
         | byte == falseInitial = identifierStart FalseLiteral
         | byte == nullInitial = identifierStart NullLiteral
-        | numberByte byte = number bytes offset False numbers
+        | numberByte byte = number bytes offset False 0 numbers
         | otherwise = Failed
       where
         following = offset + 1
@@ -197,8 +197,8 @@ delimiterByte :: Word8 -> Bool
 delimiterByte byte = byte == quote || byte == backslash
 {-# INLINE delimiterByte #-}
 
-number :: BS.ByteString -> Int -> Bool -> [BS.ByteString] -> Scanned
-number bytes initial continued numbers = go initial 0 0 False 0 continued 1
+number :: BS.ByteString -> Int -> Bool -> Int -> [BS.ByteString] -> Scanned
+number bytes initial continued retainedBytes numbers = go initial 0 0 False 0 continued 1
   where
     !size = BS.length bytes
     piece offset = BS.take (offset - initial) (BS.drop initial bytes)
@@ -225,10 +225,11 @@ number bytes initial continued numbers = go initial 0 0 False 0 continued 1
                                                 if byte == dot && not dotted
                                                     then go (offset + 1) computed digits True fractionDigits False sign
                                                     else go (offset + 1) computed digits dotted fractionDigits True sign
+    -- The inherited limit excludes the incoming piece and does not govern completion.
     partial part
-        | not continued = More (Cursor bytes size NumberPart [part])
-        | foldl' (\total partBytes -> total + BS.length partBytes) 0 numbers > numberDigitLimit = Failed
-        | otherwise = More (Cursor bytes size NumberPart (part : numbers))
+        | not continued = More (Cursor bytes size (NumberPart (BS.length part)) [part])
+        | retainedBytes > numberDigitLimit = Failed
+        | otherwise = More (Cursor bytes size (NumberPart (retainedBytes + BS.length part)) (part : numbers))
     complete part offset computed fractionDigits invalid sign
         | invalid =
             let whole = if continued then BS.concat (reverse (part : numbers)) else part

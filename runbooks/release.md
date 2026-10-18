@@ -33,9 +33,8 @@ git ls-remote --tags origin
 ```
 
 Every `Release dry-run` job must read `success`. Those jobs run the release's own build definition
-on both architectures, so a red one predicts a failed release. `task init-release` re-checks all
-four and refuses on any of them. Its `CI gate` check covers the dry-run, because the dry-run jobs
-gate it. So `DRY_RUN=1 task init-release VERSION=vX.Y.Z` rehearses this whole section without
+on both architectures, so a red one predicts a failed release. `task init-release` checks the aggregate
+`CI gate` result and refuses unless it succeeds. The dry-run jobs gate that result. So `DRY_RUN=1 task init-release VERSION=vX.Y.Z` rehearses this whole section without
 creating anything.
 
 Scope must be final before the tag: the `Tag Integrity` ruleset blocks tag deletion and update
@@ -45,7 +44,7 @@ first.
 ## 2. Cut and push the tag
 
 ```bash
-env -u IN_NIX_SHELL nix develop --command task init-release VERSION=v0.2.0
+env -u IN_NIX_SHELL nix develop --command task init-release VERSION=v0.3.0
 ```
 
 It refuses unless the version matches `ecluse.cabal`, the working tree is clean, `HEAD` is

@@ -18,8 +18,8 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
-import Ecluse.Core.Registry.Json.Packed (encodeString)
 import Ecluse.Core.Registry.Json.Scratch (Scratch, copyOut, decimalLength, newScratch, putByte, putDecimal, putEncodedText, putVarint, rewindTo, scratchCursor)
+import Ecluse.Core.Registry.Json.StringEncoding (encodeString)
 
 spec :: Spec
 spec = modifyMaxSuccess (const 1000) $ describe "Scratch" $ do

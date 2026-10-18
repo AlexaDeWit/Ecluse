@@ -9,7 +9,7 @@ import System.Directory (doesFileExist)
 
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, withSlotGeneration)
 import Ecluse.Core.Cve.Types (DbEtag)
-import Ecluse.Runtime.Cve.Sync.Internal (SyncEnv (..), SyncOutcome (..), syncStep)
+import Ecluse.Runtime.Cve.Sync.Step (SyncEnv (..), SyncOutcome (..), syncStep)
 import Ecluse.Test.Contract.Advisory (AdvisoryDriver (..), AdvisoryFixture, AdvisoryOutcome (..), AdvisorySnapshot (..))
 import Ecluse.Test.Cve (namesFix)
 

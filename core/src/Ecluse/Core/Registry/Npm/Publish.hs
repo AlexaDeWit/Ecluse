@@ -58,6 +58,7 @@ import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), jsonPutRequest, metadataRequest, packageUrl)
 import Ecluse.Core.Registry.Npm.VersionListReader (npmVersionListWalk)
 import Ecluse.Core.Registry.Publish (PublishCodec (..), PublishPlan (ppLatest))
+import Ecluse.Core.Registry.ServedDocument (objectField)
 import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 import Ecluse.Core.Server.Path (unFilename)
@@ -162,7 +163,7 @@ npmPublishDocument plan uploadData =
     filename = unFilename (maFilename artifact)
     NpmUploadMetadata fields = uploadMetadata uploadData
     authored = authoredFields fields
-    dist = distObject filename (strongestSriValue artifact) (firstHashValue SHA1 artifact) (objectAt "dist" authored)
+    dist = distObject filename (strongestSriValue artifact) (firstHashValue SHA1 artifact) (fromMaybe mempty (objectField "dist" authored))
     manifest = versionManifestObject rendered versionText dist authored
     versionText = renderVersion (inventoryVersion (uploadInventory uploadData))
     rendered = renderPackageName (inventoryPackage (uploadInventory uploadData))
@@ -170,11 +171,6 @@ npmPublishDocument plan uploadData =
 -- Keep the shrinkwrap installation marker, but drop the source registry's bookkeeping.
 authoredFields :: KeyMap Value -> KeyMap Value
 authoredFields = KeyMap.filterWithKey (\keyName _ -> keyName == "_hasShrinkwrap" || not (T.isPrefixOf "_" (Key.toText keyName)))
-
-objectAt :: Key.Key -> KeyMap Value -> KeyMap Value
-objectAt slot o = case KeyMap.lookup slot o of
-    Just (Object inner) -> inner
-    _ -> mempty
 
 -- 'KeyMap.union' is left-biased, so the local authority fields win over the authored ones.
 versionManifestObject :: Text -> Text -> Aeson.Value -> KeyMap Value -> Aeson.Value
@@ -244,7 +240,6 @@ tagsOnly version = \case
     Just (Object tags) -> all (== String (Key.toText version)) tags
     Just _ -> False
 
--- JSON's own whitespace, which a store's parser allows after the document.
 isJsonSpace :: Word8 -> Bool
 isJsonSpace byte = byte == 32 || byte == 10 || byte == 13 || byte == 9
 

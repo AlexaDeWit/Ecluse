@@ -2,15 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Request shaping and URL building for the npm data plane, composed over the
-ecosystem-agnostic mechanics in "Ecluse.Core.Registry.Request" (the outbound seal,
-URL parsing, the path join, the opaque-artifact request core).
-
-Three of npm's protocol facts are load-bearing here. Metadata comes in two forms chosen by
-@Accept@, a scoped name travels as the single segment @\@scope%2Fname@, and an artifact
-request must not decompress in flight, because the client verifies the relayed bytes
-against the packument's @dist.integrity@.
--}
+-- | npm request paths, metadata negotiation and credentials over shared HTTP mechanics.
 module Ecluse.Core.Registry.Npm.Request (
     -- * Content negotiation
     MetadataForm (..),
@@ -31,7 +23,7 @@ module Ecluse.Core.Registry.Npm.Request (
 ) where
 
 import Network.HTTP.Client (
-    Request (decompress, method, requestBody, requestHeaders),
+    Request (method, requestBody, requestHeaders),
     RequestBody (RequestBodyBS),
  )
 import Network.HTTP.Types.Header (hAccept, hAcceptEncoding, hContentType)
@@ -95,14 +87,7 @@ artifactRequestByFile ::
     Either UrlFormationError Request
 artifactRequestByFile baseUrl token name filename = do
     url <- artifactFileUrl baseUrl name filename
-    base <- parseRequestEither url
-    pure
-        . withToken token
-        $ base
-            { -- A @.tgz@ is opaque, already-compressed binary. It advertises no
-              -- @Accept-Encoding@ either, because a doubly-gzipped body fails @dist.integrity@.
-              decompress = const False
-            }
+    artifactRequestByUrl token url
 
 {- | Build npm's artifact @GET@ for the absolute @url@ the projection preserved from the upstream's
 @dist.tarball@, under npm's credential presentation.

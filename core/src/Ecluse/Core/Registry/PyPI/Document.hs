@@ -8,6 +8,7 @@ module Ecluse.Core.Registry.PyPI.Document (
     simpleDocument,
     simpleEnvelope,
     simpleFiles,
+    restrictSimpleFiles,
     simpleEncoding,
 
     -- * Packed full reads
@@ -24,6 +25,7 @@ import Data.Aeson.Encoding qualified as Encoding
 import Data.Aeson.Key (Key)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Primitive.SmallArray (smallArrayFromList)
+import Data.Set qualified as Set
 
 import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, Piece (..), Pieces (ArrayPieces), RenderPlan (..), packedResident, packedValue, tableResident)
@@ -41,13 +43,17 @@ data SimpleDocument = SimpleDocument
 simpleDocument :: Object -> [(EntryKey, Value)] -> SimpleDocument
 simpleDocument envelope = SimpleDocument (KeyMap.delete "files" envelope)
 
+-- | Keep exact source coordinates, preserving the envelope, order and repeated matching entries.
+restrictSimpleFiles :: Set EntryKey -> SimpleDocument -> SimpleDocument
+restrictSimpleFiles keys document =
+    simpleDocument (simpleEnvelope document) (filter ((`Set.member` keys) . fst) (simpleFiles document))
+
 -- The empty state avoids a trailing Series append. Strict payloads keep the fold eager.
 data EnvelopePairs
     = NoEnvelopePairs
     | PendingFiles !Encoding.Series
     | CompletePairs !Encoding.Series
 
--- The ordered fold inserts files once and discards an envelope value at the same key.
 envelopePair :: Encoding.Series -> Key -> Value -> EnvelopePairs -> EnvelopePairs
 envelopePair files key value !rest = case compare key "files" of
     GT -> PendingFiles (prependPair (encodeField key value) rest)

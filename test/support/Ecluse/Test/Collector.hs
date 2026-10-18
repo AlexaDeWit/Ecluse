@@ -2,8 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Span-local evidence from the collector's detailed debug export, shared by unit and E2E tests.
+-- | Collector fixture configuration and evidence from its detailed debug export.
 module Ecluse.Test.Collector (
+    collectorConfig,
     ExportedSpan (..),
     AttributeValue (..),
     exportedSpans,
@@ -14,6 +15,18 @@ module Ecluse.Test.Collector (
 
 import Data.List (lookup)
 import Data.Text qualified as T
+
+-- | Flow-style YAML for the @env:@ provider, which needs no file or shell in the collector image.
+collectorConfig :: [Text] -> Text
+collectorConfig pipelines =
+    "{receivers: {otlp: {protocols: {http: {endpoint: \"0.0.0.0:4318\"}}}}, "
+        <> "exporters: {debug: {verbosity: detailed}}, "
+        <> "service: {pipelines: {"
+        <> T.intercalate ", " (map debugPipeline pipelines)
+        <> "}}}"
+
+debugPipeline :: Text -> Text
+debugPipeline name = name <> ": {receivers: [otlp], exporters: [debug]}"
 
 -- | One span as the debug exporter printed it.
 data ExportedSpan = ExportedSpan

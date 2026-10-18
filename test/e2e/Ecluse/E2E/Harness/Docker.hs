@@ -88,6 +88,7 @@ import Ecluse.E2E.Harness.Stub (
     stubUrl,
  )
 import Ecluse.E2E.Harness.Types
+import Ecluse.Test.Collector (collectorConfig)
 import Ecluse.Test.Container.Image (
     ImageRef (LocallyBuilt),
     collectorImage,
@@ -146,7 +147,7 @@ withFixtureDir topology action = withSystemTempDirectory "ecluse-e2e-fixtures" $
 withGlobalDataPlane :: (GlobalDataPlane -> IO ()) -> IO ()
 withGlobalDataPlane = withDataPlane npmTopology
 
--- | Acquire the concrete resources declared by a group, releasing them on every exit path.
+-- | Wait for the owned registry stub before yielding a group, releasing resources on every exit path.
 withDataPlane :: Topology -> (GlobalDataPlane -> IO ()) -> IO ()
 withDataPlane topology action =
     usingExistingPlane >>= \case
@@ -180,7 +181,10 @@ withDataPlane topology action =
                 -- The production egress guard accepts this documentation range without a bypass.
                 withDockerNetwork labels net ["--subnet", "203.0.113.0/24"] $ \_ ->
                     withStore topology labels net workDir $ \store ->
-                        withDockerContainer labels stubRun $ \_ ->
+                        withDockerContainer labels stubRun $ \_ -> do
+                            ready <- awaitContainerLog stub ((> 0) . startedWorkers) 40
+                            -- Abort acquisition through the container bracket to retain diagnostics and cleanup.
+                            unless ready (throwIO RegistryStubStartupTimedOut)
                             withAws topology labels net $ \aws ->
                                 action
                                     GlobalDataPlane
@@ -191,6 +195,12 @@ withDataPlane topology action =
                                         , gdpWorkDir = workDir
                                         , gdpTopology = topology
                                         }
+
+data RegistryStubStartupTimedOut = RegistryStubStartupTimedOut
+    deriving stock (Show)
+
+instance Exception RegistryStubStartupTimedOut where
+    displayException _ = "the registry stub did not start a worker within the timeout"
 
 withStore :: Topology -> [String] -> String -> FilePath -> (Maybe Service -> IO a) -> IO a
 withStore topology labels net workDir action
@@ -394,7 +404,7 @@ withOptionalCollector cfg labelArgs net coll body
         let collectorRun =
                 (dockerRun coll net image)
                     { drAliases = [toString collectorAlias]
-                    , drEnv = [("OTELCOL_CONFIG", collectorConfig)]
+                    , drEnv = [("OTELCOL_CONFIG", collectorConfig ["traces", "metrics"])]
                     , drCmd = ["--config", "env:OTELCOL_CONFIG"]
                     }
         withDockerContainer labelArgs collectorRun $ \_ -> do
@@ -444,16 +454,6 @@ datadogCollectorEnv =
     , ("DD_AGENT_HOST", collectorAlias)
     ]
         <> telemetryExportTuning
-
-{- The collector configuration as a single-line flow-style YAML document. It arrives through
-the @env:@ provider, so the distroless image needs no shell, file, or bind mount. -}
-collectorConfig :: Text
-collectorConfig =
-    "{receivers: {otlp: {protocols: {http: {endpoint: \"0.0.0.0:4318\"}}}}, "
-        <> "exporters: {debug: {verbosity: detailed}}, "
-        <> "service: {pipelines: {"
-        <> "traces: {receivers: [otlp], exporters: [debug]}, "
-        <> "metrics: {receivers: [otlp], exporters: [debug]}}}}"
 
 -- | The exit status and JSONL logs from a completed product-image invocation.
 data RoleRun = RoleRun

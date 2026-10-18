@@ -100,11 +100,11 @@ httpPrefix = LowerPrefix 7 "http://"
 lowerPrefixChars :: LowerPrefix -> Int
 lowerPrefixChars (LowerPrefix chars _) = chars
 
--- | Whether the prefix begins the lower-cased text. It lowers only the prefix's length of the text, which suffices because 'T.toLower' maps each character on its own to at least one.
+-- | Whether the prefix begins the lower-cased text. It lowers only the prefix's length of the text, which suffices because 'Data.Text.toLower' maps each character on its own to at least one.
 isPrefixOfLowered :: LowerPrefix -> Text -> Bool
 isPrefixOfLowered (LowerPrefix chars prefix) t = lowered == prefix
   where
-    -- Equality, not 'T.isPrefixOf', which streams both texts and allocates for each character.
+    -- Equality, not 'Data.Text.isPrefixOf', which streams both texts and allocates for each character.
     lowered = T.take chars (T.toLower (T.take chars t))
 
 -- | Unicode lowercase, retaining the input when every character is ASCII and none is uppercase.

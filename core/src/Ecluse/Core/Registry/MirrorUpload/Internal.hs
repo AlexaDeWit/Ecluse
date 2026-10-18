@@ -48,7 +48,7 @@ import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest)
 import Ecluse.Core.Registry (MirrorArtifact (..), PublishFault (PublishIntegrityMismatch, PublishSourceUnavailable))
 import Ecluse.Core.Registry.CachedDocument (npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
-import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEnvelope, simpleFiles)
+import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, restrictSimpleFiles, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Project (fileCoordinate, projectFile, projectName, projectSimpleIndex)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifEntryKey, ifFilename))
 import Ecluse.Core.Registry.ServedDocument (uniqueEntries, validEntryKey)
@@ -179,7 +179,7 @@ splitMirrorInventory filenames inventory = do
 restrictReadData :: Set EntryKey -> MirrorReadData -> MirrorReadData
 restrictReadData keys = \case
     NpmMirrorRead fields -> NpmMirrorRead fields
-    PyPIMirrorRead document -> PyPIMirrorRead (simpleDocument (simpleEnvelope document) (filter ((`Set.member` keys) . fst) (simpleFiles document)))
+    PyPIMirrorRead document -> PyPIMirrorRead (restrictSimpleFiles keys document)
 
 validateReadData :: PackageDetails -> MirrorReadData -> Either PublishFault ()
 validateReadData details = \case
@@ -309,7 +309,7 @@ checkedMirrorUploadData inventory file verified metadata = do
         refused "the verified artifact does not belong to the complete mirror inventory"
     pure (MirrorUploadData inventory file verified metadata)
 
--- | The same bytes that passed verification, with no later raw-body argument.
+-- | Verified bytes from this upload, without a replacement body.
 uploadBytes :: MirrorUploadData metadata -> ByteString
 uploadBytes = verifiedBytes . mudVerified
 

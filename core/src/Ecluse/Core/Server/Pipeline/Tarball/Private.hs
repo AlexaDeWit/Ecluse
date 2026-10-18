@@ -16,7 +16,7 @@ module Ecluse.Core.Server.Pipeline.Tarball.Private (
 
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (status403, status404, status503, statusCode)
+import Network.HTTP.Types (status403, status404, status503)
 import Network.Wai (ResponseReceived)
 
 import Ecluse.Core.Credential (ClientCredential)
@@ -26,7 +26,6 @@ import Ecluse.Core.Package (
     PackageDetails (pkgArtifacts),
     PackageInfo (PackageInfo),
  )
-import Ecluse.Core.Registry (isAuthorisationFailure)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByFile, artifactByUrl, artifactHosts))
 import Ecluse.Core.Registry.Metadata (
     MetadataClient (fetchVersionMetadata),
@@ -71,7 +70,8 @@ import Ecluse.Core.Server.Pipeline.Origin (
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Public (servePublicArtifactWithCoverage)
 import Ecluse.Core.Server.Pipeline.Tarball.Relay (
-    acceptArtifact,
+    acceptPrivateArtifact,
+    privateArtifactResponder,
     relayUnjudged,
     relayUpstreamResult,
     withMethod,
@@ -108,7 +108,7 @@ streamPrivateArtifact ctx token = do
         PrivateMissing miss -> pure (PrivateMissed miss)
         PrivateRequest managed req ->
             liftIO $
-                relayUpstreamResult (arMode ctx) (srPrivateManager (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) (shaped req) acceptPrivate relayUnjudged privateResponder >>= \case
+                relayUpstreamResult (arMode ctx) (srPrivateManager (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) (shaped req) acceptPrivateArtifact relayUnjudged privateResponder >>= \case
                     UpstreamRelayed (_, (decision, received)) -> pure (PrivateAnswered decision received)
                     UpstreamRejected status -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed (if status == status404 then MissAbsent else MissUnresolved))
                     UpstreamTransportFailure -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed MissUnresolved)
@@ -120,16 +120,11 @@ streamPrivateArtifact ctx token = do
     shaped = withValidators (arValidators ctx) . withMethod (arMode ctx)
     unavailable = respond (tarballError replies status503 [] (mkRefusal (pdHelp (arDeps ctx)) "managed mirror view is unavailable"))
     refuse = respond (tarballError replies status403 [] (privateAuthorisationRefusal (pdHelp (arDeps ctx))))
-    acceptPrivate status = acceptArtifact status || isAuthorisationFailure (statusCode status)
-
     privateResponder =
-        RelayResponder
-            (\status headers body -> answerPrivate status (respond (tarballStream replies status headers body)))
-            (\status headers -> answerPrivate status (respond (tarballEmpty replies status headers)))
-
-    answerPrivate status admitted
-        | isAuthorisationFailure (statusCode status) = (Metric.Deny,) <$> refuse
-        | otherwise = (Metric.Admit,) <$> admitted
+        privateArtifactResponder ((Metric.Deny,) <$> refuse) (Metric.Admit,) $
+            RelayResponder
+                (\status headers body -> respond (tarballStream replies status headers body))
+                (\status headers -> respond (tarballEmpty replies status headers))
 
 data PrivateArtifact
     = PrivateRequest Bool HTTP.Request
