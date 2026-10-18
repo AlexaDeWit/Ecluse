@@ -28,7 +28,7 @@ spec = describe "parseRetryAfter" $ do
         parse (Just (BS.replicate 10000 57)) `shouldBe` Just (RetryAfter 600)
         parse (Just (BS.replicate 10000 48 <> "1")) `shouldBe` Just (RetryAfter 1)
         parse (Just (BS.replicate 10000 57 <> "x")) `shouldBe` Nothing
-        parse (Just (encodeUtf8 (show (maxBound :: Int)))) `shouldBe` Just (RetryAfter 600)
+        parse (Just (encodeUtf8 (show (maxBound :: Int) :: Text))) `shouldBe` Just (RetryAfter 600)
 
     it "treats missing, zero, and malformed hints as absent" $
         for_ [Nothing, Just "", Just "0", Just "000", Just "-1", Just "+1", Just "1.5", Just "0x10", Just "1 2", Just "1\n", Just "soon", Just "Sat, 01 Jan 10000 00:00:00 GMT"] $ \raw ->

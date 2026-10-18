@@ -9,10 +9,12 @@ import Control.Exception (AsyncException (ThreadKilled), throwIO)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
+import GHC.IO.Exception (IOErrorType (ResourceVanished))
 import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (ResponseTimeout), Manager, Request (method, requestBody), RequestBody (RequestBodyBS, RequestBodyIO, RequestBodyStream), brConsume, defaultManagerSettings, httpLbs, newManager, parseRequest, responseBody, responseStatus, withResponse)
 import Network.HTTP.Types (methodGet, methodHead, status200, status429)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp (testWithApplication)
+import System.IO.Error (ioeGetErrorType)
 import Test.Hspec
 import UnliftIO.Concurrent (threadDelay)
 
@@ -77,7 +79,7 @@ spec = describe "observeExchange" $ do
                 body <- Wai.strictRequestBody request
                 let headers = Wai.requestHeaders request
                 append received (Wai.requestMethod request, lookup "Content-Length" headers, lookup "Transfer-Encoding" headers, body)
-                respond (Wai.responseLBS status200 [] "")
+                respond (Wai.responseLBS status200 [("Connection", "close")] "")
         testWithApplication (pure application) $ \port -> do
             manager <- newManager defaultManagerSettings
             request <- parseRequest (toString (localhost port))
@@ -139,7 +141,7 @@ spec = describe "observeExchange" $ do
         withRawServer resetAfterPartialBodyOverTcp $ \port -> do
             manager <- newManager defaultManagerSettings
             request <- parseRequest (toString (localhost port))
-            observedBody manager (append events) request `shouldThrow` anyHttpException
+            observedBody manager (append events) request `shouldThrow` ((== ResourceVanished) . ioeGetErrorType)
         readIORef events `shouldReturn` [ResponseStatus 200]
 
 observedBody :: Manager -> (ExchangeOutcome -> IO ()) -> Request -> IO LBS.ByteString
@@ -160,9 +162,6 @@ isResponseTimeout :: HttpException -> Bool
 isResponseTimeout = \case
     HttpExceptionRequest _ ResponseTimeout -> True
     _ -> False
-
-anyHttpException :: HttpException -> Bool
-anyHttpException _ = True
 
 data ConsumerStopped = ConsumerStopped
     deriving stock (Eq, Show)

@@ -69,7 +69,6 @@ import Ecluse.Core.Server.Pipeline.Tarball.Refusal (
     artifactError,
     crossHostRefused,
     internalArtifactError,
-    upstreamCooling,
     upstreamUnavailable,
     versionAbsent,
  )

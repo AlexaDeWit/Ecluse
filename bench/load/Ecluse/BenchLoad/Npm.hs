@@ -60,6 +60,7 @@ import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent))
 import Ecluse.Core.Registry.MirrorUpload (inventoryDetails)
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Publish (prepareNpmSource)
+import Ecluse.Core.Registry.Public (newPublicControl)
 import Ecluse.Core.Registry.Publish.Internal (MirrorPublish (..), PreparedMirrorUpload (..), PreparedMirrorVersion (..))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Version (mkVersion, renderVersion)
@@ -71,6 +72,7 @@ import Ecluse.Core.Worker (
         wrManager,
         wrMetrics,
         wrPolicies,
+        wrPublicControl,
         wrQueue,
         wrTracing
     ),
@@ -289,6 +291,7 @@ workerScenario =
             let bytes = artifactBytes (lkPayloadBytes knobs)
             testWithApplication (pure (stubUpstream octetContentType (lkUpstreamLatencyMicros knobs) bytes)) $ \artPort -> do
                 manager <- newManager defaultManagerSettings
+                publicControl <- newPublicControl (\_ _ _ -> pass) (\_ _ -> pass)
                 queue <-
                     newBoundedInMemoryQueue
                         (defaultMemoryQueueConfig 16)
@@ -299,6 +302,7 @@ workerScenario =
                         WorkerRuntime
                             { wrQueue = queue
                             , wrManager = manager
+                            , wrPublicControl = publicControl
                             , wrHeartbeat = heartbeat
                             , wrMetrics = noopWorkerMetricsPort
                             , wrTracing = passthroughWorkerTracingPort

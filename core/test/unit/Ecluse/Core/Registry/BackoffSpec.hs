@@ -42,21 +42,21 @@ spec = do
                     refuses backoff alpha 20
 
         it "retains the longest concurrent throttle deadline in either completion order" $
-            for_ [(10, 30), (30, 10)] $ \(first, second) ->
+            for_ [(10, 30), (30, 10)] $ \(earlierDelay, laterDelay) ->
                 fixture 10 80 chooseCeiling $ \backoff _ ->
-                    admitted backoff alpha $ \one ->
-                        admitted backoff alpha $ \two -> do
-                            recordPublicResponse one (Throttled (Just (RetryAfter first)))
-                            recordPublicResponse two (Throttled (Just (RetryAfter second)))
+                    admitted backoff alpha $ \earlierAttempt ->
+                        admitted backoff alpha $ \laterAttempt -> do
+                            recordPublicResponse earlierAttempt (Throttled (Just (RetryAfter earlierDelay)))
+                            recordPublicResponse laterAttempt (Throttled (Just (RetryAfter laterDelay)))
                             refuses backoff alpha 30
 
         it "computes concurrent deadlines from each response's fresh time" $
             fixture 10 80 chooseCeiling $ \backoff setClock ->
-                admitted backoff alpha $ \one ->
-                    admitted backoff alpha $ \two -> do
-                        recordPublicResponse one (Throttled (Just (RetryAfter 30)))
+                admitted backoff alpha $ \earlierAttempt ->
+                    admitted backoff alpha $ \laterAttempt -> do
+                        recordPublicResponse earlierAttempt (Throttled (Just (RetryAfter 30)))
                         setClock (addUTCTime 20 now)
-                        recordPublicResponse two (Throttled (Just (RetryAfter 20)))
+                        recordPublicResponse laterAttempt (Throttled (Just (RetryAfter 20)))
                         refuses backoff alpha 20
 
         it "settles one response once and ignores a retained attempt after callback exit" $

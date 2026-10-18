@@ -29,7 +29,6 @@ module Ecluse.Core.Telemetry.Record (
 import GHC.Clock (getMonotonicTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Telemetry.Upstream (ExchangeOutcome, PublicReadKind)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult,
     AdvisoryDropCause,
@@ -48,6 +47,7 @@ import Ecluse.Core.Telemetry.Metrics (
     Tier,
     Upstream,
  )
+import Ecluse.Core.Telemetry.Upstream (ExchangeOutcome, PublicReadKind)
 
 {- | The metric-recording port over a telemetry backend, one field per @ecluse.*@ signal.
 Host labels name permitted public destinations. Other dimensions use bounded label types.

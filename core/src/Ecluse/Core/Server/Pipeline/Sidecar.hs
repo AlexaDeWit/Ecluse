@@ -37,7 +37,7 @@ import Ecluse.Core.Server.Path (Filename, unFilename)
 import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (..), preparePublicMetadata, withPrivateMetadataClient)
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Private (privateMetadataMiss)
-import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, firstPartyMissRefusal, upstreamCooling, upstreamUnavailable, versionAbsent)
+import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, firstPartyMissRefusal, upstreamUnavailable, versionAbsent)
 import Ecluse.Core.Server.Pipeline.Tarball.Relay (ArtifactServe (..), acceptPrivateArtifact, privateArtifactResponder, relayPublicResult, relayUnjudged, relayUpstreamResult, withMethod, withValidators)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..))
 import Ecluse.Core.Server.Response (ServeDecision, mkRefusal)
