@@ -26,12 +26,13 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageInfo, mkPackageName)
 import Ecluse.Core.Package.Entry (AdmittedEntry (admittedFilename, admittedKey), EntryKey (..))
 import Ecluse.Core.Package.Filter (fpDecisions, fpSurvivors, restrictToSurvivors)
-import Ecluse.Core.Package.Merge (MergePlan (mpArtifacts, mpSurvivors), Provenance (GatedSource), mergePackuments)
-import Ecluse.Core.Registry.CachedDocument (npmRendered)
+import Ecluse.Core.Package.Merge (MergePlan (mpArtifacts, mpDistTags, mpSurvivors, mpTime), Provenance (GatedSource), mergePackuments)
+import Ecluse.Core.Registry.CachedDocument (npmCached, npmPacked, npmRendered, pypiSimpleCached)
 import Ecluse.Core.Registry.Json.Packed (Piece (..), Pieces (ObjectPieces), RenderPlan (..))
 import Ecluse.Core.Registry.Json.Shape (Shape (Generic))
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Npm.Filter (
+    assembleMergedDocument,
     assembleMergedPackument,
     npmDocumentName,
     rewriteVersion,
@@ -39,8 +40,10 @@ import Ecluse.Core.Registry.Npm.Filter (
  )
 import Ecluse.Core.Registry.ServedDocument (RenderRefused (RenderRefused))
 
+import Ecluse.Core.Registry.Npm.Document (PackedPackument (..))
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Route (tarballPath)
+import Ecluse.Core.Registry.PyPI.Document (simpleDocument)
 import Ecluse.Core.Rules.Types (
     Decision,
     EvalContext (EvalContext),
@@ -61,6 +64,7 @@ import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 -- | Pin plan replay, source admission and artifact URL rewriting.
 spec :: Spec
 spec = do
+    fallbackAssemblySpec
     nameGateSpec
     rewriteSpec
     filterSpec
@@ -68,6 +72,34 @@ spec = do
     coherenceSpec
     propertiesSpec
     refusedRenderSpec
+
+fallbackAssemblySpec :: Spec
+fallbackAssemblySpec = describe "cached npm fallback assembly" $
+    it "renders plain and mixed sources with absent or foreign bases using exact snapshot selection" $ do
+        let release = NpmFixture.versionValue (NpmFixture.versionSpec "thing" "1.0.0" "https://upstream.test/thing-1.0.0.tgz")
+            raw = NpmFixture.packumentValue "thing" "1.0.0" [("1.0.0", release)] [] []
+            foreignDoc = fst pypiSimpleCached (simpleDocument mempty [])
+            expected entries = Aeson.object ["versions" Aeson..= Aeson.object entries, "dist-tags" Aeson..= Aeson.object [], "time" Aeson..= Aeson.object []]
+        source <- projectJsonSnapshot (projectNpmManifest defaultLimits (mkPackageName Npm Nothing "thing")) raw
+        selected <- expectRight (maybeToRight ("expected merge plan" :: Text) (mergePackuments [(GatedSource, fst <$> source)]))
+        (table, packedRelease) <- case packValue (Generic 64) [] release of
+            Right (StreamResult (Right packed) _) -> pure packed
+            _ -> expectationFailure "did not pack the release" >> fail "missing packed release"
+        let sourceTree = fst npmCached . snd <$> source
+            packedDoc = fst npmPacked (PackedPackument mempty table (KeyMap.singleton "1.0.0" packedRelease))
+            plainSources = Map.singleton 0 sourceTree
+            mixedSources = Map.insert 2 (foreignDoc <$ source) (Map.insert 1 (packedDoc <$ source) plainSources)
+            selection = selected{mpDistTags = mempty, mpTime = mempty}
+        for_ [plainSources, mixedSources] $ \sources ->
+            for_ [Nothing, Just foreignDoc] $ \baseDocument -> do
+                let render inputs = do
+                        let served = assembleMergedDocument base inputs selection baseDocument
+                        snd npmRendered served `shouldSatisfy` isNothing
+                        bytes <- expectRight (serialiseMergedDocument served)
+                        expectRight (Aeson.eitherDecode bytes)
+                render sources `shouldReturn` expected ["1.0.0" Aeson..= release]
+                render (Map.adjust (\snapshot -> snapshot{snapshotDigest = digestOf "different source"}) 0 sources)
+                    `shouldReturn` expected []
 
 refusedRenderSpec :: Spec
 refusedRenderSpec = describe "serialiseMergedDocument" $
