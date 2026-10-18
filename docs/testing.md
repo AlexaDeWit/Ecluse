@@ -153,24 +153,27 @@ projection and serving document with a size and digest that the probe takes from
 bytes. An entry with the read's own digest retains 4 KiB more in this probe, the pinned block that
 digest sits in, and the shape's figures leave that block out.
 
-The retained-byte table uses all nine npm and three PyPI captures from the qualified native arm64
-[Build job 114364621043](https://github.com/AlexaDeWit/Ecluse/actions/runs/38103656822/job/114364621043).
-The [listing calibration](#listing-peaks) records its source parents and matching actual-main baseline.
-The run used GHC 9.10.3, Cabal `-O1`, one capability and a warmed process per shape.
-These gates remain regression limits for authenticated fixtures, not a universal metadata expansion model.
-Their existing calibration stays independent of the admission factors. The original gate rule rounds
-1.08 times the measured maximum up to a quarter step. The PyPI raw gate keeps its default.
+Each capture has its own regression limit for each retained shape: its measured figure plus 3%,
+rounded up to a permille. Retained bytes repeat to the byte between runs, so the whole 3% is room
+for a regression, and growth of more than 3% fails. The figures are current, not historical maxima,
+so a recalibration after a gain lowers the limit. These limits hold authenticated fixtures. They are
+not a universal metadata expansion model, and they stay independent of the admission factors.
 
-| Ecosystem | Retained shape | Maximum heap bytes per source byte | Package | Gate | Margin |
-|---|---|---:|---|---:|---:|
-| npm | Wire bytes | 0.999938894 | typescript | 1.25 | 25.0% |
-| npm | Raw `Value` | 6.477760939 | express | 7 | 8.1% |
-| npm | Typed projection | 0.443634643 | react | 0.5 | 12.7% |
-| npm | Shared cache entry | 0.696386694 | react | 1 | 43.6% |
-| PyPI | Wire bytes | 0.999638868 | numpy | 1.25 | 25.0% |
-| PyPI | Raw `Value` | 4.120186179 | boto3 | 7 | 69.9% |
-| PyPI | Typed projection | 1.592669613 | requests | 1.75 | 9.9% |
-| PyPI | Shared cache entry | 2.404536002 | requests | 3.5 | 45.6% |
+[Build job 117558292470](https://github.com/AlexaDeWit/Ecluse/actions/runs/39085443993/job/117558292470)
+measured the figures at `8981c1b82`, with GHC 9.10.3, Cabal `-O1`, one capability and a warmed
+process per shape. The nine main runs before it gave the same retained bytes. The table gives the
+largest figure for each ecosystem and shape, and that capture's limit.
+
+| Ecosystem | Retained shape | Largest heap bytes per source byte | Package | Its limit |
+|---|---|---:|---|---:|
+| npm | Wire bytes | 0.999793 | @types/node | 1.030 |
+| npm | Raw `Value` | 6.473954 | express | 6.669 |
+| npm | Typed projection | 0.446552 | react | 0.460 |
+| npm | Shared cache entry | 0.699300 | react | 0.721 |
+| PyPI | Wire bytes | 0.996879 | numpy | 1.027 |
+| PyPI | Raw `Value` | 4.116995 | boto3 | 4.241 |
+| PyPI | Typed projection | 1.732844 | requests | 1.785 |
+| PyPI | Shared cache entry | 2.601638 | requests | 2.680 |
 
 A shared cache entry is what a listing's full read holds. Its gate is a regression limit, and the
 same test also checks that it stays within the memory gate's full-read charge, read from each
@@ -179,18 +182,18 @@ size, for the lazy encoding and its strict copy, must stay within the output cha
 [listing probe](#listing-peaks) checks both charges against a read's peak and a render's working
 set. Raise a charge in the adapter, not here, when a representation outgrows it.
 Each denominator is the original authenticated source size, including omitted fields.
-For example, the TypeScript shared shape retains 7,315,240 heap bytes from 15,693,959 source bytes.
+For example, the TypeScript shared shape retains 7,343,736 heap bytes from 15,693,959 source bytes.
 Its re-encoded serving document is 10,181,045 bytes. That encoded size and the source probe's
 `compact_byte_estimate` are different from measured retained heap, and neither is this gate's denominator.
 
-The 48 rows left -16,704 to -1,000 bytes above their warmed baselines after release.
-The 16 KiB release tolerance leaves 17,384 bytes above the observed maximum.
+The 48 rows left -19,912 to -2,480 bytes above their warmed baselines after release.
+The 16 KiB release tolerance leaves 18,864 bytes above the observed maximum.
 The second release condition requires at least 90% of each held growth to disappear.
 Signed integer differences preserve samples that fall below baseline without unsigned wraparound.
 
-The compact denominator gives a different accounting ratio. Requests' shared retained bytes
-divided by its compact encoding equal 3.064518801, the maximum across both ecosystems. The fixed 7.5
-cache-weight factor leaves 144.7% margin above it. It is not an active-work bound.
+The compact denominator gives a different accounting ratio. Boto3's shared retained bytes
+divided by its compact encoding equal 2.974360272, the maximum across both ecosystems. The fixed 7.5
+cache-weight factor leaves 152.2% margin above it. It is not an active-work bound.
 The local provider retains selected releases and assembled bytes, so full shared shapes do not
 size its entry-count control. An assembled-output mean cannot size a shared count of both forms.
 These residency measurements do not determine the shared entry-count allowance.
@@ -201,7 +204,7 @@ or derived rendering, so they do not establish the same fully forced retained en
 
 ### Listing peaks
 
-PyPI's full-read charge is 3.5 and its read limit is 3.25 after retaining canonical sidecars.
+PyPI's full-read charge is 3.5 after retaining canonical sidecars.
 npm keeps its full-read charge of 1.1. Output charges are 2.0 for npm and 1.9 for PyPI.
 
 [Build job 114592183296](https://github.com/AlexaDeWit/Ecluse/actions/runs/38180562637/job/114592183296)
@@ -211,14 +214,13 @@ That checkout merges source `9d78a8a1f79aac63fe3e401ea9d0ab22cd19ee0e` into base
 Boto3's single listing reaches 6,157,344 read bytes above baseline from 2,206,044 source bytes, a ratio of 2.791124746.
 It sets both qualifying read maxima: realistic listings and all shapes, each restricted to at least one 1 MiB source step.
 The 25% margin rounded up to a tenth gives 3.5. The all-shape figure rounds up to 2.8, so the read charge is 3.5.
-The single-read 8% margin rounded up to a quarter gives the 3.25 read regression limit.
 
-All retained envelopes and the 1,024-byte forcing allowance pass in that run and remain unchanged.
+The 1,024-byte forcing allowance passes in that run and remains unchanged.
 The [earlier packed qualification](#qualified-packed-integration) retains its original 3.2 charge and 2.75 limit as historical evidence.
 
 Retaining canonical PyPI sidecars raises the measured output working set. At checkout `372e02a14222e65128bd6cae284e335ca4e41b46`,
 NumPy's disjoint merge reaches 1.476585 per basis byte, the largest qualifying realistic shape among all 84 listing rows.
-The documented 25% margin rounded up to a tenth gives 1.9. The 8% margin rounded up to a quarter gives a 1.75 regression limit.
+The documented 25% margin rounded up to a tenth gives 1.9.
 The same run's 48 retained probes include a maximum twice-encoded/source ratio of 1.753574 for requests, within the charge.
 Heavy NumPy's largest output ratio is 1.734852, also within the charge. The source is [Build job 114592183296](https://github.com/AlexaDeWit/Ecluse/actions/runs/38180562637/job/114592183296).
 A representation change requires all 84 listing shapes, 48 retained probes, cold reads, renders and default loads.
@@ -268,7 +270,7 @@ the serving path's assembly. It reports the output basis the serving path comput
   the smallest
 
 The single-source listing and the first four shapes are realistic: they model private copies
-that deployments serve, and they set the output charge and its regression limit. The heavy bases
+that deployments serve. They set the output charge, and each has its own regression limit. The heavy bases
 stress the basis instead, and the output charge must hold them. For the read charge, the realistic
 shapes set its margin figure, and the heavy bases count only in its all-shape figure. The margin
 figure is the larger for both ecosystems, so it sets both charges.
@@ -296,9 +298,14 @@ The checks compare bytes with each ecosystem's charges:
 - The basis of an identical merge is one document and that of a disjoint merge is both. That of an
   overlapping merge is less than both, and that of a publish-order or heavy-base merge is at least
   the capture and less than both.
-- From one step up, the tier applies read regression limits of 1.0 for npm and 3.25 for PyPI.
-  The output limits are 1.75 for both npm and PyPI. Every limit remains below its charge.
-  Measurements must use the same main base as the candidate.
+- From one step of source up, a single listing's read peak stays under its capture's limit: the
+  measured figure plus 4%, rounded up to a permille. A read peak moves by up to 0.34% between
+  runs, and 4% is ten times that, rounded up. The figure is the largest over the runs measured.
+- From one step of basis up, the output working set of the single listing and of each realistic
+  merge stays under its own limit: the measured figure plus 3%, rounded up to a permille. An output
+  working set repeats to the byte between runs.
+- Every regression limit stays below its charge. Measurements must use the same main base as the
+  candidate.
 - Every single-source npm listing's held entry stays smaller than the source it was read from.
   Each residency record's `residencyEntryBelowSource` selects this check. PyPI's packed files and typed view
   still outgrow the source, so that boundary remains npm-only.
@@ -306,12 +313,18 @@ The checks compare bytes with each ecosystem's charges:
   document's weight, expanded as a cache expands it, covers them.
 
 The residency-only [Calibration module](../test/residency/Ecluse/Core/Server/MemoryModel/Calibration.hs)
-stores exact `Rational` maxima in one `Calibration` record per ecosystem.
-`marginCharge`, `fullReadCharge`, and `regressionLimit` apply the rounding rules above.
+stores exact `Rational` figures. One `Calibration` record per ecosystem holds the listing maxima
+that set the charges, and `marginCharge` and `fullReadCharge` apply the charge rule. One `Figures`
+record per capture holds its retained shapes, its single listing's read peak, and each realistic
+listing's output working set. `heldLimit` and `readPeakLimit` apply the regression rules.
 Production keeps its admission literals. `CalibrationResidencySpec` checks their equality with the
-derived charges and pins the retained envelopes and peak limits.
-PyPI keeps its original raw-tree envelope through the named `pypiRawLimit` exception.
-A recalibration updates the observations and the affected production literal together.
+derived charges and pins the rounding. The coverage check fails when a capture has no `Figures`
+record, or a record names no capture.
+
+To recalibrate a regression limit, read the figures from the `metadata-residency`,
+`metadata-listing` and `metadata-merge` lines of arm64 CI build logs. Take each read peak as the
+largest over the runs. Replace the old figure even when the new one is lower. A charge
+recalibration updates the listing maxima and the production literal together.
 
 Each `metadata-merge` report adds `derived_full_read_permille` and
 `full_read_headroom_per_source_byte`. These fields are informational and add no gate.
@@ -971,6 +984,8 @@ it read from the running RTS.
 
 [acceptance/criteria.json](../acceptance/criteria.json) holds each leg's calibrated figure in
 bytes. A leg's budget is that figure plus the file's `marginPercent`, rounded up to a whole byte.
+The margin is 1%. Over six main runs a leg's median moved by at most 0.051%, so 1% is about twenty
+times the noise and fails a regression of 1% on any leg.
 The file's calibration record names the architecture, runner, commit, and run URLs the figures came
 from. The job fails closed. It fails when:
 
@@ -992,7 +1007,9 @@ its checkout step names that commit. The job writes its report to the run summar
 Arm64 CI is the calibration source, and you can also run `task perf-allocation` on x86_64. On an
 architecture other than the calibration's, the run still holds every leg to its budget and names
 both architectures in the report and in a warning. Allocation can differ between architectures, so a
-leg close to its budget can read differently there. The job is not part of `task check` or
+leg close to its budget can read differently there. On one x86_64 host every leg allocated between
+1.16% less and 0.01% less than its arm64 figure. Every leg passed, and the PyPI requests
+`singleVersion` leg raised the below-margin warning. The job is not part of `task check` or
 `task gate`.
 The CI job writes native row outcomes after measurement and audits one receipt per ecosystem.
 The receipt binds the reviewed four-leg requirements, report and corpus bytes, process result,
@@ -1912,7 +1929,7 @@ Keep live unavailability distinct from refused product behaviour and planned cov
 | At least one real-client install, gating in a fixed E2E subject | `test/e2e/Ecluse/E2E/<Ecosystem>/InstallE2ESpec.hs`, with fixtures under `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/InstallE2ESpec.hs) and [PyPI](../test/e2e/Ecluse/E2E/PyPI/InstallE2ESpec.hs), using the [npm](../test/e2e/Ecluse/E2E/Fixtures/Npm.hs) and [PyPI](../test/e2e/Ecluse/E2E/Fixtures/PyPI.hs) fixtures. An ecosystem's other end-to-end modules sit in the same directory, as [Npm/](../test/e2e/Ecluse/E2E/Npm/) shows. |
 | For an ecosystem with a mirror write, a mirror-only install compared with its control, gating in a fixed E2E subject | `test/e2e/Ecluse/E2E/<Ecosystem>/MirrorInstallE2ESpec.hs`, with its fixture graph in `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/MirrorInstallE2ESpec.hs), as [End-to-end conformance](#end-to-end-conformance-fixed-subjects-gating) describes. [PyPI](../test/e2e/Ecluse/E2E/PyPI/MirrorInstallE2ESpec.hs) checks the complete version, public outage, restart, and file selection for a second target architecture. These target checks prove installed contents, not foreign-code execution. |
 | Walk residency, gating in `ecluse-residency` | `test/residency/Ecluse/Core/Registry/<Ecosystem>/ReaderResidencySpec.hs`, registered in `test/residency/Main.hs` | [npm](../test/residency/Ecluse/Core/Registry/Npm/ReaderResidencySpec.hs) and [PyPI](../test/residency/Ecluse/Core/Registry/PyPI/ReaderResidencySpec.hs) check that eight times more dropped input leaves the bytes a walk holds level, sampled through `Ecluse.Core.Registry.Json.WalkProbe`. |
-| Metadata residency captures and limits, gating in `ecluse-residency` | Add a `Residency` record through `residencyFor` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs). Supply authenticated captures, an exact `Calibration`, limits, envelopes, the entry bound and probe hooks. Add the document cut and heavy-base text in `Ecluse.Test.Corpus.Subset` and `Ecluse.Test.Corpus.Merge` | The residency coverage check fails by ecosystem name when a registered adapter lacks its provider. It checks non-empty captures, positive peak limits and all retained envelopes. Ecosystems without adapters remain excluded. The complete corpus needs a capture above 3,687,514 bytes. [Benchmark captures](#benchmark-captures) defines authentication. [Listing peaks](#listing-peaks) defines calibration and its checks. |
+| Metadata residency captures and limits, gating in `ecluse-residency` | Add a `Residency` record through `residencyFor` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs). Supply authenticated captures, an exact `Calibration` for the charges, measured `Figures` for each capture, the entry bound and probe hooks. Add the document cut and heavy-base text in `Ecluse.Test.Corpus.Subset` and `Ecluse.Test.Corpus.Merge` | The residency coverage check fails by ecosystem name when a registered adapter lacks its provider. It checks non-empty captures, and one `Figures` record for each capture and no other. Ecosystems without adapters remain excluded. The complete corpus needs a capture above 3,687,514 bytes. [Benchmark captures](#benchmark-captures) defines authentication. [Listing peaks](#listing-peaks) defines calibration and its checks. |
 | Read evaluation, gating in `ecluse-residency` | The same captures, and an arm for the ecosystem's served-document form in `documentKeys` in [MetadataResidencySpec.hs](../test/residency/Ecluse/Core/Registry/MetadataResidencySpec.hs) | Without that arm, the weak-pointer check of [Read evaluation](#read-evaluation) finds only the document itself and fails. |
 | Work-per-request instance and corpus | Register an `EcosystemBench` in [Ecluse.Test.EcosystemBench](../test/support/Ecluse/Test/EcosystemBench.hs), with frozen bytes under `bench/corpus/<ecosystem>/`, pins in `bench/corpus/pins.json`, and a synthetic byte generator | npm and PyPI run every metadata group through the shared record. [PyPI captures](../bench/corpus/pypi/) use the shipped PEP 691 Simple JSON format. Generator checks cover decoding, projection, selective reads, and artifact URL rewriting. New instances require no changes to the benchmark groups or report renderer. |
 | Allocation budgets | Per-package, per-leg figures in the ecosystem's section of `acceptance/criteria.json`, and osv.dev records for at least one capture under `bench/corpus/advisories/<ecosystem>/`, pinned at `advisories.records.<ecosystem>` in `bench/corpus/pins.json` | The [harness](../acceptance/app/Main.hs) measures every entry of the registered `EcosystemBench` corpus: the committed captures in the gating `captures` mode, and live npm packuments and PyPI PEP 691 Simple JSON documents in the `live` mode. Each ecosystem has its own report section. A new corpus entry needs calibrated figures before the gate passes, and the covered captures join the expected list in `Ecluse.Test.Corpus.AdvisoriesSpec`. |
