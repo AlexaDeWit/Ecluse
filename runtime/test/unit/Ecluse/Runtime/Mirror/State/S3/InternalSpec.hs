@@ -17,6 +17,7 @@ import UnliftIO.Exception (finally, throwIO)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable), TransportFault (tfCause))
 import Ecluse.Core.Mirror.State (MirrorState (..), MirrorStateFault (..), extendProjectRecord, stateTarget, verifyCompanionBytes)
 import Ecluse.Core.Mirror.State.Codec (stateExchangeCharge)
 import Ecluse.Core.Mirror.State.Internal (CompanionRef (..), StateRevision (..))
@@ -27,9 +28,10 @@ import Ecluse.Core.Server.Admission.Meter (newChargeRegion)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge)
 import Ecluse.Runtime.Mirror.State.S3 (mirrorStateForEnv)
 import Ecluse.Runtime.Mirror.State.S3.Internal
-import Ecluse.Runtime.Test.S3 (brokenResponse, emptyListing, listingReply, populatedListing, reply, withS3, xmlError)
+import Ecluse.Runtime.Test.S3 (brokenResponse, emptyListing, listingReply, populatedListing, recordingStatuses, reply, withS3, withTlsS3, xmlError)
 import Ecluse.Test.Mirror.State (mirrorPackage, mirrorSample)
 import Ecluse.Test.Package (hexSha256Of)
+import Ecluse.Test.Stub.Socket (resetAfterPartialBody, withTlsServer)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape), expectRight)
 
 spec :: Spec
@@ -276,6 +278,14 @@ spec = describe "conditional mirror metadata storage" $ do
         it "returns a typed transport fault when a conditional PUT error body closes early" $
             withS3 (brokenResponse "412 Precondition Failed" body) $ \env ->
                 writeObject (const pass) env limits "records" "key" Nothing "record" >>= (`shouldSatisfy` objectTransportFailure)
+
+    it "returns a typed unreachable fault when a TLS GET body resets after its 200" $
+        withTlsS3 (withTlsServer resetAfterPartialBody) $ \plainEnv -> do
+            (env, statuses) <- recordingStatuses plainEnv
+            readObject (const pass) env limits "records" "key" Nothing >>= \case
+                Left (ObjectTransport fault) -> tfCause fault `shouldBe` TransportUnreachable
+                other -> expectationFailure ("expected a transport fault, got " <> show other)
+            statuses `shouldReturn` [200]
 
     it "requires an ETag after a successful write" $
         withS3 (reply status200 [] "") $ \env ->

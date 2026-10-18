@@ -1569,7 +1569,8 @@ measures the HTTP exchange.
 The cold-read group calls `fetchFullManifest` and `fetchVersionMetadata` through uncached production
 clients. Each iteration includes request formation, loopback HTTP, bounded response consumption,
 source hashing on full reads, extraction, projection, and artifact-location checks. The manager
-redirects every request to the local replay server and disables proxies. No timed request reaches a
+redirects every request to the local replay server and disables proxies. Like every production
+manager, it applies `typedBodyReads` to each body read. No timed request reaches a
 live registry. Source bytes and artifact URLs stay unchanged. Metadata is always cold, although the
 HTTP manager can reuse connections. The group measures neither cache hits nor cache admission.
 

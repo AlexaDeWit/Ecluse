@@ -37,6 +37,7 @@ import UnliftIO.Timeout (timeout)
 import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbEpssNotEstablished), CveLookup (..), affecting, fixedAt, packageAdvisories)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Fault (HttpFault (HttpStatus))
+import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Compile (
     CompileSources,
@@ -49,6 +50,7 @@ import Ecluse.Core.Osv.Compile (
     csEpssFeedUrl,
     csOsvExportUrl,
     mkCompileSources,
+    newFeedManager,
     osvToRow,
     promoteCandidate,
     stampCandidateNonce,
@@ -76,6 +78,7 @@ import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),
     AdvisoryDropCause (DropMalformed, DropOversize),
  )
+import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Cve (namesFix)
 import Ecluse.Test.Log (captureJsonLog, newTestLogEnv)
@@ -84,11 +87,12 @@ import Ecluse.Test.OsvDb (compileOsvToSqlite, compileOsvZipDbTo, compileOsvZipDb
 import Ecluse.Test.Port (RecordedCompile (RecordedCompile), recordingAdvisoryCompileMetricsPort)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Stub (Stub, redirectSecrets, secretAnswer, signedRedirect, stubBaseUrl, withRoutedStubIO, withStub, withStubHeaders)
+import Ecluse.Test.Stub.Socket (Cut (CloseMidBody, CloseMidChunk, ResetMidBody), cutHalfwayThenServe, withRawServer)
 import Ecluse.Test.Supervision (superviseBriefly)
-import Network.HTTP.Client (applyBasicAuth, defaultRequest, requestHeaders)
+import Network.HTTP.Client (Manager, ManagerSettings (managerModifyResponse), applyBasicAuth, defaultRequest, newManager, requestHeaders, responseStatus)
 import Network.HTTP.Types (Header)
 import Network.HTTP.Types.Header (hLastModified)
-import Network.HTTP.Types.Status (Status, status200, status404, status503)
+import Network.HTTP.Types.Status (Status, status200, status404, status503, statusCode)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp (testWithApplication)
 
@@ -332,6 +336,7 @@ spec = describe "SQLite OSV Compilation" $ do
     epssEnrichmentSpec
     candidateSpec
     fetchFaultSpec
+    downloadCutSpec
 
     for_ [("empty", osvZipOf []), ("wrong-ecosystem", LBS.readFile "test/unit/fixtures/osv/sample.zip")] $ \(label, rejectedZip) ->
         for_ [False, True] $ \hasPrevious ->
@@ -767,6 +772,49 @@ fetchFaultSpec = describe "advisory fetch faults behind a redirect to a signed U
                             Left refusal -> toText (displayException refusal) `shouldBe` wire <> " requires EPSS enrichment, and the feed failed: " <> feed <> ": HTTP 404"
                             Right path -> expectationFailure ("a required feed failure published " <> path)
 
+-- A download the source cuts off halfway through its body is retried in place, whether the cut is a reset or a clean close.
+downloadCutSpec :: Spec
+downloadCutSpec = describe "a download the source cuts off halfway through its body" $
+    for_ [(eco, cut) | eco <- [Npm, PyPI], cut <- [ResetMidBody, CloseMidBody, CloseMidChunk]] $ \(eco, cut) -> do
+        it ("retries the OSV export in place and compiles from the clean answer, " <> show eco <> ", " <> show cut) $
+            withSystemTempDirectory "osv-cut" $ \outDir -> do
+                (source, requests) <- cutHalfwayThenServe cut 1 =<< factsArchive eco
+                (feeds, statuses) <- recordingFeedManager
+                (metrics, _) <- recordingAdvisoryCompileMetricsPort
+                dbFile <- withRawServer source $ \osvPort -> withStub status200 factsFeed $ \epssStub ->
+                    compileVia feeds metrics eco EpssRequired (mkCompileSources FingerprintSourcePath (loopbackUrl osvPort "/all.zip") (unpack (stubBaseUrl epssStub) <> "/epss.csv.gz")) outDir
+                requests `shouldReturn` 2
+                statuses `shouldReturn` [200, 200, 200]
+                packagesOf dbFile >>= (`shouldSatisfy` elem "scored-a")
+
+        it ("retries the EPSS feed in place and joins its scores, " <> show eco <> ", " <> show cut) $
+            withSystemTempDirectory "epss-cut" $ \outDir -> do
+                (source, requests) <- cutHalfwayThenServe cut 1 factsFeed
+                (feeds, statuses) <- recordingFeedManager
+                (metrics, _) <- recordingAdvisoryCompileMetricsPort
+                archive <- factsArchive eco
+                dbFile <- withStub status200 archive $ \osvStub -> withRawServer source $ \epssPort ->
+                    compileVia feeds metrics eco EpssRequired (mkCompileSources FingerprintSourcePath (unpack (stubBaseUrl osvStub) <> "/all.zip") (loopbackUrl epssPort "/epss.csv.gz")) outDir
+                requests `shouldReturn` 2
+                statuses `shouldReturn` [200, 200, 200]
+                Map.lookup "epss_status" <$> metaOf dbFile `shouldReturn` Just "available"
+
+-- Compile and promote through this manager, as Pilot does through its feed manager.
+compileVia :: Manager -> AdvisoryCompileMetricsPort -> Ecosystem -> EpssRequirement -> CompileSources -> FilePath -> IO FilePath
+compileVia feeds metrics eco requirement sources outDir =
+    runOsvTestM (withOsvCandidate metrics Nothing feeds outDir (osvEcosystemFor eco) requirement sources testQuietTime promoteCandidate)
+
+-- A manager from Pilot's feed settings, with a reader of each answered status, so a case shows the cut came after the headers.
+recordingFeedManager :: IO (Manager, IO [Int])
+recordingFeedManager = do
+    seen <- newIORef []
+    let record response = response <$ modifyIORef' seen (<> [statusCode (responseStatus response)])
+    feeds <- newManager typedTlsManagerSettings{managerModifyResponse = managerModifyResponse typedTlsManagerSettings >=> record}
+    pure (feeds, readIORef seen)
+
+loopbackUrl :: Int -> String -> String
+loopbackUrl port path = "http://127.0.0.1:" <> show port <> path
+
 -- A source that redirects to a signed URL, which gives each answer in turn and then repeats the last.
 withSignedSource :: NonEmpty (Status, [Header], LByteString) -> (String -> IO a) -> IO a
 withSignedSource answers use = do
@@ -888,14 +936,16 @@ withCandidate :: FilePath -> LByteString -> (OsvCandidate -> IO a) -> IO a
 withCandidate outDir zipData use = do
     epssData <- LBS.readFile epssFixtureFile
     (metrics, _) <- recordingAdvisoryCompileMetricsPort
+    feeds <- newFeedManager
     withStub status200 zipData $ \stub ->
         withStub status200 epssData $ \epssStub ->
-            runOsvTestM (withOsvCandidate metrics Nothing outDir (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") testQuietTime (liftIO . use))
+            runOsvTestM (withOsvCandidate metrics Nothing feeds outDir (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") testQuietTime (liftIO . use))
 
 candidateFactsFrom :: FilePath -> Ecosystem -> EpssRequirement -> CompileSources -> IO CandidateFacts
 candidateFactsFrom outDir eco requirement sources = do
     (metrics, _) <- recordingAdvisoryCompileMetricsPort
-    runOsvTestM (withOsvCandidate metrics Nothing outDir (osvEcosystemFor eco) requirement sources testQuietTime (pure . candidateFacts))
+    feeds <- newFeedManager
+    runOsvTestM (withOsvCandidate metrics Nothing feeds outDir (osvEcosystemFor eco) requirement sources testQuietTime (pure . candidateFacts))
 
 -- One advisory scored through its CVE alias across two packages, and one the feed does not score.
 factsArchive :: Ecosystem -> IO LByteString

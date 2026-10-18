@@ -26,6 +26,9 @@ module Ecluse.Core.Osv.Compile (
     stampCandidateNonce,
     promoteCandidate,
 
+    -- * Feed downloads
+    newFeedManager,
+
     -- * Refusals and rows
     PilotEpssRequired (..),
     PilotOsvFetchFailed (..),
@@ -39,6 +42,8 @@ import Data.Time (UTCTime, getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Database.SQLite.Simple
 import Katip (KatipContext, Severity (..), SimpleLogPayload, katipAddContext, logFM, ls, sl)
+import Network.HTTP.Client (Manager)
+import Network.HTTP.Client.TLS (newTlsManagerWith)
 import System.Directory (createDirectoryIfMissing, removeFile, renameFile)
 import System.FilePath ((</>))
 import System.IO (hClose, openTempFile)
@@ -47,7 +52,7 @@ import UnliftIO.Exception (bracket, throwIO, try)
 
 import Ecluse.Core.BuildIdentity (productVersion)
 import Ecluse.Core.Fault (HttpFault, renderHttpFault)
-import Ecluse.Core.Fault.Http (httpFault)
+import Ecluse.Core.Fault.Http (httpFault, typedTlsManagerSettings)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory, osvWireName))
 import Ecluse.Core.Osv.Epss (
@@ -156,8 +161,8 @@ data OsvCandidate = OsvCandidate
     }
 
 -- | Compile one ecosystem into a candidate for @use@, which may promote it. A refused compile throws before @use@ runs.
-withOsvCandidate :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> OsvEcosystem -> EpssRequirement -> CompileSources -> QuietTime -> (OsvCandidate -> m a) -> m a
-withOsvCandidate metrics mTracerProvider outDir eco requirement sources quietTime use = do
+withOsvCandidate :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> Manager -> FilePath -> OsvEcosystem -> EpssRequirement -> CompileSources -> QuietTime -> (OsvCandidate -> m a) -> m a
+withOsvCandidate metrics mTracerProvider manager outDir eco requirement sources quietTime use = do
     let dbFile = outDir </> osvDbFileName (osvWireName eco)
     logFM InfoS (ls ("Compiling OSV data for " <> osvWireName eco <> " to " <> toText dbFile <> ", EPSS enrichment " <> renderRequirement requirement))
 
@@ -171,11 +176,16 @@ withOsvCandidate metrics mTracerProvider outDir eco requirement sources quietTim
         CompileRun
             { crMetrics = metrics
             , crTracerProvider = mTracerProvider
+            , crManager = manager
             , crEcosystem = eco
             , crEpss = requirement
             , crSources = sources
             , crQuietTime = quietTime
             }
+
+-- | The manager a pass downloads its feeds through, from 'typedTlsManagerSettings' so a reset mid-body reaches the retry. It honours the HTTP proxy variables.
+newFeedManager :: IO Manager
+newFeedManager = newTlsManagerWith typedTlsManagerSettings
 
 -- | Write this attempt's nonce into the candidate. The nonce is fixed width, so the file keeps its size.
 stampCandidateNonce :: (MonadIO m) => OsvCandidate -> PublicationNonce -> m ()
@@ -193,6 +203,7 @@ promoteCandidate candidate = do
 data CompileRun = CompileRun
     { crMetrics :: AdvisoryCompileMetricsPort
     , crTracerProvider :: Maybe TracerProvider
+    , crManager :: Manager
     , crEcosystem :: OsvEcosystem
     , crEpss :: EpssRequirement
     , crSources :: CompileSources
@@ -268,7 +279,7 @@ describeCompile run sp = do
 -- still carries them whenever the feed is up.
 enrichOrRefuse :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => CompileRun -> Maybe Span -> m EpssEnrichment
 enrichOrRefuse run mSpan = do
-    acquired <- acquireEpssFeed maxEpssFeedBytes (csEpssFeedUrl (crSources run))
+    acquired <- acquireEpssFeed (crManager run) maxEpssFeedBytes (csEpssFeedUrl (crSources run))
     forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.epss_status" (renderEpssStatus (either (const EnrichmentUnavailable) (const EnrichmentAvailable) acquired))
     enrichment <- either (refuseRequiredEpss run mSpan) pure (resolveEnrichment (crEpss run) acquired)
     case enrichment of
@@ -305,7 +316,7 @@ renderRequirement = \case
     EpssRequired -> "required"
     EpssOptional -> "optional"
 
--- The client's exception holds the request a redirect reached. The typed fault is thrown outside any
+-- The client's exception can hold the request a redirect reached. The typed fault is thrown outside any
 -- handler, so nothing can annotate it with that exception.
 ingestAdvisories :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => CompileRun -> OsvIngest -> Connection -> m ContentDigest
 ingestAdvisories run ingest conn =
@@ -323,7 +334,7 @@ restreamAdvisories run ingest conn = do
     liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
     runConduit $
         fuseUpstream
-            (streamOsvUrl (crTracerProvider run) ingest (csOsvExportUrl (crSources run)))
+            (streamOsvUrl (crTracerProvider run) (crManager run) ingest (csOsvExportUrl (crSources run)))
             ( CL.filter ((== osvExportDirectory (crEcosystem run)) . extEcosystem)
                 .| CL.chunksOf 2000
                 .| sinkSqlite conn

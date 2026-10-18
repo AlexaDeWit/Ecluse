@@ -31,7 +31,7 @@ import Control.Retry (
     recovering,
  )
 import Katip (KatipContext, Severity (WarningS), logFM, ls)
-import Network.HTTP.Client (HttpException)
+import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (IncompleteHeaders, InvalidChunkHeaders, ResponseBodyTooShort))
 
 import Ecluse.Core.Fault (HttpFault (HttpStatus, HttpTransport), TransportFault (tfCause), renderHttpFault, transportRetryable)
 import Ecluse.Core.Fault.Http (httpFault, isRetryableStatusCode)
@@ -40,11 +40,20 @@ import Ecluse.Core.Fault.Http (httpFault, isRetryableStatusCode)
 defaultOsvRetryPolicy :: (MonadIO m) => RetryPolicyM m
 defaultOsvRetryPolicy = limitRetries 5 <> capDelay 60_000_000 (fullJitterBackoff 1_000_000)
 
--- | Classify status failures by HTTP code and other exceptions by transport cause.
+-- | Classify status failures by HTTP code and other exceptions by transport cause. A download cut short retries too.
 isRetryableHttpException :: HttpException -> Bool
-isRetryableHttpException err = case httpFault err of
-    HttpStatus code -> isRetryableStatusCode code
-    HttpTransport fault -> transportRetryable (tfCause fault)
+isRetryableHttpException err =
+    cutShort err || case httpFault err of
+        HttpStatus code -> isRetryableStatusCode code
+        HttpTransport fault -> transportRetryable (tfCause fault)
+
+-- A peer that closes cleanly mid-download is a protocol fault in the shared table, and another attempt can complete it.
+cutShort :: HttpException -> Bool
+cutShort = \case
+    HttpExceptionRequest _ ResponseBodyTooShort{} -> True
+    HttpExceptionRequest _ IncompleteHeaders -> True
+    HttpExceptionRequest _ InvalidChunkHeaders -> True
+    _ -> False
 
 -- | Retry temporary HTTP failures within the policy budget, warning before each retry. Other failures propagate immediately.
 withOsvRetry :: (MonadMask m, KatipContext m) => Text -> RetryPolicyM m -> m a -> m a

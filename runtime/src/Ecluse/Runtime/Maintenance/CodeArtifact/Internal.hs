@@ -27,10 +27,10 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Internal (
 import Amazonka qualified as AWS
 import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
+import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
 import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
 import Lens.Micro ((^.))
 import Network.HTTP.Client (newManager)
-import Network.HTTP.Client.TLS (tlsManagerSettings)
 import UnliftIO (tryAny)
 
 import Ecluse.Core.Ecosystem (Ecosystem)
@@ -101,9 +101,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Read (
     versionsOfPage,
  )
 
-{- | The control-plane calls this leaf makes, so the sequencing around them is drivable from
-response values of @amazonka@'s own types. The reads are held apart from the writes.
--}
+-- | The control-plane calls this leaf makes, so the sequencing around them is drivable from response values of @amazonka@'s own types. The reads are held apart from the writes.
 data ControlPlane = ControlPlane
     { cpRead :: ReadPlane
     , cpDeleteVersions :: CA.DeletePackageVersions -> IO (Either StoreFault CA.DeletePackageVersionsResponse)
@@ -111,24 +109,18 @@ data ControlPlane = ControlPlane
     , cpUntagResource :: CA.UntagResource -> IO (Either StoreFault CA.UntagResourceResponse)
     }
 
-{- | Build the maintenance handle for one CodeArtifact repository, over an environment whose AWS
-credentials are discovered the standard way.
--}
+-- | Build the maintenance handle for one CodeArtifact repository, over an environment whose AWS credentials are discovered the standard way.
 newCodeArtifactMaintenance :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreMaintenance
 newCodeArtifactMaintenance limit alphabet readManifest store = do
     env <- newMaintenanceEnv store
     boundedMaintenance limit alphabet readManifest store <$> controlPlaneFor env
 
-{- | Build the observing calls alone for one repository, over an environment discovered the same
-way. No deletion, no tag write, and no publication is built, so the caller holds none.
--}
+-- | Build the observing calls alone for one repository, over an environment discovered the same way. No deletion, no tag write, and no publication is built, so the caller holds none.
 newCodeArtifactObservation :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreObservation
 newCodeArtifactObservation limit alphabet readManifest store =
     boundedObservationFor limit alphabet readManifest store . readPlaneFor <$> newMaintenanceEnv store
 
-{- | Probe one repository's chain over an environment discovered the standard way, for a role
-that holds no maintenance handle for the repository it serves private content from.
--}
+-- | Probe one repository's chain over an environment discovered the standard way, for a role that holds no maintenance handle for the repository it serves private content from.
 newCodeArtifactUpstreamProbe :: CodeArtifactStore -> IO UpstreamSafety
 newCodeArtifactUpstreamProbe store = withReadableIdentity $ do
     -- This wrap covers the environment build. The walk below carries its own, for a caller
@@ -169,13 +161,13 @@ reused connection, so an attempt the SDK did not make is not made below it eithe
 newMaintenanceEnv :: CodeArtifactStore -> IO AWS.Env
 newMaintenanceEnv store = do
     env <- newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
-    manager <- newManager (singleAttemptSettings tlsManagerSettings)
+    manager <- newManager (singleAttemptSettings typedTlsManagerSettings)
     pure env{AWS.manager = manager}
 
 -- | Every call sent over one env, with the AWS error folded into a 'StoreFault'.
 controlPlaneFor :: AWS.Env -> IO ControlPlane
 controlPlaneFor env = do
-    deletionManager <- newManager (singleAttemptSettings tlsManagerSettings)
+    deletionManager <- newManager (singleAttemptSettings typedTlsManagerSettings)
     pure
         ControlPlane
             { cpRead = readPlaneFor env
@@ -195,9 +187,7 @@ readPlaneFor env =
         , rpListTags = sendStore env
         }
 
-{- | Build the handle over a caller-supplied 'ControlPlane' and the manifest read the root
-assembled, which together are every effect it has.
--}
+-- | Build the handle over a caller-supplied 'ControlPlane' and the manifest read the root assembled, which together are every effect it has.
 maintenanceFor :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ControlPlane -> StoreMaintenance
 maintenanceFor alphabet readManifest store plane =
     maintenanceOf
@@ -220,9 +210,7 @@ observationFor alphabet readManifest store observer =
         , obProbeUpstream = probeUpstreamSafety observer store
         }
 
-{- | Walk the repository's upstream chain, under the bounds the walk itself holds. The reads are
-the ambient role's own, so no caller's credential reaches this call.
--}
+-- | Walk the repository's upstream chain, under the bounds the walk itself holds. The reads are the ambient role's own, so no caller's credential reaches this call.
 probeUpstreamSafety :: ReadPlane -> CodeArtifactStore -> IO UpstreamSafety
 probeUpstreamSafety observer store =
     withReadableIdentity (walkUpstreamChain linksOf (repositoryOfStore store))

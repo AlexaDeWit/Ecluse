@@ -11,6 +11,7 @@ module Ecluse.Core.Registry.ExchangeSpec (spec) where
 import Data.Aeson (Value (String))
 import Data.ByteString qualified as BS
 import Data.JsonStream.Parser qualified as J
+import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
 import GHC.Clock (getMonotonicTime)
 import Network.HTTP.Client (Manager, Request (method, requestBody), RequestBody (RequestBodyBS), defaultManagerSettings, httpLbs, newManager, parseRequest)
@@ -22,7 +23,7 @@ import UnliftIO.Async (async, wait)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (tryAny)
 
-import Ecluse.Core.Fault (TransportCause (TransportTimeout), TransportFault (tfCause, tfDetail))
+import Ecluse.Core.Fault (TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause, tfDetail))
 import Ecluse.Core.Registry (BodyOutcome (SuccessBody), FetchFault (FetchTransport))
 import Ecluse.Core.Registry.Exchange (boundedExchange, digestingRead, singleAttemptSettings, withSuccessBody, withinServeCap)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream, retainedValue)
@@ -31,6 +32,7 @@ import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlightWithBackend,
 import Ecluse.Core.Snapshot (ContentDigest)
 import Ecluse.Test.Poll (awaitUntil)
 import Ecluse.Test.Snapshot (digestOf)
+import Ecluse.Test.Stub.Socket (resetAfterPartialBody, trustingTlsManager, withTlsServer)
 import Ecluse.Test.Support (expectRightIO)
 import Ecluse.Test.Wai (countingUpstream, pacedBody)
 
@@ -39,6 +41,7 @@ spec = do
     singleAttemptSpec
     digestingReadSpec
     floorSpec
+    bodyResetSpec
 
 singleAttemptSpec :: Spec
 singleAttemptSpec = describe "singleAttemptSettings" $
@@ -92,14 +95,14 @@ floorSpec = describe "the progress floor and the serve-path cap" $ do
     it "fails a body that stops after its headers within about one window" $ do
         progress <- floorOf 30 0.5 1024
         (outcome, elapsed) <- timedExchange id progress (pacedBody [(0, "{\"a\":"), (stallMicros, "1}")])
-        timeoutCause outcome `shouldBe` Just TransportTimeout
+        transportCause outcome `shouldBe` Just TransportTimeout
         elapsed `shouldSatisfy` between 0.5 10
 
     it "fails a trickle below the floor within about one window" $ do
         progress <- floorOf 30 1 65536
         -- 100 bytes every 50 ms: bytes keep arriving, at 2 KB a second against a 64 KiB floor.
         (outcome, elapsed) <- timedExchange id progress (pacedBody (replicate 400 (50_000, BS.replicate 100 0x61)))
-        timeoutCause outcome `shouldBe` Just TransportTimeout
+        transportCause outcome `shouldBe` Just TransportTimeout
         faultDetail outcome `shouldBe` Just "the exchange moved fewer than 65536 body bytes, counting both directions together, in a 1-second progress window"
         elapsed `shouldSatisfy` between 1 10
 
@@ -120,7 +123,7 @@ floorSpec = describe "the progress floor and the serve-path cap" $ do
     it "fails a serve-path exchange at the cap while its body still arrives above the floor" $ do
         progress <- floorOf 2 1 1000
         (outcome, elapsed) <- timedExchange (withinServeCap progress id) progress (pacedBody (steadyBody 80))
-        timeoutCause outcome `shouldBe` Just TransportTimeout
+        transportCause outcome `shouldBe` Just TransportTimeout
         faultDetail outcome `shouldBe` Just "the upstream exchange outlived its 2-second serve-path cap"
         elapsed `shouldSatisfy` between 2 8
 
@@ -134,7 +137,7 @@ floorSpec = describe "the progress floor and the serve-path cap" $ do
             started <- getMonotonicTime
             outcome <- exchangeBody manager progress upload
             finished <- getMonotonicTime
-            timeoutCause outcome `shouldBe` Just TransportTimeout
+            transportCause outcome `shouldBe` Just TransportTimeout
             (finished - started) `shouldSatisfy` between 1 10
 
     it "closes a connection that missed the floor instead of returning it to the pool" $ do
@@ -149,7 +152,7 @@ floorSpec = describe "the progress floor and the serve-path cap" $ do
             let fetch path = parseRequest ("http://127.0.0.1:" <> show port <> "/" <> path) >>= exchangeBody manager progress
             replicateM_ 2 (fetch "healthy" `shouldReturn` Right "{}")
             readIORef opened `shouldReturn` 1
-            (timeoutCause <$> fetch "trickle") `shouldReturn` Just TransportTimeout
+            (transportCause <$> fetch "trickle") `shouldReturn` Just TransportTimeout
             readIORef opened `shouldReturn` 1
             fetch "healthy" `shouldReturn` Right "{}"
             readIORef opened `shouldReturn` 2
@@ -168,7 +171,7 @@ floorSpec = describe "the progress floor and the serve-path cap" $ do
             followers <- traverse (const (async run)) [1 .. 3 :: Int]
             outcomes <- traverse wait (leader : followers)
             finished <- getMonotonicTime
-            map timeoutCause outcomes `shouldBe` replicate 4 (Just TransportTimeout)
+            map transportCause outcomes `shouldBe` replicate 4 (Just TransportTimeout)
             (finished - started) `shouldSatisfy` (< 10)
             readIORef hits `shouldReturn` 1
 
@@ -180,6 +183,19 @@ floorSpec = describe "the progress floor and the serve-path cap" $ do
             let slowConsumer readChunk = boundedRead (MetadataBodyLimit 1024) (threadDelay 500_000 >> readChunk)
             withSuccessBody manager progress slowConsumer request
                 `shouldReturn` Right (SuccessBody 200 (BS.length (mconcat chunks), mconcat chunks))
+
+bodyResetSpec :: Spec
+bodyResetSpec = describe "a TLS body the peer resets mid-read" $
+    it "is an unreachable transport fault after the 200 arrived, at the host:port that served it" $
+        withTlsServer resetAfterPartialBody $ \port -> do
+            manager <- trustingTlsManager
+            progress <- floorOf 30 1 1
+            bodyStarted <- newIORef False
+            let consume readChunk = writeIORef bodyStarted True >> boundedRead (MetadataBodyLimit 1024) readChunk
+            outcome <- withSuccessBody manager progress consume =<< parseRequest ("https://127.0.0.1:" <> show port <> "/")
+            readIORef bodyStarted `shouldReturn` True
+            transportCause outcome `shouldBe` Just TransportUnreachable
+            faultDetail outcome `shouldSatisfy` maybe False (T.isPrefixOf ("127.0.0.1:" <> show port <> ": "))
 
 -- A stall long enough that finishing before it proves the floor fired.
 stallMicros :: Int
@@ -219,8 +235,8 @@ timedExchange wrap progress application =
         finished <- getMonotonicTime
         pure (outcome, finished - started)
 
-timeoutCause :: Either FetchFault a -> Maybe TransportCause
-timeoutCause = \case
+transportCause :: Either FetchFault a -> Maybe TransportCause
+transportCause = \case
     Left (FetchTransport fault) -> Just (tfCause fault)
     _ -> Nothing
 
