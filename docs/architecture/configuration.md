@@ -261,10 +261,10 @@ listing's output working set, heavy bases included, and the tier checks that too
 The residency tier in [`docs/testing.md`](../testing.md#listing-peaks) fails when a listing's reads
 or render outgrow what the meter holds for them, so a representation change cannot silently
 outgrow a charge. From one step up, it fails once a single document's read peak or a realistic
-listing's output working set passes a regression limit. Each limit is the smallest quarter step at
-least 8% above its measured maximum. The current read limits sit 0.1 under npm's charge
-and 0.25 under PyPI's charge. The output limits, set over the realistic shapes, are 1.75 per basis byte for
-npm and PyPI, 0.25 and 0.15 under their charges.
+listing's output working set passes its capture's regression limit. A read peak's limit is its
+measured figure plus 4%, and an output working set's is its figure plus 3%, each rounded up to a
+permille. Every limit sits below its charge, so the tier fails on growth well before a charge stops
+covering it.
 
 A charge above what a request holds costs throughput. After each major collection the sampler
 measures the live data outside the charges, so the budget may grow until charges and that remainder
