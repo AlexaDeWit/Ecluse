@@ -37,6 +37,7 @@ import Ecluse.Core.Osv.Publication
 import Ecluse.Core.Osv.Publication.Envelope (decodeEnvelope, encodeEnvelope)
 import Ecluse.Core.Telemetry.Record (timedSeconds)
 import Ecluse.Core.Telemetry.Span (withOptionalSpan)
+import Ecluse.Runtime.Aws.Env (singleAttemptEnv)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport, serviceStatus)
 import Ecluse.Runtime.Aws.S3.Conditional (Capped (..), ConditionalPut (..), ResponseTooLarge (..), WritePrecondition (..), absenceListing, isWriteConflict, listingProvesAbsence)
 import OpenTelemetry.Trace.Core (Span, SpanKind (Client), SpanStatus (Error), TracerProvider, addAttribute, setStatus)
@@ -211,7 +212,7 @@ putCandidate :: AWS.Env -> Text -> Text -> FilePath -> Precondition -> [(Text, T
 putCandidate env bucket key path precondition envelope = try $ do
     body <- AWS.chunkedFile 1048576 path
     let native = S3.newPutObject (S3.BucketName bucket) (S3.ObjectKey key) body & S3L.putObject_metadata .~ HashMap.fromList envelope
-    result <- runResourceT (AWS.sendEither (AWS.once env{AWS.retryCheck = \_ _ -> False}) (Capped (ConditionalPut (writePrecondition precondition) native)))
+    result <- runResourceT (AWS.sendEither (singleAttemptEnv env) (Capped (ConditionalPut (writePrecondition precondition) native)))
     pure (fmap (\response -> (\(S3.ETag tag) -> ObjectRevision (decodeUtf8 tag)) <$> response ^. S3L.putObjectResponse_eTag) result)
 
 writePrecondition :: Precondition -> WritePrecondition

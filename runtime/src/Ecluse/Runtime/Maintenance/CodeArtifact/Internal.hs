@@ -66,7 +66,7 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     walkUpstreamChain,
  )
 import Ecluse.Core.Version (Version)
-import Ecluse.Runtime.Aws.Env (newAwsEnv)
+import Ecluse.Runtime.Aws.Env (newAwsEnv, singleAttemptEnv)
 import Ecluse.Runtime.Aws.Fault (sendClassified)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     CodeArtifactStore (..),
@@ -171,7 +171,7 @@ controlPlaneFor env = do
     pure
         ControlPlane
             { cpRead = readPlaneFor env
-            , cpDeleteVersions = sendStore (AWS.once env{AWS.retryCheck = \_ _ -> False, AWS.manager = deletionManager})
+            , cpDeleteVersions = sendStore (singleAttemptEnv env{AWS.manager = deletionManager})
             , cpTagResource = sendStore env
             , cpUntagResource = sendStore env
             }

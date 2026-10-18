@@ -35,6 +35,7 @@ import Ecluse.Core.Registry.Progress (Watch, meteredReader, meteredUpload, watch
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (..), boundedRead)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
 import Ecluse.Core.Stream (boundBytes)
+import Ecluse.Runtime.Aws.Env (singleAttemptEnv)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport, serviceStatus)
 import Ecluse.Runtime.Aws.S3.Conditional (ConditionalPut (..), WritePrecondition (..), absenceListing, isWriteConflict, listingProvesAbsence)
 
@@ -103,7 +104,7 @@ sendBounded charge requestCharge consumesBody env limits request native = do
                             )
                             (AWS.hooks env)
                     }
-        AWS.sendEither (AWS.once metered{AWS.retryCheck = \_ _ -> False}) request >>= \case
+        AWS.sendEither (singleAttemptEnv metered) request >>= \case
             Left err -> pure (Left err)
             Right (RawResponse service response) -> do
                 (wireCharge, bytes) <- readSource charge requestCharge watch limits (HTTP.responseBody response)
