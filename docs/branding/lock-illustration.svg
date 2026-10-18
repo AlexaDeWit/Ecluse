@@ -3,18 +3,23 @@
 <title id="title">Canal lock</title><desc id="description">Software packages, shown as parcels with code brackets, travel on a barge through two lock gates from public packages towards company builds.</desc>
 <g stroke-linejoin="round">
 <rect x="20" y="92" width="1060" height="210" fill="#577873"/>
-<rect x="290" y="92" width="530" height="210" fill="#8AA09B"/>
+<path d="M280 92H815L773 197L815 302H280L238 197Z" fill="#8AA09B"/>
 <path d="M20 65H1080V92H20ZM20 302H1080V329H20Z" fill="#DDD3BB"/>
 <path d="M20 65H1080M20 329H1080" stroke="#B8A789" stroke-width="5"/>
 <path d="M55 150H190M70 175H155M910 223H1050M950 248H1045" stroke="#F4EFE3" stroke-width="4" opacity=".45"/>
-<path d="M280 92L238 197L280 302" fill="none" stroke="#211F1C" stroke-width="26"/>
-<path d="M280 92L238 197L280 302" fill="none" stroke="#A15E42" stroke-width="16"/>
-<path d="M282 92L306 35M282 302L306 359" stroke="#DDD3BB" stroke-width="12" stroke-linecap="round"/>
+<g fill="#A15E42" stroke="#211F1C" stroke-width="5">
+<path d="M270.25 88.10L289.75 95.90L249.31 197H226.69Z"/>
+<path d="M226.69 197H249.31L289.75 298.10L270.25 305.90Z"/>
+</g>
+<path d="M280 92L304 32M280 302L304 362" stroke="#DDD3BB" stroke-width="12" stroke-linecap="round"/>
 <circle cx="280" cy="92" r="9" fill="#211F1C"/><circle cx="280" cy="302" r="9" fill="#211F1C"/>
-<path d="M815 92L773 197L815 302" fill="none" stroke="#211F1C" stroke-width="26"/>
-<path d="M815 92L773 197L815 302" fill="none" stroke="#A15E42" stroke-width="16"/>
-<path d="M817 92L841 35M817 302L841 359" stroke="#DDD3BB" stroke-width="12" stroke-linecap="round"/>
+<g fill="#A15E42" stroke="#211F1C" stroke-width="5">
+<path d="M805.25 88.10L824.75 95.90L784.31 197H761.69Z"/>
+<path d="M761.69 197H784.31L824.75 298.10L805.25 305.90Z"/>
+</g>
+<path d="M815 92L839 32M815 302L839 362" stroke="#DDD3BB" stroke-width="12" stroke-linecap="round"/>
 <circle cx="815" cy="92" r="9" fill="#211F1C"/><circle cx="815" cy="302" r="9" fill="#211F1C"/>
+<g transform="translate(-65 0)">
 <path d="M395 140H681Q725 150 752 197Q725 244 681 254H395Q381 197 395 140Z" fill="#211F1C" stroke="#F4EFE3" stroke-width="4"/>
 <path d="M416 150V244" stroke="#A15E42" stroke-width="6"/>
 <circle cx="714" cy="197" r="10" fill="none" stroke="#A15E42" stroke-width="5"/><g transform="translate(435 160) scale(1.0 1.0)">
@@ -29,4 +34,5 @@
 <rect width="64" height="75" rx="4" fill="#DDD3BB" stroke="#211F1C" stroke-width="3"/>
 <path d="M25 0V14H39V0" fill="#A15E42"/>
 <path d="M24 27L14 37L24 47M40 27L50 37L40 47" fill="none" stroke="#211F1C" stroke-width="4" stroke-linecap="round"/>
-<path d="M35 25L29 50" fill="none" stroke="#211F1C" stroke-width="3"/></g></g></svg>
+<path d="M35 25L29 50" fill="none" stroke="#211F1C" stroke-width="3"/></g></g>
+</g></svg>
