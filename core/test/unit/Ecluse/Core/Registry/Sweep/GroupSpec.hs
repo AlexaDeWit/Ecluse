@@ -30,7 +30,7 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
  )
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Registry.Sweep (sweepCycle)
-import Ecluse.Core.Registry.Sweep.Group (boundedVersions)
+import Ecluse.Core.Registry.Sweep.Group (InventoryLocation (..), boundedVersions)
 import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt (HaltBucketUnsplittable, HaltStoreFault),
     CycleOutcome (..),
@@ -60,6 +60,9 @@ import Ecluse.Test.Sweep (RecordedSweep (..), previewMount, previewingReport, re
 
 spec :: Spec
 spec = describe "grouped preview" $ do
+    it "orders mirror inventory before private-cache inventory" $
+        sort [PrivateCacheInventory, MirrorInventory] `shouldBe` [MirrorInventory, PrivateCacheInventory]
+
     it "finds mirror-only, cache-only and shared versions without origin data, counting three selections" $ do
         mirror <- seeded "mirrorTarget" [(leftPadName, ["1.0.0", "3.0.0"])]
         cache <- seeded "privateUpstream" [(leftPadName, ["2.0.0", "3.0.0"])]

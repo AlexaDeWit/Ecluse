@@ -196,6 +196,7 @@ library ecluse-core
     Ecluse.Core.Registry.Json.Intern
     Ecluse.Core.Registry.Json.Packed
     Ecluse.Core.Registry.Json.Scratch
+    Ecluse.Core.Registry.Json.StringEncoding
     Ecluse.Core.Registry.Json.Shape
     Ecluse.Core.Registry.Json.Walk
     Ecluse.Core.Registry.Json.Writer
@@ -316,6 +317,7 @@ library ecluse-core
     Ecluse.Core.Server.Pipeline.Diagnostics
     Ecluse.Core.Server.Pipeline.Origin
     Ecluse.Core.Server.Pipeline.Packument
+    Ecluse.Core.Server.Pipeline.Packument.Representation
     Ecluse.Core.Server.Pipeline.Sidecar
     Ecluse.Core.Server.Pipeline.Tarball
     Ecluse.Core.Server.Pipeline.Tarball.Private
@@ -1121,6 +1123,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Json.InternSpec
     Ecluse.Core.Registry.Json.PackedSpec
     Ecluse.Core.Registry.Json.ScratchSpec
+    Ecluse.Core.Registry.Json.StringEncodingSpec
     Ecluse.Core.Registry.Json.ShapeSpec
     Ecluse.Core.Registry.Json.WalkSpec
     Ecluse.Core.Registry.Json.WriterSpec
@@ -1224,6 +1227,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.Pipeline.InternalSpec
     Ecluse.Core.Server.Pipeline.OriginSpec
     Ecluse.Core.Server.Pipeline.PackumentSpec
+    Ecluse.Core.Server.Pipeline.Packument.RepresentationSpec
     Ecluse.Core.Server.Pipeline.SidecarSpec
     Ecluse.Core.Server.Pipeline.Tarball.PrivateSpec
     Ecluse.Core.Server.Pipeline.Tarball.PublicSpec
