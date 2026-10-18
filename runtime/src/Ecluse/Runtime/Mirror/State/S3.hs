@@ -10,14 +10,12 @@ module Ecluse.Runtime.Mirror.State.S3 (
 
 import Amazonka qualified as AWS
 import Data.Text qualified as T
-import Network.HTTP.Client.TLS (newTlsManagerWith)
 
-import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, chargedEncodeProjectRecord)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..), VerifiedCompanionBytes (..), projectKey)
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
+import Ecluse.Core.Registry.Exchange (newSingleAttemptManager)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (..))
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
@@ -25,14 +23,16 @@ import Ecluse.Runtime.Mirror.State.S3.Internal
 
 -- | The composition root supplies a validated explicit bucket and prefix, independent of advisory storage.
 newS3MirrorState :: Maybe AwsEndpoint -> Limits -> Text -> Text -> StateTarget -> IO MirrorState
-newS3MirrorState endpoint limits bucket prefix target = do
-    env <- buildS3Env endpoint
-    manager <- newTlsManagerWith (singleAttemptSettings typedTlsManagerSettings)
-    pure (mirrorStateForEnv limits bucket prefix target env{AWS.manager = manager})
+newS3MirrorState endpoint limits bucket prefix target = buildS3Env endpoint >>= mirrorStateForEnv limits bucket prefix target
 
--- | Bind one configured namespace to a single-attempt environment, including deterministic signed-wire tests.
-mirrorStateForEnv :: Limits -> Text -> Text -> StateTarget -> AWS.Env -> MirrorState
+-- | Bind one configured namespace to this env. Reads keep its manager's resend on a stale pooled connection, and writes go once.
+mirrorStateForEnv :: Limits -> Text -> Text -> StateTarget -> AWS.Env -> IO MirrorState
 mirrorStateForEnv limits bucket prefix target env =
+    newSingleAttemptManager <&> \writes -> stateOver limits bucket prefix target env env{AWS.manager = writes}
+
+-- Reads and writes share the endpoint and credentials, and differ only in their manager.
+stateOver :: Limits -> Text -> Text -> StateTarget -> AWS.Env -> AWS.Env -> MirrorState
+stateOver limits bucket prefix target readEnv writeEnv =
     MirrorState
         { msReadProject = readProject
         , msWriteProject = writeProject
@@ -46,7 +46,7 @@ mirrorStateForEnv limits bucket prefix target env =
     readProject charge name revision = case revisionBytes target name revision of
         Left fault -> pure (Left fault)
         Right expected ->
-            readObject charge env limits bucket (key name) expected >>= \case
+            readObject charge readEnv limits bucket (key name) expected >>= \case
                 Left fault -> pure (Left (objectFault fault))
                 Right ObjectAbsent -> pure (Right StateAbsent)
                 Right (ObjectUnchanged etag) -> pure (Right (StateUnchanged (StateRevision target name etag)))
@@ -59,19 +59,24 @@ mirrorStateForEnv limits bucket prefix target env =
                 chargedEncodeProjectRecord charge limits record >>= \case
                     Left fault -> pure (Left fault)
                     Right bytes ->
-                        fmap (first objectFault) (writeObject charge env limits bucket (key name) expected bytes)
+                        fmap (first objectFault) (writeObject charge writeEnv limits bucket (key name) expected bytes)
                             <&> fmap
                                 ( \case
                                     ObjectStored etag -> StateStored (StateRevision target name etag)
                                     ObjectConflict -> StateConflict
                                 )
-    retain charge verified@(VerifiedCompanionBytes _ reference _) = do
-        result <- writeObject charge env limits bucket (referenceKey reference) Nothing (companionBody verified)
+    -- A PUT that died unsent leaves the object absent. The key is content-addressed and the PUT conditional, so one more cannot overwrite other bytes.
+    retain charge verified =
+        storeOrReread charge verified >>= \case
+            Left StateMissingCompanion -> storeOrReread charge verified
+            settled -> pure settled
+    storeOrReread charge verified@(VerifiedCompanionBytes _ reference _) = do
+        result <- writeObject charge writeEnv limits bucket (referenceKey reference) Nothing (companionBody verified)
         case result of
             Right (ObjectStored _) -> pure (Right reference)
             _ -> readCompanion charge reference <&> fmap (const reference)
     readCompanion charge reference =
-        fmap (first objectFault) (readObject charge env limits bucket (referenceKey reference) Nothing)
+        fmap (first objectFault) (readObject charge readEnv limits bucket (referenceKey reference) Nothing)
             <&> ( >>=
                     \case
                         ObjectLoaded _ bytes -> verifyRetainedCompanion reference bytes
