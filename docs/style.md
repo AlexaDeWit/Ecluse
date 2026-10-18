@@ -106,13 +106,13 @@ module name to match the file path (`Ecluse.Core.Rules.Types` ⇄
 stable shared vocabulary, or separates simple data from heavy logic such as Aeson parsers. Don't
 spin up a generic bucket first.
 
-**4.4 Functional core, effects at the edges.** Domain and leaf modules are pure
-(`Ecluse.Core.Rules`, `Ecluse.Core.Version`, `Ecluse.Core.Package`), with no `IO`. Effects live at
-the boundary (`app/Main.hs`, the server and worker layers) in `ReaderT Env IO`. Swappable effectful
-backends (registry, queue, credentials) are records of functions chosen at one composition root, the
-Handle pattern (see [`docs/getting-started.md`](getting-started.md) and
-[`docs/architecture/cloud-backends.md`](architecture/cloud-backends.md)). Keep the dependency arrow
-pointing inward: pure modules never import the effectful shell.
+**4.4 Keep domain calculations pure and supply effects through interfaces.** Modules such as
+`Ecluse.Core.Version` and `Ecluse.Core.Package` contain pure domain values and operations.
+`Ecluse.Core.Rules` also coordinates effectful advisory reads, supplied through its dependencies.
+The server and worker carry request or worker contexts through `ReaderT` over logging and `IO`.
+Registry, queue, and credential backends are records of functions selected at composition time.
+See [the backend interfaces](architecture/cloud-backends.md). Pure modules must not import the
+effectful composition shell.
 
 **4.5 Put instances with the type or the class, no orphans.** Define an instance in the module that
 defines the type or the class. An orphan instance can be silently overlapped, and it makes import
@@ -180,9 +180,9 @@ unScope :: Scope -> Text          -- bare value
 renderScope :: Scope -> Text      -- wire form, here with the leading '@'
 ```
 
-Keep a type as small as the domain requires and no smaller than honest. `Version` is deliberately an
-opaque `Text` wrapper that does **not** parse semver, with a comment saying so, until a rule needs
-ordering.
+Keep the information the domain needs. `Version` preserves the raw text and an optional parsed
+`VersionKey`, which `mkVersion` constructs using the ecosystem’s grammar. Ordering uses the
+parsed key. The raw spelling remains available even when parsing cannot supply an ordering key.
 
 **6.3 Prefix record fields with a short type tag** so selectors are unambiguous across modules:
 `pkgName`, `pkgVersion`, `distTarball`, `ctxNow`.
@@ -214,7 +214,7 @@ FailureAlignment Inability` makes the four cases explicit, carries the audit rea
 is total to match. The reason is a sum type of facts too. A total function renders it to text where
 a reader needs it, such as a log line or a response body.
 
-**Test a derivation only when its *specific* shape is load-bearing.** A derived instance is lawful,
+**Test a derivation only when its *specific* shape determines the contract.** A derived instance is lawful,
 but the behaviour it picks rides on declaration structure. The compiler cannot see that, so a later
 "cosmetic" refactor can silently move a contract. Ask: does an external party or a domain rule
 depend on the *specific* shape, or only on the existence of *some* instance?
@@ -227,9 +227,9 @@ depend on the *specific* shape, or only on the existence of *some* instance?
   identity.
 - **Wire contract (`ToJSON`/`FromJSON`)** couples the wire shape to the record structure, so a
   rename is a silent breaking change for clients you can't recompile. For an owned response,
-  derive the schema from the *same* codec, or design the coupling away. The serve layer rebuilds
-  the served packument from the raw upstream document it holds opaquely, and never re-encodes it
-  from a typed model.
+  derive the schema from the *same* codec, or avoid that coupling. The npm reader retains
+  supported installation fields in a packed source representation. Serving uses that
+  representation rather than reconstructing metadata solely from typed policy facts.
 
 Prefer designing the coupling away to testing a fragile derivation. [`docs/testing.md`](testing.md)
 → "Coverage" lists which derived lines the coverage gate accepts as partials.
@@ -261,12 +261,13 @@ name lets the reader skip the body. Single-use glue that only makes sense beside
 inline.
 
 **9.2 Prefer pure and total.** Keep the core logic pure and push `IO` to the edges. Annotate a
-purity or totality guarantee **only where it is surprising or load-bearing**. Two examples: a
+purity or totality guarantee **only where a caller needs the guarantee to use the interface**. Two examples: a
 boundary parser a reader would expect to throw, and `verdictSource`'s verdicts never crashing the
 gate on hostile metadata. Never annotate reflexively. On a signature with no `IO` and a total return
 type, `-- Pure and total.` only restates the type. In a module whose header already says it is pure,
 it restates the header too ([`docs/haddock.md`](haddock.md)). The effectful parts run in
-`ReaderT Env IO`. Handlers take `Env` and run in plain `IO`.
+the request and worker contexts over the logging transformer and `IO`. Composition supplies
+the effectful operations through their explicit dependencies.
 
 **9.3 Use `where` helpers, and lift them when they stop earning the nesting.** Name sub-steps with
 local `where` helpers. A top-level binding always has a signature. A `where`-helper gets one when it

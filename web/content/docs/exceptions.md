@@ -21,7 +21,7 @@ Prefer an exact `package@version` identity. A bare package name matches every ve
 
 **Example: npm version exception**
 
-```bash
+```yaml
 mounts:
   npm:
     rules:

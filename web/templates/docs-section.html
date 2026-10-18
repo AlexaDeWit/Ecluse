@@ -5,7 +5,7 @@
 {% block content %}
 <div class="docs-shell">
   {{ docs::sidebar(current=section.permalink, group="Set up") }}
-  <main class="doc" id="content" data-pagefind-body><h1>{{ section.title }}</h1><p class="doc-deck">{{ section.description }}</p><div class="doc-content">{{ section.content | safe }}</div></main>
+  <main class="doc" id="content"><h1>{{ section.title }}</h1><p class="doc-deck">{{ section.description }}</p>{{ docs::inline_outline(headings=section.toc) }}<div class="doc-content">{{ section.content | safe }}</div></main>
   {{ docs::outline(headings=section.toc) }}
 </div>
 {% endblock content %}

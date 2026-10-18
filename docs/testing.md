@@ -9,9 +9,9 @@ test can be. Three kinds:
 - **smoke** needs an *un-emulable* live service.
 
 The first two are hermetic and **gate** merges. Smoke makes live calls and is **allowed to fail by
-design**. Two further gating tiers, residency and end-to-end, sit alongside them, for ten `cabal`
-test-suites in all. One rule spans every tier (see *What gates, and what doesn't*), so read that
-before you choose a new test's home.
+design**. Residency and end-to-end checks add further gating tiers.
+The suite declarations live in `ecluse.cabal`. Read *What gates, and what doesn’t* before
+choosing a tier for a new test.
 
 ## Unit tests: `ecluse-core-unit`, `ecluse-runtime-unit`, `ecluse-unit` (gating)
 
@@ -848,7 +848,8 @@ The npm subject composes the former serving and write arrangements under one eco
 The shared-system subject owns cross-ecosystem and core capability cases that belong to no single ecosystem.
 The subject matrix disables fail-fast, so one failure does not stop the other subjects.
 Preparation, subject runs, and the execution audit all gate.
-Each ecosystem job also audits its report against the core unit, runtime unit and integration
+The separate `e2e` job runs the execution and cross-tier completion audits after the subject
+and coverage jobs. It compares reports with the core-unit, runtime-unit, and integration
 plans and reports from the same workflow attempt. The audit checks compiled plans, required laws,
 execution status, source, architecture, run identity, and the E2E image identity where it applies.
 A partial retry can retain a previous attempt's E2E plan, which artifact consumers reject with `run identity mismatch`.
@@ -1018,7 +1019,7 @@ run attempt, and recorded build conditions. A missing or failed row keeps the al
 
 ## Benchmarks (non-gating)
 
-Use the benchmark tier to assess cost alongside the ten Cabal test suites. None of its
+Use the benchmark tier to assess cost alongside the Cabal test suites. None of its
 three workflows gates a merge or belongs in branch protection as a required check.
 The workflow YAML owns schedules and run options.
 Each workflow puts its report in the GitHub run summary and uploads the listed files on that run's page.
@@ -1926,7 +1927,7 @@ Keep live unavailability distinct from refused product behaviour and planned cov
 | Unit contracts, gating in `ecluse-core-unit` | Mirror `Ecluse.Core.Registry.<Ecosystem>.*` with `core/test/unit/Ecluse/Core/Registry/<Ecosystem>/*Spec.hs`, including the adapter contracts | [npm](../core/test/unit/Ecluse/Core/Registry/Npm/) and [PyPI](../core/test/unit/Ecluse/Core/Registry/PyPI/). The shared [adapter spec](../core/test/unit/Ecluse/Core/Registry/AdapterSpec.hs) pins ecosystem dispatch and typed rule blocks with their reasons. [Boot validation](../test/unit/Ecluse/Composition/ValidateSpec.hs) checks every blocked entry in active resolved policies and accumulation beside independent refusals. The shared [read driver spec](../core/test/unit/Ecluse/Core/Registry/Metadata/FetchSpec.hs) runs each adapter's `metadataRead` from a response and from held chunks, and fails for an adapter it holds no documents for. |
 | Recorded corpus outputs, gating in `ecluse-core-unit` | List the captures in [Ecluse.Test.Corpus](../test/support/Ecluse/Test/Corpus.hs) with a `CaptureUpstream`, give `core/test/unit/Ecluse/Core/Registry/<Ecosystem>/StreamingSpec.hs` a `CorpusRead`, and record each capture's lines in [corpus-outputs.tsv](../core/test/unit/fixtures/corpus-outputs.tsv) | The [npm](../core/test/unit/Ecluse/Core/Registry/Npm/StreamingSpec.hs) and [PyPI](../core/test/unit/Ecluse/Core/Registry/PyPI/StreamingSpec.hs) specs compare each capture's outputs, computed through `Ecluse.Test.Corpus.Outputs`, with its recorded lines. No tool writes the file. A new capture's spec fails, and its failure output lists the computed lines as Haskell string literals, with each tab shown as `\t`, to review and record. |
 | Walk parity, gating in `ecluse-core-unit` | `core/test/unit/Ecluse/Core/Registry/<Ecosystem>/ReaderSpec.hs`, a differential property over bodies from `Ecluse.Test.Registry.JsonBytes` | [npm](../core/test/unit/Ecluse/Core/Registry/Npm/ReaderSpec.hs) and [PyPI](../core/test/unit/Ecluse/Core/Registry/PyPI/ReaderSpec.hs), against the references that [One pattern for every ecosystem](#one-pattern-for-every-ecosystem) names. |
-| Adapter integration, gating in `ecluse-integration` | `test/integration/Ecluse/Core/Registry/<Ecosystem>/AdapterIntegrationSpec.hs` for metadata and artifact routes against local upstreams | [PyPI adapter](../test/integration/Ecluse/Core/Registry/PyPI/AdapterIntegrationSpec.hs). Existing npm coverage lives in [PipelineIntegrationSpec](../test/integration/Ecluse/Core/Server/PipelineIntegrationSpec.hs) and its [pipeline specs](../test/integration/Ecluse/Core/Server/Pipeline/), without a separate adapter module. |
+| Adapter integration, gating in `ecluse-integration` | `test/integration/Ecluse/Core/Registry/<Ecosystem>/AdapterIntegrationSpec.hs` for metadata and artifact routes against local upstreams | [PyPI adapter](../test/integration/Ecluse/Core/Registry/PyPI/AdapterIntegrationSpec.hs). Existing npm coverage lives in the [pipeline specs](../test/integration/Ecluse/Core/Server/Pipeline/), without a separate adapter module. |
 | At least one real-client install, gating in a fixed E2E subject | `test/e2e/Ecluse/E2E/<Ecosystem>/InstallE2ESpec.hs`, with fixtures under `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/InstallE2ESpec.hs) and [PyPI](../test/e2e/Ecluse/E2E/PyPI/InstallE2ESpec.hs), using the [npm](../test/e2e/Ecluse/E2E/Fixtures/Npm.hs) and [PyPI](../test/e2e/Ecluse/E2E/Fixtures/PyPI.hs) fixtures. An ecosystem's other end-to-end modules sit in the same directory, as [Npm/](../test/e2e/Ecluse/E2E/Npm/) shows. |
 | For an ecosystem with a mirror write, a mirror-only install compared with its control, gating in a fixed E2E subject | `test/e2e/Ecluse/E2E/<Ecosystem>/MirrorInstallE2ESpec.hs`, with its fixture graph in `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/MirrorInstallE2ESpec.hs), as [End-to-end conformance](#end-to-end-conformance-fixed-subjects-gating) describes. [PyPI](../test/e2e/Ecluse/E2E/PyPI/MirrorInstallE2ESpec.hs) checks the complete version, public outage, restart, and file selection for a second target architecture. These target checks prove installed contents, not foreign-code execution. |
 | Walk residency, gating in `ecluse-residency` | `test/residency/Ecluse/Core/Registry/<Ecosystem>/ReaderResidencySpec.hs`, registered in `test/residency/Main.hs` | [npm](../test/residency/Ecluse/Core/Registry/Npm/ReaderResidencySpec.hs) and [PyPI](../test/residency/Ecluse/Core/Registry/PyPI/ReaderResidencySpec.hs) check that eight times more dropped input leaves the bytes a walk holds level, sampled through `Ecluse.Core.Registry.Json.WalkProbe`. |
@@ -2022,7 +2023,7 @@ Two things are easy to get backwards:
   Put a test wherever its subject runs *deterministically*.
 - **The smoke tier is a drift *detector*, never a correctness *guarantee*.** It depends on
   uncontrolled external services, so it cannot gate, and nothing we rely on for correctness may live
-  *only* there. Every load-bearing behaviour owes a deterministic, gating mirror in the unit or
+  *only* there. Every required behaviour needs deterministic, gating coverage in the unit or
   integration tier. A smoke test only confirms the model still matches the live world. Version
   ordering is the template. The gate checks it offline against a committed fixture, and the smoke
   suite also regenerates that fixture from the live oracles as a differential check.

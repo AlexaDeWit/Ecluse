@@ -17,7 +17,7 @@ Configure a private upstream, then declare your package names. npm uses scopes. 
 
 **Namespace declarations**
 
-```bash
+```yaml
 mounts:
   npm:
     firstParty: "@acme"

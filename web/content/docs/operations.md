@@ -1,12 +1,11 @@
 +++
-title = "Operating Écluse"
+title = "Operations reference"
 description = "What a running instance tells your orchestrator and your log collector, how it drains and exits, and how to size the pod underneath it."
 weight = 5
 +++
 
-Deployment ends with a running instance, and this page is about living with one. Come here when
-you wire probes into an orchestrator, point a collector at the logs, or size a pod. It also covers
-pulling a bad version back out of the mirror target and its private cache.
+Use this reference when a process is unready, background work stalls, or resource limits need adjustment.
+The [operating guide](@/docs/operate.md) provides the routine monitoring and upgrade path.
 
 `ecluse check-config` validates the configuration without starting a role.
 For mirror stores with a control plane, it reports that boot builds the maintenance client
@@ -58,8 +57,9 @@ loads. Missing or rejected artifacts require a Pilot publication. Access failure
 object, or IAM correction. The same process recovers when a later poll acquires a valid artifact.
 Alarm on these lines to detect a rollout that cannot acquire its advisory database.
 
-Readiness reports every mount separately, so one ecosystem's missing artifact does not take the
-others out of rotation. The `/readyz` body carries a `mounts` object keyed by ecosystem, and each
+A proxy with advisory synchronisation reports per-mount readiness, so one ecosystem’s missing
+artifact does not remove healthy mounts from routing. Its `/readyz` body carries a `mounts` object
+keyed by ecosystem, and each
 value is `ready` or `awaiting the advisory database that ecluse pilot publishes`. A missing PyPI
 database therefore leaves a healthy npm mount routable, and the body names PyPI as the mount still
 waiting. A latched Dredger reports
@@ -107,8 +107,8 @@ On `SIGTERM`/`SIGINT` Écluse drains in-flight work rather than dropping it. `GE
 to `503`, which is the signal a load balancer or mesh watches to stop routing new traffic here,
 while `GET /livez` stays `200`, so an orchestrator does not kill a still-draining instance early.
 Every response then carries `Connection: close`, and a keep-alive pool reconnects to a ready
-instance. In-flight requests and in-progress artifact streams finish before the process exits, so
-a half-delivered tarball runs to completion.
+instance. In-flight requests and artifact streams can finish within the drain window.
+Remaining transfers can stop when the timeout expires.
 
 `ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT` bounds the drain at 30 seconds by default. **Set the
 platform's termination grace period above it**, so the orchestrator does not `SIGKILL` mid-drain.
@@ -220,7 +220,7 @@ Typical `warn` lines record:
 - A mirror job left to redeliver.
 - A store call Écluse is retrying.
 - A malformed advisory entry Écluse dropped, or an advisory date it had to ignore.
-- An EPSS feed that failed for an ecosystem with no active `DenyIfEpss`. The line starts
+- An EPSS feed that failed for an ecosystem with no active rule requiring EPSS enrichment. The line starts
   `EPSS enrichment unavailable`, and Pilot publishes that ecosystem's artifact without scores.
   An EPSS outage repeats it on every compile.
 - A background loop backing off.
@@ -386,7 +386,7 @@ cannot raise it. The
 
 A refusal logs `error` on a line that starts `Advisory publication stopped:`. The stored artifact
 stays, so consumers keep it until it reaches its maximum push age. A one-shot
-`ecluse pilot compile --upload` exits non-zero, and the scheduled loop tries again on its next
+`ecluse pilot compile --ecosystem <ecosystem> --out DIR --upload` exits non-zero, and the scheduled loop tries again on its next
 cycle. The local artifact under `advisories.dataDir` changes only after a publication lands.
 
 | The reason names | What it means |

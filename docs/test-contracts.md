@@ -142,7 +142,7 @@ Its independent Aeson readers inspect native wire version and artifact digest fi
 Verdaccio npm, CodeArtifact npm and CodeArtifact PyPI each run the same ten cases through `fullPackageStoreContract`.
 Each ID below has the prefix `package-store/<subject>/`.
 The subjects are `verdaccio`, `codeartifact` and `codeartifact-pypi`.
-Both CodeArtifact profiles use the existing `package-store-codeartifact` job and the `codeartifact` backend identity.
+Both CodeArtifact profiles run in the `backend-conformance` CI job and use the `codeartifact` backend identity.
 The six family names come from an independent completion definition, so removing a family
 from the provider catalogue cannot make its absence pass.
 
@@ -176,11 +176,12 @@ The npm and PyPI integrity controls alter successful production reads to change 
 A PyPI control also removes distribution files.
 Each control requires an assertion failure and proves that the altered read ran.
 
-New Ecluse.Test.Contract.QueueSpec runs the same queuePayloadLaw with the real memory driver, an empty-delivery driver and a corrupted-payload driver. Wrong drivers must fail.
+`Ecluse.Test.Contract.QueueSpec` runs the same `queuePayloadLaw` with the real memory driver, an empty-delivery driver and a corrupted-payload driver. Wrong drivers must fail.
 
 Ecluse.Test.Poll.runUntil replaces discarded timeout/poll results in Integration.WorkerLoop. It throws TestContractEscape on progress timeout or early normal worker exit, propagates worker errors, and cancels the worker after progress. Ecluse.Test.PollSpec covers all four outcomes including cleanup.
 
-Ecluse.Test.Env.withEnvOverrides hoists Collector save/apply/restore, saves unique keys, preserves override order and restores absent values. Collector, Ministack and withAmbientAws use it. Existing withEnvVars clear/apply/clear semantics stay intact. EnvSpec checks success, typed action failure, assignment failure, cancellation and duplicate override order. Environment callers remain serial. Retrieved #1349, #1182 and #1329 bodies/comments before changes. Boot refusal timing and compiler-output isolation remain in their existing issues and were not changed.
+Ecluse.Test.Env.withEnvOverrides hoists Collector save/apply/restore, saves unique keys, preserves override order and restores absent values. Collector, Ministack and withAmbientAws use it. Existing withEnvVars clear/apply/clear semantics stay intact. EnvSpec checks success, typed action failure, assignment failure, cancellation and duplicate override order. Environment callers remain serial. Boot refusal timing and compiler-output isolation are
+separate concerns tracked by #1349, #1182, and #1329.
 
 ## Smoke and measurement
 
@@ -545,9 +546,10 @@ The native modules retain scenario providers. The fixed suite declarations regis
 
 ## Integration registration and native traceability
 
-The integration runner registers 20 complete lifecycle groups and 346 unique examples.
-Of these, 23 execute canonical serving, queue, or advisory contracts.
-The other 323 retain their native assertions and receive fixed `integration/<group>/native-NNN` IDs.
+The integration runner registers complete lifecycle groups with stable case IDs.
+Canonical cases execute shared serving, queue, or advisory contracts. Native cases retain
+their assertions and use fixed `integration/<group>/native-NNN` IDs.
+The generated manifest is the current inventory: `cabal run ecluse-integration-manifest`.
 A parameterised example appends explicit fixture dimensions, such as HTTP status or first-party ownership.
 The PyPI cases retain source authority, companion integrity, credential confinement, and private mirror observations.
 Canonical `core-metadata` advertisement replaces its former omission control. The two legacy-alias controls remain.
@@ -561,35 +563,34 @@ Mutation checks exercise every registered case and capability without constructi
 The shared runner compares actual Hspec result IDs against each group's declared case set.
 A deleted action cannot satisfy the catalogue merely because its metadata remains.
 
-The previous `hspec-discover` output registered `PipelineIntegrationSpec` alongside all three modules it called.
-That wrapper added no hooks or assertions and repeated 116 examples.
-Explicit registration removes those duplicate executions and keeps every unique assertion.
-The old wrapper remains as a native source reference, but the runner does not schedule it.
+The runner registers each pipeline spec directly. The former `PipelineIntegrationSpec`
+wrapper was removed because it repeated examples without adding hooks or assertions.
 
-| Group | Native example IDs | Canonical examples | Native module |
-|---|---|---|---|
-| `integration/aws-composition` | `native-001` to `native-002` (2) | None | `Ecluse.AwsEndToEndIntegrationSpec` |
-| `integration/pypi` | `native-001` to `native-042` (65) | 10 serving | `Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec` |
-| `integration/mirror-view` | `native-001` to `native-018` (27) | None | `Ecluse.Core.Server.MirrorViewIntegrationSpec` |
-| `integration/egress` | `native-001` to `native-003` (3) | None | `Ecluse.Core.Security.EgressIntegrationSpec` |
-| `integration/origin` | `native-001` to `native-017` (29) | None | `Ecluse.Core.Server.Pipeline.OriginIntegrationSpec` |
-| `integration/npm-metadata` | `native-001` to `native-035` (37) | 10 serving | `Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec` |
-| `integration/publication` | npm `native-001` to `native-024` and 27 PyPI cases (57) | None | `Ecluse.Core.Server.Pipeline.PublishIntegrationSpec` |
-| `integration/pipeline-faults` | `native-001` to `native-019` (19) | None | `Ecluse.Core.Server.Pipeline.SharedIntegrationSpec` |
-| `integration/npm-artifact` | `native-001` to `native-043` (51) | None | `Ecluse.Core.Server.Pipeline.TarballIntegrationSpec` |
-| `integration/worker` | `native-001` to `native-009` (9) | None | `Ecluse.Core.Worker.LoopIntegrationSpec` |
-| `integration/pilot` | `native-001` to `native-005` (12) | None | `Ecluse.PilotIntegrationSpec` |
-| `integration/advisory-sync` | `native-001` to `native-001` (1) | None | `Ecluse.Runtime.Cve.SyncIntegrationSpec` |
-| `integration/mirror-state-s3-internal` | `native-001` (1) | None | `Ecluse.Runtime.Mirror.State.S3.InternalIntegrationSpec` |
-| `integration/mirror-state-s3` | `native-001` to `native-002` (2) | None | `Ecluse.Runtime.Mirror.State.S3IntegrationSpec` |
-| `integration/advisory-export` | `native-001` to `native-007` (16) | 1 advisory | `Ecluse.Runtime.Pilot.ExportIntegrationSpec` |
-| `integration/queue-sqs` | `native-001` to `native-006` (6) | 2 queue | `Ecluse.Runtime.Queue.SqsIntegrationSpec` |
-| `integration/server-shutdown` | `native-001` to `native-002` (2) | None | `Ecluse.Runtime.ServerIntegrationSpec` |
-| `integration/telemetry-metrics` | `native-001` to `native-002` (2) | None | `Ecluse.Runtime.Telemetry.InstrumentsIntegrationSpec` |
-| `integration/telemetry-scrape` | `native-001` to `native-006` (6) | None | `Ecluse.Runtime.Telemetry.ScrapeIntegrationSpec` |
-| `integration/telemetry-traces` | `native-001` to `native-003` (3) | None | `Ecluse.Runtime.Telemetry.TracingIntegrationSpec` |
+| Group | Native module |
+| --- | --- |
+| `integration/aws-composition` | `Ecluse.AwsEndToEndIntegrationSpec` |
+| `integration/pypi` | `Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec` |
+| `integration/mirror-view` | `Ecluse.Core.Server.MirrorViewIntegrationSpec` |
+| `integration/egress` | `Ecluse.Core.Security.EgressIntegrationSpec` |
+| `integration/origin` | `Ecluse.Core.Server.Pipeline.OriginIntegrationSpec` |
+| `integration/npm-metadata` | `Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec` |
+| `integration/publication` | `Ecluse.Core.Server.Pipeline.PublishIntegrationSpec` |
+| `integration/pipeline-faults` | `Ecluse.Core.Server.Pipeline.SharedIntegrationSpec` |
+| `integration/npm-artifact` | `Ecluse.Core.Server.Pipeline.TarballIntegrationSpec` |
+| `integration/worker` | `Ecluse.Core.Worker.LoopIntegrationSpec` |
+| `integration/pilot` | `Ecluse.PilotIntegrationSpec` |
+| `integration/advisory-sync` | `Ecluse.Runtime.Cve.SyncIntegrationSpec` |
+| `integration/mirror-state-s3-internal` | `Ecluse.Runtime.Mirror.State.S3.InternalIntegrationSpec` |
+| `integration/mirror-state-s3` | `Ecluse.Runtime.Mirror.State.S3IntegrationSpec` |
+| `integration/advisory-export` | `Ecluse.Runtime.Pilot.ExportIntegrationSpec` |
+| `integration/queue-sqs` | `Ecluse.Runtime.Queue.SqsIntegrationSpec` |
+| `integration/server-shutdown` | `Ecluse.Runtime.ServerIntegrationSpec` |
+| `integration/telemetry-metrics` | `Ecluse.Runtime.Telemetry.InstrumentsIntegrationSpec` |
+| `integration/telemetry-scrape` | `Ecluse.Runtime.Telemetry.ScrapeIntegrationSpec` |
+| `integration/telemetry-traces` | `Ecluse.Runtime.Telemetry.TracingIntegrationSpec` |
 
-Every ID labels its original Hspec example in the module listed above.
+The manifest and independent obligations enumerate the current IDs and expanded fixture cases.
+Each ID labels its Hspec example in the module listed above.
 That example retains all of its prior assertions, negative controls, and resource hooks.
 The independent obligation file enumerates every expanded parameter case.
 

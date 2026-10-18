@@ -29,16 +29,16 @@ CodeArtifact over VPC endpoints.
 
 **Edge access is an operator concern.** `ECLUSE_SERVER__AUTH_TOKEN` is off by default, so the
 deployment's access edge decides who may reach the proxy, east-west as well as north-south.
-Passthrough softens a gap in that edge: a caller with no forwarded token gets no private read or publish. An
-edge breach then exposes only the public-gated view plus the untrusted-egress and DoS surface,
-never private packages.
+The private registry decides whether an anonymous caller may read or publish.
+Passthrough grants no access beyond that registry’s policy. A deployment must therefore enforce
+both proxy reachability and the intended private-registry authentication policy.
 
 **Passthrough relocates credential risk to the proxy runtime.** Forwarding each caller's own
 credential ([credential flow](registry-model.md#credential-flow-and-authority)) leaves the proxy with no read or publish
 credential of its own, unless you configure a static publication token. It does hold every in-transit caller's credential in memory, transiently. So
-Écluse's own runtime and supply-chain integrity are a first-class control: the attested,
-reproducible image ([release supply chain](release-supply-chain.md)). The token-stripping
-boundary and the no-redirect-with-credential invariant are load-bearing, because real caller credentials cross them.
+The proxy runtime must protect those credentials. Verify its image through the
+[release supply chain](release-supply-chain.md). Token stripping and the prohibition on
+credential-bearing redirects prevent credentials from reaching an unintended origin.
 
 **The outbound controls guard the downloads an attacker can influence.** The host allowlist and
 the internal-range block apply to the public packument and to every public `dist.tarball`.
@@ -47,11 +47,11 @@ operator-declared destination (the private upstream, the mirror and publication 
 S3, the OTLP collector), which goes where the configuration says. Https-only with certificate
 validation applies to every registry endpoint regardless.
 
-**Each role runs under its own identity, and the mirror worker's is the only one that writes the
-trusted store.** A serve-only deployment has no such identity. That write authority is the sharpest
-privilege, since it feeds the trusted read path. The per-role grants are in
-[Role identities and least privilege](https://ecluse-proxy.com/docs/deployment/#role-identities-and-least-privilege). Scope it to mirror publication and the repository reads needed for the presence
-probe. Token-mint permission is separate from both. Prefer container-role minting over a static
+**Give each service its own identity.** The mirror worker publishes admitted public copies.
+The proxy separately relays first-party publications under the configured publisher credential.
+A deployment without mirroring needs no mirror-write identity. Other configured services can
+still require workload identity, including CodeArtifact private-topology checks. The per-role grants are in
+[Role identities and least privilege](https://ecluse-proxy.com/docs/deployment/#role-identities-and-least-privilege). Scope the mirror worker to publication and the repository reads needed for its presence check. Token-mint permission is separate from both. Prefer container-role minting over a static
 secret and minimise its TTL. Dredger needs a different action set: reads and deletion, not
 publication. The [operator permission table](https://ecluse-proxy.com/docs/dredger/#permissions)
 owns those action and resource scopes.
@@ -105,13 +105,11 @@ release whose file set is a singleton, npm's, either survives entire or drops en
   so Écluse still serves a below-floor private artifact. The client and the mirror worker
   verify its bytes.
 
-The asymmetry is the point: trust may substitute for cryptographic strength on the operator's
-own vetted source, never on untrusted public bytes. The types enforce it. No code can
+The trusted floor can be lowered for an operator-controlled source. The public floor cannot.
+The types enforce this distinction. No code can
 construct `MinIntegrity` (public) below SHA-256, while `MinTrustedIntegrity` (trusted) can go
 lower, so no config or constructor path lowers the public floor. The floor admits by
-algorithm strength, and the digest is computable for every algorithm it admits. The worker's
-tamper gate verifies that digest, so an admitted public artifact is always verifiable and
-reaches the mirror.
+algorithm strength, and the digest is computable for every algorithm it admits. The mirror worker verifies the admitted digest before publication.
 
 For PyPI metadata companions, the parent distribution must clear its origin's integrity floor.
 Companion digest declarations remain separate and impose no new proxy hash floor.

@@ -14,12 +14,25 @@
 </nav>
 {% endmacro sidebar %}
 
+{% macro outline_links(headings) %}
+{% for heading in headings %}
+{% if heading.level == 2 %}<a href="#{{ heading.id }}">{{ heading.title | safe }}</a>{% endif %}
+{% endfor %}
+{% endmacro outline_links %}
+
+{% macro inline_outline(headings) %}
+{% if headings | length > 0 %}
+<details class="inline-outline" data-pagefind-ignore>
+  <summary>On this page</summary>
+  <nav aria-label="On this page">{{ self::outline_links(headings=headings) }}</nav>
+</details>
+{% endif %}
+{% endmacro inline_outline %}
+
 {% macro outline(headings) %}
 <aside class="page-outline" aria-label="On this page" data-pagefind-ignore>
   {% if headings | length > 0 %}<p>On this page</p>{% endif %}
-  {% for heading in headings %}
-  {% if heading.level == 2 %}<a href="#{{ heading.id }}">{{ heading.title | safe }}</a>{% endif %}
-  {% endfor %}
+  {{ self::outline_links(headings=headings) }}
   <div class="outline-extra"><a href="{{ get_url(path='@/docs/install-failed.md') }}">Investigate a failed install</a><a href="{{ get_url(path='@/docs/threat-model.md') }}">Threat model</a></div>
 </aside>
 {% endmacro outline %}

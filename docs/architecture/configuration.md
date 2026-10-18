@@ -115,9 +115,10 @@ live allocations:
 - the enqueue buffer
 - the mirror-artifact envelope, when any mount mirrors
 
-The mirror-artifact tenant covers the transient the mirror worker holds. That worker buffers a
-fetched tarball and base64-encodes it into a publish document. The bytes, the base64 text, and the
-serialised document coexist before collection. The derivation sets the worker fetch cap
+The mirror-artifact tenant covers the worker’s transient buffers. For npm, the worker buffers
+a tarball and base64-encodes it into a publish document. The archive bytes, base64 text, and
+serialised document coexist before collection. PyPI uses native distribution uploads and
+transient archive metadata instead of an npm publish envelope. The derivation sets the worker fetch cap
 (`maxArtifactBytes`) so that this envelope is what the tenant charges. An explicit config value
 wins its own bound, and otherwise the shipped fallbacks apply.
 
@@ -338,17 +339,17 @@ document owns only the document-merge schema above.
 #### The default policy
 
 The shared shipped default enables one rule, and two more when `advisories.url` is set. `min-age`
-(`AllowIfOlderThan`, 7 days) admits a public version only after a quarantine window. Registries
-usually find and yank a malicious publish within days, so the delay keeps it out of your builds.
-This quarantine is Écluse's core security boundary.
-With a source, `remediation-fast-track` (`AllowIfRemediatesCve`) ranks above it, so Écluse admits a
-release fixing a known CVE at once rather than waiting out the quarantine. It admits a partial fix
+(`AllowIfOlderThan`, 7 days) admits a public version after the waiting period. This reduces
+exposure to versions removed before they become eligible. Age is not a malware verdict.
+With a source, `remediation-fast-track` (`AllowIfRemediatesCve`) ranks above the age rule. It can
+admit an exact security fix early when the accepted advisory evidence supports that exception. It admits a partial fix
 only when the advisories still affecting it store scores inside its limits, and it refuses while
 advisory evidence is unavailable (see
 [Rules engine](rules-engine.md#allowifremediatescve-remediation-fast-track)).
 `deny-known-malicious` (`DenyIfKnownMalicious`) ranks at 300, above every default allow (see
 [Rules engine](rules-engine.md#denyifknownmalicious-primary-namespace-evidence)). Without a source,
-neither rule is active, so a source-free deployment boots and decides on the quarantine alone.
+neither shared advisory rule is active. The age rule supplies the shared allow, and npm’s
+install-script deny still applies.
 
 The npm mount adds `deny-scripts` (`DenyInstallTimeExecution`) at admission only. It does not
 activate a mount. The operator can disable it under `mounts.npm.rules`, widen its phases, or add
@@ -365,8 +366,8 @@ API per request. The compilation, ETag polling, and atomic shadow-swap are under
 subsystem](rules-engine.md#cve-subsystem). The operator knobs (the store URL, the poll interval, the
 OSV export and EPSS feed sources, and the download size cap) are in the
 [configuration reference](https://ecluse-proxy.com/docs/configuration/#the-configuration-reference).
-With no store configured, no source activates the fast lane, and the quarantine governs alone. With
-one, a mount whose rules refuse without advisory evidence, the shipped fast lane included, stays
+With no store configured, the default advisory rules remain inactive. The age rule and any
+ecosystem defaults still apply. With a store, a mount whose rules require advisory evidence stays
 not-ready until its first artifact syncs.
 
 ### Validation: fail fast, reject the unknown

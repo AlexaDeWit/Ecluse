@@ -19,7 +19,7 @@ Configure that read endpoint to include the mirror repository. Écluse does not 
 
 **Example: npm with CodeArtifact**
 
-```bash
+```yaml
 mounts:
   npm:
     privateUpstream:
@@ -38,7 +38,7 @@ Replace the domain, account, and region values with your repository endpoints. K
 
 **Durable queue**
 
-```bash
+```yaml
 queue:
   url: https://sqs.REGION.amazonaws.com/ACCOUNT/ecluse-mirror
 ```
@@ -55,7 +55,7 @@ PyPI needs an explicit native upload endpoint and durable state in addition to i
 
 **Example: PyPI mirror additions**
 
-```bash
+```yaml
 mirrorState:
   url: s3://your-mirror-state-bucket/pypi
 mounts:

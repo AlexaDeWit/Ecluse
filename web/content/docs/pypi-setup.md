@@ -1,5 +1,5 @@
 +++
-title = "Complete PyPI setup"
+title = "PyPI deployment reference"
 description = "Configure PyPI reads, first-party uploads, whole-version mirrors, durable state and optional CodeArtifact cleanup."
 weight = 5
 +++

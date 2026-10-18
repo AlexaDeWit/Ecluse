@@ -14,15 +14,15 @@ Telemetry is opt-in and off by default. With `ECLUSE_OBSERVABILITY__TELEMETRY` u
 nothing, opens no spans, and sits the instruments on a no-op meter. An emit then becomes a discarded
 measurement rather than a branch.
 
-Datadog is a first-class, tested target and what the maintainer runs. It is never required and
-never a lock-in: nothing in the core depends on it, and switching backends is a config change. The
-Datadog-specific pieces are optional add-ons on the OTLP baseline: the `dd` trace-correlation object
-on a log line, Agent-side sampling.
+Datadog is an optional tested target. The core uses the OTLP interfaces.
+Datadog-specific options add the `dd` trace-correlation object to logs and permit Agent-side sampling.
 
 ## What gets traced
 
 The instrumentation maps onto the [request path](https://ecluse-proxy.com/docs/how-it-works/#a-request-step-by-step). Each
-request opens a WAI server span, with a child span for each upstream fetch, private then public.
+request opens a WAI server span with a child span for each upstream fetch. Ordinary metadata
+requests fetch private and public sources concurrently. First-party metadata uses only the
+private source. Artifact requests prefer the private source before a public fallback.
 A child span carries W3C TraceContext to the next hop. Metrics ride the same OTLP pipeline.
 Hand-added domain spans carry the decisions operators care about:
 
@@ -45,7 +45,8 @@ included, and never a request header.
 
 Sampling is head-based and always-on by default, so Écluse never drops a rare denial or error
 trace. `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` set a parent-based ratio without a code
-change. Against Datadog the node-local Agent resamples, so always-on is not wasteful.
+change. A Datadog Agent can resample exported traces. Sampling still affects collection and
+export cost, so choose it for the deployment’s traffic and diagnostic needs.
 
 ## Metrics
 
@@ -118,15 +119,15 @@ dashboards. All of them leave by whichever metrics transport the deployment sele
 ### Cardinality and attributes
 
 An inline proxy sees thousands of distinct packages, so the failure mode is a metric-series
-explosion. Two guarantees keep it and the telemetry safe:
+explosion. The instrumentation applies these controls:
 
 - **High-cardinality identifiers stay on spans and logs, never metric labels**. `package`,
   `version`, `scope`, and the full denial message go on the rule-eval span and the log line. Metric
-  labels are bounded enums, so such an identifier cannot become a series. `rule` is the one
-  operator-bounded label, a small fixed set per deployment.
-- **Secrets and PII never appear in any signal**: no tokens, no `Authorization`. The proxy scrubs
-  a forwarded client token from anything the WAI or http-client instrumentation captures. See
-  [security](security.md).
+  labels are bounded enums, so such an identifier cannot become a series. `rule` uses the built-in rule type names.
+- **Forwarded authorisation headers are excluded from instrumentation.** Tests cover the
+  caller’s `Authorization` header. Client spans can still contain URL paths and queries, so
+  this is not a guarantee against every secret or personal value. Apply the URL restrictions
+  and minimisation described below. See [security](security.md).
 
 ## Logs
 

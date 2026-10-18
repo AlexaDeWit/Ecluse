@@ -1,4 +1,4 @@
 {% extends "base.html" %}
 {% block title %}{{ page.title }} | Écluse{% endblock title %}
 {% block description %}{{ page.description }}{% endblock description %}
-{% block content %}<main class="doc standalone" id="content" data-pagefind-body><h1>{{ page.title }}</h1><div class="doc-content">{{ page.content | safe }}</div></main>{% endblock content %}
+{% block content %}<main class="doc standalone" id="content"><h1>{{ page.title }}</h1><div class="doc-content">{{ page.content | safe }}</div></main>{% endblock content %}

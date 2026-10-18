@@ -1,21 +1,20 @@
 +++
-title = "Configuring Écluse"
+title = "Configuration and policy reference"
 description = "Where every Écluse setting lives, which layer wins, where secrets go, and how the rule policy decides what a build may install."
 weight = 4
 +++
 
-Every choice Écluse makes at the gate traces back to a setting on this page. The binary embeds
-every default, so you write down only what you change: a wider quarantine, a mirrored mount, a
-policy of your own. Start with where a setting lives, because there are two places and one always
-wins.
+Use this reference to look up a setting, its precedence, or a policy interaction.
+For the deployment workflow, see [Package your configuration](@/docs/configure.md).
 
-## Two layers, one spelling rule
+## Configuration sources {#two-layers-one-spelling-rule}
 
-Configuration has two layers. **Environment variables** carry process and secret values. An
-optional **config document** (YAML) carries the two things flat variables express badly: the rule
-policy and the mount map. A value resolves as defaults < config document < environment variable,
-so the environment wins. The boot log carries one `config:` line per resolved key, naming the layer
-that supplied it and redacting secrets, and `ecluse check-config` prints the same dump.
+Écluse combines embedded defaults, an optional YAML file, and environment variables.
+The file overrides defaults. Environment variables override the file.
+Use YAML for non-secret settings, including the rule policy and mount map.
+Supply secrets through the environment or the supported `_FILE` settings.
+
+Startup logs and `ecluse check-config` print each resolved key and its source, with secrets redacted.
 Without `advisories.url`, the shipped `deny-known-malicious` and `remediation-fast-track` rules do
 not run, so each of their keys says so: `(default, inactive: no advisories.url)`. A key you patched
 keeps its own layer, as in `(document, inactive: no advisories.url)`. A rule you activate with
@@ -93,10 +92,9 @@ The binary embeds the defaults below, and every key appears with its default and
 
 The document is a YAML file at `/etc/ecluse/config.yaml`. `ECLUSE_CONFIG` relocates it, and is the
 one process-level setting with no document key. With `ECLUSE_CONFIG` set, a missing file is a boot
-error, but an absent document at the default path is fine. The document carries only what you
-change: the **rule policy** (see [Rule policy](@/docs/configuration.md#rule-policy)) and, for
-multi-mount deployments, the **mount map**. A single-mount npm deployment on the default policy
-needs no document at all. The schema is the
+error, but an absent document at the default path is fine. Include only the settings you want
+to override. The file can hold non-secret process settings as well as the rule policy and mount map.
+An environment-only deployment needs no document. The schema is the
 [embedded default](@/docs/configuration.md#the-configuration-reference) above, and an unknown key
 anywhere in the document is a boot error.
 
@@ -543,9 +541,9 @@ on a rule names its phases:
 | Not set, or `[admission, revocation]` | The gate, the mirror worker, and the Dredger | Refuses new versions, and the Dredger removes stored copies |
 | `[admission]` | The gate and the mirror worker | Refuses new versions. Stored copies stay, and your private stores keep serving them |
 
-Limit a deny to admission when versions your builds already installed through Écluse must stay
-installable, and no new install may start on a version the rule refuses. The policy below does
-that for every mount, and the npm mount widens the rule again so that the Dredger removes there:
+Limit a deny to admission to refuse new public admission and mirror writes while retaining
+access to stored copies. New and existing clients can still install those trusted copies.
+The example narrows the shared rule, then enables revocation for the npm mount:
 
 ```yaml
 rules:
@@ -709,9 +707,10 @@ covered them. Enable them *after* you warm your private mirror:
    precedence above 300, for example `precedence: 301`. Use that exception only for a false
    positive or a risk you accept.
 
-A warmed version is not exempt forever. `ecluse dredger` checks the stored versions against your
-current rules that apply at revocation and prunes what they deny. A policy change therefore cannot
-leave a version those rules deny in the mirror target or in the private cache that retained it.
+`ecluse dredger` checks stored versions against current revocation rules and removes eligible
+copies selected by a decisive deny. Consent, first-party protection, backend failures, candidate
+selection, and deletion caps can leave a copy in place. Follow the
+[revocation procedure](@/docs/operations.md#revoking-a-mirrored-version-internal-yank) to verify both stores.
 When Dredger runs, pin every version you must keep before you add a deny, and run
 `ecluse dredger --dry-run` to see what it would remove. To refuse new versions and keep the warmed
 ones, limit the deny to admission ([Where a rule applies](@/docs/configuration.md#where-a-rule-applies)).
@@ -796,5 +795,5 @@ To add a `DenyIfEpss` to a running deployment:
 1. Add the rule to Pilot's configuration first, so Pilot requires the feed for that ecosystem.
 2. Confirm that Pilot published an artifact with `epss_status=available`. The compile's
    `Compiled ... epss_status=available` log line shows it, and so does a run of
-   `ecluse pilot compile --upload` that exits `0`.
+   `ecluse pilot compile --ecosystem <ecosystem> --out DIR --upload` that exits `0`.
 3. Roll the same configuration out to the proxy, the mirror worker, and Dredger.

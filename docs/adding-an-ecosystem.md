@@ -66,7 +66,7 @@ for the new ecosystem before you call its reads done.
 | Property | Check |
 |---|---|
 | Served bytes, ETags, typed facts and selected reads stay the same across a performance change | The recorded corpus outputs |
-| The walk accepts and refuses the same input as its reference reader | The walk parity property ([The vendored JSON lexer](testing.md#the-vendored-json-lexer)) |
+| The walk accepts and refuses the same input as its reference reader | The walk parity property ([The vendored JSON lexer](testing.md#the-maintained-json-lexer)) |
 | A walk holds nothing for the input it drops | The walk residency specs |
 | A full read hands back a fully evaluated result | [Read evaluation](testing.md#read-evaluation) |
 | Retained heap per source byte stays within its regression limit | The retained-heap gate of the [residency tier](testing.md#residency-gate-ecluse-residency-gating) |

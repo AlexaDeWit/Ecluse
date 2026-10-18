@@ -106,7 +106,9 @@ renewals succeed. Stopping the whole batch on the first renewal failure would be
 abandons healthy work for one transient fault. A transport-wide outage still stops the batch, one
 receipt at a time, because every renewal in it fails.
 
-### The terminus for a job that can never succeed
+<a id="the-terminus-for-a-job-that-can-never-succeed"></a>
+
+### Failed jobs and dead-letter queues
 
 A transient failure retries because the worker does not ack the message. That works only while
 something eventually stops the retrying. A job that can never succeed has to end somewhere. An
@@ -160,9 +162,9 @@ whatever store a mount names. Every endpoint a mount declares carries the tag th
 and the [configuration reference](https://ecluse-proxy.com/docs/configuration/) holds the tags with
 the keys each one admits.
 
-Écluse reaches both through exactly three handles. A new backend is an additive leaf, not a
-structural change, the same posture as the [registry
-abstraction](registry-model.md#registry-abstraction):
+The queue, credentials, and repository maintenance use the following interfaces. Backend
+implementations supply their operations through these records, alongside the
+[registry abstraction](registry-model.md#registry-abstraction):
 
 1. **`MirrorQueue`**, the platform's durable hand-off from the request path to the [mirror
    worker](#mirror-queue).
@@ -177,6 +179,10 @@ abstraction](registry-model.md#registry-abstraction):
    somewhere to keep a walk cursor. `StoreObservation` holds the same store's observing calls on
    their own, and each backend builds one directly, so `ecluse dredger --dry-run` reaches no write
    at all.
+
+`MirrorState` is a separate interface for durable managed PyPI completion evidence and
+retained read data. It does not store package archives. Its consistency and retention
+requirements are described in [durable PyPI read data](#durable-pypi-read-data).
 
 The sweep joins actual mirror and private-cache inventories within the declared mount.
 It hands each target's selected versions to its backend once, with a callback that reassesses

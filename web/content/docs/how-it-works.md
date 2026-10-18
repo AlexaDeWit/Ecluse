@@ -1,19 +1,19 @@
 +++
-title = "What Écluse is"
+title = "Request handling and metadata"
 description = "How Écluse decides what a build may install: the quarantine on new public versions, the four registry roles, and the deny-by-default policy."
 weight = 1
 +++
 
-Écluse is a proxy you put in front of public package registries to protect the builds that install
-from them. Point your CI and developer tooling at Écluse instead of at a public registry. Écluse
-fetches from that registry on their behalf and decides which versions a build may install. npm
-and PyPI support reads, mirroring, and first-party publication.
+Use this reference to follow metadata discovery, downloads, mirroring, and publication.
+For the operating purpose and deployment choices, start with
+[Understand Écluse](@/docs/understand.md) or [Set up Écluse](@/docs/setup.md).
+npm and PyPI support reads, mirroring, and first-party publication.
 [Complete PyPI setup](@/docs/pypi-setup.md) connects those roles and their required stores.
 [Protocol support](@/docs/protocol-support.md) describes each protocol and its configuration requirements.
 
 A new public version waits in a quarantine, seven days by default, before a build can install it.
-Most malicious publishes are found and pulled within days, so the wait alone sidesteps them, with
-no attempt to detect malice. An advisory source enables a fast track for exact security fixes
+The delay reduces exposure to versions removed during that window. It does not establish
+that an older version is harmless. An advisory source enables a fast track for exact security fixes
 and a deny for known malicious versions. A partial fix passes only when the remaining advisory
 scores meet the configured ceilings and gaps. Missing or old advisory evidence can refuse
 admission. Higher-ranked denies still apply. The
@@ -177,6 +177,8 @@ the public integrity floor, `sha256` by default. The check runs per file, so a r
 several, as a Python release ships an sdist beside its wheels, keeps the files that clear the
 floor and loses the ones that do not. A release disappears only when no file of it survives. On a
 custom or off-spec public upstream this has a gotcha: files without such a digest silently
-disappear, and downloading one `403`s. To serve such a source, give it the private upstream role
-and loosen the trusted floor below `sha256`. The mechanics are in
+disappear, and a public download is refused with `403`. Lowering the trusted floor can permit
+weaker supported digests, but not hashless metadata entries. The private role also bypasses
+public admission, so use it only for a source you already trust. Conventional private npm
+artifact reads have a separate client-integrity contract. The mechanics are in
 [Integrity floors](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/security.md#integrity-floors).

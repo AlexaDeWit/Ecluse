@@ -8,12 +8,12 @@ and coverage, see [Testing Strategy](testing.md).
 
 **Nix (with flakes) is a hard dependency.** The whole toolchain (GHC 9.10, Cabal, fourmolu, hlint,
 Semgrep) comes from the dev shell, pinned by `flake.lock`. There is no supported system-level build.
-Enter the shell with `nix develop` (or let `direnv` do it), then run everything through `task`, the
-entry point shared by local development and CI. Running `task` from outside the shell works, but it
-re-enters the shell per target, so keep that for one-offs.
+Enter the shell with `nix develop` (or let `direnv` do it), then run the named `task` targets.
+Ordinary targets do not enter Nix for you. From an ambient shell, use
+`env -u IN_NIX_SHELL nix develop --command task <target>`.
 
 Run `task --list` for the targets. The underlying commands live in
-[`Taskfile.yml`](../Taskfile.yml), so local and CI never drift.
+[`Taskfile.yml`](../Taskfile.yml), which local development and CI both use.
 
 **Before you push,** run `task check` clean. What it runs, what `task gate` adds, and what only
 CI runs are in [Testing Strategy](testing.md).

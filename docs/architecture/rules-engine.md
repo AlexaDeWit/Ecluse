@@ -39,7 +39,7 @@ The native deletion identifier and exact identity-rule matching stay unchanged.
 A `Rule` is closed `Eq`/`Show` data with no evaluation. `verdictSource` is the single dispatch
 over it ([`Ecluse.Core.Rules`](../../core/src/Ecluse/Core/Rules.hs)). Keeping `Rule` closed is a
 security boundary: untrusted config can only name a built-in constructor, never supply an
-evaluator. Most rules decide a version from its evidence alone. The three advisory rules decide it
+evaluator. Most rules decide a version from its evidence alone. The four advisory rules decide it
 from their package's advisory rows. One evaluator decides a request's versions. The first advisory
 rule a request reaches reads the package's rows once, and every advisory rule then decides every
 version from that one read with no further IO. A request parses each row's bounds at most once, and
