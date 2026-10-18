@@ -530,7 +530,12 @@ partsLength plan parts = (separators (length parts) +) . sum <$> traverse partLe
             Encoded bytes -> Just (BS.length bytes)
             Packs -> case planPieces plan of
                 ObjectPieces members -> (separators (length members) +) . sum <$> traverse (\(version, piece) -> (encodedLength version + 1 +) <$> pieceLength piece) members
-                ArrayPieces items -> (separators (length items) +) . sum <$> traverse pieceLength items
+                ArrayPieces items -> arrayLength 0 0 items
+    arrayLength !count !total = \case
+        [] -> Just (separators count + total)
+        piece : rest -> do
+            len <- pieceLength piece
+            arrayLength (count + 1) (total + len) rest
     pieceLength (Piece index value) = do
         table <- tableAt (planTables plan) index
         let len = renderedLength table (planPrefix plan) value
