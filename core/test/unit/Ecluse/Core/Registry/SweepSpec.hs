@@ -9,8 +9,9 @@ import Data.Conduit (yield)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
+import UnliftIO.Exception (throwIO)
 
-import Ecluse.Core.Cve (AdvisoryRange (..))
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (cveAdvisoriesFor, cveCoveredNames))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
@@ -82,6 +83,7 @@ import Ecluse.Test.Maintenance (
  )
 import Ecluse.Test.Package (npmVersion, unscopedNpm)
 import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, inertRuleDeps, servingRuleDeps, shippedRemediation, staticAdvisoryDatabase)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Test.Sweep (
     RecordedSweep (..),
     previewMount,
@@ -342,6 +344,30 @@ retrySpec = describe "withStoreRetry" $ do
 -- so the store's listing bounds the cycle and the candidate set bounds the metadata reads.
 candidateCycleSpec :: Spec
 candidateCycleSpec = describe "the candidate cycle" $ do
+    it "queries advisory names and unions them with explicit identity names" $ do
+        store <- newFakeStore (storeConfigFor (map unscopedNpm ["left-pad", "license", "lodash"]))
+        calls <- newIORef (0 :: Int)
+        rec' <- recordingPorts generation
+        let cve = (fakeCveLookup []){cveCoveredNames = modifyIORef' calls (+ 1) >> pure ["left-pad"]}
+            deps = servingRuleDeps (DbEtag "etag-1") cve
+            mount = (testMount (fakeMaintenance store) [denyRule] [DenyByIdentity "lodash"]){smRuleDeps = deps}
+        outcome <- sweepCycle testPacing (recPorts rec') [mount]
+        readIORef calls `shouldReturn` 1
+        outcomeComplete outcome `shouldBe` True
+        tallyExamined (outcomeTally outcome) `shouldBe` 2
+        tallyDeleted (outcomeTally outcome) `shouldBe` 2
+        remaining <- readFakeContents store
+        map storedVersion (Map.findWithDefault [] (unscopedNpm "license") remaining) `shouldBe` [npmVersion "1.0.0"]
+
+    it "retains covered-name lookup failures in default mode" $ do
+        store <- seededStore
+        rec' <- recordingPorts generation
+        let cve = (fakeCveLookup []){cveCoveredNames = throwIO (TestContractEscape "covered names")}
+            deps = servingRuleDeps (DbEtag "etag-1") cve
+            mount = (testMount (fakeMaintenance store) [] []){smRuleDeps = deps}
+        sweepCycle testPacing (recPorts rec') [mount]
+            `shouldThrow` (== TestContractEscape "covered names")
+
     it "decides only the names the candidate set carries" $ do
         store <- seededStore
         (_, outcome) <- runCycleWith store [DenyByIdentity "left-pad"]
@@ -390,6 +416,73 @@ candidateCycleSpec = describe "the candidate cycle" $ do
 -- and it records each completed bucket so a restart re-does at most one.
 fullWalkSpec :: Spec
 fullWalkSpec = describe "the full walk" $ do
+    it "deletes and records every bucket without consulting covered names" $ do
+        store <- newFakeStore (bucketedBy "lx")
+        (writes, handle) <- recordingCursor (fakeMaintenance store)
+        rec' <- recordingPorts generation
+        let cve = (fakeCveLookup []){cveCoveredNames = throwIO (TestContractEscape "covered names")}
+            deps = servingRuleDeps (DbEtag "etag-1") cve
+            configured = [DenyByIdentity "left-pad"]
+        rules <- prepare deps (map atDefaultPrecedence configured)
+        outcome <- sweepCycle walkPacing (recPorts rec') [(testMount handle rules configured){smRuleDeps = deps}]
+        outcomeComplete outcome `shouldBe` True
+        tallyExamined (outcomeTally outcome) `shouldBe` 2
+        tallyDeleted (outcomeTally outcome) `shouldBe` 1
+        tallyKept (outcomeTally outcome) `shouldBe` 1
+        map renderNamePrefix <$> writes `shouldReturn` ["l", "x"]
+        readFakeCursor store `shouldReturn` Nothing
+        remaining <- readFakeContents store
+        Map.findWithDefault [] (unscopedNpm "left-pad") remaining `shouldBe` []
+        map storedVersion (Map.findWithDefault [] (unscopedNpm "lodash") remaining) `shouldBe` [npmVersion "1.0.0"]
+
+    it "previews actual advisory decisions without consulting covered names" $ do
+        store <- newFakeStore (bucketedBy "lx")
+        reads' <- newIORef []
+        rec' <- recordingPortsUnder previewingReport generation
+        let original = fakeCveLookup [("left-pad", advisory "CVE-2026-10001" (Just 0.75))]
+            cve =
+                original
+                    { cveCoveredNames = throwIO (TestContractEscape "covered names")
+                    , cveAdvisoriesFor = \name -> modifyIORef' reads' (name :) >> cveAdvisoriesFor original name
+                    }
+            deps = servingRuleDeps (DbEtag "etag-1") cve
+            configured = [DenyIfEpss (DenyIfEpssParams 0.5 FailDeny)]
+        rules <- prepare deps (map atDefaultPrecedence configured)
+        outcome <- sweepCycle walkPacing (recPorts rec') [(previewMount (fakeObservation store) rules configured){smRuleDeps = deps}]
+        outcomeComplete outcome `shouldBe` True
+        tallyExamined (outcomeTally outcome) `shouldBe` 2
+        tallyDeleted (outcomeTally outcome) `shouldBe` 1
+        tallyKept (outcomeTally outcome) `shouldBe` 1
+        reverse <$> readIORef reads' `shouldReturn` ["left-pad", "lodash"]
+        readFakeContents store `shouldReturn` fakeContents seededConfig
+        readFakeCursor store `shouldReturn` Nothing
+
+    it "still propagates a generation acquisition failure" $ do
+        store <- seededStore
+        rec' <- recordingPorts generation
+        let deps =
+                inertRuleDeps
+                    { rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (\_ -> throwIO (TestContractEscape "generation"))
+                    }
+            mount = (testMount (fakeMaintenance store) [] []){smRuleDeps = deps}
+        sweepCycle walkPacing (recPorts rec') [mount]
+            `shouldThrow` (== TestContractEscape "generation")
+
+    it "still performs failing advisory reads used by preview rules and keeps those versions" $ do
+        store <- seededStore
+        reads' <- newIORef []
+        rec' <- recordingPortsUnder previewingReport generation
+        let cve = (fakeCveLookup []){cveAdvisoriesFor = \name -> modifyIORef' reads' (name :) >> throwIO (TestContractEscape "package advisories")}
+            deps = servingRuleDeps (DbEtag "etag-1") cve
+            configured = [DenyIfEpss (DenyIfEpssParams 0.5 FailDeny)]
+        rules <- prepare deps (map atDefaultPrecedence configured)
+        outcome <- sweepCycle walkPacing (recPorts rec') [(previewMount (fakeObservation store) rules configured){smRuleDeps = deps}]
+        tallyExamined (outcomeTally outcome) `shouldBe` 2
+        tallyDeleted (outcomeTally outcome) `shouldBe` 0
+        tallyKept (outcomeTally outcome) `shouldBe` 2
+        reverse <$> readIORef reads' `shouldReturn` ["left-pad", "lodash"]
+        readFakeContents store `shouldReturn` fakeContents seededConfig
+
     it "decides every name in the store, candidate or not" $ do
         store <- seededStore
         (_, outcome) <- runCycle walkPacing (fakeMaintenance store)

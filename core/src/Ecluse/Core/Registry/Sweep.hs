@@ -42,7 +42,7 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
     NamePrefix,
     renderNamePrefix,
  )
-import Ecluse.Core.Registry.Sweep.Candidates (CandidateSet, candidateSet, inCandidates)
+import Ecluse.Core.Registry.Sweep.Candidates (candidateSet, inCandidates)
 import Ecluse.Core.Registry.Sweep.Group (InventoryLocation (..), boundedVersions, collectGroupBucket, groupAlphabet)
 import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt (HaltBucketUnsplittable, HaltConsentWithheld, HaltStoreFault, HaltStorePreserved),
@@ -67,7 +67,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepMount (smConfigured, smEcosystem, smProjectName, smRuleDeps, smStore),
     SweepPacing (swpChunkPause, swpChunkSize, swpShape),
     SweepPorts (sweepAudit, sweepBudget, sweepDelay, sweepNow),
-    SweepShape (SweepEverything),
+    SweepShape (SweepCandidates, SweepEverything),
     SweepState,
     SweepStore (ssExecute, ssObserve, ssVersionLimit),
     countingAt,
@@ -277,13 +277,13 @@ walkGroup pacing ports counters mount cache = do
             BucketOverflowed narrower -> go resume (resumeAfter resume (toList narrower) <> rest)
             BucketRead names ->
                 withCandidates
+                    (swpShape pacing)
                     ports
                     mount
-                    ( \candidates ctx ->
-                        stepUntilHalt (sweepOneName walk ctx) (filter (wanted candidates . fst) names)
+                    ( \wanted ctx ->
+                        stepUntilHalt (sweepOneName walk ctx) (filter (wanted . fst) names)
                     )
                     >>= maybe (marker (`writeCursor` prefix) >>= maybe (go resume rest) (pure . Just)) (pure . Just)
-    wanted candidates name = swpShape pacing == SweepEverything || inCandidates candidates name
 
 {- One name of a bucket: the chunk pause falls here, before the enumeration reads, so a pause
 never lands between the two locations of a single name. -}
@@ -332,14 +332,16 @@ groupOutcome walk ctx name bounded = case ssExecute (smStore mount) of
 locatedMount :: SweepMount -> StoreObservation -> SweepMount
 locatedMount mount store = mount{smStore = countingAt (smStore mount) store}
 
-{- One bucket's candidates under a pinned lookup. Later rule evaluations acquire their own lookups.
-A generation swapped mid-bucket defers a name it newly covers by one cycle. -}
-withCandidates :: SweepPorts -> SweepMount -> (CandidateSet -> EvalContext -> IO a) -> IO a
-withCandidates ports mount act =
+{- Full walks need the acquired generation but no candidate names.
+Default walks defer names newly covered during a bucket until the next cycle. -}
+withCandidates :: SweepShape -> SweepPorts -> SweepMount -> ((PackageName -> Bool) -> EvalContext -> IO a) -> IO a
+withCandidates shape ports mount act =
     withCveLookup (smRuleDeps mount) $ \mLookup -> do
-        candidates <- candidateSet (smProjectName mount) (smConfigured mount) (snd <$> mLookup)
+        wanted <- case shape of
+            SweepEverything -> pure (const True)
+            SweepCandidates -> inCandidates <$> candidateSet (smProjectName mount) (smConfigured mount) (snd <$> mLookup)
         ctx <- mkEvalContext (sweepNow ports) (pure (fst <$> mLookup))
-        act candidates ctx
+        act wanted ctx
 
 {- Say once per mount whose rules read advisories and no generation is loaded. Only the identity
 half then sweeps, so that rule set decided on less than it names, which is the gap recorded here. -}
