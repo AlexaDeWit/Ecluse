@@ -291,7 +291,7 @@ rolloutOps =
         , awaitPublished = \worker release -> awaitContainerLog worker (T.isInfixOf (publishedLine release)) 240
         , workerLogs = containerLogs
         , publicationCoordinate = pure
-        , outsideSweeps = const id
+        , creditSweep = const id
         }
   where
     servingEnvironment PermissivePolicy = permissiveEnv <> publishTargetEnv

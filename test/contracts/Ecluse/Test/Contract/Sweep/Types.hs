@@ -107,8 +107,8 @@ data RolloutOps plane store = RolloutOps
     , awaitPublished :: String -> Text -> IO Bool
     , workerLogs :: String -> IO Text
     , publicationCoordinate :: Text -> IO Text
-    , outsideSweeps :: forall a. plane -> IO a -> IO a
-    -- ^ Steps with no Dredger running. A provider that observes store deletes fails the steps on one.
+    , creditSweep :: plane -> IO SweepRun -> IO SweepRun
+    -- ^ A Dredger run beside the worker. A provider that observes store deletes credits that run's deletes to it.
     }
 
 -- | Generation publication returns process evidence and waits for the proxy's observed swap.

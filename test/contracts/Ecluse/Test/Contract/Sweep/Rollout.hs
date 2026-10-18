@@ -34,24 +34,23 @@ rolloutScenarios fixture@RolloutFixture{..} stores@StoreOps{..} clients@ClientOp
             -- One worker spans the sweep. The emulator hands the next job to a stopped worker's
             -- pending long poll, so a fresh worker would wait out the visibility timeout.
             withWorkerRole plane queueUrl $ \worker -> do
-                outsideSweeps plane $ do
-                    for_ [target <> "@" <> version, unaffected <> "@" <> packageVersion rolloutUnaffected] (\release -> awaitPublished worker release `shouldReturn` True)
-                    storeAwaitVersions strict target [version] `shouldReturn` [version]
-                    storeVersions cache target `shouldReturn` [version]
+                for_ [target <> "@" <> version, unaffected <> "@" <> packageVersion rolloutUnaffected] (\release -> awaitPublished worker release `shouldReturn` True)
+                storeAwaitVersions strict target [version] `shouldReturn` [version]
+                storeVersions cache target `shouldReturn` [version]
 
-                    clientWithProject strict $ \project -> do
-                        void $ clientInstallIn project target (Just version) >>= shouldSucceed
-                        clientInstalledVersion project target `shouldReturn` Just version
-                    served <- clientArtifact strict target version
-                    second LBS.length served `shouldSatisfy` servedBytes
-                swept <- runSweep plane Apply denied
+                clientWithProject strict $ \project -> do
+                    void $ clientInstallIn project target (Just version) >>= shouldSucceed
+                    clientInstalledVersion project target `shouldReturn` Just version
+                served <- clientArtifact strict target version
+                second LBS.length served `shouldSatisfy` servedBytes
+                drained <- workerLogs worker
+                swept <- creditSweep plane (runSweep plane Apply denied)
                 sweepExit swept `shouldBe` ExitSuccess
-                outsideSweeps plane $ do
-                    inventoriesEmpty stores strict cache target
-                    storeVersions strict unaffected `shouldReturn` [packageVersion rolloutUnaffected]
-                    storeVersions strict rolloutFirstPartyName `shouldReturn` [rolloutFirstPartyVersion]
-                    refusedNext clients strict target version
-                    nothingQueued fixture clients roles worker strict (target <> "@" <> version)
+                inventoriesEmpty stores strict cache target
+                storeVersions strict unaffected `shouldReturn` [packageVersion rolloutUnaffected]
+                storeVersions strict rolloutFirstPartyName `shouldReturn` [rolloutFirstPartyVersion]
+                refusedNext clients strict target version
+                nothingQueued fixture clients roles worker strict (target <> "@" <> version) drained
             rescanned <- runSweep plane Apply denied
             sweepExit rescanned `shouldBe` ExitSuccess
             inventoriesEmpty stores strict cache target
@@ -95,10 +94,14 @@ rolloutScenarios fixture@RolloutFixture{..} stores@StoreOps{..} clients@ClientOp
             awaitWrites
             inventoriesEmpty stores proxy cache name
 
--- The sentinel proves a drain after the refusal. The refused release completes once, in the drain before the sweep.
-nothingQueued :: RolloutFixture -> ClientOps store project -> RolloutOps plane store -> String -> store -> Text -> IO ()
-nothingQueued RolloutFixture{..} ClientOps{..} RolloutOps{..} worker proxy denied = do
+-- After the drain's log, the worker publishes the sentinel and never publishes or completes the refused release.
+nothingQueued :: RolloutFixture -> ClientOps store project -> RolloutOps plane store -> String -> store -> Text -> Text -> IO ()
+nothingQueued RolloutFixture{..} ClientOps{..} RolloutOps{..} worker proxy denied drained = do
     void $ clientInstall proxy (packageName rolloutSentinel) Nothing >>= shouldSucceed
     awaitPublished worker (packageName rolloutSentinel <> "@" <> packageVersion rolloutSentinel) `shouldReturn` True
     coordinate <- publicationCoordinate denied
-    (T.count ("mirror version complete: " <> coordinate) <$> workerLogs worker) `shouldReturn` 1
+    logs <- workerLogs worker
+    let evidence = map (<> coordinate) ["mirrored artifact published: ", "mirror version complete: "]
+    -- Counts, not a log suffix: the log joins stdout and stderr, so an earlier read need not be a prefix.
+    map (`T.count` logs) evidence `shouldBe` map (`T.count` drained) evidence
+    T.count ("mirror version complete: " <> coordinate) drained `shouldBe` 1

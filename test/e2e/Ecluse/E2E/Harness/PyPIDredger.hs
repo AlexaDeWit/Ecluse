@@ -52,6 +52,8 @@ data PyPISweepPlane = PyPISweepPlane
     , pspMirror :: NativeTarget
     , pspCache :: NativeTarget
     , pspDistributions :: [Distribution]
+    , pspDredgerDeletes :: TVar [(Text, Text)]
+    -- ^ The CodeArtifact delete requests credited to Dredger runs, in request order.
     }
 
 -- | Direct inventory observations stay attached to the repository behind a client endpoint.
@@ -76,9 +78,10 @@ withPyPISweepPlane global action = do
                     [ boundary distributions "mirror" mirror [] (nativeApplication (targetConfig "mirror") distributions mirror)
                     , boundary distributions "cache" cache ["mirror"] (cacheApplication distributions mirror cache)
                     ]
+            credited <- newTVarIO []
             withCodeArtifactFixture repositories $ \control ->
                 withStubFault global (PyPICodeArtifactBackend (cafPort control)) $
-                    action (PyPISweepPlane global control mirror cache distributions)
+                    action (PyPISweepPlane global control mirror cache distributions credited)
 
 targetConfig :: Text -> NativeTargetConfig
 targetConfig repository = NativeTargetConfig (repositoryUrl repository) "Basic YXdzOmZpeHR1cmUtdG9rZW4=" PreserveUploadFields

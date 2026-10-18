@@ -191,7 +191,7 @@ rolloutOps =
                 (servingEnvironment policy <> [("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", Native.repositoryUrl "mirror")])
                 (Just queue)
                 ["proxy", "--no-worker"]
-        , withWorkerRole = \plane queue -> withMirrorRole (Native.pspGlobal plane) (workerEnvironment queue)
+        , withWorkerRole = withObservedWorker
         , awaitPublished = \worker release -> do
             (name, version) <- workerRelease release
             awaitContainerLog worker (mirrorCompleted name version) 240
@@ -199,7 +199,7 @@ rolloutOps =
         , publicationCoordinate = \release -> do
             (name, version) <- workerRelease release
             pure (name <> "@" <> version)
-        , outsideSweeps = withoutDeletes
+        , creditSweep = creditDeletes
         }
   where
     servingEnvironment (IdentityPolicy names) = [("ECLUSE_RULES", denyingRules names)]
@@ -210,21 +210,32 @@ workerRelease release = case T.splitOn "@" release of
     [name, version] | not (T.null name) -> (name,) <$> canonicalVersion version
     _ -> fail "expected a PyPI package@version fixture coordinate"
 
-workerEnvironment :: Text -> [(Text, Text)]
-workerEnvironment queue =
-    Native.proxyRoleEnv
-        <> permissiveEnv
-        <> [("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873"), ("ECLUSE_QUEUE__URL", queue), ("AWS_ENDPOINT_URL_SQS", "http://ministack:4566")]
-
--- | Fail the steps on any CodeArtifact delete, which only a Dredger may issue.
-withoutDeletes :: Native.PyPISweepPlane -> IO a -> IO a
-withoutDeletes plane steps = do
-    prior <- deletes
-    result <- steps
-    deletes `shouldReturn` prior
+-- | From boot to stop, the worker sees only the CodeArtifact deletes credited to Dredger runs.
+withObservedWorker :: Native.PyPISweepPlane -> Text -> (String -> IO a) -> IO a
+withObservedWorker plane queue action = do
+    prior <- deleteRequests plane
+    credited <- length <$> readTVarIO (Native.pspDredgerDeletes plane)
+    result <- withMirrorRole (Native.pspGlobal plane) environment action
+    made <- drop credited <$> readTVarIO (Native.pspDredgerDeletes plane)
+    deleteRequests plane `shouldReturn` prior <> made
     pure result
   where
-    deletes = filter ((== "v1/package/versions/delete") . snd) <$> readTVarIO (cafRequests (Native.pspControl plane))
+    environment =
+        Native.proxyRoleEnv
+            <> permissiveEnv
+            <> [("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873"), ("ECLUSE_QUEUE__URL", queue), ("AWS_ENDPOINT_URL_SQS", "http://ministack:4566")]
+
+-- | Credit the CodeArtifact deletes a Dredger run makes to that run.
+creditDeletes :: Native.PyPISweepPlane -> IO SweepRun -> IO SweepRun
+creditDeletes plane run = do
+    prior <- length <$> deleteRequests plane
+    swept <- run
+    made <- drop prior <$> deleteRequests plane
+    atomically (modifyTVar' (Native.pspDredgerDeletes plane) (<> made))
+    pure swept
+
+deleteRequests :: Native.PyPISweepPlane -> IO [(Text, Text)]
+deleteRequests plane = filter ((== "v1/package/versions/delete") . snd) <$> readTVarIO (cafRequests (Native.pspControl plane))
 
 advisoryOps :: AdvisoryOps Native.PyPISweepPlane Native.PyPISweepStore
 advisoryOps =

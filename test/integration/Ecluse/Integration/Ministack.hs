@@ -6,7 +6,8 @@
 
 One @ministack@ container serves the whole test process. The first spec that asks starts it, and
 'withMinistackPool' stops it when the suite ends, so specs must isolate by queue and bucket names.
-The module also owns the endpoint override and fresh per-test queues.
+An emulator that crashes mid-suite fails every later group that uses it. The module also owns the
+endpoint override and fresh per-test queues.
 -}
 module Ecluse.Integration.Ministack (
     -- * Container lifecycle
@@ -49,9 +50,9 @@ import TestContainers (Container, containerAddress)
 import TestContainers qualified as TC
 import TestContainers.Docker (fromDockerfile, withLabels)
 import TestContainers.Hspec (withContainers)
-import UnliftIO.Async (async, cancel, race, waitCatch)
-import UnliftIO.Exception (bracket, onException, throwIO, try)
-import UnliftIO.MVar (modifyMVar)
+import UnliftIO.Async (asyncWithUnmask, cancel, race, waitCatch)
+import UnliftIO.Exception (bracket, mask, onException, throwIO, try)
+import UnliftIO.MVar (modifyMVarMasked)
 
 import Ecluse.Core.Queue (MirrorQueue (receive), QueueMessage, Seconds (Seconds))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -76,12 +77,13 @@ withMinistackPool = bracket (MinistackPool <$> newMVar Nothing) (\(MinistackPool
 -- | Run the body against the pool's emulator with the throwaway keys set. A failed start fails only this body.
 withMinistack :: MinistackPool -> (Container -> IO ()) -> IO ()
 withMinistack (MinistackPool slot) body = withEnvOverrides [("AWS_ACCESS_KEY_ID", "test"), ("AWS_SECRET_ACCESS_KEY", "test")] $ do
-    container <- modifyMVar slot $ \case
+    container <- modifyMVarMasked slot $ \case
         held@(Just (running, _)) -> pure (held, running)
         Nothing -> (\started -> (Just started, fst started)) <$> startHeld
     body container
 
 -- testcontainers ties a container to a bracket, so a holder thread keeps it open until the stop action runs.
+-- The caller masks, so an interrupt either cancels the holder or reaches the pool with its stop action.
 startHeld :: IO (Container, IO ())
 startHeld = do
     labels <- testContainerLabels "integration"
@@ -89,11 +91,12 @@ startHeld = do
     image <- either (fail . toString) pure ministackImage
     started <- newEmptyMVar
     stop <- newEmptyMVar
-    holder <- async (withContainers (ministack labels image) (\container -> putMVar started container >> takeMVar stop))
-    race (waitCatch holder) (takeMVar started) `onException` cancel holder >>= \case
-        Right container -> pure (container, putMVar stop () >> void (waitCatch holder))
-        Left (Left failure) -> throwIO failure
-        Left (Right ()) -> fail "the ministack holder ended before the container started"
+    mask $ \restore -> do
+        holder <- asyncWithUnmask (\unmask -> unmask (withContainers (ministack labels image) (\container -> putMVar started container >> takeMVar stop)))
+        restore (race (waitCatch holder) (takeMVar started)) `onException` cancel holder >>= \case
+            Right container -> pure (container, putMVar stop () >> void (waitCatch holder))
+            Left (Left failure) -> throwIO failure
+            Left (Right ()) -> fail "the ministack holder ended before the container started"
 
 -- The reaping labels are threaded in rather than baked into the image, so the container
 -- carries this worktree's scope and `task test-clean` reaps it after a hard kill.
