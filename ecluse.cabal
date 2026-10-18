@@ -316,6 +316,7 @@ library ecluse-core
     Ecluse.Core.Server.Pipeline.Diagnostics
     Ecluse.Core.Server.Pipeline.Origin
     Ecluse.Core.Server.Pipeline.Packument
+    Ecluse.Core.Server.Pipeline.Packument.Representation
     Ecluse.Core.Server.Pipeline.Sidecar
     Ecluse.Core.Server.Pipeline.Tarball
     Ecluse.Core.Server.Pipeline.Tarball.Private
@@ -1222,6 +1223,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.Pipeline.InternalSpec
     Ecluse.Core.Server.Pipeline.OriginSpec
     Ecluse.Core.Server.Pipeline.PackumentSpec
+    Ecluse.Core.Server.Pipeline.Packument.RepresentationSpec
     Ecluse.Core.Server.Pipeline.SidecarSpec
     Ecluse.Core.Server.Pipeline.Tarball.PrivateSpec
     Ecluse.Core.Server.Pipeline.Tarball.PublicSpec

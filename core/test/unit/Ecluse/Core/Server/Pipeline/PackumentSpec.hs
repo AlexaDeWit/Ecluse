@@ -2,17 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Validators, coding negotiation, first-party private misses, and the output charge's basis.
+-- | Coding negotiation and first-party private misses through the request pipeline.
 module Ecluse.Core.Server.Pipeline.PackumentSpec (spec) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Concurrent.MVar qualified as MVar
-import Crypto.Hash (Digest, SHA256, hash)
 import Data.Aeson (Value (String), encode, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
-import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Network.HTTP.Types (Header, Method, methodGet, methodHead, status200, status403, status404, statusCode)
 import Network.HTTP.Types.Header (RequestHeaders, hAcceptEncoding, hAuthorization, hContentEncoding, hContentLength, hETag, hIfNoneMatch, hVary)
@@ -23,11 +21,6 @@ import UnliftIO.Async (cancel, race_, wait, withAsync)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Credential (mkSecret)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageName, mkPackageName, pkgEcosystem)
-import Ecluse.Core.Package.Entry (EntryKey (..))
-import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource), mergePackuments)
-import Ecluse.Core.Registry.Metadata (ContentDigest, Manifest (manifestDigest, manifestInfo, manifestRaw))
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
@@ -39,7 +32,6 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned)
 import Ecluse.Core.Server.Admission.Meter (MeterSettings (..), meterSnapshot, newMemoryMeter, takeLargestCharge)
 import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
-import Ecluse.Core.Server.Conditional (ETag, mkStrongETag, renderETag)
 import Ecluse.Core.Server.Context (
     MountBinding (..),
     MountRouter,
@@ -48,17 +40,14 @@ import Ecluse.Core.Server.Context (
     RouteAction (RouteAction),
     ServeRuntime (srMemoryMeter),
  )
-import Ecluse.Core.Server.Encoding (ContentCoding (GzipCoding, IdentityCoding), MetadataCompression (GzipWhenAccepted, IdentityOnly))
+import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
 import Ecluse.Core.Server.MetadataGzip (gzipBufferChargeBytes, gzipWorkspaceBytes)
 import Ecluse.Core.Server.Pipeline.Internal (denialLabels, packumentServeDecision)
-import Ecluse.Core.Server.Pipeline.Origin (Contribution (..), OriginMiss (MissAbsent, MissUnresolved))
+import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved))
 import Ecluse.Core.Server.Pipeline.Packument (
     PackumentReplies (..),
-    codedETag,
     firstPartyMissDecision,
     firstPartyMissReply,
-    outputBasisBytes,
-    packumentETag,
  )
 import Ecluse.Core.Server.Response (
     RejectReason (Unavailable),
@@ -66,13 +55,11 @@ import Ecluse.Core.Server.Response (
     Transience (WillResolve),
  )
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
-import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Telemetry.Metrics (CacheResult (Hit, Miss))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpAssembledCacheRequest))
-import Ecluse.Core.Version (Version)
 import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Package (npmVersion, pypiVersion, requestsName, sampleManifest, sriSha512Of, thingName)
+import Ecluse.Test.Package (sriSha512Of, thingName)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
@@ -80,29 +67,12 @@ import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureResponse), deliverServe, responseBytes, testServeRuntime, testServeRuntimeWith)
 import Ecluse.Test.Server.Mount (npmServeDeps, pypiServeDeps, withPrivateBaseUrl)
 import Ecluse.Test.Server.Response (reasonOf)
-import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Wai (selfBaseUrl)
 
 spec :: Spec
 spec = do
-    packumentETagSpec
-    codedETagSpec
     metadataGzipSpec
     firstPartyMissSpec
-    outputBasisSpec
-
-codedETagSpec :: Spec
-codedETagSpec = describe "codedETag -- one validator per content coding" $ do
-    it "keeps the identity tag for identity coding" $
-        codedETag IdentityCoding (tagWith base) `shouldBe` tagWith base
-    it "pins a weak gzip tag over the framed identity tag" $
-        -- SHA-256 of "ecluse:packument-etag:gzip:v1\0" and the length-framed quoted identity tag.
-        renderETag (codedETag GzipCoding (mkStrongETag (hash ("identity" :: ByteString) :: Digest SHA256)))
-            `shouldBe` "W/\"34d4ae5c45518e8b9b30722d9a46d3628e64aca9df195e4351b9f3a702d44b3a\""
-    it "changes the gzip tag with the identity tag" $
-        codedETag GzipCoding (tagWith base{publicSurvivors = ["1.0.0"]}) `shouldNotBe` codedETag GzipCoding (tagWith base)
-    it "never shares the identity tag's opaque value" $
-        T.drop 2 (renderETag (codedETag GzipCoding (tagWith base))) `shouldNotBe` renderETag (tagWith base)
 
 metadataGzipSpec :: Spec
 metadataGzipSpec = describe "native metadata gzip over the live listing path" $
@@ -242,71 +212,6 @@ privateOrigin current origin request respond =
         PrivateServes -> origin request respond
         PrivateRefuses -> respond (responseLBS status403 [] "")
 
-packumentETagSpec :: Spec
-packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
-    it "pins the v4 byte framing for every entry constructor" $ do
-        let sources =
-                [ (TrustedSource, privateDigest base, [("1\0é", [ArrayEntry 0, ArrayEntry 10, ArrayEntry (-1), ObjectEntry "é\0x", SingletonEntry])])
-                , (GatedSource, publicDigest base, [])
-                ]
-        renderETag (packumentETag mountBase [] thingName sources)
-            `shouldBe` "\"4319a6866882aedd076a71e0f8158f81138c10f4f18ff475446cd63a307a5fe6\""
-
-    it "changes when the origin URL changes the source metadata pointer" $
-        packumentETag mountBase ["https://source-one.example"] thingName (piecesOf base)
-            `shouldNotBe` packumentETag mountBase ["https://source-two.example"] thingName (piecesOf base)
-
-    it "changes when an origin body changes (same survivors)" $
-        tagWith base{publicDigest = digestOf "public-bytes-v2"} `shouldNotBe` tagWith base
-
-    it "changes when the private origin's body changes" $
-        tagWith base{privateDigest = digestOf "private-bytes-v2"} `shouldNotBe` tagWith base
-
-    it "changes when a version drops out of the survivor set" $
-        tagWith base{publicSurvivors = ["1.0.0"]} `shouldNotBe` tagWith base
-
-    it "changes when a version joins the survivor set" $
-        tagWith base{publicSurvivors = ["1.0.0", "2.0.0", "3.0.0"]} `shouldNotBe` tagWith base
-
-    it "changes when the mount base URL changes (rewritten tarball URLs differ)" $
-        packumentETag "https://other.example/npm" [] thingName (piecesOf base)
-            `shouldNotBe` tagWith base
-
-    it "changes across packages" $
-        packumentETag mountBase [] (mkPackageName Npm Nothing "other-thing") (piecesOf base)
-            `shouldNotBe` tagWith base
-
-    it "distinguishes provenance: the same digest as trusted vs gated" $
-        tagWith base{privateProvenance = GatedSource} `shouldNotBe` tagWith base
-
-    it "distinguishes source order (merge precedence is positional)" $
-        packumentETag mountBase [] thingName (reverse (piecesOf base)) `shouldNotBe` tagWith base
-
-    it "does not collide survivor lists on concatenation framing" $ do
-        -- ["1.0", "0.2.0"] vs ["1.0.0", "2.0"] concatenate to the same characters.
-        -- The per-field terminator must keep them distinct.
-        tagWith base{publicSurvivors = ["1.0", "0.2.0"]}
-            `shouldNotBe` tagWith base{publicSurvivors = ["1.0.0", "2.0"]}
-
-    it "does not collide a survivor moved across the source boundary" $
-        -- The same flat multiset of survivors, split differently between the two
-        -- sources, must not collide. The source-block terminator keeps them apart.
-        tagWith base{privateSurvivors = ["9.0.0", "1.0.0"], publicSurvivors = ["2.0.0"]}
-            `shouldNotBe` tagWith base{privateSurvivors = ["9.0.0"], publicSurvivors = ["1.0.0", "2.0.0"]}
-
-    it "changes when a whole source appears or disappears" $
-        packumentETag mountBase [] thingName [publicPiece base] `shouldNotBe` tagWith base
-
-    for_ [TrustedSource, GatedSource] $ \provenance -> do
-        let tag entries = packumentETag mountBase [] thingName [(provenance, publicDigest base, [("1.0.0", entries)])]
-        it ("tracks exact admitted coordinates for " <> show provenance) $
-            tag [ArrayEntry 0, ArrayEntry 1] `shouldNotBe` tag [ArrayEntry 1]
-        it ("distinguishes entry constructors for " <> show provenance) $ do
-            tag [ArrayEntry 0] `shouldNotBe` tag [ObjectEntry "0"]
-            tag [SingletonEntry] `shouldNotBe` tag [ObjectEntry "s"]
-        it ("frames arbitrary object keys for " <> show provenance) $
-            tag [ObjectEntry "a", ObjectEntry "b"] `shouldNotBe` tag [ObjectEntry "a\0b"]
-
 firstPartyMissSpec :: Spec
 firstPartyMissSpec = describe "a first-party name whose private origin yielded nothing" $ do
     it "renders an origin that answered 404 as a 404" $
@@ -323,49 +228,6 @@ firstPartyMissSpec = describe "a first-party name whose private origin yielded n
     it "counts an unread origin as an outage, suggesting no delay" $ do
         packumentServeDecision [decisionFor MissUnresolved] `shouldBe` Metric.Unavailable
         reasonOf (decisionFor MissUnresolved) `shouldBe` Just (Unavailable (WillResolve Nothing))
-
-outputBasisSpec :: Spec
-outputBasisSpec = describe "outputBasisBytes -- the source bytes a listing's output charge scales" $
-    forM_ [(thingName, npmVersion), (requestsName, pypiVersion)] $ \(name, version) ->
-        describe (show (pkgEcosystem name)) $ do
-            let source = listingSource name version
-            it "is a single source's size" $
-                basisOf [source GatedSource 900 ["1.0.0", "2.0.0"]] `shouldBe` Just 900
-
-            it "counts one copy of sources that hold the same versions" $
-                basisOf [source TrustedSource 900 ["1.0.0", "2.0.0"], source GatedSource 900 ["1.0.0", "2.0.0"]] `shouldBe` Just 900
-
-            it "counts both sources when they share no version" $
-                basisOf [source TrustedSource 400 ["1.0.0"], source GatedSource 900 ["2.0.0", "3.0.0"]] `shouldBe` Just 1300
-
-            it "adds the smaller source's share for the versions the larger lacks" $
-                basisOf [source TrustedSource 600 ["1.0.0", "2.0.0", "3.0.0"], source GatedSource 900 ["2.0.0", "3.0.0", "4.0.0"]] `shouldBe` Just 1100
-
-            it "takes the larger source whole on either side of the merge" $
-                basisOf [source TrustedSource 900 ["1.0.0", "2.0.0", "3.0.0"], source GatedSource 300 ["3.0.0", "4.0.0", "5.0.0"]] `shouldBe` Just 1100
-
-            it "rounds a share up, anchored on the largest source when it gives more" $
-                basisOf [source TrustedSource 100 ["1.0.0", "2.0.0", "3.0.0"], source GatedSource 900 ["2.0.0", "3.0.0", "4.0.0"]] `shouldBe` Just 934
-
-            it "anchors on the base document when a larger source holds all its versions" $
-                basisOf [source TrustedSource 900 ["1.0.0"], source GatedSource 1000 thousandVersions] `shouldBe` Just 1899
-
-            it "anchors on the trusted source wherever it sits in the merge" $
-                basisOf [source GatedSource 1000 thousandVersions, source TrustedSource 900 ["1.0.0"]] `shouldBe` Just 1899
-
--- A 1,000-version document that includes 1.0.0.
-thousandVersions :: [Text]
-thousandVersions = [show major <> ".0.0" | major <- [1 .. 1000 :: Int]]
-
--- A merge source holding the given versions, whose body is the given number of bytes.
-listingSource :: PackageName -> (Text -> Version) -> Provenance -> Int -> [Text] -> Contribution
-listingSource name version provenance bytes keys =
-    Contribution provenance (manifestInfo manifest) (manifestRaw manifest) (manifestDigest manifest) bytes
-  where
-    manifest = sampleManifest name (map version keys)
-
-basisOf :: [Contribution] -> Maybe Int
-basisOf sources = (`outputBasisBytes` sources) <$> mergePackuments [(srcProvenance s, Snapshot (srcDigest s) (srcInfo s)) | s <- sources]
 
 -- Each reply factory answers its own name, so a case reads back which one the pipeline chose.
 namedReplies :: PackumentReplies Text
@@ -387,38 +249,6 @@ replyFor = firstPartyMissReply namedReplies Nothing thingName
 
 decisionFor :: OriginMiss -> ServeDecision
 decisionFor = firstPartyMissDecision thingName
-
--- The fixture: a private (trusted) and a public (gated) source with distinct
--- bodies and survivor sets, varied one field at a time by each case.
-data Fixture = Fixture
-    { privateProvenance :: Provenance
-    , privateDigest :: ContentDigest
-    , privateSurvivors :: [Text]
-    , publicDigest :: ContentDigest
-    , publicSurvivors :: [Text]
-    }
-
-base :: Fixture
-base =
-    Fixture
-        { privateProvenance = TrustedSource
-        , privateDigest = digestOf "private-bytes-v1"
-        , privateSurvivors = ["9.0.0"]
-        , publicDigest = digestOf "public-bytes-v1"
-        , publicSurvivors = ["1.0.0", "2.0.0"]
-        }
-
-piecesOf :: Fixture -> [(Provenance, ContentDigest, [(Text, [EntryKey])])]
-piecesOf f = [(privateProvenance f, privateDigest f, map (,[SingletonEntry]) (privateSurvivors f)), publicPiece f]
-
-publicPiece :: Fixture -> (Provenance, ContentDigest, [(Text, [EntryKey])])
-publicPiece f = (GatedSource, publicDigest f, map (,[SingletonEntry]) (publicSurvivors f))
-
-tagWith :: Fixture -> ETag
-tagWith f = packumentETag mountBase [] thingName (piecesOf f)
-
-mountBase :: Text
-mountBase = "https://proxy.example/npm"
 
 -- One ecosystem's listing route, mount, and the public origin that serves its document.
 data Listing = Listing
