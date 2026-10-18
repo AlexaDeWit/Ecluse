@@ -20,7 +20,7 @@ module Ecluse.Pilot (
 
 import Conduit (MonadResource, runResourceT)
 import Control.Monad.Catch (MonadMask)
-import Katip (KatipContext, LogEnv, Severity (DebugS, InfoS, WarningS), logFM, ls)
+import Katip (KatipContext, LogEnv, Severity (InfoS, WarningS), logFM, ls)
 import Network.HTTP.Client (Manager)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Async (mapConcurrently_)
@@ -113,7 +113,7 @@ superviseExportCycles schedule targets runCycle =
 -- One full cycle for one ecosystem: compile its OSV artifact, publish it, then keep it locally.
 exportEcosystem :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Metrics -> Manager -> ExportTarget -> Telemetry -> Maybe AwsEndpoint -> AdvisoriesSettings -> AdvisoryStoreUrl -> m ()
 exportEcosystem metrics feeds target telemetry s3Endpoint advisories store = do
-    logFM DebugS (ls ("Starting " <> ecosystemName eco <> " OSV database compilation"))
+    logFM InfoS (ls ("Starting " <> ecosystemName eco <> " OSV database compilation"))
     withOsvCandidate
         (advisoryCompileMetricsPortOf metrics (Just eco))
         (telemetryTracerProvider telemetry)

@@ -164,7 +164,7 @@ data OsvCandidate = OsvCandidate
 withOsvCandidate :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> Manager -> FilePath -> OsvEcosystem -> EpssRequirement -> CompileSources -> QuietTime -> (OsvCandidate -> m a) -> m a
 withOsvCandidate metrics mTracerProvider manager outDir eco requirement sources quietTime use = do
     let dbFile = outDir </> osvDbFileName (osvWireName eco)
-    logFM DebugS (ls ("Compiling OSV data for " <> osvWireName eco <> " to " <> toText dbFile <> ", EPSS enrichment " <> renderRequirement requirement))
+    logFM InfoS (ls ("Compiling OSV data for " <> osvWireName eco <> " to " <> toText dbFile <> ", EPSS enrichment " <> renderRequirement requirement))
 
     liftIO $ createDirectoryIfMissing True outDir
 

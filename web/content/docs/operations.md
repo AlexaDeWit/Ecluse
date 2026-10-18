@@ -211,8 +211,8 @@ Use the severity together with the event and its repetition:
 |---|---|---|
 | `error` | A failed operation, exhausted budget, or halted role needs attention. Some conditions can recover on retry. | Page and check the affected role. |
 | `warn` | Écluse absorbed a problem and carried on degraded. | Chart it, and alert on a sustained rate rather than on a line. |
-| `info` | Audit and lifecycle records: mirrored artifacts, completed sweeps, deletions, advisory publication and activation, and deployment posture. | Retain these records for investigation. |
-| `debug` | Ordinary serve requests, serve-time denial details, expected metadata absences, and feed-processing progress. | Enable it during an investigation, then restore `info`. |
+| `info` | Audit and lifecycle records: mirrored artifacts, completed sweeps, deletions, Pilot compilation start and completion, advisory publication and activation, and deployment posture. | Retain these records for investigation. |
+| `debug` | Ordinary serve requests, serve-time denial details, expected metadata absences, and download or parsing details. | Enable it during an investigation, then restore `info`. |
 
 Serve-time denial counters remain available when telemetry is enabled, regardless of the log level.
 Use those metrics to identify changes in denial activity. Set `ECLUSE_OBSERVABILITY__LOG_LEVEL=debug`
