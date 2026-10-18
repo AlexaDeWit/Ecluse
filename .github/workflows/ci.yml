@@ -931,8 +931,8 @@ jobs:
 
   gate:
     name: CI gate
-    # Add a gating job to `needs` and scripts/ci-gate-verdict.sh. It always runs, so its verdict
-    # rejects jobs a cancelled run skipped. Required contexts: .agents/orchestration-strategy.md.
+    # Add a gating job to `needs` and scripts/ci-gate-verdict.sh. smoke and grype never gate. It always
+    # runs, so it rejects jobs a cancelled run skipped. Required contexts: .agents/orchestration-strategy.md.
     needs:
       - changes
       - build

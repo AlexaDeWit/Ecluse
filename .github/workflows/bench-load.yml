@@ -66,7 +66,7 @@ permissions:
 env:
   # Pin the cabal store to a deterministic, cacheable location, as the other Haskell jobs do.
   CABAL_DIR: ${{ github.workspace }}/.cabal
-  # Dispatch inputs reach the shell only through these variables, so they cannot inject.
+  # These dispatch inputs reach the shell only as environment variables, so they cannot inject.
   # A blank serve-max-in-flight keeps the computed default of an unconfigured proxy.
   BENCH_LOAD_DURATION_SECONDS: ${{ inputs.duration-seconds || '30' }}
   BENCH_LOAD_CONCURRENCY: ${{ inputs.concurrency || '100' }}
