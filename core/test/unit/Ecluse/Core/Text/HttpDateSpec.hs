@@ -49,6 +49,8 @@ spec = do
                 , "Sun, 06 Nov 1994 25:49:37 GMT"
                 , "Sunday, 06-Nov-1994 08:49:37 GMT"
                 , "Sun Nov  6 08:49:37"
+                , "Sat, 01 Jan 10000 00:00:00 GMT"
+                , "Sat Jan  1 00:00:00 10000"
                 , "whenever"
                 ]
                 (\raw -> parseHttpDateAt now raw `shouldBe` Nothing)

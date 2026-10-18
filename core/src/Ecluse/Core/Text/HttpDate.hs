@@ -23,8 +23,13 @@ parseHttpDateAt now raw = do
     guard (T.length raw <= 33)
     modern <|> obsolete <|> asctime
   where
-    modern = parseHttpDate raw >>= exact "%a, %d %b %Y %H:%M:%S GMT" raw
-    asctime = parseDate "%a %b %e %H:%M:%S %Y" raw >>= \stamp -> exact "%a %b %e %H:%M:%S %Y" raw stamp <|> exact "%a %b %d %H:%M:%S %Y" raw stamp
+    modern = do
+        guard (T.length raw == 29)
+        parseHttpDate raw >>= exact "%a, %d %b %Y %H:%M:%S GMT" raw
+    asctime = do
+        guard (T.length raw == 24)
+        stamp <- parseDate "%a %b %e %H:%M:%S %Y" raw
+        exact "%a %b %e %H:%M:%S %Y" raw stamp <|> exact "%a %b %d %H:%M:%S %Y" raw stamp
     obsolete = do
         [weekday, date, clock, "GMT"] <- pure (T.words raw)
         [day, month, shortYear] <- pure (T.splitOn "-" date)
