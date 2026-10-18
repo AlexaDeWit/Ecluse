@@ -5,5 +5,5 @@ template = "index.html"
 sort_by = "weight"
 
 [extra]
-tagline = "A supply-chain policy proxy for package registries."
+tagline = "Control which packages reach your builds."
 +++

@@ -603,6 +603,7 @@ tasks:
     cmds:
       - rm -rf web/public
       - zola --root web build
+      - cp docs/branding/logo.svg docs/branding/favicon-32.png docs/branding/lock-illustration.svg docs/branding/wordmark.svg docs/branding/wordmark-inverse.svg docs/social-preview.png web/public/
   # The three Haddock trees and the spec sit under /api. The Zola pages, the API
   # hub page among them, land over the top.
   site:assemble:
@@ -611,7 +612,6 @@ tasks:
       - rm -rf _site && mkdir -p _site/api && touch _site/.nojekyll
       - cp -R {{.DOCS_BUILDDIR}}/haddock-site/. _site/api/
       - cp -R web/public/. _site/
-      - cp docs/branding/logo.svg docs/branding/favicon-32.png docs/branding/lock-illustration.svg docs/social-preview.png _site/
   site:leak-check:
     internal: true
     cmds:

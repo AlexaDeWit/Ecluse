@@ -35,11 +35,22 @@
     font: 600 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     letter-spacing: .01em;
   }
-  .brand img {
+  .brand .brand-icon {
     width: 28px;
     height: 28px;
     border-radius: 6px;
     box-shadow: 0 0 0 1px var(--strong-line);
+  }
+  .brand .brand-wordmark {
+    width: 86px;
+    height: auto;
+  }
+  .brand-wordmark-dark,
+  :root[data-theme="dark"] .brand-wordmark-light {
+    display: none;
+  }
+  :root[data-theme="dark"] .brand-wordmark-dark {
+    display: block;
   }
   .global-nav {
     display: flex;
@@ -118,13 +129,16 @@
     padding: 28px 18px 40px 0;
     border-right: 1px solid var(--line);
   }
-  .sidebar .version {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: .75rem;
-    color: var(--muted);
-    margin: 0 10px 27px;
+  .sidebar-heading {
+    display: block;
+    margin: 0 10px 23px;
+    color: var(--heading);
+    font-size: .88rem;
+    font-weight: 650;
+    text-decoration: none;
+  }
+  .sidebar-heading:hover {
+    text-decoration: underline;
   }
   .sidebar-group {
     margin-bottom: 20px;

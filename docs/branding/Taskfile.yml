@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+version: '3'
+
+tasks:
+  render:
+    desc: Render the branding PNGs from the SVG sources
+    dir: '{{.TASKFILE_DIR}}/../..'
+    cmds:
+      - |
+        nix shell --inputs-from . nixpkgs#resvg --command bash -euc '
+          for source in docs/social-card.svg docs/branding/banner.svg docs/branding/logo.svg \
+            docs/branding/wordmark.svg docs/branding/wordmark-inverse.svg; do
+            resvg "$source" "${source%.svg}.png"
+          done
+          resvg --width 32 docs/branding/logo.svg docs/branding/favicon-32.png
+        '
+      - cp docs/social-card.svg docs/social-preview.svg
+      - cp docs/social-card.png docs/social-preview.png
