@@ -36,6 +36,7 @@ import Ecluse.Core.Package.Integrity (MinIntegrity)
 import Ecluse.Core.Queue (MirrorJob (jobPackage, jobVersion), MirrorQueue)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact)
 import Ecluse.Core.Registry.Metadata (VersionEvaluation)
+import Ecluse.Core.Registry.Public (PublicControl)
 import Ecluse.Core.Registry.Publish (MirrorPublish)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (HostPort, Limits)
@@ -51,6 +52,8 @@ data WorkerRuntime = WorkerRuntime
     -- ^ The mirror-queue handle the consume loop long-polls and acks against.
     , wrManager :: Manager
     -- ^ The validating-TLS manager for the __untrusted__ artifact fetch.
+    , wrPublicControl :: PublicControl
+    -- ^ Public request admission and observation shared by all mounts in the process.
     , wrHeartbeat :: WorkerHeartbeat
     -- ^ Advanced on every successful poll and every completed job, and read by the liveness probe.
     , wrMetrics :: WorkerMetricsPort
@@ -60,14 +63,10 @@ data WorkerRuntime = WorkerRuntime
     , wrInjectTraceContext :: forall m a. (KatipContext m, MonadIO m) => m a -> m a
     -- ^ Inject the current OpenTelemetry correlation payload into the @katip@ context.
     , wrPolicies :: WorkerPolicies
-    {- ^ Current policy is re-run before a mirror write, so a policy that tightened toward
-    deny since the enqueue drops the job instead of freezing it into the trusted mirror.
-    -}
+    -- ^ Recheck policy before writing, including changes since enqueue.
     }
 
-{- | The per-ecosystem bundle every job is dispatched through. Its resolver, rules, and gates
-are the serve path's own, so ingest and serve reach one decision over one policy.
--}
+-- | Use the served mount's resolver, rules, and gates for worker admission.
 data WorkerPolicy = WorkerPolicy
     { wpFirstParty :: PackageName -> Bool
     -- ^ Whether a name belongs to a namespace this deployment owns.
@@ -78,21 +77,15 @@ data WorkerPolicy = WorkerPolicy
     , wpMinIntegrity :: MinIntegrity
     -- ^ The mount's public-integrity floor, re-applied through the shared admission gate.
     , wpArtifactHostHonoured :: Maybe HostPort -> Bool
-    {- ^ The mount's tarball-host gate, applied to each source artifact location.
-    An unextractable authority ('Nothing') is refused.
-    -}
+    -- ^ Apply the mount's artifact authority gate, refusing an unextractable authority.
     , wpEgressUrl :: Text -> Either Text RegistryUrl
     -- ^ The same URL validation policy used by the mounted serving path.
     , wpArtifact :: AdapterArtifact
     -- ^ The mount ecosystem's artifact capability. A job's @GET@ rides its by-URL member.
     , wpPublish :: MirrorPublish
-    {- ^ The mirror write bound to the mount's declared target, so a job's presence probe and
-    publish reach only its own ecosystem's mirror.
-    -}
+    -- ^ Bind inventory reads and publication to the mount's declared mirror target.
     , wpArtifactLimits :: Limits
-    {- ^ The bounded-fetch budget for the artifact download, set from the memory plan's
-    mirror-artifact tenant so a publish envelope cannot breach the heap ceiling.
-    -}
+    -- ^ Bound artifact downloads by the memory plan's mirror-artifact allocation.
     , wpMirrorState :: Maybe WorkerMirrorState
     -- ^ Durable inventory storage within the worker admission reservation.
     , wpNow :: IO UTCTime
@@ -119,14 +112,10 @@ data WorkerStateBudget = WorkerStateBudget
     , wsbTargets :: StateCharge
     }
 
-{- | The bundles keyed by a job's package ecosystem. A job whose ecosystem is absent is
-fail-closed: dropped, never mirrored unvetted.
--}
+-- | Key bundles by ecosystem. Jobs without a bundle are dropped without publication.
 type WorkerPolicies = Map Ecosystem WorkerPolicy
 
-{- | A reader over the 'WorkerRuntime' on @katip@'s logging context. That base is a reader,
-never a 'StateT', so the context behaves across the loop.
--}
+-- | Carry worker runtime and logging context through ReaderT, without mutable request state.
 newtype WorkerM a = WorkerM
     { unWorkerM :: ReaderT WorkerRuntime (KatipContextT IO) a
     }
@@ -141,25 +130,19 @@ newtype WorkerM a = WorkerM
         , KatipContext
         )
 
-{- | Run a 'WorkerM' at the caller's @katip@ environment, so the application owns the log
-stream and the trace-correlation identity every line carries.
--}
+-- | Run under the caller's logging environment and trace context.
 runWorkerM :: LogEnv -> SimpleLogPayload -> WorkerRuntime -> WorkerM a -> IO a
 runWorkerM logEnv initialContext runtime action =
     runKatipContextT logEnv initialContext mempty (runReaderT (unWorkerM action) runtime)
 
-{- | Record a unit of demonstrated progress. The loop beats on every successful poll, an empty
-long-poll included, and after every completed job, so the staleness bound covers one job.
--}
+-- | Record progress after each completed poll and job, including an empty poll.
 recordWorkerProgress :: WorkerM ()
 recordWorkerProgress = do
     heartbeat <- asks wrHeartbeat
     now <- liftIO getCurrentTime
     liftIO (recordPoll heartbeat now)
 
-{- | Run one operation on the worker's queue handle, handing its typed failure to @onFault@. A
-fault costs at most a redelivery, which idempotent publishing makes harmless, so it never fails.
--}
+-- | Hand typed queue failures to the caller without failing the batch.
 queueOp :: (MirrorQueue -> IO (Either TransportFault a)) -> (TransportFault -> WorkerM ()) -> WorkerM ()
 queueOp op onFault = do
     queue <- asks wrQueue

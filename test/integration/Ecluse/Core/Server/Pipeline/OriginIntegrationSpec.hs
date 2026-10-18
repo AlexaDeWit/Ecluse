@@ -21,21 +21,24 @@ import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (DenyByIdentity))
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepGuardSkipped))
+import Ecluse.Core.Telemetry.Upstream qualified as PublicRead
 import Ecluse.Core.Version (mkVersion, renderVersion)
+import Ecluse.Runtime.Env (Env (envPublicControl))
 import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (InfoLevel), newLogEnv)
 import Ecluse.Server.Pipeline.TestSupport
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Json (fieldAt)
-import Ecluse.Test.Log (captureStdout, lineMessage)
+import Ecluse.Test.Log (captureStdout, lineMessage, newTestLogEnv)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, readFakeContents), FakeStoreConfig (fakeContents, fakeManifests), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Package (sampleManifest)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), versionSpec, versionValue)
+import Ecluse.Test.Registry.Public (PublicFixture (..), newPublicFixture)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recResults), recordingPorts, testMount, testPacing)
 import Ecluse.Test.Wai
 import Katip (Environment (Environment), closeScribes)
-import Network.HTTP.Types (status401, status403, status404, status503, statusCode)
+import Network.HTTP.Types (status200, status401, status403, status404, status429, status503, statusCode)
 import Network.Wai (Request (pathInfo, requestHeaders), responseLBS)
 import Network.Wai.Test (simpleBody)
 import Test.Hspec
@@ -49,6 +52,7 @@ spec = do
     privateAuthorisationSpec
     namespaceTransitionSpec
     partialAvailabilitySpec
+    cooldownSpec
 
 privateAuthorisationSpec :: Spec
 privateAuthorisationSpec = describe "private authorisation refusal" $ do
@@ -344,3 +348,34 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
             fieldAt "name" (decodedBody resp) `shouldBe` Just (String "thing")
+
+cooldownSpec :: Spec
+cooldownSpec = describe "public authority cooldown" $
+    it (caseLabel "integration/origin/native-018" "refuses locally during public cooldown and resumes after its deadline") $ do
+        fixture <- newPublicFixture
+        busy <- newIORef True
+        privateUp <- upstreamRespondingWith (responseLBS status404 [] "absent")
+        publicUp <- recordingUpstreamIO $ \request -> do
+            throttled <- readIORef busy
+            pure $
+                if throttled
+                    then responseLBS status429 [("Retry-After", "60")] "busy"
+                    else responseLBS status200 [] (encodePackument (packument [("1.0.0", selfHostedVersion (selfBaseUrl request) "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 30)]))
+        queue <- newTestMemoryQueue
+        logEnv <- newTestLogEnv
+        withProxyOverRuntime (\env -> env{envPublicControl = pfControl fixture}) logEnv queue privateUp publicUp Nothing id $ \app _ _ -> do
+            firstResponse <- getThing Nothing app
+            status firstResponse `shouldBe` 503
+            header "Retry-After" firstResponse `shouldBe` Just "60"
+            pfAdvance fixture 10
+            secondResponse <- getThing Nothing app
+            status secondResponse `shouldBe` 503
+            header "Retry-After" secondResponse `shouldBe` Just "50"
+            seenAuth publicUp `shouldReturn` [Nothing]
+            pfRequests fixture `shouldReturn` [("localhost", PublicRead.Listing, PublicRead.ResponseStatus 429)]
+            writeIORef busy False
+            pfAdvance fixture 50
+            recovered <- getThing Nothing app
+            status recovered `shouldBe` 200
+            seenAuth publicUp `shouldReturn` [Nothing, Nothing]
+            pfRequests fixture `shouldReturn` [("localhost", PublicRead.Listing, PublicRead.ResponseStatus 429), ("localhost", PublicRead.Listing, PublicRead.ResponseStatus 200)]

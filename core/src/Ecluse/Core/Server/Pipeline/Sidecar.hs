@@ -19,11 +19,13 @@ import Network.Wai (Request, ResponseReceived, requestHeaders)
 import UnliftIO (tryAny)
 
 import Ecluse.Core.Credential (ClientCredential)
+import Ecluse.Core.Fault (RetryAfter)
 import Ecluse.Core.Mirror.State (MirrorVersion, recordVersion, versionFiles)
 import Ecluse.Core.Package (Artifact (..), CoreMetadata (..), PackageDetails (pkgArtifacts), PackageInfo (PackageInfo), PackageName)
 import Ecluse.Core.Package.Integrity (IntegrityFloor, partitionByFloor)
+import Ecluse.Core.Registry (FetchFault (FetchCooldown))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
-import Ecluse.Core.Registry.Metadata (MetadataClient (fetchVersionMetadata), VersionDoc (vdDetails), VersionRead (vrVersion))
+import Ecluse.Core.Registry.Metadata (MetadataClient (fetchVersionMetadata), MetadataError (MetadataFetch), VersionDoc (vdDetails), VersionRead (vrVersion))
 import Ecluse.Core.Registry.Request (sidecarUrl)
 import Ecluse.Core.Security (HostPort, Limits (progressFloor), Origin (..), hostPortAddress, thgPrivateHostPort, thgPublicHostPort)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket)
@@ -35,12 +37,13 @@ import Ecluse.Core.Server.Path (Filename, unFilename)
 import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (..), preparePublicMetadata, withPrivateMetadataClient)
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Private (privateMetadataMiss)
-import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, firstPartyMissRefusal, upstreamUnavailable, versionAbsent)
-import Ecluse.Core.Server.Pipeline.Tarball.Relay (ArtifactServe (..), acceptPrivateArtifact, privateArtifactResponder, relayUnjudged, relayUpstreamResult, withMethod, withValidators)
+import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, firstPartyMissRefusal, upstreamCooling, upstreamUnavailable, versionAbsent)
+import Ecluse.Core.Server.Pipeline.Tarball.Relay (ArtifactServe (..), acceptPrivateArtifact, privateArtifactResponder, relayPublicResult, relayUnjudged, relayUpstreamResult, withMethod, withValidators)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..))
 import Ecluse.Core.Server.Response (ServeDecision, mkRefusal)
 import Ecluse.Core.Server.Route (isHead)
 import Ecluse.Core.Server.Stream (RelayResponder (..), UpstreamResult (..))
+import Ecluse.Core.Telemetry.Upstream qualified as PublicRead
 import Ecluse.Core.Version (Version, renderVersion)
 
 -- | Bind GET and HEAD to the same metadata selection and bounded relay.
@@ -62,7 +65,7 @@ serveSidecar mode replies name version file request respond = do
         else liftIO (respond (tarballError replies status401 [] (mkRefusal Nothing unauthorisedMessage)))
 
 -- A recorded private file owns its companion absence after the complete mirror proof.
-data Selection = Selected HTTP.Request | Retained ByteString | Incomplete MirrorVersion | NewPublicFile | Unavailable | Refused | Missing OriginMiss | CompanionAbsent
+data Selection = Selected HTTP.Request | Retained ByteString | Incomplete MirrorVersion | NewPublicFile | Unavailable | Cooling RetryAfter | Refused | Missing OriginMiss | CompanionAbsent
 
 admittedRead :: ArtifactRequest response -> (MemoryTicket -> Handler Selection) -> (Selection -> Handler ResponseReceived) -> Handler ResponseReceived
 admittedRead ctx readSelection answer =
@@ -116,6 +119,7 @@ publicSelection ctx = do
     result <- tryAny (preparePublicMetadata (arRuntime ctx) deps (arPackage ctx) (arVersion ctx) >>= liftIO . executePrepared)
     pure $ case result of
         Left _ -> Missing MissUnresolved
+        Right (Left (MetadataFetch (FetchCooldown retry))) -> Cooling retry
         Right (Left err) -> Missing (fromMaybe MissUnresolved (privateMetadataMiss err))
         Right (Right readVersion) -> selectRequest ctx UntrustedOrigin (pdMinIntegrity deps) publicHost Nothing readVersion
   where
@@ -150,6 +154,7 @@ servePrivate :: ArtifactRequest response -> Selection -> Handler ResponseReceive
 servePrivate ctx = \case
     Retained bytes -> serveRetained ctx bytes
     Unavailable -> answerError ctx upstreamUnavailable
+    Cooling retry -> answerError ctx (upstreamCooling retry)
     Incomplete expected -> admittedRead ctx (const (publicSelectionCovered ctx (Just expected))) (servePublic ctx)
     NewPublicFile -> admittedRead ctx (const (publicSelectionCovered ctx Nothing)) (servePublic ctx)
     CompanionAbsent -> answerError ctx versionAbsent
@@ -161,6 +166,7 @@ servePrivate ctx = \case
             UpstreamRelayed (_, received) -> pure received
             UpstreamRejected status -> answerError ctx (if status == status404 then versionAbsent else upstreamUnavailable)
             UpstreamTransportFailure -> answerError ctx upstreamUnavailable
+            UpstreamCooling retry -> answerError ctx (upstreamCooling retry)
 
 fallback :: ArtifactRequest response -> OriginMiss -> Handler ResponseReceived
 fallback ctx miss
@@ -171,6 +177,7 @@ servePublic :: ArtifactRequest response -> Selection -> Handler ResponseReceived
 servePublic ctx = \case
     Retained _ -> answerError ctx upstreamUnavailable
     Unavailable -> answerError ctx upstreamUnavailable
+    Cooling retry -> answerError ctx (upstreamCooling retry)
     Incomplete _ -> answerError ctx upstreamUnavailable
     NewPublicFile -> answerError ctx upstreamUnavailable
     CompanionAbsent -> answerError ctx versionAbsent
@@ -180,13 +187,15 @@ servePublic ctx = \case
     Selected request ->
         relay ctx False (srPublicManager (arRuntime ctx)) (const True) request >>= \case
             UpstreamRelayed (_, received) -> pure received
+            UpstreamCooling retry -> answerError ctx (upstreamCooling retry)
             _ -> answerError ctx upstreamUnavailable
 
 relay :: ArtifactRequest response -> Bool -> HTTP.Manager -> (Status -> Bool) -> HTTP.Request -> Handler (UpstreamResult ((), ResponseReceived))
 relay ctx private manager accepts request =
     liftIO $
-        relayUpstreamResult (arMode ctx) manager (progressFloor (pdLimits (arDeps ctx))) shaped accepts relayUnjudged responder
+        relayRead (arMode ctx) manager (progressFloor (pdLimits (arDeps ctx))) shaped accepts relayUnjudged responder
   where
+    relayRead = if private then relayUpstreamResult else relayPublicResult (srPublicControl (arRuntime ctx)) PublicRead.Companion
     shaped = withValidators (arValidators ctx) (withMethod (arMode ctx) request)
     replies = arReplies ctx
     respond = arRespond ctx
@@ -228,6 +237,7 @@ publicSelectionCovered ctx expected = do
             if maybe True (\mirror -> publicMirrorCoverage (Map.singleton (renderVersion (arVersion ctx)) mirror) info) expected
                 then pure (selectRequest ctx UntrustedOrigin (pdMinIntegrity deps) publicHost Nothing readVersion)
                 else pure Unavailable
+        Right (Left (MetadataFetch (FetchCooldown retry))) -> pure (Cooling retry)
         Right (Right _) | isNothing expected -> pure (Missing MissAbsent)
         Right (Left err) | isNothing expected -> pure (Missing (fromMaybe MissUnresolved (privateMetadataMiss err)))
         _ -> pure Unavailable

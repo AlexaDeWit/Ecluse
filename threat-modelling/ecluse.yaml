@@ -2744,7 +2744,7 @@ threats:
       category: denial-of-service
     severity: medium
     status: open
-    description: Écluse concentrates package requests that previously came from GitHub Actions and laptops in different locations. These requests likely share a network address translation (NAT) gateway. At high traffic volumes, upstream registries can throttle or block that shared source. Failed metadata or artifact requests then delay or prevent package installations across the organisation.
+    description: Écluse concentrates package requests that previously came from GitHub Actions and laptops in different locations. These requests likely share a network address translation (NAT) gateway. At high traffic volumes, upstream registries can throttle or block that shared source. Failed metadata or artifact requests then delay or prevent package installations across the organisation. Process-local backoff pauses public reads after 429 or a 503 with a valid Retry-After, and request telemetry exposes each public host's traffic and throttling. These are partial controls. They neither coordinate pods nor enforce a shared upstream request budget. The proposed built-in Valkey mitigation remains outstanding under issue #1821.
     elements:
       - 0ec10e5e-0000-4000-8000-000000000020
       - public-listing

@@ -20,7 +20,7 @@ import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead), AdapterPublish (publishCodec))
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Metadata.Fetch (chargingSelectedReads)
-import Ecluse.Core.Registry.Origin (anonymousOrigin)
+import Ecluse.Core.Registry.Origin (anonymousOrigin, controlPublicOrigin)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish,
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintCredential, ptTracing),
@@ -47,9 +47,10 @@ import Ecluse.Core.Server.Context (
  )
 import Ecluse.Core.Server.MemoryModel (decodedDocumentCharge)
 import Ecluse.Core.Server.Metadata (ecosystemMetadataReads, publicMetadataClient, uncachedPublicMetadataClient)
+import Ecluse.Core.Telemetry.Upstream (PublicReadKind (WorkerMetadata))
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (..))
 import Ecluse.Core.Worker.Types (WorkerMirrorState (..), WorkerStateBudget (..))
-import Ecluse.Runtime.Env (Env, envManager, envMemoryMeter, envMetadataCache, envMetrics, envPrivateManager, envTelemetry)
+import Ecluse.Runtime.Env (Env, envManager, envMemoryMeter, envMetadataCache, envMetrics, envPrivateManager, envPublicControl, envTelemetry)
 import Ecluse.Runtime.Server (MountBinding (bindingPackumentDeps, bindingPrefix))
 import Ecluse.Runtime.Telemetry.Instruments (metricsPortOf)
 import Ecluse.Runtime.Telemetry.Tracing (tracingPortOf)
@@ -98,9 +99,7 @@ mirrorPublishFor env deps targets artifactMaxBytes eco = do
         bounded = transport{ptLimits = (ptLimits transport){maxMirrorArtifactBytes = artifactMaxBytes}}
     pure (newMirrorPublish bounded (ptMirrorUrl target) (ptUploadUrl target) (publishCodec publish))
 
-{- | The shared mirror-write transport for one mount. The presence probe reads under the mount's
-own 'pdLimits': a larger mirror packument would overrun the default and defeat duplicate suppression.
--}
+-- | Use the mount's metadata limits for mirror presence probes and publication.
 mirrorTransportFor :: Env -> PackumentDeps -> PublishTarget -> MirrorTransport
 mirrorTransportFor env deps target =
     MirrorTransport
@@ -150,4 +149,4 @@ workerPolicyFor env eco deps publish artifactMaxBytes =
 
     publicBaseUrl = pdPublicBaseUrl deps
 
-    publicOrigin = anonymousOrigin (pdLimits deps) (envManager env) publicBaseUrl
+    publicOrigin = controlPublicOrigin (envPublicControl env) (Just WorkerMetadata) (anonymousOrigin (pdLimits deps) (envManager env) publicBaseUrl)

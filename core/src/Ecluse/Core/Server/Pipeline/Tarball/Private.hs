@@ -112,6 +112,7 @@ streamPrivateArtifact ctx token = do
                     UpstreamRelayed (_, (decision, received)) -> pure (PrivateAnswered decision received)
                     UpstreamRejected status -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed (if status == status404 then MissAbsent else MissUnresolved))
                     UpstreamTransportFailure -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed MissUnresolved)
+                    UpstreamCooling _ -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed MissUnresolved)
   where
     replies = arReplies ctx
     respond = arRespond ctx

@@ -194,6 +194,7 @@ library ecluse-core
     Ecluse.Core.Registry.Adapter.Types
     Ecluse.Core.Registry.CachedDocument
     Ecluse.Core.Registry.Backoff
+    Ecluse.Core.Registry.Public
     Ecluse.Core.Registry.Exchange
     Ecluse.Core.Registry.Exchange.Observe
     Ecluse.Core.Registry.Json.Intern
@@ -809,6 +810,7 @@ library ecluse-test-support
     Ecluse.Test.Queue
     Ecluse.Test.Registry
     Ecluse.Test.Registry.Publish
+    Ecluse.Test.Registry.Public
     Ecluse.Test.Registry.Npm
     Ecluse.Test.Registry.Npm.Metadata
     Ecluse.Test.Registry.Npm.StoredVersions
@@ -1127,6 +1129,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.SnapshotSpec
     Ecluse.Core.Registry.AdapterSpec
     Ecluse.Core.Registry.CachedDocumentSpec
+    Ecluse.Core.Registry.PublicSpec
     Ecluse.Core.Registry.BackoffSpec
     Ecluse.Core.Registry.Exchange.ObserveSpec
     Ecluse.Core.Registry.ExchangeSpec

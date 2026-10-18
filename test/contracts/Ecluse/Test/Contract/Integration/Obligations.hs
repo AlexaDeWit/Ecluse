@@ -177,6 +177,7 @@ integrationObligations =
         , "integration/origin/native-015"
         , "integration/origin/native-016"
         , "integration/origin/native-017"
+        , "integration/origin/native-018"
         ]
     , required
         "integration/npm-metadata"

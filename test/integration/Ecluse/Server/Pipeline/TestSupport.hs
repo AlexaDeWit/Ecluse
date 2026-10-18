@@ -13,6 +13,7 @@ module Ecluse.Server.Pipeline.TestSupport (
     -- * Upstream doubles
     Upstream,
     recordingUpstream,
+    recordingUpstreamIO,
     upstreamRespondingWith,
     truncatedResponse,
     servingUpstream,
@@ -63,6 +64,7 @@ module Ecluse.Server.Pipeline.TestSupport (
     -- * The proxy harness
     newTestEnvWithQueue,
     withProxyOver,
+    withProxyOverRuntime,
     withProxyEnvQueueDeps,
     withProxyEnvQueue,
     withProxyEnv,
@@ -176,6 +178,7 @@ data Upstream = Upstream
 recordingUpstream :: (Request -> Response) -> IO Upstream
 recordingUpstream respondTo = recordingUpstreamIO (pure . respondTo)
 
+-- | Choose each recorded response from mutable test state.
 recordingUpstreamIO :: (Request -> IO Response) -> IO Upstream
 recordingUpstreamIO respondTo = do
     seen <- newIORef []
@@ -532,11 +535,23 @@ withProxyOver ::
     -- The continuation sees the proxy application, its 'Env' (to drain the queue),
     -- and the public upstream's ephemeral port (to assert an enqueued artifact URL).
     (forall a. (Application -> Env -> Int -> IO a) -> IO a)
-withProxyOver logEnv queue privateUp publicUp inbound tweakDeps k =
+withProxyOver = withProxyOverRuntime id
+
+-- | Override runtime capabilities before constructing the proxy application.
+withProxyOverRuntime ::
+    (Env -> Env) ->
+    LogEnv ->
+    MirrorQueue ->
+    Upstream ->
+    Upstream ->
+    Maybe Text ->
+    (PackumentDeps -> PackumentDeps) ->
+    (forall a. (Application -> Env -> Int -> IO a) -> IO a)
+withProxyOverRuntime tweakEnv logEnv queue privateUp publicUp inbound tweakDeps k =
     testWithApplication (pure (upApp privateUp)) $ \privatePort ->
         testWithApplication (pure (upApp publicUp)) $ \publicPort -> do
             manager <- newManager defaultManagerSettings
-            env <- newTestEnvLogging logEnv queue (manager, manager) telemetryDisabled
+            env <- tweakEnv <$> newTestEnvLogging logEnv queue (manager, manager) telemetryDisabled
             baseDeps <- deps privatePort publicPort inbound
             let cfg = mkServerConfig (maybeToList (mountBindingFor Npm (tweakDeps baseDeps) Nothing))
             k (application cfg env) env publicPort

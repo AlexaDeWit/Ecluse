@@ -19,6 +19,7 @@ module Ecluse.Core.Server.Pipeline.Shared (
     hRetryAfter,
     shedRetryAfter,
     retryAfterHeaders,
+    upstreamCooling,
 
     -- * Shared work
     flightOf,
@@ -53,7 +54,9 @@ import Ecluse.Core.Server.Response (
     RetryAfter (RetryAfter),
     RuleName (RuleName),
     ServeDecision (Reject),
+    Transience (WillResolve),
     mkRefusal,
+    rejectUnavailable,
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpServeDecision))
@@ -85,9 +88,7 @@ retryAfterHeaders = maybe [] (\(RetryAfter secs) -> [(hRetryAfter, show secs)])
 flightOf :: CacheKey -> FlightKey
 flightOf key = FlightKey (cacheKeyStore key) (cacheKeyIdentity key)
 
-{- | Run metadata work behind the memory gate and then the CPU gate, and answer its result after both
-release. A shed at either gate answers with @shed@, counted once.
--}
+-- | Acquire memory and CPU admission before metadata work. Answer after release, counting a shed once.
 withMetadataAdmission :: (MonadUnliftIO m) => ServeRuntime -> m received -> (MemoryTicket -> m a) -> (a -> m received) -> m received
 withMetadataAdmission runtime shed gated answer =
     admitted >>= \case
@@ -113,9 +114,7 @@ unauthorisedMessage = "authentication required"
 forwardedCredential :: MountBinding -> Request -> Maybe ClientCredential
 forwardedCredential mount = credentialRecover (bindingCredential mount) . requestHeaders
 
-{- | The rule a first-party refusal names, so the read pipelines label one denial series rather
-than two spellings of the same refusal.
--}
+-- | Use one rule label for first-party refusals across read paths.
 firstPartyRule :: RuleName
 firstPartyRule = RuleName "first-party"
 
@@ -134,3 +133,7 @@ trustedIntegrityMissing =
 trustedIntegrityBelowFloor :: ServeDecision
 trustedIntegrityBelowFloor =
     Reject (Rejection BelowIntegrityFloor "this private version's integrity digest is weaker than the configured trusted minimum and was not served")
+
+-- | A public authority that supplies a positive retry delay.
+upstreamCooling :: RetryAfter -> ServeDecision
+upstreamCooling retry = rejectUnavailable (WillResolve (Just retry)) "the public upstream is cooling down"

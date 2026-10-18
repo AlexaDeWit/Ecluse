@@ -3,10 +3,7 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE RoleAnnotations #-}
 
-{- | Everything a registry data plane needs to reach one origin: where it is, what to dial it
-through, what to present, and what response bound to hold it to. The composition root and the
-serve pipeline are the only builders, and nothing here is derived or cached.
--}
+-- | Origin coordinates, limits, and credential posture for registry data-plane reads.
 module Ecluse.Core.Registry.Origin (
     OriginClient (..),
     originClient,
@@ -20,13 +17,16 @@ module Ecluse.Core.Registry.Origin (
     perCallerOrigin,
     originClientOf,
     chargingFullReads,
+    controlPublicOrigin,
 ) where
 
 import Network.HTTP.Client (Manager)
 
 import Ecluse.Core.Credential (ClientCredential)
+import Ecluse.Core.Registry.Public (PublicControl)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Telemetry.Upstream (PublicReadKind)
 
 -- | One origin's coordinates, credential posture, and response bound.
 data OriginClient = OriginClient
@@ -38,24 +38,22 @@ data OriginClient = OriginClient
     -- ^ 'Nothing' for an anonymous origin. A passthrough read carries the caller's own verbatim.
     , ocLimits :: Limits
     -- ^ The bound every read through this origin is held to, fail-closed past the maximum.
+    , ocPublicControl :: Maybe PublicControl
+    , ocReadKind :: Maybe PublicReadKind
     , ocChargeFullRead :: Int -> IO ()
     -- ^ Pays for each decompressed chunk of a full metadata read before the parser sees it.
     }
 
-{- | One origin from the four things that name it. The bound comes first because a caller
-usually holds one and reaches several origins under it.
--}
+-- | Build an origin with caller-supplied limits, transport, and credential posture.
 originClient :: Limits -> Manager -> RegistryUrl -> Maybe ClientCredential -> OriginClient
 originClient limits manager baseUrl token =
-    OriginClient{ocBaseUrl = baseUrl, ocManager = manager, ocToken = token, ocLimits = limits, ocChargeFullRead = const pass}
+    OriginClient{ocBaseUrl = baseUrl, ocManager = manager, ocToken = token, ocLimits = limits, ocChargeFullRead = const pass, ocPublicControl = Nothing, ocReadKind = Nothing}
 
 -- | The origin's base URL as text, which is how every request builder takes it.
 originBaseUrl :: OriginClient -> Text
 originBaseUrl = registryUrlText . ocBaseUrl
 
-{- | An 'OriginClient' whose credential posture its builder fixed. The constructor stays here and
-the role annotation below stops 'coerce' retagging one.
--}
+-- | Retain credential posture in the type. The nominal role prevents retagging with 'coerce'.
 newtype OriginFor (posture :: Type) = OriginFor OriginClient
 
 -- RoleAnnotations is not in GHC2021. Without this line the parameter takes GHC's phantom role,
@@ -81,3 +79,7 @@ originClientOf (OriginFor client) = client
 -- | The same origin, paying for what its full metadata reads hand on.
 chargingFullReads :: (Int -> IO ()) -> OriginFor posture -> OriginFor posture
 chargingFullReads charge (OriginFor client) = OriginFor client{ocChargeFullRead = charge}
+
+-- | Control anonymous public reads, optionally assigning one kind to both metadata operations.
+controlPublicOrigin :: PublicControl -> Maybe PublicReadKind -> OriginFor Public -> OriginFor Public
+controlPublicOrigin control kind (OriginFor client) = OriginFor client{ocPublicControl = Just control, ocReadKind = kind}

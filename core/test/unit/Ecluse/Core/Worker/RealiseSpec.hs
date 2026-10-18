@@ -17,14 +17,19 @@ import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), MirrorQueue (delivery
 import Ecluse.Core.Registry (PublishError (PublishError), PublishFault (PublishRejected))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionPresent))
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Discarded, Failed, Published))
+import Ecluse.Core.Telemetry.Upstream qualified as PublicRead
 import Ecluse.Core.Version (Version)
 import Ecluse.Core.Worker (processBatch)
+import Ecluse.Core.Worker.Types (WorkerRuntime (wrPublicControl))
 import Ecluse.Test.Log (captureJsonLog)
 import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort, recordingWorkerMetricsPort)
+import Ecluse.Test.Registry.Public (PublicFixture (..), newPublicFixture)
 import Ecluse.Test.Rules (admitRule, denyRule)
 import Ecluse.Test.Snapshot (versionDocOf)
+import Ecluse.Test.Stub (allCaptured, stubBaseUrl, withStubHeaders)
 import Ecluse.Worker.Support
+import Network.HTTP.Types.Status (status429)
 
 spec :: Spec
 spec = do
@@ -67,6 +72,20 @@ spec = do
                 acked `shouldBe` map msgReceipt messages
 
     describe "processBatch -- ack decisions at the queue handle" $ do
+        it "leaves a cooling host's job unacked without another public send or publish" $
+            withStubHeaders status429 [("Retry-After", "60")] "busy" $ \upstream -> do
+                fixture <- newPublicFixture
+                (queue, ackedReceipts) <- recordingAckQueue
+                withRuntimeQueue queue (`recordingPublish` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime logRef -> do
+                    enqueue_ queue sampleMirrorJob
+                    messages <- receive_ queue
+                    let controlled = sourceAt (stubBaseUrl upstream) runtime{wrPublicControl = pfControl fixture}
+                    replicateM_ 2 (runWM controlled (processBatch messages))
+                    ackedReceipts `shouldReturn` []
+                    plDocuments <$> readIORef logRef `shouldReturn` []
+                    length <$> allCaptured upstream `shouldReturn` 1
+                    pfRequests fixture `shouldReturn` [("127.0.0.1", PublicRead.WorkerArtifact, PublicRead.ResponseStatus 429)]
+
         -- The memory backend cannot prove redelivery. LoopIntegrationSpec covers it against SQS.
         it "acks a successfully-mirrored job, retiring it from the queue" $
             withUpstream $ \url -> do

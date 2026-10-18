@@ -40,7 +40,7 @@ import Ecluse.Core.Package.Admission (
 import Ecluse.Core.Package.Integrity (VersionIntegrity (..), classifyDigests, partitionByFloor)
 import Ecluse.Core.Queue (MirrorJob (jobPackage, jobTraceContext, jobTriggerFilename, jobVersion))
 import Ecluse.Core.Registry (
-    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
+    FetchFault (FetchBoundExceeded, FetchCooldown, FetchTransport, FetchUrlUnformable),
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     PublishFault (PublishFetch, PublishIntegrityMismatch, PublishRejected, PublishSourceUnavailable),
     renderUrlFormationError,
@@ -49,7 +49,7 @@ import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Metadata (
     MetadataError (..),
     VersionDoc (vdDetails),
-    VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
+    VersionEvaluation (VersionCooling, VersionMetadataUnavailable, VersionMissing, VersionPresent),
     versionTransience,
  )
 import Ecluse.Core.Registry.MirrorUpload
@@ -76,43 +76,25 @@ import Ecluse.Core.Worker.Fetch (fetchArtifactBytesCharged)
 import Ecluse.Core.Worker.Managed
 import Ecluse.Core.Worker.Types
 
-{- | The terminal outcome of processing one mirror job. It decides whether the worker
-acks the message or leaves it to redeliver.
--}
+-- | A mirror outcome determines acknowledgement, redelivery, or dead-letter handling.
 data JobOutcome
-    = {- | Every expected file and companion has current completion proof.
-      The worker acknowledges the whole version, including idempotent redelivery.
-      -}
+    = -- | Completion proof covers every expected file and companion, including idempotent redelivery.
       Succeeded
-    | {- | A __non-retryable__ rejection (a tampered artifact, an unformable request URL).
-      Redelivery cannot help, so the job is acked to retire it after alarming.
-      -}
+    | -- | A non-retryable rejection. The worker alarms and acknowledges the message.
       Dropped Text
-    | {- | The source's own version object was unavailable, so no mirror write can reflect the
-      package. Retired like 'Dropped', but reported apart from a policy deny.
-      -}
+    | -- | The source version object is unavailable. Retire the job separately from a policy denial.
       SourceUnavailable Text
-    | {- | A __terminal__ fault handed to 'Ecluse.Core.Queue.deadLetter' rather than acked,
-      because a plain delete would silently discard it on a durable queue.
-      -}
+    | -- | A terminal fault sent to the dead-letter handler instead of silently deleted.
       DeadLettered Text
-    | {- | A __transient__ fault: a fetch failure, or a registry rejection worth retrying. The
-      message is left un-acked so it redelivers, carrying the leg it gave up on.
-      -}
+    | -- | A transient fault leaves the message unacknowledged and retains the failed leg.
       Retried RetryLeg Text
     deriving stock (Eq, Show)
 
-{- | Which leg a transient failure gave up on. The realisation half reads it to decide whether
-to reset the message's visibility, so the two legs cannot be conflated at the queue handle.
--}
+-- | The failed leg determines whether the worker resets queue visibility.
 data RetryLeg
-    = {- | The job gave up before it published: the inventory probe, the re-evaluation, or the
-      artifact fetch. The message keeps its lease and redelivers when that window lapses.
-      -}
+    = -- | A failure before publication keeps the lease until redelivery.
       BeforePublish
-    | {- | The publish itself failed transiently, after the bytes were fetched and verified.
-      The message is released so its redelivery does not wait out the lease.
-      -}
+    | -- | A transient publication failure releases the message for immediate redelivery.
       AfterPublish
     deriving stock (Eq, Show)
 
@@ -125,9 +107,7 @@ jobSpanOutcome = \case
     DeadLettered reason -> JobSpanOutcome "dead-lettered" (Just reason)
     Retried _ reason -> JobSpanOutcome "retried" (Just reason)
 
-{- | Decide one job, re-checking current policy before publishing, because the queue wait is
-unbounded and mirrored bytes bypass every later rule.
--}
+-- | Recheck current policy before publishing because queue delays are unbounded.
 processJob :: MirrorJob -> WorkerM JobOutcome
 processJob job = katipAddNamespace "job" $ do
     logFM DebugS (ls ("starting mirror job for " <> renderJob job))
@@ -268,6 +248,7 @@ probeFaultReason :: MirrorJob -> FetchFault -> Text
 probeFaultReason job = \case
     FetchUrlUnformable urlErr -> "unformable mirror probe URL: " <> renderUrlFormationError urlErr
     FetchBoundExceeded limitErr -> "the mirror target's metadata exceeded the response bound: " <> show limitErr
+    FetchCooldown _ -> "the public upstream is cooling down"
     FetchTransport fault -> "mirror inventory probe for " <> renderJob job <> " failed: " <> show (tfCause fault)
 
 probeStatusReason :: MirrorJob -> Int -> Text
@@ -300,6 +281,7 @@ reevaluatePolicy charge policy job =
 
 admitEvaluation :: WorkerPolicy -> MirrorJob -> VersionEvaluation -> WorkerM (Either JobOutcome Readmitted)
 admitEvaluation policy job evaluation = case evaluation of
+    VersionCooling _ -> pure (Left (unresolved "the public upstream is cooling down"))
     VersionMetadataUnavailable -> pure (Left (unresolved ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job)))
     VersionMissing -> pure (Left (unresolved ("the public upstream no longer offers " <> renderJob job)))
     VersionPresent doc upstreamLatest -> case triggerFile policy job doc of
@@ -365,9 +347,7 @@ sourceUnavailableReason job detail =
         <> detail
         <> "); refusing to mirror a reduced manifest"
 
-{- | Render the shared 'ArtifactAdmission' as the descriptor to publish, or the outcome the queue
-realises. 'admissionTransience' alone splits retry from drop, so no path can diverge from the gate.
--}
+-- | Project admission to publication or a queue outcome. 'admissionTransience' determines retry versus drop.
 outcomeOfAdmission :: MirrorJob -> ArtifactAdmission -> Either JobOutcome MirrorArtifact
 outcomeOfAdmission job admission = case admission of
     AdmissionAdmit filename artifact digests -> Right (readmittedDescriptor filename artifact digests)
@@ -407,9 +387,7 @@ readmittedDescriptor filename artifact digests =
         , maSize = artSize artifact
         }
 
-{- | The worker's terminal-versus-transient split over the shared exchange-fault channel. The
-artifact fetch and the mirror write read this one table, and each names its own retry leg.
--}
+-- | Classify fetch and publication faults through one retry-versus-drop table.
 outcomeOfFetchFault :: RetryLeg -> (FetchFault -> Text) -> FetchFault -> JobOutcome
 outcomeOfFetchFault leg render fault = verdict (render fault)
   where
@@ -417,10 +395,9 @@ outcomeOfFetchFault leg render fault = verdict (render fault)
         FetchUrlUnformable _ -> Dropped
         FetchBoundExceeded _ -> DeadLettered
         FetchTransport _ -> Retried leg
+        FetchCooldown _ -> Retried leg
 
-{- | The @latest@ one mirror write declares, over the upstream tag and the post-write inventory.
-The published version always survives, so the chosen target is always present at the store.
--}
+-- | Choose the mirror latest tag from the public tag and post-write inventory, which includes the published version.
 mirrorLatest :: Maybe Version -> [Version] -> Version -> Version
 mirrorLatest upstreamLatest inventory published =
     fromMaybe published (selectLatest upstreamLatest (published : inventory))
@@ -557,6 +534,7 @@ artifactFetchReason :: RegistryUrl -> FetchFault -> Text
 artifactFetchReason location = \case
     FetchUrlUnformable urlErr -> "unformable artifact URL: " <> renderUrlFormationError urlErr
     FetchBoundExceeded limitErr -> "artifact exceeded the response bound: " <> show limitErr
+    FetchCooldown _ -> "the public upstream is cooling down"
     FetchTransport fault -> "artifact fetch from " <> authorityLabel (registryUrlText location) <> " failed: " <> show (tfCause fault)
 
 mirrorAdmissionPayload :: MirrorJob -> Decision -> ExpectedMirrorFile -> Hash -> SimpleLogPayload
@@ -601,4 +579,5 @@ publishFaultReason :: FetchFault -> Text
 publishFaultReason = \case
     FetchUrlUnformable urlErr -> "unformable publish URL: " <> renderUrlFormationError urlErr
     FetchBoundExceeded limitErr -> "the publication target's response exceeded the response bound: " <> show limitErr
+    FetchCooldown _ -> "the public upstream is cooling down"
     FetchTransport fault -> "publish transport failure: " <> show fault

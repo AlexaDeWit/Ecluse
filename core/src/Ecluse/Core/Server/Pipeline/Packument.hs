@@ -107,6 +107,7 @@ import Ecluse.Core.Server.Response (
     Refusal,
     RejectReason (ByPolicy, Unavailable, UpstreamInvalid),
     Rejection (Rejection, rejectionMessage),
+    RetryAfter,
     ServeDecision (Admit, Reject),
     Transience (WillResolve),
     mkRefusal,
@@ -279,7 +280,7 @@ serveMergedPackument serving evalCtx record privResult pubResult =
                 required = Map.withoutKeys pending (paBlockedPending public)
                 covered = Map.null required || maybe False (publicMirrorCoverage required . srcInfo) (paContribution public)
             if not covered || fmap (infoVersions . manifestInfo) managedManifest /= fmap (infoVersions . srcInfo) managed
-                then mirrorUnavailable serving
+                then mirrorUnavailableWithRetry serving (case pubResult of OriginCooling retry -> Just retry; _ -> Nothing)
                 else case originMiss privResult of
                     Just miss | pdFirstParty deps name -> firstPartyMissed serving miss
                     _ -> case packumentPlan sources trustedVersions (paDeniedEvidence public) of
@@ -296,9 +297,12 @@ serveMergedPackument serving evalCtx record privResult pubResult =
         Just (revision, current) -> mirrorProjectViews revision current (originManifest privResult)
 
 mirrorUnavailable :: PackumentServing response -> Handler ResponseReceived
-mirrorUnavailable serving = do
+mirrorUnavailable serving = mirrorUnavailableWithRetry serving Nothing
+
+mirrorUnavailableWithRetry :: PackumentServing response -> Maybe RetryAfter -> Handler ResponseReceived
+mirrorUnavailableWithRetry serving retry = do
     liftIO (mpServeDecision (servingMetrics serving) Metric.Unavailable)
-    liftIO (psvRespond serving (packumentUnavailable (psvReplies serving) [] (mkRefusal (pdHelp (psvDeps serving)) "managed mirror view is unavailable")))
+    liftIO (psvRespond serving (packumentUnavailable (psvReplies serving) (retryAfterHeaders retry) (mkRefusal (pdHelp (psvDeps serving)) "managed mirror view is unavailable")))
 
 admitTrusted :: MinTrustedIntegrity -> Maybe Manifest -> (Maybe Contribution, [ServeDecision])
 admitTrusted minTrusted = \case
@@ -475,7 +479,7 @@ rejectionText = \case
 
 collectDecisions :: OriginResult -> OriginResult -> [ServeDecision] -> [ServeDecision]
 collectDecisions privResult pubResult publicExclusions =
-    privateDecision privResult <> publicMismatch pubResult <> publicExclusions
+    privateDecision privResult <> publicDecision pubResult <> publicExclusions
 
 privateDecision :: OriginResult -> [ServeDecision]
 privateDecision = \case
@@ -485,18 +489,20 @@ privateDecision = \case
     -- neither leg could serve still invites a retry.
     OriginNotFound -> [neededUpstreamUnavailable]
     OriginUnresolved -> [neededUpstreamUnavailable]
+    OriginCooling retry -> [upstreamCooling retry]
     OriginNameMismatch -> [upstreamInvalidDecision]
     -- An unconfigured private leg (a serve-only pure gate) is not an outage:
     -- nothing was needed, so nothing is unavailable.
     OriginAbsent -> []
 
-publicMismatch :: OriginResult -> [ServeDecision]
-publicMismatch = \case
+publicDecision :: OriginResult -> [ServeDecision]
+publicDecision = \case
     OriginAuthorisationFailure _ -> []
     OriginNameMismatch -> [upstreamInvalidDecision]
     OriginResolved _ -> []
     OriginNotFound -> []
     OriginUnresolved -> []
+    OriginCooling retry -> [upstreamCooling retry]
     OriginAbsent -> []
 
 neededUpstreamUnavailable :: ServeDecision

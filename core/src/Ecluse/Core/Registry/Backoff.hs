@@ -6,6 +6,10 @@
 module Ecluse.Core.Registry.Backoff (
     BackoffPolicy,
     mkBackoffPolicy,
+    defaultBackoffPolicy,
+    reportingBackoff,
+    CooldownEvent (..),
+    publicRetryAfter,
     PublicBackoff,
     newPublicBackoff,
     PublicAttempt,
@@ -38,12 +42,36 @@ mkBackoffPolicy floorDelay cap probeHint = do
     guard (floorDelay > RetryAfter 0 && floorDelay <= cap && probeHint > RetryAfter 0)
     pure (BackoffPolicy floorDelay cap probeHint)
 
+-- | Fixed public-read defaults: a 60-second fallback floor, 600-second cap, and one-second probe hint.
+defaultBackoffPolicy :: BackoffPolicy
+defaultBackoffPolicy = BackoffPolicy (RetryAfter 60) (RetryAfter 600) (RetryAfter 1)
+
+-- | A cooldown opens or a response restores the authority to healthy service.
+data CooldownEvent = CoolingDown | Recovered
+    deriving stock (Eq, Show)
+
+-- | Attach a non-throwing observer. Notifications run after the state transaction commits.
+reportingBackoff :: (HostPort -> CooldownEvent -> IO ()) -> PublicBackoff -> PublicBackoff
+reportingBackoff report backoff = backoff{pbReport = report}
+
+-- | Read the remaining refusal hint without acquiring a recovery probe.
+publicRetryAfter :: PublicBackoff -> HostPort -> IO (Maybe RetryAfter)
+publicRetryAfter backoff authority = do
+    now <- pbClock backoff
+    hosts <- readTVarIO (pbHosts backoff)
+    pure $
+        Map.lookup authority hosts >>= \state -> case Breaker.breakerPhase (hsBreaker state) of
+            Closed{} -> Nothing
+            RecoveryReady -> Nothing
+            _ -> Just (remainingDelay (pbPolicy backoff) now (hsBreaker state))
+
 -- | Share one handle across all public readers. Only pass authorities approved by the public egress policy.
 data PublicBackoff = PublicBackoff
     { pbPolicy :: BackoffPolicy
     , pbClock :: IO UTCTime
     , pbJitter :: RetryAfter -> RetryAfter -> IO RetryAfter
     , pbHosts :: TVar (Map HostPort HostState)
+    , pbReport :: HostPort -> CooldownEvent -> IO ()
     }
 
 data HostState = HostState
@@ -53,7 +81,9 @@ data HostState = HostState
 
 -- | Supply a fresh clock and a jitter selector. Its output is clamped to the supplied fallback interval.
 newPublicBackoff :: BackoffPolicy -> IO UTCTime -> (RetryAfter -> RetryAfter -> IO RetryAfter) -> IO PublicBackoff
-newPublicBackoff policy clock jitter = PublicBackoff policy clock jitter <$> newTVarIO Map.empty
+newPublicBackoff policy clock jitter = do
+    hosts <- newTVarIO Map.empty
+    pure (PublicBackoff policy clock jitter hosts (\_ _ -> pass))
 
 -- | An admitted request may settle once. Its enclosing callback owns its lifetime.
 data PublicAttempt = PublicAttempt
@@ -82,14 +112,15 @@ data PublicResponse
 -- | Commit response headers before consuming the body. Repeated calls and calls after the callback ends leave state unchanged.
 recordPublicResponse :: PublicAttempt -> PublicResponse -> IO ()
 recordPublicResponse attempt = \case
-    NonThrottling -> atomically (settle attempt (acceptResponse policy (paTicket attempt)))
+    NonThrottling -> commit (acceptResponse policy (paTicket attempt))
     Throttled hint -> do
         delay <- responseDelay attempt hint
         now <- pbClock backoff
-        atomically (settle attempt (throttleResponse policy (paTicket attempt) now delay))
+        commit (throttleResponse policy (paTicket attempt) now delay)
   where
     backoff = paBackoff attempt
     policy = pbPolicy backoff
+    commit step = atomically (settle attempt step) >>= traverse_ (pbReport backoff (paAuthority attempt))
 
 initialHost :: BackoffPolicy -> HostState
 initialHost policy = HostState Breaker.initialBreaker (bpFloor policy)
@@ -112,14 +143,21 @@ remainingDelay policy now breaker = case Breaker.breakerPhase breaker of
     _ -> bpProbeHint policy
 
 releaseAttempt :: PublicAttempt -> IO ()
-releaseAttempt attempt = atomically (settle attempt (\state -> state{hsBreaker = Breaker.release (paTicket attempt) (hsBreaker state)}))
+releaseAttempt attempt = void (atomically (settle attempt (\state -> state{hsBreaker = Breaker.release (paTicket attempt) (hsBreaker state)})))
 
-settle :: PublicAttempt -> (HostState -> HostState) -> STM ()
+settle :: PublicAttempt -> (HostState -> HostState) -> STM (Maybe CooldownEvent)
 settle attempt step = do
     finished <- readTVar (paFinished attempt)
-    unless finished $ do
-        modifyTVar' (pbHosts (paBackoff attempt)) (Map.adjust step (paAuthority attempt))
-        writeTVar (paFinished attempt) True
+    if finished
+        then pure Nothing
+        else do
+            let hostsVar = pbHosts (paBackoff attempt)
+            hosts <- readTVar hostsVar
+            let old = Map.lookup (paAuthority attempt) hosts
+                event = old >>= \state -> transition (hsBreaker state) (hsBreaker (step state))
+            writeTVar hostsVar (Map.adjust step (paAuthority attempt) hosts)
+            writeTVar (paFinished attempt) True
+            pure event
 
 acceptResponse :: BackoffPolicy -> Breaker.Attempt -> HostState -> HostState
 acceptResponse policy ticket state = case Breaker.breakerPhase (hsBreaker state) of
@@ -158,3 +196,10 @@ throttleResponse policy ticket now (RetryAfter seconds) state
 growFallback :: BackoffPolicy -> RetryAfter -> RetryAfter
 growFallback policy (RetryAfter current) = case bpCap policy of
     RetryAfter cap -> RetryAfter (fromInteger (min (toInteger cap) (2 * toInteger current)))
+
+transition :: Breaker -> Breaker -> Maybe CooldownEvent
+transition old new = case (Breaker.breakerPhase old, Breaker.breakerPhase new) of
+    (Open{}, Open{}) -> Nothing
+    (_, Open{}) -> Just CoolingDown
+    (HalfOpen, Closed{}) -> Just Recovered
+    _ -> Nothing

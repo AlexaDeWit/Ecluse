@@ -15,6 +15,7 @@ module Ecluse.Core.Server.Stream (
     UpstreamResult (..),
     withUpstreamWhen,
     withUpstreamResult,
+    withUpstreamResultUsing,
     UpstreamBodyFailed (..),
 
     -- * The pump
@@ -29,9 +30,11 @@ import Network.HTTP.Types (ResponseHeaders, Status)
 import Network.Wai (StreamingBody)
 import UnliftIO.Exception (finally, mask, throwIO, try, tryAny)
 
-import Ecluse.Core.Fault (TransportFault, renderTransportFault)
+import Ecluse.Core.Fault (RetryAfter, TransportFault, renderTransportFault)
 import Ecluse.Core.Fault.Http (classifyTransport)
+import Ecluse.Core.Registry (FetchFault (FetchCooldown))
 import Ecluse.Core.Registry.Progress (meteredReader, watchedRaising)
+import Ecluse.Core.Registry.Public (ReadControl (Uncontrolled), withReadControl)
 import Ecluse.Core.Security (ProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
 
@@ -68,6 +71,7 @@ withUpstreamWhen manager progress request body accept relay respond =
         UpstreamRelayed received -> Just received
         UpstreamRejected _ -> Nothing
         UpstreamTransportFailure -> Nothing
+        UpstreamCooling _ -> Nothing
 
 -- | A committed relay, or the reason no response was committed.
 data UpstreamResult a
@@ -77,6 +81,8 @@ data UpstreamResult a
       UpstreamRejected Status
     | -- | The upstream connection failed before a response was available.
       UpstreamTransportFailure
+    | -- | Public admission refused the exchange before opening a connection.
+      UpstreamCooling RetryAfter
     deriving stock (Eq, Show)
 
 -- | The upstream body failed after the relay committed its response, so the connection can only be torn down. It never carries the upstream request.
@@ -96,13 +102,22 @@ withUpstreamResult ::
     (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) ->
     RelayResponder response ->
     IO (UpstreamResult (verdict, response))
-withUpstreamResult manager progress request body accept relay respond =
-    -- Masked from 'responseOpen' to 'finally' arming 'responseClose', so an async exception
-    -- between the two cannot strand the connection. 'restore' keeps the relay interruptible.
-    mask $ \restore ->
-        tryAny (restore (responseOpen request manager)) >>= \case
-            Left _ -> pure UpstreamTransportFailure
-            Right upstream -> restore (answer upstream) `finally` responseClose upstream
+withUpstreamResult = withUpstreamResultUsing Uncontrolled
+
+-- | Apply public admission and observation while retaining response ownership through the responder.
+withUpstreamResultUsing :: ReadControl -> Manager -> ProgressFloor -> Request -> UpstreamBody -> (Status -> Bool) -> (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) -> RelayResponder response -> IO (UpstreamResult (verdict, response))
+withUpstreamResultUsing control manager progress request body accept relay respond = do
+    opened <- newIORef False
+    result <- tryAny $ withReadControl control request $ \observed recordHeaders ->
+        mask $ \restore -> do
+            upstream <- restore (responseOpen observed manager)
+            writeIORef opened True
+            restore (recordHeaders (responseStatus upstream) (responseHeaders upstream) >> answer upstream) `finally` responseClose upstream
+    case result of
+        Left fault -> readIORef opened >>= \hasResponse -> if hasResponse then throwIO fault else pure UpstreamTransportFailure
+        Right (Left (FetchCooldown retry)) -> pure (UpstreamCooling retry)
+        Right (Left _) -> pure UpstreamTransportFailure
+        Right (Right received) -> pure received
   where
     answer upstream
         | not (accept upstreamStatus) = pure (UpstreamRejected upstreamStatus)

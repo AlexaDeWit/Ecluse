@@ -8,7 +8,7 @@ Admission lifetime cases connect sweep deletions to the next private request.
 -}
 module Ecluse.Core.Server.PipelineSpec (spec) where
 
-import Data.Aeson (Value (Object, String), eitherDecode, eitherDecodeStrict, encode, object, (.=))
+import Data.Aeson (Value (Bool, Object, String), eitherDecode, eitherDecodeStrict, encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
@@ -56,7 +56,7 @@ import Ecluse.Core.Server.Context (
     RequestCtx (RequestCtx),
     ResponseAction (RunPipeline),
     RouteAction (RouteAction),
-    ServeRuntime (srMemoryMeter, srMetadataCache, srMetrics),
+    ServeRuntime (srMemoryMeter, srMetadataCache, srMetrics, srPublicControl),
     pdPrivateBaseUrl,
     pdPublicBaseUrl,
     runHandler,
@@ -67,7 +67,9 @@ import Ecluse.Core.Server.Pipeline.Publish ()
 import Ecluse.Core.Server.Pipeline.Shared (hRetryAfter)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Deny, Unavailable), SweepResult (SweepDeleted), SweepTarget (SweepPrivate))
-import Ecluse.Core.Telemetry.Record (MetricsPort (mpMemoryAdmissionOverdraw))
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpMemoryAdmissionOverdraw))
+import Ecluse.Core.Telemetry.Upstream qualified as PublicRead
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Log (captureJsonLog, newTestLogEnv)
@@ -84,6 +86,7 @@ import Ecluse.Test.Maintenance (
 import Ecluse.Test.Package (hexSha1Of, leftpadName, npmVersion, requestsName, sampleDetails, sampleManifest, sriSha256Of, sriSha512Of, unsafeFilename)
 import Ecluse.Test.Port (noopMetricsPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
+import Ecluse.Test.Registry.Public (PublicFixture (..), newPublicFixture)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, atPrecedence, blockedBy, inertRuleDeps, isUndecidable, servingRuleDeps)
 import Ecluse.Test.Server.Cache (cachedMetadata)
@@ -98,6 +101,7 @@ import Network.Wai.Internal (Response)
 import Network.Wai.Test (SResponse (..), runSession)
 import Network.Wai.Test qualified as WaiTest (request)
 import Test.Hspec
+import UnliftIO (concurrently, mapConcurrently, timeout)
 import UnliftIO.Exception (throwIO)
 
 -- | Pin client responses and metrics, including trusted reads after a policy change.
@@ -111,6 +115,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     distTagSpec
     sharedCacheSpec
     pypiPrivateArtifactSpec
+    publicControlSpec
 
     for_ [(status200, Admit), (status304, Admit), (status401, Deny), (status403, Deny)] $ \(upstreamStatus, expected) ->
         it ("records private artifact HTTP " <> show (statusCode upstreamStatus) <> " as " <> show expected <> " for GET and HEAD") $
@@ -897,6 +902,79 @@ storedUpstream store req respond = do
         then upstreamApp req respond
         else respond (responseLBS status404 [] "")
 
+publicControlSpec :: Spec
+publicControlSpec = describe "public authority control" $ do
+    it "keeps private listing contributions while suppressing repeated public throttles" $ do
+        fixture <- newPublicFixture
+        rt <- testServeRuntime noopMetricsPort
+        publicHits <- newIORef (0 :: Int)
+        privateHits <- newIORef (0 :: Int)
+        let busy _ respond = respond (responseLBS status429 [(hRetryAfter, "60")] "busy")
+        testWithApplication (pure (countingUpstream publicHits busy)) $ \publicPort ->
+            testWithApplication (pure (countingUpstream privateHits upstreamApp)) $ \privatePort -> do
+                base <- depsFor publicPort
+                let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base
+                    runtime = rt{srPublicControl = pfControl fixture}
+                replicateM_ 2 $ do
+                    response <- captureServe npmPackumentContract runtime (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
+                    statusCode (responseStatus response) `shouldBe` 200
+                readIORef publicHits `shouldReturn` 1
+                readIORef privateHits `shouldReturn` 2
+                pfRequests fixture `shouldReturn` [("localhost", PublicRead.Listing, PublicRead.ResponseStatus 429)]
+
+    for_ [(serveTarball, "GET"), (headTarball, "HEAD")] $ \(serve, method) ->
+        it ("counts public " <> method <> " sends, excluding retained metadata and local cooldown") $ do
+            fixture <- newPublicFixture
+            rt <- testServeRuntime noopMetricsPort
+            hits <- newIORef (0 :: Int)
+            let upstream req respond
+                    | rawPathInfo req == "/leftpad/-/leftpad-1.0.0.tgz" = respond (responseLBS status429 [(hRetryAfter, "60")] "busy")
+                    | otherwise = upstreamApp req respond
+            testWithApplication (pure (countingUpstream hits upstream)) $ \publicPort -> do
+                deps <- withPrivateBaseUrl Nothing <$> depsFor publicPort
+                let fetch = captureServe npmTarballContract rt{srPublicControl = pfControl fixture} (mountWith deps) (serve npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+                firstResponse <- fetch
+                statusCode (responseStatus firstResponse) `shouldBe` 429
+                secondResponse <- fetch
+                statusCode (responseStatus secondResponse) `shouldBe` 503
+                lookup hRetryAfter (responseHeaders secondResponse) `shouldBe` Just "60"
+                readIORef hits `shouldReturn` 2
+                pfRequests fixture `shouldReturn` [("localhost", PublicRead.SelectedRead, PublicRead.ResponseStatus 200), ("localhost", PublicRead.Artifact, PublicRead.ResponseStatus 429)]
+
+    for_ [methodGet, methodHead] $ \method ->
+        it ("counts public companion " <> show method <> " and refuses its next local retry") $
+            testWithApplication (pure (pypiPublicAppWith True status429)) $ \publicPort -> do
+                fixture <- newPublicFixture
+                rt <- testServeRuntime noopMetricsPort
+                let deps = (pypiServeDeps Nothing (loopbackRegistryUrl ("http://localhost:" <> show publicPort)) NoMirrorWrite [] (pure fixedNow)){pdMountBaseUrl = "http://proxy.test"}
+                    fetch = fetchPypiPath rt{srPublicControl = pfControl fixture} deps method "requests-1.0.0.tar.gz.metadata" []
+                firstResponse <- fetch
+                statusCode (simpleStatus firstResponse) `shouldBe` 429
+                secondResponse <- fetch
+                statusCode (simpleStatus secondResponse) `shouldBe` 503
+                lookup hRetryAfter (simpleHeaders secondResponse) `shouldBe` Just "60"
+                pfRequests fixture `shouldReturn` [("localhost", PublicRead.SelectedRead, PublicRead.ResponseStatus 200), ("localhost", PublicRead.Companion, PublicRead.ResponseStatus 429)]
+
+    it "counts one HTTP send for coalesced listing followers" $ do
+        completed <- timeout 5_000_000 $ do
+            fixture <- newPublicFixture
+            started <- newEmptyMVar
+            release <- newEmptyMVar
+            joined <- newEmptyMVar
+            let metrics = noopMetricsPort{mpCacheRequest = \outcome -> when (outcome == Metric.Collapsed) (putMVar joined ())}
+                upstream req respond = putMVar started () >> takeMVar release >> upstreamApp req respond
+            rt <- testServeRuntime metrics
+            testWithApplication (pure upstream) $ \publicPort -> do
+                deps <- withPrivateBaseUrl Nothing <$> depsFor publicPort
+                let fetch = captureServe npmPackumentContract rt{srPublicControl = pfControl fixture} (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
+                (responses, ()) <-
+                    concurrently
+                        (mapConcurrently (const fetch) [1 .. 8 :: Int])
+                        (takeMVar started >> replicateM_ 7 (takeMVar joined) >> putMVar release ())
+                for_ responses $ \response -> statusCode (responseStatus response) `shouldBe` 200
+                pfRequests fixture `shouldReturn` [("localhost", PublicRead.Listing, PublicRead.ResponseStatus 200)]
+        completed `shouldBe` Just ()
+
 pypiPrivateArtifactSpec :: Spec
 pypiPrivateArtifactSpec = describe "PyPI first-party private artifacts" $ do
     it "answers 503 without a suggested delay when the private origin cannot be read" $ do
@@ -1039,20 +1117,27 @@ relaysUncoded expected fetch = do
 
 -- A public PyPI origin whose one distribution answers with the given status. A 206 carries a partial body.
 pypiPublicApp :: Status -> Application
-pypiPublicApp artifactStatus req respond
+pypiPublicApp = pypiPublicAppWith False
+
+pypiPublicAppWith :: Bool -> Status -> Application
+pypiPublicAppWith companion artifactStatus req respond
     | rawPathInfo req == "/simple/requests/" = respond (responseLBS status200 [(hContentType, "application/vnd.pypi.simple.v1+json")] (encode index))
+    | companion && rawPathInfo req == "/files/requests-1.0.0.tar.gz.metadata" = respond (responseLBS artifactStatus [(hRetryAfter, "60")] "metadata")
     | rawPathInfo req == "/files/requests-1.0.0.tar.gz" = respond (responseLBS artifactStatus ((hContentType, "application/octet-stream") : range) (LBS.fromStrict body))
     | otherwise = respond (responseLBS status404 [] "")
   where
-    index = simpleIndex "requests" [withFileKeys [("url", String (selfBaseUrl req <> "/files/requests-1.0.0.tar.gz"))] (simpleFile "requests-1.0.0.tar.gz")]
+    index = simpleIndex "requests" [withFileKeys ([("url", String (selfBaseUrl req <> "/files/requests-1.0.0.tar.gz"))] <> [("core-metadata", Bool True) | companion]) (simpleFile "requests-1.0.0.tar.gz")]
     partial = statusCode artifactStatus == 206
     body = if partial then BS.take 7 artifactBytes else artifactBytes
     range = [(hContentRange, "bytes 0-6/22") | partial]
 
 -- A PyPI distribution request through the mount's router, so a HEAD takes the bodiless contract.
 fetchPypiArtifact :: ServeRuntime -> PackumentDeps -> Method -> RequestHeaders -> IO SResponse
-fetchPypiArtifact rt deps method headers =
-    case pypiRouter method headers ["simple", "requests", "requests-1.0.0.tar.gz"] of
+fetchPypiArtifact rt deps method = fetchPypiPath rt deps method "requests-1.0.0.tar.gz"
+
+fetchPypiPath :: ServeRuntime -> PackumentDeps -> Method -> Text -> RequestHeaders -> IO SResponse
+fetchPypiPath rt deps method file headers =
+    case pypiRouter method headers ["simple", "requests", file] of
         RouteAction contract (RunPipeline _ action) -> do
             logEnv <- newTestLogEnv
             runSession (WaiTest.request defaultRequest{requestMethod = method, requestHeaders = headers}) $ \req respond ->

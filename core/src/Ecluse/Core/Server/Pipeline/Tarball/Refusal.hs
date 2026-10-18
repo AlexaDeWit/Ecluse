@@ -2,11 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The refusals the artifact path can answer with, and their rendering onto the route's replies.
-
-The leg dispatch and the public leg render through here, so one artifact outcome has one status and
-one message wherever it was decided.
--}
+-- | Artifact refusal decisions and their route-specific responses.
 module Ecluse.Core.Server.Pipeline.Tarball.Refusal (
     -- * Rendering a refusal
     artifactOutcomeStatus,
@@ -16,6 +12,7 @@ module Ecluse.Core.Server.Pipeline.Tarball.Refusal (
 
     -- * The refusals themselves
     upstreamUnavailable,
+    upstreamCooling,
     versionAbsent,
     firstPartyMissRefusal,
 ) where
@@ -48,7 +45,7 @@ artifactOutcomeStatus decision
     | decision `elem` [versionAbsent, firstPartyAbsent] = NotFound
     | otherwise = artifactStatus decision
 
--- | Render a non-admit artifact outcome as the serve error model. A transient status suggests no delay: the single-artifact path has none to offer.
+-- | Render an artifact refusal, preserving any retry delay.
 artifactError :: TarballReplies response -> PackumentDeps -> ServeDecision -> response
 artifactError replies deps decision =
     tarballError replies (artifactHttpStatus status) retryHeaders (mkRefusal (pdHelp deps) message)

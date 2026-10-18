@@ -2,14 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The composition root: the single record every effectful component is reached through, and
-the one place backend choice is resolved. Each handle it holds is an opaque record of functions
-whose closures already capture their backend's private state, so no cloud SDK appears here and
-nothing downstream inspects which backend it got. That is what keeps an adapter from importing
-back into this module. It also carries the @http-client@ 'Manager' the data plane shares. The
-single-process proxy and the split deployment both wire up here and nowhere else. Consumers
-read it through a projection: 'serveRuntimeOf' per request, 'workerRuntimeOf' for the worker.
--}
+-- | Process resources shared by serving and worker runtimes. The application owns their lifetime.
 module Ecluse.Runtime.Env (
     -- * Composition root
     Env (..),
@@ -27,16 +20,20 @@ module Ecluse.Runtime.Env (
     lastPoll,
 ) where
 
-import Katip (LogEnv, katipAddContext)
+import Katip (LogEnv, Severity (InfoS, WarningS), katipAddContext, sl)
 import Network.HTTP.Client (Manager)
 
 import Ecluse.Core.Queue (MirrorQueue)
+import Ecluse.Core.Registry.Backoff (CooldownEvent (..))
+import Ecluse.Core.Registry.Public (PublicControl, newPublicControl)
+import Ecluse.Core.Security.Authority (HostPort (..))
 import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Context (ServeRuntime (..))
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpUpstreamRequest))
 import Ecluse.Core.Worker (WorkerHeartbeat, WorkerPolicies, WorkerRuntime (..), lastPoll, newWorkerHeartbeat, recordPoll)
-import Ecluse.Runtime.Log (DdContext)
+import Ecluse.Runtime.Log (DdContext, logLine)
 import Ecluse.Runtime.Telemetry (Telemetry)
 import Ecluse.Runtime.Telemetry.Correlation (ddIdentityFromEnvironment, ddPayloadNow)
 import Ecluse.Runtime.Telemetry.Instruments (Metrics, metricsPortOf, newMetrics, workerMetricsPortOf)
@@ -45,53 +42,36 @@ import Ecluse.Runtime.Telemetry.Tracing (tracingPortOf, workerTracingPortOf)
 -- | The composition-root record from which the whole effectful shell is reached.
 data Env = Env
     { envServeAdmission :: ServeAdmission
-    {- ^ The process-wide brief-wait bound for metadata-bearing serve work
-    ("Ecluse.Core.Server.Admission"). Every mount shares this one aggregate cap and waiting room.
-    -}
+    -- ^ Share the metadata admission limit and waiting room across all mounts.
     , envMemoryMeter :: MemoryMeter
     -- ^ The process-wide memory budget every serving mount pays into.
     , envQueue :: MirrorQueue
-    {- ^ The mirror-queue handle: the durable hand-off from the request path to the
-    mirror worker.
-    -}
+    -- ^ Queue mirror work from serving requests.
     , envManager :: Manager
-    {- ^ The shared validating-TLS 'Manager' for the __untrusted__ data plane. Egress is https-only,
-    so certificate validation authenticates the host a @dist.tarball@ names.
-    -}
+    -- ^ Validate public TLS peers for metadata and artifact requests.
+    , envPublicControl :: PublicControl
+    -- ^ Shared cooldown and request observation for every public serve and worker read.
     , envPrivateManager :: Manager
-    {- ^ The 'Manager' for the __trusted__ private upstream, held to the same https-only
-    requirement. The split stays because credential handling differs.
-    -}
+    -- ^ Validate private TLS peers while retaining their credential handling.
     , envMetadataCache :: MetadataCache
     -- ^ Selected-version and assembled retention with transient full-read coalescing.
     , envLogEnv :: LogEnv
-    {- ^ The @katip@ logging environment (see "Ecluse.Runtime.Log"): the structured-log stream
-    every layer attaches context to. Its stdout scribe and format are chosen at startup.
-    -}
+    -- ^ Use the configured output format and minimum severity for structured logs.
     , envTelemetry :: Telemetry
-    {- ^ The OpenTelemetry handle ("Ecluse.Runtime.Telemetry") that emits spans and metrics.
-    It is an inert no-op unless @ECLUSE_OBSERVABILITY__TELEMETRY@ is set.
-    -}
+    -- ^ Emit spans and metrics when telemetry is enabled, otherwise do nothing.
     , envMetrics :: Metrics
-    {- ^ The @ecluse.*@ metric instruments ("Ecluse.Runtime.Telemetry.Instruments"), built once
-    from 'envTelemetry'. They are inert when telemetry is off, so a layer records unconditionally.
-    -}
+    -- ^ Process-wide metric instruments are inert when telemetry is disabled.
     , envDdContext :: DdContext
-    {- ^ The resolved @dd@ log identity (@service@\/@env@\/@version@, see
-    "Ecluse.Runtime.Telemetry.Correlation"). Each log line adds the active span's trace\/span ids.
-    -}
+    -- ^ Retain the resolved Datadog identity for per-line trace correlation.
     , envWorkerHeartbeat :: WorkerHeartbeat
-    {- ^ The time of the mirror worker's last successful poll ("Ecluse.Core.Worker"). The liveness
-    probe reads it, so a stalled worker shows up in health, separately from HTTP readiness.
-    -}
+    -- ^ Track completed worker progress for liveness, separately from HTTP readiness.
     }
 
-{- | Assemble an 'Env' from its built handles and the two data-plane 'Manager's, one per origin.
-The caller supplies each handle and owns its lifetime, so assembly opens no socket itself.
--}
+-- | Assemble process handles without opening a socket. Callers own the supplied resources.
 newEnvWithAdmission :: ServeAdmission -> MemoryMeter -> MirrorQueue -> Manager -> Manager -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
 newEnvWithAdmission admission meter queue manager privateManager metadataCache logEnv telemetry heartbeat = do
     metrics <- newMetrics telemetry
+    publicControl <- newPublicControl (mpUpstreamRequest (metricsPortOf metrics)) (reportCooldown logEnv)
     -- The dd log identity comes from the (already-normalised) OTEL_* environment, the
     -- same precedence table the exporter uses, so logs and traces share one identity.
     ddContext <- ddIdentityFromEnvironment
@@ -101,6 +81,7 @@ newEnvWithAdmission admission meter queue manager privateManager metadataCache l
             , envMemoryMeter = meter
             , envQueue = queue
             , envManager = manager
+            , envPublicControl = publicControl
             , envPrivateManager = privateManager
             , envMetadataCache = metadataCache
             , envLogEnv = logEnv
@@ -110,9 +91,7 @@ newEnvWithAdmission admission meter queue manager privateManager metadataCache l
             , envWorkerHeartbeat = heartbeat
             }
 
-{- | Assemble an 'Env' and run an action in its scope, the scope the server and worker run in.
-The root borrows every resource it holds, so it has nothing to release and needs no bracket.
--}
+-- | Run an action with borrowed process resources that require no additional release.
 withEnvWithAdmission ::
     (MonadIO m) =>
     ServeAdmission ->
@@ -130,15 +109,14 @@ withEnvWithAdmission admission meter queue manager privateManager metadataCache 
     env <- liftIO (newEnvWithAdmission admission meter queue manager privateManager metadataCache logEnv telemetry heartbeat)
     action env
 
-{- | Project the 'ServeRuntime' the serve path closes over, built per request at dispatch.
-The core pipeline reads its backends through it without depending on this application 'Env'.
--}
+-- | Project serving capabilities without exposing the application environment to the core.
 serveRuntimeOf :: Env -> ServeRuntime
 serveRuntimeOf env =
     ServeRuntime
         { srAdmission = envServeAdmission env
         , srMemoryMeter = envMemoryMeter env
         , srPublicManager = envManager env
+        , srPublicControl = envPublicControl env
         , srPrivateManager = envPrivateManager env
         , srMetadataCache = envMetadataCache env
         , srQueue = envQueue env
@@ -146,14 +124,13 @@ serveRuntimeOf env =
         , srTracing = tracingPortOf (envTelemetry env)
         }
 
-{- | Project the 'WorkerRuntime' the mirror worker closes over. 'WorkerPolicies' is an argument
-because it derives from the served mounts, and the worker re-runs it through the serve gate.
--}
+-- | Project worker capabilities with policies derived from the served mounts.
 workerRuntimeOf :: WorkerPolicies -> Env -> WorkerRuntime
 workerRuntimeOf policies env =
     WorkerRuntime
         { wrQueue = envQueue env
         , wrManager = envManager env
+        , wrPublicControl = envPublicControl env
         , wrHeartbeat = envWorkerHeartbeat env
         , wrMetrics = workerMetricsPortOf (envMetrics env)
         , wrTracing = workerTracingPortOf (envTelemetry env)
@@ -162,3 +139,11 @@ workerRuntimeOf policies env =
             katipAddContext dd action
         , wrPolicies = policies
         }
+
+reportCooldown :: LogEnv -> HostPort -> CooldownEvent -> IO ()
+reportCooldown logEnv authority event = logLine logEnv payload severity message
+  where
+    payload = sl "module" ("Ecluse.Runtime.Env" :: Text) <> sl "upstream_host" (hpHost authority) <> sl "upstream_port" (hpPort authority)
+    (severity, message) = case event of
+        CoolingDown -> (WarningS, "public upstream entered cooldown")
+        Recovered -> (InfoS, "public upstream left cooldown")

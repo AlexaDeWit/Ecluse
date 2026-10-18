@@ -47,7 +47,7 @@ import Ecluse.Core.Package.Merge (
     integrityHashes,
  )
 import Ecluse.Core.Registry (
-    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
+    FetchFault (FetchBoundExceeded, FetchCooldown, FetchTransport, FetchUrlUnformable),
     UrlFormationError,
     renderUrlFormationError,
  )
@@ -75,6 +75,7 @@ logMetadataFailure name baseUrl = \case
     MetadataFetch (FetchBoundExceeded err) -> logBreach name err
     MetadataFetch (FetchUrlUnformable urlErr) -> logUpstreamUnformable name baseUrl urlErr
     MetadataFetch (FetchTransport fault) -> logUpstreamUnreachable name baseUrl fault
+    MetadataFetch (FetchCooldown _) -> pass
 
 logHttpFailure :: (KatipContext m) => PackageName -> Text -> Int -> Text -> m ()
 logHttpFailure name baseUrl code message =
@@ -133,9 +134,7 @@ logDecodeFailure :: (KatipContext m) => PackageName -> m ()
 logDecodeFailure name =
     warnUpstream name mempty "refused an upstream metadata document: it did not decode into a usable packument"
 
-{- | Warn that an origin's packument self-reported a name for a different package, so an
-operator can tell a misconfigured or hostile upstream from an ordinary outage.
--}
+-- | Warn when an upstream declares a different package identity.
 logNameMismatch :: (KatipContext m) => PackageName -> Text -> Text -> m ()
 logNameMismatch requested origin reported =
     warnUpstream
@@ -143,9 +142,7 @@ logNameMismatch requested origin reported =
         (sl "origin" (authorityLabel origin) <> sl "upstreamName" reported)
         "dropped an upstream contribution: its packument self-reported a name for a different package"
 
-{- | Warn that this origin's configured base URL could not be formed into a request, so an
-operator sees a misconfigured mount rather than an upstream that merely appears unreachable.
--}
+-- | Warn when a configured origin cannot form a request URL.
 logUpstreamUnformable :: (KatipContext m) => PackageName -> Text -> UrlFormationError -> m ()
 logUpstreamUnformable name origin urlErr =
     warnUpstream
@@ -153,9 +150,7 @@ logUpstreamUnformable name origin urlErr =
         (sl "origin" (authorityLabel origin) <> sl "urlError" (renderUrlFormationError urlErr))
         "refused an upstream metadata fetch: the configured base URL could not be formed into a request"
 
-{- | Warn that the transport failed before a usable body returned, so an operator can tell an
-outage from a decode failure or a misconfigured mount.
--}
+-- | Report transport failure separately from decoding and configuration failures.
 logUpstreamUnreachable :: (KatipContext m) => PackageName -> Text -> TransportFault -> m ()
 logUpstreamUnreachable name origin fault =
     warnUpstream

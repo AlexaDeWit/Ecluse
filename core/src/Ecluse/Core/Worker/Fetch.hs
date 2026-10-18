@@ -14,10 +14,12 @@ import Network.HTTP.Client (Request)
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
 import Ecluse.Core.Registry (BodyOutcome (SuccessBody, UnreadStatus), FetchFault (FetchTransport, FetchUrlUnformable), UrlFormationError)
-import Ecluse.Core.Registry.Exchange (boundedChargedRead, formThen, withSuccessBody)
+import Ecluse.Core.Registry.Exchange (boundedChargedRead, formThen, withSuccessBodyUsing)
+import Ecluse.Core.Registry.Public (ReadControl (Controlled))
 import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), Limits (progressFloor), maxMirrorArtifactBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
-import Ecluse.Core.Worker.Types (WorkerM, wrManager)
+import Ecluse.Core.Telemetry.Upstream (PublicReadKind (WorkerArtifact))
+import Ecluse.Core.Worker.Types (WorkerM, wrManager, wrPublicControl)
 
 -- | Charge actual buffered source bytes and refuse non-success statuses before integrity verification.
 fetchArtifactBytesCharged ::
@@ -28,11 +30,12 @@ fetchArtifactBytesCharged ::
     WorkerM (Either FetchFault ByteString)
 fetchArtifactBytesCharged charge limits buildRequest url = do
     manager <- asks wrManager
+    control <- asks wrPublicControl
     result <-
         liftIO $
             formThen
                 FetchUrlUnformable
-                (withSuccessBody manager (progressFloor limits) (fmap (fmap snd) . boundedChargedRead charge (MirrorArtifactBodyLimit (maxMirrorArtifactBytes limits))))
+                (withSuccessBodyUsing (Controlled control WorkerArtifact) manager (progressFloor limits) (fmap (fmap snd) . boundedChargedRead charge (MirrorArtifactBodyLimit (maxMirrorArtifactBytes limits))))
                 (buildRequest Nothing (registryUrlText url))
     pure $
         result >>= \case
