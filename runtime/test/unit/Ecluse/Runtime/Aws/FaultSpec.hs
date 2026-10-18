@@ -27,6 +27,7 @@ import Ecluse.Runtime.Aws.Fault (
     AwsParty (AwsServiceNamed),
     AwsRequestFailed (AwsRequestFailed, arfFault),
     classifyAwsTransport,
+    classifyEscapedTransport,
     displayAwsFaultT,
     foldTransportEscapes,
     retypeAmazonkaEscapes,
@@ -55,6 +56,17 @@ spec = do
 
         it "details a decoder failure by its status, never the body it read or the decoder's message" $
             tfDetail (classifyAwsTransport undecodableAnswer) `shouldBe` "STS: HTTP 200, an answer that could not be decoded"
+
+    describe "classifyEscapedTransport"
+        $ it "excludes credential, domain wrapper, unknown and asynchronous exceptions"
+        $ for_
+            [ toException CredentialChainExhausted
+            , toException AwsCredentialsExhausted
+            , toException (AwsRequestFailed (AwsServiceNamed "STS") (AwsUndecodable 200))
+            , toException (TestContractEscape "outside transport")
+            , toException ThreadKilled
+            ]
+        $ \err -> classifyEscapedTransport err `shouldBe` Nothing
 
     describe "foldTransportEscapes" $ do
         it "folds service and decoder failures into the caller's value type" $ do
