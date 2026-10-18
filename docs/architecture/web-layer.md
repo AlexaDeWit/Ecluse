@@ -107,7 +107,9 @@ progress floor (`limits.progressWindow`, `limits.minProgressBytes`), so a slow c
 An upstream that falls below it aborts the stream, and the client sees an incomplete download.
 
 The proxy streams artifact responses without hashing their bodies. Integrity on this path depends
-on the client checking the preserved metadata hashes. npm documents integrity checking on cache
+on the client checking the preserved metadata hashes. The proxy therefore asks the upstream for
+every artifact and Core Metadata companion in identity coding, because a registry CDN gzips a
+response the request permits, and gzip bytes miss the advertised digest. npm documents integrity checking on cache
 insertion and extraction ([npm cache](https://docs.npmjs.com/cli/v11/commands/npm-cache/)). pip checks
 index-supplied hashes against download corruption, while locally pinned hashes provide a separate
 check against a changed remote source ([pip secure installs](https://pip.pypa.io/en/stable/topics/secure-installs/)).

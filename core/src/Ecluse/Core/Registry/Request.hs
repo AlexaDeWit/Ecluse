@@ -32,6 +32,7 @@ import Network.HTTP.Client (Request (decompress, redirectCount, requestHeaders),
 import Network.HTTP.Types.Header (
     HeaderName,
     RequestHeaders,
+    hAcceptEncoding,
     hAuthorization,
     hUserAgent,
  )
@@ -112,13 +113,18 @@ authorizationUnder scheme headers = do
     guard (T.toLower presented == T.toLower scheme)
     pure (T.dropWhile (== ' ') rest)
 
-{- | Build the artifact @GET@ at the URL a projection preserved from upstream. Non-decompressing,
-so the bytes the served integrity digest is paired with are never gunzipped.
+{- | Build the artifact @GET@ at the preserved upstream URL, in identity coding and never decompressed.
+Without the field, http-client asks for gzip, and gzip bytes miss the advertised digest.
 -}
 artifactRequestByUrl :: CredentialMapping -> Maybe ClientCredential -> Text -> Either UrlFormationError Request
 artifactRequestByUrl mapping credential url = do
     base <- parseRequestEither url
-    pure . attachCredential mapping credential $ base{decompress = const False}
+    pure
+        . attachCredential mapping credential
+        $ base
+            { decompress = const False
+            , requestHeaders = (hAcceptEncoding, "identity") : requestHeaders base
+            }
 
 {- Join a base URL and an already-encoded path with exactly one slash, whatever trailing
 slashes the configured base writes.
