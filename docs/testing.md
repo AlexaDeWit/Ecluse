@@ -1696,7 +1696,10 @@ Every row declares 1000 requests per second, a one-half budget share, and a two-
 Each sample starts at the declared pacing ceiling.
 
 The harness checks one complete preflight cycle and every measured cycle against independent expected results.
-It checks the ordered store calls, examined and retained versions, proposed removals, request counts and unchanged inventories and cursors.
+It checks the ordered store calls, exact proposed and retained package/version identities, request counts and unchanged inventories and cursors.
+Each proposed removal must name the expected denial and reason. The advisory denial must credit the current serving generation.
+JSON rows retain the actual identities and denial evidence after these checks.
+The generation field identifies which removals used that verified generation, without copying its temporary fixture path.
 Both the control's covered-name query count and the candidate's zero-query full walk pass the preflight.
 The output reports the actual query count.
 

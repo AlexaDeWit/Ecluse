@@ -19,6 +19,7 @@ import Test.Tasty.HUnit (assertBool, (@?=))
 
 import Ecluse.Core.Clock (monoSecondsBetween, monotonicNow, waitSeconds)
 import Ecluse.Core.Cve (CveDb (cveDbLookup), CveLookup (cveCoveredNames))
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
@@ -164,10 +165,11 @@ runSample scenario source mirror cache marker sample = do
     quota <- readIORef quotaWaits
     chunks <- readIORef chunkWaits
     qualify scenario mirror cache marker outcome requests covered cost
+    selections <- recInfo recorded >>= qualifySelections scenario generation
     map fst quota @?= replicate (sum [count | tally <- Map.elems (ccRequests cost), (_, count) <- tallyCounts tally]) 0.002
     map fst chunks @?= [2 | scShape scenario == SweepEverything]
     recErrors recorded >>= (@?= [])
-    pure (reportSample scenario sample outcome requests covered cost quota chunks timing)
+    pure (reportSample scenario sample outcome requests covered cost quota chunks timing selections)
 
 timeCycle :: IO CycleOutcome -> IO (CycleOutcome, CycleTiming)
 timeCycle action = do
@@ -253,6 +255,36 @@ selectedNames scenario
     | scCatalogue scenario == 0 = ["zulu"]
     | otherwise = ["left-pad", "zulu"]
 
+-- Exact audit lines pin identities, named denials and the generation before any path is omitted.
+qualifySelections :: Scenario -> Maybe DbEtag -> [Text] -> IO Value
+qualifySelections scenario generation messages = do
+    isJust generation @?= (scCatalogue scenario > 0)
+    proposed @?= expectedProposed
+    retained @?= expectedRetained
+    pure
+        ( object
+            [ "proposed_identities" .= map identity proposed
+            , "retained_identities" .= retained
+            , "denial_evidence" .= map (fst . T.breakOn "; advisory generation ") proposed
+            , "serving_generation_identities" .= [identity line | line <- proposed, not ("; advisory generation none" `T.isSuffixOf` line)]
+            ]
+        )
+  where
+    proposed = mapMaybe (T.stripPrefix "dry run, would delete ") messages
+    retained = mapMaybe (T.stripPrefix "dry run, keeping ") messages
+    identity = fst . T.breakOn ": blocked by "
+    serving = maybe "none" (\(DbEtag etag) -> etag) generation
+    expectedProposed =
+        [ "left-pad@1.0.0: blocked by DenyIfCve (affected by ECLUSE-BENCH-0 (CVSS >= 8.0)); advisory generation " <> serving
+        | scCatalogue scenario > 0
+        ]
+            <> ["zulu@1.0.0: blocked by DenyByIdentity (identity zulu@1.0.0 is revoked by operator); advisory generation none"]
+    expectedRetained =
+        ["alpine@" <> version | scShape scenario == SweepEverything, version <- ["1.0.0", "2.0.0"]]
+            <> ["left-pad@1.0.0" | scCatalogue scenario == 0 && scShape scenario == SweepEverything]
+            <> ["left-pad@2.0.0" | scCatalogue scenario > 0 || scShape scenario == SweepEverything]
+            <> ["zulu@2.0.0"]
+
 expectedCalls :: Scenario -> [Text] -> [Text]
 expectedCalls scenario selected =
     ["mirror:consent", "mirror:classify", "cache:consent", "cache:classify"]
@@ -263,8 +295,8 @@ expectedCalls scenario selected =
         ["mirror:list:" <> prefix, "cache:list:" <> prefix]
             <> concat [["mirror:versions:" <> name, "mirror:manifest:" <> name] | name <- selected, prefix == "" || prefix == T.take 1 name]
 
-reportSample :: Scenario -> Int -> CycleOutcome -> [Text] -> Int -> CycleCost -> [(Double, Double)] -> [(Double, Double)] -> CycleTiming -> Value
-reportSample scenario sample outcome calls covered cost quota chunks timing =
+reportSample :: Scenario -> Int -> CycleOutcome -> [Text] -> Int -> CycleCost -> [(Double, Double)] -> [(Double, Double)] -> CycleTiming -> Value -> Value
+reportSample scenario sample outcome calls covered cost quota chunks timing selections =
     object
         [ "sample" .= sample
         , "catalogue_names" .= scCatalogue scenario
@@ -283,6 +315,7 @@ reportSample scenario sample outcome calls covered cost quota chunks timing =
         , "examined_versions" .= tallyExamined tally
         , "would_delete_versions" .= tallyDeleted tally
         , "kept_versions" .= tallyKept tally
+        , "selections" .= selections
         , "store_calls" .= calls
         , "request_counts" .= [(show kind :: Text, count) | tally <- Map.elems (ccRequests cost), (kind, count) <- tallyCounts tally]
         , "configured_requests_per_second" .= (1000 :: Int)
