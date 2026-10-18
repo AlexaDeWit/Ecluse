@@ -68,7 +68,7 @@ boot knobs use = do
                 env <- AWS.newEnv (pure . fromKeys (AWS.AccessKey "AKIDtestkey") (AWS.SecretKey "testsecretkey"))
                 let endpoint = AWS.overrideService (\service -> AWS.setEndpoint False "127.0.0.1" statePort service{AWS.s3AddressingStyle = AWS.S3AddressingStylePath}) env
                     target = stateTarget (localhost targetPort)
-                    store = mirrorStateForEnv defaultLimits "worker-load" "state" target (AWS.once endpoint{AWS.retryCheck = \_ _ -> False})
+                store <- mirrorStateForEnv defaultLimits "worker-load" "state" target (AWS.once endpoint{AWS.retryCheck = \_ _ -> False})
                 manager <- newManager defaultManagerSettings
                 meter <- testMemoryMeter
                 rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
