@@ -15,6 +15,9 @@
       document.documentElement.dataset.theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
     }
   </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400..700;1,400..700&amp;display=swap" />
   <link rel="stylesheet" href="{{ get_url(path='style.css') }}" />
   <link rel="stylesheet" href="{{ get_url(path='pagefind/pagefind-ui.css') }}" />
   {% block head %}{% endblock head %}

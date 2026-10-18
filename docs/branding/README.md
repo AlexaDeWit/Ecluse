@@ -59,3 +59,7 @@ The wordmark uses Source Sans 3 Semibold. The caption uses Source Sans 3 Regular
 Both come from Adobe's [Source Sans repository](https://github.com/adobe-fonts/source-sans/tree/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e).
 Adobe licenses Source Sans 3 under the [SIL Open Font License 1.1](https://github.com/adobe-fonts/source-sans/blob/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/LICENSE.md).
 The exported lettering contains paths, not embedded font files.
+
+The website loads Source Sans 3 from Google Fonts for prose, headings, and navigation.
+It requests normal and italic weights from 400 to 700, with system fonts as the fallback.
+Code examples keep the system monospace font.
