@@ -169,9 +169,8 @@ allocate between them.
 **Not every physical attempt is counted.** The sweep counts the calls it makes. A retry the AWS SDK
 makes inside one call is not counted, and a version enumeration counts as one request however many
 pages the store takes to answer it. A maintenance client replays no request on a reused connection
-below that accounting. So every physical attempt is one the budget counted. A connection that fails
-reaches the store-fault policy, and a metadata read that fails keeps its package until a later
-cycle.
+below that accounting. A connection failure that remains after backend retry handling reaches the
+store-fault policy. A metadata read that fails keeps its package until a later cycle.
 
 ## What is deleted, and what never is
 
