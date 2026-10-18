@@ -106,9 +106,12 @@ pre {
   }
 }
 
-// Diagram SVGs are drawn in parchment ink, so the enclosure keeps fixed light
-// literals in both schemes rather than the theme tokens.
+// The light diagram panel needs dark links and focus outlines in both schemes.
 figure.diagram {
+  --accent: var(--water);
+  --accent-strong: var(--water-deep);
+  --surface: var(--cream);
+
   margin: 1.5rem 0;
   padding: 1rem;
   background: #f4efe3;
@@ -116,8 +119,9 @@ figure.diagram {
   border-radius: 10px;
   overflow-x: auto;
 
-  svg {
+  img {
     display: block;
+    width: 100%;
     max-width: 100%;
     height: auto;
   }

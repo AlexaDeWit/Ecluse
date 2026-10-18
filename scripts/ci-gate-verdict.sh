@@ -5,7 +5,7 @@ set -euo pipefail
 
 verdict=0
 
-# $3 names the classifier filter that may skip the job: docs, release, or none.
+# $3 names the classifier filter that may skip the job: docs, release, rebuild, or none.
 require() {
   local job="$1" result="$2" filter="${3:-none}"
   if [ "$result" = "success" ]; then
@@ -19,6 +19,10 @@ require() {
     fi
     if [ "$filter" = "release" ] && [ "${RELEASE_BUILD:-}" = "false" ]; then
       echo "ok      $job: skipped, the change cannot reach the release build"
+      return 0
+    fi
+    if [ "$filter" = "rebuild" ] && [ "${RELEASE_REBUILD:-}" = "false" ]; then
+      echo "ok      $job: skipped, a pull request runs no second image build"
       return 0
     fi
   fi
@@ -56,7 +60,7 @@ else
   echo "ok      release-dry-run-assemble, release-dry-run-boot: not run, release-dry-run did not succeed"
 fi
 
-# A failed rebuild skips the comparison, which must fail outside the release filter.
-require release-compare "${RELEASE_COMPARE:-missing}" release
+# A failed build also skips the comparison, so only the rebuild filter excuses a skip.
+require release-compare "${RELEASE_COMPARE:-missing}" rebuild
 
 exit "$verdict"

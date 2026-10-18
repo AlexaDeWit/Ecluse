@@ -25,6 +25,7 @@ all_pass=(
   CHANGES=success STATIC_CHECKS=success BUILD=success ALLOCATION=success COVERAGE=success CODECOV_NOTIFY=success
   DOCS=success E2E_PREPARE=success E2E_CONFORMANCE=success E2E=success BACKEND_CONFORMANCE=success WEEDER=success STAN=success RELEASE_DRY_RUN=success
   RELEASE_DRY_RUN_ASSEMBLE=success RELEASE_DRY_RUN_BOOT=success RELEASE_COMPARE=success RELEASE_BUILD=true
+  RELEASE_REBUILD=true
 )
 release_skipped=(RELEASE_DRY_RUN=skipped RELEASE_DRY_RUN_ASSEMBLE=skipped RELEASE_DRY_RUN_BOOT=skipped RELEASE_COMPARE=skipped)
 
@@ -56,7 +57,7 @@ check "a documentation-only PR passes with the Haskell jobs, notify, and release
   CHANGES=success STATIC_CHECKS=success \
   BUILD=skipped ALLOCATION=skipped COVERAGE=skipped CODECOV_NOTIFY=skipped \
   DOCS=skipped E2E_PREPARE=skipped E2E_CONFORMANCE=skipped E2E=skipped BACKEND_CONFORMANCE=skipped WEEDER=skipped STAN=skipped \
-  "${release_skipped[@]}" DOCS_ONLY=true RELEASE_BUILD=false
+  "${release_skipped[@]}" DOCS_ONLY=true RELEASE_BUILD=false RELEASE_REBUILD=false
 
 check "a failed classifier fails, so a broken filter never waves a PR through" 1 \
   "${all_pass[@]}" CHANGES=failure DOCS_ONLY=true
@@ -68,7 +69,13 @@ check "a cancelled job fails" 1 \
   "${all_pass[@]}" STAN=cancelled DOCS_ONLY=false
 
 check "a source-only PR passes with the release jobs skipped" 0 \
-  "${all_pass[@]}" "${release_skipped[@]}" DOCS_ONLY=false RELEASE_BUILD=false
+  "${all_pass[@]}" "${release_skipped[@]}" DOCS_ONLY=false RELEASE_BUILD=false RELEASE_REBUILD=false
+
+check "a PR that reaches the release build passes with only the comparison skipped" 0 \
+  "${all_pass[@]}" RELEASE_COMPARE=skipped RELEASE_REBUILD=false
+
+check "the rebuild filter never skips the dry-run" 1 \
+  "${all_pass[@]}" "${release_skipped[@]}" RELEASE_REBUILD=false
 
 check "a skipped dry-run fails when the change reaches the release build" 1 \
   "${all_pass[@]}" "${release_skipped[@]}" DOCS_ONLY=false RELEASE_BUILD=true
@@ -104,7 +111,10 @@ check "a skipped comparison after a failed dry-run fails the gate" 1 \
   "${all_pass[@]}" RELEASE_DRY_RUN=failure RELEASE_COMPARE=skipped
 
 check "a skipped comparison fails when the classifier output is missing" 1 \
-  "${all_pass[@]}" RELEASE_COMPARE=skipped RELEASE_BUILD=
+  "${all_pass[@]}" RELEASE_COMPARE=skipped RELEASE_REBUILD=
+
+check "the release filter never skips the comparison on its own" 1 \
+  "${all_pass[@]}" RELEASE_COMPARE=skipped RELEASE_BUILD=false
 
 check "the documentation-only filter never skips the comparison on its own" 1 \
   "${all_pass[@]}" RELEASE_COMPARE=skipped DOCS_ONLY=true
@@ -112,8 +122,8 @@ check "the documentation-only filter never skips the comparison on its own" 1 \
 check "a missing comparison result fails the gate" 1 \
   "${all_pass[@]}" RELEASE_COMPARE=
 
-check "a failed comparison is not excused by the release filter" 1 \
-  "${all_pass[@]}" RELEASE_COMPARE=failure RELEASE_BUILD=false
+check "a failed comparison is not excused by the rebuild filter" 1 \
+  "${all_pass[@]}" RELEASE_COMPARE=failure RELEASE_REBUILD=false
 
 for job in E2E_PREPARE E2E_CONFORMANCE E2E BACKEND_CONFORMANCE; do
   for result in failure skipped cancelled missing ''; do

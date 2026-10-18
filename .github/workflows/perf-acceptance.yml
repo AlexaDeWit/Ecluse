@@ -59,9 +59,7 @@ jobs:
           PERF_NATIVE_OUTCOME: ${{ steps.measure.outcome }}
         run: nix develop .#ci --command task performance:live-allocation-receipt
 
-      # Off main only: the runs on main are the baseline. A missing baseline renders as
-      # "no baseline". Both steps continue on error and stop after five minutes, so neither
-      # can fail or stall the job.
+      # The runs on main are the baseline. A missing baseline renders as "no baseline".
       - name: Fetch the latest report on main
         if: ${{ !cancelled() && github.ref != 'refs/heads/main' }}
         continue-on-error: true
@@ -81,7 +79,7 @@ jobs:
       # Preserve the report when the harness fails.
       - name: Upload this run's report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: perf-acceptance-report-${{ runner.arch }}-${{ github.sha }}
           path: |

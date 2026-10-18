@@ -58,19 +58,16 @@ concurrency:
   group: bench-load-${{ github.ref }}-${{ (inputs.sweep == '' || inputs.sweep == 'none') && (inputs.pod-shape || 'all') || format('sweep-{0}-{1}', inputs.sweep, inputs.sweep-select) }}
   cancel-in-progress: false
 
-# Least privilege: a read-only token is all this workflow needs. Artifact upload uses
-# the run's own artifact service (the runtime token), not the GITHUB_TOKEN. The baseline
-# fetch reads the runs and artifacts of main with the GITHUB_TOKEN.
+# Artifact upload uses the run's runtime token, not the GITHUB_TOKEN. The baseline fetch
+# reads main's runs and artifacts with the GITHUB_TOKEN.
 permissions:
   contents: read
 
 env:
   # Pin the cabal store to a deterministic, cacheable location, as the other Haskell jobs do.
   CABAL_DIR: ${{ github.workspace }}/.cabal
-  # The load knobs, from the dispatch inputs (defaulted for a scheduled run). They travel
-  # through the environment, never interpolated into a shell command, so a malformed value
-  # can only mis-size a measurement, never inject. Blank admission leaves the proxy's
-  # computed default in force, which is what an unconfigured deployment gets.
+  # These dispatch inputs reach the shell only as environment variables, so they cannot inject.
+  # A blank serve-max-in-flight keeps the computed default of an unconfigured proxy.
   BENCH_LOAD_DURATION_SECONDS: ${{ inputs.duration-seconds || '30' }}
   BENCH_LOAD_CONCURRENCY: ${{ inputs.concurrency || '100' }}
   BENCH_LOAD_SERVE_MAX_IN_FLIGHT: ${{ inputs.serve-max-in-flight }}
@@ -135,10 +132,8 @@ jobs:
           PERF_NATIVE_OUTCOME: ${{ steps.measure.outcome }}
         run: nix develop .#ci --command task performance:load-receipt
 
-      # Off main only: the runs on main are the baseline, and each pod shape takes the
-      # newest run that measured it. The GC-thrash probe has no scenario table to compare. A
-      # missing baseline renders as "no baseline". Both steps continue on error and stop after
-      # five minutes, so neither can fail or stall the job.
+      # The newest run on main for this pod shape is the baseline. A missing one renders as
+      # "no baseline". The GC-thrash probe has no scenario table to compare.
       - name: Fetch the latest results on main for this pod shape
         if: ${{ !cancelled() && github.ref != 'refs/heads/main' && matrix.pod-shape != 'thrash' }}
         continue-on-error: true
@@ -159,7 +154,7 @@ jobs:
       # Preserve partial output when the harness fails.
       - name: Upload this run's results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-load-results-${{ runner.arch }}-${{ matrix.pod-shape }}-${{ github.sha }}
           path: |
@@ -233,7 +228,7 @@ jobs:
       # Preserve every finished arm when a later one fails.
       - name: Upload the sweep job's results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-load-sweep-${{ runner.arch }}-${{ inputs.sweep }}-${{ matrix.job }}-${{ github.sha }}
           path: sweep-results/

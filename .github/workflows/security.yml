@@ -1,16 +1,12 @@
 name: Security
 
-# Haskell advisory scanning, report-only: it never gates a PR, because findings arrive
-# with disclosure time, not with in-PR changes. osv-scanner matches every exact pin in
-# cabal.project.freeze against OSV.dev, home to the HSEC advisories the GitHub Advisory
-# Database lacks. The freeze is the committed projection of the Nix package set, so it
-# covers the statically linked Haskell libraries no image scan can see. The maintained
-# json-stream fork's freeze names the upstream release its source derives from.
-#
-# The SARIF goes to GitHub code scanning, so a human triages every finding in the
-# Security tab. The C closure's grype scan runs in ci.yml's nightly run. See
-# docs/architecture/release-supply-chain.md, "Vulnerability scanning and dependency
-# updates".
+# Haskell advisory scanning. It never gates a PR, because findings arrive with disclosure,
+# not with a change. osv-scanner matches every pin in cabal.project.freeze against OSV.dev,
+# which has the HSEC advisories the GitHub Advisory Database lacks. The freeze projects the
+# Nix package set, so it covers the statically linked Haskell libraries no image scan sees.
+# Each in-tree fork's upstream.freeze names the release its source derives from. A human
+# triages the SARIF in the Security tab. ci.yml's nightly run scans the C closure (grype).
+# See docs/architecture/release-supply-chain.md, "Vulnerability scanning and dependency updates".
 on:
   pull_request:
     paths: ["flake.lock", "flake.nix", "cabal.project.freeze", "json-stream/upstream.freeze", "vendor/lzma-managed/upstream.freeze", ".github/workflows/security.yml"]
@@ -48,7 +44,7 @@ jobs:
 
       - name: Upload osv-scanner SARIF to code scanning
         if: ${{ always() }}
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           sarif_file: osv-freeze.sarif
           category: osv-hsec
