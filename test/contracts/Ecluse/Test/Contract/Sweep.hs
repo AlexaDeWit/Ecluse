@@ -22,7 +22,7 @@ refusedNext :: ClientOps store project -> store -> Text -> Text -> IO ()
 refusedNext ClientOps{..} proxy name version = do
     (status, _) <- clientArtifact proxy name version
     status `shouldBe` 403
-    void $ clientWithProject proxy (\project -> clientInstallIn project name (Just version)) >>= shouldFail
+    void $ clientWithProject proxy (\project -> clientRefusedIn project name (Just version)) >>= shouldFail
 
 -- | Inspect both stores by name without discarding unreadable-store failures.
 inventoriesEmpty :: StoreOps store -> store -> store -> Text -> Expectation

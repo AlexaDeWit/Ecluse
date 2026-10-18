@@ -4,14 +4,15 @@
 
 {- | Shared @ministack@ bootstrapping for the integration suite.
 
-The specs that drive the real AWS SQS and S3 backends launch a @ministack@ container
-through @testcontainers@ and point at it with throwaway credentials. This module owns the
-container, its ASCII-relabelled image, the endpoint-overridden @amazonka@ environment, and
-a fresh per-test queue. It carries no 'Test.Hspec.Spec' of its own, and its name avoids the
-@Spec@ suffix so @hspec-discover@ does not collect it.
+One @ministack@ container serves the whole test process. The first spec that asks starts it, and
+'withMinistackPool' stops it when the suite ends, so specs must isolate by queue and bucket names.
+An emulator that crashes mid-suite fails every later group that uses it. The module also owns the
+endpoint override and fresh per-test queues.
 -}
 module Ecluse.Integration.Ministack (
     -- * Container lifecycle
+    MinistackPool,
+    withMinistackPool,
     withMinistack,
 
     -- * Per-test queue
@@ -49,7 +50,9 @@ import TestContainers (Container, containerAddress)
 import TestContainers qualified as TC
 import TestContainers.Docker (fromDockerfile, withLabels)
 import TestContainers.Hspec (withContainers)
-import UnliftIO.Exception (try)
+import UnliftIO.Async (asyncWithUnmask, cancel, race, waitCatch)
+import UnliftIO.Exception (bracket, mask, onException, throwIO, try)
+import UnliftIO.MVar (modifyMVarMasked)
 
 import Ecluse.Core.Queue (MirrorQueue (receive), QueueMessage, Seconds (Seconds))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -64,13 +67,36 @@ import Ecluse.Test.Poll (pollUntil)
 ministackPort :: TC.Port
 ministackPort = 4566
 
--- | One emulator per spec. A derived ASCII image label avoids a testcontainers decoding fault.
-withMinistack :: (Container -> IO ()) -> IO ()
-withMinistack body = withEnvOverrides [("AWS_ACCESS_KEY_ID", "test"), ("AWS_SECRET_ACCESS_KEY", "test")] $ do
+-- | The process's one emulator once started, with the action that stops it.
+newtype MinistackPool = MinistackPool (MVar (Maybe (Container, IO ())))
+
+-- | Hold the pool for the suite and stop its emulator, if one started, when the suite ends.
+withMinistackPool :: (MinistackPool -> IO a) -> IO a
+withMinistackPool = bracket (MinistackPool <$> newMVar Nothing) (\(MinistackPool slot) -> takeMVar slot >>= traverse_ snd)
+
+-- | Run the body against the pool's emulator with the throwaway keys set. A failed start fails only this body.
+withMinistack :: MinistackPool -> (Container -> IO ()) -> IO ()
+withMinistack (MinistackPool slot) body = withEnvOverrides [("AWS_ACCESS_KEY_ID", "test"), ("AWS_SECRET_ACCESS_KEY", "test")] $ do
+    container <- modifyMVarMasked slot $ \case
+        held@(Just (running, _)) -> pure (held, running)
+        Nothing -> (\started -> (Just started, fst started)) <$> startHeld
+    body container
+
+-- testcontainers ties a container to a bracket, so a holder thread keeps it open until the stop action runs.
+-- The caller masks, so an interrupt either cancels the holder or reaches the pool with its stop action.
+startHeld :: IO (Container, IO ())
+startHeld = do
     labels <- testContainerLabels "integration"
     -- Fail the suite if the pin does not validate, so no mutable tag reaches @FROM@.
     image <- either (fail . toString) pure ministackImage
-    withContainers (ministack labels image) body
+    started <- newEmptyMVar
+    stop <- newEmptyMVar
+    mask $ \restore -> do
+        holder <- asyncWithUnmask (\unmask -> unmask (withContainers (ministack labels image) (\container -> putMVar started container >> takeMVar stop)))
+        restore (race (waitCatch holder) (takeMVar started)) `onException` cancel holder >>= \case
+            Right container -> pure (container, putMVar stop () >> void (waitCatch holder))
+            Left (Left failure) -> throwIO failure
+            Left (Right ()) -> fail "the ministack holder ended before the container started"
 
 -- The reaping labels are threaded in rather than baked into the image, so the container
 -- carries this worktree's scope and `task test-clean` reaps it after a hard kill.
@@ -83,8 +109,8 @@ ministack labels image =
             & TC.setRm True
             & withLabels labels
 
--- ASCII description label (see 'withMinistack' for why), plus the coarse test marker so
--- `task test-clean-all` can prune a stale build image.
+-- An ASCII description label replaces the image's own, which trips a testcontainers decoding
+-- fault. The coarse test marker lets `task test-clean-all` prune a stale build image.
 ministackDockerfile :: PinnedImageRef -> Text
 ministackDockerfile image =
     "FROM "

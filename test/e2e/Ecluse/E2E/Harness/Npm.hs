@@ -8,6 +8,8 @@ lifecycle scripts.
 module Ecluse.E2E.Harness.Npm (
     npmInstall,
     npmInstallIn,
+    npmRefused,
+    npmRefusedIn,
     npmPublishIn,
     npmDeprecateIn,
     withNpmProject,
@@ -122,6 +124,14 @@ installedVersion proj pkg = do
 -- | @npm install \<pkg\>@ in a project, resolving the package's metadata through the proxy.
 npmInstallIn :: NpmProject -> Text -> IO ClientResult
 npmInstallIn proj pkg = runNpm proj ["install", toString pkg]
+
+-- | 'npmInstallIn' with no fetch retry, for an install the proxy refuses with a 503.
+npmRefusedIn :: NpmProject -> Text -> IO ClientResult
+npmRefusedIn proj pkg = runNpm proj ["install", "--fetch-retries=0", toString pkg]
+
+-- | 'npmInstall' with no fetch retry, for an install the proxy refuses with a 503.
+npmRefused :: E2E -> Text -> IO ClientResult
+npmRefused e2e pkg = withNpmProject e2e (`npmRefusedIn` pkg)
 
 -- | Publish through the configured proxy with package lifecycle scripts disabled.
 npmPublishIn :: NpmProject -> IO ClientResult

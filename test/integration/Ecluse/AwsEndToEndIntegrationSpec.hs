@@ -30,6 +30,7 @@ import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
 import Ecluse.Core.Worker (WorkerPolicies)
 import Ecluse.Integration.Ministack (
+    MinistackPool,
     endpointFor,
     freshQueueUrl,
     quietLogEnv,
@@ -59,9 +60,9 @@ import Ecluse.Test.Worker (workerSourceAt)
 {- | Serve and mirror through the composition root against ministack SQS and WAI npm stubs.
 Requires Docker, without a live AWS account.
 -}
-spec :: Spec
-spec =
-    aroundAll withMinistack $
+spec :: MinistackPool -> Spec
+spec pool =
+    aroundAll (withMinistack pool) $
         describe "AWS-backed Écluse end to end (ministack SQS + WAI npm stubs)" $ do
             it (caseLabel "integration/aws-composition/native-001" "filters public versions by the rules on a packument request") $ \container ->
                 withAwsProxy container "aws-e2e-packument" $ \proxy -> do
@@ -80,8 +81,8 @@ spec =
                     tpAcknowledged proxy `shouldReturn` True
                     readIORef (tpMirrorLog proxy) `shouldReturn` ["/left-pad"]
 
-{- | The in-process Écluse under test: the serve 'Application', the composition-root
-'Env' the worker runs over, and the mirror-target stub's publish log.
+{- | The in-process Écluse under test: the serve 'Application', the composition-root 'Env' the
+worker runs over, and the mirror-target stub's publish log.
 -}
 data TestProxy = TestProxy
     { tpApp :: Application

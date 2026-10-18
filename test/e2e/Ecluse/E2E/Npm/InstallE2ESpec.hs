@@ -55,7 +55,7 @@ scenarios recorder = do
                 refusesWithoutEffects
                     False
                     RefusalDriver
-                        { refusalInstall = npmInstall e2e (psName denyPkg)
+                        { refusalInstall = npmRefused e2e (psName denyPkg)
                         , refusalObserve = verdaccioHasVersionNow e2e (psName denyPkg) (psVersion denyPkg)
                         , refusalSettle = awaitMirrorWindow
                         }

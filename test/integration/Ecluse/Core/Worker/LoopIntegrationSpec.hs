@@ -22,6 +22,7 @@ import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails), VersionEvaluation 
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (wpResolveVersion))
 import Ecluse.Integration.Ministack (
+    MinistackPool,
     QueueOptions (qoVisibilityTimeout, qoWaitSeconds),
     defaultQueueOptions,
     freshQueue,
@@ -48,9 +49,9 @@ import Ecluse.Test.Support (TestContractEscape (TestContractEscape), expectRight
 import Ecluse.Test.Worker (workerSourceAt)
 
 -- | Real SQS supplies visibility and redelivery behaviour absent from the in-memory queue.
-spec :: Spec
-spec =
-    aroundAll withMinistack $
+spec :: MinistackPool -> Spec
+spec pool =
+    aroundAll (withMinistack pool) $
         describe "mirror worker (ministack + WAI stubs)" $ do
             it (caseLabel "integration/worker/native-001" "fetches, verifies, publishes, and acks a faithful job (via the loop)") $ \container ->
                 withUpstream $ \upstreamUrl ->
