@@ -33,8 +33,10 @@ spec = do
     it "declares all integration groups in the fixed integration component" $ do
         length (catalogueGroups integrationCatalogue) `shouldBe` 20
         map groupPartition (catalogueGroups integrationCatalogue) `shouldSatisfy` all (== "integration")
-    it "retains every unique integration case" $
-        length (concatMap groupCases (catalogueGroups integrationCatalogue)) `shouldBe` 390
+    it "retains every unique integration case" $ do
+        let cases = concatMap groupCases (catalogueGroups integrationCatalogue)
+        length cases `shouldBe` 391
+        map caseId cases `shouldContain` ["integration/origin/native-018"]
 
 removeCase :: Group -> Case -> Group -> Group
 removeCase selected item candidate
