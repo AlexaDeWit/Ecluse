@@ -20,20 +20,20 @@ parseHttpDate raw = parseTimeM True defaultTimeLocale "%a, %d %b %Y %H:%M:%S %Z"
 -- | Read all RFC 9110 HTTP-date forms, resolving two-digit years against the supplied current time.
 parseHttpDateAt :: UTCTime -> Text -> Maybe UTCTime
 parseHttpDateAt now raw = do
-    guard (T.length raw <= 33)
+    guard (T.compareLength raw 33 /= GT)
     modern <|> obsolete <|> asctime
   where
     modern = do
-        guard (T.length raw == 29)
+        guard (T.compareLength raw 29 == EQ)
         parseHttpDate raw >>= exact "%a, %d %b %Y %H:%M:%S GMT" raw
     asctime = do
-        guard (T.length raw == 24)
+        guard (T.compareLength raw 24 == EQ)
         stamp <- parseDate "%a %b %e %H:%M:%S %Y" raw
         exact "%a %b %e %H:%M:%S %Y" raw stamp <|> exact "%a %b %d %H:%M:%S %Y" raw stamp
     obsolete = do
         [weekday, date, clock, "GMT"] <- pure (T.words raw)
         [day, month, shortYear] <- pure (T.splitOn "-" date)
-        guard (T.length shortYear == 2)
+        guard (T.compareLength shortYear 2 == EQ)
         year <- readDecimalText shortYear
         let latestYear = limitYear - (limitYear - year) `mod` 100
             dated fullYear = T.unwords [weekday, day <> "-" <> month <> "-" <> show fullYear, clock, "GMT"]

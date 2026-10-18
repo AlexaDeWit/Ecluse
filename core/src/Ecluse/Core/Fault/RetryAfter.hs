@@ -7,6 +7,7 @@ module Ecluse.Core.Fault.RetryAfter (
     parseRetryAfter,
 ) where
 
+import Data.ByteString qualified as BS
 import Data.Char (isDigit)
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime)
@@ -32,6 +33,6 @@ cappedDecimal cap raw = do
     if T.null digits
         then pure 0
         else
-            if T.length digits > T.length (show cap)
+            if T.compareLength digits (BS.length (show cap)) == GT
                 then pure (toInteger cap)
                 else min (toInteger cap) <$> readDecimalText digits
