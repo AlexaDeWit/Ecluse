@@ -26,17 +26,17 @@ data Attempt = Unstarted | Pending | Answered
 -- | Keep response ownership in the continuation. Report its headers before reading its body.
 observeExchange :: (ExchangeOutcome -> IO ()) -> Request -> (Request -> (Status -> IO ()) -> IO a) -> IO a
 observeExchange record request action = Exception.mask $ \restore -> do
-    state <- newIORef Unstarted
+    attemptPhase <- newIORef Unstarted
     let settle outcome = Exception.mask_ $ do
-            previous <- atomicModifyIORef' state (Answered,)
+            previous <- atomicModifyIORef' attemptPhase (Answered,)
             unless (previous == Answered) (record outcome)
         starting = Exception.mask_ $ do
-            previous <- atomicModifyIORef' state (Pending,)
+            previous <- atomicModifyIORef' attemptPhase (Pending,)
             when (previous == Pending) (record TransportFailure)
         observed = request{requestBody = RequestBodyIO (starting $> requestBody request)}
         headers = settle . ResponseStatus . statusCode
         failed (fault :: Exception.SomeException) = do
-            current <- readIORef state
+            current <- readIORef attemptPhase
             case (Exception.fromException fault :: Maybe Exception.SomeAsyncException, Exception.fromException fault :: Maybe HttpException) of
                 (Just _, _) -> when (current == Pending) (settle Cancelled)
                 (_, Just _) -> settle TransportFailure

@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Positive retry hints, rounding, and caller-supplied bounds.
 module Ecluse.Core.Fault.RetryAfterSpec (spec) where
 
 import Data.ByteString qualified as BS

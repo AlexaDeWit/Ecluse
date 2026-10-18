@@ -60,10 +60,10 @@ publicRetryAfter backoff authority = do
     now <- pbClock backoff
     hosts <- readTVarIO (pbHosts backoff)
     pure $
-        Map.lookup authority hosts >>= \state -> case Breaker.breakerPhase (hsBreaker state) of
+        Map.lookup authority hosts >>= \hostState -> case Breaker.breakerPhase (hsBreaker hostState) of
             Closed{} -> Nothing
             RecoveryReady -> Nothing
-            _ -> Just (remainingDelay (pbPolicy backoff) now (hsBreaker state))
+            _ -> Just (remainingDelay (pbPolicy backoff) now (hsBreaker hostState))
 
 -- | Share one handle across all public readers. Only pass authorities approved by the public egress policy.
 data PublicBackoff = PublicBackoff
@@ -128,12 +128,12 @@ initialHost policy = HostState Breaker.initialBreaker (bpFloor policy)
 claim :: PublicBackoff -> HostPort -> UTCTime -> STM (Either RetryAfter PublicAttempt)
 claim backoff authority now = do
     hosts <- readTVar (pbHosts backoff)
-    let state = Map.findWithDefault (initialHost (pbPolicy backoff)) authority hosts
-        (ticket, breaker) = Breaker.admit now (hsBreaker state)
+    let hostState = Map.findWithDefault (initialHost (pbPolicy backoff)) authority hosts
+        (ticket, breaker) = Breaker.admit now (hsBreaker hostState)
     case ticket of
-        Nothing -> pure (Left (remainingDelay (pbPolicy backoff) now (hsBreaker state)))
+        Nothing -> pure (Left (remainingDelay (pbPolicy backoff) now (hsBreaker hostState)))
         Just owned -> do
-            writeTVar (pbHosts backoff) (Map.insert authority state{hsBreaker = breaker} hosts)
+            writeTVar (pbHosts backoff) (Map.insert authority hostState{hsBreaker = breaker} hosts)
             finished <- newTVar False
             pure (Right (PublicAttempt backoff authority owned finished))
 
@@ -143,7 +143,7 @@ remainingDelay policy now breaker = case Breaker.breakerPhase breaker of
     _ -> bpProbeHint policy
 
 releaseAttempt :: PublicAttempt -> IO ()
-releaseAttempt attempt = void (atomically (settle attempt (\state -> state{hsBreaker = Breaker.release (paTicket attempt) (hsBreaker state)})))
+releaseAttempt attempt = void (atomically (settle attempt (\hostState -> hostState{hsBreaker = Breaker.release (paTicket attempt) (hsBreaker hostState)})))
 
 settle :: PublicAttempt -> (HostState -> HostState) -> STM (Maybe CooldownEvent)
 settle attempt step = do
@@ -154,18 +154,18 @@ settle attempt step = do
             let hostsVar = pbHosts (paBackoff attempt)
             hosts <- readTVar hostsVar
             let old = Map.lookup (paAuthority attempt) hosts
-                event = old >>= \state -> transition (hsBreaker state) (hsBreaker (step state))
+                event = old >>= \hostState -> transition (hsBreaker hostState) (hsBreaker (step hostState))
             writeTVar hostsVar (Map.adjust step (paAuthority attempt) hosts)
             writeTVar (paFinished attempt) True
             pure event
 
 acceptResponse :: BackoffPolicy -> Breaker.Attempt -> HostState -> HostState
-acceptResponse policy ticket state = case Breaker.breakerPhase (hsBreaker state) of
+acceptResponse policy ticket hostState = case Breaker.breakerPhase (hsBreaker hostState) of
     HalfOpen
-        | recovered /= hsBreaker state -> state{hsBreaker = recovered, hsCeiling = bpFloor policy}
-    _ -> state
+        | recovered /= hsBreaker hostState -> hostState{hsBreaker = recovered, hsCeiling = bpFloor policy}
+    _ -> hostState
   where
-    recovered = Breaker.recordSuccess ticket (hsBreaker state)
+    recovered = Breaker.recordSuccess ticket (hsBreaker hostState)
 
 responseDelay :: PublicAttempt -> Maybe RetryAfter -> IO RetryAfter
 responseDelay _ (Just hint) | hint > RetryAfter 0 = pure hint
@@ -179,18 +179,18 @@ responseDelay attempt _ = do
     policy = pbPolicy backoff
 
 throttleResponse :: BackoffPolicy -> Breaker.Attempt -> UTCTime -> RetryAfter -> HostState -> HostState
-throttleResponse policy ticket now (RetryAfter seconds) state
-    | next == old = state
-    | otherwise = state{hsBreaker = next, hsCeiling = nextCeiling}
+throttleResponse policy ticket now (RetryAfter seconds) hostState
+    | next == old = hostState
+    | otherwise = hostState{hsBreaker = next, hsCeiling = nextCeiling}
   where
-    old = hsBreaker state
+    old = hsBreaker hostState
     duration = case Breaker.breakerPhase old of
         Open until' -> max (fromIntegral seconds) (diffUTCTime until' now)
         _ -> fromIntegral seconds
     next = Breaker.recordFailure 1 duration now ticket old
     nextCeiling = case Breaker.breakerPhase old of
-        Open{} -> hsCeiling state
-        _ -> growFallback policy (hsCeiling state)
+        Open{} -> hsCeiling hostState
+        _ -> growFallback policy (hsCeiling hostState)
 
 -- Integer arithmetic prevents caller-supplied bounds from overflowing before the cap applies.
 growFallback :: BackoffPolicy -> RetryAfter -> RetryAfter

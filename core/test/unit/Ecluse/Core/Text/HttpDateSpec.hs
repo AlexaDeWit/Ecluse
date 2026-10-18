@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | HTTP date formats, rolling years, and provenance compatibility.
 module Ecluse.Core.Text.HttpDateSpec (spec) where
 
 import Data.Time (UTCTime (..), addUTCTime, defaultTimeLocale, formatTime, fromGregorian)
