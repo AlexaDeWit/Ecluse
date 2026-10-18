@@ -253,6 +253,9 @@ and `advisories.epssFeedUrl`. To point one run at a mirror or a moved feed, set
 `ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL` or `ECLUSE_ADVISORIES__EPSS_FEED_URL` in its environment.
 Neither URL may carry a credential ([Secrets](@/docs/configuration.md#secrets)).
 
+Pilot uses `HTTP_PROXY` and `HTTPS_PROXY` for OSV and EPSS downloads.
+A `socks5://` or `socks5h://` URL in `HTTPS_PROXY` or `https_proxy` makes HTTPS feed downloads connect directly.
+
 The loaded configuration decides what a failed EPSS feed means, as it does for the scheduled loop
 ([When the EPSS feed fails](@/docs/configuration.md#when-the-epss-feed-fails)). An ecosystem the
 configuration does not mount counts as one with an EPSS-reading rule, because a compile run ahead of
