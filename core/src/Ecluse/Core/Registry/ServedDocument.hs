@@ -57,13 +57,13 @@ assembleAcross ::
     MergePlan ->
     Maybe CachedDoc ->
     CachedDoc
-assembleAcross (inject, project) empty assemble mountBase bySource plan base =
+assembleAcross (inject, project) emptySource assemble mountBase bySource plan base =
     inject
         ( assemble
             mountBase
             (Map.mapMaybe (traverse project) bySource)
             plan
-            (fromMaybe empty (project =<< base))
+            (fromMaybe emptySource (project =<< base))
         )
 
 -- | Encode a served document to its compact wire bytes, an empty object for a foreign one.

@@ -62,13 +62,13 @@ assemblyBoundarySpec = describe "cached assembly boundary" $
             source = jsonSnapshot raw
             foreignDoc = fst pypiSimpleCached (simpleDocument mempty [])
             sources = Map.fromList [(0, fst npmCached <$> source), (1, foreignDoc <$ source)]
-            empty = Object mempty
+            emptySource = Object mempty
             plan = planOver mempty mempty
             assemble expectedBase _ actualSources _ actualBase =
                 String (if actualSources == Map.singleton 0 source && actualBase == expectedBase then "matched" else "mismatch")
-            run expectedBase = assembleAcross npmCached empty (assemble expectedBase) "mount" sources plan
+            run expectedBase = assembleAcross npmCached emptySource (assemble expectedBase) "mount" sources plan
         for_ [Nothing, Just foreignDoc] $ \base ->
-            snd npmCached (run empty base) `shouldBe` Just (String "matched")
+            snd npmCached (run emptySource base) `shouldBe` Just (String "matched")
         snd npmCached (run (String "base") (Just (fst npmCached (String "base")))) `shouldBe` Just (String "matched")
 
 droppedArtifactSpec :: Spec
