@@ -988,6 +988,7 @@ library ecluse-runtime-test-support
     , ecluse:ecluse-test-contracts
     , amazonka          ^>=2.0
     , amazonka-codeartifact ^>=2.0
+    , bytestring        ^>=0.12
     , directory         ^>=1.3
     , microlens         ^>=0.4.13
     , hs-opentelemetry-api  ^>=1.0
