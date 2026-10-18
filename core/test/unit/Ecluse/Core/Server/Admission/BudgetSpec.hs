@@ -10,16 +10,19 @@ import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
+import UnliftIO.Exception (evaluate, impureThrow)
 
 import Ecluse.Core.Server.Admission.Budget (
     EntryGate (..),
     GrowthGate (..),
     MeterView (..),
     entryDecision,
+    entryReady,
     growthDecision,
     roundUpToStep,
     scaleCharge,
  )
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 spec :: Spec
 spec = describe "Ecluse.Core.Server.Admission.Budget" $ do
@@ -62,6 +65,15 @@ entrySpec = describe "entryDecision" $ do
         entryDecision (view 10 0) 2 4 1 `shouldBe` EntryQueue
         entryDecision (view 10 10) 4 4 1 `shouldBe` EntryRefuse
 
+    it "rejects a step that does not fit without evaluating paused priority" $ do
+        let full = (view 10 10){mvOldestWaiter = unevaluatedPriority}
+        entryReady full 1 `shouldBe` False
+        entryDecision full 0 4 1 `shouldBe` EntryQueue
+
+    it "evaluates paused priority before admitting a fitting entry" $
+        evaluate (entryReady (view 10 0){mvOldestWaiter = unevaluatedPriority} 1)
+            `shouldThrow` (== TestContractEscape "paused priority evaluated")
+
     it "never admits past the budget (property)" $ hedgehog $ do
         budget <- forAll (Gen.int (Range.linear 0 1000))
         charged <- forAll (Gen.int (Range.linear 0 2000))
@@ -90,6 +102,17 @@ growthSpec = describe "growthDecision" $ do
     it "makes everyone else wait while the token is held" $
         growthDecision (view 10 10){mvToken = Just 1, mvOldestWaiter = Just 0} (serving [0]) 5 `shouldBe` GrowWait
 
+    it "decides fitting and held-token growth without evaluating paused priority" $ do
+        let fitting = (view 10 5){mvOldestWaiter = unevaluatedPriority}
+            held = (view 10 10){mvToken = Just 1, mvOldestWaiter = unevaluatedPriority}
+        growthDecision fitting (serving [7]) 5 `shouldBe` GrowWithin
+        growthDecision held (serving [1, 9]) 5 `shouldBe` GrowOnToken
+        growthDecision held (serving [0]) 5 `shouldBe` GrowWait
+
+    it "evaluates paused priority before granting a free overdraw token" $
+        evaluate (growthDecision (view 10 10){mvOldestWaiter = unevaluatedPriority} (serving [1]) 5)
+            `shouldThrow` (== TestContractEscape "paused priority evaluated")
+
     it "lets exactly one of a full meter's paused tickets take a free token (property)" $ hedgehog $ do
         tickets <- forAll (Gen.list (Range.linear 1 20) (Gen.int (Range.linear 0 1000)))
         want <- forAll (Gen.int (Range.linear 1 100))
@@ -102,3 +125,6 @@ growthSpec = describe "growthDecision" $ do
 
 view :: Int -> Int -> MeterView
 view budget charged = MeterView{mvBudget = budget, mvCharged = charged, mvToken = Nothing, mvOldestWaiter = Nothing}
+
+unevaluatedPriority :: Maybe Int
+unevaluatedPriority = impureThrow (TestContractEscape "paused priority evaluated")

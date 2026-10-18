@@ -2,9 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The arithmetic of the metadata memory budget: what a byte count costs, how many steps cover a
-shortfall, and which request the meter lets move. "Ecluse.Core.Server.Admission.Meter" applies
-these decisions inside its transactions.
+{- | Memory charge arithmetic and admission decisions for
+"Ecluse.Core.Server.Admission.Meter" transactions.
 -}
 module Ecluse.Core.Server.Admission.Budget (
     -- * Charges
@@ -42,8 +41,8 @@ data MeterView = MeterView
     , mvCharged :: Int
     , mvToken :: Maybe Int
     -- ^ The ticket that holds the overdraw token, if any.
-    , mvOldestWaiter :: Maybe Int
-    -- ^ The oldest ticket paused on a growth step or waiting on the work of one, if any.
+    , mvOldestWaiter :: ~(Maybe Int)
+    -- ^ The oldest paused ticket, including shared-work priority. Lazy so unrelated gates skip the fold.
     }
     deriving stock (Eq, Show)
 
