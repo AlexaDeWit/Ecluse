@@ -7,6 +7,7 @@ dist-coverage/
 _site/
 # The generated fragments and diagrams for the Zola pages, and Zola's own output.
 /web/generated/
+/web/static/diagrams/
 /web/public/
 # Zola's highlighter drops its theme stylesheet here on every build. The site
 # colours code from sass/_syntax.scss and never links this file.

@@ -170,5 +170,6 @@ DCO sign-off. The [Code of Conduct](CODE_OF_CONDUCT.md) governs participation, a
 | `config/`   | The embedded defaults (`default.yaml`), the schema guidepost operator configs override                                    |
 | `runbooks/` | Maintainer procedures run step by step (releases)                                                                        |
 | `docs/`     | Architecture and design documents                                                                                        |
+| `threat-modelling/` | The Saerskriven model that owns system diagrams, threats, controls, and assumptions. The site build generates its views on demand. |
 | `web/`      | The documentation site (Zola): content, templates, and styles. `web/content/docs/` holds the operator manual              |
 | `flake.nix` | Nix dev shell (GHC 9.10, cabal, HLS, ghcid) and the package build (`nix build`) plus hermetic checks (`nix flake check`) |

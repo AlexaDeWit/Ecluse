@@ -86,35 +86,9 @@ distinct from HTTP readiness. `/livez` reports it as a pass-or-fail status plus 
 the last successful poll, so an orchestrator can judge staleness itself. A process that runs no
 worker reports no poll and stays live on its listener alone.
 
-```mermaid
-sequenceDiagram
-    participant W as Mirror worker
-    participant Q as Queue
-    participant P as Public source
-    participant S as Durable project state
-    participant T as Mirror target
-    Q->>W: Version trigger
-    W->>T: Initial inventory
-    W->>S: Expected inventory
-    alt Complete current proof
-        W->>Q: Acknowledge
-    else Missing files
-        W->>P: Resolve and admit source inventory
-        W->>S: Conditionally retain expected files and read data
-        loop Each missing distribution
-            W->>P: Fetch verified bytes once
-            W->>S: Retain verified identity and declared companion
-            W->>T: Native upload
-        end
-        W->>T: Fresh full inventory
-        W->>S: Latest expected set and companion proof
-        alt Complete
-            W->>Q: Acknowledge
-        else Incomplete or failed
-            W-->>Q: Retry or terminal outcome
-        end
-    end
-```
+[Mirror trigger, verification, upload and completion proof](https://ecluse-proxy.com/docs/threat-model/#mirror-writes-and-completion)
+
+[Managed PyPI inventory and retained companions](https://ecluse-proxy.com/docs/threat-model/#pypi-inventory-and-companions)
 
 ### Holding a receipt for the life of its job
 

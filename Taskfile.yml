@@ -524,7 +524,6 @@ tasks:
     cmds:
       - task: site:api
       - task: site:generated
-      - task: site:diagrams
       - task: site:zola
       - task: site:assemble
       - pagefind --site _site
@@ -535,7 +534,6 @@ tasks:
     desc: Build the site over placeholder fragments, with no Haskell build
     cmds:
       - task: site:generated-stub
-      - task: site:diagrams
       - task: site:zola
   # `--haddock-html-location` sends every dependency identifier to Hackage as
   # Haddock writes it, so no build-host path reaches the published tree.
@@ -564,21 +562,20 @@ tasks:
   site:threat-model:
     internal: true
     cmds:
-      - mkdir -p web/generated/diagrams
+      - task: diagrams
+      - mkdir -p web/generated
       - saer render threat-modelling/ecluse.yaml --format md --styled --no-title --heading-level 3 --out web/generated/threat-register.md
-      - saer render threat-modelling/ecluse.yaml --format svg --out web/generated/diagrams/threat-model.svg
-  # Do not render theme.d2, which only defines imported classes.
-  # Sketch mode matches the site artwork.
-  site:diagrams:
-    internal: true
+  diagrams:
+    desc: Render the shared system diagrams from the Saerskriven threat model
     cmds:
       - |
-        mkdir -p web/generated/diagrams
-        for f in web/diagrams/*.d2; do
-          [ -e "$f" ] || continue
-          case "$f" in */theme.d2) continue ;; esac
-          d2 --no-xml-tag --omit-version --pad 16 --scale 1 --sketch \
-            "$f" "web/generated/diagrams/$(basename "$f" .d2).svg" || exit 1
+        rm -rf web/static/diagrams
+        mkdir -p web/static/diagrams
+        for diagram in registry-topology metadata-admission artifact-downloads \
+          first-party-publication mirror-completion pypi-inventory \
+          advisory-publication advisory-distribution revocation-cleanup; do
+          saer render threat-modelling/ecluse.yaml --format svg --diagram "$diagram" \
+            --out "web/static/diagrams/$diagram.svg" || exit 1
         done
   # Zola refuses a non-empty output directory and never prunes a stale file.
   site:zola:
