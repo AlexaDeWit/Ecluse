@@ -27,14 +27,12 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Internal (
 import Amazonka qualified as AWS
 import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
-import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
-import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
 import Lens.Micro ((^.))
-import Network.HTTP.Client (newManager)
 import UnliftIO (tryAny)
 
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
+import Ecluse.Core.Registry.Exchange (newSingleAttemptManager)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict,
     DeleteGuard,
@@ -161,13 +159,13 @@ reused connection, so an attempt the SDK did not make is not made below it eithe
 newMaintenanceEnv :: CodeArtifactStore -> IO AWS.Env
 newMaintenanceEnv store = do
     env <- newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
-    manager <- newManager (singleAttemptSettings typedTlsManagerSettings)
+    manager <- newSingleAttemptManager
     pure env{AWS.manager = manager}
 
 -- | Every call sent over one env, with the AWS error folded into a 'StoreFault'.
 controlPlaneFor :: AWS.Env -> IO ControlPlane
 controlPlaneFor env = do
-    deletionManager <- newManager (singleAttemptSettings typedTlsManagerSettings)
+    deletionManager <- newSingleAttemptManager
     pure
         ControlPlane
             { cpRead = readPlaneFor env

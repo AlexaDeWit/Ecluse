@@ -12,7 +12,7 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Network.HTTP.Types
 import Network.HTTP.Types.Header (hETag, hIfMatch, hIfNoneMatch)
-import Network.Wai (Application, Request, queryString, requestHeaders, requestMethod, responseLBS, responseRaw, strictRequestBody)
+import Network.Wai (Application, Request, queryString, requestHeaders, requestMethod, responseLBS, strictRequestBody)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
@@ -22,7 +22,7 @@ import Ecluse.Core.Osv.Compile (OsvCandidate, candidatePath)
 import Ecluse.Core.Osv.Publication
 import Ecluse.Runtime.Aws.S3.Conditional (maxCappedResponseBytes)
 import Ecluse.Runtime.Pilot.Export
-import Ecluse.Runtime.Test.S3 (emptyListing, listingHolding, reply, withS3, xmlError)
+import Ecluse.Runtime.Test.S3 (emptyListing, listingHolding, lostResponse, reply, withS3, xmlError)
 import Ecluse.Test.Log (runQuietKatip)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip)
 import Ecluse.Test.OsvDb (withCompiledCandidate)
@@ -202,10 +202,6 @@ fakeS3 fake hooks request respond = do
     store puts seen = do
         let stored = Stored ("\"revision-" <> show puts <> "\"") (seenBody seen) [(name, value) | (name, value) <- seenHeaders seen, "x-amz-meta-" `BS.isPrefixOf` CI.foldedCase name]
         stored <$ writeIORef (fakeObject fake) (Just stored)
-
--- Close the connection without answering, as a lost acknowledgement does.
-lostResponse :: Application
-lostResponse _ respond = respond (responseRaw (\_ _ -> pass) (responseLBS status500 [] "raw response required"))
 
 observe :: Request -> IO Seen
 observe request = Seen (requestMethod request) (queryString request) (requestHeaders request) <$> strictRequestBody request

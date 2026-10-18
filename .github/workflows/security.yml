@@ -36,7 +36,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up toolchain
-        uses: ./.github/actions/setup-toolchain
+        uses: $/.github/actions/setup-toolchain
 
       # Findings are report-only, so only a scanner error fails here.
       - name: Scan the freezes (osv-scanner)
