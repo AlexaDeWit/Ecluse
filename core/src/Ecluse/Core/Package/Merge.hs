@@ -153,8 +153,8 @@ keepBetterOf (Just x) (Just y) = Just (keepBetter x y)
 keepBetterOf x y = x <|> y
 
 {- $accumulator
-The merge folds each input's 'contribute' into the lawful 'Merge' 'Monoid', which 'planFrom' then
-projects to a 'MergePlan'. 'Merge' is opaque, so a 'SourceId' always names a real input position.
+Combine 'contribute' values with the lawful 'Merge' 'Monoid', then project with 'planFrom'.
+'mergePackuments' assigns final source positions directly, with the same contribution and union rules.
 -}
 
 {- | The monoidal accumulator the merge folds into. It leaves every version key's candidates
@@ -181,21 +181,15 @@ data Merge = Merge
 -- Source IDs follow input positions, so regrouping preserves the result but permutation changes labels.
 instance Semigroup Merge where
     a <> b =
-        Merge
-            { mergeCount = mergeCount a + mergeCount b
-            , mergeVersions =
-                Map.unionWith Set.union (mergeVersions a) (shiftVersions (mergeVersions b))
-            , mergeDistTags =
-                Map.unionWith keepBetter (mergeDistTags a) (shiftRanked <$> mergeDistTags b)
-            , mergePublicLatest =
-                keepBetterOf (mergePublicLatest a) (shiftRanked <$> mergePublicLatest b)
-            , mergeName = mergeName a <|> mergeName b
-            }
+        unionMerge
+            a
+            b
+                { mergeVersions = fmap (Set.map shiftCandidate) (mergeVersions b)
+                , mergeDistTags = shiftRanked <$> mergeDistTags b
+                , mergePublicLatest = shiftRanked <$> mergePublicLatest b
+                }
       where
-        -- Re-index the right operand's SourceIds past the left operand's inputs, so a fold of
-        -- single-input contributions lands each at its list index.
         offset = mergeCount a
-        shiftVersions = fmap (Set.map shiftCandidate)
         shiftCandidate c = c{candSourceId = candSourceId c + offset}
         shiftRanked (Ranked (prov, sid) v) = Ranked (prov, sid + offset) v
 
@@ -209,11 +203,23 @@ instance Monoid Merge where
             , mergeName = Nothing
             }
 
-{- | One input's contribution to the accumulator, at local 'SourceId' @0@. The 'Semigroup' offset
-re-indexes it to the input's position when 'mergePackuments' folds over the inputs.
--}
+-- The operands must already have disjoint source positions.
+unionMerge :: Merge -> Merge -> Merge
+unionMerge a b =
+    Merge
+        { mergeCount = mergeCount a + mergeCount b
+        , mergeVersions = Map.unionWith Set.union (mergeVersions a) (mergeVersions b)
+        , mergeDistTags = Map.unionWith keepBetter (mergeDistTags a) (mergeDistTags b)
+        , mergePublicLatest = keepBetterOf (mergePublicLatest a) (mergePublicLatest b)
+        , mergeName = mergeName a <|> mergeName b
+        }
+
+-- | One input at local 'SourceId' @0@. Combining accumulators shifts it to its input position.
 contribute :: Provenance -> Snapshot PackageInfo -> Merge
-contribute prov (Snapshot digest info) =
+contribute = contributeAt 0
+
+contributeAt :: SourceId -> Provenance -> Snapshot PackageInfo -> Merge
+contributeAt sourceId prov (Snapshot digest info) =
     Merge
         { mergeCount = 1
         , mergeVersions = Map.map candidateFor (infoVersions info)
@@ -222,7 +228,7 @@ contribute prov (Snapshot digest info) =
         , mergeName = Just (infoName info)
         }
   where
-    here = (prov, 0)
+    here = (prov, sourceId)
     publicLatest = case prov of
         GatedSource -> Map.lookup "latest" (infoDistTags info)
         TrustedSource -> Nothing
@@ -230,7 +236,7 @@ contribute prov (Snapshot digest info) =
         Set.singleton
             Candidate
                 { candProvenance = prov
-                , candSourceId = 0
+                , candSourceId = sourceId
                 , candFingerprint = fingerprint details
                 , candDetails = details
                 , candSnapshot = digest
@@ -240,8 +246,10 @@ contribute prov (Snapshot digest info) =
 Empty input yields 'Nothing'.
 -}
 mergePackuments :: [(Provenance, Snapshot PackageInfo)] -> Maybe MergePlan
-mergePackuments [] = Nothing
-mergePackuments inputs = planFrom (foldMap (uncurry contribute) inputs)
+mergePackuments = planFrom . foldl' appendInput mempty
+  where
+    appendInput acc (prov, snapshot) =
+        unionMerge acc (contributeAt (mergeCount acc) prov snapshot)
 
 {- | Project the resolved 'MergePlan' from a folded 'Merge'. It resolves each version key to its
 precedence winner. 'Nothing' only for 'mempty', the empty merge, which has nothing to serve.

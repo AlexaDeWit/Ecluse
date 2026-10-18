@@ -24,12 +24,14 @@ import UnliftIO (evaluate)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package
+import Ecluse.Core.Package.Entry (AdmittedEntry (..), EntryKey (..))
 import Ecluse.Core.Package.Hash (canonicalHashValue)
 import Ecluse.Core.Package.Integrity (VersionIntegrity (MeetsFloor), assertedAlg, classifyDigests)
 import Ecluse.Core.Package.Merge hiding (contribute, mergePackuments)
 import Ecluse.Core.Package.Merge qualified as Merge
 
 import Ecluse.Core.Registry.WireSupport (Projection (Projected))
+import Ecluse.Core.Snapshot (Snapshot (..))
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, sriSha256Of, sriSha512Of, thingName, unsafeHash, validSha256, validSha256Sri)
 import Ecluse.Test.Package qualified as Package
@@ -37,7 +39,7 @@ import Ecluse.Test.Registry.Npm qualified as NpmFixture
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
-import Ecluse.Test.Snapshot (syntheticSnapshot)
+import Ecluse.Test.Snapshot (digestOf, syntheticSnapshot)
 
 mergePackuments :: [(Provenance, PackageInfo)] -> Maybe MergePlan
 mergePackuments = Merge.mergePackuments . map (second syntheticSnapshot)
@@ -145,15 +147,12 @@ sha256Def = validSha256Of "def"
 sriPair :: Text -> (Text, Maybe HashAlg, Text)
 sriPair s = ("thing.tgz", sriAlgorithm s, sriBody s)
 
--- The surviving version keys (the merged union), sorted.
 survivorKeys :: MergePlan -> [Text]
 survivorKeys = sort . Map.keys . mpSurvivors
 
--- The 'SourceId' that won a given surviving key, if it survived.
 winnerOf :: Text -> MergePlan -> Maybe SourceId
 winnerOf key = Map.lookup key . mpSurvivors
 
--- The resolved @latest@ tag's raw text, if present.
 latestKey :: MergePlan -> Maybe Text
 latestKey p = renderVersion <$> Map.lookup "latest" (mpDistTags p)
 
@@ -168,11 +167,10 @@ winnerProvenances inputs plan =
 genDigest :: Gen Text
 genDigest = validSriOf <$> Gen.text (Range.singleton 6) Gen.alphaNum
 
--- | An arbitrary 40-hex-character SHA-1 shasum (npm's @dist.shasum@ wire form).
+-- npm's shasum wire form requires 40 hexadecimal characters.
 genSha1 :: Gen Text
 genSha1 = Gen.text (Range.singleton 40) Gen.hexit
 
--- | A simple numeric semver so generated versions always parse and order.
 genVersionStr :: Gen Text
 genVersionStr = do
     a <- Gen.int (Range.linear 0 9)
@@ -192,9 +190,7 @@ genSource = do
 genSources :: Gen [(Provenance, PackageInfo)]
 genSources = Gen.list (Range.linear 1 4) genSource
 
-{- | An arbitrary 'Merge' accumulator, a 'foldMap' of 'contribute' over a small source
-list. The empty list yields 'mempty', so the laws are tested over the identity too.
--}
+-- Empty source lists include the identity in the law checks.
 genMerge :: Gen Merge
 genMerge = foldMap (uncurry contribute) <$> Gen.list (Range.linear 0 3) genSource
 
@@ -396,6 +392,29 @@ spec = do
             (survivorKeys <$> mergePackuments [(TrustedSource, trusted), (GatedSource, gated)])
                 `shouldBe` Just ["1.0.0", "2.0.0"]
 
+        it "keeps source positions and exact artifact coordinates after an empty source" $ do
+            let digest = digestOf "trusted source bytes"
+                firstFile = artifactWith [unsafeHash SRI sriSame]
+                secondFile = wheelWith "thing.whl" [unsafeHash SRI sriSame]
+                trusted =
+                    withArtifacts
+                        (firstFile{artEntryKey = ObjectEntry "1.0.0"} :| [secondFile{artEntryKey = ArrayEntry 7}])
+                        (packument [("1.0.0", sriSame)])
+                inputs =
+                    [ (GatedSource, syntheticSnapshot (packument []))
+                    , (GatedSource, syntheticSnapshot (packument [("1.0.0", sriSame)]))
+                    , (TrustedSource, Snapshot digest trusted)
+                    , (TrustedSource, syntheticSnapshot trusted)
+                    ]
+                plan = Merge.mergePackuments inputs
+            (mpSurvivors <$> plan) `shouldBe` Just (Map.singleton "1.0.0" 2)
+            (mpArtifacts <$> plan)
+                `shouldBe` Just
+                    ( Map.singleton
+                        "1.0.0"
+                        (AdmittedEntry digest (ObjectEntry "1.0.0") "thing.tgz" :| [AdmittedEntry digest (ArrayEntry 7) "thing.whl"])
+                    )
+
         it "reports no divergence when a collision's integrity agrees" $ do
             let trusted = packument [("1.0.0", sriSame)]
                 gated = packument [("1.0.0", sriSame)]
@@ -452,13 +471,14 @@ spec = do
                 other -> expectationFailure ("expected exactly one divergence, got " <> show other)
 
     describe "copies whose digests are spelled alike" $
-        it "cost the same merge whether a file carries one digest or sixteen" $ do
-            let alike digests = mergeAllocation [(TrustedSource, agreeingSource digests), (GatedSource, agreeingSource digests)]
-            oneDigest <- alike 1
-            sixteenDigests <- alike 16
-            -- A fingerprint entry is over 100 bytes. The allowance is 32 for each added digest: fifteen
-            -- in each of two files, in each of two copies.
-            sixteenDigests `shouldSatisfy` (<= oneDigest + 32 * 15 * 2 * 2 * agreeingVersions)
+        forM_ [2, 3] $ \sourceCount ->
+            it (show sourceCount <> " copies do not build fingerprints as digest counts grow") $ do
+                let provenances = TrustedSource : replicate (sourceCount - 1) GatedSource
+                    alike digests = mergeAllocation [(prov, agreeingSource digests) | prov <- provenances]
+                oneDigest <- alike 1
+                sixteenDigests <- alike 16
+                -- A fingerprint entry exceeds 100 bytes. Allow 32 per extra digest in each file and copy.
+                sixteenDigests `shouldSatisfy` (<= oneDigest + 32 * 15 * 2 * fromIntegral sourceCount * agreeingVersions)
 
     describe "a version only one source carries" $
         it "is decided before anything is built for a comparison" $ do
@@ -1007,7 +1027,16 @@ spec = do
 
         it "mergePackuments is planFrom . foldMap contribute" $
             hedgehog $ do
-                sources <- forAll genSources
+                sources <- forAll (Gen.list (Range.linear 0 5) genSource)
+                mergePackuments sources === planFrom (foldMap (uncurry contribute) sources)
+
+        it "the direct path agrees with regrouped contested sources, including missing digests" $
+            hedgehog $ do
+                sources <- forAll genContestedSources
+                splitAtSource <- forAll (Gen.int (Range.linear 0 (length sources)))
+                let (left, right) = splitAt splitAtSource sources
+                    folded = foldMap (uncurry contribute)
+                mergePackuments sources === planFrom (folded left <> folded right)
                 mergePackuments sources === planFrom (foldMap (uncurry contribute) sources)
 
     describe "the laws do not erode the trust hierarchy" $ do
