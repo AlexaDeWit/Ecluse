@@ -708,6 +708,10 @@ The cases assert client- and mirror-observable outcomes:
 - `pip` reports a yanked release and the reason for the yank when an exact pin installs it,
 - `pip` installs a wheel from a `pypi` mount in hash-checking mode, pinned to the sha256 the
   served Simple index advertised, so the installed bytes are the advertised ones,
+- `pip` installs and imports a release through its metadata companion, and refuses a companion
+  whose bytes miss the advertised digest,
+- each ecosystem fetches an artifact from the gzipping public upstream in identity coding, and a
+  client that accepts gzip receives the advertised bytes with no content coding,
 - the same admitted PyPI release serves its source distribution with the advertised sha256.
 
 The spec modules sit under `test/e2e/Ecluse/E2E/`, with one directory per ecosystem, so a module's
@@ -764,8 +768,13 @@ Each control rewrites the stub's configuration, reloads nginx, and returns once 
 that every worker of the old configuration has stopped accepting connections. It restores the
 routes the same way when its action ends. A case confirms a public outage through its own proxy
 before it relies on one: `npmPublicReachable` asks that proxy for a package that only the public
-upstream holds. The stub's access log records the route, method, status, and path of every request
-it finishes, and `stubReadsNow` reads it back, so a case can name the store that answered a client.
+upstream holds. The stub's access log records the route, method, status, path, response coding,
+and requested codings of every request it finishes. `stubReadsNow` reads it back, so a case can
+name the store that answered a client and the coding the proxy asked for.
+
+Both public routes gzip any response whose request permits gzip, as a public registry's CDN does.
+A proxy that relays those bytes to a client breaks the advertised digest, so every installation
+through a public route runs under that condition.
 
 `Ecluse.E2E.Npm.MirrorInstallE2ESpec` holds the install the mirror alone serves against a control.
 Its fixture graph is a root with a dependency that has a dependency of its own, a peer dependency,

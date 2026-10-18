@@ -12,7 +12,9 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
 import Ecluse.Test.Contract.Install
+import Ecluse.Test.Contract.Serving (ServingResponse (..))
 import Ecluse.Test.InstalledTree (snapshotTree)
+import Ecluse.Test.Package (hexSha256Of)
 
 spec :: Spec
 spec = describe "installation contract rejects broken observations" $ do
@@ -39,7 +41,29 @@ spec = describe "installation contract rejects broken observations" $ do
                 refusesObserved (driver (ExitFailure 1) (Nothing :: Maybe Text, tree) (Nothing, mempty)) `shouldThrow` anyException
     it "accepts refusal without an installation" $
         refusesObserved (driver (ExitFailure 1) False False)
+    describe "an artifact fetched from an upstream that gzips on request" $ do
+        it "accepts an identity fetch relayed uncoded with the advertised bytes" $
+            codedArtifactCase hexSha256Of coded
+        it "rejects an upstream fetch that permitted gzip" $
+            codedArtifactCase hexSha256Of coded{codedArtifactReads = [UpstreamRead (Just "gzip") (Just "gzip")]} `shouldThrow` anyException
+        it "rejects a relayed content coding" $
+            codedArtifactCase hexSha256Of coded{codedResponse = artifact{responseHeaders = [("Content-Encoding", "gzip")]}} `shouldThrow` anyException
+        it "rejects bytes that miss the advertised digest" $
+            codedArtifactCase hexSha256Of coded{codedResponse = artifact{responseBody = "coded bytes"}} `shouldThrow` anyException
+        it "rejects a fetch the upstream never saw" $
+            codedArtifactCase hexSha256Of coded{codedArtifactReads = []} `shouldThrow` anyException
+        it "rejects an upstream that never gzipped a read" $
+            codedArtifactCase hexSha256Of coded{codedRouteReads = [identityRead]} `shouldThrow` anyException
   where
+    identityRead = UpstreamRead (Just "identity") Nothing
+    artifact = ServingResponse 200 "artifact bytes" [] [] mempty
+    coded =
+        CodedArtifact
+            { codedDigest = hexSha256Of "artifact bytes"
+            , codedResponse = artifact
+            , codedArtifactReads = [identityRead]
+            , codedRouteReads = [UpstreamRead (Just "gzip") (Just "gzip"), identityRead]
+            }
     driver code actual expected =
         InstallDriver
             { installRun = pure (ClientResult "fake client" code "" "", actual)

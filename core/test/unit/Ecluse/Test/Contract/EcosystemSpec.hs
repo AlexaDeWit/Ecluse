@@ -52,7 +52,7 @@ spec = describe "canonical ecosystem composition" $ do
                     "example/client"
                     E2E
                     "example"
-                    [Case ("example/installation/" <> law) ["example/installation"] | law <- ["accepted-install", "default-denial", "artifact-integrity", "artifact-head"]]
+                    [Case ("example/installation/" <> law) ["example/installation"] | law <- ["accepted-install", "default-denial", "artifact-integrity", "artifact-head", "artifact-identity-coding"]]
                     ["read"]
                     ["client"]
                     ["registry"]

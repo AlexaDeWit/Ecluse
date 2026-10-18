@@ -6,6 +6,7 @@
 module Ecluse.E2E.Harness.Proxy (
     proxyStatus,
     proxyGet,
+    proxyGetCoded,
     proxyHead,
     proxyPut,
     shouldSucceedThroughProxy,
@@ -22,7 +23,7 @@ module Ecluse.E2E.Harness.Proxy (
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Network.HTTP.Client (
-    Request (method),
+    Request (decompress, method, requestHeaders),
     brConsume,
     httpLbs,
     parseRequest,
@@ -31,7 +32,8 @@ import Network.HTTP.Client (
     responseStatus,
     withResponse,
  )
-import Network.HTTP.Types (statusCode)
+import Network.HTTP.Types (Method, statusCode)
+import Network.HTTP.Types.Header (hAcceptEncoding)
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec (expectationFailure)
 
@@ -54,9 +56,17 @@ proxyGet e2e path = do
 
 -- | Observe the raw HEAD response, including any forbidden body bytes.
 proxyHead :: E2E -> Text -> IO Serving.ServingResponse
-proxyHead e2e path = do
+proxyHead = proxyRaw "HEAD"
+
+-- | Observe the raw GET response of a client that accepts gzip, with any content coding left on the body.
+proxyGetCoded :: E2E -> Text -> IO Serving.ServingResponse
+proxyGetCoded = proxyRaw "GET"
+
+proxyRaw :: Method -> E2E -> Text -> IO Serving.ServingResponse
+proxyRaw verb e2e path = do
     base <- parseRequest (toString (e2eBaseUrl e2e <> path))
-    withResponse base{method = "HEAD"} (e2eManager e2e) $ \resp -> do
+    let request = base{method = verb, decompress = const False, requestHeaders = [(hAcceptEncoding, "gzip")]}
+    withResponse request (e2eManager e2e) $ \resp -> do
         chunks <- brConsume (responseBody resp)
         pure
             Serving.ServingResponse

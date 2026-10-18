@@ -86,9 +86,11 @@ stubConfig fault =
         ["server_names_hash_bucket_size 128;", readLogFormat]
             <> concatMap (serverBlock fault) universe
 
--- One line for each finished request, in the fields 'stubReads' reads back.
+{- One line for each finished request, in the fields 'stubReads' reads back. The request's
+Accept-Encoding comes last because its value can hold spaces. nginx writes "-" for an absent field.
+-}
 readLogFormat :: Text
-readLogFormat = "log_format stub_read '" <> readMarker <> " $server_name $request_method $status $request_uri';"
+readLogFormat = "log_format stub_read '" <> readMarker <> " $server_name $request_method $status $request_uri $sent_http_content_encoding $http_accept_encoding';"
 
 readMarker :: Text
 readMarker = "stub-read"
@@ -103,6 +105,7 @@ serverBlock fault route =
     , "    access_log /var/log/nginx/access.log stub_read;"
     ]
         <> maybe [] (`faultLines` route) fault
+        <> [line | isPublic route, line <- publicCoding]
         <> ( case (fault, route) of
                 (Just (PyPIMirrorBackend port _), PyPIMirror) -> forwarded nativeUploadLimit port
                 (Just (PyPICodeArtifactBackend port), PyPICodeArtifactData) -> forwarded 16777216 port
@@ -116,6 +119,10 @@ forwarded limit port =
     [ "    client_max_body_size " <> show limit <> ";"
     , "    location / { proxy_pass http://203.0.113.1:" <> show port <> "; }"
     ]
+
+-- A public registry's CDN gzips any response a request permits, artifacts and companions included.
+publicCoding :: [Text]
+publicCoding = ["    gzip on;", "    gzip_types *;"]
 
 -- nginx evaluates these before it picks a location, so a fault covers its whole route.
 faultLines :: StubFault -> StubRoute -> [Text]
@@ -215,6 +222,10 @@ data StubRead = StubRead
     , srMethod :: Text
     , srStatus :: Int
     , srPath :: Text
+    , srContentEncoding :: Maybe Text
+    -- ^ The response's @Content-Encoding@.
+    , srAcceptEncoding :: Maybe Text
+    -- ^ The request's @Accept-Encoding@, as the client sent it.
     }
     deriving stock (Eq, Show)
 
@@ -223,11 +234,20 @@ stubReads :: Text -> [StubRead]
 stubReads = mapMaybe (readOf . words) . lines
   where
     readOf = \case
-        [marker, host, method, status, path] | marker == readMarker -> do
+        marker : host : method : status : path : coding : accepted@(_ : _) | marker == readMarker -> do
             route <- find ((== host) . stubHost) universe
             answered <- readMaybe (toString status)
-            pure StubRead{srRoute = route, srMethod = method, srStatus = answered, srPath = path}
+            pure
+                StubRead
+                    { srRoute = route
+                    , srMethod = method
+                    , srStatus = answered
+                    , srPath = path
+                    , srContentEncoding = logged coding
+                    , srAcceptEncoding = logged (unwords accepted)
+                    }
         _ -> Nothing
+    logged value = if value == "-" then Nothing else Just value
 
 -- | Whether a public upstream answered the request, where an outage leaves it unanswered.
 answeredByPublic :: StubRead -> Bool

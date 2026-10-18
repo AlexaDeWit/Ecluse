@@ -6,13 +6,12 @@ module Ecluse.Core.Registry.RequestSpec (spec) where
 
 import Data.List (lookup)
 import Network.HTTP.Client qualified as Client
-import Network.HTTP.Types.Header (RequestHeaders, hUserAgent)
+import Network.HTTP.Types.Header (HeaderName, RequestHeaders, hAcceptEncoding, hUserAgent)
 import Test.Hspec (
     Spec,
     describe,
     it,
     shouldBe,
-    shouldNotSatisfy,
     shouldSatisfy,
  )
 
@@ -121,7 +120,7 @@ finaliseRequestSpec = describe "finaliseRequest pins the redirect count for ever
 
 artifactByUrlSpec :: Spec
 artifactByUrlSpec = describe "artifactRequestByUrl (opaque, non-decompressing, by url)" $ do
-    it "addresses the authoritative URL verbatim (host, path, query) and never decompresses" $ do
+    it "addresses the authoritative URL verbatim (host, path, query) in identity coding and never decompresses" $ do
         let url = "https://cdn.example.net/files/abc/code-frame-7.0.0.tgz?sig=deadbeef"
         case artifactRequestByUrl apiKeyMapping Nothing url of
             Left err -> fail ("artifactRequestByUrl failed: " <> show err)
@@ -130,7 +129,7 @@ artifactByUrlSpec = describe "artifactRequestByUrl (opaque, non-decompressing, b
                 Client.path req `shouldBe` "/files/abc/code-frame-7.0.0.tgz"
                 Client.queryString req `shouldBe` "?sig=deadbeef"
                 Client.decompress req "application/gzip" `shouldBe` False
-                Client.requestHeaders req `shouldNotSatisfy` any ((== "accept-encoding") . fst)
+                acceptEncodings req `shouldBe` ["identity"]
                 Client.redirectCount req `shouldBe` 0
 
     it "attaches the credential under the mapping's presentation onto the finalised request" $ do
@@ -206,9 +205,16 @@ basicMapping = credentialMapping recoverApiKey "Authorization" renderPair
     renderPair credential =
         "Basic " <> encodeUtf8 (fromMaybe "" (credUsername credential)) <> ":" <> encodeUtf8 (unSecret (credSecret credential))
 
--- Every User-Agent a request carries, so a case can assert the header is set exactly once.
+-- Every value a request carries for one header, so a case can assert the header is set exactly once.
+headerValues :: HeaderName -> Client.Request -> [ByteString]
+headerValues header request = [value | (name, value) <- Client.requestHeaders request, name == header]
+
 userAgents :: Client.Request -> [ByteString]
-userAgents request = [value | (name, value) <- Client.requestHeaders request, name == hUserAgent]
+userAgents = headerValues hUserAgent
+
+-- http-client adds gzip only when the field is absent, so one explicit value is what goes on the wire.
+acceptEncodings :: Client.Request -> [ByteString]
+acceptEncodings = headerValues hAcceptEncoding
 
 withAgent :: ByteString -> Client.Request -> Client.Request
 withAgent value req = req{Client.requestHeaders = (hUserAgent, value) : Client.requestHeaders req}

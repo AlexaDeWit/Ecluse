@@ -71,10 +71,10 @@ artifactSpec = describe "the artifact read" $ do
         artifactFileUrl "https://index.test" requestsName "a/../b.whl"
             `shouldBe` Right "https://index.test/simple/requests/a%2F..%2Fb.whl"
 
-    it "advertises no encoding and does not decompress, so the served sha256 verifies" $ do
+    it "asks for identity coding and does not decompress, so the served sha256 verifies" $ do
         req <- expectRight (artifactRequestByFile "https://index.test" Nothing requestsName "requests-2.34.2.tar.gz")
         Client.decompress req "application/gzip" `shouldBe` False
-        Client.requestHeaders req `shouldNotSatisfy` any ((== "accept-encoding") . fst)
+        lookup "Accept-Encoding" (Client.requestHeaders req) `shouldBe` Just "identity"
 
     it "fetches an absolute file location without naming a base URL" $ do
         req <- expectRight (artifactRequestByUrl Nothing "https://files.pythonhosted.org/packages/a0/requests-2.34.2.tar.gz")

@@ -14,6 +14,7 @@ module Ecluse.E2E.Fixtures.PyPI (
     pypiYankedWheelFile,
     pypiYankedDistInfo,
     pypiYankReason,
+    pypiTamperedProject,
     pypiWheelFor,
     pypiDistInfoFor,
     buildPyPIFixtures,
@@ -80,6 +81,10 @@ pypiYankedDistInfo = pypiDistInfoFor pypiProject pypiYankedVersion
 pypiYankReason :: Text
 pypiYankReason = "published by mistake"
 
+-- | A project whose served metadata companion differs from the digest its index advertises.
+pypiTamperedProject :: Text
+pypiTamperedProject = "e2e-tampered-companion"
+
 -- | Write ordinary-install artifacts, compatibility controls, and old/recent advisory releases.
 buildPyPIFixtures :: FilePath -> IO ()
 buildPyPIFixtures root = do
@@ -97,6 +102,19 @@ buildPyPIFixtures root = do
     writeFileLBS (projectDir </> indexFile) (Aeson.encode (simpleIndex (hexSha256Of bytes) (hexSha256Of sourceBytes) (hexSha256Of yankedBytes)))
     now <- renderIso8601Utc <$> getCurrentTime
     for_ ["flask", "e2e-raw-fix"] $ \project -> buildAdvisoryWheels root project now
+    buildTamperedCompanion root
+
+-- The index advertises the built companion's digest, and the served companion changes afterwards.
+buildTamperedCompanion :: FilePath -> IO ()
+buildTamperedCompanion root = do
+    let projectDir = root </> "simple" </> toString pypiTamperedProject
+        wheelPath = projectDir </> toString (pypiWheelFor pypiTamperedProject pypiVersion)
+    createDirectoryIfMissing True projectDir
+    buildWheelFor pypiTamperedProject pypiVersion (metadataFileFor pypiTamperedProject pypiVersion) (root </> ".work-tampered") wheelPath
+    appendFileText (wheelPath <> ".metadata") "Description: altered after publication\n"
+    bytes <- BS.readFile wheelPath
+    writeFileLBS (projectDir </> indexFile) . Aeson.encode $
+        projectIndex pypiTamperedProject [pypiVersion] [wheelEntryFor pypiTamperedProject pypiVersion "2020-01-01T00:00:00Z" (hexSha256Of bytes)]
 
 -- The filename the nginx stub aliases a project's index request onto.
 indexFile :: FilePath
@@ -278,5 +296,8 @@ buildAdvisoryWheels root project now = do
         buildWheelFor project version (metadataFileFor project version) work wheelPath
         bytes <- BS.readFile wheelPath
         pure (wheelEntryFor project version uploaded (hexSha256Of bytes))
-    writeFileLBS (projectDir </> indexFile) . Aeson.encode $
-        object ["name" .= project, "meta" .= object ["api-version" .= ("1.1" :: Text)], "versions" .= (["1.18", "1.19"] :: [Text]), "files" .= files]
+    writeFileLBS (projectDir </> indexFile) (Aeson.encode (projectIndex project ["1.18", "1.19"] files))
+
+projectIndex :: Text -> [Text] -> [Aeson.Object] -> Value
+projectIndex project versions files =
+    object ["name" .= project, "meta" .= object ["api-version" .= ("1.1" :: Text)], "versions" .= versions, "files" .= files]

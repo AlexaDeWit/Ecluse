@@ -7,13 +7,13 @@ module Ecluse.E2E.Harness.Pip (
     withPipProject,
     pipCredentialUrl,
     pipInstallIn,
-    pipResolveIn,
     pipInstalled,
     pipInstalledTree,
     pipInstallsWheel,
     pipInstallGraph,
     pipInstallRequirement,
     pipInstallAndInspect,
+    pipInstallThenRun,
     PythonGraph,
     installedPythonGraph,
     pipObserveGraph,
@@ -24,6 +24,7 @@ module Ecluse.E2E.Harness.Pip (
 
     -- * The served index
     advertisedFiles,
+    advertisedCompanions,
 ) where
 
 import Data.Aeson (Value (Array, Object, String))
@@ -98,30 +99,6 @@ pipInstallIn proj =
         , ppDir proj </> requirementsFile
         ]
 
--- | Resolve without hash mode, which makes pip fetch the declared metadata companion.
-pipResolveIn :: PipProject -> Text -> Text -> IO ClientResult
-pipResolveIn proj project version =
-    runClient
-        (ppDir proj)
-        (ppEnv proj)
-        "python3"
-        [ "-m"
-        , "pip"
-        , "--isolated"
-        , "install"
-        , "--dry-run"
-        , "--ignore-installed"
-        , "--no-cache-dir"
-        , "--disable-pip-version-check"
-        , "--no-input"
-        , "--only-binary=:all:"
-        , "--index-url"
-        , toString (ppIndex proj)
-        , "--target"
-        , ppDir proj </> targetDir
-        , toString (project <> "==" <> version)
-        ]
-
 -- | Install the fixture wheel with its advertised digest and assert its installed metadata exists.
 pipInstallsWheel :: E2E -> [(Text, Text)] -> Expectation
 pipInstallsWheel e2e advertised =
@@ -146,12 +123,19 @@ pipInstalledTree proj = snapshotTree (ppDir proj) [targetDir]
 
 -- | Read advertised @(filename, sha256)@ pairs through the proxy, failing if the mount refuses.
 advertisedFiles :: E2E -> Text -> IO [(Text, Text)]
-advertisedFiles e2e project = do
+advertisedFiles = advertisedDigests "hashes"
+
+-- | Read each distribution's advertised @(filename, sha256)@ for its metadata companion.
+advertisedCompanions :: E2E -> Text -> IO [(Text, Text)]
+advertisedCompanions = advertisedDigests "core-metadata"
+
+advertisedDigests :: Aeson.Key -> E2E -> Text -> IO [(Text, Text)]
+advertisedDigests field e2e project = do
     (status, body) <- proxyGet e2e ("/pypi/simple/" <> project)
     unless (status == 200) $ do
         logs <- proxyContainerLogs e2e
         fail (toString (indexRefusal project status logs))
-    pure (digestedFiles body)
+    pure (digestedFiles field body)
 
 -- A refusal reaches the wire as a bare status, so its reason exists only in the proxy's own
 -- JSONL. "no versions are available" means the index never resolved. A rule name means a denial.
@@ -166,13 +150,13 @@ indexRefusal project status logs =
         <> " proxy log lines:\n"
         <> logTail logTailLines logs
 
--- The served PEP 691 document's file entries, keeping only those carrying a sha256.
-digestedFiles :: LByteString -> [(Text, Text)]
-digestedFiles body =
+-- The served PEP 691 document's file entries, keeping only those whose digest map carries a sha256.
+digestedFiles :: Aeson.Key -> LByteString -> [(Text, Text)]
+digestedFiles field body =
     [ (filename, digest)
     | Object entry <- servedFiles (Aeson.decode body)
     , Just (String filename) <- [KeyMap.lookup "filename" entry]
-    , Just (Object hashes) <- [KeyMap.lookup "hashes" entry]
+    , Just (Object hashes) <- [KeyMap.lookup field entry]
     , Just (String digest) <- [KeyMap.lookup "sha256" hashes]
     ]
 
@@ -214,6 +198,11 @@ inspectRequirement proxy requirementText = withInstalledRequirement proxy requir
 
 pinned :: Text -> Text -> Text
 pinned project version = project <> "==" <> version
+
+-- | Install one release into a fresh virtual environment, then run @python -c source@ inside it.
+pipInstallThenRun :: E2E -> Text -> Text -> Text -> IO (ClientResult, ClientResult)
+pipInstallThenRun proxy project version source = withInstalledRequirement proxy (pinned project version) $ \installed ->
+    (piClient installed,) <$> runClient (piDirectory installed) (piEnvironment installed) (piPython installed) ["-B", "-c", toString source]
 
 -- | Installed versions and dependency declarations from each package's own metadata.
 type PythonGraph = Map Text (Text, [Text])

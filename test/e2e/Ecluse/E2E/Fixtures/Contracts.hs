@@ -143,6 +143,7 @@ pypiPublicFixture =
                 , groupCases =
                     [ Case "pypi/install/wheel" ["pypi/install"]
                     , Case "pypi/install/metadata-companion" ["pypi/install"]
+                    , Case "pypi/install/tampered-companion" ["pypi/install"]
                     , Case "pypi/install/yanked-pin" ["pypi/install"]
                     , Case "pypi/install/yank-negative-control" ["pypi/install"]
                     , Case "pypi/install/sdist" ["pypi/install"]
