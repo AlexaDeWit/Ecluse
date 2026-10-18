@@ -159,6 +159,7 @@ library ecluse-core
     Ecluse.Core.Ecosystem
     Ecluse.Core.Fault
     Ecluse.Core.Fault.Http
+    Ecluse.Core.Fault.RetryAfter
     Ecluse.Core.InFlight
     Ecluse.Core.Json.Lenient
     Ecluse.Core.Osv.Advisory
@@ -346,6 +347,7 @@ library ecluse-core
     Ecluse.Core.Telemetry.Span
     Ecluse.Core.Text
     Ecluse.Core.Text.Iso8601
+    Ecluse.Core.Text.HttpDate
     Ecluse.Core.Version
     Ecluse.Core.Wire
     Ecluse.Core.Worker
@@ -1090,6 +1092,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.CveSpec
     Ecluse.Core.EcosystemSpec
     Ecluse.Core.Fault.HttpSpec
+    Ecluse.Core.Fault.RetryAfterSpec
     Ecluse.Core.FaultSpec
     Ecluse.Core.InFlightSpec
     Ecluse.Core.Json.LenientSpec
@@ -1248,6 +1251,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Telemetry.CatalogueSpec
     Ecluse.Core.Telemetry.MetricsSpec
     Ecluse.Core.Text.Iso8601Spec
+    Ecluse.Core.Text.HttpDateSpec
     Ecluse.Core.TextSpec
     Ecluse.Core.Version.GemSpec
     Ecluse.Core.Version.Pep440Spec
