@@ -57,5 +57,5 @@ Review the card at 320px wide and the favicon at 16px and 32px after editing.
 The illustration and lettermark are original vectors under the repository's MIT licence.
 The wordmark uses Source Sans 3 Semibold. The caption uses Source Sans 3 Regular.
 Both come from Adobe's [Source Sans repository](https://github.com/adobe-fonts/source-sans/tree/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e).
-See the [SIL Open Font License](SOURCE-SANS-LICENSE.txt).
+Adobe licenses Source Sans 3 under the [SIL Open Font License 1.1](https://github.com/adobe-fonts/source-sans/blob/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/LICENSE.md).
 The exported lettering contains paths, not embedded font files.
