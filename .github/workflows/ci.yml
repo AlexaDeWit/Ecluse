@@ -442,7 +442,7 @@ jobs:
           ministackorg/ministack@sha256:8862a8488307284427c831f8ac3940c8d19e8fe4d023d8057b668e3eb4eb4ee1
           otel/opentelemetry-collector@sha256:310a800ad69ee430e7c541796852a242c9c7db97aaad4daa5ccf843c525fbdb2
           verdaccio/verdaccio@sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c
-          nginx@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2
+          nginx@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa
 
       - name: Verify and load exact image
         run: nix develop .#ci --command task test-e2e-load
