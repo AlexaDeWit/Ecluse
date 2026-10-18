@@ -23,6 +23,10 @@ case "$1" in
   build)
     printf 'build:%s\n' "$2" >> "$TEST_TRACE"
     [ "${TEST_FAIL_BUILD:-}" != "$2" ] || exit 9
+    if [ -n "${TEST_OVERLAP:-}" ] && [ "$2" = ecluse-e2e-manifest ]; then
+      touch "$TEST_WORK/plan-started"
+      timeout 5 bash -c 'until [ -e "$TEST_WORK/image-started" ]; do sleep 0.01; done'
+    fi
     ;;
   list-bin) printf '%s/bin/%s\n' "$TEST_WORK" "${2#exe:}" ;;
   run|bench)
@@ -53,6 +57,11 @@ cat > bin/nix <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'image-build\n' >> "$TEST_TRACE"
+if [ -n "${TEST_OVERLAP:-}" ]; then
+  touch "$TEST_WORK/image-started"
+  timeout 5 bash -c 'until [ -e "$TEST_WORK/plan-started" ]; do sleep 0.01; done'
+fi
+[ -z "${TEST_FAIL_IMAGE:-}" ] || { echo 'image build failed' >&2; exit 8; }
 printf '%s/image.tar\n' "$TEST_WORK"
 STUB
 cat > bin/docker <<'STUB'
@@ -275,6 +284,19 @@ done
 
 ECLTEST_ARTIFACT_DIR="$work/bootstrap-failure" TEST_FAIL_BUILD=exe:ecluse-artifact reject run_task test-e2e-prepare
 ECLTEST_ARTIFACT_DIR="$work/bootstrap-failure" reject run_task test-e2e-prepare
+ECLTEST_ARTIFACT_DIR="$work/overlap" TEST_OVERLAP=1 run_task test-e2e-prepare
+test -s "$work/overlap/identity.json"
+status=0
+ECLTEST_ARTIFACT_DIR="$work/image-failure" TEST_FAIL_IMAGE=1 run_task test-e2e-prepare || status=$?
+[ "$status" = 8 ]
+grep -Fxq 'image build failed' "$work/task.log"
+[ ! -e "$work/image-failure/archive-path" ]
+[ ! -e "$work/image-failure/docker-image.tar" ]
+[ ! -e "$work/image-failure/identity.json" ]
+status=0
+ECLTEST_ARTIFACT_DIR="$work/plan-failure" TEST_FAIL_BUILD=ecluse-e2e-manifest TEST_FAIL_IMAGE=1 run_task test-e2e-prepare || status=$?
+[ "$status" = 9 ]
+grep -Fxq 'image build failed' "$work/task.log"
 : > "$TEST_TRACE"
 ECLTEST_ARTIFACT_DIR="$work/full-failed" TEST_FAILED_SUBJECT=pypi reject run_task test-e2e
 for subject in npm pypi shared-system; do test -s "$work/full-failed/reports/$subject.json"; done
@@ -387,4 +409,4 @@ grep -Fxq 'proxyCpus=' "$PERF_ARTIFACT_DIR/conditions.json"
 TEST_FAIL_BUILD=exe:bench-report PERF_NATIVE_OUTCOME=failure reject run_task performance:load-receipt
 [ ! -e "$PERF_ARTIFACT_DIR/ecosystem-npm/receipt.json" ]
 [ ! -e "$PERF_ARTIFACT_DIR/ecosystem-pypi/receipt.json" ]
-printf 'ok - Task sequence, current failures, aggregate evidence, locks, cancellation, coverage and fixed backend contracts\n'
+printf 'ok - Task sequence, image build overlap, current failures, aggregate evidence, locks, cancellation, coverage and fixed backend contracts\n'

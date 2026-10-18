@@ -59,13 +59,16 @@ tasks:
     cmds:
       - test -z "$ECLTEST_ARGUMENTS"
       - mkdir "$ECLTEST_ARTIFACT_DIR/.bootstrap"
+      - bash scripts/image-build-alongside.sh "$ECLTEST_ARTIFACT_DIR/archive-path" task --exit-code test:e2e-prepare-plan
+      - cp "$(cat "$ECLTEST_ARTIFACT_DIR/archive-path")" "$ECLTEST_ARTIFACT_DIR/docker-image.tar"
+      - '"$(cabal list-bin exe:ecluse-artifact)" prepare-finish "$ECLTEST_ARTIFACT_DIR" "$(bash scripts/image-archive.sh configuration "$ECLTEST_ARTIFACT_DIR/docker-image.tar")"'
+
+  e2e-prepare-plan:
+    cmds:
       - task: artifact-tool
       - '"$(cabal list-bin exe:ecluse-artifact)" prepare-begin "$ECLTEST_ARTIFACT_DIR"'
       - cabal build ecluse-e2e-manifest
       - '"$(cabal list-bin ecluse-e2e-manifest)" > "$ECLTEST_ARTIFACT_DIR/plan.json"'
-      - nix build --print-build-logs --option max-silent-time 1200 .#dockerImage --no-link --print-out-paths > "$ECLTEST_ARTIFACT_DIR/archive-path"
-      - cp "$(cat "$ECLTEST_ARTIFACT_DIR/archive-path")" "$ECLTEST_ARTIFACT_DIR/docker-image.tar"
-      - '"$(cabal list-bin exe:ecluse-artifact)" prepare-finish "$ECLTEST_ARTIFACT_DIR" "$(bash scripts/image-archive.sh configuration "$ECLTEST_ARTIFACT_DIR/docker-image.tar")"'
 
   e2e-load:
     vars:
