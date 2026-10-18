@@ -61,15 +61,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "custom_unit": "req/s",
@@ -109,15 +109,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "custom_unit": "%",
@@ -163,15 +163,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "custom_unit": "ms",
@@ -217,15 +217,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "custom_unit": "B",
@@ -274,15 +274,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -326,15 +326,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -378,15 +378,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -430,15 +430,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -491,15 +491,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -571,15 +571,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -632,15 +632,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -689,15 +689,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -741,15 +741,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -802,15 +802,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -890,15 +890,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -942,15 +942,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -994,15 +994,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -1060,15 +1060,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -1126,15 +1126,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -1192,15 +1192,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -1262,15 +1262,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -1314,15 +1314,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -1376,15 +1376,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -1428,15 +1428,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -1480,15 +1480,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -1532,15 +1532,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -1584,15 +1584,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -1636,15 +1636,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -1688,15 +1688,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -1750,15 +1750,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -1802,15 +1802,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -1854,15 +1854,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -1906,15 +1906,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -1958,15 +1958,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -2019,15 +2019,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -2076,15 +2076,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -2138,15 +2138,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -2199,15 +2199,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -2251,15 +2251,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -2303,15 +2303,15 @@
               "custom_links": [
                 {
                   "label": "Investigate logs",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy)&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Recorded denials",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 },
                 {
                   "label": "Telemetry export warnings",
-                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:platform-east {{$env}} {{$service}} @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+                  "link": "https://app.datadoghq.com/logs?query=ecluse_deployment:\"platform-east\" {{$env}} {{$service}} (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) @data.module:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
                 }
               ],
               "markers": [],
@@ -2367,7 +2367,7 @@
           "*"
         ],
         "message_display": "expanded-md",
-        "query": "ecluse_deployment:platform-east $env $service (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) status:(warn OR error)",
+        "query": "ecluse_deployment:\"platform-east\" $env $service (service:ecluse-dredger OR service:ecluse-mirror OR service:ecluse-pilot OR service:ecluse-proxy) status:(warn OR error)",
         "show_date_column": true,
         "show_message_column": true,
         "sort": {

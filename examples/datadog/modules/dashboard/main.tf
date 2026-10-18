@@ -25,7 +25,8 @@ locals {
       ["$env", "$service", "(${join(" OR ", [for service in services : "service:${service}"])})"]
     ))
   }
-  log_scope = join(" ", concat(local.deployment_tags, [
+  log_deployment_tags = [for key, value in var.scope_tags : "${key}:${jsonencode(value)}"]
+  log_scope = join(" ", concat(local.log_deployment_tags, [
     "$env", "$service",
     "(${join(" OR ", [for service in local.active_services : "service:${service}"])})"
   ]))
@@ -75,15 +76,16 @@ locals {
       }, panel.type == "query_value" ? { aggregator = try(panel.time_aggregation, "avg") } : {})
     ]
   }
+  context_log_scope = replace(replace(local.log_scope, "$env", "{{$env}}"), "$service", "{{$service}}")
   context_links = [{
     label = "Investigate logs"
-    link  = "${var.datadog_app_url}/logs?query=${join(" ", local.deployment_tags)} {{$env}} {{$service}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+    link  = "${var.datadog_app_url}/logs?query=${local.context_log_scope}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
     }, {
     label = "Recorded denials"
-    link  = "${var.datadog_app_url}/logs?query=${join(" ", local.deployment_tags)} {{$env}} {{$service}} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+    link  = "${var.datadog_app_url}/logs?query=${local.context_log_scope} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
     }, {
     label = "Telemetry export warnings"
-    link  = "${var.datadog_app_url}/logs?query=${join(" ", local.deployment_tags)} {{$env}} {{$service}} @${var.log_attribute_paths.module}:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
+    link  = "${var.datadog_app_url}/logs?query=${local.context_log_scope} @${var.log_attribute_paths.module}:Ecluse.Runtime.Telemetry.Resolve&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
   }]
   metric_widgets = {
     for panel in local.specs : panel.id => merge({

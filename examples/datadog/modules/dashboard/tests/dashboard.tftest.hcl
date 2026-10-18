@@ -33,7 +33,7 @@ run "default_scope_and_optional_sections" {
   assert {
     condition = alltrue([for widget in jsondecode(output.dashboard_json).widgets :
       widget.definition.type != "log_stream" ? true :
-      strcontains(widget.definition.query, "ecluse_deployment:platform-east") &&
+      strcontains(widget.definition.query, "ecluse_deployment:\"platform-east\"") &&
       strcontains(widget.definition.query, "$env") &&
       strcontains(widget.definition.query, "$service")
     ])
@@ -123,4 +123,34 @@ run "reject_scalar_percentiles" {
   command = plan
   variables { latency_statistics = { "ecluse.serve.decision" = ["p95"] } }
   expect_failures = [datadog_dashboard_json.this]
+}
+
+run "context_links_preserve_scope_and_quote_values" {
+  command = plan
+  variables {
+    scope_tags = { deployment = "arn:aws:ecs:ca-central-1:123456789012:cluster/platform" }
+    services   = { proxy = ["ecluse-proxy"] }
+  }
+  assert {
+    condition = alltrue(flatten([
+      for widget in jsondecode(output.dashboard_json).widgets :
+      widget.definition.type == "group" ? flatten([
+        for child in widget.definition.widgets : [
+          for link in child.definition.custom_links :
+          strcontains(link.link, "service:ecluse-proxy") &&
+          strcontains(link.link, "{{$env}}") && strcontains(link.link, "{{$service}}") &&
+          strcontains(link.link, "deployment:\"arn:aws:ecs:ca-central-1:123456789012:cluster/platform\"")
+        ]
+      ]) : []
+    ]))
+    error_message = "Investigation links must keep fixed services with wildcard selection and quote deployment values."
+  }
+  assert {
+    condition = alltrue([
+      for widget in jsondecode(output.dashboard_json).widgets :
+      widget.definition.type != "log_stream" ? true :
+      strcontains(widget.definition.query, "deployment:\"arn:aws:ecs:ca-central-1:123456789012:cluster/platform\"")
+    ])
+    error_message = "Log widgets must quote deployment values containing colons."
+  }
 }

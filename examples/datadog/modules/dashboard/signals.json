@@ -55,7 +55,8 @@
       "reason_class": [
         "policy",
         "missing_integrity",
-        "unavailable"
+        "unavailable",
+        "limit"
       ],
       "rule": [
         "built-in rule names",
