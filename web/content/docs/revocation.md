@@ -46,6 +46,6 @@ A worker still running the old policy can publish a version the updated proxy de
 
 When tightening policy, update admission and writer roles before cleanup. When relaxing a deny, update cleanup before writers rely on the new permission.
 
-When adding an EPSS-dependent rule, prepare the advisory publisher first. Verify every role’s intended policy and let older writes settle before concluding that removal is complete.
+When adding an EPSS-dependent rule, prepare the advisory publisher first. Verify every role's intended policy and let older writes settle before concluding that removal is complete.
 
 {{ next(path="@/docs/remove.md", title="Remove blocked packages") }}

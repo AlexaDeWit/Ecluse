@@ -61,7 +61,7 @@
 
   var dialog = document.getElementById("search-dialog");
   var launch = document.querySelector(".search-launch");
-  launch.querySelector("kbd").textContent = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘ K" : "Ctrl K";
+  launch.querySelector("kbd").textContent = /Mac|iPhone|iPad/.test(navigator.platform) ? "\u2318 K" : "Ctrl K";
   if (window.PagefindUI) {
     new window.PagefindUI({ element: "#search", showImages: false, showSubResults: true });
     launch.hidden = false;

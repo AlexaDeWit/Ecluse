@@ -11,7 +11,7 @@ kind = "Guide"
 reference = "/docs/quick-start/"
 +++
 
-npm · [Switch to Python](@/docs/try-pypi.md)
+npm | [Switch to Python](@/docs/try-pypi.md)
 
 ## 1. Start the proxy {#start}
 

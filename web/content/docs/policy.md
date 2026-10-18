@@ -32,7 +32,7 @@ Print the resolved order with `check-config`. Use that order when reviewing an e
 
 ## How age is measured {#age}
 
-npm uses the version’s publication time. PyPI uses the newest file upload in the release, so adding a file can restart its waiting period.
+npm uses the version's publication time. PyPI uses the newest file upload in the release, so adding a file can restart its waiting period.
 
 A missing or malformed PyPI file timestamp leaves the release age unknown. The age rule then cannot admit it. An explicit exception still needs to satisfy other applicable checks.
 

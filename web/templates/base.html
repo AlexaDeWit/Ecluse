@@ -30,7 +30,7 @@
         <a href="{{ get_url(path='@/docs/understand.md') }}">Why Écluse?</a>
         <a href="{{ get_url(path='@/docs/setup.md') }}">Set up</a>
         <a href="{{ get_url(path='@/docs/behaviour.md') }}">Reference</a>
-        <a href="{{ config.extra.source_url | safe }}">GitHub ↗</a>
+        <a href="{{ config.extra.source_url | safe }}">GitHub &#8599;</a>
       </nav>
       <div class="header-tools">
         <button class="search-launch" type="button" aria-haspopup="dialog" hidden><span>Search docs</span><kbd>Ctrl K</kbd></button>
@@ -41,8 +41,8 @@
   </header>
   {% block content %}{% endblock content %}
   <footer class="footer" data-pagefind-ignore>
-    <span>Écluse · Open source · Built in Québec</span>
-    <span><a href="{{ config.extra.source_url | safe }}">Source repository</a> · <a href="{{ get_url(path='@/docs/threat-model.md') }}">Threat model</a> · <a href="{{ get_url(path='@/api/_index.md') }}">API reference</a></span>
+    <span>Écluse &middot; Open source &middot; Built in Qu&eacute;bec</span>
+    <span><a href="{{ config.extra.source_url | safe }}">Source repository</a> &middot; <a href="{{ get_url(path='@/docs/threat-model.md') }}">Threat model</a> &middot; <a href="{{ get_url(path='@/api/_index.md') }}">API reference</a></span>
   </footer>
   <dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title" data-pagefind-ignore>
     <h2 id="search-title" class="sr-only">Search documentation</h2>

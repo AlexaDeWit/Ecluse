@@ -33,7 +33,7 @@ To enforce the policy, restrict package downloads to Écluse. Changing a registr
 | --- | --- |
 | Public package proxy | A shared minimum release age and package rules. No private registry or cloud account required. |
 | Advisory checks | Known-malicious package denial and early admission for qualifying security fixes. |
-| Private packages | Access to your own packages through the same address, using each caller’s registry credentials. |
+| Private packages | Access to your own packages through the same address, using each caller's registry credentials. |
 | Mirroring | Copies of admitted public versions in your registry. Complete copies can survive public outages or removal. |
 | Package removal | Removal of stored versions that your current revocation rules deny, with separate permission to delete. |
 

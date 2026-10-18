@@ -47,7 +47,7 @@ Pin the base image by its verified release digest for production. Build and publ
 
 The UTF-8 locale lets configuration output include non-ASCII text. Without it, the configuration check can fail while printing a warning.
 
-Keep the base image’s entrypoint and non-root user. Set the role as the container arguments. The same image can run `proxy`, `mirror`, `pilot`, or `dredger`.
+Keep the base image's entrypoint and non-root user. Set the role as the container arguments. The same image can run `proxy`, `mirror`, `pilot`, or `dredger`.
 
 You can also mount the file at `/etc/ecluse/config.yaml`. To use another path, set `ECLUSE_CONFIG`.
 
@@ -68,7 +68,7 @@ Values resolve in this order: embedded defaults, config file, then environment v
 
 ## 4. Supply secrets separately {#secrets}
 
-Do not bake tokens into the image or put them in the config file. Use your platform’s secret injection, or the setting’s `_FILE` form.
+Do not bake tokens into the image or put them in the config file. Use your platform's secret injection, or the setting's `_FILE` form.
 
 **Example: a Verdaccio mirror token**
 

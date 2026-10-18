@@ -46,6 +46,6 @@ The decision and logs record skipped checks. Removing that copy later requires a
 
 ## Readiness is not a freshness monitor {#readiness}
 
-The first successful sync satisfies the advisory readiness gate. It does not keep readiness aligned with the database’s age.
+The first successful sync satisfies the advisory readiness gate. It does not keep readiness aligned with the database's age.
 
 Monitor publication age, acquisition failures, and advisory outage events separately. Keep the intended policy consistent across the publisher and every consumer.

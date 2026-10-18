@@ -4,7 +4,7 @@ description = "Deleting denied versions from your mirror target and its private 
 weight = 6
 +++
 
-`ecluse dredger` evaluates stored versions under the mount’s revocation policy and removes
+`ecluse dredger` evaluates stored versions under the mount's revocation policy and removes
 eligible copies from the mirror and private cache. It is the only Écluse role that deletes.
 
 Use [Remove blocked packages](@/docs/remove.md) for the preview and removal procedure.

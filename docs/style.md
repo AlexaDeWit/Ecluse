@@ -181,7 +181,7 @@ renderScope :: Scope -> Text      -- wire form, here with the leading '@'
 ```
 
 Keep the information the domain needs. `Version` preserves the raw text and an optional parsed
-`VersionKey`, which `mkVersion` constructs using the ecosystem’s grammar. Ordering uses the
+`VersionKey`, which `mkVersion` constructs using the ecosystem's grammar. Ordering uses the
 parsed key. The raw spelling remains available even when parsing cannot supply an ordering key.
 
 **6.3 Prefix record fields with a short type tag** so selectors are unambiguous across modules:

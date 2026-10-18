@@ -27,7 +27,7 @@ The threat model contains the system diagrams, threats, controls, assumptions, a
 
 Each operation has its own view, including public admission, private downloads, mirror completion, advisory distribution, and cleanup.
 
-[Open the threat model ↗](@/docs/threat-model.md)
+[Open the threat model](@/docs/threat-model.md)
 
 ## Limits that matter when evaluating Écluse {#limits}
 

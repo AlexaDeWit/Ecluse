@@ -1,6 +1,6 @@
 # Haddock and documentation guide
 
-Use this guide when documenting Écluse’s exported types and functions.
+Use this guide when documenting Écluse's exported types and functions.
 [`docs/style.md`](style.md) owns formatting, naming, totality, and the compiler flags.
 
 > When in doubt, match the nearest existing module.

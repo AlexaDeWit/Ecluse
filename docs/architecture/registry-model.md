@@ -12,7 +12,7 @@ A mount carries up to four registry roles, two reads and two writes, each set in
 Several may map to one physical registry. The recommended topology keeps the first-party store
 and the public-derived store separate, and unions them at the registry level (see
 [Registry-level composition](#registry-level-composition-the-recommended-topology)). A single
-shared registry is a supported reduced topology, subject to each role’s endpoint checks.
+shared registry is a supported reduced topology, subject to each role's endpoint checks.
 
 | Role | Purpose |
 |------|---------|
@@ -58,7 +58,7 @@ on any mount's `publicUpstream` host, or equal to another mount's endpoint, refu
 The private upstream authorises each caller. Raw private metadata bypasses shared retention
 and request coalescing. Every request performs a fresh private fetch.
 The assembled-response cache can contain private data, but reuse requires the same inputs,
-including the digest returned by that request’s authorised private fetch. A cache hit cannot
+including the digest returned by that request's authorised private fetch. A cache hit cannot
 skip authorisation. See the [metadata cache](web-layer.md#metadata-cache) and
 [threat model](https://ecluse-proxy.com/docs/threat-model/).
 The [security invariants](security.md) bound outbound requests further: the host allowlist,

@@ -21,19 +21,19 @@ A double underscore descends into an object. An underscore splits a camelCase na
 
 ## Find a setting {#groups}
 
-{{ task_link(path="@/docs/configuration.md#the-configuration-reference", title="All settings and defaults ↗", description="The complete reference, rendered from the embedded configuration.") }}
+{{ task_link(path="@/docs/configuration.md#the-configuration-reference", title="All settings and defaults", description="The complete reference, rendered from the embedded configuration.") }}
 
 {{ task_link(path="@/docs/policy.md", title="Rules and their order", description="Defaults, precedence, and public admission.") }}
 
-{{ task_link(path="@/docs/configuration.md#endpoint-collisions", title="Endpoint collisions ↗", description="Which repository combinations warn or prevent a role from starting.") }}
+{{ task_link(path="@/docs/configuration.md#endpoint-collisions", title="Endpoint collisions", description="Which repository combinations warn or prevent a role from starting.") }}
 
-{{ task_link(path="@/docs/configuration.md#store-tags", title="Registry backend tags ↗", description="Generic registries, Verdaccio, and CodeArtifact capabilities.") }}
+{{ task_link(path="@/docs/configuration.md#store-tags", title="Registry backend tags", description="Generic registries, Verdaccio, and CodeArtifact capabilities.") }}
 
-{{ task_link(path="@/docs/configuration.md#secrets", title="Secret settings ↗", description="Environment variables, file indirection, and refused URL credentials.") }}
+{{ task_link(path="@/docs/configuration.md#secrets", title="Secret settings", description="Environment variables, file indirection, and refused URL credentials.") }}
 
 ## What validation establishes {#validation}
 
-`check-config` prints the resolved settings and their sources, redacting typed secrets. It checks each role’s configuration without contacting cloud services.
+`check-config` prints the resolved settings and their sources, redacting typed secrets. It checks each role's configuration without contacting cloud services.
 
 A shared configuration error returns exit `2`. A refusal specific to one role can appear as a warning while the overall command returns `0`.
 

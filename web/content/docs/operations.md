@@ -57,7 +57,7 @@ loads. Missing or rejected artifacts require a Pilot publication. Access failure
 object, or IAM correction. The same process recovers when a later poll acquires a valid artifact.
 Alarm on these lines to detect a rollout that cannot acquire its advisory database.
 
-A proxy with advisory synchronisation reports per-mount readiness, so one ecosystem’s missing
+A proxy with advisory synchronisation reports per-mount readiness, so one ecosystem's missing
 artifact does not remove healthy mounts from routing. Its `/readyz` body carries a `mounts` object
 keyed by ecosystem, and each
 value is `ready` or `awaiting the advisory database that ecluse pilot publishes`. A missing PyPI

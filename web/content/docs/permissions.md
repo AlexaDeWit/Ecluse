@@ -1,6 +1,6 @@
 +++
 title = "Credentials and service permissions"
-description = "Separate the caller’s registry access from the credentials used by background services."
+description = "Separate the caller's registry access from the credentials used by background services."
 
 weight = 37
 
@@ -27,14 +27,14 @@ Token minting requires `codeartifact:GetAuthorizationToken` on the domain and `s
 
 Minting a token does not grant repository access. Scope repository reads and package writes separately.
 
-The proxy and cleanup service inspect the private repository’s upstream chain at startup. Grant `codeartifact:DescribeRepository` on every repository in that chain.
+The proxy and cleanup service inspect the private repository's upstream chain at startup. Grant `codeartifact:DescribeRepository` on every repository in that chain.
 
 The cleanup full-walk cursor needs restricted tag-write permission. That permission must not allow the service to create or change its own consent marker.
 
 ## Exact actions and resource scopes {#references}
 
-{{ task_link(path="@/docs/deployment.md#role-identities-and-least-privilege", title="Role permissions ↗", description="AWS actions, role separation, and identity requirements.") }}
+{{ task_link(path="@/docs/deployment.md#role-identities-and-least-privilege", title="Role permissions", description="AWS actions, role separation, and identity requirements.") }}
 
-{{ task_link(path="@/docs/dredger.md#permissions", title="Cleanup permissions ↗", description="Inventory, deletion, consent, and cursor scopes for each maintained target.") }}
+{{ task_link(path="@/docs/dredger.md#permissions", title="Cleanup permissions", description="Inventory, deletion, consent, and cursor scopes for each maintained target.") }}
 
-{{ task_link(path="@/docs/pypi-setup.md#assign-credentials-and-roles", title="PyPI state permissions ↗", description="Read and conditional-write access for completion state.") }}
+{{ task_link(path="@/docs/pypi-setup.md#assign-credentials-and-roles", title="PyPI state permissions", description="Read and conditional-write access for completion state.") }}

@@ -13,7 +13,7 @@ reference = "/docs/configuration/#rule-policy"
 
 ## Identify the rule first {#identify}
 
-Read the denial and inspect the mount’s resolved rule order. A quarantine exception and an override of a known-malicious denial have different effects.
+Read the denial and inspect the mount's resolved rule order. A quarantine exception and an override of a known-malicious denial have different effects.
 
 Prefer an exact `package@version` identity. A bare package name matches every version, including future releases.
 

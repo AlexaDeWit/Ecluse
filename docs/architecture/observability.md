@@ -15,7 +15,8 @@ nothing, opens no spans, and sits the instruments on a no-op meter. An emit then
 measurement rather than a branch.
 
 Datadog is an optional tested target. The core uses the OTLP interfaces.
-Datadog-specific options add the `dd` trace-correlation object to logs and permit Agent-side sampling.
+Logs include Datadog-compatible trace IDs while a span is active, regardless of the export backend.
+A Datadog Agent can apply further sampling.
 
 ## What gets traced
 
@@ -46,7 +47,7 @@ included, and never a request header.
 Sampling is head-based and always-on by default, so Écluse never drops a rare denial or error
 trace. `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` set a parent-based ratio without a code
 change. A Datadog Agent can resample exported traces. Sampling still affects collection and
-export cost, so choose it for the deployment’s traffic and diagnostic needs.
+export cost, so choose it for the deployment's traffic and diagnostic needs.
 
 ## Metrics
 
@@ -125,7 +126,7 @@ explosion. The instrumentation applies these controls:
   `version`, `scope`, and the full denial message go on the rule-eval span and the log line. Metric
   labels are bounded enums, so such an identifier cannot become a series. `rule` uses the built-in rule type names.
 - **Forwarded authorisation headers are excluded from instrumentation.** Tests cover the
-  caller’s `Authorization` header. Client spans can still contain URL paths and queries, so
+  caller's `Authorization` header. Client spans can still contain URL paths and queries, so
   this is not a guarantee against every secret or personal value. Apply the URL restrictions
   and minimisation described below. See [security](security.md).
 

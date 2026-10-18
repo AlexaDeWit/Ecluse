@@ -144,7 +144,7 @@
     color: var(--muted);
   }
   .sidebar-group[open] summary::after {
-    content: '−';
+    content: '\2212';
   }
   .sidebar-group a {
     display: block;

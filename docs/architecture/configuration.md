@@ -115,7 +115,7 @@ live allocations:
 - the enqueue buffer
 - the mirror-artifact envelope, when any mount mirrors
 
-The mirror-artifact tenant covers the worker’s transient buffers. For npm, the worker buffers
+The mirror-artifact tenant covers the worker's transient buffers. For npm, the worker buffers
 a tarball and base64-encodes it into a publish document. The archive bytes, base64 text, and
 serialised document coexist before collection. PyPI uses native distribution uploads and
 transient archive metadata instead of an npm publish envelope. The derivation sets the worker fetch cap
@@ -348,7 +348,7 @@ advisory evidence is unavailable (see
 [Rules engine](rules-engine.md#allowifremediatescve-remediation-fast-track)).
 `deny-known-malicious` (`DenyIfKnownMalicious`) ranks at 300, above every default allow (see
 [Rules engine](rules-engine.md#denyifknownmalicious-primary-namespace-evidence)). Without a source,
-neither shared advisory rule is active. The age rule supplies the shared allow, and npm’s
+neither shared advisory rule is active. The age rule supplies the shared allow, and npm's
 install-script deny still applies.
 
 The npm mount adds `deny-scripts` (`DenyInstallTimeExecution`) at admission only. It does not

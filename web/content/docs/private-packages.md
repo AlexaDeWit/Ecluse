@@ -33,9 +33,9 @@ Use the same declarations in every role. Review existing public-derived copies b
 
 Set `publicationTarget` to your first-party repository. For npm, clients publish to the npm mount. PyPI publishers use the `/pypi/legacy/` route.
 
-For PyPI, configure the target’s exact native upload endpoint. Do not assume it is the same as its Simple index address.
+For PyPI, configure the target's exact native upload endpoint. Do not assume it is the same as its Simple index address.
 
-The proxy forwards the publisher’s credential. It refuses publications outside the declared first-party names.
+The proxy forwards the publisher's credential. It refuses publications outside the declared first-party names.
 
 ## Check both directions {#verify}
 
@@ -43,4 +43,4 @@ Publish a disposable package under a declared name. Verify it appears in the fir
 
 Check that an unauthorised caller cannot read it. Also check that a missing first-party package does not resolve from the public source.
 
-Some registry management commands are outside the proxy’s contract. Manage tags, deprecations, and yanks at the publication repository as described in the [protocol reference](@/docs/protocol-support.md).
+Some registry management commands are outside the proxy's contract. Manage tags, deprecations, and yanks at the publication repository as described in the [protocol reference](@/docs/protocol-support.md).

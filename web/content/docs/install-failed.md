@@ -1,6 +1,6 @@
 +++
 title = "Investigate a failed install"
-description = "Use the package manager’s error and proxy logs to investigate an install reported by a developer or CI job."
+description = "Use the package manager's error and proxy logs to investigate an install reported by a developer or CI job."
 
 weight = 32
 

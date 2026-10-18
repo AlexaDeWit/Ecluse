@@ -30,12 +30,12 @@ CodeArtifact over VPC endpoints.
 **Edge access is an operator concern.** `ECLUSE_SERVER__AUTH_TOKEN` is off by default, so the
 deployment's access edge decides who may reach the proxy, east-west as well as north-south.
 The private registry decides whether an anonymous caller may read or publish.
-Passthrough grants no access beyond that registry’s policy. A deployment must therefore enforce
+Passthrough grants no access beyond that registry's policy. A deployment must therefore enforce
 both proxy reachability and the intended private-registry authentication policy.
 
 **Passthrough relocates credential risk to the proxy runtime.** Forwarding each caller's own
 credential ([credential flow](registry-model.md#credential-flow-and-authority)) leaves the proxy with no read or publish
-credential of its own, unless you configure a static publication token. It does hold every in-transit caller's credential in memory, transiently. So
+credential of its own, unless you configure a static publication token. It does hold every in-transit caller's credential in memory, transiently.
 The proxy runtime must protect those credentials. Verify its image through the
 [release supply chain](release-supply-chain.md). Token stripping and the prohibition on
 credential-bearing redirects prevent credentials from reaching an unintended origin.

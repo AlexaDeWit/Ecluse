@@ -68,7 +68,7 @@ For per-caller access, leave `server.authToken` unset and enforce access at your
 
 CodeArtifact can provide the package repositories, SQS the durable mirror queue, and S3 the advisory and PyPI state stores.
 
-Use EKS Pod Identity, IRSA, or an ECS task role for service credentials. The mirror worker mints its CodeArtifact write token. Client reads still use each caller’s token.
+Use EKS Pod Identity, IRSA, or an ECS task role for service credentials. The mirror worker mints its CodeArtifact write token. Client reads still use each caller's token.
 
 The [permission reference](@/docs/permissions.md) lists what each role needs. Creating the resources and attaching those permissions follows your normal platform process.
 

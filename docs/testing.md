@@ -10,7 +10,7 @@ test can be. Three kinds:
 
 The first two are hermetic and **gate** merges. Smoke makes live calls and is **allowed to fail by
 design**. Residency and end-to-end checks add further gating tiers.
-The suite declarations live in `ecluse.cabal`. Read *What gates, and what doesn’t* before
+The suite declarations live in `ecluse.cabal`. Read *What gates, and what doesn't* before
 choosing a tier for a new test.
 
 ## Unit tests: `ecluse-core-unit`, `ecluse-runtime-unit`, `ecluse-unit` (gating)

@@ -22,15 +22,15 @@ registry=https://packages.example.com/npm/
 
 Omit the token line for a public-only proxy. The credential belongs to the private read repository when one is configured.
 
-npm, pnpm, Yarn, and Bun use the npm protocol. Check each client’s active registry settings, including project and scope overrides.
+npm, pnpm, Yarn, and Bun use the npm protocol. Check each client's active registry settings, including project and scope overrides.
 
 ## Python clients {#python}
 
 Use `https://packages.example.com/pypi/simple/` as the index URL in pip, uv, or Poetry.
 
-For a CodeArtifact private repository, supply HTTP Basic authentication with username `aws` and the caller’s token as the password.
+For a CodeArtifact private repository, supply HTTP Basic authentication with username `aws` and the caller's token as the password.
 
-Use your client’s supported credential store or runtime secret injection. Keep credentials out of committed configuration.
+Use your client's supported credential store or runtime secret injection. Keep credentials out of committed configuration.
 
 **pip: public-only example**
 

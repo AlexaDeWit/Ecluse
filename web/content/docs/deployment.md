@@ -172,10 +172,10 @@ holds on any backend, and the AWS column shows one way to grant it:
 
 | Role | Needs | AWS example |
 |---|---|---|
-| `ecluse proxy --no-worker` | Send mirror jobs, read advisory artifacts, read and list PyPI mirror state when configured, inspect the private upstream’s repository chain | `sqs:SendMessage`, `sqs:GetQueueAttributes`, `s3:GetObject`, `codeartifact:DescribeRepository` on the private upstream repository and every repository in its upstream chain |
+| `ecluse proxy --no-worker` | Send mirror jobs, read advisory artifacts, read and list PyPI mirror state when configured, inspect the private upstream's repository chain | `sqs:SendMessage`, `sqs:GetQueueAttributes`, `s3:GetObject`, `codeartifact:DescribeRepository` on the private upstream repository and every repository in its upstream chain |
 | `ecluse mirror` | Consume mirror jobs, publish to the mirror store, read advisory artifacts, read/list/conditionally write PyPI mirror state when configured | SQS receive, delete, change visibility, and get attributes. CodeArtifact token mint, reads, and publish on the mirror repository. `s3:GetObject` |
 | `ecluse pilot` | Read the published artifacts' metadata, and publish advisory artifacts | `s3:GetObject` and `s3:PutObject` on the advisory prefix, and `s3:ListBucket` limited to that prefix. With SSE-KMS, `kms:GenerateDataKey` on the bucket's key |
-| `ecluse dredger` | Read and delete in the mirror target and in the private cache, read advisory artifacts, inspect the private upstream’s repository chain | CodeArtifact token mint, repository reads, and `codeartifact:DeletePackageVersions` on package ARNs in both repositories ([full list](@/docs/dredger.md#permissions)). `codeartifact:DescribeRepository` on both repositories and on every repository in the private upstream's chain. `s3:GetObject` |
+| `ecluse dredger` | Read and delete in the mirror target and in the private cache, read advisory artifacts, inspect the private upstream's repository chain | CodeArtifact token mint, repository reads, and `codeartifact:DeletePackageVersions` on package ARNs in both repositories ([full list](@/docs/dredger.md#permissions)). `codeartifact:DescribeRepository` on both repositories and on every repository in the private upstream's chain. `s3:GetObject` |
 
 `ecluse proxy` without `--no-worker` runs the mirror worker in the same process, so its identity
 needs the proxy row and the mirror row together. Split the proxy from the worker when the serving

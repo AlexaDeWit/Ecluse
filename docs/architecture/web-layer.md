@@ -190,7 +190,7 @@ On-disk artifact caching is out of scope, and the mirror stays the durable store
 
 Raw metadata retention and full-read request coalescing apply only to the anonymous public
 origin. The serve path fetches private metadata separately for each request, preserving the
-private registry’s authorisation decision. Assembled responses can contain private data under
+private registry's authorisation decision. Assembled responses can contain private data under
 the input-fingerprint rules below.
 
 The assembled-representation store beside it memoises the encoded merged document under a content

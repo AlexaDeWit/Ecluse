@@ -55,10 +55,10 @@ Client caches and already-installed packages remain outside this operation.
 
 ## If the deletion cap stops the service {#halt}
 
-Reaching the cap halts cleanup for the process’s lifetime. Liveness stays healthy and readiness reports the halt.
+Reaching the cap halts cleanup for the process's lifetime. Liveness stays healthy and readiness reports the halt.
 
 Investigate the policy and advisory generation before restarting or increasing the cap. An automatic restart would reset the deletion budget.
 
 {{ task_link(path="@/docs/revocation.md", title="Read the revocation rules", description="Decisive denies, protected names, retained copies, and rollout order.") }}
 
-{{ task_link(path="@/docs/dredger.md", title="Read the complete cleanup reference ↗", description="Cycle budgets, full walks, consent, backend limits, and recovery.") }}
+{{ task_link(path="@/docs/dredger.md", title="Read the complete cleanup reference", description="Cycle budgets, full walks, consent, backend limits, and recovery.") }}

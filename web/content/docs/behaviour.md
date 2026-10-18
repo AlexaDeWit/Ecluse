@@ -25,7 +25,7 @@ reference = "/docs/"
 
 {{ task_link(path="@/docs/permissions.md", title="Which identity needs which permission", description="Cloud roles, caller credentials, and deletion authority.") }}
 
-{{ task_link(path="@/docs/protocol-support.md", title="Protocol details ↗", description="Supported endpoints, metadata fields, and ecosystem limits.") }}
+{{ task_link(path="@/docs/protocol-support.md", title="Protocol details", description="Supported endpoints, metadata fields, and ecosystem limits.") }}
 
 ## Security and design evidence {#security}
 

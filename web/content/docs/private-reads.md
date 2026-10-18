@@ -13,9 +13,9 @@ reference = "/docs/how-it-works/#a-request-step-by-step"
 
 ## Private copies do not re-enter public admission {#trust}
 
-Écluse reads private packages using the caller’s credentials. Private metadata must meet the trusted integrity floor. Managed mirror versions must also meet their completion checks.
+Écluse reads private packages using the caller's credentials. Private metadata must meet the trusted integrity floor. Managed mirror versions must also meet their completion checks.
 
-A conventional private npm artifact hit bypasses that metadata path and relies on the client’s integrity verification.
+A conventional private npm artifact hit bypasses that metadata path and relies on the client's integrity verification.
 
 Changing a public admission rule does not immediately block an existing private copy. See [Admission, revocation, and retained copies](@/docs/revocation.md).
 
@@ -23,7 +23,7 @@ Changing a public admission rule does not immediately block an existing private 
 
 ## The caller and worker have different authority {#credentials}
 
-The caller’s credential authorises private reads and, by default, publication. The mirror worker has its own write credential.
+The caller's credential authorises private reads and, by default, publication. The mirror worker has its own write credential.
 
 A worker token does not give the caller private access. An explicit private authentication refusal stops the request rather than falling back to a public source.
 

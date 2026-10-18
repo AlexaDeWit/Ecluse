@@ -47,7 +47,7 @@ The in-memory queue suits a single-process trial. It cannot connect separate pro
 
 Give the proxy permission to enqueue. Give the worker permission to consume, renew visibility, acknowledge jobs, and publish to the mirror.
 
-A CodeArtifact worker mints its token from workload identity. Generic registries use the mirror’s configured write credential.
+A CodeArtifact worker mints its token from workload identity. Generic registries use the mirror's configured write credential.
 
 ## For PyPI, add completion state {#python}
 

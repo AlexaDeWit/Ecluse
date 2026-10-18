@@ -11,7 +11,7 @@ kind = "Guide"
 reference = "/docs/deployment/"
 +++
 
-{{ task_link(path="@/docs/try-npm.md", title="Evaluate it locally", description="Try a package install before planning your organisation’s deployment. No cloud account required.") }}
+{{ task_link(path="@/docs/try-npm.md", title="Evaluate it locally", description="Try a package install before planning your organisation's deployment. No cloud account required.") }}
 
 {{ task_link(path="@/docs/plan-deployment.md", title="Plan a team deployment", description="Choose your registries, services, and network access.") }}
 

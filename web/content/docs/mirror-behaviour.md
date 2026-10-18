@@ -1,6 +1,6 @@
 +++
 title = "Mirror completion and recovery"
-description = "A request can start mirroring before the copy is complete. Completion, not the first successful upload, determines a managed PyPI version’s visibility."
+description = "A request can start mirroring before the copy is complete. Completion, not the first successful upload, determines a managed PyPI version's visibility."
 
 weight = 33
 
