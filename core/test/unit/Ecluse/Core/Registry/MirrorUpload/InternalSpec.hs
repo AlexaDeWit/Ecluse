@@ -10,16 +10,17 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Core.Package (Artifact (..), Hash, HashAlg (SHA1, SHA256, SHA512, SRI), PackageDetails (..), hashAlg, hashValue, renderHashAlg)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
-import Ecluse.Core.Registry (PublishFault (PublishSourceUnavailable))
+import Ecluse.Core.Registry (PublishFault (PublishIntegrityMismatch, PublishSourceUnavailable))
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload.Internal
 import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
-import Ecluse.Test.Package (hexSha256Of, hexSha512Of, pypiVersion, sampleArtifact, sampleDetails, sriSha256Of, unsafeHash, unscopedPyPI, validSha1)
+import Ecluse.Test.Package (hexSha256Of, hexSha512Of, pypiVersion, sampleArtifact, sampleDetails, sriSha256Of, thingName, unsafeHash, unscopedPyPI, v1_0_0, validSha1)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -121,6 +122,34 @@ spec = do
         upload <- expectRight (checkedMirrorUploadData inventory file verified ("metadata" :: Text))
         uploadBytes upload `shouldBe` "wheel"
         uploadInventory upload `shouldBe` inventory
+
+    for_
+        [ ("raw SHA-256", \bytes -> [unsafeHash SHA256 (hexSha256Of bytes)])
+        , ("uppercase SHA-256", \bytes -> [unsafeHash SHA256 (T.toUpper (hexSha256Of bytes))])
+        , ("SHA-512 with an incorrect SHA-256 claim", \bytes -> [unsafeHash SHA512 (hexSha512Of bytes), unsafeHash SHA256 (hexSha256Of "other")])
+        ]
+        $ \(label, hashes) ->
+            it ("derives the target SHA-256 from verified bytes for " <> label) $ do
+                inventory <- expectRight (sourceInventoryWith hashes (wheel :| []))
+                let file :| _ = inventoryFiles inventory
+                verified <- expectRight (verifyMirrorBytes file "wheel")
+                verifiedTargetHash verified `shouldBe` unsafeHash SHA256 (hexSha256Of "wheel")
+                verifiedBytes verified `shouldBe` "wheel"
+                verifiedFile verified `shouldBe` file
+
+    it "uses the computed SHA-256 for npm SRI alternatives" $ do
+        let artifact = sampleArtifact{artHashes = [unsafeHash SRI (sriSha256Of "wheel"), unsafeHash SRI (sriSha256Of "other")]}
+            details = (sampleDetails thingName v1_0_0){pkgArtifacts = artifact :| []}
+        inventory <- expectRight (restoreMirrorInventory details (NpmMirrorRead mempty))
+        let file :| _ = inventoryFiles inventory
+        verified <- expectRight (verifyMirrorBytes file "wheel")
+        verifiedTargetHash verified `shouldBe` unsafeHash SHA256 (hexSha256Of "wheel")
+        verifiedBytes verified `shouldBe` "wheel"
+
+    it "refuses a stronger mismatch even when SHA-256 matches the received bytes" $ do
+        inventory <- expectRight (sourceInventoryWith (\bytes -> [unsafeHash SHA512 (hexSha512Of "other"), unsafeHash SHA256 (hexSha256Of bytes)]) (wheel :| []))
+        let file :| _ = inventoryFiles inventory
+        verifyMirrorBytes file "wheel" `shouldBe` Left (PublishIntegrityMismatch "the SHA512 digest did not match the fetched bytes")
 
     it "refuses verified bytes belonging to another expected member" $ do
         inventory <- expectRight (sourceInventory (wheel :| [sdist]))

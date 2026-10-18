@@ -54,7 +54,7 @@ import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifEntryKey, ifFilename))
 import Ecluse.Core.Registry.ServedDocument (uniqueEntries, validEntryKey)
 import Ecluse.Core.Server.Path (mkFilename, unFilename)
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Core.Worker.Integrity (IntegrityResult (..), verifyIntegrity)
+import Ecluse.Core.Worker.Integrity (verifyIntegrityDigest)
 
 -- | Supported read fields retain their source coordinates independently of physical uploads.
 data MirrorReadData
@@ -295,12 +295,15 @@ compatibleSize _ _ = True
 
 -- | Verify the strongest admitted digest without permitting replacement bytes at publication.
 verifyMirrorBytes :: ExpectedMirrorFile -> ByteString -> Either PublishFault VerifiedArtifactBytes
-verifyMirrorBytes expected bytes = case verifyIntegrity (maHashes (expectedDescriptor expected)) bytes of
-    IntegrityMismatch detail -> Left (PublishIntegrityMismatch detail)
-    IntegrityVerified -> do
-        compute <- maybeToRight (PublishIntegrityMismatch "SHA-256 computation is unavailable") (computeDigest SHA256)
-        targetHash <- first PublishIntegrityMismatch (mkHash SHA256 (hexDigestText (compute (toLazy bytes))))
-        pure (VerifiedArtifactBytes expected bytes targetHash)
+verifyMirrorBytes expected bytes = do
+    (alg, digest) <- first PublishIntegrityMismatch (verifyIntegrityDigest (maHashes (expectedDescriptor expected)) bytes)
+    targetDigest <- case alg of
+        SHA256 -> pure digest
+        _ -> do
+            compute <- maybeToRight (PublishIntegrityMismatch "SHA-256 computation is unavailable") (computeDigest SHA256)
+            pure (compute (toLazy bytes))
+    targetHash <- first PublishIntegrityMismatch (mkHash SHA256 (hexDigestText targetDigest))
+    pure (VerifiedArtifactBytes expected bytes targetHash)
 
 -- | Codec construction alone attaches checked ecosystem metadata to verified inventory membership.
 checkedMirrorUploadData :: MirrorInventory -> ExpectedMirrorFile -> VerifiedArtifactBytes -> metadata -> Either PublishFault (MirrorUploadData metadata)

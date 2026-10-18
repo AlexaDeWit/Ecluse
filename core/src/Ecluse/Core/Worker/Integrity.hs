@@ -10,6 +10,7 @@ cannot rescue a mismatch, because that would permit substitution through a broke
 module Ecluse.Core.Worker.Integrity (
     IntegrityResult (..),
     verifyIntegrity,
+    verifyIntegrityDigest,
 ) where
 
 import Data.Text qualified as T
@@ -30,29 +31,35 @@ data IntegrityResult
 A weaker match or an uncomputable selected algorithm never permits publication.
 -}
 verifyIntegrity :: NonEmpty Hash -> ByteString -> IntegrityResult
-verifyIntegrity hashes bytes =
+verifyIntegrity hashes = either IntegrityMismatch (const IntegrityVerified) . verifyIntegrityDigest hashes
+
+-- | Return the computed algorithm and digest only after the strongest admitted assertion verifies the bytes.
+verifyIntegrityDigest :: NonEmpty Hash -> ByteString -> Either Text (HashAlg, ByteString)
+verifyIntegrityDigest hashes bytes =
     let strongest = authoritativeDigest hashes
-     in case matchesDigest (toLazy bytes) strongest hashes of
+     in case computedDigest strongest bytes of
             Nothing ->
-                IntegrityMismatch
+                Left
                     ( "the strongest admitted digest ("
                         <> describeDigest strongest
                         <> ") is in an algorithm the worker cannot verify"
                     )
-            Just True -> IntegrityVerified
-            Just False ->
-                IntegrityMismatch ("the " <> describeDigest strongest <> " digest did not match the fetched bytes")
+            Just computed@(alg, digest)
+                | matchesDigest alg digest strongest hashes -> Right computed
+                | otherwise -> Left ("the " <> describeDigest strongest <> " digest did not match the fetched bytes")
 
-matchesDigest :: LByteString -> Hash -> NonEmpty Hash -> Maybe Bool
-matchesDigest lazyBytes h hashes = do
+computedDigest :: Hash -> ByteString -> Maybe (HashAlg, ByteString)
+computedDigest h bytes = do
     alg <- assertedAlg h
     digestOf <- computeDigest alg
-    let digest = digestOf lazyBytes
-    pure $ case hashAlg h of
-        SRI ->
-            let encoded = base64DigestText digest
-             in any (\candidate -> hashAlg candidate == SRI && assertedAlg candidate == Just alg && sriBody (hashValue candidate) == encoded) hashes
-        _ -> hexDigestText digest == T.toLower (hashValue h)
+    pure (alg, digestOf (toLazy bytes))
+
+matchesDigest :: HashAlg -> ByteString -> Hash -> NonEmpty Hash -> Bool
+matchesDigest alg digest h hashes = case hashAlg h of
+    SRI ->
+        let encoded = base64DigestText digest
+         in any (\candidate -> hashAlg candidate == SRI && assertedAlg candidate == Just alg && sriBody (hashValue candidate) == encoded) hashes
+    _ -> hexDigestText digest == T.toLower (hashValue h)
 
 describeDigest :: Hash -> Text
 describeDigest h = case hashAlg h of
