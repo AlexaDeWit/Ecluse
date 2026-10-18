@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Deterministic unit test for ci-runner-policy.sh over fixture workflows. The case that
-# must never pass is a job that builds or tests off arm64 without an allow-list entry.
 # Run via `task test-scripts`.
 set -euo pipefail
 
@@ -149,19 +147,6 @@ check "a job without runs-on fails" 1 ci.yml <<'YAML'
 jobs:
   build:
     steps: []
-YAML
-
-fixture release-build.yml <<'YAML'
-jobs:
-  build:
-    runs-on: ubuntu-26.04-arm
-YAML
-check "a call to a local workflow this run checks passes" 0 ci.yml <<'YAML'
-jobs:
-  dry-run:
-    uses: ./.github/workflows/release-build.yml
-    with:
-      retention-days: 1
 YAML
 
 check "a key named runs-on inside a step is not a job runner" 0 ci.yml <<'YAML'
@@ -397,44 +382,70 @@ jobs:
     runs-on: ubuntu-latest
 YAML
 
-fixture .callee.yml <<'YAML'
+for prefix in ./ '$/'; do
+  fixture release-build.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ubuntu-26.04-arm
+YAML
+  check "$prefix: a call to a local workflow this run checks passes" 0 ci.yml <<YAML
+jobs:
+  dry-run:
+    uses: ${prefix}.github/workflows/release-build.yml
+    with:
+      retention-days: 1
+YAML
+
+  fixture .callee.yml <<'YAML'
 jobs:
   build:
     runs-on: ubuntu-latest
 YAML
-check "a local call to a dotfile callee off arm64 fails" 1 ci.yml "FAILED  .callee.yml build" <<'YAML'
+  check "$prefix: a local call to a dotfile callee off arm64 fails" 1 ci.yml "FAILED  .callee.yml build" <<YAML
 jobs:
   call:
-    uses: ./.github/workflows/.callee.yml
+    uses: ${prefix}.github/workflows/.callee.yml
 YAML
 
-check "a local call to a missing workflow fails" 1 ci.yml "which is not a workflow file this run reads" <<'YAML'
+  check "$prefix: a local call to a missing workflow fails" 1 ci.yml "which is not a workflow file this run reads" <<YAML
 jobs:
   call:
-    uses: ./.github/workflows/absent.yml
+    uses: ${prefix}.github/workflows/absent.yml
 YAML
 
-fixture callee.yml <<'YAML'
+  fixture callee.yml <<'YAML'
 jobs:
   build:
     runs-on: ubuntu-26.04-arm
 YAML
-check "a local call into a subdirectory fails" 1 ci.yml "which is not a workflow file this run reads" <<'YAML'
+  check "$prefix: a local call into a subdirectory fails" 1 ci.yml "which is not a workflow file this run reads" <<YAML
 jobs:
   call:
-    uses: ./.github/workflows/sub/callee.yml
+    uses: ${prefix}.github/workflows/sub/callee.yml
 YAML
 
-fixture callee.YML <<'YAML'
+  fixture callee.YML <<'YAML'
 jobs:
   build:
     runs-on: ubuntu-26.04-arm
 YAML
-check "a local call whose name differs in case from the file fails" 1 ci.yml "which is not a workflow file this run reads" <<'YAML'
+  check "$prefix: a local call whose name differs in case from the file fails" 1 ci.yml "which is not a workflow file this run reads" <<YAML
 jobs:
   call:
-    uses: ./.github/workflows/callee.yml
+    uses: ${prefix}.github/workflows/callee.yml
 YAML
+
+  fixture callee.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ubuntu-26.04-arm
+YAML
+  check "$prefix: a local call with a ref fails" 1 ci.yml "which is not a workflow file this run reads" <<YAML
+jobs:
+  call:
+    uses: ${prefix}.github/workflows/callee.yml@main
+YAML
+done
 
 check "a literal arm64 runner passes beside a matrix expression" 0 ci.yml <<'YAML'
 jobs:
