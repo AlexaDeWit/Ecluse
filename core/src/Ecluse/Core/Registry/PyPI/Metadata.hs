@@ -81,6 +81,7 @@ readPyPIFull limits name bound table readChunk = do
     build <- stToIO (fileWriter writer)
     readJsonWalkST stToIO bound (pypiPackedWalk writer build limits name table) readChunk
 
+-- | Full reads use the supplied table and writer without materialising file trees.
 pypiPackedWalk :: Writer st -> FileWriter st -> Limits -> PackageName -> InternTable -> Cursor -> ST st (Steps (ST st) PyPIFullRead)
 pypiPackedWalk writer build limits name table =
     pypiFullWalk build (maxNestingDepth limits) (pureStep (collectField limits FullRead)) keepsFile (packedFileStep writer limits) table (emptyProjection name)
