@@ -10,7 +10,7 @@ module Ecluse.Core.CacheBench (benchmarks) where
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlightWithBackend, resolveSingleFlight)
 import Ecluse.Core.Server.Cache.Types (CacheKey, Source (Source), assembledKey, fullKey, versionKey)
-import Ecluse.Core.Server.Pipeline.Packument (packumentETag)
+import Ecluse.Core.Server.Pipeline.Packument.Representation (packumentETag)
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Package (npmVersion, pypiVersion, scopedNpm, unscopedNpm, unscopedPyPI)
 import Ecluse.Test.Server.Cache (newSingleFlight)
