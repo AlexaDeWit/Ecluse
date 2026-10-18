@@ -30,7 +30,7 @@ import UnliftIO (bracket_)
 import Ecluse.BenchLoad.CpuUse (CpuSample (CpuSample), CpuWindow, cpuWindow, parseProcStat)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Pod (CgroupReading (crCpuStat, crCpus), CpuList, cpuListMembers, cpusLeft, keyedCounters, parseCpuList, renderCpuList)
-import Ecluse.Rts (readIfExists)
+import Ecluse.Rts.Cgroup (readIfExists)
 
 -- | The cgroup @scripts/load-cgroup.sh@ places the harness in, under @BENCH_LOAD_CGROUP@.
 harnessLeaf :: FilePath

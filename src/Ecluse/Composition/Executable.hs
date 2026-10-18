@@ -2,13 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The boot's effectful planning phase: take the cleared 'BootPlan' and yield the
-'ExecutablePlan' the booting role assembles its runtime from.
-
-Every role plans through here, so a refusal only a live environment can settle is spent at one
-gate whatever the role, and holding an 'ExecutablePlan' means nothing downstream refuses to
-boot. A listener that fails to bind is a runtime fault for supervision, not a refusal.
-@ecluse check-config@ makes no cloud call, so it stops at the 'BootPlan' and never reaches here.
+{- | Resolve environment-dependent boot refusals and construct an 'ExecutablePlan' for each role.
+Configuration checks stop at 'BootPlan'. Listener failures remain runtime faults for supervision.
 -}
 module Ecluse.Composition.Executable (
     ExecutablePlan (epBootPlan, epRoleWiring),
@@ -41,16 +36,8 @@ import Ecluse.Composition.BootError (
     refuseOnThrow,
  )
 import Ecluse.Composition.Credential (BuildCredentials, CredentialTarget (..), mirrorBackends, noCredentialProviders, providerLabel)
-import Ecluse.Composition.Maintenance (
-    BudgetPorts (BudgetPorts, bpGateFor, bpNominalPace, bpOverrides),
-    BuildUpstreamProbe,
-    ClearedBackend (cbUrl),
-    StoreBuilds (sbDeleting, sbObserving, sbProbing),
-    StorePorts,
-    planStoreMaintenance,
-    planStoreMaintenanceFor,
-    readUpstreamSafety,
- )
+import Ecluse.Composition.Maintenance (BudgetPorts (BudgetPorts, bpGateFor, bpNominalPace, bpOverrides), BuildUpstreamProbe, StoreBuilds (sbDeleting, sbObserving, sbProbing), StorePorts, planStoreMaintenance, planStoreMaintenanceFor, readUpstreamSafety)
+import Ecluse.Composition.Maintenance.Plan (ClearedBackend (cbUrl))
 import Ecluse.Composition.MemoryPlan (
     MemoryPlan (mpMaxRequestBytes, mpPublishTenant, mpQueueMemoryMaxDepth),
     PublishTenant (ptAggregateBytes),
