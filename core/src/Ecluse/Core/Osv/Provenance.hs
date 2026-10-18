@@ -3,14 +3,7 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE TupleSections #-}
 
-{- | What one advisory artifact records about the sources it was compiled from, and how old
-those sources say their data is.
-
-Pilot writes these values into the artifact's @meta@ table ("Ecluse.Core.Osv.Schema") and the
-consumer decodes them back at open. They are diagnostics and ordering evidence: nothing here
-refuses a version. A source that declares no value records no row, so absence stays
-distinguishable from a guess.
--}
+-- | Advisory source provenance and age diagnostics stored in the artifact metadata.
 module Ecluse.Core.Osv.Provenance (
     -- * The recorded sources
     AdvisoryProvenance (..),
@@ -59,11 +52,10 @@ import Ecluse.Core.Osv.Schema (
  )
 import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Security.Authority (credentialFreeOrigin, credentialFreePath, dialledOrigin)
+import Ecluse.Core.Text.HttpDate (parseHttpDate)
 import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 
-{- | The sources one artifact was compiled from, as they described themselves. Every field is
-'Nothing' when the source supplied no such value, or when an older artifact predates the key.
--}
+-- | Source declarations. Missing values and keys from older artifacts remain 'Nothing'.
 data AdvisoryProvenance = AdvisoryProvenance
     { apOsvSource :: Maybe Text
     -- ^ The advisory export in its stored form ('renderRecordedSource'). Older artifacts carry a credential-free URL.
@@ -101,9 +93,7 @@ provenanceRows prov =
   where
     row key = fmap (renderMetaKey key,)
 
-{- | Read the provenance an artifact's @meta@ rows carry. An absent key, an over-long value,
-and an unreadable timestamp all read as absence, never as a fault.
--}
+-- | Decode artifact metadata, treating absent, overlong, and unreadable values as missing.
 decodeProvenance :: [(Text, Text)] -> AdvisoryProvenance
 decodeProvenance rows =
     noProvenance
@@ -168,9 +158,7 @@ renderRecordedSource source =
         PathAsFetched path -> path
         PathSha256 hex -> "/<sha256:" <> hex <> ">"
 
-{- | An RFC 3339 timestamp, or a bare date read as its UTC start of day. Anything else is
-'Nothing', which records no value rather than an invented one.
--}
+-- | Read RFC 3339, the EPSS offset form, or a bare date at UTC midnight. Invalid values remain absent.
 parseSourceTime :: Text -> Maybe UTCTime
 parseSourceTime raw = rfc3339 <|> offsetWithoutColon <|> startOfDay
   where
@@ -180,17 +168,11 @@ parseSourceTime raw = rfc3339 <|> offsetWithoutColon <|> startOfDay
     offsetWithoutColon = parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%z" value
     startOfDay = (`UTCTime` 0) <$> (iso8601ParseM value :: Maybe Day)
 
--- | The instant an HTTP @Last-Modified@ header names, or 'Nothing' when it is unreadable.
-parseHttpDate :: Text -> Maybe UTCTime
-parseHttpDate raw = parseTimeM True defaultTimeLocale "%a, %d %b %Y %H:%M:%S %Z" (toString (T.strip raw))
-
 -- | The instant a response's @Last-Modified@ names. An absent or unreadable header records nothing.
 lastModifiedOf :: [ByteString] -> Maybe UTCTime
 lastModifiedOf = parseHttpDate . decodeUtf8 <=< listToMaybe
 
-{- | How old each source may be before Pilot raises its alarm. Loud ecosystems take a short
-threshold and slow ones a long threshold, so a quiet feed is not read as a stalled one.
--}
+-- | Per-source age thresholds for the Pilot alarm.
 data QuietTime = QuietTime
     { qtOsv :: NominalDiffTime
     -- ^ The threshold for this ecosystem's advisory export.
@@ -221,9 +203,7 @@ data SourceAge = SourceAge
     }
     deriving stock (Eq, Show)
 
-{- | The ages this provenance supports at @now@. A source that recorded no timestamp yields no
-age, because nothing about it can be read as quiet or fresh.
--}
+-- | Report ages only for sources with recorded timestamps.
 sourceAges :: UTCTime -> QuietTime -> AdvisoryProvenance -> [SourceAge]
 sourceAges now quiet prov =
     catMaybes

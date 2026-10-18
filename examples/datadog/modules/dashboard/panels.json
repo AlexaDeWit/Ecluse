@@ -604,6 +604,75 @@
     ]
   },
   {
+    "id": "upstream_requests",
+    "group": "dependencies",
+    "title": "Public upstream requests by host",
+    "unit": "requests/s",
+    "role": "public_reader",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.upstream.requests",
+        "alias": "Attempts",
+        "aggregation": "sum",
+        "modifier": "rate",
+        "group_by": [
+          "@upstream_host@"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "upstream_429",
+    "group": "dependencies",
+    "title": "Public upstream 429 responses by host",
+    "unit": "requests/s",
+    "role": "public_reader",
+    "section": "always",
+    "type": "timeseries",
+    "queries": [
+      {
+        "metric": "ecluse.upstream.requests",
+        "alias": "429 responses",
+        "aggregation": "sum",
+        "modifier": "rate",
+        "group_by": [
+          "@upstream_host@"
+        ],
+        "filters": [
+          "@upstream_status@:429"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "upstream_30d",
+    "group": "dependencies",
+    "title": "Public upstream attempts in the past 30 days",
+    "unit": "requests",
+    "role": "public_reader",
+    "section": "always",
+    "type": "query_table",
+    "queries": [
+      {
+        "metric": "ecluse.upstream.requests",
+        "alias": "Attempts",
+        "aggregation": "sum",
+        "modifier": "count",
+        "group_by": [
+          "@upstream_host@"
+        ]
+      }
+    ],
+    "time_aggregation": "sum",
+    "time": {
+      "type": "live",
+      "unit": "day",
+      "value": 30
+    }
+  },
+  {
     "id": "upstream_latency",
     "group": "dependencies",
     "title": "Upstream metadata latency",

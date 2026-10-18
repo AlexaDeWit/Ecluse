@@ -29,7 +29,7 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoInvalidEntries, infoName, infoVersions), PackageName, pkgEcosystem)
-import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable))
+import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchCooldown, FetchTransport, FetchUrlUnformable))
 import Ecluse.Core.Registry.Exchange (withinServeCap)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw),
@@ -62,9 +62,7 @@ data ManifestCaching
     = Uncached
     | Cached MetadataCache Source
 
-{- | One origin's raw reads bound to their observers, before a caching policy settles them into a
-'MetadataClient'. The phantom is the posture of the origin the reads were bound to.
--}
+-- | Bind raw origin reads to observers before choosing caching. The phantom retains the origin's credential posture.
 newtype MetadataReads (posture :: Type) = MetadataReads (Metric.Upstream -> ManifestCaching -> ClientWiring)
 
 -- As on OriginFor in Ecluse.Core.Registry.Origin: the default phantom role would let coerce
@@ -109,9 +107,7 @@ ecosystemMetadataReads ::
 ecosystemMetadataReads eco tracing metrics logFailure logInvalid logFetch =
     newMetadataReads metrics logFailure logInvalid logFetch (fetchManifest eco tracing) (fetchVersion eco tracing)
 
-{- | Hold each raw read to the floor's serve-path cap, so a single-flight leader fails before the
-request timeout ends its request.
--}
+-- | Cap each raw read so its single-flight leader fails before the request timeout.
 withinRequestCap :: ProgressFloor -> MetadataReads posture -> MetadataReads posture
 withinRequestCap progress (MetadataReads settle) = MetadataReads $ \upstream caching ->
     let wiring = settle upstream caching
@@ -232,3 +228,4 @@ metadataErrorCause = \case
     MetadataFetch (FetchUrlUnformable _) -> Metric.OtherCause
     MetadataFetch (FetchBoundExceeded _) -> Metric.OtherCause
     MetadataFetch (FetchTransport _) -> Metric.Connection
+    MetadataFetch (FetchCooldown _) -> Metric.UpstreamStatus

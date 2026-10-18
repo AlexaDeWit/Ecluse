@@ -38,7 +38,7 @@ import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataAbsent),
     VersionDoc (vdDetails),
-    VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
+    VersionEvaluation (VersionCooling, VersionMetadataUnavailable, VersionMissing, VersionPresent),
     VersionRead,
     versionEvaluation,
  )
@@ -77,7 +77,7 @@ import Ecluse.Core.Server.Pipeline.Tarball.Relay (
     RelayVerdict (RelayedArtifact, RelayedNonSuccess, RelayedOddShape),
     observeRelayAnomaly,
     relayJudged,
-    relayUpstreamWhen,
+    relayPublicResult,
     withMethod,
     withValidators,
  )
@@ -89,11 +89,12 @@ import Ecluse.Core.Server.Response (
     rejectUnavailable,
     serveDecisionOf,
  )
-import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder))
+import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamResult (..))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (spanMirrorEnqueue, spanRuleEval)
+import Ecluse.Core.Telemetry.Upstream qualified as PublicRead
 import Ecluse.Core.Version (renderVersion)
 import UnliftIO (withRunInIO)
 
@@ -146,6 +147,7 @@ gatePublicVersion covered ctx advisoryEtag prepared = do
                 Left MetadataAbsent -> VersionMissing
                 result -> versionEvaluation result
     case eval of
+        VersionCooling retry -> pure (Refused (upstreamCooling retry))
         VersionMetadataUnavailable -> pure (Refused upstreamUnavailable)
         VersionMissing -> pure (Refused (if covered Nothing then versionAbsent else upstreamUnavailable))
         VersionPresent doc _ | not (covered (Just (vdDetails doc))) -> pure (Refused upstreamUnavailable)
@@ -195,12 +197,13 @@ streamPublicArtifact ctx artifact observeVerdict
     | otherwise = case publicRequest of
         Left _ -> respond (internalArtifactError replies)
         Right req ->
-            relayUpstreamWhen (arMode ctx) (srPublicManager (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) req (const True) relayJudged (relayResponder replies respond) >>= \case
-                Just (verdict, received) -> do
+            relayPublicResult (srPublicControl (arRuntime ctx)) PublicRead.Artifact (arMode ctx) (srPublicManager (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) req (const True) relayJudged (relayResponder replies respond) >>= \case
+                UpstreamRelayed (verdict, received) -> do
                     observeVerdict verdict
                     mirrorOnAdmit ctx artifact verdict
                     pure received
-                Nothing -> respond (artifactError replies deps upstreamUnavailable)
+                UpstreamCooling retry -> respond (artifactError replies deps (upstreamCooling retry))
+                _ -> respond (artifactError replies deps upstreamUnavailable)
   where
     deps = arDeps ctx
     replies = arReplies ctx

@@ -27,7 +27,7 @@ module Ecluse.Core.Registry (
     PublishRelayResponse (..),
 ) where
 
-import Ecluse.Core.Fault (TransportFault)
+import Ecluse.Core.Fault (RetryAfter, TransportFault)
 import Ecluse.Core.Package (Hash, HashAlg, hashAlg, hashValue)
 import Ecluse.Core.Security (LimitError, authorityLabel)
 import Ecluse.Core.Server.Path (Filename)
@@ -111,6 +111,8 @@ data FetchFault
       FetchBoundExceeded LimitError
     | -- | The adapter classified a failed or interrupted exchange.
       FetchTransport TransportFault
+    | -- | A public authority is cooling down. No usable metadata or artifact body was read.
+      FetchCooldown RetryAfter
     deriving stock (Eq, Show)
 
 -- | Why a publish body is not relayed. Only the shape of a new-release upload is, since other writes edit stored releases.

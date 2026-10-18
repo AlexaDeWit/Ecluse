@@ -27,6 +27,8 @@ reference = "/docs/"
 
 {{ task_link(path="@/docs/protocol-support.md", title="Protocol details", description="Supported endpoints, metadata fields, and ecosystem limits.") }}
 
+{{ task_link(path="@/docs/upstream-behaviour.md", title="When a public registry throttles requests", description="Cooldowns, retry hints, recovery probes, and the limit of process-local state.") }}
+
 ## Security and design evidence {#security}
 
 The [rendered threat model](@/docs/threat-model.md) remains the security reference. It includes operation-specific diagrams, threats, controls, and accepted assumptions.

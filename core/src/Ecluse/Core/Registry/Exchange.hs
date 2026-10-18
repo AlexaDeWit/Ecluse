@@ -2,13 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Bounded registry exchanges and their transport-fault classification.
-Read exchanges retain explicit access refusals before reading an error body. Every exchange runs
-under the "Ecluse.Core.Registry.Progress" watchdog: one that moves fewer than the floor's body
-bytes, up or down, in a window of waiting fails with the transport timeout, and its connection
-closes rather than returning to the pool. The serve path also wraps its exchanges in
-'withinServeCap', which ends each one before the request timeout.
--}
+-- | Bounded registry exchanges under the progress watchdog and optional public authority control.
 module Ecluse.Core.Registry.Exchange (
     -- * The bounded exchange
     boundedExchange,
@@ -16,6 +10,7 @@ module Ecluse.Core.Registry.Exchange (
     singleAttemptSettings,
     newSingleAttemptManager,
     withSuccessBody,
+    withSuccessBodyUsing,
     boundedRelay,
 
     -- * The serve-path cap
@@ -47,6 +42,7 @@ import Network.HTTP.Client (
     brRead,
     newManager,
     responseBody,
+    responseHeaders,
     withResponse,
  )
 import Network.HTTP.Types.Status (statusCode)
@@ -57,12 +53,13 @@ import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
 import Ecluse.Core.Fault.Http (classifyTransport, typedTlsManagerSettings)
 import Ecluse.Core.Registry (
     BodyOutcome (SuccessBody, UnreadStatus),
-    FetchFault (FetchBoundExceeded, FetchTransport),
+    FetchFault (FetchBoundExceeded, FetchCooldown, FetchTransport),
     PublishRelayResponse (..),
     UrlFormationError,
     isSuccessStatus,
  )
 import Ecluse.Core.Registry.Progress (meteredReader, meteredUpload, watched)
+import Ecluse.Core.Registry.Public (ReadControl (Uncontrolled), withReadControl)
 import Ecluse.Core.Security (
     BodyLimit,
     LimitError,
@@ -90,13 +87,26 @@ boundedExchange project manager progress limits request =
 
 -- | Consume a response under the progress watchdog, classifying transport and body-limit failures.
 runExchange :: Manager -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
-runExchange manager progress request readResponse =
-    watched progress (\watch -> try (withResponse (metered watch) manager (readResponse . fmap (meteredReader watch))))
+runExchange = runExchangeUsing Uncontrolled
+
+runExchangeUsing :: ReadControl -> Manager -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
+runExchangeUsing control manager progress request readResponse =
+    watched
+        progress
+        ( \watch ->
+            try
+                ( withReadControl control (metered watch) $ \observed recordHeaders ->
+                    withResponse observed manager $ \response -> do
+                        cooldown <- recordHeaders (responseStatus response) (responseHeaders response)
+                        case cooldown of
+                            Just retry -> pure (Left (FetchCooldown retry))
+                            Nothing -> first FetchBoundExceeded <$> readResponse (meteredReader watch <$> response)
+                )
+        )
         <&> \case
             Nothing -> Left (belowFloor progress)
             Just (Left httpErr) -> Left (FetchTransport (classifyTransport httpErr))
-            Just (Right (Left limitErr)) -> Left (FetchBoundExceeded limitErr)
-            Just (Right (Right projected)) -> Right projected
+            Just (Right result) -> join result
   where
     metered watch = request{requestBody = meteredUpload watch (requestBody request)}
 
@@ -143,7 +153,11 @@ readBounded project limits response =
 
 -- | Consume a 2xx body within the response lifetime. A status outside 2xx never reaches the consumer.
 withSuccessBody :: Manager -> ProgressFloor -> (IO ByteString -> IO (Either LimitError a)) -> Request -> IO (Either FetchFault (BodyOutcome a))
-withSuccessBody manager progress consume request = runExchange manager progress request $ \response -> do
+withSuccessBody = withSuccessBodyUsing Uncontrolled
+
+-- | Apply public control only to the HTTP exchange that supplies this body.
+withSuccessBodyUsing :: ReadControl -> Manager -> ProgressFloor -> (IO ByteString -> IO (Either LimitError a)) -> Request -> IO (Either FetchFault (BodyOutcome a))
+withSuccessBodyUsing control manager progress consume request = runExchangeUsing control manager progress request $ \response -> do
     let code = statusCode (responseStatus response)
     if isSuccessStatus code
         then fmap (SuccessBody code) <$> consume (brRead (responseBody response))
@@ -176,9 +190,7 @@ accumulatingCharge charge = do
     (add, _) <- accumulatingChargeFrom 0 charge
     pure $ \bytes -> when (bytes > 0) (add bytes)
 
-{- | Start from an existing reservation and report the saturated total, including after callback failure.
-Every addition invokes the callback, including zero. Construction does not charge the seed.
--}
+-- | Report the saturated reservation, including after callback failure. Zero additions charge too, but construction does not charge the seed.
 accumulatingChargeFrom :: Integer -> (Int -> IO ()) -> IO (Int -> IO (), IO Int)
 accumulatingChargeFrom initial charge = do
     held <- newIORef initial

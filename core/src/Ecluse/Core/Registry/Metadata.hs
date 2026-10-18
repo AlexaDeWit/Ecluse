@@ -29,8 +29,9 @@ module Ecluse.Core.Registry.Metadata (
     versionTransience,
 ) where
 
+import Ecluse.Core.Fault (RetryAfter)
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
-import Ecluse.Core.Registry (BodyOutcome (SuccessBody, UnreadStatus), FetchFault (FetchBoundExceeded), isAuthorisationFailure)
+import Ecluse.Core.Registry (BodyOutcome (SuccessBody, UnreadStatus), FetchFault (FetchBoundExceeded, FetchCooldown), isAuthorisationFailure)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Rules.Types (Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError (..))
@@ -57,9 +58,7 @@ data MetadataClient = MetadataClient
     -- ^ One version's projection with the document's own @latest@. Errors retain the upstream failure.
     }
 
-{- | One version's typed projection paired with the object the source declared it with, built
-once from one body and never re-paired, so the mirror write republishes what the rules admitted.
--}
+-- | Pair the version facts and source object from the same read for mirror publication.
 data VersionDoc = VersionDoc
     { vdDetails :: PackageDetails
     -- ^ The typed view the rules engine decides on.
@@ -68,9 +67,7 @@ data VersionDoc = VersionDoc
     }
     deriving stock (Eq, Show)
 
-{- | The requested version and the @latest@ tag the same document declared. Both come from one
-bounded read, so a caller needing the tag adds no second fetch.
--}
+-- | Retain the selected version and latest tag from one bounded read.
 data VersionRead = VersionRead
     { vrVersion :: Maybe VersionDoc
     -- ^ The pair. 'Nothing' means the package resolved without this version.
@@ -107,6 +104,8 @@ data VersionEvaluation
       VersionMissing
     | -- | Metadata was unavailable. Public admission and workers retain their retry policy.
       VersionMetadataUnavailable
+    | -- | Public admission is unavailable until the authority cooldown expires.
+      VersionCooling RetryAfter
     deriving stock (Eq, Show)
 
 -- | Classify a version lookup for public admission and workers, treating metadata failures as transient.
@@ -117,6 +116,7 @@ fetchVersionDetails client name version =
 -- | Classify a resolved selected read without changing its acquisition lifetime.
 versionEvaluation :: Either MetadataError VersionRead -> VersionEvaluation
 versionEvaluation = \case
+    Left (MetadataFetch (FetchCooldown retry)) -> VersionCooling retry
     Left _ -> VersionMetadataUnavailable
     Right versionRead -> case vrVersion versionRead of
         Nothing -> VersionMissing
@@ -125,6 +125,7 @@ versionEvaluation = \case
 -- | Classify unsuccessful lookups for retry. A resolved version has no transience.
 versionTransience :: VersionEvaluation -> Maybe Transience
 versionTransience = \case
+    VersionCooling retry -> Just (WillResolve (Just retry))
     VersionMetadataUnavailable -> Just (WillResolve Nothing)
     -- A withdrawn version is gone for good, so no consumer waits for it to come back.
     VersionMissing -> Just WontResolve

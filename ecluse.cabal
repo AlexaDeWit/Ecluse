@@ -159,6 +159,7 @@ library ecluse-core
     Ecluse.Core.Ecosystem
     Ecluse.Core.Fault
     Ecluse.Core.Fault.Http
+    Ecluse.Core.Fault.RetryAfter
     Ecluse.Core.InFlight
     Ecluse.Core.Json.Lenient
     Ecluse.Core.Osv.Advisory
@@ -192,7 +193,10 @@ library ecluse-core
     Ecluse.Core.Registry.Adapter.Capability
     Ecluse.Core.Registry.Adapter.Types
     Ecluse.Core.Registry.CachedDocument
+    Ecluse.Core.Registry.Backoff
+    Ecluse.Core.Registry.Public
     Ecluse.Core.Registry.Exchange
+    Ecluse.Core.Registry.Exchange.Observe
     Ecluse.Core.Registry.Json.Intern
     Ecluse.Core.Registry.Json.Packed
     Ecluse.Core.Registry.Json.Scratch
@@ -344,8 +348,10 @@ library ecluse-core
     Ecluse.Core.Telemetry.Metrics
     Ecluse.Core.Telemetry.Record
     Ecluse.Core.Telemetry.Span
+    Ecluse.Core.Telemetry.Upstream
     Ecluse.Core.Text
     Ecluse.Core.Text.Iso8601
+    Ecluse.Core.Text.HttpDate
     Ecluse.Core.Version
     Ecluse.Core.Wire
     Ecluse.Core.Worker
@@ -804,6 +810,7 @@ library ecluse-test-support
     Ecluse.Test.Queue
     Ecluse.Test.Registry
     Ecluse.Test.Registry.Publish
+    Ecluse.Test.Registry.Public
     Ecluse.Test.Registry.Npm
     Ecluse.Test.Registry.Npm.Metadata
     Ecluse.Test.Registry.Npm.StoredVersions
@@ -835,6 +842,7 @@ library ecluse-test-support
     Ecluse.Test.Server.Route
     Ecluse.Test.Server.Transform
     Ecluse.Test.Stub
+    Ecluse.Test.Stub.Retry
     Ecluse.Test.Stub.Socket
     Ecluse.Test.Supervision
     Ecluse.Test.Support
@@ -1090,6 +1098,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.CveSpec
     Ecluse.Core.EcosystemSpec
     Ecluse.Core.Fault.HttpSpec
+    Ecluse.Core.Fault.RetryAfterSpec
     Ecluse.Core.FaultSpec
     Ecluse.Core.InFlightSpec
     Ecluse.Core.Json.LenientSpec
@@ -1120,6 +1129,9 @@ test-suite ecluse-core-unit
     Ecluse.Core.SnapshotSpec
     Ecluse.Core.Registry.AdapterSpec
     Ecluse.Core.Registry.CachedDocumentSpec
+    Ecluse.Core.Registry.PublicSpec
+    Ecluse.Core.Registry.BackoffSpec
+    Ecluse.Core.Registry.Exchange.ObserveSpec
     Ecluse.Core.Registry.ExchangeSpec
     Ecluse.Core.Registry.Json.InternSpec
     Ecluse.Core.Registry.Json.PackedSpec
@@ -1247,7 +1259,9 @@ test-suite ecluse-core-unit
     Ecluse.Core.Supervision.InternalSpec
     Ecluse.Core.Telemetry.CatalogueSpec
     Ecluse.Core.Telemetry.MetricsSpec
+    Ecluse.Core.Telemetry.UpstreamSpec
     Ecluse.Core.Text.Iso8601Spec
+    Ecluse.Core.Text.HttpDateSpec
     Ecluse.Core.TextSpec
     Ecluse.Core.Version.GemSpec
     Ecluse.Core.Version.Pep440Spec

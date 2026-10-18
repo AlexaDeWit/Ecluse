@@ -28,7 +28,8 @@ import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQue
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact))
 import Ecluse.Core.Registry.Metadata (versionEvaluation)
 import Ecluse.Core.Registry.Metadata.Fetch (chargingSelectedReads, fetchVersion)
-import Ecluse.Core.Registry.Origin (originClient)
+import Ecluse.Core.Registry.Origin (anonymousOrigin, controlPublicOrigin, originClientOf)
+import Ecluse.Core.Registry.Public (newPublicControl)
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpProbeInventory), MirrorTransport (..), newMirrorPublish)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiMirrorRead)
@@ -41,6 +42,7 @@ import Ecluse.Core.Server.Admission.Meter (MemoryMeter, charge, newChargeRegion,
 import Ecluse.Core.Server.MemoryModel (decodedDocumentCharge)
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Published))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (wmpMirrorJobProcessed))
+import Ecluse.Core.Telemetry.Upstream (PublicReadKind (WorkerMetadata))
 import Ecluse.Core.Worker (JobOutcome (Retried), WorkerPolicy (..), WorkerRuntime (..), newWorkerHeartbeat, processBatch, processJob, runWorkerM)
 import Ecluse.Core.Worker.Types (WorkerMirrorState (..), WorkerStateBudget (..))
 import Ecluse.Runtime.Mirror.State.S3 (mirrorStateForEnv)
@@ -70,6 +72,7 @@ boot knobs use = do
                     target = stateTarget (localhost targetPort)
                 store <- mirrorStateForEnv defaultLimits "worker-load" "state" target (AWS.once endpoint{AWS.retryCheck = \_ _ -> False})
                 manager <- newManager defaultManagerSettings
+                publicControl <- newPublicControl (\_ _ _ -> pass) (\_ _ -> pass)
                 meter <- testMemoryMeter
                 rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
                 successes <- newIORef (0 :: Int)
@@ -78,10 +81,11 @@ boot knobs use = do
                 heartbeat <- newWorkerHeartbeat
                 logEnv <- newTestLogEnv
                 let publish = newMirrorPublish (MirrorTransport manager (pure Nothing) defaultLimits passthroughTracingPort) (loopbackRegistryUrl (localhost targetPort)) (loopbackRegistryUrl (localhost targetPort <> "/upload")) pypiPublishCodec
+                    sourceOrigin = originClientOf (controlPublicOrigin publicControl (Just WorkerMetadata) (anonymousOrigin defaultLimits manager (loopbackRegistryUrl (localhost sourcePort))))
                     policy =
                         WorkerPolicy
                             { wpFirstParty = const False
-                            , wpResolveVersion = \pay name version -> versionEvaluation <$> fetchVersion (chargingSelectedReads decodedDocumentCharge pay pypiMirrorRead) passthroughTracingPort (originClient defaultLimits manager (loopbackRegistryUrl (localhost sourcePort)) Nothing) name version
+                            , wpResolveVersion = \pay name version -> versionEvaluation <$> fetchVersion (chargingSelectedReads decodedDocumentCharge pay pypiMirrorRead) passthroughTracingPort sourceOrigin name version
                             , wpRules = rules
                             , wpMinIntegrity = defaultMinIntegrity
                             , wpArtifactHostHonoured = const True
@@ -94,7 +98,17 @@ boot knobs use = do
                             }
                     recordingQueue = queue{ack = ack queue >=> traverse (\() -> modifyIORef' acknowledgements (+ 1))}
                     metrics = noopWorkerMetricsPort{wmpMirrorJobProcessed = \result -> when (result == Published) (modifyIORef' successes (+ 1))}
-                    runtime = WorkerRuntime recordingQueue manager heartbeat metrics passthroughWorkerTracingPort id (Map.singleton PyPI policy)
+                    runtime =
+                        WorkerRuntime
+                            { wrQueue = recordingQueue
+                            , wrManager = manager
+                            , wrPublicControl = publicControl
+                            , wrHeartbeat = heartbeat
+                            , wrMetrics = metrics
+                            , wrTracing = passthroughWorkerTracingPort
+                            , wrInjectTraceContext = id
+                            , wrPolicies = Map.singleton PyPI policy
+                            }
                     prepareBatch = do
                         resetWorkerFixture fixture
                         writeIORef successes 0

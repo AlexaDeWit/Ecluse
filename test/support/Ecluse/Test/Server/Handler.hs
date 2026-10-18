@@ -19,10 +19,11 @@ import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.Wai.Internal (Response (ResponseBuilder), ResponseReceived (ResponseReceived))
 import UnliftIO.Exception (throwIO)
 
+import Ecluse.Core.Registry.Public (newPublicControl)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission)
 import Ecluse.Core.Server.Context (Handler, MountBinding, RequestCtx (RequestCtx), ServeRuntime (ServeRuntime), runHandler)
 import Ecluse.Core.Server.Contract (ResponseContract, responseToWai)
-import Ecluse.Core.Telemetry.Record (MetricsPort)
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpUpstreamRequest))
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -72,4 +73,5 @@ testServeRuntimeWith admission metricsPort = do
     cache <- newMetadataCache defaultCacheConfig
     queue <- newTestMemoryQueue
     meter <- testMemoryMeter
-    pure (ServeRuntime admission meter manager manager cache queue metricsPort passthroughTracingPort)
+    publicControl <- newPublicControl (mpUpstreamRequest metricsPort) (\_ _ -> pass)
+    pure (ServeRuntime admission meter manager publicControl manager cache queue metricsPort passthroughTracingPort)

@@ -20,7 +20,7 @@ import Network.Wai (Request, RequestBodyLength (ChunkedBody, KnownLength), Respo
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (
-    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
+    FetchFault (FetchBoundExceeded, FetchCooldown, FetchTransport, FetchUrlUnformable),
     ParseError (parseErrorMessage),
     PublishBodyFault (PublishMalformed, PublishUnsupported),
     PublishRelayResponse (PublishRelayResponse),
@@ -161,6 +161,8 @@ renderRelay replies deps = \case
     Left (FetchUrlUnformable _urlErr) ->
         publishError replies status500 [] (appendHelp (pubHelp deps) "the publication target URL is misconfigured")
     Left (FetchTransport _fault) ->
+        publishError replies status502 [] (appendHelp (pubHelp deps) "the publication target could not be reached")
+    Left (FetchCooldown _retry) ->
         publishError replies status502 [] (appendHelp (pubHelp deps) "the publication target could not be reached")
     Left (FetchBoundExceeded _limit) ->
         publishError replies status502 [] (appendHelp (pubHelp deps) "the publication target could not be reached")

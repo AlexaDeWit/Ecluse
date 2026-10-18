@@ -32,6 +32,7 @@ import Ecluse.Core.Telemetry.Metrics (
     metricAttributes,
     renderLabel,
  )
+import Ecluse.Core.Telemetry.Upstream (ExchangeOutcome (..), PublicReadKind (..))
 import Ecluse.Test.Metrics (allLabelKeys, highCardinalityKeys)
 
 spec :: Spec
@@ -50,6 +51,9 @@ labelKeySpec = describe "label keys (the cardinality guard)" $ do
                               , "ecosystem"
                               , "mount"
                               , "upstream"
+                              , "server.address"
+                              , "kind"
+                              , "status"
                               , "status_class"
                               , "result"
                               , "target"
@@ -96,6 +100,13 @@ boundedDomainSpec = describe "bounded label value domains" $ do
 
 renderSpec :: Spec
 renderSpec = describe "renderLabel" $ do
+    it "renders public attempt hosts and exact status independently of other upstream signals" $ do
+        renderLabel (LServerAddress "registry.npmjs.org") `shouldBe` ("server.address", "registry.npmjs.org")
+        renderLabel (LRequestKind WorkerMetadata) `shouldBe` ("kind", "worker_metadata")
+        renderLabel (LRequestStatus (ResponseStatus 429)) `shouldBe` ("status", "429")
+        renderLabel (LRequestStatus TransportFailure) `shouldBe` ("status", "transport_failure")
+        renderLabel (LRequestStatus Cancelled) `shouldBe` ("status", "cancelled")
+
     it "keeps cache outcomes and refusal stores distinct on the wire" $ do
         map (renderLabel . LCacheResult) [Hit, Miss, Collapsed]
             `shouldBe` [("result", "hit"), ("result", "miss"), ("result", "collapsed")]
@@ -107,7 +118,7 @@ renderSpec = describe "renderLabel" $ do
         renderLabel (LDecision Deny) `shouldBe` ("decision", "deny")
         renderLabel (LDecision Unavailable) `shouldBe` ("decision", "unavailable")
 
-    it "carries the configured rule name as the one operator-bounded label" $
+    it "carries the configured rule name" $
         renderLabel (LRule "min-age") `shouldBe` ("rule", "min-age")
 
     it "spells each credential provider as the configuration spells its store tag" $ do

@@ -86,7 +86,7 @@ import Ecluse.Core.Fault (
 import Ecluse.Core.Fault.Http (isRetryableStatusCode)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
-    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
+    FetchFault (FetchBoundExceeded, FetchCooldown, FetchTransport, FetchUrlUnformable),
     UrlFormationError,
     renderUrlFormationError,
  )
@@ -197,9 +197,7 @@ maintenanceOf observed deletion =
         , storeCursor = dlCursor deletion
         }
 
-{- | Count and pace every request the observing calls make. A version enumeration counts as one
-request however many pages it takes, so a large package costs more than was counted.
--}
+-- | Meter observation calls. Version enumeration counts once, even when it reads several pages.
 meteredObservation :: RequestGate -> StoreObservation -> StoreObservation
 meteredObservation gate observed =
     observed
@@ -214,9 +212,7 @@ meteredObservation gate observed =
     -- The page is counted once it arrives, so the wait falls between it and the next request.
     counted page = spend ListingPage $> page
 
-{- | The same metering over a whole handle. A delete counts one request per batch the backend's
-ceiling divides the versions into.
--}
+-- | Meter a whole handle, counting one delete per backend-limited batch.
 meteredMaintenance :: RequestGate -> StoreMaintenance -> StoreMaintenance
 meteredMaintenance gate handle =
     handle
@@ -442,6 +438,7 @@ storeFaultOfFetch = \case
             { faultTransport = fault
             , faultRetry = if transportRetryable (tfCause fault) then RetryWorthwhile else RetryFutile
             }
+    FetchCooldown retry -> StoreFault (transportFault TransportProtocol "the public upstream is cooling down") (RetryDelayed retry)
     FetchBoundExceeded _ -> protocolFault "the store's answer crossed the response-size bound"
     FetchUrlUnformable err -> unformableFault err
 
@@ -468,9 +465,7 @@ protocolFault :: Text -> StoreFault
 protocolFault detail =
     StoreFault{faultTransport = transportFault TransportProtocol detail, faultRetry = RetryFutile}
 
-{- | A fault the store's answer status classifies. The predicate is the caller's own: the
-statuses worth another attempt differ between the reads.
--}
+-- | Classify a store status with the caller's retry predicate.
 statusFault :: (Int -> Bool) -> Int -> Text -> StoreFault
 statusFault retryable status detail =
     StoreFault

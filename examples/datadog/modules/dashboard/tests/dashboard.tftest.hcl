@@ -170,3 +170,76 @@ run "mirror_publication_audits" {
     error_message = "Mirror audit logs must retain deployment scope and select successful publication records."
   }
 }
+
+run "public_upstream_scope_rates_and_totals" {
+  command = plan
+  variables {
+    sections = { mirror = true }
+    services = {
+      proxy   = ["ecluse-proxy"]
+      mirror  = ["ecluse-worker"]
+      dredger = ["ecluse-dredger"]
+      pilot   = ["ecluse-pilot"]
+    }
+    metric_names      = { "ecluse.upstream.requests" = "otel.public.requests" }
+    upstream_tag_keys = { host = "upstream_host", kind = "request_kind", status = "upstream_status" }
+  }
+  assert {
+    condition = alltrue([for id in ["upstream_requests", "upstream_429", "upstream_30d"] :
+      strcontains(output.metric_queries[id][0].query, "sum:otel.public.requests{") &&
+      strcontains(output.metric_queries[id][0].query, "ecluse_deployment:platform-east") &&
+      strcontains(output.metric_queries[id][0].query, "region:ca-central-1") &&
+      strcontains(output.metric_queries[id][0].query, "$env") &&
+      strcontains(output.metric_queries[id][0].query, "$service") &&
+      strcontains(output.metric_queries[id][0].query, "service:ecluse-proxy OR service:ecluse-worker") &&
+      !strcontains(output.metric_queries[id][0].query, "service:ecluse-dredger") &&
+      !strcontains(output.metric_queries[id][0].query, "service:ecluse-pilot") &&
+      strcontains(output.metric_queries[id][0].query, "by {upstream_host}")
+    ])
+    error_message = "Public upstream panels must retain scope, public-reader services, and ingestion mappings."
+  }
+  assert {
+    condition = (
+      endswith(output.metric_queries.upstream_requests[0].query, ".as_rate()") &&
+      endswith(output.metric_queries.upstream_429[0].query, ".as_rate()") &&
+      strcontains(output.metric_queries.upstream_429[0].query, "upstream_status:429") &&
+      !strcontains(output.metric_queries.upstream_requests[0].query, "upstream_status:") &&
+      endswith(output.metric_queries.upstream_30d[0].query, ".as_count()") &&
+      output.metric_queries.upstream_30d[0].aggregator == "sum"
+    )
+    error_message = "Show rates and exact 429 selection, with summed counts for the total."
+  }
+  assert {
+    condition = anytrue(flatten([for widget in jsondecode(output.dashboard_json).widgets :
+      widget.definition.type != "group" ? [] : [for child in widget.definition.widgets :
+        child.definition.type != "query_table" ? false : (
+          child.definition.time.type == "live" &&
+          child.definition.time.unit == "day" &&
+          child.definition.time.value == 30 &&
+          child.definition.requests[0].response_format == "scalar"
+        )
+      ]
+    ]))
+    error_message = "The per-host table must total a fixed rolling 30-day window."
+  }
+}
+
+run "embedded_public_reader_is_not_counted_twice" {
+  command = plan
+  variables { sections = { mirror = true } }
+  assert {
+    condition = (
+      strcontains(output.metric_queries.upstream_requests[0].query, "(service:ecluse)") &&
+      !strcontains(output.metric_queries.upstream_requests[0].query, "service:ecluse OR service:ecluse") &&
+      strcontains(output.metric_queries.upstream_requests[0].query, "by {server.address}") &&
+      strcontains(output.metric_queries.upstream_429[0].query, "status:429")
+    )
+    error_message = "Embedded roles share one service selector and default host and status mappings."
+  }
+}
+
+run "reject_upstream_tag_injection" {
+  command = plan
+  variables { upstream_tag_keys = { host = "server.address} OR env:*" } }
+  expect_failures = [var.upstream_tag_keys]
+}

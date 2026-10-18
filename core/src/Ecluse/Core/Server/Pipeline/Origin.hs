@@ -28,7 +28,9 @@ import UnliftIO (withRunInIO)
 import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Credential (ClientCredential)
+import Ecluse.Core.Fault (RetryAfter)
 import Ecluse.Core.Package (PackageName, renderPackageName)
+import Ecluse.Core.Registry (FetchFault (FetchCooldown))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead))
 import Ecluse.Core.Registry.Metadata (
     Manifest,
@@ -44,7 +46,7 @@ import Ecluse.Core.Registry.Metadata (
     ),
     VersionRead,
  )
-import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, Private, Public, anonymousOrigin, chargingFullReads, originBaseUrl, originClient, originClientOf, perCallerOrigin)
+import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, Private, Public, anonymousOrigin, chargingFullReads, controlPublicOrigin, originBaseUrl, originClient, originClientOf, perCallerOrigin)
 import Ecluse.Core.Security (Limits (progressFloor))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
@@ -76,6 +78,8 @@ data OriginResult
       OriginNotFound
     | -- | The origin was not read: unreachable, faulting, or undecodable. It degrades to no contribution.
       OriginUnresolved
+    | -- | Public reads are suspended until the authority cooldown expires.
+      OriginCooling RetryAfter
     | -- | An unconfigured origin contributes neither metadata nor an availability failure.
       OriginAbsent
 
@@ -95,6 +99,7 @@ originManifest = \case
     OriginNameMismatch -> Nothing
     OriginNotFound -> Nothing
     OriginUnresolved -> Nothing
+    OriginCooling _ -> Nothing
     OriginAbsent -> Nothing
 
 -- | The miss an origin yielded, or 'Nothing' when it contributed a document or an explicit refusal.
@@ -105,6 +110,7 @@ originMiss = \case
     OriginNameMismatch -> Nothing
     OriginNotFound -> Just MissAbsent
     OriginUnresolved -> Just MissUnresolved
+    OriginCooling _ -> Just MissUnresolved
     OriginAbsent -> Just MissAbsent
 
 originResultOf :: Either SomeException (Either MetadataError Manifest) -> OriginResult
@@ -116,6 +122,7 @@ originResultOf = \case
     Right (Left (MetadataHttpFailure _)) -> OriginUnresolved
     Right (Left MetadataUndecodable) -> OriginUnresolved
     Right (Left (MetadataBoundExceeded _)) -> OriginUnresolved
+    Right (Left (MetadataFetch (FetchCooldown retry))) -> OriginCooling retry
     Right (Left (MetadataFetch _)) -> OriginUnresolved
     Right (Right manifest) -> OriginResolved manifest
 
@@ -177,7 +184,7 @@ privateOrigin :: ServeRuntime -> PackumentDeps -> RegistryUrl -> Maybe ClientCre
 privateOrigin rt deps = perCallerOrigin (pdLimits deps) (srPrivateManager rt)
 
 publicOrigin :: ServeRuntime -> PackumentDeps -> OriginFor Public
-publicOrigin rt deps = anonymousOrigin (pdLimits deps) (srPublicManager rt) (pdPublicBaseUrl deps)
+publicOrigin rt deps = controlPublicOrigin (srPublicControl rt) Nothing (anonymousOrigin (pdLimits deps) (srPublicManager rt) (pdPublicBaseUrl deps))
 
 publicSource :: PackumentDeps -> Source
 publicSource deps = Source (registryUrlText (pdPublicBaseUrl deps))

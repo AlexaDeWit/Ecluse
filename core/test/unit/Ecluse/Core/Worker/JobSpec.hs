@@ -32,7 +32,7 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionUndecidable))
 import Ecluse.Core.Queue (MirrorJob (jobTriggerFilename))
 import Ecluse.Core.Registry (
-    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
+    FetchFault (FetchBoundExceeded, FetchCooldown, FetchTransport, FetchUrlUnformable),
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     PublishError (PublishError),
     PublishFault (PublishFetch, PublishRejected),
@@ -1113,3 +1113,4 @@ renderFault = \case
     FetchUrlUnformable _ -> "unformable"
     FetchBoundExceeded _ -> "over the bound"
     FetchTransport _ -> "transport failed"
+    FetchCooldown _ -> "upstream cooling down"

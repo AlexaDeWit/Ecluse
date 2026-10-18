@@ -67,6 +67,7 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
 import Ecluse.Core.Registry.MirrorUpload (expectedDescriptor, inventoryDetails, uploadBytes)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, npmPublishDocument, prepareNpmSource, prepareNpmUpload)
+import Ecluse.Core.Registry.Public (newPublicControl)
 import Ecluse.Core.Registry.Publish.Internal (MirrorPublish (..), PreparedMirrorUpload (..), PreparedMirrorVersion (..), PublishCodec (pcNativeComplete), PublishPlan)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
@@ -75,7 +76,7 @@ import Ecluse.Core.Worker (
     WorkerHeartbeat,
     WorkerM,
     WorkerPolicies,
-    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrQueue, wrTracing),
+    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrPublicControl, wrQueue, wrTracing),
     newWorkerHeartbeat,
     runWorkerM,
  )
@@ -182,10 +183,12 @@ withWiredRuntime queue policies metricsPort body = do
 withWiredRuntimeHeartbeat :: WorkerHeartbeat -> MirrorQueue -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> IO a) -> IO a
 withWiredRuntimeHeartbeat heartbeat queue policies metricsPort body = do
     manager <- newManager defaultManagerSettings
+    publicControl <- newPublicControl (\_ _ _ -> pass) (\_ _ -> pass)
     body
         WorkerRuntime
             { wrQueue = queue
             , wrManager = manager
+            , wrPublicControl = publicControl
             , wrHeartbeat = heartbeat
             , wrMetrics = metricsPort
             , wrTracing = passthroughWorkerTracingPort
@@ -249,9 +252,7 @@ recordingAckQueue = do
     let recording = base{ack = \receipt -> atomicModifyIORef' acked (\rs -> (receipt : rs, ())) >> ack base receipt}
     pure (recording, reverse <$> readIORef acked)
 
-{- | Observe every visibility reset the worker asks for, so a spec can tell a message released
-for an immediate redelivery from one left to wait out the lease the worker held.
--}
+-- | Record visibility resets to distinguish immediate redelivery from waiting for the current lease.
 recordingVisibilityQueue :: IO (MirrorQueue, IO [(ReceiptHandle, Seconds)])
 recordingVisibilityQueue = do
     base <- newTestMemoryQueue

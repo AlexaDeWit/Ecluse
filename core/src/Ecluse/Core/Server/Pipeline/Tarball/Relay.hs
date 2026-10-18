@@ -14,8 +14,8 @@ module Ecluse.Core.Server.Pipeline.Tarball.Relay (
     withValidators,
 
     -- * Relaying the upstream response
-    relayUpstreamWhen,
     relayUpstreamResult,
+    relayPublicResult,
     acceptArtifact,
     acceptPrivateArtifact,
     privateArtifactResponder,
@@ -35,11 +35,13 @@ import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hContentType
 import Data.ByteString qualified as BS
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (isAuthorisationFailure)
+import Ecluse.Core.Registry.Public (PublicControl, ReadControl (Controlled))
 import Ecluse.Core.Security (ProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
-import Ecluse.Core.Server.Stream (RelayResponder (..), UpstreamBody (NoBody, StreamBody), UpstreamResult, withUpstreamResult, withUpstreamWhen)
+import Ecluse.Core.Server.Stream (RelayResponder (..), UpstreamBody (NoBody, StreamBody), UpstreamResult, withUpstreamResult, withUpstreamResultUsing)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpPublicRelayAnomaly))
+import Ecluse.Core.Telemetry.Upstream (PublicReadKind)
 import Ecluse.Core.Version (Version, renderVersion)
 import Katip (KatipContext, Severity (WarningS), katipAddContext, logFM, ls, sl)
 
@@ -61,19 +63,6 @@ withValidators :: RequestHeaders -> HTTP.Request -> HTTP.Request
 withValidators validators req =
     req{HTTP.requestHeaders = validators <> HTTP.requestHeaders req}
 
--- | Relay in the serve mode, combining all pre-commit misses as 'Nothing'.
-relayUpstreamWhen ::
-    ArtifactServe ->
-    Manager ->
-    ProgressFloor ->
-    HTTP.Request ->
-    (Status -> Bool) ->
-    (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) ->
-    RelayResponder response ->
-    IO (Maybe (verdict, response))
-relayUpstreamWhen mode manager progress request =
-    withUpstreamWhen manager progress request (upstreamBody mode)
-
 -- | Relay in the serve mode, preserving an upstream rejection or transport failure.
 relayUpstreamResult ::
     ArtifactServe ->
@@ -86,6 +75,10 @@ relayUpstreamResult ::
     IO (UpstreamResult (verdict, response))
 relayUpstreamResult mode manager progress request =
     withUpstreamResult manager progress request (upstreamBody mode)
+
+-- | Relay a public artifact or companion after shared authority admission.
+relayPublicResult :: PublicControl -> PublicReadKind -> ArtifactServe -> Manager -> ProgressFloor -> HTTP.Request -> (Status -> Bool) -> (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) -> RelayResponder response -> IO (UpstreamResult (verdict, response))
+relayPublicResult control kind mode manager progress request = withUpstreamResultUsing (Controlled control kind) manager progress request (upstreamBody mode)
 
 upstreamBody :: ArtifactServe -> UpstreamBody
 upstreamBody = \case

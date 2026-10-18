@@ -8,7 +8,7 @@ module Ecluse.Composition.WorkerSpec (spec) where
 import Data.Aeson (encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
-import Network.HTTP.Types.Status (status200)
+import Network.HTTP.Types.Status (status200, status429)
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
 
@@ -18,11 +18,12 @@ import Ecluse.Composition.MirrorState (MirrorStateBinding (MirrorStateBinding))
 import Ecluse.Composition.Support (expectConfig, expectProviders, expectValidated, fixedNow, overrideEnv, pypiMirrorEnv, scopedName, staticEnvVars, testLimits)
 import Ecluse.Composition.Worker (mirrorTransportFor, workerPoliciesWithState)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Fault (RetryAfter (RetryAfter))
 import Ecluse.Core.Mirror.State (MirrorState (..), stateTarget)
 import Ecluse.Core.Package (Artifact (artFilename), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionDenied), admitArtifactWithEvidence)
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
-import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails, vdRaw), VersionEvaluation (VersionPresent))
+import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails, vdRaw), VersionEvaluation (VersionCooling, VersionPresent))
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpProbeInventory), MirrorTransport (ptLimits))
 import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
@@ -36,15 +37,17 @@ import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool)
 import Ecluse.Core.Server.Context (MountBinding (bindingPackumentDeps), PackumentDeps (pdFirstParty, pdLimits, pdMinIntegrity, pdUpstreams))
 import Ecluse.Core.Server.MirrorView (newMirrorRetention, newMirrorView)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit), mountUpstreams)
+import Ecluse.Core.Telemetry.Upstream qualified as PublicRead
 import Ecluse.Core.Worker (WorkerPolicy (wpArtifactLimits, wpFirstParty, wpMinIntegrity, wpMirrorState, wpNow, wpPublish, wpResolveVersion, wpRules))
 import Ecluse.Core.Worker.Types (WorkerMirrorState (..), WorkerStateBudget (..))
-import Ecluse.Runtime.Env (Env (envMemoryMeter))
+import Ecluse.Runtime.Env (Env (envMemoryMeter, envPublicControl))
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Package (pypiVersion, requestsName, sampleDetails, thingName, unsafeFilename, v1_0_0)
+import Ecluse.Test.Registry.Public (PublicFixture (..), newPublicFixture)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleIndexWith)
 import Ecluse.Test.Rules (blockedBy, inertRuleDeps)
-import Ecluse.Test.Stub (allCaptured, capMethod, capPath, headerValue, stubBaseUrl, withRoutedStubIO, withStub)
+import Ecluse.Test.Stub (allCaptured, capMethod, capPath, headerValue, stubBaseUrl, withRoutedStubIO, withStub, withStubHeaders)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape), expectRight)
 
 spec :: Spec
@@ -128,6 +131,15 @@ policyInputsSpec = describe "workerPoliciesWithState policy inputs" $ do
 
 pypiCapabilitiesSpec :: Spec
 pypiCapabilitiesSpec = describe "composed PyPI worker capabilities" $ do
+    it "counts worker metadata once and reuses its shared cooldown for another job" $
+        withStubHeaders status429 [("Retry-After", "60")] "busy" $ \source -> do
+            fixture <- newPublicFixture
+            policy <- composedPyPIAtWith (\env -> env{envPublicControl = pfControl fixture}) (stubBaseUrl source) "http://localhost:1"
+            replicateM_ 2 $
+                wpResolveVersion policy (const pass) requestsName (pypiVersion "2.34.2") `shouldReturn` VersionCooling (RetryAfter 60)
+            length <$> allCaptured source `shouldReturn` 1
+            pfRequests fixture `shouldReturn` [("127.0.0.1", PublicRead.WorkerMetadata, PublicRead.ResponseStatus 429)]
+
     it "rereads every distribution and its source fields anonymously while authenticating target probes" $ do
         let initial = ["requests-2.34.2-py3-none-any.whl", "requests-2.34.2.tar.gz"]
             added = initial <> ["requests-2.34.2-1-py3-none-any.whl"]
@@ -212,14 +224,17 @@ managedBudgetSpec = describe "composed managed worker budget" $ do
         snChargedBytes <$> meterSnapshot (envMemoryMeter env) `shouldReturn` 0
 
 composedPyPIAt :: Text -> Text -> IO WorkerPolicy
-composedPyPIAt source target = do
+composedPyPIAt = composedPyPIAtWith id
+
+composedPyPIAtWith :: (Env -> Env) -> Text -> Text -> IO WorkerPolicy
+composedPyPIAtWith changeEnv source target = do
     (env, bindings, targets) <- composedFixturesFrom pypiMirrorEnv testLimits
     let bind mount = mount{bindingPackumentDeps = deps{pdUpstreams = mountUpstreams pypiArtifactHosts Nothing (loopbackRegistryUrl source) (MirrorOnAdmit (loopbackRegistryUrl target))}}
           where
             deps = bindingPackumentDeps mount
         retarget publish = publish{ptMirrorUrl = loopbackRegistryUrl target, ptUploadUrl = loopbackRegistryUrl (target <> "/legacy/")}
     maybe (fail "missing composed PyPI policy") pure $
-        Map.lookup PyPI (workerPoliciesWithState env Map.empty (map bind bindings) (map retarget targets) testArtifactCap)
+        Map.lookup PyPI (workerPoliciesWithState (changeEnv env) Map.empty (map bind bindings) (map retarget targets) testArtifactCap)
 
 composedManagedBudget :: Int -> IO (Env, WorkerMirrorState)
 composedManagedBudget allowance = do
