@@ -10,6 +10,7 @@ module Ecluse.Core.Registry.PyPI.Project (
     projectSimpleIndex,
     ProjectedFile,
     projectFile,
+    projectArtifact,
     projectedEntryKey,
 
     -- * File coordinates
@@ -196,8 +197,7 @@ releaseAvailability yanked previous
     | yanked == FileWithdrawn = previous
     | otherwise = Available
 
--- The location stays verbatim. 'Ecluse.Core.Package.Filter' folds its scheme and authority
--- against the egress and host policies afterward.
+-- | Keep the location verbatim. 'Ecluse.Core.Package.Filter' applies egress and host policies afterward.
 projectArtifact :: IndexFile -> Artifact
 projectArtifact file =
     Artifact

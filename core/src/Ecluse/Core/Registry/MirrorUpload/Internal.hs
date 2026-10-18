@@ -41,7 +41,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Package (Artifact (..), Hash, HashAlg (SHA256), PackageDetails (..), PackageInfo (infoVersions), PackageName, mkHash, pkgEcosystem)
+import Ecluse.Core.Package (Artifact (..), Hash, HashAlg (SHA256), PackageDetails (..), PackageName, mkHash, pkgEcosystem)
 import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Package.Hash (canonicalHashValue, computeDigest, hexDigestText)
 import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest)
@@ -49,7 +49,7 @@ import Ecluse.Core.Registry (MirrorArtifact (..), PublishFault (PublishIntegrity
 import Ecluse.Core.Registry.CachedDocument (npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, restrictSimpleFiles, simpleEnvelope, simpleFiles)
-import Ecluse.Core.Registry.PyPI.Project (fileCoordinate, projectFile, projectName, projectSimpleIndex)
+import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, fileCoordinate, projectArtifact, projectName)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifEntryKey, ifFilename))
 import Ecluse.Core.Registry.ServedDocument (uniqueEntries, validEntryKey)
 import Ecluse.Core.Server.Path (mkFilename, unFilename)
@@ -201,9 +201,9 @@ validatePyPIEntry details entries artifact = do
     raw <- maybeToRight (PublishSourceUnavailable "a source coordinate is missing or ambiguous") (Map.lookup (artEntryKey artifact) entries)
     decoded <- first (const (PublishSourceUnavailable "an admitted source file is malformed")) (parseEither parseJSON raw)
     let file = decoded{ifEntryKey = artEntryKey artifact}
-        projected = projectSimpleIndex (pkgName details) [] [projectFile file (fileCoordinate (pkgName details) (ifFilename file))]
-    version <- maybeToRight (PublishSourceUnavailable "a source filename belongs to another package or version") (Map.lookup (renderVersion (pkgVersion details)) (infoVersions projected))
-    let actual :| _ = pkgArtifacts version
+    unless (fmap fcVersionKey (fileCoordinate (pkgName details) (ifFilename file)) == Just (renderVersion (pkgVersion details))) $
+        refused "a source filename belongs to another package or version"
+    let actual = projectArtifact file
     expected <- expectedFile artifact
     actualExpected <- expectedFile actual
     unless (expectedIdentityMatches expected actualExpected && actual{artUrl = artUrl artifact, artHashes = artHashes artifact, artSize = artSize artifact} == artifact) $
