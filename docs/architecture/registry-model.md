@@ -108,7 +108,7 @@ Content-Type, including its boundary. It does not rebuild the client's distribut
 - **Opt-in.** A mount needs `publicationTarget` before it relays a client upload. Otherwise
   npm PUT and PyPI multipart POST answer `405 Method Not Allowed`.
 
-![First-party publication through authentication and namespace checks](../diagrams/first-party-publication.svg)
+[First-party publication through authentication and namespace checks](https://ecluse-proxy.com/docs/threat-model/#first-party-publication)
 
 ## Where an artifact lives
 
@@ -164,7 +164,7 @@ demand-driven mirror job. The enqueue does not block, so the proxy serves the cl
 See [Streaming](web-layer.md#streaming-and-resource-lifetime) and
 [Mirror queue](cloud-backends.md#mirror-queue).
 
-![Private artifact preference and admitted public fallback](../diagrams/artifact-downloads.svg)
+[Private artifact preference and admitted public fallback](https://ecluse-proxy.com/docs/threat-model/#artifact-downloads)
 
 ## Distribution metadata companions
 
@@ -241,7 +241,7 @@ track which input a survivor came from, so assembly can select its retained sour
 A packument request filters but never mirrors. See
 [Applying verdicts to a packument](rules-engine.md#applying-verdicts-to-a-packument).
 
-![Caller-authorised private metadata merged with admitted public metadata](../diagrams/metadata-admission.svg)
+[Caller-authorised private metadata merged with admitted public metadata](https://ecluse-proxy.com/docs/threat-model/#metadata-listing-and-admission)
 
 ### The route name is the served name's validation authority
 

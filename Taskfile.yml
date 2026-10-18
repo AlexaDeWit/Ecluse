@@ -563,19 +563,19 @@ tasks:
     internal: true
     cmds:
       - task: diagrams
-      - mkdir -p web/generated web/static/diagrams
+      - mkdir -p web/generated
       - saer render threat-modelling/ecluse.yaml --format md --styled --no-title --heading-level 3 --out web/generated/threat-register.md
-      - cp docs/diagrams/*.svg web/static/diagrams/
   diagrams:
     desc: Render the shared system diagrams from the Saerskriven threat model
     cmds:
       - |
-        mkdir -p docs/diagrams
+        rm -rf web/static/diagrams
+        mkdir -p web/static/diagrams
         for diagram in registry-topology metadata-admission artifact-downloads \
           first-party-publication mirror-completion pypi-inventory \
           advisory-publication advisory-distribution revocation-cleanup; do
           saer render threat-modelling/ecluse.yaml --format svg --diagram "$diagram" \
-            --out "docs/diagrams/$diagram.svg" || exit 1
+            --out "web/static/diagrams/$diagram.svg" || exit 1
         done
   # Zola refuses a non-empty output directory and never prunes a stale file.
   site:zola:

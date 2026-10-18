@@ -206,7 +206,7 @@ compress responses, and Istio compresses only through a resource an operator mus
 may not be allowed to install. `server.metadataGzip` is on by default, and
 `ECLUSE_SERVER__METADATA_GZIP=false` restores the identity responses exactly.
 
-![Metadata admission, authorised response reuse and per-response compression](../diagrams/metadata-admission.svg)
+[Metadata admission, authorised response reuse and per-response compression](https://ecluse-proxy.com/docs/threat-model/#metadata-listing-and-admission)
 
 After admission, `Accept-Encoding` selects gzip, identity, or a `406` when neither is permitted.
 A matching `If-None-Match` returns `304` before rendering or compression. Otherwise the proxy

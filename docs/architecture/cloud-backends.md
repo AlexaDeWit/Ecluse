@@ -86,9 +86,9 @@ distinct from HTTP readiness. `/livez` reports it as a pass-or-fail status plus 
 the last successful poll, so an orchestrator can judge staleness itself. A process that runs no
 worker reports no poll and stays live on its listener alone.
 
-![Mirror trigger, verification, upload and completion proof](../diagrams/mirror-completion.svg)
+[Mirror trigger, verification, upload and completion proof](https://ecluse-proxy.com/docs/threat-model/#mirror-writes-and-completion)
 
-![Managed PyPI inventory and retained companions](../diagrams/pypi-inventory.svg)
+[Managed PyPI inventory and retained companions](https://ecluse-proxy.com/docs/threat-model/#pypi-inventory-and-companions)
 
 ### Holding a receipt for the life of its job
 
