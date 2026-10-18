@@ -246,10 +246,12 @@ contributeAt sourceId prov (Snapshot digest info) =
 Empty input yields 'Nothing'.
 -}
 mergePackuments :: [(Provenance, Snapshot PackageInfo)] -> Maybe MergePlan
-mergePackuments = planFrom . foldl' appendInput mempty
+mergePackuments [] = Nothing
+mergePackuments ((prov, snapshot) : inputs) =
+    planFrom (foldl' appendInput (contribute prov snapshot) inputs)
   where
-    appendInput acc (prov, snapshot) =
-        unionMerge acc (contributeAt (mergeCount acc) prov snapshot)
+    appendInput acc (nextProvenance, nextSnapshot) =
+        unionMerge acc (contributeAt (mergeCount acc) nextProvenance nextSnapshot)
 
 {- | Project the resolved 'MergePlan' from a folded 'Merge'. It resolves each version key to its
 precedence winner. 'Nothing' only for 'mempty', the empty merge, which has nothing to serve.
