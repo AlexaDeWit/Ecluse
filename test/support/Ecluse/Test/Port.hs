@@ -52,6 +52,7 @@ noopMetricsPort =
         , mpRuleEvalDuration = \_ _ -> pass
         , mpRuleEffectfulFailure = const pass
         , mpUpstreamFetch = \_ _ _ -> pass
+        , mpUpstreamRequest = \_ _ _ -> pass
         , mpUpstreamFetchError = \_ _ -> pass
         , mpCacheRequest = const pass
         , mpVersionCacheRequest = const pass

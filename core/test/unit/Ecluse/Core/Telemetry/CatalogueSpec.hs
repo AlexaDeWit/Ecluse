@@ -40,6 +40,7 @@ catalogueSpec = describe "metric-name catalogue" $ do
                             , "ecluse.publish.body.in_flight_bytes"
                             , "ecluse.publish.body.shed"
                             , "ecluse.registry.merge.divergence"
+                            , "ecluse.upstream.requests"
                             , "ecluse.upstream.fetch.duration"
                             , "ecluse.upstream.fetch.errors"
                             , "ecluse.metadata_cache.requests"

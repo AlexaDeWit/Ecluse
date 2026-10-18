@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Backend-neutral recording ports for the serve path, mirror worker, Dredger and advisory tasks.
-Each port accepts the bounded labels defined in "Ecluse.Core.Telemetry.Metrics".
+Ports accept bounded labels and public request hosts from formed HTTP requests.
 The application supplies telemetry implementations. Polled gauges remain outside these ports.
 -}
 module Ecluse.Core.Telemetry.Record (
@@ -29,6 +29,7 @@ module Ecluse.Core.Telemetry.Record (
 import GHC.Clock (getMonotonicTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Telemetry.Upstream (ExchangeOutcome, PublicReadKind)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult,
     AdvisoryDropCause,
@@ -49,7 +50,7 @@ import Ecluse.Core.Telemetry.Metrics (
  )
 
 {- | The metric-recording port over a telemetry backend, one field per @ecluse.*@ signal.
-The closed label types in "Ecluse.Core.Telemetry.Metrics" bound each signal's cardinality.
+Host labels name permitted public destinations. Other dimensions use bounded label types.
 -}
 data MetricsPort = MetricsPort
     { mpServeDecision :: Decision -> IO ()
@@ -84,6 +85,8 @@ data MetricsPort = MetricsPort
     -- ^ Record a rule-evaluation latency sample (@ecluse.rule.eval.duration@) by tier.
     , mpRuleEffectfulFailure :: Cause -> IO ()
     -- ^ Record one effectful-rule failure (@ecluse.rule.effectful.failures@) by cause.
+    , mpUpstreamRequest :: Text -> PublicReadKind -> ExchangeOutcome -> IO ()
+    -- ^ Record one public HTTP attempt by formed host, request kind, and raw outcome.
     , mpUpstreamFetch :: Upstream -> StatusClass -> Double -> IO ()
     -- ^ Record an upstream metadata-fetch latency sample (@ecluse.upstream.fetch.duration@).
     , mpUpstreamFetchError :: Upstream -> Cause -> IO ()

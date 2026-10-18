@@ -347,6 +347,7 @@ library ecluse-core
     Ecluse.Core.Telemetry.Metrics
     Ecluse.Core.Telemetry.Record
     Ecluse.Core.Telemetry.Span
+    Ecluse.Core.Telemetry.Upstream
     Ecluse.Core.Text
     Ecluse.Core.Text.Iso8601
     Ecluse.Core.Text.HttpDate
@@ -1255,6 +1256,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Supervision.InternalSpec
     Ecluse.Core.Telemetry.CatalogueSpec
     Ecluse.Core.Telemetry.MetricsSpec
+    Ecluse.Core.Telemetry.UpstreamSpec
     Ecluse.Core.Text.Iso8601Spec
     Ecluse.Core.Text.HttpDateSpec
     Ecluse.Core.TextSpec

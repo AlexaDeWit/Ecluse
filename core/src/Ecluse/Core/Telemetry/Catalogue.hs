@@ -63,6 +63,8 @@ data MetricName
       PublishBodyShed
     | -- | @ecluse.registry.merge.divergence@: cross-upstream integrity divergences detected in the packument merge (counter).
       MergeDivergence
+    | -- | @ecluse.upstream.requests@: public HTTP attempts by host, kind, and status (counter).
+      UpstreamRequests
     | -- | @ecluse.upstream.fetch.duration@: upstream fetch latency (histogram).
       UpstreamFetchDuration
     | -- | @ecluse.upstream.fetch.errors@: upstream fetch errors (counter).
@@ -142,6 +144,7 @@ metricName = \case
     PublishBodyInFlightBytes -> "ecluse.publish.body.in_flight_bytes"
     PublishBodyShed -> "ecluse.publish.body.shed"
     MergeDivergence -> "ecluse.registry.merge.divergence"
+    UpstreamRequests -> "ecluse.upstream.requests"
     UpstreamFetchDuration -> "ecluse.upstream.fetch.duration"
     UpstreamFetchErrors -> "ecluse.upstream.fetch.errors"
     MetadataCacheRequests -> "ecluse.metadata_cache.requests"

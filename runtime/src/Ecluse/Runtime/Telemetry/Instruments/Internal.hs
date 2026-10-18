@@ -27,6 +27,7 @@ module Ecluse.Runtime.Telemetry.Instruments.Internal (
     recordBreakerState,
 
     -- * Upstream fetch (data plane)
+    recordUpstreamRequest,
     recordUpstreamFetch,
     recordUpstreamFetchError,
 
@@ -100,7 +101,7 @@ import Ecluse.Core.Telemetry.Metrics (
     Cause,
     CredentialResult,
     Decision,
-    Label (LAdvisoryCompileResult, LAdvisoryDropCause, LAdvisorySyncResult, LBreakerSource, LCacheResult, LCacheStore, LCause, LCredentialResult, LDecision, LEcosystem, LMirrorResult, LPerimeterCause, LProvider, LReasonClass, LRelayAnomaly, LRule, LStatusClass, LSweepResult, LSweepTarget, LTier, LUpstream),
+    Label (LAdvisoryCompileResult, LAdvisoryDropCause, LAdvisorySyncResult, LBreakerSource, LCacheResult, LCacheStore, LCause, LCredentialResult, LDecision, LEcosystem, LMirrorResult, LPerimeterCause, LProvider, LReasonClass, LRelayAnomaly, LRequestKind, LRequestStatus, LRule, LServerAddress, LStatusClass, LSweepResult, LSweepTarget, LTier, LUpstream),
     MirrorResult,
     Provider,
     ReasonClass,
@@ -116,6 +117,7 @@ import Ecluse.Core.Telemetry.Metrics (
  )
 import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (..), AdvisorySyncMetricsPort (..), DredgerMetricsPort (..), MetricsPort (..), WorkerMetricsPort (..))
 import Ecluse.Core.Telemetry.Span (ecluseScope)
+import Ecluse.Core.Telemetry.Upstream (ExchangeOutcome, PublicReadKind)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryMeterProvider)
 
 -- | Domain instruments. WAI emits @http.server.request.duration@ from its own meter.
@@ -130,6 +132,7 @@ data Metrics = Metrics
     , mRuleEvalDuration :: Histogram
     , mRuleEffectfulFailures :: Counter Int64
     , mRuleBreakerState :: Gauge Int64
+    , mUpstreamRequests :: Counter Int64
     , mUpstreamFetchDuration :: Histogram
     , mUpstreamFetchErrors :: Counter Int64
     , mMetadataCacheRequests :: Counter Int64
@@ -183,6 +186,7 @@ newMetrics telemetry = do
     ruleEvalDuration <- histogram meter RuleEvalDuration "rule-evaluation latency by tier"
     ruleEffectfulFailures <- counter meter RuleEffectfulFailures "{failure}" "effectful-rule failures by cause"
     ruleBreakerState <- gauge meter RuleBreakerState "circuit-breaker state by source (0 closed, 1 half-open, 2 open)"
+    upstreamRequests <- counter meter UpstreamRequests "{request}" "public HTTP attempts by host, kind, and status"
     upstreamFetchDuration <- histogram meter UpstreamFetchDuration "upstream metadata-fetch latency by upstream and status class"
     upstreamFetchErrors <- counter meter UpstreamFetchErrors "{error}" "upstream metadata-fetch errors by upstream and cause"
     metadataCacheRequests <- counter meter MetadataCacheRequests "{request}" "full-store requests by hit/miss/collapsed"
@@ -230,6 +234,7 @@ newMetrics telemetry = do
             , mRuleEvalDuration = ruleEvalDuration
             , mRuleEffectfulFailures = ruleEffectfulFailures
             , mRuleBreakerState = ruleBreakerState
+            , mUpstreamRequests = upstreamRequests
             , mUpstreamFetchDuration = upstreamFetchDuration
             , mUpstreamFetchErrors = upstreamFetchErrors
             , mMetadataCacheRequests = metadataCacheRequests
@@ -307,6 +312,7 @@ metricsPortOf m =
         , mpRuleDenial = recordRuleDenial m
         , mpRuleEvalDuration = recordRuleEvalDuration m
         , mpRuleEffectfulFailure = recordRuleEffectfulFailure m
+        , mpUpstreamRequest = recordUpstreamRequest m
         , mpUpstreamFetch = recordUpstreamFetch m
         , mpUpstreamFetchError = recordUpstreamFetchError m
         , mpCacheRequest = recordCacheRequest m
@@ -412,6 +418,11 @@ source as the gauge's bounded ordinal (0 closed, 1 half-open, 2 open).
 recordBreakerState :: (MonadIO m) => Metrics -> BreakerSource -> BreakerState -> m ()
 recordBreakerState m source breakerState =
     set (mRuleBreakerState m) (breakerStateCode breakerState) [LBreakerSource source]
+
+-- | Record one public HTTP attempt using the host of its formed request.
+recordUpstreamRequest :: (MonadIO m) => Metrics -> Text -> PublicReadKind -> ExchangeOutcome -> m ()
+recordUpstreamRequest m address kind outcome =
+    addOne (mUpstreamRequests m) [LServerAddress address, LRequestKind kind, LRequestStatus outcome]
 
 -- | Record an upstream metadata-fetch latency sample to @ecluse.upstream.fetch.duration@.
 recordUpstreamFetch :: (MonadIO m) => Metrics -> Upstream -> StatusClass -> Double -> m ()

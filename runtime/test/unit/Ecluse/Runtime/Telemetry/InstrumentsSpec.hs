@@ -23,7 +23,7 @@ import Ecluse.Core.Telemetry.Metrics (
     Cause (Connection, Decode, Timeout),
     CredentialResult (RefreshFailed, Refreshed),
     Decision (Admit, Deny, Unavailable),
-    Label (LCacheResult, LCacheStore, LEcosystem, LProvider),
+    Label (LCacheResult, LCacheStore, LEcosystem, LProvider, LRequestKind, LRequestStatus, LServerAddress),
     MirrorResult (Failed, Published),
     Provider (ProviderCodeArtifact, ProviderRegistry, ProviderVerdaccio),
     ReasonClass (ReasonMissingIntegrity, ReasonPolicy),
@@ -33,6 +33,7 @@ import Ecluse.Core.Telemetry.Metrics (
     metricAttributes,
  )
 import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (acmpCompileAccepted, acmpCompileDropped, acmpCompileRun), MetricsPort (..), timedSeconds)
+import Ecluse.Core.Telemetry.Upstream (ExchangeOutcome (..), PublicReadKind (..))
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Telemetry.Instruments.Internal (
     advisoryCompileMetricsPortOf,
@@ -71,6 +72,23 @@ spec :: Spec
 spec = describe "Ecluse.Telemetry.Instruments" $ do
     admissionMetricsSpec
     cacheGaugesSpec
+    it "counts public attempts separately by host, kind, and exact outcome" $
+        withTestTelemetry $ \telemetry meterEnv -> do
+            port <- metricsPortOf <$> newMetrics telemetry
+            let hosts = ["registry.npmjs.org", "files.pythonhosted.org"]
+                kinds = [Listing, SelectedRead, Artifact, Companion, WorkerMetadata, WorkerArtifact]
+                outcomes = [ResponseStatus 200, ResponseStatus 429, ResponseStatus 503, TransportFailure, Cancelled]
+            for_ hosts $ \host -> for_ kinds $ \kind -> do
+                traverse_ (mpUpstreamRequest port host kind) outcomes
+                mpUpstreamRequest port host kind (ResponseStatus 429)
+            points <- sumPoints "ecluse.upstream.requests" meterEnv
+            points
+                `shouldMatchList` [ (metricAttributes [LServerAddress host, LRequestKind kind, LRequestStatus outcome], if outcome == ResponseStatus 429 then 2 else 1)
+                                  | host <- hosts
+                                  , kind <- kinds
+                                  , outcome <- outcomes
+                                  ]
+
     it "exports distinct store outcomes and retention refusals" $
         withTestTelemetry $ \telemetry meterEnv -> do
             port <- metricsPortOf <$> newMetrics telemetry
@@ -104,6 +122,9 @@ spec = describe "Ecluse.Telemetry.Instruments" $ do
         -- One representative call per instrument, spanning the bounded label domains,
         -- so the whole emit surface is exercised. None must throw or block.
         traverse_ (recordServeDecision m) [Admit, Deny, Unavailable]
+        mpUpstreamRequest (metricsPortOf m) "registry.npmjs.org" Artifact (ResponseStatus 429)
+        mpUpstreamRequest (metricsPortOf m) "registry.npmjs.org" Artifact TransportFailure
+        mpUpstreamRequest (metricsPortOf m) "registry.npmjs.org" Artifact Cancelled
         recordRuleDenial m (Just "min-age") ReasonPolicy
         recordRuleDenial m Nothing ReasonMissingIntegrity
         traverse_ (recordRuleEvalDuration m Structural) [0, 0.5]

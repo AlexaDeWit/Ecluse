@@ -18,13 +18,7 @@ import Network.HTTP.Client (HttpException, Request (requestBody), RequestBody (R
 import Network.HTTP.Types (Status, statusCode)
 
 import Ecluse.Core.Registry.Progress (isProgressFloorFailure)
-
--- | The raw outcome of an attempt, independent of metric attributes and origin scope.
-data ExchangeOutcome
-    = ResponseStatus Int
-    | TransportFailure
-    | Cancelled
-    deriving stock (Eq, Show)
+import Ecluse.Core.Telemetry.Upstream (ExchangeOutcome (..))
 
 data Attempt = Unstarted | Pending | Answered
     deriving stock (Eq)

@@ -2,13 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The bounded-label discipline for the @ecluse.*@ metrics. An inline proxy sees thousands of
-distinct packages, so one high-cardinality label turns a handful of series into millions.
-'Label' is a closed sum over bounded-domain keys and values: @package@, @version@, @scope@, and
-a denial @message@ have no constructor, so the type keeps them off a metric, and they ride the
-spans and the log line instead. @rule@ is the exception, bounded by a deployment's own rule set
-rather than by an enum. The instruments these label are in
-"Ecluse.Core.Telemetry.Catalogue".
+{- | Metric labels exclude package, version, scope, and message identifiers.
+Rule names follow the deployment's rule set. Public host labels come from formed requests.
+The instrument catalogue lives in "Ecluse.Core.Telemetry.Catalogue".
 -}
 module Ecluse.Core.Telemetry.Metrics (
     -- * Label keys (the closed set)
@@ -66,6 +62,7 @@ import Data.Universe.Class (Universe (..))
 import Data.Universe.Generic (universeGeneric)
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Telemetry.Upstream (ExchangeOutcome, PublicReadKind, exchangeOutcomeName, publicReadKindName)
 
 {- | The closed set of metric label keys. The high-cardinality identifiers (@package@,
 @version@, @scope@, a denial @message@) have no key, so they can never become a label.
@@ -77,6 +74,9 @@ data LabelKey
     | KeyEcosystem
     | KeyMount
     | KeyUpstream
+    | KeyServerAddress
+    | KeyRequestKind
+    | KeyRequestStatus
     | KeyStatusClass
     | KeyResult
     | KeyTarget
@@ -98,6 +98,9 @@ labelKeyName = \case
     KeyEcosystem -> "ecosystem"
     KeyMount -> "mount"
     KeyUpstream -> "upstream"
+    KeyServerAddress -> "server.address"
+    KeyRequestKind -> "kind"
+    KeyRequestStatus -> "status"
     KeyStatusClass -> "status_class"
     KeyResult -> "result"
     KeyTarget -> "target"
@@ -308,7 +311,7 @@ breakerStateCode = \case
     Open -> 2
 
 {- | A single metric label. No constructor takes a package, version, scope, or message. 'LRule'
-is the one operator-bounded label, since a deployment defines a small, fixed rule set.
+follows the deployment's rule set. Public hosts identify permitted upstream destinations.
 -}
 data Label
     = LDecision Decision
@@ -317,6 +320,9 @@ data Label
     | LEcosystem Ecosystem
     | LMount Ecosystem
     | LUpstream Upstream
+    | LServerAddress Text
+    | LRequestKind PublicReadKind
+    | LRequestStatus ExchangeOutcome
     | LStatusClass StatusClass
     | LCacheResult CacheResult
     | LCacheStore CacheStore
@@ -344,6 +350,9 @@ labelKey = \case
     LEcosystem{} -> KeyEcosystem
     LMount{} -> KeyMount
     LUpstream{} -> KeyUpstream
+    LServerAddress{} -> KeyServerAddress
+    LRequestKind{} -> KeyRequestKind
+    LRequestStatus{} -> KeyRequestStatus
     LStatusClass{} -> KeyStatusClass
     LCacheResult{} -> KeyResult
     LCacheStore{} -> KeyStore
@@ -382,6 +391,9 @@ labelValue = \case
     LUpstream u -> case u of
         Private -> "private"
         Public -> "public"
+    LServerAddress address -> address
+    LRequestKind kind -> publicReadKindName kind
+    LRequestStatus outcome -> exchangeOutcomeName outcome
     LStatusClass s -> case s of
         Status2xx -> "2xx"
         Status3xx -> "3xx"
