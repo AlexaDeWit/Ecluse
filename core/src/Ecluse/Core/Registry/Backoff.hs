@@ -4,9 +4,6 @@
 
 -- | Process-local public authority cooldowns with one owned recovery request.
 module Ecluse.Core.Registry.Backoff (
-    BackoffPolicy,
-    mkBackoffPolicy,
-    defaultBackoffPolicy,
     reportingBackoff,
     CooldownEvent (..),
     publicRetryAfter,
@@ -28,7 +25,6 @@ import Ecluse.Core.Fault (RetryAfter (RetryAfter))
 import Ecluse.Core.InFlight (guardInFlight)
 import Ecluse.Core.Security.Authority (HostPort)
 
--- | Caller-selected fallback bounds and the retry hint while a probe owns recovery.
 data BackoffPolicy = BackoffPolicy
     { bpFloor :: RetryAfter
     , bpCap :: RetryAfter
@@ -36,15 +32,8 @@ data BackoffPolicy = BackoffPolicy
     }
     deriving stock (Eq, Show)
 
--- | Require positive whole seconds and a fallback floor no greater than its cap.
-mkBackoffPolicy :: RetryAfter -> RetryAfter -> RetryAfter -> Maybe BackoffPolicy
-mkBackoffPolicy floorDelay cap probeHint = do
-    guard (floorDelay > RetryAfter 0 && floorDelay <= cap && probeHint > RetryAfter 0)
-    pure (BackoffPolicy floorDelay cap probeHint)
-
--- | Fixed public-read defaults: a 60-second fallback floor, 600-second cap, and one-second probe hint.
-defaultBackoffPolicy :: BackoffPolicy
-defaultBackoffPolicy = BackoffPolicy (RetryAfter 60) (RetryAfter 600) (RetryAfter 1)
+fixedBackoffPolicy :: BackoffPolicy
+fixedBackoffPolicy = BackoffPolicy (RetryAfter 60) (RetryAfter 600) (RetryAfter 1)
 
 -- | A cooldown opens or a response restores the authority to healthy service.
 data CooldownEvent = CoolingDown | Recovered
@@ -79,11 +68,11 @@ data HostState = HostState
     , hsCeiling :: RetryAfter
     }
 
--- | Supply a fresh clock and a jitter selector. Its output is clamped to the supplied fallback interval.
-newPublicBackoff :: BackoffPolicy -> IO UTCTime -> (RetryAfter -> RetryAfter -> IO RetryAfter) -> IO PublicBackoff
-newPublicBackoff policy clock jitter = do
+-- | Use the fixed public policy with a fresh clock and jitter selector, clamped to the current fallback interval.
+newPublicBackoff :: IO UTCTime -> (RetryAfter -> RetryAfter -> IO RetryAfter) -> IO PublicBackoff
+newPublicBackoff clock jitter = do
     hosts <- newTVarIO Map.empty
-    pure (PublicBackoff policy clock jitter hosts (\_ _ -> pass))
+    pure (PublicBackoff fixedBackoffPolicy clock jitter hosts (\_ _ -> pass))
 
 -- | An admitted request may settle once. Its enclosing callback owns its lifetime.
 data PublicAttempt = PublicAttempt
@@ -192,7 +181,6 @@ throttleResponse policy ticket now (RetryAfter seconds) hostState
         Open{} -> hsCeiling hostState
         _ -> growFallback policy (hsCeiling hostState)
 
--- Integer arithmetic prevents caller-supplied bounds from overflowing before the cap applies.
 growFallback :: BackoffPolicy -> RetryAfter -> RetryAfter
 growFallback policy (RetryAfter current) = case bpCap policy of
     RetryAfter cap -> RetryAfter (fromInteger (min (toInteger cap) (2 * toInteger current)))

@@ -22,7 +22,7 @@ import Ecluse.Core.Fault (RetryAfter (RetryAfter))
 import Ecluse.Core.Fault.Http (hostPortLabel)
 import Ecluse.Core.Fault.RetryAfter (parseRetryAfter)
 import Ecluse.Core.Registry (FetchFault (FetchCooldown, FetchUrlUnformable), UrlFormationError (UnparseableUrl))
-import Ecluse.Core.Registry.Backoff (CooldownEvent, PublicBackoff, PublicResponse (..), defaultBackoffPolicy, newPublicBackoff, publicRetryAfter, recordPublicResponse, reportingBackoff, withPublicAttempt)
+import Ecluse.Core.Registry.Backoff (CooldownEvent, PublicBackoff, PublicResponse (..), newPublicBackoff, publicRetryAfter, recordPublicResponse, reportingBackoff, withPublicAttempt)
 import Ecluse.Core.Registry.Exchange.Observe (observeExchange)
 import Ecluse.Core.Security.Authority (HostPort (hpHost), hostPortAddress)
 import Ecluse.Core.Telemetry.Upstream (ExchangeOutcome, PublicReadKind)
@@ -37,7 +37,7 @@ data PublicControl = PublicControl
 -- | Create the fixed public policy with full jitter above its positive fallback floor.
 newPublicControl :: (Text -> PublicReadKind -> ExchangeOutcome -> IO ()) -> (HostPort -> CooldownEvent -> IO ()) -> IO PublicControl
 newPublicControl record report = do
-    backoff <- newPublicBackoff defaultBackoffPolicy getCurrentTime jitter
+    backoff <- newPublicBackoff getCurrentTime jitter
     pure (publicControlWith (reportingBackoff report backoff) getCurrentTime record)
   where
     jitter (RetryAfter floorDelay) (RetryAfter ceilingDelay) = do

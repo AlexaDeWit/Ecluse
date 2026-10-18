@@ -10,7 +10,7 @@ module Ecluse.Test.Registry.Public (
 
 import Data.Time (NominalDiffTime, UTCTime (UTCTime), addUTCTime, fromGregorian)
 
-import Ecluse.Core.Registry.Backoff (CooldownEvent, defaultBackoffPolicy, newPublicBackoff, reportingBackoff)
+import Ecluse.Core.Registry.Backoff (CooldownEvent, newPublicBackoff, reportingBackoff)
 import Ecluse.Core.Registry.Public (PublicControl, publicControlWith)
 import Ecluse.Core.Security.Authority (HostPort)
 import Ecluse.Core.Telemetry.Upstream (ExchangeOutcome, PublicReadKind)
@@ -29,7 +29,7 @@ newPublicFixture = do
     clock <- newIORef (UTCTime (fromGregorian 2026 10 18) 0)
     requests <- newIORef []
     transitions <- newIORef []
-    backoff <- newPublicBackoff defaultBackoffPolicy (readIORef clock) (\_ ceilingDelay -> pure ceilingDelay)
+    backoff <- newPublicBackoff (readIORef clock) (\_ ceilingDelay -> pure ceilingDelay)
     let append target value = atomicModifyIORef' target (\values -> (value : values, ()))
         report authority event = append transitions (authority, event)
         record host kind outcome = append requests (host, kind, outcome)

@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Relay outcomes, response lifetimes, and bounded streaming.
 module Ecluse.Core.Server.StreamSpec (spec) where
 
 import Prelude hiding (get)
@@ -18,7 +19,7 @@ import Network.HTTP.Client (
     responseBody,
  )
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (Method, ResponseHeaders, Status, methodGet, methodHead, status200, status206, status304, status404, statusCode, statusIsSuccessful)
+import Network.HTTP.Types (Method, ResponseHeaders, Status, methodGet, methodHead, status200, status206, status304, status404, status502, status503, statusCode, statusIsSuccessful)
 import Network.HTTP.Types.Header (HeaderName, hContentType, hETag)
 import Network.Wai (Application, Response, ResponseReceived, responseLBS, responseRaw, responseStream)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -26,10 +27,10 @@ import Test.Hspec
 import UnliftIO (concurrently)
 import UnliftIO.Exception (tryAny, withException)
 
-import Ecluse.Core.Fault (TransportCause (TransportUnreachable), TransportFault (tfCause))
+import Ecluse.Core.Fault (RetryAfter (RetryAfter), TransportCause (TransportUnreachable), TransportFault (tfCause))
 import Ecluse.Core.Security (Limits (progressFloor), ProgressFloor, defaultLimits, mkProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
-import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamBody (NoBody, StreamBody), UpstreamBodyFailed (UpstreamBodyFailed), pumpBody, withUpstreamWhen)
+import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamBody (NoBody, StreamBody), UpstreamBodyFailed (UpstreamBodyFailed), UpstreamResult (..), pumpBody, withUpstreamResult)
 import Ecluse.Test.Registry.JsonStream (sliceChunks)
 import Ecluse.Test.Stub (requestSecrets, signedRequest)
 import Ecluse.Test.Stub.Socket (resetAfterPartialBody, trustingTlsManager, withTlsServer)
@@ -82,7 +83,7 @@ spec = do
             pumpBody (srcNext src) (const (pure ())) (modifyIORef' flushes (+ 1))
             readIORef flushes `shouldReturn` 1
 
-    describe "withUpstreamWhen, a large body end to end over an in-process upstream" $
+    describe "withUpstreamResult, a large body end to end over an in-process upstream" $
         it "relays a large body through with the upstream status" $ do
             -- A 4 MiB body must arrive intact through the full http-client wiring. The pump case
             -- above is the proof that this path never buffers the body whole.
@@ -91,7 +92,7 @@ spec = do
             statusCode (HTTP.responseStatus resp) `shouldBe` 206
             toStrict (responseBody resp) `shouldBe` bigBody
 
-    describe "withUpstreamWhen, a conditional relay (hit, miss, open failure)" $ do
+    describe "withUpstreamResult, a conditional relay (hit, miss, open failure)" $ do
         it "relays the body AND the upstream content headers when the status passes accept" $ do
             -- The client verifies dist.integrity over the relayed bytes and headers, so the relay
             -- must forward the upstream's content headers along with the body.
@@ -99,16 +100,15 @@ spec = do
             toStrict (responseBody resp) `shouldBe` "the-bytes"
             headerOf hContentType resp `shouldBe` Just "application/octet-stream"
 
-        it "returns a clean miss (the fall-through marker) when the status fails accept" $ do
-            -- A 404 fails the predicate, so the helper commits no response and the proxy answers
-            -- its own marker rather than relaying the upstream body.
+        it "retains the rejected upstream status without relaying its body" $ do
             resp <- throughProxy missingUpstream conditionalProxy
-            responseBody resp `shouldBe` fellThroughMarker
+            statusCode (HTTP.responseStatus resp) `shouldBe` 404
+            responseBody resp `shouldBe` "REJECTED"
 
-        it "returns a clean miss when the upstream connection cannot be opened" $ do
-            -- A failed open is a recoverable miss, never a committed response.
+        it "distinguishes a failed connection from an upstream rejection" $ do
             resp <- throughDeadUpstream conditionalProxy
-            responseBody resp `shouldBe` fellThroughMarker
+            statusCode (HTTP.responseStatus resp) `shouldBe` 502
+            responseBody resp `shouldBe` "TRANSPORT-FAILURE"
 
         it "relays an upstream 304 as a bodiless 304, forwarding its validator (the pass-through conditional relay)" $ do
             -- A 304 passes the artifact relay's accept predicate (a 2xx or a 304). The relay sends
@@ -118,7 +118,7 @@ spec = do
             responseBody resp `shouldBe` ""
             headerOf hETag resp `shouldBe` Just "\"v1\""
 
-    describe "withUpstreamWhen, the progress floor with no cap" $
+    describe "withUpstreamResult, the progress floor with no cap" $
         it "aborts a relay whose upstream stops mid-body within about one window" $ do
             progress <- either (fail . show) pure (mkProgressFloor 30 0.5 1024)
             started <- getMonotonicTime
@@ -127,7 +127,7 @@ spec = do
             outcome `shouldSatisfy` isLeft
             (finished - started) `shouldSatisfy` (\seconds -> seconds >= 0.5 && seconds < 10)
 
-    describe "withUpstreamWhen, an upstream body that breaks after the commit" $ do
+    describe "withUpstreamResult, an upstream body that breaks after the commit" $ do
         it "raises a typed fault that never carries the upstream request" $ do
             escaped <- newIORef Nothing
             void (tryAny (throughProxy truncatedUpstream (recordingSignedRelay id escaped)))
@@ -149,7 +149,7 @@ spec = do
                     for_ requestSecrets $ \secret -> toText (displayException err) `shouldSatisfy` (not . T.isInfixOf secret)
                 Nothing -> expectationFailure "no fault escaped the committed relay"
 
-    describe "withUpstreamWhen, a bodiless relay (HEAD, no pump)" $
+    describe "withUpstreamResult, a bodiless relay (HEAD, no pump)" $
         it "relays the upstream status and content headers with no body on a hit" $ do
             -- The helper never pumps the body on a HEAD, which is the amplification a HEAD must
             -- never trigger.
@@ -160,13 +160,12 @@ spec = do
 -- The proxy under test, over the manager it relays with and the upstream's port.
 type ProxyApp = HTTP.Manager -> Int -> Application
 
--- The proxy under test: relay the upstream when its status passes @accept@, and answer the
--- fall-through marker when the helper commits nothing, so a miss is observable as a body.
+-- Each uncommitted outcome gets a distinct response so the tests retain its cause.
 relayProxy :: ProgressFloor -> UpstreamBody -> (Status -> Bool) -> Method -> ProxyApp
 relayProxy progress body accept method manager upPort _req respond = do
     upstream <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
     outcome <-
-        withUpstreamWhen
+        withUpstreamResult
             manager
             progress
             upstream{HTTP.method = method}
@@ -174,20 +173,16 @@ relayProxy progress body accept method manager upPort _req respond = do
             accept
             relayVerbatim
             (waiRelayResponder respond)
-    case outcome of
-        Just (_, received) -> pure received
-        Nothing -> respond (responseLBS status200 [] fellThroughMarker)
+    answerOutcome respond outcome
 
 -- A relay of a signed upstream URL that records whatever escapes it, so a case reads what a committed failure carries.
 recordingSignedRelay :: (HTTP.Request -> HTTP.Request) -> IORef (Maybe SomeException) -> ProxyApp
 recordingSignedRelay scheme escaped manager upPort _req respond = do
     upstream <- (\request -> scheme request{HTTP.port = upPort}) <$> signedRequest
     outcome <-
-        withUpstreamWhen manager (progressFloor defaultLimits) upstream StreamBody statusIsSuccessful relayVerbatim (waiRelayResponder respond)
+        withUpstreamResult manager (progressFloor defaultLimits) upstream StreamBody statusIsSuccessful relayVerbatim (waiRelayResponder respond)
             `withException` record
-    case outcome of
-        Just (_, received) -> pure received
-        Nothing -> respond (responseLBS status200 [] fellThroughMarker)
+    answerOutcome respond outcome
   where
     -- A socket error renders lazily. An async exception that interrupts that render stays in the error and raises at every later read.
     -- Rendering here runs before the proxy rethrows the failure, so the case's teardown of the proxy cannot interrupt it.
@@ -268,10 +263,12 @@ headLengthUpstream _req respond =
 relayVerbatim :: Status -> ResponseHeaders -> IO (Status, ResponseHeaders, ())
 relayVerbatim status headers = pure (status, headers, ())
 
--- The body a proxy answers on a relay miss, distinct from any upstream body so a miss is
--- unambiguous.
-fellThroughMarker :: LByteString
-fellThroughMarker = "FELL-THROUGH"
+answerOutcome :: (Response -> IO ResponseReceived) -> UpstreamResult ((), ResponseReceived) -> IO ResponseReceived
+answerOutcome respond = \case
+    UpstreamRelayed (_, received) -> pure received
+    UpstreamRejected status -> respond (responseLBS status [] "REJECTED")
+    UpstreamTransportFailure -> respond (responseLBS status502 [] "TRANSPORT-FAILURE")
+    UpstreamCooling (RetryAfter seconds) -> respond (responseLBS status503 [("Retry-After", show seconds)] "COOLDOWN")
 
 writeChunks :: (Builder -> IO ()) -> IO () -> [ByteString] -> IO ()
 writeChunks _ _ [] = pure ()

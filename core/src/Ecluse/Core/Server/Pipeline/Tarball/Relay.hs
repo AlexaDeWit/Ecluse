@@ -14,7 +14,6 @@ module Ecluse.Core.Server.Pipeline.Tarball.Relay (
     withValidators,
 
     -- * Relaying the upstream response
-    relayUpstreamWhen,
     relayUpstreamResult,
     relayPublicResult,
     acceptArtifact,
@@ -39,7 +38,7 @@ import Ecluse.Core.Registry (isAuthorisationFailure)
 import Ecluse.Core.Registry.Public (PublicControl, ReadControl (Controlled))
 import Ecluse.Core.Security (ProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
-import Ecluse.Core.Server.Stream (RelayResponder (..), UpstreamBody (NoBody, StreamBody), UpstreamResult, withUpstreamResult, withUpstreamResultUsing, withUpstreamWhen)
+import Ecluse.Core.Server.Stream (RelayResponder (..), UpstreamBody (NoBody, StreamBody), UpstreamResult, withUpstreamResult, withUpstreamResultUsing)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpPublicRelayAnomaly))
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind)
@@ -63,19 +62,6 @@ withMethod = \case
 withValidators :: RequestHeaders -> HTTP.Request -> HTTP.Request
 withValidators validators req =
     req{HTTP.requestHeaders = validators <> HTTP.requestHeaders req}
-
--- | Relay in the serve mode, combining all pre-commit misses as 'Nothing'.
-relayUpstreamWhen ::
-    ArtifactServe ->
-    Manager ->
-    ProgressFloor ->
-    HTTP.Request ->
-    (Status -> Bool) ->
-    (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) ->
-    RelayResponder response ->
-    IO (Maybe (verdict, response))
-relayUpstreamWhen mode manager progress request =
-    withUpstreamWhen manager progress request (upstreamBody mode)
 
 -- | Relay in the serve mode, preserving an upstream rejection or transport failure.
 relayUpstreamResult ::

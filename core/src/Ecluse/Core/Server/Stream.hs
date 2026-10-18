@@ -13,7 +13,6 @@ module Ecluse.Core.Server.Stream (
     -- * Relaying an upstream response through
     UpstreamBody (..),
     UpstreamResult (..),
-    withUpstreamWhen,
     withUpstreamResult,
     withUpstreamResultUsing,
     UpstreamBodyFailed (..),
@@ -54,25 +53,6 @@ data UpstreamBody
       NoBody
     deriving stock (Eq, Show)
 
--- | Relay accepted responses, combining pre-commit misses as 'Nothing' and propagating failures after the commit.
-withUpstreamWhen ::
-    Manager ->
-    ProgressFloor ->
-    Request ->
-    UpstreamBody ->
-    (Status -> Bool) ->
-    (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) ->
-    RelayResponder response ->
-    IO (Maybe (verdict, response))
-withUpstreamWhen manager progress request body accept relay respond =
-    toMaybe <$> withUpstreamResult manager progress request body accept relay respond
-  where
-    toMaybe = \case
-        UpstreamRelayed received -> Just received
-        UpstreamRejected _ -> Nothing
-        UpstreamTransportFailure -> Nothing
-        UpstreamCooling _ -> Nothing
-
 -- | A committed relay, or the reason no response was committed.
 data UpstreamResult a
     = -- | The responder finished, including any body streaming.
@@ -85,7 +65,7 @@ data UpstreamResult a
       UpstreamCooling RetryAfter
     deriving stock (Eq, Show)
 
--- | The upstream body failed after the relay committed its response, so the connection can only be torn down. It never carries the upstream request.
+-- | A body failure after response commitment requires closing the client connection. The fault never includes the upstream request.
 newtype UpstreamBodyFailed = UpstreamBodyFailed TransportFault
     deriving stock (Eq, Show)
 
