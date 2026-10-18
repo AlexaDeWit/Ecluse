@@ -36,6 +36,13 @@ import Ecluse.Test.Support (TestContractEscape (TestContractEscape), expectRight
 
 spec :: Spec
 spec = describe "conditional mirror metadata storage" $ do
+    it "reports the initial reservation again at EOF and before decoding an empty body" $ do
+        paid <- newIORef []
+        let charge cost = modifyIORef' paid (<> [cost])
+        withS3 (reply status200 [(hETag, "\"one\"")] "") $ \env ->
+            readObject charge env limits "records" "key" Nothing `shouldReturn` Right (ObjectLoaded "\"one\"" "")
+        readIORef paid `shouldReturn` replicate 3 stateExchangeCharge
+
     it "pays each streamed chunk before the server releases the next chunk" $ do
         release <- newEmptyMVar
         payments <- newIORef ([] :: [Int])
