@@ -48,8 +48,7 @@ require e2e-prepare "${E2E_PREPARE:-missing}" docs
 require e2e-conformance "${E2E_CONFORMANCE:-missing}" docs
 require e2e "${E2E:-missing}" docs
 require backend-conformance "${BACKEND_CONFORMANCE:-missing}" docs
-require weeder "${WEEDER:-missing}" docs
-require stan "${STAN:-missing}" docs
+require analysis "${ANALYSIS:-missing}" docs
 
 # The assemble and boot jobs need the dry-run's images, so the same reasoning applies.
 require release-dry-run "${RELEASE_DRY_RUN:-missing}" release

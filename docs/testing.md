@@ -2026,19 +2026,22 @@ Two things are easy to get backwards:
   ordering is the template. The gate checks it offline against a committed fixture, and the smoke
   suite also regenerates that fixture from the live oracles as a differential check.
 
-Beyond the test tiers, two static-analysis jobs gate. **`weeder`** reports library code not reachable
+Beyond the test tiers, two static-analysis tools gate. **`weeder`** reports library code not reachable
 from the entry point (`Ecluse.run`). **`stan`** runs HIE-based partial-function and bug analysis at
-the floor in `.stan.toml`. Each is its own parallel job the CI `gate` depends on, and a finding above
-its floor blocks the merge. Among the always-on jobs, only `smoke` is non-gating.
+the floor in `.stan.toml`. The `analysis` job builds their `.hie` input once and runs each tool in its
+own step, and stan also runs after a weeder failure. Any weeder finding, or a stan finding above
+its floor, blocks the merge. Among the always-on jobs, only `smoke` is non-gating.
 
 The Haskell jobs run in parallel where their prerequisites permit it. `build` compiles every
 target and then runs the residency suite, the doctests, and `cabal check`. `coverage` is a matrix
-with one runner per instrumented suite. `allocation`, `docs`, `weeder`, `stan`, and
+of three legs. `ecluse-runtime-unit` and `ecluse-unit` share one leg, because `ecluse-unit` reuses
+the instrumented libraries that the runtime suite builds. `allocation`, `docs`, `analysis`, and
 `static-checks` each hold their own runner. E2E preparation feeds the ecosystem and
-shared-system subject jobs, which start without waiting for coverage. The Verdaccio and
-CodeArtifact package-store subjects run in separate jobs. `codecov-notify` follows the coverage
-legs and releases the Codecov statuses.
-The core unit, runtime unit and integration coverage legs upload their plan and execution reports.
+shared-system subject jobs, which start without waiting for coverage. One `backend-conformance`
+job runs the Verdaccio package-store subject, then the CodeArtifact one. A job that runs two checks
+runs the second after a failed first, so one failure cannot hide the other. `codecov-notify`
+follows the coverage legs and releases the Codecov statuses.
+The core unit, runtime unit and integration suites upload their plan and execution reports.
 The `e2e` job waits for the subjects and the coverage legs. It audits every subject report
 against the plan, then runs the npm and PyPI completion audits over all four tiers' reports.
 
@@ -2090,12 +2093,12 @@ their own restore these:
 
 | Job | Build directories it restores |
 | --- | --- |
-| `coverage`, each unit leg | `dist-coverage`, where it builds its suite instrumented |
+| `coverage`, each unit leg | `dist-coverage`, where it builds its suites instrumented |
 | `coverage`, the integration leg | `dist-coverage` for its instrumented suite, and `dist-newstyle` for its manifest and audit tools |
-| `weeder`, `stan` | none: each builds `dist-analysis` with `-fwrite-ide-info` and never caches it |
+| `analysis` | none: it builds `dist-analysis` with `-fwrite-ide-info` and never caches it |
 
 Each `coverage` leg writes its own `dist-coverage` key, so no two legs race and each leg starts warm
-for the suite it owns.
+for the suites it owns.
 
 [`scripts/prune-caches.sh`](../scripts/prune-caches.sh) lists the key families the workflows write.
 A family missing from that list is reaped on the next sweep, which is how a retired key stops
@@ -2166,15 +2169,14 @@ Accepted options are `-fdev-http-egress` (or `--flags=dev-http-egress`), `--enab
 Separate manifest and audit executables check the report against every compiled integration declaration.
 The test binary retains its own `.tix` file, preserving the suite's coverage ticks.
 
-**What CI uploads.** The `coverage` job is a four-leg matrix, one runner per instrumented suite.
-Each leg calls its fixed Task coverage target and uploads the JSON that
-produces: `ecluse-core-unit`, `ecluse-runtime-unit`, and `ecluse-unit` (all under the Codecov flag
-`unit`), and `ecluse-integration` (flag `integration`). Only the integration leg needs a Docker
-daemon.
+**What CI uploads.** The `coverage` job is a three-leg matrix. Each leg calls the fixed Task
+coverage target once per suite, and each suite uploads its own JSON: `ecluse-core-unit`,
+`ecluse-runtime-unit`, and `ecluse-unit` (all under the Codecov flag `unit`), and
+`ecluse-integration` (flag `integration`). Only the integration leg needs a Docker daemon.
 
 **When the Codecov statuses post.** `notify.manual_trigger: true` in
 [`codecov.yml`](../codecov.yml) holds every Codecov status and comment until the CLI asks for them.
-The `codecov-notify` job makes that call, and it runs only once all four legs are green, so
+The `codecov-notify` job makes that call, and it runs only once all three legs are green, so
 `codecov/project` and `codecov/patch` post once, against the complete four-upload report. A failed
 leg skips the job, and the statuses then never post: `gate` is already red through `coverage`, and
 a required status that stays pending is the correct outcome rather than a number read off a partial

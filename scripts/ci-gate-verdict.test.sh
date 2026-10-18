@@ -23,7 +23,7 @@ check() {
 # A later assignment to the same variable overrides these in `env`.
 all_pass=(
   CHANGES=success STATIC_CHECKS=success BUILD=success ALLOCATION=success COVERAGE=success CODECOV_NOTIFY=success
-  DOCS=success E2E_PREPARE=success E2E_CONFORMANCE=success E2E=success BACKEND_CONFORMANCE=success WEEDER=success STAN=success RELEASE_DRY_RUN=success
+  DOCS=success E2E_PREPARE=success E2E_CONFORMANCE=success E2E=success BACKEND_CONFORMANCE=success ANALYSIS=success RELEASE_DRY_RUN=success
   RELEASE_DRY_RUN_ASSEMBLE=success RELEASE_DRY_RUN_BOOT=success RELEASE_COMPARE=success RELEASE_BUILD=true
   RELEASE_REBUILD=true
 )
@@ -56,7 +56,7 @@ check "a skipped Codecov notify fails behind green coverage" 1 \
 check "a documentation-only PR passes with the Haskell jobs, notify, and release jobs skipped" 0 \
   CHANGES=success STATIC_CHECKS=success \
   BUILD=skipped ALLOCATION=skipped COVERAGE=skipped CODECOV_NOTIFY=skipped \
-  DOCS=skipped E2E_PREPARE=skipped E2E_CONFORMANCE=skipped E2E=skipped BACKEND_CONFORMANCE=skipped WEEDER=skipped STAN=skipped \
+  DOCS=skipped E2E_PREPARE=skipped E2E_CONFORMANCE=skipped E2E=skipped BACKEND_CONFORMANCE=skipped ANALYSIS=skipped \
   "${release_skipped[@]}" DOCS_ONLY=true RELEASE_BUILD=false RELEASE_REBUILD=false
 
 check "a failed classifier fails, so a broken filter never waves a PR through" 1 \
@@ -66,7 +66,7 @@ check "static-checks is never skippable, even on a documentation-only PR" 1 \
   "${all_pass[@]}" STATIC_CHECKS=skipped DOCS_ONLY=true
 
 check "a cancelled job fails" 1 \
-  "${all_pass[@]}" STAN=cancelled DOCS_ONLY=false
+  "${all_pass[@]}" ANALYSIS=cancelled DOCS_ONLY=false
 
 check "a source-only PR passes with the release jobs skipped" 0 \
   "${all_pass[@]}" "${release_skipped[@]}" DOCS_ONLY=false RELEASE_BUILD=false RELEASE_REBUILD=false
