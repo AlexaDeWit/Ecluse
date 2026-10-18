@@ -77,6 +77,7 @@ fallbackAssemblySpec :: Spec
 fallbackAssemblySpec = describe "cached npm fallback assembly" $
     it "renders plain and mixed sources with absent or foreign bases using exact snapshot selection" $ do
         let release = NpmFixture.versionValue (NpmFixture.versionSpec "thing" "1.0.0" "https://upstream.test/thing-1.0.0.tgz")
+            expectedRelease = Object (KeyMap.insert "author" (String "See https://registry.npmjs.org/thing") (asObject release))
             raw = NpmFixture.packumentValue "thing" "1.0.0" [("1.0.0", release)] [] []
             foreignDoc = fst pypiSimpleCached (simpleDocument mempty [])
             expected entries = Aeson.object ["versions" Aeson..= Aeson.object entries, "dist-tags" Aeson..= Aeson.object [], "time" Aeson..= Aeson.object []]
@@ -97,7 +98,7 @@ fallbackAssemblySpec = describe "cached npm fallback assembly" $
                         snd npmRendered served `shouldSatisfy` isNothing
                         bytes <- expectRight (serialiseMergedDocument served)
                         expectRight (Aeson.eitherDecode bytes)
-                render sources `shouldReturn` expected ["1.0.0" Aeson..= release]
+                render sources `shouldReturn` expected ["1.0.0" Aeson..= expectedRelease]
                 render (Map.adjust (\snapshot -> snapshot{snapshotDigest = digestOf "different source"}) 0 sources)
                     `shouldReturn` expected []
 
