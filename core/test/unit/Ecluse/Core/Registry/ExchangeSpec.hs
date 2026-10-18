@@ -14,14 +14,14 @@ import Data.JsonStream.Parser qualified as J
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
 import GHC.Clock (getMonotonicTime)
-import Network.HTTP.Client (Manager, Request (method, requestBody), RequestBody (RequestBodyBS), defaultManagerSettings, httpLbs, newManager, parseRequest)
+import Network.HTTP.Client (Manager, Request (method, requestBody), RequestBody (RequestBodyBS), defaultManagerSettings, newManager, parseRequest)
 import Network.HTTP.Types (status200)
-import Network.Wai (Application, pathInfo, responseLBS, responseRaw)
+import Network.Wai (Application, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (defaultSettings, setOnOpen, testWithApplication, testWithApplicationSettings)
 import Test.Hspec
 import UnliftIO.Async (async, wait)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (throwIO, tryAny)
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Fault (TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause, tfDetail))
 import Ecluse.Core.Registry (BodyOutcome (SuccessBody), FetchFault (FetchTransport))
@@ -32,6 +32,7 @@ import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlightWithBackend,
 import Ecluse.Core.Snapshot (ContentDigest)
 import Ecluse.Test.Poll (awaitUntil)
 import Ecluse.Test.Snapshot (digestOf)
+import Ecluse.Test.Stub.Retry (requestsAfterLostAnswer)
 import Ecluse.Test.Stub.Socket (resetAfterPartialBody, trustingTlsManager, withTlsServer)
 import Ecluse.Test.Support (expectRightIO)
 import Ecluse.Test.Wai (countingUpstream, pacedBody)
@@ -62,7 +63,6 @@ chargeSpec = describe "cumulative charging" $ do
         total `shouldReturn` maxBound
 
     it "retains the addition when the charge callback fails" $ do
-        -- The callback exposes failure through exceptions.
         (add, total) <- accumulatingChargeFrom 7 (const (throwIO ChargeRefused))
         add 4 `shouldThrow` (== ChargeRefused)
         total `shouldReturn` 11
@@ -87,23 +87,6 @@ singleAttemptSpec = do
     describe "newSingleAttemptManager" $
         it "returns a lost destructive response over the TLS settings without resending on a fresh connection" $
             (newSingleAttemptManager >>= requestsAfterLostAnswer) `shouldReturn` 2
-
--- A warm request, then a DELETE the peer drops unanswered on the reused connection. Yields the requests the peer took.
-requestsAfterLostAnswer :: Manager -> IO Int
-requestsAfterLostAnswer manager = do
-    requests <- newIORef (0 :: Int)
-    let application _ respond = do
-            attempt <- atomicModifyIORef' requests (\n -> (n + 1, n + 1))
-            respond $
-                if attempt == 1
-                    then responseLBS status200 [] "warm connection"
-                    else responseRaw (\_ _ -> pure ()) (responseLBS status200 [] "")
-    testWithApplication (pure application) $ \port -> do
-        request <- parseRequest ("http://127.0.0.1:" <> show port <> "/")
-        void (httpLbs request manager)
-        result <- tryAny (httpLbs request{method = "DELETE"} manager)
-        result `shouldSatisfy` isLeft
-        readIORef requests
 
 digestingReadSpec :: Spec
 digestingReadSpec = describe "digestingRead" $ do
