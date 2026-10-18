@@ -1,14 +1,15 @@
 +++
-title = "Running the Dredger"
+title = "Package removal reference"
 description = "Deleting denied versions from your mirror target and its private cache: what one cycle does, what bounds it, and the permissions it needs."
 weight = 6
 +++
 
-`ecluse dredger` is the only role that deletes. It walks each mount's mirror target and the
-`privateUpstream` cache paired with it, and removes versions the mount's own rules deny. It reads
-the rules that apply at revocation, which is every rule you have not limited to admission. Run it
-when those stores must not keep serving a version a new advisory condemns. Read this page before
-you point it at a store, because deletion is permanent.
+`ecluse dredger` evaluates stored versions under the mount's revocation policy and removes
+eligible copies from the mirror and private cache. It is the only Écluse role that deletes.
+
+Use [Remove blocked packages](@/docs/remove.md) for the preview and removal procedure.
+This reference defines candidate selection, consent, limits, and recovery. Deletion can remove
+the only surviving copy of a package version.
 
 `privateUpstream` is a cache. Your builds read through it, the mirror worker writes to
 `mirrorTarget`, and your publishers write to `publicationTarget`. Dredger cleans the first two and
@@ -47,11 +48,11 @@ The Dredger takes no ingress. It exposes only `/livez` and `/readyz` on `ECLUSE_
 
 ## What one cycle does
 
-A mirrored version's metadata never changes after it is published. So a version Écluse once
-admitted can become a denied one for only three reasons: a new or changed advisory, an operator
-identity deny, or a change to your rule configuration.
+A stored version can become denied after an advisory update, an operator identity deny,
+a rule change, or a change to stored metadata such as a deprecation or yank flag.
 
-The **default cycle** covers the first two, and it is what runs unless you turn the full walk on.
+The **default cycle** selects advisory-covered and identity-denied names. Other changes can
+require a full walk to discover versions outside that candidate set.
 Each cycle:
 
 1. Reads the store's consent marker and its classification. Both are read again every cycle, so
@@ -284,14 +285,14 @@ deliberately and restart it.
 
 ## The full walk
 
-A rule-configuration change is the one cause a default cycle cannot see, because no advisory and no
-identity deny points at the versions it newly denies. The full walk covers it. Turn it on with
-`fullWalk: true`.
+A full walk checks names outside the default advisory and identity candidate set. Use it after
+a rule change, or to discover stored deprecation and yank changes that no candidate points to.
+Enable it with `fullWalk: true`.
 
 While it is on, the walk **replaces** the default cycle rather than running beside it, because a
 walk over every name is a superset of a candidate cycle. Each completed walk starts a fresh one.
-Turn it off once a walk has completed, and the Dredger drops back to candidate cycles with nothing
-lost.
+Turning it off returns Dredger to candidate cycles. Later changes outside that candidate set
+need another full walk.
 
 The walk covers the name space in prefix buckets, and records each completed bucket in the store
 itself, so a restart re-does at most one bucket. A bucket holding more names than the walk may hold

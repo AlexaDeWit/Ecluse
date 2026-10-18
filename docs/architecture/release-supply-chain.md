@@ -115,8 +115,10 @@ which is affordable on a path that runs a few times a year.
 ## Supply-chain attestations
 
 Each release attaches keyless attestations (Sigstore / OIDC, no stored key) to the image by digest.
-The public Rekor transparency log records them, and the registry stores each as an immutable OCI
-referrer. So nobody can tamper with them, and they coexist with the repo's immutable tags. GitHub's
+The public Rekor transparency log records them, and the registry stores them as OCI referrers.
+Verification checks the signature, workflow identity, and subject digest. Altering an attestation
+without its signing identity does not produce a valid signature. These checks do not guarantee
+that a registry will retain the artifact. GitHub's
 [attest-actions](https://github.com/actions/attest-build-provenance) produce them in CI.
 
 The image is multi-arch, so the attestations cover each platform plus the index. The release attests

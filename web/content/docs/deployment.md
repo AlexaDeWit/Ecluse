@@ -1,12 +1,11 @@
 +++
-title = "Deploying Écluse"
+title = "Deployment reference"
 description = "Which roles of the one container image to run, which stores to put behind them, and how to fence the edge and the network so builds cannot step around the gate."
 weight = 3
 +++
 
-You reach this page when the quick start has proven the gate and you want a deployment your builds
-can depend on. Most of the work is not in the container: it is in the stores behind it, the edge in
-front of it, and the network around it.
+Use this reference when configuring service roles, repository relationships, credentials, or
+network access. For an ordered deployment path, start with [Set up Écluse](@/docs/setup.md).
 
 ## The image and its roles
 
@@ -173,16 +172,20 @@ holds on any backend, and the AWS column shows one way to grant it:
 
 | Role | Needs | AWS example |
 |---|---|---|
-| `ecluse proxy --no-worker` | Send mirror jobs, read advisory artifacts, read what the private upstream aggregates | `sqs:SendMessage`, `sqs:GetQueueAttributes`, `s3:GetObject`, `codeartifact:DescribeRepository` on the private upstream repository and every repository in its upstream chain |
-| `ecluse mirror` | Consume mirror jobs, publish to the mirror store, read advisory artifacts | SQS receive, delete, change visibility, and get attributes. CodeArtifact token mint, reads, and publish on the mirror repository. `s3:GetObject` |
+| `ecluse proxy --no-worker` | Send mirror jobs, read advisory artifacts, read and list PyPI mirror state when configured, inspect the private upstream's repository chain | `sqs:SendMessage`, `sqs:GetQueueAttributes`, `s3:GetObject`, `codeartifact:DescribeRepository` on the private upstream repository and every repository in its upstream chain |
+| `ecluse mirror` | Consume mirror jobs, publish to the mirror store, read advisory artifacts, read/list/conditionally write PyPI mirror state when configured | SQS receive, delete, change visibility, and get attributes. CodeArtifact token mint, reads, and publish on the mirror repository. `s3:GetObject` |
 | `ecluse pilot` | Read the published artifacts' metadata, and publish advisory artifacts | `s3:GetObject` and `s3:PutObject` on the advisory prefix, and `s3:ListBucket` limited to that prefix. With SSE-KMS, `kms:GenerateDataKey` on the bucket's key |
-| `ecluse dredger` | Read and delete in the mirror target and in the private cache, read advisory artifacts, read what the private upstream aggregates | CodeArtifact token mint, repository reads, and `codeartifact:DeletePackageVersions` on package ARNs in both repositories ([full list](@/docs/dredger.md#permissions)). `codeartifact:DescribeRepository` on both repositories and on every repository in the private upstream's chain. `s3:GetObject` |
+| `ecluse dredger` | Read and delete in the mirror target and in the private cache, read advisory artifacts, inspect the private upstream's repository chain | CodeArtifact token mint, repository reads, and `codeartifact:DeletePackageVersions` on package ARNs in both repositories ([full list](@/docs/dredger.md#permissions)). `codeartifact:DescribeRepository` on both repositories and on every repository in the private upstream's chain. `s3:GetObject` |
 
 `ecluse proxy` without `--no-worker` runs the mirror worker in the same process, so its identity
 needs the proxy row and the mirror row together. Split the proxy from the worker when the serving
-fleet must hold no write access to the mirror store. Only the mirror worker's identity writes the
-trusted store, and only Dredger's identity deletes from the stores it sweeps: the mirror target and
-the private cache.
+fleet must hold no write access to the mirror store. The mirror worker publishes public-derived copies. The proxy relays first-party publication
+under the configured publisher credential. Within Écluse, Dredger holds deletion authority
+for the maintained mirror and private-cache repositories.
+
+For a PyPI mirror, scope state access separately from advisory storage. The proxy needs
+`s3:GetObject` and prefix-scoped `s3:ListBucket`. The worker also needs `s3:PutObject` for
+conditional state writes. Both use the same `mirrorState.url` bucket and prefix.
 
 The mirror worker renews each message's visibility while it holds the message, so
 `sqs:ChangeMessageVisibility` is required, not optional
@@ -219,9 +222,9 @@ Split them when you want to size each fleet on its own signal:
    at boot without it and names the key to set.
 2. Run the proxy fleet as `ecluse proxy --no-worker`. It still admits versions and enqueues a
    mirror job for each one, but it does not drain the queue.
-3. Run a second fleet as `ecluse mirror`. It boots the same configuration and the same rules, so a
-   worker's re-evaluation of a job reaches the same verdict the proxy did. It serves no registry
-   paths, only its health probes on `ECLUSE_SERVER__PORT`.
+3. Run a second fleet as `ecluse mirror` with the same intended configuration. The worker
+   checks current metadata and advisory evidence before new writes, so its verdict can differ
+   from the earlier request. It serves health probes on `ECLUSE_SERVER__PORT`, not registry paths.
 4. Scale the worker fleet on queue depth (KEDA's SQS scaler, or an Auto Scaling policy on
    `ApproximateNumberOfMessagesVisible`) and the proxy fleet on request rate.
 
@@ -356,11 +359,15 @@ Edge authentication to the proxy has two modes:
    A Python client sends the same token as an HTTP Basic **password**, under any username it
    likes, which is how `pip`, `uv`, and `twine` present a credential:
 
-   ```ini
-   # pip.conf
-   [global]
-   index-url = https://__token__:${PYPI_EDGE_TOKEN}@ecluse.example.internal/pypi/simple/
+   For pip, URL-encode the token and supply that value as `PYPI_EDGE_TOKEN_URLENCODED`.
+   Set the index in the process environment:
+
+   ```bash
+   export PIP_INDEX_URL="https://__token__:${PYPI_EDGE_TOKEN_URLENCODED}@ecluse.example.internal/pypi/simple/"
    ```
+
+   Do not put a literal environment placeholder in `pip.conf`. Pip does not expand it.
+   Other clients use their own supported credential configuration.
 
 The proxy holds no read credential of its own. Reads run **passthrough**: Écluse forwards the
 caller's own credential to the private upstream, which stays the authority on what that caller may
@@ -551,9 +558,9 @@ a separate metrics listener only when that exporter is selected.
 
 | Role | Registry or feed egress | Configured queue and advisory egress |
 |---|---|---|
-| `ecluse proxy` with embedded worker | Public/private metadata and artifact hosts, mirror repository, optional publication target | Queue send/receive/ack/visibility and redrive probe, advisory S3 read |
-| `ecluse proxy --no-worker` | Public/private metadata and artifact hosts, optional publication target | Queue send and redrive probe, advisory S3 read |
-| `ecluse mirror` | Public metadata/artifact hosts and mirror repository | Queue receive/ack/visibility and redrive probe, advisory S3 read |
+| `ecluse proxy` with embedded worker | Public/private metadata and artifact hosts, mirror repository, optional publication target | Queue send/receive/ack/visibility and redrive probe, advisory S3 read, PyPI state read/list/conditional write when configured |
+| `ecluse proxy --no-worker` | Public/private metadata and artifact hosts, optional publication target | Queue send and redrive probe, advisory S3 read, PyPI state read/list when configured |
+| `ecluse mirror` | Public metadata/artifact hosts and mirror repository | Queue receive/ack/visibility and redrive probe, advisory S3 read, PyPI state read/list/conditional write when configured |
 | `ecluse pilot` | OSV export host and EPSS feed host | Advisory S3 upload, no mirror queue |
 | `ecluse dredger` | Mirror target and private cache metadata, and each one's maintenance API | Advisory S3 read, no mirror queue |
 

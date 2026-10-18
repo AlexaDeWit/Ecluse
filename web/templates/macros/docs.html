@@ -1,32 +1,49 @@
-{% macro sidebar(current) %}
-{% set docs = get_section(path="docs/_index.md") %}
-<button class="docs-nav-toggle" type="button" aria-expanded="false" aria-controls="docs-nav" data-pagefind-ignore hidden>
-  Documentation pages
-</button>
-<nav class="docs-nav" id="docs-nav" aria-label="Documentation" data-pagefind-ignore>
-  <ul>
-    <li>
-      <a href="{{ docs.permalink | safe }}"{% if current == docs.permalink %} class="current" aria-current="page"{% endif %}>{{ docs.title }}</a>
-    </li>
-    {% for entry in docs.pages %}
-    <li>
-      <a href="{{ entry.permalink | safe }}"{% if current == entry.permalink %} class="current" aria-current="page"{% endif %}>{{ entry.title }}</a>
-    </li>
+{% macro sidebar(current, group) %}
+<nav id="docs-nav" class="sidebar" aria-label="Documentation" data-pagefind-ignore>
+  <div class="version"><a href="{{ get_url(path='@/docs/_index.md') }}">Documentation</a><span class="badge">Operator manual</span></div>
+  {% for entry in config.extra.docs_navigation %}
+  <details class="sidebar-group"{% if entry.title == group %} open{% endif %}>
+    <summary>{{ entry.title }}</summary>
+    {% for slug in entry.pages %}
+    {% set target = get_page(path="docs/" ~ slug ~ ".md") %}
+    <a href="{{ target.permalink | safe }}"{% if current == target.permalink %} aria-current="page"{% endif %}>{{ target.extra.nav_title | default(value=target.title) }}</a>
     {% endfor %}
-  </ul>
+  </details>
+  {% endfor %}
+  <div class="sidebar-group"><a href="{{ get_url(path='@/docs/threat-model.md') }}">Threat model</a><a href="{{ get_url(path='@/api/_index.md') }}">API reference</a></div>
 </nav>
 {% endmacro sidebar %}
 
-{% macro toc(headings) %}
-{% set sections = headings | filter(attribute="level", value=2) %}
-{% if sections | length > 1 %}
-<nav class="toc" aria-label="On this page" data-pagefind-ignore>
-  <p class="toc-heading">On this page</p>
-  <ul>
-    {% for heading in sections %}
-    <li><a href="#{{ heading.id }}">{{ heading.title | safe }}</a></li>
-    {% endfor %}
-  </ul>
-</nav>
+{% macro outline_links(headings) %}
+{% for heading in headings %}
+{% if heading.level == 2 %}<a href="#{{ heading.id }}">{{ heading.title | safe }}</a>{% endif %}
+{% endfor %}
+{% endmacro outline_links %}
+
+{% macro inline_outline(headings) %}
+{% if headings | length > 0 %}
+<details class="inline-outline" data-pagefind-ignore>
+  <summary>On this page</summary>
+  <nav aria-label="On this page">{{ self::outline_links(headings=headings) }}</nav>
+</details>
 {% endif %}
-{% endmacro toc %}
+{% endmacro inline_outline %}
+
+{% macro outline(headings) %}
+<aside class="page-outline" aria-label="On this page" data-pagefind-ignore>
+  {% if headings | length > 0 %}<p>On this page</p>{% endif %}
+  {{ self::outline_links(headings=headings) }}
+  <div class="outline-extra"><a href="{{ get_url(path='@/docs/install-failed.md') }}">Investigate a failed install</a><a href="{{ get_url(path='@/docs/threat-model.md') }}">Threat model</a></div>
+</aside>
+{% endmacro outline %}
+
+{% macro progress(current) %}
+{% set steps = ["plan-deployment", "configure", "connect", "verify"] %}
+{% set labels = ["1. Deployment", "2. Configuration", "3. Clients", "4. Verification"] %}
+<nav class="step-nav" aria-label="Setup progress" data-pagefind-ignore>
+{% for slug in steps %}
+{% set target = get_page(path="docs/" ~ slug ~ ".md") %}
+<a href="{{ target.permalink | safe }}"{% if current == target.permalink %} aria-current="page"{% endif %}>{{ labels[loop.index0] }}</a>
+{% endfor %}
+</nav>
+{% endmacro progress %}

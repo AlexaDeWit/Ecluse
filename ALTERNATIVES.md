@@ -1,101 +1,54 @@
 # Alternatives
 
-_Other tools in this space, and when they might suit you better._
+Package policy can run in the package manager, an update bot, a registry, or a shared proxy.
+Compare where each control applies and who must operate it.
 
-Écluse is one answer to a problem many people work on, and nowhere near the only good one.
-Projects and vendors reached its core idea independently: hold fresh packages behind a
-delay, and apply a policy at a chokepoint. Several are more mature than Écluse is today.
+## Where the policy runs
 
-Each entry says what a tool offers and when to reach for it. If one fits you better than
-Écluse, use it. For _why_ Écluse exists and how it differs, see
-[`MOTIVATION.md`](MOTIVATION.md).
+| Approach | Example | Operating responsibility |
+| --- | --- | --- |
+| Package-manager release age | [npm `min-release-age`](https://docs.npmjs.com/cli/v12/commands/npm-install/#min-release-age) | Configure the clients and projects that install dependencies. Check overrides and exceptions across the organisation. |
+| Update-proposal delay | [Renovate `minimumReleaseAge`](https://docs.renovatebot.com/key-concepts/minimum-release-age/) | Configure the bot's update workflow. Its proposal policy does not replace the controls on every installation path. |
+| Filtering inside a registry | [Verdaccio package filter](https://github.com/verdaccio/verdaccio/blob/master/packages/plugins/package-filter/README.md) | Operate the npm registry and its filter configuration. The filter supports release-age limits, version blocks, and explicit exceptions. |
+| Registry-protocol firewall | [Socket Registry Firewall](https://docs.socket.dev/docs/socket-firewall-enterprise-registry-mode-configuration-reference) | Configure the registry routes and the policies exposed by that product. Verify supported protocols and deployment requirements against its current documentation. |
+| A separate self-hosted policy proxy | [Écluse](https://ecluse-proxy.com/docs/understand/) | A platform, DevOps, or IT team operates the proxy, network boundary, policy, and any supporting stores. |
 
-## Self-hosted filtering proxies
+These controls can coexist. An organisation can delay automated update proposals and still
+apply policy when a package manager requests a version.
 
-A service you run and point your clients at, which filters or gates packages on the way
-through. The closest cousins to Écluse.
+## What to compare
 
-- **[Verdaccio](https://verdaccio.org/)**: a lightweight, widely-adopted self-hosted npm
-  registry that proxies and caches upstreams, with multiple uplinks in ordered fallback.
-  Since v6.4 it ships its own package filter rather than a third-party plugin. The filter
-  offers a minimum-age gate (`minAgeDays`), version blocklists, per-package allow
-  exceptions, and replacement of a blocked version with an older one. That is a genuine
-  open-source npm repository-firewall configuration for an npm-only team. _Reach for it_ when
-  you want to run your own npm registry and a metadata age gate is enough. Écluse differs on
-  four points. It merges versions across upstreams semantically rather than falling back in
-  order. It drives denials from OSV advisories with an immediate remediation fast lane, so a
-  fix ships the moment it lands. It swaps the advisory index atomically. It mirrors on
-  demand into a registry you already run instead of caching into its own storage.
-  Verdaccio's filter is also metadata-only and npm-only.
+- **Enforcement:** which requests cross the control, and which client or network settings can bypass it?
+- **Policy:** what happens to new versions, known-malicious releases, exact security fixes, and explicit exceptions?
+- **Private packages:** which system authorises callers and keeps first-party names separate from public packages?
+- **Retention:** where do admitted packages live, and what remains available during a public outage?
+- **Revocation:** how are denied copies removed or blocked, including downstream caches?
+- **Operation:** who runs the service, updates its evidence, investigates failures, and maintains credentials?
 
-## Package-manager and bot cooldowns
+## Other products and controls
 
-Per-project, per-consumer controls that need no infrastructure. They are the right answer
-when you can guarantee consistent configuration across everyone who installs.
+The following links provide additional starting points for an evaluation. Use each product's
+current documentation for protocol coverage, deployment modes, licensing, and policy behaviour.
 
-- **npm's minimum-release-age cooldown, pnpm's [`minimumReleaseAge`](https://pnpm.io/settings), and equivalents in bun and
-  uv**: an install-time delay set in the project or per consumer. Newer package-manager
-  releases are moving toward stronger install-time defaults. _Reach for it_ for immediate,
-  zero-infrastructure protection of a project you control.
-- **[Renovate](https://docs.renovatebot.com/key-concepts/minimum-release-age/)** and **[Dependabot](https://docs.github.com/en/code-security/dependabot)** cooldowns: delay _update_ proposals until a version ages.
-  _Reach for it_ when updates already flow through a bot and you want a cooldown with no new
-  moving parts.
-- **[SafeDep PMG](https://github.com/safedep/pmg)** (Package Manager Guard): an open-source
-  local guard that wraps your package-manager commands as a shell shim or a CI step. It
-  enforces cooldowns alongside threat-intelligence checks and OS-level sandboxing across the
-  npm and Python families, and it explicitly protects AI coding agents. _Reach for it_ for
-  per-developer and per-agent defence-in-depth with no central service to run.
-
-## Commercial platforms and hosted services
-
-Turnkey, vendor-supported central enforcement without building or maintaining it yourself.
-
-- **JFrog Artifactory** with **[Curation](https://jfrog.com/curation/)**: a full artifact
-  platform whose curation layer enforces policy at the proxy. That covers age-based
-  ("immature package") gating and malicious-package blocking, which JFrog describes
-  informally as a firewall for open-source packages. _Reach for it_ for one vendor-supported
-  platform across many ecosystems, with enterprise support.
-- **Sonatype** Nexus Repository with **[Repository Firewall](https://www.sonatype.com/products/sonatype-repository-firewall)**: quarantines suspicious components
-  at the proxy using behavioural and metadata signals, releasing safe ones automatically.
-  _Reach for it_ for mature behavioural detection backed by a large intelligence database and
-  a widely-deployed repository manager.
-- **[Harness](https://www.harness.io/) Dependency Firewall**: a commercial, centrally-managed
-  control that blocks risky open-source dependencies at the proxy. _Reach for it_ for central
-  enforcement inside the Harness platform.
-- **[StepSecurity Secure Registry](https://www.stepsecurity.io/)**: an authenticated proxy you
-  point CI, developers, and artifact managers at, enforcing cooldowns and malicious-package
-  blocking. _Reach for it_ for a managed central chokepoint you don't operate yourself.
-- **[Cloudsmith](https://cloudsmith.com/)**: a hosted, multi-format registry with a policy
-  engine that can quarantine or deny by version, metadata, and other criteria. _Reach for it_
-  for a managed registry with policy controls when you'd rather not self-host.
-- **[Socket](https://socket.dev/)**: behavioural analysis of packages (install scripts, network
-  access, and more), surfaced in CI and pull requests. Socket also offers Registry Firewall, a
-  registry-protocol proxy that applies metadata filtering across roughly eight ecosystems.
-  _Reach for it_ for deep per-package behavioural signals plus a proxy-level filter.
-- **pkgwarden**: a hosted, commercial curated registry that quarantines new versions for 14
-  days and filters on CVE data, across npm and PyPI. _Reach for it_ for a managed curated
-  registry with a fixed quarantine and CVE filtering.
-- **Managed cloud registries**, **[AWS CodeArtifact](https://aws.amazon.com/codeartifact/)** and **[Google Artifact Registry](https://cloud.google.com/artifact-registry)**, give
-  you a chokepoint, storage, authentication, and dependency-confusion controls, but no
-  freshness policy of their own. Pair them with a cooldown above. _Reach for it_ as the
-  backing store you likely already run. Écluse delegates storage to exactly these rather
-  than replacing them.
-
-## Complementary tools (not substitutes)
-
-These address a different part of the problem and pair with any of the above.
-
-- **Provenance and attestations**: [npm provenance](https://docs.npmjs.com/generating-provenance-statements/) (Sigstore / SLSA) and `npm audit signatures`
-  attest _where and how_ a package was built. _Use it alongside_ a cooldown for cryptographic
-  build-origin verification.
-- **Malicious-package scanners**: e.g. **[GuardDog](https://github.com/DataDog/guarddog)** and
-  **[SafeDep vet](https://github.com/safedep/vet)**, heuristics that flag malicious packages.
-  _Use them alongside_ a delay to add detection a delay alone won't provide.
+| Area | Product documentation |
+| --- | --- |
+| Package-manager and local controls | [pnpm settings](https://pnpm.io/settings), [SafeDep PMG](https://github.com/safedep/pmg) |
+| Update automation | [Dependabot](https://docs.github.com/en/code-security/dependabot) |
+| Registry and supply-chain products | [JFrog Curation](https://jfrog.com/curation/), [Sonatype Repository Firewall](https://www.sonatype.com/products/sonatype-repository-firewall), [Harness](https://www.harness.io/), [StepSecurity](https://www.stepsecurity.io/), [Cloudsmith](https://cloudsmith.com/) |
+| Package storage and access | [AWS CodeArtifact](https://aws.amazon.com/codeartifact/), [Google Artifact Registry](https://cloud.google.com/artifact-registry) |
+| Provenance | [npm provenance](https://docs.npmjs.com/generating-provenance-statements/) |
+| Package analysis | [GuardDog](https://github.com/DataDog/guarddog), [SafeDep vet](https://github.com/safedep/vet) |
 
 ## Where Écluse fits
 
-Écluse sits at one corner of these trade-offs: an enforced central chokepoint, open and
-self-hostable, in front of the managed registry you already run.
-[`MOTIVATION.md`](MOTIVATION.md) has the reasoning and what Écluse is not.
+Écluse provides shared admission policy for npm and PyPI while registries keep the package
+archives. It can mirror admitted public versions into a configured registry and relay
+first-party publications to a separate target.
 
-If a different point on these trade-offs serves you better, use one of the tools above.
+With an advisory source, qualifying exact security fixes can pass before the minimum age.
+That depends on publication and synchronisation of advisory evidence, the remaining-advisory
+conditions, and higher-ranked rules. It is not an unconditional immediate path for every fix.
+
+The [motivation](MOTIVATION.md) explains that design. The
+[security model](https://ecluse-proxy.com/docs/security/) identifies what the deployment must
+provide and links to the full threat model.

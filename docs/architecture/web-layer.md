@@ -27,7 +27,7 @@ Each ecosystem gets one mount, and Écluse derives that mount's prefix from the 
 nobody can mistype one. No mount sits at `/`, so adding an ecosystem never changes an existing
 consumer's URLs. Each mount also carries an optional per-ecosystem
 [rule refinement](configuration.md#rule-policy) merged over the shared policy. A single-npm setup is
-the degenerate case, under its own derived prefix.
+the single-mount case, under its own derived prefix.
 
 A mount also carries its ecosystem's credential presentation: the form its clients put a
 credential in (npm: `Authorization: Bearer`; PyPI: HTTP Basic under any username). Écluse uses the
@@ -35,7 +35,7 @@ same form when it forwards the credential upstream, rendering the recovered pair
 layer compares the secret half of what the mount recovered against the configured edge token in
 constant time and refuses anything else.
 
-URL rewriting is load-bearing. Registry responses embed absolute artifact locations: npm's
+URL rewriting keeps artifact downloads on the proxy. Registry responses embed absolute artifact locations: npm's
 `dist.tarball`, and on public PyPI, file URLs on a separate host. Forwarded unchanged, those URLs let
 a client resolve metadata through the proxy and then download the bytes straight from upstream, past
 the gate. A mount therefore rewrites embedded artifact URLs under its own protocol-specific
@@ -188,10 +188,10 @@ The cache holds the metadata, not the verdict. The rules engine re-evaluates the
 request, so time-sensitive rules (`AllowIfOlderThan`) stay correct.
 On-disk artifact caching is out of scope, and the mirror stays the durable store.
 
-Metadata retention and full-read single-flight use the anonymous public (gated) origin only. It never holds the private origin: the
-serve path fetches that origin per request and never hands it to the cache. No caller's private view
-can leak to another inside the TTL, because Écluse forbids a shared private cache. The anonymous public origin crosses no trust boundary, so the cache
-holds it freely.
+Raw metadata retention and full-read request coalescing apply only to the anonymous public
+origin. The serve path fetches private metadata separately for each request, preserving the
+private registry's authorisation decision. Assembled responses can contain private data under
+the input-fingerprint rules below.
 
 The assembled-representation store beside it memoises the encoded merged document under a content
 fingerprint of every input. That fingerprint includes the digest of the private document this

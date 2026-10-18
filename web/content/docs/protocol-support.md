@@ -1,12 +1,11 @@
 +++
-title = "Protocol support"
+title = "Protocol reference"
 description = "Which registry protocols an Écluse server speaks, and what each endpoint answers, per ecosystem."
 weight = 6
 +++
 
-The reference below is what an Écluse server speaks: every endpoint it answers, per
-ecosystem, with the responses each one returns. Écluse renders the page from the OpenAPI
-document it publishes as JSON, so the page and the document always agree.
+Use this reference to check supported registry endpoints, retained metadata, and protocol limits.
+The route tables render from the same OpenAPI document Écluse publishes as JSON.
 
 ## Supported registries
 
@@ -74,7 +73,7 @@ A true declaration or a nonempty digest map enables `GET` and `HEAD` for the dis
 Absent, false and empty-map declarations enable no companion fetch.
 Both wheel and source-distribution companions require the parent's origin-specific host and integrity checks.
 The companion path checks edge authentication and private access, but does not evaluate package rules or enqueue a mirror.
-The resolver verifies advertised companion digests on ordinary upstream reads. For mirrored versions, the worker verifies and retains declared companions, and Écluse verifies retained bytes before serving them.
+The package client, such as pip, verifies advertised companion digests on ordinary upstream reads. For mirrored versions, the worker verifies and retains declared companions, and Écluse verifies retained bytes before serving them.
 Distribution bytes stay unchanged. The proxy hashes the complete upstream index for response
 validators, including fields omitted from the served response.
 

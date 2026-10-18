@@ -27,3 +27,23 @@ external_level = "warn"
 
 [extra]
 source_url = "https://github.com/AlexaDeWit/Ecluse"
+
+[[extra.docs_navigation]]
+title = "Understand Écluse"
+pages = ["understand", "security"]
+
+[[extra.docs_navigation]]
+title = "Set up"
+pages = ["setup", "try-npm", "try-pypi", "plan-deployment", "configure", "connect", "verify", "advisory-setup", "mirror-setup", "private-packages"]
+
+[[extra.docs_navigation]]
+title = "Operate and troubleshoot"
+pages = ["install-failed", "exceptions", "remove", "operate"]
+
+[[extra.docs_navigation]]
+title = "Detailed behaviour"
+pages = ["behaviour", "policy", "private-reads", "advisory-behaviour", "mirror-behaviour", "revocation", "config-reference", "permissions"]
+
+[[extra.docs_navigation]]
+title = "Full technical reference"
+pages = ["how-it-works", "deployment", "configuration", "pypi-setup", "operations", "dredger", "protocol-support"]

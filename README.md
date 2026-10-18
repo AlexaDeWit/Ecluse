@@ -6,73 +6,55 @@
 
 ![Écluse: a supply-chain policy proxy for package registries](docs/social-preview.png)
 
-A supply-chain policy proxy for package registries, written in Haskell. The name
-**Écluse** (*Quebec French:* "ayy-cluze", [e.klyz]) is French for a canal lock: the
-controlled passage every dependency clears before it reaches your build.
+Écluse is a self-hosted package policy proxy for npm and PyPI. A central platform,
+DevOps, or IT team runs it for the organisation's developer teams and CI.
+Clients use the company registry address while Écluse decides which public package versions
+they can install.
 
-[Verifying the image](#verifying-the-image) covers how to verify a release instead of
-trusting it: the keyless provenance and SBOM attestations, and a rebuild from pinned source.
+The name **Écluse** (*Quebec French:* "ayy-cluze", [e.klyz]) is French for a canal lock.
 
-> **Status: generally available, pre-1.0.0.** The npm packument, tarball, and publish paths
-> run today and are ready for use. PyPI serves the PEP 691 Simple index, distribution files,
-> first-party publication, and whole-version mirroring. PyPI mirrors require durable state and
-> an explicit native upload endpoint. AWS-backed deployments use SQS and container-role credentials.
-> [Complete PyPI setup](https://ecluse-proxy.com/docs/pypi-setup/) connects the required roles and stores.
-> Configuration can still change before `v1.0.0`. The
-> [operator manual](https://ecluse-proxy.com/docs/) is the deployment contract.
-
-[Haddock API docs](https://ecluse-proxy.com/api/) auto-publish from `main`.
+**Status: generally available, pre-1.0.0.** Configuration can change before `v1.0.0`.
+The [operator manual](https://ecluse-proxy.com/docs/) defines the supported deployment contract.
 
 ## Overview
 
-Écluse is a proxy you put in front of public package registries to protect the builds that install
-from them. Point your CI and developer tooling at Écluse instead of at a public registry. Écluse
-fetches from that registry on their behalf and decides which versions a build may install. npm was
-the first protocol supported, and any client that speaks it works, such as npm, pnpm, yarn, or bun.
-PyPI clients such as pip, uv, and Poetry install through the same gate. First-party packages
-can publish through the mount, and admitted versions can enter the configured private mirror.
+Écluse applies policy before public package versions enter a build or a configured mirror.
+Registries hold the package archives. Écluse does not host them.
 
-A new public version waits in a quarantine, seven days by default, before a build can install it.
-Most malicious publishes are found and pulled within days, so the wait alone sidesteps them, with no
-attempt to detect malice. With an advisory source configured, a security patch overrides the
-quarantine as soon as the advisory data is available: a version that a synced advisory names as the
-exact fix for a vulnerability skips the wait. A fix that another advisory still affects skips it only
-when that advisory's stored scores stay low. The same source makes active MAL advisories deny
-affected public versions by default. Source-free deployments keep the quarantine alone. Other rules
-opt in by name.
+- **New public releases wait seven days by default.** Age does not prove a package is harmless.
+  The delay reduces exposure to releases removed during that window.
+- **Advisory checks are optional.** Configuring an advisory source activates known-malicious
+  denial and early admission for qualifying exact security fixes. Higher-ranked rules, evidence
+  freshness, and remaining advisories still affect the result.
+- **npm denies install scripts by default.** This admission rule also applies without an
+  advisory source. Scored CVSS and EPSS denies are separate opt-in rules.
+- **Private packages use the trusted path.** They bypass public admission policy, while caller
+  authorisation and applicable integrity and completion checks still apply.
+- **Mirroring keeps admitted public versions in your registry.** A complete copy can remain
+  available during a public outage or after upstream removal.
+- **Cleanup removes stored versions denied at revocation.** It requires a supported backend,
+  independent authority and consent for each target, and stays within a deletion cap.
 
-If you run a private registry, Écluse reads it first and passes your own packages through untouched.
-Any https registry that speaks the ecosystem's protocol serves in that role. Écluse can also mirror
-each admitted public version into a registry you nominate, so a mirrored version survives a public
-outage or yank. You declare each registry under a tag that names the store behind it. A mirror
-target under the `codeArtifact` tag mints its own short-lived write token, and the other tags take
-a static token you supply. Écluse hosts no packages itself.
-
-A mirror keeps what it was given, so a version your rules later deny stays until something removes
-it. `ecluse dredger` is that role. It walks each mount's mirror target and the private cache paired
-with it. It re-evaluates the versions a new advisory or an operator deny can have changed, and
-deletes only what a named rule condemns. It is the only role that deletes, and it does so only from
-a store carrying its own consent marker, under a per-cycle cap.
-
-The [operator manual](https://ecluse-proxy.com/docs/) covers running Écluse.
-
-[`docs/architecture.md`](docs/architecture.md) has the design: the registry roles, the rules
-engine, and the mirror queue. The threat model (Saerskriven, STRIDE) lives in
-[`threat-modelling/ecluse.yaml`](threat-modelling/ecluse.yaml). The site build renders it as a
-readable [register](https://ecluse-proxy.com/docs/threat-model/).
+The [security model](https://ecluse-proxy.com/docs/security/) explains the limits and links to
+the rendered threat model. Network access control remains the operating team's responsibility.
+Pointing clients at Écluse alone does not prevent direct downloads around it.
 
 ## Using Écluse
 
-The [operator manual](https://ecluse-proxy.com/docs/) covers configuration, connecting your
-clients, the network-egress safety you're responsible for, the rule policy, and the health and
-observability endpoints. The [`docs/architecture/`](docs/architecture.md) documents are the
-*why* behind each setting.
+Choose the guide for your task:
 
-Écluse publishes to GitHub Container Registry and nowhere else: `ghcr.io/alexadewit/ecluse`,
-one immutable tag per version, no `latest`. Pin a deployment by digest and verify what you
-pin ([Verifying the image](#verifying-the-image)).
-[Release and supply-chain operations](docs/architecture/release-supply-chain.md#releases-and-container-image)
-covers the publish flow.
+| Task | Start here |
+| --- | --- |
+| Decide whether Écluse fits | [Understand Écluse](https://ecluse-proxy.com/docs/understand/) |
+| Deploy it for your organisation | [Set up Écluse](https://ecluse-proxy.com/docs/setup/) |
+| Embed configuration in a derived image | [Package your configuration](https://ecluse-proxy.com/docs/configure/) |
+| Investigate a request or policy interaction | [Detailed behaviour](https://ecluse-proxy.com/docs/behaviour/) |
+| Review security assumptions and controls | [Rendered threat model](https://ecluse-proxy.com/docs/threat-model/) |
+| Read or extend the code | [Architecture](docs/architecture.md) and [API reference](https://ecluse-proxy.com/api/) |
+
+Images publish to `ghcr.io/alexadewit/ecluse`, with an immutable tag for each version and no
+`latest` tag. Pin production deployments by digest and verify the base image before building
+your configured derivative.
 
 ## Verifying the image
 
@@ -156,7 +138,7 @@ DCO sign-off. The [Code of Conduct](CODE_OF_CONDUCT.md) governs participation, a
 
 | Path        | Purpose                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `core/`     | `ecluse-core` library: the pure, ecosystem-agnostic capability core (`Ecluse.Core.*`)                                    |
+| `core/`     | `ecluse-core` library: the ecosystem-agnostic domain and capability core (`Ecluse.Core.*`)                                    |
 | `runtime/`  | `ecluse-runtime` library: the effectful edge (OTel SDK, warp, scribes, and cloud adapters, `Ecluse.Runtime.*`)           |
 | `src/`      | `ecluse` library: the composition shell that assembles and runs the tiers (`Ecluse.*`)                                  |
 | `app/`      | Executable entry point, thin wiring only                                                                                  |
@@ -167,7 +149,7 @@ DCO sign-off. The [Code of Conduct](CODE_OF_CONDUCT.md) governs participation, a
 | `vendor/` | Attributed native decoder sources with bounded resource lifetime support |
 | `config/`   | The embedded defaults (`default.yaml`), the schema guidepost operator configs override                                    |
 | `runbooks/` | Maintainer procedures run step by step (releases)                                                                        |
-| `docs/`     | Architecture and design documents                                                                                        |
+| `docs/`     | Contributor guides, testing contracts, and architecture decisions                                                                                        |
 | `threat-modelling/` | The Saerskriven model that owns system diagrams, threats, controls, and assumptions. The site build generates its views on demand. |
 | `web/`      | The documentation site (Zola): content, templates, and styles. `web/content/docs/` holds the operator manual              |
 | `flake.nix` | Nix dev shell (GHC 9.10, cabal, HLS, ghcid) and the package build (`nix build`) plus hermetic checks (`nix flake check`) |

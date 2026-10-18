@@ -1,6 +1,6 @@
 # Haddock and documentation guide
 
-How to write the in-source documentation for Écluse (package `ecluse`). Follow it directly.
+Use this guide when documenting Écluse's exported types and functions.
 [`docs/style.md`](style.md) owns formatting, naming, totality, and the compiler flags.
 
 > When in doubt, match the nearest existing module.
@@ -10,12 +10,14 @@ How to write the in-source documentation for Écluse (package `ecluse`). Follow 
 
 ## What Haddock is for
 
-Haddock is Écluse's **reference** documentation for the public API: what a thing is, and how to call
-it. `task docs` renders it to a browsable site, published from `main`. It is one of the
-[four kinds of documentation](https://diataxis.fr/), not tutorial, how-to, or explanation. Narrative
-and onboarding belong in [`README.md`](../README.md) and [`docs/architecture.md`](architecture.md).
-At each type and function, give the contract, the caveats, and the reasoning a signature cannot
-carry, in one-line summaries, never a wall of prose.
+Haddock describes the public API: what each exported type or function provides and how to use it.
+`task docs` builds the local reference. CI publishes the generated API documentation from `main`.
+
+Document the contract and any constraint the signature cannot express. Keep summaries short,
+and link to longer design explanations when needed. Operator onboarding belongs in the
+[setup guide](../web/content/docs/setup.md). Contributor onboarding belongs in
+[Getting started](getting-started.md), and design rationale belongs in
+[the architecture documents](architecture.md).
 
 ---
 
@@ -111,7 +113,7 @@ back to `-- |`, so never hand-convert either form.
 
 Every module opens with a header. A header that fits on one line is a `-- |` comment, and a longer
 one is a `{- | … -}` block (§4). State what the module is for and how it fits the system: the model
-and the load-bearing decisions, never a list of type names. Cross-reference sibling modules and the
+and the decisions that determine its contract, never a list of type names. Cross-reference sibling modules and the
 architecture documents.
 
 ```haskell
@@ -137,7 +139,7 @@ several modules depend on, and keep each one within the same cap.
 
 ## 6. Documenting declarations
 
-**Functions.** Annotate the contract the signature cannot state. Here that is a load-bearing
+**Functions.** Annotate the contract the signature cannot state. Here that is a required
 totality: a crash would take down the gate. A `-- ^` on an argument only where the type does not
 say its role or unit. Never add a reflexive "pure and total" tag (docs/style.md §9.2):
 

@@ -12,7 +12,7 @@ A mount carries up to four registry roles, two reads and two writes, each set in
 Several may map to one physical registry. The recommended topology keeps the first-party store
 and the public-derived store separate, and unions them at the registry level (see
 [Registry-level composition](#registry-level-composition-the-recommended-topology)). A single
-shared registry is the degenerate floor.
+shared registry is a supported reduced topology, subject to each role's endpoint checks.
 
 | Role | Purpose |
 |------|---------|
@@ -24,10 +24,10 @@ shared registry is the degenerate floor.
 Whether a mount mirrors is **derived from its endpoints, never declared as a mode**. A declared
 `mirrorTarget` makes the mount mirror, and the mount then requires a private upstream so a client
 can read the mirror back. Without one, boot fails with `MountMissingPrivateUpstream`. An absent
-`mirrorTarget` makes the mount serve-only: no writes, and the private upstream optional. A mount
-with neither is the pure public gate. A serve-only mount runs the full rules gate unchanged. The
-trade is that every artifact stays on the gated public leg instead of retiring onto the private
-read (see [the V](#registry-level-composition-the-recommended-topology)).
+`mirrorTarget` makes the mount serve-only: no mirror writes, and the private upstream is optional.
+First-party publication remains independently available when `publicationTarget` is configured.
+A mount with neither read nor mirror store is a pure public gate. It applies the same public
+admission rules, but retains no mirror copy for later trusted reads.
 
 ### Credential flow and authority
 
@@ -55,12 +55,12 @@ The non-negotiable invariant, under every strategy: **the client's credential is
 the public upstream.** The boot enforces it on the one client-driven write: a `publicationTarget`
 on any mount's `publicUpstream` host, or equal to another mount's endpoint, refuses to start.
 
-The private upstream is the per-client authority for who may read what. The proxy reads its
-metadata per request and **never enters it into the shared cache**. A credential-blind key would
-let one client warm an entry that a differently-authorised client then gets as a hit. That is the
-cross-client disclosure hazard in the
-[threat model](https://ecluse-proxy.com/docs/threat-model/). The cache holds only the anonymous
-public origin (see the [metadata cache](web-layer.md#metadata-cache)).
+The private upstream authorises each caller. Raw private metadata bypasses shared retention
+and request coalescing. Every request performs a fresh private fetch.
+The assembled-response cache can contain private data, but reuse requires the same inputs,
+including the digest returned by that request's authorised private fetch. A cache hit cannot
+skip authorisation. See the [metadata cache](web-layer.md#metadata-cache) and
+[threat model](https://ecluse-proxy.com/docs/threat-model/).
 The [security invariants](security.md) bound outbound requests further: the host allowlist,
 internal-range blocking, canonicalisation, and response bounds.
 
@@ -73,7 +73,7 @@ The publication target adds the one client-driven write path. Écluse accepts a 
 (`npm publish`) at the mount and relays it to the publication target. That write is distinct in
 trigger, content, and credential from the mirror write.
 
-- **Anti-shadowing guard (the load-bearing control).** Écluse refuses a publish whose name falls
+- **First-party publication guard.** Écluse refuses a publish whose name falls
   outside the mount's `firstParty` namespaces (for npm, scopes such as `@acme`). That stops a client
   publishing a name that shadows an existing public package, a dependency-confusion vector. The
   guard holds a **guard-name ≡ URL-path name ≡ every declared body name** invariant. The scope
@@ -314,20 +314,18 @@ physically separate. It unions them at the registry level into the private-upstr
 One example is an AWS CodeArtifact repository drawing from a mirror-target repo and a first-party
 repo. The private upstream then returns the full trusted set in one fetch, while each store stays
 independently governable (distinct scanning per provenance, clean post-disclosure scoping).
-Collapsing the roles onto one store works as the degenerate floor: it trades away auditability and
+Combining the roles in one store trades away auditability and
 defence-in-depth, not the perimeter.
 
-The topology is a **V**: Écluse fans a read to the public origin and to the private pull-through,
-which unions the mirror and first-party stores. The worker back-fills every admitted public
-tarball into the mirror, and the mirror feeds the private read path. The private read therefore
-comes to serve nearly all tarball traffic once a fleet has warmed. The public tarball leg is a
-transient, per-artifact fail-over that a new version transits until the worker promotes it. Its
-throughput matters for onboarding, not for steady-state capacity. Trading private-hit (hot-path)
-work to speed the public fail-over is a regression. A **serve-only** mount opts out of the
-back-fill, so its public leg is permanent. It is the low-effort shape, and the accepted trade is
-slower installs at scale and egress that never retires. Availability also couples to the public
-registry, and no mirrored copy survives an upstream yank. The security gate is identical.
-Declaring a `mirrorTarget` later upgrades the mount in place.
+Écluse fetches ordinary package metadata from the public and private sources. The private
+read endpoint combines the mirror and first-party repositories. The worker copies admitted
+public versions into the mirror, making completed copies available through the private path.
+
+A mirrored deployment is intended to serve repeated artifact requests through that private
+path. Performance changes must preserve private-read behaviour and report public-path costs
+separately. A serve-only mount keeps fetching public artifacts from the public source and
+retains no mirror copy through Écluse. Its availability remains coupled to that source.
+Adding a `mirrorTarget` enables mirroring without changing the public admission policy.
 
 #### The one rule of registry composition: Écluse is the only path from public
 
@@ -355,7 +353,7 @@ catalogued in the [threat model](https://ecluse-proxy.com/docs/threat-model/).
 
 `PackageDetails` ([`core/src/Ecluse/Core/Package.hs`](../../core/src/Ecluse/Core/Package.hs))
 is the ecosystem-agnostic per-version snapshot every adapter produces and the rules engine
-consumes. Its shape follows the npm protocol. Three principles govern it:
+consumes. Adapters map their protocols into this shared model. Four principles govern it:
 
 - **The rules engine is ecosystem-blind.** It never branches on npm vs PyPI vs RubyGems.
   Adapters project each wire format into normalised signals: a rule sees `CodeExecSignal`,
@@ -368,9 +366,9 @@ consumes. Its shape follows the npm protocol. Three principles govern it:
   determine cheaply, has its own representation (`CodeExecUnknown`, `Nothing`).
   A pure rule then yields no decision rather than guessing, and an effectful rule can resolve it
   later.
-- **The model holds signals, not the document.** A cache keeps a snapshot for every version, so it
-  carries only the typed rows of the vocabulary below, not dependencies, and the artifact facts
-  that merge, admission, serving and the mirror worker read. Licences, publishers, deprecation
+- **The policy model holds the facts that rules and admission need.** Installation fields
+  remain in the retained source representation. The typed model carries the vocabulary below
+  and the artifact facts used by merging, serving, and mirroring. Licences, publishers, deprecation
   notices, per-file yanks with their reasons, and provenance reach clients in the served document,
   within its supported fields.
 
