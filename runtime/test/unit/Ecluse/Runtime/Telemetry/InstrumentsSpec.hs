@@ -7,7 +7,7 @@ module Ecluse.Runtime.Telemetry.InstrumentsSpec (spec) where
 
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, getCurrentTime)
 import GHC.Clock (getMonotonicTime)
-import OpenTelemetry.Attributes (Attributes)
+import OpenTelemetry.Attributes (Attributes, emptyAttributes)
 import OpenTelemetry.Metric.Core (ObservableResult (ObservableResult))
 import Test.Hspec
 
@@ -198,20 +198,20 @@ admissionMetricsSpec = describe "enabled admission observations" $ do
             mpPublishBodyInFlightBytes port 4096
             mpServeAdmissionInFlight port (-1)
             mpPublishBodyInFlightBytes port (-1024)
-            sumPoints "ecluse.serve.admission.in_flight" meterEnv `shouldReturn` [(mempty, 1)]
-            sumPoints "ecluse.publish.body.in_flight_bytes" meterEnv `shouldReturn` [(mempty, 3072)]
+            sumPoints "ecluse.serve.admission.in_flight" meterEnv `shouldReturn` [(emptyAttributes, 1)]
+            sumPoints "ecluse.publish.body.in_flight_bytes" meterEnv `shouldReturn` [(emptyAttributes, 3072)]
             mpServeAdmissionInFlight port (-1)
             mpPublishBodyInFlightBytes port (-3072)
-            sumPoints "ecluse.serve.admission.in_flight" meterEnv `shouldReturn` [(mempty, 0)]
-            sumPoints "ecluse.publish.body.in_flight_bytes" meterEnv `shouldReturn` [(mempty, 0)]
+            sumPoints "ecluse.serve.admission.in_flight" meterEnv `shouldReturn` [(emptyAttributes, 0)]
+            sumPoints "ecluse.publish.body.in_flight_bytes" meterEnv `shouldReturn` [(emptyAttributes, 0)]
 
     it "keeps admission queueing and publish refusal counts distinct" $
         withTestTelemetry $ \telemetry meterEnv -> do
             port <- metricsPortOf <$> newMetrics telemetry
             replicateM_ 2 (mpServeAdmissionQueued port)
             replicateM_ 3 (mpPublishBodyShed port)
-            sumPoints "ecluse.serve.admission.queued" meterEnv `shouldReturn` [(mempty, 2)]
-            sumPoints "ecluse.publish.body.shed" meterEnv `shouldReturn` [(mempty, 3)]
+            sumPoints "ecluse.serve.admission.queued" meterEnv `shouldReturn` [(emptyAttributes, 2)]
+            sumPoints "ecluse.publish.body.shed" meterEnv `shouldReturn` [(emptyAttributes, 3)]
 
     it "distinguishes waiting, refusal, pauses and overdraw at the memory gate" $
         withTestTelemetry $ \telemetry meterEnv -> do
@@ -220,10 +220,10 @@ admissionMetricsSpec = describe "enabled admission observations" $ do
             replicateM_ 2 (mpMemoryAdmissionShed port)
             replicateM_ 3 (mpMemoryAdmissionPause port)
             replicateM_ 4 (mpMemoryAdmissionOverdraw port)
-            sumPoints "ecluse.serve.admission.memory.queued" meterEnv `shouldReturn` [(mempty, 1)]
-            sumPoints "ecluse.serve.admission.memory.shed" meterEnv `shouldReturn` [(mempty, 2)]
-            sumPoints "ecluse.serve.admission.memory.pauses" meterEnv `shouldReturn` [(mempty, 3)]
-            sumPoints "ecluse.serve.admission.memory.overdraws" meterEnv `shouldReturn` [(mempty, 4)]
+            sumPoints "ecluse.serve.admission.memory.queued" meterEnv `shouldReturn` [(emptyAttributes, 1)]
+            sumPoints "ecluse.serve.admission.memory.shed" meterEnv `shouldReturn` [(emptyAttributes, 2)]
+            sumPoints "ecluse.serve.admission.memory.pauses" meterEnv `shouldReturn` [(emptyAttributes, 3)]
+            sumPoints "ecluse.serve.admission.memory.overdraws" meterEnv `shouldReturn` [(emptyAttributes, 4)]
 
 cacheGaugesSpec :: Spec
 cacheGaugesSpec =
@@ -234,18 +234,18 @@ cacheGaugesSpec =
             mpCacheResidentBytes port 1000
             mpVersionCacheResidentBytes port 2000
             mpAssembledCacheResidentBytes port 3000
-            gaugePoints "ecluse.metadata_cache.entries" meterEnv `shouldReturn` [(mempty, 9)]
-            gaugePoints "ecluse.metadata_cache.resident_bytes" meterEnv `shouldReturn` [(mempty, 1000)]
-            gaugePoints "ecluse.metadata_cache.version.resident_bytes" meterEnv `shouldReturn` [(mempty, 2000)]
-            gaugePoints "ecluse.metadata_cache.assembled.resident_bytes" meterEnv `shouldReturn` [(mempty, 3000)]
+            gaugePoints "ecluse.metadata_cache.entries" meterEnv `shouldReturn` [(emptyAttributes, 9)]
+            gaugePoints "ecluse.metadata_cache.resident_bytes" meterEnv `shouldReturn` [(emptyAttributes, 1000)]
+            gaugePoints "ecluse.metadata_cache.version.resident_bytes" meterEnv `shouldReturn` [(emptyAttributes, 2000)]
+            gaugePoints "ecluse.metadata_cache.assembled.resident_bytes" meterEnv `shouldReturn` [(emptyAttributes, 3000)]
             mpCacheEntries port 4
             mpCacheResidentBytes port 700
             mpVersionCacheResidentBytes port 800
             mpAssembledCacheResidentBytes port 900
-            gaugePoints "ecluse.metadata_cache.entries" meterEnv `shouldReturn` [(mempty, 4)]
-            gaugePoints "ecluse.metadata_cache.resident_bytes" meterEnv `shouldReturn` [(mempty, 700)]
-            gaugePoints "ecluse.metadata_cache.version.resident_bytes" meterEnv `shouldReturn` [(mempty, 800)]
-            gaugePoints "ecluse.metadata_cache.assembled.resident_bytes" meterEnv `shouldReturn` [(mempty, 900)]
+            gaugePoints "ecluse.metadata_cache.entries" meterEnv `shouldReturn` [(emptyAttributes, 4)]
+            gaugePoints "ecluse.metadata_cache.resident_bytes" meterEnv `shouldReturn` [(emptyAttributes, 700)]
+            gaugePoints "ecluse.metadata_cache.version.resident_bytes" meterEnv `shouldReturn` [(emptyAttributes, 800)]
+            gaugePoints "ecluse.metadata_cache.assembled.resident_bytes" meterEnv `shouldReturn` [(emptyAttributes, 900)]
 
 -- Keep each callback observation with its attributes.
 capture :: IORef [(Int64, Attributes)] -> ObservableResult Int64
