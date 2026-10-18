@@ -16,7 +16,17 @@
   outputs = { nixpkgs, flake-utils, saerskriven, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = nixpkgs.legacyPackages.${system};
+        pkgs = nixpkgs.legacyPackages.${system}.extend (_final: prev: {
+          # Remove when actionlint releases support for $/ (rhysd/actionlint#732).
+          actionlint = prev.actionlint.overrideAttrs (old: {
+            patches = (old.patches or [ ]) ++ [
+              (prev.fetchurl {
+                url = "https://github.com/rhysd/actionlint/compare/011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7...b02c24b743cc88a26b280339814eb4ece91c32cb.diff";
+                hash = "sha256-s1b8wqQFELTjRfBYit4h2g1+5TFaei3nzqIZc/EA86E=";
+              })
+            ];
+          });
+        });
         hlib = pkgs.haskell.lib;
 
         # A hash-pinned Hackage release with dontCheck. Upstream suites are not ours to
@@ -422,11 +432,6 @@
           # `coverage` target (see CONTRIBUTING.md → "Coverage").
           (hlib.justStaticExecutables (hlib.dontCheck toolHpkgs.hpc-codecov))
           pkgs.semgrep
-          # GitHub Actions linting (`task lint-workflows`). `actionlint` checks
-          # correctness (shellcheck over `run:` blocks, expression and context
-          # checks), and zizmor checks security (template injection, credential
-          # persistence, excessive permissions, dangerous triggers). It mechanises
-          # the injection-free workflow rule in AGENTS.md → "CI & Security".
           pkgs.actionlint
           pkgs.zizmor
           # yq (the Go yq-go) turns each workflow into JSON for the runner-policy

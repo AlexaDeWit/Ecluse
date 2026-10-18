@@ -34,7 +34,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up toolchain
-        uses: ./.github/actions/setup-toolchain
+        uses: $/.github/actions/setup-toolchain
 
       - name: Assert the release tag matches ecluse.cabal version
         id: version
@@ -47,7 +47,7 @@ jobs:
     needs: verify-version
     permissions:
       contents: read
-    uses: ./.github/workflows/release-build.yml
+    uses: $/.github/workflows/release-build.yml
 
   publish:
     name: Assemble multi-arch image, attest & release

@@ -1981,6 +1981,13 @@ exact references first through `scripts/docker-prepull.sh`. The `ci.yml` comment
 
 ## What gates, and what doesn't
 
+Workflows use `$/` for actions and reusable workflows from this repository.
+GitHub resolves these references at the running commit, independent of the checkout.
+The flake carries a commit- and hash-pinned patch from
+[actionlint PR #732](https://github.com/rhysd/actionlint/pull/732) until a release supports this syntax.
+`task lint-workflows` checks inputs with the patched actionlint and keeps zizmor's `self-repository` audit enabled.
+The runner policy checks both `./` and `$/` calls against the workflow files it reads.
+
 Two things are easy to get backwards:
 
 - **The integration tier is not "the tier for thorough tests."** A test goes to integration because

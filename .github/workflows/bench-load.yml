@@ -103,7 +103,7 @@ jobs:
 
       - name: Set up toolchain
         id: toolchain
-        uses: ./.github/actions/setup-toolchain
+        uses: $/.github/actions/setup-toolchain
         with:
           # Restore the warm cabal store (this job compiles the harness).
           cabal-cache: "true"
@@ -205,7 +205,7 @@ jobs:
 
       - name: Set up toolchain
         id: toolchain
-        uses: ./.github/actions/setup-toolchain
+        uses: $/.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
 
