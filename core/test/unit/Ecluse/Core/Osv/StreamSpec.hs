@@ -15,6 +15,7 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Types.Status (status200)
 import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 
+import Ecluse.Core.BuildIdentity (userAgent)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Compile (newFeedManager)
@@ -37,7 +38,7 @@ import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Test.Osv (OsvTestM, noScores, npmFeed, osvZipOf, runOsvJsonLog, runOsvTestM)
 import Ecluse.Test.Osv.Withdrawal (withdrawalZip)
 import Ecluse.Test.Snapshot (digestOf)
-import Ecluse.Test.Stub (stubBaseUrl, withStub)
+import Ecluse.Test.Stub (headerValue, lastCaptured, stubBaseUrl, withStub)
 
 -- The run clock every ingest here is built with. Nothing in this module reads the record
 -- dates it judges, so its only job is to be a clock.
@@ -118,8 +119,11 @@ spec = describe "the OSV ingest stream" $ do
 
     it "fetches and streams an OSV zip archive over HTTP" $ do
         zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
-        results <- withStub status200 zipData $ \stub ->
-            ingestedUrl (unpack (stubBaseUrl stub) <> "/sample.zip")
+        results <- withStub status200 zipData $ \stub -> do
+            rows <- ingestedUrl (unpack (stubBaseUrl stub) <> "/sample.zip")
+            captured <- lastCaptured stub
+            headerValue "User-Agent" captured `shouldBe` Just userAgent
+            pure rows
         theSampleRow results
 
     it "throws an exception if the URL is invalid" $

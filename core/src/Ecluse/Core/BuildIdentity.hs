@@ -2,19 +2,17 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The proxy's own identity: the product name, the version the build declares, and the
-@User-Agent@ every registry and mirror-target request carries. The version is read from
-@Paths_ecluse@, so it follows the @version:@ field of @ecluse.cabal@. Proxy identity is no
-ecosystem's protocol fact, so it lives outside every adapter namespace and imports nothing
-from @Ecluse@.
--}
+-- | The product identity shared by outbound registry requests and advisory feeds.
 module Ecluse.Core.BuildIdentity (
     productName,
     productVersion,
     userAgent,
+    identifyRequest,
 ) where
 
 import Data.Version (showVersion)
+import Network.HTTP.Client (Request (requestHeaders))
+import Network.HTTP.Types.Header (hUserAgent)
 import Paths_ecluse (version)
 
 -- | The name Écluse identifies itself by to another service.
@@ -25,8 +23,14 @@ productName = "ecluse"
 productVersion :: Text
 productVersion = toText (showVersion version)
 
-{- | The @User-Agent@ value for an outbound request, @ecluse\/\<version\>@.
-'Ecluse.Core.Registry.Request.sealRequest' sets it once for every adapter.
--}
+-- | The default identity, including the project's public URL.
 userAgent :: ByteString
-userAgent = encodeUtf8 (productName <> "/" <> productVersion)
+userAgent = encodeUtf8 (productName <> "/" <> productVersion <> " (+https://ecluse-proxy.com)")
+
+-- | Identify an outbound request unless the caller supplies its own identity.
+identifyRequest :: Request -> Request
+identifyRequest request
+    | any ((== hUserAgent) . fst) headers = request
+    | otherwise = request{requestHeaders = (hUserAgent, userAgent) : headers}
+  where
+    headers = requestHeaders request

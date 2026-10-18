@@ -538,9 +538,10 @@ to https on its own host. A file the gate refuses, for its scheme or for its hos
 the listing** rather than listed and refused at download, so the listing and the download gate agree
 file by file. A release disappears when no file of it survives. No configuration widens that.
 
-**Écluse identifies itself on every registry and mirror-target request.** The `User-Agent` is
-`ecluse/<version>`, naming the running build. An upstream, a WAF, or a forward proxy that filters on
-the agent has to allow it.
+**Écluse identifies itself on every registry and mirror-target request and Pilot feed download.**
+The `User-Agent` is `ecluse/<version> (+https://ecluse-proxy.com)`, naming the running build and
+linking to the project. An upstream, a WAF, or a forward proxy that filters on the agent has to
+allow it.
 
 Provide the second layer at the platform. Deny egress by default and allow only the role-specific
 destinations below. Permit DNS through your resolver, and telemetry to the configured collector when

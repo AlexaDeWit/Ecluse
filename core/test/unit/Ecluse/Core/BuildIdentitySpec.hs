@@ -4,17 +4,25 @@
 
 module Ecluse.Core.BuildIdentitySpec (spec) where
 
+import Network.HTTP.Client (Request (requestHeaders), defaultRequest)
+import Network.HTTP.Types.Header (hUserAgent)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe)
 
-import Ecluse.Core.BuildIdentity (productName, productVersion, userAgent)
+import Ecluse.Core.BuildIdentity (identifyRequest, productName, productVersion, userAgent)
 
-{- | The identity an upstream sees on every outbound request. Its shape is a contract with
-every operator who filters or logs on the agent, so it is pinned here, not at a call site.
--}
 spec :: Spec
 spec = describe "the proxy's build identity" $ do
-    it "renders the User-Agent as the product name over the build version" $
-        userAgent `shouldBe` encodeUtf8 (productName <> "/" <> productVersion)
+    it "renders the product, version and project URL" $
+        userAgent `shouldBe` encodeUtf8 (productName <> "/" <> productVersion <> " (+https://ecluse-proxy.com)")
 
     it "carries a version, so no request identifies an unnamed build" $
         productVersion `shouldNotBe` ""
+
+    it "adds the identity once without changing other request headers" $ do
+        let request = defaultRequest{requestHeaders = [("Accept", "application/json")]}
+        requestHeaders (identifyRequest (identifyRequest request))
+            `shouldBe` [(hUserAgent, userAgent), ("Accept", "application/json")]
+
+    it "preserves the caller's identity" $ do
+        let request = defaultRequest{requestHeaders = [(hUserAgent, "custom/1")]}
+        requestHeaders (identifyRequest request) `shouldBe` requestHeaders request

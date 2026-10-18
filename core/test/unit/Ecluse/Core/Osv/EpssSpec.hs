@@ -19,6 +19,7 @@ import System.IO.Error (doesNotExistErrorType, mkIOError, resourceVanishedErrorT
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Exception (evaluate)
 
+import Ecluse.Core.BuildIdentity (userAgent)
 import Ecluse.Core.Fault (HttpFault (HttpStatus), TransportCause (TransportProtocol, TransportTimeout, TransportUnreachable))
 import Ecluse.Core.Osv.Compile (newFeedManager)
 import Ecluse.Core.Osv.Epss (
@@ -46,7 +47,7 @@ import Ecluse.Core.Osv.Schema (EpssRequirement (..), EpssStatus (..))
 import Ecluse.Test.Fault (httpTransportCause)
 import Ecluse.Test.Osv (runOsvTestM)
 import Ecluse.Test.Snapshot (digestOf)
-import Ecluse.Test.Stub (allCaptured, stubBaseUrl, withStub, withStubHeaders)
+import Ecluse.Test.Stub (allCaptured, headerValue, lastCaptured, stubBaseUrl, withStub, withStubHeaders)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 -- The feed's own preamble, in the shape FIRST.org publishes: a metadata comment, then a header.
@@ -134,6 +135,13 @@ spec = do
             epssForIds (mkEpssScores []) ["CVE-A"] `shouldBe` Nothing
 
     describe "fetchEpssScores" $ do
+        it "identifies the proxy to the feed server" $
+            withStub status200 wholeFeed $ \stub -> do
+                feeds <- newFeedManager
+                void (runOsvTestM (fetchEpssScores feeds maxEpssFeedBytes (toString (stubBaseUrl stub) <> "/epss.csv.gz")))
+                captured <- lastCaptured stub
+                headerValue "User-Agent" captured `shouldBe` Just userAgent
+
         it "fetches, decompresses, and decodes a served feed" $
             fetchServed maxEpssFeedBytes (feedPreamble <> "CVE-2026-10001,0.875,0.995\nCVE-2026-10002,0.5,0.900\n")
                 `shouldReturn` 2
