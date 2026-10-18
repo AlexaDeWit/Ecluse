@@ -1998,6 +1998,20 @@ exact references first through `scripts/docker-prepull.sh`. The `ci.yml` comment
 
 ## What gates, and what doesn't
 
+Workflows use `$/` for actions and reusable workflows from this repository.
+GitHub resolves these references at the running commit, independent of the checkout.
+The flake carries a commit- and hash-pinned patch from
+[actionlint PR #732](https://github.com/rhysd/actionlint/pull/732) until a release supports this syntax.
+`task lint-workflows` checks inputs with the patched actionlint and keeps zizmor's `self-repository` audit enabled.
+The runner policy checks both `./` and `$/` calls against the workflow files it reads.
+
+`task sast` replaces the registry's mutable-action-tag rule with the fixed rule from
+[Semgrep rules PR #4042](https://github.com/semgrep/semgrep-rules/pull/4042).
+Nix fetches the rule and its tests at a fixed commit and verifies both content hashes.
+`task test-sast` runs those tests before the scan.
+The registry rule incorrectly flags `$/` references, so the scan excludes only that original rule and loads the fixed copy.
+Remove the replacement and its exclusion when the registry publishes the fix.
+
 Two things are easy to get backwards:
 
 - **The integration tier is not "the tier for thorough tests."** A test goes to integration because
