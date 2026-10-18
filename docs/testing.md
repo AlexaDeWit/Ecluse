@@ -2029,12 +2029,13 @@ logs in to a registry, signs, attests, or pushes. The nightly run and a manual d
 both images' SBOMs with grype. That scan is report-only and never gates.
 
 `release-rebuild` runs the same workflow a second time for the same commit, on separate runners
-that share no cache and no Nix store with the first build, and it uploads no SBOM.
+that share no cache and no Nix store with the first build, and it uploads no SBOM. It runs on a
+push to main, the nightly run, and a manual dispatch, and never on a pull request.
 `release-compare` then compares the two archives of each architecture by SHA-256
 (`scripts/image-archive.sh compare`), and on a difference it prints the archive members and the
 files that differ. `release-compare` gates both architectures. A difference fails `CI gate`, as
 does a skipped comparison after a failed or cancelled build. The gate accepts a comparison skip
-only when the change classifier sets `release-build=false`.
+only when the change classifier sets `release-rebuild=false`, which it does on every pull request.
 
 Every job restores caches and only a main run ever saves one, so a pull request reads the default
 branch's entries and adds none of its own. Each cache key has exactly one writer, because GitHub
@@ -2078,14 +2079,20 @@ Such a PR uploads no coverage and skips the `codecov-notify` job, so the require
 `codecov/project` status stays pending by design, and the repo owner merges it by administrator
 bypass.
 
-The same script skips the release dry-run, and with it the rebuild and the comparison, for a PR
-whose paths are all documentation, Haskell source, runbooks, or analysis-tool configuration. The
-`build` and `docs` jobs compile that source on arm64, but such a PR builds no image and compiles
-nothing on amd64. The flake, `ecluse.cabal`,
-`cabal.project`, the freeze, the Taskfile, the workflows, the CI actions, the scripts,
-`test/oracles/` (it feeds the `.#ci` shell), and any unlisted path run it. A push to main, the nightly
-run, and a manual dispatch always run it. The `gate` job accepts a skipped job from these two
-filters and from nothing else, so a job that silently never ran still fails the gate.
+The same script skips the release dry-run for a PR whose paths cannot change the release image. Such
+paths are documentation, Haskell source, runbooks, and analysis-tool configuration. Scripts that the
+release workflows, the dry-run, and the Taskfiles' top-level variables never run also qualify.
+`e2e-prepare` builds the arm64 image from that source, but such a PR compiles nothing on amd64.
+[`scripts/ci-cabal-diff.sh`](../scripts/ci-cabal-diff.sh) reads an `ecluse.cabal` change line by
+line. The change skips the dry-run when each changed line is a comment, a blank line, or a
+module-list entry. A test-suite or benchmark field also qualifies, unless it names dependencies,
+imports a common stanza, sets `buildable`, or is a conditional. Evaluating the image resolves the
+dependency names of every buildable stanza. Any other changed line runs the dry-run, as does a diff
+that the script cannot parse. The flake, `cabal.project`, the freeze, the Taskfiles (an included
+file's top-level variables reach every task), the workflows, the CI actions, the other scripts,
+`test/oracles/` (it feeds the `.#ci` shell), and any unlisted path run it. A push to main, the
+nightly run, and a manual dispatch always run it. The `gate` job accepts a skipped job from the
+classifier's outputs and from nothing else, so a job that silently never ran still fails the gate.
 
 The Haddock job's flake checks and the release image build run under
 `scripts/ci-build-diagnostics.sh`. The image build also prints each derivation's build log, and

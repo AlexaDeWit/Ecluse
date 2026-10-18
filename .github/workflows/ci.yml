@@ -33,11 +33,14 @@ jobs:
     outputs:
       docs-only: ${{ steps.classify.outputs.docs-only }}
       release-build: ${{ steps.classify.outputs.release-build }}
+      release-rebuild: ${{ steps.classify.outputs.release-rebuild }}
     steps:
+      # Depth 2 keeps the merge commit's parents for the script's ecluse.cabal diff.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 2
 
       # The path lists live in the script, which fails closed: an unlisted path, an
       # unreadable file list, or any non-PR event runs every job.
@@ -48,6 +51,7 @@ jobs:
           REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: bash scripts/ci-classify-change.sh
 
   build:
@@ -828,12 +832,12 @@ jobs:
           tag="$(bash scripts/docker-load.sh "artifacts/image-${ARCH}.tar")"
           docker run --rm --network none "$tag" --version
 
-  # A second build of the same commit, on separate runners with no cache, so the two
-  # share no store. The prefix keeps its archive out of the `image-*` reads above.
+  # A second build of the same commit off pull requests, on separate runners that share no store
+  # with the first. The prefix keeps its archive out of the `image-*` reads above.
   release-rebuild:
     name: Release rebuild
     needs: changes
-    if: ${{ needs.changes.outputs.release-build == 'true' }}
+    if: ${{ needs.changes.outputs.release-rebuild == 'true' }}
     permissions:
       contents: read
     uses: ./.github/workflows/release-build.yml
@@ -952,8 +956,8 @@ jobs:
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 10
     steps:
-      # The script accepts a skip only from the classifier's two filters (documentation
-      # only, and no release-build change), each for the jobs it may skip.
+      # The script accepts a skip only from a classifier output, and only for the jobs
+      # that output may skip.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -963,6 +967,7 @@ jobs:
         env:
           DOCS_ONLY: ${{ needs.changes.outputs.docs-only }}
           RELEASE_BUILD: ${{ needs.changes.outputs.release-build }}
+          RELEASE_REBUILD: ${{ needs.changes.outputs.release-rebuild }}
           CHANGES: ${{ needs.changes.result }}
           STATIC_CHECKS: ${{ needs.static-checks.result }}
           BUILD: ${{ needs.build.result }}
