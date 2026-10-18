@@ -6,7 +6,9 @@
     # docs/architecture/release-supply-chain.md.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     flake-utils.url = "github:numtide/flake-utils";
-    saerskriven.url = "github:AlexaDeWit/Saerskriven";
+    # The v0.10.0 packaging commit, one after the tag. A release tag's Nix
+    # package still installs the previous release's binary.
+    saerskriven.url = "github:AlexaDeWit/Saerskriven/b1ade081654a0cfbd4c6e965605db2e34748d4e9";
     saerskriven.inputs.nixpkgs.follows = "nixpkgs";
     saerskriven.inputs.flake-utils.follows = "flake-utils";
   };
