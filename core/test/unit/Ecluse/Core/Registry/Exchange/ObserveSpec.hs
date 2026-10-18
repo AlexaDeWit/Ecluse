@@ -9,11 +9,12 @@ import Control.Exception (AsyncException (ThreadKilled), throwIO)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
-import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (ResponseTimeout), Manager, Request (method, requestBody), RequestBody (RequestBodyBS, RequestBodyIO), brConsume, defaultManagerSettings, httpLbs, newManager, parseRequest, responseBody, responseStatus, withResponse)
+import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (ResponseTimeout), Manager, Request (method, requestBody), RequestBody (RequestBodyBS, RequestBodyIO, RequestBodyStream), brConsume, defaultManagerSettings, httpLbs, newManager, parseRequest, responseBody, responseStatus, withResponse)
 import Network.HTTP.Types (methodGet, methodHead, status200, status429)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
+import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Registry.Exchange.Observe (ExchangeOutcome (..), observeExchange)
 import Ecluse.Core.Registry.Progress (meteredUpload, watched)
@@ -105,6 +106,27 @@ spec = describe "observeExchange" $ do
                 )
                 `shouldReturn` Just (LBS.fromStrict bytes)
         readIORef events `shouldReturn` [ResponseStatus 200]
+
+    it "records a stalled upload once and preserves the watchdog result" $ do
+        events <- newIORef []
+        progress <- either (fail . show) pure (mkProgressFloor 60 0.3 1024)
+        request <- parseRequest "http://localhost/"
+        let upload = request{requestBody = RequestBodyBS (BS.replicate 2048 0x61)}
+        watched
+            progress
+            ( \watch ->
+                observeExchange (append events) upload $ \modified _ ->
+                    case meteredUpload watch (requestBody modified) of
+                        RequestBodyIO prepare ->
+                            prepare >>= \case
+                                RequestBodyStream _ gives -> gives $ \next -> do
+                                    void next
+                                    threadDelay 2_000_000
+                                _ -> expectationFailure "expected the metered upload stream"
+                        _ -> expectationFailure "expected attempt notification"
+            )
+            `shouldReturn` Nothing
+        readIORef events `shouldReturn` [TransportFailure]
 
     it "records the failed reused-connection attempt and its successful retry" $ do
         events <- newIORef []

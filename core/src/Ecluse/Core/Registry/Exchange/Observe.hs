@@ -17,6 +17,8 @@ import Control.Exception qualified as Exception
 import Network.HTTP.Client (HttpException, Request (requestBody), RequestBody (RequestBodyIO))
 import Network.HTTP.Types (Status, statusCode)
 
+import Ecluse.Core.Registry.Progress (isProgressFloorFailure)
+
 -- | The raw outcome of an attempt, independent of metric attributes and origin scope.
 data ExchangeOutcome
     = ResponseStatus Int
@@ -44,6 +46,7 @@ observeExchange record request action = Exception.mask $ \restore -> do
             case (Exception.fromException fault :: Maybe Exception.SomeAsyncException, Exception.fromException fault :: Maybe HttpException) of
                 (Just _, _) -> when (current == Pending) (settle Cancelled)
                 (_, Just _) -> settle TransportFailure
+                _ | isProgressFloorFailure fault -> settle TransportFailure
                 _ -> pass
             Exception.throwIO fault
     outcome <- Exception.try (restore (action observed headers))

@@ -2,17 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The progress watchdog a registry transfer runs under. It counts the request-body bytes
-handed to the connection and the response-body bytes read from it, and the time spent blocked on
-the upstream in either direction. A transfer that waits a whole 'ProgressFloor' window without
-moving the floor's bytes is stopped. The consumer's own work between reads, and the wait for the
-status line and headers, never count.
+{- | Bound registry transfers by body progress during upstream waits.
+Consumer time and waits for response headers do not count.
 -}
 module Ecluse.Core.Registry.Progress (
     -- * The watchdog
     Watch,
     watched,
     watchedRaising,
+    isProgressFloorFailure,
 
     -- * Metered transfers
     meteredReader,
@@ -42,18 +40,20 @@ data BelowProgressFloor = BelowProgressFloor
 
 instance Exception BelowProgressFloor
 
-{- | Run a transfer under the watchdog. 'Nothing' means the transfer fell below the floor and was
-stopped. The catch sits outside the watchdog's lifetime, so a raise can never land after it.
--}
+-- | Identify the watchdog's transport-timeout interruption without exposing its constructor.
+isProgressFloorFailure :: SomeException -> Bool
+isProgressFloorFailure fault = case fromException fault of
+    Just BelowProgressFloor -> True
+    Nothing -> False
+
+-- | Return 'Nothing' below the floor. The catch outlives the watchdog, so its interruption cannot escape later.
 watched :: ProgressFloor -> (Watch -> IO a) -> IO (Maybe a)
 watched progress transfer =
     try (watchedRaising progress transfer) <&> \case
         Left BelowProgressFloor -> Nothing
         Right result -> Just result
 
-{- | 'watched' for a transfer already committed to a client, which a floor miss can only abort. The
-failure propagates as an exception, so the response tears down instead of ending cleanly.
--}
+-- | Raise a floor failure so an already committed response tears down.
 watchedRaising :: ProgressFloor -> (Watch -> IO a) -> IO a
 watchedRaising progress transfer = do
     owner <- myThreadId
@@ -89,9 +89,7 @@ meteredReader watch readChunk = do
     endWait watch (BS.length chunk)
     pure chunk
 
-{- | The same body, handed over in slices the watch counts once each is written. A body with no
-bytes has no upload to watch and stays as it is.
--}
+-- | Count each slice once written. An empty body has no upload to watch.
 meteredUpload :: Watch -> RequestBody -> RequestBody
 meteredUpload watch body = case body of
     RequestBodyLBS bytes | not (LBS.null bytes) -> fromChunks (LBS.length bytes) (LBS.toChunks bytes)
