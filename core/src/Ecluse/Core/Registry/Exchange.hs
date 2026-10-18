@@ -14,6 +14,7 @@ module Ecluse.Core.Registry.Exchange (
     boundedExchange,
     runExchange,
     singleAttemptSettings,
+    newSingleAttemptManager,
     withSuccessBody,
     boundedRelay,
 
@@ -44,6 +45,7 @@ import Network.HTTP.Client (
     Request (requestBody),
     Response (responseStatus),
     brRead,
+    newManager,
     responseBody,
     withResponse,
  )
@@ -52,7 +54,7 @@ import UnliftIO (try)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
-import Ecluse.Core.Fault.Http (classifyTransport)
+import Ecluse.Core.Fault.Http (classifyTransport, typedTlsManagerSettings)
 import Ecluse.Core.Registry (
     BodyOutcome (SuccessBody, UnreadStatus),
     FetchFault (FetchBoundExceeded, FetchTransport),
@@ -77,6 +79,10 @@ import Ecluse.Core.Snapshot (ContentDigest, digestFromContext)
 singleAttemptSettings :: ManagerSettings -> ManagerSettings
 singleAttemptSettings settings = settings{managerRetryableException = const False}
 
+-- | A 'typedTlsManagerSettings' manager under 'singleAttemptSettings'. @newTlsManagerWith@ would replace its retry check and restore the replay on a reused connection.
+newSingleAttemptManager :: IO Manager
+newSingleAttemptManager = newManager (singleAttemptSettings typedTlsManagerSettings)
+
 -- | Project status, decompressed byte count, and body. Transport failures retain their typed cause.
 boundedExchange :: (Int -> Int -> ByteString -> a) -> Manager -> ProgressFloor -> BodyLimit -> Request -> IO (Either FetchFault a)
 boundedExchange project manager progress limits request =
@@ -94,9 +100,7 @@ runExchange manager progress request readResponse =
   where
     metered watch = request{requestBody = meteredUpload watch (requestBody request)}
 
-{- | Fail an action that outlives the floor's serve-path cap with the transport timeout. The serve
-path wraps its exchanges in it, and the mirror worker and the Dredger do not.
--}
+-- | Fail an action that outlives the floor's serve-path cap with the transport timeout.
 withinServeCap :: ProgressFloor -> (FetchFault -> e) -> IO (Either e a) -> IO (Either e a)
 withinServeCap progress inject action =
     fromMaybe (Left (inject capExceeded)) <$> timeout (floorServeCapMicros progress) action
@@ -145,9 +149,7 @@ withSuccessBody manager progress consume request = runExchange manager progress 
         then fmap (SuccessBody code) <$> consume (brRead (responseBody response))
         else pure (Right (UnreadStatus code))
 
-{- | Run a consumer over a source that hashes each chunk it passes on. A successful result carries
-the digest of every chunk the consumer read.
--}
+-- | Run a consumer over a source that hashes each chunk it passes on. A success carries the digest of every chunk read.
 digestingRead :: (IO ByteString -> IO (Either e a)) -> IO ByteString -> IO (Either e (a, ContentDigest))
 digestingRead consume readChunk = do
     context <- newIORef hashInit

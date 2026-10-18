@@ -28,7 +28,7 @@ import Ecluse.Core.Server.Admission.Meter (newChargeRegion)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge)
 import Ecluse.Runtime.Mirror.State.S3 (mirrorStateForEnv)
 import Ecluse.Runtime.Mirror.State.S3.Internal
-import Ecluse.Runtime.Test.S3 (brokenResponse, emptyListing, listingReply, populatedListing, recordingStatuses, reply, withS3, withTlsS3, xmlError)
+import Ecluse.Runtime.Test.S3 (answerThenClose, brokenResponse, emptyListing, listingReply, lostResponse, populatedListing, recordingStatuses, reply, withS3, withTlsS3, xmlError)
 import Ecluse.Test.Mirror.State (mirrorPackage, mirrorSample)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Stub.Socket (resetAfterPartialBody, withTlsServer)
@@ -64,7 +64,7 @@ spec = describe "conditional mirror metadata storage" $ do
             previous <- readIORef paid
             if previous == 0 then writeIORef paid cost else throwIO refused
         withS3 (gatedChunks release) $ \env -> do
-            let store = mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
+            store <- mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
             ( timeout paymentWaitMicros (msReadProject store charge (mkPackageName PyPI Nothing "demo") Nothing)
                     `shouldThrow` (== refused)
                 )
@@ -137,7 +137,7 @@ spec = describe "conditional mirror metadata storage" $ do
         paid <- newIORef (0 :: Int)
         charge <- newChargeRegion (\cost -> modifyIORef' paid (+ cost))
         withS3 (reply status200 [(hETag, "\"one\"")] "metadata") $ \env -> do
-            let store = mirrorStateForEnv defaultLimits "records" "state" (stateTarget "https://private.test") env
+            store <- mirrorStateForEnv defaultLimits "records" "state" (stateTarget "https://private.test") env
             msReadCompanion store charge (CompanionRef digest 8) `shouldReturn` Right "metadata"
         total <- readIORef paid
         total `shouldSatisfy` (> 8)
@@ -259,13 +259,13 @@ spec = describe "conditional mirror metadata storage" $ do
     for_ [shortLengthBody, interruptedChunkBody] $ \body -> do
         it "returns a typed transport fault when a project GET body closes early" $
             withS3 (brokenResponse "200 OK" body) $ \env -> do
-                let store = mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
+                store <- mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
                 msReadProject store (const pass) (mkPackageName PyPI Nothing "demo") Nothing >>= (`shouldSatisfy` stateTransportFailure)
 
         it "returns a typed transport fault when a retained companion body closes early" $ do
             digest <- expectRight (mkHash SHA256 (hexSha256Of "metadata"))
             withS3 (brokenResponse "200 OK" body) $ \env -> do
-                let store = mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
+                store <- mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
                 msReadCompanion store (const pass) (CompanionRef digest 8) >>= (`shouldSatisfy` stateTransportFailure)
 
         it "returns a typed transport fault when an error body closes early" $
@@ -382,13 +382,13 @@ spec = describe "conditional mirror metadata storage" $ do
         let reference = CompanionRef digest 8
         for_ [(reply status404 [] (xmlError "NoSuchKey"), Left StateMissingCompanion), (reply status200 [(hETag, "one")] "Metadata", Left (StateInvalid "retained companion identity mismatch")), (reply status200 [(hETag, "one")] "metadata", Right "metadata"), (reply status200 [] "metadata", Left (StateInvalid "state response omitted its revision"))] $ \(application, expected) ->
             withS3 application $ \env -> do
-                let store = mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
+                store <- mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
                 msReadCompanion store (const pass) reference `shouldReturn` expected
 
     it "maps uncertain object absence to unavailable companion state" $ do
         digest <- expectRight (mkHash SHA256 (hexSha256Of "metadata"))
         withS3 (listingReply "<ListBucketResult><IsTruncated>true</IsTruncated></ListBucketResult>") $ \env -> do
-            let store = mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
+            store <- mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
             msReadCompanion store (const pass) (CompanionRef digest 8)
                 `shouldReturn` Left (StateInvalid "state absence could not be established")
 
@@ -399,7 +399,7 @@ spec = describe "conditional mirror metadata storage" $ do
             otherPackage = mkPackageName PyPI Nothing "other"
         record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
         withS3 (\_ _ -> fail "revision mismatch must not reach storage") $ \env -> do
-            let store = mirrorStateForEnv limits "records" "state" target env
+            store <- mirrorStateForEnv limits "records" "state" target env
             for_ [StateRevision otherTarget mirrorPackage "one", StateRevision target otherPackage "one"] $ \revision -> do
                 msReadProject store (const pass) mirrorPackage (Just revision) `shouldReturn` Left StateRevisionMismatch
                 msWriteProject store (const pass) mirrorPackage (Just revision) record `shouldReturn` Left StateRevisionMismatch
@@ -422,11 +422,50 @@ spec = describe "conditional mirror metadata storage" $ do
                         else reply status200 [(hETag, "one")] retainedBody request respond
                 )
                 $ \env -> do
-                    let store = mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
+                    store <- mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
                     digest <- expectRight (mkHash SHA256 (hexSha256Of "metadata"))
                     msRetainCompanion store (const pass) verified
                         `shouldReturn` maybe (Right (CompanionRef digest 8)) Left fault
             reverse <$> readIORef requests `shouldReturn` [methodPut, methodGet]
+
+    it "reads again over a fresh connection when the store has closed the pooled one" $ do
+        digest <- expectRight (mkHash SHA256 (hexSha256Of "metadata"))
+        withS3 (answerThenClose "metadata") $ \env -> do
+            store <- mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
+            replicateM_ 2 (msReadCompanion store (const pass) (CompanionRef digest 8) `shouldReturn` Right "metadata")
+
+    it "sends a project write whose answer is lost on a reused connection only once" $ do
+        inventory <- mirrorSample [1] False "https://first.test/" "original"
+        let target = stateTarget "https://private.test"
+        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        puts <- newIORef (0 :: Int)
+        let firstAnswered request respond = do
+                void (strictRequestBody request)
+                attempt <- atomicModifyIORef' puts (\n -> (n + 1, n + 1))
+                if attempt == 1 then reply status200 [(hETag, "\"one\"")] "" request respond else lostResponse request respond
+        withS3 firstAnswered $ \env -> do
+            store <- mirrorStateForEnv defaultLimits "records" "state" target env
+            msWriteProject store (const pass) mirrorPackage Nothing record >>= (`shouldSatisfy` isRight)
+            msWriteProject store (const pass) mirrorPackage Nothing record >>= (`shouldSatisfy` stateTransportFailure)
+        readIORef puts `shouldReturn` 2
+
+    it "puts a companion once more when the reread after a PUT lost on a stale connection finds it absent" $ do
+        inventory <- mirrorSample [1] True "https://first.test/" "original"
+        let file :| _ = inventoryFiles inventory
+        verified <- expectRight (verifyCompanionBytes limits file "metadata")
+        digest <- expectRight (mkHash SHA256 (hexSha256Of "metadata"))
+        requests <- newIORef ([] :: [Method])
+        let staleAfterFirstPut request respond = do
+                previous <- atomicModifyIORef' requests (\seen -> (requestMethod request : seen, seen))
+                let answer
+                        | requestMethod request /= methodPut = reply status404 [] (xmlError "NoSuchKey")
+                        | null previous = answerThenClose ""
+                        | otherwise = reply status200 [(hETag, "\"two\"")] ""
+                answer request respond
+        withS3 staleAfterFirstPut $ \env -> do
+            store <- mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
+            replicateM_ 2 (msRetainCompanion store (const pass) verified `shouldReturn` Right (CompanionRef digest 8))
+        reverse <$> readIORef requests `shouldReturn` [methodPut, methodGet, methodPut]
 
 gatedChunks :: MVar Bool -> Application
 gatedChunks release _ respond =

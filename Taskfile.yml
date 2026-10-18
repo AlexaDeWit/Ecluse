@@ -321,6 +321,10 @@ tasks:
       - '**/*.hs'
       - '**/*.sh'
       - '**/*.yaml'
+      - '.github/**/*.yml'
+      - '.github/**/*.yaml'
+      - 'Taskfile.yml'
+      - 'flake.nix'
       - '**/*.json'
       - 'flake.lock'
       - 'ecluse.cabal'
@@ -334,9 +338,23 @@ tasks:
       - exclude: 'sbom/**'
       - exclude: '*.json'
     cmds:
-      # The owner excluded missing-integrity because the site fetches no external subresources.
-      # Keep the exclusion here so the SARIF upload also omits that rule.
-      - semgrep scan --config auto --severity ERROR --severity WARNING --exclude-rule html.security.audit.missing-integrity.missing-integrity --sarif-output=semgrep.sarif --error .
+      - task: test-sast
+      # The site fetches no external subresources, so missing-integrity does not apply.
+      # Replace the registry's action-pinning rule with the pinned fix from upstream #4042.
+      - >-
+        semgrep scan --config auto --config "$ECLTEST_SEMGREP_ACTION_RULE"
+        --severity ERROR --severity WARNING
+        --exclude-rule html.security.audit.missing-integrity.missing-integrity
+        --exclude-rule yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+        --sarif-output=semgrep.sarif --error .
+  test-sast:
+    desc: Test the pinned action-pinning rule
+    sources:
+      - 'Taskfile.yml'
+      - 'flake.nix'
+      - 'flake.lock'
+    cmds:
+      - semgrep --test --config "$ECLTEST_SEMGREP_ACTION_RULE" "$ECLTEST_SEMGREP_ACTION_TEST"
   cabal-check:
     desc: Validate the .cabal package metadata
     sources:

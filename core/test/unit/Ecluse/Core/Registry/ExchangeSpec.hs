@@ -25,7 +25,7 @@ import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Fault (TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause, tfDetail))
 import Ecluse.Core.Registry (BodyOutcome (SuccessBody), FetchFault (FetchTransport))
-import Ecluse.Core.Registry.Exchange (accumulatingCharge, accumulatingChargeFrom, boundedExchange, digestingRead, singleAttemptSettings, withSuccessBody, withinServeCap)
+import Ecluse.Core.Registry.Exchange (accumulatingCharge, accumulatingChargeFrom, boundedExchange, digestingRead, newSingleAttemptManager, singleAttemptSettings, withSuccessBody, withinServeCap)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream, retainedValue)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), ProgressFloor, boundedRead, mkProgressFloor)
 import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlightWithBackend, resolveSingleFlight)
@@ -73,22 +73,31 @@ chargeSpec = describe "cumulative charging" $ do
         readIORef paid `shouldReturn` [4, 6]
 
 singleAttemptSpec :: Spec
-singleAttemptSpec = describe "singleAttemptSettings" $
-    it "returns a lost destructive response without resending on a fresh connection" $ do
-        requests <- newIORef (0 :: Int)
-        let application _ respond = do
-                attempt <- atomicModifyIORef' requests (\n -> (n + 1, n + 1))
-                respond $
-                    if attempt == 1
-                        then responseLBS status200 [] "warm connection"
-                        else responseRaw (\_ _ -> pure ()) (responseLBS status200 [] "")
-        testWithApplication (pure application) $ \port -> do
-            manager <- newManager (singleAttemptSettings defaultManagerSettings)
-            request <- parseRequest ("http://127.0.0.1:" <> show port <> "/")
-            void (httpLbs request manager)
-            result <- tryAny (httpLbs request{method = "DELETE"} manager)
-            result `shouldSatisfy` isLeft
-            readIORef requests `shouldReturn` 2
+singleAttemptSpec = do
+    describe "singleAttemptSettings" $
+        it "returns a lost destructive response without resending on a fresh connection" $
+            (newManager (singleAttemptSettings defaultManagerSettings) >>= requestsAfterLostAnswer) `shouldReturn` 2
+
+    describe "newSingleAttemptManager" $
+        it "returns a lost destructive response over the TLS settings without resending on a fresh connection" $
+            (newSingleAttemptManager >>= requestsAfterLostAnswer) `shouldReturn` 2
+
+-- A warm request, then a DELETE the peer drops unanswered on the reused connection. Yields the requests the peer took.
+requestsAfterLostAnswer :: Manager -> IO Int
+requestsAfterLostAnswer manager = do
+    requests <- newIORef (0 :: Int)
+    let application _ respond = do
+            attempt <- atomicModifyIORef' requests (\n -> (n + 1, n + 1))
+            respond $
+                if attempt == 1
+                    then responseLBS status200 [] "warm connection"
+                    else responseRaw (\_ _ -> pure ()) (responseLBS status200 [] "")
+    testWithApplication (pure application) $ \port -> do
+        request <- parseRequest ("http://127.0.0.1:" <> show port <> "/")
+        void (httpLbs request manager)
+        result <- tryAny (httpLbs request{method = "DELETE"} manager)
+        result `shouldSatisfy` isLeft
+        readIORef requests
 
 digestingReadSpec :: Spec
 digestingReadSpec = describe "digestingRead" $ do
