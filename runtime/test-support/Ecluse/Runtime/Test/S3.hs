@@ -14,13 +14,16 @@ module Ecluse.Runtime.Test.S3 (
     populatedListing,
     listingHolding,
     brokenResponse,
+    answerThenClose,
+    lostResponse,
 ) where
 
 import Amazonka qualified as AWS
 import Amazonka.Env.Hooks qualified as Hooks
+import Data.ByteString qualified as BS
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (ResponseHeaders, Status, status200, status403, status500, statusCode)
-import Network.Wai (Application, queryString, requestMethod, responseLBS, responseRaw)
+import Network.Wai (Application, queryString, requestMethod, responseLBS, responseRaw, strictRequestBody)
 import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.Runtime.Test.Aws (loopbackAwsEnv)
@@ -81,9 +84,18 @@ listingHolding key =
 
 -- | Send a raw status line and these header and body bytes, then close, so a response can break early.
 brokenResponse :: ByteString -> ByteString -> Application
-brokenResponse status body _ respond =
-    respond
-        ( responseRaw
-            (\_ send -> send ("HTTP/1.1 " <> status <> "\r\nETag: \"one\"\r\nConnection: close\r\n" <> body))
-            (responseLBS status500 [] "raw response required")
-        )
+brokenResponse status body = rawThenClose ($ "HTTP/1.1 " <> status <> "\r\nETag: \"one\"\r\nConnection: close\r\n" <> body)
+
+-- | Answer a 200 with these bytes as if the connection stays open, then close it, so the client pools a dead connection.
+answerThenClose :: ByteString -> Application
+answerThenClose body request respond = do
+    void (strictRequestBody request)
+    rawThenClose ($ "HTTP/1.1 200 OK\r\nETag: \"one\"\r\nContent-Length: " <> show (BS.length body) <> "\r\n\r\n" <> body) request respond
+
+-- | Close the connection without answering, as a lost acknowledgement does.
+lostResponse :: Application
+lostResponse = rawThenClose (const pass)
+
+-- Hand the connection's send to this writer, then close the connection.
+rawThenClose :: ((ByteString -> IO ()) -> IO ()) -> Application
+rawThenClose write _ respond = respond (responseRaw (const write) (responseLBS status500 [] "raw response required"))

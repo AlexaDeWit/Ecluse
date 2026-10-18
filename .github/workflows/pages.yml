@@ -64,7 +64,7 @@ jobs:
       # steps below restore that variant instead.
       - name: Set up toolchain
         id: toolchain
-        uses: ./.github/actions/setup-toolchain
+        uses: $/.github/actions/setup-toolchain
 
       # The doc-variant dependency closure is about 84% of this job's wall time. Pages
       # runs only on main, serialised by the `pages` group, so it is this cache's one

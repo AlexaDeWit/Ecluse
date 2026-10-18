@@ -1,14 +1,6 @@
 #!/usr/bin/env bash
-# Check every workflow job's runner, for `task lint-workflows`. CI builds and tests on
-# arm64, so a job runs on ubuntu-26.04-arm unless the allow-list below names its
-# workflow, job, and runner with a reason. A `runs-on: ${{ matrix.<a>[.<b>] }}` job is
-# checked against every value its matrix and its include entries give that path.
-# Anything the script cannot resolve fails. A local reusable-workflow call must name a
-# workflow file this run reads, and a remote one fails unless allow-listed.
-#
-# yq turns each workflow into JSON and jq decides. Needs yq-go and jq (the dev shells).
-#
-# Usage: scripts/ci-runner-policy.sh [workflow-dir]   (default .github/workflows)
+# Unresolved runners and unchecked reusable workflows fail closed.
+# Usage: scripts/ci-runner-policy.sh [workflow-dir] (default .github/workflows)
 set -euo pipefail
 
 dir="${1:-.github/workflows}"
@@ -102,7 +94,7 @@ def job_rows($job; $j):
   if ($j | type) != "object" then fail($job; "the job is not a mapping")
   else
     ( if ($j | has("uses")) then
-        if ($j.uses | type) == "string" and ($j.uses | startswith("./")) then row($job; "local"; $j.uses)
+        if ($j.uses | type) == "string" and ($j.uses | startswith("./") or startswith("$/")) then row($job; "local"; $j.uses)
         else row($job; "uses"; $j.uses | tostring)
         end
       else empty
@@ -133,7 +125,7 @@ reason_for() {
 # A local call resolves only to a workflow file this run reads.
 declare -A read_files=()
 calls_read_file() {
-  [[ "$1" =~ ^\./\.github/workflows/([^/]+)$ ]] && [ -n "${read_files[${BASH_REMATCH[1]}]:-}" ]
+  [[ "$1" =~ ^[.$]/\.github/workflows/([^/]+)$ ]] && [ -n "${read_files[${BASH_REMATCH[1]}]:-}" ]
 }
 
 err="$(mktemp)"
