@@ -2,12 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The assembly every mirror-pipeline role runs over: the composition-root 'Env' and the
-services derived from it.
-
-'withServiceRuntime' builds from the 'ExecutablePlan' the boot already gated, so nothing here
-refuses to boot. "Ecluse.Proxy" adds the front door over it and "Ecluse.Mirror" runs the worker
-alone, so the dedicated worker is the same worker the serve path embeds, not a second copy.
+{- | Shared runtime assembly for proxy and mirror-worker roles from a cleared 'ExecutablePlan'.
+"Ecluse.Proxy" adds the front door. "Ecluse.Mirror" runs the same worker alone.
 -}
 module Ecluse.Service (
     -- * The role-shared runtime
@@ -84,7 +80,7 @@ import Ecluse.Core.Supervision (
  )
 import Ecluse.Core.Worker (Liveness, WorkerHeartbeat, WorkerPolicies, alwaysLive, heartbeatLivenessNow, runWorkerM, workerLoop)
 import Ecluse.Cve.Sync (cveSyncReadiness, cveSyncScheduleFor, cveSyncTasks, registerAdvisoryAges)
-import Ecluse.Rts (cgroupMemoryUse)
+import Ecluse.Rts.Cgroup (cgroupMemoryUse)
 import Ecluse.Rts.Sampler (SamplerSettings (..), readCollector, runMemorySampler, samplerPeriodMicros, shareWindowPeriods)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Server (MountBinding (..))

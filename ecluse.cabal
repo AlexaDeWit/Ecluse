@@ -514,6 +514,7 @@ library
     Ecluse.Config.Target
     Ecluse.Config.Types
     Ecluse.Rts
+    Ecluse.Rts.Cgroup
     Ecluse.Rts.Sampler
 
   build-depends:
@@ -1463,6 +1464,7 @@ test-suite ecluse-unit
     Ecluse.Pilot.PlanSpec
     Ecluse.PilotSpec
     Ecluse.RtsSpec
+    Ecluse.Rts.CgroupSpec
     Ecluse.Rts.SamplerSpec
     Ecluse.Runtime.EnvSpec
     Ecluse.Runtime.ServerSpec

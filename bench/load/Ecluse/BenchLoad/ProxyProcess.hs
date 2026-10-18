@@ -122,7 +122,7 @@ import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection), RtsSnapshot, co
 import Ecluse.BenchLoad.Verdict (ProxyEnding, classifyEnding)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Server.Encoding (MetadataCompression (IdentityOnly))
-import Ecluse.Rts (parseMemoryMax, readIfExists)
+import Ecluse.Rts.Cgroup (parseMemoryMax, readIfExists)
 import Ecluse.Runtime.Server (listeningPrefix, proxyListener)
 import Ecluse.Test.Env (ambientAwsEntries)
 import Ecluse.Test.Poll (awaitUntil, pollUntil)

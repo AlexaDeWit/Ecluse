@@ -44,7 +44,7 @@ import Ecluse.Composition.Types (BootRole (BootMirrorPipeline), MirrorRole (Serv
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvMetadataGzip), loadConfig, renderConfigError)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Server.Encoding (MetadataCompression (IdentityOnly))
-import Ecluse.Rts (readIfExists)
+import Ecluse.Rts.Cgroup (readIfExists)
 import Ecluse.Runtime.Server (listeningPrefix, proxyListener)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Wai (freePort)
