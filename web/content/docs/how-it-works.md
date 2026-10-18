@@ -63,7 +63,7 @@ and explains what you lose when two share one.
 For npm, a client requests a version listing and then a tarball. PyPI clients request project indexes
 and distribution files. Both protocols support background mirroring and first-party publication.
 
-{{ diagram(name="request-flow", alt="A client talks only to Écluse, which fetches the private upstream and the public registry in parallel and queues a background mirror job to the mirror target.") }}
+{{ diagram(name="metadata-admission", alt="The proxy combines caller-authorised private metadata with admitted anonymous public metadata. First-party names stay private, and response reuse follows fresh private authorisation.", caption="Version discovery and admission. Advisory polling runs independently of each request.") }}
 
 1. **The listing.** For non-first-party names, Écluse fetches private and public metadata in parallel.
    Private versions must meet the trusted integrity floor, and managed mirror versions must also prove completion.
@@ -76,6 +76,8 @@ and distribution files. Both protocols support background mirroring and first-pa
    when mirroring is configured. For PyPI, that job copies every supported wheel and sdist in the admitted version.
 3. **A publish.** Publishing stays off until you configure a publication target. With one, Écluse
    refuses any name outside the mount's first-party namespaces before it writes upstream.
+
+{{ diagram(name="artifact-downloads", alt="An artifact request prefers the private source. An admitted public fallback streams to the client and queues a version trigger when mirroring is configured.", caption="Downloads and the trigger for background mirroring.") }}
 
 Private versions do not re-enter public admission. Private metadata passes the trusted integrity
 floor, but a conventional private npm artifact hit bypasses that metadata path.

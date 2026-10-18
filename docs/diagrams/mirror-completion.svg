@@ -1,0 +1,198 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="2 2 866 756" width="866" height="756"><title>Mirror writes and completion</title><rect x="2" y="2" width="866" height="756" fill="#F9F6F0"></rect><style>.saer-diagram-element {
+  font-family: "Liberation Sans";
+}
+.saer-diagram-shape {
+  fill: #FAF8F2;
+  stroke: #38342E;
+  stroke-width: 2;
+}
+.saer-diagram-actor {
+  fill: #EAE5DA;
+}
+.saer-diagram-process {
+  fill: #E7E9E1;
+}
+.saer-diagram-store {
+  fill: none;
+  stroke-width: 2.5;
+}
+.saer-diagram-boundary-box,
+.saer-diagram-boundary-curve {
+  fill: none;
+  stroke: #6B655C;
+  stroke-width: 2;
+  stroke-dasharray: 8 6;
+}
+.saer-diagram-note-frame {
+  fill: none;
+}
+.saer-diagram-label {
+  fill: #38342E;
+  font-size: 10px;
+  font-weight: 500;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.saer-diagram-note {
+  fill: #6B655C;
+  font-size: 12px;
+  text-anchor: start;
+  dominant-baseline: central;
+}
+.saer-diagram-flow {
+  fill: none;
+}
+.saer-diagram-flow-arrow {
+  fill: #38342E;
+  stroke: none;
+}
+.saer-diagram-flow-label {
+  fill: #6B655C;
+  font-size: 10px;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.saer-diagram-flow-backing {
+  fill: #F9F6F0;
+  stroke: none;
+}
+.saer-diagram-out-of-scope .saer-diagram-shape {
+  stroke: #6B655C;
+  stroke-dasharray: 0 5;
+  stroke-linecap: round;
+}
+.saer-diagram-out-of-scope .saer-diagram-flow-arrow {
+  fill: #6B655C;
+}
+.saer-diagram-badge {
+  stroke: #FAF8F2;
+  stroke-width: 3;
+}
+.saer-diagram-badge-count {
+  fill: #FAF8F2;
+  stroke: none;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.saer-diagram-badge-primary .saer-diagram-badge-count {
+  font-size: 11px;
+}
+.saer-diagram-badge-secondary .saer-diagram-badge-count {
+  font-size: 9px;
+}
+.saer-diagram-badge-mark {
+  fill: #FAF8F2;
+  stroke: none;
+  font-size: 9px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.saer-diagram-badge-flag {
+  stroke-linejoin: round;
+}
+.saer-diagram-tone-critical {
+  fill: #C14339;
+}
+.saer-diagram-tone-high {
+  fill: #A85E1D;
+}
+.saer-diagram-tone-medium {
+  fill: #46788A;
+}
+.saer-diagram-tone-low {
+  fill: #4B6B50;
+}
+.saer-diagram-tone-neutral {
+  fill: #756E63;
+}
+.saer-diagram-tone-flag {
+  fill: #38342E;
+}
+
+.saer-diagram-accent-1 .saer-diagram-shape {
+  stroke: #AA6A89;
+}
+.saer-diagram-accent-1 .saer-diagram-flow-arrow,
+.saer-diagram-accent-1 .saer-diagram-note-bar {
+  fill: #AA6A89;
+}
+.saer-diagram-accent-1 .saer-diagram-tinted {
+  fill: #EDE1E1;
+}
+.saer-diagram-accent-2 .saer-diagram-shape {
+  stroke: #9370CE;
+}
+.saer-diagram-accent-2 .saer-diagram-flow-arrow,
+.saer-diagram-accent-2 .saer-diagram-note-bar {
+  fill: #9370CE;
+}
+.saer-diagram-accent-2 .saer-diagram-tinted {
+  fill: #EAE2EC;
+}
+.saer-diagram-accent-3 .saer-diagram-shape {
+  stroke: #93814F;
+}
+.saer-diagram-accent-3 .saer-diagram-flow-arrow,
+.saer-diagram-accent-3 .saer-diagram-note-bar {
+  fill: #93814F;
+}
+.saer-diagram-accent-3 .saer-diagram-tinted {
+  fill: #EAE5D8;
+}
+.saer-diagram-accent-4 .saer-diagram-shape {
+  stroke: #5C8A8F;
+}
+.saer-diagram-accent-4 .saer-diagram-flow-arrow,
+.saer-diagram-accent-4 .saer-diagram-note-bar {
+  fill: #5C8A8F;
+}
+.saer-diagram-accent-4 .saer-diagram-tinted {
+  fill: #E1E6E2;
+}
+.saer-diagram-store-band,
+.saer-diagram-note-ground {
+  stroke: none;
+}
+.saer-diagram-accent-strong .saer-diagram-note {
+  fill: #38342E;
+}
+.saer-diagram-accent-strong .saer-diagram-shape {
+  stroke-width: 3;
+}
+.saer-diagram-accent-strong .saer-diagram-boundary-box,
+.saer-diagram-accent-strong .saer-diagram-boundary-curve {
+  stroke-width: 3.5;
+}
+.saer-diagram-accent-strong .saer-diagram-flow {
+  stroke-width: 4;
+}
+.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-shape {
+  stroke-dasharray: 0 7.5;
+}
+.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-boundary-box,
+.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-boundary-curve {
+  stroke-dasharray: 0 8.75;
+}
+.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-flow {
+  stroke-dasharray: 0 10;
+}
+.saer-diagram-out-of-scope .saer-diagram-shape.saer-diagram-note-frame {
+  stroke: #6B655C;
+  stroke-width: 2;
+  stroke-dasharray: 0 5;
+}
+
+.saer-diagram-tone-low { fill: #4B6B50; stroke: #4B6B50; stroke-width: 3; }
+.saer-diagram-tone-low ~ .saer-diagram-badge-count, .saer-diagram-tone-low ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
+.saer-diagram-tone-medium { fill: #46788A; stroke: #46788A; stroke-width: 3; }
+.saer-diagram-tone-medium ~ .saer-diagram-badge-count, .saer-diagram-tone-medium ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
+.saer-diagram-tone-high { fill: #A85E1D; stroke: #A85E1D; stroke-width: 3; }
+.saer-diagram-tone-high ~ .saer-diagram-badge-count, .saer-diagram-tone-high ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
+.saer-diagram-tone-critical { fill: #C14339; stroke: #C14339; stroke-width: 3; }
+.saer-diagram-tone-critical ~ .saer-diagram-badge-count, .saer-diagram-tone-critical ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
+.saer-diagram-tone-neutral { fill: #756E63; stroke: #756E63; stroke-width: 3; }
+.saer-diagram-tone-neutral ~ .saer-diagram-badge-count, .saer-diagram-tone-neutral ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
+.saer-diagram-tone-flag { fill: #38342E; stroke: #38342E; stroke-width: 3; }
+.saer-diagram-tone-flag ~ .saer-diagram-badge-count, .saer-diagram-tone-flag ~ .saer-diagram-badge-mark { fill: #FAF8F2; }</style><g transform="translate(290, 10)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-boundary-box" width="570" height="740"></rect><text class="saer-diagram-label" x="285" y="11"><tspan x="285" dy="0">Operator trust zone</tspan></text></g></g><g transform="translate(10, 285)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-boundary-box" width="225" height="180"></rect><text class="saer-diagram-label" x="112.5" y="11"><tspan x="112.5" dy="0">Public internet</tspan></text></g></g><g transform="translate(330, 65)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">Mirror queue</tspan><tspan x="80" dy="12.5">(SQS)</tspan></text></g></g><g transform="translate(330, 325)"><g class="saer-diagram-element saer-diagram-accent-1"><ellipse class="saer-diagram-shape saer-diagram-process" cx="80" cy="60" rx="80" ry="60"></ellipse><text class="saer-diagram-label" x="80" y="60"><tspan x="80" dy="0">Mirror worker</tspan></text></g></g><g transform="translate(30, 335)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-actor" width="160" height="90"></rect><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">Public registry</tspan><tspan x="80" dy="12.5">(npm / PyPI)</tspan></text></g></g><g transform="translate(640, 335)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">B: public-derived</tspan><tspan x="80" dy="12.5">mirror store</tspan></text></g></g><g transform="translate(640, 65)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">Mirror state</tspan><tspan x="80" dy="12.5">(S3-compatible)</tspan></text></g></g><g transform="translate(320, 600)"><g class="saer-diagram-element saer-diagram-accent-1"><rect class="saer-diagram-note-bar" width="4" height="125"></rect><text class="saer-diagram-note" x="6" y="13.5"><tspan x="6" dy="0">For new copying: resolve current metadata, re-evaluate policy, retain</tspan><tspan x="6" dy="15">expected files, verify bytes, then upload.</tspan><tspan x="6" dy="15">A proven complete retry needs no new public admission. A queued trigger</tspan><tspan x="6" dy="15">carries no trusted artifact URL.</tspan></text></g></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 410 155 L 410 325"></path><path class="saer-diagram-flow-arrow" d="M 410 325 L 403 307 L 417 307 Z"></path><rect class="saer-diagram-flow-backing" x="362" y="231" width="96" height="18"></rect><text class="saer-diagram-flow-label" x="410" y="240"><tspan x="410" dy="0">Version triggers</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 330 385 L 300 385 L 300 110 L 330 110"></path><path class="saer-diagram-flow-arrow" d="M 330 110 L 312 117 L 312 103 Z"></path><rect class="saer-diagram-flow-backing" x="304" y="252.25" width="101.5" height="30.5"></rect><text class="saer-diagram-flow-label" x="354.75" y="261.25"><tspan x="354.75" dy="0">Acknowledge after</tspan><tspan x="354.75" dy="12.5">completion proof</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 190 380 L 330 385"></path><path class="saer-diagram-flow-arrow" d="M 330 385 L 311.762 391.353 L 312.261 377.362 Z"></path><rect class="saer-diagram-flow-backing" x="195.73" y="333.202" width="90.5" height="43"></rect><text class="saer-diagram-flow-label" x="240.98" y="342.202"><tspan x="240.98" dy="0">Admitted source</tspan><tspan x="240.98" dy="12.5">files and</tspan><tspan x="240.98" dy="12.5">companions</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 490 385 L 640 380"></path><path class="saer-diagram-flow-arrow" d="M 640 380 L 622.243 387.596 L 621.777 373.604 Z"></path><rect class="saer-diagram-flow-backing" x="508.047" y="346.146" width="112.5" height="30.5"></rect><text class="saer-diagram-flow-label" x="564.297" y="355.146"><tspan x="564.297" dy="0">Verified upload</tspan><tspan x="564.297" dy="12.5">(worker credential)</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 720 425 L 720 525 L 410 525 L 410 445"></path><path class="saer-diagram-flow-arrow" d="M 410 445 L 417 463 L 403 463 Z"></path><rect class="saer-diagram-flow-backing" x="522.5" y="509.75" width="85" height="30.5"></rect><text class="saer-diagram-flow-label" x="565" y="518.75"><tspan x="565" dy="0">Current target</tspan><tspan x="565" dy="12.5">inventory</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 410 325 L 520 270 L 520 110 L 640 110"></path><path class="saer-diagram-flow-arrow" d="M 640 110 L 622 117 L 622 103 Z"></path><path class="saer-diagram-flow-arrow" d="M 410 325 L 422.969 310.689 L 429.23 323.211 Z"></path><rect class="saer-diagram-flow-backing" x="463.75" y="174.75" width="112.5" height="30.5"></rect><text class="saer-diagram-flow-label" x="520" y="183.75"><tspan x="520" dy="0">Expected identities</tspan><tspan x="520" dy="12.5">and companions</tspan></text></g></svg>

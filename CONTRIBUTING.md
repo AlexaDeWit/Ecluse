@@ -164,6 +164,7 @@ The first tells them which functions changed, which the diff already shows.
   `${{ github.head_ref }}` into `run:` blocks. Pass them through `env:` or intermediate files.
 - **Semgrep and Stan ignores require the repo owner's approval**. Do not add `.semgrepignore`
   entries, `nosemgrep` comments, or Stan `[[ignore]]` entries on your own.
-- **Diagrams are Mermaid, not ASCII art**: a fenced ` ```mermaid ` block, never box-drawing
-  characters. This governs the repository's Markdown. The site authors diagrams as d2 sources
-  rendered to SVG at build ([docs/prose.md](docs/prose.md#diagrams)).
+- **Reuse the system diagrams from the threat model.** Run `task diagrams` in the flake and
+  commit its SVGs with model changes. Repository Markdown and site pages use those generated
+  views. Contributor workflow diagrams can use Mermaid. Never use ASCII or box-drawing art.
+  [The prose guide](docs/prose.md#diagrams) describes the sources and rendering.

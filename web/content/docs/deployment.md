@@ -110,10 +110,12 @@ one they accepted. If the feed stays down past the maximum advisory age, the adv
 
 ## The recommended topology
 
-{{ diagram(name="topology", alt="The registry topology. Clients and CI call the Écluse proxy, which reads the private upstream union of the publication and mirror stores, fetches gated content from the public registry, and queues admitted versions for the mirror worker to write to the mirror target.", caption="The registry topology: only gated public content enters the union, the mirror write is the single path public packages take into the trusted stores, and no edge runs from the public registry into them. The diagram shows the stores, not every role.") }}
+{{ diagram(name="registry-topology", alt="The proxy reads trusted endpoint C, which unions first-party A and mirror B. Public packages pass through the proxy admission gate, never directly into C.", caption="The recommended registry roles and their trust boundaries. A and B hold packages. C provides the private read view.") }}
 
-The [threat model's data-flow diagram](@/docs/threat-model.md#data-flow-diagram) shows every role,
-the advisory store, and the trust boundaries.
+The [threat model](@/docs/threat-model.md) follows each operation in its own view, including
+[mirror writes](@/docs/threat-model.md#mirror-writes-and-completion),
+[advisory distribution](@/docs/threat-model.md#advisory-distribution), and
+[revocation](@/docs/threat-model.md#revocation-and-cleanup).
 
 This is the posture the [threat model](@/docs/threat-model.md) treats as canonical. Aim for it
 unless you have a specific reason to diverge.

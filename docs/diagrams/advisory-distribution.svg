@@ -1,0 +1,198 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="2 2 866 791" width="866" height="791"><title>Advisory distribution</title><rect x="2" y="2" width="866" height="791" fill="#F9F6F0"></rect><style>.saer-diagram-element {
+  font-family: "Liberation Sans";
+}
+.saer-diagram-shape {
+  fill: #FAF8F2;
+  stroke: #38342E;
+  stroke-width: 2;
+}
+.saer-diagram-actor {
+  fill: #EAE5DA;
+}
+.saer-diagram-process {
+  fill: #E7E9E1;
+}
+.saer-diagram-store {
+  fill: none;
+  stroke-width: 2.5;
+}
+.saer-diagram-boundary-box,
+.saer-diagram-boundary-curve {
+  fill: none;
+  stroke: #6B655C;
+  stroke-width: 2;
+  stroke-dasharray: 8 6;
+}
+.saer-diagram-note-frame {
+  fill: none;
+}
+.saer-diagram-label {
+  fill: #38342E;
+  font-size: 10px;
+  font-weight: 500;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.saer-diagram-note {
+  fill: #6B655C;
+  font-size: 12px;
+  text-anchor: start;
+  dominant-baseline: central;
+}
+.saer-diagram-flow {
+  fill: none;
+}
+.saer-diagram-flow-arrow {
+  fill: #38342E;
+  stroke: none;
+}
+.saer-diagram-flow-label {
+  fill: #6B655C;
+  font-size: 10px;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.saer-diagram-flow-backing {
+  fill: #F9F6F0;
+  stroke: none;
+}
+.saer-diagram-out-of-scope .saer-diagram-shape {
+  stroke: #6B655C;
+  stroke-dasharray: 0 5;
+  stroke-linecap: round;
+}
+.saer-diagram-out-of-scope .saer-diagram-flow-arrow {
+  fill: #6B655C;
+}
+.saer-diagram-badge {
+  stroke: #FAF8F2;
+  stroke-width: 3;
+}
+.saer-diagram-badge-count {
+  fill: #FAF8F2;
+  stroke: none;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.saer-diagram-badge-primary .saer-diagram-badge-count {
+  font-size: 11px;
+}
+.saer-diagram-badge-secondary .saer-diagram-badge-count {
+  font-size: 9px;
+}
+.saer-diagram-badge-mark {
+  fill: #FAF8F2;
+  stroke: none;
+  font-size: 9px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.saer-diagram-badge-flag {
+  stroke-linejoin: round;
+}
+.saer-diagram-tone-critical {
+  fill: #C14339;
+}
+.saer-diagram-tone-high {
+  fill: #A85E1D;
+}
+.saer-diagram-tone-medium {
+  fill: #46788A;
+}
+.saer-diagram-tone-low {
+  fill: #4B6B50;
+}
+.saer-diagram-tone-neutral {
+  fill: #756E63;
+}
+.saer-diagram-tone-flag {
+  fill: #38342E;
+}
+
+.saer-diagram-accent-1 .saer-diagram-shape {
+  stroke: #AA6A89;
+}
+.saer-diagram-accent-1 .saer-diagram-flow-arrow,
+.saer-diagram-accent-1 .saer-diagram-note-bar {
+  fill: #AA6A89;
+}
+.saer-diagram-accent-1 .saer-diagram-tinted {
+  fill: #EDE1E1;
+}
+.saer-diagram-accent-2 .saer-diagram-shape {
+  stroke: #9370CE;
+}
+.saer-diagram-accent-2 .saer-diagram-flow-arrow,
+.saer-diagram-accent-2 .saer-diagram-note-bar {
+  fill: #9370CE;
+}
+.saer-diagram-accent-2 .saer-diagram-tinted {
+  fill: #EAE2EC;
+}
+.saer-diagram-accent-3 .saer-diagram-shape {
+  stroke: #93814F;
+}
+.saer-diagram-accent-3 .saer-diagram-flow-arrow,
+.saer-diagram-accent-3 .saer-diagram-note-bar {
+  fill: #93814F;
+}
+.saer-diagram-accent-3 .saer-diagram-tinted {
+  fill: #EAE5D8;
+}
+.saer-diagram-accent-4 .saer-diagram-shape {
+  stroke: #5C8A8F;
+}
+.saer-diagram-accent-4 .saer-diagram-flow-arrow,
+.saer-diagram-accent-4 .saer-diagram-note-bar {
+  fill: #5C8A8F;
+}
+.saer-diagram-accent-4 .saer-diagram-tinted {
+  fill: #E1E6E2;
+}
+.saer-diagram-store-band,
+.saer-diagram-note-ground {
+  stroke: none;
+}
+.saer-diagram-accent-strong .saer-diagram-note {
+  fill: #38342E;
+}
+.saer-diagram-accent-strong .saer-diagram-shape {
+  stroke-width: 3;
+}
+.saer-diagram-accent-strong .saer-diagram-boundary-box,
+.saer-diagram-accent-strong .saer-diagram-boundary-curve {
+  stroke-width: 3.5;
+}
+.saer-diagram-accent-strong .saer-diagram-flow {
+  stroke-width: 4;
+}
+.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-shape {
+  stroke-dasharray: 0 7.5;
+}
+.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-boundary-box,
+.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-boundary-curve {
+  stroke-dasharray: 0 8.75;
+}
+.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-flow {
+  stroke-dasharray: 0 10;
+}
+.saer-diagram-out-of-scope .saer-diagram-shape.saer-diagram-note-frame {
+  stroke: #6B655C;
+  stroke-width: 2;
+  stroke-dasharray: 0 5;
+}
+
+.saer-diagram-tone-low { fill: #4B6B50; stroke: #4B6B50; stroke-width: 3; }
+.saer-diagram-tone-low ~ .saer-diagram-badge-count, .saer-diagram-tone-low ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
+.saer-diagram-tone-medium { fill: #46788A; stroke: #46788A; stroke-width: 3; }
+.saer-diagram-tone-medium ~ .saer-diagram-badge-count, .saer-diagram-tone-medium ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
+.saer-diagram-tone-high { fill: #A85E1D; stroke: #A85E1D; stroke-width: 3; }
+.saer-diagram-tone-high ~ .saer-diagram-badge-count, .saer-diagram-tone-high ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
+.saer-diagram-tone-critical { fill: #C14339; stroke: #C14339; stroke-width: 3; }
+.saer-diagram-tone-critical ~ .saer-diagram-badge-count, .saer-diagram-tone-critical ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
+.saer-diagram-tone-neutral { fill: #756E63; stroke: #756E63; stroke-width: 3; }
+.saer-diagram-tone-neutral ~ .saer-diagram-badge-count, .saer-diagram-tone-neutral ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
+.saer-diagram-tone-flag { fill: #38342E; stroke: #38342E; stroke-width: 3; }
+.saer-diagram-tone-flag ~ .saer-diagram-badge-count, .saer-diagram-tone-flag ~ .saer-diagram-badge-mark { fill: #FAF8F2; }</style><g transform="translate(10, 10)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-boundary-box" width="850" height="610"></rect><text class="saer-diagram-label" x="425" y="11"><tspan x="425" dy="0">Operator trust zone</tspan></text></g></g><g transform="translate(345, 65)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">Advisory store</tspan><tspan x="80" dy="12.5">(S3)</tspan></text></g></g><g transform="translate(60, 330)"><g class="saer-diagram-element saer-diagram-accent-1"><ellipse class="saer-diagram-shape saer-diagram-process" cx="80" cy="60" rx="80" ry="60"></ellipse><text class="saer-diagram-label" x="80" y="60"><tspan x="80" dy="0">Écluse proxy</tspan></text></g></g><g transform="translate(345, 330)"><g class="saer-diagram-element saer-diagram-accent-1"><ellipse class="saer-diagram-shape saer-diagram-process" cx="80" cy="60" rx="80" ry="60"></ellipse><text class="saer-diagram-label" x="80" y="60"><tspan x="80" dy="0">Mirror worker</tspan></text></g></g><g transform="translate(630, 330)"><g class="saer-diagram-element saer-diagram-accent-1"><ellipse class="saer-diagram-shape saer-diagram-process" cx="80" cy="60" rx="80" ry="60"></ellipse><text class="saer-diagram-label" x="80" y="60"><tspan x="80" dy="0">Dredger</tspan></text></g></g><g transform="translate(50, 475)"><g class="saer-diagram-element saer-diagram-accent-1"><rect class="saer-diagram-note-bar" width="4" height="50"></rect><text class="saer-diagram-note" x="6" y="13.5"><tspan x="6" dy="0">Public admission</tspan></text></g></g><g transform="translate(330, 475)"><g class="saer-diagram-element saer-diagram-accent-1"><rect class="saer-diagram-note-bar" width="4" height="65"></rect><text class="saer-diagram-note" x="6" y="13.5"><tspan x="6" dy="0">Admission before new copying</tspan></text></g></g><g transform="translate(615, 475)"><g class="saer-diagram-element saer-diagram-accent-1"><rect class="saer-diagram-note-bar" width="4" height="50"></rect><text class="saer-diagram-note" x="6" y="13.5"><tspan x="6" dy="0">Revocation rules only</tspan></text></g></g><g transform="translate(30, 665)"><g class="saer-diagram-element saer-diagram-accent-1"><rect class="saer-diagram-note-bar" width="4" height="120"></rect><text class="saer-diagram-note" x="6" y="13.5"><tspan x="6" dy="0">Each role polls, validates, and swaps its own database. A rejected update leaves the last-good generation at its</tspan><tspan x="6" dy="15">original age.</tspan><tspan x="6" dy="15">Maximum push age and each rule&#x27;s unavailable setting bound its use. Roles can temporarily hold different generations.</tspan></text></g></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 345 110 L 140 110 L 140 330"></path><path class="saer-diagram-flow-arrow" d="M 140 330 L 133 312 L 147 312 Z"></path><rect class="saer-diagram-flow-backing" x="100.25" y="204.75" width="79.5" height="30.5"></rect><text class="saer-diagram-flow-label" x="140" y="213.75"><tspan x="140" dy="0">Read advisory</tspan><tspan x="140" dy="12.5">artifacts</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 425 155 L 425 330"></path><path class="saer-diagram-flow-arrow" d="M 425 330 L 418 312 L 432 312 Z"></path><rect class="saer-diagram-flow-backing" x="385.25" y="227.25" width="79.5" height="30.5"></rect><text class="saer-diagram-flow-label" x="425" y="236.25"><tspan x="425" dy="0">Read advisory</tspan><tspan x="425" dy="12.5">artifacts</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 505 110 L 710 110 L 710 330"></path><path class="saer-diagram-flow-arrow" d="M 710 330 L 703 312 L 717 312 Z"></path><rect class="saer-diagram-flow-backing" x="670.25" y="204.75" width="79.5" height="30.5"></rect><text class="saer-diagram-flow-label" x="710" y="213.75"><tspan x="710" dy="0">Read advisory</tspan><tspan x="710" dy="12.5">artifacts</tspan></text></g></svg>

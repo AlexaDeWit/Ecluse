@@ -116,8 +116,9 @@ figure.diagram {
   border-radius: 10px;
   overflow-x: auto;
 
-  svg {
+  img {
     display: block;
+    width: 100%;
     max-width: 100%;
     height: auto;
   }

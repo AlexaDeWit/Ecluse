@@ -1,0 +1,198 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="2 2 866 756" width="866" height="756"><title>PyPI inventory and companions</title><rect x="2" y="2" width="866" height="756" fill="#F9F6F0"></rect><style>.saer-diagram-element {
+  font-family: "Liberation Sans";
+}
+.saer-diagram-shape {
+  fill: #FAF8F2;
+  stroke: #38342E;
+  stroke-width: 2;
+}
+.saer-diagram-actor {
+  fill: #EAE5DA;
+}
+.saer-diagram-process {
+  fill: #E7E9E1;
+}
+.saer-diagram-store {
+  fill: none;
+  stroke-width: 2.5;
+}
+.saer-diagram-boundary-box,
+.saer-diagram-boundary-curve {
+  fill: none;
+  stroke: #6B655C;
+  stroke-width: 2;
+  stroke-dasharray: 8 6;
+}
+.saer-diagram-note-frame {
+  fill: none;
+}
+.saer-diagram-label {
+  fill: #38342E;
+  font-size: 10px;
+  font-weight: 500;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.saer-diagram-note {
+  fill: #6B655C;
+  font-size: 12px;
+  text-anchor: start;
+  dominant-baseline: central;
+}
+.saer-diagram-flow {
+  fill: none;
+}
+.saer-diagram-flow-arrow {
+  fill: #38342E;
+  stroke: none;
+}
+.saer-diagram-flow-label {
+  fill: #6B655C;
+  font-size: 10px;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.saer-diagram-flow-backing {
+  fill: #F9F6F0;
+  stroke: none;
+}
+.saer-diagram-out-of-scope .saer-diagram-shape {
+  stroke: #6B655C;
+  stroke-dasharray: 0 5;
+  stroke-linecap: round;
+}
+.saer-diagram-out-of-scope .saer-diagram-flow-arrow {
+  fill: #6B655C;
+}
+.saer-diagram-badge {
+  stroke: #FAF8F2;
+  stroke-width: 3;
+}
+.saer-diagram-badge-count {
+  fill: #FAF8F2;
+  stroke: none;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.saer-diagram-badge-primary .saer-diagram-badge-count {
+  font-size: 11px;
+}
+.saer-diagram-badge-secondary .saer-diagram-badge-count {
+  font-size: 9px;
+}
+.saer-diagram-badge-mark {
+  fill: #FAF8F2;
+  stroke: none;
+  font-size: 9px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.saer-diagram-badge-flag {
+  stroke-linejoin: round;
+}
+.saer-diagram-tone-critical {
+  fill: #C14339;
+}
+.saer-diagram-tone-high {
+  fill: #A85E1D;
+}
+.saer-diagram-tone-medium {
+  fill: #46788A;
+}
+.saer-diagram-tone-low {
+  fill: #4B6B50;
+}
+.saer-diagram-tone-neutral {
+  fill: #756E63;
+}
+.saer-diagram-tone-flag {
+  fill: #38342E;
+}
+
+.saer-diagram-accent-1 .saer-diagram-shape {
+  stroke: #AA6A89;
+}
+.saer-diagram-accent-1 .saer-diagram-flow-arrow,
+.saer-diagram-accent-1 .saer-diagram-note-bar {
+  fill: #AA6A89;
+}
+.saer-diagram-accent-1 .saer-diagram-tinted {
+  fill: #EDE1E1;
+}
+.saer-diagram-accent-2 .saer-diagram-shape {
+  stroke: #9370CE;
+}
+.saer-diagram-accent-2 .saer-diagram-flow-arrow,
+.saer-diagram-accent-2 .saer-diagram-note-bar {
+  fill: #9370CE;
+}
+.saer-diagram-accent-2 .saer-diagram-tinted {
+  fill: #EAE2EC;
+}
+.saer-diagram-accent-3 .saer-diagram-shape {
+  stroke: #93814F;
+}
+.saer-diagram-accent-3 .saer-diagram-flow-arrow,
+.saer-diagram-accent-3 .saer-diagram-note-bar {
+  fill: #93814F;
+}
+.saer-diagram-accent-3 .saer-diagram-tinted {
+  fill: #EAE5D8;
+}
+.saer-diagram-accent-4 .saer-diagram-shape {
+  stroke: #5C8A8F;
+}
+.saer-diagram-accent-4 .saer-diagram-flow-arrow,
+.saer-diagram-accent-4 .saer-diagram-note-bar {
+  fill: #5C8A8F;
+}
+.saer-diagram-accent-4 .saer-diagram-tinted {
+  fill: #E1E6E2;
+}
+.saer-diagram-store-band,
+.saer-diagram-note-ground {
+  stroke: none;
+}
+.saer-diagram-accent-strong .saer-diagram-note {
+  fill: #38342E;
+}
+.saer-diagram-accent-strong .saer-diagram-shape {
+  stroke-width: 3;
+}
+.saer-diagram-accent-strong .saer-diagram-boundary-box,
+.saer-diagram-accent-strong .saer-diagram-boundary-curve {
+  stroke-width: 3.5;
+}
+.saer-diagram-accent-strong .saer-diagram-flow {
+  stroke-width: 4;
+}
+.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-shape {
+  stroke-dasharray: 0 7.5;
+}
+.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-boundary-box,
+.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-boundary-curve {
+  stroke-dasharray: 0 8.75;
+}
+.saer-diagram-out-of-scope.saer-diagram-accent-strong .saer-diagram-flow {
+  stroke-dasharray: 0 10;
+}
+.saer-diagram-out-of-scope .saer-diagram-shape.saer-diagram-note-frame {
+  stroke: #6B655C;
+  stroke-width: 2;
+  stroke-dasharray: 0 5;
+}
+
+.saer-diagram-tone-low { fill: #4B6B50; stroke: #4B6B50; stroke-width: 3; }
+.saer-diagram-tone-low ~ .saer-diagram-badge-count, .saer-diagram-tone-low ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
+.saer-diagram-tone-medium { fill: #46788A; stroke: #46788A; stroke-width: 3; }
+.saer-diagram-tone-medium ~ .saer-diagram-badge-count, .saer-diagram-tone-medium ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
+.saer-diagram-tone-high { fill: #A85E1D; stroke: #A85E1D; stroke-width: 3; }
+.saer-diagram-tone-high ~ .saer-diagram-badge-count, .saer-diagram-tone-high ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
+.saer-diagram-tone-critical { fill: #C14339; stroke: #C14339; stroke-width: 3; }
+.saer-diagram-tone-critical ~ .saer-diagram-badge-count, .saer-diagram-tone-critical ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
+.saer-diagram-tone-neutral { fill: #756E63; stroke: #756E63; stroke-width: 3; }
+.saer-diagram-tone-neutral ~ .saer-diagram-badge-count, .saer-diagram-tone-neutral ~ .saer-diagram-badge-mark { fill: #FAF8F2; }
+.saer-diagram-tone-flag { fill: #38342E; stroke: #38342E; stroke-width: 3; }
+.saer-diagram-tone-flag ~ .saer-diagram-badge-count, .saer-diagram-tone-flag ~ .saer-diagram-badge-mark { fill: #FAF8F2; }</style><g transform="translate(290, 10)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-boundary-box" width="570" height="740"></rect><text class="saer-diagram-label" x="285" y="11"><tspan x="285" dy="0">Operator trust zone</tspan></text></g></g><g transform="translate(10, 285)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-boundary-box" width="225" height="180"></rect><text class="saer-diagram-label" x="112.5" y="11"><tspan x="112.5" dy="0">Public internet</tspan></text></g></g><g transform="translate(30, 65)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-actor" width="160" height="90"></rect><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">Package client</tspan><tspan x="80" dy="12.5">(developer / CI)</tspan></text></g></g><g transform="translate(330, 55)"><g class="saer-diagram-element saer-diagram-accent-1"><ellipse class="saer-diagram-shape saer-diagram-process" cx="80" cy="60" rx="80" ry="60"></ellipse><text class="saer-diagram-label" x="80" y="60"><tspan x="80" dy="0">Écluse proxy</tspan></text></g></g><g transform="translate(640, 65)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">C: private read</tspan><tspan x="80" dy="12.5">endpoint</tspan></text></g></g><g transform="translate(30, 335)"><g class="saer-diagram-element"><rect class="saer-diagram-shape saer-diagram-actor" width="160" height="90"></rect><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">Public registry</tspan><tspan x="80" dy="12.5">(npm / PyPI)</tspan></text></g></g><g transform="translate(640, 335)"><g class="saer-diagram-element"><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="0" x2="160" y2="0"></line><line class="saer-diagram-shape saer-diagram-store" x1="0" y1="90" x2="160" y2="90"></line><text class="saer-diagram-label" x="80" y="38.75"><tspan x="80" dy="0">Mirror state</tspan><tspan x="80" dy="12.5">(S3-compatible)</tspan></text></g></g><g transform="translate(320, 495)"><g class="saer-diagram-element saer-diagram-accent-1"><rect class="saer-diagram-note-bar" width="4" height="220"></rect><text class="saer-diagram-note" x="6" y="13.5"><tspan x="6" dy="0">Read C under the caller credential before reading retained state.</tspan><tspan x="6" dy="15">Current target identities must prove the complete expected version.</tspan><tspan x="6" dy="15">Otherwise use a validated full public alternative or report</tspan><tspan x="6" dy="15">unavailability.</tspan><tspan x="6" dy="15">Unreadable state fails closed. Confirmed absence means unmanaged content.</tspan><tspan x="6" dy="15">Complete private versions and retained companions remain usable during a</tspan><tspan x="6" dy="15">public outage.</tspan></text></g></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 190 110 L 330 115"></path><path class="saer-diagram-flow-arrow" d="M 330 115 L 311.762 121.353 L 312.261 107.362 Z"></path><path class="saer-diagram-flow-arrow" d="M 190 110 L 208.238 103.647 L 207.739 117.638 Z"></path><rect class="saer-diagram-flow-backing" x="195.721" y="69.698" width="90.5" height="30.5"></rect><text class="saer-diagram-flow-label" x="240.971" y="78.698"><tspan x="240.971" dy="0">Listing request</tspan><tspan x="240.971" dy="12.5">and response</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 490 115 L 640 110"></path><path class="saer-diagram-flow-arrow" d="M 640 110 L 622.243 117.596 L 621.777 103.604 Z"></path><rect class="saer-diagram-flow-backing" x="508.047" y="76.146" width="112.5" height="30.5"></rect><text class="saer-diagram-flow-label" x="564.297" y="85.146"><tspan x="564.297" dy="0">Private read</tspan><tspan x="564.297" dy="12.5">(caller credential)</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 190 380 L 410 380 L 410 175"></path><path class="saer-diagram-flow-arrow" d="M 410 175 L 417 193 L 403 193 Z"></path><rect class="saer-diagram-flow-backing" x="290.75" y="364.75" width="90.5" height="30.5"></rect><text class="saer-diagram-flow-label" x="336" y="373.75"><tspan x="336" dy="0">Anonymous</tspan><tspan x="336" dy="12.5">public metadata</tspan></text></g><g class="saer-diagram-element"><path class="saer-diagram-shape saer-diagram-flow" d="M 640 380 L 550 380 L 550 250 L 410 175"></path><path class="saer-diagram-flow-arrow" d="M 410 175 L 429.172 177.33 L 422.561 189.67 Z"></path><rect class="saer-diagram-flow-backing" x="437.5" y="197.25" width="85" height="30.5"></rect><text class="saer-diagram-flow-label" x="480" y="206.25"><tspan x="480" dy="0">Expected view</tspan><tspan x="480" dy="12.5">and companions</tspan></text></g></svg>

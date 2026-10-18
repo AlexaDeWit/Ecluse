@@ -468,9 +468,6 @@
           # output into the search bundle. Both the publish and the site gate run them.
           pkgs.zola
           pkgs.pagefind
-          # d2 renders web/diagrams/*.d2 to SVG in the site build (`task site` and
-          # the site-stub gate). A single Go binary: no npm closure, no client JS.
-          pkgs.d2
           saerskriven.packages.${system}.saerskriven
         ];
 

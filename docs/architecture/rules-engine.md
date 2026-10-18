@@ -359,6 +359,10 @@ This qualification preserves individual-score abstention and each rule's unavail
 
 ### Local polling, decoupled ingestion
 
+![OSV and EPSS ingestion with guarded artifact publication](../diagrams/advisory-publication.svg)
+
+![Independent advisory polling by proxy, worker and Dredger](../diagrams/advisory-distribution.svg)
+
 Parsing raw JSON advisory dumps on the proxy costs heavy GC pressure and memory spikes. So
 Écluse decouples that work into **Écluse Pilot**, a standalone service. Pilot pulls OSV's
 per-ecosystem exports, compiles them into a read-only SQLite database (`osv.db`), and pushes it

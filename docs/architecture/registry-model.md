@@ -108,28 +108,7 @@ Content-Type, including its boundary. It does not rebuild the client's distribut
 - **Opt-in.** A mount needs `publicationTarget` before it relays a client upload. Otherwise
   npm PUT and PyPI multipart POST answer `405 Method Not Allowed`.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Client as Publisher
-    participant E as Écluse
-    participant PubT as Publication target
-
-    Client->>E: PUT /{pkg} (npm publish: document + client token)
-    alt no mounts.npm.publicationTarget configured
-        E-->>Client: 405 Method Not Allowed
-    else publication target configured
-        Note over E: enforce the mount's first-party namespaces<br/>(anti-shadowing, reject before any write)
-        alt name out of scope
-            E-->>Client: 4xx npm-shaped error (no upstream write)
-        else name in scope
-            E->>PubT: publishArtifact (selected publish credential)
-            PubT-->>E: result (publication target authorises the credential)
-            E-->>Client: npm success shape
-        end
-    end
-    Note over E,PubT: write-only from the proxy, read back via the private upstream
-```
+![First-party publication through authentication and namespace checks](../diagrams/first-party-publication.svg)
 
 ## Where an artifact lives
 
@@ -185,38 +164,7 @@ demand-driven mirror job. The enqueue does not block, so the proxy serves the cl
 See [Streaming](web-layer.md#streaming-and-resource-lifetime) and
 [Mirror queue](cloud-backends.md#mirror-queue).
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Client
-    participant E as Écluse
-    participant Priv as Private upstream
-    participant Pub as Public upstream
-    participant Rules as Rules engine
-    participant Queue as Mirror queue
-
-    Client->>E: GET tarball (e.g. npm ci, direct)
-    E->>Priv: fetch (client token forwarded)
-    alt private hit (2xx)
-        Priv-->>E: tarball stream
-        E-->>Client: stream unfiltered (already vetted)
-    else private access refused (401 or 403)
-        E-->>Client: 403 local refusal
-    else private miss
-        E->>Pub: fetch version metadata (anonymous)
-        E->>Rules: evaluate that one version
-        alt denied
-            E-->>Client: 403 + denial message
-        else unavailable
-            E-->>Client: 503 Retry-After or 500
-        else admitted
-            E->>Pub: stream artifact bytes
-            E-->>Client: stream (constant memory, backpressure)
-            E-)Queue: enqueue mirror job (best-effort)
-        end
-    end
-    Note over E,Queue: demand-driven, enqueue only when a tarball is accepted
-```
+![Private artifact preference and admitted public fallback](../diagrams/artifact-downloads.svg)
 
 ## Distribution metadata companions
 
@@ -293,42 +241,7 @@ track which input a survivor came from, so assembly can select its retained sour
 A packument request filters but never mirrors. See
 [Applying verdicts to a packument](rules-engine.md#applying-verdicts-to-a-packument).
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Client
-    participant E as Écluse
-    participant Cache as Metadata cache
-    participant Priv as Private upstream
-    participant Pub as Public upstream
-    participant Rules as Rules engine
-
-    Client->>E: GET packument
-    par fetch upstreams in parallel
-        E->>Priv: fetch (client token forwarded)
-        Priv-->>E: packument, access refusal, or miss
-    and
-        E->>Cache: lookup parsed public metadata
-        alt cache miss
-            E->>Pub: fetch (anonymous, token stripped)
-            Pub-->>E: packument (or miss)
-            E->>Cache: store parsed metadata (short TTL)
-        end
-    end
-    alt private access refused (401 or 403)
-        E-->>Client: 403 local refusal
-    else private access not explicitly refused
-        E->>Rules: evaluate every public version
-        Rules-->>E: verdicts (allow / deny / unavailable)
-        Note over E: filter gated (public) versions, trust private,<br/>merge (private wins, flag integrity divergence),<br/>repoint latest, recompute ETag over merged body
-        alt no survivors in merge
-            E-->>Client: 403 policy / 503 transient / 502 upstream-invalid / 500 permanent
-        else some admitted
-            E-->>Client: merged + filtered packument
-        end
-    end
-    Note over E,Pub: packument requests filter but never mirror
-```
+![Caller-authorised private metadata merged with admitted public metadata](../diagrams/metadata-admission.svg)
 
 ### The route name is the served name's validation authority
 

@@ -1,5 +1,7 @@
-{%- set svg = load_data(path="generated/diagrams/" ~ name ~ ".svg", format="plain") -%}
+{%- set asset = get_url(path="diagrams/" ~ name ~ ".svg") -%}
 <figure class="diagram">
-  <div role="img" aria-label="{{ alt }}">{{ svg | safe }}</div>
-  {%- if caption is defined %}<figcaption>{{ caption }}</figcaption>{% endif -%}
+  <a href="{{ asset }}" aria-label="Open full-size diagram: {{ alt }}">
+    <img src="{{ asset }}" alt="{{ alt }}" loading="lazy" />
+  </a>
+  <figcaption>{% if caption is defined %}{{ caption }} {% endif %}<a href="{{ asset }}">Open full-size diagram</a></figcaption>
 </figure>

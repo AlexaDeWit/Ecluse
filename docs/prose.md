@@ -44,9 +44,10 @@ Density that comes from packing facts into prose is a defect, not a virtue.
 
 ## Diagrams
 
-- Repository Markdown uses fenced `mermaid` blocks, which GitHub renders
-  ([CONTRIBUTING, Repository requirements](../CONTRIBUTING.md#repository-requirements)).
-- The site authors diagrams as [d2](https://d2lang.com/) sources in `web/diagrams/`, rendered to
-  SVG by the site build. Every rendered diagram sits in a parchment enclosure (the fixed light
-  panel the landing illustration uses), so one render per diagram keeps its contrast in both
-  colour schemes.
+- System diagrams come from `threat-modelling/ecluse.yaml`. Share elements across its focused
+  Saerskriven views so names, relationships and threat links have one home.
+- Run `task diagrams` inside the flake after a model edit. Commit the generated SVGs under
+  `docs/diagrams/` so repository Markdown shows the same views as the site.
+- Site pages use the `diagram` shortcode with the diagram ID and an accessible description.
+  Each image links to its full-size SVG and keeps its contrast in both colour schemes.
+- Contributor workflow diagrams can use Mermaid when they describe no system or threat-model view.
