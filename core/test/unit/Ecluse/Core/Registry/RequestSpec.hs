@@ -6,13 +6,14 @@ module Ecluse.Core.Registry.RequestSpec (spec) where
 
 import Data.List (lookup)
 import Network.HTTP.Client qualified as Client
-import Network.HTTP.Types.Header (RequestHeaders, hUserAgent)
+import Network.HTTP.Types (status200)
+import Network.HTTP.Types.Header (HeaderName, RequestHeaders, hAcceptEncoding, hUserAgent)
 import Test.Hspec (
     Spec,
     describe,
     it,
     shouldBe,
-    shouldNotSatisfy,
+    shouldReturn,
     shouldSatisfy,
  )
 
@@ -30,6 +31,8 @@ import Ecluse.Core.Registry.Request (
     parseRequestEither,
     sealRequest,
  )
+import Ecluse.Core.Server.FieldValue (fieldValues)
+import Ecluse.Test.Stub (headerValue, lastCaptured, stubBaseUrl, withStub)
 import Ecluse.Test.Support (parseRequestOrFail)
 
 spec :: Spec
@@ -121,7 +124,7 @@ finaliseRequestSpec = describe "finaliseRequest pins the redirect count for ever
 
 artifactByUrlSpec :: Spec
 artifactByUrlSpec = describe "artifactRequestByUrl (opaque, non-decompressing, by url)" $ do
-    it "addresses the authoritative URL verbatim (host, path, query) and never decompresses" $ do
+    it "addresses the authoritative URL verbatim (host, path, query) in identity coding and never decompresses" $ do
         let url = "https://cdn.example.net/files/abc/code-frame-7.0.0.tgz?sig=deadbeef"
         case artifactRequestByUrl apiKeyMapping Nothing url of
             Left err -> fail ("artifactRequestByUrl failed: " <> show err)
@@ -130,8 +133,16 @@ artifactByUrlSpec = describe "artifactRequestByUrl (opaque, non-decompressing, b
                 Client.path req `shouldBe` "/files/abc/code-frame-7.0.0.tgz"
                 Client.queryString req `shouldBe` "?sig=deadbeef"
                 Client.decompress req "application/gzip" `shouldBe` False
-                Client.requestHeaders req `shouldNotSatisfy` any ((== "accept-encoding") . fst)
+                acceptEncodings req `shouldBe` ["identity"]
                 Client.redirectCount req `shouldBe` 0
+
+    it "transmits identity coding, where http-client's default request asks for gzip" $
+        withStub status200 "artifact bytes" $ \stub -> do
+            manager <- Client.newManager Client.defaultManagerSettings
+            let url = stubBaseUrl stub <> "/files/thing.tgz"
+                transmitted request = Client.httpLbs request manager >> headerValue "Accept-Encoding" <$> lastCaptured stub
+            either (fail . show) transmitted (parseRequestEither url) `shouldReturn` Just "gzip"
+            either (fail . show) transmitted (artifactRequestByUrl apiKeyMapping Nothing url) `shouldReturn` Just "identity"
 
     it "attaches the credential under the mapping's presentation onto the finalised request" $ do
         case artifactRequestByUrl schemedMapping (Just (bareCredential (mkSecret "tok-xyz"))) "https://private.reg/files/thing.tgz" of
@@ -206,9 +217,15 @@ basicMapping = credentialMapping recoverApiKey "Authorization" renderPair
     renderPair credential =
         "Basic " <> encodeUtf8 (fromMaybe "" (credUsername credential)) <> ":" <> encodeUtf8 (unSecret (credSecret credential))
 
--- Every User-Agent a request carries, so a case can assert the header is set exactly once.
+-- Every value a request carries for one header, so a case can assert the header is set exactly once.
+headerValues :: HeaderName -> Client.Request -> [ByteString]
+headerValues header = fieldValues header . Client.requestHeaders
+
 userAgents :: Client.Request -> [ByteString]
-userAgents request = [value | (name, value) <- Client.requestHeaders request, name == hUserAgent]
+userAgents = headerValues hUserAgent
+
+acceptEncodings :: Client.Request -> [ByteString]
+acceptEncodings = headerValues hAcceptEncoding
 
 withAgent :: ByteString -> Client.Request -> Client.Request
 withAgent value req = req{Client.requestHeaders = (hUserAgent, value) : Client.requestHeaders req}

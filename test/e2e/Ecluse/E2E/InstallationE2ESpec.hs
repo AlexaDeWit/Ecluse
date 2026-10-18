@@ -16,8 +16,7 @@ import Ecluse.E2E.Fixtures.PyPI (pypiDistInfo, pypiProject, pypiVersion, pypiWhe
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture, FamilyMetadata)
-import Ecluse.Test.Contract.Install (InstallDriver (..), InstallationDriver (..))
-import Ecluse.Test.Contract.Serving (ServingResponse (..))
+import Ecluse.Test.Contract.Install (CodedArtifact (..), InstallDriver (..), InstallationDriver (..), UpstreamRead (..))
 import Ecluse.Test.Json (textAtPath)
 import Ecluse.Test.Package (hexSha256Of, sriSha512Of)
 
@@ -35,19 +34,19 @@ npmInstallationDriver e2e =
             InstallDriver
                 (withE2EWith (deniedConfig "npm") (`install` observeRefusal) (e2ePlane e2e))
                 (Nothing, mempty)
-        , installationArtifact = do
-            (_, body) <- proxyGet e2e ("/npm/" <> name)
-            value <- maybe (fail "npm returned no metadata JSON") pure (Aeson.decode body)
-            digest <- maybe (fail "npm advertised no artifact integrity") pure (textAtPath ["versions", Key.fromText version, "dist", "integrity"] value)
-            response <- artifactGet e2e path
-            pure (digest, response)
+        , installationArtifact = (,) <$> advertised <*> proxyGetCoded e2e path
         , installationDigest = sriSha512Of
         , installationHead = proxyHead e2e path
+        , installationCodedArtifact = codedArtifact e2e NpmPublic (npmArtifactPath name version) path advertised
         }
   where
     name = psName allowPkg
     version = psVersion allowPkg
     path = npmTarballPath name version
+    advertised = do
+        (_, body) <- proxyGet e2e ("/npm/" <> name)
+        value <- maybe (fail "npm returned no metadata JSON") pure (Aeson.decode body)
+        maybe (fail "npm advertised no artifact integrity") pure (textAtPath ["versions", Key.fromText version, "dist", "integrity"] value)
     observeRefusal project =
         (,) <$> installedVersion project name <*> snapshotTree (npDir project) ["node_modules", "package-lock.json"]
     install proxy observe = withNpmProject proxy $ \project ->
@@ -65,12 +64,14 @@ pypiInstallationDriver e2e =
                     withE2EWith (deniedConfig "pypi") (\proxy -> install proxy digest observeRefusal) (e2ePlane e2e)
                 )
                 (False, mempty)
-        , installationArtifact = (,) <$> wheelDigest <*> artifactGet e2e path
+        , installationArtifact = (,) <$> wheelDigest <*> proxyGetCoded e2e path
         , installationDigest = hexSha256Of
         , installationHead = proxyHead e2e path
+        , installationCodedArtifact = codedArtifact e2e PyPIPublic upstreamPath path wheelDigest
         }
   where
-    path = "/pypi/simple/" <> pypiProject <> "/" <> pypiWheelFile
+    upstreamPath = "/simple/" <> pypiProject <> "/" <> pypiWheelFile
+    path = "/pypi" <> upstreamPath
     observeRefusal project = (,) <$> pipInstalled project pypiDistInfo <*> pipInstalledTree project
     wheelDigest = do
         files <- advertisedFiles e2e pypiProject
@@ -78,10 +79,27 @@ pypiInstallationDriver e2e =
     install proxy digest observe = withPipProject proxy pypiProject pypiVersion digest $ \project ->
         (,) <$> pipInstallIn project <*> observe project
 
-artifactGet :: E2E -> Text -> IO ServingResponse
-artifactGet e2e path = do
-    (status, body) <- proxyGet e2e path
-    pure (ServingResponse status body [] [] mempty)
+{- Read the artifact at @proxyPath@ and the public upstream's own log of that fetch, where the
+artifact sits at @upstreamPath@. The route's earlier reads show whether it gzips on request.
+-}
+codedArtifact :: E2E -> StubRoute -> Text -> Text -> IO Text -> IO CodedArtifact
+codedArtifact e2e route upstreamPath proxyPath advertised = do
+    digest <- advertised
+    seen <- length <$> stubReadsNow plane
+    response <- proxyGetCoded e2e proxyPath
+    during <- awaitStubReads plane seen (any fetched)
+    answered <- filter ((== route) . srRoute) <$> stubReadsNow plane
+    pure
+        CodedArtifact
+            { codedDigest = digest
+            , codedResponse = response
+            , codedArtifactReads = map upstreamRead (filter fetched during)
+            , codedRouteReads = map upstreamRead answered
+            }
+  where
+    plane = e2ePlane e2e
+    fetched answer = srRoute answer == route && srPath answer == upstreamPath
+    upstreamRead answer = UpstreamRead (srAcceptEncoding answer) (srContentEncoding answer)
 
 deniedConfig :: Text -> E2EConfig
 deniedConfig ecosystem =

@@ -5,15 +5,17 @@
 -- | Native documents and independent response readers for the shared serving laws.
 module Ecluse.Server.Pipeline.ServingDriver (npmServingDriver, pypiServingDriver) where
 
+import Codec.Compression.GZip qualified as GZip
 import Data.Aeson (Value (Array, Object, String), encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (hContentLength, status200, status404, statusCode)
+import Network.HTTP.Types (RequestHeaders, hContentLength, status200, status404, statusCode)
 import Network.Wai (rawPathInfo, responseLBS)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -26,6 +28,7 @@ import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Encoding (CodingChoice (ServeCoding), ContentCoding (GzipCoding), MetadataCompression (GzipWhenAccepted), chooseCoding, gzipEncodingHeader)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue, packument, publishedDaysAgo, requestAt)
@@ -79,9 +82,18 @@ nativeDriver ecosystem adapter mount metadataPath artifactPath document observe 
         | BS.dropWhileEnd (== 47) (rawPathInfo request) == metadataPath =
             respond (responseLBS status200 [] (encode (document (selfBaseUrl request) releases)))
         | Just release <- find ((== rawPathInfo request) . artifactPath . releaseVersion) releases =
-            -- Warp does not infer a builder response's representation length for HEAD.
-            respond (responseLBS status200 [(hContentLength, show (BS.length (releaseBytes release)))] (toLazy (releaseBytes release)))
+            respond (artifactResponse (Wai.requestHeaders request) (releaseBytes release))
         | otherwise = respond (responseLBS status404 [] "")
+
+{- Answer as a CDN does: gzip the artifact for a request that permits it. A proxy that relays those
+bytes breaks the advertised digest. Warp does not infer a builder response's length for HEAD.
+-}
+artifactResponse :: RequestHeaders -> ByteString -> Wai.Response
+artifactResponse headers bytes = case chooseCoding GzipWhenAccepted headers of
+    ServeCoding GzipCoding -> sized (GZip.compress (toLazy bytes)) [gzipEncodingHeader]
+    _ -> sized (toLazy bytes) []
+  where
+    sized body coding = responseLBS status200 ((hContentLength, show (LBS.length body)) : coding) body
 
 npmArtifact :: Text -> ByteString
 npmArtifact version = encodeUtf8 ("/thing/-/thing-" <> version <> ".tgz")

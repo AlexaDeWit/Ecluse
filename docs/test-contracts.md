@@ -419,14 +419,16 @@ Each provider's brackets remain inside its single schedulable `npm/dredger` or `
 The detailed tables below preserve all 49 original E2E observations and descriptions.
 Native deprecation/yank handling, npm publication metadata and tamper-refusal assertions remain in their ecosystem specs.
 
-The new shared installation family runs these four IDs for each of `npm` and `pypi`:
+The new shared installation family runs these five IDs for each of `npm` and `pypi`:
 `installation/accepted-install`, `installation/default-denial`, `installation/artifact-integrity`,
-and `installation/artifact-head`, with the ecosystem prefix.
+`installation/artifact-head`, and `installation/artifact-identity-coding`, with the ecosystem prefix.
 
 Admission preserves the native version or distribution observation until the contract compares it with the expected result.
 Refusal requires a failed client and an empty installation tree, including npm's lock file or pip's complete target directory.
 `core/test/unit/Ecluse/Test/Contract/InstallSpec.hs` rejects unexpected versions and files left by failed clients.
 Those negative controls create and inspect their files before checking the contract's failure.
+For `artifact-identity-coding` it rejects a gzip-permitting upstream fetch, a relayed content coding,
+bytes that miss the digest, a fetch the upstream never saw, and an upstream that never gzipped.
 
 The npm advisory counterparts are `npm/advisories/deny-cve`, `npm/advisories/deny-epss`,
 `npm/advisories/mal-denial`, `npm/advisories/exact-fix`, and `npm/advisories/partial-fix`.
@@ -512,7 +514,8 @@ The native modules retain scenario providers. The fixed suite declarations regis
 | Case ID | Original assertion |
 |---|---|
 | `pypi/install/wheel` | installs the compatible non-yanked wheel with its advertised hash |
-| `pypi/install/metadata-companion` | resolves with a real pip request for the advertised companion, then completes the hash-checked install |
+| `pypi/install/metadata-companion` | installs and imports through the metadata companion, fetched in identity coding from a gzipping upstream |
+| `pypi/install/tampered-companion` | refuses a metadata companion whose bytes miss the advertised digest |
 | `pypi/install/yanked-pin` | relays the yank reason when pip installs an exact pin |
 | `pypi/install/yank-negative-control` | rejects the yank warning assertion for a release without the member |
 | `pypi/install/sdist` | serves the source distribution beside the wheel under the shipped policy |

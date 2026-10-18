@@ -13,7 +13,10 @@ module Ecluse.Test.Contract.Install (
     crossTargetInstallCase,
     targetInstallCase,
     InstallationDriver (..),
+    UpstreamRead (..),
+    CodedArtifact (..),
     installationContract,
+    codedArtifactCase,
     RefusalDriver (..),
     refusesWithoutEffects,
     installsObserved,
@@ -24,13 +27,14 @@ module Ecluse.Test.Contract.Install (
     clientReport,
 ) where
 
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Ecluse.Test.InstalledTree (InstalledTree, TreeEntry (TreeFile))
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec (Expectation, SpecWith, expectationFailure, it, shouldBe, shouldMatchList, shouldNotBe, shouldSatisfy)
 
 import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Ecluse.Test.Contract.Serving (ServingResponse, artifactDigestCase, artifactHeadCase)
+import Ecluse.Test.Contract.Serving (ServingResponse (responseHeaders), artifactDigestCase, artifactHeadCase)
 
 -- | The outcome of one client invocation: what ran, its exit code, and its captured output.
 data ClientResult = ClientResult
@@ -54,6 +58,30 @@ data InstallationDriver observation = InstallationDriver
     , installationArtifact :: IO (Text, ServingResponse)
     , installationDigest :: ByteString -> Text
     , installationHead :: IO ServingResponse
+    , installationCodedArtifact :: IO CodedArtifact
+    }
+
+-- | The content codings of one read a public upstream answered, as its access log records them.
+data UpstreamRead = UpstreamRead
+    { upstreamAccepted :: Maybe Text
+    -- ^ The request's @Accept-Encoding@.
+    , upstreamCoding :: Maybe Text
+    -- ^ The response's @Content-Encoding@.
+    }
+    deriving stock (Eq, Show)
+
+{- | One artifact read through the proxy by a client that accepts gzip, from a public upstream that
+gzips any response a request permits.
+-}
+data CodedArtifact = CodedArtifact
+    { codedDigest :: Text
+    -- ^ The digest the served metadata advertises for the artifact.
+    , codedResponse :: ServingResponse
+    -- ^ The proxy's response on the wire, undecoded.
+    , codedArtifactReads :: [UpstreamRead]
+    -- ^ The upstream's reads of this artifact during the fetch.
+    , codedRouteReads :: [UpstreamRead]
+    -- ^ Every read the same upstream answered so far, the control that it gzips on request.
     }
 
 -- | Require a fresh installation, refusal without files, and intact artifact representations.
@@ -68,8 +96,21 @@ installationContract prefix = do
         artifactDigestCase (installationDigest driver) digest response
     it (label "artifact-head" "advertises an admitted artifact without transferring its body") $
         installationHead >=> artifactHeadCase
+    it (label "artifact-identity-coding" "fetches the artifact in identity coding from an upstream that gzips on request") $ \driver ->
+        installationCodedArtifact driver >>= codedArtifactCase (installationDigest driver)
   where
     label name = caseLabel (prefix <> "/" <> name)
+
+{- | Require an identity-coded upstream fetch and the advertised bytes, uncoded, for a client that
+accepts gzip. The upstream must have gzipped some read, or the fetch proves nothing.
+-}
+codedArtifactCase :: (ByteString -> Text) -> CodedArtifact -> Expectation
+codedArtifactCase digest coded = do
+    codedRouteReads coded `shouldSatisfy` any ((== Just "gzip") . upstreamCoding)
+    codedArtifactReads coded `shouldSatisfy` (not . null)
+    for_ (codedArtifactReads coded) (`shouldBe` UpstreamRead (Just "identity") Nothing)
+    lookup "Content-Encoding" (responseHeaders (codedResponse coded)) `shouldBe` Nothing
+    artifactDigestCase digest (codedDigest coded) (codedResponse coded)
 
 -- | An attempted install and an independent destination observation after its write window.
 data RefusalDriver evidence = RefusalDriver

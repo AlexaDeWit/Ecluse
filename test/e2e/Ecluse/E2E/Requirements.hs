@@ -44,7 +44,7 @@ obligations =
         "pypi/install"
         Supported
         ["read", "client-install"]
-        ["pypi/install/wheel", "pypi/install/metadata-companion", "pypi/install/yanked-pin", "pypi/install/yank-negative-control", "pypi/install/sdist", "pypi/install/outage"]
+        ["pypi/install/wheel", "pypi/install/metadata-companion", "pypi/install/tampered-companion", "pypi/install/yanked-pin", "pypi/install/yank-negative-control", "pypi/install/sdist", "pypi/install/outage"]
     , Obligation
         "pypi/advisories"
         "pypi/advisories"
@@ -72,14 +72,14 @@ obligations =
         "npm/installation"
         Supported
         ["read", "client-install"]
-        ["npm/installation/accepted-install", "npm/installation/default-denial", "npm/installation/artifact-integrity", "npm/installation/artifact-head"]
+        ["npm/installation/accepted-install", "npm/installation/default-denial", "npm/installation/artifact-integrity", "npm/installation/artifact-head", "npm/installation/artifact-identity-coding"]
     , Obligation
         "pypi/installation"
         "pypi/read"
         "pypi/installation"
         Supported
         ["read", "client-install"]
-        ["pypi/installation/accepted-install", "pypi/installation/default-denial", "pypi/installation/artifact-integrity", "pypi/installation/artifact-head"]
+        ["pypi/installation/accepted-install", "pypi/installation/default-denial", "pypi/installation/artifact-integrity", "pypi/installation/artifact-head", "pypi/installation/artifact-identity-coding"]
     , Obligation
         "npm/advisories"
         "npm/advisories"

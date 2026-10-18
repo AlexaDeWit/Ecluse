@@ -6,7 +6,7 @@ module Ecluse.Core.Registry.Npm.RequestSpec (spec) where
 
 import Data.List (lookup)
 import Network.HTTP.Client qualified as Client
-import Test.Hspec (Spec, describe, it, shouldBe, shouldNotSatisfy, shouldSatisfy)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -117,13 +117,13 @@ redirectSpec = describe "no data-plane request follows an upstream redirect" $ d
 
 artifactSpec :: Spec
 artifactSpec = describe "artifact request building" $ do
-    it "artifactRequestByFile fetches by the preserved filename, non-decompressing" $ do
+    it "artifactRequestByFile fetches by the preserved filename in identity coding, non-decompressing" $ do
         case artifactRequestByFile "https://reg.test" Nothing babelCodeFrame "code-frame-7.0.0.tgz" of
             Left err -> fail ("artifactRequestByFile failed: " <> show err)
             Right req -> do
                 Client.path req `shouldBe` "/@babel%2Fcode-frame/-/code-frame-7.0.0.tgz"
                 Client.decompress req "application/gzip" `shouldBe` False
-                Client.requestHeaders req `shouldNotSatisfy` any ((== "accept-encoding") . fst)
+                lookup "Accept-Encoding" (Client.requestHeaders req) `shouldBe` Just "identity"
 
     it "artifactFileUrl builds the preserved-filename URL under the package /-/ path" $ do
         artifactFileUrl "https://reg.test" babelCodeFrame "code-frame-7.0.0.tgz"

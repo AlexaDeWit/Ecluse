@@ -2,12 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The pypi mount on the base topology, driven by a real @pip@ client in hash-checking mode. The mount has
-no private store, so the same install fails through a second proxy while public is down.
+{- | The pypi mount on the base topology, driven by a real @pip@ client. The mount has no private store,
+so the same install fails through a second proxy while public is down.
 -}
 module Ecluse.E2E.PyPI.InstallE2ESpec (nativeInstallationContract) where
 
 import Data.List (lookup)
+import Data.Text qualified as T
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
@@ -15,7 +16,7 @@ import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Ecluse.Test.Contract.Types (Group)
 import Test.Hspec
 
-import Ecluse.E2E.Fixtures.PyPI (pypiProject, pypiSdistFile, pypiVersion, pypiWheelFile, pypiYankReason, pypiYankedDistInfo, pypiYankedVersion, pypiYankedWheelFile)
+import Ecluse.E2E.Fixtures.PyPI (pypiProject, pypiSdistFile, pypiTamperedCompanion, pypiTamperedProject, pypiVersion, pypiWheelFile, pypiWheelFor, pypiYankReason, pypiYankedDistInfo, pypiYankedVersion, pypiYankedWheelFile)
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
 import Ecluse.Test.Contract.Install.Outage
@@ -35,19 +36,44 @@ scenarios recorder =
                 length advertised `shouldBe` 5
                 pipInstallsWheel e2e advertised
 
-            it (caseLabel "pypi/install/metadata-companion" "resolves through the advertised metadata companion before the hash-checked install") $ \e2e -> do
-                advertised <- advertisedFiles e2e pypiProject
-                case lookup pypiWheelFile advertised of
-                    Nothing -> expectationFailure "the served index advertised no digest for the wheel"
+            it (caseLabel "pypi/install/metadata-companion" "installs and imports through the metadata companion, fetched in identity coding from a gzipping upstream") $ \e2e -> do
+                companions <- advertisedCompanions e2e pypiProject
+                case lookup pypiWheelFile companions of
+                    Nothing -> expectationFailure "the served index advertised no digest for the wheel's metadata companion"
                     Just digest -> do
                         let plane = e2ePlane e2e
-                            companion readEvent = srRoute readEvent == PyPIPublic && srPath readEvent == "/simple/" <> pypiProject <> "/" <> pypiWheelFile <> ".metadata" && answeredByPublic readEvent
+                            companion = publicRead (companionPath pypiProject pypiWheelFile)
+                            wheel = publicRead ("/simple/" <> pypiProject <> "/" <> pypiWheelFile)
                         seen <- length <$> stubReadsNow plane
-                        withPipProject e2e pypiProject pypiVersion digest $ \proj ->
-                            void $ pipResolveIn proj pypiProject pypiVersion >>= shouldSucceedThroughProxy e2e
+                        (installed, imported) <- pipInstallThenRun e2e pypiProject pypiVersion ("import " <> T.replace "-" "_" pypiProject <> " as installed\nprint(installed.VERSION)")
+                        void (shouldSucceedThroughProxy e2e installed)
+                        void (shouldSucceedThroughProxy e2e imported)
+                        T.strip (crStdout imported) `shouldBe` pypiVersion
+                        observedReads <- awaitStubReads plane seen (\answered -> any companion answered && any wheel answered)
+                        for_ [companion, wheel] $ \fetched -> do
+                            observedReads `shouldSatisfy` any fetched
+                            map srAcceptEncoding (filter fetched observedReads) `shouldSatisfy` all (== Just "identity")
+                        served <- proxyGetCoded e2e ("/pypi" <> companionPath pypiProject pypiWheelFile)
+                        lookup "Content-Encoding" (responseHeaders served) `shouldBe` Nothing
+                        artifactDigestCase hexSha256Of digest served
+
+            it (caseLabel "pypi/install/tampered-companion" "refuses a metadata companion whose bytes miss the advertised digest") $ \e2e -> do
+                let plane = e2ePlane e2e
+                    wheelFile = pypiWheelFor pypiTamperedProject pypiVersion
+                    companion = publicRead (companionPath pypiTamperedProject wheelFile)
+                companions <- advertisedCompanions e2e pypiTamperedProject
+                case lookup wheelFile companions of
+                    Nothing -> expectationFailure "the served index advertised no digest for the tampered metadata companion"
+                    Just digest -> do
+                        seen <- length <$> stubReadsNow plane
+                        (result, tree) <- pipInstallAndInspect e2e pypiTamperedProject pypiVersion
+                        void (shouldFail result)
+                        -- pip names both digests, so the second proves the tampered bytes arrived uncoded.
+                        crStderr result `shouldSatisfy` T.isInfixOf ("Expected sha256 " <> digest)
+                        crStderr result `shouldSatisfy` T.isInfixOf (hexSha256Of (encodeUtf8 pypiTamperedCompanion))
+                        tree `shouldBe` mempty
                         observedReads <- awaitStubReads plane seen (any companion)
-                        observedReads `shouldSatisfy` any companion
-                        pipInstallsWheel e2e advertised
+                        filter companion observedReads `shouldSatisfy` any ((== 200) . srStatus)
 
             it (caseLabel "pypi/install/yanked-pin" "relays the yank reason when pip installs an exact pin") $ \e2e -> do
                 advertised <- advertisedFiles e2e pypiProject
@@ -90,6 +116,14 @@ scenarios recorder =
                                     answered <- awaitStubReads plane seen (any indexLeftUnanswered)
                                     pure (result, map srPath (filter indexLeftUnanswered answered), map srPath (filter answeredByPublic answered))
                                 }
+
+-- A read the PyPI public route answered at this path.
+publicRead :: Text -> StubRead -> Bool
+publicRead path r = srRoute r == PyPIPublic && srPath r == path && answeredByPublic r
+
+-- The upstream path of a distribution's metadata companion.
+companionPath :: Text -> Text -> Text
+companionPath project file = "/simple/" <> project <> "/" <> file <> ".metadata"
 
 -- The proxy's read of the project's index, which the public route took and closed with no answer.
 indexLeftUnanswered :: StubRead -> Bool
