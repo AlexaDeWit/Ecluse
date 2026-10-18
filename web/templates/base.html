@@ -24,7 +24,9 @@
   <header class="header" data-pagefind-ignore>
     <div class="header-inner">
       <a class="brand" href="{{ get_url(path='@/_index.md') }}" aria-label="Écluse home">
-        <img src="{{ get_url(path='logo.svg') }}" alt="" width="28" height="28" /><span>Écluse</span>
+        <img class="brand-icon" src="{{ get_url(path='logo.svg') }}" alt="" width="28" height="28" />
+        <img class="brand-wordmark brand-wordmark-light" src="{{ get_url(path='wordmark.svg') }}" alt="" width="86" height="33" />
+        <img class="brand-wordmark brand-wordmark-dark" src="{{ get_url(path='wordmark-inverse.svg') }}" alt="" width="86" height="33" />
       </a>
       <nav id="site-nav" class="global-nav" aria-label="Main navigation">
         <a href="{{ get_url(path='@/docs/understand.md') }}">Why Écluse?</a>

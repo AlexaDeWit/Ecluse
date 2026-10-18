@@ -1,6 +1,6 @@
 {% macro sidebar(current, group) %}
 <nav id="docs-nav" class="sidebar" aria-label="Documentation" data-pagefind-ignore>
-  <div class="version"><a href="{{ get_url(path='@/docs/_index.md') }}">Documentation</a><span class="badge">Operator manual</span></div>
+  <a class="sidebar-heading" href="{{ get_url(path='@/docs/_index.md') }}">Operator manual</a>
   {% for entry in config.extra.docs_navigation %}
   <details class="sidebar-group"{% if entry.title == group %} open{% endif %}>
     <summary>{{ entry.title }}</summary>

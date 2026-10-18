@@ -4,7 +4,7 @@
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13335/badge)](https://www.bestpractices.dev/projects/13335)
 [![codecov](https://codecov.io/gh/AlexaDeWit/Ecluse/branch/main/graph/badge.svg?token=1TWB5HBQ0S)](https://codecov.io/gh/AlexaDeWit/Ecluse)
 
-![Écluse: a supply-chain policy proxy for package registries](docs/social-preview.png)
+![Écluse: control which packages reach your builds](docs/branding/banner.png)
 
 Écluse is a self-hosted package policy proxy for npm and PyPI. A central platform,
 DevOps, or IT team runs it for the organisation's developer teams and CI.
