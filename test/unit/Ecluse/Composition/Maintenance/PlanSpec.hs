@@ -17,7 +17,8 @@ import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, Mi
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig (cfgMounts), Config (configApp, configMounts), ControlPlane (ControlCodeArtifact, ControlNone, ControlProtocol), MountConfig (mntPrivateUpstream), StoreBackend, StoreTag (TagVerdaccio), sbControl)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Registry.Adapter (adapterFor)
+import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMaintenance, adapterPublish), adapterFor)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMaintenance (maintenanceVersionDelete))
 import Ecluse.Core.Registry.Maintenance.NameSpace (noNameAlphabet)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (casRepository)
 
@@ -79,6 +80,17 @@ passSpec = describe "vetStoreBackends" $ do
 
 protocolSpec :: Spec
 protocolSpec = describe "vetStoreBackends -- a store swept through the ecosystem protocol" $ do
+    for_
+        [ ("an adapter", noAdapter)
+        , ("version deletion", fmap (\adapter -> adapter{adapterMaintenance = (adapterMaintenance adapter){maintenanceVersionDelete = Nothing}}) . adapterFor)
+        , ("publication", fmap (\adapter -> adapter{adapterPublish = Nothing}) . adapterFor)
+        ]
+        $ \(missing, resolveAdapter) ->
+            it ("refuses a consenting protocol store without " <> missing) $ do
+                mounts <- mountsFor (verdaccioEnv "true")
+                void (snd (runVet MirrorPruner (vetStoreBackends resolveAdapter mounts)))
+                    `shouldBe` Left [StoreMaintenanceUnavailable Npm NoProtocolMaintenance]
+
     it "refuses the deleting role a Verdaccio target carrying no deletion consent" $ do
         mounts <- mountsFor (verdaccioEnv "false")
         refusalsOf (vetted MirrorPruner mounts)
