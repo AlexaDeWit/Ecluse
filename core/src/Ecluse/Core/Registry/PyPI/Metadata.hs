@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (MetadataError, VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk, EcosystemRead (..))
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
-import Ecluse.Core.Registry.PyPI.Document (PackedSimple, SimpleDocument, simpleDocument, simpleEnvelope, simpleFiles)
+import Ecluse.Core.Registry.PyPI.Document (PackedSimple, SimpleDocument, restrictSimpleFiles)
 import Ecluse.Core.Registry.PyPI.FileWriter (FileWriter, fileWriter)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiFullWalk, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequest)
@@ -81,7 +81,6 @@ readPyPIFull limits name bound table readChunk = do
     build <- stToIO (fileWriter writer)
     readJsonWalkST stToIO bound (pypiPackedWalk writer build limits name table) readChunk
 
--- | The production full-read walk over the caller's table and scratch writer.
 pypiPackedWalk :: Writer st -> FileWriter st -> Limits -> PackageName -> InternTable -> Cursor -> ST st (Steps (ST st) PyPIFullRead)
 pypiPackedWalk writer build limits name table =
     pypiFullWalk build (maxNestingDepth limits) (pureStep (collectField limits FullRead)) keepsFile (packedFileStep writer limits) table (emptyProjection name)
@@ -114,7 +113,7 @@ mirrorDocument :: PackageDetails -> SimpleDocument -> CachedDoc
 mirrorDocument details document = fst pypiSimpleCached retained
   where
     keys = Set.fromList (map artEntryKey (toList (pkgArtifacts details)))
-    retained = simpleDocument (simpleEnvelope document) (filter ((`Set.member` keys) . fst) (simpleFiles document))
+    retained = restrictSimpleFiles keys document
 
 -- | Finish a tree read, keeping files linked to their source coordinates.
 projectPyPIStream :: Limits -> PackageName -> StreamResult PyPIProjection -> Either MetadataError (PackageInfo, SimpleDocument)
