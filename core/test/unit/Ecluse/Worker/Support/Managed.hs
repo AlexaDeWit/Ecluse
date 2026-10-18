@@ -13,10 +13,12 @@ module Ecluse.Worker.Support.Managed (
     managedJob,
     runManaged,
     runManagedWith,
+    runManagedWithLog,
 ) where
 
 import Data.Map.Strict qualified as Map
 import Data.Text.Encoding qualified as TE
+import Katip (LogEnv)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Mirror.State
@@ -32,6 +34,7 @@ import Ecluse.Core.Registry.Publish.Internal (MirrorPublish (..), PreparedMirror
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Worker.Job (JobOutcome, processJob)
 import Ecluse.Core.Worker.Types (WorkerMirrorState (..), WorkerPolicy (..), WorkerStateBudget (..))
+import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Mirror.State
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Port (noopWorkerMetricsPort)
@@ -39,7 +42,7 @@ import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (admitRule)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape), expectRight)
 import Ecluse.Worker.Support.Fixtures (npmPolicy, tarballBytes)
-import Ecluse.Worker.Support.Runtime (runWM, withWiredRuntime)
+import Ecluse.Worker.Support.Runtime (runWMWith, withWiredRuntime)
 import UnliftIO.Exception (throwIO)
 
 -- | Faults mutate independently so a second runtime can reuse only durable target and state facts.
@@ -174,9 +177,15 @@ managedJob = MirrorJob mirrorPackage mirrorVersion Nothing Nothing
 runManaged :: ManagedFixture -> IO JobOutcome
 runManaged = runManagedWith managedJob
 
--- | Explicit filename demand must extend an older complete record when the source adds a file.
+-- | Run an explicit job against the fixture's existing store and target.
 runManagedWith :: MirrorJob -> ManagedFixture -> IO JobOutcome
 runManagedWith job fixture = do
+    logEnv <- newTestLogEnv
+    runManagedWithLog logEnv job fixture
+
+-- | Select the log environment for a managed job without resetting its store.
+runManagedWithLog :: LogEnv -> MirrorJob -> ManagedFixture -> IO JobOutcome
+runManagedWithLog logEnv job fixture = do
     queue <- newTestMemoryQueue
     withWiredRuntime queue (Map.singleton PyPI (mfPolicy fixture)) noopWorkerMetricsPort $ \runtime ->
-        runWM runtime (processJob job)
+        runWMWith logEnv runtime (processJob job)

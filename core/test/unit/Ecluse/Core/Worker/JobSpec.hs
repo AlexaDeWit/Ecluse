@@ -170,7 +170,9 @@ spec = do
                 resolved <- readIORef (mfResolves fixture)
                 writeIORef (mfSource fixture) VersionMetadataUnavailable
                 let policy = (mfPolicy fixture){wpRules = [denyRule]}
-                runManaged fixture{mfPolicy = policy} `shouldReturn` Succeeded
+                (outcome, logs) <- captureJsonLogAt InfoS (\logEnv -> runManagedWithLog logEnv managedJob fixture{mfPolicy = policy})
+                outcome `shouldBe` Succeeded
+                logs `shouldBe` ""
                 readIORef (mfResolves fixture) `shouldReturn` resolved
 
         it "extends an already complete record for an explicitly requested later file" $
@@ -915,8 +917,9 @@ spec = do
             -- taken, the artifact fetch would surface a Retried, not this Succeeded.
             withRuntimeRegistry (\logRef -> mirrorListingPublish logRef (Right ()) [ver]) (npmPolicies (\_ _ -> pure VersionMetadataUnavailable) [denyRule]) noopWorkerMetricsPort $ \runtime queue logRef -> do
                 job <- enqueueAndReceive queue sampleMirrorJob
-                outcome <- runWM (sourceAt unreachableUrl runtime) (processJob job)
+                (outcome, logs) <- captureJsonLogAt InfoS (\logEnv -> runWMWith logEnv (sourceAt unreachableUrl runtime) (processJob job))
                 outcome `shouldBe` Succeeded
+                logs `shouldBe` ""
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
 
