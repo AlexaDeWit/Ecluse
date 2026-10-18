@@ -174,6 +174,11 @@ packedSerialiseSpec = describe "packed served bytes" $
             (info, tree) <- expectRight (projectPyPIIndex defaultLimits name bytes)
             (packedInfo, packed) <- expectRight (projectPyPIPackedChunks defaultLimits name [bytes] >>= projectPyPIPacked defaultLimits name)
             packedInfo `shouldBe` info
+            let keys = map fst (packedFiles packed)
+                positions = [position | ArrayEntry position <- keys]
+            keys `shouldBe` map fst (simpleFiles tree)
+            length positions `shouldBe` length keys
+            zip (-1 : positions) positions `shouldSatisfy` all (uncurry (<))
             fingerprint <$> Filter.serialiseSimpleDocument (fst pypiPacked packed)
                 `shouldBe` (fingerprint <$> Filter.serialiseSimpleDocument (fst pypiSimpleCached tree))
             let releases = Map.keysSet (infoVersions info)

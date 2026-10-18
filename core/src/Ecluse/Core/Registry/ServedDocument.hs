@@ -85,15 +85,21 @@ overlaySurvivors :: (src -> [(EntryKey, entry)]) -> Map SourceId (Snapshot src) 
 overlaySurvivors entriesOf bySource plan =
     [ (version, entry)
     | (sid, source) <- Map.toAscList bySource
-    , let entries = entriesOf (snapshotValue source)
-    , let unambiguous = uniqueEntries entries
-    , (key, entry) <- entries
-    , Map.member key unambiguous
+    , (key, entry) <- uniqueSourceEntries (entriesOf (snapshotValue source))
     , Just (version, kept) <- [Map.lookup (sid, snapshotDigest source, key) admitted]
     , usableEntry kept
     ]
   where
     admitted = admittedIndex plan
+
+uniqueSourceEntries :: [(EntryKey, entry)] -> [(EntryKey, entry)]
+uniqueSourceEntries entries = ascending (-1) entries
+  where
+    ascending previous ((ArrayEntry position, _) : rest)
+        | position > previous = ascending position rest
+    ascending _ [] = entries
+    ascending _ _ = filter (\(key, _) -> Map.member key unambiguous) entries
+    unambiguous = uniqueEntries entries
 
 {- | Select exact admitted entries by lookup in each winning source's key map, in source and key order.
 Only object coordinates are served. Missing keys, ambiguous keys, and mismatched snapshots contribute nothing.
