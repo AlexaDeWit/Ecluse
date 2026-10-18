@@ -128,15 +128,15 @@ spec = describe "the OSV ingest stream" $ do
 
     it "sends the configured contact to the OSV source" $ do
         contact <- either (fail . toString) pure (parseOperatorContact "platform@example.com")
-        let identity = renderUserAgent (Just contact)
+        let renderedAgent = renderUserAgent (Just contact)
         zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
         withStub status200 zipData $ \stub -> do
-            feeds <- newFeedManagerWithIdentity identity
+            feeds <- newFeedManagerWithIdentity renderedAgent
             runOsvTestM $ do
                 ingest <- newOsvIngest defaultIngestLimits npmFeed noScores ingestClock
                 runConduit (void (streamOsvUrl Nothing feeds ingest (unpack (stubBaseUrl stub) <> "/sample.zip")) .| sinkNull)
             captured <- lastCaptured stub
-            headerValue "User-Agent" captured `shouldBe` Just identity
+            headerValue "User-Agent" captured `shouldBe` Just renderedAgent
 
     it "throws an exception if the URL is invalid" $
         ingestedUrl "not-a-valid-url" `shouldThrow` anyException

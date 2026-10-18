@@ -58,13 +58,13 @@ identifyRequest = identifyWith userAgent
 
 -- | Chain request callbacks and replace only the default product identity or an absent identity.
 identityManagerSettings :: ByteString -> ManagerSettings -> ManagerSettings
-identityManagerSettings identity settings =
-    settings{managerModifyRequest = fmap (identifyWith identity) . managerModifyRequest settings}
+identityManagerSettings renderedAgent settings =
+    settings{managerModifyRequest = fmap (identifyWith renderedAgent) . managerModifyRequest settings}
 
 identifyWith :: ByteString -> Request -> Request
-identifyWith identity request
+identifyWith renderedAgent request
     | any customIdentity headers = request
-    | otherwise = request{requestHeaders = (hUserAgent, identity) : filter ((/= hUserAgent) . fst) headers}
+    | otherwise = request{requestHeaders = (hUserAgent, renderedAgent) : filter ((/= hUserAgent) . fst) headers}
   where
     headers = requestHeaders request
-    customIdentity (name, value) = name == hUserAgent && value /= userAgent && value /= identity
+    customIdentity (name, value) = name == hUserAgent && value /= userAgent && value /= renderedAgent

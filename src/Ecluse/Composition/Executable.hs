@@ -228,7 +228,7 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
         planStoreMaintenance
             buildStore
             tracing
-            identity
+            renderedAgent
             budget
             (fromRight noCredentialProviders credentials)
             (bpLimits bootPlan)
@@ -238,7 +238,7 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
             PrivateCacheCredential
             buildStore
             tracing
-            identity
+            renderedAgent
             budget
             (fromRight noCredentialProviders credentials)
             (bpLimits bootPlan)
@@ -262,7 +262,7 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
             <* eitherToValidation probed
   where
     validated = bpValidated bootPlan
-    identity = renderUserAgent (egrOperatorContact (cfgEgress (vpSettings validated)))
+    renderedAgent = renderUserAgent (egrOperatorContact (cfgEgress (vpSettings validated)))
     dredger = cfgDredger (vpSettings validated)
     prunerMounts = map vmMount (vpMounts validated)
     credentialBackends =

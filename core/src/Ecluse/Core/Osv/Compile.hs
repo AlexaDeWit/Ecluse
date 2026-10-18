@@ -190,7 +190,7 @@ newFeedManager = newFeedManagerWithIdentity userAgent
 
 -- | Reuse a precomputed outbound identity for both advisory feeds.
 newFeedManagerWithIdentity :: ByteString -> IO Manager
-newFeedManagerWithIdentity identity = newTlsManagerWith (identityManagerSettings identity typedTlsManagerSettings)
+newFeedManagerWithIdentity renderedAgent = newTlsManagerWith (identityManagerSettings renderedAgent typedTlsManagerSettings)
 
 -- | Write this attempt's nonce into the candidate. The nonce is fixed width, so the file keeps its size.
 stampCandidateNonce :: (MonadIO m) => OsvCandidate -> PublicationNonce -> m ()

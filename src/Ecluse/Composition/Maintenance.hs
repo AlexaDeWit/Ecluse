@@ -257,7 +257,7 @@ storeOrigin limits cleared manager = originClient limits manager (cbUrl cleared)
 
 -- Disable hidden HTTP replay so every attempt consumes the store's request budget.
 storeManager :: ByteString -> IO Manager
-storeManager identity = newPooledManager storeConnections (identityManagerSettings identity (singleAttemptSettings typedTlsManagerSettings))
+storeManager renderedAgent = newPooledManager storeConnections (identityManagerSettings renderedAgent (singleAttemptSettings typedTlsManagerSettings))
 
 -- One store, swept package by package, so the pool holds what one in-flight request needs.
 storeConnections :: Int
@@ -306,7 +306,7 @@ planStoreMaintenanceFor ::
     Limits ->
     Map Ecosystem ClearedBackend ->
     IO (Either [BootError] (Map Ecosystem store))
-planStoreMaintenanceFor target build tracing identity budget credentials limits backends =
+planStoreMaintenanceFor target build tracing renderedAgent budget credentials limits backends =
     validationToEither . traverse eitherToValidation <$> Map.traverseWithKey planOne backends
   where
     planOne eco backend =
@@ -317,7 +317,7 @@ planStoreMaintenanceFor target build tracing identity budget credentials limits 
     portsFor eco =
         StorePorts
             { spTracing = tracing
-            , spUserAgent = identity
+            , spUserAgent = renderedAgent
             , spCredential = lookupTargetProvider target eco credentials
             , spBudget = budget
             }

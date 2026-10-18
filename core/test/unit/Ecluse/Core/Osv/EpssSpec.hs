@@ -138,12 +138,12 @@ spec = do
         for_ [Nothing, Just "platform@example.com"] $ \contactText ->
             it ("identifies the proxy to the feed server with contact " <> show contactText) $ do
                 contact <- either (fail . toString) pure (traverse parseOperatorContact contactText)
-                let identity = renderUserAgent contact
+                let renderedAgent = renderUserAgent contact
                 withStub status200 wholeFeed $ \stub -> do
-                    feeds <- newFeedManagerWithIdentity identity
+                    feeds <- newFeedManagerWithIdentity renderedAgent
                     void (runOsvTestM (fetchEpssScores feeds maxEpssFeedBytes (toString (stubBaseUrl stub) <> "/epss.csv.gz")))
                     captured <- lastCaptured stub
-                    headerValue "User-Agent" captured `shouldBe` Just identity
+                    headerValue "User-Agent" captured `shouldBe` Just renderedAgent
 
         it "fetches, decompresses, and decodes a served feed" $
             fetchServed maxEpssFeedBytes (feedPreamble <> "CVE-2026-10001,0.875,0.995\nCVE-2026-10002,0.5,0.900\n")

@@ -43,25 +43,25 @@ spec = describe "the proxy's build identity" $ do
 
     it "chains the existing callback before identifying a request" $ do
         contact <- either (fail . toString) pure (parseOperatorContact "platform@example.com")
-        let identity = renderUserAgent (Just contact)
+        let renderedAgent = renderUserAgent (Just contact)
             settings = defaultManagerSettings{managerModifyRequest = pure . (\request -> request{requestHeaders = ("X-Callback", "called") : requestHeaders request})}
-        request <- managerModifyRequest (identityManagerSettings identity settings) (identifyRequest defaultRequest)
-        requestHeaders request `shouldBe` [(hUserAgent, identity), ("X-Callback", "called")]
+        request <- managerModifyRequest (identityManagerSettings renderedAgent settings) (identifyRequest defaultRequest)
+        requestHeaders request `shouldBe` [(hUserAgent, renderedAgent), ("X-Callback", "called")]
 
     it "sets a configured identity once on absent and default identities" $ do
         contact <- either (fail . toString) pure (parseOperatorContact "platform@example.com")
-        let identity = renderUserAgent (Just contact)
-            settings = identityManagerSettings identity defaultManagerSettings
+        let renderedAgent = renderUserAgent (Just contact)
+            settings = identityManagerSettings renderedAgent defaultManagerSettings
         for_ [defaultRequest, identifyRequest defaultRequest] $ \request -> do
             once <- managerModifyRequest settings request
             twice <- managerModifyRequest settings once
-            requestHeaders twice `shouldBe` [(hUserAgent, identity)]
+            requestHeaders twice `shouldBe` [(hUserAgent, renderedAgent)]
 
     for_ ["custom/1", "aws-sdk-haskell/1"] $ \custom ->
         it ("preserves configured caller identity " <> toString custom) $ do
             contact <- either (fail . toString) pure (parseOperatorContact "platform@example.com")
-            let identity = renderUserAgent (Just contact)
+            let renderedAgent = renderUserAgent (Just contact)
                 request = defaultRequest{requestHeaders = [(hUserAgent, encodeUtf8 custom)]}
-                settings = identityManagerSettings identity defaultManagerSettings
+                settings = identityManagerSettings renderedAgent defaultManagerSettings
             identified <- managerModifyRequest settings request
             requestHeaders identified `shouldBe` requestHeaders request

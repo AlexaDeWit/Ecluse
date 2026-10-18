@@ -204,9 +204,9 @@ dataPlaneManagers :: Telemetry -> BootPlan -> IO (Manager, Manager)
 dataPlaneManagers telemetry bootPlan = do
     publicSettings <- dataPlaneManagerSettings telemetry
     privateSettings <- dataPlaneManagerSettings telemetry
-    let identity = renderUserAgent (egrOperatorContact (cfgEgress (vpSettings (bpValidated bootPlan))))
-    manager <- newPooledManager (bpPublicConnections bootPlan) (identityManagerSettings identity publicSettings)
-    privateManager <- newPooledManager (bpPrivateConnections bootPlan) (identityManagerSettings identity privateSettings)
+    let renderedAgent = renderUserAgent (egrOperatorContact (cfgEgress (vpSettings (bpValidated bootPlan))))
+    manager <- newPooledManager (bpPublicConnections bootPlan) (identityManagerSettings renderedAgent publicSettings)
+    privateManager <- newPooledManager (bpPrivateConnections bootPlan) (identityManagerSettings renderedAgent privateSettings)
     pure (manager, privateManager)
 
 -- | The settings each data-plane manager pools from: 'typedTlsManagerSettings', under the client span when telemetry is on.
