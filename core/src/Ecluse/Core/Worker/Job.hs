@@ -16,14 +16,15 @@ module Ecluse.Core.Worker.Job (
 
 import Control.Monad (foldM)
 import Control.Monad.Except (throwError)
+import Data.Aeson (object, (.=))
 import Data.Map.Strict qualified as Map
-import Katip (Severity (DebugS, ErrorS, InfoS), katipAddNamespace, logFM, ls, sl)
+import Katip (Severity (DebugS, ErrorS, InfoS), SimpleLogPayload, katipAddContext, katipAddNamespace, logFM, ls, sl)
 import UnliftIO (withRunInIO)
 
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (tfCause)
 import Ecluse.Core.Mirror.State
-import Ecluse.Core.Package (Artifact (artFilename, artHashes, artSize, artUrl), Hash, PackageDetails (pkgArtifacts, pkgVersion), PackageInfo (..), pkgEcosystem, renderPackageName)
+import Ecluse.Core.Package (Artifact (artFilename, artHashes, artSize, artUrl), Hash, PackageDetails (pkgArtifacts, pkgVersion), PackageInfo (..), hashAlg, hashValue, pkgEcosystem, renderHashAlg, renderPackageName)
 import Ecluse.Core.Package.Admission (
     ArtifactAdmission (
         AdmissionAdmit,
@@ -34,7 +35,7 @@ import Ecluse.Core.Package.Admission (
         AdmissionUndecidable
     ),
     admissionTransience,
-    admitArtifactWithEvidence,
+    admitArtifactWithDecision,
  )
 import Ecluse.Core.Package.Integrity (VersionIntegrity (..), classifyDigests, partitionByFloor)
 import Ecluse.Core.Queue (MirrorJob (jobPackage, jobTraceContext, jobTriggerFilename, jobVersion))
@@ -63,8 +64,8 @@ import Ecluse.Core.Registry.Publish (
  )
 import Ecluse.Core.Registry.Request (sidecarUrl)
 import Ecluse.Core.Rules.Outage (logSkippedCheckEvidence)
-import Ecluse.Core.Rules.Render (renderReason)
-import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), Transience (WillResolve, WontResolve), mkEvalContext)
+import Ecluse.Core.Rules.Render (renderDecision, renderReason)
+import Ecluse.Core.Rules.Types (Decision (Admitted, Blocked, BlockedByDefault, Undecidable), Transience (WillResolve, WontResolve), identityEvidence, mkEvalContext, skippedChecks)
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxMirrorArtifactBytes), authorityLabel, hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Path (Filename, mkFilename, unFilename)
@@ -177,18 +178,18 @@ mirrorUnlessPresent charge policy job = do
     result <- runExceptT $ do
         target <- ExceptT (probeInventory charge policy job)
         if isNothing (wpMirrorState policy) && triggerPresent (\name -> any ((== name) . artFilename) (targetFiles job target)) && mpNativeComplete (wpPublish policy) (jobPackage job) (jobVersion job) target
-            then pure ()
+            then pure DebugS
             else do
                 previous <- readRecord charge policy job Nothing
                 case previous >>= recordVersion (jobVersion job) of
                     Just version
                         | triggerPresent (`Map.member` versionFiles version)
                         , checkMirrorCompletion version (targetFiles job target) == MirrorComplete ->
-                            verifyRecordedCompanions charge policy version
-                    _ -> completePass charge policy job 3 target previous
+                            DebugS <$ verifyRecordedCompanions charge policy version
+                    _ -> InfoS <$ completePass charge policy job 3 target previous
     case result of
         Left failure -> pure failure
-        Right () -> Succeeded <$ logFM InfoS (ls ("mirror version complete: " <> renderJob job))
+        Right severity -> Succeeded <$ logFM severity (ls ("mirror version complete: " <> renderJob job))
   where
     triggerPresent contains = maybe True (contains . unFilename) (jobTriggerFilename job)
 
@@ -290,6 +291,7 @@ data Readmitted = Readmitted
     { raPrepared :: PreparedMirrorVersion
     , raLocations :: NonEmpty (ExpectedMirrorFile, RegistryUrl)
     , raUpstreamLatest :: Maybe Version
+    , raDecision :: Decision
     }
 
 reevaluatePolicy :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome Readmitted)
@@ -304,20 +306,20 @@ admitEvaluation policy job evaluation = case evaluation of
         Nothing -> pure (Left (Dropped "the source inventory has no supported trigger artifact"))
         Just trigger -> do
             ctx <- liftIO (mkEvalContext (wpNow policy) (pure Nothing))
-            (admission, skipped) <- liftIO (admitArtifactWithEvidence ctx (wpRules policy) (wpMinIntegrity policy) trigger (vdDetails doc))
+            (admission, decision) <- liftIO (admitArtifactWithDecision ctx (wpRules policy) (wpMinIntegrity policy) trigger (vdDetails doc))
             case outcomeOfAdmission job admission of
                 Left outcome -> pure (Left outcome)
                 Right _ -> do
                     logSkippedCheckEvidence
                         (sl "package" (renderPackageName (jobPackage job)) <> sl "version" (renderVersion (jobVersion job)))
-                        skipped
+                        (skippedChecks decision)
                     case supportedVersion policy job trigger doc of
                         Left outcome -> pure (Left outcome)
                         Right supported -> case mpPrepareVersion (wpPublish policy) (jobPackage job) (jobVersion job) supported of
                             Left fault -> Left <$> outcomeOfPublish job (Left fault)
                             Right prepared -> pure $ do
                                 locations <- traverse (admittedLocation policy job) (inventoryFiles (pmvInventory prepared))
-                                pure (Readmitted prepared locations upstreamLatest)
+                                pure (Readmitted prepared locations upstreamLatest decision)
   where
     unresolved = retryOrDrop (versionTransience evaluation)
 
@@ -457,7 +459,7 @@ copyFragment context current fragment = do
         then pure current
         else do
             admitted <- ExceptT (admitEvaluation (cpPolicy context) job{jobTriggerFilename = Nothing} (VersionPresent (fragmentDocument fragment) (raUpstreamLatest (cpLatest context))))
-            foldM (copyFile context (raPrepared admitted)) current (toList (raLocations admitted))
+            foldM (copyFile context admitted) current (toList (raLocations admitted))
   where
     job = cpJob context
 
@@ -470,8 +472,8 @@ needsCopy currentFiles version artifact =
             || null matches
             || maybe True (\file -> not (all (expectedTargetMatchesWith file verified) matches)) (Map.lookup name (versionFiles version))
 
-copyFile :: CopyPass -> PreparedMirrorVersion -> ProjectMirrorRecord -> (ExpectedMirrorFile, RegistryUrl) -> ExceptT JobOutcome WorkerM ProjectMirrorRecord
-copyFile context prepared current (file, location) = do
+copyFile :: CopyPass -> Readmitted -> ProjectMirrorRecord -> (ExpectedMirrorFile, RegistryUrl) -> ExceptT JobOutcome WorkerM ProjectMirrorRecord
+copyFile context admitted current (file, location) = do
     version <- requiredVersion job current
     let name = artFilename (expectedArtifact file)
         matches = filter ((== name) . artFilename) (cpTargetFiles context)
@@ -481,7 +483,7 @@ copyFile context prepared current (file, location) = do
         throwError (Dropped ("mirror target identity conflicts: " <> name))
     uploaded <-
         if null matches
-            then mirrorArtifact charge policy job (cpPlan context) prepared file locations current
+            then mirrorArtifact charge policy job (cpPlan context) admitted file locations current
             else
                 if all (expectedTargetMatchesWith file verified) matches
                     then pure current
@@ -520,11 +522,11 @@ retainPending charge policy job file locations record = do
                 stateAction (retainCompanion charge binding (jobVersion job) verified record)
         _ -> pure record
 
-mirrorArtifact :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> PublishPlan -> PreparedMirrorVersion -> ExpectedMirrorFile -> NonEmpty RegistryUrl -> ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ProjectMirrorRecord
-mirrorArtifact charge policy job plan prepared file locations record = do
+mirrorArtifact :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> PublishPlan -> Readmitted -> ExpectedMirrorFile -> NonEmpty RegistryUrl -> ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ProjectMirrorRecord
+mirrorArtifact charge policy job plan admitted file locations record = do
     (verified, retained) <- fetchVerified charge policy job file locations record
-    ready <- publishAction job (liftIO (pmvPrepareUpload prepared (wsbArchive charge) file verified))
-    outcome <- lift (publishVerified job plan ready)
+    ready <- publishAction job (liftIO (pmvPrepareUpload (raPrepared admitted) (wsbArchive charge) file verified))
+    outcome <- lift (katipAddContext (mirrorAdmissionPayload job (raDecision admitted) file (verifiedTargetHash verified)) (publishVerified job plan ready))
     case outcome of
         Succeeded -> pure retained
         failure -> throwError failure
@@ -556,6 +558,25 @@ artifactFetchReason location = \case
     FetchUrlUnformable urlErr -> "unformable artifact URL: " <> renderUrlFormationError urlErr
     FetchBoundExceeded limitErr -> "artifact exceeded the response bound: " <> show limitErr
     FetchTransport fault -> "artifact fetch from " <> authorityLabel (registryUrlText location) <> " failed: " <> show (tfCause fault)
+
+mirrorAdmissionPayload :: MirrorJob -> Decision -> ExpectedMirrorFile -> Hash -> SimpleLogPayload
+mirrorAdmissionPayload job decision file digest =
+    sl "event" ("mirror_publication" :: Text)
+        <> sl "package" (renderPackageName (jobPackage job))
+        <> sl "version" (renderVersion (jobVersion job))
+        <> sl "ecosystem" (ecosystemName (pkgEcosystem (jobPackage job)))
+        <> sl "target" ("mirrorTarget" :: Text)
+        <> sl "artifact" (artFilename artifact)
+        <> sl "digest" (object ["algorithm" .= renderHashAlg (hashAlg digest), "value" .= hashValue digest])
+        <> sl "admission" (renderDecision (identityEvidence (jobPackage job) (jobVersion job)) decision)
+        <> ruleField
+  where
+    artifact = expectedArtifact file
+    ruleField = case decision of
+        Admitted name _ _ -> sl "rule" name
+        Blocked name _ _ -> sl "rule" name
+        BlockedByDefault _ -> sl "rule" ("BlockedByDefault" :: Text)
+        Undecidable _ _ -> mempty
 
 publishVerified :: MirrorJob -> PublishPlan -> PreparedMirrorUpload -> WorkerM JobOutcome
 publishVerified job plan prepared = do

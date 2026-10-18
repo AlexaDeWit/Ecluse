@@ -9,6 +9,7 @@ module Ecluse.Core.Package.Admission (
     ArtifactAdmission (..),
     admissionTransience,
     admitArtifactWithEvidence,
+    admitArtifactWithDecision,
 ) where
 
 import Ecluse.Core.Package (Artifact, Hash, PackageDetails, artFilename, artHashes, pkgArtifacts)
@@ -67,8 +68,20 @@ admitArtifactWithEvidence ::
     PackageDetails ->
     IO (ArtifactAdmission, [SkippedCheck])
 admitArtifactWithEvidence ctx rules minIntegrity file details = do
+    (admission, decision) <- admitArtifactWithDecision ctx rules minIntegrity file details
+    pure (admission, skippedChecks decision)
+
+-- | Retain the evaluated decision for a mirror publication audit without running the rules again.
+admitArtifactWithDecision ::
+    EvalContext ->
+    [PreparedRule] ->
+    MinIntegrity ->
+    Filename ->
+    PackageDetails ->
+    IO (ArtifactAdmission, Decision)
+admitArtifactWithDecision ctx rules minIntegrity file details = do
     decision <- evalRules ctx rules (completeEvidence details)
-    pure (admissionOf minIntegrity file details decision, skippedChecks decision)
+    pure (admissionOf minIntegrity file details decision, decision)
 
 -- The filename and integrity steps over a settled rules decision.
 admissionOf :: MinIntegrity -> Filename -> PackageDetails -> Decision -> ArtifactAdmission

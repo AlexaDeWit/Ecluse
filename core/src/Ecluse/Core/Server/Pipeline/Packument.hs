@@ -19,7 +19,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Katip (Severity (DebugS, InfoS), logFM, ls)
+import Katip (Severity (DebugS), logFM, ls)
 import Network.HTTP.Types (Method, ResponseHeaders, hContentLength)
 import Network.Wai (Request, ResponseReceived, requestHeaders)
 import UnliftIO (concurrently)
@@ -215,7 +215,7 @@ packumentWith mode replies name request respond = do
 
 serveAdmittedPackument :: PackumentServing response -> Maybe ClientCredential -> Handler ResponseReceived
 serveAdmittedPackument serving clientToken = do
-    logFM InfoS (ls ("serving packument request for " <> renderPackageName (psvName serving)))
+    logFM DebugS (ls ("serving packument request for " <> renderPackageName (psvName serving)))
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pdAdvisoryEtag deps))
     case pdMirrorState deps of
         Just mirror | not (pdFirstParty deps (psvName serving)) -> do

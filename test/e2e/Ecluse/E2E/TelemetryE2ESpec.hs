@@ -72,7 +72,7 @@ telemetryConfig = \case
     EnabledTelemetry -> defaultE2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv}
     DisabledTelemetry -> defaultE2EConfig{ecExtraEnv = [("ECLUSE_OBSERVABILITY__TELEMETRY", "off")]}
     FailedExporter -> defaultE2EConfig{ecExtraEnv = otlpCollectorEnv}
-    IdentityTelemetry -> defaultE2EConfig{ecCollector = True, ecExtraEnv = datadogCollectorEnv}
+    IdentityTelemetry -> defaultE2EConfig{ecCollector = True, ecExtraEnv = ("ECLUSE_OBSERVABILITY__LOG_LEVEL", "debug") : datadogCollectorEnv}
 
 npmTraffic :: E2E -> TrafficDriver
 npmTraffic e2e = TrafficDriver (npmInstall e2e) (proxyStatus e2e "/readyz")
