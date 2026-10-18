@@ -154,7 +154,7 @@ jobs:
           if-no-files-found: warn
 
   coverage:
-    name: Coverage (${{ matrix.suite }})
+    name: Coverage (${{ matrix.second-suite && format('{0}, {1}', matrix.suite, matrix.second-suite) || matrix.suite }})
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-26.04-arm
@@ -162,8 +162,7 @@ jobs:
     permissions:
       contents: read
       id-token: write # OIDC for tokenless Codecov upload (no stored token)
-    # One runner per instrumented suite. Each leg runs the suite Codecov expects under
-    # its flag, so the four uploads Codecov waits for still land on every commit.
+    # Each suite uploads under its own flag, so Codecov receives four uploads from three legs.
     strategy:
       fail-fast: false
       matrix:
@@ -171,10 +170,9 @@ jobs:
           - suite: ecluse-core-unit
             coverage-task: coverage-unit
             flag: unit
-          - suite: ecluse-unit
-            coverage-task: coverage-unit
-            flag: unit
+          # ecluse-unit reuses the instrumented libraries this leg builds for ecluse-runtime-unit.
           - suite: ecluse-runtime-unit
+            second-suite: ecluse-unit
             coverage-task: coverage-unit
             flag: unit
           # Drives ministack through testcontainers, so this leg alone needs Docker.
@@ -194,7 +192,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # Every leg builds its suite into dist-coverage. The integration leg also builds its
+      # Every leg builds its suites into dist-coverage. The integration leg also builds its
       # manifest and audit tools into dist-newstyle, so only that leg restores it.
       - name: Set up toolchain
         id: toolchain
@@ -203,7 +201,7 @@ jobs:
           cabal-cache: "true"
           dist-cache: ${{ matrix.suite == 'ecluse-integration' && 'true' || 'false' }}
 
-      # One key per suite, so each leg is the sole writer of the builddir it produces.
+      # One key per leg, named for its first suite, so each leg is the sole writer of its builddir.
       # The version family bounds a restore, and the commit makes each main save fresh.
       - name: Restore dist-coverage
         id: restore-dist-coverage
@@ -227,10 +225,19 @@ jobs:
           ministackorg/ministack@sha256:8862a8488307284427c831f8ac3940c8d19e8fe4d023d8057b668e3eb4eb4ee1
           otel/opentelemetry-collector@sha256:310a800ad69ee430e7c541796852a242c9c7db97aaad4daa5ccf843c525fbdb2
 
-      - name: Instrumented build and run
+      - name: Instrumented build and run (${{ matrix.suite }})
+        id: first-suite
         env:
           COVERAGE_TASK: ${{ matrix.coverage-task }}
           SUITE: ${{ matrix.suite }}
+        run: nix develop .#ci --command task "$COVERAGE_TASK" SUITE="$SUITE"
+
+      # Runs after a failed first suite too, so one failure cannot hide the other.
+      - name: Instrumented build and run (${{ matrix.second-suite }})
+        if: ${{ !cancelled() && matrix.second-suite && steps.first-suite.outcome != 'skipped' }}
+        env:
+          COVERAGE_TASK: ${{ matrix.coverage-task }}
+          SUITE: ${{ matrix.second-suite }}
         run: nix develop .#ci --command task "$COVERAGE_TASK" SUITE="$SUITE"
 
       - name: Upload unit execution evidence
@@ -253,11 +260,20 @@ jobs:
             scratchpad/integration/${{ github.run_id }}-${{ github.run_attempt }}/report.json
           if-no-files-found: error
 
-      - name: Upload coverage to Codecov
+      - name: Upload coverage to Codecov (${{ matrix.suite }})
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           use_oidc: true # tokenless upload via GitHub OIDC, no CODECOV_TOKEN secret
           files: coverage/${{ matrix.suite }}.json
+          flags: ${{ matrix.flag }}
+          fail_ci_if_error: true # a lost upload must not silently skip the gate
+
+      - name: Upload coverage to Codecov (${{ matrix.second-suite }})
+        if: ${{ matrix.second-suite }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          use_oidc: true # tokenless upload via GitHub OIDC, no CODECOV_TOKEN secret
+          files: coverage/${{ matrix.second-suite }}.json
           flags: ${{ matrix.flag }}
           fail_ci_if_error: true # a lost upload must not silently skip the gate
 
@@ -542,17 +558,13 @@ jobs:
         run: nix develop .#ci --command task test-e2e-pypi-completion
 
   backend-conformance:
-    name: Conformance (package store ${{ matrix.subject }})
+    name: Conformance (package stores verdaccio, codeartifact)
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 75
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        subject: [verdaccio, codeartifact]
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
       ECLTEST_SOURCE: ${{ github.sha }}
@@ -574,16 +586,21 @@ jobs:
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
-      - name: Run the fixed package-store contract
-        env:
-          SUBJECT: ${{ matrix.subject }}
-        run: nix develop .#ci --command task "test-conformance-$SUBJECT"
+      - name: Run the fixed package-store contract (verdaccio)
+        id: verdaccio
+        run: nix develop .#ci --command task test-conformance-verdaccio
 
+      # Runs after a failed Verdaccio subject too, so one failure cannot hide the other.
+      - name: Run the fixed package-store contract (codeartifact)
+        if: ${{ !cancelled() && steps.verdaccio.outcome != 'skipped' }}
+        run: nix develop .#ci --command task test-conformance-codeartifact
+
+      # Each subject writes its own <subject>.* directory under this root.
       - name: Upload package-store evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: package-store-report-${{ matrix.subject }}
+          name: package-store-reports
           path: scratchpad/backend-conformance/
           if-no-files-found: error
 
@@ -664,14 +681,14 @@ jobs:
           ".#checks.$NIX_SYSTEM.freeze-sync"
           ".#checks.$NIX_SYSTEM.amazonka-lockstep"
 
-  weeder:
-    name: Dead-code check (weeder)
+  analysis:
+    name: Dead-code and static analysis (weeder, stan)
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 60
-    # Reports library code unreachable from `Ecluse.run`, and any finding fails the gate.
-    # Its own job because the -fwrite-ide-info build is heavy.
+    # weeder reports library code unreachable from `Ecluse.run`. stan finds partial functions at the
+    # .stan.toml floor, which Semgrep and hlint cannot see. A finding from either fails the gate.
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
     steps:
@@ -688,18 +705,23 @@ jobs:
           dist-cache: "false" # this job builds with -fwrite-ide-info, into dist-analysis
 
       # dist-analysis is deliberately NOT cached. cabal cannot delete a removed module's
-      # artifacts, so a restored builddir feeds weeder orphaned .hie for modules that are gone.
+      # artifacts, so a restored builddir feeds the tools orphaned .hie for modules that are gone.
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
+      - name: Build the .hie files both tools read
+        id: analysis-build
+        run: nix develop .#ci --command task analysis-build
+
       - name: weeder (fails on findings)
+        id: weeder
         run: |
           set -eo pipefail
           nix develop .#ci --command task weeder 2>&1 | tee weeder.out
 
       - name: Render weeder findings to the run summary
-        if: always()
+        if: ${{ always() && steps.weeder.outcome != 'skipped' }}
         run: |
           {
             echo '## weeder: library code not reachable from the app entry';
@@ -711,41 +733,16 @@ jobs:
             echo '```';
           } >> "$GITHUB_STEP_SUMMARY"
 
-  stan:
-    name: Haskell static analysis (stan)
-    needs: changes
-    if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-26.04-arm
-    timeout-minutes: 60
-    # HIE-based partial-function analysis at the .stan.toml floor, which Semgrep (no
-    # Haskell) and hlint (no type info) cannot see. A finding above the floor fails the gate.
-    env:
-      CABAL_DIR: ${{ github.workspace }}/.cabal
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up toolchain
-        id: toolchain
-        uses: $/.github/actions/setup-toolchain
-        with:
-          cabal-cache: "true"
-          dist-cache: "false" # this job builds with -fwrite-ide-info, into dist-analysis
-
-      # dist-analysis is not cached here either, for the reason on the weeder job.
-      - name: Update package index
-        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
-        run: nix develop .#ci --command task update
-
+      # Runs after weeder findings too, so one tool's failure cannot hide the other's.
       - name: stan (fails on findings)
+        id: stan
+        if: ${{ !cancelled() && steps.analysis-build.outcome == 'success' }}
         run: |
           set -eo pipefail
           nix develop .#ci --command task stan 2>&1 | tee stan.out
 
       - name: Render stan findings to the run summary
-        if: always()
+        if: ${{ always() && steps.stan.outcome != 'skipped' }}
         run: |
           {
             echo '## stan: Haskell static analysis (gating: any finding above the floor fails this job and the CI gate)';
@@ -945,8 +942,7 @@ jobs:
       - e2e-conformance
       - e2e
       - backend-conformance
-      - weeder
-      - stan
+      - analysis
       - release-dry-run
       - release-dry-run-assemble
       - release-dry-run-boot
@@ -978,8 +974,7 @@ jobs:
           E2E_CONFORMANCE: ${{ needs.e2e-conformance.result }}
           E2E: ${{ needs.e2e.result }}
           BACKEND_CONFORMANCE: ${{ needs.backend-conformance.result }}
-          WEEDER: ${{ needs.weeder.result }}
-          STAN: ${{ needs.stan.result }}
+          ANALYSIS: ${{ needs.analysis.result }}
           RELEASE_DRY_RUN: ${{ needs.release-dry-run.result }}
           RELEASE_DRY_RUN_ASSEMBLE: ${{ needs.release-dry-run-assemble.result }}
           RELEASE_DRY_RUN_BOOT: ${{ needs.release-dry-run-boot.result }}
