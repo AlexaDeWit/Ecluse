@@ -147,7 +147,7 @@ withFixtureDir topology action = withSystemTempDirectory "ecluse-e2e-fixtures" $
 withGlobalDataPlane :: (GlobalDataPlane -> IO ()) -> IO ()
 withGlobalDataPlane = withDataPlane npmTopology
 
--- | Wait for the registry stub before yielding a group, releasing resources on every exit path.
+-- | Wait for the owned registry stub before yielding a group, releasing resources on every exit path.
 withDataPlane :: Topology -> (GlobalDataPlane -> IO ()) -> IO ()
 withDataPlane topology action =
     usingExistingPlane >>= \case
@@ -183,7 +183,8 @@ withDataPlane topology action =
                     withStore topology labels net workDir $ \store ->
                         withDockerContainer labels stubRun $ \_ -> do
                             ready <- awaitContainerLog stub ((> 0) . startedWorkers) 40
-                            unless ready (fail "the registry stub did not start a worker within the timeout")
+                            -- Abort acquisition through the container bracket to retain diagnostics and cleanup.
+                            unless ready (throwIO RegistryStubStartupTimedOut)
                             withAws topology labels net $ \aws ->
                                 action
                                     GlobalDataPlane
@@ -194,6 +195,12 @@ withDataPlane topology action =
                                         , gdpWorkDir = workDir
                                         , gdpTopology = topology
                                         }
+
+data RegistryStubStartupTimedOut = RegistryStubStartupTimedOut
+    deriving stock (Show)
+
+instance Exception RegistryStubStartupTimedOut where
+    displayException _ = "the registry stub did not start a worker within the timeout"
 
 withStore :: Topology -> [String] -> String -> FilePath -> (Maybe Service -> IO a) -> IO a
 withStore topology labels net workDir action
