@@ -25,7 +25,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, projectRecordWeight)
 import Ecluse.Core.Mirror.State.Internal
 import Ecluse.Core.Package
-import Ecluse.Core.Server.MemoryModel.Probe (HeapSample (live), forceShown, sample)
+import Ecluse.Core.Server.MemoryModel.Probe (HeapSample (live), sample)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Mirror.Read (ReadFixture (fixtureOld), makeReadFixture, readLimits)
 import Ecluse.Test.Mirror.State (mirrorPackage)
@@ -80,17 +80,21 @@ probeMain mode path = do
     released <- live <$> sample
     LBS.putStr (encode (Measurement baselineBytes held released paid))
 
--- Only the stable pointer and evaluated scalar leave this frame. Show visits opaque parsed keys and descriptors.
+-- Only the stable pointer and evaluated scalar leave this frame.
 {-# NOINLINE prepare #-}
 prepare :: String -> FilePath -> IO (StablePtr ProjectMirrorRecord, Int)
 prepare mode path = do
     bytes <- BS.readFile path
     record <- chargedDecodeProjectRecord (const (pure ())) readLimits (stateTarget "https://private.test") mirrorPackage bytes >>= expectRight
     shaped <- shape mode record
-    void (forceShown shaped)
+    forceCompared shaped
     paid <- expectRight (projectRecordWeight readLimits shaped) >>= evaluate
     root <- newStablePtr shaped
     pure (root, paid)
+
+-- For these PyPI records, equality forces every field Show renders, parsed keys and descriptors included, without building the text.
+forceCompared :: ProjectMirrorRecord -> IO ()
+forceCompared record = unless (record == record) (fail "a mirror record differs from itself")
 
 observe :: StablePtr ProjectMirrorRecord -> IO ()
 observe root = do

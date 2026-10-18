@@ -3,9 +3,9 @@
 -- SPDX-License-Identifier: MIT
 
 {- | What a span records when an exception escapes it. @hs-opentelemetry@ records an escaping
-exception's 'displayException', and for an HTTP client or @amazonka@ exception that prints the
-request, header and query included. 'withEscapeHandler' tells the library to ignore those, and
-'recordEscape' records a typed cause and the error status in their place.
+exception's 'displayException'. For an HTTP client or @amazonka@ exception, that text holds the
+request, header and query included, or a proxy variable's value. 'withEscapeHandler' tells the
+library to ignore those, and 'recordEscape' records a typed cause and the error status in their place.
 -}
 module Ecluse.Runtime.Telemetry.Escape (
     escapedRequestCause,
@@ -17,7 +17,6 @@ module Ecluse.Runtime.Telemetry.Escape (
 import Amazonka qualified as AWS
 import Data.HashMap.Strict qualified as HashMap
 import Data.Typeable (typeOf)
-import Network.HTTP.Client (HttpException)
 import Network.Wai (Middleware)
 import OpenTelemetry.Attributes (toAttribute)
 import OpenTelemetry.Trace.Core (
@@ -35,13 +34,13 @@ import OpenTelemetry.Trace.Core (
 import UnliftIO.Exception (withException)
 
 import Ecluse.Core.Fault (renderTransportFault)
-import Ecluse.Core.Fault.Http (displayFaultT)
+import Ecluse.Core.Fault.Http (displayFaultT, isClientFault)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
 
--- | The typed cause of an exception whose own rendering can print a request, or 'Nothing' for any other.
+-- | The typed cause of an exception whose own rendering can print a request or a proxy credential, or 'Nothing' for any other.
 escapedRequestCause :: SomeException -> Maybe Text
 escapedRequestCause err
-    | Just (_ :: HttpException) <- fromException err = Just (displayFaultT err)
+    | isClientFault err = Just (displayFaultT err)
     | Just (aws :: AWS.Error) <- fromException err = Just (renderTransportFault (classifyAwsTransport aws))
     | otherwise = Nothing
 

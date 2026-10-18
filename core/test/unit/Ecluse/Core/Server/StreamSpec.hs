@@ -184,10 +184,14 @@ recordingSignedRelay scheme escaped manager upPort _req respond = do
     upstream <- (\request -> scheme request{HTTP.port = upPort}) <$> signedRequest
     outcome <-
         withUpstreamWhen manager (progressFloor defaultLimits) upstream StreamBody statusIsSuccessful relayVerbatim (waiRelayResponder respond)
-            `withException` (writeIORef escaped . Just)
+            `withException` record
     case outcome of
         Just (_, received) -> pure received
         Nothing -> respond (responseLBS status200 [] fellThroughMarker)
+  where
+    -- A socket error renders lazily. An async exception that interrupts that render stays in the error and raises at every later read.
+    -- Rendering here runs before the proxy rethrows the failure, so the case's teardown of the proxy cannot interrupt it.
+    record err = evaluateNF_ (displayException err) >> writeIORef escaped (Just err)
 
 overTls :: HTTP.Request -> HTTP.Request
 overTls request = request{HTTP.secure = True}

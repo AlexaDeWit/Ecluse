@@ -405,7 +405,7 @@ library ecluse-core
     , conduit               ^>=1.3
     , directory             ^>=1.3
     , filepath              ^>=1.4 || ^>=1.5
-    , crypton               >=2.1 && <2.2
+    , crypton               >=2.2.1 && <2.3
     , cvss                  ^>=0.3
     , exceptions            ^>=0.10
     , sqlite-simple         ^>=0.4
@@ -523,7 +523,7 @@ library
     , aeson                           >=2.2 && <2.4
     , bytestring                      ^>=0.12
     , containers                      ^>=0.7
-    , crypton                         >=2.1 && <2.2
+    , crypton                         >=2.2.1 && <2.3
     , cvss                            ^>=0.3
     , yaml                            ^>=0.11
     , directory                       ^>=1.3
@@ -638,7 +638,7 @@ library ecluse-runtime
     , clock                           ^>=0.8
     , conduit                         ^>=1.3
     , containers                      ^>=0.7
-    , crypton                         >=2.1 && <2.2
+    , crypton                         >=2.2.1 && <2.3
     , directory                       ^>=1.3
     , exceptions                      ^>=0.10
     , filepath                        ^>=1.4 || ^>=1.5
@@ -857,7 +857,7 @@ library ecluse-test-support
     , case-insensitive  ^>=1.2
     , conduit           ^>=1.3
     , containers        ^>=0.7
-    , crypton           >=2.1 && <2.2
+    , crypton           >=2.2.1 && <2.3
     , crypton-connection ^>=0.4
     -- crypton-x509 and time-hourglass build the TLS peer's certificate per server, so no private key is committed.
     , crypton-x509      ^>=1.10
@@ -955,7 +955,7 @@ library ecluse-test-contracts
     , aeson             >=2.2 && <2.4
     , bytestring        ^>=0.12
     , containers        ^>=0.7
-    , crypton           >=2.1 && <2.2
+    , crypton           >=2.2.1 && <2.3
     , directory         ^>=1.3
     , filepath          ^>=1.4 || ^>=1.5
     , hspec             ^>=2.11
@@ -1295,7 +1295,7 @@ test-suite ecluse-core-unit
     , bytestring        ^>=0.12
     , clock             ^>=0.8
     , containers        ^>=0.7
-    , crypton           >=2.1 && <2.2
+    , crypton           >=2.2.1 && <2.3
     , hedgehog          ^>=1.5
     , hs-opentelemetry-api  ^>=1.0
     , hs-opentelemetry-exporter-in-memory  ^>=1.0
@@ -1506,7 +1506,7 @@ test-suite ecluse-unit
     , bytestring        ^>=0.12
     , cache             ^>=0.1.3
     , containers        ^>=0.7
-    , crypton           >=2.1 && <2.2
+    , crypton           >=2.2.1 && <2.3
     , exceptions        ^>=0.10
     , yaml              ^>=0.11
     , hedgehog          ^>=1.5
@@ -1760,7 +1760,7 @@ test-suite ecluse-residency
     , bytestring        ^>=0.12
     , case-insensitive  ^>=1.2
     , containers        ^>=0.7
-    , crypton           >=2.1 && <2.2
+    , crypton           >=2.2.1 && <2.3
     , ecluse
     , ecluse:ecluse-core
     , ecluse:ecluse-json-stream

@@ -7,10 +7,12 @@ module Ecluse.Runtime.Telemetry.EscapeSpec (spec) where
 
 import Amazonka qualified as AWS
 import Data.Text qualified as T
-import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (ResponseTimeout))
+import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (InvalidProxyEnvironmentVariable, ResponseTimeout))
+import Network.HTTP.Client.Internal (throwHttp)
 import OpenTelemetry.Trace (TracerProviderOptions (tracerProviderOptionsExceptionHandlers), emptyTracerProviderOptions)
 import OpenTelemetry.Trace.Core (ExceptionClassification (IgnoredException), ExceptionResponse (ExceptionResponse))
 import Test.Hspec
+import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), renderTransportCause)
 import Ecluse.Core.Fault.Http (displayFaultT)
@@ -30,6 +32,15 @@ spec = do
             timedOut <- (`HttpExceptionRequest` ResponseTimeout) <$> signedRequest
             escapedRequestCause (toException (AWS.TransportError timedOut))
                 `shouldBe` Just ("127.0.0.1:1: ResponseTimeout (" <> renderTransportCause TransportTimeout <> ")")
+
+        it "renders a client fault raised outside a request through its typed cause, never its proxy value, and the library ignores it" $ do
+            raised <- tryAny (throwHttp (InvalidProxyEnvironmentVariable "https_proxy" "https://user:proxy-secret@proxy.example:3128") :: IO ())
+            case raised of
+                Left wrapper -> do
+                    escapedRequestCause wrapper `shouldBe` Just (displayFaultT wrapper)
+                    displayFaultT wrapper `shouldNotSatisfy` T.isInfixOf "proxy-secret"
+                    ignored wrapper `shouldBe` True
+                Right () -> expectationFailure "throwHttp returned"
 
         it "leaves any other exception to the library" $
             escapedRequestCause (toException (TestContractEscape "contract broken")) `shouldBe` Nothing

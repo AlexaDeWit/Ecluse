@@ -27,11 +27,10 @@ import Katip (LogEnv, Severity (WarningS))
 import OpenTelemetry.Exporter.Span (ExportResult (..))
 import OpenTelemetry.Internal.Logging (setGlobalErrorHandler)
 
+import Ecluse.Core.Fault.Http (displayFaultT)
 import Ecluse.Runtime.Log (moduleLog)
 
-{- | The throttle state for SDK export-error routing. Exposed so a test asserts the throttle
-decision without wall-clock timing.
--}
+-- | The throttle's state, exposed so a test steps the throttle without a wall clock.
 data ThrottleState = ThrottleState
     { tsLastLogged :: Maybe UTCTime
     -- ^ When an error was last surfaced ('Nothing' before the first).
@@ -44,9 +43,7 @@ data ThrottleState = ThrottleState
 data ThrottleEmit
     = -- | The first error: surface it plainly.
       EmitFirst
-    | {- | The throttle window elapsed: surface a heartbeat carrying the count of
-      errors since the last surfaced one (this one included).
-      -}
+    | -- | The window elapsed: surface a heartbeat with the count of errors since the last surfaced one, this one included.
       EmitHeartbeat Int
     | -- | Within the window: suppress and count.
       EmitSuppress
@@ -60,9 +57,7 @@ initialThrottle = ThrottleState Nothing 0
 throttleInterval :: NominalDiffTime
 throttleInterval = 60
 
-{- | Advance the throttle for one export error at @now@: the first surfaces, a heartbeat once
-@interval@ has elapsed since the last surfaced error, and anything between is suppressed and counted.
--}
+-- | Advance the throttle for one export error at @now@, with a heartbeat due once @interval@ has passed since the last surfaced error.
 throttleStep :: NominalDiffTime -> UTCTime -> ThrottleState -> (ThrottleState, ThrottleEmit)
 throttleStep interval now st = case tsLastLogged st of
     Nothing -> (ThrottleState (Just now) 0, EmitFirst)
@@ -72,9 +67,7 @@ throttleStep interval now st = case tsLastLogged st of
         | otherwise ->
             (st{tsSuppressed = tsSuppressed st + 1}, EmitSuppress)
 
-{- | One throttle and one @katip@ target shared by every export-failure feed. The clock and the
-surfacing action are injected, so a test asserts the throttle decision without wall-clock timing.
--}
+-- | One throttle and one @katip@ target that every export-failure feed shares.
 data ExportFailureSink = ExportFailureSink
     { sinkNow :: IO UTCTime
     , sinkState :: IORef ThrottleState
@@ -96,8 +89,16 @@ exportFailureSink logEnv = newExportFailureSink getCurrentTime (moduleLog logEnv
 sinkModule :: Text
 sinkModule = "Ecluse.Runtime.Telemetry.Resolve"
 
-{- Route one export-failure diagnostic through the shared throttle into @katip@. The first
-error surfaces plainly and later ones fold into a heartbeat carrying the suppressed count. -}
+-- | Route a failed export from the @signal@ exporter through the sink. The exporter's request holds every collector header, so the error renders through 'displayFaultT'.
+observeExportResult :: ExportFailureSink -> Text -> ExportResult -> IO ()
+observeExportResult sink signal = \case
+    Success -> pass
+    Failure mErr -> routeExportFailure sink (signal <> " export failed" <> maybe "" ((": " <>) . displayFaultT) mErr)
+
+-- | Install a process-global handler that forwards the SDK's own diagnostic text verbatim. Failed exports reach the sink separately, through 'observeExportResult'.
+installExportErrorHandler :: ExportFailureSink -> IO ()
+installExportErrorHandler sink = setGlobalErrorHandler (routeExportFailure sink . toText)
+
 routeExportFailure :: ExportFailureSink -> Text -> IO ()
 routeExportFailure sink diagnostic = do
     now <- sinkNow sink
@@ -106,20 +107,6 @@ routeExportFailure sink diagnostic = do
         EmitFirst -> sinkSurface sink WarningS (firstErrorMessage diagnostic)
         EmitHeartbeat suppressed -> sinkSurface sink WarningS (heartbeatMessage suppressed diagnostic)
         EmitSuppress -> pass
-
-{- | Observe one exporter's 'ExportResult', routing a 'Failure' through the sink. @signal@ names the
-exporter (@span@ \/ @metric@). @hs-opentelemetry 1.0.0.0@ drops a failed OTLP export, so only this feed reports one.
--}
-observeExportResult :: ExportFailureSink -> Text -> ExportResult -> IO ()
-observeExportResult sink signal = \case
-    Success -> pass
-    Failure mErr -> routeExportFailure sink (signal <> " export failed" <> maybe "" ((": " <>) . show) mErr)
-
-{- | Install a process-global handler for the SDK's own diagnostic stream, forwarded verbatim. Ecluse
-reads none of @OTEL_EXPORTER_OTLP_HEADERS@, @DD_API_KEY@, @DD_SITE@, so the SDK's own text is the only leak channel.
--}
-installExportErrorHandler :: ExportFailureSink -> IO ()
-installExportErrorHandler sink = setGlobalErrorHandler (routeExportFailure sink . toText)
 
 firstErrorMessage :: Text -> Text
 firstErrorMessage diagnostic =
