@@ -11,6 +11,9 @@ import Control.Exception (AsyncException (ThreadKilled))
 import Data.Text qualified as T
 import Network.HTTP.Client (HttpException)
 import Network.HTTP.Types.Status (status200, status404)
+import System.FilePath ((</>))
+import System.IO.Error (isDoesNotExistError)
+import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import UnliftIO.Exception (throwIO, try)
 
@@ -67,9 +70,13 @@ spec = do
             foldTransportEscapes tfDetail (pure (Right (3 :: Int))) `shouldReturn` Right 3
             (foldTransportEscapes tfDetail (pure (Left "domain refusal")) :: IO (Either Text ())) `shouldReturn` Left "domain refusal"
 
-        it "propagates filesystem, credential, unknown and asynchronous exceptions" $ do
+        it "propagates a missing-file exception from the filesystem" $
+            withSystemTempDirectory "ecluse-aws-fault" $ \directory ->
+                foldTransportEscapes tfDetail (Right <$> readFileBS (directory </> "absent"))
+                    `shouldThrow` isDoesNotExistError
+
+        it "propagates credential, unknown and asynchronous exceptions" $ do
             let folded action = foldTransportEscapes tfDetail action :: IO (Either Text ())
-            folded (ioError (userError "filesystem failure")) `shouldThrow` anyIOException
             folded (throwIO CredentialChainExhausted) `shouldThrow` isCredentialExhaustion
             folded (throwIO (TestContractEscape "unknown failure")) `shouldThrow` (== TestContractEscape "unknown failure")
             folded (throwIO ThreadKilled) `shouldThrow` (== ThreadKilled)
