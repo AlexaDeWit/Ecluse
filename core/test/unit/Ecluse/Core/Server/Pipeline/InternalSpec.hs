@@ -13,7 +13,7 @@ import Data.Time (getCurrentTime, nominalDay)
 import Hedgehog (Gen, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
-import Katip (toObject)
+import Katip (Severity (InfoS), toObject)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
@@ -80,7 +80,7 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpRuleEffectfulFailure))
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Json (textAtPath)
-import Ecluse.Test.Log (runJsonLog)
+import Ecluse.Test.Log (runJsonLog, runJsonLogAt)
 import Ecluse.Test.Package (
     artifactsWith,
     defaultMinIntegrity,
@@ -187,20 +187,25 @@ spec = do
                 , BlockedByDefault []
                 ]
 
+    describe "logDenials at the default info level" $
+        it "omits policy denial details without disabling the logging environment" $ do
+            let denied = VersionVerdict "1.0.0" (Reject (Rejection (ByPolicy (RuleName "BlockedByDefault") [quarantine]) "denied"))
+            runJsonLogAt InfoS (logDenials (unscopedNpm "is-odd") Nothing [denied]) `shouldReturn` ""
+
     describe "logDenials" $
         -- An open rule-source breaker fast-fails to this verdict, so it is the routine
         -- shape of a rule source being down rather than a fault nobody answered.
-        it "keeps an absorbed rule-source outage below the level an operator pages on" $ do
+        it "keeps serve-time denial details at debug while preserving investigation fields" $ do
             let denied =
                     VersionVerdict
                         "1.0.0"
                         (Reject (Rejection (Unavailable (WillResolve Nothing)) "DenyIfCve: the rule could not be evaluated"))
             logged <- runJsonLog (logDenials (unscopedNpm "is-odd") Nothing [denied])
-            logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+            logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Debug\""
             logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
             logged `shouldSatisfy` T.isInfixOf "\"package\":\"is-odd\""
 
-    describe "logDenials (the advisories an audit line names)" $ do
+    describe "logDenials (the advisories a debug line names)" $ do
         it "records the advisories a scored or a malicious denial names" $ do
             auditCve npmEvidence (Blocked "DenyIfCve" (Just (DbEtag "etag-1")) (AffectedBy Cvss 7.0 (mkAdvisoryIds ("CVE-2026-0001" :| ["GHSA-aaaa-bbbb-cccc"]))))
                 `shouldReturn` [Just "CVE-2026-0001, GHSA-aaaa-bbbb-cccc"]

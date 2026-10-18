@@ -40,7 +40,7 @@ module Ecluse.Core.Server.Pipeline.Internal (
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Katip (KatipContext, Severity (WarningS), SimpleLogPayload, katipAddContext, logFM, ls, sl)
+import Katip (KatipContext, Severity (DebugS), SimpleLogPayload, katipAddContext, logFM, ls, sl)
 
 import Ecluse.Core.Cve.Types (DbEtag (..))
 import Ecluse.Core.Package (
@@ -223,7 +223,7 @@ versionAuditPayload pkg version etag =
         <> sl "version" version
         <> maybe mempty (\(DbEtag e) -> sl "active_advisory_db_etag" e) etag
 
--- | Emit one audit log line per denied version, __denials only__. 'recordDenials' counts the same denials.
+-- | Emit debug details per denied version. 'recordDenials' counts them at every log level.
 logDenials :: (KatipContext m) => PackageName -> Maybe DbEtag -> [VersionVerdict] -> m ()
 logDenials pkg etag = traverse_ logOne
   where
@@ -233,7 +233,7 @@ logDenials pkg etag = traverse_ logOne
             let (rule, reasonClass) = denialLabels reason
                 audit = DenialAudit pkg (vvVersion vv) rule reasonClass etag (policyReasons reason)
              in katipAddContext (denialAuditPayload audit) $
-                    logFM WarningS (ls ("denied" :: Text))
+                    logFM DebugS (ls ("denied" :: Text))
 
 policyReasons :: RejectReason -> [Reason]
 policyReasons = \case

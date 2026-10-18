@@ -147,6 +147,7 @@ DCO sign-off. The [Code of Conduct](CODE_OF_CONDUCT.md) governs participation, a
 | `taskfiles/` | Task orchestration for tests, coverage, and performance measurements                                                      |
 | `json-stream/` | Maintained json-stream fork: the private lexer and parser library, retaining upstream BSD-3-Clause attribution |
 | `vendor/` | Attributed native decoder sources with bounded resource lifetime support |
+| `examples/` | Operator starting points, including the Datadog Terraform dashboard example |
 | `config/`   | The embedded defaults (`default.yaml`), the schema guidepost operator configs override                                    |
 | `runbooks/` | Maintainer procedures run step by step (releases)                                                                        |
 | `docs/`     | Contributor guides, testing contracts, and architecture decisions                                                                                        |

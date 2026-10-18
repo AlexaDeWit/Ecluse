@@ -3,6 +3,7 @@ includes:
   test: taskfiles/test.yml
   coverage: taskfiles/coverage.yml
   performance: taskfiles/performance.yml
+  datadog: taskfiles/datadog.yml
 vars:
   DOCS_BUILDDIR: dist-newstyle
   BENCH_PROFILE_DIR: dist-bench-prof

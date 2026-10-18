@@ -627,6 +627,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: nix develop .#ci --command task static-checks
 
+      - name: Datadog operator example
+        run: nix develop .#datadog --command task datadog:ci
+
       # Semgrep still gates on every PR (`task sast` fails on findings). This upload is
       # only the Security-tab view, which tracks main, hence always().
       - name: Upload Semgrep SARIF to code scanning

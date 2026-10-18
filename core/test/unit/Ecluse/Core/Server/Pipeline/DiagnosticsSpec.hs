@@ -9,6 +9,7 @@ module Ecluse.Core.Server.Pipeline.DiagnosticsSpec (spec) where
 
 import Data.Aeson (Value (Number), object, (.=))
 import Data.Text qualified as T
+import Katip (Severity (InfoS))
 import Test.Hspec
 
 import Ecluse.Core.Package (
@@ -25,7 +26,7 @@ import Ecluse.Core.Server.Pipeline.Diagnostics (
     logNameMismatch,
     logUpstreamUnformable,
  )
-import Ecluse.Test.Log (runJsonLog)
+import Ecluse.Test.Log (runJsonLog, runJsonLogAt)
 import Ecluse.Test.Package (unscopedNpm)
 
 -- | Pin log severity, status fields, and credential redaction.
@@ -85,7 +86,11 @@ upstreamWarningSpec = do
 
 metadataFailureSpec :: Spec
 metadataFailureSpec = describe "logMetadataFailure" $ do
-    for_ [(MetadataAbsent, 404, "Warning"), (MetadataHttpFailure 301, 301, "Warning"), (MetadataHttpFailure 400, 400, "Warning"), (MetadataHttpFailure 408, 408, "Error"), (MetadataHttpFailure 429, 429, "Error"), (MetadataHttpFailure 500, 500, "Error"), (MetadataHttpFailure 503, 503, "Error")] $ \(failure, code, severity) ->
+    it "omits expected upstream absences at the default info level" $
+        runJsonLogAt InfoS (logMetadataFailure (unscopedNpm "mix") upstream MetadataAbsent)
+            `shouldReturn` ""
+
+    for_ [(MetadataAbsent, 404, "Debug"), (MetadataHttpFailure 404, 404, "Debug"), (MetadataHttpFailure 301, 301, "Warning"), (MetadataHttpFailure 400, 400, "Warning"), (MetadataHttpFailure 408, 408, "Error"), (MetadataHttpFailure 429, 429, "Error"), (MetadataHttpFailure 500, 500, "Error"), (MetadataHttpFailure 503, 503, "Error")] $ \(failure, code, severity) ->
         it ("logs " <> show failure <> " as " <> toString severity <> " without credentials") $ do
             logged <- runJsonLog (logMetadataFailure (unscopedNpm "mix") "https://deploy:hunter2@registry.npmjs.org/path?sig=abc" failure)
             logged `shouldSatisfy` T.isInfixOf ("\"sev\":\"" <> severity <> "\"")

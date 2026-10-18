@@ -33,6 +33,7 @@ import Ecluse.Core.Package.Admission (
         AdmissionUndecidable
     ),
     admissionTransience,
+    admitArtifactWithDecision,
     admitArtifactWithEvidence,
  )
 import Ecluse.Core.Package.Integrity (
@@ -45,12 +46,12 @@ import Ecluse.Core.Package.Integrity (
  )
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Rules.Types (
-    Decision (Blocked, Undecidable),
+    Decision (Admitted, Blocked, Undecidable),
     EvalContext (EvalContext),
-    FailureAlignment (FailNoDecision),
+    FailureAlignment (FailDeny, FailNoDecision),
     Inability (EvaluationFailed, NoDatabaseLoaded),
     Reason (RuleUnable),
-    RuleVerdict (CannotVet),
+    RuleVerdict (Allow, CannotVet),
     SkippedCheck (SkippedUnavailable),
     Transience (WillResolve, WontResolve),
  )
@@ -66,7 +67,7 @@ import Ecluse.Test.Package (
     v1_0_0,
  )
 import Ecluse.Test.Package qualified as Package
-import Ecluse.Test.Rules (admitRule, cannotVetRule, constRule, denyRule, revocation)
+import Ecluse.Test.Rules (admitRule, cannotVetRule, constRule, denyRule, packageRule, remediation, revocation)
 
 -- The sanctioned splitter, as the plain list the artifact fixtures take.
 sriHashesOf :: Text -> [Hash]
@@ -135,6 +136,17 @@ skippedCveRule = constRule "DenyIfCve" (CannotVet FailNoDecision NoDatabaseLoade
 
 spec :: Spec
 spec = do
+    describe "admitArtifactWithDecision" $
+        it "retains the winning decision without repeating the advisory read" $ do
+            readCount <- newIORef (0 :: Int)
+            let rule = packageRule "audit-allow" 100 FailDeny Nothing (modifyIORef' readCount (+ 1)) (Allow remediation)
+            (admission, decision) <- admitArtifactWithDecision ctx [rule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
+            decision `shouldBe` Admitted "audit-allow" remediation []
+            readIORef readCount `shouldReturn` 1
+            case admission of
+                AdmissionAdmit{} -> pass
+                other -> expectationFailure ("expected an admit, got " <> show other)
+
     describe "admitArtifactWithEvidence -- the shared serve/worker admission oracle" $ do
         it "carries the skipped-check evidence beside an admit, so the gate can record it once" $ do
             (admission, skipped) <- admitArtifactWithEvidence ctx [skippedCveRule, admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails

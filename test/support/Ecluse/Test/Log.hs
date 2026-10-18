@@ -18,7 +18,9 @@ module Ecluse.Test.Log (
     captureStderr,
     captureStderrWith,
     captureJsonLog,
+    captureJsonLogAt,
     runJsonLog,
+    runJsonLogAt,
     lineMessage,
 ) where
 
@@ -59,18 +61,17 @@ runQuietKatip action = do
     logEnv <- newTestLogEnv
     runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty action
 
-{- | A 'LogEnv' with one stdout scribe over @katip@'s own @jsonFormat@, every severity admitted.
-The application's own scribe renders a different line shape, so assert on the payload, not the line.
--}
+-- | Capture all severities with katip's JSON shape. Assert on payloads when testing application logs.
 jsonLogEnv :: IO LogEnv
-jsonLogEnv = do
-    scribe <- mkHandleScribeWithFormatter jsonFormat (ColorLog False) stdout (permitItem DebugS) V2
+jsonLogEnv = jsonLogEnvAt DebugS
+
+jsonLogEnvAt :: Severity -> IO LogEnv
+jsonLogEnvAt severity = do
+    scribe <- mkHandleScribeWithFormatter jsonFormat (ColorLog False) stdout (permitItem severity) V2
     base <- newTestLogEnv
     registerScribe "stdout" scribe defaultScribeSettings base
 
-{- | A 'LogEnv' with one scribe that keeps every message in memory, and an action that reads them
-in the order logged. The scribe runs on @katip@'s worker thread, so a spec polls the reader.
--}
+-- | Capture messages in order. The scribe runs asynchronously, so a spec polls the reader.
 memoryLogEnv :: IO (LogEnv, IO [Text])
 memoryLogEnv = do
     held <- newIORef []
@@ -79,9 +80,7 @@ memoryLogEnv = do
     logEnv <- registerScribe "memory" scribe defaultScribeSettings =<< newTestLogEnv
     pure (logEnv, reverse <$> readIORef held)
 
-{- | Run an action with 'stdout' redirected to a temporary file and return what it wrote.
-'stdout' is restored on every exit path, so scribe output never leaks into the run.
--}
+-- | Capture stdout, restoring the original handle on every exit path.
 captureStdout :: IO () -> IO Text
 captureStdout = fmap snd . captureHandle stdout
 
@@ -89,9 +88,7 @@ captureStdout = fmap snd . captureHandle stdout
 captureStderr :: IO () -> IO Text
 captureStderr = fmap snd . captureHandle stderr
 
-{- | 'captureStderr' keeping the action's result, for a case that decides on both the refusal
-report and the status the run took.
--}
+-- | Capture stderr alongside the action's result.
 captureStderrWith :: IO a -> IO (a, Text)
 captureStderrWith = captureHandle stderr
 
@@ -112,16 +109,22 @@ captureHandle stream act =
         hDuplicateTo saved stream
         hClose saved
 
-{- | Run an action against a 'jsonLogEnv' and return its result beside the captured JSONL.
-The scribes close before the capture is read, so every buffered line is in the returned text.
--}
+-- | Capture all severities alongside the action's result, closing scribes before reading.
 captureJsonLog :: (LogEnv -> IO a) -> IO (a, Text)
-captureJsonLog body = captureHandle stdout (bracket jsonLogEnv (void . closeScribes) body)
+captureJsonLog = captureJsonLogAt DebugS
+
+-- | Capture JSON logs at the selected severity floor, closing scribes before reading.
+captureJsonLogAt :: Severity -> (LogEnv -> IO a) -> IO (a, Text)
+captureJsonLogAt severity body = captureHandle stdout (bracket (jsonLogEnvAt severity) (void . closeScribes) body)
 
 -- | 'captureJsonLog' over a @katip@-constrained action, at the empty context and namespace.
 runJsonLog :: KatipContextT IO () -> IO Text
-runJsonLog action =
-    snd <$> captureJsonLog (\logEnv -> runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty action)
+runJsonLog = runJsonLogAt DebugS
+
+-- | Capture a logging action at the selected severity floor.
+runJsonLogAt :: Severity -> KatipContextT IO () -> IO Text
+runJsonLogAt severity action =
+    snd <$> captureJsonLogAt severity (\logEnv -> runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty action)
 
 -- | Read a JSONL message, returning 'Nothing' for malformed JSON or a missing or non-text message.
 lineMessage :: Text -> Maybe Text

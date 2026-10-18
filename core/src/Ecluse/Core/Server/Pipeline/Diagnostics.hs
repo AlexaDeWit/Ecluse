@@ -26,7 +26,7 @@ import Data.Aeson (Value)
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
-import Katip (KatipContext, Severity (ErrorS, WarningS), SimpleLogPayload, katipAddContext, logFM, ls, sl)
+import Katip (KatipContext, Severity (DebugS, ErrorS, WarningS), SimpleLogPayload, katipAddContext, logFM, ls, sl)
 
 import Ecluse.Core.Fault (TransportFault (tfCause, tfDetail))
 import Ecluse.Core.Fault.Http (isRetryableStatusCode)
@@ -80,7 +80,10 @@ logHttpFailure :: (KatipContext m) => PackageName -> Text -> Int -> Text -> m ()
 logHttpFailure name baseUrl code message =
     katipAddContext payload (logFM severity (ls message))
   where
-    severity = if isRetryableStatusCode code then ErrorS else WarningS
+    severity
+        | code == 404 = DebugS
+        | isRetryableStatusCode code = ErrorS
+        | otherwise = WarningS
     payload =
         sl "module" pipelineModule
             <> sl "package" (renderPackageName name)

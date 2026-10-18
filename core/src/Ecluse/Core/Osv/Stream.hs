@@ -156,7 +156,7 @@ instance Exception PilotIngestAborted
 -- | Fetch the OSV zip and stream its contents, bounded by @ingest@. It returns the digest of the whole response body.
 streamOsvUrl :: (MonadResource m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> Manager -> OsvIngest -> String -> ConduitT i ExtractedOsv m ContentDigest
 streamOsvUrl mTracerProvider manager ingest urlStr = do
-    lift $ logFM InfoS (ls ("Initializing OSV stream from " <> dialledAuthorityLabel (toText urlStr)))
+    lift $ logFM DebugS (ls ("Initializing OSV stream from " <> dialledAuthorityLabel (toText urlStr)))
     bracketP
         (openOptionalSpan mTracerProvider Internal "ecluse.pilot.osv.stream")
         closeOptionalSpan
@@ -172,7 +172,7 @@ streamOsvUrl mTracerProvider manager ingest urlStr = do
 -- | Parse the zip stream and emit ExtractedOsv, bounded by @ingest@.
 parseOsvStream :: (MonadResource m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> OsvIngest -> ConduitT ByteString ExtractedOsv m ()
 parseOsvStream mTracerProvider ingest = do
-    lift $ logFM InfoS (ls ("Starting OSV zip extraction and parsing pipeline" :: String))
+    lift $ logFM DebugS (ls ("Starting OSV zip extraction and parsing pipeline" :: String))
     bracketP
         (openOptionalSpan mTracerProvider Internal "ecluse.pilot.osv.parse")
         closeOptionalSpan
@@ -181,7 +181,7 @@ parseOsvStream mTracerProvider ingest = do
 processZipEntries :: (MonadThrow m, KatipContext m) => OsvIngest -> ConduitT (Either ZipEntry ByteString) ExtractedOsv m ()
 processZipEntries ingest =
     await >>= \case
-        Nothing -> lift $ logFM InfoS (ls ("OSV stream fully processed" :: String))
+        Nothing -> lift $ logFM DebugS (ls ("OSV stream fully processed" :: String))
         Just (Left entry) -> do
             outcome <- collectFile (ilMaxAdvisoryBytes (ingestLimits ingest))
             handleEntry ingest entry outcome

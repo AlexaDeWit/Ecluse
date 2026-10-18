@@ -61,7 +61,7 @@ import Data.Streaming.Zlib (
  )
 import Data.Text qualified as T
 import Data.Time (UTCTime)
-import Katip (KatipContext, Severity (InfoS), logFM, ls)
+import Katip (KatipContext, Severity (DebugS), logFM, ls)
 import Network.HTTP.Client (HttpException (InvalidUrlException), Manager)
 import Network.HTTP.Simple (getResponseBody, getResponseHeader, httpSource, parseRequest, setRequestCheckStatus, setRequestManager)
 import Network.HTTP.Types.Header (hLastModified)
@@ -191,7 +191,7 @@ fetchEpssScores manager cap urlStr = do
         pure (accumulated, lastModifiedOf (getResponseHeader hLastModified res))
     let scores = faScores decoded
     when (epssScoreCount scores == 0) (throwM EpssFeedEmpty)
-    logFM InfoS (ls ("Ingested " <> show (epssScoreCount scores) <> " EPSS scores from " <> dialledAuthorityLabel (toText urlStr)))
+    logFM DebugS (ls ("Ingested " <> show (epssScoreCount scores) <> " EPSS scores from " <> dialledAuthorityLabel (toText urlStr)))
     pure
         EpssFeed
             { efScores = scores

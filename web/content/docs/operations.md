@@ -211,8 +211,22 @@ Use the severity together with the event and its repetition:
 |---|---|---|
 | `error` | A failed operation, exhausted budget, or halted role needs attention. Some conditions can recover on retry. | Page and check the affected role. |
 | `warn` | Écluse absorbed a problem and carried on degraded. | Chart it, and alert on a sustained rate rather than on a line. |
-| `info` | What the run did: a completed sweep cycle, a version deleted, a mirrored artifact, a served package. | Index it, and read it back during an incident. |
-| `debug` | Per-request and per-entry detail. Verbose under load, and off by default. | Turn it on while you investigate. |
+| `info` | Audit and lifecycle records: mirrored artifacts, completed sweeps, deletions, Pilot compilation start and completion, advisory publication and activation, and deployment posture. | Retain these records for investigation. |
+| `debug` | Ordinary serve requests, serve-time denial details, expected metadata absences, and download or parsing details. | Enable it during an investigation, then restore `info`. |
+
+Serve-time denial counters remain available when telemetry is enabled, regardless of the log level.
+Use those metrics to identify changes in denial activity. Set `ECLUSE_OBSERVABILITY__LOG_LEVEL=debug`
+when the individual decisions are needed, then restore `info` after the investigation.
+Routine reads and policy denials do not produce default-level request logs.
+This also means a serve-only deployment has no default audit history of normal admissions.
+
+Successful mirror publications carry `data.event=mirror_publication`, package, version, ecosystem,
+artifact filename, the verified artifact digest, and the evaluated admission rationale.
+The rationale uses the decision already made for that artifact, without another rule evaluation.
+It includes the winning rule and skipped-check evidence. It does not claim a complete policy hash
+or identify an advisory generation that the admitted decision does not carry.
+A successful registry response can be idempotent, so this record does not prove that the artifact was newly created.
+A job that finds a version already complete reports that repeat completion at `debug`.
 
 Typical `warn` lines record:
 
@@ -425,11 +439,15 @@ written without that metadata stops Pilot's publications, as above.
 
 ## Telemetry (opt-in)
 
+The repository provides a [Datadog Terraform example](https://github.com/AlexaDeWit/Ecluse/tree/main/examples/datadog)
+with a deployment-scoped dashboard and signal inventory.
+Copy and adapt it for your deployment. It does not configure collection or retention.
+
 Metadata reads record HTTP refusals on `ecluse.upstream.fetch.errors` with cause
 `upstream_status`, including `404`. A malformed successful response records `decode` instead.
 Explicit `401` and `403` refusals retain `other` and their existing warning log.
-Metadata `408`, `429`, and server errors log at `ERROR`. A genuine `404` absence and other
-non-success statuses log at `WARN`. These logs carry the status and upstream authority,
+Metadata `408`, `429`, and server errors log at `ERROR`. A genuine `404` absence logs at `DEBUG`.
+Other non-success statuses log at `WARN`. These logs carry the status and upstream authority,
 without the upstream body, credentials, or URL query.
 
 Telemetry stays off until you ask for it. Set `ECLUSE_OBSERVABILITY__TELEMETRY=on`, then give the

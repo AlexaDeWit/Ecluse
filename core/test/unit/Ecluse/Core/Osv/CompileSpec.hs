@@ -19,7 +19,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Data.Version (showVersion)
 import Database.SQLite.Simple
-import Katip (LogEnv, runKatipContextT)
+import Katip (LogEnv, Severity (InfoS), runKatipContextT)
 import OpenTelemetry.Attributes (fromAttribute, lookupAttribute)
 import OpenTelemetry.Exporter.InMemory.Span (inMemoryListExporter)
 import OpenTelemetry.Trace (createTracerProvider, emptyTracerProviderOptions, forceFlushTracerProvider)
@@ -81,7 +81,7 @@ import Ecluse.Core.Telemetry.Metrics (
 import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Cve (namesFix)
-import Ecluse.Test.Log (captureJsonLog, newTestLogEnv)
+import Ecluse.Test.Log (captureJsonLog, captureJsonLogAt, newTestLogEnv)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip, osvZipOf, runOsvJsonLog, runOsvTestM, runOsvTestMWith)
 import Ecluse.Test.OsvDb (compileOsvToSqlite, compileOsvZipDbTo, compileOsvZipDbWithFeedTo, epssFixtureFile, metaOf, openCveDb, scoresOf)
 import Ecluse.Test.Port (RecordedCompile (RecordedCompile), recordingAdvisoryCompileMetricsPort)
@@ -106,7 +106,13 @@ spec = describe "SQLite OSV Compilation" $ do
             (dbFile, sources) <- withStub status200 zipData $ \stub ->
                 withStub status200 epssData $ \epssStub -> do
                     let sources = sourcesOf stub epssStub "/sample.zip"
-                    path <- runOsvTestM (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) EpssRequired sources testQuietTime)
+                    (path, logged) <- captureJsonLogAt InfoS $ \logEnv ->
+                        runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) EpssRequired sources testQuietTime)
+                    for_ ["Compiling OSV data for npm", "Compiled "] $ \message ->
+                        case filter (T.isInfixOf message) (lines logged) of
+                            [entry] -> entry `shouldSatisfy` T.isInfixOf "\"sev\":\"Info\""
+                            other -> expectationFailure ("expected one compilation lifecycle line, got " <> show other)
+                    logged `shouldSatisfy` (not . T.isInfixOf "Starting OSV zip extraction and parsing pipeline")
                     pure (path, sources)
             let sourceHost = authorityLabel (toText (csOsvExportUrl sources))
                 epssHost = authorityLabel (toText (csEpssFeedUrl sources))

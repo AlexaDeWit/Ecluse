@@ -9,6 +9,7 @@ import Data.Aeson (Value (String), object, (.=))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
+import Katip (Severity (InfoS))
 import Test.Hspec
 import UnliftIO.Exception (impureThrow)
 
@@ -68,7 +69,7 @@ import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchF
 import Ecluse.Core.Worker.Types (WorkerMirrorState (..))
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Json (fieldAt)
-import Ecluse.Test.Log (captureJsonLog)
+import Ecluse.Test.Log (captureJsonLog, captureJsonLogAt)
 import Ecluse.Test.Mirror.State
 import Ecluse.Test.Package (hexSha256Of, npmVersion, unsafeFilename, unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughTracingPort)
@@ -169,7 +170,9 @@ spec = do
                 resolved <- readIORef (mfResolves fixture)
                 writeIORef (mfSource fixture) VersionMetadataUnavailable
                 let policy = (mfPolicy fixture){wpRules = [denyRule]}
-                runManaged fixture{mfPolicy = policy} `shouldReturn` Succeeded
+                (outcome, logs) <- captureJsonLogAt InfoS (\logEnv -> runManagedWithLog logEnv managedJob fixture{mfPolicy = policy})
+                outcome `shouldBe` Succeeded
+                logs `shouldBe` ""
                 readIORef (mfResolves fixture) `shouldReturn` resolved
 
         it "extends an already complete record for an explicitly requested later file" $
@@ -791,10 +794,19 @@ spec = do
             withUpstream $ \url ->
                 withRuntimePolicies (npmPolicies presentResolver [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                     job <- enqueueAndReceive queue sampleMirrorJob
-                    outcome <- runWM (sourceAt url runtime) (processJob job)
+                    (outcome, logs) <- captureJsonLogAt InfoS (\logEnv -> runWMWith logEnv (sourceAt url runtime) (processJob job))
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
+                    case filter (T.isInfixOf "mirrored artifact published") (lines logs) of
+                        [entry] -> do
+                            entry `shouldSatisfy` T.isInfixOf "\"event\":\"mirror_publication\""
+                            entry `shouldSatisfy` T.isInfixOf "\"target\":\"mirrorTarget\""
+                            entry `shouldSatisfy` T.isInfixOf "\"digest\":{"
+                            entry `shouldSatisfy` T.isInfixOf (hexSha256Of tarballBytes)
+                            entry `shouldSatisfy` T.isInfixOf "was approved by test-admit"
+                            entry `shouldSatisfy` T.isInfixOf "\"rule\":\"test-admit\""
+                        other -> expectationFailure ("expected one publication audit, got " <> show other)
 
         it "fetches through the request formation keyed by the job's own ecosystem" $
             -- The PyPI builder refuses every request. The npm job must use its
@@ -905,8 +917,9 @@ spec = do
             -- taken, the artifact fetch would surface a Retried, not this Succeeded.
             withRuntimeRegistry (\logRef -> mirrorListingPublish logRef (Right ()) [ver]) (npmPolicies (\_ _ -> pure VersionMetadataUnavailable) [denyRule]) noopWorkerMetricsPort $ \runtime queue logRef -> do
                 job <- enqueueAndReceive queue sampleMirrorJob
-                outcome <- runWM (sourceAt unreachableUrl runtime) (processJob job)
+                (outcome, logs) <- captureJsonLogAt InfoS (\logEnv -> runWMWith logEnv (sourceAt unreachableUrl runtime) (processJob job))
                 outcome `shouldBe` Succeeded
+                logs `shouldBe` ""
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
 

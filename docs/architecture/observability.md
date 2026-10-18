@@ -136,6 +136,10 @@ Logs are structured JSON lines through `katip`, stitched to traces by trace-ID i
 operator manual's [Logs section](https://ecluse-proxy.com/docs/operations/#logs) states the line shape, the
 reserved Datadog attributes, the level floor, and the redaction.
 
+Metrics carry routine operational signals. Serve requests and serve-time denial details stay at debug.
+Mirror publications retain the evaluated admission rationale with the artifact identity.
+The shared admission helper returns the original decision so auditing does not re-run the rules.
+
 ### URL minimisation
 
 An upstream supplies the artifact location. An operator supplies the advisory export URL. Either
