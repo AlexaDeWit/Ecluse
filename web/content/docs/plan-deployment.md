@@ -52,6 +52,10 @@ Use workload identity for cloud access. Keep caller credentials separate: the pr
 
 For per-caller access, leave `server.authToken` unset and enforce access at your network or gateway. A shared edge token does not preserve distinct registry identities.
 
+## Plan public registry traffic {#registry-traffic}
+
+A proxy adds public metadata reads, so plan traffic across your organisation before you concentrate installs behind one egress address. Mirroring reduces repeated artifact downloads, but listings still read public metadata. Review the [request costs and registry guidance](@/docs/operations.md#registry-traffic) when you size the deployment.
+
 ## On Kubernetes {#kubernetes}
 
 | Setting | What Écluse needs |
