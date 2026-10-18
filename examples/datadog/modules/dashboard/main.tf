@@ -16,6 +16,10 @@ locals {
       var.sections.mirror ? tolist(var.services.mirror) : [],
       var.sections.dredger ? tolist(var.services.dredger) : []
     )))
+    public_reader = sort(distinct(concat(
+      tolist(var.services.proxy),
+      var.sections.mirror ? tolist(var.services.mirror) : []
+    )))
     all = local.active_services
   })
   deployment_tags = [for key, value in var.scope_tags : "${key}:${value}"]
@@ -31,8 +35,11 @@ locals {
     "(${join(" OR ", [for service in local.active_services : "service:${service}"])})"
   ]))
   tag_keys = {
-    "@status@"   = var.http_tag_keys.status
-    "@instance@" = var.instance_tag == null ? "" : var.instance_tag
+    "@upstream_host@"   = var.upstream_tag_keys.host
+    "@upstream_kind@"   = var.upstream_tag_keys.kind
+    "@upstream_status@" = var.upstream_tag_keys.status
+    "@status@"          = var.http_tag_keys.status
+    "@instance@"        = var.instance_tag == null ? "" : var.instance_tag
   }
   specs = concat(
     [for panel in local.panel_specs : panel if panel.section == "always" ? true : var.sections[panel.section]],
@@ -55,7 +62,7 @@ locals {
           alias       = try(query.statistics, false) ? "${query.alias} (${stat})" : query.alias
           modifier    = query.modifier
           group_by    = compact([for key in try(query.group_by, []) : lookup(local.tag_keys, key, key)])
-          filters     = [for filter in try(query.filters, []) : replace(filter, "@status@", var.http_tag_keys.status)]
+          filters     = [for filter in try(query.filters, []) : replace(replace(filter, "@status@", var.http_tag_keys.status), "@upstream_status@", var.upstream_tag_keys.status)]
           ecosystem   = try(query.ecosystem, false)
         }
       ]
@@ -73,7 +80,7 @@ locals {
           length(series.group_by) > 0 ? " by {${join(",", series.group_by)}}" : "",
           lookup({ rate = ".as_rate()", count = ".as_count()", gauge = ".fill(null)", histogram = "" }, series.modifier, "")
         )
-      }, panel.type == "query_value" ? { aggregator = try(panel.time_aggregation, "avg") } : {})
+      }, contains(["query_value", "query_table"], panel.type) ? { aggregator = try(panel.time_aggregation, "avg") } : {})
     ]
   }
   context_log_scope = replace(replace(local.log_scope, "$env", "{{$env}}"), "$service", "{{$service}}")
@@ -92,7 +99,7 @@ locals {
       title = panel.id == "memory_ratio" ? "${panel.title} (${var.instance_tag == null ? "fleet totals" : "per instance"})" : panel.title
       type  = panel.type
       requests = [merge({
-        response_format = panel.type == "query_value" ? "scalar" : "timeseries"
+        response_format = contains(["query_value", "query_table"], panel.type) ? "scalar" : "timeseries"
         queries         = local.queries[panel.id]
         formulas = try(panel.formulas, [for index, series in local.series[panel.id] : {
           formula = series.modifier == "histogram" && panel.unit == "ms" ? "1000 * q${index}" : "q${index}"
@@ -101,6 +108,7 @@ locals {
       }, panel.type == "timeseries" ? { display_type = "line" } : {})]
       custom_links = local.context_links
       }, {
+      query_table = {}
       query_value = {
         autoscale   = true
         precision   = 2
@@ -115,7 +123,7 @@ locals {
           label        = "Operator reference"
         }] : []
       }
-    }[panel.type])
+    }[panel.type], try(panel.time, null) == null ? {} : { time = panel.time })
   }
   groups = [
     { id = "overview", title = "Overview" },

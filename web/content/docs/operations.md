@@ -443,6 +443,26 @@ The repository provides a [Datadog Terraform example](https://github.com/AlexaDe
 with a deployment-scoped dashboard and signal inventory.
 Copy and adapt it for your deployment. It does not configure collection or retention.
 
+`ecluse.upstream.requests` counts public HTTP attempts from the proxy and mirror workers.
+Its attributes are `server.address` (the formed request host), `kind`, and `status`.
+Kinds are `listing`, `selected_read`, `artifact`, `companion`, `worker_metadata`, and `worker_artifact`.
+Status carries the exact HTTP code, `transport_failure`, or `cancelled`.
+A received status counts before the body, so a later body failure does not count again.
+Cache hits, followers, local cooldown refusals, private reads, and target writes count nothing.
+Failed connections count as transport failures. Attempt notification does not prove registry receipt.
+
+The Datadog example shows rates, exact `429` rates, and 30-day totals by host.
+For a scoped Datadog query, sum this count query over a rolling 30-day window:
+
+```text
+sum:ecluse.upstream.requests{ecluse_deployment:platform-east AND env:production AND (service:ecluse-proxy OR service:ecluse-mirror)} by {server.address}.as_count()
+```
+
+Replace the example deployment, environment, services, and ingestion names with your own values.
+Include every proxy and mirror service for the deployment total.
+New deployments, telemetry export gaps, and retention shorter than 30 days leave an incomplete total.
+This count excludes registry traffic from other applications.
+
 Metadata reads record HTTP refusals on `ecluse.upstream.fetch.errors` with cause
 `upstream_status`, including `404`. A malformed successful response records `decode` instead.
 Explicit `401` and `403` refusals retain `other` and their existing warning log.

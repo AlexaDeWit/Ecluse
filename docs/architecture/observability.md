@@ -55,6 +55,16 @@ export cost, so choose it for the deployment's traffic and diagnostic needs.
 (CloudWatch, Cloud Monitoring), so Écluse does not re-emit them. Names follow OTel HTTP conventions
 (`http.server.*`) plus an `ecluse.*` namespace for domain signals. The alarm-worthy signals:
 
+- `ecluse.upstream.requests` counts public HTTP exchange attempts by `server.address`, `kind`, and `status`.
+  The host comes from the formed request, without its port, path, query, or credentials.
+  Kinds are `listing`, `selected_read`, `artifact`, `companion`, `worker_metadata`, and `worker_artifact`.
+  Status is the exact HTTP code, `transport_failure`, or `cancelled`.
+  The proxy and mirror workers record only public reads.
+  Private reads, target writes, cache hits, followers, and local cooldown refusals do not count.
+  The observer records headers before body consumption, so later body failures retain that status without another count.
+  Internal retries record each notified attempt. Connection failure before notification records one transport failure.
+  Notification precedes header writes and does not prove remote receipt.
+  A cancellation before notification records no attempt.
 - `ecluse.serve.perimeter.faults` (render/unclassified) and `ecluse.serve.relay.anomalies`
   (odd_shape/non_success) are steady-state zero. Any movement is an invariant break: a pre-commit
   handler escape answered with the neutral 500, or a public relay that was not the admitted
@@ -124,7 +134,8 @@ explosion. The instrumentation applies these controls:
 
 - **High-cardinality identifiers stay on spans and logs, never metric labels**. `package`,
   `version`, `scope`, and the full denial message go on the rule-eval span and the log line. Metric
-  labels are bounded enums, so such an identifier cannot become a series. `rule` uses the built-in rule type names.
+  labels use bounded enums, permitted public hosts, and built-in rule type names.
+  Public request hosts can include an allowed ecosystem artifact host. They carry no package path or query.
 - **Forwarded authorisation headers are excluded from instrumentation.** Tests cover the
   caller's `Authorization` header. Client spans can still contain URL paths and queries, so
   this is not a guarantee against every secret or personal value. Apply the URL restrictions

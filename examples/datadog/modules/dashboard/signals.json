@@ -106,6 +106,30 @@
     "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
   },
   {
+    "name": "ecluse.upstream.requests",
+    "instrument": "counter",
+    "unit": "{request}",
+    "labels": {
+      "server.address": [
+        "formed public request host"
+      ],
+      "kind": [
+        "listing",
+        "selected_read",
+        "artifact",
+        "companion",
+        "worker_metadata",
+        "worker_artifact"
+      ],
+      "status": [
+        "exact HTTP status code",
+        "transport_failure",
+        "cancelled"
+      ]
+    },
+    "source": "runtime/src/Ecluse/Runtime/Telemetry/Instruments/Internal.hs"
+  },
+  {
     "name": "ecluse.upstream.fetch.duration",
     "instrument": "histogram",
     "unit": "s",

@@ -112,6 +112,20 @@ variable "http_tag_keys" {
   }
 }
 
+variable "upstream_tag_keys" {
+  description = "Received Datadog tags for public upstream request attributes."
+  type = object({
+    host   = optional(string, "server.address")
+    kind   = optional(string, "kind")
+    status = optional(string, "status")
+  })
+  default = {}
+  validation {
+    condition     = alltrue([for key in values(var.upstream_tag_keys) : can(regex("^[a-z][a-z0-9_.-]*$", key))])
+    error_message = "Upstream tag mappings must be tag keys."
+  }
+}
+
 variable "latency_statistics" {
   description = "Statistics by latency metric name. Percentiles require existing Datadog percentile support."
   type        = map(set(string))

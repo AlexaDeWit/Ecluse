@@ -38,6 +38,7 @@ The queries target OTLP metric names and Datadog distributions.
 Prometheus/OpenMetrics ingestion needs explicit name mappings and compatible metric types.
 Renaming a bucket counter does not turn it into a distribution.
 Check the received HTTP status tag through `http_tag_keys` if your pipeline changes it.
+Use `upstream_tag_keys` for the public upstream host, request kind, and status tags.
 
 ## Run locally
 
@@ -105,7 +106,7 @@ The module returns `dashboard_id`, `dashboard_url`, `dashboard_json`, and `metri
 | `scope_tags`, `environment` | Required deployment scope and initial environment selection |
 | `services`, `instance_tag` | Role identity and optional per-producer grouping |
 | `sections`, `advisory_ecosystems` | Available capabilities and advisory ecosystem choices |
-| `metric_names`, `http_tag_keys` | Explicit ingestion name and HTTP tag mappings |
+| `metric_names`, `http_tag_keys`, `upstream_tag_keys` | Explicit ingestion name and HTTP or upstream tag mappings |
 | `latency_statistics` | Statistics per histogram, mean by default |
 | `thresholds` | Reference lines by enabled timeseries panel ID |
 | `log_indexes`, `log_attribute_paths` | Existing indexes and application JSON fields |
@@ -131,7 +132,25 @@ HTTP charts include proxy health probes and unmounted requests.
 Serve decisions cover a different population. Recorded version denials are not a rejected-request rate.
 Successful metadata filtering does not report every removed version through the denial counter.
 
-Upstream charts describe metadata fetching. A genuine upstream 404 contributes to the error counter.
+Public upstream panels show request rates and `429` response rates per host.
+The table sums attempts per host over the past 30 days, independent of the dashboard time selector.
+It includes public reads by the proxy and enabled mirror workers, with shared embedded services counted once.
+The environment, service selector, and fixed deployment scope still apply.
+Selecting one service narrows the total to that service.
+
+The counter includes failed connections and cancellations after attempt notification.
+A response counts under its exact status when headers arrive, even if its body later fails.
+Cache hits, followers, local cooldown refusals, private reads, and target writes contribute nothing.
+The counter measures attempted exchanges, not confirmed receipt by the registry.
+It does not measure the rest of an organisation's registry traffic.
+
+A 30-day total only covers received telemetry within that window.
+New deployments, disabled telemetry, export gaps, and insufficient retention make the total incomplete.
+Missing data remains unknown.
+The mocked checks validate generated queries, not account ingestion or live query results.
+
+The older upstream latency and error charts describe metadata fetching.
+A genuine upstream 404 contributes to the metadata error counter.
 Dredger records an examined count and a disposition for the same version.
 Keep those separate, and keep dry-run `would_delete` separate from `deleted`.
 
@@ -147,7 +166,7 @@ The mirror section can show those publication records when its log section is en
 
 ## Signal inventory and validation
 
-[signals.json](modules/dashboard/signals.json) lists the 48 instrument names, types, SDK units, and label vocabulary.
+[signals.json](modules/dashboard/signals.json) lists the 49 instrument names, types, SDK units, and label vocabulary.
 A vocabulary can include an enum value that no configured role emits.
 Datadog lowercases metric tags, including values such as `codeArtifact` and `mirrorTarget`.
 Logs preserve their attribute case.
