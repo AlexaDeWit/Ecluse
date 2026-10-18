@@ -1676,6 +1676,44 @@ The worst-case rows run one iteration each, to bound their run time. Their repor
 spread estimate. Allocation varies little between runs, so one iteration still gives their
 allocation per request.
 
+### Complete Dredger preview cycles
+
+The separate `ecluse-dredger-bench` component measures complete preview cycles.
+It does not enter the proxy benchmark obligations or change their floors.
+Run it serially inside the pinned Nix shell:
+
+```bash
+task performance:dredger-build
+task performance:dredger-measure SAMPLES=5 > scratchpad/dredger-preview.jsonl
+```
+
+Setup compiles real temporary SQLite artifacts with 100 and 20,000 covered names through Pilot.
+A slot serves each artifact during the cycle.
+The deterministic mirror holds three packages with two versions each, beside an empty private cache.
+Each catalogue runs full and default modes against one bucket and the npm alphabet.
+Source-free rows provide both modes and both bucket shapes.
+Every row declares 1000 requests per second, a one-half budget share, and a two-second pause after two package names.
+Each sample starts at the declared pacing ceiling.
+
+The harness checks one complete preflight cycle and every measured cycle against independent expected results.
+It checks the ordered store calls, examined and retained versions, proposed removals, request counts and unchanged inventories and cursors.
+Both the control's covered-name query count and the candidate's zero-query full walk pass the preflight.
+The output reports the actual query count.
+
+The measured interval contains `sweepCycle`, including required waits and cycle reporting.
+Database compilation, store creation, rule preparation, assertions and forced GC stay outside that interval.
+JSONL rows report complete-cycle wall time, CPU time, budget work time, and requested and actual waits.
+Active time subtracts both quota and chunk waits from wall time.
+Budget work time subtracts only quota waits and ends when the cycle closes its budget.
+Query counters, request recording, wait clocks and audit recording add measured overhead in both arms.
+Allocation includes this instrumentation and the statistics snapshots.
+The process peak live-heap counter includes setup and previous samples, so it is not a per-cycle residency measurement.
+
+Compare identical harness commits on control and candidate with the same runtime settings and sample count.
+Keep all rows and compare semantic outputs, requests and required waits before timing.
+These rows measure preview throughput, not destructive-cycle throughput or live-store latency.
+They do not include the pause between cycles.
+
 ### Streaming pump rows
 
 The `stream (pump into Warp sink)` group shows the CPU cost of a flush policy on the artifact relay.

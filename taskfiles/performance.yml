@@ -1,5 +1,17 @@
 version: '3'
 tasks:
+  dredger-build:
+    desc: Build the isolated complete-cycle Dredger preview benchmark
+    cmds:
+      - cabal build bench:ecluse-dredger-bench --enable-optimization=1
+
+  dredger-measure:
+    desc: Measure qualified Dredger preview cycles as JSONL
+    vars:
+      SAMPLES: '{{.SAMPLES | default "5"}}'
+    cmds:
+      - cabal run -v0 bench:ecluse-dredger-bench --enable-optimization=1 -- {{.SAMPLES}} +RTS -N1 -RTS
+
   invalidate:
     cmds:
       - mkdir -p "$PERF_ARTIFACT_DIR"
