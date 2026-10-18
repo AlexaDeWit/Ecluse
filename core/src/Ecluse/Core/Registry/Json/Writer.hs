@@ -35,9 +35,10 @@ import Data.Primitive.PrimArray (MutablePrimArray, PrimArray, copyMutablePrimArr
 import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 
 import Ecluse.Core.Registry.Json.Intern (Entry, Name, entryIndex, entryString, entryText, foldName)
-import Ecluse.Core.Registry.Json.Packed (Packed, TableStrings (..), decodeScalar, decodeWith, encodedLength, opArray, opFalse, opInline, opNull, opObject, opShared, opTrue, packed, packedBlob, readVarint, separators, valueEnd, varintSize, writeVarint)
+import Ecluse.Core.Registry.Json.Packed (Packed, TableStrings (..), decodeScalar, decodeWith, opArray, opFalse, opInline, opNull, opObject, opShared, opTrue, packed, packedBlob, readVarint, separators, valueEnd, varintSize, writeVarint)
 import Ecluse.Core.Registry.Json.Scratch (Scratch, copyOut, decimalLength, newScratch, putAt, putByte, putDecimal, putEncodedText, putPlainBytes, putRawBytes, putVarint, reserve, rewindTo, scratchBuffer, scratchCursor)
 import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..))
+import Ecluse.Core.Registry.Json.StringEncoding (encodedLength)
 import Ecluse.Core.Registry.Json.Walk (Steps)
 
 -- | One read's scratch and member records, shared by every retained value of that read.
