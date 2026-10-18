@@ -226,6 +226,7 @@ jobs:
           otel/opentelemetry-collector@sha256:310a800ad69ee430e7c541796852a242c9c7db97aaad4daa5ccf843c525fbdb2
 
       - name: Instrumented build and run (${{ matrix.suite }})
+        id: first-suite
         env:
           COVERAGE_TASK: ${{ matrix.coverage-task }}
           SUITE: ${{ matrix.suite }}
@@ -233,7 +234,7 @@ jobs:
 
       # Runs after a failed first suite too, so one failure cannot hide the other.
       - name: Instrumented build and run (${{ matrix.second-suite }})
-        if: ${{ !cancelled() && matrix.second-suite }}
+        if: ${{ !cancelled() && matrix.second-suite && steps.first-suite.outcome != 'skipped' }}
         env:
           COVERAGE_TASK: ${{ matrix.coverage-task }}
           SUITE: ${{ matrix.second-suite }}
@@ -586,11 +587,12 @@ jobs:
         run: nix develop .#ci --command task update
 
       - name: Run the fixed package-store contract (verdaccio)
+        id: verdaccio
         run: nix develop .#ci --command task test-conformance-verdaccio
 
       # Runs after a failed Verdaccio subject too, so one failure cannot hide the other.
       - name: Run the fixed package-store contract (codeartifact)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.verdaccio.outcome != 'skipped' }}
         run: nix develop .#ci --command task test-conformance-codeartifact
 
       # Each subject writes its own <subject>.* directory under this root.
