@@ -9,6 +9,7 @@ configured the same way on every path.
 module Ecluse.Runtime.Aws.Env (
     AwsEndpoint (..),
     newAwsEnv,
+    singleAttemptEnv,
 ) where
 
-import Ecluse.Runtime.Aws.Env.Internal (AwsEndpoint (..), newAwsEnv)
+import Ecluse.Runtime.Aws.Env.Internal (AwsEndpoint (..), newAwsEnv, singleAttemptEnv)

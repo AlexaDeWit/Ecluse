@@ -2,13 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The env builder behind "Ecluse.Runtime.Aws.Env", which re-exports the curated surface.
-Importing this module opts out of that stability promise, the convention @text@ and
-@bytestring@ use, so production code imports the public one.
--}
+-- | AWS environment construction and SDK retry policy behind "Ecluse.Runtime.Aws.Env".
 module Ecluse.Runtime.Aws.Env.Internal (
     AwsEndpoint (..),
     newAwsEnv,
+    singleAttemptEnv,
     newAwsEnvWith,
 ) where
 
@@ -20,6 +18,10 @@ import Network.HTTP.Types (HeaderName)
 
 import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
 import Ecluse.Runtime.Aws.Fault (retypeAwsFailure)
+
+-- | Disable SDK retries without changing the caller's HTTP manager or hooks.
+singleAttemptEnv :: AWS.Env -> AWS.Env
+singleAttemptEnv env = AWS.once env{AWS.retryCheck = \_ _ -> False}
 
 -- | An AWS-compatible endpoint on a non-default host: a local emulator (@ministack@) in tests, or a VPC endpoint.
 data AwsEndpoint = AwsEndpoint
