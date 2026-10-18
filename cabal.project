@@ -16,7 +16,7 @@ source-repository-package
 
 -- Keep this index recent enough for the versions task freeze takes from Nix.
 -- See docs/getting-started.md, Dependency locking, for task bump-index-state.
-index-state: 2026-10-08T08:23:48Z
+index-state: 2026-10-17T17:19:18Z
 
 -- Bare cabal test does not enable tests during solving. Keep every command
 -- on the same tests-inclusive plan to avoid Cabal-7043.
@@ -30,9 +30,8 @@ benchmarks: True
 -- The stub then reports NoResponseDataReceived. Remove the cap after a fix.
 constraints: warp < 3.4.10
 
--- Match the Nix overlays until upstream widens these bounds. regression-simple
--- excludes base 4.20. aeson 2.3 fixes HSEC-2026-0007. amazonka-core excludes
--- crypton 2. crypton-connection excludes x509 1.10, which tls 2.4.10 needs.
+-- Match the Nix overlays until upstream widens. regression-simple caps base, aeson 2.3 fixes
+-- HSEC-2026-0007, amazonka-core caps crypton, crypton-connection caps x509 below 1.10.
 allow-newer:
   regression-simple:base,
   insert-ordered-containers:aeson,

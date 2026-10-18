@@ -35,9 +35,10 @@ import Data.Primitive.PrimArray (MutablePrimArray, PrimArray, copyMutablePrimArr
 import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 
 import Ecluse.Core.Registry.Json.Intern (Entry, Name, entryIndex, entryString, entryText, foldName)
-import Ecluse.Core.Registry.Json.Packed (Packed, TableStrings (..), decodeScalar, decodeWith, encodedLength, opArray, opFalse, opInline, opNull, opObject, opShared, opTrue, packed, packedBlob, readVarint, separators, valueEnd, varintSize, writeVarint)
+import Ecluse.Core.Registry.Json.Packed (Packed, TableStrings (..), decodeScalar, decodeWith, opArray, opFalse, opInline, opNull, opObject, opShared, opTrue, packed, packedBlob, readVarint, separators, valueEnd, varintSize, writeVarint)
 import Ecluse.Core.Registry.Json.Scratch (Scratch, copyOut, decimalLength, newScratch, putAt, putByte, putDecimal, putEncodedText, putPlainBytes, putRawBytes, putVarint, reserve, rewindTo, scratchBuffer, scratchCursor)
 import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..))
+import Ecluse.Core.Registry.Json.StringEncoding (encodedLength)
 import Ecluse.Core.Registry.Json.Walk (Steps)
 
 -- | One read's scratch and member records, shared by every retained value of that read.
@@ -65,20 +66,33 @@ packTree path value = runST $ do
 
 -- | Create a read's writer, optionally adding a top-level member. Shared originals are replaced and retained for diagnostics. Owned originals win.
 newWriter :: Maybe (Entry, Entry) -> ST st (Writer st)
-newWriter added =
-    Writer
-        <$> newScratch 1024
-        <*> (newPrimArray (spanWidth * 32) >>= newMutVar)
-        <*> (newArray 32 "" >>= newMutVar)
-        <*> newPrimVar 0
-        <*> (newFilled 256 (-1) >>= newMutVar)
-        <*> (newArray 256 Null >>= newMutVar)
-        <*> (newFilled 256 0 >>= newMutVar)
-        <*> (newPrimArray 64 >>= newMutVar)
-        <*> newPrimVar 0
-        <*> pure added
-        <*> newMarks
-        <*> newMutVar Nothing
+newWriter added = do
+    scratch <- newScratch 1024
+    spans <- newPrimArray (spanWidth * 32) >>= newMutVar
+    keys <- newArray 32 "" >>= newMutVar
+    top <- newPrimVar 0
+    seen <- newFilled 256 (-1) >>= newMutVar
+    strings <- newArray 256 Null >>= newMutVar
+    lengths <- newFilled 256 0 >>= newMutVar
+    order <- newPrimArray 64 >>= newMutVar
+    depth <- newPrimVar 0
+    marks <- newMarks
+    replaced <- newMutVar Nothing
+    pure
+        Writer
+            { writerScratch = scratch
+            , writerSpans = spans
+            , writerKeys = keys
+            , writerTop = top
+            , writerSeen = seen
+            , writerStrings = strings
+            , writerLengths = lengths
+            , writerOrder = order
+            , writerDepth = depth
+            , writerAdded = added
+            , writerMarks = marks
+            , writerReplaced = replaced
+            }
 
 newFilled :: Int -> Int -> ST st (MutablePrimArray st Int)
 newFilled size value = do
@@ -86,8 +100,7 @@ newFilled size value = do
     setPrimArray array 0 size value
     pure array
 
--- The marks: where the value the writer holds starts, and the span of the member the added member
--- replaced in it, or -1.
+-- A replaced-member start of -1 means no original member was retained.
 marksWidth, valueStart, replacedStart, replacedEnd :: Int
 marksWidth = 3
 valueStart = 0
@@ -105,8 +118,12 @@ data Frame = Frame !Int !Int
 
 -- Spans are records of four integers: the key's table index or -1, where the value starts and ends,
 -- and the member the key's earlier record pointed at.
-spanWidth :: Int
+spanWidth, spanKeyIndex, spanValueStart, spanValueEnd, spanPrevious :: Int
 spanWidth = 4
+spanKeyIndex = 0
+spanValueStart = 1
+spanValueEnd = 2
+spanPrevious = 3
 
 -- Build results carry no payload. Out-of-line steps keep one writer pointer in read continuations.
 instance Build (Writer st) (ST st (Steps (ST st) s)) where
@@ -216,7 +233,7 @@ dropMember :: Writer st -> ST st ()
 dropMember writer = do
     top <- readPrimVar (writerTop writer)
     spans <- readMutVar (writerSpans writer)
-    readPrimArray spans (spanWidth * (top - 1) + 1) >>= rewindTo (writerScratch writer)
+    readPrimArray spans (spanWidth * (top - 1) + spanValueStart) >>= rewindTo (writerScratch writer)
     writePrimVar (writerTop writer) (top - 1)
 {-# OPAQUE dropMember #-}
 
@@ -332,7 +349,6 @@ setSeen writer index value = do
             writePrimArray grown index value
             writeMutVar (writerSeen writer) grown
 
--- Reserve a member record that starts at the cursor.
 reserveMember :: Writer st -> ST st ()
 reserveMember writer = do
     top <- readPrimVar (writerTop writer)
@@ -351,7 +367,7 @@ reserveMember writer = do
         grown <- newArray (2 * sizeofMutableArray keys) ""
         Array.copyMutableArray grown 0 keys 0 (sizeofMutableArray keys)
         writeMutVar (writerKeys writer) grown
-    scratchCursor (writerScratch writer) >>= writePrimArray spans' (spanWidth * top + 1)
+    scratchCursor (writerScratch writer) >>= writePrimArray spans' (spanWidth * top + spanValueStart)
     writePrimVar (writerTop writer) (top + 1)
 
 -- Complete a reserved record: its key's table index or -1, the record the key hides, and its key's text.
@@ -360,9 +376,9 @@ completeMember writer member index earlier text = do
     spans <- readMutVar (writerSpans writer)
     keys <- readMutVar (writerKeys writer)
     end <- scratchCursor (writerScratch writer)
-    writePrimArray spans (spanWidth * member) index
-    writePrimArray spans (spanWidth * member + 2) end
-    writePrimArray spans (spanWidth * member + 3) earlier
+    writePrimArray spans (spanWidth * member + spanKeyIndex) index
+    writePrimArray spans (spanWidth * member + spanValueEnd) end
+    writePrimArray spans (spanWidth * member + spanPrevious) earlier
     writeArray keys member text
 
 -- The added member, written after the object's members, replaces any member under its key.
@@ -376,10 +392,10 @@ addTopMember writer (Frame _ base) (key, value) = do
             writeShared writer value
             end <- scratchCursor scratch
             spans <- readMutVar (writerSpans writer)
-            readPrimArray spans (spanWidth * earlier + 1) >>= writePrimArray (writerMarks writer) replacedStart
-            readPrimArray spans (spanWidth * earlier + 2) >>= writePrimArray (writerMarks writer) replacedEnd
-            writePrimArray spans (spanWidth * earlier + 1) start
-            writePrimArray spans (spanWidth * earlier + 2) end
+            readPrimArray spans (spanWidth * earlier + spanValueStart) >>= writePrimArray (writerMarks writer) replacedStart
+            readPrimArray spans (spanWidth * earlier + spanValueEnd) >>= writePrimArray (writerMarks writer) replacedEnd
+            writePrimArray spans (spanWidth * earlier + spanValueStart) start
+            writePrimArray spans (spanWidth * earlier + spanValueEnd) end
         else do
             writePrimArray (writerMarks writer) replacedStart (-1)
             reserveMember writer >> writeShared writer value >> endShared writer key
@@ -413,9 +429,9 @@ closeFrame writer (Frame start base) topLevel = do
 copyMembers :: Scratch st -> MutableArray st Text -> MutablePrimArray st Int -> MutablePrimArray st Int -> Int -> Int -> ST st ()
 copyMembers scratch keys spans order kept !position = when (position < kept) $ do
     member <- readPrimArray order position
-    index <- readPrimArray spans (spanWidth * member)
-    from <- readPrimArray spans (spanWidth * member + 1)
-    to <- readPrimArray spans (spanWidth * member + 2)
+    index <- readPrimArray spans (spanWidth * member + spanKeyIndex)
+    from <- readPrimArray spans (spanWidth * member + spanValueStart)
+    to <- readPrimArray spans (spanWidth * member + spanValueEnd)
     if index >= 0
         then putVarint scratch (2 * index)
         else do
@@ -426,8 +442,8 @@ copyMembers scratch keys spans order kept !position = when (position < kept) $ d
 -- Point each table key an object recorded back at the record it hid, latest record first.
 restoreSeen :: Writer st -> MutablePrimArray st Int -> Int -> Int -> ST st ()
 restoreSeen writer spans base !member = when (member >= base) $ do
-    index <- readPrimArray spans (spanWidth * member)
-    when (index >= 0) (readPrimArray spans (spanWidth * member + 3) >>= setSeen writer index)
+    index <- readPrimArray spans (spanWidth * member + spanKeyIndex)
+    when (index >= 0) (readPrimArray spans (spanWidth * member + spanPrevious) >>= setSeen writer index)
     restoreSeen writer spans base (member - 1)
 
 -- The object's spans in key order, ties in source order, in the order workspace's first slots.
@@ -453,7 +469,6 @@ fillOrder work base count !position = when (position < count) $ do
     writePrimArray work position (base + position)
     fillOrder work base count (position + 1)
 
--- Whether the first member's key sorts after the second's.
 sortsAfter :: MutableArray st Text -> Int -> Int -> ST st Bool
 sortsAfter keys a b = do
     left <- readArray keys a

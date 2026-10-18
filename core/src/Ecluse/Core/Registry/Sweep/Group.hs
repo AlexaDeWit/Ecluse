@@ -6,6 +6,7 @@
 Each package retains the observations that actually listed it.
 -}
 module Ecluse.Core.Registry.Sweep.Group (
+    InventoryLocation (..),
     groupAlphabet,
     collectGroupBucket,
     boundedVersions,
@@ -32,6 +33,10 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
 import Ecluse.Core.Registry.Sweep.Walk (BucketNames, collectBucketWith, insertInventory)
 import Ecluse.Core.Version (renderVersion)
 
+-- | A listed package's store. Constructor order keeps mirror reads and credit first.
+data InventoryLocation = MirrorInventory | PrivateCacheInventory
+    deriving stock (Eq, Ord, Show)
+
 -- | Use a common partition only when both backends declare the same alphabet.
 groupAlphabet :: StoreObservation -> StoreObservation -> NameAlphabet
 groupAlphabet mirror cache
@@ -41,13 +46,13 @@ groupAlphabet mirror cache
     alphabet = factNameAlphabet . obFacts
 
 -- | Join actual package presence under the shared bucket budget, retaining each location.
-collectGroupBucket :: NameAlphabet -> NamePrefix -> StoreObservation -> StoreObservation -> IO (BucketNames (StoreObservation, StoreFault) (PackageName, [Bool]))
+collectGroupBucket :: NameAlphabet -> NamePrefix -> StoreObservation -> StoreObservation -> IO (BucketNames (StoreObservation, StoreFault) (PackageName, [InventoryLocation]))
 collectGroupBucket alphabet prefix mirror cache =
     fmap (second Map.elems) <$> collectBucketWith alphabet prefix Map.union source
   where
     source = do
-        fault <- locatedPages False mirror
-        maybe (locatedPages True cache) (pure . Just) fault
+        fault <- locatedPages MirrorInventory mirror
+        maybe (locatedPages PrivateCacheInventory cache) (pure . Just) fault
     -- The slot keys its own entry, so a name a location lists on several pages joins once.
     locatedPages slot store =
         fmap (store,)

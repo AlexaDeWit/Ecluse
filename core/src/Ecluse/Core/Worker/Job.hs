@@ -423,54 +423,88 @@ mirrorLatest :: Maybe Version -> [Version] -> Version -> Version
 mirrorLatest upstreamLatest inventory published =
     fromMaybe published (selectLatest upstreamLatest (published : inventory))
 
--- Each fragment retains its original source and is readmitted under the current policy before a new write.
+-- Keep fixed inputs lazy so inspecting the context does not force the plan or target inventory.
+data CopyPass = CopyPass
+    { cpCharge :: ~WorkerStateBudget
+    , cpPolicy :: ~WorkerPolicy
+    , cpJob :: ~MirrorJob
+    , cpPlan :: ~PublishPlan
+    , cpTargetFiles :: ~[Artifact]
+    , cpLatest :: ~Readmitted
+    }
+
+-- Each fragment requires current admission before the pass traverses all its admitted locations.
 copyRecorded :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> PackageInfo -> Readmitted -> ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ProjectMirrorRecord
 copyRecorded charge policy job target latest record = do
     version <- requiredVersion job record
-    foldM copyFragment record (toList (versionFragments version))
+    foldM (copyFragment context) record (toList (versionFragments version))
   where
-    plan = PublishPlan (mirrorLatest (raUpstreamLatest latest) (map pkgVersion (Map.elems (infoVersions target))) (jobVersion job))
-    currentFiles = targetFiles job target
-    copyFragment current fragment = do
-        version <- requiredVersion job current
-        let files = filter (needsWork version) (toList (pkgArtifacts (fragmentDetails fragment)))
-        if null files
-            then pure current
-            else do
-                admitted <- ExceptT (admitEvaluation policy job{jobTriggerFilename = Nothing} (VersionPresent (fragmentDocument fragment) (raUpstreamLatest latest)))
-                foldM (copyFile (raPrepared admitted)) current (toList (raLocations admitted))
-    needsWork version artifact =
-        let name = artFilename artifact
-            matches = filter ((== name) . artFilename) currentFiles
-            verified = Map.lookup name (versionVerifiedIdentities version)
-         in Map.lookup name (versionCompanions version) == Just CompanionPending
-                || null matches
-                || maybe True (\file -> not (all (expectedTargetMatchesWith file verified) matches)) (Map.lookup name (versionFiles version))
-    copyFile prepared current (file, location) = do
-        version <- requiredVersion job current
-        let name = artFilename (expectedArtifact file)
-            matches = filter ((== name) . artFilename) currentFiles
-            verified = Map.lookup name (versionVerifiedIdentities version)
-            locations = location :| [candidate | (incoming, candidate) <- toList (raLocations latest), expectedIdentityMatches file incoming, candidate /= location]
-        when (any (targetIdentityConflict file verified) matches) $
-            throwError (Dropped ("mirror target identity conflicts: " <> name))
-        uploaded <-
-            if null matches
-                then mirrorArtifact charge policy job plan prepared file locations current
-                else
-                    if all (expectedTargetMatchesWith file verified) matches
-                        then pure current
-                        else do
-                            (bytes, retained) <- fetchVerified charge policy job file locations current
-                            let proof = Just (verifiedTargetHash bytes)
-                            when (any (targetIdentityConflict file proof) matches) $
-                                throwError (Dropped ("mirror target identity conflicts: " <> name))
-                            unless (all (expectedTargetMatchesWith file proof) matches) $
-                                throwError (Retried BeforePublish ("mirror file lacks compatible current identity: " <> name))
-                            pure retained
-        retained <- retainPending charge policy job file locations uploaded
-        lift recordWorkerProgress
-        pure retained
+    context =
+        CopyPass
+            { cpCharge = charge
+            , cpPolicy = policy
+            , cpJob = job
+            , cpPlan = PublishPlan (mirrorLatest (raUpstreamLatest latest) (map pkgVersion (Map.elems (infoVersions target))) (jobVersion job))
+            , cpTargetFiles = targetFiles job target
+            , cpLatest = latest
+            }
+
+copyFragment :: CopyPass -> ProjectMirrorRecord -> StoredMirrorFragment -> ExceptT JobOutcome WorkerM ProjectMirrorRecord
+copyFragment context current fragment = do
+    version <- requiredVersion job current
+    let files = filter (needsCopy (cpTargetFiles context) version) (toList (pkgArtifacts (fragmentDetails fragment)))
+    if null files
+        then pure current
+        else do
+            admitted <- ExceptT (admitEvaluation (cpPolicy context) job{jobTriggerFilename = Nothing} (VersionPresent (fragmentDocument fragment) (raUpstreamLatest (cpLatest context))))
+            foldM (copyFile context (raPrepared admitted)) current (toList (raLocations admitted))
+  where
+    job = cpJob context
+
+needsCopy :: [Artifact] -> MirrorVersion -> Artifact -> Bool
+needsCopy currentFiles version artifact =
+    let name = artFilename artifact
+        matches = filter ((== name) . artFilename) currentFiles
+        verified = Map.lookup name (versionVerifiedIdentities version)
+     in Map.lookup name (versionCompanions version) == Just CompanionPending
+            || null matches
+            || maybe True (\file -> not (all (expectedTargetMatchesWith file verified) matches)) (Map.lookup name (versionFiles version))
+
+copyFile :: CopyPass -> PreparedMirrorVersion -> ProjectMirrorRecord -> (ExpectedMirrorFile, RegistryUrl) -> ExceptT JobOutcome WorkerM ProjectMirrorRecord
+copyFile context prepared current (file, location) = do
+    version <- requiredVersion job current
+    let name = artFilename (expectedArtifact file)
+        matches = filter ((== name) . artFilename) (cpTargetFiles context)
+        verified = Map.lookup name (versionVerifiedIdentities version)
+        locations = location :| [candidate | (incoming, candidate) <- toList (raLocations (cpLatest context)), expectedIdentityMatches file incoming, candidate /= location]
+    when (any (targetIdentityConflict file verified) matches) $
+        throwError (Dropped ("mirror target identity conflicts: " <> name))
+    uploaded <-
+        if null matches
+            then mirrorArtifact charge policy job (cpPlan context) prepared file locations current
+            else
+                if all (expectedTargetMatchesWith file verified) matches
+                    then pure current
+                    else verifyExistingTarget context file locations matches current
+    retained <- retainPending charge policy job file locations uploaded
+    lift recordWorkerProgress
+    pure retained
+  where
+    charge = cpCharge context
+    policy = cpPolicy context
+    job = cpJob context
+
+verifyExistingTarget :: CopyPass -> ExpectedMirrorFile -> NonEmpty RegistryUrl -> [Artifact] -> ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ProjectMirrorRecord
+verifyExistingTarget context file locations matches current = do
+    (bytes, retained) <- fetchVerified (cpCharge context) (cpPolicy context) (cpJob context) file locations current
+    let proof = Just (verifiedTargetHash bytes)
+    when (any (targetIdentityConflict file proof) matches) $
+        throwError (Dropped ("mirror target identity conflicts: " <> name))
+    unless (all (expectedTargetMatchesWith file proof) matches) $
+        throwError (Retried BeforePublish ("mirror file lacks compatible current identity: " <> name))
+    pure retained
+  where
+    name = artFilename (expectedArtifact file)
 
 retainPending :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> ExpectedMirrorFile -> NonEmpty RegistryUrl -> ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ProjectMirrorRecord
 retainPending charge policy job file locations record = do

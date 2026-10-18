@@ -13,6 +13,7 @@ module Ecluse.Core.Fault.Http (
     httpFault,
     isRetryableStatusCode,
     displayFaultT,
+    isClientFault,
     hostPortLabel,
 
     -- * Managers
@@ -34,6 +35,7 @@ import Network.HTTP.Client (
     getOriginalRequest,
     responseStatus,
  )
+import Network.HTTP.Client.Internal (unHttpExceptionContentWrapper)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types.Status (statusCode)
 import Network.TLS qualified as TLS
@@ -100,11 +102,20 @@ httpFault = \case
 isRetryableStatusCode :: Int -> Bool
 isRetryableStatusCode code = code >= 500 || code == 408 || code == 429
 
--- | 'displayExceptionT' for a log line, except that an 'HttpException' renders through 'renderHttpFault' at the @host:port@ it dialled.
+-- | An exception for a log line, without GHC's context. A client exception renders through 'renderHttpFault' at the @host:port@ it dialled, or by its reason alone without a request.
 displayFaultT :: SomeException -> Text
-displayFaultT err = maybe (displayExceptionT err) renderDialled (fromException err)
-  where
-    renderDialled http = renderHttpFault (dialledAuthority http) (httpFault http)
+displayFaultT err
+    | Just http <- fromException err = renderHttpFault (dialledAuthority http) (httpFault http)
+    | Just content <- outsideRequest err = contentReason content
+    | otherwise = displayWithoutContext err
+
+-- | Whether 'displayFaultT' renders the exception as an http-client fault, with a request or without one.
+isClientFault :: SomeException -> Bool
+isClientFault err = isJust (fromException @HttpException err) || isJust (outsideRequest err)
+
+-- A fault http-client raises outside a request, such as a malformed proxy variable, carries no HttpException and no peer to name.
+outsideRequest :: SomeException -> Maybe HttpExceptionContent
+outsideRequest err = unHttpExceptionContentWrapper <$> fromException err
 
 -- | A dialled host and port as a log line names them, so an IPv6 host keeps its brackets.
 hostPortLabel :: Text -> Int -> Text
@@ -150,11 +161,11 @@ contentReason = \case
     TooManyHeaderFields -> "TooManyHeaderFields"
     ResponseTimeout -> "ResponseTimeout"
     ConnectionTimeout -> "ConnectionTimeout"
-    ConnectionFailure (SomeException inner) -> "ConnectionFailure: " <> displayExceptionT inner
+    ConnectionFailure inner -> "ConnectionFailure: " <> displayWithoutContext inner
     InvalidStatusLine _ -> "InvalidStatusLine"
     InvalidHeader _ -> "InvalidHeader"
     InvalidRequestHeader _ -> "InvalidRequestHeader"
-    InternalException (SomeException inner) -> "InternalException: " <> displayExceptionT inner
+    InternalException inner -> "InternalException: " <> displayWithoutContext inner
     ProxyConnectException{} -> "ProxyConnectException"
     NoResponseDataReceived -> "NoResponseDataReceived"
     TlsNotSupported -> "TlsNotSupported"
@@ -167,3 +178,7 @@ contentReason = \case
     InvalidProxyEnvironmentVariable name _ -> "InvalidProxyEnvironmentVariable: " <> name
     ConnectionClosed -> "ConnectionClosed"
     InvalidProxySettings _ -> "InvalidProxySettings"
+
+-- GHC 9.10 appends the exception context, a backtrace, to a SomeException's display. The exception inside renders without it.
+displayWithoutContext :: SomeException -> Text
+displayWithoutContext (SomeException inner) = displayExceptionT inner

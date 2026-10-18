@@ -14,11 +14,7 @@ front of it, and the network around it.
 container command selects the role. Every role reads the same configuration, so you write it once
 and run the roles your deployment needs.
 
-The image is built for `linux/amd64` and `linux/arm64`. The amd64 image needs a processor with AVX2
-and BMI2. On a processor without either, the process stops with an illegal instruction and prints
-no message. That covers Intel processors older than Haswell, AMD processors older than Excavator,
-many Atom-class processors, and a virtual machine whose hypervisor presents an older processor
-model: QEMU's default model has no AVX2. The arm64 image has no such requirement.
+The image is built for `linux/amd64` and `linux/arm64`.
 
 | Command | What it does | How to run it |
 |---|---|---|
@@ -110,10 +106,12 @@ one they accepted. If the feed stays down past the maximum advisory age, the adv
 
 ## The recommended topology
 
-{{ diagram(name="topology", alt="The registry topology. Clients and CI call the Écluse proxy, which reads the private upstream union of the publication and mirror stores, fetches gated content from the public registry, and queues admitted versions for the mirror worker to write to the mirror target.", caption="The registry topology: only gated public content enters the union, the mirror write is the single path public packages take into the trusted stores, and no edge runs from the public registry into them. The diagram shows the stores, not every role.") }}
+{{ diagram(name="registry-topology", alt="The proxy reads trusted endpoint C, which unions first-party A and mirror B. Public packages pass through the proxy admission gate, never directly into C.", caption="The recommended registry roles and their trust boundaries. A and B hold packages. C provides the private read view.") }}
 
-The [threat model's data-flow diagram](@/docs/threat-model.md#data-flow-diagram) shows every role,
-the advisory store, and the trust boundaries.
+The [threat model](@/docs/threat-model.md) follows each operation in its own view, including
+[mirror writes](@/docs/threat-model.md#mirror-writes-and-completion),
+[advisory distribution](@/docs/threat-model.md#advisory-distribution), and
+[revocation](@/docs/threat-model.md#revocation-and-cleanup).
 
 This is the posture the [threat model](@/docs/threat-model.md) treats as canonical. Aim for it
 unless you have a specific reason to diverge.
