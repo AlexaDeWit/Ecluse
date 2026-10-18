@@ -7,7 +7,7 @@
     "runs": [
       "https://github.com/AlexaDeWit/Ecluse/actions/runs/39004627180/job/117314717591"
     ],
-    "marginPercent": 10
+    "marginPercent": 1
   },
   "allocatedBytes": {
     "npm": {

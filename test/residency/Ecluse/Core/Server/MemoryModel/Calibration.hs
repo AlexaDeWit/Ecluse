@@ -2,29 +2,33 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Exact observations that derive the residency limits and check production admission factors.
+-- | Measured figures behind the residency regression limits, and the maxima behind production admission charges.
 module Ecluse.Core.Server.MemoryModel.Calibration (
+    -- * Admission charges
     Calibration (..),
     marginCharge,
     fullReadCharge,
-    regressionLimit,
     npmCalibration,
     pypiCalibration,
-    pypiRawLimit,
+
+    -- * Regression limits
+    Figures (..),
+    heldLimit,
+    readPeakLimit,
+    npmFigures,
+    pypiFigures,
 ) where
 
+import Data.Map.Strict qualified as Map
 import Data.Ratio ((%))
 
--- | Historical maxima remain independent when a later measurement lowers a retained envelope.
+import Ecluse.Test.Corpus.Merge (MergeShape (Disjoint, Identical, Overlapping, PublishOrder))
+
+-- | The listing maxima that set an ecosystem's admission charges.
 data Calibration = Calibration
     { realisticReadMaximum :: Rational
     , allReadMaximum :: Rational
-    , singleReadMaximum :: Rational
     , outputMaximum :: Rational
-    , wireMaximum :: Rational
-    , rawMaximum :: Rational
-    , typedMaximum :: Rational
-    , sharedMaximum :: Rational
     }
 
 -- | A 25% margin rounded up to a tenth, in permille.
@@ -35,43 +39,201 @@ marginCharge maximumRatio = 100 * ceiling (maximumRatio * 25 / 2)
 fullReadCharge :: Calibration -> Integer
 fullReadCharge calibration = max (marginCharge (realisticReadMaximum calibration)) (100 * ceiling (10 * allReadMaximum calibration))
 
--- | An 8% margin rounded up to a quarter step, in permille.
-regressionLimit :: Rational -> Integer
-regressionLimit maximumRatio = 250 * ceiling (maximumRatio * 108 / 25)
-
--- | npm's native parser, retained projection and packed-entry calibrations.
+-- | npm's listing maxima.
 npmCalibration :: Calibration
 npmCalibration =
     -- Listing counts: https://github.com/AlexaDeWit/Ecluse/actions/runs/38107103485/job/114374944192
     Calibration
         { realisticReadMaximum = 5856896 % 6997055
         , allReadMaximum = 51887 % 54134
-        , singleReadMaximum = 5856896 % 6997055
         , outputMaximum = 2112758 % 1386415
-        , -- Retained counts: https://github.com/AlexaDeWit/Ecluse/actions/runs/36392431999/job/108832038539
-          wireMaximum = 15693000 % 15693959
-        , rawMaximum = 2620196 % 404491
-        , typedMaximum = 239024 % 538235
-        , -- Packed-entry counts: https://github.com/AlexaDeWit/Ecluse/actions/runs/38059331291/job/114237799183
-          sharedMaximum = 4873008 % 6997055
         }
 
--- | PyPI's sidecar listing calibration and unchanged retained calibration.
+-- | PyPI's listing maxima with canonical sidecars retained.
 pypiCalibration :: Calibration
 pypiCalibration =
     -- Listing counts: https://github.com/AlexaDeWit/Ecluse/actions/runs/38180562637/job/114592183296
     Calibration
         { realisticReadMaximum = 513112 % 183837
         , allReadMaximum = 513112 % 183837
-        , singleReadMaximum = 513112 % 183837
         , outputMaximum = 816606 % 553037
-        , -- Retained counts: https://github.com/AlexaDeWit/Ecluse/actions/runs/36392431999/job/108832038539
-          wireMaximum = 694786 % 695037
-        , rawMaximum = 2272328 % 551511
-        , typedMaximum = 12219 % 7694
-        , sharedMaximum = 48165 % 15388
         }
 
--- | PyPI's raw tree keeps the original default instead of a calibrated regression limit.
-pypiRawLimit :: Integer
-pypiRawLimit = 7000
+-- | One capture's live bytes per source byte, and per basis byte for an output working set.
+data Figures = Figures
+    { retainedWire :: Rational
+    , retainedRaw :: Rational
+    , retainedTyped :: Rational
+    , retainedShared :: Rational
+    , readPeak :: Maybe Rational
+    -- ^ The single listing's read peak, measured from one meter step of source up.
+    , singleOutput :: Maybe Rational
+    -- ^ The single listing's output working set, measured from one meter step of basis up.
+    , mergedOutputs :: Map MergeShape Rational
+    -- ^ Each realistic merge's output working set, measured from one meter step of basis up.
+    }
+
+-- | Held bytes repeat to the byte between runs: the figure plus 3%, rounded up to a permille.
+heldLimit :: Rational -> Integer
+heldLimit ratio = ceiling (ratio * 1030)
+
+-- | A read peak moves by up to 0.4% between runs: the figure plus 4%, rounded up to a permille.
+readPeakLimit :: Rational -> Integer
+readPeakLimit ratio = ceiling (ratio * 1040)
+
+-- | npm figures by capture name. Each read peak is the largest of the ten main runs up to the job cited.
+npmFigures :: Map Text Figures
+npmFigures =
+    -- https://github.com/AlexaDeWit/Ecluse/actions/runs/39085443993/job/117558292470
+    Map.fromList
+        [
+            ( "@types/node"
+            , Figures
+                { retainedWire = 11148200 % 11150508
+                , retainedRaw = 64051032 % 11150508
+                , retainedTyped = 2208328 % 11150508
+                , retainedShared = 3413528 % 11150508
+                , readPeak = Just (4238952 % 11150508)
+                , singleOutput = Just (3903736 % 11150508)
+                , mergedOutputs = Map.fromList [(Identical, 3903736 % 11150508), (Overlapping, 3903736 % 11152697), (Disjoint, 3903736 % 11153414), (PublishOrder, 3903736 % 11150508)]
+                }
+            )
+        ,
+            ( "webpack"
+            , Figures
+                { retainedWire = 5197936 % 5200717
+                , retainedRaw = 24358328 % 5200717
+                , retainedTyped = 836640 % 5200717
+                , retainedShared = 1695400 % 5200717
+                , readPeak = Just (2431232 % 5200717)
+                , singleOutput = Just (7403116 % 5200717)
+                , mergedOutputs = Map.fromList [(Identical, 7403116 % 5200717), (Overlapping, 7403116 % 5247473), (Disjoint, 7403116 % 5278738), (PublishOrder, 7403116 % 6285681)]
+                }
+            )
+        ,
+            ( "@aws-sdk/client-s3"
+            , Figures
+                { retainedWire = 4155592 % 4159245
+                , retainedRaw = 20228728 % 4159245
+                , retainedTyped = 729584 % 4159245
+                , retainedShared = 1462984 % 4159245
+                , readPeak = Just (2050016 % 4159245)
+                , singleOutput = Just (6338274 % 4159245)
+                , mergedOutputs = Map.fromList [(Identical, 6338274 % 4159245), (Overlapping, 6338274 % 4190408), (Disjoint, 6338274 % 4221118), (PublishOrder, 6338274 % 4159245)]
+                }
+            )
+        ,
+            ( "express"
+            , Figures
+                { retainedWire = 805024 % 808982
+                , retainedRaw = 5237312 % 808982
+                , retainedTyped = 251928 % 808982
+                , retainedShared = 449776 % 808982
+                , readPeak = Nothing
+                , singleOutput = Nothing
+                , mergedOutputs = mempty
+                }
+            )
+        ,
+            ( "typescript"
+            , Figures
+                { retainedWire = 15689256 % 15693959
+                , retainedRaw = 92046584 % 15693959
+                , retainedTyped = 4129440 % 15693959
+                , retainedShared = 7343736 % 15693959
+                , readPeak = Just (8822304 % 15693959)
+                , singleOutput = Just (20694364 % 15693959)
+                , mergedOutputs = Map.fromList [(Identical, 20694364 % 15693959), (Overlapping, 20694364 % 15695441), (Disjoint, 20694364 % 15699578), (PublishOrder, 20694364 % 15693959)]
+                }
+            )
+        ,
+            ( "@babel/core"
+            , Figures
+                { retainedWire = 792000 % 797193
+                , retainedRaw = 3986128 % 797193
+                , retainedTyped = 210600 % 797193
+                , retainedShared = 370680 % 797193
+                , readPeak = Nothing
+                , singleOutput = Nothing
+                , mergedOutputs = mempty
+                }
+            )
+        ,
+            ( "react"
+            , Figures
+                { retainedWire = 6991432 % 6997055
+                , retainedRaw = 35633200 % 6997055
+                , retainedTyped = 3124552 % 6997055
+                , retainedShared = 4893040 % 6997055
+                , readPeak = Just (5926736 % 6997055)
+                , singleOutput = Just (6925034 % 6997055)
+                , mergedOutputs = Map.fromList [(Identical, 6925034 % 6997055), (Overlapping, 6925034 % 7016607), (Disjoint, 6925034 % 7012325), (PublishOrder, 6925034 % 6997055)]
+                }
+            )
+        ,
+            ( "request"
+            , Figures
+                { retainedWire = 300984 % 307243
+                , retainedRaw = 1660064 % 307243
+                , retainedTyped = 98280 % 307243
+                , retainedShared = 176440 % 307243
+                , readPeak = Nothing
+                , singleOutput = Nothing
+                , mergedOutputs = mempty
+                }
+            )
+        ,
+            ( "lodash"
+            , Figures
+                { retainedWire = 240944 % 247678
+                , retainedRaw = 1454272 % 247678
+                , retainedTyped = 90640 % 247678
+                , retainedShared = 148392 % 247678
+                , readPeak = Nothing
+                , singleOutput = Nothing
+                , mergedOutputs = mempty
+                }
+            )
+        ]
+
+-- | PyPI figures by capture name, from the same runs as 'npmFigures'.
+pypiFigures :: Map Text Figures
+pypiFigures =
+    Map.fromList
+        [
+            ( "boto3"
+            , Figures
+                { retainedWire = 2198000 % 2206044
+                , retainedRaw = 9082272 % 2206044
+                , retainedTyped = 3775632 % 2206044
+                , retainedShared = 5642064 % 2206044
+                , readPeak = Just (6161208 % 2206044)
+                , singleOutput = Just (3232642 % 2206044)
+                , mergedOutputs = Map.fromList [(Identical, 3232642 % 2206044), (Overlapping, 3232642 % 2206155), (Disjoint, 3232642 % 2206172), (PublishOrder, 3232642 % 2206044)]
+                }
+            )
+        ,
+            ( "numpy"
+            , Figures
+                { retainedWire = 2771472 % 2780148
+                , retainedRaw = 10327440 % 2780148
+                , retainedTyped = 3340592 % 2780148
+                , retainedShared = 5667808 % 2780148
+                , readPeak = Just (6340096 % 2780148)
+                , singleOutput = Just (4083030 % 2780148)
+                , mergedOutputs = Map.fromList [(Identical, 4083030 % 2780148), (Overlapping, 4083030 % 2774356), (Disjoint, 4083030 % 2765185), (PublishOrder, 4083030 % 3467301)]
+                }
+            )
+        ,
+            ( "requests"
+            , Figures
+                { retainedWire = 113728 % 123104
+                , retainedRaw = 494440 % 123104
+                , retainedTyped = 213320 % 123104
+                , retainedShared = 320272 % 123104
+                , readPeak = Nothing
+                , singleOutput = Nothing
+                , mergedOutputs = mempty
+                }
+            )
+        ]
