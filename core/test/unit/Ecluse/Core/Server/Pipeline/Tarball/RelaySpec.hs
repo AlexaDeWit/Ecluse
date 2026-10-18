@@ -2,16 +2,43 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Relay classification and private refusal preserve response commitment.
 module Ecluse.Core.Server.Pipeline.Tarball.RelaySpec (spec) where
 
 import Data.Text qualified as T
-import Network.HTTP.Types (hContentLength, hContentType, status200, status304, status404, status503)
+import Ecluse.Core.Server.Stream (RelayResponder (..))
+import Network.HTTP.Types (hContentLength, hContentType, status200, status304, status401, status403, status404, status503)
 import Test.Hspec
 
-import Ecluse.Core.Server.Pipeline.Tarball.Relay (RelayVerdict (RelayedArtifact, RelayedNonSuccess, RelayedOddShape), relayVerdict)
+import Ecluse.Core.Server.Pipeline.Tarball.Relay (RelayVerdict (RelayedArtifact, RelayedNonSuccess, RelayedOddShape), acceptPrivateArtifact, privateArtifactResponder, relayVerdict)
 
 spec :: Spec
-spec = describe "relayVerdict (the public relay judged from status and headers alone)" $ do
+spec = do
+    privateResponderSpec
+    publicVerdictSpec
+
+privateResponderSpec :: Spec
+privateResponderSpec = describe "private artifact relay" $ do
+    it "accepts only artifacts, validators, and access refusals" $
+        map acceptPrivateArtifact [status200, status304, status401, status403, status404, status503]
+            `shouldBe` [True, True, True, True, False, False]
+
+    for_ [status401, status403] $ \status ->
+        it ("replaces " <> show status <> " without touching upstream responders or body") $ do
+            let upstream = RelayResponder (\_ _ _ -> fail "stream responder called") (\_ _ -> fail "empty responder called")
+                responder = privateArtifactResponder (pure ("refused" :: Text)) id upstream
+            relayStreamResponse responder status [] (\_ _ -> fail "body read") `shouldReturn` "refused"
+            relayEmptyResponse responder status [] `shouldReturn` "refused"
+
+    it "retains admitted status and validators for stream and empty responses" $ do
+        let headers = [("ETag", "version-one")]
+            upstream = RelayResponder (\status hs _ -> pure (status, hs)) (curry pure)
+            responder = privateArtifactResponder (fail "refusal called") id upstream
+        relayStreamResponse responder status200 headers (\_ _ -> pure ()) `shouldReturn` (status200, headers)
+        relayEmptyResponse responder status304 headers `shouldReturn` (status304, headers)
+
+publicVerdictSpec :: Spec
+publicVerdictSpec = describe "relayVerdict (the public relay judged from status and headers alone)" $ do
     it "a success with a binary content type is the artifact" $
         relayVerdict status200 [(hContentType, "application/octet-stream")] `shouldBe` RelayedArtifact
 

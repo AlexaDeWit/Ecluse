@@ -14,7 +14,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Builder (byteString)
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (Method, Status, hContentLength, status200, status304, status401, status403, status404, status500, statusCode)
+import Network.HTTP.Types (Method, Status, hContentLength, status200, status304, status401, status403, status404, status500)
 import Network.Wai (Request, ResponseReceived, requestHeaders)
 import UnliftIO (tryAny)
 
@@ -22,7 +22,6 @@ import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Mirror.State (MirrorVersion, recordVersion, versionFiles)
 import Ecluse.Core.Package (Artifact (..), CoreMetadata (..), PackageDetails (pkgArtifacts), PackageInfo (PackageInfo), PackageName)
 import Ecluse.Core.Package.Integrity (IntegrityFloor, partitionByFloor)
-import Ecluse.Core.Registry (isAuthorisationFailure)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Metadata (MetadataClient (fetchVersionMetadata), VersionDoc (vdDetails), VersionRead (vrVersion))
 import Ecluse.Core.Registry.Request (sidecarUrl)
@@ -37,7 +36,7 @@ import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (..), preparePublicMetadat
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Private (privateMetadataMiss)
 import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, firstPartyMissRefusal, upstreamUnavailable, versionAbsent)
-import Ecluse.Core.Server.Pipeline.Tarball.Relay (ArtifactServe (..), acceptArtifact, relayUnjudged, relayUpstreamResult, withMethod, withValidators)
+import Ecluse.Core.Server.Pipeline.Tarball.Relay (ArtifactServe (..), acceptPrivateArtifact, privateArtifactResponder, relayUnjudged, relayUpstreamResult, withMethod, withValidators)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..))
 import Ecluse.Core.Server.Response (ServeDecision, mkRefusal)
 import Ecluse.Core.Server.Route (isHead)
@@ -157,13 +156,11 @@ servePrivate ctx = \case
     Refused -> refusePrivate ctx
     Missing miss -> fallback ctx miss
     Selected request -> do
-        result <- relay ctx True (srPrivateManager (arRuntime ctx)) acceptPrivate request
+        result <- relay ctx True (srPrivateManager (arRuntime ctx)) acceptPrivateArtifact request
         case result of
             UpstreamRelayed (_, received) -> pure received
             UpstreamRejected status -> answerError ctx (if status == status404 then versionAbsent else upstreamUnavailable)
             UpstreamTransportFailure -> answerError ctx upstreamUnavailable
-  where
-    acceptPrivate status = acceptArtifact status || isAuthorisationFailure (statusCode status)
 
 fallback :: ArtifactRequest response -> OriginMiss -> Handler ResponseReceived
 fallback ctx miss
@@ -194,9 +191,13 @@ relay ctx private manager accepts request =
     replies = arReplies ctx
     respond = arRespond ctx
     responder =
+        if private
+            then privateArtifactResponder (respond (privateRefusal ctx)) id upstreamResponder
+            else upstreamResponder
+    upstreamResponder =
         RelayResponder
-            (\status headers body -> respond (if private && isAuthorisationFailure (statusCode status) then privateRefusal ctx else tarballStream replies status headers body))
-            (\status headers -> respond (if private && isAuthorisationFailure (statusCode status) then privateRefusal ctx else tarballEmpty replies status headers))
+            (\status headers body -> respond (tarballStream replies status headers body))
+            (\status headers -> respond (tarballEmpty replies status headers))
 
 privateRefusal :: ArtifactRequest response -> response
 privateRefusal ctx = tarballError (arReplies ctx) status403 [] (privateAuthorisationRefusal (pdHelp (arDeps ctx)))
