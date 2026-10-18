@@ -480,7 +480,8 @@ fullWalkSpec = describe "the full walk" $ do
         tallyExamined (outcomeTally outcome) `shouldBe` 2
         tallyDeleted (outcomeTally outcome) `shouldBe` 0
         tallyKept (outcomeTally outcome) `shouldBe` 2
-        reverse <$> readIORef reads' `shouldReturn` ["left-pad", "lodash"]
+        -- The default advisory policy makes one initial attempt and two retries per package.
+        reverse <$> readIORef reads' `shouldReturn` ["left-pad", "left-pad", "left-pad", "lodash", "lodash", "lodash"]
         readFakeContents store `shouldReturn` fakeContents seededConfig
 
     it "decides every name in the store, candidate or not" $ do
