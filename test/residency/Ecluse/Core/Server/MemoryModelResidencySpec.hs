@@ -30,8 +30,8 @@ import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Admission.Budget (roundUpToStep, scaleCharge)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfOutputPermille))
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
-import Ecluse.Core.Server.MemoryModel.Calibration (fullReadCharge)
-import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), Measurement (..), PeakLimits (..), Residency (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), SingleListing (..), measureInChild, packages, probeSelected, probeSource, requireResidency, writeMergeDocuments)
+import Ecluse.Core.Server.MemoryModel.Calibration (Figures (..), fullReadCharge, heldLimit, readPeakLimit)
+import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), Measurement (..), Residency (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), SingleListing (..), measureInChild, packages, probeSelected, probeSource, requireFigures, requireResidency, retainedFigure, writeMergeDocuments)
 import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
 import Ecluse.Core.Snapshot (digestBytes)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -49,10 +49,7 @@ spec = do
                     record <- requireResidency ecosystem
                     length (residencyPackages record) `shouldSatisfy` (> 0)
                     map (pkgEcosystem . cpPackage) (residencyPackages record) `shouldSatisfy` all (== ecosystem)
-                    let limits = residencyPeakLimits record
-                    readPeakLimit limits `shouldSatisfy` (> 0)
-                    outputLimit limits `shouldSatisfy` (> 0)
-                    for_ [minBound .. maxBound] $ \shape -> residencyEnvelope record shape `shouldSatisfy` (> 0)
+                    Map.keys (residencyFigures record) `shouldMatchList` map cpName (residencyPackages record)
     describe "metadata retained heap" $ do
         it "includes an authenticated capture above the previous 3,687,514-byte maximum" $ do
             sizes <- traverse authenticate packages
@@ -65,16 +62,16 @@ spec = do
                         Left failure -> expectationFailure failure
                         Right result -> do
                             report package digest shape result
-                            checkMeasurement (pkgEcosystem (cpPackage package)) shape size result
+                            checkMeasurement package shape size result
     describe "listing peak heap" $ do
         it "keeps each regression limit below its charge" $
             for_ universe $ \ecosystem ->
                 for_ (adapterFor ecosystem) $ \adapter -> do
                     record <- requireResidency ecosystem
                     let factors = metadataChargeFactors (adapterMetadata adapter)
-                        limits = residencyPeakLimits record
-                    readPeakLimit limits `shouldSatisfy` (< toInteger (cfFullReadPermille factors))
-                    outputLimit limits `shouldSatisfy` (< toInteger (cfOutputPermille factors))
+                    for_ (residencyFigures record) $ \figures -> do
+                        map readPeakLimit (maybeToList (readPeak figures)) `shouldSatisfy` all (< toInteger (cfFullReadPermille factors))
+                        map heldLimit (maybeToList (singleOutput figures) <> Map.elems (mergedOutputs figures)) `shouldSatisfy` all (< toInteger (cfOutputPermille factors))
         forM_ packages $ \package -> it (toString (cpName package)) $ do
             (size, _) <- authenticate package
             measureInChild Mode.Listing package >>= \case
@@ -92,11 +89,11 @@ spec = do
                     listingSourceBytes peaks `shouldBe` size
                     listingBasisBytes peaks `shouldBe` size
                     (record, factors) <- listingBounds package
-                    let limits = residencyPeakLimits record
+                    figures <- requireFigures package
                     checkPaid factors peaks
-                    checkReadPeak limits peaks
+                    checkReadPeak (readPeak figures) peaks
                     checkOutputCharge factors peaks
-                    checkOutputLimit limits peaks
+                    checkOutputLimit (singleOutput figures) peaks
                     when (residencyEntryBelowSource record) (rise listingEntryLive listingBaseline peaks `shouldSatisfy` (< toInteger size))
                     singleDocumentLive single `shouldSatisfy` (> 0)
                     singleDocumentLive single `shouldSatisfy` (<= toInteger (singleDocumentCharge single))
@@ -120,10 +117,10 @@ spec = do
                         peaks
                     checkBasis shape size peaks
                     (_, factors) <- listingBounds package
-                    let limits = residencyPeakLimits record
+                    figures <- requireFigures package
                     checkPaid factors peaks
                     checkOutputCharge factors peaks
-                    when (realisticShape shape) (checkOutputLimit limits peaks)
+                    when (realisticShape shape) (checkOutputLimit (Map.lookup shape (mergedOutputs figures)) peaks)
 
 merges :: [(CorpusPackage, MergeShape)]
 merges = [(package, shape) | package <- packages, shape <- [minBound .. maxBound]]
@@ -140,17 +137,17 @@ measureMerges = do
         (private, public) <- writeMergeDocuments shape directory package
         measureInChild (Mode.Merge private public) package
 
-checkMeasurement :: Ecosystem -> Shape -> Int -> Measurement -> Expectation
-checkMeasurement ecosystem shape size result = do
-    record <- requireResidency ecosystem
-    factors <- maybe (fail "residency ecosystem has no adapter") pure (chargeFactors ecosystem)
+checkMeasurement :: CorpusPackage -> Shape -> Int -> Measurement -> Expectation
+checkMeasurement package shape size result = do
+    figures <- requireFigures package
+    factors <- maybe (fail "residency ecosystem has no adapter") pure (chargeFactors (pkgEcosystem (cpPackage package)))
     let retained = toInteger (heldLive result) - toInteger (baselineLive result)
         residual = max 0 (toInteger (releasedLive result) - toInteger (baselineLive result))
     wireBytes result `shouldBe` size
     retained `shouldSatisfy` (> 0)
     residual `shouldSatisfy` (<= 16 * 1024)
     (10 * residual) `shouldSatisfy` (<= retained)
-    (1000 * retained) `shouldSatisfy` (<= residencyEnvelope record shape * toInteger size)
+    (1000 * retained) `shouldSatisfy` (<= heldLimit (retainedFigure shape figures) * toInteger size)
     when (shape == Typed || shape == Shared) (versions result `shouldSatisfy` (> 0))
     when (shape == Shared) $ do
         (1000 * retained) `shouldSatisfy` (<= toInteger (cfFullReadPermille factors) * toInteger size)
@@ -172,10 +169,11 @@ checkPaid factors peaks = do
     output = scaleCharge (cfOutputPermille factors) (listingBasisBytes peaks)
     paid = toInteger . roundUpToStep meterStepBytes . max meterStepBytes
 
--- From one step of source up, a read's peak stays under its limit, which sits below its charge.
-checkReadPeak :: PeakLimits -> ListingPeaks -> Expectation
-checkReadPeak limits peaks = when (size >= meterStepBytes) $ do
-    (1000 * rise listingReadPeak listingBaseline peaks) `shouldSatisfy` (<= readPeakLimit limits * toInteger size)
+-- From one step of source up, a read's peak stays under its capture's limit, which sits below its charge.
+checkReadPeak :: Maybe Rational -> ListingPeaks -> Expectation
+checkReadPeak figure peaks = when (size >= meterStepBytes) $ case figure of
+    Nothing -> expectationFailure "no read peak figure for a source of at least one meter step"
+    Just ratio -> (1000 * rise listingReadPeak listingBaseline peaks) `shouldSatisfy` (<= readPeakLimit ratio * toInteger size)
   where
     size = listingSourceBytes peaks
 
@@ -185,9 +183,11 @@ checkOutputCharge factors peaks = when (basis >= meterStepBytes) $ outputWorking
   where
     basis = listingBasisBytes peaks
 
--- From one step of basis up, a realistic listing's output working set stays under its limit.
-checkOutputLimit :: PeakLimits -> ListingPeaks -> Expectation
-checkOutputLimit limits peaks = when (basis >= meterStepBytes) $ (1000 * outputWorkingSet peaks) `shouldSatisfy` (<= outputLimit limits * toInteger basis)
+-- From one step of basis up, a realistic listing's output working set stays under its own limit.
+checkOutputLimit :: Maybe Rational -> ListingPeaks -> Expectation
+checkOutputLimit figure peaks = when (basis >= meterStepBytes) $ case figure of
+    Nothing -> expectationFailure "no output working set figure for a basis of at least one meter step"
+    Just ratio -> (1000 * outputWorkingSet peaks) `shouldSatisfy` (<= heldLimit ratio * toInteger basis)
   where
     basis = listingBasisBytes peaks
 
