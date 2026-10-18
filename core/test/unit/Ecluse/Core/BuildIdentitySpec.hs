@@ -34,8 +34,10 @@ spec = describe "the proxy's build identity" $ do
             `shouldBe` encodeUtf8 (productName <> "/" <> productVersion <> " (+https://ecluse-proxy.com; contact: platform@example.com)")
 
     for_ ["a", T.replicate 256 "a", "https://example.com/contact", "a b"] $ \value ->
-        it ("accepts contact " <> show value) $
-            isRight (parseOperatorContact value) `shouldBe` True
+        it ("retains the accepted contact " <> show value) $ do
+            contact <- either (fail . toString) pure (parseOperatorContact value)
+            renderUserAgent (Just contact)
+                `shouldBe` encodeUtf8 (productName <> "/" <> productVersion <> " (+https://ecluse-proxy.com; contact: " <> value <> ")")
 
     for_ ["", T.replicate 257 "a", "(", ")", "\\", "\r", "\n", "\t", "\0", "\DEL", "é"] $ \value ->
         it ("refuses contact " <> show value) $
@@ -56,6 +58,14 @@ spec = describe "the proxy's build identity" $ do
             once <- managerModifyRequest settings request
             twice <- managerModifyRequest settings once
             requestHeaders twice `shouldBe` [(hUserAgent, renderedAgent)]
+
+    it "keeps unrelated headers when replacing the default product identity" $ do
+        contact <- either (fail . toString) pure (parseOperatorContact "platform@example.com")
+        let renderedAgent = renderUserAgent (Just contact)
+            request = defaultRequest{requestHeaders = [("Accept", "application/json"), (hUserAgent, userAgent), ("X-Request", "kept")]}
+            settings = identityManagerSettings renderedAgent defaultManagerSettings
+        identified <- managerModifyRequest settings request
+        requestHeaders identified `shouldBe` [(hUserAgent, renderedAgent), ("Accept", "application/json"), ("X-Request", "kept")]
 
     for_ (["custom/1", "aws-sdk-haskell/1"] :: [Text]) $ \custom ->
         it ("preserves configured caller identity " <> toString custom) $ do

@@ -7,6 +7,7 @@ module Ecluse.ServiceSpec (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Time (addUTCTime, getCurrentTime)
+import Katip (LogEnv)
 import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (InternalException), brConsume, newManager, parseRequest, responseBody, withResponse)
 import Test.Hspec
 import UnliftIO.Exception (try)
@@ -18,6 +19,7 @@ import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbO
 import Ecluse.Composition.Support (expectConfig, expectPlanFor, noCeiling, staticEnvVars)
 import Ecluse.Composition.TelemetrySupport (advisoryAgePoints, newAdvisoryHandles, withRoleTelemetry)
 import Ecluse.Composition.Types (BootRole (BootMirrorPipeline), MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
+import Ecluse.Core.BuildIdentity (parseOperatorContact, renderUserAgent)
 import Ecluse.Core.Cve.Slot (swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
@@ -34,15 +36,18 @@ import Ecluse.Core.Worker (
 import Ecluse.Core.Worker.Liveness (newWorkerHeartbeatWithClock)
 import Ecluse.Cve.Sync (CveSyncHandle (csEnv))
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncSlot))
+import Ecluse.Runtime.Env (envManager, envPrivateManager)
 import Ecluse.Runtime.Server (MountBinding (bindingPrefix))
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryDisabled)
-import Ecluse.Service (dataPlaneManagerSettings, mountBindingFor, withServiceRuntime, workerLiveness)
+import Ecluse.Service (ServiceRuntime (svcEnv), dataPlaneManagerSettings, mountBindingFor, withServiceRuntime, workerLiveness)
 import Ecluse.Test.Cve (fakeCveDb)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
+import Ecluse.Test.Stub (headerValue, lastCaptured, stubBaseUrl, withStub)
 import Ecluse.Test.Stub.Socket (resetAfterPartialBodyOverTcp, withRawServer)
 import Ecluse.Test.Support (newTestClock)
+import Network.HTTP.Types.Status (status200)
 
 stalledHeartbeat :: IO WorkerHeartbeat
 stalledHeartbeat = do
@@ -55,6 +60,7 @@ spec :: Spec
 spec = do
     advisoryAgeSpec
     dataPlaneSpec
+    outboundIdentitySpec
     describe "workerLiveness, what /livez answers once the spawn decision is derived" $ do
         it "reports a stalled consume loop as not live where the process runs one" $ do
             liveness <- stalledHeartbeat >>= workerLiveness True
@@ -118,35 +124,56 @@ typesBodyResetUnder telemetry = withRawServer resetAfterPartialBodyOverTcp $ \po
         Left other -> expectationFailure ("expected a typed body-read reset, got " <> show other)
         Right _ -> expectationFailure "a reset body was read whole"
 
+outboundIdentitySpec :: Spec
+outboundIdentitySpec = describe "the runtime's outbound registry identity" $
+    for_ [Nothing, Just "platform@example.com"] $ \contactText ->
+        it ("uses the configured identity in both registry managers: " <> show contactText) $
+            withRoleTelemetry $ \logEnv telemetry _ -> do
+                contact <- either (fail . toString) pure (traverse parseOperatorContact contactText)
+                let expected = renderUserAgent contact
+                    environment = maybe [] (\value -> [("ECLUSE_EGRESS__OPERATOR_CONTACT", toString value)]) contactText <> staticEnvVars
+                withServicePlan ServeAndMirror environment logEnv telemetry $ \boot plan mirror ->
+                    withServiceRuntime boot plan mirror $ \runtime ->
+                        for_ [envManager (svcEnv runtime), envPrivateManager (svcEnv runtime)] $ \manager ->
+                            withStub status200 "ok" $ \stub -> do
+                                request <- parseRequest (toString (stubBaseUrl stub))
+                                fmap mconcat (withResponse request manager (brConsume . responseBody)) `shouldReturn` "ok"
+                                captured <- lastCaptured stub
+                                headerValue "User-Agent" captured `shouldBe` Just expected
+
 advisoryAgeSpec :: Spec
 advisoryAgeSpec = describe "withServiceRuntime advisory database ages" $
     for_ [ServeAndMirror, ServeOnly, MirrorOnly] $ \role ->
         it ("emits configured ecosystem ages for " <> show role) $
-            withRoleTelemetry $ \logEnv telemetry meterEnv -> do
-                config <- expectConfig staticEnvVars Nothing
-                bootPlan <- expectPlanFor (BootMirrorPipeline role) staticEnvVars Nothing config noCeiling
-                (_, planned) <-
-                    planExecutable
-                        logEnv
-                        passthroughTracingPort
-                        mountBindingFor
-                        (\_ _ _ -> pure noMirrorQueue)
-                        initTargetCredentialProviders
-                        StoreBuilds
-                            { sbDeleting = \_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig
-                            , sbObserving = \_ _ _ -> fakeObservation <$> newFakeStore defaultFakeStoreConfig
-                            , sbProbing = \_ _ -> noUpstreamMechanism
-                            }
-                        bootPlan
-                case planned of
-                    Right plan | MirrorPipelineWiring mirror <- epRoleWiring plan -> do
-                        handles <- newAdvisoryHandles [Npm, PyPI]
-                        -- The gauge reports nothing for a slot that never loaded an artifact, so
-                        -- each handle serves one before the observation reads it.
-                        for_ handles $ \(_, handle) -> swapIn (syncSlot (csEnv handle)) (DbEtag "installed") Nothing (fakeCveDb [])
-                        let boot = BootEnv config logEnv telemetry bootPlan
-                        withServiceRuntime boot plan mirror{mwCveSync = Map.fromList handles} $ \_ -> do
-                            points <- advisoryAgePoints meterEnv
-                            map fst points `shouldMatchList` map (metricAttributes . pure . LEcosystem) [Npm, PyPI]
-                            map snd points `shouldSatisfy` all (>= 0)
-                    _ -> expectationFailure "expected a mirror-pipeline role plan"
+            withRoleTelemetry $ \logEnv telemetry meterEnv ->
+                withServicePlan role staticEnvVars logEnv telemetry $ \boot plan mirror -> do
+                    handles <- newAdvisoryHandles [Npm, PyPI]
+                    -- The age gauge needs an installed artifact before observation.
+                    for_ handles $ \(_, handle) -> swapIn (syncSlot (csEnv handle)) (DbEtag "installed") Nothing (fakeCveDb [])
+                    withServiceRuntime boot plan mirror{mwCveSync = Map.fromList handles} $ \_ -> do
+                        points <- advisoryAgePoints meterEnv
+                        map fst points `shouldMatchList` map (metricAttributes . pure . LEcosystem) [Npm, PyPI]
+                        map snd points `shouldSatisfy` all (>= 0)
+
+withServicePlan :: MirrorRole -> [(String, String)] -> LogEnv -> Telemetry -> (BootEnv -> ExecutablePlan -> MirrorWiring -> IO ()) -> IO ()
+withServicePlan role environment logEnv telemetry use = do
+    config <- expectConfig environment Nothing
+    bootPlan <- expectPlanFor (BootMirrorPipeline role) environment Nothing config noCeiling
+    (_, planned) <-
+        planExecutable
+            logEnv
+            passthroughTracingPort
+            mountBindingFor
+            (\_ _ _ -> pure noMirrorQueue)
+            initTargetCredentialProviders
+            StoreBuilds
+                { sbDeleting = \_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig
+                , sbObserving = \_ _ _ -> fakeObservation <$> newFakeStore defaultFakeStoreConfig
+                , sbProbing = \_ _ -> noUpstreamMechanism
+                }
+            bootPlan
+    case planned of
+        Right plan
+            | MirrorPipelineWiring mirror <- epRoleWiring plan ->
+                use (BootEnv config logEnv telemetry bootPlan) plan mirror
+        _ -> expectationFailure "expected a mirror-pipeline role plan"
