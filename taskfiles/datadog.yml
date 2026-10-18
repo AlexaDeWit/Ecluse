@@ -2,25 +2,10 @@ version: '3'
 
 tasks:
   ci:
-    desc: Check the Datadog example and generated preview
+    desc: Check the Datadog operator example
     cmds:
       - task: init
       - task: check
-      - task: preview
-      - git diff --exit-code -- examples/datadog/preview/dashboard.json examples/datadog/preview/dashboard.svg
-  preview:
-    desc: Render the module dashboard with illustrative data
-    cmds:
-      - |
-        tofu -chdir=examples/datadog/modules/dashboard console -var-file=../../preview/full.tfvars.example <<'EOF' | node examples/datadog/preview/render.mjs
-        jsonencode(local.dashboard)
-        EOF
-      - mkdir -p examples/datadog/preview/rendered
-      - resvg examples/datadog/preview/dashboard.svg examples/datadog/preview/rendered/dashboard.png
-  cost:
-    desc: Estimate telemetry components from the operator worksheet
-    cmds:
-      - node examples/datadog/cost-model.mjs
   format:
     desc: Format the Terraform operator example
     cmds:
@@ -37,4 +22,3 @@ tasks:
       - tofu -chdir=examples/datadog validate
       - tofu -chdir=examples/datadog/modules/dashboard validate
       - tofu -chdir=examples/datadog/modules/dashboard test
-      - node --test examples/datadog/cost-model.test.mjs

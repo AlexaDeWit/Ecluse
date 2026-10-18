@@ -639,7 +639,7 @@
       devShells = {
         datadog = pkgs.mkShell {
           name = "ecluse-datadog-example";
-          packages = [ pkgs.go-task pkgs.opentofu pkgs.nodejs pkgs.resvg ];
+          packages = [ pkgs.go-task pkgs.opentofu ];
         };
 
         # The shell every CI job enters. See `ciShellInputs` for why it is one

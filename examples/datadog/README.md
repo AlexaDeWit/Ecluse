@@ -4,14 +4,12 @@ Copy and adapt this example to add an Écluse operations dashboard to your Datad
 The local module is a starting point for operators. It is not a published Terraform Registry module.
 
 The example creates one dashboard. Collection, log indexes, retention, metrics configuration, monitors,
-and trace sampling remain under your deployment's control. Read [the cost assessment](costs.md)
-before enabling telemetry or changing collection.
+and trace sampling remain under your deployment's control.
 
-## Preview and scope
+## Scope
 
-The [rendered mockup](preview/dashboard.svg) uses illustrative values.
-Its panel titles, groups, filters, and query list come from the same JSON definition as the Terraform resource.
-The preview enables every application role. The default example shows serving, capacity, dependencies, and logs.
+The default example shows serving, capacity, dependencies, and logs.
+Optional sections cover advisory consumers, Pilot, mirroring, and Dredger.
 
 - Deployment tags constrain every generated data query. A dashboard is not an access-control boundary.
 - Environment and service selectors narrow that deployment.
@@ -49,13 +47,11 @@ From the repository root:
 nix develop .#datadog
 task datadog:init
 task datadog:check
-task datadog:preview
 ```
 
-The dedicated shell pins OpenTofu, Node.js, and the SVG renderer through the repository's Nix lock.
+The dedicated shell pins OpenTofu through the repository's Nix lock.
 The module uses Terraform-compatible HCL. The local checks use OpenTofu and a mocked Datadog provider.
 Mocked tests create no Datadog resources and do not prove that a live account has the required metrics.
-Node.js renders the preview from exported JSON without a browser or another package dependency.
 
 For an operator-owned deployment, copy this directory and prepare its variables:
 
@@ -119,9 +115,9 @@ The module returns `dashboard_id`, `dashboard_url`, `dashboard_json`, and `metri
 
 The `panels.json` entries own panel IDs, units, formulas, and metric references.
 The module rejects unknown metric overrides and thresholds on disabled panels.
-Percentile selections query existing Datadog support. They do not enable or purchase percentile indexing.
+Percentile selections query existing Datadog support.
 
-For example, after checking the metric's percentile configuration and cost:
+For example, after checking the metric's percentile configuration:
 
 ```hcl
 latency_statistics = {
@@ -146,6 +142,8 @@ Readiness must come from the deployment's actual probes or health monitors.
 Cache and breaker gauges retain their last recorded value. Disabling interpolation cannot make them liveness signals.
 Idle credential expiry alone is not a provider failure.
 Logs show indexed evidence, which can omit events under the operator's retention or sampling policy.
+Serve-time denial details require debug logging. Mirror publication audits remain at info.
+The mirror section can show those publication records when its log section is enabled.
 
 ## Signal inventory and validation
 
@@ -157,4 +155,4 @@ Logs preserve their attribute case.
 The inventory covers the application catalogue and the pinned WAI instrumentation.
 The Haskell source remains authoritative when instrumentation changes.
 Plan tests check scope preservation, optional roles, per-instance formulas, ingestion overrides, and rejected inputs.
-They do not replace account-level query verification or measured billing evidence.
+They do not replace account-level query verification.

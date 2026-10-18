@@ -154,3 +154,19 @@ run "context_links_preserve_scope_and_quote_values" {
     error_message = "Log widgets must quote deployment values containing colons."
   }
 }
+
+run "mirror_publication_audits" {
+  command = plan
+  variables { sections = { mirror = true, logs = true } }
+  assert {
+    condition = anytrue([
+      for widget in jsondecode(output.dashboard_json).widgets :
+      widget.definition.type != "log_stream" ? false :
+      widget.definition.title == "Mirror publication audits" &&
+      strcontains(widget.definition.query, "status:info @data.event:mirror_publication") &&
+      strcontains(widget.definition.query, "ecluse_deployment:\"platform-east\"") &&
+      strcontains(widget.definition.query, "$env") && strcontains(widget.definition.query, "$service")
+    ])
+    error_message = "Mirror audit logs must retain deployment scope and select successful publication records."
+  }
+}

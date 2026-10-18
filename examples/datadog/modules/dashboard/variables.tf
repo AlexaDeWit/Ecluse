@@ -148,6 +148,7 @@ variable "log_attribute_paths" {
     package = optional(string, "data.package")
     rule    = optional(string, "data.rule")
     module  = optional(string, "data.module")
+    event   = optional(string, "data.event")
   })
   default = {}
   validation {

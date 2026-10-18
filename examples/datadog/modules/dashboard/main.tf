@@ -81,7 +81,7 @@ locals {
     label = "Investigate logs"
     link  = "${var.datadog_app_url}/logs?query=${local.context_log_scope}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
     }, {
-    label = "Recorded denials"
+    label = "Serve denial details (enable debug)"
     link  = "${var.datadog_app_url}/logs?query=${local.context_log_scope} message:denied&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"
     }, {
     label = "Telemetry export warnings"
@@ -135,6 +135,15 @@ locals {
     ], [for name, url in var.runbook_urls : "[${name}](${url})"],
     [for name, id in var.health_monitor_ids : "[Health: ${name}](${var.datadog_app_url}/monitors/${id}) (fixed monitor scope, independent of selectors)"]
   ))
+  log_stream = {
+    type                = "log_stream"
+    indexes             = var.log_indexes
+    columns             = ["timestamp", "status", "service", "message", "@${var.log_attribute_paths.package}", "@${var.log_attribute_paths.rule}"]
+    show_date_column    = true
+    show_message_column = true
+    message_display     = "expanded-md"
+    sort                = { column = "timestamp", order = "desc" }
+  }
   dashboard = {
     title       = var.title
     description = "Deployment-configurable Écluse operator example. ${var.description}"
@@ -161,17 +170,16 @@ locals {
           }]
         }
       } if anytrue([for panel in local.specs : panel.group == group.id])],
-      var.sections.logs ? [{ definition = {
-        type                = "log_stream"
-        title               = "Warnings and errors: indexed investigation evidence"
-        query               = "${local.log_scope} status:(warn OR error)"
-        indexes             = var.log_indexes
-        columns             = ["timestamp", "status", "service", "message", "@${var.log_attribute_paths.package}", "@${var.log_attribute_paths.rule}"]
-        show_date_column    = true
-        show_message_column = true
-        message_display     = "expanded-md"
-        sort                = { column = "timestamp", order = "desc" }
-      } }] : []
+      var.sections.logs ? concat(
+        [{ definition = merge(local.log_stream, {
+          title = "Warnings and errors: indexed investigation evidence"
+          query = "${local.log_scope} status:(warn OR error)"
+        }) }],
+        var.sections.mirror ? [{ definition = merge(local.log_stream, {
+          title = "Mirror publication audits"
+          query = "${local.log_scope} status:info @${var.log_attribute_paths.event}:mirror_publication"
+        }) }] : []
+      ) : []
     )
   }
 }

@@ -5,4 +5,3 @@
 terraform.tfvars
 *.auto.tfvars
 crash.log
-preview/rendered/
