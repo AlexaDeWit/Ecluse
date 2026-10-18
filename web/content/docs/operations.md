@@ -838,6 +838,48 @@ The adapter logs the decode failure at `debug`, below the default `info` thresho
 dumping the payload. Configure SQS redrive to capture it. Without redrive it can repeat until
 queue retention removes it, with none of the per-job worker signals described above.
 
+## Public registry traffic {#registry-traffic}
+
+Use these costs to estimate public traffic across all your deployments, including requests that bypass Écluse. A shared egress address concentrates bursts, while npm's terms also count traffic across the organisation.
+
+### Requests per operation
+
+These counts reflect shipped request paths checked on 2026-10-18. They assume admitted packages outside `firstParty`, the local cache, and a stable registry. They exclude private reads, redirects, retries, and failures. A document means the full npm packument or the project's PyPI Simple index.
+
+| Operation | Serve-only or copy unavailable | Complete private copy available |
+| --- | --- | --- |
+| Listing | 1 public document | 1 public document |
+| Artifact or declared PyPI companion download | 1 public document unless the selected-version cache hits, plus 1 artifact or companion request | 0 public requests |
+| Mirror copy pass | 1 public document unless npm finds a selected-version cache hit, plus files that need copying or verification and missing companions | No public read when the job confirms completion |
+
+A successful admitted artifact GET can enqueue a separate mirror job. A companion request does not enqueue one. PyPI workers always read their own Simple document because they need publication fields. They copy the whole supported version, including its wheels, source distributions, and declared companions. Completion passes and queue retries add requests.
+
+First-party names never fall back to public registries. A private authorisation refusal also stops public fallback.
+
+### Cache and mirror effects
+
+The local cache never retains full public documents. Identical metadata reads share a fetch only while it runs in the same process. Each pod keeps separate sharing state and retained values, so more replicas can increase public traffic.
+
+The selected-version cache keeps eligible entries for `cache.ttl`, which defaults to [60 seconds](https://github.com/AlexaDeWit/Ecluse/blob/4971c1a6422d1666cdf6a0750783f2b97bc43f78/config/default.yaml#L111-L129) (checked 2026-10-18). Entries can expire, be evicted, or exceed the retention budget. Listings do not populate this cache. An assembled listing cache hit avoids rendering work but still needs the public document first. An embedded npm worker can reuse a selected version from its serving process.
+
+npm requests the full packument with `application/json` because age rules need its `time` map. PyPI full and selected reads use the same Simple-index request.
+
+For example, 1,500 distinct npm versions can require 3,000 public requests through a serve-only mount: one metadata read and one tarball per version. This estimate follows the request table above and assumes no cache hits, listings, or retries. Complete private copies remove those public artifact requests. Listings still read public metadata.
+
+[Configure mirroring](@/docs/mirror-setup.md) to reduce repeated downloads at scale. Keep package-manager caches in CI and stagger cold installs where possible.
+
+### Registry limits and guidance
+
+These published positions were checked on 2026-10-18. Recheck them before capacity changes. Neither registry guarantees a request allowance for your egress address.
+
+| Registry | Published position |
+| --- | --- |
+| npm | [Open-Source Terms, Acceptable Use item 17](https://docs.npmjs.com/policies/open-source-terms/#acceptable-use) treats five million requests in a month-long period from an individual, organisation, or affiliated group as unreasonable. Lower volumes can also impose unreasonable load. This is not a safe quota or a per-IP limit. Contact npm sales for high-volume needs. |
+| PyPI | [API policies](https://docs.pypi.org/api/#rate-limiting) say the edge currently applies no API rate limiting. PyPI can prohibit irresponsible consumers. It asks clients to identify themselves through `User-Agent`, preferably with contact information, and avoid thousands of requests within minutes. It recommends a mirror or cache for services that download many packages. |
+| PyPI outlook | The [August 14, 2026 infrastructure update](https://blog.pypi.org/posts/2026-08-14-how-aws-powers-pypi-and-the-psf/) says PyPI is considering rate limits for its heaviest consumers. It does not announce a numeric allowance. |
+
+npm's organisation-wide wording includes deployments and direct npm traffic across different egress addresses. Monthly totals alone do not describe the load from bursts.
+
 ## Appendix: runtime-sizing arithmetic
 
 **Give Écluse whole cores.** A fractional CPU limit, say 3.5, has no good option. Claiming 4
