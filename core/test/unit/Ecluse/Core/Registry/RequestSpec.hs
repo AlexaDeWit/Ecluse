@@ -6,12 +6,14 @@ module Ecluse.Core.Registry.RequestSpec (spec) where
 
 import Data.List (lookup)
 import Network.HTTP.Client qualified as Client
+import Network.HTTP.Types (status200)
 import Network.HTTP.Types.Header (HeaderName, RequestHeaders, hAcceptEncoding, hUserAgent)
 import Test.Hspec (
     Spec,
     describe,
     it,
     shouldBe,
+    shouldReturn,
     shouldSatisfy,
  )
 
@@ -29,6 +31,8 @@ import Ecluse.Core.Registry.Request (
     parseRequestEither,
     sealRequest,
  )
+import Ecluse.Core.Server.FieldValue (fieldValues)
+import Ecluse.Test.Stub (headerValue, lastCaptured, stubBaseUrl, withStub)
 import Ecluse.Test.Support (parseRequestOrFail)
 
 spec :: Spec
@@ -132,6 +136,14 @@ artifactByUrlSpec = describe "artifactRequestByUrl (opaque, non-decompressing, b
                 acceptEncodings req `shouldBe` ["identity"]
                 Client.redirectCount req `shouldBe` 0
 
+    it "transmits identity coding, where http-client's default request asks for gzip" $
+        withStub status200 "artifact bytes" $ \stub -> do
+            manager <- Client.newManager Client.defaultManagerSettings
+            let url = stubBaseUrl stub <> "/files/thing.tgz"
+                transmitted request = Client.httpLbs request manager >> headerValue "Accept-Encoding" <$> lastCaptured stub
+            either (fail . show) transmitted (parseRequestEither url) `shouldReturn` Just "gzip"
+            either (fail . show) transmitted (artifactRequestByUrl apiKeyMapping Nothing url) `shouldReturn` Just "identity"
+
     it "attaches the credential under the mapping's presentation onto the finalised request" $ do
         case artifactRequestByUrl schemedMapping (Just (bareCredential (mkSecret "tok-xyz"))) "https://private.reg/files/thing.tgz" of
             Left err -> fail ("artifactRequestByUrl failed: " <> show err)
@@ -207,12 +219,11 @@ basicMapping = credentialMapping recoverApiKey "Authorization" renderPair
 
 -- Every value a request carries for one header, so a case can assert the header is set exactly once.
 headerValues :: HeaderName -> Client.Request -> [ByteString]
-headerValues header request = [value | (name, value) <- Client.requestHeaders request, name == header]
+headerValues header = fieldValues header . Client.requestHeaders
 
 userAgents :: Client.Request -> [ByteString]
 userAgents = headerValues hUserAgent
 
--- http-client adds gzip only when the field is absent, so one explicit value is what goes on the wire.
 acceptEncodings :: Client.Request -> [ByteString]
 acceptEncodings = headerValues hAcceptEncoding
 

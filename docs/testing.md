@@ -772,9 +772,10 @@ upstream holds. The stub's access log records the route, method, status, path, r
 and requested codings of every request it finishes. `stubReadsNow` reads it back, so a case can
 name the store that answered a client and the coding the proxy asked for.
 
-Both public routes gzip any response whose request permits gzip, as a public registry's CDN does.
-A proxy that relays those bytes to a client breaks the advertised digest, so every installation
-through a public route runs under that condition.
+Both public routes gzip any response whose request permits gzip. A public registry's CDN gzips
+JSON and Core Metadata companions, and the stub gzips archives too. A proxy that relays those bytes
+to a client breaks the advertised digest, so every installation through a public route runs under
+that condition.
 
 `Ecluse.E2E.Npm.MirrorInstallE2ESpec` holds the install the mirror alone serves against a control.
 Its fixture graph is a root with a dependency that has a dependency of its own, a peer dependency,

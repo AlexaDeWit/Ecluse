@@ -426,6 +426,8 @@ The new shared installation family runs these five IDs for each of `npm` and `py
 Admission preserves the native version or distribution observation until the contract compares it with the expected result.
 Refusal requires a failed client and an empty installation tree, including npm's lock file or pip's complete target directory.
 `core/test/unit/Ecluse/Test/Contract/InstallSpec.hs` rejects unexpected versions and files left by failed clients.
+For `artifact-identity-coding` it rejects a gzip-permitting upstream fetch, a relayed content coding,
+bytes that miss the digest, a fetch the upstream never saw, and an upstream that never gzipped.
 Those negative controls create and inspect their files before checking the contract's failure.
 
 The npm advisory counterparts are `npm/advisories/deny-cve`, `npm/advisories/deny-epss`,

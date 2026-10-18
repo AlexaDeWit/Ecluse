@@ -16,7 +16,7 @@ import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Ecluse.Test.Contract.Types (Group)
 import Test.Hspec
 
-import Ecluse.E2E.Fixtures.PyPI (pypiProject, pypiSdistFile, pypiTamperedProject, pypiVersion, pypiWheelFile, pypiWheelFor, pypiYankReason, pypiYankedDistInfo, pypiYankedVersion, pypiYankedWheelFile)
+import Ecluse.E2E.Fixtures.PyPI (pypiProject, pypiSdistFile, pypiTamperedCompanion, pypiTamperedProject, pypiVersion, pypiWheelFile, pypiWheelFor, pypiYankReason, pypiYankedDistInfo, pypiYankedVersion, pypiYankedWheelFile)
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
 import Ecluse.Test.Contract.Install.Outage
@@ -68,8 +68,9 @@ scenarios recorder =
                         seen <- length <$> stubReadsNow plane
                         (result, tree) <- pipInstallAndInspect e2e pypiTamperedProject pypiVersion
                         void (shouldFail result)
-                        -- pip names the advertised digest when the bytes it received miss it.
+                        -- pip names both digests, so the second proves the tampered bytes arrived uncoded.
                         crStderr result `shouldSatisfy` T.isInfixOf ("Expected sha256 " <> digest)
+                        crStderr result `shouldSatisfy` T.isInfixOf (hexSha256Of (encodeUtf8 pypiTamperedCompanion))
                         tree `shouldBe` mempty
                         observedReads <- awaitStubReads plane seen (any companion)
                         filter companion observedReads `shouldSatisfy` any ((== 200) . srStatus)

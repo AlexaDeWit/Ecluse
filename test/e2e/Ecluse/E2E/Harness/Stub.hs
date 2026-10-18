@@ -120,7 +120,7 @@ forwarded limit port =
     , "    location / { proxy_pass http://203.0.113.1:" <> show port <> "; }"
     ]
 
--- A public registry's CDN gzips any response a request permits, artifacts and companions included.
+-- Gzip every response a request permits: a superset of a registry CDN, which gzips JSON and companions.
 publicCoding :: [Text]
 publicCoding = ["    gzip on;", "    gzip_types *;"]
 
@@ -234,7 +234,7 @@ stubReads :: Text -> [StubRead]
 stubReads = mapMaybe (readOf . words) . lines
   where
     readOf = \case
-        marker : host : method : status : path : coding : accepted@(_ : _) | marker == readMarker -> do
+        marker : host : method : status : path : coding : accepted | marker == readMarker -> do
             route <- find ((== host) . stubHost) universe
             answered <- readMaybe (toString status)
             pure
@@ -247,7 +247,8 @@ stubReads = mapMaybe (readOf . words) . lines
                     , srAcceptEncoding = logged (unwords accepted)
                     }
         _ -> Nothing
-    logged value = if value == "-" then Nothing else Just value
+    -- nginx logs "-" for an absent field and nothing for an empty one.
+    logged value = if value `elem` ["-", ""] then Nothing else Just value
 
 -- | Whether a public upstream answered the request, where an outage leaves it unanswered.
 answeredByPublic :: StubRead -> Bool

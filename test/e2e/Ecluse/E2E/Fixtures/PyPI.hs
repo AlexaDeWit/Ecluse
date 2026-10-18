@@ -15,6 +15,7 @@ module Ecluse.E2E.Fixtures.PyPI (
     pypiYankedDistInfo,
     pypiYankReason,
     pypiTamperedProject,
+    pypiTamperedCompanion,
     pypiWheelFor,
     pypiDistInfoFor,
     buildPyPIFixtures,
@@ -85,6 +86,10 @@ pypiYankReason = "published by mistake"
 pypiTamperedProject :: Text
 pypiTamperedProject = "e2e-tampered-companion"
 
+-- | The companion bytes the stub serves for the tampered project's wheel.
+pypiTamperedCompanion :: Text
+pypiTamperedCompanion = metadataFileFor pypiTamperedProject pypiVersion <> "Description: altered after publication\n"
+
 -- | Write ordinary-install artifacts, compatibility controls, and old/recent advisory releases.
 buildPyPIFixtures :: FilePath -> IO ()
 buildPyPIFixtures root = do
@@ -111,7 +116,7 @@ buildTamperedCompanion root = do
         wheelPath = projectDir </> toString (pypiWheelFor pypiTamperedProject pypiVersion)
     createDirectoryIfMissing True projectDir
     buildWheelFor pypiTamperedProject pypiVersion (metadataFileFor pypiTamperedProject pypiVersion) (root </> ".work-tampered") wheelPath
-    appendFileText (wheelPath <> ".metadata") "Description: altered after publication\n"
+    writeFileText (wheelPath <> ".metadata") pypiTamperedCompanion
     bytes <- BS.readFile wheelPath
     writeFileLBS (projectDir </> indexFile) . Aeson.encode $
         projectIndex pypiTamperedProject [pypiVersion] [wheelEntryFor pypiTamperedProject pypiVersion "2020-01-01T00:00:00Z" (hexSha256Of bytes)]
