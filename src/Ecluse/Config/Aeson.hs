@@ -25,6 +25,7 @@ import Ecluse.Config.Parser
 import Ecluse.Config.Rule
 import Ecluse.Config.Types
 
+import Ecluse.Core.BuildIdentity (parseOperatorContact)
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..), ecosystemName, parseEcosystem)
 import Ecluse.Core.Osv.Provenance (SourcePathRecording (FingerprintSourcePath, RecordSourcePath))
@@ -190,6 +191,7 @@ egressDecoder :: GroupDecoder EgressSettings
 egressDecoder =
     EgressSettings
         <$> optionalKeyOr "additionalBlockedRanges" (String "") parseBlockedRanges
+        <*> optionalKey "operatorContact" (parseEnum parseOperatorContact)
 
 advisoriesDecoder :: GroupDecoder AdvisoriesSettings
 advisoriesDecoder =

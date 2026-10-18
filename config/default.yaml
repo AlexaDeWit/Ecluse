@@ -138,11 +138,16 @@ integrity:
   # fail-closed (also fail_closed or failclosed) refuses startup. Remove that setting only after
   # accepting private preference: divergence alone can leave a damaged private copy served.
 
-# Extra CIDR ranges denied registry egress, on top of the built-in internal-range
-# blocklist (comma-separated). Extends the block only. A malformed entry fails closed
-# at boot.
-# egress:
-#   additionalBlockedRanges: "100.64.0.0/10,198.18.0.0/15"
+egress:
+  # Extra CIDR ranges denied registry egress, added to the built-in internal-range blocklist.
+  # Comma-separated. A malformed entry refuses startup.
+  additionalBlockedRanges: ""
+  # Optional contact sent to all registry destinations and Pilot's OSV and EPSS sources.
+  # Appended to User-Agent: ecluse/<version> (+https://ecluse-proxy.com; contact: <value>).
+  # Set a monitored email address or contact URL so upstream operators can reach your team.
+  # Accepts 1-256 printable ASCII characters, excluding parentheses and backslash.
+  # Empty, control, non-ASCII and oversized values refuse startup, naming egress.operatorContact.
+  operatorContact: null
 
 # Durable expected PyPI files and preserved read metadata, separate from advisory storage.
 # Requires conditional creates/replacements and strong reads. Referenced objects must not expire.

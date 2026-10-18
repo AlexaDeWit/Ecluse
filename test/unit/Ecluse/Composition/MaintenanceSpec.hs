@@ -21,6 +21,7 @@ import Ecluse.Composition.Support (NoCredentials (NoCredentials), clearedUrl, co
 import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner))
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig (cfgMounts), Config (configApp, configMounts), MountConfig (mntPrivateUpstream), PrivateEndpoint, QuotaOverride (QuotaOverride, qoQuotas, qoScope, qoWeights))
+import Ecluse.Core.BuildIdentity (userAgent)
 import Ecluse.Core.Credential (AuthToken (AuthToken), CredentialProvider (CredentialProvider), mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
@@ -151,6 +152,7 @@ anonymousPorts :: StorePorts
 anonymousPorts =
     StorePorts
         { spTracing = passthroughTracingPort
+        , spUserAgent = userAgent
         , spCredential = Nothing
         , spBudget = unpacedBudget
         }
@@ -180,6 +182,7 @@ planSpec = describe "planStoreMaintenance" $ do
             planStoreMaintenance
                 (\_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig)
                 passthroughTracingPort
+                userAgent
                 unpacedBudget
                 noCredentialProviders
                 defaultLimits
@@ -193,6 +196,7 @@ planSpec = describe "planStoreMaintenance" $ do
             planStoreMaintenance
                 (\_ _ _ -> throwIO NoCredentials)
                 passthroughTracingPort
+                userAgent
                 unpacedBudget
                 noCredentialProviders
                 defaultLimits

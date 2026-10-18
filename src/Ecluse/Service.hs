@@ -48,7 +48,8 @@ import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Composition.Types (MirrorRole)
 import Ecluse.Composition.Validate (ValidatedPlan (vpSettings))
 import Ecluse.Composition.Worker (workerPoliciesWithState)
-import Ecluse.Config (AppConfig)
+import Ecluse.Config (AppConfig (cfgEgress), EgressSettings (egrOperatorContact))
+import Ecluse.Core.BuildIdentity (identityManagerSettings, renderUserAgent)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured))
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
 import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
@@ -203,8 +204,9 @@ dataPlaneManagers :: Telemetry -> BootPlan -> IO (Manager, Manager)
 dataPlaneManagers telemetry bootPlan = do
     publicSettings <- dataPlaneManagerSettings telemetry
     privateSettings <- dataPlaneManagerSettings telemetry
-    manager <- newPooledManager (bpPublicConnections bootPlan) publicSettings
-    privateManager <- newPooledManager (bpPrivateConnections bootPlan) privateSettings
+    let identity = renderUserAgent (egrOperatorContact (cfgEgress (vpSettings (bpValidated bootPlan))))
+    manager <- newPooledManager (bpPublicConnections bootPlan) (identityManagerSettings identity publicSettings)
+    privateManager <- newPooledManager (bpPrivateConnections bootPlan) (identityManagerSettings identity privateSettings)
     pure (manager, privateManager)
 
 -- | The settings each data-plane manager pools from: 'typedTlsManagerSettings', under the client span when telemetry is on.

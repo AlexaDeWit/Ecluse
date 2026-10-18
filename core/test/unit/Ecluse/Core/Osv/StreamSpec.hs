@@ -15,10 +15,10 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Types.Status (status200)
 import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 
-import Ecluse.Core.BuildIdentity (userAgent)
+import Ecluse.Core.BuildIdentity (parseOperatorContact, renderUserAgent, userAgent)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
-import Ecluse.Core.Osv.Compile (newFeedManager)
+import Ecluse.Core.Osv.Compile (newFeedManager, newFeedManagerWithIdentity)
 import Ecluse.Core.Osv.Ecosystem (
     OsvEcosystem (osvExportDirectory, osvMaxAdvisoryFanOut, osvWireName),
     osvEcosystemFor,
@@ -125,6 +125,18 @@ spec = describe "the OSV ingest stream" $ do
             headerValue "User-Agent" captured `shouldBe` Just userAgent
             pure rows
         theSampleRow results
+
+    it "sends the configured contact to the OSV source" $ do
+        contact <- either (fail . toString) pure (parseOperatorContact "platform@example.com")
+        let identity = renderUserAgent (Just contact)
+        zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+        withStub status200 zipData $ \stub -> do
+            feeds <- newFeedManagerWithIdentity identity
+            runOsvTestM $ do
+                ingest <- newOsvIngest defaultIngestLimits npmFeed noScores ingestClock
+                runConduit (void (streamOsvUrl Nothing feeds ingest (unpack (stubBaseUrl stub) <> "/sample.zip")) .| sinkNull)
+            captured <- lastCaptured stub
+            headerValue "User-Agent" captured `shouldBe` Just identity
 
     it "throws an exception if the URL is invalid" $
         ingestedUrl "not-a-valid-url" `shouldThrow` anyException

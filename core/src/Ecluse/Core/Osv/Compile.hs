@@ -28,6 +28,7 @@ module Ecluse.Core.Osv.Compile (
 
     -- * Feed downloads
     newFeedManager,
+    newFeedManagerWithIdentity,
 
     -- * Refusals and rows
     PilotEpssRequired (..),
@@ -42,7 +43,7 @@ import Data.Time (UTCTime, getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Database.SQLite.Simple
 import Katip (KatipContext, Severity (..), SimpleLogPayload, katipAddContext, logFM, ls, sl)
-import Network.HTTP.Client (Manager, ManagerSettings (managerModifyRequest))
+import Network.HTTP.Client (Manager)
 import Network.HTTP.Client.TLS (newTlsManagerWith)
 import System.Directory (createDirectoryIfMissing, removeFile, renameFile)
 import System.FilePath ((</>))
@@ -50,7 +51,7 @@ import System.IO (hClose, openTempFile)
 import System.IO.Error (catchIOError)
 import UnliftIO.Exception (bracket, throwIO, try)
 
-import Ecluse.Core.BuildIdentity (identifyRequest, productVersion)
+import Ecluse.Core.BuildIdentity (identityManagerSettings, productVersion, userAgent)
 import Ecluse.Core.Fault (HttpFault, renderHttpFault)
 import Ecluse.Core.Fault.Http (httpFault, typedTlsManagerSettings)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
@@ -185,11 +186,11 @@ withOsvCandidate metrics mTracerProvider manager outDir eco requirement sources 
 
 -- | Identify feed requests while retaining typed transport faults and HTTP proxy support.
 newFeedManager :: IO Manager
-newFeedManager =
-    newTlsManagerWith
-        typedTlsManagerSettings
-            { managerModifyRequest = fmap identifyRequest . managerModifyRequest typedTlsManagerSettings
-            }
+newFeedManager = newFeedManagerWithIdentity userAgent
+
+-- | Reuse a precomputed outbound identity for both advisory feeds.
+newFeedManagerWithIdentity :: ByteString -> IO Manager
+newFeedManagerWithIdentity identity = newTlsManagerWith (identityManagerSettings identity typedTlsManagerSettings)
 
 -- | Write this attempt's nonce into the candidate. The nonce is fixed width, so the file keeps its size.
 stampCandidateNonce :: (MonadIO m) => OsvCandidate -> PublicationNonce -> m ()

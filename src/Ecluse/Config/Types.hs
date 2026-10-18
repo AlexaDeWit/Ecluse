@@ -76,6 +76,7 @@ import Ecluse.Config.Advisory.Internal (
 import Ecluse.Config.Queue.Internal (QueueTarget (..), QueueUrl, queueUrlTarget, queueUrlText)
 import Ecluse.Config.Resolve (mountDocRef, mountKeyRef)
 import Ecluse.Config.Rule (PolicyError (SuppressUnknownRule), renderPolicyError)
+import Ecluse.Core.BuildIdentity (OperatorContact)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
 import Ecluse.Core.Osv.Provenance (SourcePathRecording)
@@ -375,9 +376,11 @@ data IntegritySettings = IntegritySettings
     }
     deriving stock (Eq, Show)
 
--- | The @egress@ group: the operator's additions to the blocked target ranges.
-newtype EgressSettings = EgressSettings
+-- | Outbound identity and extra blocked target ranges.
+data EgressSettings = EgressSettings
     { egrAdditionalBlockedRanges :: [IPRange]
+    , egrOperatorContact :: Maybe OperatorContact
+    -- ^ Optional contact included in registry and Pilot feed identities.
     }
     deriving stock (Eq, Show)
 

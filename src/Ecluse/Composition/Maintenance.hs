@@ -50,6 +50,7 @@ import Ecluse.Config (
     storeTagName,
  )
 import Ecluse.Config.Target (resolvePrivateBackend)
+import Ecluse.Core.BuildIdentity (identityManagerSettings)
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), CredentialProvider, bareCredential, mintSecret)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
@@ -90,6 +91,8 @@ data StorePorts = StorePorts
     -- ^ The tracing port the manifest read is bracketed by.
     , spCredential :: Maybe CredentialProvider
     -- ^ The credential for this exact target. An anonymous protocol observation holds none.
+    , spUserAgent :: ByteString
+    -- ^ The precomputed identity shared by this store's registry requests.
     , spBudget :: BudgetPorts
     -- ^ What this store's requests are counted and paced through.
     }
@@ -169,7 +172,7 @@ buildStoreMaintenance ports limits cleared = budgeted ports cleared <$> built
             ClearedCodeArtifact store -> newCodeArtifactMaintenance (maxVersionCount limits) (cbAlphabet cleared) readManifest store
             ClearedCodeArtifactCache store -> newCodeArtifactCacheMaintenance (maxVersionCount limits) (cbAlphabet cleared) readManifest store
             ClearedProtocol store -> do
-                deletionManager <- newPooledManager storeConnections (singleAttemptSettings typedTlsManagerSettings)
+                deletionManager <- newPooledManager storeConnections (identityManagerSettings (spUserAgent ports) (singleAttemptSettings typedTlsManagerSettings))
                 pure (newProtocolMaintenance (protocolStore limits cleared store readManifest manager deletionManager))
 
 -- Resolve the capacity pool before metering requests against it.
@@ -239,7 +242,7 @@ declared budget override =
 -- One manager of the store's own, and the manifest read that leads over it.
 storeAccess :: StorePorts -> Limits -> ClearedBackend -> IO (StoreManifestRead, Manager)
 storeAccess ports limits cleared = do
-    manager <- storeManager
+    manager <- storeManager (spUserAgent ports)
     pure (storeManifestRead ports limits cleared manager, manager)
 
 -- Resolve the current secret for each read because managed tokens expire.
@@ -253,8 +256,8 @@ storeOrigin :: Limits -> ClearedBackend -> Manager -> Maybe ClientCredential -> 
 storeOrigin limits cleared manager = originClient limits manager (cbUrl cleared)
 
 -- Disable hidden HTTP replay so every attempt consumes the store's request budget.
-storeManager :: IO Manager
-storeManager = newPooledManager storeConnections (singleAttemptSettings typedTlsManagerSettings)
+storeManager :: ByteString -> IO Manager
+storeManager identity = newPooledManager storeConnections (identityManagerSettings identity (singleAttemptSettings typedTlsManagerSettings))
 
 -- One store, swept package by package, so the pool holds what one in-flight request needs.
 storeConnections :: Int
@@ -284,6 +287,7 @@ protocolRead limits cleared store readManifest manager =
 planStoreMaintenance ::
     (StorePorts -> Limits -> ClearedBackend -> IO store) ->
     TracingPort ->
+    ByteString ->
     BudgetPorts ->
     CredentialProviders ->
     Limits ->
@@ -296,12 +300,13 @@ planStoreMaintenanceFor ::
     CredentialTarget ->
     (StorePorts -> Limits -> ClearedBackend -> IO store) ->
     TracingPort ->
+    ByteString ->
     BudgetPorts ->
     CredentialProviders ->
     Limits ->
     Map Ecosystem ClearedBackend ->
     IO (Either [BootError] (Map Ecosystem store))
-planStoreMaintenanceFor target build tracing budget credentials limits backends =
+planStoreMaintenanceFor target build tracing identity budget credentials limits backends =
     validationToEither . traverse eitherToValidation <$> Map.traverseWithKey planOne backends
   where
     planOne eco backend =
@@ -312,6 +317,7 @@ planStoreMaintenanceFor target build tracing budget credentials limits backends 
     portsFor eco =
         StorePorts
             { spTracing = tracing
+            , spUserAgent = identity
             , spCredential = lookupTargetProvider target eco credentials
             , spBudget = budget
             }

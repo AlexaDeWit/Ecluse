@@ -543,6 +543,14 @@ The `User-Agent` is `ecluse/<version> (+https://ecluse-proxy.com)`, naming the r
 linking to the project. An upstream, a WAF, or a forward proxy that filters on the agent has to
 allow it.
 
+Set `egress.operatorContact` to a monitored email address or contact URL so an upstream operator
+can reach your team before blocking your deployment. Écluse appends `; contact: <value>` inside
+the comment and sends it to public and private upstreams, mirror and publication targets,
+maintenance registry destinations, and Pilot's OSV and EPSS sources. The contact is unset by
+default. It accepts 1-256 printable ASCII characters, excluding parentheses and backslash.
+Invalid configured values, including an empty value, refuse startup and name the key.
+Caller-supplied identities and AWS SDK identities stay intact.
+
 Provide the second layer at the platform. Deny egress by default and allow only the role-specific
 destinations below. Permit DNS through your resolver, and telemetry to the configured collector when
 enabled:

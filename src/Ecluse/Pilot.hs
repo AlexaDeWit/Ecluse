@@ -32,13 +32,15 @@ import Ecluse.Composition.Plan (BootPlan (bpS3Endpoint))
 import Ecluse.Config (
     AdvisoriesSettings (advDataDir, advUrl),
     AdvisoryStoreUrl,
-    AppConfig (cfgAdvisories),
+    AppConfig (cfgAdvisories, cfgEgress),
     Config (configApp, configMounts),
+    EgressSettings (egrOperatorContact),
     advisoryStoreUrlText,
  )
 import Ecluse.Config.AdvisoryStore (advisoryStoreCapability)
+import Ecluse.Core.BuildIdentity (renderUserAgent)
 import Ecluse.Core.Ecosystem (ecosystemName, parseEcosystem)
-import Ecluse.Core.Osv.Compile (OsvCandidate, candidateDestination, newFeedManager, promoteCandidate, withOsvCandidate)
+import Ecluse.Core.Osv.Compile (OsvCandidate, candidateDestination, newFeedManagerWithIdentity, promoteCandidate, withOsvCandidate)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor, osvEcosystemNamed)
 import Ecluse.Core.Osv.Publication (Rebaseline)
 import Ecluse.Core.Supervision (
@@ -93,7 +95,7 @@ runExportLoop telemetry s3Endpoint config = \case
         -- One instrument set for the whole loop. Rebuilding it per cycle would register
         -- the catalogue again and split each signal across two streams.
         metrics <- liftIO (newMetrics telemetry)
-        feeds <- liftIO newFeedManager
+        feeds <- liftIO (newFeedManagerWithIdentity (renderUserAgent (egrOperatorContact (cfgEgress (configApp config)))))
         superviseExportCycles schedule targets $ \target -> do
             runResourceT (exportEcosystem metrics feeds target telemetry s3Endpoint advisories store)
             threadDelay cadence
@@ -147,7 +149,7 @@ runUploadPlan telemetry s3Endpoint advisories plan candidate = case plan of
 runPilotCompile :: LogEnv -> Telemetry -> Maybe AwsEndpoint -> Config -> PilotCompileOptions -> IO FilePath
 runPilotCompile logEnv telemetry s3Endpoint config opts = do
     metrics <- newMetrics telemetry
-    feeds <- newFeedManager
+    feeds <- newFeedManagerWithIdentity (renderUserAgent (egrOperatorContact (cfgEgress (configApp config))))
     -- The metric label domain is the closed 'Ecosystem' enum. A one-shot compile of a name
     -- outside it still writes its artifact, and records no series.
     let compileMetrics = advisoryCompileMetricsPortOf metrics (parseEcosystem (pcoEcosystem opts))
