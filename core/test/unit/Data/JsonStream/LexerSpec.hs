@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Recorded C lexer outputs remain independent of the replacement scanner.
+-- | Recorded C lexer outputs, independent of the replacement scanner, and the skip against a loop over its tokens.
 module Data.JsonStream.LexerSpec (spec) where
 
 import Control.Monad (foldM)
@@ -14,6 +14,7 @@ import Data.JsonStream.Lexer qualified as Lexer
 import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
 
 import Ecluse.Test.Package (hexSha256Of)
+import Ecluse.Test.Registry.JsonStream (sliceChunks)
 
 data Reference = Reference Text [ByteString] [Aeson.Value]
 
@@ -26,24 +27,28 @@ spec :: Spec
 spec = do
     guardSpec
     it "matches the recorded C scanner for every directed input and chunk cut" $ do
-        bytes <- readFileBS "core/test/unit/fixtures/json-stream/c-lexer-events.json"
-        case Aeson.eitherDecodeStrict bytes :: Either String [Reference] of
-            Left failure -> expectationFailure failure
-            Right references -> do
-                length references `shouldBe` referenceCount
-                for_ references $ \(Reference name chunks expected) ->
-                    (name, traceTokens chunks) `shouldBe` (name, expected)
+        references <- loadReferences
+        length references `shouldBe` referenceCount
+        for_ references $ \(Reference name chunks expected) ->
+            (name, traceTokens chunks) `shouldBe` (name, expected)
+    skipSpec
+
+loadReferences :: IO [Reference]
+loadReferences = do
+    bytes <- readFileBS "core/test/unit/fixtures/json-stream/c-lexer-events.json"
+    either (\failure -> [] <$ expectationFailure failure) pure (Aeson.eitherDecodeStrict bytes)
 
 traceTokens :: [ByteString] -> [Aeson.Value]
-traceTokens = go (Lexer.start BS.empty)
-  where
-    go tokens chunks = case Lexer.next tokens of
-        Token element rest -> tokenEvent element rest : go rest chunks
-        Failed -> [Aeson.String "Failure"]
-        More waiting ->
-            Aeson.String "Wait" : case chunks of
-                [] -> []
-                piece : rest -> go (Lexer.feed waiting piece) rest
+traceTokens = traceFrom (Lexer.start BS.empty)
+
+traceFrom :: Cursor -> [ByteString] -> [Aeson.Value]
+traceFrom tokens chunks = case Lexer.next tokens of
+    Token element rest -> tokenEvent element rest : traceFrom rest chunks
+    Failed -> [Aeson.String "Failure"]
+    More waiting ->
+        Aeson.String "Wait" : case chunks of
+            [] -> []
+            piece : rest -> traceFrom (Lexer.feed waiting piece) rest
 
 tokenEvent :: Element -> Cursor -> Aeson.Value
 tokenEvent element after = case element of
@@ -146,6 +151,100 @@ guardSpec = describe "immutable lexer" $ do
     it "reads dense tokens in pieces larger than the bounded body's chunk size" $ do
         let body = "[" <> BS.intercalate "," (replicate denseCount "0") <> "]"
         remainingTokens (Lexer.start body) `shouldBe` ArrayBegin : replicate denseCount (JInteger 0) <> [ArrayEnd]
+
+-- Where a skip ends: the trace after its closer, its open levels with what probes read next, or its failure.
+data Skip = SkipClosed [Aeson.Value] | SkipOpen Int [[Aeson.Value]] | SkipStopped Text
+    deriving stock (Eq, Show)
+
+skipSpec :: Spec
+skipSpec = describe "skipLevels" $
+    it "stops where a loop over next stops, from every token, level and chunk cut" $ do
+        references <- loadReferences
+        take 1 (skipMismatches ([chunks | Reference _ chunks _ <- references] <> nestedChunks)) `shouldBe` []
+
+skipMismatches :: [[ByteString]] -> [([ByteString], Int, Skip, Skip)]
+skipMismatches inputs =
+    [ (chunks, level, actual, expected)
+    | input <- inputs
+    , chunks <- [input, input <> closers]
+    , (cursor, pieces) <- entries (Lexer.start BS.empty) chunks
+    , level <- [0, 1, 2]
+    , let actual = skipped level cursor pieces
+          expected = referenceSkip level cursor pieces
+    , actual /= expected
+    ]
+
+-- Each cursor a loop over next passes through, with the chunks not yet fed.
+entries :: Cursor -> [ByteString] -> [(Cursor, [ByteString])]
+entries cursor chunks =
+    (cursor, chunks) : case Lexer.next cursor of
+        Token _ rest -> entries rest chunks
+        More waiting -> case chunks of
+            piece : pieces -> entries (Lexer.feed waiting piece) pieces
+            [] -> []
+        Failed -> []
+
+skipped :: Int -> Cursor -> [ByteString] -> Skip
+skipped level cursor chunks = case Lexer.skipLevels level cursor of
+    Lexer.Closed rest -> SkipClosed (traceFrom rest chunks)
+    Lexer.Unclosed open waiting -> resume open waiting chunks skipped
+    Lexer.SkipFailed -> SkipStopped lexerFailed
+    Lexer.StrayStringEnd -> SkipStopped strayStringEnd
+
+-- The walk's skip before skipLevels: drop each token of next, count levels, and pass split strings.
+referenceSkip :: Int -> Cursor -> [ByteString] -> Skip
+referenceSkip level cursor chunks = case Lexer.next cursor of
+    Token element rest -> case element of
+        ArrayEnd -> closed rest
+        ObjectEnd -> closed rest
+        ArrayBegin -> referenceSkip (level + 1) rest chunks
+        ObjectBegin -> referenceSkip (level + 1) rest chunks
+        StringContent _ -> referenceString level rest chunks
+        StringEnd -> SkipStopped strayStringEnd
+        _ -> referenceSkip level rest chunks
+    More waiting -> resume level waiting chunks referenceSkip
+    Failed -> SkipStopped lexerFailed
+  where
+    closed rest
+        | level <= 1 = SkipClosed (traceFrom rest chunks)
+        | otherwise = referenceSkip (level - 1) rest chunks
+
+referenceString :: Int -> Cursor -> [ByteString] -> Skip
+referenceString level cursor chunks = case Lexer.next cursor of
+    Token (StringContent _) rest -> referenceString level rest chunks
+    Token StringEnd rest -> referenceSkip level rest chunks
+    Token _ _ -> SkipStopped "unexpected token in a string"
+    More waiting -> resume level waiting chunks referenceString
+    Failed -> SkipStopped lexerFailed
+
+resume :: Int -> Cursor -> [ByteString] -> (Int -> Cursor -> [ByteString] -> Skip) -> Skip
+resume level waiting chunks continue = case chunks of
+    piece : pieces -> continue level (Lexer.feed waiting piece) pieces
+    [] -> SkipOpen level [traceFrom (Lexer.feed waiting probe) [] | probe <- probes]
+
+-- Nested containers, which the recorded inputs lack, in pieces of every size.
+nestedChunks :: [[ByteString]]
+nestedChunks = [sliceChunks size body | body <- nestedBodies, size <- [1 .. BS.length body]]
+
+nestedBodies :: [ByteString]
+nestedBodies =
+    [ "{\"a\":[1,{\"b\":\"c\\\"d\"}],\"e\":true}"
+    , "[[\"x\\\\\"],{\"y\":-1.5e3,\"z\":[]}]"
+    , "[{\"a\":1]}"
+    , "[\"\\u00e9\",nul]"
+    , "[1,@]"
+    ]
+
+-- Inputs that tell the lexer's resumable states apart: base, string start, escape, number and literal.
+probes :: [ByteString]
+probes = ["]", "0]", "e]", "x\"]", "\"]\"]"]
+
+closers :: [ByteString]
+closers = ["]", "}", " 7"]
+
+lexerFailed, strayStringEnd :: Text
+lexerFailed = "the JSON lexer failed"
+strayStringEnd = "unexpected end of string"
 
 remainingTokens :: Cursor -> [Element]
 remainingTokens cursor = case Lexer.next cursor of
