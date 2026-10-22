@@ -478,11 +478,13 @@ skippedOf (Passed name res) = case res of
     skipped FailDeny _ = Nothing
 
 -- Only an admission carries evidence: the checks that could not vet ahead of it, in boot order,
--- then the ones it pre-empted.
+-- then the ones it pre-empted. 'decisive' builds it with none, so it stands when none is found.
 withEvidence :: [Passed] -> [PreparedRule] -> Decision -> Decision
-withEvidence passed unreached = \case
-    Admitted name reason _ -> Admitted name reason (reverse (mapMaybe skippedOf passed) <> map (Unreached . prepName) unreached)
-    other -> other
+withEvidence passed unreached decided = case decided of
+    Admitted name reason _ | not (null evidence) -> Admitted name reason evidence
+    _ -> decided
+  where
+    evidence = reverse (mapMaybe skippedOf passed) <> map (Unreached . prepName) unreached
 
 -- 'CannotVet' has no transience evidence, so it produces a plain retryable refusal. An admission's
 -- evidence is attached by the fold, which alone knows what it passed and pre-empted.
