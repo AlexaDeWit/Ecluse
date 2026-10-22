@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Measure filtering, merging, assembly, and serialisation of prepared metadata.
+{- | Measure filtering, merging, assembly, validators, and serialisation of prepared metadata.
 Decoding and fetch-digest construction stay outside the measured operation.
 -}
 module Ecluse.Core.ServeBench (benchmarks) where
@@ -13,6 +13,7 @@ import Data.Aeson.Encoding (encodingToLazyByteString)
 import Data.Aeson.Encoding qualified as Encoding
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -22,14 +23,16 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts), infoVersions)
 import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Package.Filter (restrictToSurvivors)
-import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
+import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource), mergePackuments)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmPacked, npmRendered, pypiRendered, pypiSimpleCached)
 import Ecluse.Core.Registry.Json.Packed (Pieces (ArrayPieces, ObjectPieces), RenderPlan (..))
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEncoding, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Filter (serialiseSimpleDocument)
-import Ecluse.Core.Snapshot (Snapshot (snapshotValue))
-import Ecluse.Test.Corpus (cpName, cpPackage, syntheticProxyBase)
+import Ecluse.Core.Server.Conditional (renderETag)
+import Ecluse.Core.Server.Pipeline.Packument.Representation (Contribution (Contribution), fingerprintPiece, packumentETag)
+import Ecluse.Core.Snapshot (Snapshot (snapshotDigest, snapshotValue))
+import Ecluse.Test.Corpus (CaptureUpstream (upstreamOrigin), cpName, cpPackage, syntheticProxyBase)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..), LoadedEntry (..))
 import Ecluse.Test.Registry.PyPI.Metadata (simpleValue)
 import Ecluse.Test.Server.Transform (serveDocumentSize)
@@ -51,6 +54,7 @@ benchmarks ecosystem =
             <> [npmAssemblyBenchmarks ecosystem | ebEcosystem ecosystem == Npm]
             <> [pypiEncodingBenchmarks ecosystem | ebEcosystem ecosystem == PyPI]
             <> [pypiAssemblyBenchmarks ecosystem | ebEcosystem ecosystem == PyPI]
+            <> [validatorBenchmarks ecosystem]
   where
     serveDepth = serveDocumentSize (ebMetadata ecosystem) benchEvalContext
 
@@ -161,6 +165,21 @@ pypiPlanDepth :: CachedDoc -> Int
 pypiPlanDepth document = case snd pypiRendered document of
     Just plan -> foldl' (\count table -> table `seq` count + 1) (renderPlanDepth plan) (planTables plan)
     Nothing -> throw (PyPIAssemblyInvalid "missing native render plan")
+
+-- The listing validator over every version and artifact of a capture, from one source and from two.
+validatorBenchmarks :: EcosystemBench -> Benchmark
+validatorBenchmarks ecosystem =
+    bgroup
+        "packument validator"
+        [ bgroup
+            (entryName entry)
+            [ bench shape (whnf (validator (cpPackage (lePackage entry))) [Contribution provenance info (snapshotValue source) (snapshotDigest source) (BS.length raw) | provenance <- provenances])
+            | (shape, provenances) <- [("single", [GatedSource]), ("merged", [TrustedSource, GatedSource])]
+            ]
+        | entry@LoadedEntry{leInfo = info, leSnapshot = source, leBytes = raw} <- ebCorpus ecosystem
+        ]
+  where
+    validator name sources = renderETag (packumentETag syntheticProxyBase (upstreamOrigin (ebUpstream ecosystem) <$ sources) name (map fingerprintPiece sources))
 
 newtype PyPIAssemblyInvalid = PyPIAssemblyInvalid Text
     deriving stock (Show)

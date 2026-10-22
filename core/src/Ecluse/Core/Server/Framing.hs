@@ -7,17 +7,25 @@ the identity of a cache key. Each component carries its own length, so no conten
 -}
 module Ecluse.Core.Server.Framing (
     frameBytes,
+    putFrame,
     frameComponents,
 ) where
 
+import Control.Monad.ST (ST)
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (Builder, byteString, intDec)
 import Data.ByteString.Builder.Extra (smallChunkSize, toLazyByteStringWith, untrimmedStrategy)
 import Data.ByteString.Lazy qualified as LBS
 
+import Ecluse.Core.Registry.Json.Scratch (Scratch, putByte, putDecimal)
+
 -- | One component: its decimal byte length, a colon, then its bytes.
 frameBytes :: ByteString -> Builder
 frameBytes bytes = intDec (BS.length bytes) <> ":" <> byteString bytes
+
+-- | 'frameBytes' in a scratch buffer: the byte length, a colon, then a writer of exactly that many bytes.
+putFrame :: Scratch st -> Int -> ST st () -> ST st ()
+putFrame scratch len body = putDecimal scratch len >> putByte scratch 0x3a >> body
 
 {- | A tuple's components in order, so that no two tuples frame to the same bytes. An absent
 component is a lone @-@, which no length starts with, so it never frames as the shorter tuple.

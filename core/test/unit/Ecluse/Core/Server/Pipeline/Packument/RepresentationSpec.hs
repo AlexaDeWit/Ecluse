@@ -5,15 +5,23 @@
 -- | Independent validator bytes and output-charge estimates for admitted metadata.
 module Ecluse.Core.Server.Pipeline.Packument.RepresentationSpec (spec) where
 
-import Crypto.Hash (Digest, SHA256, hash)
+import Crypto.Hash (Context, Digest, SHA256, hash, hashFinalize, hashInit, hashUpdates)
+import Data.ByteString qualified as BS
+import Data.ByteString.Builder (Builder, byteString, intDec, toLazyByteString)
+import Data.ByteString.Lazy qualified as LBS
+import Data.Char (isAscii)
 import Data.Text qualified as T
+import Hedgehog (Gen, cover, forAll, (===))
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageName, mkPackageName, pkgEcosystem)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Package (PackageName, mkPackageName, pkgEcosystem, renderPackageName)
 import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource), mergePackuments)
-import Ecluse.Core.Registry.Metadata (ContentDigest, Manifest (manifestDigest, manifestInfo, manifestRaw))
+import Ecluse.Core.Registry.Metadata (ContentDigest, Manifest (manifestDigest, manifestInfo, manifestRaw), digestBytes)
 import Ecluse.Core.Server.Conditional (ETag, mkStrongETag, renderETag)
 import Ecluse.Core.Server.Encoding (ContentCoding (GzipCoding, IdentityCoding))
 import Ecluse.Core.Server.Pipeline.Packument.Representation
@@ -105,6 +113,68 @@ packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
             tag [SingletonEntry] `shouldNotBe` tag [ObjectEntry "s"]
         it ("frames arbitrary object keys for " <> show provenance) $
             tag [ObjectEntry "a", ObjectEntry "b"] `shouldNotBe` tag [ObjectEntry "a\0b"]
+
+    describe "properties" $
+        modifyMaxSuccess (const 500) . it "writes the same fingerprint as the Builder encoding it replaced" $
+            hedgehog $ do
+                mount <- forAll genFingerprintText
+                origins <- forAll (Gen.list (Range.constant 0 3) genFingerprintText)
+                name <- forAll (mkPackageName <$> Gen.element [Npm, PyPI] <*> pure Nothing <*> genFingerprintText)
+                sources <- forAll (Gen.list (Range.constant 0 3) genSourcePiece)
+                let indices = [index | (_, _, survivors) <- sources, (_, entries) <- survivors, ArrayEntry index <- entries]
+                    texts = mount : origins <> [text | (_, _, survivors) <- sources, (version, entries) <- survivors, text <- version : [key | ObjectEntry key <- entries]]
+                cover 5 "an index at minBound" (minBound `elem` indices)
+                cover 5 "an index at maxBound" (maxBound `elem` indices)
+                cover 5 "another negative index" (any (\index -> index < 0 && index /= minBound) indices)
+                cover 5 "a zero index" (0 `elem` indices)
+                cover 5 "text with a NUL or a non-ASCII character" (any (T.any (\c -> c == '\0' || not (isAscii c))) texts)
+                cover 5 "a source with no survivors" (any (\(_, _, survivors) -> null survivors) sources)
+                cover 5 "no sources" (null sources)
+                cover 5 "several origins" (length origins >= 2)
+                packumentETag mount origins name sources === builderETag mount origins name sources
+
+-- The v4 encoding through a Builder, frozen as it stood before the fingerprint moved to one buffer.
+builderETag :: Text -> [Text] -> PackageName -> [(Provenance, ContentDigest, [(Text, [EntryKey])])] -> ETag
+builderETag mountBaseUrl originBaseUrls name sources =
+    mkStrongETag (hashFinalize (hashUpdates (hashInit :: Context SHA256) (LBS.toChunks (toLazyByteString fingerprint))))
+  where
+    frame bytes = intDec (BS.length bytes) <> ":" <> byteString bytes
+    fingerprint =
+        "ecluse:packument-etag:v4\0"
+            <> foldMap (frame . encodeUtf8) originBaseUrls
+            <> "\0"
+            <> byteString (encodeUtf8 mountBaseUrl)
+            <> "\0"
+            <> byteString (encodeUtf8 (renderPackageName name))
+            <> "\0"
+            <> foldMap sourcePiece sources
+    sourcePiece (provenance, digest, survivors) = provenanceTag provenance <> byteString (digestBytes digest) <> foldMap versionPiece survivors <> "\1"
+    versionPiece (version, entries) = frame (encodeUtf8 version) <> foldMap entryPiece entries <> "\2"
+    entryPiece :: EntryKey -> Builder
+    entryPiece = \case
+        ArrayEntry index -> "a" <> frame (show index)
+        ObjectEntry key -> "o" <> frame (encodeUtf8 key)
+        SingletonEntry -> "s"
+    provenanceTag :: Provenance -> Builder
+    provenanceTag = \case
+        TrustedSource -> "t\0"
+        GatedSource -> "g\0"
+
+genSourcePiece :: Gen (Provenance, ContentDigest, [(Text, [EntryKey])])
+genSourcePiece =
+    (,,)
+        <$> Gen.element [TrustedSource, GatedSource]
+        <*> (digestOf <$> Gen.bytes (Range.constant 0 8))
+        <*> Gen.list (Range.constant 0 3) ((,) <$> genFingerprintText <*> Gen.list (Range.constant 0 4) genEntryKey)
+
+genEntryKey :: Gen EntryKey
+genEntryKey = Gen.choice [ArrayEntry <$> genIndex, ObjectEntry <$> genFingerprintText, pure SingletonEntry]
+  where
+    genIndex = Gen.choice [Gen.element [minBound, maxBound, 0, -1], Gen.int (Range.constantFrom 0 minBound maxBound)]
+
+-- Mostly ASCII, with NUL, the framing colon, two- and four-byte UTF-8 characters, and other Unicode characters.
+genFingerprintText :: Gen Text
+genFingerprintText = Gen.text (Range.constant 0 6) (Gen.frequency [(4, Gen.alphaNum), (1, Gen.element ['\0', ':', '\233', '\128512']), (1, Gen.unicode)])
 
 outputBasisSpec :: Spec
 outputBasisSpec = describe "outputBasisBytes -- the source bytes a listing's output charge scales" $
