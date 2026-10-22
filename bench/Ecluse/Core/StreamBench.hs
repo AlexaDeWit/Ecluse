@@ -2,10 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Flush-strategy benches for the artifact streaming pump ("Ecluse.Core.Server.Stream").
-Each row pumps an 8 MiB body into the Warp sink model of "Ecluse.Core.StreamBench.Sink".
-The rows price the CPU side of a flush cadence, and the load harness (@bench-load@) prices the
-socket sends. A CPU difference here does not justify a cadence change on its own.
+{- | Benches for the artifact streaming pump ("Ecluse.Core.Server.Stream"): each flush strategy, and
+the shipped pump under the relay's progress meter. Each row pumps an 8 MiB body into the Warp sink
+model of "Ecluse.Core.StreamBench.Sink". The rows price the CPU side of a flush cadence, and the
+load harness (@bench-load@) prices the socket sends. A CPU difference here does not justify a
+cadence change on its own.
 -}
 module Ecluse.Core.StreamBench (
     benchmarks,
