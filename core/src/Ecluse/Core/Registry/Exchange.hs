@@ -85,6 +85,17 @@ boundedExchange :: (Int -> Int -> ByteString -> a) -> Manager -> ProgressFloor -
 boundedExchange project manager progress limits request =
     runExchange manager progress request (readBounded project limits)
 
+readBounded :: (Int -> Int -> ByteString -> a) -> BodyLimit -> Response BodyReader -> IO (Either LimitError a)
+readBounded project limits response =
+    fmap (uncurry (project (statusCode (responseStatus response))))
+        <$> boundedRead limits (brRead (responseBody response))
+
+-- | The exchange keeping the answered status alongside the body, for the first-party relay.
+boundedRelay :: Manager -> ProgressFloor -> BodyLimit -> Request -> IO (Either FetchFault PublishRelayResponse)
+boundedRelay =
+    boundedExchange $ \status _ body ->
+        PublishRelayResponse{relayStatus = status, relayBody = LBS.fromStrict body}
+
 -- | Consume a response under the progress watchdog, classifying transport and body-limit failures.
 runExchange :: Manager -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
 runExchange = runExchangeUsing Uncontrolled
@@ -131,25 +142,6 @@ seconds :: Int -> Text
 seconds micros = case micros `divMod` 1_000_000 of
     (whole, 0) -> show whole
     _ -> show (fromIntegral micros / 1_000_000 :: Double)
-
--- | The exchange keeping the answered status alongside the body, for the first-party relay.
-boundedRelay :: Manager -> ProgressFloor -> BodyLimit -> Request -> IO (Either FetchFault PublishRelayResponse)
-boundedRelay =
-    boundedExchange $ \status _ body ->
-        PublishRelayResponse{relayStatus = status, relayBody = LBS.fromStrict body}
-
--- | Report request-formation and exchange failures through the same error channel.
-formThen ::
-    (UrlFormationError -> fault) ->
-    (Request -> IO (Either fault a)) ->
-    Either UrlFormationError Request ->
-    IO (Either fault a)
-formThen unformable = either (pure . Left . unformable)
-
-readBounded :: (Int -> Int -> ByteString -> a) -> BodyLimit -> Response BodyReader -> IO (Either LimitError a)
-readBounded project limits response =
-    fmap (uncurry (project (statusCode (responseStatus response))))
-        <$> boundedRead limits (brRead (responseBody response))
 
 -- | Consume a 2xx body within the response lifetime. A status outside 2xx never reaches the consumer.
 withSuccessBody :: Manager -> ProgressFloor -> (IO ByteString -> IO (Either LimitError a)) -> Request -> IO (Either FetchFault (BodyOutcome a))
@@ -205,3 +197,11 @@ boundedChargedRead :: (Int -> IO ()) -> BodyLimit -> IO ByteString -> IO (Either
 boundedChargedRead charge limits readChunk = do
     retain <- accumulatingCharge charge
     boundedRead limits (chargedRead (retain . bufferedChunkCharge) readChunk)
+
+-- | Report request-formation and exchange failures through the same error channel.
+formThen ::
+    (UrlFormationError -> fault) ->
+    (Request -> IO (Either fault a)) ->
+    Either UrlFormationError Request ->
+    IO (Either fault a)
+formThen unformable = either (pure . Left . unformable)
