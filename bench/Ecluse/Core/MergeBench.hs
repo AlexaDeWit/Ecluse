@@ -10,6 +10,7 @@ module Ecluse.Core.MergeBench (
 ) where
 
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Ecluse.Bench.Corpus (
     entryInfo,
     entryName,
@@ -18,7 +19,7 @@ import Ecluse.Bench.Corpus (
 import Ecluse.Bench.Fit (notWorseThanLinear)
 import Ecluse.Core.Package (PackageInfo)
 import Ecluse.Core.Package.Merge (
-    MergePlan (mpSurvivors),
+    MergePlan (mpDivergences, mpSurvivors),
     Provenance (GatedSource, TrustedSource),
     mergePackuments,
  )
@@ -40,7 +41,18 @@ benchmarks ecosystem =
                     (fmap syntheticSnapshot . syntheticPackageInfo ecosystem . fromIntegral)
                     (either (const (-1)) mergeDepth)
                ]
+            <> [ bgroup
+                    "merge plan, conditional answer"
+                    [ bench (entryName le) (whnf conditionalDepth (entryInfo le <$ served))
+                    | le@LoadedEntry{leSnapshot = served} <- ebCorpus ecosystem
+                    ]
+               ]
 
 mergeDepth :: Snapshot PackageInfo -> Int
 mergeDepth info =
     maybe 0 (Map.size . mpSurvivors) (mergePackuments [(TrustedSource, info), (GatedSource, info)])
+
+-- What a 304 reads from the plan: the survivors and the divergences, never the render's fields.
+conditionalDepth :: Snapshot PackageInfo -> Int
+conditionalDepth info =
+    maybe 0 (\plan -> Map.size (mpSurvivors plan) + Set.size (mpDivergences plan)) (mergePackuments [(TrustedSource, info), (GatedSource, info)])
