@@ -130,14 +130,29 @@ projectSimpleIndex name invalid files =
     (versions, fileDrops) = projectVersions name files
 
 projectVersions :: PackageName -> [ProjectedFile] -> (Map Text PackageDetails, [InvalidEntry])
-projectVersions name = foldl' place (Map.empty, [])
+projectVersions name files = (closeRun run byVersion, drops)
   where
-    place (!byVersion, !dropAcc) = \case
-        ReleaseFile file ->
-            ( Map.alter (Just . projectDetails name file) (renderVersion (frVersion file)) byVersion
-            , dropAcc
-            )
-        UncoordinatedFile _ failure -> (byVersion, failure : dropAcc)
+    VersionFold byVersion run drops = foldl' (placeFile name) (VersionFold Map.empty NoRun []) files
+
+-- The open run collects adjacent files of one release, so the map takes one write per run, not per file.
+data VersionFold = VersionFold (Map Text PackageDetails) OpenRun [InvalidEntry]
+
+data OpenRun = NoRun | OpenRun Text PackageDetails
+
+placeFile :: PackageName -> VersionFold -> ProjectedFile -> VersionFold
+placeFile _ (VersionFold byVersion run drops) (UncoordinatedFile _ failure) = VersionFold byVersion run (failure : drops)
+placeFile name (VersionFold byVersion run drops) (ReleaseFile file) = case run of
+    OpenRun open held | open == key -> extendRun byVersion (Just held)
+    _ -> extendRun settled (Map.lookup key settled)
+  where
+    key = renderVersion (frVersion file)
+    settled = closeRun run byVersion
+    extendRun into held = VersionFold into (OpenRun key (projectDetails name file held)) drops
+
+closeRun :: OpenRun -> Map Text PackageDetails -> Map Text PackageDetails
+closeRun = \case
+    NoRun -> id
+    OpenRun key details -> Map.insert key details
 
 -- 'mkInvalidEntry' reduces the location to its authority before logging.
 uncoordinatedDrop :: IndexFile -> InvalidEntry
