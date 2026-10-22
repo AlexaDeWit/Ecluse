@@ -16,6 +16,8 @@ module Ecluse.Core.Package.Filter.Internal (
     -- * Checking a URL
     ArtifactLocation (..),
     LocationRefusal (..),
+    AuthorityVerdict,
+    noAuthorityVerdict,
     locateArtifact,
 
     -- * Checking an artifact
@@ -35,7 +37,17 @@ import Ecluse.Core.Package (
     InvalidEntryKind (InvalidIndexFile, InvalidVersionManifest),
     mkInvalidEntry,
  )
-import Ecluse.Core.Security (AllowedHostPorts, HostPort, artifactAuthorityHonoured, authorityLabel, hostAddress, hostPortAddress)
+import Ecluse.Core.Security (
+    AllowedHostPorts,
+    AuthorityText,
+    HostPort,
+    artifactAuthorityHonoured,
+    authorityHostPort,
+    authorityLabel,
+    authorityText,
+    hostAddress,
+    hostPortAddress,
+ )
 import Ecluse.Core.Security.Egress (registryUrlText, resolveTarballUrl)
 import Ecluse.Core.Text (httpsPrefix, isPrefixOfLowered, urlFilename)
 
@@ -76,22 +88,36 @@ data LocationRefusal = LocationRefusal
     }
     deriving stock (Eq, Show)
 
-{- | Check a URL's filename, its https normalisation, then its authority. A non-https (loopback)
-upstream skips normalisation, but not the authority check, which the download gate also applies.
+-- | The last authority the check decided, with its verdict. It holds only for the 'ArtifactOrigin' that decided it.
+data AuthorityVerdict
+    = NoAuthorityVerdict
+    | AuthorityVerdict AuthorityText Bool
+
+-- | The verdict a document's first URL starts from.
+noAuthorityVerdict :: AuthorityVerdict
+noAuthorityVerdict = NoAuthorityVerdict
+
+{- | Check a URL's filename, its https normalisation, then its authority, reusing the previous verdict for the same
+authority text. A non-https (loopback) upstream skips normalisation, not the authority check the download gate also applies.
 -}
-locateArtifact :: ArtifactOrigin -> Text -> Either LocationRefusal ArtifactLocation
-locateArtifact origin url = do
-    filename <- namedFile url
-    normalised <- normaliseScheme
-    -- Text equal to the original has passed the filename check already.
-    changed <-
-        if normalised == url
-            then Right Nothing
-            else Just normalised <$ namedFile normalised
-    if artifactAuthorityHonoured (originHosts origin) (originAuthority origin) (hostPortAddress normalised)
-        then Right $! ArtifactLocation{locatedFilename = filename, locatedNormalised = changed, locatedTrimmedNamesFile = trimmedNamesFile}
-        else Left (LocationRefusal "artifact authority is neither the serving upstream nor a declared artifact host" normalised)
+locateArtifact :: ArtifactOrigin -> AuthorityVerdict -> Text -> (AuthorityVerdict, Either LocationRefusal ArtifactLocation)
+locateArtifact origin previous url = case beforeAuthority of
+    Left refusal -> (previous, Left refusal)
+    Right (filename, normalised, changed) -> case authorityVerdict origin previous (authorityText normalised) of
+        verdict@(AuthorityVerdict _ True) ->
+            (verdict, Right $! ArtifactLocation{locatedFilename = filename, locatedNormalised = changed, locatedTrimmedNamesFile = trimmedNamesFile})
+        verdict -> (verdict, Left (LocationRefusal "artifact authority is neither the serving upstream nor a declared artifact host" normalised))
   where
+    beforeAuthority = do
+        filename <- namedFile url
+        normalised <- normaliseScheme
+        -- Text equal to the original has passed the filename check already.
+        changed <-
+            if normalised == url
+                then Right Nothing
+                else Just normalised <$ namedFile normalised
+        pure (filename, normalised, changed)
+
     namedFile candidate = maybeToRight (LocationRefusal "artifact URL has no safe filename" candidate) (urlFilename candidate)
 
     normaliseScheme = case originHttpsHost origin of
@@ -101,6 +127,12 @@ locateArtifact origin url = do
     -- Trimming that changes nothing leaves the name already checked.
     trimmedNamesFile = trimmed == url || isJust (urlFilename trimmed)
     trimmed = T.strip url
+
+-- The previous verdict when it decided the same authority text, otherwise the verdict for this one.
+authorityVerdict :: ArtifactOrigin -> AuthorityVerdict -> AuthorityText -> AuthorityVerdict
+authorityVerdict origin previous authority = case previous of
+    AuthorityVerdict decided _ | decided == authority -> previous
+    _ -> AuthorityVerdict authority (artifactAuthorityHonoured (originHosts origin) (originAuthority origin) (authorityHostPort authority))
 
 -- | Why one artifact was refused, for the drop record that reports it.
 data ArtifactRefusal = ArtifactRefusal
@@ -112,12 +144,12 @@ data ArtifactRefusal = ArtifactRefusal
     deriving stock (Eq, Show)
 
 -- | 'locateArtifact' for a typed artifact, which stays as written unless normalising changed its URL.
-resolveArtifact :: ArtifactOrigin -> Artifact -> Either ArtifactRefusal Artifact
-resolveArtifact origin art = case locateArtifact origin (artUrl art) of
-    Left refusal -> Left ArtifactRefusal{refusedFile = artFilename art, refusedReason = unlocatedReason refusal, refusedUrl = unlocatedUrl refusal}
-    Right location -> case locatedNormalised location of
-        Nothing -> Right art
-        Just normalised -> Right art{artUrl = normalised}
+resolveArtifact :: ArtifactOrigin -> AuthorityVerdict -> Artifact -> (AuthorityVerdict, Either ArtifactRefusal Artifact)
+resolveArtifact origin previous art = case locateArtifact origin previous (artUrl art) of
+    (verdict, Left refusal) -> (verdict, Left ArtifactRefusal{refusedFile = artFilename art, refusedReason = unlocatedReason refusal, refusedUrl = unlocatedUrl refusal})
+    (verdict, Right location) -> case locatedNormalised location of
+        Nothing -> (verdict, Right art)
+        Just normalised -> (verdict, Right art{artUrl = normalised})
 
 {- | Split one version's checked artifacts, in file order, into its survivors and its drop records. A
 refused file records under its own name. A version left with none records its first refusal, under its key.

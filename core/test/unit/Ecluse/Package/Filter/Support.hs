@@ -130,16 +130,32 @@ upstreams =
 
 -- | A URL assembled from hostile spellings of each part, with an occasional stray character.
 genHostileUrl :: [Text] -> Gen Text
-genHostileUrl served = do
+genHostileUrl served = genHostileAuthority served >>= genHostileUrlAt
+
+-- An authority as a hostile URL writes it, with a suffix that may end it early or add userinfo.
+genHostileAuthority :: [Text] -> Gen Text
+genHostileAuthority served = do
+    authority <- Gen.frequency [(3, Gen.element served), (1, (<>) <$> Gen.element otherHosts <*> Gen.element ports)]
+    suffix <- Gen.frequency [(8, pure ""), (1, Gen.element authoritySuffixes)]
+    pure (authority <> suffix)
+  where
+    otherHosts = ["registry.npmjs.org", "pypi.org", "files.pythonhosted.org", "[::1]", "127.0.0.1", "cdn.example.net", "evil.test", "[2606:4700::1111]", "[::1", "b\xFC\&cher.example", "xn--bcher-kva.example", "", "169.254.169.254"]
+    authoritySuffixes = ["#@evil.test", "?@registry.npmjs.org", "@evil.test", ":443@evil.test", "\\@evil.test"]
+
+-- Port spellings, the empty, malformed and full-width ones included.
+ports :: [Text]
+ports = ["", ":443", ":8443", ":8080", ":", ":0", ":0443", ":65536", ":\xFF18\xFF10"]
+
+-- A hostile URL around the given authority.
+genHostileUrlAt :: Text -> Gen Text
+genHostileUrlAt authority = do
     leading <- Gen.frequency [(9, pure ""), (1, Gen.element whitespace)]
     scheme <- Gen.frequency [(5, respell "https://"), (3, respell "http://"), (1, Gen.element oddSchemes)]
     userinfo <- Gen.frequency [(6, pure ""), (1, Gen.element ["deploy:hunter2@", "user@", "a@b@", "@", "%40@"])]
-    authority <- Gen.frequency [(3, Gen.element served), (1, (<>) <$> Gen.element otherHosts <*> Gen.element ports)]
-    suffix <- Gen.frequency [(8, pure ""), (1, Gen.element authoritySuffixes)]
     directory <- Gen.frequency [(5, Gen.element directories), (1, Gen.element delimitedDirectories)]
     file <- Gen.frequency [(5, Gen.element plainFiles), (2, Gen.element hostileFiles)]
     trailing <- Gen.frequency [(9, pure ""), (1, Gen.element whitespace)]
-    let url = leading <> scheme <> userinfo <> authority <> suffix <> directory <> file <> trailing
+    let url = leading <> scheme <> userinfo <> authority <> directory <> file <> trailing
     Gen.frequency [(8, pure url), (1, strayChar url)]
   where
     respell = fmap toText . traverse (\c -> Gen.element (ordNub [c, toUpper c])) . T.unpack
@@ -149,21 +165,19 @@ genHostileUrl served = do
         pure (T.take at url <> T.singleton stray <> T.drop at url)
     whitespace = [" ", "\t", "\n", "\xA0", "\x3000"]
     oddSchemes = ["", "//", "ftp://", "https:/", "https:", "HTTPS//", "\x130https://", "\x212Ahttps://", "https\xFF1A//", "http\xFF1A//"]
-    otherHosts = ["registry.npmjs.org", "pypi.org", "files.pythonhosted.org", "[::1]", "127.0.0.1", "cdn.example.net", "evil.test", "[2606:4700::1111]", "[::1", "b\xFC\&cher.example", "xn--bcher-kva.example", "", "169.254.169.254"]
-    ports = ["", ":443", ":8443", ":8080", ":", ":0", ":0443", ":65536", ":\xFF18\xFF10"]
-    authoritySuffixes = ["#@evil.test", "?@registry.npmjs.org", "@evil.test", ":443@evil.test", "\\@evil.test"]
     directories = ["", "/thing/-", "/packages/ab/cd", "/%2e%2e", "/a b"]
     delimitedDirectories = ["?/", "#/", "/a?b/", "?/registry.npmjs.org", "#/files.pythonhosted.org", "/a#b@evil.test/c"]
     plainFiles = ["/thing-1.0.0.tgz", "/numpy-2.0.0-cp312-cp312-manylinux_2_17_x86_64.whl", "/requests-2.32.3.tar.gz", "/%C3%BCber-1.0.tar.gz", "/\xFC\&ber-1.0.tar.gz"]
     hostileFiles = ["/", "", "/.", "/..", "/%2e%2e", "/a%2Fb.whl", "/pkg%00.tgz", "/%E2%80%AE.whl", "/%ff.whl", "/a\\b.tgz", "/x.tgz?sig=abc", "/x.tgz#frag", "/?q", "/ ", "/. ", "/.. ", "/x.tgz\t"]
 
 {- | A document of one to three versions, each with one to three files at hostile URLs under distinct
-names, and one earlier drop record.
+names, and one earlier drop record. Most files share a few spellings of one authority.
 -}
 genHostileInfo :: [Text] -> Gen PackageInfo
 genHostileInfo served = do
+    shared <- genSharedAuthorities served
     count <- Gen.int (Range.constant 1 3)
-    versions <- traverse (\key -> (key,) <$> genDetails key) (take count ["1.0.0", "1.1.0", "2.0.0"])
+    versions <- traverse (\key -> (key,) <$> genDetails shared key) (take count ["1.0.0", "1.1.0", "2.0.0"])
     pure
         PackageInfo
             { infoName = thingName
@@ -172,9 +186,24 @@ genHostileInfo served = do
             , infoInvalidEntries = [mkInvalidEntry InvalidDistTag "next" (String "not-a-version") "earlier drop"]
             }
   where
-    genDetails key = do
-        firstUrl <- genHostileUrl served
-        laterUrls <- Gen.list (Range.constant 0 2) (genHostileUrl served)
+    genDetails shared key = do
+        firstUrl <- genUrl shared
+        laterUrls <- Gen.list (Range.constant 0 2) (genUrl shared)
         pure (sampleDetails thingName (npmVersion key)){pkgArtifacts = artifactAt 0 firstUrl :| zipWith artifactAt [1 ..] laterUrls}
+    genUrl shared = Gen.frequency [(1, genHostileUrl served), (2, Gen.element shared >>= genHostileUrlAt)]
     artifactAt :: Int -> Text -> Artifact
     artifactAt position url = sampleArtifact{artFilename = "file-" <> show position <> ".tgz", artUrl = url}
+
+-- An authority and some of its respellings: upper case, its host at another port, and IPv6 zero groups written out.
+genSharedAuthorities :: [Text] -> Gen [Text]
+genSharedAuthorities served = do
+    authority <- Gen.frequency [(4, genHostileAuthority served), (1, Gen.element ["[::1]:8443", "[::1]", "[2606:4700::1111]:443"])]
+    port <- Gen.element ports
+    respellings <- Gen.subsequence [T.toUpper authority, withoutPort authority <> port, T.replace "::" ":0::" (T.replace "[::" "[0::" authority)]
+    pure (authority : respellings)
+
+-- The authority up to its port, bracket-aware.
+withoutPort :: Text -> Text
+withoutPort authority = case T.breakOn "]" authority of
+    (bracketed, closing) | not (T.null closing) -> bracketed <> "]"
+    _ -> T.takeWhile (/= ':') authority

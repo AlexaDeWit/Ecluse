@@ -14,7 +14,7 @@ import Data.Map.Strict qualified as Map
 import Ecluse.Bench.Corpus (entryInfo, entryName, forcedTree, syntheticPackageInfo, unHeldTree)
 import Ecluse.Core.Package (PackageInfo, artUrl, infoDistTags, infoInvalidEntries, infoVersions, pkgArtifacts)
 import Ecluse.Core.Package.Filter (enforceArtifactLocations)
-import Ecluse.Core.Package.Filter.Internal (ArtifactOrigin, artifactOrigin, locateArtifact)
+import Ecluse.Core.Package.Filter.Internal (ArtifactOrigin, artifactOrigin, locateArtifact, noAuthorityVerdict)
 import Ecluse.Core.Package.Integrity (IntegrityFloor)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError, boundedRead, defaultLimits, maxMetadataBytes)
 import Ecluse.Core.Server.Pipeline.Internal (admitByIntegrity)
@@ -72,10 +72,10 @@ versionCountDepth info = either limitErrorCode (const 1) (checkVersionCount defa
 limitErrorCode :: LimitError -> Int
 limitErrorCode _ = -1
 
--- The projected artifacts whose URL passes the check against the capture's registry, each result forced.
+-- The projected artifacts whose URL passes the check against the capture's registry, each URL checked alone and its result forced.
 locatedArtifacts :: ArtifactOrigin -> PackageInfo -> Int
 locatedArtifacts origin info =
-    length [() | details <- Map.elems (infoVersions info), art <- toList (pkgArtifacts details), Right !_ <- [locateArtifact origin (artUrl art)]]
+    length [() | details <- Map.elems (infoVersions info), art <- toList (pkgArtifacts details), Right !_ <- [snd (locateArtifact origin noAuthorityVerdict (artUrl art))]]
 
 -- The files and drop records the location check leaves when one call checks the whole document.
 enforcedArtifacts :: CaptureUpstream -> PackageInfo -> Int
