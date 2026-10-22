@@ -24,13 +24,15 @@ import UnliftIO (evaluate)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package
+import Ecluse.Core.Package.Entry (AdmittedEntry (..))
 import Ecluse.Core.Package.Hash (canonicalHashValue)
 import Ecluse.Core.Package.Integrity (VersionIntegrity (MeetsFloor), assertedAlg, classifyDigests)
 import Ecluse.Core.Package.Merge hiding (contribute, mergePackuments)
 import Ecluse.Core.Package.Merge qualified as Merge
 
 import Ecluse.Core.Registry.WireSupport (Projection (Projected))
-import Ecluse.Core.Version (mkVersion, renderVersion)
+import Ecluse.Core.Snapshot (Snapshot (snapshotDigest))
+import Ecluse.Core.Version (Version, mkVersion, renderVersion, selectLatest)
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, sriSha256Of, sriSha512Of, thingName, unsafeHash, validSha256, validSha256Sri)
 import Ecluse.Test.Package qualified as Package
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
@@ -207,14 +209,39 @@ divergenceFacts =
 
 -- Each version's copies in precedence order, the winner first.
 copiesByVersion :: [(Provenance, PackageInfo)] -> Map Text (NonEmpty PackageDetails)
-copiesByVersion sources =
-    fmap snd . NE.sortWith fst
+copiesByVersion = fmap (fmap snd) . rankedCopies
+
+-- Each version's copies with their precedence rank, the winner first.
+rankedCopies :: [(Provenance, PackageInfo)] -> Map Text (NonEmpty ((Provenance, SourceId), PackageDetails))
+rankedCopies sources =
+    NE.sortWith fst
         <$> Map.fromListWith
             (<>)
             [ (key, one ((prov, position), details))
-            | (position, (prov, info)) <- zip [0 :: Int ..] sources
+            | (position, (prov, info)) <- zip [0 ..] sources
             , (key, details) <- Map.toList (infoVersions info)
             ]
+
+-- What a render reads from the plan, in strict fields, so a deferred field compares by value.
+data RenderFields = RenderFields (Map Text SourceId) (Map Text Version) (Map Text (NonEmpty AdmittedEntry)) (Map Text UTCTime)
+    deriving stock (Eq, Show)
+
+renderFields :: MergePlan -> RenderFields
+renderFields plan = RenderFields (mpSurvivors plan) (mpDistTags plan) (mpArtifacts plan) (mpTime plan)
+
+-- Each version's winning copy, each tag from its highest-precedence source, and @latest@ from the shared selector.
+referenceRenderFields :: [(Provenance, PackageInfo)] -> RenderFields
+referenceRenderFields sources =
+    RenderFields (snd . fst <$> winners) tags (Map.mapMaybe admitted winners) (Map.mapMaybe (pkgPublishedAt . snd) winners)
+  where
+    ranked = sortOn fst [((prov, position), info) | (position, (prov, info)) <- zip [0 ..] sources]
+    winners = NE.head <$> rankedCopies sources
+    digests = Map.fromList [(rank, snapshotDigest (syntheticSnapshot info)) | (rank, info) <- ranked]
+    admitted (rank, details) = (\digest -> admittedAs digest <$> pkgArtifacts details) <$> Map.lookup rank digests
+    admittedAs digest art = AdmittedEntry digest (artEntryKey art) (artFilename art)
+    carried = Map.filter ((`Map.member` winners) . renderVersion) (Map.unions (map (infoDistTags . snd) ranked))
+    publicLatest = listToMaybe [v | ((GatedSource, _), info) <- ranked, Just v <- [Map.lookup "latest" (infoDistTags info)]]
+    tags = maybe (Map.delete "latest" carried) (\v -> Map.insert "latest" v carried) (selectLatest publicLatest (map (pkgVersion . snd) (Map.elems winners)))
 
 -- The divergence set from the fingerprint test and then the contradiction test alone, over every
 -- copy of a version. The merge must agree with it whatever it tests first.
@@ -312,6 +339,20 @@ genCopy (key, release) =
     overHashes f art = art{artHashes = f (artHashes art)}
     swapping xs ys h = fromMaybe h (lookup h (zip (xs <> ys) (ys <> xs)))
 
+-- Sources over four releases whose copies differ in publish time and file, with tags aimed at a release or an absent version.
+genRenderedSources :: Gen [(Provenance, PackageInfo)]
+genRenderedSources = Gen.list (Range.linear 1 4) $ do
+    prov <- Gen.element [TrustedSource, GatedSource]
+    copies <- traverse genCopyOf =<< Gen.subsequence releases
+    tags <- Gen.list (Range.constant 0 3) ((,) <$> Gen.element ["latest", "next", "beta"] <*> Gen.element (map (mkVersion Npm) ("9.9.9" : releases)))
+    pure (prov, (packumentWith []){infoVersions = Map.fromList copies, infoDistTags = Map.fromList tags})
+  where
+    releases = ["1.0.0", "1.1.0", "2.0.0-rc.1", "2.0.0"]
+    genCopyOf key = do
+        published <- Gen.frequency [(1, pure Nothing), (2, Just . (`UTCTime` 0) . fromGregorian 2026 1 <$> Gen.int (Range.constant 1 28))]
+        file <- Gen.element ["thing.tgz", "thing.whl"]
+        pure (key, (detailsWith key []){pkgPublishedAt = published, pkgArtifacts = wheelWith file [] :| []})
+
 -- Two or three sources over three releases, each carrying its own copy of some of them.
 genContestedSources :: Gen [(Provenance, PackageInfo)]
 genContestedSources = do
@@ -339,10 +380,14 @@ mergeAllocation sources = do
     let inputs = map (second syntheticSnapshot) sources
     _ <- evaluate (T.length (show inputs))
     allocationBefore <- getAllocationCounter
-    divergences <- evaluate (maybe (-1) (Set.size . mpDivergences) (Merge.mergePackuments inputs))
+    divergences <- evaluate (maybe (-1) wholePlanDivergences (Merge.mergePackuments inputs))
     allocationAfter <- getAllocationCounter
     divergences `shouldBe` 0
     pure (allocationBefore - allocationAfter)
+
+-- Every field forced, as an npm render forces them, so the allocation bounds price the whole plan.
+wholePlanDivergences :: MergePlan -> Int
+wholePlanDivergences plan = mpDistTags plan `seq` mpArtifacts plan `seq` mpTime plan `seq` Set.size (mpDivergences plan)
 
 spec :: Spec
 spec = do
@@ -880,6 +925,18 @@ spec = do
                 plan <- H.evalMaybe (mergePackuments sources)
                 let keys = Map.keys (mpSurvivors plan)
                 H.assert (all (`elem` keys) (Map.keys (mpTime plan)))
+
+        it "the render's fields equal a strict copy built from each version's winning copy" $
+            hedgehog $ do
+                sources <- forAll genRenderedSources
+                plan <- H.evalMaybe (mergePackuments sources)
+                let copies = rankedCopies sources
+                    targets = concatMap (Map.elems . infoDistTags . snd) sources
+                H.cover 20 "a version two sources carry" (any ((> 1) . length) copies)
+                H.cover 30 "a copy with no publish time" (any (any (isNothing . pkgPublishedAt . snd)) copies)
+                H.cover 10 "a tag aimed at an absent version" (any (\v -> Map.notMember (renderVersion v) copies) targets)
+                H.cover 10 "a public latest" (any (\(prov, info) -> prov == GatedSource && Map.member "latest" (infoDistTags info)) sources)
+                renderFields plan === referenceRenderFields sources
 
         it "a single input is the identity over the plan" $
             hedgehog $ do
