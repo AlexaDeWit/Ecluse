@@ -17,7 +17,7 @@ import Database.SQLite.Simple (execute_, withConnection)
 import Katip (LogEnv, SimpleLogPayload, closeScribes, runKatipContextT)
 import Network.HTTP.Client (HttpException, defaultManagerSettings, httpNoBody, newManager, parseRequest)
 import Network.HTTP.Client qualified as HttpClient
-import Network.HTTP.Types (Header, Status, hConnection, hContentType, methodDelete, methodGet, methodHead, methodPost, methodPut, status200, status404, status500, statusCode)
+import Network.HTTP.Types (Header, Method, Status, hConnection, hContentType, methodDelete, methodGet, methodHead, methodPost, methodPut, status200, status404, status500, statusCode)
 import Network.Wai (
     Application,
     Response,
@@ -66,7 +66,7 @@ import Ecluse.Core.Rules.Types (
 import Ecluse.Core.Security (defaultLimits, maxPublishRequestBytes)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission)
-import Ecluse.Core.Server.Context (MountRouter, PackumentDeps (pdMetadata), PublishDeps (..), ResponseAction (AnswerLocally), RouteAction (RouteAction))
+import Ecluse.Core.Server.Context (MountRouter, PackumentDeps (pdMetadata), PublishDeps (..), ResponseAction (AnswerLocally, RunPipeline), RouteAction (RouteAction))
 import Ecluse.Core.Server.Contract (ResponseContract, VariableResponse, variableOpaqueContract, variableResponse)
 import Ecluse.Core.Server.Fault (RequestFault (rqCause))
 import Ecluse.Core.Server.Readiness (Readiness (Latched))
@@ -240,6 +240,7 @@ matchNoConnectionHeader = MatchHeader $ \headers _body ->
 spec :: Spec
 spec = do
     perimeterGuardSpec
+    pipelineFallbackSpec
     composedNpmMountSpec
     partialAdvisorySpec
     startupAdvisorySpec
@@ -528,6 +529,48 @@ perimeterGuardSpec = describe "perimeterGuard (the typed request perimeter)" $ d
         case outcome of
             Left escape -> fmap (\(RelayContractEscape detail) -> detail) (fromException escape) `shouldBe` Just "post-commit teardown"
             Right () -> expectationFailure "expected the post-commit escape to rethrow"
+
+-- Each pipeline route's escape before commit answers the route's own neutral 500, pinned byte for byte.
+pipelineFallbackSpec :: Spec
+pipelineFallbackSpec = describe "a pipeline route's neutral 500 after an escape before commit" $
+    with escapingApp $
+        it "answers each npm and PyPI pipeline route with its pinned status, headers, and body" $
+            for_ pipelineFallbacks $ \(method, path, expected) -> do
+                response <- request method path [] ""
+                liftIO ((method, path, answered response) `shouldBe` (method, path, expected))
+  where
+    answered response = (statusCode (WaiTest.simpleStatus response), WaiTest.simpleHeaders response, WaiTest.simpleBody response)
+
+-- npm answers its JSON error body. PyPI's reads answer a bare status (no help message is set), its upload plain text.
+pipelineFallbacks :: [(Method, ByteString, (Int, [Header], LByteString))]
+pipelineFallbacks =
+    [ (methodGet, "/npm/widget", (500, npmJson, npmBody))
+    , (methodHead, "/npm/widget", (500, npmJson, ""))
+    , (methodGet, "/npm/widget/-/widget-1.0.0.tgz", (500, npmJson, npmBody))
+    , (methodHead, "/npm/widget/-/widget-1.0.0.tgz", (500, npmJson, ""))
+    , (methodPut, "/npm/widget", (500, npmJson, npmBody))
+    , (methodGet, "/pypi/simple/thing", (500, [], ""))
+    , (methodGet, "/pypi/simple/thing/thing-1.0.tar.gz", (500, [], ""))
+    , (methodHead, "/pypi/simple/thing/thing-1.0.tar.gz", (500, [], ""))
+    , (methodGet, "/pypi/simple/thing/thing-1.0-py3-none-any.whl.metadata", (500, [], ""))
+    , (methodPost, "/pypi/legacy", (500, [(hContentType, "text/plain")], "internal server error"))
+    ]
+  where
+    npmJson = [(hContentType, "application/json")]
+    npmBody = "{\"error\":\"internal server error\"}"
+
+-- The shipped npm and PyPI mounts, with every pipeline handler escaping before it responds.
+escapingApp :: IO Application
+escapingApp = application (mkServerConfig (map escaping mounts)) <$> newTestEnv
+  where
+    mounts = catMaybes [mountBindingFor Npm inertPackumentDeps Nothing, mountBindingFor PyPI (inertDepsFor pypiAdapter) Nothing]
+    escaping binding = binding{bindingRouter = escapingBeforeCommit (bindingRouter binding)}
+
+-- Keep the route's contract and fallback, and replace its handler with one that escapes before it responds.
+escapingBeforeCommit :: MountRouter -> MountRouter
+escapingBeforeCommit router method headers segments = case router method headers segments of
+    RouteAction contract (RunPipeline fallback _) -> RouteAction contract (RunPipeline fallback (\_ _ -> throwIO (RelayContractEscape "escaped before commit")))
+    action -> action
 
 -- The application builder raises it on receipt of its config, so 'runWarp' unwinds before binding a socket.
 data AbortLaunch = AbortLaunch
