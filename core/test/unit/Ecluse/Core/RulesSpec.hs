@@ -958,11 +958,14 @@ evaluatorParitySpec = describe "the evaluator against the one frozen at f5f368d3
                 wholeRecordThrows = case evidencePoison of
                     Just PoisonedRecord{} -> True
                     _ -> False
+                admissions = [skippedChecks decision | Reached decision@Admitted{} <- obOutcomes asItStood]
             H.cover 10 "a rule's throw refuses a version" (any isRuleThrew (obOutcomes asItStood))
             H.cover 2 "a throw leaves the evaluator" (any isEscaped (obOutcomes asItStood))
             H.cover 1 "a per-version rule's throw refuses a version an advisory rule read" (any (perVersionThrowAfterRead keys) (obOutcomes asItStood))
             H.cover 2 "a throw inside a PerPackage verdict refuses a version" (not wholeRecordThrows && any (advisoryRuleThrew keys) (obOutcomes asItStood))
             H.cover 10 "an advisory rule's abstention reaches the trail" (any holdsAdvisoryAbstention (obOutcomes asItStood))
+            H.cover 1 "an admission carries no evidence" (any null admissions)
+            H.cover 2 "an admission carries evidence" (not (all null admissions))
             live === asItStood
 
     modifyMaxSuccess (const 200) . it "decides one package's versions concurrently as it did in turn, reading the package at most once" $
