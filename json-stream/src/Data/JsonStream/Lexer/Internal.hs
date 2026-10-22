@@ -253,27 +253,18 @@ number bytes initial continued retainedBytes numbers = go initial 0 0 False 0 co
     piece offset = BS.take (offset - initial) (BS.drop initial bytes)
     go !offset !computed !digits !dotted !fractionDigits !invalid !sign
         | offset >= size = partial (piece offset)
-        | otherwise =
-            let !byte = BS.index bytes offset
-             in if not (numberByte byte)
-                    then complete (piece offset) offset computed fractionDigits invalid sign
-                    else
-                        if invalid
-                            then go (offset + 1) computed digits dotted fractionDigits True sign
-                            else
-                                if offset == initial && byte == minus
-                                    then go (offset + 1) computed digits dotted fractionDigits False (negate 1)
-                                    else
-                                        if digitByte byte
-                                            then
-                                                let !digits' = digits + 1
-                                                    !computed' = computed * decimalRadix + fromIntegral (byte - digitZero)
-                                                    !fractionDigits' = if dotted then fractionDigits + 1 else fractionDigits
-                                                 in go (offset + 1) computed' digits' dotted fractionDigits' (digits' > fastDigits) sign
-                                            else
-                                                if byte == dot && not dotted
-                                                    then go (offset + 1) computed digits True fractionDigits False sign
-                                                    else go (offset + 1) computed digits dotted fractionDigits True sign
+        | not (numberByte byte) = complete (piece offset) offset computed fractionDigits invalid sign
+        | invalid = go (offset + 1) computed digits dotted fractionDigits True sign
+        | offset == initial && byte == minus = go (offset + 1) computed digits dotted fractionDigits False (negate 1)
+        | digitByte byte =
+            let !digits' = digits + 1
+                !computed' = computed * decimalRadix + fromIntegral (byte - digitZero)
+                !fractionDigits' = if dotted then fractionDigits + 1 else fractionDigits
+             in go (offset + 1) computed' digits' dotted fractionDigits' (digits' > fastDigits) sign
+        | byte == dot && not dotted = go (offset + 1) computed digits True fractionDigits False sign
+        | otherwise = go (offset + 1) computed digits dotted fractionDigits True sign
+      where
+        byte = BS.index bytes offset
     -- The inherited limit excludes the incoming piece and does not govern completion.
     partial part
         | not continued = More (Cursor bytes size (NumberPart (BS.length part)) [part])
