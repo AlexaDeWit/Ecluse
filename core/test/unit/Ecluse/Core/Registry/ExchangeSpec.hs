@@ -8,17 +8,22 @@ connection, and only a serve-path exchange is capped.
 -}
 module Ecluse.Core.Registry.ExchangeSpec (spec) where
 
+import Crypto.Hash (hashInit, hashUpdates)
 import Data.Aeson (Value (String))
 import Data.ByteString qualified as BS
 import Data.JsonStream.Parser qualified as J
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
 import GHC.Clock (getMonotonicTime)
+import Hedgehog (Gen, cover, forAll, (===))
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Network.HTTP.Client (Manager, Request (method, requestBody), RequestBody (RequestBodyBS), defaultManagerSettings, newManager, parseRequest)
 import Network.HTTP.Types (status200)
 import Network.Wai (Application, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (defaultSettings, setOnOpen, testWithApplication, testWithApplicationSettings)
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 import UnliftIO.Async (async, wait)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
@@ -29,8 +34,9 @@ import Ecluse.Core.Registry.Exchange (accumulatingCharge, accumulatingChargeFrom
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream, retainedValue)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), ProgressFloor, boundedRead, mkProgressFloor)
 import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlightWithBackend, resolveSingleFlight)
-import Ecluse.Core.Snapshot (ContentDigest)
+import Ecluse.Core.Snapshot (ContentDigest, digestFromContext)
 import Ecluse.Test.Poll (awaitUntil)
+import Ecluse.Test.Registry.JsonStream (heldChunks)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Stub.Retry (requestsAfterLostAnswer)
 import Ecluse.Test.Stub.Socket (resetAfterPartialBody, trustingTlsManager, withTlsServer)
@@ -106,6 +112,27 @@ digestingReadSpec = describe "digestingRead" $ do
 
     it "returns the consumer's refusal without a digest" $
         readDigested (MetadataBodyLimit 2) ["{}", "x"] `shouldReturn` Left (BodyTooLarge (MetadataBodyLimit 2))
+
+    describe "properties" $
+        modifyMaxSuccess (const 500) . it "digests the chunks the consumer read as the pure SHA-256 fold does, empty chunks included" $
+            hedgehog $ do
+                chunks <- forAll (Gen.list (Range.linear 0 24) genChunk)
+                count <- forAll (Gen.int (Range.constant 0 (length chunks)))
+                let consumed = take count chunks
+                cover 20 "an empty chunk is read" (any BS.null consumed)
+                cover 20 "a chunk is left unread" (count < length chunks)
+                digest <- liftIO (digestOfReads count chunks)
+                digest === digestFromContext (hashUpdates hashInit consumed)
+
+-- Mostly chunks that end inside a 64-byte SHA-256 block, some empty, a few across many blocks.
+genChunk :: Gen ByteString
+genChunk = Gen.frequency [(2, pure BS.empty), (6, Gen.bytes (Range.linear 1 200)), (1, Gen.bytes (Range.exponential 1 4096))]
+
+-- The digest of a consumer that reads exactly the first @count@ chunks.
+digestOfReads :: Int -> [ByteString] -> IO ContentDigest
+digestOfReads count chunks = do
+    next <- heldChunks chunks
+    digestingRead (\readChunk -> Right @Void () <$ replicateM_ count readChunk) next >>= either absurd (pure . snd)
 
 readDigested :: BodyLimit -> [ByteString] -> IO (Either LimitError (StreamResult (Maybe Value), ContentDigest))
 readDigested bound chunks = do

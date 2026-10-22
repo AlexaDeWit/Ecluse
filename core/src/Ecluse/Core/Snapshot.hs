@@ -10,9 +10,11 @@ module Ecluse.Core.Snapshot (
     ContentDigest,
     digestBytes,
     digestFromContext,
+    digestFromMutableContext,
 ) where
 
 import Crypto.Hash (Context, SHA256, hashFinalize)
+import Crypto.Hash.IO (MutableContext, hashMutableFinalize)
 import Data.ByteArray qualified as BA
 
 {- | A view paired with the digest computed before projection. Producers must use the same fetch.
@@ -35,3 +37,7 @@ digestBytes (ContentDigest bytes) = bytes
 -- | Finish the SHA-256 state accumulated from the exact consumed source chunks.
 digestFromContext :: Context SHA256 -> ContentDigest
 digestFromContext = ContentDigest . BA.convert . hashFinalize
+
+-- | 'digestFromContext' for a state updated in place. Finishing spends the state, so finish it once.
+digestFromMutableContext :: MutableContext SHA256 -> IO ContentDigest
+digestFromMutableContext context = ContentDigest . BA.convert <$> hashMutableFinalize context

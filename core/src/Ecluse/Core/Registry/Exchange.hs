@@ -30,7 +30,7 @@ module Ecluse.Core.Registry.Exchange (
     formThen,
 ) where
 
-import Crypto.Hash (hashInit, hashUpdate)
+import Crypto.Hash.IO (hashMutableInit, hashMutableUpdate)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Network.HTTP.Client (
@@ -70,7 +70,7 @@ import Ecluse.Core.Security (
     floorWindowMicros,
  )
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge)
-import Ecluse.Core.Snapshot (ContentDigest, digestFromContext)
+import Ecluse.Core.Snapshot (ContentDigest, digestFromMutableContext)
 
 -- | Destructive clients must return uncertain transport failures for reassessment before retry.
 singleAttemptSettings :: ManagerSettings -> ManagerSettings
@@ -166,12 +166,12 @@ withSuccessBodyUsing control manager progress consume request = runExchangeUsing
 -- | Run a consumer over a source that hashes each chunk it passes on. A success carries the digest of every chunk read.
 digestingRead :: (IO ByteString -> IO (Either e a)) -> IO ByteString -> IO (Either e (a, ContentDigest))
 digestingRead consume readChunk = do
-    context <- newIORef hashInit
+    context <- hashMutableInit
     let next = do
             chunk <- readChunk
-            modifyIORef' context (`hashUpdate` chunk)
+            hashMutableUpdate context chunk
             pure chunk
-    consume next >>= traverse (\result -> (result,) . digestFromContext <$> readIORef context)
+    consume next >>= traverse (\result -> (result,) <$> digestFromMutableContext context)
 
 -- | Pay for each chunk's length before the consumer sees it.
 chargedRead :: (Int -> IO ()) -> IO ByteString -> IO ByteString
