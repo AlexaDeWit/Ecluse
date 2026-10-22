@@ -16,6 +16,7 @@ module Ecluse.Core.Registry.Npm.Metadata (
 
     -- * The memory budget
     npmChargeFactors,
+    npmCalibratedChargeFactors,
 
     -- * Walking a packument
     npmPackumentWalk,
@@ -70,9 +71,15 @@ npmRead =
         , erFinishSelected = finishNpmVersion
         }
 
--- | Charges cover read peaks 0.958/source byte and output working sets 1.524/basis byte from one meter step up (@docs/testing.md@).
+{- | Spike, not for merge: the calibrated charges scaled by 0.8393 (live data over charged bytes under load,
+times 1.25), each rounded up to a tenth. The serve path pays these.
+-}
 npmChargeFactors :: ChargeFactors
-npmChargeFactors = ChargeFactors{cfFullReadPermille = 1100, cfOutputPermille = 2000}
+npmChargeFactors = ChargeFactors{cfFullReadPermille = 1000, cfOutputPermille = 1700}
+
+-- | Charges cover read peaks 0.958/source byte and output working sets 1.524/basis byte from one meter step up (@docs/testing.md@).
+npmCalibratedChargeFactors :: ChargeFactors
+npmCalibratedChargeFactors = ChargeFactors{cfFullReadPermille = 1100, cfOutputPermille = 2000}
 
 readNpmPackument :: Limits -> PackageName -> PackumentRead -> DocumentWalk (Walked TreeRead)
 readNpmPackument limits name mode bound table = readJsonWalk bound (npmPackumentWalk limits name mode table)
