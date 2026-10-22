@@ -133,21 +133,11 @@ skipFrom element rest next = case element of
 
 -- | Skip to the end of the container the given number of levels up. Any closing token closes a level.
 skipRest :: (Walk r) => Int -> Cursor -> (Cursor -> r) -> r
-skipRest !level tokens next = case Lexer.next tokens of
-    Lexer.Token element rest -> case element of
-        ArrayEnd -> closed rest
-        ObjectEnd -> closed rest
-        ArrayBegin -> skipRest (level + 1) rest next
-        ObjectBegin -> skipRest (level + 1) rest next
-        StringContent _ -> skipStringThen rest (\after -> skipRest level after next)
-        StringEnd -> failWith "unexpected end of string"
-        _ -> skipRest level rest next
-    Lexer.More waiting -> needData (\chunk -> skipRest level (Lexer.feed waiting chunk) next)
-    Lexer.Failed -> failWith "the JSON lexer failed"
-  where
-    closed rest
-        | level <= 1 = next rest
-        | otherwise = skipRest (level - 1) rest next
+skipRest !level tokens next = case Lexer.skipLevels level tokens of
+    Lexer.Closed rest -> next rest
+    Lexer.Unclosed open waiting -> needData (\chunk -> skipRest open (Lexer.feed waiting chunk) next)
+    Lexer.SkipFailed -> failWith "the JSON lexer failed"
+    Lexer.StrayStringEnd -> failWith "unexpected end of string"
 {-# INLINEABLE skipRest #-}
 
 skipStringThen :: (Walk r) => Cursor -> (Cursor -> r) -> r
