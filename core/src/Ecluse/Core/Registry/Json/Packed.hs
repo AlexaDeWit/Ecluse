@@ -174,8 +174,9 @@ tableEntry :: DocTable -> Int -> (# Int, Int #)
 tableEntry (DocTable _ offsets) index
     | index < 0 || index + 1 >= sizeofPrimArray offsets = (# 0, -1 #)
     | otherwise =
-        let start = indexPrimArray offsets index
-         in (# start, indexPrimArray offsets (index + 1) - start #)
+        let !start = indexPrimArray offsets index
+            !len = indexPrimArray offsets (index + 1) - start
+         in (# start, len #)
 {-# INLINE tableEntry #-}
 
 tableArena :: DocTable -> ByteArray
@@ -218,7 +219,7 @@ scalarSource table blob position
     | (indexByteArray blob position :: Word8) == opShared = case readVarint blob (position + 1) of
         (# index, next #) -> case tableEntry table index of (# start, len #) -> (# tableArena table, start, len, next #)
     | otherwise = case readVarint blob (position + 1) of
-        (# len, next #) -> (# blob, next, len, next + len #)
+        (# !len, next #) -> let !after = next + len in (# blob, next, len, after #)
 
 -- | Aeson's encoded prefix bytes without quotes, inserted before the filename when rebasing a URL hole.
 newtype UrlPrefix = UrlPrefix ByteArray
@@ -235,21 +236,29 @@ escape writes a slash, a question mark or a hash, so the span is the file name's
 fileSpan :: ByteArray -> Int -> Int -> (# Int, Int #)
 fileSpan array start len
     | len < 2 = (# start, 0 #)
-    | otherwise = (# fileStart, pathEnd - fileStart #)
-  where
-    end = start + len - 1
-    pathEnd = scanPath (start + 1)
-    scanPath !at
-        | at >= end = end
-        | otherwise = case indexByteArray array at :: Word8 of
-            0x3f -> at
-            0x23 -> at
-            _ -> scanPath (at + 1)
-    fileStart = scanSlash pathEnd
-    scanSlash !at
-        | at <= start + 1 = start + 1
-        | (indexByteArray array (at - 1) :: Word8) == 0x2f = at
-        | otherwise = scanSlash (at - 1)
+    | otherwise =
+        let !pathEnd = urlPathEnd array (start + len - 1) (start + 1)
+            !fileStart = fileNameStart array (start + 1) pathEnd
+            !fileLen = pathEnd - fileStart
+         in (# fileStart, fileLen #)
+{-# INLINE fileSpan #-}
+
+-- The first question mark or hash from a position, or the end. The scans sit at module level because a
+-- where-bound loop under a strict binding becomes a join point that boxes its index on each byte.
+urlPathEnd :: ByteArray -> Int -> Int -> Int
+urlPathEnd array end !at
+    | at >= end = end
+    | otherwise = case indexByteArray array at :: Word8 of
+        0x3f -> at
+        0x23 -> at
+        _ -> urlPathEnd array end (at + 1)
+
+-- The position after the last slash before a position, or the lower bound.
+fileNameStart :: ByteArray -> Int -> Int -> Int
+fileNameStart array low !at
+    | at <= low = low
+    | (indexByteArray array (at - 1) :: Word8) == 0x2f = at
+    | otherwise = fileNameStart array low (at - 1)
 
 -- The length of a value's encoding, with its hole rebased onto the prefix when one is given, or -1
 -- when its hole names a string the table lacks.
