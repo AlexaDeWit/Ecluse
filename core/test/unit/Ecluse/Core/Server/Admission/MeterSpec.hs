@@ -236,8 +236,8 @@ spec = around withSweeper $ describe "Ecluse.Core.Server.Admission.Meter" $ do
         wait holder `shouldReturn` Right ()
         charged meter `shouldReturn` 0
 
-    it "steps a part down to what it keeps, and gives each payment back once" $ do
-        (meter, port, _) <- newMeter 100
+    it "steps a part down to what it keeps, and gives each payment back once" $ \deadlines -> do
+        (meter, port, _) <- newMeter deadlines 100
         inside <- withMemoryEntry port meter $ \ticket -> do
             part <- newChargePart ticket
             chargePart part 25
@@ -250,11 +250,11 @@ spec = around withSweeper $ describe "Ecluse.Core.Server.Admission.Meter" $ do
             drained <- charged meter
             stepDown part 0
             (paid,kept,again,drained,) <$> charged meter
-        inside `shouldBe` Just (30, 15, 15, 5, 5)
+        inside `shouldBe` Right (30, 15, 15, 5, 5)
         charged meter `shouldReturn` 0
 
-    it "gives back only the part's own payments" $ do
-        (meter, port, _) <- newMeter 100
+    it "gives back only the part's own payments" $ \deadlines -> do
+        (meter, port, _) <- newMeter deadlines 100
         inside <- withMemoryEntry port meter $ \ticket -> do
             own <- newChargePart ticket
             other <- newChargePart ticket
@@ -265,11 +265,11 @@ spec = around withSweeper $ describe "Ecluse.Core.Server.Admission.Meter" $ do
             stepDown own 0
             stepDown own 0
             charged meter
-        inside `shouldBe` Just 30
+        inside `shouldBe` Right 30
         charged meter `shouldReturn` 0
 
-    it "keeps the meter and its tickets in step while parts give back at once" $ do
-        meter <- newMemoryMeter MeterSettings{msBudgetBytes = 1_000_000, msStepBytes = 1, msEntryRoom = 2, msEntryWaitMicros = 0}
+    it "keeps the meter and its tickets in step while parts give back at once" $ \deadlines -> do
+        meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = 1_000_000, msStepBytes = 1, msEntryRoom = 2, msEntryWaitMicros = 0}
         inside <- withMemoryEntry noopMetricsPort meter $ \ticket -> do
             parts <- replicateM 64 (newChargePart ticket)
             forConcurrently_ parts $ \part -> do
@@ -277,11 +277,11 @@ spec = around withSweeper $ describe "Ecluse.Core.Server.Admission.Meter" $ do
                 stepDown part 30
                 stepDown part 30
             charged meter
-        inside `shouldBe` Just (64 * 30)
+        inside `shouldBe` Right (64 * 30)
         charged meter `shouldReturn` 0
 
-    it "gives back nothing once the part's request has ended" $ do
-        (meter, port, _) <- newMeter 100
+    it "gives back nothing once the part's request has ended" $ \deadlines -> do
+        (meter, port, _) <- newMeter deadlines 100
         escaped <- newEmptyMVar
         _ <- withMemoryEntry port meter $ \ticket -> do
             part <- newChargePart ticket
@@ -292,11 +292,11 @@ spec = around withSweeper $ describe "Ecluse.Core.Server.Admission.Meter" $ do
         stepDown part 0
         charged meter `shouldReturn` 10
         release
-        wait holder `shouldReturn` Just ()
+        wait holder `shouldReturn` Right ()
         charged meter `shouldReturn` 0
 
-    it "returns every charge when cancelled between two phases" $ do
-        (meter, port, _) <- newMeter 100
+    it "returns every charge when cancelled between two phases" $ \deadlines -> do
+        (meter, port, _) <- newMeter deadlines 100
         stepped <- newEmptyMVar
         blocked <- newEmptyMVar
         worker <- async . withMemoryEntry port meter $ \ticket -> do
@@ -313,8 +313,8 @@ spec = around withSweeper $ describe "Ecluse.Core.Server.Admission.Meter" $ do
         charged meter `shouldReturn` 0
         putMVar blocked ()
 
-    it "lets a paused request move once another gives back what its read no longer holds" $ do
-        (meter, port, counted) <- newMeter 30
+    it "lets a paused request move once another gives back what its read no longer holds" $ \deadlines -> do
+        (meter, port, counted) <- newMeter deadlines 30
         (paused, go) <- enteredCharger port meter (`charge` 15)
         overdrawn <- newEmptyMVar
         giveBack <- newEmptyMVar
@@ -330,11 +330,11 @@ spec = around withSweeper $ describe "Ecluse.Core.Server.Admission.Meter" $ do
         go
         awaitFigures meter ((== 1) . snPaused)
         putMVar giveBack ()
-        wait paused `shouldReturn` Just ()
+        wait paused `shouldReturn` Right ()
         (isNothing <$> poll holder) `shouldReturn` True
         cOverdraws <$> counted `shouldReturn` 1
         putMVar ends ()
-        wait holder `shouldReturn` Just ()
+        wait holder `shouldReturn` Right ()
         charged meter `shouldReturn` 0
 
 -- A request that holds its entry step, filling a 10-byte meter, until the returned signal.

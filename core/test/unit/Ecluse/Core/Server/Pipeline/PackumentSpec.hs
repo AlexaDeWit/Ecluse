@@ -25,6 +25,7 @@ import UnliftIO.Exception (evaluate, impureThrow, throwIO)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
@@ -34,12 +35,13 @@ import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned)
-import Ecluse.Core.Server.Admission.Meter (MeterSettings (..), meterSnapshot, newMemoryMeter, takeLargestCharge)
-import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
+import Ecluse.Core.Server.Admission.Budget (scaleCharge)
+import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), meterSnapshot, newMemoryMeter)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfKeptPermille, cfOutputPermille), MeterSnapshot (snChargedBytes))
 import Ecluse.Core.Server.Context (
     MountBinding (..),
     MountRouter,
-    PackumentDeps (pdInboundToken, pdMetadataCompression, pdMountBaseUrl, pdRules),
+    PackumentDeps (pdInboundToken, pdMetadata, pdMetadataCompression, pdMountBaseUrl, pdRules),
     RequestCtx (RequestCtx),
     ResponseAction (RunPipeline),
     RouteAction (RouteAction),
@@ -67,7 +69,7 @@ import Ecluse.Core.Server.Response (
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics (CacheResult (Hit, Miss))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Telemetry.Record (MetricsPort (mpAssembledCacheRequest))
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpAssembledCacheRequest, mpRuleEvalDuration))
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (sriSha512Of, thingName)
@@ -169,13 +171,16 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
         it "charges a gzip response its workspace and buffer, and returns every charge" $ withSweeper $ \deadlines -> do
             meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 1000, msEntryWaitMicros = 0}
             unmetered <- testServeRuntime deadlines noopMetricsPort
-            withListingIn unmetered{srMemoryMeter = meter} listing $ \serve -> do
-                void (serve GzipWhenAccepted methodGet [])
-                void (takeLargestCharge meter)
-                void (serve GzipWhenAccepted methodGet [])
-                plainCharge <- takeLargestCharge meter
-                void (serve GzipWhenAccepted methodGet [(hAcceptEncoding, "gzip")])
-                gzipCharge <- takeLargestCharge meter
+            testWithApplication (pure (listingOrigin listing)) $ \port -> do
+                deps <- listingDeps listing port
+                -- The reads' charge is gone by the time the body is sent, so each response's own charge is what it holds then.
+                let chargeWhileSending headers = do
+                        held <- newIORef 0
+                        runListing unmetered{srMemoryMeter = meter} listing deps methodGet headers (\_ -> chargedOn meter >>= writeIORef held)
+                        readIORef held
+                void (chargeWhileSending [])
+                plainCharge <- chargeWhileSending []
+                gzipCharge <- chargeWhileSending [(hAcceptEncoding, "gzip")]
                 gzipCharge - plainCharge `shouldBe` gzipWorkspaceBytes + gzipBufferChargeBytes
                 snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
         it "keeps edge authentication, private authorisation and policy ahead of a cached gzip validator" $ withSweeper $ \deadlines -> do
@@ -210,6 +215,23 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
                 snChargedBytes <$> meterSnapshot (srMemoryMeter rt) `shouldReturn` 0
                 next <- captureListing rt listing deps methodGet [(hAcceptEncoding, "gzip")]
                 statusOf next `shouldBe` 200
+        it "holds what its reads keep through policy, and only its output charge while it responds" $ withSweeper $ \deadlines -> do
+            meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 1000, msEntryWaitMicros = 0}
+            atGate <- newIORef Nothing
+            unmetered <- testServeRuntime deadlines noopMetricsPort{mpRuleEvalDuration = \_ _ -> chargedOn meter >>= writeIORef atGate . Just}
+            privateSent <- newIORef 0
+            publicSent <- newIORef 0
+            testWithApplication (pure (measuredOrigin publicSent (listingOrigin listing))) $ \publicPort ->
+                testWithApplication (pure (measuredOrigin privateSent (listingOrigin listing))) $ \privatePort -> do
+                    public <- listingDeps listing publicPort
+                    let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) public{pdMetadataCompression = IdentityOnly}
+                        factors = metadataChargeFactors (pdMetadata deps)
+                    atRespond <- newIORef Nothing
+                    runListing unmetered{srMemoryMeter = meter} listing deps methodGet [] (\_ -> chargedOn meter >>= writeIORef atRespond . Just)
+                    sizes <- traverse readIORef [privateSent, publicSent]
+                    readIORef atGate `shouldReturn` Just (sum (map (scaleCharge (cfKeptPermille factors)) sizes))
+                    readIORef atRespond `shouldReturn` Just (scaleCharge (cfOutputPermille factors) (foldl' max 0 sizes))
+                    chargedOn meter `shouldReturn` 0
   where
     statusOf = statusCode . responseStatus
     header name = lookup name . responseHeaders
@@ -218,6 +240,16 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
 
 -- What the private origin answers for the listing.
 data PrivateState = PrivateServes | PrivateRefuses
+
+chargedOn :: MemoryMeter -> IO Int
+chargedOn meter = snChargedBytes <$> meterSnapshot meter
+
+-- The origin's answers unchanged, recording the length of the last body it sent.
+measuredOrigin :: IORef Int -> Application -> Application
+measuredOrigin sent origin request respond = origin request $ \response -> do
+    body <- responseBytes response
+    writeIORef sent (fromIntegral (LBS.length body))
+    respond (responseLBS (responseStatus response) (responseHeaders response) body)
 
 privateOrigin :: IORef PrivateState -> Application -> Application
 privateOrigin current origin request respond =
@@ -228,29 +260,30 @@ privateOrigin current origin request respond =
 listingWriteSpec :: Spec
 listingWriteSpec = describe "a listing whose body is being written" $
     for_ listings $ \listing -> describe (listingLabel listing) $ do
-        it "has freed its CPU slot and still holds its whole memory charge" $
-            withOneSlot listing $ \rt deps -> do
+        it "has freed its CPU slot and still holds its output charge" $
+            withOneSlot listing $ \rt deps sourceBytes -> do
                 observed <- newIORef Nothing
                 runListing rt listing deps methodGet [] $ \_ -> do
                     held <- chargedNow rt
                     beside <- captureListing rt listing deps methodGet []
                     writeIORef observed (Just (held, statusCode (responseStatus beside)))
-                whole <- takeLargestCharge (srMemoryMeter rt)
-                readIORef observed `shouldReturn` Just (whole, 200)
+                output <- scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) <$> sourceBytes
+                readIORef observed `shouldReturn` Just (output, 200)
                 chargedNow rt `shouldReturn` 0
         it "evaluates its reply in the CPU slot, before the write" $
-            withOneSlot listing $ \rt deps -> do
+            withOneSlot listing $ \rt deps _ -> do
                 logEnv <- newTestLogEnv
                 let replies = namedReplies{packumentOk = \_ _ -> impureThrow Evaluated}
                     binding = MountBinding (listingPrefix listing :| []) (listingRouter listing) (listingCredential listing) deps Nothing
                 runHandler logEnv mempty (RequestCtx rt binding) (servePackument replies (listingName listing) defaultRequest (\_ -> pure ResponseReceived))
                     `shouldThrow` (== Evaluated)
         it "returns its charge when the client goes away mid-body, and leaves the slot free" $
-            withOneSlot listing $ \rt deps -> do
+            withOneSlot listing $ \rt deps sourceBytes -> do
                 held <- newIORef 0
                 runListing rt listing deps methodGet [] (\_ -> chargedNow rt >>= writeIORef held >> throwIO clientGone)
                     `shouldThrow` (== clientGone)
-                readIORef held >>= (`shouldSatisfy` (> 0))
+                output <- scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) <$> sourceBytes
+                readIORef held `shouldReturn` output
                 chargedNow rt `shouldReturn` 0
                 statusCode . responseStatus <$> captureListing rt listing deps methodGet [] `shouldReturn` 200
   where
@@ -258,12 +291,15 @@ listingWriteSpec = describe "a listing whose body is being written" $
     clientGone = mkIOError resourceVanishedErrorType "the client closed the connection" Nothing Nothing
 
 -- One CPU slot with no waiting room, and a meter that charges each byte.
-withOneSlot :: Listing -> (ServeRuntime -> PackumentDeps -> IO a) -> IO a
+withOneSlot :: Listing -> (ServeRuntime -> PackumentDeps -> IO Int -> IO a) -> IO a
 withOneSlot listing use = withSweeper $ \deadlines -> do
     admission <- newServeAdmissionTuned deadlines 1 0 0
     rt <- testServeRuntimeWith deadlines admission noopMetricsPort
     meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 1000, msEntryWaitMicros = 0}
-    testWithApplication (pure (listingOrigin listing)) (listingDeps listing >=> use rt{srMemoryMeter = meter})
+    sourceBytes <- newIORef 0
+    testWithApplication (pure (measuredOrigin sourceBytes (listingOrigin listing))) $ \port -> do
+        deps <- listingDeps listing port
+        use rt{srMemoryMeter = meter} deps (readIORef sourceBytes)
 
 noSurvivorsSpec :: Spec
 noSurvivorsSpec =

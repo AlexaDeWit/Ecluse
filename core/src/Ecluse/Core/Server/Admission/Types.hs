@@ -2,10 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The admission gates' shared vocabulary: why a gate turns a request away, what adapters charge,
-what the meter reports, and the bounds the boot hands the brake. "Ecluse.Core.Server.Admission.Meter"
-and "Ecluse.Core.Server.Admission.Brake" act on these, and the adapters, the sampler, the memory plan
-and the gauges read or build them.
+{- | Admission outcomes, per-ecosystem charges and memory observations shared by the gates,
+adapters, sampler and boot-time memory plan.
 -}
 module Ecluse.Core.Server.Admission.Types (
     -- * Refusals
@@ -39,6 +37,10 @@ data ChargeFactors = ChargeFactors
     { cfFullReadPermille :: Int
     {- ^ Per decompressed byte of a full read: 1.25 times the largest read peak per source byte of a
     realistic listing, or any listing's largest if more, from one meter step up, rounded up to a tenth.
+    -}
+    , cfKeptPermille :: Int
+    {- ^ Per decompressed byte of a full read once it completes, until the render: 1.25 times the
+    largest shared cache entry per source byte, rounded up to a tenth.
     -}
     , cfOutputPermille :: Int
     {- ^ Per byte of a listing's output basis: 1.25 times the largest output working set per basis byte
