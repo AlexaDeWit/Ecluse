@@ -125,8 +125,8 @@ data Candidate = Candidate
     }
     deriving stock (Show)
 
--- Eq and Ord both go through this key. 'candDetails' is deliberately excluded: a 'SourceId' is
--- unique per call, so two contributions agreeing on rank and integrity are the same candidate.
+-- Eq and Ord both go through this key. 'candDetails' is left out: a 'SourceId' is unique per call,
+-- so two contributions agreeing on rank and integrity are the same candidate.
 candKey :: Candidate -> ((Provenance, SourceId), IntegrityFingerprint)
 candKey c = ((candProvenance c, candSourceId c), candFingerprint c)
 

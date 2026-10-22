@@ -147,15 +147,12 @@ sha256Def = validSha256Of "def"
 sriPair :: Text -> (Text, Maybe HashAlg, Text)
 sriPair s = ("thing.tgz", sriAlgorithm s, sriBody s)
 
--- The surviving version keys (the merged union), sorted.
 survivorKeys :: MergePlan -> [Text]
 survivorKeys = sort . Map.keys . mpSurvivors
 
--- The 'SourceId' that won a given surviving key, if it survived.
 winnerOf :: Text -> MergePlan -> Maybe SourceId
 winnerOf key = Map.lookup key . mpSurvivors
 
--- The resolved @latest@ tag's raw text, if present.
 latestKey :: MergePlan -> Maybe Text
 latestKey p = renderVersion <$> Map.lookup "latest" (mpDistTags p)
 
@@ -194,9 +191,7 @@ genSource = do
 genSources :: Gen [(Provenance, PackageInfo)]
 genSources = Gen.list (Range.linear 1 4) genSource
 
-{- | An arbitrary 'Merge' accumulator, a 'foldMap' of 'contribute' over a small source
-list. The empty list yields 'mempty', so the laws are tested over the identity too.
--}
+-- An empty source list yields 'mempty', so the law checks cover the identity too.
 genMerge :: Gen Merge
 genMerge = foldMap (uncurry contribute) <$> Gen.list (Range.linear 0 3) genSource
 
@@ -1048,8 +1043,8 @@ spec = do
                     divergenceFacts plan === referenceDivergences sources
 
     describe "the merge accumulator is a lawful Monoid" $ do
-        -- The 'Merge' accumulator is associative and identity-respecting, but deliberately
-        -- not commutative, because the 'SourceId' tiebreak is positional.
+        -- The 'Merge' accumulator is associative and has an identity, but it is not commutative,
+        -- because the 'SourceId' tiebreak is positional.
         it "is associative: (a <> b) <> c === a <> (b <> c)" $
             hedgehog $ do
                 a <- forAll genMerge
@@ -1076,8 +1071,8 @@ spec = do
                 gated = contribute GatedSource (packument [("1.0.0", sriPub)])
                 forward = planFrom (trusted <> gated)
                 backward = planFrom (gated <> trusted)
-            -- Same decision (trusted wins) but opposite positional label, so the two
-            -- plans, and the two accumulators, are genuinely not equal.
+            -- Same decision (trusted wins) but opposite positional labels, so the two plans and the two
+            -- accumulators are not equal.
             (trusted <> gated == gated <> trusted) `shouldBe` False
             (winnerOf "1.0.0" =<< forward) `shouldBe` Just 0
             (winnerOf "1.0.0" =<< backward) `shouldBe` Just 1
