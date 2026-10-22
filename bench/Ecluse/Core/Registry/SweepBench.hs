@@ -114,9 +114,8 @@ data Held = Held
     , heldCached :: Bool
     }
 
-{- Names spread evenly over ten populated buckets. One name in a hundred holds 1,000 versions, nine
-hold 100, and the rest 10. The cache holds the first hundred of every 500 names, a fifth of each
-stratum and of each bucket. -}
+-- Ten populated buckets. One name in a hundred holds 1,000 versions, nine hold 100, the rest 10.
+-- The cache holds the first hundred of every 500 names: a fifth of each stratum and bucket.
 scaleInventory :: Int -> [Held]
 scaleInventory size = [Held (scaleName k) (versionsOf k) (k `mod` 500 < 100) | k <- [0 .. size - 1]]
   where
