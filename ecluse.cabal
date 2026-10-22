@@ -239,6 +239,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Wire
     Ecluse.Core.Registry.Origin
     Ecluse.Core.Registry.Progress
+    Ecluse.Core.Registry.Progress.Internal
     Ecluse.Core.Registry.MirrorUpload
     Ecluse.Core.Registry.MirrorUpload.Internal
     Ecluse.Core.Registry.Publish
@@ -1144,6 +1145,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Json.WriterSpec
     Ecluse.Core.Registry.JsonStreamSpec
     Ecluse.Core.Registry.ProgressSpec
+    Ecluse.Core.Registry.Progress.InternalSpec
     Ecluse.Core.Registry.VersionListSpec
     Ecluse.Core.Registry.Maintenance.BudgetSpec
     Ecluse.Core.Registry.Maintenance.NameSpaceSpec

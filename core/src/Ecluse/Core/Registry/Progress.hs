@@ -22,17 +22,16 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Builder (toLazyByteString)
 import Data.ByteString.Lazy qualified as LBS
 import GHC.Clock (getMonotonicTimeNSec)
+import GHC.IORef qualified as IORef
 import Network.HTTP.Client (BodyReader, GivesPopper, Popper, RequestBody (..))
 import UnliftIO (try, withAsync)
 import UnliftIO.Concurrent (ThreadId, myThreadId, threadDelay)
 
-import Ecluse.Core.Security (ProgressFloor, floorMinBytes, floorWindowMicros)
+import Ecluse.Core.Registry.Progress.Internal (Window, beginAt, endAt, freshWindow, pause, waitedBy)
+import Ecluse.Core.Security (ProgressFloor, floorWindowMicros)
 
 -- | One transfer's progress in the current window, shared by its meters and its watchdog.
 data Watch = Watch ProgressFloor (IORef Window)
-
--- When the current wait on the upstream began, the nanoseconds waited before it, and the bytes moved.
-data Window = Window (Maybe Word64) Word64 Int
 
 -- Raised in a transfer's thread as a synchronous failure of the transfer, as a socket error would be.
 data BelowProgressFloor = BelowProgressFloor
@@ -57,7 +56,7 @@ watched progress transfer =
 watchedRaising :: ProgressFloor -> (Watch -> IO a) -> IO a
 watchedRaising progress transfer = do
     owner <- myThreadId
-    watch <- Watch progress <$> newIORef (Window Nothing 0 0)
+    watch <- Watch progress <$> newIORef freshWindow
     withAsync (watchdog watch owner) (\_ -> transfer watch)
 
 {- Base 'throwTo' delivers the plain exception, which the synchronous catch in 'watched' sees.
@@ -73,13 +72,6 @@ watchdog (Watch progress window) owner = go
         if spent >= budget
             then throwTo owner BelowProgressFloor
             else threadDelay (fromIntegral (pause budget spent current `div` 1_000) + 1) >> go
-
-{- With a wait open the watchdog wakes as its budget runs out. With none open the waited time cannot
-grow, so it sleeps at least a sixteenth of the window instead of spinning on a near-spent budget. -}
-pause :: Word64 -> Word64 -> Window -> Word64
-pause budget spent = \case
-    Window (Just _) _ _ -> budget - spent
-    Window Nothing _ _ -> max (budget `div` 16) (budget - spent)
 
 -- | A reader whose every read counts as a wait on the upstream, and its chunk as progress.
 meteredReader :: Watch -> BodyReader -> BodyReader
@@ -133,19 +125,13 @@ nextSlice pending popper = do
 uploadSliceBytes :: Int
 uploadSliceBytes = 64 * 1024
 
+-- GHC.IORef's atomicModifyIORef'_ builds no pair per update, unlike relude's namesake.
 beginWait :: Watch -> IO ()
 beginWait (Watch _ window) = do
     now <- getMonotonicTimeNSec
-    atomicModifyIORef' window (\(Window _ waited moved) -> (Window (Just now) waited moved, ()))
+    void (IORef.atomicModifyIORef'_ window (beginAt now))
 
 endWait :: Watch -> Int -> IO ()
 endWait (Watch progress window) bytes = do
     now <- getMonotonicTimeNSec
-    atomicModifyIORef' window $ \current@(Window _ _ moved) ->
-        if moved + bytes >= floorMinBytes progress
-            then (Window Nothing 0 0, ())
-            else (Window Nothing (waitedBy now current) (moved + bytes), ())
-
--- The watchdog can read its clock just before the transfer stamps a later wait, so the gap floors at zero.
-waitedBy :: Word64 -> Window -> Word64
-waitedBy now (Window since waited _) = waited + maybe 0 (\began -> if now > began then now - began else 0) since
+    void (IORef.atomicModifyIORef'_ window (endAt progress now bytes))
