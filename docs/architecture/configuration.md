@@ -259,6 +259,14 @@ far more than their version count suggests, and from one step of basis up holds 
 within the output charge. Below one step, the whole meter steps a response pays for hold every
 listing's output working set, heavy bases included, and the tier checks that too.
 
+A completed read keeps less than its peak, and nothing reaches its document once the body exists.
+So when a full read completes, its charge steps down to the kept charge: 1.25 times the largest
+shared cache entry per source byte that the residency tier measures, rounded up to a tenth. That is
+0.9 for npm (react at 0.699300) and 3.3 for PyPI (requests at 2.601638). Once the body exists, the
+reads' charges go back, and the response holds only its own charge while it is sent. The residency
+tier checks each phase against what the meter holds then. Its heap census of the live listing path
+also covers the policy and merge plan between the reads and the render.
+
 The residency tier in [`docs/testing.md`](../testing.md#listing-peaks) fails when a listing's reads
 or render outgrow what the meter holds for them, so a representation change cannot silently
 outgrow a charge. From one step up, it fails once a single document's read peak or a realistic

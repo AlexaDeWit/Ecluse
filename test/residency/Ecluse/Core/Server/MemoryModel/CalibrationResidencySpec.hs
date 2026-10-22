@@ -43,3 +43,10 @@ spec = do
                 let factors = metadataChargeFactors (residencyMetadata record)
                 toInteger (cfFullReadPermille factors) `shouldBe` fullReadCharge calibration
                 toInteger (cfOutputPermille factors) `shouldBe` marginCharge (outputMaximum calibration)
+        it "pins the kept charges" $ do
+            keptCharge npmFigures `shouldBe` 900
+            keptCharge pypiFigures `shouldBe` 3300
+        for_ [Npm, PyPI] $ \ecosystem ->
+            it (show ecosystem <> " keeps its adapter's kept charge") $ do
+                record <- requireResidency ecosystem
+                toInteger (cfKeptPermille (metadataChargeFactors (residencyMetadata record))) `shouldBe` keptCharge (residencyFigures record)

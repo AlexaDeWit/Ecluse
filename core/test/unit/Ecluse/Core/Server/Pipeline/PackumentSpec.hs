@@ -21,6 +21,7 @@ import UnliftIO.Async (cancel, race_, wait, withAsync)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
@@ -30,12 +31,13 @@ import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned)
-import Ecluse.Core.Server.Admission.Meter (MeterSettings (..), meterSnapshot, newMemoryMeter, takeLargestCharge)
-import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
+import Ecluse.Core.Server.Admission.Budget (scaleCharge)
+import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), meterSnapshot, newMemoryMeter)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfKeptPermille, cfOutputPermille), MeterSnapshot (snChargedBytes))
 import Ecluse.Core.Server.Context (
     MountBinding (..),
     MountRouter,
-    PackumentDeps (pdInboundToken, pdMetadataCompression, pdMountBaseUrl, pdRules),
+    PackumentDeps (pdInboundToken, pdMetadata, pdMetadataCompression, pdMountBaseUrl, pdRules),
     ResponseAction (RunPipeline),
     RouteAction (RouteAction),
     ServeRuntime (srMemoryMeter),
@@ -57,7 +59,7 @@ import Ecluse.Core.Server.Response (
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics (CacheResult (Hit, Miss))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Telemetry.Record (MetricsPort (mpAssembledCacheRequest))
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpAssembledCacheRequest, mpRuleEvalDuration))
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (sriSha512Of, thingName)
 import Ecluse.Test.Port (noopMetricsPort)
@@ -156,13 +158,16 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
         it "charges a gzip response its workspace and buffer, and returns every charge" $ do
             meter <- newMemoryMeter MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 1000, msEntryWaitMicros = 0}
             unmetered <- testServeRuntime noopMetricsPort
-            withListingIn unmetered{srMemoryMeter = meter} listing $ \serve -> do
-                void (serve GzipWhenAccepted methodGet [])
-                void (takeLargestCharge meter)
-                void (serve GzipWhenAccepted methodGet [])
-                plainCharge <- takeLargestCharge meter
-                void (serve GzipWhenAccepted methodGet [(hAcceptEncoding, "gzip")])
-                gzipCharge <- takeLargestCharge meter
+            testWithApplication (pure (listingOrigin listing)) $ \port -> do
+                deps <- listingDeps listing port
+                -- The reads' charge is gone by the time the body is sent, so each response's own charge is what it holds then.
+                let chargeWhileSending headers = do
+                        held <- newIORef 0
+                        runListing unmetered{srMemoryMeter = meter} listing deps methodGet headers (\_ -> chargedOn meter >>= writeIORef held)
+                        readIORef held
+                void (chargeWhileSending [])
+                plainCharge <- chargeWhileSending []
+                gzipCharge <- chargeWhileSending [(hAcceptEncoding, "gzip")]
                 gzipCharge - plainCharge `shouldBe` gzipWorkspaceBytes + gzipBufferChargeBytes
                 snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
         it "keeps edge authentication, private authorisation and policy ahead of a cached gzip validator" $ do
@@ -197,6 +202,23 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
                 snChargedBytes <$> meterSnapshot (srMemoryMeter rt) `shouldReturn` 0
                 next <- captureListing rt listing deps methodGet [(hAcceptEncoding, "gzip")]
                 statusOf next `shouldBe` 200
+        it "holds what its reads keep through policy, and only its output charge while it responds" $ do
+            meter <- newMemoryMeter MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 1000, msEntryWaitMicros = 0}
+            atGate <- newIORef Nothing
+            unmetered <- testServeRuntime noopMetricsPort{mpRuleEvalDuration = \_ _ -> chargedOn meter >>= writeIORef atGate . Just}
+            privateSent <- newIORef 0
+            publicSent <- newIORef 0
+            testWithApplication (pure (measuredOrigin publicSent (listingOrigin listing))) $ \publicPort ->
+                testWithApplication (pure (measuredOrigin privateSent (listingOrigin listing))) $ \privatePort -> do
+                    public <- listingDeps listing publicPort
+                    let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) public{pdMetadataCompression = IdentityOnly}
+                        factors = metadataChargeFactors (pdMetadata deps)
+                    atRespond <- newIORef Nothing
+                    runListing unmetered{srMemoryMeter = meter} listing deps methodGet [] (\_ -> chargedOn meter >>= writeIORef atRespond . Just)
+                    sizes <- traverse readIORef [privateSent, publicSent]
+                    readIORef atGate `shouldReturn` Just (sum (map (scaleCharge (cfKeptPermille factors)) sizes))
+                    readIORef atRespond `shouldReturn` Just (scaleCharge (cfOutputPermille factors) (foldl' max 0 sizes))
+                    chargedOn meter `shouldReturn` 0
   where
     statusOf = statusCode . responseStatus
     header name = lookup name . responseHeaders
@@ -205,6 +227,16 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
 
 -- What the private origin answers for the listing.
 data PrivateState = PrivateServes | PrivateRefuses
+
+chargedOn :: MemoryMeter -> IO Int
+chargedOn meter = snChargedBytes <$> meterSnapshot meter
+
+-- The origin's answers unchanged, recording the length of the last body it sent.
+measuredOrigin :: IORef Int -> Application -> Application
+measuredOrigin sent origin request respond = origin request $ \response -> do
+    body <- responseBytes response
+    writeIORef sent (fromIntegral (LBS.length body))
+    respond (responseLBS (responseStatus response) (responseHeaders response) body)
 
 privateOrigin :: IORef PrivateState -> Application -> Application
 privateOrigin current origin request respond =

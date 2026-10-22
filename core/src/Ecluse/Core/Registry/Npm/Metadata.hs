@@ -70,9 +70,9 @@ npmRead =
         , erFinishSelected = finishNpmVersion
         }
 
--- | Charges cover read peaks 0.958/source byte and output working sets 1.524/basis byte from one meter step up (@docs/testing.md@).
+-- | Charges cover read peaks 0.958 and shared entries 0.699 per source byte, and output working sets 1.524 per basis byte (@docs/testing.md@).
 npmChargeFactors :: ChargeFactors
-npmChargeFactors = ChargeFactors{cfFullReadPermille = 1100, cfOutputPermille = 2000}
+npmChargeFactors = ChargeFactors{cfFullReadPermille = 1100, cfKeptPermille = 900, cfOutputPermille = 2000}
 
 readNpmPackument :: Limits -> PackageName -> PackumentRead -> DocumentWalk (Walked TreeRead)
 readNpmPackument limits name mode bound table = readJsonWalk bound (npmPackumentWalk limits name mode table)
