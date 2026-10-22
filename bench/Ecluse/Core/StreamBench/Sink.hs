@@ -24,16 +24,19 @@ import Data.ByteString.Builder.Extra (flush)
 import Data.Streaming.ByteString.Builder (Buffer, allocBuffer, newByteStringBuilderRecv, reuseBufferStrategy)
 import UnliftIO.Exception (evaluate)
 
+import Ecluse.Core.Registry.Progress (meteredReader, watchedRaising)
+import Ecluse.Core.Security (defaultLimits, progressFloor)
 import Ecluse.Core.Server.Stream (pumpBody)
 import Ecluse.Test.Registry.JsonStream (heldChunks, sliceChunks)
 
 -- | A body pump: it reads chunks until an empty one, writes each to the sink, and flushes by its own policy.
 type Pump = IO ByteString -> (Builder -> IO ()) -> IO () -> IO ()
 
--- | The measured pumps by row name: the shipped pump, a flush every 64 KiB, and one flush at the end.
+-- | The measured pumps by row name: the shipped pump bare and metered as the relay runs it, a flush every 64 KiB, and one flush at the end.
 strategies :: [(Text, Pump)]
 strategies =
     [ ("opening-flush (shipped)", pumpBody)
+    , ("opening-flush metered (shipped relay)", metered pumpBody)
     , ("flush-threshold-64k", pumpThreshold (64 * 1024))
     , ("flush-end-only", pumpEndOnly)
     ]
@@ -88,6 +91,11 @@ runSink (SinkBuffer buffer) send pump chunks = do
             unless (BS.null piece) (send piece >> sendPieces popper)
     pump readChunk write (write flush)
     finish >>= traverse_ send
+
+-- The progress watchdog and per-chunk meter "Ecluse.Core.Server.Stream" puts around a relay's pump, under the default floor.
+metered :: Pump -> Pump
+metered pump readChunk write flushSink =
+    watchedRaising (progressFloor defaultLimits) (\watch -> pump (meteredReader watch readChunk) write flushSink)
 
 pumpThreshold :: Int -> Pump
 pumpThreshold threshold readChunk write flushSink = go 0
