@@ -16,7 +16,7 @@ module Ecluse.Core.Registry.ServedDocument (
     uniqueEntries,
     validEntryKey,
     overlayObjectSurvivors,
-    overlayObjectSources,
+    overlayObjectVersions,
 
     -- * The interpolated-name gate
     safeDocumentName,
@@ -37,6 +37,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
+import Data.Primitive.SmallArray (SmallArray, indexSmallArray, newSmallArray, readSmallArray, runSmallArray, sizeofSmallArray, writeSmallArray)
 import Data.Text qualified as T
 
 import Ecluse.Core.Package.Entry (AdmittedEntry (..), EntryKey (..))
@@ -83,50 +84,116 @@ Missing keys, ambiguous keys, and mismatched snapshots contribute nothing.
 -}
 overlaySurvivors :: (src -> [(EntryKey, entry)]) -> Map SourceId (Snapshot src) -> MergePlan -> [(Text, entry)]
 overlaySurvivors entriesOf bySource plan =
-    [ (version, entry)
+    [ selected
     | (sid, source) <- Map.toAscList bySource
-    , (key, entry) <- uniqueSourceEntries (entriesOf (snapshotValue source))
-    , Just (version, kept) <- [Map.lookup (sid, snapshotDigest source, key) admitted]
+    , selected <- selectEntries (sourceAdmissions plan sid source) (entriesOf (snapshotValue source))
+    ]
+
+-- Positions that ascend from zero, the last under twice the count, index a slot table. Other sources key a map.
+selectEntries :: [(EntryKey, (Text, AdmittedEntry))] -> [(EntryKey, entry)] -> [(Text, entry)]
+selectEntries admissions entries = case ascendingSpan entries of
+    Just (count, end) | end < 2 * count -> slotted (admissionSlots end admissions) entries
+    Just _ -> keyed (uniqueEntries admissions) entries
+    Nothing -> keyed (uniqueEntries admissions) (filter (\(key, _) -> Map.member key unrepeated) entries)
+  where
+    unrepeated = uniqueEntries entries
+
+-- The count and last position of entries at strictly ascending array positions from zero.
+ascendingSpan :: [(EntryKey, entry)] -> Maybe (Int, Int)
+ascendingSpan = go 0 (-1)
+  where
+    go !count !previous = \case
+        (ArrayEntry position, _) : rest | position > previous -> go (count + 1) position rest
+        [] -> Just (count, previous)
+        _ -> Nothing
+
+data Slot = Vacant | Admitted Text AdmittedEntry | Ambiguous
+
+-- One slot per position up to @end@. A position admitted twice selects nothing.
+admissionSlots :: Int -> [(EntryKey, (Text, AdmittedEntry))] -> SmallArray Slot
+admissionSlots end admissions = runSmallArray $ do
+    slots <- newSmallArray (end + 1) Vacant
+    for_ admissions $ \case
+        (ArrayEntry position, (version, kept)) | position >= 0 && position <= end -> do
+            slot <- readSmallArray slots position
+            writeSmallArray slots position $! case slot of
+                Vacant -> Admitted version kept
+                _ -> Ambiguous
+        _ -> pass
+    pure slots
+
+slotted :: SmallArray Slot -> [(EntryKey, entry)] -> [(Text, entry)]
+slotted slots entries =
+    [ (version, entry)
+    | (ArrayEntry position, entry) <- entries
+    , position >= 0 && position < sizeofSmallArray slots
+    , Admitted version kept <- [indexSmallArray slots position]
     , usableEntry kept
     ]
-  where
-    admitted = admittedIndex plan
 
--- Strictly ascending array positions are already unique, so only other sources build the map.
-uniqueSourceEntries :: [(EntryKey, entry)] -> [(EntryKey, entry)]
-uniqueSourceEntries entries = ascending (-1) entries
-  where
-    ascending !previous ((ArrayEntry position, _) : rest)
-        | position > previous = ascending position rest
-    ascending _ [] = entries
-    ascending _ _ = filter (\(key, _) -> Map.member key unambiguous) entries
-    unambiguous = uniqueEntries entries
+keyed :: Map EntryKey (Text, AdmittedEntry) -> [(EntryKey, entry)] -> [(Text, entry)]
+keyed admitted entries =
+    [ (version, entry)
+    | (key, entry) <- entries
+    , Just (version, kept) <- [Map.lookup key admitted]
+    , usableEntry kept
+    ]
 
 {- | Select exact admitted entries by lookup in each winning source's key map, in source and key order.
 Only object coordinates are served. Missing keys, ambiguous keys, and mismatched snapshots contribute nothing.
 -}
 overlayObjectSurvivors :: (src -> KeyMap entry) -> Map SourceId (Snapshot src) -> MergePlan -> [(Text, entry)]
-overlayObjectSurvivors entriesOf bySource plan = [(version, entry) | (version, _, entry) <- overlayObjectSources entriesOf bySource plan]
-
--- | 'overlayObjectSurvivors' with the source each entry came from.
-overlayObjectSources :: (src -> KeyMap entry) -> Map SourceId (Snapshot src) -> MergePlan -> [(Text, SourceId, entry)]
-overlayObjectSources entriesOf bySource plan =
-    [ (version, sid, entry)
-    | ((sid, digest, ObjectEntry key), (version, kept)) <- Map.toAscList (admittedIndex plan)
+overlayObjectSurvivors entriesOf bySource plan =
+    [ (version, entry)
+    | (sid, source) <- Map.toAscList bySource
+    , let entries = entriesOf (snapshotValue source)
+    , (key, (version, kept)) <- Map.toAscList (objectAdmissions plan sid source)
     , usableEntry kept
-    , Just source <- [Map.lookup sid bySource]
-    , snapshotDigest source == digest
-    , Just entry <- [KeyMap.lookup (Key.fromText key) (entriesOf (snapshotValue source))]
+    , Just entry <- [KeyMap.lookup (Key.fromText key) entries]
     ]
 
-admittedIndex :: MergePlan -> Map (SourceId, ContentDigest, EntryKey) (Text, AdmittedEntry)
-admittedIndex plan =
-    uniqueEntries
-        [ ((sid, admittedSnapshot entry, admittedKey entry), (version, entry))
-        | (version, entries) <- Map.toList (mpArtifacts plan)
-        , Just sid <- [Map.lookup version (mpSurvivors plan)]
-        , entry <- toList entries
+{- | 'overlayObjectSurvivors' as one entry per served version, in version order, with its source.
+A version with several selected keys keeps the greatest, as a key map built in key order does.
+-}
+overlayObjectVersions :: (src -> KeyMap entry) -> Map SourceId (Snapshot src) -> MergePlan -> [(Text, SourceId, entry)]
+overlayObjectVersions entriesOf bySource plan =
+    [ (version, sid, entry)
+    | (version, admitted) <- Map.toAscList (mpArtifacts plan)
+    , Just sid <- [Map.lookup version (mpSurvivors plan)]
+    , Just source <- [Map.lookup sid indexed]
+    , Just entry <- [versionEntry source admitted]
+    ]
+  where
+    indexed = Map.mapWithKey (\sid source -> (snapshotDigest source, entriesOf (snapshotValue source), objectAdmissions plan sid source)) bySource
+
+versionEntry :: (ContentDigest, KeyMap entry, Map Text admission) -> NonEmpty AdmittedEntry -> Maybe entry
+versionEntry (digest, entries, unique) admitted =
+    snd <$> foldl' greater Nothing selected
+  where
+    selected =
+        [ (key, entry)
+        | kept <- toList admitted
+        , admittedSnapshot kept == digest
+        , ObjectEntry key <- [admittedKey kept]
+        , Map.member key unique
+        , usableEntry kept
+        , Just entry <- [KeyMap.lookup (Key.fromText key) entries]
         ]
+    greater best candidate = if all ((< fst candidate) . fst) best then Just candidate else best
+
+-- The plan's admissions of this source's snapshot under versions the source won, in version order.
+sourceAdmissions :: MergePlan -> SourceId -> Snapshot src -> [(EntryKey, (Text, AdmittedEntry))]
+sourceAdmissions plan sid source =
+    [ (admittedKey entry, (version, entry))
+    | (version, entries) <- Map.toList (mpArtifacts plan)
+    , Map.lookup version (mpSurvivors plan) == Just sid
+    , entry <- toList entries
+    , admittedSnapshot entry == snapshotDigest source
+    ]
+
+-- The object keys this source's snapshot admits exactly once.
+objectAdmissions :: MergePlan -> SourceId -> Snapshot src -> Map Text (Text, AdmittedEntry)
+objectAdmissions plan sid source = uniqueEntries [(key, admission) | (ObjectEntry key, admission) <- sourceAdmissions plan sid source]
 
 usableEntry :: AdmittedEntry -> Bool
 usableEntry entry = validEntryKey (admittedKey entry) && not (T.null (admittedFilename entry))

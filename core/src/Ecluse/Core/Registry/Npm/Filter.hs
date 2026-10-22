@@ -35,8 +35,8 @@ import Ecluse.Core.Registry.ServedDocument (
     assembleAcross,
     documentObject,
     objectField,
-    overlayObjectSources,
     overlayObjectSurvivors,
+    overlayObjectVersions,
     rebaseArtifactUrl,
     safeDocumentName,
     serialiseAcross,
@@ -117,17 +117,16 @@ assemblePackedPackument mountBase bySource plan base =
         { planMembers = servedMembers plan baseObject
         , planSlot = "versions"
         , planTables = smallArrayFromList (map (packumentTable . snapshotValue) (Map.elems bySource))
-        , planPieces = ObjectPieces [(Key.toText version, piece) | (version, piece) <- KeyMap.toAscList survivors]
+        , planPieces =
+            ObjectPieces
+                [ (version, Piece index packed)
+                | (version, sid, packed) <- overlayObjectVersions packumentVersions bySource plan
+                , Just index <- [Map.lookupIndex sid bySource]
+                ]
         , planPrefix = urlPrefix <$> (npmDocumentName baseObject >>= servedTarballPrefix mountBase)
         }
   where
     baseObject = maybe mempty packumentTop base
-    survivors =
-        KeyMap.fromList
-            [ (Key.fromText version, Piece index packed)
-            | (version, sid, packed) <- overlayObjectSources packumentVersions bySource plan
-            , Just index <- [Map.lookupIndex sid bySource]
-            ]
 
 {- | npm's 'Ecluse.Core.Registry.Adapter.Capability.metadataAssemble', over npm's own boundary.
 Packed sources and base render from their tables. Any other document goes through aeson's trees.
