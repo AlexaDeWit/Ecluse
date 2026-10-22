@@ -4,12 +4,15 @@
 
 module Ecluse.Core.Server.Pipeline.InternalSpec (spec) where
 
+import Prelude hiding (universe)
+
 import Data.Aeson (Value (String), decodeStrict')
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (getCurrentTime, nominalDay)
+import Data.Universe.Class (universe)
 import Hedgehog (Gen, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -22,12 +25,23 @@ import Ecluse.Core.Cve.Types (DbEtag (..))
 import Ecluse.Core.Package (
     Artifact (..),
     Hash,
-    HashAlg (SHA1, SHA256),
+    HashAlg (MD5, SHA1, SHA256, SHA512, SRI),
     PackageDetails (..),
     PackageInfo (..),
+    hashValue,
     mkScope,
+    sriBody,
  )
-import Ecluse.Core.Package.Integrity (VersionIntegrity (MeetsFloor), classifyDigests)
+import Ecluse.Core.Package.Integrity (
+    IntegrityFloor,
+    MinIntegrity,
+    MinTrustedIntegrity,
+    VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
+    classifyDigests,
+    mkMinIntegrity,
+    mkMinTrustedIntegrity,
+    partitionByFloor,
+ )
 import Ecluse.Core.Rules (
     PreparedRule,
     Resilience (Resilience),
@@ -85,14 +99,19 @@ import Ecluse.Test.Package (
     artifactsWith,
     defaultMinIntegrity,
     detailsWith,
+    hexSha512Of,
     leftpadName,
     npmVersion,
     pypiVersion,
     requestsName,
     unsafeHash,
     unscopedNpm,
+    validMd5,
     validSha1,
     validSha256,
+    validSha256Sri,
+    validSha384Sri,
+    validSha512Sri,
  )
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, packageRule)
@@ -313,6 +332,23 @@ spec = do
                     refusals === (belowFloorMarker <$ Map.elems weak) <> (missingMarker <$ Map.elems digestless)
                     infoDistTags admissible === Map.filter ((`Map.member` listed) . renderVersion) (infoDistTags info)
 
+    describe "admitByIntegrity against the full rebuild" $
+        modifyMaxSuccess (const 500) $
+            it "returns the listing and refusals of the full rebuild under a public or a trusted floor" $
+                hedgehog $ do
+                    info <- forAll genFloorListing
+                    chosen <- forAll genFloor
+                    let (actual, expected@(kept, refused)) = either (bothAdmissions info) (bothAdmissions info) chosen
+                        whole = infoVersions kept == infoVersions info
+                    cover 30 "every file clears the floor" whole
+                    cover 20 "a file or a version drops" (not whole)
+                    cover 5 "a dist-tag pruned from a whole listing" (whole && infoDistTags kept /= infoDistTags info)
+                    cover 5 "a version refused below the floor" (belowFloorMarker `elem` refused)
+                    cover 5 "a version refused with no digest" (missingMarker `elem` refused)
+                    cover 2 "both refusal kinds in one listing" (belowFloorMarker `elem` refused && missingMarker `elem` refused)
+                    cover 20 "the trusted floor" (isRight chosen)
+                    actual === expected
+
 -- | The @cve@ field of each audit line 'logDenials' writes for one version's decision.
 auditCve :: RuleEvidence -> Decision -> IO [Maybe Text]
 auditCve evidence decision = do
@@ -378,3 +414,91 @@ genIntegrityInfo = do
             , infoDistTags = Map.fromList (zip ["latest", "next", "beta", "legacy"] (map versionOf tagged))
             , infoInvalidEntries = []
             }
+
+-- | The function under test and the reference, both over one listing and floor.
+bothAdmissions :: (IntegrityFloor floor) => PackageInfo -> floor -> ((PackageInfo, [ServeDecision]), (PackageInfo, [ServeDecision]))
+bothAdmissions info flr = (admitByIntegrity flr belowFloorMarker missingMarker info, referenceAdmit flr belowFloorMarker missingMarker info)
+
+-- | admitByIntegrity's body before it returned an all-clear listing whole, kept as the reference.
+referenceAdmit :: (IntegrityFloor floor) => floor -> ServeDecision -> ServeDecision -> PackageInfo -> (PackageInfo, [ServeDecision])
+referenceAdmit floorSpec belowFloorRefusal missingRefusal info =
+    ( info
+        { infoVersions = admissible
+        , infoDistTags = Map.filter ((`Map.member` admissible) . renderVersion) (infoDistTags info)
+        }
+    , below <> missing
+    )
+  where
+    partitioned = Map.map admitArtifacts (infoVersions info)
+    admitArtifacts details =
+        (\survivors -> details{pkgArtifacts = survivors}) <$> partitionByFloor floorSpec artHashes (pkgArtifacts details)
+    admissible = Map.mapMaybe rightToMaybe partitioned
+    (below, missing) = Map.foldr bucket ([], []) partitioned
+    bucket (Left BelowFloor) (b, m) = (belowFloorRefusal : b, m)
+    bucket (Left NoIntegrity) (b, m) = (b, missingRefusal : m)
+    bucket (Left MeetsFloor) acc = acc
+    bucket (Right _) acc = acc
+
+-- | Every floor each smart constructor accepts, public on the left and trusted on the right.
+genFloor :: Gen (Either MinIntegrity MinTrustedIntegrity)
+genFloor =
+    Gen.choice
+        [ Left <$> Gen.element (rights (map mkMinIntegrity universe))
+        , Right <$> Gen.element (rights (map mkMinTrustedIntegrity universe))
+        ]
+
+-- | Up to six versions of 1 to 40 files, with dist-tags inside and outside them. Half give every file a SHA-512 digest.
+genFloorListing :: Gen PackageInfo
+genFloorListing = do
+    (name, versionOf) <- Gen.element [(leftpadName, npmVersion), (requestsName, pypiVersion)]
+    clearing <- Gen.bool
+    keys <- Gen.subsequence ["0.9.0", "1.0.0", "1.5.0", "2.0.0", "2.5.0", "3.0.0"]
+    versions <- forM keys $ \key -> do
+        files <- genVersionDigests clearing
+        pure (key, (detailsWith name (versionOf key) []){pkgArtifacts = artifactsWith files})
+    tagged <- Gen.subsequence (keys <> ["0.1.0", "9.9.9"])
+    pure
+        PackageInfo
+            { infoName = name
+            , infoVersions = Map.fromList versions
+            , infoDistTags = Map.fromList (zip (map (("tag-" <>) . show) [0 :: Int ..]) (map versionOf tagged))
+            , infoInvalidEntries = []
+            }
+
+-- | One version's 1 to 40 files: each clearing every floor, or a mix, or with no digest at all.
+genVersionDigests :: Bool -> Gen (NonEmpty [Hash])
+genVersionDigests clearing
+    | clearing = Gen.nonEmpty fileCount genClearingDigests
+    | otherwise = Gen.frequency [(4, Gen.nonEmpty fileCount genAnyDigests), (1, Gen.nonEmpty fileCount (pure []))]
+  where
+    fileCount = Range.linear 1 40
+
+-- | A SHA-512 digest, which clears every floor, among others from the pool.
+genClearingDigests :: Gen [Hash]
+genClearingDigests = do
+    strongest <- Gen.element [unsafeHash SRI validSha512Sri, unsafeHash SHA512 (hexSha512Of "")]
+    others <- Gen.list (Range.linear 0 2) (Gen.element floorDigestPool)
+    Gen.shuffle (strongest : others)
+
+-- | No digest, or up to three from the pool.
+genAnyDigests :: Gen [Hash]
+genAnyDigests = Gen.frequency [(1, pure []), (4, Gen.list (Range.linear 1 3) (Gen.element floorDigestPool))]
+
+-- | SRI and hex digests, then SRI spellings with an unknown or malformed prefix or body.
+floorDigestPool :: [Hash]
+floorDigestPool =
+    [ unsafeHash SRI validSha256Sri
+    , unsafeHash SRI validSha384Sri
+    , unsafeHash SRI validSha512Sri
+    , unsafeHash SHA1 validSha1
+    , unsafeHash SHA256 validSha256
+    , unsafeHash MD5 validMd5
+    , spelledSri ("sha1-" <> sriBody validSha256Sri)
+    , spelledSri ("sha3-" <> sriBody validSha512Sri)
+    , spelledSri ("SHA512-" <> sriBody validSha512Sri)
+    , spelledSri ("-" <> sriBody validSha256Sri)
+    , spelledSri "sha256 sha512"
+    , spelledSri "sha256-forged"
+    ]
+  where
+    spelledSri wire = (unsafeHash SRI validSha256Sri){hashValue = wire}
