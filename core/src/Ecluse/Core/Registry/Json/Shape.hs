@@ -84,8 +84,11 @@ listedMember members name = case findMember members name of
     Nothing -> Nothing
 {-# INLINE listedMember #-}
 
+-- An empty table skips the lookup, which hashes the name before it looks at the table.
 findMember :: Members -> Name -> Maybe Member
-findMember (Members named _) name = HashMap.lookup (nameBytes name) named
+findMember (Members named _) name
+    | HashMap.null named = Nothing
+    | otherwise = HashMap.lookup (nameBytes name) named
 {-# INLINE findMember #-}
 
 -- | Whether a value's keys and strings go through the document's table or keep their own copies.
