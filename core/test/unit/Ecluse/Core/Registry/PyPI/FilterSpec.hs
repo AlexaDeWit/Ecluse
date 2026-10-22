@@ -59,6 +59,7 @@ spec = do
     sidecarSpec
     serialiseSpec
     packedSerialiseSpec
+    packedPositionSpec
     packedAdverseSpec
 
 fallbackAssemblySpec :: Spec
@@ -193,6 +194,20 @@ packedSerialiseSpec = describe "packed served bytes" $
                         changedTree = Map.adjust (\snapshot -> snapshot{snapshotDigest = digestOf "another source"}) 0 (sources treeDoc)
                     fingerprint <$> Filter.serialiseSimpleDocument (Filter.assembleSimpleDocument mountBase changed plan (Just packedDoc))
                         `shouldBe` (fingerprint <$> Filter.serialiseSimpleDocument (Filter.assembleSimpleDocument mountBase changedTree plan (Just treeDoc)))
+
+packedPositionSpec :: Spec
+packedPositionSpec = describe "packed file coordinates" $
+    for_ pypiCorpusPackages $ \package ->
+        it ("numbers the files of " <> cpPath package <> " at strictly ascending array positions, as the tree does") $ do
+            bytes <- readFileBS (cpPath package)
+            let name = cpPackage package
+            (_, tree) <- expectRight (projectPyPIIndex defaultLimits name bytes)
+            (_, packed) <- expectRight (projectPyPIPackedChunks defaultLimits name [bytes] >>= projectPyPIPacked defaultLimits name)
+            let keys = map fst (packedFiles packed)
+                positions = [position | ArrayEntry position <- keys]
+            keys `shouldBe` map fst (simpleFiles tree)
+            length positions `shouldBe` length keys
+            zip (-1 : positions) positions `shouldSatisfy` all (uncurry (<))
 
 relaySpec :: Spec
 relaySpec = describe "what the assembly relays from the base document" $ do
