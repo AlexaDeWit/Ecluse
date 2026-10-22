@@ -12,20 +12,24 @@ module Ecluse.Core.Server.Pipeline.Packument.Representation (
     assembleServedBody,
 ) where
 
-import Crypto.Hash (Context, SHA256, hashFinalize, hashInit, hashUpdates)
-import Data.ByteString.Builder (Builder, byteString, toLazyByteString)
+import Control.Monad.ST (ST)
+import Crypto.Hash (Context, SHA256 (SHA256), hashFinalize, hashInit, hashUpdates, hashWith)
+import Data.ByteString.Builder (toLazyByteString)
+import Data.ByteString.Internal (c2w)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
+import Data.Text.Unsafe (lengthWord8)
 
 import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, renderPackageName)
 import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource, TrustedSource), SourceId)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
+import Ecluse.Core.Registry.Json.Scratch (Scratch, decimalLength, putByte, putDecimal, putRawBytes, putRawText, scratchBytes)
 import Ecluse.Core.Registry.Metadata (ContentDigest, digestBytes)
 import Ecluse.Core.Server.Conditional (ETag, mkStrongETag, mkWeakETag, renderETag)
 import Ecluse.Core.Server.Encoding (ContentCoding (GzipCoding, IdentityCoding))
-import Ecluse.Core.Server.Framing (frameBytes)
+import Ecluse.Core.Server.Framing (frameBytes, putFrame)
 import Ecluse.Core.Snapshot (Snapshot (..))
 
 -- | A parsed contribution with opaque source bytes and a digest for the derived validator.
@@ -57,43 +61,46 @@ codedETag coding identityTag = case coding of
 -- | A validator derived from framed inputs so unchanged requests skip assembly. Bump the salt when assembly behaviour changes.
 packumentETag :: Text -> [Text] -> PackageName -> [(Provenance, ContentDigest, [(Text, [EntryKey])])] -> ETag
 packumentETag mountBaseUrl originBaseUrls name sources =
-    mkStrongETag (hashFinalize (hashUpdates (hashInit :: Context SHA256) pieces))
+    mkStrongETag (hashWith SHA256 (scratchBytes 4096 fingerprint))
   where
-    pieces :: [ByteString]
-    pieces = LBS.toChunks (toLazyByteString fingerprint)
+    fingerprint :: Scratch st -> ST st ()
+    fingerprint scratch = do
+        putRawBytes scratch "ecluse:packument-etag:v4\0"
+        traverse_ (putFramedText scratch) originBaseUrls
+        putByte scratch 0
+        putRawText scratch mountBaseUrl
+        putByte scratch 0
+        putRawText scratch (renderPackageName name)
+        putByte scratch 0
+        traverse_ (putSourcePiece scratch) sources
 
-    fingerprint :: Builder
-    fingerprint =
-        "ecluse:packument-etag:v4\0"
-            <> foldMap (frameBytes . encodeUtf8) originBaseUrls
-            <> "\0"
-            <> byteString (encodeUtf8 mountBaseUrl)
-            <> "\0"
-            <> byteString (encodeUtf8 (renderPackageName name))
-            <> "\0"
-            <> foldMap etagSourcePiece sources
+putSourcePiece :: Scratch st -> (Provenance, ContentDigest, [(Text, [EntryKey])]) -> ST st ()
+putSourcePiece scratch (provenance, digest, survivors) = do
+    putByte scratch (provenanceTag provenance)
+    putByte scratch 0
+    putRawBytes scratch (digestBytes digest)
+    traverse_ (putVersionPiece scratch) survivors
+    putByte scratch 1
 
-etagSourcePiece :: (Provenance, ContentDigest, [(Text, [EntryKey])]) -> Builder
-etagSourcePiece (provenance, digest, survivors) =
-    etagProvenanceTag provenance
-        <> byteString (digestBytes digest)
-        <> foldMap etagVersionPiece survivors
-        <> "\1"
+putVersionPiece :: Scratch st -> (Text, [EntryKey]) -> ST st ()
+putVersionPiece scratch (version, entries) = do
+    putFramedText scratch version
+    traverse_ (putEntryPiece scratch) entries
+    putByte scratch 2
 
-etagVersionPiece :: (Text, [EntryKey]) -> Builder
-etagVersionPiece (version, entries) =
-    frameBytes (encodeUtf8 version) <> foldMap etagEntryPiece entries <> "\2"
+putEntryPiece :: Scratch st -> EntryKey -> ST st ()
+putEntryPiece scratch = \case
+    ArrayEntry index -> putByte scratch (c2w 'a') >> putFrame scratch (decimalLength index) (putDecimal scratch index)
+    ObjectEntry key -> putByte scratch (c2w 'o') >> putFramedText scratch key
+    SingletonEntry -> putByte scratch (c2w 's')
 
-etagEntryPiece :: EntryKey -> Builder
-etagEntryPiece = \case
-    ArrayEntry index -> "a" <> frameBytes (show index)
-    ObjectEntry key -> "o" <> frameBytes (encodeUtf8 key)
-    SingletonEntry -> "s"
+putFramedText :: Scratch st -> Text -> ST st ()
+putFramedText scratch text = putFrame scratch (lengthWord8 text) (putRawText scratch text)
 
-etagProvenanceTag :: Provenance -> Builder
-etagProvenanceTag = \case
-    TrustedSource -> "t\0"
-    GatedSource -> "g\0"
+provenanceTag :: Provenance -> Word8
+provenanceTag = \case
+    TrustedSource -> c2w 't'
+    GatedSource -> c2w 'g'
 
 -- | Charge the larger source estimate, adding proportional bytes for versions missing from each anchor.
 outputBasisBytes :: MergePlan -> [Contribution] -> Int
