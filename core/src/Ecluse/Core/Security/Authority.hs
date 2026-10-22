@@ -19,6 +19,11 @@ module Ecluse.Core.Security.Authority (
     hostPortAddressWithDefault,
     splitHostPort,
 
+    -- * Comparing authorities
+    AuthorityText,
+    authorityText,
+    authorityHostPort,
+
     -- * Configured-URL refusal
     refuseCredentialMaterial,
 
@@ -50,12 +55,26 @@ hostAddress raw = toLowerUnlessAsciiUnchanged (maybe "" fst (splitHostPort (auth
 
 -- | Extract the host and effective port, defaulting to 443. Refuse absent hosts and malformed ports.
 hostPortAddress :: Text -> Maybe HostPort
-hostPortAddress = hostPortAddressWithDefault 443
+hostPortAddress = authorityHostPort . authorityText
 
 -- | 'hostPortAddress' with the caller's own port for a URL that writes none, for a scheme whose portless default is not the gate's 443. The authority split and the port grammar do not change.
 hostPortAddressWithDefault :: Word16 -> Text -> Maybe HostPort
-hostPortAddressWithDefault portless raw = do
-    let authority = authorityOf raw
+hostPortAddressWithDefault portless = hostPortOf portless . authorityOf
+
+-- | The only text of a URL that 'hostPortAddress' reads. Equal texts give equal results, so a caller may reuse one's result for the other.
+newtype AuthorityText = AuthorityText Text
+    deriving stock (Eq)
+
+-- | The authority of a URI or bare @host[:port]@ value, without userinfo.
+authorityText :: Text -> AuthorityText
+authorityText = AuthorityText . authorityOf
+
+-- | 'hostPortAddress' from the authority text alone: @hostPortAddress = authorityHostPort . authorityText@.
+authorityHostPort :: AuthorityText -> Maybe HostPort
+authorityHostPort (AuthorityText authority) = hostPortOf 443 authority
+
+hostPortOf :: Word16 -> Text -> Maybe HostPort
+hostPortOf portless authority = do
     (host, rest) <- splitHostPort authority
     guard (not (T.null host))
     port <- effectivePort portless authority rest
