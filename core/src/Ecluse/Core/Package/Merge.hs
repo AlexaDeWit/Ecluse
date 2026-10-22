@@ -91,13 +91,14 @@ data MergePlan = MergePlan
     {- ^ Each surviving version key mapped to the 'SourceId' of the input that won it. Trusted wins
     a collision. The serve layer takes that version's object from that source's raw @Value@.
     -}
-    , mpDistTags :: Map Text Version
+    , -- Lazy, as are 'mpArtifacts' and 'mpTime': only the render reads them, so a 304 or an assembled hit builds none.
+      mpDistTags :: ~(Map Text Version)
     {- ^ @dist-tags@ reconciled over the survivors. @latest@ comes from the public tag or the
     ordering, never the private one. Other tags carry by precedence, and an absent target drops.
     -}
-    , mpArtifacts :: Map Text (NonEmpty AdmittedEntry)
+    , mpArtifacts :: ~(Map Text (NonEmpty AdmittedEntry))
     -- ^ Exact admitted entries from each version's winning source snapshot.
-    , mpTime :: Map Text UTCTime
+    , mpTime :: ~(Map Text UTCTime)
     -- ^ Publish times from winning candidates. A winner with no known time contributes no entry.
     , mpDivergences :: Set Divergence
     {- ^ Every distinct same-version integrity conflict: the winner's fingerprint against each
