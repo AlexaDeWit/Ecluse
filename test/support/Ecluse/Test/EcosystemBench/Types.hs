@@ -20,6 +20,7 @@ import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError)
+import Ecluse.Core.Server.Context (RouteAction)
 import Ecluse.Core.Snapshot (Snapshot)
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Corpus (CaptureUpstream, CorpusPackage)
@@ -53,6 +54,9 @@ data EcosystemBench = EcosystemBench
     , ebMetadata :: AdapterMetadata
     , ebRoutes :: [RouteCase]
     , ebClassify :: (Method, [Text]) -> Int
+    , ebActionRoutes :: [RouteCase]
+    , ebAction :: (Method, [Text]) -> Maybe RouteAction
+    -- ^ The action the route table names for a request, as dispatch receives it.
     , ebRouteScaling :: [RouteScaling]
     }
 

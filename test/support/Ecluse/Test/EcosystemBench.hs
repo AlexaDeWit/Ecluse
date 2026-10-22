@@ -118,6 +118,8 @@ npmBench =
         , ebMetadata = adapterMetadata npmAdapter
         , ebRoutes = [RouteCase "mixed requests" (concat (replicate 1000 npmRequests))]
         , ebClassify = \(method, segments) -> routeDepth (matchRoute npmRoutes method [] segments)
+        , ebActionRoutes = [RouteCase "tarball action" (replicate 1000 (methodGet, ["express", "-", "express-4.18.2.tgz"]))]
+        , ebAction = \(method, segments) -> snd <$> matchRoute npmRoutes method [] segments
         , ebRouteScaling = []
         }
 
@@ -147,6 +149,8 @@ pypiBench =
             , RouteCase "normal wheel" [distribution "requests-2.34.2-py3-none-any.whl"]
             ]
         , ebClassify = \(method, segments) -> routeDepth (matchRoute pypiRoutes method [] segments)
+        , ebActionRoutes = [RouteCase "wheel action" (replicate 1000 (distribution "requests-2.34.2-py3-none-any.whl"))]
+        , ebAction = \(method, segments) -> snd <$> matchRoute pypiRoutes method [] segments
         , ebRouteScaling =
             [ RouteScaling "malformed filename separators" (\count -> distribution (separatorHeavySdist "requests" (fromIntegral count) "benchmark"))
             , RouteScaling "valid filename separators" (\count -> distribution ("requests" <> T.replicate (fromIntegral count) "_" <> "1.tar.gz"))
