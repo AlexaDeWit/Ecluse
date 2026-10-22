@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Measure response bounds and the artifact location check over each ecosystem's wire documents and
-projected releases. Parsed documents enter the nesting guard without timing their decoding.
+{- | Measure response bounds, the integrity floor, and the artifact location check over each ecosystem's
+wire documents and projected releases. Parsed documents enter the nesting guard without timing their decoding.
 -}
 module Ecluse.Core.SecurityBench (benchmarks) where
 
@@ -12,11 +12,16 @@ import Ecluse.Test.Security.Limits (checkVersionCount)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Ecluse.Bench.Corpus (entryInfo, entryName, forcedTree, syntheticPackageInfo, unHeldTree)
-import Ecluse.Core.Package (PackageInfo, artUrl, infoVersions, pkgArtifacts)
+import Ecluse.Core.Package (PackageInfo, artUrl, infoDistTags, infoVersions, pkgArtifacts)
 import Ecluse.Core.Package.Filter.Internal (ArtifactOrigin, artifactOrigin, locateArtifact)
+import Ecluse.Core.Package.Integrity (IntegrityFloor)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError, boundedRead, defaultLimits, maxMetadataBytes)
+import Ecluse.Core.Server.Pipeline.Internal (admitByIntegrity)
+import Ecluse.Core.Server.Pipeline.Shared (integrityBelowFloor, integrityMissing, trustedIntegrityBelowFloor, trustedIntegrityMissing)
+import Ecluse.Core.Server.Response (ServeDecision)
 import Ecluse.Test.Corpus (CaptureUpstream (..))
 import Ecluse.Test.EcosystemBench (EcosystemBench (..), LoadedEntry (..))
+import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Test.Tasty (withResource)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, env, whnf, whnfAppIO, whnfIO)
 
@@ -31,6 +36,8 @@ benchmarks ecosystem =
                         bench "checkNestingDepth" (whnfAppIO (fmap (ebNestingDepth ecosystem . unHeldTree)) held)
                     , bench "checkVersionCount" (whnf versionCountDepth (entryInfo entry))
                     , bench "artifact locations" (whnf (locatedArtifacts origin) (entryInfo entry))
+                    , bench "integrity floor (public)" (whnf (floorAdmitted defaultMinIntegrity integrityBelowFloor integrityMissing) (entryInfo entry))
+                    , bench "integrity floor (trusted)" (whnf (floorAdmitted defaultMinTrustedIntegrity trustedIntegrityBelowFloor trustedIntegrityMissing) (entryInfo entry))
                     ]
                | entry@LoadedEntry{leSnapshot = document} <- ebCorpus ecosystem
                ]
@@ -67,3 +74,10 @@ limitErrorCode _ = -1
 locatedArtifacts :: ArtifactOrigin -> PackageInfo -> Int
 locatedArtifacts origin info =
     length [() | details <- Map.elems (infoVersions info), art <- toList (pkgArtifacts details), Right !_ <- [locateArtifact origin (artUrl art)]]
+
+-- The files, dist-tags and refusals left after the integrity floor, every surviving file walked as a render would.
+floorAdmitted :: (IntegrityFloor floor) => floor -> ServeDecision -> ServeDecision -> PackageInfo -> Int
+floorAdmitted floorSpec belowFloorRefusal missingRefusal info =
+    Map.foldl' (\count details -> count + length (pkgArtifacts details)) (length refusals + Map.size (infoDistTags admitted)) (infoVersions admitted)
+  where
+    (admitted, refusals) = admitByIntegrity floorSpec belowFloorRefusal missingRefusal info
