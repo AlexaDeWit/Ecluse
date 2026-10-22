@@ -54,6 +54,7 @@ import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), codeArtifactFormat)
 import Ecluse.Runtime.Test.PackageStore.FixedPages (FixedPlane (..), FixedRepository (..), NativeCall (..), fixedCache, fixedMirror, fixedVersion, newFixedPlane)
 import Ecluse.Test.Corpus.Advisories (SyntheticTarget (..), compileAdvisoryInputs, fillerTargets, suggestedDenyIfCve, syntheticAdvisories)
+import Ecluse.Test.Cve (countingCoveredNames)
 import Ecluse.Test.EcosystemBench (EcosystemBench (ebEcosystem, ebRead, ebSynthetic))
 import Ecluse.Test.OsvDb (withServedArtifact)
 import Ecluse.Test.Registry.Metadata.Fetch (captureChunks)
@@ -318,13 +319,12 @@ probedDeps probe serving deps =
         { rdAdvisoryDatabase = case rdAdvisoryDatabase deps of
             NoAdvisoryDatabase -> NoAdvisoryDatabase
             AdvisoryDatabase borrow -> AdvisoryDatabase $ \use -> borrow $ \generation ->
-                use generation{agLookup = \readLookup -> agLookup generation (\held -> acquired held >> readLookup (second counted <$> held))}
+                use generation{agLookup = \readLookup -> agLookup generation (\held -> acquired held >> readLookup (second (countingCoveredNames (prCoveredQueries probe)) <$> held))}
         }
   where
     acquired held = do
         modifyIORef' (prAcquired probe) (+ 1)
         when (fmap fst held == serving) (modifyIORef' (prServing probe) (+ 1))
-    counted cve = cve{cveCoveredNames = modifyIORef' (prCoveredQueries probe) (+ 1) >> cveCoveredNames cve}
 
 -- An identity deny that names nothing the stores hold. 'tracedRules' records each identity it decides.
 identityDeny :: Rule
