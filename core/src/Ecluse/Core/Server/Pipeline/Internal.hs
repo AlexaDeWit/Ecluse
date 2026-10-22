@@ -104,8 +104,6 @@ admitByIntegrity floorSpec belowFloorRefusal missingRefusal info
             , infoDistTags = Map.filter ((`Map.member` versions) . renderVersion) (infoDistTags info)
             }
 
-    -- One walk of an up-to-100k-version map yields the surviving versions and both refusal
-    -- buckets. The partitioned map is that large too.
     partitioned :: Map Text (Either VersionIntegrity PackageDetails)
     partitioned = Map.map admitArtifacts (infoVersions info)
 
