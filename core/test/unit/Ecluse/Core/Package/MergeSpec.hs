@@ -24,14 +24,14 @@ import UnliftIO (evaluate)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package
-import Ecluse.Core.Package.Entry (AdmittedEntry (..))
+import Ecluse.Core.Package.Entry (AdmittedEntry (..), EntryKey (..))
 import Ecluse.Core.Package.Hash (canonicalHashValue)
 import Ecluse.Core.Package.Integrity (VersionIntegrity (MeetsFloor), assertedAlg, classifyDigests)
 import Ecluse.Core.Package.Merge hiding (contribute, mergePackuments)
 import Ecluse.Core.Package.Merge qualified as Merge
 
 import Ecluse.Core.Registry.WireSupport (Projection (Projected))
-import Ecluse.Core.Snapshot (Snapshot (snapshotDigest))
+import Ecluse.Core.Snapshot (Snapshot (..))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion, selectLatest)
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, sriSha256Of, sriSha512Of, thingName, unsafeHash, validSha256, validSha256Sri)
 import Ecluse.Test.Package qualified as Package
@@ -39,7 +39,7 @@ import Ecluse.Test.Registry.Npm qualified as NpmFixture
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
-import Ecluse.Test.Snapshot (syntheticSnapshot)
+import Ecluse.Test.Snapshot (digestOf, syntheticSnapshot)
 
 mergePackuments :: [(Provenance, PackageInfo)] -> Maybe MergePlan
 mergePackuments = Merge.mergePackuments . map (second syntheticSnapshot)
@@ -385,6 +385,12 @@ mergeAllocation sources = do
     divergences `shouldBe` 0
     pure (allocationBefore - allocationAfter)
 
+-- The merge allocation of alike copies from these sources, with one digest per file and then sixteen.
+alikeAllocations :: [Provenance] -> IO (Int64, Int64)
+alikeAllocations provenances = (,) <$> alike 1 <*> alike 16
+  where
+    alike digests = mergeAllocation [(prov, agreeingSource digests) | prov <- provenances]
+
 -- Every field forced, as an npm render forces them, so the allocation bounds price the whole plan.
 wholePlanDivergences :: MergePlan -> Int
 wholePlanDivergences plan = mpDistTags plan `seq` mpArtifacts plan `seq` mpTime plan `seq` Set.size (mpDivergences plan)
@@ -440,6 +446,26 @@ spec = do
                 gated = packument [("2.0.0", sriBbb)]
             (survivorKeys <$> mergePackuments [(TrustedSource, trusted), (GatedSource, gated)])
                 `shouldBe` Just ["1.0.0", "2.0.0"]
+
+        it "counts an empty source's position and takes artifacts from the winning snapshot" $ do
+            let digest = digestOf "trusted source bytes"
+                tarball = (artifactWith [unsafeHash SRI sriSame]){artEntryKey = ObjectEntry "1.0.0"}
+                wheel = (wheelWith "thing.whl" [unsafeHash SRI sriSame]){artEntryKey = ArrayEntry 7}
+                trusted = withArtifacts (tarball :| [wheel]) (packument [("1.0.0", sriSame)])
+                plan =
+                    Merge.mergePackuments
+                        [ (GatedSource, syntheticSnapshot (packument []))
+                        , (GatedSource, syntheticSnapshot (packument [("1.0.0", sriSame)]))
+                        , (TrustedSource, Snapshot digest trusted)
+                        , (TrustedSource, syntheticSnapshot trusted)
+                        ]
+            (mpSurvivors <$> plan) `shouldBe` Just (Map.singleton "1.0.0" 2)
+            (mpArtifacts <$> plan)
+                `shouldBe` Just
+                    ( Map.singleton
+                        "1.0.0"
+                        (AdmittedEntry digest (ObjectEntry "1.0.0") "thing.tgz" :| [AdmittedEntry digest (ArrayEntry 7) "thing.whl"])
+                    )
 
         it "reports no divergence when a collision's integrity agrees" $ do
             let trusted = packument [("1.0.0", sriSame)]
@@ -498,12 +524,15 @@ spec = do
 
     describe "copies whose digests are spelled alike" $
         it "cost the same merge whether a file carries one digest or sixteen" $ do
-            let alike digests = mergeAllocation [(TrustedSource, agreeingSource digests), (GatedSource, agreeingSource digests)]
-            oneDigest <- alike 1
-            sixteenDigests <- alike 16
+            (oneDigest, sixteenDigests) <- alikeAllocations [TrustedSource, GatedSource]
             -- A fingerprint entry is over 100 bytes. The allowance is 32 for each added digest: fifteen
             -- in each of two files, in each of two copies.
             sixteenDigests `shouldSatisfy` (<= oneDigest + 32 * 15 * 2 * 2 * agreeingVersions)
+
+    describe "three copies whose digests are spelled alike" $
+        it "cost the same merge whether a file carries one digest or sixteen" $ do
+            (oneDigest, sixteenDigests) <- alikeAllocations [TrustedSource, GatedSource, GatedSource]
+            sixteenDigests `shouldSatisfy` (<= oneDigest + 32 * 15 * 2 * 3 * agreeingVersions)
 
     describe "a version only one source carries" $
         it "is decided before anything is built for a comparison" $ do
@@ -1064,8 +1093,15 @@ spec = do
 
         it "mergePackuments is planFrom . foldMap contribute" $
             hedgehog $ do
-                sources <- forAll genSources
+                sources <- forAll (Gen.list (Range.linear 0 5) genSource)
                 mergePackuments sources === planFrom (foldMap (uncurry contribute) sources)
+
+        it "mergePackuments equals the accumulator regrouped at any source over contested copies" $
+            hedgehog $ do
+                sources <- forAll genContestedSources
+                (left, right) <- forAll (flip splitAt sources <$> Gen.int (Range.linear 0 (length sources)))
+                let folded = foldMap (uncurry contribute)
+                mergePackuments sources === planFrom (folded left <> folded right)
 
     describe "the laws do not erode the trust hierarchy" $ do
         it "the trust order IS the hierarchy: TrustedSource < GatedSource (keystone -- do not reorder)" $
