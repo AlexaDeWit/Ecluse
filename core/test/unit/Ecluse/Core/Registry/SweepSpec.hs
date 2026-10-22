@@ -6,16 +6,19 @@
 module Ecluse.Core.Registry.SweepSpec (spec) where
 
 import Data.Conduit (yield)
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
+import UnliftIO.Exception (throwIO, try)
 
-import Ecluse.Core.Cve (AdvisoryRange (..))
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (cveCoveredNames), CveQueryFault (CveQueryFault))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
 import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
-import Ecluse.Core.Package (PackageName)
+import Ecluse.Core.Package (PackageName, unscopedName)
+import Ecluse.Core.Registry.Adapter (adapterProjectName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     RetryAdvice (RetryWorthwhile),
@@ -49,7 +52,9 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
     mkNameAlphabet,
     renderNamePrefix,
  )
+import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Sweep (paceAtCeiling, storeBudgets, sweepCycle, withStoreRetry)
+import Ecluse.Core.Registry.Sweep.Candidates (candidateSet, inCandidates)
 import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt (HaltConsentWithheld, HaltDeletionCap, HaltStoreFault, HaltStorePreserved),
     CycleOutcome (outcomeEvidence, outcomeHalt, outcomePrerequisites, outcomeTally),
@@ -71,7 +76,7 @@ import Ecluse.Core.Rules (RuleDeps (rdAdvisoryDatabase), prepare)
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh))
 import Ecluse.Core.Rules.Types (DenyIfCveParams (..), DenyIfEpssParams (..), FailureAlignment (FailDeny, FailNoDecision), Rule (DenyByIdentity, DenyIfCve, DenyIfEpss))
 import Ecluse.Core.Version (Version)
-import Ecluse.Test.Cve (fakeCveLookup, unscoredEpssCases)
+import Ecluse.Test.Cve (countingCoveredNames, fakeCveLookup, unscoredEpssCases)
 import Ecluse.Test.Maintenance (
     FakeStore (fakeMaintenance, fakeObservation, readFakeContents, readFakeCursor),
     FakeStoreConfig (..),
@@ -104,6 +109,7 @@ spec = do
     epssSpec
     pacingSpec
     generationSpec
+    candidateMemoSpec
 
 permissionSpec :: Spec
 permissionSpec = describe "consent and classification" $ do
@@ -768,3 +774,133 @@ generationSpec = describe "deletion evidence generation" $
             let deletions = filter (T.isInfixOf "blocked by") info
             length deletions `shouldBe` 1
             deletions `shouldSatisfy` all (\line -> T.isInfixOf "NEW-ONLY" line && T.isInfixOf "generation-B" line)
+
+-- A walk builds its candidate set once per generation it meets, and still makes the store calls
+-- and decisions of a walk that built each bucket's set from that bucket's own lookup.
+candidateMemoSpec :: Spec
+candidateMemoSpec = describe "the candidate set across a walk's buckets" $ do
+    for_ [SweepCandidates, SweepEverything] $ \shape ->
+        it ("queries a stable generation's covered names once per cycle in " <> show shape) $
+            void (assertMemo shape [("a", Just generationA)] 1)
+
+    it "queries the generation a later bucket's listing swaps in, and decides its new name there" $ do
+        calls <- assertMemo SweepCandidates [("a", Just generationA), ("b", Just generationB)] 2
+        calls `shouldContain` [Listed "b", Enumerated (unscopedNpm "brine"), Enumerated (unscopedNpm "bronze"), Listed "c"]
+
+    it "sweeps the identity half alone while no generation is loaded, then queries again" $ do
+        calls <- assertMemo SweepCandidates [("a", Just generationA), ("b", Nothing), ("c", Just generationA)] 2
+        calls `shouldContain` [Listed "b", Enumerated (unscopedNpm "brine"), Listed "c"]
+
+    it "aborts on a later generation's query fault, and queries that generation again next cycle" $ do
+        store <- newFakeStore memoConfig
+        faulting <- faultingOnce
+        let schedule = [("a", Just generationA), ("b", Just faulting)]
+        aborted <- memoCycle store SweepCandidates schedule
+        leftToMaybe (mrOutcome aborted) `shouldBe` Just queryFault
+        mrQueries aborted `shouldBe` 2
+        mrCalls aborted `shouldBe` [Listed "a", Enumerated (unscopedNpm "alpha"), Enumerated (unscopedNpm "apex"), Listed "b"]
+        resumed <- memoCycle store SweepCandidates schedule
+        mrQueries resumed `shouldBe` 2
+        mrCalls resumed `shouldContain` [Listed "b", Enumerated (unscopedNpm "brine"), Enumerated (unscopedNpm "bronze"), Listed "c"]
+
+-- A mirror call the memo cases trace, in the order the walk made it.
+data StoreCall = Listed Text | Enumerated PackageName | CursorWritten Text
+    deriving stock (Eq, Show)
+
+-- One memo cycle: its outcome or the fault that ended it, its calls, its covered-name queries, and
+-- the names that still hold a version.
+data MemoRun = MemoRun
+    { mrOutcome :: Either CveQueryFault CycleOutcome
+    , mrCalls :: [StoreCall]
+    , mrQueries :: Int
+    , mrLeft :: [PackageName]
+    }
+
+-- Check one cycle against the per-bucket reference, and that it ran this many queries.
+assertMemo :: SweepShape -> [(Text, Maybe (DbEtag, CveLookup))] -> Int -> IO [StoreCall]
+assertMemo shape schedule queries = do
+    store <- newFakeStore memoConfig
+    run <- memoCycle store shape schedule
+    reference <- perBucketReference shape schedule
+    outcome <- either (fail . show) pure (mrOutcome run)
+    let decided = [name | Enumerated name <- reference]
+        tally = outcomeTally outcome
+    mrCalls run `shouldBe` reference
+    mrQueries run `shouldBe` queries
+    outcomeHalt outcome `shouldBe` Nothing
+    (tallyExamined tally, tallyDeleted tally) `shouldBe` (length decided, length decided)
+    mrLeft run `shouldBe` filter (`notElem` decided) memoNames
+    pure (mrCalls run)
+
+{- One cycle over the memo store under a rule that deletes whatever it decides. Listing a bucket the
+schedule names installs that bucket's generation first, so the bucket's own lookup borrows it. -}
+memoCycle :: FakeStore -> SweepShape -> [(Text, Maybe (DbEtag, CveLookup))] -> IO MemoRun
+memoCycle store shape schedule = do
+    queries <- newIORef 0
+    active <- newIORef Nothing
+    calls <- newIORef []
+    rec' <- recordingPorts Nothing
+    let counted = map (second (fmap (second (countingCoveredNames queries)))) schedule
+        traced call = modifyIORef' calls (call :)
+        base = fakeMaintenance store
+        tracedWrites cursor = cursor{writeCursor = \prefix -> traced (CursorWritten (renderNamePrefix prefix)) >> writeCursor cursor prefix}
+        handle =
+            base
+                { listPackagesIn = \prefix -> do
+                    lift (traverse_ (writeIORef active) (lookup (renderNamePrefix prefix) counted))
+                    lift (traced (Listed (renderNamePrefix prefix)))
+                    listPackagesIn base prefix
+                , enumerateVersions = \name -> traced (Enumerated name) >> enumerateVersions base name
+                , storeCursor = tracedWrites <$> storeCursor base
+                }
+        deps = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (\use -> readIORef active >>= use)}
+    outcome <- try (sweepCycle testPacing{swpShape = shape} (recPorts rec') [(testMount handle [denyRule] memoConfigured){smRuleDeps = deps}])
+    -- A delete re-reads the name it removes, so a repeat of the call before it is the same step.
+    steps <- mapMaybe listToMaybe . group . reverse <$> readIORef calls
+    MemoRun outcome steps
+        <$> readIORef queries
+        <*> (Map.keys . Map.filter (not . null) <$> readFakeContents store)
+
+{- The calls of the walk before the memo, from the inventory alone: each bucket lists, decides the
+names the candidate set of its own generation carries, and in a full walk records the bucket. -}
+perBucketReference :: SweepShape -> [(Text, Maybe (DbEtag, CveLookup))] -> IO [StoreCall]
+perBucketReference shape schedule = concat <$> traverse bucketCalls (zip memoBuckets generations)
+  where
+    generations = drop 1 (scanl (\held bucket -> fromMaybe held (lookup bucket schedule)) Nothing memoBuckets)
+    full = shape == SweepEverything
+    bucketCalls (bucket, pinned) = do
+        candidates <- candidateSet (adapterProjectName npmAdapter) memoConfigured (snd <$> pinned)
+        let decided = [name | name <- memoNames, bucket `T.isPrefixOf` unscopedName name, full || inCandidates candidates name]
+        pure ([Listed bucket] <> map Enumerated decided <> [CursorWritten bucket | full])
+
+memoBuckets :: [Text]
+memoBuckets = ["a", "b", "c"]
+
+-- Seven names over the three buckets, in listing order. An identity deny pins two of them.
+memoNames :: [PackageName]
+memoNames = map unscopedNpm ["alpha", "apex", "bravo", "brine", "bronze", "charlie", "cobalt"]
+
+memoConfigured :: [Rule]
+memoConfigured = [DenyByIdentity "apex", DenyByIdentity "brine"]
+
+memoConfig :: FakeStoreConfig
+memoConfig = (storeConfigFor memoNames){fakeFacts = (fakeFacts seededConfig){factNameAlphabet = mkNameAlphabet "abc"}}
+
+-- A covers one name in each bucket. B keeps the first and covers the two names A leaves out.
+generationA, generationB :: (DbEtag, CveLookup)
+generationA = (DbEtag "generation-A", coveringNames ["alpha", "bravo", "charlie"])
+generationB = (DbEtag "generation-B", coveringNames ["alpha", "bronze", "cobalt"])
+
+coveringNames :: [Text] -> CveLookup
+coveringNames names = fakeCveLookup [(name, advisory "MEMO-1" Nothing) | name <- names]
+
+-- A generation whose first covered-name query faults and whose later ones answer as B's do.
+faultingOnce :: IO (DbEtag, CveLookup)
+faultingOnce = do
+    faulted <- newIORef False
+    let answering = snd generationB
+        query = readIORef faulted >>= bool (writeIORef faulted True >> throwIO queryFault) (cveCoveredNames answering)
+    pure (DbEtag "generation-F", answering{cveCoveredNames = query})
+
+queryFault :: CveQueryFault
+queryFault = CveQueryFault "covered-names" "disk I/O error"

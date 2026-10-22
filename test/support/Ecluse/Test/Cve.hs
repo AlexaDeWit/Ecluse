@@ -10,6 +10,7 @@ behavioural cases against this fake and the real handle, so the two cannot drift
 module Ecluse.Test.Cve (
     fakeCveLookup,
     fakeCveDb,
+    countingCoveredNames,
     namesFix,
     unscoredEpssCases,
     referenceInside,
@@ -35,6 +36,10 @@ retires a displaced generation builds its own recording handle instead.
 -}
 fakeCveDb :: [(Text, AdvisoryRange)] -> CveDb
 fakeCveDb rows = CveDb{cveDbLookup = fakeCveLookup rows, cveDbClose = pass, cveDbMeta = [], cveDbProvenance = noProvenance}
+
+-- | The lookup with each covered-name query counted before it runs, so a faulted query counts too.
+countingCoveredNames :: IORef Int -> CveLookup -> CveLookup
+countingCoveredNames queries cve = cve{cveCoveredNames = modifyIORef' queries (+ 1) >> cveCoveredNames cve}
 
 -- | Whether a package row names this exact version as its fix, which tells generations apart.
 namesFix :: CveLookup -> Text -> Text -> IO Bool

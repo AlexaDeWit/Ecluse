@@ -16,6 +16,8 @@ module Ecluse.Core.Registry.Sweep (
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 
+import Ecluse.Core.Cve (CveLookup)
+import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (RetryAfter (RetryAfter))
 import Ecluse.Core.Package (PackageName)
@@ -248,41 +250,44 @@ data GroupWalk = GroupWalk
     , gwMount :: SweepMount
     , gwCache :: SweepStore
     , gwCombined :: Text
+    , gwCandidates :: IORef (Maybe (DbEtag, CandidateSet))
+    -- ^ The last candidate set this walk built, and the generation it was built from.
     }
 
 walkGroup :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> SweepStore -> IO (Maybe CycleHalt)
 walkGroup pacing ports counters mount cache = do
+    memo <- newIORef Nothing
+    let walk =
+            GroupWalk
+                { gwPacing = pacing
+                , gwPorts = ports
+                , gwCounters = counters
+                , gwMount = mount
+                , gwCache = cache
+                , gwCombined = backendOf mount <> " and " <> factBackend (obFacts (ssObserve cache)) <> " (combined inventory)"
+                , gwCandidates = memo
+                }
     resume <- if resumable then readWalkCursor pacing ports mount else pure (Right Nothing)
     case resume of
         Left halt -> pure (Just halt)
-        Right cursor -> go cursor (resumeAfter cursor (walkBuckets alphabet))
+        Right cursor -> go walk cursor (resumeAfter cursor (walkBuckets alphabet))
   where
-    walk =
-        GroupWalk
-            { gwPacing = pacing
-            , gwPorts = ports
-            , gwCounters = counters
-            , gwMount = mount
-            , gwCache = cache
-            , gwCombined = backendOf mount <> " and " <> factBackend (obFacts (ssObserve cache)) <> " (combined inventory)"
-            }
     alphabet = groupAlphabet (observed mount) (ssObserve cache)
     resumable = swpShape pacing == SweepEverything && alphabet == alphabetOf mount
     marker action = if resumable then onCursor pacing ports mount action else pure Nothing
-    go _ [] = marker clearCursor
-    go resume (prefix : rest) =
+    go _ _ [] = marker clearCursor
+    go walk resume (prefix : rest) =
         collectGroupBucket alphabet prefix (observed mount) (ssObserve cache) >>= \case
             BucketFaulted (store, fault) -> pure (Just (storeHalt (locatedMount mount store) fault))
             BucketUnsplittable -> pure (Just (HaltBucketUnsplittable (smEcosystem mount) (gwCombined walk) (renderNamePrefix prefix)))
-            BucketOverflowed narrower -> go resume (resumeAfter resume (toList narrower) <> rest)
+            BucketOverflowed narrower -> go walk resume (resumeAfter resume (toList narrower) <> rest)
             BucketRead names ->
                 withCandidates
-                    ports
-                    mount
+                    walk
                     ( \candidates ctx ->
                         stepUntilHalt (sweepOneName walk ctx) (filter (wanted candidates . fst) names)
                     )
-                    >>= maybe (marker (`writeCursor` prefix) >>= maybe (go resume rest) (pure . Just)) (pure . Just)
+                    >>= maybe (marker (`writeCursor` prefix) >>= maybe (go walk resume rest) (pure . Just)) (pure . Just)
     wanted candidates name = swpShape pacing == SweepEverything || inCandidates candidates name
 
 {- One name of a bucket: the chunk pause falls here, before the enumeration reads, so a pause
@@ -334,12 +339,26 @@ locatedMount mount store = mount{smStore = countingAt (smStore mount) store}
 
 {- One bucket's candidates under a pinned lookup. Later rule evaluations acquire their own lookups.
 A generation swapped mid-bucket defers a name it newly covers by one cycle. -}
-withCandidates :: SweepPorts -> SweepMount -> (CandidateSet -> EvalContext -> IO a) -> IO a
-withCandidates ports mount act =
-    withCveLookup (smRuleDeps mount) $ \mLookup -> do
-        candidates <- candidateSet (smProjectName mount) (smConfigured mount) (snd <$> mLookup)
-        ctx <- mkEvalContext (sweepNow ports) (pure (fst <$> mLookup))
+withCandidates :: GroupWalk -> (CandidateSet -> EvalContext -> IO a) -> IO a
+withCandidates walk act =
+    withCveLookup (smRuleDeps (gwMount walk)) $ \mLookup -> do
+        candidates <- reuseCandidates (gwCandidates walk) (gwMount walk) mLookup
+        ctx <- mkEvalContext (sweepNow (gwPorts walk)) (pure (fst <$> mLookup))
         act candidates ctx
+
+{- The pinned generation's candidates, reused while its ETag matches the kept build's, since equal
+ETags carry equal bytes. An absent generation clears the build, and a faulted query stores none. -}
+reuseCandidates :: IORef (Maybe (DbEtag, CandidateSet)) -> SweepMount -> Maybe (DbEtag, CveLookup) -> IO CandidateSet
+reuseCandidates held mount = \case
+    Nothing -> writeIORef held Nothing >> build Nothing
+    Just (etag, cve) ->
+        readIORef held >>= \case
+            Just (built, candidates) | built == etag -> pure candidates
+            _ -> do
+                candidates <- build (Just cve)
+                candidates <$ writeIORef held (Just (etag, candidates))
+  where
+    build = candidateSet (smProjectName mount) (smConfigured mount)
 
 {- Say once per mount whose rules read advisories and no generation is loaded. Only the identity
 half then sweeps, so that rule set decided on less than it names, which is the gap recorded here. -}
