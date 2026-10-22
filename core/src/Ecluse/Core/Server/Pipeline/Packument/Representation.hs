@@ -13,10 +13,9 @@ module Ecluse.Core.Server.Pipeline.Packument.Representation (
 ) where
 
 import Control.Monad.ST (ST)
-import Crypto.Hash (Context, SHA256 (SHA256), hashFinalize, hashInit, hashUpdates, hashWith)
+import Crypto.Hash (SHA256 (SHA256), hashWith, hashlazy)
 import Data.ByteString.Builder (toLazyByteString)
 import Data.ByteString.Internal (c2w)
-import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text.Unsafe (lengthWord8)
 
@@ -54,7 +53,7 @@ fingerprintPiece s =
 codedETag :: ContentCoding -> ETag -> ETag
 codedETag coding identityTag = case coding of
     IdentityCoding -> identityTag
-    GzipCoding -> mkWeakETag (hashFinalize (hashUpdates (hashInit :: Context SHA256) (LBS.toChunks (toLazyByteString discriminated))))
+    GzipCoding -> mkWeakETag (hashlazy (toLazyByteString discriminated))
   where
     discriminated = "ecluse:packument-etag:gzip:v1\0" <> frameBytes (encodeUtf8 (renderETag identityTag))
 
