@@ -20,9 +20,10 @@
           # Remove when actionlint releases support for $/ (rhysd/actionlint#732).
           actionlint = prev.actionlint.overrideAttrs (old: {
             patches = (old.patches or [ ]) ++ [
-              (prev.fetchurl {
+              # fetchpatch strips the index lines, whose hash length GitHub changes.
+              (prev.fetchpatch {
                 url = "https://github.com/rhysd/actionlint/compare/011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7...b02c24b743cc88a26b280339814eb4ece91c32cb.diff";
-                hash = "sha256-s1b8wqQFELTjRfBYit4h2g1+5TFaei3nzqIZc/EA86E=";
+                hash = "sha256-ssleL7s/8EDmmN8b5RNHanVfn0Imz2X2MY3wAMwDVQw=";
               })
             ];
           });
