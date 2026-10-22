@@ -136,10 +136,7 @@ digestOfReads count chunks = do
 
 readDigested :: BodyLimit -> [ByteString] -> IO (Either LimitError (StreamResult (Maybe Value), ContentDigest))
 readDigested bound chunks = do
-    remaining <- newIORef chunks
-    let next = atomicModifyIORef' remaining $ \case
-            [] -> ([], BS.empty)
-            chunk : rest -> (rest, chunk)
+    next <- heldChunks chunks
     digestingRead (readJsonStream bound (J.objectWithKey "keep" (retainedValue 1)) (\_ value -> Right (Just value)) Nothing) next
 
 -- Each case runs a real Warp stub, because the floor bounds transfers on a live socket. Every
