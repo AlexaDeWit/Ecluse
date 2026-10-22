@@ -214,6 +214,7 @@ withoutHole (Packed blob _ encoded) = Packed blob (-1) encoded
 hasHole :: Packed -> Bool
 hasHole (Packed _ hole _) = hole >= 0
 
+-- The array that holds the scalar at a position, its start and length there, and the position after it.
 scalarSource :: DocTable -> ByteArray -> Int -> (# ByteArray, Int, Int, Int #)
 scalarSource table blob position
     | (indexByteArray blob position :: Word8) == opShared = case readVarint blob (position + 1) of
