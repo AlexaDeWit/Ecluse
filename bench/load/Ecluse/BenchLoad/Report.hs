@@ -491,6 +491,12 @@ renderVerdict violations =
 
 -- memory.peak less the RTS's own high-water mark: off-heap and kernel memory, and the overshoot
 -- between collections.
+offHeapGap :: ScenarioReport -> Maybe Int
+offHeapGap r = do
+    peak <- crMemoryPeak =<< pfCgroup =<< srProxy r
+    inUse <- rsMaxMemInUseBytes <$> srRtsEnd r
+    pure (peak - fromIntegral inUse)
+
 -- Little's law over the sampled gauge: slot-milliseconds in the window shared out over its successes.
 slotPerSuccessMs :: ScenarioReport -> Maybe Double
 slotPerSuccessMs r = do
@@ -501,12 +507,6 @@ slotPerSuccessMs r = do
     windowSeconds = case srSteps r of
         [] -> lsElapsedSeconds (srLoad r)
         steps -> sum (map lsElapsedSeconds steps)
-
-offHeapGap :: ScenarioReport -> Maybe Int
-offHeapGap r = do
-    peak <- crMemoryPeak =<< pfCgroup =<< srProxy r
-    inUse <- rsMaxMemInUseBytes <$> srRtsEnd r
-    pure (peak - fromIntegral inUse)
 
 -- The posture at the window's end, or at the idle floor when the proxy died before the window closed.
 posture :: ScenarioReport -> Maybe RtsSnapshot

@@ -5,8 +5,8 @@
 {- | Clients that read each response at a fixed rate, as a CI runner on a slow link does. Each one
 advertises an Ethernet segment size, so the server's send buffer grows as it would across a network
 instead of to the megabytes loopback allows, and a body larger than that buffer keeps the server
-writing while the client reads. A refused client waits out the shed's @Retry-After@ before it asks
-again.
+writing while the client reads. After a @429@ or @503@, or a failed request, a client waits one
+second, the proxy's admission wait, before it asks again. It does not read @Retry-After@.
 -}
 module Ecluse.BenchLoad.SlowReader (
     slowReaders,
@@ -24,7 +24,7 @@ import GHC.Clock (getMonotonicTime)
 import Network.HTTP.Client qualified as HTTP
 import Network.Socket (AddrInfo (..), Family (AF_INET), Socket, SocketOption (MaxSegment, RecvBuffer), SocketType (Stream), close, connect, defaultHints, defaultProtocol, getAddrInfo, setSocketOption, socket)
 import Network.Socket.ByteString (recv, sendAll)
-import UnliftIO (bracket, timeout, tryAny)
+import UnliftIO (bracket, bracketOnError, timeout, tryAny)
 import UnliftIO.Async (forConcurrently_)
 
 import Ecluse.BenchLoad.Error (benchFail)
@@ -47,7 +47,7 @@ slowReaderDescription listing cold =
         <> show (slowReadBytesPerSecond `div` 1024)
         <> " KiB/s over "
         <> show ethernetSegmentBytes
-        <> "-byte segments. A refused slow reader waits one second before it asks again."
+        <> "-byte segments. After a refusal or a failure, a slow reader waits one second before it asks again."
 
 -- The rate every client reads at: a slow CI link, which takes two seconds over a 2 MiB listing.
 slowReadBytesPerSecond :: Int
@@ -87,11 +87,11 @@ readTarget rate (Target addresses wire) = case addresses of
 
 -- The segment size and receive buffer are set before the handshake, which is when they take effect.
 open :: AddrInfo -> IO Socket
-open address = do
-    sock <- socket (addrFamily address) Stream defaultProtocol
-    setSocketOption sock MaxSegment ethernetSegmentBytes
-    setSocketOption sock RecvBuffer receiveBufferBytes
-    connect sock (addrAddress address) $> sock
+open address =
+    bracketOnError (socket (addrFamily address) Stream defaultProtocol) close $ \sock -> do
+        setSocketOption sock MaxSegment ethernetSegmentBytes
+        setSocketOption sock RecvBuffer receiveBufferBytes
+        connect sock (addrAddress address) $> sock
 
 -- Read to the server's close, never ahead of the rate from the first byte, keeping the status line.
 readPaced :: Int -> Socket -> IO ByteString
@@ -137,10 +137,14 @@ readLoop tally = \case
         atomicModifyIORef' tally (\t -> (t{tStarted = tStarted t + 1}, ()))
         outcome <- either (Failed . show) id <$> tryAny (readTarget slowReadBytesPerSecond next)
         atomicModifyIORef' tally (\t -> (record outcome t, ()))
-        case outcome of
-            Answered status _ | isRefusalStatus status -> threadDelay admissionWaitMicros
-            _ -> pass
+        when (waitsAfter outcome) (threadDelay admissionWaitMicros)
         readLoop tally rest
+
+-- A failure waits too, so readers of a proxy that is down do not spin on refused connections.
+waitsAfter :: SlowRead -> Bool
+waitsAfter = \case
+    Answered status _ -> isRefusalStatus status
+    Failed _ -> True
 
 record :: SlowRead -> Tally -> Tally
 record outcome t = case outcome of

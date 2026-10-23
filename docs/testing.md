@@ -1287,7 +1287,8 @@ response at 1 MiB/s. These slow readers run in the harness process:
 - Each advertises a 1448-byte segment size, as an Ethernet path does. The proxy's socket send
   buffer then stays near a few hundred KiB, where loopback lets it grow to 4 MiB, so a listing
   larger than that buffer keeps the proxy writing while the client reads.
-- A refused slow reader waits the one second its `Retry-After` names before it asks again.
+- After a `429` or `503`, or a failed request, a slow reader waits one second, the proxy's
+  admission wait, before it asks again. It does not read `Retry-After`.
 - The scenario's section shows the slow readers' successes, refusals, and time to the last byte
   beside the measured load. The report lists the scenario after the private-copy rows.
 
