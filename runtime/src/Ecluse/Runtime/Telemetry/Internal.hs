@@ -28,7 +28,12 @@ module Ecluse.Runtime.Telemetry.Internal (
     observeMetricExporter,
 ) where
 
+import Control.Concurrent (forkIO, killThread)
 import Katip (LogEnv)
+import OpenTelemetry.MeterProvider (SdkMeterEnv, collectResourceMetrics)
+import OpenTelemetry.Metric.Core (getMeter)
+import OpenTelemetry.Resource (MaterializedResources)
+import System.Environment qualified as InvEnv
 import OpenTelemetry.Environment (lookupBooleanEnv)
 import OpenTelemetry.Exporter.Metric (MetricExporter (..))
 import OpenTelemetry.Exporter.OTLP.Span (loadExporterEnvironmentVariables, otlpExporter)
@@ -62,6 +67,8 @@ import OpenTelemetry.Trace (
 import UnliftIO (bracket)
 import UnliftIO.Exception (catchAny)
 
+import Ecluse.Core.Telemetry.Span (ecluseScope)
+import Ecluse.Runtime.Telemetry.Batched (BatchShape (..), batchFlushHook, batchedMeterProvider, flushBatcher, newBatcher, renderExport, runFlusher)
 import Ecluse.Runtime.Telemetry.Escape (withEscapeHandler)
 import Ecluse.Runtime.Telemetry.ExportFailure (
     ExportFailureSink,
@@ -234,12 +241,39 @@ initializeObservedMeterProvider sink = do
             builtInResources <- detectBuiltInResources
             envResources <- mkResource . map Just <$> detectResourceAttributes
             let resources = materializeResources (mergeResources envResources builtInResources)
-            (provider, env) <- createMeterProvider resources defaultSdkMeterProviderOptions
+            (unbatched, env) <- createMeterProvider resources defaultSdkMeterProviderOptions
+            provider <- invBatching resources unbatched env
             readerHandle <- forkPeriodicMetricReader env exporter readerOptions
             let provider' = stopReaderOnShutdown readerHandle provider
             setGlobalMeterProvider provider'
             scrape <- metricScrapeFor env
             pure (provider', scrape)
+
+-- Prototype (#1835): INV_OTEL_BATCH=shard|queue batches synchronous records. INV_OTEL_SHADOW=PATH
+-- also records every measurement unbatched into a second provider and writes both at shutdown.
+invBatching :: MaterializedResources -> MeterProvider -> SdkMeterEnv -> IO MeterProvider
+invBatching resources provider env = do
+    selected <- InvEnv.lookupEnv "INV_OTEL_BATCH"
+    case selected of
+        Nothing -> pure provider
+        Just name -> do
+            batcher <- newBatcher (if name == "queue" then Queued else Sharded)
+            interval <- maybe 1_000_000 ((* 1000) . fromMaybe 1000 . readMaybe) <$> InvEnv.lookupEnv "INV_OTEL_FLUSH_MS"
+            shadowPath <- InvEnv.lookupEnv "INV_OTEL_SHADOW"
+            shadow <- traverse (const (createMeterProvider resources defaultSdkMeterProviderOptions)) shadowPath
+            hookMeter <- getMeter provider ecluseScope
+            batchFlushHook hookMeter batcher
+            flusher <- forkIO (runFlusher interval batcher)
+            let stop = do
+                    flushBatcher batcher
+                    killThread flusher
+                    for_ ((,) <$> shadowPath <*> shadow) $ \(path, (_, shadowEnv)) -> do
+                        mine <- collectResourceMetrics env
+                        theirs <- collectResourceMetrics shadowEnv
+                        writeFileText (path <> ".batched") (unlines (renderExport mine))
+                        writeFileText (path <> ".shadow") (unlines (renderExport theirs))
+                batched = batchedMeterProvider batcher (fst <$> shadow) provider
+            pure batched{meterProviderShutdown = \timeout -> stop >> meterProviderShutdown provider timeout}
 
 {- Mirrors the SDK's own shutdown ordering, and is part of the same version-pin re-diff
 surface as 'initializeObservedMeterProvider'. -}

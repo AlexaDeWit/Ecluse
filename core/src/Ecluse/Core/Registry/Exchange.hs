@@ -46,7 +46,7 @@ import Network.HTTP.Client (
     withResponse,
  )
 import Network.HTTP.Types.Status (statusCode)
-import UnliftIO (try)
+import UnliftIO (bracket, try)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
@@ -58,7 +58,9 @@ import Ecluse.Core.Registry (
     UrlFormationError,
     isSuccessStatus,
  )
-import Ecluse.Core.Registry.Progress (meteredReader, meteredUpload, watched)
+import Ecluse.Core.Registry.Progress (ServeCapExceeded (..), armDeadline, invTimerMode, meteredReader, meteredUpload, watched)
+import GHC.Clock (getMonotonicTimeNSec)
+import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (ResponseTimeout))
 import Ecluse.Core.Registry.Public (ReadControl (Uncontrolled), withReadControl)
 import Ecluse.Core.Security (
     BodyLimit,
@@ -101,7 +103,19 @@ runExchange :: Manager -> ProgressFloor -> Request -> (Response BodyReader -> IO
 runExchange = runExchangeUsing Uncontrolled
 
 runExchangeUsing :: ReadControl -> Manager -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
-runExchangeUsing control manager progress request readResponse =
+runExchangeUsing control manager progress request readResponse
+    | invTimerMode == "sweep" = do
+        start <- getMonotonicTimeNSec
+        answered <- newIORef False
+        let due now = do
+                headers <- readIORef answered
+                pure (if not headers && now - start >= 30_000_000_000 then Just (toException (HttpExceptionRequest request ResponseTimeout)) else Nothing)
+        bracket (armDeadline due) id $ \_ ->
+            runExchangeShipped control manager progress request (\response -> writeIORef answered True >> readResponse response)
+    | otherwise = runExchangeShipped control manager progress request readResponse
+
+runExchangeShipped :: ReadControl -> Manager -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
+runExchangeShipped control manager progress request readResponse =
     watched
         progress
         ( \watch ->
@@ -124,7 +138,16 @@ runExchangeUsing control manager progress request readResponse =
 -- | Fail an action that outlives the floor's serve-path cap with the transport timeout.
 withinServeCap :: ProgressFloor -> (FetchFault -> e) -> IO (Either e a) -> IO (Either e a)
 withinServeCap progress inject action =
-    fromMaybe (Left (inject capExceeded)) <$> timeout (floorServeCapMicros progress) action
+    case invTimerMode of
+        "ship" -> fromMaybe (Left (inject capExceeded)) <$> timeout (floorServeCapMicros progress) action
+        "sweep" -> do
+            start <- getMonotonicTimeNSec
+            let limit = fromIntegral (floorServeCapMicros progress) * 1_000
+                due now = pure (if now - start >= limit then Just (toException ServeCapExceeded) else Nothing)
+            try (bracket (armDeadline due) id (const action)) <&> \case
+                Left ServeCapExceeded -> Left (inject capExceeded)
+                Right result -> result
+        _ -> action
   where
     capExceeded = FetchTransport (transportFault TransportTimeout ("the upstream exchange outlived its " <> seconds (floorServeCapMicros progress) <> "-second serve-path cap"))
 

@@ -297,7 +297,7 @@ launch settings shape root dir publicPort privatePort = do
         commandIn = \case
             Nothing -> proc self [serveProxyFlag]
             -- The shell joins the cgroup and then becomes the proxy, so the boot already sees its limits.
-            Just cg -> proc "/bin/sh" ["-c", "echo $$ > \"$0\" && exec \"$@\"", cg </> "cgroup.procs", self, serveProxyFlag]
+            Just cg -> proc "/bin/sh" ["-c", "echo $$ > \"$0\" && exec ${INV_PROXY_TASKSET:+taskset -c $INV_PROXY_TASKSET} \"$@\"", cg </> "cgroup.procs", self, serveProxyFlag]
         bootAttempt attempt = do
             cgroup <- acquireCgroup shape (psTuning settings) root attempt
             outcome <- bootDrained manager 1200 port (setEnv environment (commandIn cgroup)) `onException` traverse_ retireCgroup cgroup
@@ -388,14 +388,14 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
           ("ECLUSE_SERVER__METADATA_GZIP", "false")
         , ("ECLUSE_ADVISORIES__DATA_DIR", toText (dir </> "advisories"))
         , ("ECLUSE_CACHE__TTL", show (psCacheTtlSeconds settings))
-        , ("ECLUSE_OBSERVABILITY__TELEMETRY", "on")
+        , ("ECLUSE_OBSERVABILITY__TELEMETRY", if any ((== "INV_TELEMETRY_OFF") . fst) base then "off" else "on")
         , ("OTEL_METRICS_EXPORTER", "prometheus")
         , ("OTEL_EXPORTER_PROMETHEUS_HOST", "127.0.0.1")
         , ("OTEL_EXPORTER_PROMETHEUS_PORT", show scrapePort)
         , ("OTEL_TRACES_EXPORTER", "none")
         , ("OTEL_LOGS_EXPORTER", "none")
         , ("BENCH_PROXY_CONTROL_PORT", show controlPort)
-        , ("GHCRTS", T.unwords (toText rtsStatsFlag : ["-A" <> show area <> "m" | Just area <- [ptAllocAreaMib tuning]]))
+        , ("GHCRTS", T.unwords (toText rtsStatsFlag : ["-A" <> show area <> "m" | Just area <- [ptAllocAreaMib tuning]] <> maybe [] (pure . toText . snd) (find ((== "INV_PROXY_EXTRA_RTS") . fst) base)))
         , upstream "PUBLIC_UPSTREAM" publicPort
         ]
     tuning = psTuning settings

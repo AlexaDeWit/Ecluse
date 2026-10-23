@@ -612,6 +612,7 @@ library ecluse-runtime
     Ecluse.Runtime.Server.Internal
     Ecluse.Runtime.Server.Middleware
     Ecluse.Runtime.Telemetry
+    Ecluse.Runtime.Telemetry.Batched
     Ecluse.Runtime.Telemetry.Correlation
     Ecluse.Runtime.Telemetry.Correlation.Internal
     Ecluse.Runtime.Telemetry.Escape

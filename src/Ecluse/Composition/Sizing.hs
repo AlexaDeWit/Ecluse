@@ -24,7 +24,8 @@ module Ecluse.Composition.Sizing (
 ) where
 
 import Data.Ord (clamp)
-import Network.HTTP.Client (Manager, ManagerSettings (managerConnCount), newManager)
+import Ecluse.Core.Registry.Progress (invTimerMode)
+import Network.HTTP.Client (Manager, ManagerSettings (managerConnCount, managerResponseTimeout), newManager, responseTimeoutNone)
 import System.Posix.Resource (Resource (ResourceOpenFiles), ResourceLimit (ResourceLimit, ResourceLimitInfinity, ResourceLimitUnknown), ResourceLimits (softLimit), getResourceLimit)
 
 {- | A resolved bound and its boot-log line: an explicit config value wins, else the
@@ -55,7 +56,7 @@ newPooledManager connections = newManager . connectionPoolSettings connections
 apply it after telemetry instrumentation, so it cannot discard the instrumented hooks.
 -}
 connectionPoolSettings :: Int -> ManagerSettings -> ManagerSettings
-connectionPoolSettings connections settings = settings{managerConnCount = connections}
+connectionPoolSettings connections settings = settings{managerConnCount = connections, managerResponseTimeout = if invTimerMode == "ship" then managerResponseTimeout settings else responseTimeoutNone}
 
 -- | Resolve metadata concurrency independently of its byte budget. An explicit capacity stays exact.
 resolveServeAdmission :: Maybe Int -> Int -> (Int, Text)
