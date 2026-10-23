@@ -106,12 +106,15 @@ artifact size, with backpressure for free. Only the time spent waiting on upstre
 progress floor (`limits.progressWindow`, `limits.minProgressBytes`), so a slow client never trips it.
 An upstream that falls below it aborts the stream, and the client sees an incomplete download.
 
-Three deadlines bound a request and its upstream exchanges beyond http-client's own 30-second
-connect and response timeouts: the 60-second request timeout, the serve-path cap 10 seconds under
-it, and the progress floor. One sweeper thread checks them in the process every 100 ms, so each one
-ends about 100 ms late: one tick, plus the sweep and scheduling. Arming a deadline adds it to a list
-for the arming thread's core, so request threads never wait on each other to arm one, as they would
-on GHC's process-wide timer queue.
+Four deadlines bound a request and its upstream exchanges: the 60-second request timeout, the
+serve-path cap 10 seconds under it, the progress floor, and a fixed 30-second wait for a connection
+and then the response headers. As in http-client, that wait gives the headers what the connection
+left of it, counted from the end of any request body. When http-client retries on a new connection
+because a pooled one was stale, the retry keeps what is left of the same wait. One sweeper thread
+checks every deadline in the process every 100 ms, so each one ends about 100 ms late: one tick,
+plus the sweep and scheduling. Arming a deadline adds it to a list for the arming thread's core, so
+request threads never wait on each other to arm one, as they would on GHC's process-wide timer
+queue. Amazonka's S3 calls and the OSV and EPSS fetches keep their own clients' timers.
 
 The proxy streams artifact responses without hashing their bodies. Integrity on this path depends
 on the client checking the preserved metadata hashes. The proxy therefore asks the upstream for

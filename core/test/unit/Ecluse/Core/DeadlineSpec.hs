@@ -14,7 +14,7 @@ import UnliftIO.Async (Async, async, asyncOn, cancel, mapConcurrently, wait, wai
 import UnliftIO.Concurrent (myThreadId, threadDelay)
 import UnliftIO.Exception (bracket_, throwIO, try, tryAny, uninterruptibleMask_)
 
-import Ecluse.Core.Deadline (Deadlines, newDeadlines, sweepTick, timeout, withDeadline)
+import Ecluse.Core.Deadline (Deadlines, newDeadlines, sweepTick, timeout, withDeadline, withEndableDeadline)
 import Ecluse.Test.Deadline (withSweeper)
 
 spec :: Spec
@@ -74,6 +74,12 @@ withDeadlineSpec = describe "withDeadline" $ do
             finished <- getMonotonicTime
             outcomes `shouldSatisfy` all isNothing
             (finished - started) `shouldSatisfy` (< 2)
+
+    it "raises nothing once its action ends the check early, though the scope outlives the deadline" $
+        withSweeper $ \deadlines -> do
+            limit <- (+ 200_000_000) <$> getMonotonicTimeNSec
+            let due now = pure (if now >= limit then Just (toException Fired) else Nothing)
+            try (withEndableDeadline deadlines due (\end -> end >> threadDelay 500_000)) `shouldReturn` Right @Fired ()
 
     it "keeps every other armed check when one throws during a sweep" $ do
         deadlines <- newDeadlines
