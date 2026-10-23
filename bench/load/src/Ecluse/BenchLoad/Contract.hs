@@ -49,6 +49,7 @@ data LoadLaw
     | PatternDefaultBodyCap
     | PrivateArtifactCeiling
     | AdmissionHerd
+    | HerdUnderPrivateCopy
     | WarmUnderCold
     | AdmissionRamp
     | MirrorWorker
@@ -90,6 +91,7 @@ requiredLoadLaws scope =
     , PatternDefaultBodyCap
     , PrivateArtifactCeiling
     , AdmissionHerd
+    , HerdUnderPrivateCopy
     , WarmUnderCold
     , AdmissionRamp
     ]
@@ -128,6 +130,7 @@ loadScenarioName ecosystem law = case ecosystem of
         PatternDefaultBodyCap -> "pattern-cold-install-default-body-cap"
         PrivateArtifactCeiling -> artifact <> "-ceiling"
         AdmissionHerd -> "herd"
+        HerdUnderPrivateCopy -> "herd-under-heavy-private"
         WarmUnderCold -> "warm-under-cold"
         AdmissionRamp -> "ramp"
         MirrorWorker -> "worker-mirroring"
@@ -177,6 +180,7 @@ hasServiceTime = \case
     PatternScan -> False
     PatternDefaultBodyCap -> False
     AdmissionHerd -> False
+    HerdUnderPrivateCopy -> False
     WarmUnderCold -> False
     AdmissionRamp -> False
     ColdMetadata -> True

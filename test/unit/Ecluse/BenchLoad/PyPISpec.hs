@@ -24,10 +24,10 @@ import Ecluse.Test.Wai (localhost, rebaseAuthority)
 spec :: Spec
 spec = do
     describe "PyPI stress measurements" $ do
-        it "keeps four stress cases before mirroring and replay patterns with the existing stress settings" $ do
-            names `shouldSatisfy` isInfixOf ["wheel-onboarding", "wheel-ceiling", "herd", "warm-under-cold", "ramp", "mirror-native-baseline", "mirror-managed-warm", "mirror-managed-revision", "worker-mirroring", "pattern-hot-set-control"]
-            let observed = [(scenarioName item, scenarioConcurrencyScale item, scenarioServiceTime item, scenarioUpstreamLatencyMicros item) | item <- fixtureScenarios pypiFixture, scenarioName item `elem` ["wheel-ceiling", "herd", "warm-under-cold", "ramp"]]
-            observed `shouldBe` [("wheel-ceiling", 4, True, Just 2000), ("herd", 1, False, Nothing), ("warm-under-cold", 1, False, Nothing), ("ramp", 1, False, Nothing)]
+        it "keeps five stress cases before mirroring and replay patterns with the existing stress settings" $ do
+            names `shouldSatisfy` isInfixOf ["wheel-onboarding", "wheel-ceiling", "herd", "herd-under-heavy-private", "warm-under-cold", "ramp", "mirror-native-baseline", "mirror-managed-warm", "mirror-managed-revision", "worker-mirroring", "pattern-hot-set-control"]
+            let observed = [(scenarioName item, scenarioConcurrencyScale item, scenarioServiceTime item, scenarioUpstreamLatencyMicros item) | item <- fixtureScenarios pypiFixture, scenarioName item `elem` ["wheel-ceiling", "herd", "herd-under-heavy-private", "warm-under-cold", "ramp"]]
+            observed `shouldBe` [("wheel-ceiling", 4, True, Just 2000), ("herd", 1, False, Nothing), ("herd-under-heavy-private", 1, False, Nothing), ("warm-under-cold", 1, False, Nothing), ("ramp", 1, False, Nothing)]
         it "resolves real captured PyPI pins to native selected artifact routes" $ do
             bodies <- loadCorpusBodies pypiCorpusPackages
             selected <- selectWarmArtifacts pypiCorpusPackages bodies

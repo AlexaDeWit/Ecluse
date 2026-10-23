@@ -11,9 +11,12 @@ import Data.Set qualified as Set
 import Test.Hspec
 
 import Ecluse.BenchLoad.Pod (
+    BurstMemory (..),
+    CgroupReading (..),
     CpuList,
     PodShape (Limited, MemoryOnly, QuotaOnly, Unlimited),
     ProxyTuning (..),
+    burstMemory,
     counter,
     cpuListMembers,
     cpuMaxValue,
@@ -96,9 +99,26 @@ spec = do
             Map.size events `shouldBe` 5
         it "reads an absent counter as zero" $
             counter "oom_group_kill" (keyedCounters "oom_kill 0\n") `shouldBe` 0
+    describe "burstMemory" $ do
+        it "keeps the reading with the most memory charged and the one with the most socket memory" $ do
+            let quiet = memoryReading 300 0
+                heapPeak = memoryReading 700 10
+                socketPeak = memoryReading 650 200
+                burst = burstMemory 10 [quiet, heapPeak, socketPeak, quiet]
+            (bmIntervalMs burst, bmSamples burst) `shouldBe` (10, 4)
+            bmHighestCurrent burst `shouldBe` Just heapPeak
+            bmHighestSock burst `shouldBe` Just socketPeak
+        it "keeps no reading from a burst it could not read" $
+            burstMemory 10 [] `shouldBe` BurstMemory 10 0 Nothing Nothing
 
 gib :: Int
 gib = 1024 * 1024 * 1024
+
+-- A reading with this memory.current and this sock, both in MiB.
+memoryReading :: Int -> Int -> CgroupReading
+memoryReading current sock = CgroupReading (Just gib) Nothing (Just (current * mib)) mempty (Map.fromList [("sock", sock * mib)]) mempty Nothing
+  where
+    mib = 1024 * 1024
 
 cpus :: Text -> Maybe CpuList
 cpus = rightToMaybe . parseCpuList
