@@ -244,27 +244,32 @@ withMetadataAdmissionC runtime shed gated answer =
     -- Wait in arrival order for a signal that a place freed, a sweeper tick, or the end of the wait. Each try
     -- uses the normal door. The request counts as held until it holds a place, and a signal it cannot use passes on.
     wakeLobby run = do
-        me <- newTVarIO (0 :: Int)
-        atomically (modifyTVar' spikeWaiters (Seq.|> me))
+        entry <- newTVarIO (0 :: Int)
+        atomically (modifyTVar' spikeWaiters (Seq.|> entry))
+        current <- newIORef entry
         let -- Leave the queue and the count. A signal that arrived meanwhile goes to the next waiter.
             leave = do
+                me <- readIORef current
                 was <- atomically $ do
                     s <- readTVar me
                     unless (s == 2) (writeTVar me 2)
                     when (s == 1) spikeSignalOne
                     pure s
                 unless (was == 2) spikeLeaveHold
-            -- Back to the head of the queue after a try that found no place.
+            -- Back to the head of the queue after a try that found no place, with a fresh entry so that no
+            -- request is queued twice. An entry still waiting in the queue stays where it is.
             requeue = do
-                was <- atomically $ do
-                    s <- readTVar me
-                    writeTVar me 0
-                    when (s /= 0) (modifyTVar' spikeWaiters (me Seq.<|))
-                    pure s
-                when (was == 2) (atomicModifyIORef' spikeHeld (\n -> (n + 1, ())))
+                me <- readIORef current
+                was <- readTVarIO me
+                unless (was == 0) $ do
+                    fresh <- newTVarIO 0
+                    atomically (writeTVar me 2 >> modifyTVar' spikeWaiters (fresh Seq.<|))
+                    writeIORef current fresh
+                    when (was == 2) (atomicModifyIORef' spikeHeld (\n -> (n + 1, ())))
             -- A signal that woke this request is spent on its try. State 3: awake, out of the queue.
-            consume = atomically (readTVar me >>= \s -> when (s == 1) (writeTVar me 3))
-            wait deadline =
+            consume = readIORef current >>= \me -> atomically (readTVar me >>= \s -> when (s == 1) (writeTVar me 3))
+            wait deadline = do
+                me <- readIORef current
                 withSweptFlag deadlines 1 $ \tick ->
                     atomically $
                         ((readTVar me >>= check . (== 1)) $> False)
