@@ -7,7 +7,11 @@ module Ecluse.Core.Registry.MaintenanceSpec (spec) where
 import Data.Conduit (fuseUpstream, runConduit, (.|))
 import Data.Conduit.List qualified as CL
 import Data.Text qualified as T
+import Hedgehog (cover, forAll, (===))
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportTimeout), tfCause, tfDetail, transportFault)
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
@@ -217,6 +221,20 @@ pageAllSpec = describe "pageAll" $ do
         fetch <- pagesFrom [(Nothing, [])]
         collectPagesBounded 0 (pageSource fetch) `shouldReturn` Right []
 
+    it "collects the same inventory and bound fault from pages of 1 to 1,000 entries" $ hedgehog $ do
+        count <- forAll (Gen.int (Range.linear 0 2500))
+        size <- forAll (Gen.int (Range.linear 1 1000))
+        bound <- forAll (Gen.int (Range.linear 0 2500))
+        cover 20 "within the bound" (count <= bound)
+        cover 20 "past the bound" (count > bound)
+        let items = map show [1 .. count]
+        whole <- liftIO (pagesFrom (pagedAt size items) >>= pageAll)
+        bounded <- liftIO (pagesFrom (pagedAt size items) >>= collectPagesBounded bound . pageSource)
+        oneEach <- liftIO (pagesFrom (pagedAt 1 items) >>= collectPagesBounded bound . pageSource)
+        whole === Right items
+        bounded === oneEach
+        isRight bounded === (count <= bound)
+
 chunkingSpec :: Spec
 chunkingSpec = describe "chunksOfCeiling" $ do
     it "splits a batch at the ceiling and keeps the remainder" $ do
@@ -289,6 +307,15 @@ collectedPages = collectPages . pageSource
 -- The fault a source ended with, discarding the pages it handed out on the way.
 faultEnding :: (Maybe Text -> IO (Either StoreFault (Maybe Text, [Text]))) -> IO (Maybe StoreFault)
 faultEnding fetch = runConduit (fuseUpstream (pageSource fetch) CL.sinkNull)
+
+-- An inventory in pages of at most @size@ entries, each page but the last naming the next.
+pagedAt :: Int -> [Text] -> [(Maybe Text, [Text])]
+pagedAt size items = zip tokens pages
+  where
+    pages = case chunksOfCeiling (AtMost size) items of
+        [] -> [[]]
+        chunks -> chunks
+    tokens = [Just ("p" <> show n) | n <- [2 .. length pages]] <> [Nothing]
 
 pagesFrom :: [(Maybe Text, [Text])] -> IO (Maybe Text -> IO (Either StoreFault (Maybe Text, [Text])))
 pagesFrom pages = do

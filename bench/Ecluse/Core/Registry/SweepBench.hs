@@ -51,7 +51,7 @@ import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
 import Ecluse.Core.Server.Metadata (selectVersion)
 import Ecluse.Core.Telemetry.Record (DredgerMetricsPort (DredgerMetricsPort))
 import Ecluse.Core.Version (mkVersion, renderVersion)
-import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), codeArtifactFormat)
+import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), codeArtifactFormat, listPageLimit)
 import Ecluse.Runtime.Test.PackageStore.FixedPages (FixedPlane (..), FixedRepository (..), NativeCall (..), fixedCache, fixedMirror, fixedVersion, newFixedPlane)
 import Ecluse.Test.Corpus.Advisories (SyntheticTarget (..), compileAdvisoryInputs, fillerTargets, suggestedDenyIfCve, syntheticAdvisories)
 import Ecluse.Test.Cve (countingCoveredNames)
@@ -210,7 +210,7 @@ shapeName = \case
 -- Run each cycle, check it, write its line, and require the same decisions from every cycle.
 scaleRow :: FilePath -> Row -> TestTree
 scaleRow output row = testCaseInfo (rowLabel row) $ do
-    let wanted = expectedOf designPageSize row
+    let wanted = expectedOf (fromIntegral listPageLimit) row
     checkDesign row
     reports <- forM [1 .. rowCycles row] $ \cycleNumber -> do
         measured <- runCycle row

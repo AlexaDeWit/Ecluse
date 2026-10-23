@@ -18,6 +18,7 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     -- * What the backend does
     codeArtifactFacts,
     deleteCeiling,
+    listPageLimit,
 
     -- * Requests
     listPackagesRequest,
@@ -75,6 +76,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal (
     formatEcosystem,
     formatToken,
     listPackagesRequest,
+    listPageLimit,
     listTagsRequest,
     listVersionsRequest,
     listVersionsResult,

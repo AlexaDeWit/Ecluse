@@ -18,6 +18,7 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal (
     -- * What the backend does
     codeArtifactFacts,
     deleteCeiling,
+    listPageLimit,
 
     -- * The npm codec
     packageCoordinates,
@@ -205,6 +206,10 @@ codeArtifactCosts =
 deleteCeiling :: DeleteCeiling
 deleteCeiling = AtMost 100
 
+-- | The largest @maxResults@ the list calls accept. AWS documents no default page size.
+listPageLimit :: Natural
+listPageLimit = 1000
+
 -- | The namespace and package CodeArtifact addresses a name by. An npm scope is the namespace, without its sigil, and the unscoped name is the package.
 packageCoordinates :: PackageName -> (Maybe Text, Text)
 packageCoordinates name = (unScope <$> pkgNamespace name, unscopedName name)
@@ -220,6 +225,7 @@ listPackagesRequest store prefix token =
         & (CAL.listPackages_domainOwner ?~ casDomainOwner store)
         & (CAL.listPackages_format ?~ storePackageFormat store)
         & (CAL.listPackages_packagePrefix .~ nonBlank (renderNamePrefix prefix))
+        & (CAL.listPackages_maxResults ?~ listPageLimit)
         & (CAL.listPackages_nextToken .~ token)
 
 -- | List one page of a package's versions, continuing from a page token when there is one.
@@ -228,6 +234,7 @@ listVersionsRequest store name token =
     CA.newListPackageVersions (casDomain store) (casRepository store) (storePackageFormat store) package
         & (CAL.listPackageVersions_domainOwner ?~ casDomainOwner store)
         & (CAL.listPackageVersions_namespace .~ namespace)
+        & (CAL.listPackageVersions_maxResults ?~ listPageLimit)
         & (CAL.listPackageVersions_nextToken .~ token)
   where
     (namespace, package) = packageCoordinates name

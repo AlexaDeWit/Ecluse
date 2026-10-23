@@ -6,7 +6,7 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.DecideSpec (spec) where
 
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Lens.Micro ((?~), (^.))
+import Lens.Micro ((.~), (?~), (^.))
 import Network.HTTP.Client (
     HttpException (HttpExceptionRequest, InvalidUrlException),
     HttpExceptionContent (ConnectionTimeout),
@@ -210,6 +210,28 @@ requestCases store = do
 
     it "sends an unscoped package with no namespace" $
         listVersionsRequest store lodashName Nothing ^. CAL.listPackageVersions_namespace `shouldBe` Nothing
+
+    it "asks for listing pages of the 1000 names AWS allows, and sets nothing else" $
+        withBucket "c" $ \prefix -> do
+            let request = listPackagesRequest store prefix (Just "page-2")
+            request ^. CAL.listPackages_maxResults `shouldBe` Just 1000
+            (request & CAL.listPackages_maxResults .~ Nothing)
+                `shouldBe` ( CA.newListPackages "acme" "mirror"
+                                & (CAL.listPackages_domainOwner ?~ "111122223333")
+                                & (CAL.listPackages_format ?~ CA.PackageFormat_Npm)
+                                & (CAL.listPackages_packagePrefix ?~ "c")
+                                & (CAL.listPackages_nextToken ?~ "page-2")
+                           )
+
+    it "asks for version pages of the 1000 versions AWS allows, and sets nothing else" $ do
+        let request = listVersionsRequest store babelCore (Just "page-2")
+        request ^. CAL.listPackageVersions_maxResults `shouldBe` Just 1000
+        (request & CAL.listPackageVersions_maxResults .~ Nothing)
+            `shouldBe` ( CA.newListPackageVersions "acme" "mirror" CA.PackageFormat_Npm "core"
+                            & (CAL.listPackageVersions_domainOwner ?~ "111122223333")
+                            & (CAL.listPackageVersions_namespace ?~ "babel")
+                            & (CAL.listPackageVersions_nextToken ?~ "page-2")
+                       )
 
     it "sends the versions to delete in their published spelling" $ do
         let request = deleteRequest store babelCore [npmVersion "7.0.0", npmVersion "7.1.0"]

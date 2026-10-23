@@ -1763,9 +1763,10 @@ bucket. The fixture refuses every delete.
 Each cycle is checked against counts derived from the inventory alone: the tally, the native calls
 per store and kind, the metered requests, the quota and chunk waits asked for, the cursor writes,
 and a checksum of every identity the rules decided. Every advisory read must borrow the served
-generation. The npm rows must also reach the native totals the scale design calculated: 2,790 and
-25,462 calls for the full walks, and 391 and 491 for the default cycles. A row with two cycles
-requires the same decisions from both.
+generation. The Dredger asks for pages of 1,000, the most CodeArtifact allows, and the counts follow
+that size. Derived at the design's 100 per page instead, the npm counts must reach the native totals
+the scale design calculated: 2,790 and 25,462 calls for the full walks, and 391 and 491 for the
+default cycles. A row with two cycles requires the same decisions from both.
 
 Each cycle writes one JSON line to `dredger-scale.jsonl` in `$PERF_ARTIFACT_DIR`, or in
 `scratchpad/performance/` when that is unset. The benchmark workflow uploads it with the run's
