@@ -49,7 +49,7 @@ import Ecluse.Core.Server.Admission.Budget (
     growthDecision,
     roundUpToStep,
  )
-import Ecluse.Core.Server.Admission.Probe (Site (..), probeRetry, probed)
+import Ecluse.Core.Server.Admission.Probe (Site (..), probeRetry, probed, registerPeaks)
 import Ecluse.Core.Server.Admission.Types (BrakeLevel (Calm), FlightKey, MeterSnapshot (..))
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
@@ -80,6 +80,10 @@ data MemoryMeter = MemoryMeter
     , mmLargest :: TVar Int
     -- ^ The largest total any one ticket reached since the sampler last read it.
     , mmNextTicket :: IORef Int
+    , mmPeakCharged :: TVar Int
+    -- ^ Spike only: the most the meter held right after any take.
+    , mmPeakOver :: TVar Int
+    -- ^ Spike only: the most a take left the meter above its budget.
     , mmStepBytes :: Int
     , mmEntryRoom :: Int
     , mmEntryWaitMicros :: Int
@@ -87,7 +91,13 @@ data MemoryMeter = MemoryMeter
 
 -- | Build a meter. The step floors at one byte, and the room and the wait at zero.
 newMemoryMeter :: MeterSettings -> IO MemoryMeter
-newMemoryMeter settings =
+newMemoryMeter settings = do
+    meter <- newMemoryMeterWith settings
+    registerPeaks (atomically ((,) <$> readTVar (mmPeakCharged meter) <*> readTVar (mmPeakOver meter)))
+    pure meter
+
+newMemoryMeterWith :: MeterSettings -> IO MemoryMeter
+newMemoryMeterWith settings =
     MemoryMeter
         <$> newTVarIO (max 0 (msBudgetBytes settings))
         <*> newTVarIO 0
@@ -98,6 +108,8 @@ newMemoryMeter settings =
         <*> newTVarIO Calm
         <*> newTVarIO 0
         <*> newIORef 0
+        <*> newTVarIO 0
+        <*> newTVarIO minBound
         <*> pure (max 1 (msStepBytes settings))
         <*> pure (max 0 (msEntryRoom settings))
         <*> pure (max 0 (msEntryWaitMicros settings))
@@ -236,7 +248,11 @@ waitingOn interest = maybe IntSet.empty (\key -> Map.findWithDefault IntSet.empt
 takeBytes :: MemoryTicket -> Int -> STM ()
 takeBytes ticket bytes = do
     let meter = tMeter ticket
-    modifyTVar' (mmCharged meter) (+ bytes)
+    charged <- (+ bytes) <$> readTVar (mmCharged meter)
+    writeTVar (mmCharged meter) charged
+    budget <- readTVar (mmBudget meter)
+    modifyTVar' (mmPeakCharged meter) (max charged)
+    modifyTVar' (mmPeakOver meter) (max (charged - budget))
     total <- (+ bytes) <$> readTVar (tCharged ticket)
     writeTVar (tCharged ticket) total
     modifyTVar' (mmLargest meter) (max total)

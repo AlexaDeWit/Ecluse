@@ -18,6 +18,8 @@ module Ecluse.Core.Server.Admission.Probe (
     siteName,
     kindName,
     probeSelfTest,
+    registerPeaks,
+    probePeaks,
 ) where
 
 import Control.Concurrent (forkIO)
@@ -134,6 +136,18 @@ probeSnapshot = traverse total [(site, kind) | site <- [minBound .. maxBound], k
         values <- traverse (\capability -> readSlot (slot capability site kind)) [0 .. capabilitySlots - 1]
         pure (site, kind, if kind == MaxNanos then foldl' max 0 values else sum values)
     readSlot (I# i) = let !(Cells arr) = cells in IO $ \s -> case readIntArray# arr i s of (# s1, v #) -> (# s1, I# v #)
+
+{-# NOINLINE peakSource #-}
+peakSource :: IORef (IO (Int, Int))
+peakSource = unsafePerformIO (newIORef (pure (0, 0)))
+
+-- | Name the meter whose peaks the gauge reports: the most it held, and the most a take left it over budget.
+registerPeaks :: IO (Int, Int) -> IO ()
+registerPeaks = writeIORef peakSource
+
+-- | The registered meter's peaks since boot.
+probePeaks :: IO (Int, Int)
+probePeaks = join (readIORef peakSource)
 
 siteName :: Site -> Text
 siteName = show

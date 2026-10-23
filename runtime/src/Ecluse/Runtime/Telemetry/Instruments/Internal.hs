@@ -85,10 +85,10 @@ import OpenTelemetry.Metric.Core (
     noopMeterProvider,
  )
 
-import OpenTelemetry.Attributes (addAttributesFromBuilder, attr, defaultAttributeLimits, emptyAttributes)
+import OpenTelemetry.Attributes (Attributes, addAttributesFromBuilder, attr, defaultAttributeLimits, emptyAttributes)
 
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Server.Admission.Probe (kindName, probeSnapshot, siteName)
+import Ecluse.Core.Server.Admission.Probe (kindName, probePeaks, probeSnapshot, siteName)
 import Ecluse.Core.Server.Admission.Types (MeterSnapshot (..), brakeLevelCode)
 import Ecluse.Core.Telemetry.Catalogue (
     MetricName (..),
@@ -574,9 +574,14 @@ registerMemoryMeter m readMeter = do
 
 -- Spike only: every probe counter, labelled by site and kind.
 observeProbe :: ObservableResult Int64 -> IO ()
-observeProbe result = probeSnapshot >>= traverse_ (\(site, kind, value) -> observe result (fromIntegral value) (probeAttributes site kind))
+observeProbe result = do
+    probeSnapshot >>= traverse_ (\(site, kind, value) -> observe result (fromIntegral value) (probeAttributes (siteName site) (kindName kind)))
+    (charged, over) <- probePeaks
+    observe result (fromIntegral charged) (probeAttributes "PeakCharged" "Peak")
+    observe result (fromIntegral over) (probeAttributes "PeakOverBudget" "Peak")
   where
-    probeAttributes site kind = addAttributesFromBuilder defaultAttributeLimits emptyAttributes (attr "site" (siteName site) <> attr "kind" (kindName kind))
+    probeAttributes :: Text -> Text -> Attributes
+    probeAttributes site kind = addAttributesFromBuilder defaultAttributeLimits emptyAttributes (attr "site" site <> attr "kind" kind)
 
 -- | Record the advisory entries one compile pass accepted (@ecluse.advisory.compile.accepted@).
 recordAdvisoryCompileAccepted :: (MonadIO m) => Metrics -> Ecosystem -> Int -> m ()
