@@ -109,11 +109,12 @@ An upstream that falls below it aborts the stream, and the client sees an incomp
 Four deadlines bound a request and its upstream exchanges: the 60-second request timeout, the
 serve-path cap 10 seconds under it, the progress floor, and a fixed 30-second wait for a connection
 and then the response headers. As in http-client, that wait gives the headers what the connection
-left of it, counted from the end of any request body. One sweeper thread checks every deadline in
-the process every 100 ms, so each one ends about 100 ms late: one tick, plus the sweep and
-scheduling. Arming a deadline adds it to a list for the arming thread's core, so request threads
-never wait on each other to arm one, as they would on GHC's process-wide timer queue. Amazonka's
-S3 calls and the OSV and EPSS fetches keep their own clients' timers.
+left of it, counted from the end of any request body. When http-client retries on a new connection
+because a pooled one was stale, the retry keeps what is left of the same wait. One sweeper thread
+checks every deadline in the process every 100 ms, so each one ends about 100 ms late: one tick,
+plus the sweep and scheduling. Arming a deadline adds it to a list for the arming thread's core, so
+request threads never wait on each other to arm one, as they would on GHC's process-wide timer
+queue. Amazonka's S3 calls and the OSV and EPSS fetches keep their own clients' timers.
 
 The proxy streams artifact responses without hashing their bodies. Integrity on this path depends
 on the client checking the preserved metadata hashes. The proxy therefore asks the upstream for

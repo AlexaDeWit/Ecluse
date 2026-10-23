@@ -8,7 +8,9 @@ module Ecluse.Test.Stub.Socket (
     withRawServer,
     withTlsServer,
     withTlsLostAnswerThenSilent,
+    withTlsLostAnswerThenSlow,
     withTlsResetThenSilent,
+    withResetAfterHeadThenFull,
     trustingTlsManager,
 
     -- * Peers that reset mid-body
@@ -38,7 +40,24 @@ import Data.X509 (
 import Network.Connection (TLSSettings (TLSSettingsSimple))
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (mkManagerSettings)
-import Network.Socket (Socket, SocketOption (Linger), StructLinger (StructLinger), accept, close, setSockOpt)
+import Network.Socket (
+    Family (AF_INET),
+    SockAddr (SockAddrInet),
+    Socket,
+    SocketOption (Linger),
+    SocketType (Stream),
+    StructLinger (StructLinger),
+    accept,
+    bind,
+    close,
+    connect,
+    defaultProtocol,
+    listen,
+    setSockOpt,
+    socket,
+    socketPort,
+    tupleToHostAddress,
+ )
 import Network.Socket.ByteString (recv, sendAll)
 import Network.TLS qualified as TLS
 import Network.Wai.Handler.Warp (openFreePort)
@@ -65,21 +84,31 @@ withTlsServer handler action = do
 never finish a later connection's handshake: http-client's retry of a reused connection then stalls.
 -}
 withTlsLostAnswerThenSilent :: (Int -> IO a) -> IO a
-withTlsLostAnswerThenSilent = withTlsWarmThenSilent (\_ context -> awaitTlsHead context "" >> TLS.bye context)
+withTlsLostAnswerThenSilent = withTlsWarmThen loseAnswer silently
+
+-- | 'withTlsLostAnswerThenSilent' with a later connection that finishes its handshake, and then answers, each after its delay in microseconds.
+withTlsLostAnswerThenSlow :: Int -> Int -> (Int -> IO a) -> IO a
+withTlsLostAnswerThenSlow handshakeDelay answerDelay = withTlsWarmThen loseAnswer $ \params conn -> do
+    threadDelay handshakeDelay
+    context <- TLS.contextNew conn params
+    TLS.handshake context
+    awaitTlsHead context ""
+    threadDelay answerDelay
+    TLS.sendData context "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
 
 -- | 'withTlsLostAnswerThenSilent' with the first connection reset once it answers, so the next request's head fails to send.
 withTlsResetThenSilent :: (Int -> IO a) -> IO a
-withTlsResetThenSilent = withTlsWarmThenSilent (\conn _ -> resetOnClose conn)
+withTlsResetThenSilent = withTlsWarmThen (\conn _ -> resetOnClose conn) silently
 
--- Answer the first connection's first request over TLS, then end it as given. Later connections never finish a handshake.
-withTlsWarmThenSilent :: (Socket -> TLS.Context -> IO ()) -> (Int -> IO a) -> IO a
-withTlsWarmThenSilent ending action = do
+-- Answer the first connection's first request over TLS, then end it as given. Later connections take the other handler.
+withTlsWarmThen :: (Socket -> TLS.Context -> IO ()) -> (TLS.ServerParams -> Socket -> IO ()) -> (Int -> IO a) -> IO a
+withTlsWarmThen ending later action = do
     params <- selfSignedServerParams
     connections <- newIORef (0 :: Int)
     let serve conn = do
             seen <- atomicModifyIORef' connections (\n -> (n + 1, n))
             if seen > 0
-                then threadDelay 20_000_000
+                then later params conn
                 else do
                     context <- TLS.contextNew conn params
                     TLS.handshake context
@@ -88,10 +117,44 @@ withTlsWarmThenSilent ending action = do
                     ending conn context
     withRawServer serve action
 
+-- Take the request head, then close without answering.
+loseAnswer :: Socket -> TLS.Context -> IO ()
+loseAnswer _ context = awaitTlsHead context "" >> TLS.bye context
+
+-- Never finish the handshake.
+silently :: TLS.ServerParams -> Socket -> IO ()
+silently _ _ = threadDelay 20_000_000
+
 selfSignedServerParams :: IO TLS.ServerParams
 selfSignedServerParams = do
     credential <- selfSignedCredential
     pure TLS.defaultParamsServer{TLS.serverShared = TLS.defaultShared{TLS.sharedCredentials = TLS.Credentials [credential]}}
+
+{- | Over plain TCP, answer the first connection's first request, then fill the listener's queue and
+reset that connection once the next request's head is in, filling the variable. A later connection
+never completes: the kernel drops its handshake.
+-}
+withResetAfterHeadThenFull :: MVar () -> (Int -> IO a) -> IO a
+withResetAfterHeadThenFull reset action =
+    bracket (socket AF_INET Stream defaultProtocol) close $ \listener -> do
+        bind listener (SockAddrInet 0 (tupleToHostAddress (127, 0, 0, 1)))
+        listen listener 1
+        port <- fromIntegral <$> socketPort listener
+        withAsync (serveThenFill listener port) (\_ -> action port)
+  where
+    serveThenFill listener port = bracket (fst <$> accept listener) close $ \conn -> do
+        awaitRequestHead conn ""
+        sendAll conn "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nwarm"
+        -- A queue of one takes two waiting connections, and the kernel drops any after them.
+        bracket (replicateM 2 (dial port)) (traverse_ close) $ \_ -> do
+            awaitRequestHead conn ""
+            resetOnClose conn
+            close conn
+            putMVar reset ()
+            threadDelay 20_000_000
+    dial port = do
+        client <- socket AF_INET Stream defaultProtocol
+        client <$ connect client (SockAddrInet (fromIntegral port) (tupleToHostAddress (127, 0, 0, 1)))
 
 -- | A manager under 'typedBodyReads', as every production manager is, that skips certificate validation so it accepts 'withTlsServer'.
 trustingTlsManager :: IO Manager

@@ -18,5 +18,5 @@ data ExchangeClient = ExchangeClient
     { ecManager :: Manager
     -- ^ The @http-client@ pool the exchange's connection comes from.
     , ecDeadlines :: Deadlines
-    -- ^ The process's sweeper, which keeps the progress floor, the serve-path cap and the request timeout.
+    -- ^ The process's sweeper: the progress floor, the serve-path cap, the request timeout and the response wait.
     }

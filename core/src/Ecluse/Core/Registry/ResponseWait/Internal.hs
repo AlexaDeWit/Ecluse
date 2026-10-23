@@ -4,7 +4,8 @@
 
 {- | The wait "Ecluse.Core.Registry.ResponseWait" keeps for each exchange, its pure transitions, and
 the opener under any length of wait. Importing this module opts out of the public surface's
-stability promises. It exists so a spec can hold the transitions and a short wait to account.
+stability promises. It exists so a spec can test the transitions directly and open responses under a
+wait of a second or two.
 -}
 module Ecluse.Core.Registry.ResponseWait.Internal (
     ResponseWait (..),
@@ -13,6 +14,7 @@ module Ecluse.Core.Registry.ResponseWait.Internal (
     uploadedAt,
     waitFault,
     openResponseAfter,
+    WaitExpired (..),
 ) where
 
 import Control.Exception (asyncExceptionFromException, asyncExceptionToException, handleJust)
@@ -45,16 +47,16 @@ data ResponseWait
     | Answering {-# UNPACK #-} !Word64
     deriving stock (Eq, Show)
 
-{- | The wait the headers have left once a connection is in hand. A second connection is http-client's
-retry: its wait starts afresh here, and while it reconnects the first attempt's deadline still runs.
+{- | The wait the headers have left once a connection is in hand: what the connection left of the
+whole wait, or on http-client's retry of a stale connection, what the attempt before it left.
 -}
-connectedAt :: Word64 -> Word64 -> ResponseWait -> Either HttpExceptionContent Word64
-connectedAt whole now = \case
-    Connecting deadline
-        | now >= deadline -> Left ConnectionTimeout
-        | otherwise -> Right (deadline - now)
-    Uploading _ -> Right whole
-    Answering _ -> Right whole
+connectedAt :: Word64 -> ResponseWait -> Either HttpExceptionContent Word64
+connectedAt now = \case
+    Connecting deadline -> leftBefore ConnectionTimeout deadline
+    Uploading left -> Right left
+    Answering deadline -> leftBefore ResponseTimeout deadline
+  where
+    leftBefore fault deadline = if now >= deadline then Left fault else Right (deadline - now)
 
 -- | Pause the headers' deadline while a streamed body is written. A deadline already due stays due.
 uploadingAt :: Word64 -> ResponseWait -> ResponseWait
@@ -87,7 +89,7 @@ openResponseAfter whole ExchangeClient{ecManager, ecDeadlines} request = do
         ours (WaitExpired raised content) = if raised == scope then Just content else Nothing
         timed answered =
             request
-                { requestBody = RequestBodyIO (sending whole wait (requestBody request))
+                { requestBody = RequestBodyIO (sending wait (requestBody request))
                 , responseTimeout = responseTimeoutNone
                 , checkResponse = \sent response -> answered >> checkResponse request sent response
                 }
@@ -96,11 +98,11 @@ openResponseAfter whole ExchangeClient{ecManager, ecDeadlines} request = do
 
 {- http-client builds the body on a connection, just before the head, which goes out under the headers'
 deadline so a retry after a failed head keeps one. Only a streamed body, as a metered one is, pauses it. -}
-sending :: Word64 -> IORef ResponseWait -> RequestBody -> IO RequestBody
-sending whole wait body = do
+sending :: IORef ResponseWait -> RequestBody -> IO RequestBody
+sending wait body = do
     now <- getMonotonicTimeNSec
     -- Thrown as http-client throws its own, which tags it with the request and closes the connection.
-    left <- either throwHttp pure . connectedAt whole now =<< readIORef wait
+    left <- either throwHttp pure . connectedAt now =<< readIORef wait
     built <- resolved body
     -- The sweeper reads the wait from another thread, so it only ever holds an evaluated state.
     writeIORef wait $! Answering (now + left)
@@ -123,8 +125,9 @@ timedUpload wait gives needsPopper = gives $ \popper -> needsPopper $ do
   where
     stamp transition = getMonotonicTimeNSec >>= \now -> modifyIORef' wait (transition now)
 
-{- Raised asynchronously, as http-client's own timer is, so a TLS handshake that wraps synchronous
-faults passes it on. 'openResponseAfter' turns it back into the client's fault. -}
+{- | Raised asynchronously, as http-client's own timer is, so a TLS handshake that wraps synchronous
+faults passes it on. 'openResponseAfter' turns it back into the client's fault.
+-}
 data WaitExpired = WaitExpired (IORef ()) HttpExceptionContent
 
 -- Shown as http-client's unexported wrapper shows its own timeout, because the client span records the text.

@@ -16,6 +16,8 @@ module Ecluse.Test.Support (
     parseRequestOrFail,
     TestContractEscape (..),
     incompressibleBytes,
+    givesTimes,
+    between,
 ) where
 
 import Data.Aeson (FromJSON, eitherDecodeStrict)
@@ -67,6 +69,16 @@ newtype TestContractEscape = TestContractEscape Text
     deriving stock (Eq, Show)
 
 instance Exception TestContractEscape
+
+-- | A streamed request body that hands over the chunk this many times, then ends.
+givesTimes :: Int -> ByteString -> Client.GivesPopper ()
+givesTimes count chunk needsPopper = do
+    remaining <- newIORef count
+    needsPopper $ atomicModifyIORef' remaining $ \left -> if left <= 0 then (0, BS.empty) else (left - 1, chunk)
+
+-- | Whether a duration in seconds is at least the low bound and below the high one.
+between :: Double -> Double -> Double -> Bool
+between low high seconds = seconds >= low && seconds < high
 
 -- | Deterministic bytes no compressor can shrink: an xorshift stream.
 incompressibleBytes :: Int -> ByteString

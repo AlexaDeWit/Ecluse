@@ -18,7 +18,7 @@ import GHC.Clock (getMonotonicTime)
 import Hedgehog (Gen, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
-import Network.HTTP.Client (Request (method, requestBody), RequestBody (RequestBodyBS), defaultManagerSettings, newManager, parseRequest)
+import Network.HTTP.Client (Request (method, requestBody), RequestBody (RequestBodyBS, RequestBodyStreamChunked), defaultManagerSettings, httpLbs, newManager, parseRequest)
 import Network.HTTP.Types (status200)
 import Network.Wai (Application, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (defaultSettings, setOnOpen, testWithApplication, testWithApplicationSettings)
@@ -42,8 +42,8 @@ import Ecluse.Test.Poll (awaitUntil)
 import Ecluse.Test.Registry.JsonStream (heldChunks)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Stub.Retry (requestsAfterLostAnswer)
-import Ecluse.Test.Stub.Socket (resetAfterPartialBody, trustingTlsManager, withTlsServer)
-import Ecluse.Test.Support (expectRightIO)
+import Ecluse.Test.Stub.Socket (resetAfterPartialBody, trustingTlsManager, withResetAfterHeadThenFull, withTlsServer)
+import Ecluse.Test.Support (between, expectRightIO)
 import Ecluse.Test.Wai (countingUpstream, pacedBody)
 
 spec :: Spec
@@ -194,6 +194,26 @@ floorSpec = describe "the progress floor and the serve-path cap" $ do
             transportCause outcome `shouldBe` Just TransportTimeout
             (finished - started) `shouldSatisfy` between 1 10
 
+    it "ends a retry's stalled reconnect after a failed upload slice with the floor, which no wait bounds" $ do
+        progress <- floorOf 30 0.5 1024
+        reset <- newEmptyMVar
+        withResetAfterHeadThenFull reset $ \port -> do
+            manager <- newManager defaultManagerSettings
+            request <- parseRequest ("http://127.0.0.1:" <> show port <> "/")
+            void (httpLbs request manager)
+            withExchangeClient (pure manager) $ \client -> do
+                -- The slice waits for the reset to land, so the slice fails to send and the head did not.
+                let afterReset needsPopper = do
+                        sent <- newIORef False
+                        needsPopper $ readIORef sent >>= bool (readMVar reset >> threadDelay 200_000 >> writeIORef sent True $> "data") (pure BS.empty)
+                    upload = request{method = "PUT", requestBody = RequestBodyStreamChunked afterReset}
+                started <- getMonotonicTime
+                outcome <- exchangeBody client progress upload
+                finished <- getMonotonicTime
+                transportCause outcome `shouldBe` Just TransportTimeout
+                faultDetail outcome `shouldSatisfy` maybe False ("progress window" `T.isInfixOf`)
+                (finished - started) `shouldSatisfy` between 0.5 8
+
     it "closes a connection that missed the floor instead of returning it to the pool" $ do
         progress <- floorOf 30 0.5 65536
         opened <- newIORef (0 :: Int)
@@ -258,9 +278,6 @@ stallMicros = 20_000_000
 -- 2 KB every 150 ms: each chunk alone clears a 1000-byte floor, far inside a 1 s window.
 steadyBody :: Int -> [(Int, ByteString)]
 steadyBody count = [(150_000, BS.replicate 2000 (0x61 + fromIntegral (i `mod` 26))) | i <- [0 .. count - 1]]
-
-between :: Double -> Double -> Double -> Bool
-between low high seconds = seconds >= low && seconds < high
 
 -- A floor from a serve-path cap, a window, and a byte count.
 floorOf :: NominalDiffTime -> NominalDiffTime -> Int -> IO ProgressFloor

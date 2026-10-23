@@ -3,7 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The response wait gives the connection the whole wait and the headers what is left, counted
-from the end of the upload, and fails each phase with the fault http-client's own timer gives.
+from the end of the upload, keeps that one wait across http-client's retry, and fails each phase
+with the fault http-client's own timer gives.
 -}
 module Ecluse.Core.Registry.ResponseWait.InternalSpec (spec) where
 
@@ -15,7 +16,7 @@ import Hedgehog.Range qualified as Range
 import Network.HTTP.Client (
     BodyReader,
     HttpException (HttpExceptionRequest),
-    HttpExceptionContent,
+    HttpExceptionContent (ConnectionTimeout, ResponseTimeout),
     Manager,
     Request (method, requestBody, responseTimeout),
     RequestBody (RequestBodyStream, RequestBodyStreamChunked),
@@ -31,20 +32,22 @@ import Network.HTTP.Client (
     responseStatus,
     responseTimeoutMicro,
  )
+import Network.HTTP.Client.Internal (throwHttp)
 import Network.HTTP.Types (status200, statusCode)
 import Network.Wai (Application, getRequestBodyChunk, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (defaultSettings, setOnOpen, testWithApplication, testWithApplicationSettings)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (bracket, try)
+import UnliftIO.Exception (bracket, try, tryAny)
 
 import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
-import Ecluse.Core.Registry.ResponseWait.Internal (ResponseWait (..), connectedAt, openResponseAfter, uploadedAt, uploadingAt, waitFault)
+import Ecluse.Core.Registry.ResponseWait.Internal (ResponseWait (..), WaitExpired (WaitExpired), connectedAt, openResponseAfter, uploadedAt, uploadingAt, waitFault)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Stub.Retry (withLostAnswer, withLostAnswerPaced)
-import Ecluse.Test.Stub.Socket (trustingTlsManager, withRawServer, withTlsLostAnswerThenSilent, withTlsResetThenSilent)
+import Ecluse.Test.Stub.Socket (trustingTlsManager, withRawServer, withTlsLostAnswerThenSilent, withTlsLostAnswerThenSlow, withTlsResetThenSilent)
+import Ecluse.Test.Support (between, givesTimes)
 
 spec :: Spec
 spec = do
@@ -58,15 +61,16 @@ transitionSpec = describe "the transitions" $ do
         hedgehog $ do
             deadline <- forAll (Gen.word64 (Range.linear 1 60_000_000_000))
             now <- forAll (Gen.word64 (Range.linear 0 (deadline - 1)))
-            first named (connectedAt 30 now (Connecting deadline)) === Right (deadline - now)
+            first named (connectedAt now (Connecting deadline)) === Right (deadline - now)
 
     it "fails a connection made at or after its deadline with the connect timeout" $ do
-        first named (connectedAt 30 50 (Connecting 50)) `shouldBe` Left "ConnectionTimeout"
-        first named (connectedAt 30 51 (Connecting 50)) `shouldBe` Left "ConnectionTimeout"
+        first named (connectedAt 50 (Connecting 50)) `shouldBe` Left "ConnectionTimeout"
+        first named (connectedAt 51 (Connecting 50)) `shouldBe` Left "ConnectionTimeout"
 
-    it "starts the whole wait again on a second connection, as http-client's retry does" $ do
-        first named (connectedAt 30 900 (Uploading 7)) `shouldBe` Right 30
-        first named (connectedAt 30 900 (Answering 12)) `shouldBe` Right 30
+    it "leaves a retry's connection what the attempt before it left of the wait, and fails one past it" $ do
+        first named (connectedAt 900 (Uploading 7)) `shouldBe` Right 7
+        first named (connectedAt 900 (Answering 912)) `shouldBe` Right 12
+        first named (connectedAt 912 (Answering 912)) `shouldBe` Left "ResponseTimeout"
 
     it "pauses the headers' deadline from the first slice of an upload, unless it is already due" $ do
         uploadingAt 100 (Answering 130) `shouldBe` Uploading 30
@@ -83,6 +87,12 @@ transitionSpec = describe "the transitions" $ do
         named <$> waitFault 49 (Connecting 50) `shouldBe` Nothing
         named <$> waitFault 49 (Answering 50) `shouldBe` Nothing
         named <$> waitFault maxBound (Uploading 1) `shouldBe` Nothing
+
+    it "shows each timeout as http-client's own throw does, the text a client span records" $
+        for_ [ResponseTimeout, ConnectionTimeout] $ \content -> do
+            scope <- newIORef ()
+            theirs <- tryAny (throwHttp content)
+            (show <$> leftToMaybe theirs :: Maybe Text) `shouldBe` Just (show (toException (WaitExpired scope content)))
 
 -- Each case runs a real loopback peer, with a one or two second wait in place of the 30 s one. Every
 -- bound on elapsed time leaves a wide margin for a loaded runner.
@@ -168,15 +178,24 @@ retrySpec = describe "on http-client's retry of a stale pooled connection" $ do
         withLostAnswer manager (readThrough manager >=> writeIORef outcome . Just) `shouldReturn` 3
         readIORef outcome `shouldReturn` Just (Right 200)
 
-    it "gives the retry a whole new wait for its headers once its new connection is in hand" $ do
+    it "ends a retry at the first attempt's deadline when the dropped answer and the retry's answer outlast it together" $ do
         manager <- newManager defaultManagerSettings
         outcome <- newIORef Nothing
         started <- getMonotonicTime
-        -- The dropped answer and the retry's answer each take 1.2 s, together beyond the 2 s wait.
+        -- Each answer takes 1.2 s, inside the 2 s wait alone and beyond it together.
         withLostAnswerPaced 1_200_000 1_200_000 manager (readThroughAfter 2 manager >=> writeIORef outcome . Just) `shouldReturn` 3
         finished <- getMonotonicTime
-        readIORef outcome `shouldReturn` Just (Right 200)
-        (finished - started) `shouldSatisfy` (> 2)
+        readIORef outcome `shouldReturn` Just (Left "ResponseTimeout")
+        (finished - started) `shouldSatisfy` between 2 4
+
+    it "ends a retry at the first attempt's deadline when its slow reconnect and slow headers outlast it together" $ do
+        ours <- withTlsLostAnswerThenSlow 1_200_000 1_200_000 $ \port -> do
+            manager <- trustingTlsManager
+            request <- parseRequest ("https://127.0.0.1:" <> show port <> "/")
+            void (httpLbs request manager)
+            opened 2 manager request
+        fst ours `shouldBe` Left "ResponseTimeout"
+        snd ours `shouldSatisfy` between 2 4
 
     it "keeps the first attempt's header deadline while the retry reconnects, where http-client's own timer would give a connect timeout" $ do
         ours <- withTlsLostAnswerThenSilent $ \port -> do
@@ -254,12 +273,3 @@ readingAt rate request respond = do
                 pace consumed
     pace (0 :: Int)
     respond (responseLBS status200 [] "")
-
--- Hand over the same chunk this many times.
-givesTimes :: Int -> ByteString -> (IO ByteString -> IO ()) -> IO ()
-givesTimes count chunk needsPopper = do
-    remaining <- newIORef count
-    needsPopper $ atomicModifyIORef' remaining $ \left -> if left <= 0 then (0, BS.empty) else (left - 1, chunk)
-
-between :: Double -> Double -> Double -> Bool
-between low high seconds = seconds >= low && seconds < high
