@@ -14,6 +14,7 @@ module Ecluse.Core.Server.Pipeline.Shared (
 
     -- * Admission shed
     withMetadataAdmission,
+    withListingAdmission,
     shedStatus,
     shedMessage,
     hRetryAfter,
@@ -91,15 +92,25 @@ flightOf key = FlightKey (cacheKeyStore key) (cacheKeyIdentity key)
 -- | Acquire memory and CPU admission before metadata work. Answer after release, counting a shed once.
 withMetadataAdmission :: (MonadUnliftIO m) => ServeRuntime -> m received -> (MemoryTicket -> m a) -> (a -> m received) -> m received
 withMetadataAdmission runtime shed gated answer =
-    admitted >>= \case
-        Just result -> answer result
-        Nothing -> do
-            liftIO (mpServeDecision metrics Metric.Unavailable)
-            shed
+    metadataAdmission runtime gated pure >>= maybe (shedCounted runtime shed) answer
+
+{- | As 'withMetadataAdmission', but write the response after the CPU slot is released and before the
+memory ticket returns its charge, so the charge covers the body until it is written.
+-}
+withListingAdmission :: (MonadUnliftIO m) => ServeRuntime -> m received -> (MemoryTicket -> m response) -> (response -> m received) -> m received
+withListingAdmission runtime shed gated write =
+    metadataAdmission runtime gated write >>= maybe (shedCounted runtime shed) pure
+
+-- The memory entry spans the gated work and @held@, the CPU slot the gated work alone. 'Nothing' is a shed.
+metadataAdmission :: (MonadUnliftIO m) => ServeRuntime -> (MemoryTicket -> m a) -> (a -> m b) -> m (Maybe b)
+metadataAdmission runtime gated held =
+    fmap join . withMemoryEntry metrics (srMemoryMeter runtime) $ \ticket ->
+        withServeAdmission metrics (srAdmission runtime) (gated ticket) >>= traverse held
   where
     metrics = srMetrics runtime
-    admitted = fmap join . withMemoryEntry metrics (srMemoryMeter runtime) $ \ticket ->
-        withServeAdmission metrics (srAdmission runtime) (gated ticket)
+
+shedCounted :: (MonadIO m) => ServeRuntime -> m received -> m received
+shedCounted runtime shed = liftIO (mpServeDecision (srMetrics runtime) Metric.Unavailable) >> shed
 
 -- | Match the configured inbound secret without content-dependent early exit. An unconfigured edge is open.
 edgeTokenMatches :: Maybe Secret -> Maybe ClientCredential -> Bool

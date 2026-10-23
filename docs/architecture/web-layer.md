@@ -247,8 +247,10 @@ compression, hit or miss. A public artifact decision reads one
 selected release, so its entry step is its whole charge. A started request that runs out of budget
 pauses at its next charge, keeping its CPU slot. A pause during an upstream read ends at the
 serve-path cap, and a pause before a render at the request timeout. Both gates stay held through
-metadata evaluation and the listing response. Public artifact requests release both after the
-metadata decision, before streaming the admitted artifact.
+metadata evaluation and while the listing response is built. A listing then gives up its CPU slot
+and keeps its memory charge while Écluse writes the body, so a slow client holds memory but no CPU
+slot. Public artifact requests release both after the metadata decision, before streaming the
+admitted artifact.
 
 Each gate has a bounded waiting room and a 1 s wait budget. A full waiting room or an expired wait
 sheds with `503` and `Retry-After`. Health probes, cheap local routes and trusted private artifact

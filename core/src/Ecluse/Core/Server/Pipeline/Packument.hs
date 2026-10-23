@@ -166,15 +166,14 @@ data PackumentServe
       -- @Content-Length@ and the own @ETag@) with no body.
       PackumentHead
 
--- Everything a terminal arm of one admitted packument serve answers through. It is assembled once
--- per request so each arm takes it whole instead of eight positional parameters.
+-- Everything a terminal arm of one admitted packument serve builds its response from, assembled once
+-- per request so each arm takes it whole instead of one positional parameter per field.
 data PackumentServing response = PackumentServing
     { psvMode :: PackumentServe
     , psvReplies :: PackumentReplies response
     , psvDeps :: PackumentDeps
     , psvName :: PackageName
     , psvRequest :: Request
-    , psvRespond :: response -> IO ResponseReceived
     , psvRuntime :: ServeRuntime
     , psvTicket :: MemoryTicket
     -- ^ The request's account with the memory meter, which its reads and its output pay into.
@@ -184,7 +183,8 @@ servingMetrics :: PackumentServing response -> MetricsPort
 servingMetrics = srMetrics . psvRuntime
 
 -- The edge token is compared before any upstream is touched, so an unauthenticated client
--- cannot drive egress. Admission is held only for the gated work.
+-- cannot drive egress. The CPU slot is held for the gated work, and the memory ticket until the
+-- response is written.
 packumentWith ::
     PackumentServe ->
     PackumentReplies response ->
@@ -204,17 +204,16 @@ packumentWith mode replies name request respond = do
                 , psvDeps = deps
                 , psvName = name
                 , psvRequest = request
-                , psvRespond = respond
                 , psvRuntime = ctxRuntime ctx
                 , psvTicket = ticket
                 }
     if edgeTokenMatches (pdInboundToken deps) clientToken
-        then withMetadataAdmission (ctxRuntime ctx) (refuse packumentUnavailable [shedRetryAfter] shedMessage) (\ticket -> serveAdmittedPackument (serving ticket) clientToken) pure
+        then withListingAdmission (ctxRuntime ctx) (refuse packumentUnavailable [shedRetryAfter] shedMessage) (\ticket -> serveAdmittedPackument (serving ticket) clientToken) (liftIO . respond)
         else refuse packumentUnauthorised [] unauthorisedMessage
   where
     refuse reply headers message = liftIO (respond (reply replies headers (mkRefusal Nothing message)))
 
-serveAdmittedPackument :: PackumentServing response -> Maybe ClientCredential -> Handler ResponseReceived
+serveAdmittedPackument :: PackumentServing response -> Maybe ClientCredential -> Handler response
 serveAdmittedPackument serving clientToken = do
     logFM DebugS (ls ("serving packument request for " <> renderPackageName (psvName serving)))
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pdAdvisoryEtag deps))
@@ -254,11 +253,10 @@ resolveOrigins deps rt ticket clientToken name
             (fetchPublicOrigin deps rt ticket name)
 
 -- An explicit private refusal stops the request: no public document may stand in for it.
-privateAccessRefused :: PackumentServing response -> Handler ResponseReceived
+privateAccessRefused :: PackumentServing response -> Handler response
 privateAccessRefused serving = do
     liftIO (mpServeDecision (servingMetrics serving) Metric.Deny)
-    liftIO . psvRespond serving $
-        packumentForbidden (psvReplies serving) [] (privateAuthorisationRefusal (pdHelp (psvDeps serving)))
+    pure (packumentForbidden (psvReplies serving) [] (privateAuthorisationRefusal (pdHelp (psvDeps serving))))
 
 serveMergedPackument ::
     PackumentServing response ->
@@ -266,7 +264,7 @@ serveMergedPackument ::
     Maybe (StateRevision, ProjectMirrorRecord) ->
     OriginResult ->
     OriginResult ->
-    Handler ResponseReceived
+    Handler response
 serveMergedPackument serving evalCtx record privResult pubResult =
     case views of
         Left _ -> mirrorUnavailable serving
@@ -296,13 +294,13 @@ serveMergedPackument serving evalCtx record privResult pubResult =
         Nothing -> Right (originManifest privResult, Nothing, Map.empty)
         Just (revision, current) -> mirrorProjectViews revision current (originManifest privResult)
 
-mirrorUnavailable :: PackumentServing response -> Handler ResponseReceived
+mirrorUnavailable :: PackumentServing response -> Handler response
 mirrorUnavailable serving = mirrorUnavailableWithRetry serving Nothing
 
-mirrorUnavailableWithRetry :: PackumentServing response -> Maybe RetryAfter -> Handler ResponseReceived
+mirrorUnavailableWithRetry :: PackumentServing response -> Maybe RetryAfter -> Handler response
 mirrorUnavailableWithRetry serving retry = do
     liftIO (mpServeDecision (servingMetrics serving) Metric.Unavailable)
-    liftIO (psvRespond serving (packumentUnavailable (psvReplies serving) (retryAfterHeaders retry) (mkRefusal (pdHelp (psvDeps serving)) "managed mirror view is unavailable")))
+    pure (packumentUnavailable (psvReplies serving) (retryAfterHeaders retry) (mkRefusal (pdHelp (psvDeps serving)) "managed mirror view is unavailable"))
 
 admitTrusted :: MinTrustedIntegrity -> Maybe Manifest -> (Maybe Contribution, [ServeDecision])
 admitTrusted minTrusted = \case
@@ -365,33 +363,32 @@ packumentPlan sources trustedVersions deniedEvidence = do
     guard (not (Map.null (mpSurvivors plan)))
     pure plan{mpDivergences = mpDivergences plan <> integrityDivergences trustedVersions deniedEvidence}
 
-serveResolved :: PackumentServing response -> [Contribution] -> MergePlan -> Handler ResponseReceived
+serveResolved :: PackumentServing response -> [Contribution] -> MergePlan -> Handler response
 serveResolved serving sources plan = do
     warnDivergences (servingMetrics serving) (psvName serving) plan
     liftIO (mpServeDecision (servingMetrics serving) Metric.Admit)
     answerPackumentConditional serving sources plan
 
 -- The coding is chosen before the validator, so a 304 names the coding's own tag. It skips assembly and compression.
-answerPackumentConditional :: PackumentServing response -> [Contribution] -> MergePlan -> Handler ResponseReceived
+answerPackumentConditional :: PackumentServing response -> [Contribution] -> MergePlan -> Handler response
 answerPackumentConditional serving sources plan =
     case chooseCoding (pdMetadataCompression deps) headers of
         NoAcceptableCoding ->
-            liftIO (respond (packumentNotAcceptable replies (represented []) (mkRefusal (pdHelp deps) "the request's Accept-Encoding excludes both gzip and identity")))
+            pure (packumentNotAcceptable replies (represented []) (mkRefusal (pdHelp deps) "the request's Accept-Encoding excludes both gzip and identity"))
         ServeCoding coding -> case evaluateETag headers (codedETag coding identityTag) of
             NotModified matched -> do
                 logFM DebugS (ls ("packument unchanged for " <> renderPackageName name <> " (304, unassembled)"))
-                liftIO (respond (packumentNotModified replies (represented [etagHeader matched])))
+                pure (packumentNotModified replies (represented [etagHeader matched]))
             Modified fresh -> do
                 logFM DebugS (ls ("serving packument for " <> renderPackageName name))
                 -- The assembled cache holds the identity bytes under the identity tag, whatever the coding.
                 bytes <- liftIO (servedBytes serving sources plan identityTag)
                 listing <- liftIO (codedListing (psvTicket serving) coding bytes)
-                liftIO (respond (packumentResponse replies (psvMode serving) (represented [etagHeader fresh]) listing))
+                pure (packumentResponse replies (psvMode serving) (represented [etagHeader fresh]) listing)
   where
     deps = psvDeps serving
     name = psvName serving
     replies = psvReplies serving
-    respond = psvRespond serving
     headers = requestHeaders (psvRequest serving)
     origins = map registryUrlText (maybeToList (pdPrivateBaseUrl deps) <> [pdPublicBaseUrl deps])
     identityTag = packumentETag (pdMountBaseUrl deps) origins name (map fingerprintPiece sources)
@@ -446,12 +443,12 @@ noServeableVersions ::
     Maybe DbEtag ->
     [VersionVerdict] ->
     [ServeDecision] ->
-    Handler ResponseReceived
+    Handler response
 noServeableVersions serving etag verdicts decisions = do
     liftIO (mpServeDecision metrics (statusServeDecision status))
     liftIO (recordDenials metrics decisions)
     logDenials (psvName serving) etag verdicts
-    liftIO (psvRespond serving (noSurvivors (psvReplies serving) (psvDeps serving) status decisions))
+    pure (noSurvivors (psvReplies serving) (psvDeps serving) status decisions)
   where
     metrics = servingMetrics serving
     status = packumentStatus decisions
@@ -511,12 +508,11 @@ neededUpstreamUnavailable = Reject (Rejection (Unavailable (WillResolve Nothing)
 upstreamInvalidDecision :: ServeDecision
 upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")
 
-firstPartyMissed :: PackumentServing response -> OriginMiss -> Handler ResponseReceived
+firstPartyMissed :: PackumentServing response -> OriginMiss -> Handler response
 firstPartyMissed serving miss = do
     liftIO (mpServeDecision metrics (packumentServeDecision [decision]))
     liftIO (recordDenials metrics [decision])
-    liftIO . psvRespond serving $
-        firstPartyMissReply (psvReplies serving) (pdHelp (psvDeps serving)) name miss
+    pure (firstPartyMissReply (psvReplies serving) (pdHelp (psvDeps serving)) name miss)
   where
     metrics = servingMetrics serving
     name = psvName serving

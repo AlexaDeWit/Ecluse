@@ -16,6 +16,7 @@ import Network.HTTP.Types (Header, Method, methodGet, methodHead, status200, sta
 import Network.HTTP.Types.Header (RequestHeaders, hAcceptEncoding, hAuthorization, hContentEncoding, hContentLength, hETag, hIfNoneMatch, hVary)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders, requestMethod), Response, defaultRequest, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
+import System.IO.Error (mkIOError, resourceVanishedErrorType)
 import Test.Hspec
 import UnliftIO.Async (cancel, race_, wait, withAsync)
 import UnliftIO.Exception (throwIO)
@@ -72,6 +73,7 @@ import Ecluse.Test.Wai (selfBaseUrl)
 spec :: Spec
 spec = do
     metadataGzipSpec
+    listingWriteSpec
     firstPartyMissSpec
 
 metadataGzipSpec :: Spec
@@ -211,6 +213,39 @@ privateOrigin current origin request respond =
     readIORef current >>= \case
         PrivateServes -> origin request respond
         PrivateRefuses -> respond (responseLBS status403 [] "")
+
+listingWriteSpec :: Spec
+listingWriteSpec = describe "a listing whose body is being written" $
+    for_ listings $ \listing -> describe (listingLabel listing) $ do
+        it "has freed its CPU slot and still holds its whole memory charge" $
+            withOneSlot listing $ \rt deps -> do
+                observed <- newIORef Nothing
+                runListing rt listing deps methodGet [] $ \_ -> do
+                    held <- chargedNow rt
+                    beside <- captureListing rt listing deps methodGet []
+                    writeIORef observed (Just (held, statusCode (responseStatus beside)))
+                whole <- takeLargestCharge (srMemoryMeter rt)
+                readIORef observed `shouldReturn` Just (whole, 200)
+                chargedNow rt `shouldReturn` 0
+        it "returns its charge when the client goes away mid-body, and leaves the slot free" $
+            withOneSlot listing $ \rt deps -> do
+                held <- newIORef 0
+                runListing rt listing deps methodGet [] (\_ -> chargedNow rt >>= writeIORef held >> throwIO clientGone)
+                    `shouldThrow` (== clientGone)
+                readIORef held >>= (`shouldSatisfy` (> 0))
+                chargedNow rt `shouldReturn` 0
+                statusCode . responseStatus <$> captureListing rt listing deps methodGet [] `shouldReturn` 200
+  where
+    chargedNow rt = snChargedBytes <$> meterSnapshot (srMemoryMeter rt)
+    clientGone = mkIOError resourceVanishedErrorType "the client closed the connection" Nothing Nothing
+
+-- One CPU slot with no waiting room, so a second request is shed while the first holds it, and an exact meter.
+withOneSlot :: Listing -> (ServeRuntime -> PackumentDeps -> IO a) -> IO a
+withOneSlot listing use = do
+    admission <- newServeAdmissionTuned 1 0 0
+    rt <- testServeRuntimeWith admission noopMetricsPort
+    meter <- newMemoryMeter MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 1000, msEntryWaitMicros = 0}
+    testWithApplication (pure (listingOrigin listing)) (listingDeps listing >=> use rt{srMemoryMeter = meter})
 
 firstPartyMissSpec :: Spec
 firstPartyMissSpec = describe "a first-party name whose private origin yielded nothing" $ do
