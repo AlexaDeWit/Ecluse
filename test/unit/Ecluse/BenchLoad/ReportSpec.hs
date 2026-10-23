@@ -31,6 +31,10 @@ spec = do
             burstLines `shouldSatisfy` elem "| highest memory.current in the burst, then memory.stat anon / file / kernel / sock | 900.0 MiB, then 600.0 MiB / 0.0 MiB / 0.0 MiB / 250.0 MiB |"
             burstLines `shouldSatisfy` elem "| highest memory.stat sock in the burst, then memory.current | 250.0 MiB, then 900.0 MiB |"
             T.lines (renderReports (loadedSection Npm 5_000 [plain])) `shouldNotSatisfy` any (T.isInfixOf "in the burst")
+        it "says a burst under the unlimited control had no cgroup to read" $ do
+            let unbounded = (scenarioReport "npm/herd-under-heavy-private" 100 0 255 300){srProxy = Just (proxyWithPeak 0){pfBurstMemory = Just (burstMemory 10 [])}}
+                burstLines = filter (T.isInfixOf "burst") (T.lines (renderReports (loadedSection Npm 5_000 [unbounded])))
+            filter (T.isPrefixOf "| cgroup") burstLines `shouldBe` ["| cgroup readings through the burst | no cgroup |"]
         it "shows busy time on the proxy's CPUs that the proxy did not spend only for a proxy placed on its own CPUs" $ do
             let report = (scenarioReport "npm/merge-cold" 100 0 255 300){srProxy = Just (proxyWithPeak (300 * 1024 * 1024)){pfCpu = Just (placedWindow 1_000)}}
                 unplaced = loadedSection Npm 5_000 [report]

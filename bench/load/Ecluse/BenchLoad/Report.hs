@@ -343,12 +343,15 @@ proxyRows p =
             <> ")"
 
 -- The cgroup's memory through a burst: the reading with the most charged, and the one with the most in socket buffers.
+-- Every burst reads its cgroup at least once, so a burst without a reading had no cgroup to read.
 burstRows :: BurstMemory -> [Text]
-burstRows b =
-    [ row ("cgroup readings through the burst, every " <> show (bmIntervalMs b) <> " ms") (show (bmSamples b))
-    , row "highest memory.current in the burst, then memory.stat anon / file / kernel / sock" (maybe "n/a" (\c -> currentCell c <> ", then " <> statCell c) (bmHighestCurrent b))
-    , row "highest memory.stat sock in the burst, then memory.current" (maybe "n/a" (\c -> mib (fromIntegral (counter "sock" (crMemoryStat c))) <> ", then " <> currentCell c) (bmHighestSock b))
-    ]
+burstRows b
+    | bmSamples b == 0 = [row "cgroup readings through the burst" "no cgroup"]
+    | otherwise =
+        [ row ("cgroup readings through the burst, every " <> show (bmIntervalMs b) <> " ms") (show (bmSamples b))
+        , row "highest memory.current in the burst, then memory.stat anon / file / kernel / sock" (maybe "n/a" (\c -> currentCell c <> ", then " <> statCell c) (bmHighestCurrent b))
+        , row "highest memory.stat sock in the burst, then memory.current" (maybe "n/a" (\c -> mib (fromIntegral (counter "sock" (crMemoryStat c))) <> ", then " <> currentCell c) (bmHighestSock b))
+        ]
   where
     currentCell = maybe "n/a" (mib . fromIntegral) . crMemoryCurrent
 
