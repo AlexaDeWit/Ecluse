@@ -18,8 +18,13 @@ module Ecluse.Core.Deadline (
     Check,
     withDeadline,
     timeout,
+
+    -- * Spike 1866: swept waits
+    withSweptFlag,
+    holdSwept,
 ) where
 
+import Control.Concurrent.STM qualified as STM
 import Control.Exception (asyncExceptionFromException, asyncExceptionToException, handleJust, throwTo)
 import Data.Primitive.SmallArray (SmallArray, indexSmallArray, sizeofSmallArray, smallArrayFromList)
 import GHC.Clock (getMonotonicTimeNSec)
@@ -118,6 +123,20 @@ timeout deadlines micros action
         -- Base 'handleJust', because the unliftio one never catches an asynchronous exception.
         handleJust (\caught -> if caught == expiry then Just () else Nothing) (\() -> pure Nothing) $
             Just <$> withDeadline deadlines due action
+
+{- | Spike 1866: run an action with a flag the sweeper raises once the microseconds pass, about a
+tick late, in place of 'GHC.Conc.registerDelay'. The flag is written once.
+-}
+withSweptFlag :: Deadlines -> Int -> (TVar Bool -> IO a) -> IO a
+withSweptFlag deadlines micros action = do
+    flag <- newTVarIO False
+    limit <- (`nanosAfter` micros) <$> getMonotonicTimeNSec
+    let raise now = Nothing <$ when (now >= limit) (atomically (readTVar flag >>= \raised -> unless raised (writeTVar flag True)))
+    withDeadline deadlines raise (action flag)
+
+-- | Spike 1866: wait about the microseconds on the sweeper, without a GHC timer.
+holdSwept :: Deadlines -> Int -> IO ()
+holdSwept deadlines micros = withSweptFlag deadlines micros (atomically . (readTVar >=> STM.check))
 
 -- The monotonic nanoseconds this many microseconds after an instant, saturating rather than wrapping.
 nanosAfter :: Word64 -> Int -> Word64
