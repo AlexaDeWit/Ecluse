@@ -8,6 +8,7 @@ module Ecluse.Core.Server.MemoryModel.Calibration (
     Calibration (..),
     marginCharge,
     fullReadCharge,
+    keptCharge,
     npmCalibration,
     pypiCalibration,
 
@@ -38,6 +39,10 @@ marginCharge maximumRatio = 100 * ceiling (maximumRatio * 25 / 2)
 -- | Cover both realistic reads with margin and every measured shape, in permille.
 fullReadCharge :: Calibration -> Integer
 fullReadCharge calibration = max (marginCharge (realisticReadMaximum calibration)) (100 * ceiling (10 * allReadMaximum calibration))
+
+-- | Cover the largest shared cache entry with margin, in permille: what a completed read keeps.
+keptCharge :: Map Text Figures -> Integer
+keptCharge = marginCharge . foldl' max 0 . fmap retainedShared
 
 -- | npm's listing maxima.
 npmCalibration :: Calibration

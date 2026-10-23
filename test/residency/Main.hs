@@ -21,6 +21,7 @@ import Ecluse.Core.Server.MemoryModel.ProbeModeResidencySpec qualified as ProbeM
 import Ecluse.Core.Server.MemoryModelResidencySpec qualified as MemoryModelResidencySpec
 import Ecluse.Core.Server.MetadataGzipResidencySpec qualified as MetadataGzipResidencySpec
 import Ecluse.Core.Server.MirrorViewResidencySpec qualified as MirrorViewResidencySpec
+import Ecluse.Core.Server.Pipeline.PackumentResidencySpec qualified as PackumentResidencySpec
 import Ecluse.Core.Server.Pipeline.TarballResidencySpec qualified as TarballResidencySpec
 import System.Environment qualified as Environment
 import Test.Hspec (hspec)
@@ -46,6 +47,7 @@ main =
             NpmReaderResidencySpec.spec
             PyPIReaderResidencySpec.spec
             TarballResidencySpec.spec
+            PackumentResidencySpec.spec
             MemoryModelResidencySpec.spec
 
 runProbe :: Mode.ProbeMode -> FilePath -> IO ()

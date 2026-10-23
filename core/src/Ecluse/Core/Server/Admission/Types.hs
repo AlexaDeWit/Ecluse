@@ -29,6 +29,10 @@ data ChargeFactors = ChargeFactors
     {- ^ Per decompressed byte of a full read: 1.25 times the largest read peak per source byte of a
     realistic listing, or any listing's largest if more, from one meter step up, rounded up to a tenth.
     -}
+    , cfKeptPermille :: Int
+    {- ^ Per decompressed byte of a full read once it completes, until the render: 1.25 times the
+    largest shared cache entry per source byte, rounded up to a tenth.
+    -}
     , cfOutputPermille :: Int
     {- ^ Per byte of a listing's output basis: 1.25 times the largest output working set per basis byte
     of a single document or a realistic merge, on a capture of at least one meter step, rounded up.
