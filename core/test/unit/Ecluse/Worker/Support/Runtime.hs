@@ -80,7 +80,7 @@ import Ecluse.Core.Worker (
     newWorkerHeartbeat,
     runWorkerM,
  )
-import Ecluse.Test.Deadline (newSweptClient)
+import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -183,19 +183,19 @@ withWiredRuntime queue policies metricsPort body = do
 -- | 'withWiredRuntime' over a __caller-supplied__ heartbeat, so a test observes the heartbeat a mid-batch step reads while the loop runs.
 withWiredRuntimeHeartbeat :: WorkerHeartbeat -> MirrorQueue -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> IO a) -> IO a
 withWiredRuntimeHeartbeat heartbeat queue policies metricsPort body = do
-    exchanges <- newSweptClient =<< newManager defaultManagerSettings
-    publicControl <- newPublicControl (\_ _ _ -> pass) (\_ _ -> pass)
-    body
-        WorkerRuntime
-            { wrQueue = queue
-            , wrClient = exchanges
-            , wrPublicControl = publicControl
-            , wrHeartbeat = heartbeat
-            , wrMetrics = metricsPort
-            , wrTracing = passthroughWorkerTracingPort
-            , wrInjectTraceContext = id
-            , wrPolicies = policies
-            }
+    withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+        publicControl <- newPublicControl (\_ _ _ -> pass) (\_ _ -> pass)
+        body
+            WorkerRuntime
+                { wrQueue = queue
+                , wrClient = exchanges
+                , wrPublicControl = publicControl
+                , wrHeartbeat = heartbeat
+                , wrMetrics = metricsPort
+                , wrTracing = passthroughWorkerTracingPort
+                , wrInjectTraceContext = id
+                , wrPolicies = policies
+                }
 
 -- | 'withRuntimeRegistry' with the recording publish double answering the given publish outcome.
 withRuntimePolicies :: WorkerPolicies -> WorkerMetricsPort -> Either PublishFault () -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a

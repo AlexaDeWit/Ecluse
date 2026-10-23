@@ -38,7 +38,7 @@ import Ecluse.Core.Server.Readiness (
 import Ecluse.Core.Worker (Liveness (liveHealthy, liveLastPoll))
 import Ecluse.Runtime.Server.Drain (DrainSignal, isDraining)
 
-{- | Answer an empty @503@ for a request that outlives this many seconds, up to one sweep late. Like
+{- | Answer an empty @503@ for a request that outlives this many seconds, about one sweep late. Like
 wai-extra's @timeout@, it answers even when a response has already begun.
 -}
 requestTimeout :: Deadlines -> Int -> Middleware

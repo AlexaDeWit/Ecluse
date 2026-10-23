@@ -17,7 +17,7 @@ import Ecluse.Core.Registry.Exchange (withSuccessBodyUsing)
 import Ecluse.Core.Registry.Public (ReadControl (Controlled), classifyPublicResponse)
 import Ecluse.Core.Security (Limits (progressFloor), defaultLimits)
 import Ecluse.Core.Telemetry.Upstream (ExchangeOutcome (ResponseStatus), PublicReadKind (Listing))
-import Ecluse.Test.Deadline (newSweptClient)
+import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Registry.Public (PublicFixture (..), newPublicFixture)
 import Ecluse.Test.Stub (allCaptured, stubBaseUrl, withRoutedStubIO)
 
@@ -39,19 +39,19 @@ spec = do
         response <- newIORef (status429, [("Retry-After", "60")], "busy")
         withRoutedStubIO (const (readIORef response)) $ \stub -> do
             fixture <- newPublicFixture
-            exchanges <- newSweptClient =<< newManager defaultManagerSettings
-            request <- parseRequest (toString (stubBaseUrl stub))
-            let fetch = withSuccessBodyUsing (Controlled (pfControl fixture) Listing) exchanges (progressFloor defaultLimits) (const (pure (Right ()))) request
-            fetch `shouldReturn` Left (FetchCooldown (RetryAfter 60))
-            pfAdvance fixture 10
-            fetch `shouldReturn` Left (FetchCooldown (RetryAfter 50))
-            length <$> allCaptured stub `shouldReturn` 1
-            pfRequests fixture `shouldReturn` [("127.0.0.1", Listing, ResponseStatus 429)]
-            writeIORef response (status200, [], "ok")
-            pfAdvance fixture 50
-            fetch `shouldReturn` Right (SuccessBody 200 ())
-            length <$> allCaptured stub `shouldReturn` 2
-            map snd <$> pfTransitions fixture `shouldReturn` [CoolingDown, Recovered]
-            pfRequests fixture `shouldReturn` [("127.0.0.1", Listing, ResponseStatus 429), ("127.0.0.1", Listing, ResponseStatus 200)]
+            withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                request <- parseRequest (toString (stubBaseUrl stub))
+                let fetch = withSuccessBodyUsing (Controlled (pfControl fixture) Listing) exchanges (progressFloor defaultLimits) (const (pure (Right ()))) request
+                fetch `shouldReturn` Left (FetchCooldown (RetryAfter 60))
+                pfAdvance fixture 10
+                fetch `shouldReturn` Left (FetchCooldown (RetryAfter 50))
+                length <$> allCaptured stub `shouldReturn` 1
+                pfRequests fixture `shouldReturn` [("127.0.0.1", Listing, ResponseStatus 429)]
+                writeIORef response (status200, [], "ok")
+                pfAdvance fixture 50
+                fetch `shouldReturn` Right (SuccessBody 200 ())
+                length <$> allCaptured stub `shouldReturn` 2
+                map snd <$> pfTransitions fixture `shouldReturn` [CoolingDown, Recovered]
+                pfRequests fixture `shouldReturn` [("127.0.0.1", Listing, ResponseStatus 429), ("127.0.0.1", Listing, ResponseStatus 200)]
   where
     now = UTCTime (fromGregorian 2026 10 18) 0

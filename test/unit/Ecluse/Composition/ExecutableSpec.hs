@@ -48,6 +48,7 @@ import Ecluse.Composition.Types (
  )
 import Ecluse.Config (DeletionConsent (DeletionPermitted), StoreBackend (BackendCodeArtifact, BackendRegistry, BackendVerdaccio))
 import Ecluse.Core.Credential (mintSecret, mkSecret, unSecret)
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired))
 import Ecluse.Core.Queue (noMirrorQueue)
@@ -73,7 +74,6 @@ import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (CodeArtifactC
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEpssRequirement))
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (CodeArtifactStore, casDomain, casDomainOwner, casFormat, casRegion, casRepository), codeArtifactFormat)
 import Ecluse.Service (mountBindingFor)
-import Ecluse.Test.Deadline (newSweptDeadlines)
 import Ecluse.Test.Env (withAmbientAws)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation, readFakeContents), FakeStoreConfig (fakeUpstream), defaultFakeStoreConfig, newFakeStore, seededStoreConfig)
@@ -611,7 +611,7 @@ reportUnder envVars role resolveAdapter buildQueue buildCredentials buildStore =
     config <- expectConfig envVars Nothing
     bootPlan <- expectPlanFor role envVars Nothing config noCeiling
     logEnv <- newTestLogEnv
-    deadlines <- newSweptDeadlines
+    deadlines <- newDeadlines
     planExecutable logEnv passthroughTracingPort deadlines resolveAdapter buildQueue buildCredentials buildStore bootPlan
 
 -- | 'planFor', failing the test on a refusal.

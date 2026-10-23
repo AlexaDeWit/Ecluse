@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecManager))
 import Ecluse.Core.Security (Limits (progressFloor), ProgressFloor, defaultLimits, mkProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
 import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamBody (NoBody, StreamBody), UpstreamBodyFailed (UpstreamBodyFailed), UpstreamResult (..), pumpBody, withUpstreamResult)
-import Ecluse.Test.Deadline (newSweptClient)
+import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Registry.JsonStream (sliceChunks)
 import Ecluse.Test.Stub (requestSecrets, signedRequest)
 import Ecluse.Test.Stub.Socket (resetAfterPartialBody, trustingTlsManager, withTlsServer)
@@ -143,13 +143,13 @@ spec = do
 
         it "raises a typed unreachable fault when a TLS upstream resets mid-body" $ do
             escaped <- newIORef Nothing
-            client <- newSweptClient =<< trustingTlsManager
-            void (tryAny (withTlsServer resetAfterPartialBody (askProxy (ecManager client) . recordingSignedRelay overTls escaped client)))
-            readIORef escaped >>= \case
-                Just err -> do
-                    fmap (\(UpstreamBodyFailed fault) -> tfCause fault) (fromException err) `shouldBe` Just TransportUnreachable
-                    for_ requestSecrets $ \secret -> toText (displayException err) `shouldSatisfy` (not . T.isInfixOf secret)
-                Nothing -> expectationFailure "no fault escaped the committed relay"
+            withExchangeClient trustingTlsManager $ \client -> do
+                void (tryAny (withTlsServer resetAfterPartialBody (askProxy (ecManager client) . recordingSignedRelay overTls escaped client)))
+                readIORef escaped >>= \case
+                    Just err -> do
+                        fmap (\(UpstreamBodyFailed fault) -> tfCause fault) (fromException err) `shouldBe` Just TransportUnreachable
+                        for_ requestSecrets $ \secret -> toText (displayException err) `shouldSatisfy` (not . T.isInfixOf secret)
+                    Nothing -> expectationFailure "no fault escaped the committed relay"
 
     describe "withUpstreamResult, a bodiless relay (HEAD, no pump)" $
         it "relays the upstream status and content headers with no body on a hit" $ do
@@ -213,16 +213,16 @@ probeProxy = relayProxy (progressFloor defaultLimits) NoBody statusIsSuccessful 
 -- One request through the proxy under test, standing in front of this upstream.
 throughProxy :: Application -> ProxyApp -> IO (HTTP.Response LByteString)
 throughProxy upstream proxy = do
-    client <- newSweptClient =<< newManager defaultManagerSettings
-    testWithApplication (pure upstream) (askProxy (ecManager client) . proxy client)
+    withExchangeClient (newManager defaultManagerSettings) $ \client -> do
+        testWithApplication (pure upstream) (askProxy (ecManager client) . proxy client)
 
 -- 'throughProxy' against a port bound only long enough to learn a free one, then released, so
 -- the proxy's open fails.
 throughDeadUpstream :: ProxyApp -> IO (HTTP.Response LByteString)
 throughDeadUpstream proxy = do
-    client <- newSweptClient =<< newManager defaultManagerSettings
-    deadPort <- testWithApplication (pure missingUpstream) pure
-    askProxy (ecManager client) (proxy client deadPort)
+    withExchangeClient (newManager defaultManagerSettings) $ \client -> do
+        deadPort <- testWithApplication (pure missingUpstream) pure
+        askProxy (ecManager client) (proxy client deadPort)
 
 -- One request at the proxy's root, over the manager the proxy itself relays with.
 askProxy :: HTTP.Manager -> Application -> IO (HTTP.Response LByteString)

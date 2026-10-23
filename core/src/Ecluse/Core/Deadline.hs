@@ -4,7 +4,7 @@
 
 {- | Deadlines that one sweeper thread checks every 100 ms, so arming one never waits on another
 thread. GHC's timers share one process-wide queue, and every arm and disarm edits it in turn. Here
-arming adds to a list owned by the arming thread's capability, and a deadline fires up to one tick
+arming adds to a list owned by the arming thread's capability, and a deadline fires about one tick
 late. A due check is thrown from a forked thread, as 'System.Timeout.timeout' does, so a disarm can
 stop a throw still in flight.
 -}
@@ -17,7 +17,6 @@ module Ecluse.Core.Deadline (
     -- * Armed scopes
     Check,
     withDeadline,
-    withEndableDeadline,
     timeout,
 ) where
 
@@ -88,11 +87,7 @@ throwOnce owner lock failure = do
 thread while the action runs, and never after it ends.
 -}
 withDeadline :: Deadlines -> Check -> IO a -> IO a
-withDeadline deadlines check = withEndableDeadline deadlines check . const
-
--- | 'withDeadline' whose action can end the check early. Once the end returns, nothing the check raised lands.
-withEndableDeadline :: Deadlines -> Check -> (IO () -> IO a) -> IO a
-withEndableDeadline deadlines check action = bracket (arm deadlines check) disarm (action . disarm)
+withDeadline deadlines check action = bracket (arm deadlines check) disarm (const action)
 
 arm :: Deadlines -> Check -> IO (MVar (Maybe ThreadId))
 arm (Deadlines cells) check = do
@@ -103,14 +98,14 @@ arm (Deadlines cells) check = do
     void (IORef.atomicModifyIORef'_ cell (Armed owner lock check :))
     pure lock
 
--- A thrower that claimed the lock first dies before its throw lands, as this thread is uninterruptible here. A second disarm does nothing.
+-- A thrower that claimed the lock first dies before its throw lands, as this thread is uninterruptible here.
 disarm :: MVar (Maybe ThreadId) -> IO ()
 disarm lock = uninterruptibleMask_ $ do
     disarmed <- tryPutMVar lock Nothing
     unless disarmed (readMVar lock >>= traverse_ killThread)
 
 {- | 'System.Timeout.timeout' on the sweeper: 'Nothing' once the action outlives the microseconds,
-up to a tick late. A negative bound never fires, and zero fires at once.
+about a tick late. A negative bound never fires, and zero fires at once.
 -}
 timeout :: Deadlines -> Int -> IO a -> IO (Maybe a)
 timeout deadlines micros action

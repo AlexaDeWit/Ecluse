@@ -8,6 +8,7 @@ module Ecluse.Core.Supervision.Internal (
     superviseLoop,
     superviseLoopWithDelay,
     superviseBackground,
+    superviseUnder,
     SupervisionPolicy (..),
     transientPolicy,
     FaultDisposition (..),
@@ -96,9 +97,13 @@ superviseLoopWithDelay delayAction policy step = go 0
 Pacing lives in the step, and the loop logs under the label's namespace.
 -}
 superviseBackground :: Text -> LogEnv -> IO () -> IO ()
-superviseBackground label logEnv task =
-    void . runKatipContextT logEnv (mempty :: SimpleLogPayload) (Namespace [label]) $
-        superviseLoop (transientPolicy label backgroundLoopBackoff) (liftIO task)
+superviseBackground label = superviseUnder (transientPolicy label backgroundLoopBackoff)
+
+-- | Run a background loop under a policy, logging under the policy's label.
+superviseUnder :: SupervisionPolicy -> LogEnv -> IO () -> IO ()
+superviseUnder policy logEnv task =
+    void . runKatipContextT logEnv (mempty :: SimpleLogPayload) (Namespace [spLabel policy]) $
+        superviseLoop policy (liftIO task)
 
 -- A retry the loop makes for itself, so it warns. The 'Permanent' arm of 'superviseLoop' is this
 -- combinator's only error, and it fails the process up.

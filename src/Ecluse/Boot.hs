@@ -26,6 +26,10 @@ module Ecluse.Boot (
     -- * Boot-time logging and wiring
     logBootWarning,
     logBootInfo,
+
+    -- * The deadline sweeper
+    withDeadlineSweeper,
+    alongsideSweeper,
     buildMirrorQueue,
     applyServerSettings,
     probeServerConfig,
@@ -71,7 +75,12 @@ import Ecluse.Core.Deadline (Deadlines, newDeadlines, sweepTick)
 import Ecluse.Core.Queue (MirrorQueue (deadLetterTerminus, deliveryBudget))
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
-import Ecluse.Core.Supervision (superviseBackground)
+import Ecluse.Core.Supervision (
+    FaultDisposition (Permanent),
+    SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
+    backgroundLoopBackoff,
+    superviseUnder,
+ )
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Rts (RuntimeOverrides (RuntimeOverrides, roCores, roCoresCeiling, roMaxHeapBytes), applyRuntimePosture)
 import Ecluse.Runtime.Log (moduleLog, newLogEnv)
@@ -218,12 +227,23 @@ withBootEnv role action = do
                             , beDeadlines = deadlines
                             }
 
-{- Run the sweeper beside the role. It starts once the runtime posture has fixed the capability
-count, and a fault in it fails the process rather than leaving every deadline unarmed. -}
+{- | Run the deadline sweeper beside the role. Start it once the runtime posture has fixed the
+capability count.
+-}
 withDeadlineSweeper :: LogEnv -> (Deadlines -> IO a) -> IO a
 withDeadlineSweeper logEnv action = do
     deadlines <- newDeadlines
-    withAsync (superviseBackground "deadline-sweeper" logEnv (sweepTick deadlines)) (\sweeper -> link sweeper >> action deadlines)
+    alongsideSweeper logEnv (sweepTick deadlines) (action deadlines)
+
+{- | Run an action beside a sweep step repeated forever. A fault in the step fails the action: a
+sweeper that stops firing deadlines is worse than a restart.
+-}
+alongsideSweeper :: LogEnv -> IO () -> IO a -> IO a
+alongsideSweeper logEnv sweep action =
+    withAsync (superviseUnder sweeperPolicy logEnv sweep) (\sweeper -> link sweeper >> action)
+
+sweeperPolicy :: SupervisionPolicy
+sweeperPolicy = SupervisionPolicy{spLabel = "deadline-sweeper", spClassify = const Permanent, spBackoff = backgroundLoopBackoff}
 
 {- Log the report and yield the plan, or refuse. The order is load-bearing: @ecluse check-config@
 prints the same lists in it, so a transcript and a boot log agree line for line. -}

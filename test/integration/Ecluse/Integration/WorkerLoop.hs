@@ -40,7 +40,7 @@ import Ecluse.Core.Worker (WorkerPolicies)
 import Ecluse.Runtime.Env (Env)
 import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue)
 import Ecluse.Service (runWorker)
-import Ecluse.Test.Deadline (newSweptClient)
+import Ecluse.Test.Deadline (unsweptClient)
 import Ecluse.Test.Poll (runUntil)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRightText)
@@ -121,7 +121,7 @@ mirrorPoliciesUnderAt rules mirrorUrl digests = do
 
 newPublishAt :: Text -> IO MirrorPublish
 newPublishAt mirrorUrl = do
-    client <- newSweptClient =<< newManager defaultManagerSettings
+    client <- unsweptClient =<< newManager defaultManagerSettings
     let transport =
             MirrorTransport
                 { ptClient = client
