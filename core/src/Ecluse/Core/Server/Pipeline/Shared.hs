@@ -111,7 +111,6 @@ shedStatus = status503
 shedMessage :: Text
 shedMessage = "server is busy; retry later"
 
--- | The @Retry-After@ header name.
 hRetryAfter :: HeaderName
 hRetryAfter = "Retry-After"
 
