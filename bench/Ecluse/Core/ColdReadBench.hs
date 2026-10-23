@@ -28,6 +28,7 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked, pyp
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataClient (..), MetadataError (MetadataFetch), VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.Origin (perCallerOrigin)
+import Ecluse.Core.Registry.Request (mkBaseRequest)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Metadata (ecosystemMetadataReads, privateMetadataClient)
@@ -52,7 +53,8 @@ withBenchmarks ecosystems action = do
 
 replayResponse :: (EcosystemBench, LoadedEntry) -> IO (ByteString, BL.ByteString)
 replayResponse (ecosystem, LoadedEntry{lePackage = package, leBytes = raw}) = do
-    request <- expectRight (erRequest (metadataRead (ebMetadata ecosystem)) (ebOrigin ecosystem) Nothing (cpPackage package))
+    base <- expectRight (mkRegistryUrl (ebOrigin ecosystem))
+    request <- expectRight (erRequest (metadataRead (ebMetadata ecosystem)) (mkBaseRequest base) Nothing (cpPackage package))
     pure (HTTP.path request, BL.fromStrict raw)
 
 replayApplication :: Map ByteString BL.ByteString -> Application
@@ -145,4 +147,4 @@ sameDocument left right = case (snd npmPacked left, snd npmPacked right, snd pyp
 metadataClient :: HTTP.Manager -> EcosystemBench -> Limits -> IO MetadataClient
 metadataClient manager ecosystem limits = do
     base <- expectRight (mkRegistryUrl (ebOrigin ecosystem))
-    pure (privateMetadataClient (ecosystemMetadataReads (metadataRead (ebMetadata ecosystem)) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) (perCallerOrigin limits manager base Nothing)))
+    pure (privateMetadataClient (ecosystemMetadataReads (metadataRead (ebMetadata ecosystem)) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) (perCallerOrigin limits manager (mkBaseRequest base) Nothing)))

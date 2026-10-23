@@ -31,7 +31,9 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Registry.Metadata.Fetch (chargingSelectedReads, fetchManifest, fetchVersion, readManifest, readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest), ReadTerms (..))
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocLimits), chargingFullReads, originBaseUrl, originClient, perCallerOrigin)
+import Ecluse.Core.Registry.Request (baseRequestUrl, mkBaseRequest)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooManyVersions), Limits (maxMetadataBytes, maxVersionCount), defaultLimits)
+import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Metadata (ecosystemMetadataReads, privateMetadataClient)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
@@ -60,7 +62,7 @@ statusSpec eco = describe "upstream statuses" $ do
                 events <- newIORef ([] :: [(Text, PackageName)])
                 let record phase who action = modifyIORef' events (<> [(phase, who)]) >> action
                     tracing = passthroughTracingPort{spanMetadataFetch = record "fetch", spanMetadataDecode = record "decode"}
-                    origin = perCallerOrigin defaultLimits manager (loopbackRegistryUrl (stubBaseUrl stub)) Nothing
+                    origin = perCallerOrigin defaultLimits manager (mkBaseRequest (loopbackRegistryUrl (stubBaseUrl stub))) Nothing
                     client = privateMetadataClient (ecosystemMetadataReads (rdRead eco) tracing noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
                 full <- fetchFullManifest client (thing eco)
                 void full `shouldBe` expected
@@ -77,7 +79,7 @@ statusSpec eco = describe "upstream statuses" $ do
         withStub status200 (toLazy document) $ \stub -> do
             manager <- newManager defaultManagerSettings
             charges <- newIORef (0 :: Int)
-            let origin = chargingFullReads (\n -> modifyIORef' charges (+ n)) (perCallerOrigin defaultLimits manager (loopbackRegistryUrl (stubBaseUrl stub)) Nothing)
+            let origin = chargingFullReads (\n -> modifyIORef' charges (+ n)) (perCallerOrigin defaultLimits manager (mkBaseRequest (loopbackRegistryUrl (stubBaseUrl stub))) Nothing)
                 client = privateMetadataClient (ecosystemMetadataReads (rdRead eco) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
             _ <- fetchVersionMetadata client (thing eco) (releaseOf eco)
             readIORef charges `shouldReturn` 0
@@ -157,7 +159,7 @@ requestSpec eco = describe "the request" $ do
             map capPath <$> allCaptured stub `shouldReturn` ["/"]
   where
     -- http-client's own parse leaves redirect following on, which a sealed request turns off.
-    unsealedRequest base _ _ = first (const EmptyBaseUrl) (parseRequest (toString base) :: Either SomeException Request)
+    unsealedRequest base _ _ = first (const EmptyBaseUrl) (parseRequest (toString (registryUrlText (baseRequestUrl base))) :: Either SomeException Request)
     redirectOnce captured
         | capPath captured == "/moved" = (status200, [], toLazy (rdDocument eco "thing" 0))
         | otherwise = (status302, [(hLocation, "/moved")], "")

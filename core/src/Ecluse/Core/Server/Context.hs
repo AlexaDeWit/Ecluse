@@ -15,6 +15,8 @@ module Ecluse.Core.Server.Context (
     PackumentDeps (..),
     pdPrivateBaseUrl,
     pdPublicBaseUrl,
+    pdPrivateBase,
+    pdPublicBase,
     pdMirror,
     pdTarballHostGate,
     tarballHostHonoured,
@@ -56,7 +58,7 @@ import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact, AdapterMetadata, AdapterPublish, ProjectName)
 import Ecluse.Core.Registry.Public (PublicControl)
-import Ecluse.Core.Registry.Request (CredentialMapping)
+import Ecluse.Core.Registry.Request (BaseRequest, CredentialMapping)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Rules.Outage (AdmissionIdentity)
 import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, tarballHostAllowed, thgAllowlist, thgEcosystemHosts)
@@ -73,7 +75,9 @@ import Ecluse.Core.Server.Upstream (
     MirrorServePlan,
     MountUpstreams,
     upstreamMirror,
+    upstreamPrivateBase,
     upstreamPrivateBaseUrl,
+    upstreamPublicBase,
     upstreamPublicBaseUrl,
     upstreamTarballHostGate,
  )
@@ -149,6 +153,14 @@ pdPrivateBaseUrl = upstreamPrivateBaseUrl . pdUpstreams
 -- | The public upstream base URL. Reads are anonymous, with no client credential.
 pdPublicBaseUrl :: PackumentDeps -> RegistryUrl
 pdPublicBaseUrl = upstreamPublicBaseUrl . pdUpstreams
+
+-- | 'pdPrivateBaseUrl' parsed once at boot, which the private reads build their requests under.
+pdPrivateBase :: PackumentDeps -> Maybe BaseRequest
+pdPrivateBase = upstreamPrivateBase . pdUpstreams
+
+-- | 'pdPublicBaseUrl' parsed once at boot, which the public reads build their requests under.
+pdPublicBase :: PackumentDeps -> BaseRequest
+pdPublicBase = upstreamPublicBase . pdUpstreams
 
 -- | The mirror destination for admitted public artifacts, or no write for a serve-only mount.
 pdMirror :: PackumentDeps -> MirrorServePlan

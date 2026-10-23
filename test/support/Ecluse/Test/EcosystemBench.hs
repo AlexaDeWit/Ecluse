@@ -39,7 +39,7 @@ import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, filenameMemo, readCoordinate)
 import Ecluse.Core.Registry.PyPI.Route.Internal (pypiRoutes)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifFilename), SimpleIndex (siFiles))
-import Ecluse.Core.Registry.Request (sealRequest)
+import Ecluse.Core.Registry.Request (BaseRequest, mkBaseRequest, sealRequest)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
@@ -49,6 +49,7 @@ import Ecluse.Test.Corpus.Npm (benchPackageName, syntheticPackumentBytes)
 import Ecluse.Test.Corpus.PyPI (benchProject, syntheticIndexBytes)
 import Ecluse.Test.Corpus.Subset (heavyNpmBase, heavyPyPIBase, keepNpmVersions, keepPyPIVersions)
 import Ecluse.Test.EcosystemBench.Types
+import Ecluse.Test.Package (unsafeRegistryUrl)
 import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, captureManifest, captureVersion)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmFull, projectNpmManifest)
 import Ecluse.Test.Registry.Npm.Project (parseVersionBytes)
@@ -129,8 +130,8 @@ npmBench =
         , ebAction = \(method, segments) -> snd <$> matchRoute npmRoutes method [] segments
         , ebRouteScaling = []
         , ebRequestBuilds =
-            [ RequestBuild "artifact request" (\name -> NpmRequest.artifactRequestByFile npmOrigin benchCredential name (unscopedName name <> "-1.0.0.tgz"))
-            , RequestBuild "metadata request" (originRequest (adapterMetadata npmAdapter) npmOrigin)
+            [ RequestBuild "artifact request" (\name -> NpmRequest.artifactRequestUnder npmBase benchCredential name (unscopedName name <> "-1.0.0.tgz"))
+            , RequestBuild "metadata request" (originRequest (adapterMetadata npmAdapter) npmBase)
             ]
         }
 
@@ -167,7 +168,7 @@ pypiBench =
             , RouteScaling "valid filename separators" (\count -> distribution ("requests" <> T.replicate (fromIntegral count) "_" <> "1.tar.gz"))
             ]
         , ebRequestBuilds =
-            [ RequestBuild "index request" (originRequest (adapterMetadata pypiAdapter) pypiOrigin)
+            [ RequestBuild "index request" (originRequest (adapterMetadata pypiAdapter) pypiBase)
             , RequestBuild "artifact request" (artifactByUrl (adapterArtifact pypiAdapter) benchCredential . wheelUrl)
             ]
         }
@@ -178,12 +179,19 @@ npmOrigin = "https://registry.npmjs.org"
 pypiOrigin :: Text
 pypiOrigin = "https://pypi.org"
 
+-- The bases a mount parses once at boot, shared by every request a batch builds.
+npmBase :: BaseRequest
+npmBase = mkBaseRequest (unsafeRegistryUrl npmOrigin)
+
+pypiBase :: BaseRequest
+pypiBase = mkBaseRequest (unsafeRegistryUrl pypiOrigin)
+
 -- A private read presents the caller's credential, which the build attaches.
 benchCredential :: Maybe ClientCredential
 benchCredential = Just (bareCredential (mkSecret "bench-token"))
 
 -- The whole-document request a metadata read seals before it sends.
-originRequest :: AdapterMetadata -> Text -> PackageName -> Either UrlFormationError Request
+originRequest :: AdapterMetadata -> BaseRequest -> PackageName -> Either UrlFormationError Request
 originRequest metadata base name = sealRequest <$> erRequest (metadataRead metadata) base benchCredential name
 
 -- A wheel location as the index lists it, which the artifact read fetches by URL.

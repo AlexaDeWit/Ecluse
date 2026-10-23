@@ -5,6 +5,10 @@
 module Ecluse.Core.Registry.RequestSpec (spec) where
 
 import Data.List (lookup)
+import Data.Text qualified as T
+import Hedgehog (Gen, cover, forAll, (===))
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Network.HTTP.Client qualified as Client
 import Network.HTTP.Types (status200)
 import Network.HTTP.Types.Header (HeaderName, RequestHeaders, hAcceptEncoding, hUserAgent)
@@ -16,6 +20,7 @@ import Test.Hspec (
     shouldReturn,
     shouldSatisfy,
  )
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.BuildIdentity (userAgent)
 import Ecluse.Core.Credential (ClientCredential (ClientCredential, credSecret, credUsername), bareCredential, mkSecret, unSecret)
@@ -28,10 +33,16 @@ import Ecluse.Core.Registry.Request (
     credentialRecover,
     finaliseRequest,
     joinPath,
+    mkBaseRequest,
     parseRequestEither,
+    requestUnder,
     sealRequest,
  )
+import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.FieldValue (fieldValues)
+import Ecluse.Core.Server.Path (encodeComponent)
+import Ecluse.Registry.Request.Support (genBaseUrl, genComponent, outcomeFacts)
 import Ecluse.Test.Stub (headerValue, lastCaptured, stubBaseUrl, withStub)
 import Ecluse.Test.Support (parseRequestOrFail)
 
@@ -43,6 +54,7 @@ spec = do
     artifactByUrlSpec
     joinPathSpec
     parseSpec
+    underBaseSpec
 
 credentialMappingSpec :: Spec
 credentialMappingSpec = describe "a credential mapping carries one ecosystem's presentation both ways" $ do
@@ -192,6 +204,35 @@ parseSpec = describe "parseRequestEither maps a parse failure to UrlFormationErr
                 Client.redirectCount credentialed `shouldBe` 0
                 userAgents credentialed `shouldBe` [userAgent]
                 lookup "X-Api-Key" (Client.requestHeaders credentialed) `shouldBe` Just "tok-abc"
+
+underBaseSpec :: Spec
+underBaseSpec = describe "requestUnder builds under a base parsed once" $ do
+    it "keeps no parse for a base with a query or a fragment" $
+        for_ ["https://reg.test/?x", "https://reg.test#x"] $ \text ->
+            requestUnder (mkBaseRequest (loopbackRegistryUrl text)) "pkg" `shouldSatisfy` isNothing
+
+    it "leaves a path a parse would not keep verbatim to the joined parse" $
+        for_ ["a b", "a?b", "a#b", "%4", "%zz", "\xFC"] $ \suffix ->
+            requestUnder (mkBaseRequest (loopbackRegistryUrl "https://reg.test")) suffix `shouldSatisfy` isNothing
+
+    modifyMaxSuccess (const 5000) $
+        it "builds what parsing the joined URL builds, field by field, for generated bases and paths" $
+            hedgehog $ do
+                url <- loopbackRegistryUrl <$> forAll genBaseUrl
+                suffix <- forAll genSuffix
+                let joined = joinPath (registryUrlText url) suffix >>= parseRequestEither
+                    under = requestUnder (mkBaseRequest url) suffix
+                cover 30 "built under the parsed base" (isJust under)
+                cover 5 "left to the joined parse" (isNothing under)
+                outcomeFacts (maybe joined Right under) === outcomeFacts joined
+
+-- An encoded path as the builders write one, or raw text a parse would not keep verbatim.
+genSuffix :: Gen Text
+genSuffix =
+    Gen.frequency
+        [ (3, T.intercalate "/" <$> Gen.list (Range.linear 0 4) (encodeComponent <$> genComponent))
+        , (1, Gen.text (Range.linear 0 12) (Gen.element ("aZ09-._~@/%:?#[] \xFC+!$&'()*,;=\\" :: String)))
+        ]
 
 {- | A presentation that carries a raw token on a header it names itself. These cases
 therefore drive the mapping vocabulary, not any registered ecosystem's scheme.

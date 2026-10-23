@@ -47,9 +47,11 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.Metadata (Manifest (manifestDigest, manifestInfo, manifestRaw))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
+import Ecluse.Core.Registry.Request (mkBaseRequest)
 import Ecluse.Core.Rules (RuleDeps)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), PrecededRule)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), defaultLimits, maxMetadataBytes)
+import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Rts (RtsPosture (rpAllocAreaBytes, rpCapabilities), currentRtsPosture)
@@ -133,7 +135,9 @@ fetchDocument manager ecosystem pkg = case liveRequest ecosystem pkg of
             <$> fetchTestBody manager (progressFloor defaultLimits) (MetadataBodyLimit (maxMetadataBytes defaultLimits)) request{responseTimeout = responseTimeoutMicro (30 * 1000 * 1000)}
 
 liveRequest :: EcosystemBench -> PackageName -> Either Text Request
-liveRequest ecosystem = first show . erRequest (metadataRead (ebMetadata ecosystem)) (ebOrigin ecosystem) Nothing
+liveRequest ecosystem name = do
+    origin <- mkRegistryUrl (ebOrigin ecosystem)
+    first show (erRequest (metadataRead (ebMetadata ecosystem)) (mkBaseRequest origin) Nothing name)
 
 outcomeFrom :: Text -> Maybe Double -> Either Text (Int, [(Leg, Measurement)]) -> PackageOutcome
 outcomeFrom name upstreamMs = \case

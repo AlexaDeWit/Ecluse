@@ -35,7 +35,7 @@ import Ecluse.Core.Registry.Metadata.Projection (streamError)
 import Ecluse.Core.Registry.PyPI.Document (PackedSimple, SimpleDocument, restrictSimpleFiles)
 import Ecluse.Core.Registry.PyPI.FileWriter (FileWriter, fileWriter)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiFullWalk, pypiWalk)
-import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequest)
+import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequestUnder)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, finishPackedProjection, finishProjection, keepsFile, packedFileStep)
 import Ecluse.Core.Security (AllowedHostPorts, Limits, ecosystemArtifactAuthorities, maxNestingDepth)
@@ -53,7 +53,7 @@ pypiMirrorRead = pypiReadWith MirrorRead (\details -> Just . mirrorDocument deta
 pypiReadWith :: (PackageName -> Text -> PyPIRead) -> (PackageDetails -> SimpleDocument -> Maybe CachedDoc) -> EcosystemRead
 pypiReadWith mode retain =
     EcosystemRead
-        { erRequest = simpleIndexRequest
+        { erRequest = simpleIndexRequestUnder
         , erUniqueFields = fileUniqueFields
         , erWalkFull = \limits name _ -> readPyPIFull limits name
         , erFinishFull = finishPyPIFull
