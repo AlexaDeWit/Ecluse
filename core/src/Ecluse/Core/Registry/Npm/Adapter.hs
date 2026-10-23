@@ -54,7 +54,7 @@ npmAdapter =
                 }
         , adapterArtifact =
             AdapterArtifact
-                { artifactByFile = \origin -> NpmRequest.artifactRequestUnder (ocBaseRequest origin) (ocToken origin)
+                { artifactByFile = \origin -> NpmRequest.artifactRequestByFile (ocBaseRequest origin) (ocToken origin)
                 , artifactByUrl = NpmRequest.artifactRequestByUrl
                 , artifactHosts = NpmRequest.npmArtifactHosts
                 }

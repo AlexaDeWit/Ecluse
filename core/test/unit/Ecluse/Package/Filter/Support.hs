@@ -15,6 +15,9 @@ module Ecluse.Package.Filter.Support (
     upstreams,
     genHostileUrl,
     genHostileInfo,
+    hostileHosts,
+    hostilePorts,
+    respell,
 ) where
 
 import Data.Aeson (Value (String))
@@ -135,16 +138,23 @@ genHostileUrl served = genHostileAuthority served >>= genHostileUrlAt
 -- An authority as a hostile URL writes it, with a suffix that may end it early or add userinfo.
 genHostileAuthority :: [Text] -> Gen Text
 genHostileAuthority served = do
-    authority <- Gen.frequency [(3, Gen.element served), (1, (<>) <$> Gen.element otherHosts <*> Gen.element ports)]
+    authority <- Gen.frequency [(3, Gen.element served), (1, (<>) <$> Gen.element hostileHosts <*> Gen.element hostilePorts)]
     suffix <- Gen.frequency [(8, pure ""), (1, Gen.element authoritySuffixes)]
     pure (authority <> suffix)
   where
-    otherHosts = ["registry.npmjs.org", "pypi.org", "files.pythonhosted.org", "[::1]", "127.0.0.1", "cdn.example.net", "evil.test", "[2606:4700::1111]", "[::1", "b\xFC\&cher.example", "xn--bcher-kva.example", "", "169.254.169.254"]
     authoritySuffixes = ["#@evil.test", "?@registry.npmjs.org", "@evil.test", ":443@evil.test", "\\@evil.test"]
 
--- Port spellings, the empty, malformed and full-width ones included.
-ports :: [Text]
-ports = ["", ":443", ":8443", ":8080", ":", ":0", ":0443", ":65536", ":\xFF18\xFF10"]
+-- | Hosts a hostile URL names: registries, loopback, IPv6, non-ASCII, empty, unclosed and metadata addresses.
+hostileHosts :: [Text]
+hostileHosts = ["registry.npmjs.org", "pypi.org", "files.pythonhosted.org", "[::1]", "127.0.0.1", "cdn.example.net", "evil.test", "[2606:4700::1111]", "[::1", "b\xFC\&cher.example", "xn--bcher-kva.example", "", "169.254.169.254"]
+
+-- | Port spellings, the empty, malformed and full-width ones included.
+hostilePorts :: [Text]
+hostilePorts = ["", ":443", ":8443", ":8080", ":", ":0", ":0443", ":65536", ":\xFF18\xFF10"]
+
+-- | Each character of @text@ in its own case or upper-cased, so a scheme or host is respelled.
+respell :: Text -> Gen Text
+respell = fmap toText . traverse (\c -> Gen.element (ordNub [c, toUpper c])) . T.unpack
 
 -- A hostile URL around the given authority.
 genHostileUrlAt :: Text -> Gen Text
@@ -158,7 +168,6 @@ genHostileUrlAt authority = do
     let url = leading <> scheme <> userinfo <> authority <> directory <> file <> trailing
     Gen.frequency [(8, pure url), (1, strayChar url)]
   where
-    respell = fmap toText . traverse (\c -> Gen.element (ordNub [c, toUpper c])) . T.unpack
     strayChar url = do
         at <- Gen.int (Range.linear 0 (T.length url))
         stray <- Gen.unicode
@@ -198,7 +207,7 @@ genHostileInfo served = do
 genSharedAuthorities :: [Text] -> Gen [Text]
 genSharedAuthorities served = do
     authority <- Gen.frequency [(4, genHostileAuthority served), (1, Gen.element ["[::1]:8443", "[::1]", "[2606:4700::1111]:443"])]
-    port <- Gen.element ports
+    port <- Gen.element hostilePorts
     respellings <- Gen.subsequence [T.toUpper authority, withoutPort authority <> port, T.replace "::" ":0::" (T.replace "[::" "[0::" authority)]
     pure (authority : respellings)
 

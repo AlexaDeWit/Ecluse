@@ -130,7 +130,7 @@ npmBench =
         , ebAction = \(method, segments) -> snd <$> matchRoute npmRoutes method [] segments
         , ebRouteScaling = []
         , ebRequestBuilds =
-            [ RequestBuild "artifact request" (\name -> NpmRequest.artifactRequestUnder npmBase benchCredential name (unscopedName name <> "-1.0.0.tgz"))
+            [ RequestBuild "artifact request" (\name -> NpmRequest.artifactRequestByFile npmBase benchCredential name (unscopedName name <> "-1.0.0.tgz"))
             , RequestBuild "metadata request" (originRequest (adapterMetadata npmAdapter) npmBase)
             ]
         }
@@ -179,7 +179,7 @@ npmOrigin = "https://registry.npmjs.org"
 pypiOrigin :: Text
 pypiOrigin = "https://pypi.org"
 
--- The bases a mount parses once at boot, shared by every request a batch builds.
+-- The bases a mount parses once, shared by every request a batch builds.
 npmBase :: BaseRequest
 npmBase = mkBaseRequest (unsafeRegistryUrl npmOrigin)
 

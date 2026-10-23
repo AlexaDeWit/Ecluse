@@ -10,14 +10,16 @@ module Ecluse.Registry.Request.Support (
     RequestFacts,
     outcomeFacts,
 
-    -- * Generators
+    -- * Bases
+    baseAt,
     forAllBase,
+
+    -- * Generators
     genBaseUrl,
     genComponent,
     genCredential,
 ) where
 
-import Data.Char (toUpper)
 import Data.Text qualified as T
 import Hedgehog (Gen, PropertyT, cover, forAll)
 import Hedgehog.Gen qualified as Gen
@@ -27,10 +29,10 @@ import Network.HTTP.Types (Method, RequestHeaders)
 
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), bareCredential, mkSecret)
 import Ecluse.Core.Registry (UrlFormationError)
-import Ecluse.Core.Registry.Request (BaseRequest, mkBaseRequest, requestUnder)
+import Ecluse.Core.Registry.Request (BaseRequest, mkBaseRequest, requestAt)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Package.Filter.Support (genHostileUrl)
+import Ecluse.Package.Filter.Support (genHostileUrl, hostileHosts, hostilePorts, respell)
 import Ecluse.Test.Server.Route (genPathSegmentFrom)
 
 -- | The fields a sent request carries, compared field by field and in header order.
@@ -72,15 +74,20 @@ requestFacts request =
 decompressProbes :: [ByteString]
 decompressProbes = ["application/x-tar", "application/gzip", "application/json", ""]
 
+-- | The base parsed once from @url@, held as the egress witness holds it.
+baseAt :: Text -> BaseRequest
+baseAt = mkBaseRequest . loopbackRegistryUrl
+
 {- | A generated base URL as the egress witness holds it, and the base parsed once from it. Most
-generated bases must keep a parse, or the property would hold only the fallback.
+bases must parse with no query or fragment, so most requests append to the base's one parse.
 -}
 forAllBase :: PropertyT IO (Text, BaseRequest)
 forAllBase = do
     url <- loopbackRegistryUrl <$> forAll genBaseUrl
     let base = mkBaseRequest url
-    cover 40 "the base kept a parse" (isJust (requestUnder base ""))
-    pure (registryUrlText url, base)
+        text = registryUrlText url
+    cover 40 "the base parses with no query or fragment" (isRight (requestAt base "") && not (T.any (`elem` ("?#" :: String)) text))
+    pure (text, base)
 
 {- | A configured base URL: respelled schemes, named, numeric, non-ASCII and bracketed IPv6 hosts,
 ports, spaced and non-ASCII directories, trailing slashes, and at times a query, fragment or hostile URL.
@@ -92,17 +99,14 @@ genConfiguredBase :: Gen Text
 genConfiguredBase = do
     scheme <- Gen.element ["https://", "http://" :: Text] >>= respell
     userinfo <- Gen.frequency [(12, pure ""), (1, Gen.element ["user:pass@", "a b@", "%40@", "@"])]
-    authority <- Gen.element hosts
-    written <- Gen.frequency [(3, pure ""), (2, Gen.element ports)]
+    authority <- Gen.element (hostileHosts <> otherHosts)
+    written <- Gen.frequency [(3, pure ""), (2, Gen.element (":44a" : hostilePorts))]
     directories <- Gen.list (Range.linear 0 3) genDirectory
     slashes <- Gen.int (Range.linear 0 3)
     ending <- Gen.frequency [(12, pure ""), (1, Gen.element ["?", "?q=1", "#", "#frag", "?a#b"])]
     pure (scheme <> userinfo <> authority <> written <> foldMap ("/" <>) directories <> T.replicate slashes "/" <> ending)
   where
-    respell :: Text -> Gen Text
-    respell = fmap toText . traverse (\c -> Gen.element (ordNub [c, toUpper c])) . toString
-    hosts = ["registry.npmjs.org", "REGISTRY.NpmJS.org", "pypi.org", "localhost", "127.0.0.1", "[::1]", "[2606:4700::1111]", "[fe80::1%25eth0]", "[v1.x]", "b\xFC\&cher.example", "xn--bcher-kva.example", "my registry.example", "", "[::1", "host%", "a%41b", "999.1.1.1", "1.2.3.4.5"]
-    ports = [":443", ":8443", ":8080", ":0", ":", ":65536", ":0443", ":44a", ":\xFF18"]
+    otherHosts = ["REGISTRY.NpmJS.org", "localhost", "[fe80::1%25eth0]", "[v1.x]", "my registry.example", "host%", "a%41b", "999.1.1.1", "1.2.3.4.5"]
 
 -- One directory of a base's path, from the plain names a registry mounts under to hostile text.
 genDirectory :: Gen Text

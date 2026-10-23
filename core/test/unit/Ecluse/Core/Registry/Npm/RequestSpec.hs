@@ -22,12 +22,11 @@ import Ecluse.Core.Registry.Npm.Request (
     artifactFileUrl,
     artifactRequestByFile,
     artifactRequestByUrl,
-    artifactRequestUnder,
     metadataRequest,
     metadataRequestUnder,
  )
 
-import Ecluse.Registry.Request.Support (forAllBase, genComponent, genCredential, outcomeFacts)
+import Ecluse.Registry.Request.Support (baseAt, forAllBase, genComponent, genCredential, outcomeFacts)
 import Ecluse.Test.Registry.Npm (isOdd)
 
 spec :: Spec
@@ -112,7 +111,7 @@ redirectSpec = describe "no data-plane request follows an upstream redirect" $ d
         expectRedirectCount 0 (metadataRequest "https://reg.test" Nothing Abbreviated isOdd)
 
     it "a token-bearing by-filename artifact request has redirectCount 0 (the private tarball leg)" $ do
-        expectRedirectCount 0 (artifactRequestByFile "https://reg.test" (Just (bareCredential (mkSecret "tok"))) isOdd "is-odd-1.0.0.tgz")
+        expectRedirectCount 0 (artifactRequestByFile (baseAt "https://reg.test") (Just (bareCredential (mkSecret "tok"))) isOdd "is-odd-1.0.0.tgz")
 
     it "a token-bearing publish relay request has redirectCount 0" $ do
         expectRedirectCount 0 (publishRequest "https://reg.test" (Just (bareCredential (mkSecret "tok"))) isOdd "{}")
@@ -125,7 +124,7 @@ redirectSpec = describe "no data-plane request follows an upstream redirect" $ d
 artifactSpec :: Spec
 artifactSpec = describe "artifact request building" $ do
     it "artifactRequestByFile fetches by the preserved filename in identity coding, non-decompressing" $ do
-        case artifactRequestByFile "https://reg.test" Nothing babelCodeFrame "code-frame-7.0.0.tgz" of
+        case artifactRequestByFile (baseAt "https://reg.test") Nothing babelCodeFrame "code-frame-7.0.0.tgz" of
             Left err -> fail ("artifactRequestByFile failed: " <> show err)
             Right req -> do
                 Client.path req `shouldBe` "/@babel%2Fcode-frame/-/code-frame-7.0.0.tgz"
@@ -149,7 +148,7 @@ urlFailureSpec = describe "URL-formation failures" $ do
         metadataRequest "" Nothing Abbreviated isOdd `shouldSatisfy` urlErrorWas EmptyBaseUrl
 
     it "artifactRequestByFile refuses an empty base URL as a UrlFormationError" $ do
-        artifactRequestByFile "" Nothing isOdd "is-odd-1.0.0.tgz" `shouldSatisfy` urlErrorWas EmptyBaseUrl
+        artifactRequestByFile (baseAt "") Nothing isOdd "is-odd-1.0.0.tgz" `shouldSatisfy` urlErrorWas EmptyBaseUrl
 
     it "artifactFileUrl refuses an empty base URL as a UrlFormationError" $ do
         artifactFileUrl "" isOdd "is-odd-1.0.0.tgz" `shouldSatisfy` urlErrorWas EmptyBaseUrl
@@ -168,13 +167,14 @@ urlFailureSpec = describe "URL-formation failures" $ do
 underBaseSpec :: Spec
 underBaseSpec = describe "requests under a base parsed once" $
     modifyMaxSuccess (const 2000) $ do
-        it "artifactRequestUnder builds what artifactRequestByFile builds, field by field" $
+        it "artifactRequestByFile builds what parsing the joined artifact URL builds, field by field" $
             hedgehog $ do
                 (baseUrl, base) <- forAllBase
                 name <- forAll genNpmName
                 filename <- forAll genComponent
                 token <- forAll genCredential
-                outcomeFacts (artifactRequestUnder base token name filename) === outcomeFacts (artifactRequestByFile baseUrl token name filename)
+                let joined = artifactFileUrl baseUrl name filename >>= artifactRequestByUrl token
+                outcomeFacts (artifactRequestByFile base token name filename) === outcomeFacts joined
 
         it "metadataRequestUnder builds what metadataRequest builds, field by field" $
             hedgehog $ do

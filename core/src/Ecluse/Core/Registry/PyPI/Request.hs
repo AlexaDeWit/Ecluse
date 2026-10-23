@@ -28,9 +28,8 @@ import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Project (canonicalName)
 import Ecluse.Core.Registry.PyPI.Wire (simpleIndexMediaType)
-import Ecluse.Core.Registry.Request (BaseRequest, attachCredential, baseRequestUrl, joinPath, parseRequestEither, requestUnder)
+import Ecluse.Core.Registry.Request (BaseRequest, attachCredential, joinPath, parseRequestEither, requestAt)
 import Ecluse.Core.Registry.Request qualified as Request
-import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Path (encodeComponent)
 
 {- | PyPI's canonical artifact hosts, declared to the artifact-host gate so the same-host default
@@ -47,15 +46,13 @@ simpleIndexRequest ::
     Either UrlFormationError Request
 simpleIndexRequest baseUrl credential name = indexGet credential <$> (simpleIndexUrl baseUrl name >>= parseRequestEither)
 
--- | 'simpleIndexRequest' under a base parsed once. A path the base does not cover takes 'simpleIndexRequest'.
+-- | 'simpleIndexRequest' under a base parsed once, through 'requestAt'.
 simpleIndexRequestUnder ::
     BaseRequest ->
     Maybe ClientCredential ->
     PackageName ->
     Either UrlFormationError Request
-simpleIndexRequestUnder base credential name = case requestUnder base (indexPath name) of
-    Just request -> Right (indexGet credential request)
-    Nothing -> simpleIndexRequest (registryUrlText (baseRequestUrl base)) credential name
+simpleIndexRequestUnder base credential name = indexGet credential <$> requestAt base (indexPath name)
 
 indexGet :: Maybe ClientCredential -> Request -> Request
 indexGet credential base =
