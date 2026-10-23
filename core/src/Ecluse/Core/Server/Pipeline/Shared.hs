@@ -48,12 +48,12 @@ import System.IO.Unsafe (unsafePerformIO)
 
 import Control.Concurrent.STM (check, orElse)
 
+import Data.Sequence qualified as Seq
 import Ecluse.Core.Deadline (holdSwept, withSweptFlag)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Server.Admission (withServeAdmissionP)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, withMemoryEntryP)
 import Ecluse.Core.Server.Admission.Types (FlightKey (FlightKey))
-import Data.Sequence qualified as Seq
 
 import Ecluse.Core.Server.Admission.Weighted (Shed (..), admissionWaitMicros, spikePlacesFreed, spikeSignalOne, spikeWaiters)
 import Ecluse.Core.Server.Cache.Types (CacheKey, cacheKeyIdentity, cacheKeyStore)
@@ -194,35 +194,36 @@ withMetadataAdmissionC runtime shed gated answer =
     firstTry >>= \case
         Right result -> answer result
         Left WaitExpired -> liftIO (spikeCount CExpired) >> refuse False
-        Left DoorFull -> liftIO (spikeCount CDoor) >> case spikeShed of
-            ShedNow -> refuse False
-            ShedLobbyWake -> do
-                entered <- liftIO spikeEnterHold
-                if not entered
-                    then refuse spikeCloseOver
-                    else do
-                        outcome <- withRunInIO (\run -> wakeLobby run)
-                        case outcome of
-                            Right result -> liftIO (spikeCount CAdmitted) >> answer result
-                            Left _ -> liftIO (spikeCount CRefused) >> refuse False
-            ShedPause -> do
-                entered <- liftIO spikeEnterHold
-                if entered
-                    then do
-                        received <- refuse False
-                        liftIO (holdSwept deadlines spikeWaitMicros `finally` spikeLeaveHold)
-                        pure received
-                    else refuse spikeCloseOver
-            _ -> do
-                entered <- liftIO spikeEnterHold
-                if not entered
-                    then refuse spikeCloseOver
-                    else do
-                        start <- liftIO getMonotonicTimeNSec
-                        outcome <- withRunInIO (\run -> held start run `finally` spikeLeaveHold)
-                        case outcome of
-                            Right result -> liftIO (spikeCount CAdmitted) >> answer result
-                            Left _ -> liftIO (spikeCount CRefused) >> refuse False
+        Left DoorFull ->
+            liftIO (spikeCount CDoor) >> case spikeShed of
+                ShedNow -> refuse False
+                ShedLobbyWake -> do
+                    entered <- liftIO spikeEnterHold
+                    if not entered
+                        then refuse spikeCloseOver
+                        else do
+                            outcome <- withRunInIO (\run -> wakeLobby run)
+                            case outcome of
+                                Right result -> liftIO (spikeCount CAdmitted) >> answer result
+                                Left _ -> liftIO (spikeCount CRefused) >> refuse False
+                ShedPause -> do
+                    entered <- liftIO spikeEnterHold
+                    if entered
+                        then do
+                            received <- refuse False
+                            liftIO (holdSwept deadlines spikeWaitMicros `finally` spikeLeaveHold)
+                            pure received
+                        else refuse spikeCloseOver
+                _ -> do
+                    entered <- liftIO spikeEnterHold
+                    if not entered
+                        then refuse spikeCloseOver
+                        else do
+                            start <- liftIO getMonotonicTimeNSec
+                            outcome <- withRunInIO (\run -> held start run `finally` spikeLeaveHold)
+                            case outcome of
+                                Right result -> liftIO (spikeCount CAdmitted) >> answer result
+                                Left _ -> liftIO (spikeCount CRefused) >> refuse False
   where
     metrics = srMetrics runtime
     deadlines = ecDeadlines (srPublicClient runtime)
@@ -247,7 +248,8 @@ withMetadataAdmissionC runtime shed gated answer =
         entry <- newTVarIO (0 :: Int)
         atomically (modifyTVar' spikeWaiters (Seq.|> entry))
         current <- newIORef entry
-        let -- Leave the queue and the count. A signal that arrived meanwhile goes to the next waiter.
+        let
+            -- Leave the queue and the count. A signal that arrived meanwhile goes to the next waiter.
             leave = do
                 me <- readIORef current
                 was <- atomically $ do

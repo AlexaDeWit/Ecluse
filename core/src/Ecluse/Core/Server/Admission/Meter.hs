@@ -42,6 +42,7 @@ import GHC.Conc (registerDelay)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Exception qualified as UE
 
+import Ecluse.Core.Deadline (Deadlines, withSweptFlag)
 import Ecluse.Core.Server.Admission.Budget (
     EntryGate (..),
     GrowthGate (..),
@@ -51,7 +52,6 @@ import Ecluse.Core.Server.Admission.Budget (
     growthDecision,
     roundUpToStep,
  )
-import Ecluse.Core.Deadline (Deadlines, withSweptFlag)
 import Ecluse.Core.Server.Admission.Types (BrakeLevel (Calm), FlightKey, MeterSnapshot (..))
 import Ecluse.Core.Server.Admission.Weighted (Shed (..), spikeRoomSwept, spikeSignalOne)
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
