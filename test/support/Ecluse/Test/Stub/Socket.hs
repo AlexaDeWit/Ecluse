@@ -8,6 +8,7 @@ module Ecluse.Test.Stub.Socket (
     withRawServer,
     withTlsServer,
     withTlsLostAnswerThenSilent,
+    withTlsResetThenSilent,
     trustingTlsManager,
 
     -- * Peers that reset mid-body
@@ -57,19 +58,25 @@ withRawServer handler action = bracket openFreePort (close . snd) $ \(port, list
 -- | 'withRawServer' with the handler run after a completed TLS handshake. Reach it through 'trustingTlsManager'.
 withTlsServer :: (Socket -> TLS.Context -> IO ()) -> (Int -> IO a) -> IO a
 withTlsServer handler action = do
-    credential <- selfSignedCredential
-    let params = TLS.defaultParamsServer{TLS.serverShared = TLS.defaultShared{TLS.sharedCredentials = TLS.Credentials [credential]}}
+    params <- selfSignedServerParams
     withRawServer (\conn -> TLS.contextNew conn params >>= \context -> TLS.handshake context >> handler conn context) action
 
 {- | Over TLS, answer the first connection's first request, close it on the second unanswered, and
 never finish a later connection's handshake: http-client's retry of a reused connection then stalls.
 -}
 withTlsLostAnswerThenSilent :: (Int -> IO a) -> IO a
-withTlsLostAnswerThenSilent action = do
-    credential <- selfSignedCredential
+withTlsLostAnswerThenSilent = withTlsWarmThenSilent (\_ context -> awaitTlsHead context "" >> TLS.bye context)
+
+-- | 'withTlsLostAnswerThenSilent' with the first connection reset once it answers, so the next request's head fails to send.
+withTlsResetThenSilent :: (Int -> IO a) -> IO a
+withTlsResetThenSilent = withTlsWarmThenSilent (\conn _ -> resetOnClose conn)
+
+-- Answer the first connection's first request over TLS, then end it as given. Later connections never finish a handshake.
+withTlsWarmThenSilent :: (Socket -> TLS.Context -> IO ()) -> (Int -> IO a) -> IO a
+withTlsWarmThenSilent ending action = do
+    params <- selfSignedServerParams
     connections <- newIORef (0 :: Int)
-    let params = TLS.defaultParamsServer{TLS.serverShared = TLS.defaultShared{TLS.sharedCredentials = TLS.Credentials [credential]}}
-        serve conn = do
+    let serve conn = do
             seen <- atomicModifyIORef' connections (\n -> (n + 1, n))
             if seen > 0
                 then threadDelay 20_000_000
@@ -78,9 +85,13 @@ withTlsLostAnswerThenSilent action = do
                     TLS.handshake context
                     awaitTlsHead context ""
                     TLS.sendData context "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nwarm"
-                    awaitTlsHead context ""
-                    TLS.bye context
+                    ending conn context
     withRawServer serve action
+
+selfSignedServerParams :: IO TLS.ServerParams
+selfSignedServerParams = do
+    credential <- selfSignedCredential
+    pure TLS.defaultParamsServer{TLS.serverShared = TLS.defaultShared{TLS.sharedCredentials = TLS.Credentials [credential]}}
 
 -- | A manager under 'typedBodyReads', as every production manager is, that skips certificate validation so it accepts 'withTlsServer'.
 trustingTlsManager :: IO Manager

@@ -9,6 +9,7 @@ stability promises. It exists so a spec can hold the transitions and a short wai
 module Ecluse.Core.Registry.ResponseWait.Internal (
     ResponseWait (..),
     connectedAt,
+    uploadingAt,
     uploadedAt,
     waitFault,
     openResponseAfter,
@@ -55,7 +56,13 @@ connectedAt whole now = \case
     Uploading _ -> Right whole
     Answering _ -> Right whole
 
--- | Start the headers' deadline once the request body is written.
+-- | Pause the headers' deadline while a streamed body is written. A deadline already due stays due.
+uploadingAt :: Word64 -> ResponseWait -> ResponseWait
+uploadingAt now = \case
+    Answering deadline | now < deadline -> Uploading (deadline - now)
+    other -> other
+
+-- | Start the headers' deadline again once the request body is written.
 uploadedAt :: Word64 -> ResponseWait -> ResponseWait
 uploadedAt now = \case
     Uploading left -> Answering (now + left)
@@ -87,22 +94,20 @@ openResponseAfter whole ExchangeClient{ecManager, ecDeadlines} request = do
     handleJust ours (throwIO . HttpExceptionRequest request) $
         withEndableDeadline ecDeadlines expired (\answered -> responseOpen (timed answered) ecManager)
 
-{- http-client builds the body once it holds a connection, just before writing the request. Only a
-streamed body shows its end, and a metered upload is always one. -}
+{- http-client builds the body on a connection, just before the head, which goes out under the headers'
+deadline so a retry after a failed head keeps one. Only a streamed body, as a metered one is, pauses it. -}
 sending :: Word64 -> IORef ResponseWait -> RequestBody -> IO RequestBody
 sending whole wait body = do
     now <- getMonotonicTimeNSec
     -- Thrown as http-client throws its own, which tags it with the request and closes the connection.
     left <- either throwHttp pure . connectedAt whole now =<< readIORef wait
     built <- resolved body
-    case built of
-        RequestBodyStream size gives -> RequestBodyStream size (endingWith uploaded gives) <$ settle (Uploading left)
-        RequestBodyStreamChunked gives -> RequestBodyStreamChunked (endingWith uploaded gives) <$ settle (Uploading left)
-        other -> other <$ settle (Answering (now + left))
-  where
     -- The sweeper reads the wait from another thread, so it only ever holds an evaluated state.
-    settle next = writeIORef wait $! next
-    uploaded = getMonotonicTimeNSec >>= \now -> modifyIORef' wait (uploadedAt now)
+    writeIORef wait $! Answering (now + left)
+    pure $ case built of
+        RequestBodyStream size gives -> RequestBodyStream size (timedUpload wait gives)
+        RequestBodyStreamChunked gives -> RequestBodyStreamChunked (timedUpload wait gives)
+        other -> other
 
 resolved :: RequestBody -> IO RequestBody
 resolved = \case
@@ -110,8 +115,13 @@ resolved = \case
     other -> pure other
 
 -- The connection pulls until a slice comes back empty.
-endingWith :: IO () -> GivesPopper () -> GivesPopper ()
-endingWith ended gives needsPopper = gives $ \popper -> needsPopper (popper >>= \slice -> slice <$ when (BS.null slice) ended)
+timedUpload :: IORef ResponseWait -> GivesPopper () -> GivesPopper ()
+timedUpload wait gives needsPopper = gives $ \popper -> needsPopper $ do
+    stamp uploadingAt
+    slice <- popper
+    slice <$ when (BS.null slice) (stamp uploadedAt)
+  where
+    stamp transition = getMonotonicTimeNSec >>= \now -> modifyIORef' wait (transition now)
 
 {- Raised asynchronously, as http-client's own timer is, so a TLS handshake that wraps synchronous
 faults passes it on. 'openResponseAfter' turns it back into the client's fault. -}

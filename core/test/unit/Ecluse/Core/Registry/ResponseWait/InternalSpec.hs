@@ -41,10 +41,10 @@ import UnliftIO.Exception (bracket, try)
 
 import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
-import Ecluse.Core.Registry.ResponseWait.Internal (ResponseWait (..), connectedAt, openResponseAfter, uploadedAt, waitFault)
+import Ecluse.Core.Registry.ResponseWait.Internal (ResponseWait (..), connectedAt, openResponseAfter, uploadedAt, uploadingAt, waitFault)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Stub.Retry (withLostAnswer, withLostAnswerPaced)
-import Ecluse.Test.Stub.Socket (trustingTlsManager, withRawServer, withTlsLostAnswerThenSilent)
+import Ecluse.Test.Stub.Socket (trustingTlsManager, withRawServer, withTlsLostAnswerThenSilent, withTlsResetThenSilent)
 
 spec :: Spec
 spec = do
@@ -67,6 +67,11 @@ transitionSpec = describe "the transitions" $ do
     it "starts the whole wait again on a second connection, as http-client's retry does" $ do
         first named (connectedAt 30 900 (Uploading 7)) `shouldBe` Right 30
         first named (connectedAt 30 900 (Answering 12)) `shouldBe` Right 30
+
+    it "pauses the headers' deadline from the first slice of an upload, unless it is already due" $ do
+        uploadingAt 100 (Answering 130) `shouldBe` Uploading 30
+        uploadingAt 130 (Answering 130) `shouldBe` Answering 130
+        uploadingAt 200 (Uploading 30) `shouldBe` Uploading 30
 
     it "starts the headers' deadline at the end of the upload" $ do
         uploadedAt 100 (Uploading 30) `shouldBe` Answering 130
@@ -187,6 +192,20 @@ retrySpec = describe "on http-client's retry of a stale pooled connection" $ do
             void (httpLbs request manager)
             openedByClient manager request
         fst theirs `shouldBe` Left "ConnectionTimeout"
+
+    it "keeps the first attempt's header deadline when an upload's head fails to send and the retry reconnects" $ do
+        let upload request = request{method = "PUT", requestBody = RequestBodyStream 4 (givesTimes 1 "data")}
+            afterReset open = withTlsResetThenSilent $ \port -> do
+                manager <- trustingTlsManager
+                request <- parseRequest ("https://127.0.0.1:" <> show port <> "/")
+                void (httpLbs request manager)
+                -- Leave the reset time to land, so the head fails on the reused connection.
+                threadDelay 200_000
+                open manager (upload request)
+        ours <- afterReset (opened 1)
+        fst ours `shouldBe` Left "ResponseTimeout"
+        snd ours `shouldSatisfy` between 1 4
+        fst <$> afterReset openedByClient `shouldReturn` Left "ConnectionTimeout"
 
 -- Open under a wait of whole seconds, then close: the status, or the timeout's name, and the seconds taken.
 opened :: Word64 -> Manager -> Request -> IO (Either Text Int, Double)
