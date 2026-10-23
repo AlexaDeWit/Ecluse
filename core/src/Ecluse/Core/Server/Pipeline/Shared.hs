@@ -121,17 +121,17 @@ spikeShed = case spikeEnv "SPIKE1866_SHED" of
     Just "lobby-wake" -> ShedLobbyWake
     Just "lobby-end" -> ShedLobbyEnd
     Just "pause" -> ShedPause
-    _ -> ShedNow
+    _ -> ShedLobbyWake
 {-# NOINLINE spikeShed #-}
 
 -- The wait, in microseconds.
 spikeWaitMicros :: Int
-spikeWaitMicros = maybe 1_000_000 (* 1000) (readMaybe =<< spikeEnv "SPIKE1866_WAIT_MS")
+spikeWaitMicros = maybe 500_000 (* 1000) (readMaybe =<< spikeEnv "SPIKE1866_WAIT_MS")
 {-# NOINLINE spikeWaitMicros #-}
 
 -- How many requests may wait at once.
 spikeCap :: Int
-spikeCap = fromMaybe 1000 (readMaybe =<< spikeEnv "SPIKE1866_CAP")
+spikeCap = fromMaybe 320 (readMaybe =<< spikeEnv "SPIKE1866_CAP")
 {-# NOINLINE spikeCap #-}
 
 -- Close on every shed (all), past the cap (over), or never.
