@@ -27,6 +27,7 @@ module Ecluse.Core.Server.Metadata (
 
 import Data.Map.Strict qualified as Map
 
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoInvalidEntries, infoName, infoVersions), PackageName, pkgEcosystem)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchCooldown, FetchTransport, FetchUrlUnformable))
@@ -108,12 +109,12 @@ ecosystemMetadataReads eco tracing metrics logFailure logInvalid logFetch =
     newMetadataReads metrics logFailure logInvalid logFetch (fetchManifest eco tracing) (fetchVersion eco tracing)
 
 -- | Cap each raw read so its single-flight leader fails before the request timeout.
-withinRequestCap :: ProgressFloor -> MetadataReads posture -> MetadataReads posture
-withinRequestCap progress (MetadataReads settle) = MetadataReads $ \upstream caching ->
+withinRequestCap :: Deadlines -> ProgressFloor -> MetadataReads posture -> MetadataReads posture
+withinRequestCap deadlines progress (MetadataReads settle) = MetadataReads $ \upstream caching ->
     let wiring = settle upstream caching
      in wiring
-            { cwFetch = withinServeCap progress MetadataFetch . cwFetch wiring
-            , cwFetchVersion = \name -> withinServeCap progress MetadataFetch . cwFetchVersion wiring name
+            { cwFetch = withinServeCap deadlines progress MetadataFetch . cwFetch wiring
+            , cwFetchVersion = \name -> withinServeCap deadlines progress MetadataFetch . cwFetchVersion wiring name
             }
 
 -- | The anonymous origin's handle, resolving through the shared cache under its 'Source' key.

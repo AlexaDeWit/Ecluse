@@ -8,7 +8,7 @@ module Ecluse.Core.Registry.NpmSmokeSpec (spec) where
 import Data.Aeson (Value (Object, String), eitherDecodeStrict)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
-import Network.HTTP.Client (Manager, newManager)
+import Network.HTTP.Client (newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.Process (readProcessWithExitCode)
@@ -23,6 +23,7 @@ import Ecluse.Core.Package (
     renderPackageName,
  )
 import Ecluse.Core.Registry (RegistryResponse (responseBody))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
 import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Project (projectName)
@@ -33,6 +34,7 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.RegistrySmoke (liveMetadata)
+import Ecluse.Test.Deadline (newSweptClient)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig, publicRegistryBaseUrl)
 import Ecluse.Test.Registry.Npm.Metadata (fetchMetadataFormBounded, projectNpmManifest)
@@ -58,9 +60,9 @@ spec = describe "live npm registry protocol" $ do
                         Map.null (infoVersions info) `shouldBe` False
 
     it "a bounded fetch of a real package projects to PackageInfo (full data plane)" $ do
-        manager <- newManager tlsManagerSettings
+        exchanges <- newSweptClient =<< newManager tlsManagerSettings
         let isOdd = mkPackageName Npm Nothing "is-odd"
-        config <- publicRegistryOrigin manager
+        config <- publicRegistryOrigin exchanges
         outcome <- fetchMetadataFormBounded config Abbreviated isOdd
         case outcome of
             Left _ ->
@@ -87,9 +89,9 @@ spec = describe "live npm registry protocol" $ do
     -- Live responses check default admission against growth since the complete corpus captures.
     for_ [("react", "react"), ("types-node", "@types/node"), ("lodash", "lodash"), ("typescript", "typescript")] $ \(identifier, pkg) ->
         it (caseLabel ("live/npm/" <> identifier) ("a real large trusted packument is admissible under the default Limits (" <> pkg <> ")")) $ do
-            manager <- newManager tlsManagerSettings
+            exchanges <- newSweptClient =<< newManager tlsManagerSettings
             parsed <- either (fail . show) pure (projectName pkg)
-            config <- publicRegistryOrigin manager
+            config <- publicRegistryOrigin exchanges
             void (liveMetadata pkg (fetchManifest npmRead passthroughTracingPort config parsed))
 
 registryBase :: String
@@ -126,6 +128,6 @@ collectDistDigests value =
     ]
 
 -- Reject an invalid built-in registry URL instead of reporting an offline test.
-publicRegistryOrigin :: Manager -> IO OriginClient
-publicRegistryOrigin manager =
-    (`defaultNpmConfig` manager) <$> expectRightText (mkRegistryUrl publicRegistryBaseUrl)
+publicRegistryOrigin :: ExchangeClient -> IO OriginClient
+publicRegistryOrigin client =
+    (`defaultNpmConfig` client) <$> expectRightText (mkRegistryUrl publicRegistryBaseUrl)

@@ -20,9 +20,8 @@ module Ecluse.Core.Registry.Origin (
     controlPublicOrigin,
 ) where
 
-import Network.HTTP.Client (Manager)
-
 import Ecluse.Core.Credential (ClientCredential)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Public (PublicControl)
 import Ecluse.Core.Registry.Request (BaseRequest, baseRequestUrl, mkBaseRequest)
 import Ecluse.Core.Security (Limits)
@@ -35,8 +34,8 @@ data OriginClient = OriginClient
     -- ^ The https-only egress witness the proxy appends a package path to.
     , ocBaseRequest :: BaseRequest
     -- ^ 'ocBaseUrl' parsed once. The builders below set the two together.
-    , ocManager :: Manager
-    -- ^ The shared @http-client@ 'Manager' to issue requests through.
+    , ocClient :: ExchangeClient
+    -- ^ The shared connection pool and deadline sweeper to issue requests through.
     , ocToken :: Maybe ClientCredential
     -- ^ 'Nothing' for an anonymous origin. A passthrough read carries the caller's own verbatim.
     , ocLimits :: Limits
@@ -48,12 +47,12 @@ data OriginClient = OriginClient
     }
 
 -- | Build an origin with caller-supplied limits, transport, and credential posture.
-originClient :: Limits -> Manager -> RegistryUrl -> Maybe ClientCredential -> OriginClient
-originClient limits manager = originAt limits manager . mkBaseRequest
+originClient :: Limits -> ExchangeClient -> RegistryUrl -> Maybe ClientCredential -> OriginClient
+originClient limits client = originAt limits client . mkBaseRequest
 
-originAt :: Limits -> Manager -> BaseRequest -> Maybe ClientCredential -> OriginClient
-originAt limits manager base token =
-    OriginClient{ocBaseUrl = baseRequestUrl base, ocBaseRequest = base, ocManager = manager, ocToken = token, ocLimits = limits, ocChargeFullRead = const pass, ocPublicControl = Nothing, ocReadKind = Nothing}
+originAt :: Limits -> ExchangeClient -> BaseRequest -> Maybe ClientCredential -> OriginClient
+originAt limits client base token =
+    OriginClient{ocBaseUrl = baseRequestUrl base, ocBaseRequest = base, ocClient = client, ocToken = token, ocLimits = limits, ocChargeFullRead = const pass, ocPublicControl = Nothing, ocReadKind = Nothing}
 
 -- | The origin's base URL as text.
 originBaseUrl :: OriginClient -> Text
@@ -71,12 +70,12 @@ data Public
 data Private
 
 -- | An origin dialled with no credential, so no caller's authorisation scopes what it reads.
-anonymousOrigin :: Limits -> Manager -> BaseRequest -> OriginFor Public
-anonymousOrigin limits manager base = OriginFor (originAt limits manager base Nothing)
+anonymousOrigin :: Limits -> ExchangeClient -> BaseRequest -> OriginFor Public
+anonymousOrigin limits client base = OriginFor (originAt limits client base Nothing)
 
 -- | An origin presenting one caller's credential, so what it reads is scoped to that caller.
-perCallerOrigin :: Limits -> Manager -> BaseRequest -> Maybe ClientCredential -> OriginFor Private
-perCallerOrigin limits manager base token = OriginFor (originAt limits manager base token)
+perCallerOrigin :: Limits -> ExchangeClient -> BaseRequest -> Maybe ClientCredential -> OriginFor Private
+perCallerOrigin limits client base token = OriginFor (originAt limits client base token)
 
 -- | The plain record behind a tagged origin, for the operations that take any origin.
 originClientOf :: OriginFor posture -> OriginClient

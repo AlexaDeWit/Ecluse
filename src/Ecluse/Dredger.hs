@@ -111,7 +111,7 @@ runDredger bootEnv opts pruner = do
     paceAtCeiling pacing (portsOver metrics) mounts
     moduleLog logEnv dredgerModule InfoS "Dredger starting up"
     raceServerAgainstLoop
-        (runWarp logEnv "Dredger health probes" (cfg status) probeOnlyApplication)
+        (runWarp logEnv "Dredger health probes" (cfg status) (probeOnlyApplication (beDeadlines bootEnv)))
         (withSyncTasks (syncTasks metrics) (sweepTask logEnv opts pacing (portsOver metrics) syncReady status mounts))
     (>>= cycleEnding (doMode opts)) <$> readIORef (stFinal status)
   where

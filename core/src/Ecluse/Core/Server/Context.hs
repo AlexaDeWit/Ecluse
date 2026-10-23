@@ -44,7 +44,6 @@ import Data.IP (IPRange)
 import Data.Time (UTCTime)
 import Katip (Katip, KatipContext, LogEnv, SimpleLogPayload)
 import Katip.Monadic (KatipContextT, runKatipContextT)
-import Network.HTTP.Client (Manager)
 import Network.HTTP.Types (Method)
 import Network.HTTP.Types.Header (RequestHeaders)
 import Network.Wai (ResponseReceived)
@@ -57,6 +56,7 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact, AdapterMetadata, AdapterPublish, ProjectName)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Public (PublicControl)
 import Ecluse.Core.Registry.Request (BaseRequest, CredentialMapping)
 import Ecluse.Core.Rules (PreparedRule)
@@ -90,12 +90,12 @@ data ServeRuntime = ServeRuntime
     -- ^ Bounds concurrent metadata work, excluding private artifact reads and artifact relay.
     , srMemoryMeter :: MemoryMeter
     -- ^ The memory budget metadata requests pay into as they read and build.
-    , srPublicManager :: Manager
-    -- ^ The validating-TLS manager for the __untrusted__ public metadata fetch and every artifact stream.
+    , srPublicClient :: ExchangeClient
+    -- ^ The validating-TLS pool for the __untrusted__ public metadata fetch and every artifact stream.
     , srPublicControl :: PublicControl
     -- ^ Public request admission and observation shared by all mounts in the process.
-    , srPrivateManager :: Manager
-    -- ^ The __trusted__ private upstream's validating-TLS manager, which differs in credential handling only.
+    , srPrivateClient :: ExchangeClient
+    -- ^ The __trusted__ private upstream's validating-TLS pool, which differs in credential handling only.
     , srMetadataCache :: MetadataCache
     -- ^ The short-TTL, size-bounded metadata cache the serve paths share ("Ecluse.Core.Server.Cache").
     , srQueue :: MirrorQueue

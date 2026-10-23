@@ -20,7 +20,7 @@ import Data.Time (getCurrentTime)
 import Data.Universe.Class (universe)
 import GHC.Clock (getMonotonicTime)
 import GHC.Conc (getAllocationCounter)
-import Network.HTTP.Client (Manager, Request, newManager, responseTimeout, responseTimeoutMicro)
+import Network.HTTP.Client (Request, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.IO.Temp (withSystemTempDirectory)
 
@@ -45,6 +45,7 @@ import Ecluse.Acceptance (
 import Ecluse.Acceptance.Evidence (capturesEvidence, liveEvidence)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Metadata (Manifest (manifestDigest, manifestInfo, manifestRaw))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.Request (mkBaseRequest)
@@ -57,6 +58,7 @@ import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Rts (RtsPosture (rpAllocAreaBytes, rpCapabilities), currentRtsPosture)
 import Ecluse.Test.Corpus (CaptureRecord (crCapturedAt), CorpusPackage (cpPackage), cpName, permissiveAgeRules, readCaptureRecords)
 import Ecluse.Test.Corpus.Advisories (allAdvisoryRules, checkCapturesServed, compileCorpusAdvisories, configuredShippedPolicy)
+import Ecluse.Test.Deadline (newSweptClient)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..), LoadedEntry (..), ecosystemBenches)
 import Ecluse.Test.OsvDb (withServedArtifact)
 import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, fetchTestBody)
@@ -93,10 +95,10 @@ captures = do
 live :: IO ()
 live = do
     benches <- ecosystemBenches
-    manager <- newManager tlsManagerSettings
+    client <- newSweptClient =<< newManager tlsManagerSettings
     now <- getCurrentTime
     runs <- forM benches $ \bench -> withCorpusAdvisories bench $ \advisories ->
-        (ebEcosystem bench,) <$> traverse (\LoadedEntry{lePackage = package} -> measureLive manager advisories (EvalContext now Nothing) bench package) (ebCorpus bench)
+        (ebEcosystem bench,) <$> traverse (\LoadedEntry{lePackage = package} -> measureLive client advisories (EvalContext now Nothing) bench package) (ebCorpus bench)
     op <- operatingPoint
     writeObservations (liveEvidence op runs)
     publish (renderLiveReport op runs)
@@ -114,10 +116,10 @@ withCorpusAdvisories bench use =
   where
     eco = ebEcosystem bench
 
-measureLive :: Manager -> RuleDeps -> EvalContext -> EcosystemBench -> CorpusPackage -> IO PackageOutcome
-measureLive manager advisories ctx bench package = do
+measureLive :: ExchangeClient -> RuleDeps -> EvalContext -> EcosystemBench -> CorpusPackage -> IO PackageOutcome
+measureLive client advisories ctx bench package = do
     t0 <- getMonotonicTime
-    fetched <- fetchDocument manager bench pkg
+    fetched <- fetchDocument client bench pkg
     t1 <- getMonotonicTime
     case fetched of
         Unreachable reason -> pure (Unavailable name reason)
@@ -127,12 +129,12 @@ measureLive manager advisories ctx bench package = do
     pkg = cpPackage package
     name = cpName package
 
-fetchDocument :: Manager -> EcosystemBench -> PackageName -> IO Fetched
-fetchDocument manager ecosystem pkg = case liveRequest ecosystem pkg of
+fetchDocument :: ExchangeClient -> EcosystemBench -> PackageName -> IO Fetched
+fetchDocument client ecosystem pkg = case liveRequest ecosystem pkg of
     Left reason -> pure (Refused reason)
     Right request ->
         classifyFetch
-            <$> fetchTestBody manager (progressFloor defaultLimits) (MetadataBodyLimit (maxMetadataBytes defaultLimits)) request{responseTimeout = responseTimeoutMicro (30 * 1000 * 1000)}
+            <$> fetchTestBody client (progressFloor defaultLimits) (MetadataBodyLimit (maxMetadataBytes defaultLimits)) request
 
 liveRequest :: EcosystemBench -> PackageName -> Either Text Request
 liveRequest ecosystem name = do

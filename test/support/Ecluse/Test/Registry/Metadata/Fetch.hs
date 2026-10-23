@@ -17,13 +17,14 @@ module Ecluse.Test.Registry.Metadata.Fetch (
 ) where
 
 import Data.ByteString qualified as BS
-import Network.HTTP.Client (Manager, Request, Response (responseStatus), brRead, responseBody)
+import Network.HTTP.Client (Request, Response (responseStatus), brRead, responseBody)
 import Network.HTTP.Types.Status (statusCode)
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (BodyOutcome (SuccessBody), FetchFault (FetchBoundExceeded), RegistryResponse (RegistryResponse), isAuthorisationFailure)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.Exchange (runExchange)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError, VersionRead)
 import Ecluse.Core.Registry.Metadata.Fetch (readManifest, readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (Body (Body), EcosystemRead, ReadTerms (..))
@@ -34,8 +35,8 @@ import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.JsonStream (heldChunks, sliceChunks)
 
 -- | Preserve authorisation refusals without reading their bodies. Bound every other smoke or contract response.
-fetchTestBody :: Manager -> ProgressFloor -> BodyLimit -> Request -> IO (Either FetchFault RegistryResponse)
-fetchTestBody manager progress limit request = runExchange manager progress request $ \response ->
+fetchTestBody :: ExchangeClient -> ProgressFloor -> BodyLimit -> Request -> IO (Either FetchFault RegistryResponse)
+fetchTestBody client progress limit request = runExchange client progress request $ \response ->
     let code = statusCode (responseStatus response)
      in if isAuthorisationFailure code
             then pure (Right (RegistryResponse code 0 ""))

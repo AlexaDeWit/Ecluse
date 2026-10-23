@@ -25,6 +25,7 @@ import Ecluse.Core.Package (Artifact (..), CoreMetadata (..), PackageDetails (pk
 import Ecluse.Core.Package.Integrity (IntegrityFloor, partitionByFloor)
 import Ecluse.Core.Registry (FetchFault (FetchCooldown))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Metadata (MetadataClient (fetchVersionMetadata), MetadataError (MetadataFetch), VersionDoc (vdDetails), VersionRead (vrVersion))
 import Ecluse.Core.Registry.Request (sidecarUrl)
 import Ecluse.Core.Security (HostPort, Limits (progressFloor), Origin (..), hostPortAddress, thgPrivateHostPort, thgPublicHostPort)
@@ -161,7 +162,7 @@ servePrivate ctx = \case
     Refused -> refusePrivate ctx
     Missing miss -> fallback ctx miss
     Selected request -> do
-        result <- relay ctx True (srPrivateManager (arRuntime ctx)) acceptPrivateArtifact request
+        result <- relay ctx True (srPrivateClient (arRuntime ctx)) acceptPrivateArtifact request
         case result of
             UpstreamRelayed (_, received) -> pure received
             UpstreamRejected status -> answerError ctx (if status == status404 then versionAbsent else upstreamUnavailable)
@@ -185,15 +186,15 @@ servePublic ctx = \case
     Missing MissAbsent -> answerError ctx versionAbsent
     Missing MissUnresolved -> answerError ctx upstreamUnavailable
     Selected request ->
-        relay ctx False (srPublicManager (arRuntime ctx)) (const True) request >>= \case
+        relay ctx False (srPublicClient (arRuntime ctx)) (const True) request >>= \case
             UpstreamRelayed (_, received) -> pure received
             UpstreamCooling retry -> answerError ctx (upstreamCooling retry)
             _ -> answerError ctx upstreamUnavailable
 
-relay :: ArtifactRequest response -> Bool -> HTTP.Manager -> (Status -> Bool) -> HTTP.Request -> Handler (UpstreamResult ((), ResponseReceived))
-relay ctx private manager accepts request =
+relay :: ArtifactRequest response -> Bool -> ExchangeClient -> (Status -> Bool) -> HTTP.Request -> Handler (UpstreamResult ((), ResponseReceived))
+relay ctx private client accepts request =
     liftIO $
-        relayRead (arMode ctx) manager (progressFloor (pdLimits (arDeps ctx))) shaped accepts relayUnjudged responder
+        relayRead (arMode ctx) client (progressFloor (pdLimits (arDeps ctx))) shaped accepts relayUnjudged responder
   where
     relayRead = if private then relayUpstreamResult else relayPublicResult (srPublicControl (arRuntime ctx)) PublicRead.Companion
     shaped = withValidators (arValidators ctx) (withMethod (arMode ctx) request)

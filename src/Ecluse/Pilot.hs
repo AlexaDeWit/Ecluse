@@ -81,7 +81,7 @@ runPilot bootEnv exportPlan = do
     moduleContext (beLogEnv bootEnv) "Ecluse.Pilot" $ do
         logFM InfoS "Pilot mode starting up"
         raceServerAgainstLoop
-            (liftIO $ runWarp (beLogEnv bootEnv) "Pilot health probes" cfg probeOnlyApplication)
+            (liftIO $ runWarp (beLogEnv bootEnv) "Pilot health probes" cfg (probeOnlyApplication (beDeadlines bootEnv)))
             (runExportLoop (beTelemetry bootEnv) (bpS3Endpoint (beBootPlan bootEnv)) (beConfig bootEnv) exportPlan)
 
 -- | Run the loop the boot planned, never returning. Every fault inside a cycle is transient: a cycle has no wiring to fail on.

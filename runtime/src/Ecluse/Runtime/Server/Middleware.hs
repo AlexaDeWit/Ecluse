@@ -2,14 +2,16 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The front door's cross-cutting middleware pieces and the control-plane health
-endpoints. Those are the drain-aware going-away header and the @\/livez@ \/ @\/readyz@ probe
+{- | The front door's cross-cutting middleware pieces and its control-plane health endpoints: the
+request timeout, the drain-aware going-away header, and the @\/livez@ \/ @\/readyz@ probe
 application. "Ecluse.Runtime.Server"'s @serverMiddleware@ composes the pieces around the proxy
-'Application'. Its dispatch answers the probes through 'probeApplication'. The request-body cap
-is not here: it is a route concern, enforced at the read site by the only body-consuming route
-(publish).
+'Application', and its dispatch answers the probes through 'probeApplication'. The request-body cap
+is a route concern, enforced where the only body-consuming route (publish) reads its body.
 -}
 module Ecluse.Runtime.Server.Middleware (
+    -- * The request timeout
+    requestTimeout,
+
     -- * Drain-aware going-away header
     goingAwayMiddleware,
 
@@ -26,6 +28,7 @@ import Data.Map.Strict qualified as Map
 import Network.HTTP.Types (Status, hConnection, hContentType, status200, status404, status503)
 import Network.Wai (Application, Middleware, Response, mapResponseHeaders, modifyResponse, pathInfo, responseLBS)
 
+import Ecluse.Core.Deadline (Deadlines, timeout)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Server.Readiness (
     MountReadiness (MountAwaitingFirstSync, MountReady),
@@ -34,6 +37,13 @@ import Ecluse.Core.Server.Readiness (
  )
 import Ecluse.Core.Worker (Liveness (liveHealthy, liveLastPoll))
 import Ecluse.Runtime.Server.Drain (DrainSignal, isDraining)
+
+{- | Answer an empty @503@ for a request that outlives this many seconds, up to one sweep late. Like
+wai-extra's @timeout@, it answers even when a response has already begun.
+-}
+requestTimeout :: Deadlines -> Int -> Middleware
+requestTimeout deadlines seconds app request respond =
+    timeout deadlines (seconds * 1_000_000) (app request respond) >>= maybe (respond (responseLBS status503 [] "")) pure
 
 {- | While the instance is draining, stamp @Connection: close@ on every response. A keep-alive
 client or a mesh connection pool then stops reusing the socket on a closing instance.

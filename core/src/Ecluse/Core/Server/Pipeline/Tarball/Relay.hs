@@ -28,13 +28,13 @@ module Ecluse.Core.Server.Pipeline.Tarball.Relay (
     observeRelayAnomaly,
 ) where
 
-import Network.HTTP.Client (Manager)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hContentType, methodHead, statusCode, statusIsSuccessful)
 
 import Data.ByteString qualified as BS
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (isAuthorisationFailure)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Public (PublicControl, ReadControl (Controlled))
 import Ecluse.Core.Security (ProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
@@ -66,19 +66,19 @@ withValidators validators req =
 -- | Relay in the serve mode, preserving an upstream rejection or transport failure.
 relayUpstreamResult ::
     ArtifactServe ->
-    Manager ->
+    ExchangeClient ->
     ProgressFloor ->
     HTTP.Request ->
     (Status -> Bool) ->
     (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) ->
     RelayResponder response ->
     IO (UpstreamResult (verdict, response))
-relayUpstreamResult mode manager progress request =
-    withUpstreamResult manager progress request (upstreamBody mode)
+relayUpstreamResult mode client progress request =
+    withUpstreamResult client progress request (upstreamBody mode)
 
 -- | Relay a public artifact or companion after shared authority admission.
-relayPublicResult :: PublicControl -> PublicReadKind -> ArtifactServe -> Manager -> ProgressFloor -> HTTP.Request -> (Status -> Bool) -> (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) -> RelayResponder response -> IO (UpstreamResult (verdict, response))
-relayPublicResult control kind mode manager progress request = withUpstreamResultUsing (Controlled control kind) manager progress request (upstreamBody mode)
+relayPublicResult :: PublicControl -> PublicReadKind -> ArtifactServe -> ExchangeClient -> ProgressFloor -> HTTP.Request -> (Status -> Bool) -> (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) -> RelayResponder response -> IO (UpstreamResult (verdict, response))
+relayPublicResult control kind mode client progress request = withUpstreamResultUsing (Controlled control kind) client progress request (upstreamBody mode)
 
 upstreamBody :: ArtifactServe -> UpstreamBody
 upstreamBody = \case

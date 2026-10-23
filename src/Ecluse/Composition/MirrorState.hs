@@ -18,6 +18,7 @@ import Ecluse.Config (
     MountConfig (mntMirrorTarget),
     advisoryStoreTarget,
  )
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI), parseEcosystem)
 import Ecluse.Core.Mirror.State (MirrorState, StateTarget, stateTarget)
 import Ecluse.Core.Security (Limits)
@@ -37,13 +38,13 @@ data MirrorStateBinding = MirrorStateBinding
     }
 
 -- | Reuse the metadata pool's aggregate bounds. Unconfigured mounts allocate no state client or retention.
-newMirrorStates :: Maybe AwsEndpoint -> AppConfig -> Limits -> CacheConfig -> LocalPool -> IO (Map Ecosystem MirrorStateBinding)
-newMirrorStates endpoint app limits cacheConfig pool = case configured of
+newMirrorStates :: Maybe AwsEndpoint -> Deadlines -> AppConfig -> Limits -> CacheConfig -> LocalPool -> IO (Map Ecosystem MirrorStateBinding)
+newMirrorStates endpoint deadlines app limits cacheConfig pool = case configured of
     Nothing -> pure Map.empty
     Just (storeUrl, mirror) -> do
         let S3Store bucket prefix = advisoryStoreTarget storeUrl
             target = stateTarget (registryUrlText (meUrl mirror))
-        store <- newS3MirrorState endpoint limits bucket (fromMaybe "" prefix) target
+        store <- newS3MirrorState endpoint deadlines limits bucket (fromMaybe "" prefix) target
         retention <- newMirrorRetention pool (cacheTtl cacheConfig) (StoreBudget 0 0)
         pure (Map.singleton PyPI (MirrorStateBinding store target (newMirrorView limits target store retention)))
   where

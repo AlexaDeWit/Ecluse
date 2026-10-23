@@ -67,9 +67,9 @@ import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Core.Worker (
     WorkerRuntime (
         WorkerRuntime,
+        wrClient,
         wrHeartbeat,
         wrInjectTraceContext,
-        wrManager,
         wrMetrics,
         wrPolicies,
         wrPublicControl,
@@ -82,6 +82,7 @@ import Ecluse.Core.Worker (
  )
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpWeight), corpusPackages, cpName)
 import Ecluse.Test.Corpus.Subset (newestNpmShare)
+import Ecluse.Test.Deadline (newSweptClient)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (hexSha1OfLazy, sriSha512OfLazy, unsafeFilename, unsafeHash, validSha1, validSha512Sri)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
@@ -290,7 +291,7 @@ workerScenario =
             publish <- succeedingPublishClient counter
             let bytes = artifactBytes (lkPayloadBytes knobs)
             testWithApplication (pure (stubUpstream octetContentType (lkUpstreamLatencyMicros knobs) bytes)) $ \artPort -> do
-                manager <- newManager defaultManagerSettings
+                client <- newSweptClient =<< newManager defaultManagerSettings
                 publicControl <- newPublicControl (\_ _ _ -> pass) (\_ _ -> pass)
                 queue <-
                     newBoundedInMemoryQueue
@@ -301,7 +302,7 @@ workerScenario =
                 let runtime =
                         WorkerRuntime
                             { wrQueue = queue
-                            , wrManager = manager
+                            , wrClient = client
                             , wrPublicControl = publicControl
                             , wrHeartbeat = heartbeat
                             , wrMetrics = noopWorkerMetricsPort

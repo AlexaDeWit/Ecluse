@@ -48,13 +48,13 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import Hedgehog (Gen)
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
-import Network.HTTP.Client (Manager)
 
 import Ecluse.Core.Credential (Secret, bareCredential, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Artifact (artFilename, artHashes, artSize, artUrl), Hash (hashAlg, hashValue), HashAlg (SHA1, SRI), PackageDetails (pkgArtifacts, pkgName, pkgVersion), PackageName, mkPackageName, mkScope, renderPackageName)
 import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Metadata (VersionDoc (VersionDoc, vdDetails, vdRaw))
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocToken), originClient)
 import Ecluse.Core.Security (Limits, defaultLimits)
@@ -296,15 +296,15 @@ publicRegistryBaseUrl = "https://registry.npmjs.org"
 {- | An anonymous origin against @baseUrl@ at the secure-default response bounds. The caller
 supplies the base as an egress witness, so one fixture serves the public registry and a stub.
 -}
-defaultNpmConfig :: RegistryUrl -> Manager -> OriginClient
-defaultNpmConfig baseUrl manager = originClient defaultLimits manager baseUrl Nothing
+defaultNpmConfig :: RegistryUrl -> ExchangeClient -> OriginClient
+defaultNpmConfig baseUrl client = originClient defaultLimits client baseUrl Nothing
 
 {- | 'defaultNpmConfig' carrying the mirror-write token as a bare credential, at caller-chosen
 response bounds. The maintenance verbs read the token off the origin, so a store fixture needs it.
 -}
-writeTokenNpmConfig :: RegistryUrl -> Manager -> Limits -> OriginClient
-writeTokenNpmConfig baseUrl manager limits =
-    (defaultNpmConfig baseUrl manager)
+writeTokenNpmConfig :: RegistryUrl -> ExchangeClient -> Limits -> OriginClient
+writeTokenNpmConfig baseUrl client limits =
+    (defaultNpmConfig baseUrl client)
         { ocToken = Just (bareCredential mirrorWriteToken)
         , ocLimits = limits
         }

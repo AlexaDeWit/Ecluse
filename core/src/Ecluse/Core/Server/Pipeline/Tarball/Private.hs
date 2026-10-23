@@ -108,7 +108,7 @@ streamPrivateArtifact ctx token = do
         PrivateMissing miss -> pure (PrivateMissed miss)
         PrivateRequest managed req ->
             liftIO $
-                relayUpstreamResult (arMode ctx) (srPrivateManager (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) (shaped req) acceptPrivateArtifact relayUnjudged privateResponder >>= \case
+                relayUpstreamResult (arMode ctx) (srPrivateClient (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) (shaped req) acceptPrivateArtifact relayUnjudged privateResponder >>= \case
                     UpstreamRelayed (_, (decision, received)) -> pure (PrivateAnswered decision received)
                     UpstreamRejected status -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed (if status == status404 then MissAbsent else MissUnresolved))
                     UpstreamTransportFailure -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed MissUnresolved)
@@ -149,7 +149,7 @@ privateArtifactRequest ticket ctx token = case pdPrivateBase deps of
 
     byConventionalPath privateBase =
         either (const (PrivateMissing MissAbsent)) (PrivateRequest False) $
-            artifactByFile (pdArtifact deps) (mountOrigin deps (srPrivateManager (arRuntime ctx)) privateBase token) (arPackage ctx) (unFilename (arFile ctx))
+            artifactByFile (pdArtifact deps) (mountOrigin deps (srPrivateClient (arRuntime ctx)) privateBase token) (arPackage ctx) (unFilename (arFile ctx))
 
 byIndexedLocation :: Maybe MemoryTicket -> ArtifactRequest response -> Maybe ClientCredential -> BaseRequest -> Maybe HostPort -> Handler PrivateArtifact
 byIndexedLocation ticket ctx token privateBase privateHostPort = do

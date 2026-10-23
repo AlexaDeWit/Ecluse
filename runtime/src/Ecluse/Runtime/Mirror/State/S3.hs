@@ -11,6 +11,7 @@ module Ecluse.Runtime.Mirror.State.S3 (
 import Amazonka qualified as AWS
 import Data.Text qualified as T
 
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, chargedEncodeProjectRecord)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..), VerifiedCompanionBytes (..), projectKey)
@@ -22,17 +23,17 @@ import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Mirror.State.S3.Internal
 
 -- | The composition root supplies a validated explicit bucket and prefix, independent of advisory storage.
-newS3MirrorState :: Maybe AwsEndpoint -> Limits -> Text -> Text -> StateTarget -> IO MirrorState
-newS3MirrorState endpoint limits bucket prefix target = buildS3Env endpoint >>= mirrorStateForEnv limits bucket prefix target
+newS3MirrorState :: Maybe AwsEndpoint -> Deadlines -> Limits -> Text -> Text -> StateTarget -> IO MirrorState
+newS3MirrorState endpoint deadlines limits bucket prefix target = buildS3Env endpoint >>= mirrorStateForEnv deadlines limits bucket prefix target
 
 -- | Bind one configured namespace to this env. Reads keep its manager's resend on a stale pooled connection, and writes go once.
-mirrorStateForEnv :: Limits -> Text -> Text -> StateTarget -> AWS.Env -> IO MirrorState
-mirrorStateForEnv limits bucket prefix target env =
-    newSingleAttemptManager <&> \writes -> stateOver limits bucket prefix target env env{AWS.manager = writes}
+mirrorStateForEnv :: Deadlines -> Limits -> Text -> Text -> StateTarget -> AWS.Env -> IO MirrorState
+mirrorStateForEnv deadlines limits bucket prefix target env =
+    newSingleAttemptManager <&> \writes -> stateOver deadlines limits bucket prefix target env env{AWS.manager = writes}
 
 -- Reads and writes share the endpoint and credentials, and differ only in their manager.
-stateOver :: Limits -> Text -> Text -> StateTarget -> AWS.Env -> AWS.Env -> MirrorState
-stateOver limits bucket prefix target readEnv writeEnv =
+stateOver :: Deadlines -> Limits -> Text -> Text -> StateTarget -> AWS.Env -> AWS.Env -> MirrorState
+stateOver deadlines limits bucket prefix target readEnv writeEnv =
     MirrorState
         { msReadProject = readProject
         , msWriteProject = writeProject
@@ -46,7 +47,7 @@ stateOver limits bucket prefix target readEnv writeEnv =
     readProject charge name revision = case revisionBytes target name revision of
         Left fault -> pure (Left fault)
         Right expected ->
-            readObject charge readEnv limits bucket (key name) expected >>= \case
+            readObject charge deadlines readEnv limits bucket (key name) expected >>= \case
                 Left fault -> pure (Left (objectFault fault))
                 Right ObjectAbsent -> pure (Right StateAbsent)
                 Right (ObjectUnchanged etag) -> pure (Right (StateUnchanged (StateRevision target name etag)))
@@ -59,7 +60,7 @@ stateOver limits bucket prefix target readEnv writeEnv =
                 chargedEncodeProjectRecord charge limits record >>= \case
                     Left fault -> pure (Left fault)
                     Right bytes ->
-                        fmap (first objectFault) (writeObject charge writeEnv limits bucket (key name) expected bytes)
+                        fmap (first objectFault) (writeObject charge deadlines writeEnv limits bucket (key name) expected bytes)
                             <&> fmap
                                 ( \case
                                     ObjectStored etag -> StateStored (StateRevision target name etag)
@@ -71,12 +72,12 @@ stateOver limits bucket prefix target readEnv writeEnv =
             Left StateMissingCompanion -> storeOrReread charge verified
             settled -> pure settled
     storeOrReread charge verified@(VerifiedCompanionBytes _ reference _) = do
-        result <- writeObject charge writeEnv limits bucket (referenceKey reference) Nothing (companionBody verified)
+        result <- writeObject charge deadlines writeEnv limits bucket (referenceKey reference) Nothing (companionBody verified)
         case result of
             Right (ObjectStored _) -> pure (Right reference)
             _ -> readCompanion charge reference <&> fmap (const reference)
     readCompanion charge reference =
-        fmap (first objectFault) (readObject charge readEnv limits bucket (referenceKey reference) Nothing)
+        fmap (first objectFault) (readObject charge deadlines readEnv limits bucket (referenceKey reference) Nothing)
             <&> ( >>=
                     \case
                         ObjectLoaded _ bytes -> verifyRetainedCompanion reference bytes

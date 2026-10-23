@@ -30,6 +30,7 @@ import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), P
 import Ecluse.Core.Registry.PyPI.Publish (classifyPublish, pypiPublishCodec)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Security.Limits (defaultLimits)
+import Ecluse.Test.Deadline (newSweptClient)
 import Ecluse.Test.Osv (osvZipOf)
 import Ecluse.Test.Package (pypiVersion, unscopedPyPI)
 import Ecluse.Test.Port (passthroughTracingPort)
@@ -44,9 +45,9 @@ spec = do
             withStub status200 "ok" $ \stub -> do
                 bytes <- BSL.toStrict <$> osvZipOf [("example-1.dist-info/METADATA", "Metadata-Version: 2.4\nName: example\nVersion: 1\nRequires-Dist: dependency>=2; extra == 'test'\nProvides-Extra: test\n\nA description.\n")]
                 snapshot <- sourceSnapshot bytes
-                manager <- newManager defaultManagerSettings
+                exchanges <- newSweptClient =<< newManager defaultManagerSettings
                 let target = loopbackRegistryUrl (stubBaseUrl stub <> "/custom-upload")
-                    transport = MirrorTransport manager (pure (Just (ClientCredential (Just "publisher") (mkSecret "password")))) defaultLimits passthroughTracingPort
+                    transport = MirrorTransport exchanges (pure (Just (ClientCredential (Just "publisher") (mkSecret "password")))) defaultLimits passthroughTracingPort
                     writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) target pypiPublishCodec
                 version <- expectRight (mpPrepareVersion writer (unscopedPyPI "example") (pypiVersion "1") snapshot)
                 let inventory = pmvInventory version

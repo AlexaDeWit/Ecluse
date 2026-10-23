@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Bounded registry exchanges under the progress watchdog and optional public authority control.
+-- | Bounded registry exchanges under the progress floor, the response wait, and optional public authority control.
 module Ecluse.Core.Registry.Exchange (
     -- * The bounded exchange
     boundedExchange,
@@ -43,12 +43,11 @@ import Network.HTTP.Client (
     newManager,
     responseBody,
     responseHeaders,
-    withResponse,
  )
 import Network.HTTP.Types.Status (statusCode)
 import UnliftIO (try)
-import UnliftIO.Timeout (timeout)
 
+import Ecluse.Core.Deadline (Deadlines, timeout)
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
 import Ecluse.Core.Fault.Http (classifyTransport, typedTlsManagerSettings)
 import Ecluse.Core.Registry (
@@ -58,8 +57,10 @@ import Ecluse.Core.Registry (
     UrlFormationError,
     isSuccessStatus,
  )
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Progress (meteredReader, meteredUpload, watched)
 import Ecluse.Core.Registry.Public (ReadControl (Uncontrolled), withReadControl)
+import Ecluse.Core.Registry.ResponseWait (withResponse)
 import Ecluse.Core.Security (
     BodyLimit,
     LimitError,
@@ -81,9 +82,9 @@ newSingleAttemptManager :: IO Manager
 newSingleAttemptManager = newManager (singleAttemptSettings typedTlsManagerSettings)
 
 -- | Project status, decompressed byte count, and body. Transport failures retain their typed cause.
-boundedExchange :: (Int -> Int -> ByteString -> a) -> Manager -> ProgressFloor -> BodyLimit -> Request -> IO (Either FetchFault a)
-boundedExchange project manager progress limits request =
-    runExchange manager progress request (readBounded project limits)
+boundedExchange :: (Int -> Int -> ByteString -> a) -> ExchangeClient -> ProgressFloor -> BodyLimit -> Request -> IO (Either FetchFault a)
+boundedExchange project client progress limits request =
+    runExchange client progress request (readBounded project limits)
 
 readBounded :: (Int -> Int -> ByteString -> a) -> BodyLimit -> Response BodyReader -> IO (Either LimitError a)
 readBounded project limits response =
@@ -91,23 +92,24 @@ readBounded project limits response =
         <$> boundedRead limits (brRead (responseBody response))
 
 -- | The exchange keeping the answered status alongside the body, for the first-party relay.
-boundedRelay :: Manager -> ProgressFloor -> BodyLimit -> Request -> IO (Either FetchFault PublishRelayResponse)
+boundedRelay :: ExchangeClient -> ProgressFloor -> BodyLimit -> Request -> IO (Either FetchFault PublishRelayResponse)
 boundedRelay =
     boundedExchange $ \status _ body ->
         PublishRelayResponse{relayStatus = status, relayBody = LBS.fromStrict body}
 
--- | Consume a response under the progress watchdog, classifying transport and body-limit failures.
-runExchange :: Manager -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
+-- | Consume a response under the progress floor and the response wait, classifying transport and body-limit failures.
+runExchange :: ExchangeClient -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
 runExchange = runExchangeUsing Uncontrolled
 
-runExchangeUsing :: ReadControl -> Manager -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
-runExchangeUsing control manager progress request readResponse =
+runExchangeUsing :: ReadControl -> ExchangeClient -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
+runExchangeUsing control client progress request readResponse =
     watched
+        (ecDeadlines client)
         progress
         ( \watch ->
             try
                 ( withReadControl control (metered watch) $ \observed recordHeaders ->
-                    withResponse observed manager $ \response -> do
+                    withResponse client observed $ \response -> do
                         cooldown <- recordHeaders (responseStatus response) (responseHeaders response)
                         case cooldown of
                             Just retry -> pure (Left (FetchCooldown retry))
@@ -121,10 +123,10 @@ runExchangeUsing control manager progress request readResponse =
   where
     metered watch = request{requestBody = meteredUpload watch (requestBody request)}
 
--- | Fail an action that outlives the floor's serve-path cap with the transport timeout.
-withinServeCap :: ProgressFloor -> (FetchFault -> e) -> IO (Either e a) -> IO (Either e a)
-withinServeCap progress inject action =
-    fromMaybe (Left (inject capExceeded)) <$> timeout (floorServeCapMicros progress) action
+-- | Fail an action that outlives the floor's serve-path cap with the transport timeout, up to one sweep late.
+withinServeCap :: Deadlines -> ProgressFloor -> (FetchFault -> e) -> IO (Either e a) -> IO (Either e a)
+withinServeCap deadlines progress inject action =
+    fromMaybe (Left (inject capExceeded)) <$> timeout deadlines (floorServeCapMicros progress) action
   where
     capExceeded = FetchTransport (transportFault TransportTimeout ("the upstream exchange outlived its " <> seconds (floorServeCapMicros progress) <> "-second serve-path cap"))
 
@@ -144,12 +146,12 @@ seconds micros = case micros `divMod` 1_000_000 of
     _ -> show (fromIntegral micros / 1_000_000 :: Double)
 
 -- | Consume a 2xx body within the response lifetime. A status outside 2xx never reaches the consumer.
-withSuccessBody :: Manager -> ProgressFloor -> (IO ByteString -> IO (Either LimitError a)) -> Request -> IO (Either FetchFault (BodyOutcome a))
+withSuccessBody :: ExchangeClient -> ProgressFloor -> (IO ByteString -> IO (Either LimitError a)) -> Request -> IO (Either FetchFault (BodyOutcome a))
 withSuccessBody = withSuccessBodyUsing Uncontrolled
 
 -- | Apply public control only to the HTTP exchange that supplies this body.
-withSuccessBodyUsing :: ReadControl -> Manager -> ProgressFloor -> (IO ByteString -> IO (Either LimitError a)) -> Request -> IO (Either FetchFault (BodyOutcome a))
-withSuccessBodyUsing control manager progress consume request = runExchangeUsing control manager progress request $ \response -> do
+withSuccessBodyUsing :: ReadControl -> ExchangeClient -> ProgressFloor -> (IO ByteString -> IO (Either LimitError a)) -> Request -> IO (Either FetchFault (BodyOutcome a))
+withSuccessBodyUsing control client progress consume request = runExchangeUsing control client progress request $ \response -> do
     let code = statusCode (responseStatus response)
     if isSuccessStatus code
         then fmap (SuccessBody code) <$> consume (brRead (responseBody response))
