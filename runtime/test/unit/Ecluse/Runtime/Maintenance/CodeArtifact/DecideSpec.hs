@@ -91,10 +91,11 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Support (
     routedTo,
     serviceError,
     withNpmStore,
+    withPyPIStore,
  )
 import Ecluse.Runtime.Test.Aws (canonicalRequestMessage, plantedRefusal)
 import Ecluse.Test.Maintenance (withBucket)
-import Ecluse.Test.Package (babelCore, lodashName, npmVersion)
+import Ecluse.Test.Package (babelCore, lodashName, npmVersion, unscopedPyPI)
 
 spec :: Spec
 spec = do
@@ -102,6 +103,7 @@ spec = do
     codecSpec
     presenceSpec
     requestSpec
+    pypiRequestSpec
     ceilingSpec
     deleteFoldSpec
     faultSpec
@@ -248,6 +250,31 @@ requestCases store = do
         listTagsRequest "arn:aws:codeartifact:eu-west-1:111122223333:repository/acme/mirror"
             ^. CAL.listTagsForResource_resourceArn
             `shouldBe` "arn:aws:codeartifact:eu-west-1:111122223333:repository/acme/mirror"
+
+pypiRequestSpec :: Spec
+pypiRequestSpec = describe "the requests the leaf builds for PyPI" $ withPyPIStore pypiRequestCases
+
+pypiRequestCases :: CodeArtifactStore -> Spec
+pypiRequestCases store = do
+    it "asks for listing pages of the 1000 names AWS allows, and sets nothing else" $
+        withBucket "r" $ \prefix -> do
+            let request = listPackagesRequest store prefix Nothing
+            request ^. CAL.listPackages_maxResults `shouldBe` Just 1000
+            (request & CAL.listPackages_maxResults .~ Nothing)
+                `shouldBe` ( CA.newListPackages "acme" "mirror"
+                                & (CAL.listPackages_domainOwner ?~ "111122223333")
+                                & (CAL.listPackages_format ?~ CA.PackageFormat_Pypi)
+                                & (CAL.listPackages_packagePrefix ?~ "r")
+                           )
+
+    it "asks for version pages of the 1000 versions AWS allows, and sets nothing else" $ do
+        let request = listVersionsRequest store (unscopedPyPI "requests") (Just "page-2")
+        request ^. CAL.listPackageVersions_maxResults `shouldBe` Just 1000
+        (request & CAL.listPackageVersions_maxResults .~ Nothing)
+            `shouldBe` ( CA.newListPackageVersions "acme" "mirror" CA.PackageFormat_Pypi "requests"
+                            & (CAL.listPackageVersions_domainOwner ?~ "111122223333")
+                            & (CAL.listPackageVersions_nextToken ?~ "page-2")
+                       )
 
 ceilingSpec :: Spec
 ceilingSpec =

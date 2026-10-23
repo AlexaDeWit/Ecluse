@@ -232,8 +232,8 @@ pageAllSpec = describe "pageAll" $ do
         bounded <- liftIO (pagesFrom (pagedAt size items) >>= collectPagesBounded bound . pageSource)
         oneEach <- liftIO (pagesFrom (pagedAt 1 items) >>= collectPagesBounded bound . pageSource)
         whole === Right items
-        bounded === oneEach
-        isRight bounded === (count <= bound)
+        isRight oneEach === (count <= bound)
+        bounded === (if count <= bound then Right items else oneEach)
 
 chunkingSpec :: Spec
 chunkingSpec = describe "chunksOfCeiling" $ do

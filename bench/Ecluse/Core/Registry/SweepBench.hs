@@ -3,9 +3,11 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Complete Dredger cycles over CodeArtifact stores of 1,000 and 10,000 names. Each cycle drives
-the production maintenance handles over a fixed-page fixture that waits 20 ms per native call, with
-real advisory catalogues, the shipped quota model, and real chunk pauses. Each cycle is checked
-against counts derived from the inventory alone, then written as one JSON line.
+the production maintenance handles over a fixed-page fixture, with real advisory catalogues and the
+shipped quota model. A paced cycle waits 20 ms per native call and serves its quota waits and chunk
+pauses. An unpaced cycle asks for the same waits and serves none, so it counts a full walk's native
+calls in seconds. Each cycle is checked against counts derived from the inventory alone, then
+written as one JSON line.
 -}
 module Ecluse.Core.Registry.SweepBench (withBenchmarks) where
 

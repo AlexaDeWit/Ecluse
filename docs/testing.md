@@ -1776,7 +1776,7 @@ out.
 | Field | Meaning |
 |---|---|
 | `paced` | Whether the row served its waits and the fixture delay |
-| `wall_seconds`, `cpu_seconds` | The whole cycle, waits included |
+| `wall_seconds`, `cpu_seconds` | The whole cycle, with every wait a paced row serves. An unpaced row serves none |
 | `active_seconds` | Wall time less the quota waits, chunk pauses, and fixture delay |
 | `allocated_bytes` | Bytes allocated during the cycle, the fixture's documents and the counters included |
 | `live_bytes_before`, `live_bytes_after` | The live heap after a major GC on each side of the cycle |
@@ -1784,7 +1784,7 @@ out.
 | `major_gc_live_bytes_peak_sampled` | The largest live heap of those major GCs that a 10 ms sampler saw. It can miss the true peak |
 | `process_max_live_bytes` | The process peak, which includes every earlier benchmark |
 | `native_requests_per_version` | Native calls of each kind per decided version |
-| `versions_per_hour` | Decided versions per hour of wall time at the ceiling pace |
+| `versions_per_hour` | Decided versions per hour of wall time. A paced row runs at the ceiling pace. An unpaced row serves no wait, so its figure is not a rate the quotas allow |
 | `decisions`, `decision_digest` | The tally, request counts, waits asked for, cursor writes, and identity checksum, then their SHA-256. Times and the covered-name query count stay out, so a change that only saves work keeps the digest |
 
 The group takes about 28 minutes, 21 of them in the paced npm full walk of 10,000 names. A paced

@@ -9,6 +9,7 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Support (
     -- * The repository under test
     npmStore,
     withNpmStore,
+    withPyPIStore,
 
     -- * Describe answers
     describing,
@@ -31,7 +32,7 @@ import Amazonka qualified as AWS
 import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (tfDetail)
 import Ecluse.Core.Registry.Maintenance (StoreFault (..))
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
@@ -42,7 +43,11 @@ import Ecluse.Runtime.Test.PackageStore.FixedPages (describing)
 
 -- | The npm repository the maintenance specs address, or 'Nothing' if npm resolved to no format.
 npmStore :: Maybe CodeArtifactStore
-npmStore = coordinates <$> codeArtifactFormat Npm
+npmStore = storeFor Npm
+
+-- One set of coordinates, in the ecosystem's format.
+storeFor :: Ecosystem -> Maybe CodeArtifactStore
+storeFor eco = coordinates <$> codeArtifactFormat eco
   where
     coordinates format =
         CodeArtifactStore
@@ -62,6 +67,14 @@ withNpmStore cases = maybe noNpmFormat cases npmStore
     noNpmFormat =
         it "has a CodeArtifact format for npm" $
             expectationFailure "npm resolved to no CodeArtifact format"
+
+-- | Run the cases over the PyPI repository at the coordinates 'npmStore' uses, failing as 'withNpmStore' does.
+withPyPIStore :: (CodeArtifactStore -> Spec) -> Spec
+withPyPIStore cases = maybe noPyPIFormat cases (storeFor PyPI)
+  where
+    noPyPIFormat =
+        it "has a CodeArtifact format for pypi" $
+            expectationFailure "pypi resolved to no CodeArtifact format"
 
 -- | A repository whose own external connection reaches the named registry.
 connectedTo :: Text -> CA.RepositoryDescription

@@ -48,7 +48,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal (consentTagKey, c
 import Ecluse.Runtime.Maintenance.CodeArtifact.Internal (ControlPlane (..), boundedObservationFor, cacheMaintenanceFor, maintenanceFor)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Read (ReadPlane (..))
 
--- | One repository's packages, its page size, and the wait before each answer.
+-- | One repository's packages, the page size for a request without @maxResults@, and the wait before each answer.
 data FixedRepository = FixedRepository
     { frStore :: CodeArtifactStore
     , frPackages :: Map Text Int
