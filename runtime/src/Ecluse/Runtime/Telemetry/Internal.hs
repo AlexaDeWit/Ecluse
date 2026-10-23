@@ -36,7 +36,7 @@ import OpenTelemetry.Exporter.Span (SpanExporter (..))
 import OpenTelemetry.Log (initializeGlobalLoggerProvider, shutdownLoggerProvider)
 import OpenTelemetry.Metric (
     MeterProvider (..),
-    PeriodicMetricReaderHandle (..),
+    PeriodicMetricReaderHandle (stopPeriodicMetricReader),
     createMeterProvider,
     defaultSdkMeterProviderOptions,
     forkPeriodicMetricReader,
@@ -60,20 +60,24 @@ import OpenTelemetry.Trace (
     shutdownTracerProvider,
  )
 import UnliftIO (bracket)
+import UnliftIO.Async (asyncWithUnmask, cancel)
 import UnliftIO.Exception (catchAny)
 
+import Ecluse.Runtime.Telemetry.Batched (batchMeterProvider)
 import Ecluse.Runtime.Telemetry.Escape (withEscapeHandler)
 import Ecluse.Runtime.Telemetry.ExportFailure (
     ExportFailureSink,
     exportFailureSink,
     installExportErrorHandler,
     observeExportResult,
+    observeFlushFault,
  )
 import Ecluse.Runtime.Telemetry.Scrape (MetricScrape, metricScrapeFor, withScrapeListener)
 
 import Data.Universe.Class (Universe (..))
 import Data.Universe.Generic (universeGeneric)
 
+import Ecluse.Core.Supervision (superviseBackground)
 import Ecluse.Core.Wire (WireVocab (..), parseWire)
 
 -- | The @ECLUSE_OBSERVABILITY__TELEMETRY@ master switch. Telemetry is opt-in, so 'TelemetryOff' is the default.
@@ -156,7 +160,7 @@ withTelemetry switch logEnv use = case switch of
         sink <- exportFailureSink logEnv
         installExportErrorHandler sink
         registerObservedSpanExporter sink
-        bracket (initializeObservedOpenTelemetry sink) (otelShutdown . fst) $ \(signals, scrape) ->
+        bracket (initializeObservedOpenTelemetry logEnv sink) (otelShutdown . fst) $ \(signals, scrape) ->
             withScrapeListener logEnv scrape (use (telemetryEnabled signals))
 
 {- Wrap the OTLP span exporter so a failed export is observed: @hs-opentelemetry@ 1.0.0.0
@@ -191,10 +195,10 @@ registerObservedSpanExporter sink =
 
 {- Mirror @hs-opentelemetry-sdk@ 1.0.0.0's @initializeOpenTelemetry@. The tracer reads the
 registry, so 'registerObservedSpanExporter' runs first. Re-diff against the SDK on a bump. -}
-initializeObservedOpenTelemetry :: ExportFailureSink -> IO (OTelSignals, Maybe MetricScrape)
-initializeObservedOpenTelemetry sink = do
+initializeObservedOpenTelemetry :: LogEnv -> ExportFailureSink -> IO (OTelSignals, Maybe MetricScrape)
+initializeObservedOpenTelemetry logEnv sink = do
     tracerProvider <- initializeEscapeHandledTracerProvider
-    (meterProvider, scrape) <- initializeObservedMeterProvider sink
+    (meterProvider, scrape) <- initializeObservedMeterProvider logEnv sink
     loggerProvider <- initializeGlobalLoggerProvider
     let shutdown = do
             void (shutdownTracerProvider tracerProvider Nothing) `catchAny` const pass
@@ -221,10 +225,10 @@ initializeEscapeHandledTracerProvider = do
     setGlobalTracerProvider provider
     pure provider
 
-{- Mirror @hs-opentelemetry-sdk@ 1.0.0.0's @initializeGlobalMeterProvider@, observing the metric
-exporter's failures and lifting the meter environment out for the scrape. Re-diff on a bump. -}
-initializeObservedMeterProvider :: ExportFailureSink -> IO (MeterProvider, Maybe MetricScrape)
-initializeObservedMeterProvider sink = do
+{- Mirror @hs-opentelemetry-sdk@ 1.0.0.0's @initializeGlobalMeterProvider@, batching synchronous
+records, observing the exporter's failures, and lifting the meter environment out for the scrape. -}
+initializeObservedMeterProvider :: LogEnv -> ExportFailureSink -> IO (MeterProvider, Maybe MetricScrape)
+initializeObservedMeterProvider logEnv sink = do
     disabled <- lookupBooleanEnv "OTEL_SDK_DISABLED"
     if disabled
         then (noopMeterProvider, Nothing) <$ setGlobalMeterProvider noopMeterProvider
@@ -234,19 +238,18 @@ initializeObservedMeterProvider sink = do
             builtInResources <- detectBuiltInResources
             envResources <- mkResource . map Just <$> detectResourceAttributes
             let resources = materializeResources (mergeResources envResources builtInResources)
-            (provider, env) <- createMeterProvider resources defaultSdkMeterProviderOptions
+            (sdkProvider, env) <- createMeterProvider resources defaultSdkMeterProviderOptions
+            (batched, flushStep) <- batchMeterProvider (observeFlushFault sink) sdkProvider
             readerHandle <- forkPeriodicMetricReader env exporter readerOptions
-            let provider' = stopReaderOnShutdown readerHandle provider
-            setGlobalMeterProvider provider'
+            -- The bracket acquires masked, so the flusher unmasks to stay cancellable.
+            flusher <- asyncWithUnmask (\unmask -> unmask (superviseBackground "metric-flush" logEnv flushStep))
+            let provider = beforeShutdown (stopPeriodicMetricReader readerHandle) (beforeShutdown (cancel flusher) batched)
+            setGlobalMeterProvider provider
             scrape <- metricScrapeFor env
-            pure (provider', scrape)
+            pure (provider, scrape)
 
-{- Mirrors the SDK's own shutdown ordering, and is part of the same version-pin re-diff
-surface as 'initializeObservedMeterProvider'. -}
-stopReaderOnShutdown :: PeriodicMetricReaderHandle -> MeterProvider -> MeterProvider
-stopReaderOnShutdown readerHandle provider =
-    provider
-        { meterProviderShutdown = \timeout -> do
-            stopPeriodicMetricReader readerHandle
-            meterProviderShutdown provider timeout
-        }
+{- Run a stop before the provider shuts down: the reader's, whose final export is the last, then the
+flusher's. The order mirrors the SDK's own, so it is part of the same version-pin re-diff surface. -}
+beforeShutdown :: IO () -> MeterProvider -> MeterProvider
+beforeShutdown stop provider =
+    provider{meterProviderShutdown = \timeout -> stop >> meterProviderShutdown provider timeout}

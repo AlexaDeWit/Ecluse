@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | In-process telemetry collection without exporters or background readers, and a captured span's events.
-module Ecluse.Runtime.Test.Telemetry (withTestTelemetry, gaugePoints, sumPoints, spanEvents) where
+module Ecluse.Runtime.Test.Telemetry (withTestTelemetry, gaugePoints, sumPoints, sumPointsIn, metricExports, spanEvents) where
 
 import OpenTelemetry.Attributes (Attributes)
 import OpenTelemetry.Exporter.Metric (
@@ -41,23 +41,31 @@ gaugePoints wanted = collectPoints $ \case
 
 -- | Collect integer counter observations under a metric name.
 sumPoints :: Text -> SdkMeterEnv -> IO [(Attributes, Int64)]
-sumPoints wanted = collectPoints $ \case
+sumPoints wanted meterEnv = sumPointsIn wanted <$> collectResourceMetrics meterEnv
+
+-- | Integer counter observations under a metric name in a collection already taken, such as an exporter's.
+sumPointsIn :: Text -> [ResourceMetricsExport] -> [(Attributes, Int64)]
+sumPointsIn wanted = selectPoints $ \case
     MetricExportSum{mesName = name, mesSumPoints = points}
         | name == wanted ->
             [(sumDataPointAttributes point, sumDataPointValue point) | point <- toList points]
     _ -> []
+
+-- | Every metric in a collection, across its resources and scopes.
+metricExports :: [ResourceMetricsExport] -> [MetricExport]
+metricExports batches =
+    [ metric
+    | batch <- batches
+    , scope <- toList (resourceMetricsScopes batch)
+    , metric <- toList (scopeMetricsExports scope)
+    ]
 
 -- | The events a captured span holds, the library's own @exception@ event included.
 spanEvents :: SpanHot -> [Event]
 spanEvents = toList . appendOnlyBoundedCollectionValues . hotEvents
 
 collectPoints :: (MetricExport -> [(Attributes, NumberValue)]) -> SdkMeterEnv -> IO [(Attributes, Int64)]
-collectPoints select meterEnv = do
-    batches <- collectResourceMetrics meterEnv
-    pure
-        [ (attrs, value)
-        | batch <- batches
-        , scope <- toList (resourceMetricsScopes batch)
-        , metric <- toList (scopeMetricsExports scope)
-        , (attrs, IntNumber value) <- select metric
-        ]
+collectPoints select meterEnv = selectPoints select <$> collectResourceMetrics meterEnv
+
+selectPoints :: (MetricExport -> [(Attributes, NumberValue)]) -> [ResourceMetricsExport] -> [(Attributes, Int64)]
+selectPoints select batches = [(attrs, value) | metric <- metricExports batches, (attrs, IntNumber value) <- select metric]
