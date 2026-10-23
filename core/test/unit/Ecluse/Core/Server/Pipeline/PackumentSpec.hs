@@ -58,6 +58,7 @@ import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics (CacheResult (Hit, Miss))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpAssembledCacheRequest))
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (sriSha512Of, thingName)
 import Ecluse.Test.Port (noopMetricsPort)
@@ -144,18 +145,18 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
                     header hETag response `shouldBe` Just tag
                     header hContentEncoding response `shouldBe` Nothing
                     header hVary response `shouldBe` Nothing
-        it "serves both codings from one identity entry in the assembled cache" $ do
+        it "serves both codings from one identity entry in the assembled cache" $ withSweeper $ \deadlines -> do
             results <- newIORef []
-            rt <- testServeRuntime noopMetricsPort{mpAssembledCacheRequest = \result -> modifyIORef' results (result :)}
+            rt <- testServeRuntime deadlines noopMetricsPort{mpAssembledCacheRequest = \result -> modifyIORef' results (result :)}
             withListingIn rt listing $ \serve -> do
                 packed <- serve GzipWhenAccepted methodGet [(hAcceptEncoding, "gzip")]
                 plain <- serve GzipWhenAccepted methodGet []
                 plainBytes <- responseBytes plain
                 (GZip.decompress <$> responseBytes packed) `shouldReturn` plainBytes
                 reverse <$> readIORef results `shouldReturn` [Miss, Hit]
-        it "charges a gzip response its workspace and buffer, and returns every charge" $ do
+        it "charges a gzip response its workspace and buffer, and returns every charge" $ withSweeper $ \deadlines -> do
             meter <- newMemoryMeter MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 1000, msEntryWaitMicros = 0}
-            unmetered <- testServeRuntime noopMetricsPort
+            unmetered <- testServeRuntime deadlines noopMetricsPort
             withListingIn unmetered{srMemoryMeter = meter} listing $ \serve -> do
                 void (serve GzipWhenAccepted methodGet [])
                 void (takeLargestCharge meter)
@@ -165,8 +166,8 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
                 gzipCharge <- takeLargestCharge meter
                 gzipCharge - plainCharge `shouldBe` gzipWorkspaceBytes + gzipBufferChargeBytes
                 snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
-        it "keeps edge authentication, private authorisation and policy ahead of a cached gzip validator" $ do
-            rt <- testServeRuntime noopMetricsPort
+        it "keeps edge authentication, private authorisation and policy ahead of a cached gzip validator" $ withSweeper $ \deadlines -> do
+            rt <- testServeRuntime deadlines noopMetricsPort
             privateState <- newIORef PrivateServes
             testWithApplication (pure (listingOrigin listing)) $ \publicPort ->
                 testWithApplication (pure (privateOrigin privateState (listingOrigin listing))) $ \privatePort -> do
@@ -183,9 +184,9 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
                     publicTag <- validator =<< serve publicOnly signed
                     statusOf <$> serve publicOnly ((hIfNoneMatch, publicTag) : signed) `shouldReturn` 304
                     statusOf <$> serve publicOnly{pdRules = []} ((hIfNoneMatch, publicTag) : signed) `shouldReturn` 403
-        it "returns its admission slot and charges when cancelled while it responds" $ do
+        it "returns its admission slot and charges when cancelled while it responds" $ withSweeper $ \deadlines -> do
             admission <- newServeAdmissionTuned 1 0 0
-            rt <- testServeRuntimeWith admission noopMetricsPort
+            rt <- testServeRuntimeWith deadlines admission noopMetricsPort
             testWithApplication (pure (listingOrigin listing)) $ \port -> do
                 deps <- listingDeps listing port
                 ready <- MVar.newEmptyMVar
@@ -291,8 +292,8 @@ pypiOrigin request respond
 
 -- Serve each request through a fresh runtime over one origin, choosing the mount's coding policy.
 withListing :: Listing -> ((MetadataCompression -> Method -> RequestHeaders -> IO Response) -> IO a) -> IO a
-withListing listing use = do
-    rt <- testServeRuntime noopMetricsPort
+withListing listing use = withSweeper $ \deadlines -> do
+    rt <- testServeRuntime deadlines noopMetricsPort
     withListingIn rt listing use
 
 withListingIn :: ServeRuntime -> Listing -> ((MetadataCompression -> Method -> RequestHeaders -> IO Response) -> IO a) -> IO a

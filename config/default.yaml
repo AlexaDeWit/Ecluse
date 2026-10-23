@@ -93,8 +93,9 @@ limits:
   # Apart from the artifact stream, each upstream exchange a served request makes also
   # ends 50 seconds in: the 60-second request timeout less a 10-second margin. That frees
   # the requests waiting on a slow fetch before they time out. The mirror worker and the
-  # Dredger have no such cap. Écluse checks these bounds every 100 ms, so each ends about 100 ms
-  # after its time. The window must be positive and below 50, and the byte count positive.
+  # Dredger have no such cap. Écluse checks the floor, the 50-second cap and the request
+  # timeout every 100 ms, so each ends about 100 ms after its time. The window must be
+  # positive and below 50, and the byte count positive.
   progressWindow: 10
   minProgressBytes: 1048576
   # maxResponseBytes defaults to 128 MiB, a fixed metadata ingest ceiling independent of CPU
