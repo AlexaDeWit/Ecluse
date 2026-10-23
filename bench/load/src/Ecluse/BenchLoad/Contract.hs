@@ -29,6 +29,7 @@ data LoadLaw
     = ColdMetadata
     | ShippedAdvisoryMetadata
     | AllAdvisoryMetadata
+    | SlowReaders
     | PrivateCopyFivePercent
     | PrivateCopyQuarter
     | PrivateCopyWhole
@@ -70,6 +71,7 @@ requiredLoadLaws scope =
     [ ColdMetadata
     , ShippedAdvisoryMetadata
     , AllAdvisoryMetadata
+    , SlowReaders
     , PrivateCopyFivePercent
     , PrivateCopyQuarter
     , PrivateCopyWhole
@@ -108,6 +110,7 @@ loadScenarioName ecosystem law = case ecosystem of
         ColdMetadata -> cold
         ShippedAdvisoryMetadata -> cold <> "-advisories"
         AllAdvisoryMetadata -> cold <> "-all-advisory-rules"
+        SlowReaders -> "slow-readers"
         PrivateCopyFivePercent -> "heavy-private-5pct"
         PrivateCopyQuarter -> "heavy-private-25pct"
         PrivateCopyWhole -> "heavy-private"
@@ -179,6 +182,7 @@ hasServiceTime = \case
     AdmissionHerd -> False
     WarmUnderCold -> False
     AdmissionRamp -> False
+    SlowReaders -> False
     ColdMetadata -> True
     ShippedAdvisoryMetadata -> True
     AllAdvisoryMetadata -> True
