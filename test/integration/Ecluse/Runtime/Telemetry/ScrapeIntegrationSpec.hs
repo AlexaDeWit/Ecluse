@@ -6,6 +6,7 @@ module Ecluse.Runtime.Telemetry.ScrapeIntegrationSpec (spec) where
 
 import Data.List (lookup)
 import Data.Text qualified as T
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Test.Hspec
 
@@ -39,6 +40,7 @@ import Ecluse.Runtime.Telemetry.Instruments.Internal (
     recordServeDecision,
  )
 import Ecluse.Runtime.Test.Support (newTestEnvWith)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Metrics (highCardinalityKeys)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Support (parseRequestOrFail)
@@ -110,9 +112,9 @@ driveScrapeRun = do
     scrapePort <- freePort
     withScrapeEnv scrapePort $ do
         logEnv <- initLogEnv (Namespace ["itest"]) (Environment "test")
-        withTelemetry TelemetryOn logEnv $ \telemetry -> do
+        withTelemetry TelemetryOn logEnv $ \telemetry -> withSweeper $ \deadlines -> do
             recordSpread telemetry
-            env <- buildEnv telemetry
+            env <- buildEnv deadlines telemetry
             app <- tracedApplication (mkServerConfig []) env
             Warp.testWithApplication (pure app) $ \proxyPort ->
                 ScrapeRun
@@ -171,8 +173,8 @@ urlOn port path = "http://127.0.0.1:" <> show port <> path
 
 -- A minimal composition root for the front door. No mount is configured, so every path on the
 -- proxy port falls through to the health probes.
-buildEnv :: Telemetry -> IO Env
-buildEnv telemetry = do
+buildEnv :: Deadlines -> Telemetry -> IO Env
+buildEnv deadlines telemetry = do
     manager <- newManager defaultManagerSettings
     queue <- newTestMemoryQueue
-    newTestEnvWith queue (manager, manager) telemetry
+    newTestEnvWith deadlines queue (manager, manager) telemetry

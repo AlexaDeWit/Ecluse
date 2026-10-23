@@ -34,6 +34,7 @@ import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue, packument, publishedDaysAgo, requestAt)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Contract.Serving (ServingDriver (..), ServingRelease (..), ServingResponse (..), ServingSession (..))
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Json (fieldAt, textAtPath)
 import Ecluse.Test.Package (hexSha256Of, sriSha256Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -55,10 +56,10 @@ nativeDriver ecosystem adapter mount metadataPath artifactPath document observe 
     ServingDriver
         { withServing = \compression rules privateReleases publicReleases action ->
             testWithApplication (pure (upstream privateReleases)) $ \privatePort ->
-                testWithApplication (pure (upstream publicReleases)) $ \publicPort -> do
+                testWithApplication (pure (upstream publicReleases)) $ \publicPort -> withSweeper $ \deadlines -> do
                     queue <- newTestMemoryQueue
                     manager <- newManager defaultManagerSettings
-                    env <- newTestEnvWithQueue queue manager
+                    env <- newTestEnvWithQueue deadlines queue manager
                     prepared <- prepare inertRuleDeps (map atDefaultPrecedence rules)
                     let deps =
                             (serveDepsFor adapter (Just (loopbackRegistryUrl (localhost privatePort))) (loopbackRegistryUrl (localhost publicPort)) NoMirrorWrite prepared (pure now))

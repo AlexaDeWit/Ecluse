@@ -27,13 +27,13 @@ module Ecluse.Boot (
     logBootWarning,
     logBootInfo,
     superviseBackground,
+    buildMirrorQueue,
+    applyServerSettings,
+    probeServerConfig,
 
     -- * The deadline sweeper
     withDeadlineSweeper,
     alongsideSweeper,
-    buildMirrorQueue,
-    applyServerSettings,
-    probeServerConfig,
 ) where
 
 import Data.ByteString qualified as BS
