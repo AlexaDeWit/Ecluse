@@ -20,7 +20,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Katip (Severity (DebugS), logFM, ls)
-import Network.HTTP.Types (Method, ResponseHeaders, hContentLength)
+import Network.HTTP.Types (Method, ResponseHeaders, hConnection, hContentLength)
 import Network.Wai (Request, ResponseReceived, requestHeaders)
 import UnliftIO (concurrently)
 import UnliftIO.Exception (catchAny, throwIO)
@@ -209,7 +209,7 @@ packumentWith mode replies name request respond = do
                 , psvTicket = ticket
                 }
     if edgeTokenMatches (pdInboundToken deps) clientToken
-        then withMetadataAdmission (ctxRuntime ctx) (refuse packumentUnavailable [shedRetryAfter] shedMessage) (\ticket -> serveAdmittedPackument (serving ticket) clientToken) pure
+        then withMetadataAdmissionC (ctxRuntime ctx) (\closing -> refuse packumentUnavailable (shedRetryAfter : [(hConnection, "close") | closing]) shedMessage) (\ticket -> serveAdmittedPackument (serving ticket) clientToken) pure
         else refuse packumentUnauthorised [] unauthorisedMessage
   where
     refuse reply headers message = liftIO (respond (reply replies headers (mkRefusal Nothing message)))

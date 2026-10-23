@@ -8,16 +8,29 @@ A bounded waiting room prevents newcomers from bypassing queued requests. Wake o
 module Ecluse.Core.Server.Admission.Weighted (
     WeightedAdmission,
     weightedAdmissionWaiting,
+    weightedAdmissionLevels,
     newWeightedAdmission,
+    newWeightedAdmissionSwept,
     withWeightedAdmission,
+    withWeightedAdmissionE,
+    withWeightedAdmissionP,
+    spikePlacesFreed,
+    spikeWaiters,
+    spikeSignalOne,
+    Shed (..),
+    spikeRoomSwept,
     AdmissionObservers (..),
     admissionWaitMicros,
 ) where
 
 import Control.Concurrent.STM (retry)
+import Data.Sequence qualified as Seq
 import GHC.Conc (registerDelay)
+import System.IO.Unsafe (unsafePerformIO)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Exception qualified as UE
+
+import Ecluse.Core.Deadline (Deadlines, withSweptFlag)
 
 -- | Capacity and waiting-room state. Only the controller can mutate these fields.
 data WeightedAdmission = WeightedAdmission
@@ -25,7 +38,41 @@ data WeightedAdmission = WeightedAdmission
     , waWaiting :: TVar Int
     , waWaitingRoom :: Int
     , waWaitMicros :: Int
+    , waDeadlines :: Maybe Deadlines
+    -- ^ Spike 1866: time the room wait on the sweeper instead of 'registerDelay'.
     }
+
+-- | Spike 1866: why a request was shed.
+data Shed = DoorFull | WaitExpired
+    deriving stock (Eq, Show)
+
+-- | Spike 1866: bumped whenever a room place or capacity frees, so held requests wake to try again.
+spikePlacesFreed :: TVar Int
+spikePlacesFreed = unsafePerformIO (newTVarIO 0)
+{-# NOINLINE spikePlacesFreed #-}
+
+-- | Spike 1866: requests waiting for a place, oldest first. A state of 0 waits, 1 is signalled, 2 has left.
+spikeWaiters :: TVar (Seq (TVar Int))
+spikeWaiters = unsafePerformIO (newTVarIO Seq.empty)
+{-# NOINLINE spikeWaiters #-}
+
+-- | Spike 1866: a place freed, so signal the oldest request still waiting for one.
+spikeSignalOne :: STM ()
+spikeSignalOne = do
+    queue <- readTVar spikeWaiters
+    unless (Seq.null queue) (go queue)
+  where
+    go queue = case Seq.viewl queue of
+        Seq.EmptyL -> writeTVar spikeWaiters Seq.empty
+        waiter Seq.:< rest ->
+            readTVar waiter >>= \case
+                0 -> writeTVar waiter 1 >> writeTVar spikeWaiters rest
+                _ -> go rest
+
+-- | Spike 1866: SPIKE1866_ROOM=ghc keeps 'registerDelay' for the room wait.
+spikeRoomSwept :: Bool
+spikeRoomSwept = unsafePerformIO (lookupEnv "SPIKE1866_ROOM") /= Just "ghc"
+{-# NOINLINE spikeRoomSwept #-}
 
 -- | Admission observers, independent of the telemetry vocabulary.
 data AdmissionObservers = AdmissionObservers
@@ -43,7 +90,11 @@ admissionWaitMicros = 1_000_000
 
 -- | Keep capacity verbatim and clamp the room and microsecond wait budget at zero.
 newWeightedAdmission :: Int -> Int -> Int -> IO WeightedAdmission
-newWeightedAdmission capacity room waitMicros = do
+newWeightedAdmission = newWeightedAdmissionSwept Nothing
+
+-- | Spike 1866: 'newWeightedAdmission' whose room wait runs on the sweeper.
+newWeightedAdmissionSwept :: Maybe Deadlines -> Int -> Int -> Int -> IO WeightedAdmission
+newWeightedAdmissionSwept deadlines capacity room waitMicros = do
     available <- newTVarIO capacity
     waiting <- newTVarIO 0
     pure
@@ -52,6 +103,7 @@ newWeightedAdmission capacity room waitMicros = do
             , waWaiting = waiting
             , waWaitingRoom = max 0 room
             , waWaitMicros = max 0 waitMicros
+            , waDeadlines = if spikeRoomSwept then deadlines else Nothing
             }
 
 -- The outcome of the door transaction: the weight taken directly, a place taken in the
@@ -93,19 +145,42 @@ withWeightedAdmission ::
     Int ->
     m a ->
     m (Maybe a)
-withWeightedAdmission obs wa weight action =
+withWeightedAdmission obs wa weight action = either (const Nothing) Just <$> withWeightedAdmissionE obs wa weight action
+
+-- | Spike 1866: 'withWeightedAdmission' that says why it shed.
+{-# INLINE withWeightedAdmissionE #-}
+withWeightedAdmissionE ::
+    (MonadUnliftIO m) =>
+    AdmissionObservers ->
+    WeightedAdmission ->
+    Int ->
+    m a ->
+    m (Either Shed a)
+withWeightedAdmissionE obs wa weight = withWeightedAdmissionP obs wa weight pass
+
+-- | Spike 1866: 'withWeightedAdmissionE' that runs @placed@ once the request holds a place or a slot.
+{-# INLINE withWeightedAdmissionP #-}
+withWeightedAdmissionP ::
+    (MonadUnliftIO m) =>
+    AdmissionObservers ->
+    WeightedAdmission ->
+    Int ->
+    IO () ->
+    m a ->
+    m (Either Shed a)
+withWeightedAdmissionP obs wa weight placed action =
     UE.mask $ \restore -> do
         gate <- atomically (doorDecision wa weight)
         case gate of
-            Refused -> shedRecording obs
-            Admitted -> admittedRun obs wa weight (pure ()) restore action
-            Queued -> queuedWait obs wa weight restore action
+            Refused -> shedRecording obs DoorFull
+            Admitted -> liftIO placed >> admittedRun obs wa weight (pure ()) restore action
+            Queued -> liftIO placed >> queuedWait obs wa weight restore action
 
 -- Record the shed and refuse. A room place taken on the queued path is already
 -- surrendered before this runs.
 {-# INLINE shedRecording #-}
-shedRecording :: (MonadIO m) => AdmissionObservers -> m (Maybe a)
-shedRecording obs = liftIO (onShed obs) $> Nothing
+shedRecording :: (MonadIO m) => AdmissionObservers -> Shed -> m (Either Shed a)
+shedRecording obs why = liftIO (onShed obs) $> Left why
 
 -- A blocked STM retry stays interruptible under the mask, so a cancellation aborts it taking
 -- nothing while a committed acquire returns with the weight held and exceptions still masked.
@@ -117,15 +192,15 @@ queuedWait ::
     Int ->
     (m a -> m a) ->
     m a ->
-    m (Maybe a)
+    m (Either Shed a)
 queuedWait obs wa weight restore action = do
-    deadline <- liftIO (registerDelay (waWaitMicros wa))
+    let waitFor deadline = atomically (acquireOrExpire wa weight deadline)
     acquired <-
-        atomically (acquireOrExpire wa weight deadline)
-            `UE.finally` atomically (modifyTVar' (waWaiting wa) (subtract 1))
+        liftIO (maybe (registerDelay (waWaitMicros wa) >>= waitFor) (\d -> withSweptFlag d (waWaitMicros wa) waitFor) (waDeadlines wa))
+            `UE.finally` atomically (modifyTVar' (waWaiting wa) (subtract 1) >> spikeSignalOne)
     if acquired
         then admittedRun obs wa weight (onQueued obs) restore action
-        else shedRecording obs
+        else shedRecording obs WaitExpired
 
 -- The gauge increment runs under the enclosing mask, before 'restore', and 'afterArm' with it, so a
 -- cancellation or a throwing observer cannot fire the finaliser's decrement without the increment.
@@ -138,9 +213,9 @@ admittedRun ::
     IO () ->
     (m a -> m a) ->
     m a ->
-    m (Maybe a)
+    m (Either Shed a)
 admittedRun obs wa weight afterArm restore action =
-    Just
+    Right
         <$> ( (liftIO (onInFlightDelta obs weight >> afterArm) >> restore action)
                 `UE.finally` releaseWeight obs wa weight
             )
@@ -151,7 +226,11 @@ admittedRun obs wa weight afterArm restore action =
 releaseWeight :: (MonadUnliftIO m) => AdmissionObservers -> WeightedAdmission -> Int -> m ()
 releaseWeight obs wa weight =
     liftIO (onInFlightDelta obs (negate weight))
-        `UE.finally` atomically (modifyTVar' (waAvailable wa) (+ weight))
+        `UE.finally` atomically (modifyTVar' (waAvailable wa) (+ weight) >> spikeSignalOne)
+
+-- | Spike 1866: free capacity and room occupancy, read without a transaction.
+weightedAdmissionLevels :: WeightedAdmission -> IO (Int, Int)
+weightedAdmissionLevels wa = (,) <$> readTVarIO (waAvailable wa) <*> readTVarIO (waWaiting wa)
 
 -- | Observe committed waiting-room occupancy without changing admission state.
 weightedAdmissionWaiting :: WeightedAdmission -> STM Int

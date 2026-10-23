@@ -15,6 +15,7 @@ module Ecluse.Core.Server.Admission.Meter (
     MemoryMeter,
     MeterSettings (..),
     newMemoryMeter,
+    newMemoryMeterSwept,
     steerMeter,
     meterSnapshot,
     meterFigures,
@@ -23,6 +24,8 @@ module Ecluse.Core.Server.Admission.Meter (
     -- * A request's ticket
     MemoryTicket,
     withMemoryEntry,
+    withMemoryEntryE,
+    withMemoryEntryP,
     charge,
     newChargeRegion,
 
@@ -48,7 +51,9 @@ import Ecluse.Core.Server.Admission.Budget (
     growthDecision,
     roundUpToStep,
  )
+import Ecluse.Core.Deadline (Deadlines, withSweptFlag)
 import Ecluse.Core.Server.Admission.Types (BrakeLevel (Calm), FlightKey, MeterSnapshot (..))
+import Ecluse.Core.Server.Admission.Weighted (Shed (..), spikeRoomSwept, spikeSignalOne)
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
 -- | The boot-time shape of a meter.
@@ -81,11 +86,17 @@ data MemoryMeter = MemoryMeter
     , mmStepBytes :: Int
     , mmEntryRoom :: Int
     , mmEntryWaitMicros :: Int
+    , mmDeadlines :: Maybe Deadlines
+    -- ^ Spike 1866: time the entry wait on the sweeper.
     }
 
 -- | Build a meter. The step floors at one byte, and the room and the wait at zero.
 newMemoryMeter :: MeterSettings -> IO MemoryMeter
-newMemoryMeter settings =
+newMemoryMeter = newMemoryMeterSwept Nothing
+
+-- | Spike 1866: 'newMemoryMeter' whose entry wait runs on the sweeper.
+newMemoryMeterSwept :: Maybe Deadlines -> MeterSettings -> IO MemoryMeter
+newMemoryMeterSwept deadlines settings =
     MemoryMeter
         <$> newTVarIO (max 0 (msBudgetBytes settings))
         <*> newTVarIO 0
@@ -99,6 +110,7 @@ newMemoryMeter settings =
         <*> pure (max 1 (msStepBytes settings))
         <*> pure (max 0 (msEntryRoom settings))
         <*> pure (max 0 (msEntryWaitMicros settings))
+        <*> pure (if spikeRoomSwept then deadlines else Nothing)
 
 -- | Move the budget and record the brake level that moved it. Paused reads and queued entries retry at once.
 steerMeter :: MemoryMeter -> Int -> BrakeLevel -> IO ()
@@ -141,14 +153,22 @@ data MemoryTicket = MemoryTicket
 step did not fit within the wait. Everything the ticket paid returns on every exit path.
 -}
 withMemoryEntry :: (MonadUnliftIO m) => MetricsPort -> MemoryMeter -> (MemoryTicket -> m a) -> m (Maybe a)
-withMemoryEntry metrics meter body =
+withMemoryEntry metrics meter body = either (const Nothing) Just <$> withMemoryEntryE metrics meter body
+
+-- | Spike 1866: 'withMemoryEntry' that says why it shed.
+withMemoryEntryE :: (MonadUnliftIO m) => MetricsPort -> MemoryMeter -> (MemoryTicket -> m a) -> m (Either Shed a)
+withMemoryEntryE metrics meter = withMemoryEntryP metrics meter pass
+
+-- | Spike 1866: 'withMemoryEntryE' that runs @placed@ once the request holds a place or its entry step.
+withMemoryEntryP :: (MonadUnliftIO m) => MetricsPort -> MemoryMeter -> IO () -> (MemoryTicket -> m a) -> m (Either Shed a)
+withMemoryEntryP metrics meter placed body =
     UE.mask $ \restore -> do
         ticket <- liftIO (newTicket metrics meter)
-        entered <- liftIO (enter ticket)
+        entered <- liftIO (enter placed ticket)
         case entered of
-            Nothing -> liftIO (mpMemoryAdmissionShed metrics) $> Nothing
-            Just waited ->
-                Just
+            Left why -> liftIO (mpMemoryAdmissionShed metrics) $> Left why
+            Right waited ->
+                Right
                     <$> ( restore (liftIO (when waited (mpMemoryAdmissionQueued metrics)) >> body ticket)
                             `UE.finally` liftIO (releaseTicket ticket)
                         )
@@ -162,8 +182,8 @@ newTicket metrics meter = do
 
 -- The gate. 'Just' carries whether the request had to wait. It runs under the caller's mask, and
 -- the queued count taken in the deciding transaction is returned before any interruptible step.
-enter :: MemoryTicket -> IO (Maybe Bool)
-enter ticket = do
+enter :: IO () -> MemoryTicket -> IO (Either Shed Bool)
+enter placed ticket = do
     gate <- atomically $ do
         view <- readView meter
         waiting <- readTVar (mmEntryWaiting meter)
@@ -172,13 +192,15 @@ enter ticket = do
             EntryQueue -> writeTVar (mmEntryWaiting meter) (waiting + 1) $> EntryQueue
             EntryRefuse -> pure EntryRefuse
     case gate of
-        EntryAdmit -> openHeadroom $> Just False
-        EntryRefuse -> pure Nothing
+        EntryAdmit -> placed >> openHeadroom $> Right False
+        EntryRefuse -> pure (Left DoorFull)
         EntryQueue -> do
+            placed
+            let waitFor = atomically . entryOrExpire
             admitted <-
-                (registerDelay (mmEntryWaitMicros meter) >>= atomically . entryOrExpire)
-                    `UE.finally` atomically (modifyTVar' (mmEntryWaiting meter) (subtract 1))
-            if admitted then openHeadroom $> Just True else pure Nothing
+                maybe (registerDelay (mmEntryWaitMicros meter) >>= waitFor) (\d -> withSweptFlag d (mmEntryWaitMicros meter) waitFor) (mmDeadlines meter)
+                    `UE.finally` atomically (modifyTVar' (mmEntryWaiting meter) (subtract 1) >> spikeSignalOne)
+            if admitted then openHeadroom $> Right True else pure (Left WaitExpired)
   where
     meter = tMeter ticket
     step = mmStepBytes meter
