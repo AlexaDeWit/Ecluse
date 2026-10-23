@@ -1118,7 +1118,7 @@ thread at a time. Its count does not reserve a processor or set CPU affinity.
 
 | Setting or report label | Meaning |
 |---|---|
-| `2cpu` or `4cpu` in a load pod shape, and `BENCH_LOAD_THRASH_CPUS` | CPU-time quota in CPU equivalents. `2cpu` writes `200000 100000` to `cpu.max`, allowing 200 ms of CPU time per 100 ms period. It assigns no specific CPUs. |
+| `2cpu` or `3cpu` in a load pod shape, and `BENCH_LOAD_THRASH_CPUS` | CPU-time quota in CPU equivalents. `2cpu` writes `200000 100000` to `cpu.max`, allowing 200 ms of CPU time per 100 ms period. It assigns no specific CPUs. |
 | Runner logical processors | The runner's online logical CPUs, from `/sys/devices/system/cpu/online`, separate from the capability count and from any placement |
 | Load harness `-N3` | Three GHC capabilities for the harness and each scenario child. The measured proxy resolves its own count at boot. |
 | Unlimited load shape `runtime.cores` | Sets the proxy's GHC capability count to the harness's count, unless `BENCH_LOAD_PROXY_CORES` sets it. The harness imposes no CPU-time quota. |
@@ -1211,7 +1211,7 @@ of gzip-enabled throughput: the gzip rows under [Metadata gzip rows](#metadata-g
 the enabled path's cost.
 
 `BENCH_LOAD_POD` names the pod shape: `unlimited`, a CPU-time quota such as `2cpu`, a memory limit
-such as `1gib`, or both, such as `2cpu-1gib` or `4cpu-2gib`. Under any shape but `unlimited` the
+such as `1gib`, or both, such as `2cpu-1gib` or `3cpu-2gib`. Under any shape but `unlimited` the
 proxy starts inside its own cgroup, a child of the directory `BENCH_LOAD_CGROUP` names. That cgroup
 gets `cpu.max` at the quota, and `memory.max` at the limit with `memory.swap.max` at zero. The load
 generator and the stubs stay outside that cgroup. The
@@ -1222,11 +1222,12 @@ count instead. The workflow delegates the cgroup subtree with `sudo` before the 
 cpuset, cpu, memory, and pids controllers for it without a task limit, and turns swap off. The cgroup
 outlives the proxy, so an OOM kill stays countable after the process is gone, and the harness
 retires any proxy cgroup a killed run left. A scheduled run measures `unlimited`, `2cpu-1gib`,
-`4cpu-1gib`, and `4cpu-2gib` in a matrix. A dispatch picks one shape, `all`, or `thrash` for the
+`3cpu-1gib`, and `3cpu-2gib` in a matrix. A dispatch picks one shape, `all`, or `thrash` for the
 GC-thrash probe. To measure a branch, dispatch the workflow on that branch after merging this
 harness into it.
-Hosted runners have four logical processors. Without a placement, a four-CPU quota still shares
-those processors with `oha` and the stubs.
+Hosted runners have four logical processors. A `3cpu` shape therefore leaves at least one CPU of
+time to `oha`, the stubs, and the harness. The proxy has no placement, so its threads can still run
+on CPU 0 beside `oha`.
 
 A run can also pin settings on every measured proxy. A scheduled run sets none of them, and a run
 that sets any of them is not held to the [success floors](#success-floors):

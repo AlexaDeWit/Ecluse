@@ -36,7 +36,7 @@ spec = do
         it "reads the unlimited control and both memory units" $ do
             parsePodShape "unlimited" `shouldBe` Right Unlimited
             parsePodShape "2cpu-512mib" `shouldBe` Right (Limited 2 (512 * 1024 * 1024))
-            parsePodShape " 4CPU-2GiB " `shouldBe` Right (Limited 4 (2 * 1024 * 1024 * 1024))
+            parsePodShape " 3CPU-2GiB " `shouldBe` Right (Limited 3 (2 * 1024 * 1024 * 1024))
         it "reads a CPU-time quota or a memory limit on its own" $ do
             parsePodShape "2cpu" `shouldBe` Right (QuotaOnly 2)
             parsePodShape "1gib" `shouldBe` Right (MemoryOnly gib)
@@ -49,7 +49,7 @@ spec = do
             for_ scheduledPodShapes $ \shape ->
                 parsePodShape (renderPodShape shape) `shouldBe` Right shape
         it "names the four scheduled shapes as the floors and the baseline artifacts key them" $
-            map renderPodShape scheduledPodShapes `shouldBe` ["unlimited", "2cpu-1gib", "4cpu-1gib", "4cpu-2gib"]
+            map renderPodShape scheduledPodShapes `shouldBe` ["unlimited", "2cpu-1gib", "3cpu-1gib", "3cpu-2gib"]
         it "round-trips a shape with one part, and never renders one as a scheduled name" $
             for_ [QuotaOnly 2, MemoryOnly gib, MemoryOnly (2 * gib), MemoryOnly (512 * 1024 * 1024)] $ \shape -> do
                 parsePodShape (renderPodShape shape) `shouldBe` Right shape
