@@ -2129,7 +2129,11 @@ The release dry-run also gates. It runs `release-build.yml`, the reusable workfl
 `release.yml` builds its images with, so both architectures build natively and without a cache, as
 in a release. Each image build runs `scripts/image-archive.sh executables`, which fails when the
 image holds a second Écluse program or a second store path with an Écluse build. It does not read
-the programs that library packages carry in their own store paths.
+the programs that library packages carry in their own store paths. The build then runs
+`scripts/image-archive.sh trust-store`, which reads every regular file directly in an
+`etc/ssl/certs` directory of the image, and none in its subdirectories, as a CA bundle. It fails when
+such a file holds no certificate, a block with OpenSSL trust rules, or one of the distrusted roots
+the script lists, and when `SSL_CERT_FILE` names no bundle in the image.
 `release-dry-run-assemble` assembles the multi-arch index without pushing it, and
 `release-dry-run-boot` starts each image with `--version` on its own architecture. No dry-run job
 logs in to a registry, signs, attests, or pushes. The nightly run and a manual dispatch also scan

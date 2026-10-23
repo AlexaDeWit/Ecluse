@@ -171,6 +171,12 @@ assumptions:
     threats:
       - 68f1c8b8-2f55-4969-8036-aeddc439bd1d
     appliesToModel: false
+  - id: as-ca-bundle-currency
+    prose: The operator rolls out an image release whose bundle drops a newly distrusted root. An operator who points `SSL_CERT_FILE` at their own bundle keeps it to plain certificates of roots trusted for TLS servers, leaves out the roots the image leaves out, and removes a root when a CA it vouches for is compromised. Écluse reads that file as it is, and the release build checks only the bundle the image ships.
+    status: valid
+    threats:
+      - df1fed56-04ce-499e-8815-1edb2ec9e196
+    appliesToModel: false
 diagrams:
   - id: registry-topology
     title: Registry topology and trust
@@ -1858,6 +1864,7 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-000000000110
       - 0ec10e5e-0000-4000-8000-000000000125
       - 0ec10e5e-0000-4000-8000-000000000128
+      - df1fed56-04ce-499e-8815-1edb2ec9e196
   - id: mit-artifact-location-authority
     title: Same-authority artifact locations
     prose: A disallow-by-default same-authority policy applies to every upstream-declared artifact location, matched on host and port, with the hosts an ecosystem serves artifact bytes from as its one equivalence. Écluse upgrades a legacy http location to https on the same host, and drops and records a file whose scheme or authority the policy refuses. The projection and the download gate read one definition of the check, so a refused file is absent from the served listing, and a release drops when none of its files survive. Companion selection checks the parent and derived companion location against the same origin-sensitive host and port rule.
@@ -2218,6 +2225,12 @@ mitigations:
     status: proposed
     threats:
       - 7d7144df-c350-4c8c-94dd-51fb1c0bd120
+  - id: mit-tls-server-ca-bundle
+    title: TLS-server-only CA bundle, checked by the release build
+    prose: The image ships one CA bundle of plain certificates and points `SSL_CERT_FILE` at it. The TLS stack takes every certificate in its bundle as a trust anchor and ignores OpenSSL trust rules, so the bundle holds only the roots NSS trusts for TLS server authentication. It leaves out AAA Certificate Services and emSign ECC Root CA - G3, which eMudhra's compromised intermediate CAs chain to, and emSign Root CA - C1 and emSign ECC Root CA - C3, which Mozilla removed with them. The release build refuses an image whose bundles hold a block with trust rules or one of those roots, or whose `SSL_CERT_FILE` names no bundle in the image. The control acts on a compromise that is known when the image is built.
+    status: implemented
+    threats:
+      - df1fed56-04ce-499e-8815-1edb2ec9e196
 threats:
   - id: 0ec10e5e-0000-4000-8000-000000000101
     number: 1
@@ -2749,4 +2762,33 @@ threats:
       - 0ec10e5e-0000-4000-8000-000000000020
       - public-listing
       - public-artifact
-lastIssuedThreatNumber: 120
+  - id: df1fed56-04ce-499e-8815-1edb2ec9e196
+    number: 121
+    title: Upstream impersonation with a certificate from a compromised CA
+    category:
+      methodology: STRIDE
+      category: spoofing
+    severity: high
+    status: mitigated
+    description: "An attacker who can intercept or redirect Écluse's outbound connections presents a certificate for the host Écluse dials: the public registry or its file host, the private upstream, the mirror or publication target, an advisory feed, or a cloud API such as S3, SQS, STS or CodeArtifact. A root in Écluse's CA bundle vouches for the issuing CA, but that CA's key is compromised or misused. Certificate validation accepts the chain, so the attacker answers in place of the upstream: it can serve forged metadata, artifacts or advisory data, and read any credential the request carries. Écluse checks neither Certificate Transparency nor revocation, so a certificate that no CT log holds, or that its CA has revoked, still passes. A compromised CA stays trusted until the bundle Écluse reads drops the root it chains to. For the image's bundle that takes a release and its rollout, and for a bundle the operator mounts it takes the operator's own edit."
+    elements:
+      - e4a10f2e-9b48-4173-b2d1-9798f82a347b
+      - 0ec10e5e-0000-4000-8000-000000000041
+      - public-listing
+      - public-artifact
+      - 029fb3b3-40df-4197-bac2-142912c50fe5
+      - 0ec10e5e-0000-4000-8000-00000000004a
+      - 9f3d5702-9eb6-4a45-899b-6f50127b1562
+      - a0e683b0-63a0-43b7-b5c2-d548b82f72f8
+      - 1fd354fb-84eb-483d-8c56-2b8e3820115e
+      - bc70f625-f86a-405c-97a1-8b0fb156965f
+      - 4e565871-45cc-4987-abba-24859ee2cf60
+      - c02b5948-c82c-419b-a240-cf223204dba4
+      - 0fae263a-780c-4ded-a335-da3a438c29f7
+      - advisory-metadata
+      - e7322f48-8b14-431f-8657-68561cbcd57a
+      - 65fc7a41-c967-44e9-857a-fda9095b5172
+      - 1627ccc4-ec16-4eb1-9a7b-79a0b1669d7c
+      - d5da865d-6e80-44da-a2ee-841f6bebd567
+      - c9e4d8b4-1234-4d1c-8948-a0ba03f82abd
+lastIssuedThreatNumber: 121

@@ -35,7 +35,7 @@ The operator keeps C free of direct or transitive public connections, including 
 
 {{ diagram(name="registry-topology", alt="The client reaches the proxy across the operator boundary. The proxy reads C and anonymous public data. First-party A and mirror B supply C, with no public-to-C connection.") }}
 
-Related threats: [registry collapse](#threat-10), [substitution across origins](#threat-11), and [public aggregation bypass](#threat-15).
+Related threats: [registry collapse](#threat-10), [substitution across origins](#threat-11), [public aggregation bypass](#threat-15), and [upstream impersonation through a compromised CA](#threat-121).
 [Deployment](@/docs/deployment.md#the-recommended-topology) explains the registry configuration.
 
 ## Metadata listing and admission

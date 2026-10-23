@@ -597,6 +597,36 @@ an ECS credential endpoint, or STS for an assumed role. On EC2, require IMDSv2 w
 every internal range. The trust assumptions behind the credential split are in
 [Security posture](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/security.md#trust-assumptions--credential-posture).
 
+### Trusted certificate authorities
+
+Écluse validates each upstream's certificate against the CA bundle that `SSL_CERT_FILE` names. The
+image sets it to a bundle of the roots Mozilla trusts for TLS servers, also linked at
+`/etc/ssl/certs/ca-bundle.crt`. The bundle leaves out four roots, because the private keys of eight
+eMudhra intermediate CAs are compromised:
+
+| Root | Why the image leaves it out |
+|---|---|
+| AAA Certificate Services (NSS name: Comodo AAA Services root) | It issued cross-signed copies of the compromised intermediate CAs |
+| emSign ECC Root CA - G3 | It cross-signs emSign Root TLS CA - G3, which issued the compromised TLS intermediate CAs |
+| emSign Root CA - C1 | Mozilla removed it from NSS 3.131.1 together with emSign ECC Root CA - G3 |
+| emSign ECC Root CA - C3 | Mozilla removed it from NSS 3.131.1 together with emSign ECC Root CA - G3 |
+
+A private upstream, such as an Artifactory or Nexus host, fails with an unknown CA error when its
+certificate chains to a root that Mozilla does not trust for TLS servers. Give such a host a bundle
+of your own through `SSL_CERT_FILE`, as for an internal CA.
+
+To reach a private registry on an internal CA, mount a bundle that holds your CA beside the public
+roots, and point `SSL_CERT_FILE` at it. Écluse then trusts every certificate in that file, and
+nothing else, so build it on these terms:
+
+- Start from the image's own bundle, or from another bundle that holds only roots trusted for TLS
+  servers.
+- Leave out the four roots above. Écluse trusts a certificate from a compromised CA for as long as
+  your bundle holds a root it chains to, as [its limits](@/docs/security.md#limits) state.
+- Use plain `-----BEGIN CERTIFICATE-----` blocks. Écluse ignores the trust rules in a
+  `-----BEGIN TRUSTED CERTIFICATE-----` block, so it trusts that root for servers even where the
+  rules reject it.
+
 ## Locking down CI egress
 
 The controls above secure Écluse's own egress. This one secures your consumers'. If you control CI,
