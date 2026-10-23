@@ -25,7 +25,6 @@ module Ecluse.Core.Worker.Types (
 
 import Data.Time (UTCTime, getCurrentTime)
 import Katip (Katip, KatipContext, KatipContextT, LogEnv, SimpleLogPayload, runKatipContextT)
-import Network.HTTP.Client (Manager)
 import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem)
@@ -35,6 +34,7 @@ import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Package.Integrity (MinIntegrity)
 import Ecluse.Core.Queue (MirrorJob (jobPackage, jobVersion), MirrorQueue)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Metadata (VersionEvaluation)
 import Ecluse.Core.Registry.Public (PublicControl)
 import Ecluse.Core.Registry.Publish (MirrorPublish)
@@ -50,8 +50,8 @@ import Ecluse.Core.Worker.Liveness (WorkerHeartbeat, recordPoll)
 data WorkerRuntime = WorkerRuntime
     { wrQueue :: MirrorQueue
     -- ^ The mirror-queue handle the consume loop long-polls and acks against.
-    , wrManager :: Manager
-    -- ^ The validating-TLS manager for the __untrusted__ artifact fetch.
+    , wrClient :: ExchangeClient
+    -- ^ The validating-TLS pool and the deadline sweeper for the __untrusted__ artifact fetch.
     , wrPublicControl :: PublicControl
     -- ^ Public request admission and observation shared by all mounts in the process.
     , wrHeartbeat :: WorkerHeartbeat

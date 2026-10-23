@@ -23,7 +23,6 @@ module Ecluse.Core.Server.Pipeline.Origin (
 ) where
 
 import Katip (Severity (DebugS), logFM, ls)
-import Network.HTTP.Client (Manager)
 import UnliftIO (withRunInIO)
 import UnliftIO.Exception (tryAny)
 
@@ -32,6 +31,7 @@ import Ecluse.Core.Fault (RetryAfter)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (FetchFault (FetchCooldown))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Metadata (
     Manifest,
     MetadataClient (fetchFullManifest),
@@ -46,7 +46,7 @@ import Ecluse.Core.Registry.Metadata (
     ),
     VersionRead,
  )
-import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, Private, Public, anonymousOrigin, chargingFullReads, controlPublicOrigin, originBaseUrl, originClient, originClientOf, perCallerOrigin)
+import Ecluse.Core.Registry.Origin (OriginClient (ocClient), OriginFor, Private, Public, anonymousOrigin, chargingFullReads, controlPublicOrigin, originBaseUrl, originClient, originClientOf, perCallerOrigin)
 import Ecluse.Core.Security (Limits (progressFloor))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
@@ -155,7 +155,7 @@ withMetadataClient ::
     Handler a
 withMetadataClient rt deps settle origin k =
     withRunInIO $ \runInIO ->
-        k . settle . withinRequestCap (progressFloor (pdLimits deps)) $
+        k . settle . withinRequestCap (ecDeadlines (ocClient (originClientOf origin))) (progressFloor (pdLimits deps)) $
             ecosystemMetadataReads
                 (metadataRead (pdMetadata deps))
                 (srTracing rt)
@@ -181,14 +181,14 @@ preparePublicMetadata rt deps name version =
     withMetadataClient rt deps (preparePublicVersion (srMetadataCache rt) (publicSource deps)) (publicOrigin rt deps) (\prepare -> prepare name version)
 
 privateOrigin :: ServeRuntime -> PackumentDeps -> RegistryUrl -> Maybe ClientCredential -> OriginFor Private
-privateOrigin rt deps = perCallerOrigin (pdLimits deps) (srPrivateManager rt)
+privateOrigin rt deps = perCallerOrigin (pdLimits deps) (srPrivateClient rt)
 
 publicOrigin :: ServeRuntime -> PackumentDeps -> OriginFor Public
-publicOrigin rt deps = controlPublicOrigin (srPublicControl rt) Nothing (anonymousOrigin (pdLimits deps) (srPublicManager rt) (pdPublicBaseUrl deps))
+publicOrigin rt deps = controlPublicOrigin (srPublicControl rt) Nothing (anonymousOrigin (pdLimits deps) (srPublicClient rt) (pdPublicBaseUrl deps))
 
 publicSource :: PackumentDeps -> Source
 publicSource deps = Source (registryUrlText (pdPublicBaseUrl deps))
 
 -- | Build an origin with the mount's response bound and the caller-selected manager and credential.
-mountOrigin :: PackumentDeps -> Manager -> RegistryUrl -> Maybe ClientCredential -> OriginClient
+mountOrigin :: PackumentDeps -> ExchangeClient -> RegistryUrl -> Maybe ClientCredential -> OriginClient
 mountOrigin deps = originClient (pdLimits deps)

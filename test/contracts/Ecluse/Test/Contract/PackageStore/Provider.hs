@@ -50,7 +50,7 @@ fetchStoreArtifact :: BodyLimit -> OriginClient -> Either UrlFormationError Requ
 fetchStoreArtifact limit origin = \case
     Left fault -> pure (Left (show fault))
     Right request -> do
-        response <- fetchTestBody (ocManager origin) (progressFloor (ocLimits origin)) limit request
+        response <- fetchTestBody (ocClient origin) (progressFloor (ocLimits origin)) limit request
         pure $ do
             received <- first show response
             unless (responseStatusCode received == 200) (Left "stored artifact did not answer HTTP 200")

@@ -156,6 +156,7 @@ library ecluse-core
     Ecluse.Core.Cve.Internal
     Ecluse.Core.Cve.Slot
     Ecluse.Core.Cve.Types
+    Ecluse.Core.Deadline
     Ecluse.Core.Ecosystem
     Ecluse.Core.Fault
     Ecluse.Core.Fault.Http
@@ -197,6 +198,7 @@ library ecluse-core
     Ecluse.Core.Registry.Public
     Ecluse.Core.Registry.Exchange
     Ecluse.Core.Registry.Exchange.Observe
+    Ecluse.Core.Registry.Exchange.Types
     Ecluse.Core.Registry.Json.Intern
     Ecluse.Core.Registry.Json.Packed
     Ecluse.Core.Registry.Json.Scratch
@@ -240,6 +242,8 @@ library ecluse-core
     Ecluse.Core.Registry.Origin
     Ecluse.Core.Registry.Progress
     Ecluse.Core.Registry.Progress.Internal
+    Ecluse.Core.Registry.ResponseWait
+    Ecluse.Core.Registry.ResponseWait.Internal
     Ecluse.Core.Registry.MirrorUpload
     Ecluse.Core.Registry.MirrorUpload.Internal
     Ecluse.Core.Registry.Publish
@@ -797,6 +801,7 @@ library ecluse-test-support
     Ecluse.Test.Corpus.Subset
     Ecluse.Test.Credential
     Ecluse.Test.Cve
+    Ecluse.Test.Deadline
     Ecluse.Test.EcosystemBench
     Ecluse.Test.EcosystemBench.Types
     Ecluse.Test.Env
@@ -1099,6 +1104,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.BreakerSpec
     Ecluse.Core.BuildIdentitySpec
     Ecluse.Core.ClockSpec
+    Ecluse.Core.DeadlineSpec
     Ecluse.Core.Credential.Refresh.InternalSpec
     Ecluse.Core.CredentialSpec
     Ecluse.Core.Cve.InternalSpec
@@ -1151,6 +1157,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.JsonStreamSpec
     Ecluse.Core.Registry.ProgressSpec
     Ecluse.Core.Registry.Progress.InternalSpec
+    Ecluse.Core.Registry.ResponseWait.InternalSpec
     Ecluse.Core.Registry.VersionListSpec
     Ecluse.Core.Registry.Maintenance.BudgetSpec
     Ecluse.Core.Registry.Maintenance.NameSpaceSpec

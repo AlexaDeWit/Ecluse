@@ -22,6 +22,7 @@ import Ecluse.Core.Server.Readiness (
 import Ecluse.Core.Worker (Liveness (Liveness, liveHealthy, liveLastPoll))
 import Ecluse.Mirror (mirrorServerConfig)
 import Ecluse.Runtime.Server (probeOnlyApplication)
+import Ecluse.Test.Deadline (newSweptDeadlines)
 import Ecluse.Test.Wai (bodyContainsAll)
 
 -- | A fixed poll instant, so the rendered probe body is deterministic.
@@ -34,7 +35,8 @@ injected, which is how the composition root wires the consume-loop heartbeat beh
 mirrorApp :: Liveness -> Readiness -> IO Application
 mirrorApp liveness ready = do
     appCfg <- expectAppConfig [] Nothing
-    probeOnlyApplication (mirrorServerConfig appCfg (pure ready) (pure liveness))
+    deadlines <- newSweptDeadlines
+    probeOnlyApplication deadlines (mirrorServerConfig appCfg (pure ready) (pure liveness))
 
 spec :: Spec
 spec = do

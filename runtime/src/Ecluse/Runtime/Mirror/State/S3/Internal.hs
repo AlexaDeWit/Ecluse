@@ -26,6 +26,7 @@ import Network.HTTP.Types.Status (statusCode)
 import UnliftIO (withRunInIO)
 import UnliftIO.Exception (catch, throwIO)
 
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), TransportFault, transportFault)
 import Ecluse.Core.Mirror.State.Codec (saturatingStateCharge, stateExchangeCharge)
 import Ecluse.Core.Mirror.State.Internal (StateCharge)
@@ -89,10 +90,10 @@ newtype ObjectLimit = ObjectLimit Int
 
 instance Exception ObjectLimit
 
-sendBounded :: (AWS.AWSRequest request, AWS.AWSResponse request ~ RawResponse, AWS.AWSRequest native) => StateCharge -> Int -> Bool -> AWS.Env -> Limits -> request -> Proxy native -> ResourceT IO (Either AWS.Error (AWS.AWSResponse native))
-sendBounded charge requestCharge consumesBody env limits request native = do
+sendBounded :: (AWS.AWSRequest request, AWS.AWSResponse request ~ RawResponse, AWS.AWSRequest native) => StateCharge -> Int -> Bool -> Deadlines -> AWS.Env -> Limits -> request -> Proxy native -> ResourceT IO (Either AWS.Error (AWS.AWSResponse native))
+sendBounded charge requestCharge consumesBody deadlines env limits request native = do
     liftIO $ charge (saturatingStateCharge (toInteger stateExchangeCharge + toInteger requestCharge))
-    received <- withRunInIO $ \run -> watched (progressFloor limits) $ \watch -> run $ do
+    received <- withRunInIO $ \run -> watched deadlines (progressFloor limits) $ \watch -> run $ do
         let metered =
                 env
                     { AWS.hooks =
@@ -143,10 +144,10 @@ byteCap :: (MonadIO m) => Int -> ConduitT ByteString ByteString m ()
 byteCap cap = boundBytes cap (const (throwIO (ObjectLimit cap)))
 
 -- | GET returns bytes and their revision in the same resource lifetime.
-readObject :: StateCharge -> AWS.Env -> Limits -> Text -> Text -> Maybe ByteString -> IO (Either ObjectFault ObjectRead)
-readObject charge env limits bucket key revision = boundedCall $ do
+readObject :: StateCharge -> Deadlines -> AWS.Env -> Limits -> Text -> Text -> Maybe ByteString -> IO (Either ObjectFault ObjectRead)
+readObject charge deadlines env limits bucket key revision = boundedCall $ do
     result <- runResourceT $ do
-        response <- sendBounded charge 0 False env limits (BoundedGet revision request) (Proxy :: Proxy S3.GetObject)
+        response <- sendBounded charge 0 False deadlines env limits (BoundedGet revision request) (Proxy :: Proxy S3.GetObject)
         case response of
             Left err -> pure (Left err)
             Right received | received ^. S3L.getObjectResponse_httpStatus == 304 -> pure (Right unchanged)
@@ -160,7 +161,7 @@ readObject charge env limits bucket key revision = boundedCall $ do
         Left err
             | serviceStatus err == Just 304 -> pure unchanged
             | serviceStatus err == Just 404 && serviceCode err == Just "NoSuchKey" -> pure (Right ObjectAbsent)
-            | serviceStatus err == Just 403 -> absenceFallback charge env limits bucket key
+            | serviceStatus err == Just 403 -> absenceFallback charge deadlines env limits bucket key
             | otherwise -> pure (Left (ObjectTransport (classifyAwsTransport err)))
   where
     cap = maxMetadataBytes limits
@@ -168,11 +169,11 @@ readObject charge env limits bucket key revision = boundedCall $ do
     request = S3.newGetObject (S3.BucketName bucket) (S3.ObjectKey key)
 
 -- | A failed or uncertain write returns to the caller for reread and union before another attempt.
-writeObject :: StateCharge -> AWS.Env -> Limits -> Text -> Text -> Maybe ByteString -> ByteString -> IO (Either ObjectFault ObjectWrite)
-writeObject charge env limits bucket key revision bytes
+writeObject :: StateCharge -> Deadlines -> AWS.Env -> Limits -> Text -> Text -> Maybe ByteString -> ByteString -> IO (Either ObjectFault ObjectWrite)
+writeObject charge deadlines env limits bucket key revision bytes
     | BS.length bytes > maxMetadataBytes limits = pure (Left (ObjectTooLarge (maxMetadataBytes limits)))
     | otherwise = boundedCall $ do
-        result <- runResourceT (sendBounded charge (bufferedChunkCharge (BS.length bytes)) True env limits request (Proxy :: Proxy S3.PutObject))
+        result <- runResourceT (sendBounded charge (bufferedChunkCharge (BS.length bytes)) True deadlines env limits request (Proxy :: Proxy S3.PutObject))
         pure $ case result of
             Right response -> ObjectStored <$> objectRevision (response ^. S3L.putObjectResponse_eTag)
             Left err
@@ -182,9 +183,9 @@ writeObject charge env limits bucket key revision bytes
     precondition = maybe IfAbsent IfRevision revision
     request = BoundedPut (ConditionalPut precondition (S3.newPutObject (S3.BucketName bucket) (S3.ObjectKey key) (AWS.toBody bytes)))
 
-absenceFallback :: StateCharge -> AWS.Env -> Limits -> Text -> Text -> IO (Either ObjectFault ObjectRead)
-absenceFallback charge env limits bucket key = do
-    result <- runResourceT (sendBounded charge 0 True env limits request (Proxy :: Proxy S3.ListObjectsV2))
+absenceFallback :: StateCharge -> Deadlines -> AWS.Env -> Limits -> Text -> Text -> IO (Either ObjectFault ObjectRead)
+absenceFallback charge deadlines env limits bucket key = do
+    result <- runResourceT (sendBounded charge 0 True deadlines env limits request (Proxy :: Proxy S3.ListObjectsV2))
     pure $ case result of
         Right response
             | listingProvesAbsence response -> Right ObjectAbsent

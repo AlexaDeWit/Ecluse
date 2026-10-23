@@ -31,7 +31,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
  )
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
-import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
+import Ecluse.Core.Registry.Origin (OriginClient (ocClient, ocLimits, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleDocument, serialiseSimpleDocument)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiChargeFactors, pypiRead)
@@ -90,7 +90,7 @@ pypiPublish =
         { publishRelay = \origin _ body ->
             formThen
                 FetchUrlUnformable
-                (boundedRelay (ocManager origin) (progressFloor (ocLimits origin)) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
+                (boundedRelay (ocClient origin) (progressFloor (ocLimits origin)) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
                 ( do
                     base <- parseRequestEither (originBaseUrl origin)
                     pure . attachCredential pypiCredential (ocToken origin) $

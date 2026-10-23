@@ -26,6 +26,7 @@ module Ecluse.Boot (
     -- * Boot-time logging and wiring
     logBootWarning,
     logBootInfo,
+    superviseBackground,
     buildMirrorQueue,
     applyServerSettings,
     probeServerConfig,
@@ -34,10 +35,11 @@ module Ecluse.Boot (
 import Data.ByteString qualified as BS
 import Data.List (lookup)
 import Data.Text qualified as T
-import Katip (Environment (Environment), LogEnv, Severity (InfoS, WarningS), closeScribes)
+import Katip (Environment (Environment), LogEnv, Namespace (Namespace), Severity (InfoS, WarningS), SimpleLogPayload, closeScribes, runKatipContextT)
 import System.Environment (getEnvironment)
 import System.IO.Error (ioeGetErrorString, isDoesNotExistError)
 import UnliftIO (bracket, throwIO, tryIO)
+import UnliftIO.Async (link, withAsync)
 
 import Ecluse.Composition.BootError (renderAdvisory, renderBootErrors)
 import Ecluse.Composition.MirrorQueue (
@@ -66,9 +68,11 @@ import Ecluse.Config (
     renderConfigError,
  )
 import Ecluse.Config.Resolve (secretEnvSpellings)
+import Ecluse.Core.Deadline (Deadlines, newDeadlines, sweepTick)
 import Ecluse.Core.Queue (MirrorQueue (deadLetterTerminus, deliveryBudget))
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
+import Ecluse.Core.Supervision (backgroundLoopBackoff, superviseLoop, transientPolicy)
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Rts (RuntimeOverrides (RuntimeOverrides, roCores, roCoresCeiling, roMaxHeapBytes), applyRuntimePosture)
 import Ecluse.Runtime.Log (moduleLog, newLogEnv)
@@ -92,6 +96,8 @@ data BootEnv = BootEnv
     -- ^ The telemetry handle, inert unless @ECLUSE_OBSERVABILITY__TELEMETRY@ enabled it.
     , beBootPlan :: BootPlan
     -- ^ The resolved plan, whose diagnostics were logged before role work starts.
+    , beDeadlines :: Deadlines
+    -- ^ The process's one deadline sweeper, which runs as long as the role does.
     }
 
 {- | The environment, the secret files it names, the config document, and the parse, in that order.
@@ -203,13 +209,30 @@ withBootEnv role action = do
                             }
             prepareTelemetryBoot (obsTelemetry observability) logEnv
             withTelemetry (obsTelemetry observability) logEnv $ \telemetry ->
-                action
-                    BootEnv
-                        { beConfig = config
-                        , beLogEnv = logEnv
-                        , beTelemetry = telemetry
-                        , beBootPlan = bootPlan
-                        }
+                withDeadlineSweeper logEnv $ \deadlines ->
+                    action
+                        BootEnv
+                            { beConfig = config
+                            , beLogEnv = logEnv
+                            , beTelemetry = telemetry
+                            , beBootPlan = bootPlan
+                            , beDeadlines = deadlines
+                            }
+
+{- Run the sweeper beside the role. It starts once the runtime posture has fixed the capability
+count, and a fault in it fails the process rather than leaving every deadline unarmed. -}
+withDeadlineSweeper :: LogEnv -> (Deadlines -> IO a) -> IO a
+withDeadlineSweeper logEnv action = do
+    deadlines <- newDeadlines
+    withAsync (superviseBackground "deadline-sweeper" logEnv (sweepTick deadlines)) (\sweeper -> link sweeper >> action deadlines)
+
+{- | A background loop under the shared supervision combinator. Pacing lives in each loop, so this
+wrapper only stops residue ending the task.
+-}
+superviseBackground :: Text -> LogEnv -> IO () -> IO ()
+superviseBackground label logEnv task =
+    void . runKatipContextT logEnv (mempty :: SimpleLogPayload) (Namespace [label]) $
+        superviseLoop (transientPolicy label backgroundLoopBackoff) (liftIO task)
 
 {- Log the report and yield the plan, or refuse. The order is load-bearing: @ecluse check-config@
 prints the same lists in it, so a transcript and a boot log agree line for line. -}

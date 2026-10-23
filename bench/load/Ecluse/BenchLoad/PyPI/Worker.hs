@@ -26,6 +26,7 @@ import Ecluse.Core.Package (infoVersions, pkgArtifacts)
 import Ecluse.Core.Queue (MirrorJob (..), MirrorQueue (..), QueueMessage)
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Metadata (versionEvaluation)
 import Ecluse.Core.Registry.Metadata.Fetch (chargingSelectedReads, fetchVersion)
 import Ecluse.Core.Registry.Origin (anonymousOrigin, controlPublicOrigin, originClientOf)
@@ -46,6 +47,7 @@ import Ecluse.Core.Telemetry.Upstream (PublicReadKind (WorkerMetadata))
 import Ecluse.Core.Worker (JobOutcome (Retried), WorkerPolicy (..), WorkerRuntime (..), newWorkerHeartbeat, processBatch, processJob, runWorkerM)
 import Ecluse.Core.Worker.Types (WorkerMirrorState (..), WorkerStateBudget (..))
 import Ecluse.Runtime.Mirror.State.S3 (mirrorStateForEnv)
+import Ecluse.Test.Deadline (newSweptClient)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (defaultMinIntegrity, unsafeFilename)
 import Ecluse.Test.Port (noopMetricsPort, noopWorkerMetricsPort, passthroughTracingPort, passthroughWorkerTracingPort)
@@ -70,8 +72,8 @@ boot knobs use = do
                 env <- AWS.newEnv (pure . fromKeys (AWS.AccessKey "AKIDtestkey") (AWS.SecretKey "testsecretkey"))
                 let endpoint = AWS.overrideService (\service -> AWS.setEndpoint False "127.0.0.1" statePort service{AWS.s3AddressingStyle = AWS.S3AddressingStylePath}) env
                     target = stateTarget (localhost targetPort)
-                store <- mirrorStateForEnv defaultLimits "worker-load" "state" target (AWS.once endpoint{AWS.retryCheck = \_ _ -> False})
-                manager <- newManager defaultManagerSettings
+                client <- newSweptClient =<< newManager defaultManagerSettings
+                store <- mirrorStateForEnv (ecDeadlines client) defaultLimits "worker-load" "state" target (AWS.once endpoint{AWS.retryCheck = \_ _ -> False})
                 publicControl <- newPublicControl (\_ _ _ -> pass) (\_ _ -> pass)
                 meter <- testMemoryMeter
                 rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
@@ -80,8 +82,8 @@ boot knobs use = do
                 queue <- newBoundedInMemoryQueue (defaultMemoryQueueConfig 16) (\n -> benchFail ("PyPI worker queue dropped a job: " <> show n))
                 heartbeat <- newWorkerHeartbeat
                 logEnv <- newTestLogEnv
-                let publish = newMirrorPublish (MirrorTransport manager (pure Nothing) defaultLimits passthroughTracingPort) (loopbackRegistryUrl (localhost targetPort)) (loopbackRegistryUrl (localhost targetPort <> "/upload")) pypiPublishCodec
-                    sourceOrigin = originClientOf (controlPublicOrigin publicControl (Just WorkerMetadata) (anonymousOrigin defaultLimits manager (loopbackRegistryUrl (localhost sourcePort))))
+                let publish = newMirrorPublish (MirrorTransport client (pure Nothing) defaultLimits passthroughTracingPort) (loopbackRegistryUrl (localhost targetPort)) (loopbackRegistryUrl (localhost targetPort <> "/upload")) pypiPublishCodec
+                    sourceOrigin = originClientOf (controlPublicOrigin publicControl (Just WorkerMetadata) (anonymousOrigin defaultLimits client (loopbackRegistryUrl (localhost sourcePort))))
                     policy =
                         WorkerPolicy
                             { wpFirstParty = const False
@@ -101,7 +103,7 @@ boot knobs use = do
                     runtime =
                         WorkerRuntime
                             { wrQueue = recordingQueue
-                            , wrManager = manager
+                            , wrClient = client
                             , wrPublicControl = publicControl
                             , wrHeartbeat = heartbeat
                             , wrMetrics = metrics

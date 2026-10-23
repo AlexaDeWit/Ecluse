@@ -106,6 +106,15 @@ artifact size, with backpressure for free. Only the time spent waiting on upstre
 progress floor (`limits.progressWindow`, `limits.minProgressBytes`), so a slow client never trips it.
 An upstream that falls below it aborts the stream, and the client sees an incomplete download.
 
+Four deadlines bound a request and its upstream exchanges: the 60-second request timeout, the
+serve-path cap 10 seconds under it, the progress floor, and a fixed 30-second wait for a connection
+and then the response headers. As in http-client, that wait gives the headers what the connection
+left of it, counted from the end of any request body. One sweeper thread checks every deadline in
+the process every 100 ms, so each one ends up to 100 ms late. GHC's own timers keep one
+process-wide queue, and under load the request threads that armed and disarmed them waited on each
+other's edits. The sweeper keeps one list for each core instead, so arming a deadline never waits
+on another request.
+
 The proxy streams artifact responses without hashing their bodies. Integrity on this path depends
 on the client checking the preserved metadata hashes. The proxy therefore asks the upstream for
 every artifact and Core Metadata companion in identity coding. A registry CDN gzips a companion

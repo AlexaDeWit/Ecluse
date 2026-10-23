@@ -28,9 +28,11 @@ import UnliftIO (concurrently)
 import UnliftIO.Exception (tryAny, withException)
 
 import Ecluse.Core.Fault (RetryAfter (RetryAfter), TransportCause (TransportUnreachable), TransportFault (tfCause))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecManager))
 import Ecluse.Core.Security (Limits (progressFloor), ProgressFloor, defaultLimits, mkProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
 import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamBody (NoBody, StreamBody), UpstreamBodyFailed (UpstreamBodyFailed), UpstreamResult (..), pumpBody, withUpstreamResult)
+import Ecluse.Test.Deadline (newSweptClient)
 import Ecluse.Test.Registry.JsonStream (sliceChunks)
 import Ecluse.Test.Stub (requestSecrets, signedRequest)
 import Ecluse.Test.Stub.Socket (resetAfterPartialBody, trustingTlsManager, withTlsServer)
@@ -141,8 +143,8 @@ spec = do
 
         it "raises a typed unreachable fault when a TLS upstream resets mid-body" $ do
             escaped <- newIORef Nothing
-            manager <- trustingTlsManager
-            void (tryAny (withTlsServer resetAfterPartialBody (askProxy manager . recordingSignedRelay overTls escaped manager)))
+            client <- newSweptClient =<< trustingTlsManager
+            void (tryAny (withTlsServer resetAfterPartialBody (askProxy (ecManager client) . recordingSignedRelay overTls escaped client)))
             readIORef escaped >>= \case
                 Just err -> do
                     fmap (\(UpstreamBodyFailed fault) -> tfCause fault) (fromException err) `shouldBe` Just TransportUnreachable
@@ -157,16 +159,16 @@ spec = do
             responseBody resp `shouldBe` ""
             headerOf hContentType resp `shouldBe` Just "application/octet-stream"
 
--- The proxy under test, over the manager it relays with and the upstream's port.
-type ProxyApp = HTTP.Manager -> Int -> Application
+-- The proxy under test, over the client it relays with and the upstream's port.
+type ProxyApp = ExchangeClient -> Int -> Application
 
 -- Each uncommitted outcome gets a distinct response so the tests retain its cause.
 relayProxy :: ProgressFloor -> UpstreamBody -> (Status -> Bool) -> Method -> ProxyApp
-relayProxy progress body accept method manager upPort _req respond = do
+relayProxy progress body accept method client upPort _req respond = do
     upstream <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
     outcome <-
         withUpstreamResult
-            manager
+            client
             progress
             upstream{HTTP.method = method}
             body
@@ -177,10 +179,10 @@ relayProxy progress body accept method manager upPort _req respond = do
 
 -- A relay of a signed upstream URL that records whatever escapes it, so a case reads what a committed failure carries.
 recordingSignedRelay :: (HTTP.Request -> HTTP.Request) -> IORef (Maybe SomeException) -> ProxyApp
-recordingSignedRelay scheme escaped manager upPort _req respond = do
+recordingSignedRelay scheme escaped client upPort _req respond = do
     upstream <- (\request -> scheme request{HTTP.port = upPort}) <$> signedRequest
     outcome <-
-        withUpstreamResult manager (progressFloor defaultLimits) upstream StreamBody statusIsSuccessful relayVerbatim (waiRelayResponder respond)
+        withUpstreamResult client (progressFloor defaultLimits) upstream StreamBody statusIsSuccessful relayVerbatim (waiRelayResponder respond)
             `withException` record
     answerOutcome respond outcome
   where
@@ -211,16 +213,16 @@ probeProxy = relayProxy (progressFloor defaultLimits) NoBody statusIsSuccessful 
 -- One request through the proxy under test, standing in front of this upstream.
 throughProxy :: Application -> ProxyApp -> IO (HTTP.Response LByteString)
 throughProxy upstream proxy = do
-    manager <- newManager defaultManagerSettings
-    testWithApplication (pure upstream) (askProxy manager . proxy manager)
+    client <- newSweptClient =<< newManager defaultManagerSettings
+    testWithApplication (pure upstream) (askProxy (ecManager client) . proxy client)
 
 -- 'throughProxy' against a port bound only long enough to learn a free one, then released, so
 -- the proxy's open fails.
 throughDeadUpstream :: ProxyApp -> IO (HTTP.Response LByteString)
 throughDeadUpstream proxy = do
-    manager <- newManager defaultManagerSettings
+    client <- newSweptClient =<< newManager defaultManagerSettings
     deadPort <- testWithApplication (pure missingUpstream) pure
-    askProxy manager (proxy manager deadPort)
+    askProxy (ecManager client) (proxy client deadPort)
 
 -- One request at the proxy's root, over the manager the proxy itself relays with.
 askProxy :: HTTP.Manager -> Application -> IO (HTTP.Response LByteString)

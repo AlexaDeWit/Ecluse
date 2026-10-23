@@ -22,9 +22,9 @@ module Ecluse.Service (
 ) where
 
 import Katip (LogEnv, katipAddNamespace)
-import Network.HTTP.Client (Manager, ManagerSettings)
+import Network.HTTP.Client (ManagerSettings)
 
-import Ecluse.Boot (BootEnv (beLogEnv, beTelemetry), logBootWarning)
+import Ecluse.Boot (BootEnv (beDeadlines, beLogEnv, beTelemetry), logBootWarning, superviseBackground)
 import Ecluse.Composition (BootWiring (bwBindings, bwPublishTargets))
 import Ecluse.Composition.Executable (
     ExecutablePlan (epBootPlan),
@@ -51,6 +51,7 @@ import Ecluse.Composition.Worker (workerPoliciesWithState)
 import Ecluse.Config (AppConfig (cfgEgress), EgressSettings (egrOperatorContact))
 import Ecluse.Core.BuildIdentity (identityManagerSettings, renderUserAgent)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured))
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
 import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
 import Ecluse.Core.Queue (MirrorQueue)
@@ -63,6 +64,7 @@ import Ecluse.Core.Registry.Adapter (
     serveCredential,
     serveRouter,
  )
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Admission.Brake (defaultBrakeMarks)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), meterSnapshot, newMemoryMeter)
@@ -76,7 +78,6 @@ import Ecluse.Core.Supervision (
     FaultDisposition (Permanent, Transient),
     SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
     backgroundLoopBackoff,
-    superviseBackground,
  )
 import Ecluse.Core.Worker (Liveness, WorkerHeartbeat, WorkerPolicies, alwaysLive, heartbeatLivenessNow, runWorkerM, workerLoop)
 import Ecluse.Cve.Sync (cveSyncReadiness, cveSyncScheduleFor, cveSyncTasks, registerAdvisoryAges)
@@ -120,6 +121,7 @@ withServiceRuntime :: BootEnv -> ExecutablePlan -> MirrorWiring -> (ServiceRunti
 withServiceRuntime bootEnv plan mirror action = do
     let logEnv = beLogEnv bootEnv
         telemetry = beTelemetry bootEnv
+        deadlines = beDeadlines bootEnv
         bootPlan = epBootPlan plan
         role = mwRole mirror
         appConfig = vpSettings (bpValidated bootPlan)
@@ -137,11 +139,11 @@ withServiceRuntime bootEnv plan mirror action = do
     let cacheConfig = bpCacheConfig bootPlan
     pool <- newLocalPool (cacheMaxEntries cacheConfig) (cacheMaxBytes cacheConfig)
     metadataCache <- localCacheProviderWithPool pool cacheConfig >>= newMetadataCacheWithProvider
-    states <- newMirrorStates (bpS3Endpoint bootPlan) appConfig (bpLimits bootPlan) cacheConfig pool
+    states <- newMirrorStates (bpS3Endpoint bootPlan) deadlines appConfig (bpLimits bootPlan) cacheConfig pool
     let bindings = bindMirrorStates states baseBindings
 
-    (manager, privateManager) <- dataPlaneManagers telemetry bootPlan
-    withEnvWithAdmission serveAdmission memoryMeter queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
+    (publicClient, privateClient) <- dataPlaneClients telemetry deadlines bootPlan
+    withEnvWithAdmission serveAdmission memoryMeter queue publicClient privateClient metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
         -- The instruments exist now, so installing them makes the credential provider's deferred
         -- reporters live for the rest of the run.
         installMetrics deferredMetrics (envMetrics builtEnv)
@@ -157,7 +159,7 @@ withServiceRuntime bootEnv plan mirror action = do
                 , svcAppConfig = appConfig
                 , svcBindings = bindings
                 , svcWorkerPolicies = workerPoliciesWithState builtEnv states bindings (bwPublishTargets (mwBootWiring mirror)) workerArtifactMaxBytes
-                , svcMirrorDrain = superviseBackground (envLogEnv builtEnv) "mirror-enqueue-drain" <$> mirrorDrain
+                , svcMirrorDrain = superviseBackground "mirror-enqueue-drain" (envLogEnv builtEnv) <$> mirrorDrain
                 , svcSyncTasks =
                     cveSyncTasks
                         (envLogEnv builtEnv)
@@ -165,7 +167,7 @@ withServiceRuntime bootEnv plan mirror action = do
                         (envTelemetry builtEnv)
                         (cveSyncScheduleFor appConfig)
                         cveSyncPlan
-                , svcMemorySampler = superviseBackground (envLogEnv builtEnv) "memory-sampler" sampler
+                , svcMemorySampler = superviseBackground "memory-sampler" (envLogEnv builtEnv) sampler
                 , svcCheckReady = cveSyncReadiness cveSyncPlan
                 , svcCheckLive = workerLiveness runsWorkerHere heartbeat
                 }
@@ -197,16 +199,17 @@ memoryAdmission memoryPlan = do
                 }
         )
 
-{- The two data-plane managers, each instrumented then pooled at its own bound. They stay split
-because public reads are anonymous and private reads forward the caller's credential. -}
-dataPlaneManagers :: Telemetry -> BootPlan -> IO (Manager, Manager)
-dataPlaneManagers telemetry bootPlan = do
+{- The two data-plane clients, each instrumented then pooled at its own bound, over the process's
+one sweeper. They stay split because public reads are anonymous and private reads forward the
+caller's credential. -}
+dataPlaneClients :: Telemetry -> Deadlines -> BootPlan -> IO (ExchangeClient, ExchangeClient)
+dataPlaneClients telemetry deadlines bootPlan = do
     publicSettings <- dataPlaneManagerSettings telemetry
     privateSettings <- dataPlaneManagerSettings telemetry
     let renderedAgent = renderUserAgent (egrOperatorContact (cfgEgress (vpSettings (bpValidated bootPlan))))
     manager <- newPooledManager (bpPublicConnections bootPlan) (identityManagerSettings renderedAgent publicSettings)
     privateManager <- newPooledManager (bpPrivateConnections bootPlan) (identityManagerSettings renderedAgent privateSettings)
-    pure (manager, privateManager)
+    pure (ExchangeClient manager deadlines, ExchangeClient privateManager deadlines)
 
 -- | The settings each data-plane manager pools from: 'typedTlsManagerSettings', under the client span when telemetry is on.
 dataPlaneManagerSettings :: Telemetry -> IO ManagerSettings

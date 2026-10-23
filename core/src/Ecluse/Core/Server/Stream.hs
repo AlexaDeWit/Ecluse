@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Artifact relays with bounded memory and upstream backpressure.
-The connection stays open until the responder finishes. The progress watchdog
+The connection stays open until the responder finishes. The progress floor
 counts upstream waits, excluding time spent waiting for the client.
 -}
 module Ecluse.Core.Server.Stream (
@@ -23,7 +23,7 @@ module Ecluse.Core.Server.Stream (
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (Builder, byteString)
-import Network.HTTP.Client (BodyReader, Manager, Request, brRead, responseClose, responseHeaders, responseOpen, responseStatus)
+import Network.HTTP.Client (BodyReader, Request, brRead, responseClose, responseHeaders, responseStatus)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (ResponseHeaders, Status)
 import Network.Wai (StreamingBody)
@@ -32,8 +32,10 @@ import UnliftIO.Exception (finally, mask, throwIO, try, tryAny)
 import Ecluse.Core.Fault (RetryAfter, TransportFault, renderTransportFault)
 import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Registry (FetchFault (FetchCooldown))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Progress (meteredReader, watchedRaising)
 import Ecluse.Core.Registry.Public (ReadControl (Uncontrolled), withReadControl)
+import Ecluse.Core.Registry.ResponseWait (openResponse)
 import Ecluse.Core.Security (ProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
 
@@ -74,7 +76,7 @@ instance Exception UpstreamBodyFailed where
 
 -- | Relay accepted responses, preserving pre-commit misses and propagating failures after the commit.
 withUpstreamResult ::
-    Manager ->
+    ExchangeClient ->
     ProgressFloor ->
     Request ->
     UpstreamBody ->
@@ -85,12 +87,12 @@ withUpstreamResult ::
 withUpstreamResult = withUpstreamResultUsing Uncontrolled
 
 -- | Apply public admission and observation while retaining response ownership through the responder.
-withUpstreamResultUsing :: ReadControl -> Manager -> ProgressFloor -> Request -> UpstreamBody -> (Status -> Bool) -> (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) -> RelayResponder response -> IO (UpstreamResult (verdict, response))
-withUpstreamResultUsing control manager progress request body accept relay respond = do
+withUpstreamResultUsing :: ReadControl -> ExchangeClient -> ProgressFloor -> Request -> UpstreamBody -> (Status -> Bool) -> (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) -> RelayResponder response -> IO (UpstreamResult (verdict, response))
+withUpstreamResultUsing control client progress request body accept relay respond = do
     opened <- newIORef False
     result <- tryAny $ withReadControl control request $ \observed recordHeaders ->
         mask $ \restore -> do
-            upstream <- restore (responseOpen observed manager)
+            upstream <- restore (openResponse client observed)
             writeIORef opened True
             restore (recordHeaders (responseStatus upstream) (responseHeaders upstream) >> answer upstream) `finally` responseClose upstream
     case result of
@@ -113,7 +115,7 @@ withUpstreamResultUsing control manager progress request body accept relay respo
         bodiless = body == NoBody || isNotModified upstreamStatus
         -- A body read fails with the upstream request inside, so the fault is typed before it leaves.
         pump write flush =
-            try (watchedRaising progress (\watch -> pumpBody (meteredReader watch (brRead (HTTP.responseBody upstream))) write flush))
+            try (watchedRaising (ecDeadlines client) progress (\watch -> pumpBody (meteredReader watch (brRead (HTTP.responseBody upstream))) write flush))
                 >>= either (throwIO . UpstreamBodyFailed . classifyTransport) pure
 
 -- | Pump chunks with one opening flush. An empty chunk marks the end of the body.
