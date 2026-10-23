@@ -17,18 +17,18 @@ module Ecluse.Core.Registry.ResponseWait (
 import Control.Exception qualified as Exception
 import Network.HTTP.Client (BodyReader, Request, Response, responseClose)
 
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecTrace))
 import Ecluse.Core.Registry.ResponseWait.Internal (openResponseAfter)
 
--- | 'Network.HTTP.Client.responseOpen' under the response wait. Close the response with 'responseClose'.
+-- | 'Network.HTTP.Client.responseOpen' under the response wait and the client's tracing. Close the response with 'responseClose'.
 openResponse :: ExchangeClient -> Request -> IO (Response BodyReader)
-openResponse = openResponseAfter responseWaitNanos
+openResponse client request = ecTrace client request (openResponseAfter responseWaitNanos client)
 
 -- http-client's default response timeout, in nanoseconds.
 responseWaitNanos :: Word64
 responseWaitNanos = 30_000_000_000
 
--- | 'Network.HTTP.Client.withResponse' under the response wait.
+-- | 'Network.HTTP.Client.withResponse' under the response wait and the client's tracing.
 withResponse :: ExchangeClient -> Request -> (Response BodyReader -> IO a) -> IO a
 -- Base 'Exception.bracket', as http-client's own uses, so closing a connection stays interruptible.
 withResponse client request = Exception.bracket (openResponse client request) responseClose

@@ -1159,6 +1159,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.ProgressSpec
     Ecluse.Core.Registry.Progress.InternalSpec
     Ecluse.Core.Registry.ResponseWait.InternalSpec
+    Ecluse.Core.Registry.ResponseWaitSpec
     Ecluse.Core.Registry.VersionListSpec
     Ecluse.Core.Registry.Maintenance.BudgetSpec
     Ecluse.Core.Registry.Maintenance.NameSpaceSpec

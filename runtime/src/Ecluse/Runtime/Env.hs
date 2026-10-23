@@ -39,7 +39,7 @@ import Ecluse.Runtime.Log (DdContext, logLine)
 import Ecluse.Runtime.Telemetry (Telemetry)
 import Ecluse.Runtime.Telemetry.Correlation (ddIdentityFromEnvironment, ddPayloadNow)
 import Ecluse.Runtime.Telemetry.Instruments (Metrics, metricsPortOf, newMetrics, workerMetricsPortOf)
-import Ecluse.Runtime.Telemetry.Tracing (tracingPortOf, workerTracingPortOf)
+import Ecluse.Runtime.Telemetry.Tracing (dataPlaneTrace, tracingPortOf, workerTracingPortOf)
 
 -- | The composition-root record from which the whole effectful shell is reached.
 data Env = Env
@@ -71,10 +71,11 @@ data Env = Env
     -- ^ Track completed worker progress for liveness, separately from HTTP readiness.
     }
 
--- | Assemble process handles without opening a socket. Both clients carry the one sweeper. Callers own the supplied resources.
+-- | Assemble process handles without opening a socket. Both clients carry the one sweeper and the one client-span tracing. Callers own the supplied resources.
 newEnvWithAdmission :: ServeAdmission -> MemoryMeter -> MirrorQueue -> Manager -> Manager -> Deadlines -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
 newEnvWithAdmission admission meter queue manager privateManager deadlines metadataCache logEnv telemetry heartbeat = do
     metrics <- newMetrics telemetry
+    tracing <- dataPlaneTrace telemetry
     publicControl <- newPublicControl (mpUpstreamRequest (metricsPortOf metrics)) (reportCooldown logEnv)
     -- The dd log identity comes from the (already-normalised) OTEL_* environment, the
     -- same precedence table the exporter uses, so logs and traces share one identity.
@@ -84,9 +85,9 @@ newEnvWithAdmission admission meter queue manager privateManager deadlines metad
             { envServeAdmission = admission
             , envMemoryMeter = meter
             , envQueue = queue
-            , envPublicClient = ExchangeClient manager deadlines
+            , envPublicClient = ExchangeClient manager deadlines tracing
             , envPublicControl = publicControl
-            , envPrivateClient = ExchangeClient privateManager deadlines
+            , envPrivateClient = ExchangeClient privateManager deadlines tracing
             , envDeadlines = deadlines
             , envMetadataCache = metadataCache
             , envLogEnv = logEnv

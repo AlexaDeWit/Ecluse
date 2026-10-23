@@ -42,9 +42,8 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (bracket, try, tryAny)
 
 import Ecluse.Core.Deadline (newDeadlines)
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
 import Ecluse.Core.Registry.ResponseWait.Internal (ResponseWait (..), WaitExpired (WaitExpired), connectedAt, openResponseAfter, uploadedAt, uploadingAt, waitFault)
-import Ecluse.Test.Deadline (withSweeper)
+import Ecluse.Test.Deadline (untracedClient, withSweeper)
 import Ecluse.Test.Stub.Retry (withLostAnswer, withLostAnswerPaced)
 import Ecluse.Test.Stub.Socket (trustingTlsManager, withRawServer, withTlsLostAnswerThenSilent, withTlsLostAnswerThenSlow, withTlsResetThenSilent)
 import Ecluse.Test.Support (between, givesTimes)
@@ -149,7 +148,7 @@ openSpec = describe "openResponseAfter" $ do
             request <- parseRequest ("http://127.0.0.1:" <> show port <> "/")
             -- Nothing sweeps these deadlines, so only the check as the connection arrives can fail it.
             deadlines <- newDeadlines
-            outcome <- timedOpen (openResponseAfter 1 (ExchangeClient manager deadlines) request)
+            outcome <- timedOpen (openResponseAfter 1 (untracedClient manager deadlines) request)
             fst outcome `shouldBe` Left "ConnectionTimeout"
 
     it "closes a connection whose headers missed the wait instead of returning it to the pool" $ do
@@ -229,7 +228,7 @@ retrySpec = describe "on http-client's retry of a stale pooled connection" $ do
 -- Open under a wait of whole seconds, then close: the status, or the timeout's name, and the seconds taken.
 opened :: Word64 -> Manager -> Request -> IO (Either Text Int, Double)
 opened seconds manager request =
-    withSweeper $ \deadlines -> timedOpen (openResponseAfter (seconds * 1_000_000_000) (ExchangeClient manager deadlines) request)
+    withSweeper $ \deadlines -> timedOpen (openResponseAfter (seconds * 1_000_000_000) (untracedClient manager deadlines) request)
 
 -- The same through http-client's own one-second response timeout, for reference.
 openedByClient :: Manager -> Request -> IO (Either Text Int, Double)
@@ -243,7 +242,7 @@ readThroughAfter :: Word64 -> Manager -> Request -> IO (Either Text Int)
 readThroughAfter seconds manager request =
     withSweeper $ \deadlines ->
         first failure
-            <$> try (bracket (openResponseAfter (seconds * 1_000_000_000) (ExchangeClient manager deadlines) request) responseClose (\response -> statusCode (responseStatus response) <$ brConsume (responseBody response)))
+            <$> try (bracket (openResponseAfter (seconds * 1_000_000_000) (untracedClient manager deadlines) request) responseClose (\response -> statusCode (responseStatus response) <$ brConsume (responseBody response)))
 
 timedOpen :: IO (Response BodyReader) -> IO (Either Text Int, Double)
 timedOpen open = do

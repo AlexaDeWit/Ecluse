@@ -16,13 +16,10 @@ module Ecluse.Service (
 
     -- * npm front door
     mountBindingFor,
-
-    -- * Data-plane managers
-    dataPlaneManagerSettings,
 ) where
 
 import Katip (LogEnv, katipAddNamespace)
-import Network.HTTP.Client (Manager, ManagerSettings)
+import Network.HTTP.Client (Manager)
 
 import Ecluse.Boot (BootEnv (beDeadlines, beLogEnv, beTelemetry), logBootWarning)
 import Ecluse.Composition (BootWiring (bwBindings, bwPublishTargets))
@@ -84,7 +81,6 @@ import Ecluse.Rts.Cgroup (cgroupMemoryUse)
 import Ecluse.Rts.Sampler (SamplerSettings (..), readCollector, runMemorySampler, samplerPeriodMicros, shareWindowPeriods)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Server (MountBinding (..))
-import Ecluse.Runtime.Telemetry (Telemetry)
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Runtime.Telemetry.Instruments (registerMemoryMeter)
 import Ecluse.Runtime.Telemetry.Reporters (
@@ -92,7 +88,6 @@ import Ecluse.Runtime.Telemetry.Reporters (
     deferredMirrorEnqueueFailure,
     installMetrics,
  )
-import Ecluse.Runtime.Telemetry.Tracing (instrumentDataPlaneManagerSettings)
 
 -- | Everything a role needs to start its own tasks, built once by 'withServiceRuntime'. The background tasks arrive already wrapped in their supervision policy.
 data ServiceRuntime = ServiceRuntime
@@ -141,7 +136,7 @@ withServiceRuntime bootEnv plan mirror action = do
     states <- newMirrorStates (bpS3Endpoint bootPlan) deadlines appConfig (bpLimits bootPlan) cacheConfig pool
     let bindings = bindMirrorStates states baseBindings
 
-    (manager, privateManager) <- dataPlaneManagers telemetry bootPlan
+    (manager, privateManager) <- dataPlaneManagers bootPlan
     withEnvWithAdmission serveAdmission memoryMeter queue manager privateManager deadlines metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
         -- The instruments exist now, so installing them makes the credential provider's deferred
         -- reporters live for the rest of the run.
@@ -198,20 +193,13 @@ memoryAdmission memoryPlan = do
                 }
         )
 
-{- The two data-plane managers, each instrumented then pooled at its own bound. They stay split
-because public reads are anonymous and private reads forward the caller's credential. -}
-dataPlaneManagers :: Telemetry -> BootPlan -> IO (Manager, Manager)
-dataPlaneManagers telemetry bootPlan = do
-    publicSettings <- dataPlaneManagerSettings telemetry
-    privateSettings <- dataPlaneManagerSettings telemetry
-    let renderedAgent = renderUserAgent (egrOperatorContact (cfgEgress (vpSettings (bpValidated bootPlan))))
-    manager <- newPooledManager (bpPublicConnections bootPlan) (identityManagerSettings renderedAgent publicSettings)
-    privateManager <- newPooledManager (bpPrivateConnections bootPlan) (identityManagerSettings renderedAgent privateSettings)
-    pure (manager, privateManager)
-
--- | The settings each data-plane manager pools from: 'typedTlsManagerSettings', under the client span when telemetry is on.
-dataPlaneManagerSettings :: Telemetry -> IO ManagerSettings
-dataPlaneManagerSettings telemetry = instrumentDataPlaneManagerSettings telemetry typedTlsManagerSettings
+{- The two data-plane managers, each pooled at its own bound. They stay split because public reads
+are anonymous and private reads forward the caller's credential. -}
+dataPlaneManagers :: BootPlan -> IO (Manager, Manager)
+dataPlaneManagers bootPlan = (,) <$> pooled (bpPublicConnections bootPlan) <*> pooled (bpPrivateConnections bootPlan)
+  where
+    renderedAgent = renderUserAgent (egrOperatorContact (cfgEgress (vpSettings (bpValidated bootPlan))))
+    pooled connections = newPooledManager connections (identityManagerSettings renderedAgent typedTlsManagerSettings)
 
 -- | The @\/livez@ arm a process answers from, given whether it runs the worker ('spawnsWorker'): the consume-loop heartbeat where it does, the listener alone where it does not.
 workerLiveness :: Bool -> WorkerHeartbeat -> IO Liveness

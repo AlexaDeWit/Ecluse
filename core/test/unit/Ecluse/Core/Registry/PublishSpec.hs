@@ -20,7 +20,6 @@ import Ecluse.Core.Registry (
     PublishFault (PublishFetch),
     UrlFormationError (UnparseableUrl),
  )
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.MirrorUpload (inventoryFiles, verifyMirrorBytes)
@@ -35,7 +34,7 @@ import Ecluse.Core.Registry.Publish (
  )
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Test.Deadline (withExchangeClient, withSweeper)
+import Ecluse.Test.Deadline (untracedClient, withExchangeClient, withSweeper)
 import Ecluse.Test.Package (v1_0_0)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry (isBoundExceededPublish, isTransportFetch, isUrlUnformableFetch, isUrlUnformablePublish)
@@ -218,7 +217,7 @@ servedPaths stub = fmap capPath <$> allCaptured stub
 -- fixed token, so the per-call mint is observable.
 mintCountingPublish :: Deadlines -> Stub -> IO (MirrorPublish, IORef Int)
 mintCountingPublish deadlines stub = do
-    exchanges <- ExchangeClient <$> Client.newManager Client.defaultManagerSettings <*> pure deadlines
+    exchanges <- untracedClient <$> Client.newManager Client.defaultManagerSettings <*> pure deadlines
     mints <- newIORef (0 :: Int)
     let mint = do
             atomicModifyIORef' mints (\n -> (n + 1, ()))

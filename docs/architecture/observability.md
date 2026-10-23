@@ -25,6 +25,9 @@ request opens a WAI server span with a child span for each upstream fetch. Ordin
 requests fetch private and public sources concurrently. First-party metadata uses only the
 private source. Artifact requests prefer the private source before a public fallback.
 A child span carries W3C TraceContext to the next hop. Metrics ride the same OTLP pipeline.
+A child span covers one exchange, from the request to the response headers, and the
+`http.client.*` metrics count the same exchanges. `http.client.active_requests` counts the
+exchanges still waiting for their headers. The Dredger's reads of a store open no child span.
 Hand-added domain spans carry the decisions operators care about:
 
 - **Rule evaluation**: the verdict, and on denial the `RuleName` and `RejectReason` (the

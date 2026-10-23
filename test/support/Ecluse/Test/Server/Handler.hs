@@ -20,12 +20,12 @@ import Network.Wai.Internal (Response (ResponseBuilder), ResponseReceived (Respo
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Deadline (Deadlines)
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
 import Ecluse.Core.Registry.Public (newPublicControl)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission)
 import Ecluse.Core.Server.Context (Handler, MountBinding, RequestCtx (RequestCtx), ServeRuntime (ServeRuntime), runHandler)
 import Ecluse.Core.Server.Contract (ResponseContract, responseToWai)
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpUpstreamRequest))
+import Ecluse.Test.Deadline (untracedClient)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -71,7 +71,7 @@ testServeRuntime deadlines metricsPort = do
 -- | 'testServeRuntime' under the given serve admission.
 testServeRuntimeWith :: Deadlines -> ServeAdmission -> MetricsPort -> IO ServeRuntime
 testServeRuntimeWith deadlines admission metricsPort = do
-    client <- ExchangeClient <$> newManager defaultManagerSettings <*> pure deadlines
+    client <- untracedClient <$> newManager defaultManagerSettings <*> pure deadlines
     cache <- newMetadataCache defaultCacheConfig
     queue <- newTestMemoryQueue
     meter <- testMemoryMeter

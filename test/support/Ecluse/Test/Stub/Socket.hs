@@ -13,6 +13,9 @@ module Ecluse.Test.Stub.Socket (
     withResetAfterHeadThenFull,
     trustingTlsManager,
 
+    -- * A peer that never answers
+    silentPeer,
+
     -- * Peers that reset mid-body
     resetOnClose,
     resetAfterPartialBody,
@@ -159,6 +162,10 @@ withResetAfterHeadThenFull reset action =
 -- | A manager under 'typedBodyReads', as every production manager is, that skips certificate validation so it accepts 'withTlsServer'.
 trustingTlsManager :: IO Manager
 trustingTlsManager = newManager (typedBodyReads (mkManagerSettings (TLSSettingsSimple True False False TLS.defaultSupported) Nothing))
+
+-- | Hold the connection and send nothing, so a client waits for headers that never come.
+silentPeer :: Socket -> IO ()
+silentPeer _ = forever (threadDelay 1_000_000)
 
 -- | Make the connection's close send RST instead of FIN, through a zero linger time.
 resetOnClose :: Socket -> IO ()
