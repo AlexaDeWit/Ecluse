@@ -106,7 +106,11 @@ retainFileFact limits mode payload current file =
             _ -> current
      in case (mode, fcVersionKey <$> coordinate) of
             (FullRead, Just version) ->
-                let versions = Set.insert version (projectedVersions current)
+                let known = projectedVersions current
+                    -- The specialised 'Set.insert' copies the path even when the key is present.
+                    versions
+                        | Set.member version known = known
+                        | otherwise = Set.insert version known
                     count = projectedArtifactCount current + 1
                     bounded = case checkVersionCountOf limits (Set.size versions) of
                         Left fault -> next{projectedBound = Just fault}
@@ -114,8 +118,10 @@ retainFileFact limits mode payload current file =
                  in withBound (checkArtifactCount limits count) bounded
             _ -> next
 
+-- Keep the first fault, and return the input itself when nothing changes so no record is rebuilt.
 withBound :: Either LimitError () -> PyPIProjection -> PyPIProjection
-withBound result current = current{projectedBound = projectedBound current <|> either Just (const Nothing) result}
+withBound (Left fault) current | isNothing (projectedBound current) = current{projectedBound = Just fault}
+withBound _ current = current
 
 -- | Continue typed counts after retention stops so later version faults retain priority. Decode whole files only for recorded invalid-entry diagnostics.
 packedFileStep :: Writer st -> Limits -> PyPIProjection -> Int -> FileValue -> (Either LimitError PyPIProjection -> ST st r) -> ST st r

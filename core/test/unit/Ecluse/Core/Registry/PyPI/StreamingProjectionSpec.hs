@@ -5,20 +5,30 @@
 -- | Full reads preserve refusal priority when a structural fault stops payload retention.
 module Ecluse.Core.Registry.PyPI.StreamingProjectionSpec (spec) where
 
+import Data.Aeson (Value, object, (.=))
 import Data.ByteString qualified as BS
+import Data.List (findIndex)
+import Hedgehog (Gen, assert, cover, forAll, (===))
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
+import Ecluse.Core.Package (PackageInfo, PackageName)
 import Ecluse.Core.Registry.Json.Intern (tableTexts)
 import Ecluse.Core.Registry.Json.Walk (Walked (..))
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
+import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, packedSimpleDocument)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIPacked)
 import Ecluse.Core.Security (LimitError (TooDeeplyNested, TooManyArtifacts, TooManyVersions), Limits (..), defaultLimits)
+import Ecluse.Test.Json (encodeStrict)
 import Ecluse.Test.Package (unscopedPyPI)
-import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIPackedChunks)
+import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex, projectPyPIPackedChunks)
 import Ecluse.Test.Support (expectRight)
 
--- | Pin full-read refusal order with literal results independent of the current reducer.
+-- | Pin full-read refusal order against literal results and a count of release keys, both independent of the current reducer.
 spec :: Spec
 spec = describe "packed full-read refusal priority" $ do
     let firstTwo = "{\"files\":[" <> BS.intercalate "," [firstSdist, firstWheel] <> "]"
@@ -86,15 +96,65 @@ spec = describe "packed full-read refusal priority" $ do
         afterTexts `shouldBe` beforeTexts
         packed limits withLater `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
 
+    describe "properties" $
+        modifyMaxSuccess (const 1000) $
+            it "agrees with the tree read and with a count of release keys on adjacent and split releases" $
+                hedgehog $ do
+                    versions <- forAll (Gen.int (Range.constant 1 3))
+                    artifacts <- forAll (Gen.int (Range.constant 1 6))
+                    entries <- forAll genEntries
+                    let bounds = defaultLimits{maxVersionCount = versions, maxArtifactCount = artifacts}
+                        body = encodeStrict (simpleIndex "thing" (map fst entries))
+                        releases = mapMaybe snd entries
+                        unbounded = treeRead defaultLimits body
+                        versionFaultAt = findIndex (> versions) (map (length . ordNub) (drop 1 (inits releases)))
+                        keptAfter at = length (filter (`elem` take versions (ordNub releases)) (drop (at + 1) releases))
+                    cover 5 "a version fault after the artifact fault" (any (> artifacts) versionFaultAt)
+                    cover 5 "the artifact ceiling trips after a version fault" (any (\at -> keptAfter at > 0 && at + keptAfter at > artifacts) versionFaultAt)
+                    cover 20 "an artifact fault alone" (isNothing versionFaultAt && length releases > artifacts)
+                    cover 20 "no fault" (isNothing (expectedBound bounds releases))
+                    cover 15 "a release split across runs" (length (group releases) > length (ordNub releases))
+                    assert (isRight unbounded)
+                    treeRead bounds body === maybe unbounded (Left . MetadataBoundExceeded) (expectedBound bounds releases)
+                    packedRead bounds body === treeRead bounds body
+
 limits :: Limits
 limits = defaultLimits{maxVersionCount = 1, maxArtifactCount = 1}
 
 packed :: Limits -> ByteString -> Either MetadataError ()
-packed bounds body = void (projectPyPIPackedChunks bounds (unscopedPyPI "thing") [body] >>= projectPyPIPacked bounds (unscopedPyPI "thing"))
+packed bounds = void . packedRead bounds
+
+packedRead, treeRead :: Limits -> ByteString -> Either MetadataError (PackageInfo, Maybe SimpleDocument)
+packedRead bounds body = second packedSimpleDocument <$> (projectPyPIPackedChunks bounds thing [body] >>= projectPyPIPacked bounds thing)
+treeRead bounds body = second Just <$> projectPyPIIndex bounds thing body
+
+thing :: PackageName
+thing = unscopedPyPI "thing"
+
+-- The bound a full read reports from its release keys alone: any version fault outranks the artifact fault.
+expectedBound :: Limits -> [Text] -> Maybe LimitError
+expectedBound bounds releases
+    | length (ordNub releases) > maxVersionCount bounds = Just (TooManyVersions (maxVersionCount bounds + 1) (maxVersionCount bounds))
+    | length releases > maxArtifactCount bounds = Just (TooManyArtifacts (maxArtifactCount bounds + 1) (maxArtifactCount bounds))
+    | otherwise = Nothing
+
+-- Runs of one release's files, each with the release key it counts toward. "01.0" spells release
+-- "1.0" a second way, and a foreign or undecodable entry counts toward none.
+genEntries :: Gen [(Value, Maybe Text)]
+genEntries = concat <$> Gen.list (Range.constant 0 6) genRun
+  where
+    genRun = do
+        (release, spelling) <- Gen.element [("1.0", "1.0"), ("1.0", "01.0"), ("2.0", "2.0"), ("3.0rc1", "3.0rc1")]
+        Gen.list (Range.constant 1 4) $
+            Gen.frequency
+                [ (6, (\suffix -> (simpleFile ("thing-" <> spelling <> suffix), Just release)) <$> Gen.element [".tar.gz", "-py3-none-any.whl"])
+                , (1, pure (simpleFile "other-1.0.tar.gz", Nothing))
+                , (1, pure (object ["filename" .= ("thing-4.0.tar.gz" :: Text)], Nothing))
+                ]
 
 retainedTexts :: ByteString -> Either MetadataError [Text]
 retainedTexts body = do
-    streamed <- projectPyPIPackedChunks limits (unscopedPyPI "thing") [body]
+    streamed <- projectPyPIPackedChunks limits thing [body]
     Walked table _ <- first (const MetadataUndecodable) (streamValue streamed)
     pure (toList (tableTexts table))
 
