@@ -23,6 +23,7 @@ module Ecluse.BenchLoad.Harness (
     proxied,
     Driver (..),
     Companion (..),
+    burstReadingMs,
     Load (..),
     urlLoad,
 
@@ -65,7 +66,7 @@ import Ecluse.BenchLoad.Oha (OhaReport (..), OhaRun (..), RunLength (ForRequests
 import Ecluse.BenchLoad.PatternReport (ReplayTotals (..))
 import Ecluse.BenchLoad.Patterns (RequestTrace (rtClients))
 import Ecluse.BenchLoad.Placement (cpuSampleNow, cpuWindowSince)
-import Ecluse.BenchLoad.Pod (CgroupReading (..), ProxyTuning (..), counter, noTuning, parseCpuList, positive, renderPodShape)
+import Ecluse.BenchLoad.Pod (BurstMemory, CgroupReading (..), ProxyTuning (..), burstMemory, counter, noTuning, parseCpuList, positive, renderPodShape)
 import Ecluse.BenchLoad.ProxyProcess (
     AdvisoryFeed,
     ProxyEnd (..),
@@ -269,6 +270,8 @@ data Driver
       DriveUnder Load Load
     | -- | Measure the load while the companion runs beside it for the same duration.
       DriveBeside Load Companion
+    | -- | Hold the load for the configured duration. Halfway through, send this many requests for the URL at once on connections of their own.
+      DriveBurstUnder Int Text Load
     | -- | Consume a finite trace once from the fresh fixture, without priming any cache.
       DriveReplay Replay
     | -- | Run the in-process load for the configured duration, returning each unit's latency in seconds.
@@ -333,6 +336,8 @@ data ProxyFigures = ProxyFigures
     -- ^ Every admission series at the end of the window.
     , pfCacheWindow :: Maybe [(Text, CacheOutcomes)]
     -- ^ Each metadata cache store's outcomes in the window. 'Nothing' when a scrape failed.
+    , pfBurstMemory :: Maybe BurstMemory
+    -- ^ The cgroup's memory through a burst sent under load, sampled far more often than the gauges.
     }
     deriving stock (Show, Generic)
     deriving anyclass (FromJSON, ToJSON)
@@ -392,7 +397,7 @@ measure knobs s shape (Target proxy driver) = do
     before <- snapshotOf proxy MajorCollection
     cgroupBefore <- cgroupOf proxy
     cpuStart <- forM proxy (const (cpuSampleNow cgroupBefore))
-    (outcome, (inFlight, tasks)) <- sampling proxy (drive knobs driver)
+    (outcome, (inFlight, tasks)) <- sampling proxy (drive knobs proxy driver)
     after <- snapshotOf proxy MinorCollection
     cgroupAfter <- cgroupOf proxy
     cpu <- traverse (`cpuWindowSince` cgroupAfter) cpuStart
@@ -401,7 +406,7 @@ measure knobs s shape (Target proxy driver) = do
         DriveReplay replay -> replayEvidence replay
         _ -> pure ""
     let evidence = T.intercalate "\n\n" (filter (not . T.null) [replayed, maybe "" ruleFailureNote (ruleFailuresWindow <$> startScrape <*> endScrape)])
-        window = ProxyWindow cgroupBefore cgroupAfter cpu inFlight tasks startScrape endScrape
+        window = ProxyWindow cgroupBefore cgroupAfter cpu inFlight tasks startScrape endScrape (doBurstMemory outcome)
     retained <- snapshotOf proxy MajorCollection
     ends <- traverse (\p -> (p,) <$> stopProxy p) proxy
     pure
@@ -431,6 +436,7 @@ data ProxyWindow = ProxyWindow
     , pwTasks :: [Maybe Double]
     , pwStartScrape :: Maybe [Sample]
     , pwEndScrape :: Maybe [Sample]
+    , pwBurstMemory :: Maybe BurstMemory
     }
 
 proxyFigures :: ProxyProcess -> ProxyEnd -> ProxyWindow -> ProxyFigures
@@ -452,6 +458,7 @@ proxyFigures proxy end window =
         , pfTasks = summariseGauge (pwTasks window)
         , pfAdmissionSeries = maybe ["(the final scrape failed)"] admissionSeries (pwEndScrape window)
         , pfCacheWindow = cacheWindow <$> pwStartScrape window <*> pwEndScrape window
+        , pfBurstMemory = pwBurstMemory window
         }
   where
     throttled start stop = counter "throttled_usec" (crCpuStat stop) - counter "throttled_usec" (crCpuStat start)
@@ -486,14 +493,30 @@ scrapeOf = fmap join . traverse proxyScrape
 sampling :: Maybe ProxyProcess -> IO a -> IO (a, ([Maybe Double], [Maybe Double]))
 sampling proxy load = case proxy of
     Nothing -> (,([], [])) <$> load
-    Just p -> do
-        readings <- newIORef []
-        let sampleOnce = do
-                scraped <- proxyScrape p
-                tasks <- proxyTasksNow p
-                modifyIORef' readings ((fromMaybe 0 . seriesTotal inFlightSeries [] <$> scraped, fromIntegral <$> tasks) :)
-        result <- withAsync (forever (sampleOnce >> threadDelay 1_000_000)) (const load)
-        (result,) . unzip . reverse <$> readIORef readings
+    Just p -> second unzip <$> sampleEvery 1_000_000 (gauges p) load
+  where
+    gauges p = do
+        scraped <- proxyScrape p
+        tasks <- proxyTasksNow p
+        pure (fromMaybe 0 . seriesTotal inFlightSeries [] <$> scraped, fromIntegral <$> tasks)
+
+{- | How often the harness reads the proxy cgroup through a burst sent under load. A herd on an idle
+proxy completes in about a second, so the one-second gauges would miss its peak.
+-}
+burstReadingMs :: Int
+burstReadingMs = 10
+
+sampleBurst :: Maybe ProxyProcess -> IO a -> IO (a, Maybe BurstMemory)
+sampleBurst proxy burst = case proxy of
+    Nothing -> (,Nothing) <$> burst
+    Just p -> second (Just . burstMemory burstReadingMs . catMaybes) <$> sampleEvery (burstReadingMs * 1_000) (proxyCgroupNow p) burst
+
+-- Run the action, reading the probe at the start and then every interval in microseconds until it ends.
+sampleEvery :: Int -> IO s -> IO a -> IO (a, [s])
+sampleEvery micros probe action = do
+    readings <- newIORef []
+    result <- withAsync (forever (probe >>= \reading -> modifyIORef' readings (reading :) >> threadDelay micros)) (const action)
+    (result,) . reverse <$> readIORef readings
 
 inFlightSeries :: Text
 inFlightSeries = "ecluse_serve_admission_in_flight"
@@ -508,6 +531,7 @@ warmUp = \case
     DriveRamp _ load -> warm load
     DriveUnder measured beside -> warm measured >> warm beside
     DriveBeside measured _ -> warm measured
+    DriveBurstUnder _ _ beside -> warm beside
     DriveBurst _ _ -> pass
     DriveReplay _ -> pass
     DriveInProcess _ -> pass
@@ -519,25 +543,29 @@ data DriveOutcome = DriveOutcome
     , doCompanion :: Maybe LoadSummary
     , doSteps :: [LoadSummary]
     , doReplay :: Maybe ReplayTotals
+    , doBurstMemory :: Maybe BurstMemory
     }
 
-drive :: LoadKnobs -> Driver -> IO DriveOutcome
-drive knobs = \case
+drive :: LoadKnobs -> Maybe ProxyProcess -> Driver -> IO DriveOutcome
+drive knobs proxy = \case
     DriveHttp load -> alone . summariseOha "" connections <$> runOha (timed connections load)
-    DriveBurst count url -> alone . summariseOha "" count <$> runOha (OhaRun count (ForRequests count) [] [url] True)
+    DriveBurst count url -> alone . summariseOha "" count <$> runOha (burst count url)
     DriveRamp steps load -> do
         reports <- traverse (\c -> (c,) <$> runOha (timed c load)) steps
         let stepSummaries = [summariseOha (show c <> " connections") c r | (c, r) <- reports]
             highest = fromMaybe (summariseOha "" 0 (OhaReport 0 mempty mempty [])) (listToMaybe (reverse stepSummaries))
-        pure (DriveOutcome highest Nothing stepSummaries Nothing)
+        pure (DriveOutcome highest Nothing stepSummaries Nothing Nothing)
     DriveUnder measured beside -> paired measured (summariseOha "concurrent load" connections) (runOha (timed connections beside))
     DriveBeside measured companion ->
         paired measured (summariseOha (companionLabel companion) (companionConnections companion)) (companionRun companion (lkDurationSeconds knobs))
+    DriveBurstUnder count url beside -> do
+        (b, (m, memory)) <- concurrently (runOha (timed connections beside)) (threadDelay halfWindow >> sampleBurst proxy (runOha (burst count url)))
+        pure (DriveOutcome (summariseOha "burst" count m) (Just (summariseOha "concurrent load" connections b)) [] Nothing memory)
     DriveReplay replay -> do
         result <- runReplay replay
         let totals = replayTotals result
             clients = length (rtClients (replayTrace replay))
-        pure (DriveOutcome (summariseOha "" clients (replayHttp result)){lsDeadlineAborts = rtotalUnfinished totals} Nothing [] (Just totals))
+        pure (DriveOutcome (summariseOha "" clients (replayHttp result)){lsDeadlineAborts = rtotalUnfinished totals} Nothing [] (Just totals) Nothing)
     DriveInProcess act -> do
         start <- getMonotonicTime
         latencies <- act
@@ -547,11 +575,13 @@ drive knobs = \case
             LoadSummary "" connections (max 1e-9 (end - start)) completed completed 0 0 0 0 (percentiles latencies) "in-process worker loop (no HTTP surface)"
   where
     connections = lkConcurrency knobs
+    halfWindow = lkDurationSeconds knobs * 500_000
     timed c load = OhaRun c (ForSeconds (lkDurationSeconds knobs)) (loadHeaders load) (loadUrls load) True
-    alone summary = DriveOutcome summary Nothing [] Nothing
+    burst count url = OhaRun count (ForRequests count) [] [url] True
+    alone summary = DriveOutcome summary Nothing [] Nothing Nothing
     paired measured summariseBeside beside = do
         (m, b) <- concurrently (runOha (timed connections measured)) beside
-        pure (DriveOutcome (summariseOha "measured" connections m) (Just (summariseBeside b)) [] Nothing)
+        pure (DriveOutcome (summariseOha "measured" connections m) (Just (summariseBeside b)) [] Nothing Nothing)
 
 summariseOha :: Text -> Int -> OhaReport -> LoadSummary
 summariseOha label connections report =
