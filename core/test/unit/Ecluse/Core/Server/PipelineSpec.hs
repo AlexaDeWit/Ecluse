@@ -22,6 +22,7 @@ import Network.HTTP.Types (Method, Status, hContentType, methodGet, methodHead, 
 import Ecluse.Core.Credential (ClientCredential (credSecret), bareCredential, mkSecret, unSecret)
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
 import Ecluse.Core.Package (HashAlg (SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity)
@@ -72,6 +73,7 @@ import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpMemoryAdmiss
 import Ecluse.Core.Telemetry.Upstream qualified as PublicRead
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Cve (fakeCveLookup)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (captureJsonLog, newTestLogEnv)
 import Ecluse.Test.Maintenance (
     FakeStore (fakeMaintenance, readFakeContents, writeFakeContents),
@@ -119,9 +121,9 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
     for_ [(status200, Admit), (status304, Admit), (status401, Deny), (status403, Deny)] $ \(upstreamStatus, expected) ->
         it ("records private artifact HTTP " <> show (statusCode upstreamStatus) <> " as " <> show expected <> " for GET and HEAD") $
-            testWithApplication (pure (\_ respond -> respond (responseLBS upstreamStatus [] "private response"))) $ \port -> do
+            testWithApplication (pure (\_ respond -> respond (responseLBS upstreamStatus [] "private response"))) $ \port -> withSweeper $ \deadlines -> do
                 (metricsPort, decisions) <- recordingMetricsPort
-                rt <- testServeRuntime metricsPort
+                rt <- testServeRuntime deadlines metricsPort
                 base <- depsFor 1
                 let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) base
                 for_ [serveTarball, headTarball] $ \serve -> do
@@ -130,25 +132,25 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                 decisions `shouldReturn` [expected, expected]
 
     it "serves a merged packument and records an admit through the metrics port" $
-        testWithApplication (pure upstreamApp) $ \port -> do
+        testWithApplication (pure upstreamApp) $ \port -> withSweeper $ \deadlines -> do
             (metricsPort, decisions) <- recordingMetricsPort
-            rt <- testServeRuntime metricsPort
+            rt <- testServeRuntime deadlines metricsPort
             deps <- depsFor port
             resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
 
-    it "records an unavailability and renders 503 when no upstream resolves" $ do
+    it "records an unavailability and renders 503 when no upstream resolves" $ withSweeper $ \deadlines -> do
         (metricsPort, decisions) <- recordingMetricsPort
-        rt <- testServeRuntime metricsPort
+        rt <- testServeRuntime deadlines metricsPort
         deps <- depsFor 1
         resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
         statusCode (responseStatus resp) `shouldBe` 503
         decisions >>= (`shouldBe` [Unavailable])
 
-    it "admits exactly the credential presentation the mount's ecosystem declares" $ do
+    it "admits exactly the credential presentation the mount's ecosystem declares" $ withSweeper $ \deadlines -> do
         (metricsPort, _decisions) <- recordingMetricsPort
-        rt <- testServeRuntime metricsPort
+        rt <- testServeRuntime deadlines metricsPort
         -- Closed upstream ports distinguish edge refusal from an admitted request's fetch failure.
         gated <- gatedDeps
         let serveUnder mapping headers =
@@ -164,8 +166,8 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         serveUnder apiKeyCredential [("Authorization", "Bearer " <> edgeToken)] >>= (`shouldBe` 401)
 
     it "refuses public metadata and direct artifacts on MAL evidence with structured audit IDs" $
-        testWithApplication (pure upstreamApp) $ \port -> do
-            rt <- testServeRuntime noopMetricsPort
+        testWithApplication (pure upstreamApp) $ \port -> withSweeper $ \deadlines -> do
+            rt <- testServeRuntime deadlines noopMetricsPort
             base <- depsFor port
             let source = servingRuleDeps (DbEtag "mal-generation") (fakeCveLookup [("leftpad", AdvisoryRange "MAL-pipeline" Nothing Nothing Unbounded Nothing)])
             rules <- prepare source (atDefaultPrecedence (Rules.DenyIfKnownMalicious Rules.FailDeny) : allowPolicy)
@@ -179,9 +181,9 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                 logged `shouldSatisfy` T.isInfixOf field
 
     it "serves a gated tarball and records an admit, driving the metrics and tracing ports" $
-        testWithApplication (pure upstreamApp) $ \port -> do
+        testWithApplication (pure upstreamApp) $ \port -> withSweeper $ \deadlines -> do
             (metricsPort, decisions) <- recordingMetricsPort
-            rt <- testServeRuntime metricsPort
+            rt <- testServeRuntime deadlines metricsPort
             deps <- depsFor port
             resp <-
                 captureServe
@@ -192,9 +194,9 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
 
-    it "keeps a first-party packument off the public upstream, answering 503 when the private origin cannot be read" $ do
+    it "keeps a first-party packument off the public upstream, answering 503 when the private origin cannot be read" $ withSweeper $ \deadlines -> do
         (metricsPort, decisions) <- recordingMetricsPort
-        rt <- testServeRuntime metricsPort
+        rt <- testServeRuntime deadlines metricsPort
         hits <- newIORef (0 :: Int)
         testWithApplication (pure (countingUpstream hits upstreamApp)) $ \port -> do
             base <- depsFor port
@@ -214,9 +216,9 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             readIORef hits >>= (`shouldSatisfy` (> 0))
             decisions >>= (`shouldBe` [Unavailable, Admit])
 
-    it "keeps a first-party artifact off the public upstream, answering 503 when the private port is closed" $ do
+    it "keeps a first-party artifact off the public upstream, answering 503 when the private port is closed" $ withSweeper $ \deadlines -> do
         (metricsPort, decisions) <- recordingMetricsPort
-        rt <- testServeRuntime metricsPort
+        rt <- testServeRuntime deadlines metricsPort
         hits <- newIORef (0 :: Int)
         testWithApplication (pure (countingUpstream hits upstreamApp)) $ \port -> do
             base <- depsFor port
@@ -233,9 +235,9 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             decisions `shouldReturn` [Unavailable, Unavailable]
 
     for_ [(status404, 404, Deny), (status302, 503, Unavailable), (status400, 503, Unavailable), (status429, 503, Unavailable), (status500, 503, Unavailable), (status503, 503, Unavailable)] $ \(privateStatus, expectedStatus, expectedDecision) ->
-        it ("keeps first-party artifact HTTP " <> show (statusCode privateStatus) <> " private, answering " <> show expectedStatus <> " for GET and HEAD") $ do
+        it ("keeps first-party artifact HTTP " <> show (statusCode privateStatus) <> " private, answering " <> show expectedStatus <> " for GET and HEAD") $ withSweeper $ \deadlines -> do
             (metricsPort, decisions) <- recordingMetricsPort
-            rt <- testServeRuntime metricsPort
+            rt <- testServeRuntime deadlines metricsPort
             publicHits <- newIORef (0 :: Int)
             testWithApplication (pure (countingUpstream publicHits upstreamApp)) $ \publicPort ->
                 testWithApplication (pure (\_ respond -> respond (responseLBS privateStatus [] "private refusal"))) $ \privatePort -> do
@@ -254,8 +256,8 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                     decisions `shouldReturn` [expectedDecision, expectedDecision]
 
     it "keeps the public artifact status, headers and bytes after every private miss" $
-        testWithApplication (pure (dated upstreamApp)) $ \publicPort -> do
-            rt <- testServeRuntime noopMetricsPort
+        testWithApplication (pure (dated upstreamApp)) $ \publicPort -> withSweeper $ \deadlines -> do
+            rt <- testServeRuntime deadlines noopMetricsPort
             base <- depsFor publicPort
             logEnv <- newTestLogEnv
             let fetch deps =
@@ -278,8 +280,8 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
     for_ [(200, upstreamApp), (206, partialUpstream)] $ \(expected, upstream) ->
         it ("relays an upstream " <> show expected <> " npm artifact unchanged to a client that accepts gzip, for GET and HEAD") $
-            testWithApplication (pure (dated upstream)) $ \publicPort -> do
-                rt <- testServeRuntime noopMetricsPort
+            testWithApplication (pure (dated upstream)) $ \publicPort -> withSweeper $ \deadlines -> do
+                rt <- testServeRuntime deadlines noopMetricsPort
                 deps <- withPrivateBaseUrl Nothing <$> depsFor publicPort
                 logEnv <- newTestLogEnv
                 for_ [serveTarball, headTarball] $ \serve -> do
@@ -290,17 +292,17 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
     for_ [(200, status200), (206, status206)] $ \(expected, artifactStatus) ->
         it ("relays an upstream " <> show expected <> " PyPI distribution unchanged to a client that accepts gzip, for GET and HEAD") $
-            testWithApplication (pure (dated (pypiPublicApp artifactStatus))) $ \publicPort -> do
-                rt <- testServeRuntime noopMetricsPort
+            testWithApplication (pure (dated (pypiPublicApp artifactStatus))) $ \publicPort -> withSweeper $ \deadlines -> do
+                rt <- testServeRuntime deadlines noopMetricsPort
                 prepared <- prepare inertRuleDeps allowPolicy
                 let deps = (pypiServeDeps Nothing (loopbackRegistryUrl ("http://localhost:" <> show publicPort)) NoMirrorWrite prepared (pure (UTCTime (fromGregorian 2026 6 20) 0))){pdMountBaseUrl = "http://proxy.test"}
                 for_ [methodGet, methodHead] $ \method ->
                     relaysUncoded expected (fetchPypiArtifact rt deps method)
 
-    it "sheds packument work when metadata admission refuses" $ do
+    it "sheds packument work when metadata admission refuses" $ withSweeper $ \deadlines -> do
         (metricsPort, _decisions) <- recordingMetricsPort
         admission <- newServeAdmissionTuned 1 0 0
-        rt <- testServeRuntimeWith admission metricsPort
+        rt <- testServeRuntimeWith deadlines admission metricsPort
         deps <- depsFor 1
         held <- withServeAdmission (srMetrics rt) admission (captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest))
         response <- maybe (throwIO MissingFixtureResponse) pure held
@@ -308,20 +310,20 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         (snd <$> find ((== hRetryAfter) . fst) (responseHeaders response)) `shouldBe` Just "1"
 
     it "releases metadata admission after an admitted operation completes" $
-        testWithApplication (pure upstreamApp) $ \port -> do
+        testWithApplication (pure upstreamApp) $ \port -> withSweeper $ \deadlines -> do
             (metricsPort, _decisions) <- recordingMetricsPort
             admission <- newServeAdmissionTuned 1 0 0
-            rt <- testServeRuntimeWith admission metricsPort
+            rt <- testServeRuntimeWith deadlines admission metricsPort
             deps <- depsFor port
             saturated <- withServeAdmission (srMetrics rt) admission (captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest))
             (statusCode . responseStatus <$> saturated) `shouldBe` Just 503
             admitted <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
             statusCode (responseStatus admitted) `shouldBe` 200
 
-    it "sheds a tarball miss when its public metadata gate cannot acquire admission" $ do
+    it "sheds a tarball miss when its public metadata gate cannot acquire admission" $ withSweeper $ \deadlines -> do
         (metricsPort, _decisions) <- recordingMetricsPort
         admission <- newServeAdmissionTuned 1 0 0
-        rt <- testServeRuntimeWith admission metricsPort
+        rt <- testServeRuntimeWith deadlines admission metricsPort
         deps <- depsFor 1
         held <-
             withServeAdmission (srMetrics rt) admission $
@@ -335,10 +337,10 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         (snd <$> find ((== hRetryAfter) . fst) (responseHeaders response)) `shouldBe` Just "1"
 
     it "does not hold metadata admission around a trusted private tarball stream" $
-        testWithApplication (pure upstreamApp) $ \port -> do
+        testWithApplication (pure upstreamApp) $ \port -> withSweeper $ \deadlines -> do
             (metricsPort, _decisions) <- recordingMetricsPort
             admission <- newServeAdmission 1
-            rt <- testServeRuntimeWith admission metricsPort
+            rt <- testServeRuntimeWith deadlines admission metricsPort
             deps <- depsFor 1
             let privateDeps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) deps
             held <-
@@ -350,9 +352,9 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                         (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
             (statusCode . responseStatus <$> held) `shouldBe` Just 200
 
-    it "releases both gates before public artifact relay starts" $ do
+    it "releases both gates before public artifact relay starts" $ withSweeper $ \deadlines -> do
         admission <- newServeAdmissionTuned 1 0 0
-        rt <- testServeRuntimeWith admission noopMetricsPort
+        rt <- testServeRuntimeWith deadlines admission noopMetricsPort
         released <- newIORef Nothing
         let upstream req respond = do
                 when ("/leftpad/-/" `BS.isPrefixOf` rawPathInfo req) $ do
@@ -379,8 +381,8 @@ memoryAdmissionSpec = describe "memory admission on live request paths" $ do
             let upstream req respond = do
                     when (rawPathInfo req == "/leftpad") (modifyIORef' lookupCalls (+ 1))
                     upstreamApp req respond
-            testWithApplication (pure upstream) $ \port -> do
-                rt <- testServeRuntime noopMetricsPort
+            testWithApplication (pure upstream) $ \port -> withSweeper $ \deadlines -> do
+                rt <- testServeRuntime deadlines noopMetricsPort
                 deps <- depsFor port
                 let serve rules selected =
                         captureServe
@@ -401,8 +403,8 @@ memoryAdmissionSpec = describe "memory admission on live request paths" $ do
         privateCalls <- newIORef (0 :: Int)
         publicCalls <- newIORef (0 :: Int)
         testWithApplication (pure (countingUpstream privateCalls upstreamApp)) $ \privatePort ->
-            testWithApplication (pure (countingUpstream publicCalls upstreamApp)) $ \publicPort -> do
-                rt <- testServeRuntime noopMetricsPort
+            testWithApplication (pure (countingUpstream publicCalls upstreamApp)) $ \publicPort -> withSweeper $ \deadlines -> do
+                rt <- testServeRuntime deadlines noopMetricsPort
                 base <- depsFor publicPort
                 let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base
                     serve request = captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName request)
@@ -418,8 +420,8 @@ memoryAdmissionSpec = describe "memory admission on live request paths" $ do
 
     it "sheds a listing at a full memory gate before either origin starts" $ do
         lookups <- newIORef (0 :: Int)
-        testWithApplication (pure (countingUpstream lookups upstreamApp)) $ \port -> do
-            (rt, meter) <- fullDoorRuntime noopMetricsPort
+        testWithApplication (pure (countingUpstream lookups upstreamApp)) $ \port -> withSweeper $ \deadlines -> do
+            (rt, meter) <- fullDoorRuntime deadlines noopMetricsPort
             base <- depsFor port
             let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) base
             held <- withMemoryEntry noopMetricsPort meter $ \_ ->
@@ -431,8 +433,8 @@ memoryAdmissionSpec = describe "memory admission on live request paths" $ do
 
     it "sheds a public artifact decision at a full memory gate before any lookup" $ do
         lookups <- newIORef (0 :: Int)
-        testWithApplication (pure (countingUpstream lookups upstreamApp)) $ \port -> do
-            (rt, meter) <- fullDoorRuntime noopMetricsPort
+        testWithApplication (pure (countingUpstream lookups upstreamApp)) $ \port -> withSweeper $ \deadlines -> do
+            (rt, meter) <- fullDoorRuntime deadlines noopMetricsPort
             deps <- depsFor port
             held <- withMemoryEntry noopMetricsPort meter $ \_ ->
                 captureServe
@@ -444,10 +446,10 @@ memoryAdmissionSpec = describe "memory admission on live request paths" $ do
             readIORef lookups `shouldReturn` 0
 
     it "charges a public artifact decision its entry step alone" $
-        testWithApplication (pure upstreamApp) $ \port -> do
+        testWithApplication (pure upstreamApp) $ \port -> withSweeper $ \deadlines -> do
             overdraws <- newIORef (0 :: Int)
             let port' = noopMetricsPort{mpMemoryAdmissionOverdraw = atomicModifyIORef' overdraws (\n -> (n + 1, ()))}
-            (rt, meter) <- fullDoorRuntime port'
+            (rt, meter) <- fullDoorRuntime deadlines port'
             deps <- depsFor port
             response <-
                 captureServe
@@ -460,10 +462,10 @@ memoryAdmissionSpec = describe "memory admission on live request paths" $ do
             snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
 
     it "lets a listing larger than the whole budget finish by overdrawing, then returns its charge" $
-        testWithApplication (pure upstreamApp) $ \port -> do
+        testWithApplication (pure upstreamApp) $ \port -> withSweeper $ \deadlines -> do
             overdraws <- newIORef (0 :: Int)
             let port' = noopMetricsPort{mpMemoryAdmissionOverdraw = atomicModifyIORef' overdraws (\n -> (n + 1, ()))}
-            (rt, meter) <- fullDoorRuntime port'
+            (rt, meter) <- fullDoorRuntime deadlines port'
             base <- depsFor port
             let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) base
             response <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
@@ -540,9 +542,9 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
 skippedCheckAuditSpec :: Spec
 skippedCheckAuditSpec = describe "skipped-check evidence at the public artifact gate" $ do
     it "logs the skipped check once, at the artifact admission, and not for the packument that listed it" $
-        testWithApplication (pure upstreamApp) $ \port -> do
+        testWithApplication (pure upstreamApp) $ \port -> withSweeper $ \deadlines -> do
             (metricsPort, _decisions) <- recordingMetricsPort
-            rt <- testServeRuntime metricsPort
+            rt <- testServeRuntime deadlines metricsPort
             deps <- skippingDeps port
             (_, logged) <- captureJsonLog $ \logEnv -> do
                 packument <- captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
@@ -555,9 +557,9 @@ skippedCheckAuditSpec = describe "skipped-check evidence at the public artifact 
                 logged `shouldSatisfy` T.isInfixOf field
 
     it "logs the line once per admission identity for the life of the outage, and again after recovery" $
-        testWithApplication (pure twoVersionUpstream) $ \port -> do
+        testWithApplication (pure twoVersionUpstream) $ \port -> withSweeper $ \deadlines -> do
             (metricsPort, _decisions) <- recordingMetricsPort
-            rt <- testServeRuntime metricsPort
+            rt <- testServeRuntime deadlines metricsPort
             (reporter, deps) <- observedSkippingDeps port
             twoSkips <- prepare (ruleDepsOf reporter) (atDefaultPrecedence (Rules.DenyIfEpss (Rules.DenyIfEpssParams 0.5 Rules.FailNoDecision)) : skipPolicy)
             let serve logEnv d ver = do
@@ -576,9 +578,9 @@ skippedCheckAuditSpec = describe "skipped-check evidence at the public artifact 
             length (filter (T.isInfixOf "\"rule\":\"DenyIfEpss\"") (lines logged)) `shouldBe` 1
 
     it "logs nothing for a trusted private serve, which runs no rules" $
-        testWithApplication (pure upstreamApp) $ \port -> do
+        testWithApplication (pure upstreamApp) $ \port -> withSweeper $ \deadlines -> do
             (metricsPort, _decisions) <- recordingMetricsPort
-            rt <- testServeRuntime metricsPort
+            rt <- testServeRuntime deadlines metricsPort
             deps <- withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) <$> skippingDeps 1
             (_, logged) <- captureJsonLog $ \logEnv ->
                 replicateM_ 3 $ do
@@ -663,9 +665,9 @@ withConflictOrigins :: Application -> Application -> (ServeRuntime -> PackumentD
 withConflictOrigins public private action = do
     publicHits <- newIORef 0
     testWithApplication (pure (countingUpstream publicHits public)) $ \publicPort ->
-        testWithApplication (pure private) $ \privatePort -> do
+        testWithApplication (pure private) $ \privatePort -> withSweeper $ \deadlines -> do
             (metrics, divergences) <- recordingDivergenceMetricsPort
-            rt <- testServeRuntime metrics
+            rt <- testServeRuntime deadlines metrics
             base <- depsFor publicPort
             action rt (withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base) divergences publicHits
 
@@ -878,9 +880,9 @@ nextPrivateGet privateUpstream rules retained = do
     publicHits <- newIORef (0 :: Int)
     privateHits <- newIORef (0 :: Int)
     testWithApplication (pure (countingUpstream publicHits upstreamApp)) $ \publicPort ->
-        testWithApplication (pure (countingUpstream privateHits privateUpstream)) $ \privatePort -> do
+        testWithApplication (pure (countingUpstream privateHits privateUpstream)) $ \privatePort -> withSweeper $ \deadlines -> do
             (metricsPort, decisions) <- recordingMetricsPort
-            rt <- testServeRuntime metricsPort
+            rt <- testServeRuntime deadlines metricsPort
             base <- depsFor publicPort
             let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base{pdRules = rules}
             response <-
@@ -904,9 +906,9 @@ storedUpstream store req respond = do
 
 publicControlSpec :: Spec
 publicControlSpec = describe "public authority control" $ do
-    it "keeps private listing contributions while suppressing repeated public throttles" $ do
+    it "keeps private listing contributions while suppressing repeated public throttles" $ withSweeper $ \deadlines -> do
         fixture <- newPublicFixture
-        rt <- testServeRuntime noopMetricsPort
+        rt <- testServeRuntime deadlines noopMetricsPort
         publicHits <- newIORef (0 :: Int)
         privateHits <- newIORef (0 :: Int)
         let busy _ respond = respond (responseLBS status429 [(hRetryAfter, "60")] "busy")
@@ -923,9 +925,9 @@ publicControlSpec = describe "public authority control" $ do
                 pfRequests fixture `shouldReturn` [("localhost", PublicRead.Listing, PublicRead.ResponseStatus 429)]
 
     for_ [(serveTarball, "GET"), (headTarball, "HEAD")] $ \(serve, method) ->
-        it ("counts public " <> method <> " sends, excluding retained metadata and local cooldown") $ do
+        it ("counts public " <> method <> " sends, excluding retained metadata and local cooldown") $ withSweeper $ \deadlines -> do
             fixture <- newPublicFixture
-            rt <- testServeRuntime noopMetricsPort
+            rt <- testServeRuntime deadlines noopMetricsPort
             hits <- newIORef (0 :: Int)
             let upstream req respond
                     | rawPathInfo req == "/leftpad/-/leftpad-1.0.0.tgz" = respond (responseLBS status429 [(hRetryAfter, "60")] "busy")
@@ -943,9 +945,9 @@ publicControlSpec = describe "public authority control" $ do
 
     for_ [methodGet, methodHead] $ \method ->
         it ("counts public companion " <> show method <> " and refuses its next local retry") $
-            testWithApplication (pure (pypiPublicAppWith True status429)) $ \publicPort -> do
+            testWithApplication (pure (pypiPublicAppWith True status429)) $ \publicPort -> withSweeper $ \deadlines -> do
                 fixture <- newPublicFixture
-                rt <- testServeRuntime noopMetricsPort
+                rt <- testServeRuntime deadlines noopMetricsPort
                 let deps = (pypiServeDeps Nothing (loopbackRegistryUrl ("http://localhost:" <> show publicPort)) NoMirrorWrite [] (pure fixedNow)){pdMountBaseUrl = "http://proxy.test"}
                     fetch = fetchPypiPath rt{srPublicControl = pfControl fixture} deps method "requests-1.0.0.tar.gz.metadata" []
                 firstResponse <- fetch
@@ -956,14 +958,14 @@ publicControlSpec = describe "public authority control" $ do
                 pfRequests fixture `shouldReturn` [("localhost", PublicRead.SelectedRead, PublicRead.ResponseStatus 200), ("localhost", PublicRead.Companion, PublicRead.ResponseStatus 429)]
 
     it "counts one HTTP send for coalesced listing followers" $ do
-        completed <- timeout 5_000_000 $ do
+        completed <- timeout 5_000_000 $ withSweeper $ \deadlines -> do
             fixture <- newPublicFixture
             started <- newEmptyMVar
             release <- newEmptyMVar
             joined <- newEmptyMVar
             let metrics = noopMetricsPort{mpCacheRequest = \outcome -> when (outcome == Metric.Collapsed) (putMVar joined ())}
                 upstream req respond = putMVar started () >> takeMVar release >> upstreamApp req respond
-            rt <- testServeRuntime metrics
+            rt <- testServeRuntime deadlines metrics
             testWithApplication (pure upstream) $ \publicPort -> do
                 deps <- withPrivateBaseUrl Nothing <$> depsFor publicPort
                 let fetch = captureServe npmPackumentContract rt{srPublicControl = pfControl fixture} (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
@@ -977,9 +979,9 @@ publicControlSpec = describe "public authority control" $ do
 
 pypiPrivateArtifactSpec :: Spec
 pypiPrivateArtifactSpec = describe "PyPI first-party private artifacts" $ do
-    it "answers 503 without a suggested delay when the private origin cannot be read" $ do
+    it "answers 503 without a suggested delay when the private origin cannot be read" $ withSweeper $ \deadlines -> do
         (metricsPort, decisions) <- recordingMetricsPort
-        rt <- testServeRuntime metricsPort
+        rt <- testServeRuntime deadlines metricsPort
         publicHits <- newIORef (0 :: Int)
         testWithApplication (pure (countingUpstream publicHits upstreamApp)) $ \publicPort -> do
             let deps = pypiPrivateDeps 1 publicPort
@@ -991,9 +993,9 @@ pypiPrivateArtifactSpec = describe "PyPI first-party private artifacts" $ do
             decisions `shouldReturn` [Unavailable, Unavailable]
 
     for_ [(status404, 404, Deny), (status302, 503, Unavailable), (status429, 503, Unavailable), (status500, 503, Unavailable)] $ \(privateStatus, expectedStatus, expectedDecision) ->
-        it ("answers " <> show expectedStatus <> " after a private index hit and artifact HTTP " <> show (statusCode privateStatus)) $ do
+        it ("answers " <> show expectedStatus <> " after a private index hit and artifact HTTP " <> show (statusCode privateStatus)) $ withSweeper $ \deadlines -> do
             (metricsPort, decisions) <- recordingMetricsPort
-            rt <- testServeRuntime metricsPort
+            rt <- testServeRuntime deadlines metricsPort
             publicHits <- newIORef (0 :: Int)
             privateHits <- newIORef (0 :: Int)
             testWithApplication (pure (countingUpstream publicHits upstreamApp)) $ \publicPort ->
@@ -1029,9 +1031,9 @@ pypiPrivateApp privateStatus req respond
     index = simpleIndex "requests" [withFileKeys [("url", String (selfBaseUrl req <> "/files/requests-1.0.0.tar.gz"))] (simpleFile "requests-1.0.0.tar.gz")]
 
 -- The zero waiting room makes a held step refuse the next request at once.
-fullDoorRuntime :: MetricsPort -> IO (ServeRuntime, MemoryMeter)
-fullDoorRuntime metricsPort = do
-    rt <- testServeRuntime metricsPort
+fullDoorRuntime :: Deadlines -> MetricsPort -> IO (ServeRuntime, MemoryMeter)
+fullDoorRuntime deadlines metricsPort = do
+    rt <- testServeRuntime deadlines metricsPort
     meter <- newMemoryMeter MeterSettings{msBudgetBytes = 1, msStepBytes = 1, msEntryRoom = 0, msEntryWaitMicros = 0}
     pure (rt{srMemoryMeter = meter}, meter)
 

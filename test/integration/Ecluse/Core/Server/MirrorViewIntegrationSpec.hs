@@ -40,6 +40,7 @@ import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, newTestEnvWithQueue, requestAt)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Mirror.State
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, packageRule, revocation)
@@ -403,8 +404,8 @@ withManagedProxyOver :: (MirrorQueue, PackumentDeps -> PackumentDeps) -> MirrorV
 withManagedProxyOver (queue, configure) view firstParty private public action = do
     manager <- newManager defaultManagerSettings
     testWithApplication (pure private) $ \privatePort ->
-        testWithApplication (pure public) $ \publicPort -> do
-            env <- newTestEnvWithQueue queue manager
+        testWithApplication (pure public) $ \publicPort -> withSweeper $ \deadlines -> do
+            env <- newTestEnvWithQueue deadlines queue manager
             let deps =
                     (pypiServeDeps (Just (loopbackRegistryUrl (localhost privatePort))) (loopbackRegistryUrl (localhost publicPort)) NoMirrorWrite [] (pure (UTCTime (fromGregorian 2026 10 11) 0)))
                         { pdMirrorState = Just view

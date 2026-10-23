@@ -10,6 +10,7 @@ module Ecluse.Runtime.Cve.SyncIntegrationSpec (spec) where
 import Data.Aeson (Value (String), encode, object, (.=))
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Katip (KatipContextT, SimpleLogPayload, runKatipContextT)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
@@ -51,6 +52,7 @@ import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.TestSupport (getPath)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Corpus.Advisories (configuredShippedPolicy)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip)
 import Ecluse.Test.Osv.Withdrawal (maliciousZip)
 import Ecluse.Test.OsvDb (epssFixtureFile, withSourceStubs)
@@ -73,7 +75,7 @@ spec pool =
             it (caseLabel "integration/advisory-sync/native-001" "refuses or quarantines the young fix with no database, then admits it once the synced artifact swaps in") $ \container ->
                 withSystemTempDir $ \dataDir ->
                     withPublicUpstream $ \publicUrl ->
-                        withPrivateUpstream $ \privateUrl -> do
+                        withPrivateUpstream $ \privateUrl -> withSweeper $ \deadlines -> do
                             -- The bucket, addressed exactly as the released image would
                             -- (the standard AWS_ENDPOINT_URL override), created empty.
                             let endpoint = endpointFor container
@@ -97,9 +99,9 @@ spec pool =
                                         , syncStoreRef = "s3://" <> bucket
                                         }
                                 schedule = SyncSchedule{schedBootBackoff = [50_000, 50_000], schedPollDelay = 100_000, schedAbsentReport = 600_000_000}
-                            app <- proxyApp ruleDeps configuredShippedPolicy privateUrl publicUrl
-                            refusing <- proxyApp ruleDeps (fastLaneUnder FailDeny) privateUrl publicUrl
-                            skipping <- proxyApp ruleDeps (fastLaneUnder FailNoDecision) privateUrl publicUrl
+                            app <- proxyApp deadlines ruleDeps configuredShippedPolicy privateUrl publicUrl
+                            refusing <- proxyApp deadlines ruleDeps (fastLaneUnder FailDeny) privateUrl publicUrl
+                            skipping <- proxyApp deadlines ruleDeps (fastLaneUnder FailNoDecision) privateUrl publicUrl
                             withAsync (runQuiet (runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort syncEnv schedule (SyncHooks{hookFirstSync = pass, hookPushAge = pass}))) $ \_ -> do
                                 -- The configured MAL deny cannot vet before the first accepted generation.
                                 denied <- getPath "/npm/corpus-vuln" app
@@ -195,12 +197,12 @@ fastLaneUnder :: FailureAlignment -> [PrecededRule]
 fastLaneUnder alignment = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), differentialRemediation alignment]
 
 -- A proxy under this policy, with the packument stub as its public origin.
-proxyApp :: RuleDeps -> [PrecededRule] -> Text -> Text -> IO Application
-proxyApp ruleDeps policy privateUrl publicUrl = do
+proxyApp :: Deadlines -> RuleDeps -> [PrecededRule] -> Text -> Text -> IO Application
+proxyApp deadlines ruleDeps policy privateUrl publicUrl = do
     prepared <- prepare ruleDeps policy
     manager <- newManager defaultManagerSettings
     queue <- newTestMemoryQueue
-    env <- newTestEnvWith queue (manager, manager) telemetryDisabled
+    env <- newTestEnvWith deadlines queue (manager, manager) telemetryDisabled
     let deps =
             ( npmServeDeps
                 (Just (loopbackRegistryUrl privateUrl))
