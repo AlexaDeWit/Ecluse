@@ -38,6 +38,9 @@ import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Vector (Vector)
+import Data.Vector qualified as V
+import Data.Vector.Mutable qualified as MV
 
 import Ecluse.Core.Package.Entry (AdmittedEntry (..), EntryKey (..))
 import Ecluse.Core.Package.Merge (MergePlan (mpArtifacts, mpSurvivors), SourceId)
@@ -83,24 +86,71 @@ Missing keys, ambiguous keys, and mismatched snapshots contribute nothing.
 -}
 overlaySurvivors :: (src -> [(EntryKey, entry)]) -> Map SourceId (Snapshot src) -> MergePlan -> [(Text, entry)]
 overlaySurvivors entriesOf bySource plan =
-    [ (version, entry)
+    [ selected
     | (sid, source) <- Map.toAscList bySource
-    , (key, entry) <- uniqueSourceEntries (entriesOf (snapshotValue source))
-    , Just (version, kept) <- [Map.lookup (sid, snapshotDigest source, key) admitted]
+    , selected <- selectEntries (sourceAdmissions plan sid source) (entriesOf (snapshotValue source))
+    ]
+
+-- The plan's admissions of this source's snapshot under versions the source won, in version order.
+sourceAdmissions :: MergePlan -> SourceId -> Snapshot src -> [(EntryKey, (Text, AdmittedEntry))]
+sourceAdmissions plan sid source =
+    [ (admittedKey entry, (version, entry))
+    | (version, entries) <- Map.toList (mpArtifacts plan)
+    , Map.lookup version (mpSurvivors plan) == Just sid
+    , entry <- toList entries
+    , admittedSnapshot entry == snapshotDigest source
+    ]
+
+-- A slot costs one word per position and a map node six per admission, so the table serves the denser case.
+selectEntries :: [(EntryKey, (Text, AdmittedEntry))] -> [(EntryKey, entry)] -> [(Text, entry)]
+selectEntries admissions entries = case lastAscending entries of
+    Just end | end < 6 * length admissions -> slotted (admissionSlots end admissions) entries
+    Just _ -> keyed (uniqueEntries admissions) entries
+    Nothing -> keyed (uniqueEntries admissions) (filter (\(key, _) -> Map.member key unrepeated) entries)
+  where
+    unrepeated = uniqueEntries entries
+
+-- The last of strictly ascending non-negative array positions, which are already unique.
+lastAscending :: [(EntryKey, entry)] -> Maybe Int
+lastAscending = go (-1)
+  where
+    go !previous = \case
+        (ArrayEntry position, _) : rest | position > previous -> go position rest
+        [] -> Just previous
+        _ -> Nothing
+
+data Slot = Vacant | Admitted Text AdmittedEntry | Ambiguous
+
+-- One slot per position up to @end@. A position admitted twice selects nothing.
+admissionSlots :: Int -> [(EntryKey, (Text, AdmittedEntry))] -> Vector Slot
+admissionSlots end admissions = V.create $ do
+    slots <- MV.replicate (end + 1) Vacant
+    for_ admissions $ \case
+        (ArrayEntry position, (version, kept)) ->
+            MV.readMaybe slots position >>= traverse_ (\slot -> MV.write slots position $! occupy version kept slot)
+        _ -> pass
+    pure slots
+
+occupy :: Text -> AdmittedEntry -> Slot -> Slot
+occupy version kept = \case
+    Vacant -> Admitted version kept
+    _ -> Ambiguous
+
+slotted :: Vector Slot -> [(EntryKey, entry)] -> [(Text, entry)]
+slotted slots entries =
+    [ (version, entry)
+    | (ArrayEntry position, entry) <- entries
+    , Just (Admitted version kept) <- [slots V.!? position]
     , usableEntry kept
     ]
-  where
-    admitted = admittedIndex plan
 
--- Strictly ascending array positions are already unique, so only other sources build the map.
-uniqueSourceEntries :: [(EntryKey, entry)] -> [(EntryKey, entry)]
-uniqueSourceEntries entries = ascending (-1) entries
-  where
-    ascending !previous ((ArrayEntry position, _) : rest)
-        | position > previous = ascending position rest
-    ascending _ [] = entries
-    ascending _ _ = filter (\(key, _) -> Map.member key unambiguous) entries
-    unambiguous = uniqueEntries entries
+keyed :: Map EntryKey (Text, AdmittedEntry) -> [(EntryKey, entry)] -> [(Text, entry)]
+keyed admitted entries =
+    [ (version, entry)
+    | (key, entry) <- entries
+    , Just (version, kept) <- [Map.lookup key admitted]
+    , usableEntry kept
+    ]
 
 {- | Select exact admitted entries by lookup in each winning source's key map, in source and key order.
 Only object coordinates are served. Missing keys, ambiguous keys, and mismatched snapshots contribute nothing.
