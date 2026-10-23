@@ -23,7 +23,7 @@ import Ecluse.Core.Registry.Json.Intern (newInternTable, newTableKey)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamBytes))
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError, VersionRead, metadataResponse)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (Body (Body), DocumentWalk, EcosystemRead (..), ManifestFetch, ReadTerms (..))
-import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocClient, ocLimits, ocPublicControl, ocReadKind, ocToken), originBaseUrl)
+import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocChargeFullRead, ocLimits, ocClient, ocPublicControl, ocReadKind, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Public (ReadControl (..))
 import Ecluse.Core.Registry.Request (sealRequest)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError, Limits (maxMetadataBytes, progressFloor))
@@ -99,7 +99,7 @@ originBody kind eco origin name =
             formThen
                 FetchUrlUnformable
                 (withSuccessBodyUsing control (ocClient origin) (progressFloor (ocLimits origin)) consume)
-                (sealRequest <$> erRequest eco (originBaseUrl origin) (ocToken origin) name)
+                (sealRequest <$> erRequest eco (ocBaseRequest origin) (ocToken origin) name)
         )
   where
     control = maybe Uncontrolled (\handle -> Controlled handle (fromMaybe kind (ocReadKind origin))) (ocPublicControl origin)

@@ -36,7 +36,7 @@ import Ecluse.Core.Registry.Maintenance.Budget (QuotaDimension (StoreRequests), 
 import Ecluse.Core.Registry.Maintenance.Upstream (ExternalConnection (ExternalConnection), RepositoryName (RepositoryName), UndecidabilityReason (NetworkFailure, NoMechanism), UnsafeReason (ConfigurationEvidence), UpstreamSafety (Safe, Undecidable, Unsafe))
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent, MetadataFetch))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
-import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl, originClient)
+import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocToken), originClient)
 import Ecluse.Core.Security (Limits, defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Text (joinUrlPath, registryPath)
@@ -158,7 +158,7 @@ captureMetadataRequests eco build cleared credential = withSweeper $ \deadlines 
     adapter <- maybe (fail "missing adapter") pure (adapterFor eco)
     captured <- newIORef []
     let capture _ origin name = do
-            request <- either (fail . show) pure (erRequest (metadataRead (adapterMetadata adapter)) (originBaseUrl origin) (ocToken origin) name)
+            request <- either (fail . show) pure (erRequest (metadataRead (adapterMetadata adapter)) (ocBaseRequest origin) (ocToken origin) name)
             modifyIORef' captured (<> [request])
             pure (Left MetadataAbsent)
     readManifest <- build (anonymousPorts deadlines){spCredential = credential} defaultLimits cleared{cbFetchManifest = capture}

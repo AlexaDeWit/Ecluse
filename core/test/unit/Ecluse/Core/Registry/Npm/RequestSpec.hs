@@ -5,8 +5,11 @@
 module Ecluse.Core.Registry.Npm.RequestSpec (spec) where
 
 import Data.List (lookup)
+import Hedgehog (Gen, forAll, (===))
+import Hedgehog.Gen qualified as Gen
 import Network.HTTP.Client qualified as Client
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -19,9 +22,12 @@ import Ecluse.Core.Registry.Npm.Request (
     artifactFileUrl,
     artifactRequestByFile,
     artifactRequestByUrl,
+    artifactRequestUnder,
     metadataRequest,
+    metadataRequestUnder,
  )
 
+import Ecluse.Registry.Request.Support (forAllBase, genComponent, genCredential, outcomeFacts)
 import Ecluse.Test.Registry.Npm (isOdd)
 
 spec :: Spec
@@ -33,6 +39,7 @@ spec = do
     redirectSpec
     artifactSpec
     urlFailureSpec
+    underBaseSpec
 
 requestShapingSpec :: Spec
 requestShapingSpec =
@@ -157,6 +164,28 @@ urlFailureSpec = describe "URL-formation failures" $ do
         -- The base carries a trailing slash, which must not double against the package path.
         fmap Client.path (metadataRequest "https://reg.test/" Nothing Abbreviated isOdd)
             `shouldBe` Right "/is-odd"
+
+underBaseSpec :: Spec
+underBaseSpec = describe "requests under a base parsed once" $
+    modifyMaxSuccess (const 2000) $ do
+        it "artifactRequestUnder builds what artifactRequestByFile builds, field by field" $
+            hedgehog $ do
+                (baseUrl, base) <- forAllBase
+                name <- forAll genNpmName
+                filename <- forAll genComponent
+                token <- forAll genCredential
+                outcomeFacts (artifactRequestUnder base token name filename) === outcomeFacts (artifactRequestByFile baseUrl token name filename)
+
+        it "metadataRequestUnder builds what metadataRequest builds, field by field" $
+            hedgehog $ do
+                (baseUrl, base) <- forAllBase
+                name <- forAll genNpmName
+                form <- forAll (Gen.element [Abbreviated, Full])
+                token <- forAll genCredential
+                outcomeFacts (metadataRequestUnder base token form name) === outcomeFacts (metadataRequest baseUrl token form name)
+
+genNpmName :: Gen PackageName
+genNpmName = mkPackageName Npm <$> Gen.maybe (mkScope <$> genComponent) <*> genComponent
 
 babelCodeFrame :: PackageName
 babelCodeFrame = mkPackageName Npm (Just (mkScope "babel")) "code-frame"
