@@ -7,6 +7,8 @@ module Ecluse.Core.Supervision.Internal (
     -- * The combinator
     superviseLoop,
     superviseLoopWithDelay,
+    superviseBackground,
+    superviseUnder,
     SupervisionPolicy (..),
     transientPolicy,
     FaultDisposition (..),
@@ -21,7 +23,7 @@ module Ecluse.Core.Supervision.Internal (
 ) where
 
 import Control.Retry (RetryPolicyM, RetryStatus (rsIterNumber), retryPolicy)
-import Katip (KatipContext, Severity (ErrorS, WarningS), logFM, ls)
+import Katip (KatipContext, LogEnv, Namespace (Namespace), Severity (ErrorS, WarningS), SimpleLogPayload, logFM, ls, runKatipContextT)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO, tryAny)
@@ -90,6 +92,18 @@ superviseLoopWithDelay delayAction policy step = go 0
                     logFM ErrorS (ls (spLabel policy <> ": permanent fault, failing up: " <> displayFaultT fault))
                     throwIO fault
                 Transient -> warnAndBackOff delayAction policy consecutiveFaults fault >> go (consecutiveFaults + 1)
+
+{- | Run a background loop that never fails up: every escaped fault backs off and the step reruns.
+Pacing lives in the step, and the loop logs under the label's namespace.
+-}
+superviseBackground :: Text -> LogEnv -> IO () -> IO ()
+superviseBackground label = superviseUnder (transientPolicy label backgroundLoopBackoff)
+
+-- | Run a background loop under a policy, logging under the policy's label.
+superviseUnder :: SupervisionPolicy -> LogEnv -> IO () -> IO ()
+superviseUnder policy logEnv task =
+    void . runKatipContextT logEnv (mempty :: SimpleLogPayload) (Namespace [spLabel policy]) $
+        superviseLoop policy (liftIO task)
 
 -- A retry the loop makes for itself, so it warns. The 'Permanent' arm of 'superviseLoop' is this
 -- combinator's only error, and it fails the process up.

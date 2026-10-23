@@ -186,7 +186,7 @@ The credential then sits in a secret-typed key, which the dump redacts
 
 Telemetry is off until an operator sets `ECLUSE_OBSERVABILITY__TELEMETRY`. The operator manual's
 [Telemetry section](https://ecluse-proxy.com/docs/operations/#telemetry-opt-in) owns the variables
-and the wiring. Five design facts hold regardless:
+and the wiring. Six design facts hold regardless:
 
 - **Metrics push or pull, and the pull side gets its own port.** OTLP push is the default and
   shares the traces' pipeline, which suits the Datadog Agent and any Collector. A shop that
@@ -205,6 +205,11 @@ and the wiring. Five design facts hold regardless:
   destination, so it is deliberately not SSRF-classified.
 - **Export never touches the request path.** The batch exporter runs asynchronously, and Écluse
   logs a failed export under a throttle.
+- **Metric records batch per capability.** The SDK keeps every series in one shared cell. Écluse
+  records into one cell per capability by compare-and-swap, and hands the totals to the SDK once a
+  second and before every collection, the reader's final export at shutdown included, so every
+  export sees each record made before it. Counts, buckets, minimums and maximums stay exact, and
+  exemplars keep the trace of the request that recorded them.
 - **Threaded RTS required.** The OTel SDK's batch span processor aborts under the non-threaded
   runtime, so telemetry needs the threaded runtime the image runs.
 - **The resource-attribute header is bounded.** `service.name` travels on `OTEL_SERVICE_NAME`

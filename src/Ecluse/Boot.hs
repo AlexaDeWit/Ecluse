@@ -26,7 +26,6 @@ module Ecluse.Boot (
     -- * Boot-time logging and wiring
     logBootWarning,
     logBootInfo,
-    superviseBackground,
     buildMirrorQueue,
     applyServerSettings,
     probeServerConfig,
@@ -39,7 +38,7 @@ module Ecluse.Boot (
 import Data.ByteString qualified as BS
 import Data.List (lookup)
 import Data.Text qualified as T
-import Katip (Environment (Environment), LogEnv, Namespace (Namespace), Severity (InfoS, WarningS), SimpleLogPayload, closeScribes, runKatipContextT)
+import Katip (Environment (Environment), LogEnv, Severity (InfoS, WarningS), closeScribes)
 import System.Environment (getEnvironment)
 import System.IO.Error (ioeGetErrorString, isDoesNotExistError)
 import UnliftIO (bracket, throwIO, tryIO)
@@ -80,8 +79,7 @@ import Ecluse.Core.Supervision (
     FaultDisposition (Permanent),
     SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
     backgroundLoopBackoff,
-    superviseLoop,
-    transientPolicy,
+    superviseUnder,
  )
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Rts (RuntimeOverrides (RuntimeOverrides, roCores, roCoresCeiling, roMaxHeapBytes), applyRuntimePosture)
@@ -246,17 +244,6 @@ alongsideSweeper logEnv sweep action =
 
 sweeperPolicy :: SupervisionPolicy
 sweeperPolicy = SupervisionPolicy{spLabel = "deadline-sweeper", spClassify = const Permanent, spBackoff = backgroundLoopBackoff}
-
-{- | A background loop under the shared supervision combinator, retrying each fault. Pacing lives in
-each loop, so this wrapper only stops residue ending the task.
--}
-superviseBackground :: Text -> LogEnv -> IO () -> IO ()
-superviseBackground label = superviseUnder (transientPolicy label backgroundLoopBackoff)
-
-superviseUnder :: SupervisionPolicy -> LogEnv -> IO () -> IO ()
-superviseUnder policy logEnv task =
-    void . runKatipContextT logEnv (mempty :: SimpleLogPayload) (Namespace [spLabel policy]) $
-        superviseLoop policy (liftIO task)
 
 {- Log the report and yield the plan, or refuse. The order is load-bearing: @ecluse check-config@
 prints the same lists in it, so a transcript and a boot log agree line for line. -}
