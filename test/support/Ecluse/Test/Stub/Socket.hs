@@ -7,6 +7,7 @@ module Ecluse.Test.Stub.Socket (
     -- * Listeners
     withRawServer,
     withTlsServer,
+    withTlsLostAnswerThenSilent,
     trustingTlsManager,
 
     -- * Peers that reset mid-body
@@ -42,6 +43,7 @@ import Network.TLS qualified as TLS
 import Network.Wai.Handler.Warp (openFreePort)
 import Numeric (showHex)
 import UnliftIO.Async (withAsync)
+import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (bracket, finally)
 
 import Ecluse.Core.Fault.Http (typedBodyReads)
@@ -58,6 +60,27 @@ withTlsServer handler action = do
     credential <- selfSignedCredential
     let params = TLS.defaultParamsServer{TLS.serverShared = TLS.defaultShared{TLS.sharedCredentials = TLS.Credentials [credential]}}
     withRawServer (\conn -> TLS.contextNew conn params >>= \context -> TLS.handshake context >> handler conn context) action
+
+{- | Over TLS, answer the first connection's first request, close it on the second unanswered, and
+never finish a later connection's handshake: http-client's retry of a reused connection then stalls.
+-}
+withTlsLostAnswerThenSilent :: (Int -> IO a) -> IO a
+withTlsLostAnswerThenSilent action = do
+    credential <- selfSignedCredential
+    connections <- newIORef (0 :: Int)
+    let params = TLS.defaultParamsServer{TLS.serverShared = TLS.defaultShared{TLS.sharedCredentials = TLS.Credentials [credential]}}
+        serve conn = do
+            seen <- atomicModifyIORef' connections (\n -> (n + 1, n))
+            if seen > 0
+                then threadDelay 20_000_000
+                else do
+                    context <- TLS.contextNew conn params
+                    TLS.handshake context
+                    awaitTlsHead context ""
+                    TLS.sendData context "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nwarm"
+                    awaitTlsHead context ""
+                    TLS.bye context
+    withRawServer serve action
 
 -- | A manager under 'typedBodyReads', as every production manager is, that skips certificate validation so it accepts 'withTlsServer'.
 trustingTlsManager :: IO Manager
@@ -120,6 +143,12 @@ awaitRequestHead :: Socket -> ByteString -> IO ()
 awaitRequestHead conn seen = unless ("\r\n\r\n" `BS.isInfixOf` seen) $ do
     chunk <- recv conn 4096
     unless (BS.null chunk) (awaitRequestHead conn (seen <> chunk))
+
+-- The request head in full over TLS.
+awaitTlsHead :: TLS.Context -> ByteString -> IO ()
+awaitTlsHead context seen = unless ("\r\n\r\n" `BS.isInfixOf` seen) $ do
+    chunk <- TLS.recvData context
+    unless (BS.null chunk) (awaitTlsHead context (seen <> chunk))
 
 partialAnswer :: ByteString -> ByteString
 partialAnswer request = "HTTP/1.1 200 OK\r\nContent-Length: 20\r\nETag: \"one\"\r\nConnection: close\r\n\r\n" <> body

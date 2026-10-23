@@ -20,7 +20,7 @@ import Data.Time (getCurrentTime)
 import Data.Universe.Class (universe)
 import GHC.Clock (getMonotonicTime)
 import GHC.Conc (getAllocationCounter)
-import Network.HTTP.Client (Request, newManager, responseTimeout, responseTimeoutMicro)
+import Network.HTTP.Client (Request, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.IO.Temp (withSystemTempDirectory)
 
@@ -132,7 +132,7 @@ fetchDocument client ecosystem pkg = case liveRequest ecosystem pkg of
     Left reason -> pure (Refused reason)
     Right request ->
         classifyFetch
-            <$> fetchTestBody client (progressFloor defaultLimits) (MetadataBodyLimit (maxMetadataBytes defaultLimits)) request{responseTimeout = responseTimeoutMicro (30 * 1000 * 1000)}
+            <$> fetchTestBody client (progressFloor defaultLimits) (MetadataBodyLimit (maxMetadataBytes defaultLimits)) request
 
 liveRequest :: EcosystemBench -> PackageName -> Either Text Request
 liveRequest ecosystem = first show . erRequest (metadataRead (ebMetadata ecosystem)) (ebOrigin ecosystem) Nothing

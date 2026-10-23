@@ -2,24 +2,29 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Open an upstream response for a registry exchange, under http-client's own connect and response
-timeouts. Every registry exchange opens its response here. Amazonka's S3 calls and the OSV and EPSS
-fetches use their own clients.
+{- | Open an upstream response under the sweeper's deadlines rather than http-client's own timers.
+A connection gets 30 seconds, and the status line and headers get what the connection left of
+them, counted from the end of the request body. That is http-client's default response timeout,
+with the same 'ConnectionTimeout' and 'ResponseTimeout' faults, about one sweep late. Every
+registry exchange opens its response here. Amazonka's S3 calls and the OSV and EPSS fetches keep
+their own clients' timers.
 -}
 module Ecluse.Core.Registry.ResponseWait (
     openResponse,
     withResponse,
 ) where
 
-import Network.HTTP.Client (BodyReader, Request, Response, responseOpen)
-import Network.HTTP.Client qualified as HTTP
+import Control.Exception qualified as Exception
+import Network.HTTP.Client (BodyReader, Request, Response, responseClose)
 
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecManager))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
+import Ecluse.Core.Registry.ResponseWait.Internal (openResponseAfter)
 
--- | 'responseOpen' over the client's pool. Close the response with 'Network.HTTP.Client.responseClose'.
+-- | 'Network.HTTP.Client.responseOpen' under the response wait. Close the response with 'responseClose'.
 openResponse :: ExchangeClient -> Request -> IO (Response BodyReader)
-openResponse client request = responseOpen request (ecManager client)
+openResponse = openResponseAfter 30_000_000_000
 
--- | 'HTTP.withResponse' over the client's pool.
+-- | 'Network.HTTP.Client.withResponse' under the response wait.
 withResponse :: ExchangeClient -> Request -> (Response BodyReader -> IO a) -> IO a
-withResponse client request = HTTP.withResponse request (ecManager client)
+-- Base 'Exception.bracket', as http-client's own uses, so closing a connection stays interruptible.
+withResponse client request = Exception.bracket (openResponse client request) responseClose
