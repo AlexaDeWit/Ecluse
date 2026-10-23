@@ -23,7 +23,7 @@ import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig (cfgMounts), Config (configApp, configMounts), MountConfig (mntPrivateUpstream), PrivateEndpoint, QuotaOverride (QuotaOverride, qoQuotas, qoScope, qoWeights))
 import Ecluse.Core.BuildIdentity (parseOperatorContact, renderUserAgent, userAgent)
 import Ecluse.Core.Credential (AuthToken (AuthToken), CredentialProvider (CredentialProvider), mkSecret)
-import Ecluse.Core.Deadline (newDeadlines)
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
 import Ecluse.Core.Package (PackageName)
@@ -61,18 +61,18 @@ spec = do
 
 buildSpec :: Spec
 buildSpec = describe "buildStoreMaintenance -- a store swept through the ecosystem protocol" $ do
-    it "supplies the backend's standing facts under the tag the store was declared with" $ do
-        handle <- protocolHandleFor MirrorPruner "true"
+    it "supplies the backend's standing facts under the tag the store was declared with" $ withSweeper $ \deadlines -> do
+        handle <- protocolHandleFor deadlines MirrorPruner "true"
         let facts = storeFacts handle
         factBackend facts `shouldBe` "verdaccio"
         factDeleteCeiling facts `shouldBe` AtMost 1
         factRefill facts `shouldBe` RefillPermitted
         factCompletion facts `shouldBe` CompletesOnCall
 
-    it "reads a manifest over the store's own endpoint, not the public upstream" $ do
+    it "reads a manifest over the store's own endpoint, not the public upstream" $ withSweeper $ \deadlines -> do
         -- The endpoint answers nothing, so the read reaching the network at all is what this
         -- shows: the handle carries the ecosystem's codec rather than an absent read.
-        handle <- protocolHandleFor MirrorPruner "true"
+        handle <- protocolHandleFor deadlines MirrorPruner "true"
         (fmap faultRetry . leftToMaybe <$> readStoreManifest handle aPackage)
             `shouldReturn` Just RetryWorthwhile
 
@@ -85,9 +85,8 @@ buildSpec = describe "buildStoreMaintenance -- a store swept through the ecosyst
         withRoutedStub answer $ \stub -> do
             cleared <- clearedBackendsFor MirrorPruner (verdaccioEnv "true")
             case Map.elems cleared of
-                [backend] -> do
-                    ports <- anonymousPorts
-                    handle <- buildStoreMaintenance ports{spUserAgent = renderedAgent} defaultLimits backend{cbUrl = loopbackRegistryUrl (stubBaseUrl stub)}
+                [backend] -> withSweeper $ \deadlines -> do
+                    handle <- buildStoreMaintenance (anonymousPorts deadlines){spUserAgent = renderedAgent} defaultLimits backend{cbUrl = loopbackRegistryUrl (stubBaseUrl stub)}
                     let version = npmVersion "1.0.0"
                     deleteVersions handle testDeleteGuard aPackage [version] `shouldReturn` [(version, VersionRemoved)]
                     captured <- allCaptured stub
@@ -95,14 +94,14 @@ buildSpec = describe "buildStoreMaintenance -- a store swept through the ecosyst
                     map (headerValue "User-Agent") captured `shouldBe` replicate 2 (Just renderedAgent)
                 _ -> expectationFailure "expected one cleared protocol store"
 
-    it "grants consent on the store the pass cleared" $ do
-        handle <- protocolHandleFor MirrorPruner "true"
+    it "grants consent on the store the pass cleared" $ withSweeper $ \deadlines -> do
+        handle <- protocolHandleFor deadlines MirrorPruner "true"
         verifyConsent handle `shouldReturn` Right ConsentGranted
 
-    it "withholds it, naming the key an operator sets, on a store carrying none" $ do
+    it "withholds it, naming the key an operator sets, on a store carrying none" $ withSweeper $ \deadlines -> do
         -- Only the preview role's pass clears a store carrying no consent, so its boot is the
         -- one that builds the handle reporting the withheld verdict.
-        handle <- protocolHandleFor MirrorPreviewer "false"
+        handle <- protocolHandleFor deadlines MirrorPreviewer "false"
         verifyConsent handle >>= \case
             Right (ConsentWithheld descriptor) ->
                 descriptor `shouldSatisfy` T.isInfixOf "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__PERMIT_DELETION"
@@ -155,36 +154,33 @@ captureMetadataRequests ::
     ClearedBackend ->
     Maybe CredentialProvider ->
     IO [Request]
-captureMetadataRequests eco build cleared credential = do
+captureMetadataRequests eco build cleared credential = withSweeper $ \deadlines -> do
     adapter <- maybe (fail "missing adapter") pure (adapterFor eco)
     captured <- newIORef []
     let capture _ origin name = do
             request <- either (fail . show) pure (erRequest (metadataRead (adapterMetadata adapter)) (ocBaseRequest origin) (ocToken origin) name)
             modifyIORef' captured (<> [request])
             pure (Left MetadataAbsent)
-    ports <- anonymousPorts
-    readManifest <- build ports{spCredential = credential} defaultLimits cleared{cbFetchManifest = capture}
+    readManifest <- build (anonymousPorts deadlines){spCredential = credential} defaultLimits cleared{cbFetchManifest = capture}
     replicateM_ 2 (void (readManifest aPackage))
     readIORef captured
 
-protocolHandleFor :: RegistryRole -> String -> IO StoreMaintenance
-protocolHandleFor role permitDeletion = do
+protocolHandleFor :: Deadlines -> RegistryRole -> String -> IO StoreMaintenance
+protocolHandleFor deadlines role permitDeletion = do
     cleared <- clearedBackendsFor role (verdaccioEnv permitDeletion)
     case Map.elems cleared of
-        [backend] -> anonymousPorts >>= \ports -> buildStoreMaintenance ports defaultLimits backend
+        [backend] -> buildStoreMaintenance (anonymousPorts deadlines) defaultLimits backend
         other -> fail ("expected one cleared protocol store, got " <> show (length other))
 
-anonymousPorts :: IO StorePorts
-anonymousPorts = do
-    deadlines <- newDeadlines
-    pure
-        StorePorts
-            { spTracing = passthroughTracingPort
-            , spUserAgent = userAgent
-            , spDeadlines = deadlines
-            , spCredential = Nothing
-            , spBudget = unpacedBudget
-            }
+anonymousPorts :: Deadlines -> StorePorts
+anonymousPorts deadlines =
+    StorePorts
+        { spTracing = passthroughTracingPort
+        , spUserAgent = userAgent
+        , spDeadlines = deadlines
+        , spCredential = Nothing
+        , spBudget = unpacedBudget
+        }
 
 unpacedBudget :: BudgetPorts
 unpacedBudget =
@@ -293,7 +289,7 @@ privateEndpointFor envVars = do
         mntPrivateUpstream =<< Map.lookup Npm (cfgMounts (configApp config))
 
 clearedBackendName :: ClearedBackend -> IO Text
-clearedBackendName cleared = anonymousPorts >>= \ports -> factBackend . obFacts <$> buildStoreObservation ports defaultLimits cleared
+clearedBackendName cleared = withSweeper $ \deadlines -> factBackend . obFacts <$> buildStoreObservation (anonymousPorts deadlines) defaultLimits cleared
 
 budgetSpec :: Spec
 budgetSpec = describe "the request capacity a boot resolves for a store" $ do
@@ -373,10 +369,9 @@ previewCachesSpec = describe "vetPrivateCaches" $ do
         config <- expectConfig (withObservablePrivate (withoutPrivateAuthority codeArtifactEnvVars)) Nothing
         case privateCaches adapterFor MirrorPreviewer config of
             Right caches -> case Map.elems caches of
-                [(credential, cleared)] -> do
+                [(credential, cleared)] -> withSweeper $ \deadlines -> do
                     isNothing credential `shouldBe` True
-                    ports <- anonymousPorts
-                    observation <- buildStoreObservation ports defaultLimits cleared
+                    observation <- buildStoreObservation (anonymousPorts deadlines) defaultLimits cleared
                     obVerifyConsent observation >>= \case
                         Right (ConsentWithheld _) -> pass
                         other -> expectationFailure ("expected a withheld verdict, got: " <> show other)

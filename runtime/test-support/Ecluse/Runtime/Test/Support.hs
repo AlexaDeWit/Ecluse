@@ -12,13 +12,12 @@ module Ecluse.Runtime.Test.Support (
     newTestEnv,
     newTestEnvWith,
     newTestEnvLogging,
-    newTestEnvSweptBy,
 ) where
 
 import Katip (LogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 
-import Ecluse.Core.Deadline (Deadlines, newDeadlines)
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Runtime.Env (Env, newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryDisabled)
@@ -27,35 +26,24 @@ import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Test.Support (testMemoryMeter, testServeAdmission)
 
-{- | The default test environment: the memory queue, a standard HTTP manager, and
-telemetry disabled.
+{- | The default test environment over deadlines the caller sweeps through
+'Ecluse.Test.Deadline.withSweeper': the memory queue, a standard HTTP manager, and telemetry disabled.
 -}
-newTestEnv :: IO Env
-newTestEnv = do
+newTestEnv :: Deadlines -> IO Env
+newTestEnv deadlines = do
     queue <- newTestMemoryQueue
     manager <- newManager defaultManagerSettings
-    newTestEnvWith queue (manager, manager) telemetryDisabled
+    newTestEnvWith deadlines queue (manager, manager) telemetryDisabled
 
-{- | Build a test environment over the given queue, managers, and telemetry handle. Everything
-else takes its default.
--}
-newTestEnvWith :: MirrorQueue -> (Manager, Manager) -> Telemetry -> IO Env
-newTestEnvWith queue managers telemetry = do
+-- | 'newTestEnv' over the given queue, managers, and telemetry handle. Everything else takes its default.
+newTestEnvWith :: Deadlines -> MirrorQueue -> (Manager, Manager) -> Telemetry -> IO Env
+newTestEnvWith deadlines queue managers telemetry = do
     logEnv <- newTestLogEnv
-    newTestEnvLogging logEnv queue managers telemetry
+    newTestEnvLogging deadlines logEnv queue managers telemetry
 
-{- | 'newTestEnvWith' over a caller-supplied log environment, so a test can capture what the
-serve path logged. Nothing sweeps its deadlines, so no case through it may wait one out.
--}
-newTestEnvLogging :: LogEnv -> MirrorQueue -> (Manager, Manager) -> Telemetry -> IO Env
-newTestEnvLogging logEnv queue managers telemetry = newDeadlines >>= \deadlines -> testEnvOver deadlines logEnv queue managers telemetry
-
--- | 'newTestEnvWith' over deadlines the caller sweeps, as 'Ecluse.Test.Deadline.withSweeper' does, for a case that waits one out.
-newTestEnvSweptBy :: Deadlines -> MirrorQueue -> (Manager, Manager) -> Telemetry -> IO Env
-newTestEnvSweptBy deadlines queue managers telemetry = newTestLogEnv >>= \logEnv -> testEnvOver deadlines logEnv queue managers telemetry
-
-testEnvOver :: Deadlines -> LogEnv -> MirrorQueue -> (Manager, Manager) -> Telemetry -> IO Env
-testEnvOver deadlines logEnv queue (manager, privateManager) telemetry = do
+-- | 'newTestEnvWith' over a caller-supplied log environment, so a test can capture what the serve path logged.
+newTestEnvLogging :: Deadlines -> LogEnv -> MirrorQueue -> (Manager, Manager) -> Telemetry -> IO Env
+newTestEnvLogging deadlines logEnv queue (manager, privateManager) telemetry = do
     metadataCache <- newMetadataCache defaultCacheConfig
     heartbeat <- newWorkerHeartbeat
     admission <- testServeAdmission

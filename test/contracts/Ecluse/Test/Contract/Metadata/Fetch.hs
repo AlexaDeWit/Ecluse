@@ -39,7 +39,7 @@ import Ecluse.Core.Server.Metadata (ecosystemMetadataReads, privateMetadataClien
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Ecluse.Test.Deadline (withExchangeClient)
+import Ecluse.Test.Deadline (withExchangeClient, withSweeper)
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Registry (isBoundExceededFetch, isTransportFetch)
 import Ecluse.Test.Registry.Metadata.Fetch (heldBody)
@@ -89,8 +89,8 @@ statusSpec eco = describe "upstream statuses" $ do
 
     for_ [401, 403] $ \code ->
         fetchCase eco ("oversized-auth-" <> show code) ("retains HTTP " <> show code <> " before an oversized error body") $
-            withStub (mkStatus code "test") (toLazy (rdDocument eco "thing" 256)) $ \stub -> do
-                origin <- stubConfig loopbackRegistryUrl stub
+            withStub (mkStatus code "test") (toLazy (rdDocument eco "thing" 256)) $ \stub -> withSweeper $ \deadlines -> do
+                origin <- stubConfig deadlines loopbackRegistryUrl stub
                 outcome <- fetchManifest (rdRead eco) passthroughTracingPort origin{ocLimits = defaultLimits{maxMetadataBytes = 64}} (thing eco)
                 void outcome `shouldBe` Left (MetadataAuthorisationFailure code)
   where
@@ -99,8 +99,8 @@ statusSpec eco = describe "upstream statuses" $ do
 responseBoundSpec :: ReadFixture -> Spec
 responseBoundSpec eco = describe "the body bound on a response" $ do
     fetchCase eco "exact-byte-bound" "digests the complete source body within maxMetadataBytes" $
-        withStub status200 (toLazy small) $ \stub -> do
-            origin <- stubConfig loopbackRegistryUrl stub
+        withStub status200 (toLazy small) $ \stub -> withSweeper $ \deadlines -> do
+            origin <- stubConfig deadlines loopbackRegistryUrl stub
             manifest <- fetchManifest (rdRead eco) passthroughTracingPort origin{ocLimits = defaultLimits{maxMetadataBytes = BS.length small}} (thing eco)
             fmap manifestDigest manifest `shouldBe` Right (digestOf small)
 
@@ -128,7 +128,7 @@ responseBoundSpec eco = describe "the body bound on a response" $ do
     padded = rdDocument eco "thing" 256
     inflating = rdDocument eco "thing" 65536
     withGzipped body action =
-        withStubHeaders status200 [(hContentEncoding, "gzip")] (GZip.compress (toLazy body)) (stubConfig loopbackRegistryUrl >=> action)
+        withSweeper $ \deadlines -> withStubHeaders status200 [(hContentEncoding, "gzip")] (GZip.compress (toLazy body)) (stubConfig deadlines loopbackRegistryUrl >=> action)
 
 requestSpec :: ReadFixture -> Spec
 requestSpec eco = describe "the request" $ do
@@ -153,8 +153,8 @@ requestSpec eco = describe "the request" $ do
             fetchFault outcome `shouldSatisfy` isTransportFetch
 
     fetchCase eco "no-redirect" "follows no redirect when the ecosystem's request builder did not seal its request" $
-        withRoutedStub redirectOnce $ \stub -> do
-            origin <- stubConfig loopbackRegistryUrl stub
+        withRoutedStub redirectOnce $ \stub -> withSweeper $ \deadlines -> do
+            origin <- stubConfig deadlines loopbackRegistryUrl stub
             outcome <- fetchManifest (rdRead eco){erRequest = unsealedRequest} passthroughTracingPort origin (thing eco)
             void outcome `shouldBe` Left (MetadataHttpFailure 302)
             map capPath <$> allCaptured stub `shouldReturn` ["/"]
@@ -215,8 +215,8 @@ heldSpec eco = describe "held chunks, against the response" $ do
 the same bytes held in three chunks. The held reads must equal the response's. -}
 bothWays :: ReadFixture -> Limits -> (Int -> IO ()) -> (Text -> ByteString) -> IO (Either MetadataError ManifestFields, Either MetadataError VersionRead)
 bothWays eco limits charge document =
-    withRoutedStub (\captured -> (status200, [], toLazy (document ("http://" <> maybe "" decodeUtf8 (headerValue "Host" captured))))) $ \stub -> do
-        served <- stubConfig loopbackRegistryUrl stub
+    withRoutedStub (\captured -> (status200, [], toLazy (document ("http://" <> maybe "" decodeUtf8 (headerValue "Host" captured))))) $ \stub -> withSweeper $ \deadlines -> do
+        served <- stubConfig deadlines loopbackRegistryUrl stub
         let origin = served{ocLimits = limits}
             terms = ReadTerms{rtLimits = limits, rtBaseUrl = originBaseUrl origin, rtChargeFullRead = charge}
             bytes = document (stubBaseUrl stub)

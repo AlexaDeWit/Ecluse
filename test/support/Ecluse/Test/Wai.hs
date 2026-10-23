@@ -34,6 +34,9 @@ module Ecluse.Test.Wai (
 
     -- * Matching a response body
     bodyContainsAll,
+
+    -- * Serving an app to hspec-wai
+    withSweptApp,
 ) where
 
 import Data.Aeson (Value (Null, Object), eitherDecodeStrict)
@@ -51,9 +54,17 @@ import Network.Socket (close)
 import Network.Wai (Application, Request (requestHeaders), responseStream)
 import Network.Wai.Handler.Warp (Port, openFreePort)
 import Network.Wai.Test (SResponse (simpleBody, simpleHeaders, simpleStatus))
+import Test.Hspec (Spec, SpecWith, around)
 import Test.Hspec.Wai.Matcher (MatchBody (MatchBody))
 import UnliftIO (bracket)
 import UnliftIO.Concurrent (threadDelay)
+
+import Ecluse.Core.Deadline (Deadlines)
+import Ecluse.Test.Deadline (withSweeper)
+
+-- | hspec-wai's @with@ over an app built on deadlines a sweeper keeps for the length of each case.
+withSweptApp :: (Deadlines -> IO Application) -> SpecWith ((), Application) -> Spec
+withSweptApp build = around (\run -> withSweeper (build >=> run . ((),)))
 
 -- | The base URL of a loopback stub on the given port, by the @localhost@ DNS name.
 localhost :: Int -> Text
