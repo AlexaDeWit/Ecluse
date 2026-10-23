@@ -21,10 +21,11 @@ module Ecluse.Runtime.Env (
 ) where
 
 import Katip (LogEnv, Severity (InfoS, WarningS), katipAddContext, sl)
-import Network.HTTP.Client (Manager)
 
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry.Backoff (CooldownEvent (..))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Public (PublicControl, newPublicControl)
 import Ecluse.Core.Security.Authority (HostPort (..))
 import Ecluse.Core.Server.Admission (ServeAdmission)
@@ -47,12 +48,14 @@ data Env = Env
     -- ^ The process-wide memory budget every serving mount pays into.
     , envQueue :: MirrorQueue
     -- ^ Queue mirror work from serving requests.
-    , envManager :: Manager
+    , envPublicClient :: ExchangeClient
     -- ^ Validate public TLS peers for metadata and artifact requests.
     , envPublicControl :: PublicControl
     -- ^ Shared cooldown and request observation for every public serve and worker read.
-    , envPrivateManager :: Manager
+    , envPrivateClient :: ExchangeClient
     -- ^ Validate private TLS peers while retaining their credential handling.
+    , envDeadlines :: Deadlines
+    -- ^ The process's one sweeper, which both clients share and every request's timeout runs on.
     , envMetadataCache :: MetadataCache
     -- ^ Selected-version and assembled retention with transient full-read coalescing.
     , envLogEnv :: LogEnv
@@ -68,8 +71,8 @@ data Env = Env
     }
 
 -- | Assemble process handles without opening a socket. Callers own the supplied resources.
-newEnvWithAdmission :: ServeAdmission -> MemoryMeter -> MirrorQueue -> Manager -> Manager -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
-newEnvWithAdmission admission meter queue manager privateManager metadataCache logEnv telemetry heartbeat = do
+newEnvWithAdmission :: ServeAdmission -> MemoryMeter -> MirrorQueue -> ExchangeClient -> ExchangeClient -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
+newEnvWithAdmission admission meter queue publicClient privateClient metadataCache logEnv telemetry heartbeat = do
     metrics <- newMetrics telemetry
     publicControl <- newPublicControl (mpUpstreamRequest (metricsPortOf metrics)) (reportCooldown logEnv)
     -- The dd log identity comes from the (already-normalised) OTEL_* environment, the
@@ -80,9 +83,10 @@ newEnvWithAdmission admission meter queue manager privateManager metadataCache l
             { envServeAdmission = admission
             , envMemoryMeter = meter
             , envQueue = queue
-            , envManager = manager
+            , envPublicClient = publicClient
             , envPublicControl = publicControl
-            , envPrivateManager = privateManager
+            , envPrivateClient = privateClient
+            , envDeadlines = ecDeadlines publicClient
             , envMetadataCache = metadataCache
             , envLogEnv = logEnv
             , envTelemetry = telemetry
@@ -97,16 +101,16 @@ withEnvWithAdmission ::
     ServeAdmission ->
     MemoryMeter ->
     MirrorQueue ->
-    Manager ->
-    Manager ->
+    ExchangeClient ->
+    ExchangeClient ->
     MetadataCache ->
     LogEnv ->
     Telemetry ->
     WorkerHeartbeat ->
     (Env -> m a) ->
     m a
-withEnvWithAdmission admission meter queue manager privateManager metadataCache logEnv telemetry heartbeat action = do
-    env <- liftIO (newEnvWithAdmission admission meter queue manager privateManager metadataCache logEnv telemetry heartbeat)
+withEnvWithAdmission admission meter queue publicClient privateClient metadataCache logEnv telemetry heartbeat action = do
+    env <- liftIO (newEnvWithAdmission admission meter queue publicClient privateClient metadataCache logEnv telemetry heartbeat)
     action env
 
 -- | Project serving capabilities without exposing the application environment to the core.
@@ -115,9 +119,9 @@ serveRuntimeOf env =
     ServeRuntime
         { srAdmission = envServeAdmission env
         , srMemoryMeter = envMemoryMeter env
-        , srPublicManager = envManager env
+        , srPublicClient = envPublicClient env
         , srPublicControl = envPublicControl env
-        , srPrivateManager = envPrivateManager env
+        , srPrivateClient = envPrivateClient env
         , srMetadataCache = envMetadataCache env
         , srQueue = envQueue env
         , srMetrics = metricsPortOf (envMetrics env)
@@ -129,7 +133,7 @@ workerRuntimeOf :: WorkerPolicies -> Env -> WorkerRuntime
 workerRuntimeOf policies env =
     WorkerRuntime
         { wrQueue = envQueue env
-        , wrManager = envManager env
+        , wrClient = envPublicClient env
         , wrPublicControl = envPublicControl env
         , wrHeartbeat = envWorkerHeartbeat env
         , wrMetrics = workerMetricsPortOf (envMetrics env)

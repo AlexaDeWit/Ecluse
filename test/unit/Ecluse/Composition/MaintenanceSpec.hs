@@ -7,7 +7,7 @@ module Ecluse.Composition.MaintenanceSpec (spec) where
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Network.HTTP.Client (Manager, Request (path, requestHeaders), defaultManagerSettings, newManager)
+import Network.HTTP.Client (Request (path, requestHeaders), defaultManagerSettings, newManager)
 import Network.HTTP.Types.Header (hAuthorization)
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
@@ -29,6 +29,7 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Maintenance (CompletionNotion (CompletesOnCall), ConsentVerdict (ConsentGranted, ConsentWithheld), DeleteCeiling (AtMost), RefillPosture (RefillPermitted), RetryAdvice (RetryWorthwhile), StoreFacts (..), StoreFault (faultRetry), StoreMaintenance (deleteVersions, readStoreManifest, storeFacts, verifyConsent), StoreManifestRead, StoreObservation (obFacts, obReadManifest, obVerifyConsent), VersionOutcome (VersionRemoved))
 import Ecluse.Core.Registry.Maintenance.Budget (QuotaDimension (StoreRequests), QuotaOrigin (QuotaDeclared, QuotaDerived), RequestGate (RequestGate, gateSpend), RequestKind (CursorWrite, DeleteBatch, ListingPage), StoreBudget (bgCosts, bgOrigin, bgQuotas, bgScope), mkQuotaScope, requestKinds, undeclaredBudget)
 import Ecluse.Core.Registry.Maintenance.Upstream (ExternalConnection (ExternalConnection), RepositoryName (RepositoryName), UndecidabilityReason (NetworkFailure, NoMechanism), UnsafeReason (ConfigurationEvidence), UpstreamSafety (Safe, Undecidable, Unsafe))
@@ -38,6 +39,7 @@ import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl, origi
 import Ecluse.Core.Security (Limits, defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Text (joinUrlPath, registryPath)
+import Ecluse.Test.Deadline (newSweptClient, newSweptDeadlines)
 import Ecluse.Test.Env (withAmbientAws)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore, testDeleteGuard)
 import Ecluse.Test.Package (npmVersion, unsafeRegistryUrl, unscopedNpm)
@@ -83,7 +85,8 @@ buildSpec = describe "buildStoreMaintenance -- a store swept through the ecosyst
             cleared <- clearedBackendsFor MirrorPruner (verdaccioEnv "true")
             case Map.elems cleared of
                 [backend] -> do
-                    handle <- buildStoreMaintenance anonymousPorts{spUserAgent = renderedAgent} defaultLimits backend{cbUrl = loopbackRegistryUrl (stubBaseUrl stub)}
+                    ports <- anonymousPorts
+                    handle <- buildStoreMaintenance ports{spUserAgent = renderedAgent} defaultLimits backend{cbUrl = loopbackRegistryUrl (stubBaseUrl stub)}
                     let version = npmVersion "1.0.0"
                     deleteVersions handle testDeleteGuard aPackage [version] `shouldReturn` [(version, VersionRemoved)]
                     captured <- allCaptured stub
@@ -158,7 +161,8 @@ captureMetadataRequests eco build cleared credential = do
             request <- either (fail . show) pure (erRequest (metadataRead (adapterMetadata adapter)) (originBaseUrl origin) (ocToken origin) name)
             modifyIORef' captured (<> [request])
             pure (Left MetadataAbsent)
-    readManifest <- build anonymousPorts{spCredential = credential} defaultLimits cleared{cbFetchManifest = capture}
+    ports <- anonymousPorts
+    readManifest <- build ports{spCredential = credential} defaultLimits cleared{cbFetchManifest = capture}
     replicateM_ 2 (void (readManifest aPackage))
     readIORef captured
 
@@ -166,17 +170,20 @@ protocolHandleFor :: RegistryRole -> String -> IO StoreMaintenance
 protocolHandleFor role permitDeletion = do
     cleared <- clearedBackendsFor role (verdaccioEnv permitDeletion)
     case Map.elems cleared of
-        [backend] -> buildStoreMaintenance anonymousPorts defaultLimits backend
+        [backend] -> anonymousPorts >>= \ports -> buildStoreMaintenance ports defaultLimits backend
         other -> fail ("expected one cleared protocol store, got " <> show (length other))
 
-anonymousPorts :: StorePorts
-anonymousPorts =
-    StorePorts
-        { spTracing = passthroughTracingPort
-        , spUserAgent = userAgent
-        , spCredential = Nothing
-        , spBudget = unpacedBudget
-        }
+anonymousPorts :: IO StorePorts
+anonymousPorts = do
+    deadlines <- newSweptDeadlines
+    pure
+        StorePorts
+            { spTracing = passthroughTracingPort
+            , spUserAgent = userAgent
+            , spDeadlines = deadlines
+            , spCredential = Nothing
+            , spBudget = unpacedBudget
+            }
 
 unpacedBudget :: BudgetPorts
 unpacedBudget =
@@ -189,8 +196,8 @@ aPackage :: PackageName
 aPackage = unscopedNpm "leftpad"
 
 -- An origin the absent read never dials, because it answers before it forms a request.
-nowhere :: Manager -> OriginClient
-nowhere manager = originClient defaultLimits manager (unsafeRegistryUrl "https://store.invalid/") Nothing
+nowhere :: ExchangeClient -> OriginClient
+nowhere client = originClient defaultLimits client (unsafeRegistryUrl "https://store.invalid/") Nothing
 
 absentRead :: Text
 absentRead = "this build serves the mount's ecosystem no metadata read"
@@ -199,10 +206,12 @@ planSpec :: Spec
 planSpec = describe "planStoreMaintenance" $ do
     it "builds one handle per cleared store, keyed by the mount that declares it" $ do
         backends <- clearedBackendsFor MirrorPruner twoStoreEnv
+        deadlines <- newSweptDeadlines
         outcome <-
             planStoreMaintenance
                 (\_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig)
                 passthroughTracingPort
+                deadlines
                 userAgent
                 unpacedBudget
                 noCredentialProviders
@@ -212,11 +221,13 @@ planSpec = describe "planStoreMaintenance" $ do
 
     it "reports a refusal for every store whose client the environment cannot build" $ do
         backends <- clearedBackendsFor MirrorPruner twoStoreEnv
+        deadlines <- newSweptDeadlines
         Map.keys backends `shouldBe` [Npm, PyPI]
         outcome <-
             planStoreMaintenance
                 (\_ _ _ -> throwIO NoCredentials)
                 passthroughTracingPort
+                deadlines
                 userAgent
                 unpacedBudget
                 noCredentialProviders
@@ -281,7 +292,7 @@ privateEndpointFor envVars = do
         mntPrivateUpstream =<< Map.lookup Npm (cfgMounts (configApp config))
 
 clearedBackendName :: ClearedBackend -> IO Text
-clearedBackendName cleared = factBackend . obFacts <$> buildStoreObservation anonymousPorts defaultLimits cleared
+clearedBackendName cleared = anonymousPorts >>= \ports -> factBackend . obFacts <$> buildStoreObservation ports defaultLimits cleared
 
 budgetSpec :: Spec
 budgetSpec = describe "the request capacity a boot resolves for a store" $ do
@@ -331,10 +342,10 @@ absentAdapterSpec :: Spec
 absentAdapterSpec = describe "vetStoreBackends" $ do
     it "clears that store a read that reports the absent adapter rather than one that invents one" $ do
         mounts <- mountsFor codeArtifactEnvVars
-        manager <- newManager defaultManagerSettings
+        exchanges <- newSweptClient =<< newManager defaultManagerSettings
         case snd (runVet MirrorPruner (vetStoreBackends noAdapter mounts)) of
             Right cleared | [backend] <- Map.elems cleared -> do
-                outcome <- cbFetchManifest backend passthroughTracingPort (nowhere manager) aPackage
+                outcome <- cbFetchManifest backend passthroughTracingPort (nowhere exchanges) aPackage
                 leftToMaybe outcome
                     `shouldBe` Just (MetadataFetch (FetchTransport (transportFault TransportProtocol absentRead)))
             other -> expectationFailure ("expected one cleared store, got: " <> show (void other))
@@ -363,7 +374,8 @@ previewCachesSpec = describe "vetPrivateCaches" $ do
             Right caches -> case Map.elems caches of
                 [(credential, cleared)] -> do
                     isNothing credential `shouldBe` True
-                    observation <- buildStoreObservation anonymousPorts defaultLimits cleared
+                    ports <- anonymousPorts
+                    observation <- buildStoreObservation ports defaultLimits cleared
                     obVerifyConsent observation >>= \case
                         Right (ConsentWithheld _) -> pass
                         other -> expectationFailure ("expected a withheld verdict, got: " <> show other)

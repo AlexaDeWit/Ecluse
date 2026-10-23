@@ -24,6 +24,7 @@ import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission)
 import Ecluse.Core.Server.Context (Handler, MountBinding, RequestCtx (RequestCtx), ServeRuntime (ServeRuntime), runHandler)
 import Ecluse.Core.Server.Contract (ResponseContract, responseToWai)
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpUpstreamRequest))
+import Ecluse.Test.Deadline (newSweptClient)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -69,9 +70,9 @@ testServeRuntime metricsPort = do
 -- | 'testServeRuntime' under the given serve admission.
 testServeRuntimeWith :: ServeAdmission -> MetricsPort -> IO ServeRuntime
 testServeRuntimeWith admission metricsPort = do
-    manager <- newManager defaultManagerSettings
+    client <- newSweptClient =<< newManager defaultManagerSettings
     cache <- newMetadataCache defaultCacheConfig
     queue <- newTestMemoryQueue
     meter <- testMemoryMeter
     publicControl <- newPublicControl (mpUpstreamRequest metricsPort) (\_ _ -> pass)
-    pure (ServeRuntime admission meter manager publicControl manager cache queue metricsPort passthroughTracingPort)
+    pure (ServeRuntime admission meter client publicControl client cache queue metricsPort passthroughTracingPort)

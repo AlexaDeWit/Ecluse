@@ -19,7 +19,7 @@ import Ecluse.Core.Registry.Public (ReadControl (Controlled))
 import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), Limits (progressFloor), maxMirrorArtifactBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind (WorkerArtifact))
-import Ecluse.Core.Worker.Types (WorkerM, wrManager, wrPublicControl)
+import Ecluse.Core.Worker.Types (WorkerM, wrClient, wrPublicControl)
 
 -- | Charge actual buffered source bytes and refuse non-success statuses before integrity verification.
 fetchArtifactBytesCharged ::
@@ -29,13 +29,13 @@ fetchArtifactBytesCharged ::
     RegistryUrl ->
     WorkerM (Either FetchFault ByteString)
 fetchArtifactBytesCharged charge limits buildRequest url = do
-    manager <- asks wrManager
+    client <- asks wrClient
     control <- asks wrPublicControl
     result <-
         liftIO $
             formThen
                 FetchUrlUnformable
-                (withSuccessBodyUsing (Controlled control WorkerArtifact) manager (progressFloor limits) (fmap (fmap snd) . boundedChargedRead charge (MirrorArtifactBodyLimit (maxMirrorArtifactBytes limits))))
+                (withSuccessBodyUsing (Controlled control WorkerArtifact) client (progressFloor limits) (fmap (fmap snd) . boundedChargedRead charge (MirrorArtifactBodyLimit (maxMirrorArtifactBytes limits))))
                 (buildRequest Nothing (registryUrlText url))
     pure $
         result >>= \case

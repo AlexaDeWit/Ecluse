@@ -62,6 +62,7 @@ import Ecluse.Config (AppConfig (cfgAdvisories, cfgDredger, cfgEgress), DredgerS
 import Ecluse.Core.BuildIdentity (renderUserAgent)
 import Ecluse.Core.Clock (waitSeconds)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
@@ -159,13 +160,14 @@ environment can settle. Each role has one arm here, and a refusal is spent once 
 planExecutable ::
     LogEnv ->
     TracingPort ->
+    Deadlines ->
     ResolveAdapter ->
     BuildMirrorQueue ->
     BuildCredentials ->
     StoreBuilds ->
     BootPlan ->
     IO ([Advisory], Either [BootError] ExecutablePlan)
-planExecutable logEnv tracing resolveAdapter buildQueue buildCredentials builds bootPlan = case bpRole bootPlan of
+planExecutable logEnv tracing deadlines resolveAdapter buildQueue buildCredentials builds bootPlan = case bpRole bootPlan of
     BootMirrorPipeline role -> do
         (advisories, probed) <- probeServedUpstreams (sbProbing builds) role bootPlan
         wiring <- planMirrorWiring logEnv resolveAdapter buildQueue buildCredentials role bootPlan
@@ -178,7 +180,7 @@ planExecutable logEnv tracing resolveAdapter buildQueue buildCredentials builds 
 
     prunerArm build =
         second (fmap (executablePlan . StorePrunerWiring))
-            <$> planPrunerWiring logEnv tracing buildCredentials build bootPlan
+            <$> planPrunerWiring logEnv tracing deadlines buildCredentials build bootPlan
 
     deleting build ports limits cleared = deletingCache <$> build ports limits cleared
     previewing build ports limits cleared = previewCache <$> build ports limits cleared
@@ -217,8 +219,8 @@ probeHeldCaches caches =
 
 {- The store roles' shared arm: the advisory sync their rules read, the credential their stores
 answer to, and one store per cleared target. All three refusable steps accumulate. -}
-planPrunerWiring :: LogEnv -> TracingPort -> BuildCredentials -> BuildSweepCache -> BootPlan -> IO ([Advisory], Either [BootError] PrunerWiring)
-planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
+planPrunerWiring :: LogEnv -> TracingPort -> Deadlines -> BuildCredentials -> BuildSweepCache -> BootPlan -> IO ([Advisory], Either [BootError] PrunerWiring)
+planPrunerWiring logEnv tracing deadlines buildCredentials buildStore bootPlan = do
     deferredMetrics <- newDeferredMetrics getCurrentTime
     cveSync <- planAdvisorySync logEnv bootPlan
     credentials <- buildCredentials (credentialReportersOver deferredMetrics) credentialBackends
@@ -228,6 +230,7 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
         planStoreMaintenance
             buildStore
             tracing
+            deadlines
             renderedAgent
             budget
             (fromRight noCredentialProviders credentials)
@@ -238,6 +241,7 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
             PrivateCacheCredential
             buildStore
             tracing
+            deadlines
             renderedAgent
             budget
             (fromRight noCredentialProviders credentials)

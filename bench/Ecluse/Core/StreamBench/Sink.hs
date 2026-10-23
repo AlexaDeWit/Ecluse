@@ -24,6 +24,7 @@ import Data.ByteString.Builder.Extra (flush)
 import Data.Streaming.ByteString.Builder (Buffer, allocBuffer, newByteStringBuilderRecv, reuseBufferStrategy)
 import UnliftIO.Exception (evaluate)
 
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Registry.Progress (meteredReader, watchedRaising)
 import Ecluse.Core.Security (defaultLimits, progressFloor)
 import Ecluse.Core.Server.Stream (pumpBody)
@@ -92,10 +93,12 @@ runSink (SinkBuffer buffer) send pump chunks = do
     pump readChunk write (write flush)
     finish >>= traverse_ send
 
--- The progress watchdog and per-chunk meter "Ecluse.Core.Server.Stream" puts around a relay's pump, under the default floor.
+{- The progress floor and per-chunk meter "Ecluse.Core.Server.Stream" puts around a relay's pump, under
+the default floor. Nothing sweeps these deadlines: a relay adds only the arming and disarming. -}
 metered :: Pump -> Pump
-metered pump readChunk write flushSink =
-    watchedRaising (progressFloor defaultLimits) (\watch -> pump (meteredReader watch readChunk) write flushSink)
+metered pump readChunk write flushSink = do
+    deadlines <- newDeadlines
+    watchedRaising deadlines (progressFloor defaultLimits) (\watch -> pump (meteredReader watch readChunk) write flushSink)
 
 pumpThreshold :: Int -> Pump
 pumpThreshold threshold readChunk write flushSink = go 0
