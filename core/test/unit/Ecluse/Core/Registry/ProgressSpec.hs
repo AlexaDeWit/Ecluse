@@ -20,6 +20,7 @@ import UnliftIO.Exception (tryAny)
 import Ecluse.Core.Registry.Progress (meteredReader, meteredUpload, watched, watchedRaising)
 import Ecluse.Core.Security (ProgressFloor, mkProgressFloor)
 import Ecluse.Test.Deadline (withSweeper)
+import Ecluse.Test.Support (givesTimes)
 
 spec :: Spec
 spec = around withSweeper $ do
@@ -55,8 +56,8 @@ spec = around withSweeper $ do
             [ ("a strict body", RequestBodyBS body, Just size)
             , ("a lazy body", RequestBodyLBS (LBS.fromChunks [BS.take 70_000 body, BS.drop 70_000 body]), Just size)
             , ("a builder", RequestBodyBuilder size (byteString body), Just size)
-            , ("a stream", RequestBodyStream size (givesOnce body), Just size)
-            , ("a chunked stream", RequestBodyStreamChunked (givesOnce body), Nothing)
+            , ("a stream", RequestBodyStream size (givesTimes 1 body), Just size)
+            , ("a chunked stream", RequestBodyStreamChunked (givesTimes 1 body), Nothing)
             , ("an IO body", RequestBodyIO (pure (RequestBodyBS body)), Just size)
             ]
             $ \(label, original, declared) ->
@@ -84,11 +85,6 @@ declaredLength = \case
 
 floorOf :: NominalDiffTime -> Int -> IO ProgressFloor
 floorOf window minBytes = either (fail . show) pure (mkProgressFloor 60 window minBytes)
-
-givesOnce :: ByteString -> GivesPopper ()
-givesOnce bytes needsPopper = do
-    remaining <- newIORef bytes
-    needsPopper (atomicModifyIORef' remaining (BS.empty,))
 
 -- Every slice a body hands over, pausing before each pull after the first.
 drainWith :: Int -> RequestBody -> IO [ByteString]
