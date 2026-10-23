@@ -85,7 +85,10 @@ import OpenTelemetry.Metric.Core (
     noopMeterProvider,
  )
 
+import OpenTelemetry.Attributes (addAttributesFromBuilder, attr, defaultAttributeLimits, emptyAttributes)
+
 import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Server.Admission.Probe (kindName, probeSnapshot, siteName)
 import Ecluse.Core.Server.Admission.Types (MeterSnapshot (..), brakeLevelCode)
 import Ecluse.Core.Telemetry.Catalogue (
     MetricName (..),
@@ -176,6 +179,7 @@ newMetrics telemetry = do
     let meterProvider :: MeterProvider
         meterProvider = fromMaybe noopMeterProvider (telemetryMeterProvider telemetry)
     meter <- getMeter meterProvider ecluseScope
+    void (meterCreateObservableGaugeInt64 meter "ecluse.spike.admission.stm" Nothing (Just "spike probe of meter and gate transactions") defaultAdvisoryParameters [observeProbe])
     serveDecision <- counter meter ServeDecision "{decision}" "serve decisions by admit/deny/unavailable"
     serveAdmissionInFlight <- upDownCounter meter ServeAdmissionInFlight "{request}" "in-flight metadata parses"
     serveAdmissionQueued <- counter meter ServeAdmissionQueued "{request}" "admissions that waited for a slot"
@@ -567,6 +571,12 @@ registerMemoryMeter m readMeter = do
     observeWith (brakeLevelCode . snBrakeLevel) (mMemoryAdmissionBrakeLevel m)
     observeWith snWaiting (mMemoryAdmissionWaiting m)
     observeWith snPaused (mMemoryAdmissionPausedNow m)
+
+-- Spike only: every probe counter, labelled by site and kind.
+observeProbe :: ObservableResult Int64 -> IO ()
+observeProbe result = probeSnapshot >>= traverse_ (\(site, kind, value) -> observe result (fromIntegral value) (probeAttributes site kind))
+  where
+    probeAttributes site kind = addAttributesFromBuilder defaultAttributeLimits emptyAttributes (attr "site" (siteName site) <> attr "kind" (kindName kind))
 
 -- | Record the advisory entries one compile pass accepted (@ecluse.advisory.compile.accepted@).
 recordAdvisoryCompileAccepted :: (MonadIO m) => Metrics -> Ecosystem -> Int -> m ()

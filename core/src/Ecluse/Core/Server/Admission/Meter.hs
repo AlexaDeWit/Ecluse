@@ -32,11 +32,12 @@ module Ecluse.Core.Server.Admission.Meter (
 ) where
 
 import Control.Concurrent.MVar qualified as MVar
-import Control.Concurrent.STM (retry, stateTVar)
+import Control.Concurrent.STM (stateTVar)
 import Data.IntSet qualified as IntSet
 import Data.Map.Strict qualified as Map
 import GHC.Conc (registerDelay)
 import UnliftIO (MonadUnliftIO)
+import System.IO.Unsafe (unsafePerformIO)
 import UnliftIO.Exception qualified as UE
 
 import Ecluse.Core.Server.Admission.Budget (
@@ -48,6 +49,7 @@ import Ecluse.Core.Server.Admission.Budget (
     growthDecision,
     roundUpToStep,
  )
+import Ecluse.Core.Server.Admission.Probe (Site (..), probeRetry, probed)
 import Ecluse.Core.Server.Admission.Types (BrakeLevel (Calm), FlightKey, MeterSnapshot (..))
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
@@ -102,13 +104,13 @@ newMemoryMeter settings =
 
 -- | Move the budget and record the brake level that moved it. Paused reads and queued entries retry at once.
 steerMeter :: MemoryMeter -> Int -> BrakeLevel -> IO ()
-steerMeter meter budget level = atomically $ do
+steerMeter meter budget level = probed MeterSteer $ do
     writeTVar (mmBudget meter) (max 0 budget)
     writeTVar (mmBrakeLevel meter) level
 
 -- | Read the meter's figures without blocking a request.
 meterSnapshot :: MemoryMeter -> IO MeterSnapshot
-meterSnapshot = atomically . meterFigures
+meterSnapshot = probed MeterRead . meterFigures
 
 -- | The meter's figures inside a transaction, so a caller can wait for them to change.
 meterFigures :: MemoryMeter -> STM MeterSnapshot
@@ -122,7 +124,7 @@ meterFigures meter =
 
 -- | The largest total one ticket reached since the last call, for the sampler alone.
 takeLargestCharge :: MemoryMeter -> IO Int
-takeLargestCharge meter = atomically (stateTVar (mmLargest meter) (,0))
+takeLargestCharge meter = probed MeterRead (stateTVar (mmLargest meter) (,0))
 
 -- | One request's account with the meter, or a view of it that pays for shared work.
 data MemoryTicket = MemoryTicket
@@ -141,7 +143,23 @@ data MemoryTicket = MemoryTicket
 step did not fit within the wait. Everything the ticket paid returns on every exit path.
 -}
 withMemoryEntry :: (MonadUnliftIO m) => MetricsPort -> MemoryMeter -> (MemoryTicket -> m a) -> m (Maybe a)
-withMemoryEntry metrics meter body =
+withMemoryEntry metrics meter body
+    | invMeterModel == "off" = liftIO (oracleTicket metrics meter) >>= fmap Just . body
+    | otherwise = withMemoryEntryStm metrics meter body
+
+-- Spike only: INV_METER_MODEL picks the meter model. "off" is an oracle that keeps no shared account.
+invMeterModel :: String
+invMeterModel = unsafePerformIO (fromMaybe "stm" <$> lookupEnv "INV_METER_MODEL")
+{-# NOINLINE invMeterModel #-}
+
+oracleTicket :: MetricsPort -> MemoryMeter -> IO MemoryTicket
+oracleTicket metrics meter = do
+    charged <- newTVarIO 0
+    headroom <- newIORef 0
+    pure MemoryTicket{tMeter = meter, tId = 0, tCharged = charged, tHeadroom = headroom, tServes = Nothing, tMetrics = metrics}
+
+withMemoryEntryStm :: (MonadUnliftIO m) => MetricsPort -> MemoryMeter -> (MemoryTicket -> m a) -> m (Maybe a)
+withMemoryEntryStm metrics meter body =
     UE.mask $ \restore -> do
         ticket <- liftIO (newTicket metrics meter)
         entered <- liftIO (enter ticket)
@@ -164,7 +182,7 @@ newTicket metrics meter = do
 -- the queued count taken in the deciding transaction is returned before any interruptible step.
 enter :: MemoryTicket -> IO (Maybe Bool)
 enter ticket = do
-    gate <- atomically $ do
+    gate <- probed MeterEntry $ do
         view <- readView meter
         waiting <- readTVar (mmEntryWaiting meter)
         case entryDecision view waiting (mmEntryRoom meter) step of
@@ -176,8 +194,8 @@ enter ticket = do
         EntryRefuse -> pure Nothing
         EntryQueue -> do
             admitted <-
-                (registerDelay (mmEntryWaitMicros meter) >>= atomically . entryOrExpire)
-                    `UE.finally` atomically (modifyTVar' (mmEntryWaiting meter) (subtract 1))
+                (registerDelay (mmEntryWaitMicros meter) >>= probed MeterEntryWait . entryOrExpire)
+                    `UE.finally` probed MeterEntryLeave (modifyTVar' (mmEntryWaiting meter) (subtract 1))
             if admitted then openHeadroom $> Just True else pure Nothing
   where
     meter = tMeter ticket
@@ -189,7 +207,7 @@ enter ticket = do
             then takeBytes ticket step $> True
             else do
                 expired <- readTVar deadline
-                if expired then pure False else retry
+                if expired then pure False else probeRetry MeterEntryWait
 
 -- The oldest waiter counts the tickets waiting on its shared work, so it may carry their priority.
 readView :: MemoryMeter -> STM MeterView
@@ -224,7 +242,7 @@ takeBytes ticket bytes = do
     modifyTVar' (mmLargest meter) (max total)
 
 releaseTicket :: MemoryTicket -> IO ()
-releaseTicket ticket = atomically $ do
+releaseTicket ticket = probed MeterRelease $ do
     let meter = tMeter ticket
     held <- readTVar (tCharged ticket)
     writeTVar (tCharged ticket) 0
@@ -236,8 +254,9 @@ releaseTicket ticket = atomically $ do
 request that does that work may pause and overdraw with this request's priority.
 -}
 awaitingFlight :: (MonadUnliftIO m) => MemoryTicket -> FlightKey -> m a -> m a
-awaitingFlight ticket key =
-    UE.bracket_ (liftIO (atomically (update (IntSet.insert (tId ticket))))) (liftIO (atomically (update (IntSet.delete (tId ticket)))))
+awaitingFlight ticket key
+    | invMeterModel == "off" = id
+    | otherwise = UE.bracket_ (liftIO (probed MeterFlightAdd (update (IntSet.insert (tId ticket))))) (liftIO (probed MeterFlightDel (update (IntSet.delete (tId ticket)))))
   where
     interest = mmInterest (tMeter ticket)
     update change = modifyTVar' interest (Map.alter (nonEmptySet . change . fromMaybe IntSet.empty) key)
@@ -258,7 +277,7 @@ newChargeRegion pay = do
 
 -- | Pay for bytes the request is about to hold, already scaled to their charge.
 charge :: MemoryTicket -> Int -> IO ()
-charge ticket cost = when (cost > 0) $ do
+charge ticket cost = when (cost > 0 && invMeterModel /= "off") $ do
     shortfall <- atomicModifyIORef' (tHeadroom ticket) $ \headroom ->
         if cost <= headroom then (headroom - cost, 0) else (0, cost - headroom)
     when (shortfall > 0) $ do
@@ -270,13 +289,13 @@ charge ticket cost = when (cost > 0) $ do
 -- ticket as a waiter, which holds new entries back and names the oldest claimant.
 grow :: MemoryTicket -> Int -> IO ()
 grow ticket want = do
-    immediate <- atomically (attempt ticket want)
+    immediate <- probed MeterGrow (attempt ticket want)
     overdrew <- case immediate of
         Just overdrew -> pure overdrew
         Nothing -> do
             mpMemoryAdmissionPause (tMetrics ticket)
-            (atomically (modifyTVar' waiters (Map.insert (tId ticket) (tServes ticket))) >> atomically (attempt ticket want >>= maybe retry pure))
-                `UE.finally` atomically (modifyTVar' waiters (Map.delete (tId ticket)))
+            (probed MeterWaiterAdd (modifyTVar' waiters (Map.insert (tId ticket) (tServes ticket))) >> probed MeterGrowWait (attempt ticket want >>= maybe (probeRetry MeterGrowWait) pure))
+                `UE.finally` probed MeterWaiterDel (modifyTVar' waiters (Map.delete (tId ticket)))
     when overdrew (mpMemoryAdmissionOverdraw (tMetrics ticket))
   where
     waiters = mmWaiters (tMeter ticket)

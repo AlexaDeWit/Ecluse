@@ -62,6 +62,7 @@ import Ecluse.BenchLoad.Oha (ohaPinned)
 import Ecluse.BenchLoad.Placement (runnerProcessors, withHarnessPlacement)
 import Ecluse.BenchLoad.Pod (PodShape (Limited), ProxyTuning (ptCpus), renderPodShape)
 import Ecluse.BenchLoad.ProxyProcess (podShapeFromEnv, serveProxyFlag, sweepProxyCgroups)
+import Ecluse.Core.Server.Admission.Probe (probeSelfTest)
 import Ecluse.BenchLoad.ProxyServe (runServeProxy)
 import Ecluse.BenchLoad.PyPI (pypiLoadNotes)
 import Ecluse.BenchLoad.Report (Section (..), renderFloors, renderLoadSaturation, renderReports, renderServiceTime, renderThrash, renderVerdict)
@@ -78,6 +79,7 @@ main =
     getArgs >>= \case
         [] -> runDriver
         [flag] | flag == serveProxyFlag -> runServeProxy
+        ["--probe-selftest", threads, iterations, work] -> probeSelfTest (fromMaybe 4 (readMaybe threads)) (fromMaybe 1000 (readMaybe iterations)) (fromMaybe 0 (readMaybe work))
         [name] -> runChild Loaded (toText name)
         ["--service-time", name] -> runChild ConcurrencyOne (toText name)
         _ -> benchFail "usage: bench-load [<ecosystem>/<scenario-name> | --service-time <ecosystem>/<scenario-name> | --serve-proxy]"

@@ -14,10 +14,11 @@ module Ecluse.Core.Server.Admission.Weighted (
     admissionWaitMicros,
 ) where
 
-import Control.Concurrent.STM (retry)
 import GHC.Conc (registerDelay)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Exception qualified as UE
+
+import Ecluse.Core.Server.Admission.Probe (Site (..), probeRetry, probed)
 
 -- | Capacity and waiting-room state. Only the controller can mutate these fields.
 data WeightedAdmission = WeightedAdmission
@@ -80,7 +81,7 @@ acquireOrExpire wa weight deadline = do
         then writeTVar (waAvailable wa) (available - weight) $> True
         else do
             expired <- readTVar deadline
-            if expired then pure False else retry
+            if expired then pure False else probeRetry GateWait
 
 -- | Hold the supplied weight through the action. Refusal or expiry returns Nothing.
 
@@ -95,7 +96,7 @@ withWeightedAdmission ::
     m (Maybe a)
 withWeightedAdmission obs wa weight action =
     UE.mask $ \restore -> do
-        gate <- atomically (doorDecision wa weight)
+        gate <- liftIO (probed GateDoor (doorDecision wa weight))
         case gate of
             Refused -> shedRecording obs
             Admitted -> admittedRun obs wa weight (pure ()) restore action
@@ -121,8 +122,8 @@ queuedWait ::
 queuedWait obs wa weight restore action = do
     deadline <- liftIO (registerDelay (waWaitMicros wa))
     acquired <-
-        atomically (acquireOrExpire wa weight deadline)
-            `UE.finally` atomically (modifyTVar' (waWaiting wa) (subtract 1))
+        liftIO (probed GateWait (acquireOrExpire wa weight deadline))
+            `UE.finally` liftIO (probed GateLeave (modifyTVar' (waWaiting wa) (subtract 1)))
     if acquired
         then admittedRun obs wa weight (onQueued obs) restore action
         else shedRecording obs
@@ -151,7 +152,7 @@ admittedRun obs wa weight afterArm restore action =
 releaseWeight :: (MonadUnliftIO m) => AdmissionObservers -> WeightedAdmission -> Int -> m ()
 releaseWeight obs wa weight =
     liftIO (onInFlightDelta obs (negate weight))
-        `UE.finally` atomically (modifyTVar' (waAvailable wa) (+ weight))
+        `UE.finally` liftIO (probed GateRelease (modifyTVar' (waAvailable wa) (+ weight)))
 
 -- | Observe committed waiting-room occupancy without changing admission state.
 weightedAdmissionWaiting :: WeightedAdmission -> STM Int

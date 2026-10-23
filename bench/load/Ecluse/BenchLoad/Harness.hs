@@ -439,7 +439,7 @@ proxyFigures proxy end window =
         , pfBootRetries = proxyBootRetries proxy
         , pfInFlight = summariseGauge (pwInFlight window)
         , pfTasks = summariseGauge (pwTasks window)
-        , pfAdmissionSeries = maybe ["(the final scrape failed)"] admissionSeries (pwEndScrape window)
+        , pfAdmissionSeries = maybe ["(the final scrape failed)"] admissionSeries (pwEndScrape window) <> maybe [] (map ("start " <>) . admissionSeries) (pwStartScrape window)
         , pfCacheWindow = cacheWindow <$> pwStartScrape window <*> pwEndScrape window
         }
   where

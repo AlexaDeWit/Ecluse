@@ -305,6 +305,7 @@ library ecluse-core
     Ecluse.Core.Server.Admission.Bytes
     Ecluse.Core.Server.Admission.Bytes.Internal
     Ecluse.Core.Server.Admission.Meter
+    Ecluse.Core.Server.Admission.Probe
     Ecluse.Core.Server.Admission.Types
     Ecluse.Core.Server.Admission.Weighted
     Ecluse.Core.Server.Conditional
