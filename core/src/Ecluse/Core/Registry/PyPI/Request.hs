@@ -39,9 +39,7 @@ admits the files host without an operator naming it.
 pypiArtifactHosts :: [Text]
 pypiArtifactHosts = ["https://files.pythonhosted.org"]
 
-{- | Build the Simple-index @GET@ for a project. It fails only when the URL cannot be formed,
-which here means an empty base URL.
--}
+-- | Build the Simple-index @GET@ for a project. It fails only on an empty or unparseable base URL.
 simpleIndexRequest ::
     Text ->
     Maybe ClientCredential ->

@@ -125,8 +125,7 @@ artifactRequestByUrl = Request.artifactRequestByUrl npmCredential
 
 -- The metadata and publish URL for a package: @{baseUrl}/{encoded-name}@.
 packageUrl :: Text -> PackageName -> Either UrlFormationError Text
-packageUrl baseUrl name =
-    joinPath baseUrl (encodePackagePath name)
+packageUrl baseUrl name = joinPath baseUrl (encodePackagePath name)
 
 {- | The artifact URL @{baseUrl}\/{encoded-name}\/-\/{encoded-filename}@, with @filename@
 percent-encoded as one component so a once-decoded escape cannot reach the upstream raw.
