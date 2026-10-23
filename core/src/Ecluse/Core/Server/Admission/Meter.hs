@@ -247,7 +247,6 @@ takeBytes ticket bytes = do
 
 releaseTicket :: MemoryTicket -> IO ()
 releaseTicket ticket = atomically $ do
-    spikeSignalOne
     let meter = tMeter ticket
     held <- readTVar (tCharged ticket)
     writeTVar (tCharged ticket) 0
