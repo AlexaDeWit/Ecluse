@@ -5,7 +5,7 @@
 -- | Shared text parsing contracts, the ASCII alphanumeric class and text storage.
 module Ecluse.Core.TextSpec (spec) where
 
-import Data.Char (isAlphaNum, isAscii)
+import Data.Char (isAlphaNum, isAscii, toUpper)
 import Data.Text qualified as T
 import Hedgehog (cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
@@ -63,7 +63,9 @@ isPrefixOfLoweredSpec = describe "isPrefixOfLowered" $ do
     it "agrees with lowering the whole text, including characters that lower to several" $
         hedgehog $ do
             (prefix, spelled) <- forAll (Gen.element [(httpsPrefix, "https://"), (httpPrefix, "http://")])
-            lead <- forAll (Gen.element ["", "HTTPS://", "hTtP://", "HTTPS:", "\x130", "\x212A"])
+            -- Half the leads spell the drawn prefix. Left to two uniform draws, the label fires one test in six
+            -- and falls under its 5% bar about once in 10,000 runs.
+            lead <- forAll (Gen.choice [T.pack <$> traverse (\c -> Gen.element [c, toUpper c]) (T.unpack spelled), Gen.element ["", "HTTPS://", "hTtP://", "HTTPS:", "\x130", "\x212A"]])
             rest <- forAll (Gen.text (Range.linear 0 8) (Gen.frequency [(4, Gen.element ("hHtTpPsS:/ i\x130\x212A" :: String)), (1, Gen.unicode)]))
             let t = lead <> rest
                 expected = spelled `T.isPrefixOf` T.toLower t

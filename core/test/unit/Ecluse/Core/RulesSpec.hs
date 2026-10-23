@@ -939,8 +939,9 @@ holdsAdvisoryAbstention = \case
 evaluatorParitySpec :: Spec
 evaluatorParitySpec = describe "the evaluator against the one frozen at f5f368d31" $ do
     -- Constant ranges and a two-package majority keep reads of more than one run common. A size-scaled range
-    -- leaves the early tests of each size cycle with no rule or a single version.
-    modifyMaxSuccess (const 300) . it "decides, reads and reports as it did over one or two packages in turn, npm and PyPI" $
+    -- leaves the early tests of each size cycle with no rule or a single version. Fewer tests let either 1% label
+    -- fall under its bar by chance.
+    modifyMaxSuccess (const 600) . it "decides, reads and reports as it did over one or two packages in turn, npm and PyPI" $
         hedgehog $ do
             (eco, pool) <- forAll genEcosystem
             standing <- forAll genSourceState

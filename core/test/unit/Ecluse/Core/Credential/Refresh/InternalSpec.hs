@@ -21,7 +21,7 @@ import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
-import Test.Hspec.Hedgehog (hedgehog)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 import UnliftIO (async, cancel, mapConcurrently, timeout, wait, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (finally, throwIO, try)
@@ -629,7 +629,8 @@ spec = do
             result `shouldBe` Just ()
 
     describe "refreshingProvider (model-based)" $
-        it "agrees with a pure cache/clock/breaker model under random operation sequences" $
+        -- Fewer tests let "expired-error" fall under its 1% bar by chance.
+        modifyMaxSuccess (const 200) . it "agrees with a pure cache/clock/breaker model under random operation sequences" $
             hedgehog refreshModelProperty
 
 modelRefreshAt :: Double

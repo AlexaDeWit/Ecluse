@@ -19,7 +19,7 @@ import System.Directory (getSymbolicLinkTarget, listDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
-import Test.Hspec.Hedgehog (hedgehog)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 import UnliftIO.Exception (bracket, catchAny, finally, try)
 
 import Ecluse.Core.Cve (
@@ -361,7 +361,8 @@ spec = do
                 for_ ["1.0.0", "not-a-version"] $ \raw ->
                     fixedAt (packageAdvisories eco []) (mkVersion eco raw) `shouldBe` []
 
-        it "preserves npm exact fix text, row order and duplicate rows" $
+        -- Fewer tests let "some row names the version as its fix" fall under its bar by chance.
+        modifyMaxSuccess (const 200) . it "preserves npm exact fix text, row order and duplicate rows" $
             hedgehog $ do
                 pool <- forAll (Gen.list (Range.linear 1 6) genVersionText)
                 ranges <- forAll (Gen.list (Range.linear 0 8) (genSegment pool))
