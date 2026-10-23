@@ -53,7 +53,9 @@ import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Server.Admission (withServeAdmissionP)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, withMemoryEntryP)
 import Ecluse.Core.Server.Admission.Types (FlightKey (FlightKey))
-import Ecluse.Core.Server.Admission.Weighted (Shed (..), admissionWaitMicros, spikePlacesFreed)
+import Data.Sequence qualified as Seq
+
+import Ecluse.Core.Server.Admission.Weighted (Shed (..), admissionWaitMicros, spikePlacesFreed, spikeSignalOne, spikeWaiters)
 import Ecluse.Core.Server.Cache.Types (CacheKey, cacheKeyIdentity, cacheKeyStore)
 import Ecluse.Core.Server.Context (MountBinding (bindingCredential), ServeRuntime (srAdmission, srMemoryMeter, srMetrics, srPublicClient))
 import Ecluse.Core.Server.Response (
@@ -103,7 +105,7 @@ withMetadataAdmission :: (MonadUnliftIO m) => ServeRuntime -> m received -> (Mem
 withMetadataAdmission runtime shed = withMetadataAdmissionC runtime (const shed)
 
 -- Spike 1866: how a request the door refused is handled.
-data SpikeShed = ShedNow | ShedHold | ShedLobby | ShedLobbyFair | ShedLobbyEvent | ShedLobbyEnd | ShedPause
+data SpikeShed = ShedNow | ShedHold | ShedLobby | ShedLobbyFair | ShedLobbyEvent | ShedLobbyWake | ShedLobbyEnd | ShedPause
     deriving stock (Eq, Show)
 
 spikeEnv :: String -> Maybe String
@@ -116,6 +118,7 @@ spikeShed = case spikeEnv "SPIKE1866_SHED" of
     Just "lobby" -> ShedLobby
     Just "lobby-fair" -> ShedLobbyFair
     Just "lobby-event" -> ShedLobbyEvent
+    Just "lobby-wake" -> ShedLobbyWake
     Just "lobby-end" -> ShedLobbyEnd
     Just "pause" -> ShedPause
     _ -> ShedNow
@@ -193,6 +196,15 @@ withMetadataAdmissionC runtime shed gated answer =
         Left WaitExpired -> liftIO (spikeCount CExpired) >> refuse False
         Left DoorFull -> liftIO (spikeCount CDoor) >> case spikeShed of
             ShedNow -> refuse False
+            ShedLobbyWake -> do
+                entered <- liftIO spikeEnterHold
+                if not entered
+                    then refuse spikeCloseOver
+                    else do
+                        outcome <- withRunInIO (\run -> wakeLobby run)
+                        case outcome of
+                            Right result -> liftIO (spikeCount CAdmitted) >> answer result
+                            Left _ -> liftIO (spikeCount CRefused) >> refuse False
             ShedPause -> do
                 entered <- liftIO spikeEnterHold
                 if entered
@@ -229,6 +241,45 @@ withMetadataAdmissionC runtime shed gated answer =
         ShedLobbyEnd -> holdSwept deadlines spikeWaitMicros >> spikeCount CRetry >> run admitted
         ShedLobbyEvent -> eventLobby run
         _ -> lobby start run
+    -- Wait in arrival order for a signal that a place freed, a sweeper tick, or the end of the wait. Each try
+    -- uses the normal door. The request counts as held until it holds a place, and a signal it cannot use passes on.
+    wakeLobby run = do
+        me <- newTVarIO (0 :: Int)
+        atomically (modifyTVar' spikeWaiters (Seq.|> me))
+        let -- Leave the queue and the count. A signal that arrived meanwhile goes to the next waiter.
+            leave = do
+                was <- atomically $ do
+                    s <- readTVar me
+                    unless (s == 2) (writeTVar me 2)
+                    when (s == 1) spikeSignalOne
+                    pure s
+                unless (was == 2) spikeLeaveHold
+            -- Back to the head of the queue after a try that found no place.
+            requeue = do
+                was <- atomically $ do
+                    s <- readTVar me
+                    writeTVar me 0
+                    when (s /= 0) (modifyTVar' spikeWaiters (me Seq.<|))
+                    pure s
+                when (was == 2) (atomicModifyIORef' spikeHeld (\n -> (n + 1, ())))
+            wait deadline =
+                withSweptFlag deadlines 1 $ \tick ->
+                    atomically $
+                        ((readTVar me >>= check . (== 1)) $> False)
+                            `orElse` ((readTVar deadline >>= check) $> True)
+                            `orElse` ((readTVar tick >>= check) $> False)
+            loop deadline = do
+                expired <- wait deadline
+                if expired
+                    then pure (Left DoorFull)
+                    else do
+                        spikeCount CRetry
+                        outcome <- run (admittedP leave)
+                        case outcome of
+                            Left DoorFull -> requeue >> loop deadline
+                            _ -> pure outcome
+        (withSweptFlag deadlines spikeWaitMicros loop `finally` leave)
+
     -- Wait for a freed place or the end of the wait. A request stops counting as held once it holds a place.
     eventLobby run = do
         counted <- newIORef True

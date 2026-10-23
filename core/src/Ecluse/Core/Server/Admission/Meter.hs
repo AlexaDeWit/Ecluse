@@ -53,7 +53,7 @@ import Ecluse.Core.Server.Admission.Budget (
  )
 import Ecluse.Core.Deadline (Deadlines, withSweptFlag)
 import Ecluse.Core.Server.Admission.Types (BrakeLevel (Calm), FlightKey, MeterSnapshot (..))
-import Ecluse.Core.Server.Admission.Weighted (Shed (..), spikePlacesFreed, spikeRoomSwept)
+import Ecluse.Core.Server.Admission.Weighted (Shed (..), spikeRoomSwept, spikeSignalOne)
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
 -- | The boot-time shape of a meter.
@@ -199,7 +199,7 @@ enter placed ticket = do
             let waitFor = atomically . entryOrExpire
             admitted <-
                 maybe (registerDelay (mmEntryWaitMicros meter) >>= waitFor) (\d -> withSweptFlag d (mmEntryWaitMicros meter) waitFor) (mmDeadlines meter)
-                    `UE.finally` atomically (modifyTVar' (mmEntryWaiting meter) (subtract 1) >> modifyTVar' spikePlacesFreed (+ 1))
+                    `UE.finally` atomically (modifyTVar' (mmEntryWaiting meter) (subtract 1) >> spikeSignalOne)
             if admitted then openHeadroom $> Right True else pure (Left WaitExpired)
   where
     meter = tMeter ticket
@@ -247,7 +247,7 @@ takeBytes ticket bytes = do
 
 releaseTicket :: MemoryTicket -> IO ()
 releaseTicket ticket = atomically $ do
-    modifyTVar' spikePlacesFreed (+ 1)
+    spikeSignalOne
     let meter = tMeter ticket
     held <- readTVar (tCharged ticket)
     writeTVar (tCharged ticket) 0

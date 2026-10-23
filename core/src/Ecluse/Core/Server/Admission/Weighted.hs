@@ -15,6 +15,8 @@ module Ecluse.Core.Server.Admission.Weighted (
     withWeightedAdmissionE,
     withWeightedAdmissionP,
     spikePlacesFreed,
+    spikeWaiters,
+    spikeSignalOne,
     Shed (..),
     spikeRoomSwept,
     AdmissionObservers (..),
@@ -22,6 +24,7 @@ module Ecluse.Core.Server.Admission.Weighted (
 ) where
 
 import Control.Concurrent.STM (retry)
+import Data.Sequence qualified as Seq
 import GHC.Conc (registerDelay)
 import System.IO.Unsafe (unsafePerformIO)
 import UnliftIO (MonadUnliftIO)
@@ -47,6 +50,24 @@ data Shed = DoorFull | WaitExpired
 spikePlacesFreed :: TVar Int
 spikePlacesFreed = unsafePerformIO (newTVarIO 0)
 {-# NOINLINE spikePlacesFreed #-}
+
+-- | Spike 1866: requests waiting for a place, oldest first. A state of 0 waits, 1 is signalled, 2 has left.
+spikeWaiters :: TVar (Seq (TVar Int))
+spikeWaiters = unsafePerformIO (newTVarIO Seq.empty)
+{-# NOINLINE spikeWaiters #-}
+
+-- | Spike 1866: a place freed, so signal the oldest request still waiting for one.
+spikeSignalOne :: STM ()
+spikeSignalOne = do
+    queue <- readTVar spikeWaiters
+    unless (Seq.null queue) (go queue)
+  where
+    go queue = case Seq.viewl queue of
+        Seq.EmptyL -> writeTVar spikeWaiters Seq.empty
+        waiter Seq.:< rest ->
+            readTVar waiter >>= \case
+                0 -> writeTVar waiter 1 >> writeTVar spikeWaiters rest
+                _ -> go rest
 
 -- | Spike 1866: SPIKE1866_ROOM=ghc keeps 'registerDelay' for the room wait.
 spikeRoomSwept :: Bool
@@ -176,7 +197,7 @@ queuedWait obs wa weight restore action = do
     let waitFor deadline = atomically (acquireOrExpire wa weight deadline)
     acquired <-
         liftIO (maybe (registerDelay (waWaitMicros wa) >>= waitFor) (\d -> withSweptFlag d (waWaitMicros wa) waitFor) (waDeadlines wa))
-            `UE.finally` atomically (modifyTVar' (waWaiting wa) (subtract 1) >> modifyTVar' spikePlacesFreed (+ 1))
+            `UE.finally` atomically (modifyTVar' (waWaiting wa) (subtract 1) >> spikeSignalOne)
     if acquired
         then admittedRun obs wa weight (onQueued obs) restore action
         else shedRecording obs WaitExpired
@@ -205,7 +226,7 @@ admittedRun obs wa weight afterArm restore action =
 releaseWeight :: (MonadUnliftIO m) => AdmissionObservers -> WeightedAdmission -> Int -> m ()
 releaseWeight obs wa weight =
     liftIO (onInFlightDelta obs (negate weight))
-        `UE.finally` atomically (modifyTVar' (waAvailable wa) (+ weight) >> modifyTVar' spikePlacesFreed (+ 1))
+        `UE.finally` atomically (modifyTVar' (waAvailable wa) (+ weight) >> spikeSignalOne)
 
 -- | Spike 1866: free capacity and room occupancy, read without a transaction.
 weightedAdmissionLevels :: WeightedAdmission -> IO (Int, Int)
