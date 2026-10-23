@@ -337,7 +337,7 @@ data ProxyFigures = ProxyFigures
     , pfCacheWindow :: Maybe [(Text, CacheOutcomes)]
     -- ^ Each metadata cache store's outcomes in the window. 'Nothing' when a scrape failed.
     , pfBurstMemory :: Maybe BurstMemory
-    -- ^ The cgroup's memory through a burst sent under load, sampled far more often than the gauges.
+    -- ^ The cgroup's memory through a burst, sampled far more often than the gauges.
     }
     deriving stock (Show, Generic)
     deriving anyclass (FromJSON, ToJSON)
@@ -500,8 +500,8 @@ sampling proxy load = case proxy of
         tasks <- proxyTasksNow p
         pure (fromMaybe 0 . seriesTotal inFlightSeries [] <$> scraped, fromIntegral <$> tasks)
 
-{- | How often the harness reads the proxy cgroup through a burst sent under load. A herd on an idle
-proxy completes in about a second, so the one-second gauges would miss its peak.
+{- | How often the harness reads the proxy cgroup through a burst. A herd on an idle proxy completes
+in about a second, so the one-second gauges would miss its peak.
 -}
 burstReadingMs :: Int
 burstReadingMs = 10
@@ -549,7 +549,9 @@ data DriveOutcome = DriveOutcome
 drive :: LoadKnobs -> Maybe ProxyProcess -> Driver -> IO DriveOutcome
 drive knobs proxy = \case
     DriveHttp load -> alone . summariseOha "" connections <$> runOha (timed connections load)
-    DriveBurst count url -> alone . summariseOha "" count <$> runOha (burst count url)
+    DriveBurst count url -> do
+        (r, memory) <- sampleBurst proxy (runOha (burst count url))
+        pure (DriveOutcome (summariseOha "" count r) Nothing [] Nothing memory)
     DriveRamp steps load -> do
         reports <- traverse (\c -> (c,) <$> runOha (timed c load)) steps
         let stepSummaries = [summariseOha (show c <> " connections") c r | (c, r) <- reports]
