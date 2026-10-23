@@ -48,7 +48,7 @@ import Ecluse.Core.Server.Admission.Budget (
     growthDecision,
     roundUpToStep,
  )
-import Ecluse.Core.Server.Admission.Probe (Site (..), invMeterModel, invStrict, nextTicketId, probeRetry, probed, registerPeaks)
+import Ecluse.Core.Server.Admission.Probe (Site (..), invMeterModel, invStrict, nextTicketId, probeRetry, probeTimed, probed, registerPeaks)
 import Ecluse.Core.Server.Admission.Types (BrakeLevel (Calm), FlightKey, MeterSnapshot (..))
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
@@ -179,7 +179,7 @@ withMemoryEntryStm metrics meter body =
 
 newTicket :: MetricsPort -> MemoryMeter -> IO MemoryTicket
 newTicket metrics meter = do
-    ticketId <- if invStrict then nextTicketId else atomicModifyIORef' (mmNextTicket meter) (\n -> (n + 1, n))
+    ticketId <- probeTimed TicketCounter (if invStrict then nextTicketId else atomicModifyIORef' (mmNextTicket meter) (\n -> (n + 1, n)))
     charged <- newTVarIO 0
     headroom <- newIORef 0
     pure MemoryTicket{tMeter = meter, tId = ticketId, tCharged = charged, tHeadroom = headroom, tServes = Nothing, tMetrics = metrics}

@@ -11,6 +11,7 @@ module Ecluse.Core.Server.Admission.Probe (
     Site (..),
     Kind (..),
     probed,
+    probeTimed,
     probeRetry,
     probeAdd,
     probeMax,
@@ -58,6 +59,7 @@ data Site
     | ModelUnderBytes
     | SelfTest
     | SelfTestWait
+    | TicketCounter
     deriving stock (Eq, Show, Enum, Bounded)
 
 -- | What a site counts. Conflicts are attempts less commits less explicit retries.
@@ -112,6 +114,20 @@ probed site body = do
     result <- atomically (unsafeIOToSTM (probeAdd site Attempts 1) >> body)
     end <- getMonotonicTimeNSec
     let took = fromIntegral (end - start)
+    probeAdd site Commits 1
+    probeAdd site Nanos took
+    probeMax site MaxNanos took
+    probeAdd site (bucket took) 1
+    pure result
+
+-- | Run a plain action, counting it and its duration as one commit.
+probeTimed :: Site -> IO a -> IO a
+probeTimed site action = do
+    start <- getMonotonicTimeNSec
+    result <- action
+    end <- getMonotonicTimeNSec
+    let took = fromIntegral (end - start)
+    probeAdd site Attempts 1
     probeAdd site Commits 1
     probeAdd site Nanos took
     probeMax site MaxNanos took
