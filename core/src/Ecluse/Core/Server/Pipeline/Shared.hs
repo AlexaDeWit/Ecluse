@@ -262,6 +262,8 @@ withMetadataAdmissionC runtime shed gated answer =
                     when (s /= 0) (modifyTVar' spikeWaiters (me Seq.<|))
                     pure s
                 when (was == 2) (atomicModifyIORef' spikeHeld (\n -> (n + 1, ())))
+            -- A signal that woke this request is spent on its try. State 3: awake, out of the queue.
+            consume = atomically (readTVar me >>= \s -> when (s == 1) (writeTVar me 3))
             wait deadline =
                 withSweptFlag deadlines 1 $ \tick ->
                     atomically $
@@ -273,6 +275,7 @@ withMetadataAdmissionC runtime shed gated answer =
                 if expired
                     then pure (Left DoorFull)
                     else do
+                        consume
                         spikeCount CRetry
                         outcome <- run (admittedP leave)
                         case outcome of
