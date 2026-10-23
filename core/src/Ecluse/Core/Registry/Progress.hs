@@ -145,7 +145,7 @@ armDeadline due = do
 
 -- Diagnostic only: the shipped timer shape is chosen by INV_TIMER_MODE.
 invTimerMode :: String
-invTimerMode = InvUnsafe.unsafePerformIO (fromMaybe "ship" <$> InvEnv.lookupEnv "INV_TIMER_MODE")
+invTimerMode = InvUnsafe.unsafePerformIO (fromMaybe "sweep" <$> InvEnv.lookupEnv "INV_TIMER_MODE")
 {-# NOINLINE invTimerMode #-}
 
 -- Register n far timers on the system timer manager for the length of the action.

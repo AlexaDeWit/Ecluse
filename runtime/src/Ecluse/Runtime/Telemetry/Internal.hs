@@ -253,7 +253,7 @@ initializeObservedMeterProvider sink = do
 -- also records every measurement unbatched into a second provider and writes both at shutdown.
 invBatching :: MaterializedResources -> MeterProvider -> SdkMeterEnv -> IO MeterProvider
 invBatching resources provider env = do
-    selected <- InvEnv.lookupEnv "INV_OTEL_BATCH"
+    selected <- (\chosen -> if chosen == Just "off" then Nothing else Just (fromMaybe "shard" chosen)) <$> InvEnv.lookupEnv "INV_OTEL_BATCH"
     case selected of
         Nothing -> pure provider
         Just name -> do
