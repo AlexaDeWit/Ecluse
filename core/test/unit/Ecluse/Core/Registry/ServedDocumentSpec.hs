@@ -11,7 +11,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import GHC.Conc (getAllocationCounter)
-import Hedgehog (Gen, forAll, (===))
+import Hedgehog (Gen, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
@@ -186,7 +186,7 @@ objectOverlaySpec = describe "overlayObjectSurvivors" $ do
                 winner index = if even index then (0, firstSource) else (1, secondSource)
                 exact index = AdmittedEntry (snapshotDigest (snd (winner index))) (ObjectEntry (show index)) "x.tgz"
                 losingDigest index = snapshotDigest (snd (winner (index + 1)))
-            artifacts <- forAll (traverse (\index -> (show index,) <$> admissionVariant count (losingDigest index) (exact index)) selected)
+            artifacts <- forAll (traverse (\index -> (show index,) <$> admissionVariant (objectAlias count) [digestOf "foreign bytes", losingDigest index] (exact index)) selected)
             let selection =
                     (entryPlan firstSource key)
                         { mpSurvivors = Map.fromList [(show index, fst (winner index)) | index <- selected]
@@ -196,16 +196,19 @@ objectOverlaySpec = describe "overlayObjectSurvivors" $ do
             overlayObjectSurvivors id bySource selection === overlaySurvivors orderedEntries bySource selection
 
 -- Shrinks toward the exact admission. The other variants duplicate, alias, or corrupt it.
-admissionVariant :: Int -> ContentDigest -> AdmittedEntry -> Gen (NonEmpty AdmittedEntry)
-admissionVariant count losingDigest exact =
+admissionVariant :: Gen EntryKey -> [ContentDigest] -> AdmittedEntry -> Gen (NonEmpty AdmittedEntry)
+admissionVariant alias digests exact =
     Gen.frequency
         [ (4, pure (exact :| []))
         , (1, pure (exact :| [exact]))
-        , (1, (\other -> exact{admittedKey = ObjectEntry (show other)} :| [exact]) <$> Gen.int (Range.constant 0 count))
-        , (1, (\digest -> exact{admittedSnapshot = digest} :| []) <$> Gen.element [digestOf "foreign bytes", losingDigest])
+        , (1, (\other -> exact{admittedKey = other} :| [exact]) <$> alias)
+        , (1, (\digest -> exact{admittedSnapshot = digest} :| []) <$> Gen.element digests)
         , (1, pure (exact{admittedFilename = ""} :| []))
         , (1, (\other -> exact{admittedKey = other} :| []) <$> Gen.element [ArrayEntry 0, ArrayEntry (-1), SingletonEntry])
         ]
+
+objectAlias :: Int -> Gen EntryKey
+objectAlias count = ObjectEntry . show <$> Gen.int (Range.constant 0 count)
 
 entryContractSpec :: Spec
 entryContractSpec = describe "source-scoped admitted-entry contracts" $ do
@@ -261,26 +264,74 @@ arrayOverlaySpec = describe "array selection against the generic selector" $ do
             plan = (entryPlan source SingletonEntry){mpArtifacts = Map.singleton "1" (AdmittedEntry (snapshotDigest source) (ArrayEntry 4096) "a.whl" :| [AdmittedEntry (snapshotDigest source) (ArrayEntry 2048) "b.whl"])}
         overlaySurvivors id (Map.singleton 0 source) plan `shouldBe` [("1", "ArrayEntry 4096"), ("1", "ArrayEntry 2048")]
 
-    describe "properties" $
+    it "selects every admitted position of a dense source except one admitted under two versions" $ do
+        let source = syntheticSnapshot [(ArrayEntry position, show position :: Text) | position <- [0 .. 99]]
+            admitted position = AdmittedEntry (snapshotDigest source) (ArrayEntry position) "a.whl"
+            plan = (entryPlan source SingletonEntry){mpSurvivors = Map.fromList [("1", 0), ("2", 0)], mpArtifacts = Map.fromList [("1", admitted 0 :| map admitted [1 .. 99]), ("2", admitted 7 :| [])]}
+        overlaySurvivors id (Map.singleton 0 source) plan `shouldBe` [("1", show position) | position <- [0 .. 99 :: Int], position /= 7]
+
+    it "selects from ascending sources with too few admissions to fill a slot table" $
+        for_ [([0 .. 99], 50), ([0, maxBound], maxBound)] $ \(positions, position) -> do
+            let source = syntheticSnapshot [(ArrayEntry at, show at :: Text) | at <- positions]
+            overlaySurvivors id (Map.singleton 0 source) (entryPlan source (ArrayEntry position)) `shouldBe` [("1", show position)]
+
+    describe "properties" $ do
         it "matches generic selection for ordered, gapped, mixed and repeated keys with adversarial admissions" $
             hedgehog $ do
-                keys <-
-                    forAll $
-                        Gen.choice
-                            [ map ArrayEntry <$> Gen.subsequence [0 .. 80]
-                            , map ArrayEntry . sort <$> Gen.list (Range.linear 0 80) (Gen.int (Range.constant (-2) 40))
-                            , Gen.list (Range.linear 0 80) (Gen.element [ArrayEntry (-1), ArrayEntry 0, ArrayEntry 2, ArrayEntry 7, ArrayEntry maxBound, ObjectEntry "release", SingletonEntry])
-                            ]
+                keys <- forAll genSourceKeys
                 let source = syntheticSnapshot [(key, show index :: Text) | (index, key) <- zip [0 :: Int ..] keys]
                     losing = syntheticSnapshot [(key, "losing" :: Text) | key <- keys]
                     admittedKeys = Map.keys (Map.fromList [(key, ()) | key <- keys])
                 admissions <- forM (zip [0 :: Int ..] admittedKeys) $ \(index, key) -> do
                     sid <- forAll (Gen.element [0, 1, 2])
-                    entries <- forAll (admissionVariant 8 (snapshotDigest losing) (AdmittedEntry (snapshotDigest source) key "file.whl"))
+                    entries <- forAll (admissionVariant (objectAlias 8) [digestOf "foreign bytes", snapshotDigest losing] (AdmittedEntry (snapshotDigest source) key "file.whl"))
                     pure (show index, (sid, entries))
                 let plan = (entryPlan source SingletonEntry){mpSurvivors = Map.fromList [(version, sid) | (version, (sid, _)) <- admissions], mpArtifacts = Map.fromList [(version, entries) | (version, (_, entries)) <- admissions]}
                     sources = Map.fromList [(0, source), (1, losing)]
                 overlaySurvivors id sources plan === genericOverlay sources plan
+
+        it "matches generic selection over two sources, one snapshot under both, and positions aliased across versions" $
+            hedgehog $ do
+                firstKeys <- forAll genSourceKeys
+                secondKeys <- forAll genSourceKeys
+                shared <- forAll Gen.bool
+                let firstSource = syntheticSnapshot [(key, "first " <> show index :: Text) | (index, key) <- zip [0 :: Int ..] firstKeys]
+                    secondSource = if shared then firstSource else syntheticSnapshot [(key, "second " <> show index) | (index, key) <- zip [0 :: Int ..] secondKeys]
+                    sources = Map.fromList [(0, firstSource), (1, secondSource)]
+                    pool = ordNub (firstKeys <> secondKeys <> [ArrayEntry (-1), ArrayEntry 1000, ObjectEntry "absent", SingletonEntry])
+                plan <- forAll (genPlan sources pool)
+                let expected = genericOverlay sources plan
+                cover 30 "a source at ascending positions" (any ascendingPositions [firstKeys, secondKeys])
+                cover 15 "every key admitted" (Map.size (mpArtifacts plan) == length pool)
+                cover 30 "a selected entry" (not (null expected))
+                overlaySurvivors id sources plan === expected
+
+-- Dense, gapped, sparse, repeated, negative and mixed keys.
+genSourceKeys :: Gen [EntryKey]
+genSourceKeys =
+    Gen.choice
+        [ map ArrayEntry <$> Gen.subsequence [0 .. 80]
+        , map ArrayEntry . sort <$> Gen.list (Range.linear 0 80) (Gen.int (Range.constant (-2) 40))
+        , Gen.list (Range.linear 0 80) (Gen.element [ArrayEntry (-1), ArrayEntry 0, ArrayEntry 2, ArrayEntry 7, ArrayEntry maxBound, ObjectEntry "release", SingletonEntry])
+        , (\count -> map ArrayEntry [0 .. count - 1]) <$> Gen.int (Range.linear 0 80)
+        , map (ArrayEntry . (* 50)) <$> Gen.subsequence [0 .. 20]
+        ]
+
+ascendingPositions :: [EntryKey] -> Bool
+ascendingPositions keys = length positions == length keys && and (zipWith (<) (-1 : positions) positions)
+  where
+    positions = [position | ArrayEntry position <- keys]
+
+-- Each admitted key gets its own version, won by source 0, 1, the absent source 2, or none.
+genPlan :: Map SourceId (Snapshot a) -> [EntryKey] -> Gen MergePlan
+genPlan sources keys = do
+    admitted <- Gen.frequency [(1, pure keys), (2, Gen.subsequence keys)]
+    versions <- forM (zip [0 :: Int ..] admitted) $ \(index, key) -> do
+        survivor <- Gen.maybe (Gen.element [0, 1, 2])
+        let digest = maybe (digestOf "absent source") snapshotDigest (survivor >>= (`Map.lookup` sources))
+        entries <- admissionVariant (Gen.element keys) (digestOf "foreign bytes" : map snapshotDigest (Map.elems sources)) (AdmittedEntry digest key "file.whl")
+        pure (show index, survivor, entries)
+    pure (planOver mempty mempty){mpSurvivors = Map.fromList [(version, sid) | (version, Just sid, _) <- versions], mpArtifacts = Map.fromList [(version, entries) | (version, _, entries) <- versions]}
 
 -- The selection at 899ec89d2, frozen: every source builds a uniqueness map over its keys.
 genericOverlay :: Map SourceId (Snapshot [(EntryKey, entry)]) -> MergePlan -> [(Text, entry)]
