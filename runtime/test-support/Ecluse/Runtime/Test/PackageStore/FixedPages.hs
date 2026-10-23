@@ -3,8 +3,9 @@
 -- SPDX-License-Identifier: MIT
 
 {- | A CodeArtifact control plane over one fixed inventory, for driving the production maintenance
-handle without AWS. Every native call waits a fixed delay, then answers a fixed page. The plane
-counts each call by kind, keeps the walk cursor tag, and refuses every delete.
+handle without AWS. Every native call waits a fixed delay, then answers one page of the size the
+request asked for. The plane counts each call by kind, keeps the walk cursor tag, and refuses every
+delete.
 -}
 module Ecluse.Runtime.Test.PackageStore.FixedPages (
     -- * The fixture
@@ -47,12 +48,13 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal (consentTagKey, c
 import Ecluse.Runtime.Maintenance.CodeArtifact.Internal (ControlPlane (..), boundedObservationFor, cacheMaintenanceFor, maintenanceFor)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Read (ReadPlane (..))
 
--- | One repository's packages, the page size it answers in, and the wait before each answer.
+-- | One repository's packages, its page size, and the wait before each answer.
 data FixedRepository = FixedRepository
     { frStore :: CodeArtifactStore
     , frPackages :: Map Text Int
     -- ^ Each package's version count. 'fixedVersion' spells the versions.
-    , frPageSize :: Int
+    , frDefaultPageSize :: Int
+    -- ^ The page size for a request without @maxResults@, for which AWS documents no default.
     , frDelay :: NominalDiffTime
     }
 
@@ -157,14 +159,17 @@ listPackages repository cells request =
   where
     prefix = fromMaybe "" (request ^. CAL.listPackages_packagePrefix)
     inBucket = Map.takeWhileAntitone (prefix `T.isPrefixOf`) (Map.dropWhileAntitone (< prefix) (frPackages repository))
-    (token, names) = pageOf (frPageSize repository) (request ^. CAL.listPackages_nextToken) (Map.keys inBucket)
+    (token, names) = pageOf (pageSizeOf repository (request ^. CAL.listPackages_maxResults)) (request ^. CAL.listPackages_nextToken) (Map.keys inBucket)
 
 -- A package the repository does not hold lists empty, as the leaf reads a missing package.
 listVersions :: FixedRepository -> CA.ListPackageVersions -> Either StoreFault CA.ListPackageVersionsResponse
 listVersions repository request = do
     addressed repository (request ^. CAL.listPackageVersions_domain) (request ^. CAL.listPackageVersions_repository)
     let count = Map.findWithDefault 0 (request ^. CAL.listPackageVersions_package) (frPackages repository)
-    pure (uncurry versionsPage (pageOf (frPageSize repository) (request ^. CAL.listPackageVersions_nextToken) (map fixedVersion [0 .. count - 1])))
+    pure (uncurry versionsPage (pageOf (pageSizeOf repository (request ^. CAL.listPackageVersions_maxResults)) (request ^. CAL.listPackageVersions_nextToken) (map fixedVersion [0 .. count - 1])))
+
+pageSizeOf :: FixedRepository -> Maybe Natural -> Int
+pageSizeOf repository = maybe (frDefaultPageSize repository) fromIntegral
 
 writeCursor :: FixedRepository -> FixedState -> CA.TagResource -> IO (Either StoreFault CA.TagResourceResponse)
 writeCursor repository cells request = case find ((== cursorKey repository) . (^. CAL.tag_key)) (request ^. CAL.tagResource_tags) of
