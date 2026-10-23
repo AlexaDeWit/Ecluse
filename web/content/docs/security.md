@@ -40,7 +40,8 @@ PyPI mirror completion applies to reads through Écluse. Direct registry reads c
 Écluse checks neither Certificate Transparency nor certificate revocation. It trusts any certificate
 that chains to a root in its CA bundle, so a compromised CA stays trusted until the bundle drops
 that root. [Trusted certificate authorities](@/docs/deployment.md#trusted-certificate-authorities)
-lists the roots the image leaves out.
+lists the roots the image leaves out, and the threat model records the
+[residual](@/docs/threat-model.md#threat-121).
 
 ## Verify the software you deploy {#image}
 
