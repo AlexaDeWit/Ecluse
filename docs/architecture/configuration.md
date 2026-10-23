@@ -40,12 +40,22 @@ Every registry endpoint must be an `https://` URL: the private and public upstre
 target, and the publication target. A plain-HTTP endpoint fails closed at boot with an error naming
 the URL.
 
-Certificate validation is the endpoint-authentication boundary. The shipped image is distroless
-and has no system trust store: it pins `SSL_CERT_FILE` to a bundle of public roots in the Nix
-store. To use a private registry on an internal CA, mount a bundle that holds your chain beside
-those public roots and point `SSL_CERT_FILE` at it. The proxy pre-bakes no custom CA trust. It
-upgrades a plaintext `dist.tarball` to https when the legacy upstream advertises it on its own
-host. It drops a plaintext tarball on any other host and skips that version.
+Certificate validation is the endpoint-authentication boundary. The proxy pre-bakes no custom CA
+trust. It upgrades a plaintext `dist.tarball` to https when the legacy upstream advertises it on
+its own host. It drops a plaintext tarball on any other host and skips that version.
+
+### The TLS trust store
+
+The CA bundle decides which servers Écluse believes, and Écluse has no second check behind it: it
+verifies neither Certificate Transparency nor revocation. Its TLS stack (`crypton-x509-store`) also
+takes every certificate in the `SSL_CERT_FILE` bundle as a trust anchor for servers and ignores
+OpenSSL trust rules. A `TRUSTED CERTIFICATE` block that rejects servers still anchors a server
+chain. So the distroless image ships one bundle of plain certificates: the roots NSS trusts for TLS
+servers, minus the roots that eMudhra's compromised intermediate CAs chain to and the other emSign
+roots Mozilla removed with them. The release build refuses an image whose bundle holds a trust-rule
+block or one of those roots.
+[Trusted certificate authorities](https://ecluse-proxy.com/docs/deployment/#trusted-certificate-authorities)
+lists the roots and covers a bundle an operator brings.
 
 ### Upstream composition (optional)
 

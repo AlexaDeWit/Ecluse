@@ -373,6 +373,26 @@
           else
             ecluseBinUnpruned;
 
+        # The image's trust store. Écluse's TLS stack takes every certificate in
+        # SSL_CERT_FILE as a trust anchor and ignores OpenSSL trust rules, so the
+        # image carries cacert's plain bundle alone: the roots NSS trusts for TLS
+        # servers. The blacklist drops the roots eMudhra's compromised intermediate
+        # CAs chain to, and the other emSign roots Mozilla removed with them.
+        # buildcatrust fails on a label NSS no longer carries, so drop the emSign
+        # labels when cacert reaches NSS 3.131.1, which removes those roots itself.
+        tlsCaBundle = pkgs.runCommand "tls-ca-bundle" { } ''
+          install -D -m 0444 ${
+            pkgs.cacert.override {
+              blacklist = [
+                "Comodo AAA Services root"
+                "emSign ECC Root CA - G3"
+                "emSign Root CA - C1"
+                "emSign ECC Root CA - C3"
+              ];
+            }
+          }/etc/ssl/certs/ca-no-trust-rules-bundle.crt $out/etc/ssl/certs/ca-bundle.crt
+        '';
+
         # importNpmLock builds the node-semver oracle from its committed lock
         # and integrity hashes. Renovate excludes this reference data.
         # Refresh it through the fixture workflow. NODE_PATH exposes semver.
@@ -582,16 +602,17 @@
           dockerImage = pkgs.dockerTools.buildLayeredImage {
             name = "ecluse";
             tag = null;
-            contents = [ ecluseBin pkgs.cacert ];
+            contents = [ ecluseBin tlsCaBundle ];
             config = {
               Entrypoint = [ "${ecluseBin}/bin/ecluse" ];
               ExposedPorts = { "8080/tcp" = { }; }; # default ECLUSE_SERVER__PORT
               User = "65532:65532"; # nonroot, distroless convention
               Env = [
                 # A distroless image has no system trust store, so tls/x509-system
-                # finds no CAs and every outbound HTTPS fetch fails. `contents`
-                # above puts cacert in the closure. Point GHC's TLS stack at it.
-                "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                # finds no CAs and every outbound HTTPS fetch fails. Point GHC's TLS
+                # stack at the bundle `contents` puts in the closure. The release build
+                # checks it with `scripts/image-archive.sh trust-store`.
+                "SSL_CERT_FILE=${tlsCaBundle}/etc/ssl/certs/ca-bundle.crt"
               ];
               Labels = {
                 "org.opencontainers.image.title" = "ecluse";
