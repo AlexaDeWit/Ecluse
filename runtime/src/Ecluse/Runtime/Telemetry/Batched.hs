@@ -13,6 +13,7 @@ module Ecluse.Runtime.Telemetry.Batched (
     batchMeterProvider,
 ) where
 
+import Data.Atomics (atomicModifyIORefCAS_)
 import Data.HashMap.Strict qualified as HashMap
 import GHC.Clock (getMonotonicTimeNSec)
 import OpenTelemetry.Attributes (Attributes)
@@ -34,7 +35,7 @@ import UnliftIO.Exception (finally, uninterruptibleMask_)
 import UnliftIO.MVar (withMVar)
 
 import Ecluse.Core.Telemetry.Span (ecluseScope)
-import Ecluse.Runtime.Telemetry.Batched.Cells (casModify, drainCells, modifyOwnCell, newCells)
+import Ecluse.Runtime.Telemetry.Batched.Cells (drainCells, modifyOwnCell, newCells)
 
 {- | Wrap an SDK provider so its synchronous Int64 counters, up-down counters and gauges, and its
 histograms, record per capability. Also returns the flusher's step: wait a second, then flush.
@@ -71,7 +72,7 @@ flushBatch batch = withMVar (batchLock batch) $ \() -> uninterruptibleMask_ $ do
 
 -- Instruments are created at boot, so the list of flushes stays bounded.
 registerFlush :: Batch -> IO () -> IO ()
-registerFlush batch flush = casModify (batchFlushes batch) (flush :)
+registerFlush batch flush = atomicModifyIORefCAS_ (batchFlushes batch) (flush :)
 
 batchedMeter :: Batch -> Meter -> Meter
 batchedMeter batch meter =

@@ -2,19 +2,20 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | One mutable cell per capability, written by compare-and-swap with evaluated values. A writer
-updates the cell of the capability it runs on, so it races another writer only when one of them is
-preempted between its read and its swap, and it never waits on another thread's unfinished update.
+{- | One mutable cell per capability. A writer updates its own capability's cell by compare-and-swap,
+evaluating the new value first, so it races another writer only when one is preempted between its
+read and its swap. The loop is atomic-primops' own, compiled in the library, because coverage
+instrumentation in the caller breaks the swap's pointer test. After 30 failed swaps it falls back
+to a lazy update, which the next writer or a drain evaluates.
 -}
 module Ecluse.Runtime.Telemetry.Batched.Cells (
     Cells,
     newCells,
     modifyOwnCell,
     drainCells,
-    casModify,
 ) where
 
-import Data.Atomics (casIORef, peekTicket, readForCAS)
+import Data.Atomics (atomicModifyIORefCAS_)
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import GHC.Conc (getNumCapabilities, myThreadId, threadCapability)
@@ -36,23 +37,12 @@ newCells blank = do
     rest <- V.replicateM (count - 1) (newIORef blank)
     pure Cells{cellsBlank = blank, cellsFirst = home, cellsAll = V.cons home rest}
 
--- | Apply a change to the calling thread's cell.
+-- | Apply a change to the calling thread's cell. A change that builds a strict value is evaluated whole.
 modifyOwnCell :: Cells a -> (a -> a) -> IO ()
 modifyOwnCell cells change = do
     (capability, _) <- threadCapability =<< myThreadId
-    casModify (fromMaybe (cellsFirst cells) (cellsAll cells V.!? capability)) change
+    atomicModifyIORefCAS_ (fromMaybe (cellsFirst cells) (cellsAll cells V.!? capability)) change
 
 -- | Take every cell's value, leaving the blank value in its place.
 drainCells :: Cells a -> IO [a]
 drainCells cells = traverse (`atomicSwapIORef` cellsBlank cells) (V.toList (cellsAll cells))
-
-{- | Replace a value with the change applied to it, retrying if another writer swapped first. The new
-value is evaluated to weak head normal form before the swap, so a cell's type should be strict.
--}
-casModify :: IORef a -> (a -> a) -> IO ()
-casModify ref change = readForCAS ref >>= attempt
-  where
-    attempt ticket = do
-        let !new = change (peekTicket ticket)
-        (swapped, current) <- casIORef ref ticket new
-        unless swapped (attempt current)
