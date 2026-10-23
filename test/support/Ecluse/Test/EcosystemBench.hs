@@ -19,20 +19,27 @@ import Data.Aeson (Value, eitherDecodeStrict)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Universe.Class (universe)
+import Network.HTTP.Client (Request)
 import Network.HTTP.Types (Method, methodGet, methodPut)
 
+import Ecluse.Core.Credential (ClientCredential, bareCredential, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
-import Ecluse.Core.Package (PackageName, infoVersions)
+import Ecluse.Core.Package (PackageName, infoVersions, renderPackageName, unscopedName)
+import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.Adapter (adapterFor)
-import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl), AdapterMetadata (metadataRead))
+import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (Manifest (..))
+import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
+import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Registry.Npm.Route.Internal (npmRoutes)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, filenameMemo, readCoordinate)
 import Ecluse.Core.Registry.PyPI.Route.Internal (pypiRoutes)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifFilename), SimpleIndex (siFiles))
+import Ecluse.Core.Registry.Request (sealRequest)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
@@ -102,7 +109,7 @@ npmBench =
         { ebEcosystem = Npm
         , ebCorpus = []
         , ebUpstream = npmCaptureUpstream
-        , ebOrigin = "https://registry.npmjs.org"
+        , ebOrigin = npmOrigin
         , ebTreeRead = \name -> fmap (second (fst npmCached)) . projectNpmManifest defaultLimits name
         , ebTreeDocument = (fst npmCached <$>) . snd npmCached
         , ebKeepVersions = const keepNpmVersions
@@ -121,6 +128,10 @@ npmBench =
         , ebActionRoutes = [RouteCase "tarball action" (replicate 1000 (methodGet, ["express", "-", "express-4.18.2.tgz"]))]
         , ebAction = \(method, segments) -> snd <$> matchRoute npmRoutes method [] segments
         , ebRouteScaling = []
+        , ebRequestBuilds =
+            [ RequestBuild "artifact request" (\name -> NpmRequest.artifactRequestByFile npmOrigin benchCredential name (unscopedName name <> "-1.0.0.tgz"))
+            , RequestBuild "metadata request" (originRequest (adapterMetadata npmAdapter) npmOrigin)
+            ]
         }
 
 pypiBench :: EcosystemBench
@@ -129,7 +140,7 @@ pypiBench =
         { ebEcosystem = PyPI
         , ebCorpus = []
         , ebUpstream = pypiCaptureUpstream
-        , ebOrigin = "https://pypi.org"
+        , ebOrigin = pypiOrigin
         , ebTreeRead = \name -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits name
         , ebTreeDocument = (fst pypiSimpleCached <$>) . snd pypiSimpleCached
         , ebKeepVersions = keepPyPIVersions
@@ -155,7 +166,29 @@ pypiBench =
             [ RouteScaling "malformed filename separators" (\count -> distribution (separatorHeavySdist "requests" (fromIntegral count) "benchmark"))
             , RouteScaling "valid filename separators" (\count -> distribution ("requests" <> T.replicate (fromIntegral count) "_" <> "1.tar.gz"))
             ]
+        , ebRequestBuilds =
+            [ RequestBuild "index request" (originRequest (adapterMetadata pypiAdapter) pypiOrigin)
+            , RequestBuild "artifact request" (artifactByUrl (adapterArtifact pypiAdapter) benchCredential . wheelUrl)
+            ]
         }
+
+npmOrigin :: Text
+npmOrigin = "https://registry.npmjs.org"
+
+pypiOrigin :: Text
+pypiOrigin = "https://pypi.org"
+
+-- A private read presents the caller's credential, which the build attaches.
+benchCredential :: Maybe ClientCredential
+benchCredential = Just (bareCredential (mkSecret "bench-token"))
+
+-- The whole-document request a metadata read seals before it sends.
+originRequest :: AdapterMetadata -> Text -> PackageName -> Either UrlFormationError Request
+originRequest metadata base name = sealRequest <$> erRequest (metadataRead metadata) base benchCredential name
+
+-- A wheel location as the index lists it, which the artifact read fetches by URL.
+wheelUrl :: PackageName -> Text
+wheelUrl name = "https://files.pythonhosted.org/packages/a0/" <> renderPackageName name <> "-2.34.2-py3-none-any.whl"
 
 -- The release keys the files name, in the order met, read through the memo a full read keeps.
 pypiReleaseKeys :: PackageName -> [IndexFile] -> [Text]
