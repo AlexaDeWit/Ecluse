@@ -40,6 +40,7 @@ import Ecluse.Core.Registry.Publish (
     PublishCodec (pcNativeComplete),
     PublishPlan (PublishPlan, ppLatest),
  )
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityVerified), verifyIntegrity)
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, pypiVersion, sriSha256Of, sriSha512Of, unsafeHash, unscopedNpm, unscopedPyPI, v1_0_0)
@@ -275,7 +276,7 @@ stubPublish :: Deadlines -> Stub -> IO MirrorPublish
 stubPublish deadlines stub = publishAt deadlines (stubBaseUrl stub)
 
 publishAt :: Deadlines -> Text -> IO MirrorPublish
-publishAt deadlines = anonymousPublishAt deadlines npmPublishCodec
+publishAt deadlines = anonymousPublishAt deadlines npmPublishCodec . loopbackRegistryUrl
 
 sizedArtifact :: MirrorArtifact
 sizedArtifact = dummyArtifact{maSize = Just 1234, maHashes = unsafeHash SHA1 (hexSha1Of dummyTarballBytes) :| []}

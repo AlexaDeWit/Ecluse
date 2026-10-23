@@ -201,7 +201,7 @@ isProbeTransportFault = \case
     _ -> False
 
 unsealedPublishAt :: Deadlines -> Stub -> IO MirrorPublish
-unsealedPublishAt deadlines stub = anonymousPublishAt deadlines unsealedCodec (stubBaseUrl stub)
+unsealedPublishAt deadlines stub = anonymousPublishAt deadlines unsealedCodec (loopbackRegistryUrl (stubBaseUrl stub))
 
 -- Answer one path with a 302 elsewhere on the same stub, so a followed hop shows up as a
 -- second served path.
@@ -227,4 +227,4 @@ mintCountingPublish deadlines stub = do
 
 -- The anonymous marriage of npm's codec against an arbitrary target URL.
 publishAt :: Deadlines -> Text -> IO MirrorPublish
-publishAt deadlines = anonymousPublishAt deadlines npmPublishCodec
+publishAt deadlines = anonymousPublishAt deadlines npmPublishCodec . loopbackRegistryUrl
