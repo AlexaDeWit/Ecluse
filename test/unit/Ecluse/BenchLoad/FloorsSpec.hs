@@ -65,7 +65,7 @@ spec = do
             for_ [(135, 200), (135, 250), (0, 0)] $ \(highest, most) ->
                 decodeFloors (document (calibrationValue ["npmInjectedLatency" .= latencyValue [("2cpu-1gib", highest)] most]) twoCoreFloors) `shouldSatisfy` isLeft
         it "refuses highest latencies for other pod shapes than the floors hold, and for none" $
-            for_ [[("4cpu-1gib", 135)], [("2cpu-1gib", 135), ("4cpu-1gib", 141)], [("2CPU-1GIB", 135)], []] $ \highest ->
+            for_ [[("3cpu-1gib", 135)], [("2cpu-1gib", 135), ("3cpu-1gib", 141)], [("2CPU-1GIB", 135)], []] $ \highest ->
                 decodeFloors (document (calibrationValue ["npmInjectedLatency" .= latencyValue highest 210]) twoCoreFloors) `shouldSatisfy` isLeft
         it "refuses a pod shape it cannot read, and one not in its rendered form" $
             for_ ["2cpu", "2CPU-1GIB", "2cpu-1024mib"] $ \shape ->
@@ -73,7 +73,7 @@ spec = do
         it "requires a PyPI ceiling when calibration names the unified conditions" $
             decodeFloors (document (calibrationValue ["measurementConditions" .= ("unified-v2" :: Text)]) twoCoreFloors) `shouldSatisfy` isLeft
         it "checks native PyPI ceiling arithmetic and pod identities" $
-            for_ [latencyValue [("2cpu-1gib", 100)] 151, latencyValue [("4cpu-1gib", 100)] 150] $ \latencyRecord ->
+            for_ [latencyValue [("2cpu-1gib", 100)] 151, latencyValue [("3cpu-1gib", 100)] 150] $ \latencyRecord ->
                 decodeFloors (document (calibrationValue ["measurementConditions" .= ("unified-v2" :: Text), "pypiInjectedLatency" .= latencyRecord]) twoCoreFloors) `shouldSatisfy` isLeft
         it "reads each ecosystem ceiling and retained row provenance without changing counts" $ do
             let changed = ["measurementConditions" .= ("unified-v2" :: Text), "pypiInjectedLatency" .= latencyValue [("2cpu-1gib", 100)] 150, "retainedFloorConditions" .= Map.singleton ("npm/herd" :: Text) ("legacy-v1" :: Text)]

@@ -126,8 +126,8 @@ check "a run without the artifact gives way to the next older run" "$(record 2)"
 begin
 prefix="results-ARM64-2cpu-1gib-"
 runs 3 main workflow_dispatch owner/repo 2 main schedule owner/repo > "$stub/runs.json"
-artifacts 3 results-ARM64-thrash-sha3 false results-ARM64-4cpu-1gib-sha3 false
-artifacts 2 results-ARM64-4cpu-1gib-sha2 false results-ARM64-2cpu-1gib-sha2 false
+artifacts 3 results-ARM64-thrash-sha3 false results-ARM64-3cpu-1gib-sha3 false
+artifacts 2 results-ARM64-3cpu-1gib-sha2 false results-ARM64-2cpu-1gib-sha2 false
 check "a pod shape takes the newest run that measured that shape" "$(record 2)" "2 results-ARM64-2cpu-1gib-sha2"
 
 begin
