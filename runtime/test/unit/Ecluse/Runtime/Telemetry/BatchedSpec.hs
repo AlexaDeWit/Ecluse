@@ -4,12 +4,14 @@
 
 module Ecluse.Runtime.Telemetry.BatchedSpec (spec) where
 
+import Control.Concurrent (forkOn)
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Vector qualified as V
+import GHC.Clock (getMonotonicTimeNSec)
 import Test.Hspec
-import UnliftIO (bracket, forConcurrently_)
+import UnliftIO (bracket, forConcurrently_, throwIO, tryAny)
 
 import OpenTelemetry.Attributes (Attributes, addAttribute, defaultAttributeLimits, emptyAttributes)
 import OpenTelemetry.Exporter.InMemory.Metric (inMemoryMetricExporter)
@@ -23,14 +25,22 @@ import OpenTelemetry.Exporter.Metric (
     ResourceMetricsExport,
     SumDataPoint (..),
  )
-import OpenTelemetry.MeterProvider (SdkMeterEnv, SdkMeterProviderOptions (metricExporter), collectResourceMetrics)
-import OpenTelemetry.Metric (createMeterProvider, defaultSdkMeterProviderOptions, shutdownMeterProvider)
+import OpenTelemetry.Instrumentation.HttpClient.Raw (createHttpClientMetricsFromMeter)
+import OpenTelemetry.MeterProvider (SdkMeterEnv, collectResourceMetrics)
+import OpenTelemetry.Metric (
+    PeriodicMetricReaderHandle (stopPeriodicMetricReader),
+    createMeterProvider,
+    defaultPeriodicMetricReaderOptions,
+    defaultSdkMeterProviderOptions,
+    forkPeriodicMetricReader,
+    shutdownMeterProvider,
+ )
 import OpenTelemetry.Metric.Core (
     AdvisoryParameters (advisoryExplicitBucketBoundaries),
     Counter (counterAdd),
     Gauge (gaugeRecord),
     Histogram (histogramRecord),
-    MeterProvider,
+    MeterProvider (meterProviderGetMeter),
     ObservableResult (observe),
     UpDownCounter (upDownCounterAdd),
     defaultAdvisoryParameters,
@@ -50,6 +60,7 @@ import OpenTelemetry.Trace.Id (spanIdBytes, traceIdBytes)
 
 import Ecluse.Core.Telemetry.Span (ecluseScope)
 import Ecluse.Runtime.Telemetry.Batched (batchMeterProvider)
+import Ecluse.Runtime.Telemetry.Batched.Internal (Batch (batchFlushes), batchedProvider, newBatch)
 import Ecluse.Runtime.Test.Telemetry (gaugePoints, metricExports, sumPoints, sumPointsIn)
 import Ecluse.Test.Support (withCapabilities)
 
@@ -58,6 +69,9 @@ spec :: Spec
 spec = do
     exactnessSpec
     collectionSpec
+    instrumentSpec
+    gaugeOrderSpec
+    faultSpec
     exemplarSpec
 
 exactnessSpec :: Spec
@@ -108,14 +122,65 @@ collectionSpec = describe "flushing" $ do
             upDownCounterAdd (probeActive probe) (-1) putAttrs
             sumPoints "probe.active" meterEnv `shouldReturn` [(putAttrs, 0)]
 
-    it "flushes before shutdown, so the shutdown export carries the last records" $ do
+    it "flushes into the periodic reader's final export at shutdown, so the last records are exported" $ do
         (exporter, exported) <- inMemoryMetricExporter
-        (sdk, _) <- createMeterProvider emptyMaterializedResources defaultSdkMeterProviderOptions{metricExporter = Just exporter}
-        (provider, _) <- batchMeterProvider sdk
+        (sdk, meterEnv) <- createMeterProvider emptyMaterializedResources defaultSdkMeterProviderOptions
+        (provider, _) <- batchMeterProvider (const pass) sdk
+        periodic <- forkPeriodicMetricReader meterEnv exporter defaultPeriodicMetricReaderOptions
         probe <- newProbe provider
         counterAdd (probeRequests probe) 4 getAttrs
-        void (shutdownMeterProvider provider Nothing)
-        sumPointsIn "probe.requests" <$> readIORef exported `shouldReturn` [(getAttrs, 4)]
+        stopPeriodicMetricReader periodic
+        finalExport <- take 1 . reverse <$> readIORef exported
+        sumPointsIn "probe.requests" finalExport `shouldBe` [(getAttrs, 4)]
+        shutdown provider
+
+instrumentSpec :: Spec
+instrumentSpec = describe "instrument creation" $ do
+    it "returns the first instrument for a repeated key, so creating it again adds no flush" $
+        withBatch getMonotonicTimeNSec $ \batch provider meterEnv -> do
+            meter <- getMeter provider ecluseScope
+            let create description = meterCreateCounterInt64 meter "probe.requests" (Just "{request}") description defaultAdvisoryParameters
+            replicateM_ 100 (create Nothing >>= \counter -> counterAdd counter 1 getAttrs)
+            flushCount batch `shouldReturn` 1
+            sumPoints "probe.requests" meterEnv `shouldReturn` [(getAttrs, 100)]
+            void (create (Just "Requests served."))
+            flushCount batch `shouldReturn` 2
+
+    it "adds no flush when the http-client instrumentation creates its metrics on every request" $
+        withBatch getMonotonicTimeNSec $ \batch provider _ -> do
+            meter <- getMeter provider ecluseScope
+            replicateM_ 50 (createHttpClientMetricsFromMeter meter)
+            flushCount batch `shouldReturn` 3
+
+gaugeOrderSpec :: Spec
+gaugeOrderSpec = describe "gauge readings from two capabilities" $
+    it "keep the newest, across cells and against an older reading drained after a newer one was flushed" $
+        withCapabilities 2 $ do
+            clock <- newIORef 0
+            withBatch (readIORef clock) $ \_ provider meterEnv -> do
+                meter <- getMeter provider ecluseScope
+                gauge <- meterCreateGaugeInt64 meter "probe.depth" Nothing Nothing defaultAdvisoryParameters
+                let recordOn capability at value = onCapability capability (writeIORef clock at >> gaugeRecord gauge value getAttrs)
+                recordOn 0 30 3 >> recordOn 1 25 4
+                gaugePoints "probe.depth" meterEnv `shouldReturn` [(getAttrs, 3)]
+                recordOn 1 40 5
+                gaugePoints "probe.depth" meterEnv `shouldReturn` [(getAttrs, 5)]
+                recordOn 0 35 6
+                gaugePoints "probe.depth" meterEnv `shouldReturn` [(getAttrs, 5)]
+
+faultSpec :: Spec
+faultSpec = describe "a series whose replay throws" $
+    it "is reported and dropped alone, and the collection still finishes" $ do
+        faults <- newIORef (0 :: Int)
+        (sdk, meterEnv) <- createMeterProvider emptyMaterializedResources defaultSdkMeterProviderOptions
+        batch <- newBatch getMonotonicTimeNSec (\_ -> modifyIORef' faults (+ 1))
+        provider <- batchedProvider batch (refusingCounterRecords putAttrs sdk)
+        probe <- newProbe provider
+        let accepted = methodAttrs <$> ["GET", "HEAD", "POST", "PATCH", "DELETE", "OPTIONS", "TRACE", "CONNECT", "PURGE", "LINK"]
+        for_ (putAttrs : accepted) $ \attrs -> counterAdd (probeRequests probe) 1 attrs
+        sumPoints "probe.requests" meterEnv >>= (`shouldMatchList` map (,1) accepted)
+        readIORef faults `shouldReturn` 1
+        shutdown provider
 
 exemplarSpec :: Spec
 exemplarSpec = describe "exemplars" $
@@ -251,8 +316,39 @@ withBatched = bracket acquire (shutdown . fst)
   where
     acquire = do
         (sdk, meterEnv) <- createMeterProvider emptyMaterializedResources defaultSdkMeterProviderOptions
-        (provider, _flushStep) <- batchMeterProvider sdk
+        (provider, _flushStep) <- batchMeterProvider (const pass) sdk
         pure (provider, meterEnv)
+
+-- A batch over a plain SDK provider and a given monotonic clock, with no fault expected.
+withBatch :: IO Word64 -> (Batch -> MeterProvider -> SdkMeterEnv -> IO a) -> IO a
+withBatch clock use =
+    bracket (createMeterProvider emptyMaterializedResources defaultSdkMeterProviderOptions) (shutdown . fst) $ \(sdk, meterEnv) -> do
+        batch <- newBatch clock throwIO
+        provider <- batchedProvider batch sdk
+        use batch provider meterEnv
+
+-- How many instruments a batch flushes.
+flushCount :: Batch -> IO Int
+flushCount batch = length <$> readIORef (batchFlushes batch)
+
+-- Run an action on one capability and wait for it.
+onCapability :: Int -> IO () -> IO ()
+onCapability capability act = do
+    done <- newEmptyMVar
+    _ <- forkOn capability (tryAny act >>= putMVar done)
+    takeMVar done >>= either throwIO pure
+
+-- An SDK provider whose counters throw on one attribute set.
+refusingCounterRecords :: Attributes -> MeterProvider -> MeterProvider
+refusingCounterRecords refused sdk = sdk{meterProviderGetMeter = fmap refusing . meterProviderGetMeter sdk}
+  where
+    refusing meter = meter{meterCreateCounterInt64 = \name unit description advice -> refuse <$> meterCreateCounterInt64 meter name unit description advice}
+    refuse counter = counter{counterAdd = \value attrs -> if attrs == refused then throwIO RecordRefused else counterAdd counter value attrs}
+
+data RecordRefused = RecordRefused
+    deriving stock (Show)
+
+instance Exception RecordRefused
 
 shutdown :: MeterProvider -> IO ()
 shutdown provider = void (shutdownMeterProvider provider Nothing)
@@ -269,7 +365,10 @@ realtimeNanos :: IO Word64
 realtimeNanos = floor . (* 1_000_000_000) <$> getPOSIXTime
 
 getAttrs :: Attributes
-getAttrs = addAttribute defaultAttributeLimits emptyAttributes "http.request.method" ("GET" :: Text)
+getAttrs = methodAttrs "GET"
 
 putAttrs :: Attributes
-putAttrs = addAttribute defaultAttributeLimits emptyAttributes "http.request.method" ("PUT" :: Text)
+putAttrs = methodAttrs "PUT"
+
+methodAttrs :: Text -> Attributes
+methodAttrs = addAttribute defaultAttributeLimits emptyAttributes "http.request.method"

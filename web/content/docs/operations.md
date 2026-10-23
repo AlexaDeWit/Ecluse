@@ -494,11 +494,12 @@ it, and a scrape never enters the proxy's request path, so it adds nothing to th
 is an error in the log rather than a failed start.
 
 Écluse hands its metric records to the SDK in batches: once a second, and again before every
-scrape, OTLP export and shutdown. A scrape or an export therefore still sees every record made
-before it. Three details follow from the batching. A gauge point carries the time of the batch, at
-most a second after the record. An exemplar carries the trace and span of the request that made
-the record, but the time of the batch. A counter's exemplar holds the total added since the
-previous batch, not one request's increment.
+scrape and OTLP export, the final export at shutdown included. A scrape or an export therefore
+still sees every record made before it. Three details follow from the batching. A gauge point
+carries the time of the batch, at most a second after the record. An exemplar carries the trace
+and span of the request that made the record, but the time of the batch. A counter's exemplar
+holds the total added since the previous batch, not one request's increment, and a gauge's
+exemplar holds the newest reading in the batch.
 
 **Give every co-located Prometheus exporter its own port.** These exporters all read
 the same variable, so two on one host race for 9464. The loser logs the bind failure and serves

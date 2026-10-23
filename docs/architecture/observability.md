@@ -205,11 +205,11 @@ and the wiring. Six design facts hold regardless:
   destination, so it is deliberately not SSRF-classified.
 - **Export never touches the request path.** The batch exporter runs asynchronously, and Écluse
   logs a failed export under a throttle.
-- **Recording never waits on another request.** The SDK keeps every series in one shared cell,
-  so concurrent requests queued behind each other's records. Écluse records into one cell per
-  capability and hands the totals to the SDK once a second, and before every scrape, export and
-  shutdown, so a collection still sees every record made before it. Counts, buckets, minimums and
-  maximums stay exact, and exemplars keep the trace of the request that recorded them.
+- **Metric records batch per capability.** The SDK keeps every series in one shared cell. Écluse
+  records into one cell per capability by compare-and-swap, and hands the totals to the SDK once a
+  second and before every collection, the reader's final export at shutdown included, so every
+  export sees each record made before it. Counts, buckets, minimums and maximums stay exact, and
+  exemplars keep the trace of the request that recorded them.
 - **Threaded RTS required.** The OTel SDK's batch span processor aborts under the non-threaded
   runtime, so telemetry needs the threaded runtime the image runs.
 - **The resource-attribute header is bounded.** `service.name` travels on `OTEL_SERVICE_NAME`

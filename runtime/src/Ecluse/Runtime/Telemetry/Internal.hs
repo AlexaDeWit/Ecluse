@@ -70,6 +70,7 @@ import Ecluse.Runtime.Telemetry.ExportFailure (
     exportFailureSink,
     installExportErrorHandler,
     observeExportResult,
+    observeFlushFault,
  )
 import Ecluse.Runtime.Telemetry.Scrape (MetricScrape, metricScrapeFor, withScrapeListener)
 
@@ -238,7 +239,7 @@ initializeObservedMeterProvider logEnv sink = do
             envResources <- mkResource . map Just <$> detectResourceAttributes
             let resources = materializeResources (mergeResources envResources builtInResources)
             (sdkProvider, env) <- createMeterProvider resources defaultSdkMeterProviderOptions
-            (batched, flushStep) <- batchMeterProvider sdkProvider
+            (batched, flushStep) <- batchMeterProvider (observeFlushFault sink) sdkProvider
             readerHandle <- forkPeriodicMetricReader env exporter readerOptions
             -- The bracket acquires masked, so the flusher unmasks to stay cancellable.
             flusher <- asyncWithUnmask (\unmask -> unmask (superviseBackground "metric-flush" logEnv flushStep))
@@ -247,8 +248,8 @@ initializeObservedMeterProvider logEnv sink = do
             scrape <- metricScrapeFor env
             pure (provider, scrape)
 
-{- Stopping the reader first mirrors the SDK's own shutdown ordering, so this is part of the same
-version-pin re-diff surface as 'initializeObservedMeterProvider'. -}
+{- Run a stop before the provider shuts down: the reader's, whose final export is the last, then the
+flusher's. The order mirrors the SDK's own, so it is part of the same version-pin re-diff surface. -}
 beforeShutdown :: IO () -> MeterProvider -> MeterProvider
 beforeShutdown stop provider =
     provider{meterProviderShutdown = \timeout -> stop >> meterProviderShutdown provider timeout}

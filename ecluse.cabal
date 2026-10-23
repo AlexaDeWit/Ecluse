@@ -617,6 +617,7 @@ library ecluse-runtime
     Ecluse.Runtime.Telemetry
     Ecluse.Runtime.Telemetry.Batched
     Ecluse.Runtime.Telemetry.Batched.Cells
+    Ecluse.Runtime.Telemetry.Batched.Internal
     Ecluse.Runtime.Telemetry.Correlation
     Ecluse.Runtime.Telemetry.Correlation.Internal
     Ecluse.Runtime.Telemetry.Escape
