@@ -99,7 +99,8 @@ spec = do
 
 packedReadSpec :: Spec
 packedReadSpec = describe "packed full read" $ do
-    modifyMaxSuccess (const 1000) $ do
+    -- Fewer tests let "a tarball served as read" fall under its bar by chance.
+    modifyMaxSuccess (const 2000) $
         it "reads what the tree read reads, for hostile packuments, chunkings and damage" $
             hedgehog $ do
                 body <- forAll (Gen.choice [genPackumentBytes, genServablePackumentBytes] >>= damaged)
@@ -110,6 +111,7 @@ packedReadSpec = describe "packed full read" $ do
                 served [tree] === served [packed]
                 fmap snd (packedFullRead chunks) === baseFullRead (readLimits chunks) (packageNameOf chunks) (bodyLimit chunks) chunks
 
+    modifyMaxSuccess (const 1000) $
         it "renders a listing merged from two sources, each packed over its own table, as the tree reads do" $
             hedgehog $ do
                 sources <- forAll (Gen.list (Range.singleton 2) genServablePackumentBytes)

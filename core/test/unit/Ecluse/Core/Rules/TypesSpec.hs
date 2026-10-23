@@ -224,7 +224,8 @@ revocationSpec = describe "revocationRules" $ do
         decideUnder NoDatabase policy evidence >>= (`shouldSatisfy` isApproved)
         decideUnder NoDatabase (revocationRules policy) evidence >>= \d -> blockedBy d `shouldBe` Just "DenyByIdentity"
 
-    modifyMaxSuccess (const 5000) $
+    -- Fewer tests let "an allow admits at the gate" fall under its bar by chance.
+    modifyMaxSuccess (const 10000) $
         it "never blocks a version the whole policy admits, on the same evidence" $
             hedgehog $ do
                 policy <- forAll genPolicy

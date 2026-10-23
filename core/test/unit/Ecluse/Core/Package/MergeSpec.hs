@@ -950,7 +950,8 @@ spec = do
                 let keys = Map.keys (mpSurvivors plan)
                 H.assert (all (`elem` keys) (Map.keys (mpTime plan)))
 
-        it "the render's fields equal a strict copy built from each version's winning copy" $
+        -- Fewer tests let "a version two sources carry" fall under its bar by chance.
+        modifyMaxSuccess (const 200) . it "the render's fields equal a strict copy built from each version's winning copy" $
             hedgehog $ do
                 sources <- forAll genRenderedSources
                 plan <- H.evalMaybe (mergePackuments sources)
