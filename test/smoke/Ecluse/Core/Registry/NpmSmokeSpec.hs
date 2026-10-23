@@ -34,7 +34,7 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.RegistrySmoke (liveMetadata)
-import Ecluse.Test.Deadline (newSweptClient)
+import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig, publicRegistryBaseUrl)
 import Ecluse.Test.Registry.Npm.Metadata (fetchMetadataFormBounded, projectNpmManifest)
@@ -60,20 +60,20 @@ spec = describe "live npm registry protocol" $ do
                         Map.null (infoVersions info) `shouldBe` False
 
     it "a bounded fetch of a real package projects to PackageInfo (full data plane)" $ do
-        exchanges <- newSweptClient =<< newManager tlsManagerSettings
-        let isOdd = mkPackageName Npm Nothing "is-odd"
-        config <- publicRegistryOrigin exchanges
-        outcome <- fetchMetadataFormBounded config Abbreviated isOdd
-        case outcome of
-            Left _ ->
-                pendingWith "npm registry unreachable (offline); smoke test skipped"
-            Right response ->
-                case projectNpmManifest defaultLimits isOdd (responseBody response) of
-                    Left err ->
-                        expectationFailure ("live packument failed to project: " <> show err)
-                    Right (info, _raw) -> do
-                        renderPackageName (infoName info) `shouldBe` "is-odd"
-                        Map.member "latest" (infoDistTags info) `shouldBe` True
+        withExchangeClient (newManager tlsManagerSettings) $ \exchanges -> do
+            let isOdd = mkPackageName Npm Nothing "is-odd"
+            config <- publicRegistryOrigin exchanges
+            outcome <- fetchMetadataFormBounded config Abbreviated isOdd
+            case outcome of
+                Left _ ->
+                    pendingWith "npm registry unreachable (offline); smoke test skipped"
+                Right response ->
+                    case projectNpmManifest defaultLimits isOdd (responseBody response) of
+                        Left err ->
+                            expectationFailure ("live packument failed to project: " <> show err)
+                        Right (info, _raw) -> do
+                            renderPackageName (infoName info) `shouldBe` "is-odd"
+                            Map.member "latest" (infoDistTags info) `shouldBe` True
 
     it "validates every real dist.shasum and dist.integrity a long-lived npm packument serves (mkHash accepts real formats)" $ do
         -- Lodash covers both legacy SHA-1 and modern SRI formats. This checks syntax, not admission.
@@ -89,10 +89,10 @@ spec = describe "live npm registry protocol" $ do
     -- Live responses check default admission against growth since the complete corpus captures.
     for_ [("react", "react"), ("types-node", "@types/node"), ("lodash", "lodash"), ("typescript", "typescript")] $ \(identifier, pkg) ->
         it (caseLabel ("live/npm/" <> identifier) ("a real large trusted packument is admissible under the default Limits (" <> pkg <> ")")) $ do
-            exchanges <- newSweptClient =<< newManager tlsManagerSettings
-            parsed <- either (fail . show) pure (projectName pkg)
-            config <- publicRegistryOrigin exchanges
-            void (liveMetadata pkg (fetchManifest npmRead passthroughTracingPort config parsed))
+            withExchangeClient (newManager tlsManagerSettings) $ \exchanges -> do
+                parsed <- either (fail . show) pure (projectName pkg)
+                config <- publicRegistryOrigin exchanges
+                void (liveMetadata pkg (fetchManifest npmRead passthroughTracingPort config parsed))
 
 registryBase :: String
 registryBase = "https://registry.npmjs.org"

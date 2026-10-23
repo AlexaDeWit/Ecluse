@@ -31,7 +31,7 @@ import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version)
-import Ecluse.Test.Deadline (newSweptClient)
+import Ecluse.Test.Deadline (unsweptClient)
 import Ecluse.Test.Json (encodeStrict, keysAt, objectAt)
 import Ecluse.Test.Package (leftpadName, npmVersion, unscopedNpm)
 import Ecluse.Test.Registry.Npm (listingValue, writeTokenNpmConfig)
@@ -178,7 +178,7 @@ deleteSequenceSpec = describe "the version delete verb" $ do
             `shouldReturn` Just "NO_REVISION"
 
 storeOrigin :: IO OriginClient
-storeOrigin = storeOriginOver <$> (newSweptClient =<< newManager defaultManagerSettings)
+storeOrigin = storeOriginOver <$> (unsweptClient =<< newManager defaultManagerSettings)
 
 -- The shared mirror-write client, against the fixture store's own base URL.
 storeOriginOver :: ExchangeClient -> OriginClient

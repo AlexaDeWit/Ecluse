@@ -22,7 +22,7 @@ module Ecluse.Service (
 ) where
 
 import Katip (LogEnv, katipAddNamespace)
-import Network.HTTP.Client (ManagerSettings)
+import Network.HTTP.Client (Manager, ManagerSettings)
 
 import Ecluse.Boot (BootEnv (beDeadlines, beLogEnv, beTelemetry), logBootWarning, superviseBackground)
 import Ecluse.Composition (BootWiring (bwBindings, bwPublishTargets))
@@ -51,7 +51,6 @@ import Ecluse.Composition.Worker (workerPoliciesWithState)
 import Ecluse.Config (AppConfig (cfgEgress), EgressSettings (egrOperatorContact))
 import Ecluse.Core.BuildIdentity (identityManagerSettings, renderUserAgent)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured))
-import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
 import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
 import Ecluse.Core.Queue (MirrorQueue)
@@ -64,7 +63,6 @@ import Ecluse.Core.Registry.Adapter (
     serveCredential,
     serveRouter,
  )
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Admission.Brake (defaultBrakeMarks)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), meterSnapshot, newMemoryMeter)
@@ -142,8 +140,8 @@ withServiceRuntime bootEnv plan mirror action = do
     states <- newMirrorStates (bpS3Endpoint bootPlan) deadlines appConfig (bpLimits bootPlan) cacheConfig pool
     let bindings = bindMirrorStates states baseBindings
 
-    (publicClient, privateClient) <- dataPlaneClients telemetry deadlines bootPlan
-    withEnvWithAdmission serveAdmission memoryMeter queue publicClient privateClient metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
+    (manager, privateManager) <- dataPlaneManagers telemetry bootPlan
+    withEnvWithAdmission serveAdmission memoryMeter queue manager privateManager deadlines metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
         -- The instruments exist now, so installing them makes the credential provider's deferred
         -- reporters live for the rest of the run.
         installMetrics deferredMetrics (envMetrics builtEnv)
@@ -199,17 +197,16 @@ memoryAdmission memoryPlan = do
                 }
         )
 
-{- The two data-plane clients, each instrumented then pooled at its own bound, over the process's
-one sweeper. They stay split because public reads are anonymous and private reads forward the
-caller's credential. -}
-dataPlaneClients :: Telemetry -> Deadlines -> BootPlan -> IO (ExchangeClient, ExchangeClient)
-dataPlaneClients telemetry deadlines bootPlan = do
+{- The two data-plane managers, each instrumented then pooled at its own bound. They stay split
+because public reads are anonymous and private reads forward the caller's credential. -}
+dataPlaneManagers :: Telemetry -> BootPlan -> IO (Manager, Manager)
+dataPlaneManagers telemetry bootPlan = do
     publicSettings <- dataPlaneManagerSettings telemetry
     privateSettings <- dataPlaneManagerSettings telemetry
     let renderedAgent = renderUserAgent (egrOperatorContact (cfgEgress (vpSettings (bpValidated bootPlan))))
     manager <- newPooledManager (bpPublicConnections bootPlan) (identityManagerSettings renderedAgent publicSettings)
     privateManager <- newPooledManager (bpPrivateConnections bootPlan) (identityManagerSettings renderedAgent privateSettings)
-    pure (ExchangeClient manager deadlines, ExchangeClient privateManager deadlines)
+    pure (manager, privateManager)
 
 -- | The settings each data-plane manager pools from: 'typedTlsManagerSettings', under the client span when telemetry is on.
 dataPlaneManagerSettings :: Telemetry -> IO ManagerSettings

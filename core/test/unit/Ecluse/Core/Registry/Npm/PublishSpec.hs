@@ -54,7 +54,7 @@ import Ecluse.Test.Registry.Publish (checkedNpmUpload, isMalformedBody, publishO
 import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 
-import Ecluse.Test.Deadline (newSweptClient)
+import Ecluse.Test.Deadline (unsweptClient)
 import Ecluse.Test.Stub (
     Stub,
     allCaptured,
@@ -281,7 +281,7 @@ stubPublish stub = publishAt (stubBaseUrl stub)
 
 publishAt :: Text -> IO MirrorPublish
 publishAt targetUrl = do
-    exchanges <- newSweptClient =<< newManager defaultManagerSettings
+    exchanges <- unsweptClient =<< newManager defaultManagerSettings
     let transport = MirrorTransport{ptClient = exchanges, ptMintCredential = pure Nothing, ptLimits = defaultLimits, ptTracing = passthroughTracingPort}
     pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) (loopbackRegistryUrl targetUrl) npmPublishCodec)
 

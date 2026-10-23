@@ -26,7 +26,7 @@ import Ecluse.Core.Version (canonicalPep440, renderVersion)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityVerified), verifyIntegrity)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.RegistrySmoke (liveMetadata)
-import Ecluse.Test.Deadline (newSweptClient)
+import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Metadata.Fetch (fetchTestBody)
 import Ecluse.Test.Support (expectRight, expectRightText)
@@ -35,20 +35,20 @@ import Ecluse.Test.Support (expectRight, expectRightText)
 spec :: Spec
 spec = describe "live PyPI registry protocol" $
     it (caseLabel "live/pypi/sampleproject" "reads a bounded Simple index and verifies one advertised wheel") $ do
-        client <- newSweptClient =<< newManager tlsManagerSettings
-        base <- expectRightText (mkRegistryUrl "https://pypi.org")
-        expectedVersion <- maybe (fail "invalid sampleproject fixture version") pure (canonicalPep440 "4.0.0")
-        let versionKey = renderVersion expectedVersion
-            name = mkPackageName PyPI Nothing "sampleproject"
-            origin = originClient defaultLimits client base Nothing
-        info <- liveMetadata "sampleproject" (fetchManifest (metadataRead (adapterMetadata pypiAdapter)) passthroughTracingPort origin name)
-        version <- maybe (fail "live index omitted sampleproject 4.0.0") pure (Map.lookup versionKey (infoVersions info))
-        pkgName version `shouldBe` name
-        renderVersion (pkgVersion version) `shouldBe` versionKey
-        artifact <-
-            maybe (fail "live index omitted the sampleproject 4.0.0 wheel") pure $
-                find ((== wheelFilename) . artFilename) (NE.toList (pkgArtifacts version))
-        downloadWheel client artifact
+        withExchangeClient (newManager tlsManagerSettings) $ \client -> do
+            base <- expectRightText (mkRegistryUrl "https://pypi.org")
+            expectedVersion <- maybe (fail "invalid sampleproject fixture version") pure (canonicalPep440 "4.0.0")
+            let versionKey = renderVersion expectedVersion
+                name = mkPackageName PyPI Nothing "sampleproject"
+                origin = originClient defaultLimits client base Nothing
+            info <- liveMetadata "sampleproject" (fetchManifest (metadataRead (adapterMetadata pypiAdapter)) passthroughTracingPort origin name)
+            version <- maybe (fail "live index omitted sampleproject 4.0.0") pure (Map.lookup versionKey (infoVersions info))
+            pkgName version `shouldBe` name
+            renderVersion (pkgVersion version) `shouldBe` versionKey
+            artifact <-
+                maybe (fail "live index omitted the sampleproject 4.0.0 wheel") pure $
+                    find ((== wheelFilename) . artFilename) (NE.toList (pkgArtifacts version))
+            downloadWheel client artifact
 
 wheelFilename :: Text
 wheelFilename = "sampleproject-4.0.0-py3-none-any.whl"

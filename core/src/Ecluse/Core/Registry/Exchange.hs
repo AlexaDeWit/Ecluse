@@ -123,7 +123,7 @@ runExchangeUsing control client progress request readResponse =
   where
     metered watch = request{requestBody = meteredUpload watch (requestBody request)}
 
--- | Fail an action that outlives the floor's serve-path cap with the transport timeout, up to one sweep late.
+-- | Fail an action that outlives the floor's serve-path cap with the transport timeout, about one sweep late.
 withinServeCap :: Deadlines -> ProgressFloor -> (FetchFault -> e) -> IO (Either e a) -> IO (Either e a)
 withinServeCap deadlines progress inject action =
     fromMaybe (Left (inject capExceeded)) <$> timeout deadlines (floorServeCapMicros progress) action

@@ -41,7 +41,7 @@ import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Contract.PackageStore
 import Ecluse.Test.Contract.PackageStore.Provider
-import Ecluse.Test.Deadline (newSweptClient)
+import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Package (npmVersion, sriSha512Of, unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Npm (mirrorWriteToken, writeTokenNpmConfig)
@@ -78,11 +78,11 @@ withNpmSession maintenance use = do
                 }
     withRoutedStubIO (reply held writes failWrite failDelete) $ \stub -> do
         let reopen = do
-                exchanges <- newSweptClient =<< newManager (singleAttemptSettings defaultManagerSettings)
-                let origin = writeTokenNpmConfig (loopbackRegistryUrl (stubBaseUrl stub)) exchanges defaultLimits
-                    publisher = newMirrorPublish (MirrorTransport exchanges (pure (Just (bareCredential mirrorWriteToken))) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (ocBaseUrl origin) npmPublishCodec
-                store <- maintenance origin boundary
-                pure (operations origin publisher store)
+                withExchangeClient (newManager (singleAttemptSettings defaultManagerSettings)) $ \exchanges -> do
+                    let origin = writeTokenNpmConfig (loopbackRegistryUrl (stubBaseUrl stub)) exchanges defaultLimits
+                        publisher = newMirrorPublish (MirrorTransport exchanges (pure (Just (bareCredential mirrorWriteToken))) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (ocBaseUrl origin) npmPublishCodec
+                    store <- maintenance origin boundary
+                    pure (operations origin publisher store)
         initial <- reopen
         use
             PackageStoreSession

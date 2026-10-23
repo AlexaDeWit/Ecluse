@@ -21,11 +21,12 @@ module Ecluse.Runtime.Env (
 ) where
 
 import Katip (LogEnv, Severity (InfoS, WarningS), katipAddContext, sl)
+import Network.HTTP.Client (Manager)
 
 import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry.Backoff (CooldownEvent (..))
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
 import Ecluse.Core.Registry.Public (PublicControl, newPublicControl)
 import Ecluse.Core.Security.Authority (HostPort (..))
 import Ecluse.Core.Server.Admission (ServeAdmission)
@@ -55,7 +56,7 @@ data Env = Env
     , envPrivateClient :: ExchangeClient
     -- ^ Validate private TLS peers while retaining their credential handling.
     , envDeadlines :: Deadlines
-    -- ^ The process's one sweeper, which both clients share and every request's timeout runs on.
+    -- ^ The process's one sweeper, which both clients carry and every request's timeout runs on.
     , envMetadataCache :: MetadataCache
     -- ^ Selected-version and assembled retention with transient full-read coalescing.
     , envLogEnv :: LogEnv
@@ -70,9 +71,9 @@ data Env = Env
     -- ^ Track completed worker progress for liveness, separately from HTTP readiness.
     }
 
--- | Assemble process handles without opening a socket. Callers own the supplied resources.
-newEnvWithAdmission :: ServeAdmission -> MemoryMeter -> MirrorQueue -> ExchangeClient -> ExchangeClient -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
-newEnvWithAdmission admission meter queue publicClient privateClient metadataCache logEnv telemetry heartbeat = do
+-- | Assemble process handles without opening a socket. Both clients carry the one sweeper. Callers own the supplied resources.
+newEnvWithAdmission :: ServeAdmission -> MemoryMeter -> MirrorQueue -> Manager -> Manager -> Deadlines -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
+newEnvWithAdmission admission meter queue manager privateManager deadlines metadataCache logEnv telemetry heartbeat = do
     metrics <- newMetrics telemetry
     publicControl <- newPublicControl (mpUpstreamRequest (metricsPortOf metrics)) (reportCooldown logEnv)
     -- The dd log identity comes from the (already-normalised) OTEL_* environment, the
@@ -83,10 +84,10 @@ newEnvWithAdmission admission meter queue publicClient privateClient metadataCac
             { envServeAdmission = admission
             , envMemoryMeter = meter
             , envQueue = queue
-            , envPublicClient = publicClient
+            , envPublicClient = ExchangeClient manager deadlines
             , envPublicControl = publicControl
-            , envPrivateClient = privateClient
-            , envDeadlines = ecDeadlines publicClient
+            , envPrivateClient = ExchangeClient privateManager deadlines
+            , envDeadlines = deadlines
             , envMetadataCache = metadataCache
             , envLogEnv = logEnv
             , envTelemetry = telemetry
@@ -101,16 +102,17 @@ withEnvWithAdmission ::
     ServeAdmission ->
     MemoryMeter ->
     MirrorQueue ->
-    ExchangeClient ->
-    ExchangeClient ->
+    Manager ->
+    Manager ->
+    Deadlines ->
     MetadataCache ->
     LogEnv ->
     Telemetry ->
     WorkerHeartbeat ->
     (Env -> m a) ->
     m a
-withEnvWithAdmission admission meter queue publicClient privateClient metadataCache logEnv telemetry heartbeat action = do
-    env <- liftIO (newEnvWithAdmission admission meter queue publicClient privateClient metadataCache logEnv telemetry heartbeat)
+withEnvWithAdmission admission meter queue manager privateManager deadlines metadataCache logEnv telemetry heartbeat action = do
+    env <- liftIO (newEnvWithAdmission admission meter queue manager privateManager deadlines metadataCache logEnv telemetry heartbeat)
     action env
 
 -- | Project serving capabilities without exposing the application environment to the core.

@@ -44,6 +44,7 @@ import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Cve.Slot (swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (mkScope)
@@ -99,7 +100,6 @@ import Ecluse.Runtime.Test.Cve (fetchServingAt, headOnlyFetch)
 import Ecluse.Runtime.Test.Support (newTestEnv, newTestEnvLogging)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Cve (fakeCveDb)
-import Ecluse.Test.Deadline (newSweptDeadlines)
 import Ecluse.Test.Log (captureJsonLog, memoryLogEnv, newTestLogEnv)
 import Ecluse.Test.Osv (mkDbWithWrongEpoch, mkMinimalValidDbWithMeta)
 import Ecluse.Test.Package (validSha256, validSha256Sri)
@@ -190,11 +190,11 @@ neutralApp = application (mkServerConfig []) <$> newTestEnv
 
 -- | The probe-only front door the Dredger and Pilot worker roles run.
 probeOnlyApp :: IO Application
-probeOnlyApp = newSweptDeadlines >>= \deadlines -> probeOnlyApplication deadlines (mkServerConfig [])
+probeOnlyApp = newDeadlines >>= \deadlines -> probeOnlyApplication deadlines (mkServerConfig [])
 
 -- | 'probeOnlyApp' with the injected liveness check failing, which only @\/livez@ reads.
 deadProbeOnlyApp :: IO Application
-deadProbeOnlyApp = newSweptDeadlines >>= \deadlines -> probeOnlyApplication deadlines ((mkServerConfig []){scCheckLive = pure notLive})
+deadProbeOnlyApp = newDeadlines >>= \deadlines -> probeOnlyApplication deadlines ((mkServerConfig []){scCheckLive = pure notLive})
 
 -- | A failing liveness verdict with no poll recorded, standing in for a stalled loop.
 notLive :: Liveness
@@ -613,7 +613,7 @@ listeningLineSpec = describe "serveBound -- the listening line" $ do
 -- and return the port it names and whether @/livez@ answers on that port.
 listeningOn :: Int -> IO (Maybe Int, Bool)
 listeningOn configured = do
-    app <- newSweptDeadlines >>= \deadlines -> probeOnlyApplication deadlines (mkServerConfig [])
+    app <- newDeadlines >>= \deadlines -> probeOnlyApplication deadlines (mkServerConfig [])
     bracket memoryLogEnv (void . closeScribes . fst) $ \(logEnv, messages) ->
         withAsync (serveBound logEnv proxyListener (Warp.setPort configured Warp.defaultSettings) app) $ \server -> do
             link server

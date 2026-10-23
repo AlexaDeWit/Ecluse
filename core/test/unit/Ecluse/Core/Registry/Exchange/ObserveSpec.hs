@@ -111,7 +111,7 @@ spec = describe "observeExchange" $ do
                 `shouldReturn` Just (LBS.fromStrict bytes)
         readIORef events `shouldReturn` [ResponseStatus 200]
 
-    it "records a stalled upload once and preserves the watchdog result" $ withSweeper $ \deadlines -> do
+    it "records a stalled upload once and preserves the progress floor's result" $ withSweeper $ \deadlines -> do
         events <- newIORef []
         progress <- either (fail . show) pure (mkProgressFloor 60 0.3 1024)
         request <- parseRequest "http://localhost/"

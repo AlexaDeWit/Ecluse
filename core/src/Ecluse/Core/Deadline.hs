@@ -4,7 +4,7 @@
 
 {- | Deadlines that one sweeper thread checks every 100 ms, so arming one never waits on another
 thread. GHC's timers share one process-wide queue, and every arm and disarm edits it in turn. Here
-arming adds to a list owned by the arming thread's capability, and a deadline fires up to one tick
+arming adds to a list owned by the arming thread's capability, and a deadline fires about one tick
 late. A due check is thrown from a forked thread, as 'System.Timeout.timeout' does, so a disarm can
 stop a throw still in flight.
 -}
@@ -110,7 +110,7 @@ disarm lock = uninterruptibleMask_ $ do
     unless disarmed (readMVar lock >>= traverse_ killThread)
 
 {- | 'System.Timeout.timeout' on the sweeper: 'Nothing' once the action outlives the microseconds,
-up to a tick late. A negative bound never fires, and zero fires at once.
+about a tick late. A negative bound never fires, and zero fires at once.
 -}
 timeout :: Deadlines -> Int -> IO a -> IO (Maybe a)
 timeout deadlines micros action
