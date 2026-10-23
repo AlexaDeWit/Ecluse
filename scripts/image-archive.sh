@@ -99,8 +99,11 @@ executables() {
 # Check one CA bundle $2, shown as /$1. The TLS stack takes every PEM block as a trust anchor
 # and ignores OpenSSL trust rules, so a TRUSTED CERTIFICATE block counts as trusted.
 bundle() {
-  local line kind="" pem="" count=0 ruled=0 verdict=0 fingerprint
+  local line kind="" pem="" count=0 ruled=0 verdict=0 fingerprint root
+  local -A reported=()
   while IFS= read -r line || [ -n "$line" ]; do
+    # Drop trailing blanks and a CRLF's carriage return, which would end up in the block kind.
+    line="${line%"${line##*[![:space:]]}"}"
     case "$line" in
       "-----BEGIN "*)
         kind="${line#-----BEGIN }"
@@ -117,8 +120,11 @@ bundle() {
         else
           fingerprint="${fingerprint#*=}"
           fingerprint="${fingerprint//:/}"
-          if [ -n "${distrusted[$fingerprint]:-}" ]; then
-            echo "FAILED  /$1: holds the distrusted root ${distrusted[$fingerprint]}"
+          root="${distrusted[$fingerprint]:-}"
+          # A trust-rule bundle holds a root twice, as a plain and as a trusted block.
+          if [ -n "$root" ] && [ -z "${reported[$root]:-}" ]; then
+            reported[$root]=1
+            echo "FAILED  /$1: holds the distrusted root $root"
             verdict=1
           fi
         fi
@@ -132,7 +138,8 @@ bundle() {
     verdict=1
   fi
   if [ "$count" = 0 ]; then
-    echo "FAILED  /$1: holds no certificate"
+    echo "FAILED  /$1: holds no certificate, and the check reads every regular file directly" \
+      "in an etc/ssl/certs directory as a CA bundle"
     verdict=1
   elif [ "$verdict" = 0 ]; then
     echo "ok      /$1: $count certificates, none distrusted"
@@ -140,8 +147,10 @@ bundle() {
   return "$verdict"
 }
 
-# Every regular file in an etc/ssl/certs directory is a bundle the TLS stack can read: the
-# one SSL_CERT_FILE names, or each one in /etc/ssl/certs when SSL_CERT_FILE is unset.
+# Every regular file directly in an etc/ssl/certs directory, never in a subdirectory, counts
+# as a bundle. The TLS stack reads the one SSL_CERT_FILE names, or the files in /etc/ssl/certs
+# when SSL_CERT_FILE is unset, and other TLS clients read hashed files such as 14bc7599.0. So
+# a file there that holds no certificate fails too.
 trust_store() {
   local image="$work/image" config cert_file layer name path verdict=0 named=0
   unpack "$1" "$image"

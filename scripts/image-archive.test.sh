@@ -181,11 +181,50 @@ check "fails on a second bundle that holds a distrusted root" 1 \
   "^FAILED +/nix/store/$hash-nss-cacert-3.126/etc/ssl/certs/ca-bundle.crt: holds the distrusted" \
   trust-store "$work/second.tar"
 
+# A trust-rule bundle holds a root as a plain and as a trusted block, and the check names it once.
+shipped_image "$work/doubled"
+cat "$work/distrusted.pem" >> "$work/doubled/store/$bundle"
+openssl x509 -in "$work/distrusted.pem" -trustout >> "$work/doubled/store/$bundle"
+pack "$work/doubled.tar" "$work/doubled"
+named="$(bash "$script" trust-store "$work/doubled.tar" 2>&1 | grep -c 'holds the distrusted root' || true)"
+if [ "$named" = 1 ]; then
+  printf 'ok   - %s\n' "names a distrusted root once when a bundle holds it twice"
+else
+  printf 'FAIL - %s (named %s times)\n' "names a distrusted root once when a bundle holds it twice" "$named"
+  fail=1
+fi
+
+# Windows line endings and blanks after a BEGIN line leave a bundle as readable as before.
+for layout in crlf blank; do
+  case "$layout" in
+    crlf) edit='s/$/\r/' label="CRLF line ends" ;;
+    blank) edit='s/^-----BEGIN CERTIFICATE-----$/&  /' label="blanks after its BEGIN lines" ;;
+  esac
+  shipped_image "$work/$layout"
+  sed "$edit" "$work/fixture.pem" > "$work/$layout/store/$bundle"
+  pack "$work/$layout.tar" "$work/$layout"
+  check "passes a clean bundle with $label" 0 \
+    "^ok +/$bundle: 1 certificates, none distrusted$" trust-store "$work/$layout.tar"
+  shipped_image "$work/$layout-rooted"
+  cat "$work/fixture.pem" "$work/distrusted.pem" | sed "$edit" > "$work/$layout-rooted/store/$bundle"
+  pack "$work/$layout-rooted.tar" "$work/$layout-rooted"
+  check "fails on a distrusted root in a bundle with $label" 1 \
+    "^FAILED +/$bundle: holds the distrusted root emSign ECC Root CA - G3$" \
+    trust-store "$work/$layout-rooted.tar"
+done
+
 shipped_image "$work/text"
-put "$work/text/store" "$bundle" "no certificates here"
+put "$work/text/store" "nix/store/$hash-tls-ca-bundle/etc/ssl/certs/README" "no certificates here"
 pack "$work/text.tar" "$work/text"
-check "fails on a bundle that holds no certificate" 1 \
-  "^FAILED +/$bundle: holds no certificate$" trust-store "$work/text.tar"
+check "fails on a file directly in etc/ssl/certs that holds no certificate" 1 \
+  "^FAILED +/nix/store/$hash-tls-ca-bundle/etc/ssl/certs/README: holds no certificate, and the check reads every regular file directly in an etc/ssl/certs directory as a CA bundle$" \
+  trust-store "$work/text.tar"
+
+shipped_image "$work/nested-text"
+put "$work/nested-text/store" "nix/store/$hash-tls-ca-bundle/etc/ssl/certs/notes/README" "no certificates here"
+pack "$work/nested-text.tar" "$work/nested-text"
+check "reads no file in a subdirectory of etc/ssl/certs" 0 \
+  "^ok +SSL_CERT_FILE names /$bundle$" trust-store "$work/nested-text.tar"
 
 shipped_image "$work/unset"
 printf '{"config":{}}' > "$work/unset/config.json"

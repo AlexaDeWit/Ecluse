@@ -611,6 +611,10 @@ eMudhra intermediate CAs are compromised:
 | emSign Root CA - C1 | Mozilla removed it from NSS 3.131.1 together with emSign ECC Root CA - G3 |
 | emSign ECC Root CA - C3 | Mozilla removed it from NSS 3.131.1 together with emSign ECC Root CA - G3 |
 
+A private upstream, such as an Artifactory or Nexus host, fails with an unknown CA error when its
+certificate chains to a root that Mozilla does not trust for TLS servers. Give such a host a bundle
+of your own through `SSL_CERT_FILE`, as for an internal CA.
+
 To reach a private registry on an internal CA, mount a bundle that holds your CA beside the public
 roots, and point `SSL_CERT_FILE` at it. Écluse then trusts every certificate in that file, and
 nothing else, so build it on these terms:

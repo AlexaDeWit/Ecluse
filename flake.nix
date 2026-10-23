@@ -530,6 +530,9 @@
           # index for its per-platform digests. Pinned here rather than relying on
           # the runner's.
           pkgs.jq
+          # openssl: `scripts/image-archive.sh trust-store` fingerprints each
+          # certificate in the image's CA bundles with it, in the release build.
+          pkgs.openssl
           # reuse: per-file SPDX licence headers. `task lint-spdx` stamps and gates
           # through `reuse lint-file` and `reuse annotate`. A Python tool, justified
           # over a hand-rolled shell gate because it is the SPDX and REUSE reference
