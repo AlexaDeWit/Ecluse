@@ -21,7 +21,7 @@ module Ecluse.Service (
     dataPlaneManagerSettings,
 ) where
 
-import Katip (LogEnv, Namespace (Namespace), SimpleLogPayload, katipAddNamespace, runKatipContextT)
+import Katip (LogEnv, katipAddNamespace)
 import Network.HTTP.Client (Manager, ManagerSettings)
 
 import Ecluse.Boot (BootEnv (beLogEnv, beTelemetry), logBootWarning)
@@ -76,8 +76,7 @@ import Ecluse.Core.Supervision (
     FaultDisposition (Permanent, Transient),
     SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
     backgroundLoopBackoff,
-    superviseLoop,
-    transientPolicy,
+    superviseBackground,
  )
 import Ecluse.Core.Worker (Liveness, WorkerHeartbeat, WorkerPolicies, alwaysLive, heartbeatLivenessNow, runWorkerM, workerLoop)
 import Ecluse.Cve.Sync (cveSyncReadiness, cveSyncScheduleFor, cveSyncTasks, registerAdvisoryAges)
@@ -158,7 +157,7 @@ withServiceRuntime bootEnv plan mirror action = do
                 , svcAppConfig = appConfig
                 , svcBindings = bindings
                 , svcWorkerPolicies = workerPoliciesWithState builtEnv states bindings (bwPublishTargets (mwBootWiring mirror)) workerArtifactMaxBytes
-                , svcMirrorDrain = superviseBackground "mirror-enqueue-drain" builtEnv <$> mirrorDrain
+                , svcMirrorDrain = superviseBackground (envLogEnv builtEnv) "mirror-enqueue-drain" <$> mirrorDrain
                 , svcSyncTasks =
                     cveSyncTasks
                         (envLogEnv builtEnv)
@@ -166,7 +165,7 @@ withServiceRuntime bootEnv plan mirror action = do
                         (envTelemetry builtEnv)
                         (cveSyncScheduleFor appConfig)
                         cveSyncPlan
-                , svcMemorySampler = superviseBackground "memory-sampler" builtEnv sampler
+                , svcMemorySampler = superviseBackground (envLogEnv builtEnv) "memory-sampler" sampler
                 , svcCheckReady = cveSyncReadiness cveSyncPlan
                 , svcCheckLive = workerLiveness runsWorkerHere heartbeat
                 }
@@ -254,13 +253,6 @@ bufferedMirrorHandOff warn countEnqueueFailure =
 the log line is rate-limited, and the metric alongside counts every event. -}
 enqueueReportWorthy :: Int -> Bool
 enqueueReportWorthy n = reportWorthy n Composition.mirrorEnqueueReportInterval
-
-{- A background loop under the shared supervision combinator: the enqueue-buffer drain or the
-memory sampler. Pacing lives in each loop, so this wrapper only stops residue ending the task. -}
-superviseBackground :: Text -> Env -> IO () -> IO ()
-superviseBackground label builtEnv task =
-    void . runKatipContextT (envLogEnv builtEnv) (mempty :: SimpleLogPayload) (Namespace [label]) $
-        superviseLoop (transientPolicy label backgroundLoopBackoff) (liftIO task)
 
 -- | Run the supervised mirror worker over the composition-root 'Env' and the per-ecosystem bundles. The loop re-runs current policy against a job before it mirrors.
 runWorker :: WorkerPolicies -> Env -> IO ()

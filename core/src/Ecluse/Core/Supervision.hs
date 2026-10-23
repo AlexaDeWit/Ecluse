@@ -6,6 +6,7 @@
 module Ecluse.Core.Supervision (
     -- * The combinator
     superviseLoop,
+    superviseBackground,
     SupervisionPolicy (..),
     transientPolicy,
     FaultDisposition (..),
