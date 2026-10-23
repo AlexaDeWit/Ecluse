@@ -1225,8 +1225,9 @@ Each scenario reports:
   `memory.current`
 - cgroup `memory.peak` against `memory.max` and against the RTS's own peak, `memory.stat` (`anon`,
   `file`, `kernel`, `sock`) as the window closes, the `memory.events` counters, and the CPU time
-  the quota withheld during the window. A scenario that sends a burst under load also shows the
-  cgroup's memory through the burst
+  the quota withheld during the window. A scenario that sends a burst also shows the cgroup's
+  memory through the burst, as [The herd under heavy private load](#the-herd-under-heavy-private-load)
+  describes
 - how the proxy ended: a clean shutdown, a heap overflow (from its own report or the RTS exit
   status), a kernel OOM kill, or another exit
 - the serve-admission limit in requests and the memory admission budget at boot, read from the
@@ -1357,6 +1358,10 @@ would miss its peak. The scenario's own section adds three rows to the usual fig
 | Cgroup readings through the burst | How many readings the harness took |
 | Highest `memory.current` in the burst | The most memory charged to the cgroup, with `anon`, `file`, `kernel` and `sock` from `memory.stat` at the same reading |
 | Highest `memory.stat` `sock` in the burst | The most memory in kernel socket buffers, with `memory.current` at the same reading |
+
+`npm/herd` and `pypi/herd` show the same rows for their burst on an idle proxy. A run without
+`BENCH_LOAD_CGROUP` starts its proxy outside any cgroup of its own, so these rows read `no cgroup`
+there.
 
 `sock` counts response bytes the kernel holds until the client reads them, and `anon` holds the heap
 with the rest of the process's own memory. Compare the `sock` peak with `memory.peak` less the RTS
