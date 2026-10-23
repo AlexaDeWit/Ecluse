@@ -14,7 +14,6 @@ module Ecluse.Runtime.Telemetry.Tracing.Internal (
 
     -- * The data plane's client spans
     dataPlaneTrace,
-    dataPlaneInstrumentationConfig,
     tracedExchange,
 
     -- * Domain spans
@@ -40,7 +39,7 @@ import OpenTelemetry.Instrumentation.HttpClient (
     httpClientInstrumentationConfig,
     tracedHttpRequest,
  )
-import OpenTelemetry.Instrumentation.HttpClient.Raw (HttpClientMetrics, createHttpClientMetrics)
+import OpenTelemetry.Instrumentation.HttpClient.Raw (createHttpClientMetricsFromMeter)
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
 import OpenTelemetry.Metric.Core (getMeter)
 import OpenTelemetry.Propagator.W3CTraceContext (decodeSpanContext, encodeSpanContext)
@@ -92,20 +91,22 @@ telemetryWaiMiddleware telemetry =
             (. escapeRecordingMiddleware) <$> newOpenTelemetryWaiMiddleware' tracerProvider meter
         _ -> pure id
 
--- | Open each upstream exchange under one client span that carries W3C trace-context headers, when telemetry is enabled.
+{- | Open each upstream exchange under one client span that carries W3C trace-context headers, when
+telemetry is enabled. The span comes from the global tracer provider, which the library reads.
+-}
 dataPlaneTrace :: Telemetry -> IO TraceExchange
 dataPlaneTrace telemetry =
-    case telemetryTracerProvider telemetry of
-        Nothing -> pure untracedExchange
-        -- The library's instruments, on the global meter provider the boot has set, built once for the process.
-        Just _ -> tracedExchange . dataPlaneInstrumentationConfig <$> createHttpClientMetrics
+    case (telemetryTracerProvider telemetry, telemetryMeterProvider telemetry) of
+        (Just _, Just meterProvider) -> do
+            -- The library's instruments under its own scope, built once for the process.
+            metrics <- createHttpClientMetricsFromMeter =<< getMeter meterProvider "hs-opentelemetry-instrumentation-http-client"
+            -- It records __no__ header, so an @Authorization@ header never reaches a span.
+            pure (tracedExchange httpClientInstrumentationConfig{httpClientMetrics = Just metrics})
+        _ -> pure untracedExchange
 
--- | The data plane's http-client instrumentation. It records __no__ headers, so an @Authorization@ header never reaches a span.
-dataPlaneInstrumentationConfig :: HttpClientMetrics -> HttpClientInstrumentationConfig
-dataPlaneInstrumentationConfig metrics = httpClientInstrumentationConfig{httpClientMetrics = Just metrics}
-
-{- | One client span from the request to the response headers. Its bookkeeping runs masked, so an
-asynchronous exception cannot leave the span open or the context attached.
+{- | One client span from the request to the response headers, with its bookkeeping masked. An
+asynchronous exception lands in the opener, where the span records it and ends, or in a thread's first
+context attach, which can wait on the context table's growth and leave the span unended.
 -}
 tracedExchange :: HttpClientInstrumentationConfig -> TraceExchange
 tracedExchange config request open =
@@ -113,7 +114,9 @@ tracedExchange config request open =
         tracedHttpRequest config request (\sent -> restore (open sent) `catch` (throwIO . UntaggedFault))
             `catch` \(UntaggedFault original) -> throwIO original
 
--- An HTTP fault crossing the client span, which records the fault's text. The text leaves out the request and its headers.
+{- An HTTP fault crossing the client span, which records its text, shown without the request it is
+tagged with. StatusCodeException and TooManyRedirects show a response that still holds the request,
+and stay unreachable only while requests keep redirectCount 0 and the default checkResponse. -}
 newtype UntaggedFault = UntaggedFault HttpException
 
 -- Shown as http-client shows a fault before it tags the fault with its request.
