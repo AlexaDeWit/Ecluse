@@ -12,7 +12,6 @@ module Ecluse.Core.Registry.Progress.Internal (
     beginAt,
     endAt,
     waitedBy,
-    pause,
 ) where
 
 import Ecluse.Core.Security (ProgressFloor, floorMinBytes)
@@ -42,21 +41,13 @@ endAt progress now bytes current
   where
     total = movedIn current + bytes
 
-{- | The nanoseconds waited by a monotonic time. The watchdog can read its clock just before the
+{- | The nanoseconds waited by a monotonic time. The sweeper can read its clock just before the
 transfer stamps a later wait, so the open wait's gap floors at zero.
 -}
 waitedBy :: Word64 -> Window -> Word64
 waitedBy now = \case
     Waiting began waited _ -> waited + if now > began then now - began else 0
     Idle waited _ -> waited
-
-{- | The watchdog's next sleep for a budget and the time spent: the rest of the budget while a wait
-is open. With none open the waited time cannot grow, so it sleeps a sixteenth or more instead of spinning.
--}
-pause :: Word64 -> Word64 -> Window -> Word64
-pause budget spent = \case
-    Waiting{} -> budget - spent
-    Idle{} -> max (budget `div` 16) (budget - spent)
 
 movedIn :: Window -> Int
 movedIn = \case

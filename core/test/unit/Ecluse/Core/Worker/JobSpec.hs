@@ -49,7 +49,7 @@ import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish (mpProbeInventory),
-    MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintCredential, ptTracing),
+    MirrorTransport (MirrorTransport, ptClient, ptLimits, ptMintCredential, ptTracing),
     PublishPlan (ppLatest),
     newMirrorPublish,
  )
@@ -68,6 +68,7 @@ import Ecluse.Core.Worker (
 import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchFault)
 import Ecluse.Core.Worker.Types (WorkerMirrorState (..))
 import Ecluse.Test.Cve (fakeCveLookup)
+import Ecluse.Test.Deadline (unsweptClient)
 import Ecluse.Test.Json (fieldAt)
 import Ecluse.Test.Log (captureJsonLog, captureJsonLogAt)
 import Ecluse.Test.Mirror.State
@@ -1090,8 +1091,8 @@ admissionObject = fst npmCached (object ["marker" .= ("admission-time" :: Text)]
 -- refusal is the one under test rather than a recording double's.
 codecPublishAt :: Text -> IO MirrorPublish
 codecPublishAt targetUrl = do
-    manager <- newManager defaultManagerSettings
-    let transport = MirrorTransport{ptManager = manager, ptMintCredential = pure Nothing, ptLimits = defaultLimits, ptTracing = passthroughTracingPort}
+    exchanges <- unsweptClient =<< newManager defaultManagerSettings
+    let transport = MirrorTransport{ptClient = exchanges, ptMintCredential = pure Nothing, ptLimits = defaultLimits, ptTracing = passthroughTracingPort}
     pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) (loopbackRegistryUrl targetUrl) npmPublishCodec)
 
 -- A resolver whose present verdict carries the given raw object beside the sample details.

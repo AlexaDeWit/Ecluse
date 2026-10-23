@@ -31,7 +31,7 @@ import Ecluse.Core.Package (Hash)
 import Ecluse.Core.Queue (MirrorQueue (ack, deadLetter))
 import Ecluse.Core.Registry.Npm.Filter (rewriteVersion)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
-import Ecluse.Core.Registry.Publish (MirrorPublish, MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintCredential, ptTracing), newMirrorPublish)
+import Ecluse.Core.Registry.Publish (MirrorPublish, MirrorTransport (MirrorTransport, ptClient, ptLimits, ptMintCredential, ptTracing), newMirrorPublish)
 import Ecluse.Core.Registry.ServedDocument (documentObject, objectField)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (defaultLimits)
@@ -40,6 +40,7 @@ import Ecluse.Core.Worker (WorkerPolicies)
 import Ecluse.Runtime.Env (Env)
 import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue)
 import Ecluse.Service (runWorker)
+import Ecluse.Test.Deadline (unsweptClient)
 import Ecluse.Test.Poll (runUntil)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRightText)
@@ -120,10 +121,10 @@ mirrorPoliciesUnderAt rules mirrorUrl digests = do
 
 newPublishAt :: Text -> IO MirrorPublish
 newPublishAt mirrorUrl = do
-    manager <- newManager defaultManagerSettings
+    client <- unsweptClient =<< newManager defaultManagerSettings
     let transport =
             MirrorTransport
-                { ptManager = manager
+                { ptClient = client
                 , ptMintCredential = pure (Just (bareCredential (mkSecret "test-token")))
                 , ptLimits = defaultLimits
                 , ptTracing = passthroughTracingPort

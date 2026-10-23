@@ -156,6 +156,7 @@ library ecluse-core
     Ecluse.Core.Cve.Internal
     Ecluse.Core.Cve.Slot
     Ecluse.Core.Cve.Types
+    Ecluse.Core.Deadline
     Ecluse.Core.Ecosystem
     Ecluse.Core.Fault
     Ecluse.Core.Fault.Http
@@ -197,6 +198,7 @@ library ecluse-core
     Ecluse.Core.Registry.Public
     Ecluse.Core.Registry.Exchange
     Ecluse.Core.Registry.Exchange.Observe
+    Ecluse.Core.Registry.Exchange.Types
     Ecluse.Core.Registry.Json.Intern
     Ecluse.Core.Registry.Json.Packed
     Ecluse.Core.Registry.Json.Scratch
@@ -240,6 +242,7 @@ library ecluse-core
     Ecluse.Core.Registry.Origin
     Ecluse.Core.Registry.Progress
     Ecluse.Core.Registry.Progress.Internal
+    Ecluse.Core.Registry.ResponseWait
     Ecluse.Core.Registry.MirrorUpload
     Ecluse.Core.Registry.MirrorUpload.Internal
     Ecluse.Core.Registry.Publish
@@ -792,6 +795,7 @@ library ecluse-test-support
     Ecluse.Test.Corpus.Subset
     Ecluse.Test.Credential
     Ecluse.Test.Cve
+    Ecluse.Test.Deadline
     Ecluse.Test.EcosystemBench
     Ecluse.Test.EcosystemBench.Types
     Ecluse.Test.Env
@@ -1094,6 +1098,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.BreakerSpec
     Ecluse.Core.BuildIdentitySpec
     Ecluse.Core.ClockSpec
+    Ecluse.Core.DeadlineSpec
     Ecluse.Core.Credential.Refresh.InternalSpec
     Ecluse.Core.CredentialSpec
     Ecluse.Core.Cve.InternalSpec
@@ -1606,6 +1611,7 @@ test-suite ecluse-runtime-unit
     Ecluse.Runtime.Queue.SqsSpec
     Ecluse.Runtime.Server.DrainSpec
     Ecluse.Runtime.Server.HaltSpec
+    Ecluse.Runtime.Server.MiddlewareSpec
     Ecluse.Runtime.Telemetry.CorrelationSpec
     Ecluse.Runtime.Telemetry.EscapeSpec
     Ecluse.Runtime.Telemetry.ExportFailureSpec
@@ -1662,6 +1668,7 @@ test-suite ecluse-runtime-unit
     , unliftio          ^>=0.2.25
     , vector            ^>=0.13
     , wai               ^>=3.2
+    , wai-extra         ^>=3.1
     , warp              ^>=3.4
 
 -- Integration tests: exercise the real request path against in-process servers

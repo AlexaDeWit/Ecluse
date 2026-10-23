@@ -46,6 +46,7 @@ import Ecluse.Core.Server.Metadata (newMetadataReads, privateMetadataClient, pub
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpUpstreamFetchError, mpVersionCacheRequest))
 import Ecluse.Core.Version (Version)
+import Ecluse.Test.Deadline (unsweptClient, withSweeper)
 import Ecluse.Test.Package (npmVersion, pypiVersion, requestsName, sampleManifest, unscopedNpm)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig, externalOperations, newMetadataCache)
@@ -57,9 +58,10 @@ spec = do
     selectVersionSpec
     -- Every case here drives the read functions directly, so neither origin is ever dialled:
     -- only the posture its builder fixes is under test.
-    manager <- runIO (newManager defaultManagerSettings)
-    let anonymous = anonymousOrigin defaultLimits manager stubUrl
-        perCaller = perCallerOrigin defaultLimits manager stubUrl Nothing
+    -- Nothing sweeps these deadlines: the request cap's case sweeps its own.
+    exchanges <- runIO (unsweptClient =<< newManager defaultManagerSettings)
+    let anonymous = anonymousOrigin defaultLimits exchanges stubUrl
+        perCaller = perCallerOrigin defaultLimits exchanges stubUrl Nothing
 
     describe "publicMetadataClient -- selected retention" $ do
         it "keeps full listing and selected retention independent" $ do
@@ -259,14 +261,15 @@ spec = do
             readIORef calls `shouldReturn` 2
 
     describe "withinRequestCap" $
-        it "fails a read that outlives the serve-path cap with the transport timeout" $ do
-            -- A 0.5 s cap, far below the 20 s read.
-            progress <- either (fail . show) pure (mkProgressFloor 0.5 0.25 1)
-            let stalled = threadDelay 20_000_000 $> Left MetadataAbsent
-                client = privateMetadataClient (withinRequestCap progress (newMetadataReads noopMetricsPort noLog noInvalidLog noFetchLog (\_ _ -> stalled) (\_ _ _ -> stalled) perCaller))
-            full <- fetchFullManifest client name
-            single <- fetchVersionMetadata client name (npmVersion "1.0.0")
-            map timeoutCause [void full, void single] `shouldBe` replicate 2 (Just TransportTimeout)
+        it "fails a read that outlives the serve-path cap with the transport timeout" $
+            withSweeper $ \deadlines -> do
+                -- A 0.5 s cap, far below the 20 s read.
+                progress <- either (fail . show) pure (mkProgressFloor 0.5 0.25 1)
+                let stalled = threadDelay 20_000_000 $> Left MetadataAbsent
+                    client = privateMetadataClient (withinRequestCap deadlines progress (newMetadataReads noopMetricsPort noLog noInvalidLog noFetchLog (\_ _ -> stalled) (\_ _ _ -> stalled) perCaller))
+                full <- fetchFullManifest client name
+                single <- fetchVersionMetadata client name (npmVersion "1.0.0")
+                map timeoutCause [void full, void single] `shouldBe` replicate 2 (Just TransportTimeout)
 
     describe "metadata read handles -- failure propagation" $ do
         for_ httpFailures $ \(refusal, expectedCause) ->

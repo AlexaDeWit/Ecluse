@@ -67,9 +67,9 @@ import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Core.Worker (
     WorkerRuntime (
         WorkerRuntime,
+        wrClient,
         wrHeartbeat,
         wrInjectTraceContext,
-        wrManager,
         wrMetrics,
         wrPolicies,
         wrPublicControl,
@@ -82,6 +82,7 @@ import Ecluse.Core.Worker (
  )
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpWeight), corpusPackages, cpName)
 import Ecluse.Test.Corpus.Subset (newestNpmShare)
+import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (hexSha1OfLazy, sriSha512OfLazy, unsafeFilename, unsafeHash, validSha1, validSha512Sri)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
@@ -290,28 +291,28 @@ workerScenario =
             publish <- succeedingPublishClient counter
             let bytes = artifactBytes (lkPayloadBytes knobs)
             testWithApplication (pure (stubUpstream octetContentType (lkUpstreamLatencyMicros knobs) bytes)) $ \artPort -> do
-                manager <- newManager defaultManagerSettings
-                publicControl <- newPublicControl (\_ _ _ -> pass) (\_ _ -> pass)
-                queue <-
-                    newBoundedInMemoryQueue
-                        (defaultMemoryQueueConfig 16)
-                        (\n -> benchFail ("worker scenario: the in-memory mirror queue dropped a job (running total " <> show n <> "); the enqueue-receive cadence broke"))
-                heartbeat <- newWorkerHeartbeat
-                logEnv <- newTestLogEnv
-                let runtime =
-                        WorkerRuntime
-                            { wrQueue = queue
-                            , wrManager = manager
-                            , wrPublicControl = publicControl
-                            , wrHeartbeat = heartbeat
-                            , wrMetrics = noopWorkerMetricsPort
-                            , wrTracing = passthroughWorkerTracingPort
-                            , wrInjectTraceContext = id
-                            , wrPolicies = workerSourceAt artUrl (admitAllPolicies publish (jobHashes bytes))
-                            }
-                    artUrl = localhost artPort <> "/" <> packageText <> "/-/" <> packageText <> "-1.0.0.tgz"
-                    job = mirrorJob
-                k (Target Nothing (DriveInProcess (runWorkerLoop knobs logEnv runtime queue job counter)))
+                withExchangeClient (newManager defaultManagerSettings) $ \client -> do
+                    publicControl <- newPublicControl (\_ _ _ -> pass) (\_ _ -> pass)
+                    queue <-
+                        newBoundedInMemoryQueue
+                            (defaultMemoryQueueConfig 16)
+                            (\n -> benchFail ("worker scenario: the in-memory mirror queue dropped a job (running total " <> show n <> "); the enqueue-receive cadence broke"))
+                    heartbeat <- newWorkerHeartbeat
+                    logEnv <- newTestLogEnv
+                    let runtime =
+                            WorkerRuntime
+                                { wrQueue = queue
+                                , wrClient = client
+                                , wrPublicControl = publicControl
+                                , wrHeartbeat = heartbeat
+                                , wrMetrics = noopWorkerMetricsPort
+                                , wrTracing = passthroughWorkerTracingPort
+                                , wrInjectTraceContext = id
+                                , wrPolicies = workerSourceAt artUrl (admitAllPolicies publish (jobHashes bytes))
+                                }
+                        artUrl = localhost artPort <> "/" <> packageText <> "/-/" <> packageText <> "-1.0.0.tgz"
+                        job = mirrorJob
+                    k (Target Nothing (DriveInProcess (runWorkerLoop knobs logEnv runtime queue job counter)))
     )
         { scenarioInProcess = True
         }

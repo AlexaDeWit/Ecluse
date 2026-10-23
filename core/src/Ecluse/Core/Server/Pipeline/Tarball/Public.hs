@@ -197,7 +197,7 @@ streamPublicArtifact ctx artifact observeVerdict
     | otherwise = case publicRequest of
         Left _ -> respond (internalArtifactError replies)
         Right req ->
-            relayPublicResult (srPublicControl (arRuntime ctx)) PublicRead.Artifact (arMode ctx) (srPublicManager (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) req (const True) relayJudged (relayResponder replies respond) >>= \case
+            relayPublicResult (srPublicControl (arRuntime ctx)) PublicRead.Artifact (arMode ctx) (srPublicClient (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) req (const True) relayJudged (relayResponder replies respond) >>= \case
                 UpstreamRelayed (verdict, received) -> do
                     observeVerdict verdict
                     mirrorOnAdmit ctx artifact verdict

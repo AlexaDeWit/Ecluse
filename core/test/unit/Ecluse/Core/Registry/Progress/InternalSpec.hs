@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | The unboxed progress window keeps the state, waited time, and watchdog verdicts of the window it replaced.
+-- | The unboxed progress window keeps the state, waited time, and floor verdicts of the window it replaced.
 module Ecluse.Core.Registry.Progress.InternalSpec (spec) where
 
 import Hedgehog (Gen, evalEither, forAll, (===))
@@ -11,14 +11,14 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
-import Ecluse.Core.Registry.Progress.Internal (Window (..), beginAt, endAt, freshWindow, pause, waitedBy)
+import Ecluse.Core.Registry.Progress.Internal (Window (..), beginAt, endAt, freshWindow, waitedBy)
 import Ecluse.Core.Security (ProgressFloor, floorMinBytes, mkProgressFloor)
 
 spec :: Spec
 spec =
     describe "properties" $
         modifyMaxSuccess (const 1000) $
-            it "matches the replaced window after every wait opened or closed, and at every watchdog read" $
+            it "matches the replaced window after every wait opened or closed, and at every check of the floor" $
                 hedgehog $ do
                     chunk <- forAll (Gen.int (Range.exponential 1 (64 * 1024)))
                     minBytes <- forAll (Gen.choice [(chunk *) <$> Gen.int (Range.linear 1 8), Gen.int (Range.exponential 1 (4 * 1024 * 1024))])
@@ -30,9 +30,9 @@ spec =
                     map (asReference . fst) states === map snd states
                     for_ [(now, pair) | (Read now, pair) <- zip events states] $ \(now, (window, reference)) ->
                         for_ [budget, waitedBy now window + slack] $ \limit ->
-                            verdict waitedBy pause limit now window === verdict referenceWaitedBy referencePause limit now reference
+                            verdict waitedBy limit now window === verdict referenceWaitedBy limit now reference
 
--- A transfer opening a wait, closing one with its bytes, or the watchdog reading its clock, each at a time in nanoseconds.
+-- A transfer opening a wait, closing one with its bytes, or the floor's check reading its clock, each at a time in nanoseconds.
 data Event
     = Begin Word64
     | End Word64 Int
@@ -51,9 +51,9 @@ step progress (window, reference) = \case
     End now bytes -> (endAt progress now bytes window, referenceEnd progress now bytes reference)
     Read _ -> (window, reference)
 
--- The waited nanoseconds, and the next sleep unless the floor fires, as the watchdog decides them.
-verdict :: (Word64 -> w -> Word64) -> (Word64 -> Word64 -> w -> Word64) -> Word64 -> Word64 -> w -> (Word64, Maybe Word64)
-verdict waited sleep budget now window = (spent, if spent >= budget then Nothing else Just (sleep budget spent window))
+-- The waited nanoseconds, and whether the floor fires, as the check decides them.
+verdict :: (Word64 -> w -> Word64) -> Word64 -> Word64 -> w -> (Word64, Bool)
+verdict waited budget now window = (spent, spent >= budget)
   where
     spent = waited now window
 
@@ -77,8 +77,3 @@ referenceEnd progress now bytes current@(Reference _ _ moved) =
 
 referenceWaitedBy :: Word64 -> Reference -> Word64
 referenceWaitedBy now (Reference since waited _) = waited + maybe 0 (\began -> if now > began then now - began else 0) since
-
-referencePause :: Word64 -> Word64 -> Reference -> Word64
-referencePause budget spent = \case
-    Reference (Just _) _ _ -> budget - spent
-    Reference Nothing _ _ -> max (budget `div` 16) (budget - spent)

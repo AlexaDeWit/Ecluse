@@ -10,12 +10,14 @@ import UnliftIO (evaluate, throwIO, timeout, try)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Queue (enqueue, msgJob, receive)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines, ecManager))
 import Ecluse.Proxy (runServer)
 import Ecluse.Runtime.Env (Env (..), newWorkerHeartbeat, withEnvWithAdmission)
 import Ecluse.Runtime.Server (ServerConfig, mkServerConfig, scPort)
 import Ecluse.Runtime.Telemetry (telemetryDisabled, telemetryMeterProvider, telemetryTracerProvider)
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Service (mountBindingFor, runWorker)
+import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Queue (newTestMemoryQueue, sampleJob)
 import Ecluse.Test.Server.Cache (defaultCacheConfig, newMetadataCache)
@@ -39,8 +41,8 @@ Forcing each accessor to weak-head normal form without a bottom is all a case ca
 -}
 opaqueHandles :: [(String, Env -> IO ())]
 opaqueHandles =
-    [ ("shared HTTP manager", void . evaluate . envManager)
-    , ("trusted private-origin manager", void . evaluate . envPrivateManager)
+    [ ("shared HTTP manager", void . evaluate . envPublicClient)
+    , ("trusted private-origin manager", void . evaluate . envPrivateClient)
     , ("LogEnv", void . evaluate . envLogEnv)
     ]
 
@@ -68,26 +70,26 @@ spec = do
     describe "withEnvWithAdmission" $ do
         it "runs the body against the assembled Env and returns its result" $ do
             queue <- newTestMemoryQueue
-            manager <- newManager defaultManagerSettings
-            metadataCache <- newMetadataCache defaultCacheConfig
-            logEnv <- newTestLogEnv
-            heartbeat <- newWorkerHeartbeat
-            admission <- testServeAdmission
-            meter <- testMemoryMeter
-            withEnvWithAdmission admission meter queue manager manager metadataCache logEnv telemetryDisabled heartbeat (\_ -> pure ())
+            withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                metadataCache <- newMetadataCache defaultCacheConfig
+                logEnv <- newTestLogEnv
+                heartbeat <- newWorkerHeartbeat
+                admission <- testServeAdmission
+                meter <- testMemoryMeter
+                withEnvWithAdmission admission meter queue (ecManager exchanges) (ecManager exchanges) (ecDeadlines exchanges) metadataCache logEnv telemetryDisabled heartbeat (\_ -> pure ())
 
         it "propagates an exception thrown in the body (the Env scopes the action, nothing swallows it)" $ do
             queue <- newTestMemoryQueue
-            manager <- newManager defaultManagerSettings
-            metadataCache <- newMetadataCache defaultCacheConfig
-            logEnv <- newTestLogEnv
-            heartbeat <- newWorkerHeartbeat
-            admission <- testServeAdmission
-            meter <- testMemoryMeter
-            let body :: Env -> IO ()
-                body _ = throwIO BodyEscape
-            outcome <- try (withEnvWithAdmission admission meter queue manager manager metadataCache logEnv telemetryDisabled heartbeat body)
-            outcome `shouldBe` Left BodyEscape
+            withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                metadataCache <- newMetadataCache defaultCacheConfig
+                logEnv <- newTestLogEnv
+                heartbeat <- newWorkerHeartbeat
+                admission <- testServeAdmission
+                meter <- testMemoryMeter
+                let body :: Env -> IO ()
+                    body _ = throwIO BodyEscape
+                outcome <- try (withEnvWithAdmission admission meter queue (ecManager exchanges) (ecManager exchanges) (ecDeadlines exchanges) metadataCache logEnv telemetryDisabled heartbeat body)
+                outcome `shouldBe` Left BodyEscape
 
     describe "split-ready services" $ do
         it "runServer over a ServerConfig and Env serves (blocks) rather than returning" $ do

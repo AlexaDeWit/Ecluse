@@ -12,11 +12,13 @@ module Ecluse.Runtime.Test.Support (
     newTestEnv,
     newTestEnvWith,
     newTestEnvLogging,
+    newTestEnvSweptBy,
 ) where
 
 import Katip (LogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 
+import Ecluse.Core.Deadline (Deadlines, newDeadlines)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Runtime.Env (Env, newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryDisabled)
@@ -43,12 +45,19 @@ newTestEnvWith queue managers telemetry = do
     newTestEnvLogging logEnv queue managers telemetry
 
 {- | 'newTestEnvWith' over a caller-supplied log environment, so a test can capture what the
-serve path logged.
+serve path logged. Nothing sweeps its deadlines, so no case through it may wait one out.
 -}
 newTestEnvLogging :: LogEnv -> MirrorQueue -> (Manager, Manager) -> Telemetry -> IO Env
-newTestEnvLogging logEnv queue (manager, privateManager) telemetry = do
+newTestEnvLogging logEnv queue managers telemetry = newDeadlines >>= \deadlines -> testEnvOver deadlines logEnv queue managers telemetry
+
+-- | 'newTestEnvWith' over deadlines the caller sweeps, as 'Ecluse.Test.Deadline.withSweeper' does, for a case that waits one out.
+newTestEnvSweptBy :: Deadlines -> MirrorQueue -> (Manager, Manager) -> Telemetry -> IO Env
+newTestEnvSweptBy deadlines queue managers telemetry = newTestLogEnv >>= \logEnv -> testEnvOver deadlines logEnv queue managers telemetry
+
+testEnvOver :: Deadlines -> LogEnv -> MirrorQueue -> (Manager, Manager) -> Telemetry -> IO Env
+testEnvOver deadlines logEnv queue (manager, privateManager) telemetry = do
     metadataCache <- newMetadataCache defaultCacheConfig
     heartbeat <- newWorkerHeartbeat
     admission <- testServeAdmission
     meter <- testMemoryMeter
-    newEnvWithAdmission admission meter queue manager privateManager metadataCache logEnv telemetry heartbeat
+    newEnvWithAdmission admission meter queue manager privateManager deadlines metadataCache logEnv telemetry heartbeat

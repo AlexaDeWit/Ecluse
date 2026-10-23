@@ -24,6 +24,7 @@ import Ecluse.Core.Cve.Slot (swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Queue (noMirrorQueue)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecManager))
 import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
 import Ecluse.Core.Telemetry.Metrics (Label (LEcosystem), metricAttributes)
 import Ecluse.Core.Worker (
@@ -36,11 +37,12 @@ import Ecluse.Core.Worker (
 import Ecluse.Core.Worker.Liveness (newWorkerHeartbeatWithClock)
 import Ecluse.Cve.Sync (CveSyncHandle (csEnv))
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncSlot))
-import Ecluse.Runtime.Env (envManager, envPrivateManager)
+import Ecluse.Runtime.Env (envPrivateClient, envPublicClient)
 import Ecluse.Runtime.Server (MountBinding (bindingPrefix))
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryDisabled)
 import Ecluse.Service (ServiceRuntime (svcEnv), dataPlaneManagerSettings, mountBindingFor, withServiceRuntime, workerLiveness)
 import Ecluse.Test.Cve (fakeCveDb)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
@@ -134,10 +136,10 @@ outboundIdentitySpec = describe "the runtime's outbound registry identity" $
                     environment = maybe [] (\value -> [("ECLUSE_EGRESS__OPERATOR_CONTACT", toString value)]) contactText <> staticEnvVars
                 withServicePlan ServeAndMirror environment logEnv telemetry $ \boot plan mirror ->
                     withServiceRuntime boot plan mirror $ \runtime ->
-                        for_ [envManager (svcEnv runtime), envPrivateManager (svcEnv runtime)] $ \manager ->
+                        for_ [envPublicClient (svcEnv runtime), envPrivateClient (svcEnv runtime)] $ \client ->
                             withStub status200 "ok" $ \stub -> do
                                 request <- parseRequest (toString (stubBaseUrl stub))
-                                fmap mconcat (withResponse request manager (brConsume . responseBody)) `shouldReturn` "ok"
+                                fmap mconcat (withResponse request (ecManager client) (brConsume . responseBody)) `shouldReturn` "ok"
                                 captured <- lastCaptured stub
                                 headerValue "User-Agent" captured `shouldBe` Just expected
 
@@ -156,13 +158,14 @@ advisoryAgeSpec = describe "withServiceRuntime advisory database ages" $
                         map snd points `shouldSatisfy` all (>= 0)
 
 withServicePlan :: MirrorRole -> [(String, String)] -> LogEnv -> Telemetry -> (BootEnv -> ExecutablePlan -> MirrorWiring -> IO ()) -> IO ()
-withServicePlan role environment logEnv telemetry use = do
+withServicePlan role environment logEnv telemetry use = withSweeper $ \deadlines -> do
     config <- expectConfig environment Nothing
     bootPlan <- expectPlanFor (BootMirrorPipeline role) environment Nothing config noCeiling
     (_, planned) <-
         planExecutable
             logEnv
             passthroughTracingPort
+            deadlines
             mountBindingFor
             (\_ _ _ -> pure noMirrorQueue)
             initTargetCredentialProviders
@@ -175,5 +178,5 @@ withServicePlan role environment logEnv telemetry use = do
     case planned of
         Right plan
             | MirrorPipelineWiring mirror <- epRoleWiring plan ->
-                use (BootEnv config logEnv telemetry bootPlan) plan mirror
+                use (BootEnv config logEnv telemetry bootPlan deadlines) plan mirror
         _ -> expectationFailure "expected a mirror-pipeline role plan"

@@ -23,7 +23,7 @@ import Ecluse.Core.Registry.Metadata.Fetch (chargingSelectedReads)
 import Ecluse.Core.Registry.Origin (anonymousOrigin, controlPublicOrigin)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish,
-    MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintCredential, ptTracing),
+    MirrorTransport (MirrorTransport, ptClient, ptLimits, ptMintCredential, ptTracing),
     newMirrorPublish,
  )
 import Ecluse.Core.Registry.PyPI.Metadata (pypiMirrorRead)
@@ -50,7 +50,7 @@ import Ecluse.Core.Server.Metadata (ecosystemMetadataReads, publicMetadataClient
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind (WorkerMetadata))
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (..))
 import Ecluse.Core.Worker.Types (WorkerMirrorState (..), WorkerStateBudget (..))
-import Ecluse.Runtime.Env (Env, envManager, envMemoryMeter, envMetadataCache, envMetrics, envPrivateManager, envPublicControl, envTelemetry)
+import Ecluse.Runtime.Env (Env, envMemoryMeter, envMetadataCache, envMetrics, envPrivateClient, envPublicClient, envPublicControl, envTelemetry)
 import Ecluse.Runtime.Server (MountBinding (bindingPackumentDeps, bindingPrefix))
 import Ecluse.Runtime.Telemetry.Instruments (metricsPortOf)
 import Ecluse.Runtime.Telemetry.Tracing (tracingPortOf)
@@ -103,7 +103,7 @@ mirrorPublishFor env deps targets artifactMaxBytes eco = do
 mirrorTransportFor :: Env -> PackumentDeps -> PublishTarget -> MirrorTransport
 mirrorTransportFor env deps target =
     MirrorTransport
-        { ptManager = envPrivateManager env
+        { ptClient = envPrivateClient env
         , ptMintCredential = Just . ClientCredential (ptUsername target) <$> mintSecret (ptCredentials target)
         , ptLimits = pdLimits deps
         , ptTracing = tracingPortOf (envTelemetry env)
@@ -149,4 +149,4 @@ workerPolicyFor env eco deps publish artifactMaxBytes =
 
     publicBaseUrl = pdPublicBaseUrl deps
 
-    publicOrigin = controlPublicOrigin (envPublicControl env) (Just WorkerMetadata) (anonymousOrigin (pdLimits deps) (envManager env) publicBaseUrl)
+    publicOrigin = controlPublicOrigin (envPublicControl env) (Just WorkerMetadata) (anonymousOrigin (pdLimits deps) (envPublicClient env) publicBaseUrl)

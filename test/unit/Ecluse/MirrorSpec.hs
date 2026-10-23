@@ -13,6 +13,7 @@ import Test.Hspec
 import Test.Hspec.Wai
 
 import Ecluse.Composition.Support (expectAppConfig)
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Server.Readiness (
     MountReadiness (MountAwaitingFirstSync, MountReady),
@@ -34,7 +35,8 @@ injected, which is how the composition root wires the consume-loop heartbeat beh
 mirrorApp :: Liveness -> Readiness -> IO Application
 mirrorApp liveness ready = do
     appCfg <- expectAppConfig [] Nothing
-    probeOnlyApplication (mirrorServerConfig appCfg (pure ready) (pure liveness))
+    deadlines <- newDeadlines
+    probeOnlyApplication deadlines (mirrorServerConfig appCfg (pure ready) (pure liveness))
 
 spec :: Spec
 spec = do

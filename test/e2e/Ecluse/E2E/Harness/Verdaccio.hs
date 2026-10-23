@@ -52,6 +52,7 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.E2E.Harness.Npm (npmArtifactPath)
 import Ecluse.E2E.Harness.Types
+import Ecluse.Test.Deadline (unsweptClient)
 import Ecluse.Test.Maintenance (withBucket)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (passthroughTracingPort)
@@ -205,7 +206,8 @@ verdaccioObservation :: E2E -> IO StoreObservation
 verdaccioObservation e2e = do
     listing <- expectRightText (maybeToRight "npm has no listing capability" (maintenanceListing npmMaintenance))
     store <- serviceUrl <$> packageStore e2e
-    let origin = originClient defaultLimits (e2eManager e2e) (loopbackRegistryUrl store) Nothing
+    client <- unsweptClient (e2eManager e2e)
+    let origin = originClient defaultLimits client (loopbackRegistryUrl store) Nothing
     pure . newProtocolObservation $
         ProtocolRead
             { prOrigin = origin
