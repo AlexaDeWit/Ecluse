@@ -5,8 +5,9 @@
 {- | Open an upstream response under the sweeper's deadlines rather than http-client's own timers.
 A connection gets 30 seconds, and the status line and headers get what the connection left of
 them, counted from the end of the request body. That is http-client's default response timeout,
-with the same 'ConnectionTimeout' and 'ResponseTimeout' faults, up to one sweep late. Every
-upstream response opens here, once, under the client's tracing.
+with the same 'ConnectionTimeout' and 'ResponseTimeout' faults, about one sweep late. Every
+registry exchange opens its response here. Amazonka's S3 calls and the OSV and EPSS fetches keep
+their own clients' timers.
 -}
 module Ecluse.Core.Registry.ResponseWait (
     openResponse,

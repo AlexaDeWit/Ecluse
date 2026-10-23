@@ -51,7 +51,7 @@ watched deadlines progress transfer =
         Left BelowProgressFloor -> Nothing
         Right result -> Just result
 
--- | Raise a floor failure so an already committed response tears down. It lands up to one sweep late.
+-- | Raise a floor failure so an already committed response tears down. It lands about one sweep late.
 watchedRaising :: Deadlines -> ProgressFloor -> (Watch -> IO a) -> IO a
 watchedRaising deadlines progress transfer = do
     watch <- Watch progress <$> newIORef freshWindow

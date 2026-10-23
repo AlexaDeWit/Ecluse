@@ -19,6 +19,7 @@ module Ecluse.Service (
 ) where
 
 import Katip (LogEnv, katipAddNamespace)
+import Network.HTTP.Client (Manager)
 
 import Ecluse.Boot (BootEnv (beDeadlines, beLogEnv, beTelemetry), logBootWarning, superviseBackground)
 import Ecluse.Composition (BootWiring (bwBindings, bwPublishTargets))
@@ -47,7 +48,6 @@ import Ecluse.Composition.Worker (workerPoliciesWithState)
 import Ecluse.Config (AppConfig (cfgEgress), EgressSettings (egrOperatorContact))
 import Ecluse.Core.BuildIdentity (identityManagerSettings, renderUserAgent)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured))
-import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
 import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
 import Ecluse.Core.Queue (MirrorQueue)
@@ -60,7 +60,6 @@ import Ecluse.Core.Registry.Adapter (
     serveCredential,
     serveRouter,
  )
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Admission.Brake (defaultBrakeMarks)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), meterSnapshot, newMemoryMeter)
@@ -81,7 +80,6 @@ import Ecluse.Rts.Cgroup (cgroupMemoryUse)
 import Ecluse.Rts.Sampler (SamplerSettings (..), readCollector, runMemorySampler, samplerPeriodMicros, shareWindowPeriods)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Server (MountBinding (..))
-import Ecluse.Runtime.Telemetry (Telemetry)
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Runtime.Telemetry.Instruments (registerMemoryMeter)
 import Ecluse.Runtime.Telemetry.Reporters (
@@ -89,7 +87,6 @@ import Ecluse.Runtime.Telemetry.Reporters (
     deferredMirrorEnqueueFailure,
     installMetrics,
  )
-import Ecluse.Runtime.Telemetry.Tracing (dataPlaneTrace)
 
 -- | Everything a role needs to start its own tasks, built once by 'withServiceRuntime'. The background tasks arrive already wrapped in their supervision policy.
 data ServiceRuntime = ServiceRuntime
@@ -138,8 +135,8 @@ withServiceRuntime bootEnv plan mirror action = do
     states <- newMirrorStates (bpS3Endpoint bootPlan) deadlines appConfig (bpLimits bootPlan) cacheConfig pool
     let bindings = bindMirrorStates states baseBindings
 
-    (publicClient, privateClient) <- dataPlaneClients telemetry deadlines bootPlan
-    withEnvWithAdmission serveAdmission memoryMeter queue publicClient privateClient metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
+    (manager, privateManager) <- dataPlaneManagers bootPlan
+    withEnvWithAdmission serveAdmission memoryMeter queue manager privateManager deadlines metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
         -- The instruments exist now, so installing them makes the credential provider's deferred
         -- reporters live for the rest of the run.
         installMetrics deferredMetrics (envMetrics builtEnv)
@@ -195,14 +192,13 @@ memoryAdmission memoryPlan = do
                 }
         )
 
-{- The two data-plane clients, each pooled at its own bound, sharing the sweeper and the client span.
-They stay split because public reads are anonymous and private reads forward the caller's credential. -}
-dataPlaneClients :: Telemetry -> Deadlines -> BootPlan -> IO (ExchangeClient, ExchangeClient)
-dataPlaneClients telemetry deadlines bootPlan = do
-    tracing <- dataPlaneTrace telemetry
-    let renderedAgent = renderUserAgent (egrOperatorContact (cfgEgress (vpSettings (bpValidated bootPlan))))
-        client connections = (\manager -> ExchangeClient manager deadlines tracing) <$> newPooledManager connections (identityManagerSettings renderedAgent typedTlsManagerSettings)
-    (,) <$> client (bpPublicConnections bootPlan) <*> client (bpPrivateConnections bootPlan)
+{- The two data-plane managers, each pooled at its own bound. They stay split because public reads
+are anonymous and private reads forward the caller's credential. -}
+dataPlaneManagers :: BootPlan -> IO (Manager, Manager)
+dataPlaneManagers bootPlan = (,) <$> pooled (bpPublicConnections bootPlan) <*> pooled (bpPrivateConnections bootPlan)
+  where
+    renderedAgent = renderUserAgent (egrOperatorContact (cfgEgress (vpSettings (bpValidated bootPlan))))
+    pooled connections = newPooledManager connections (identityManagerSettings renderedAgent typedTlsManagerSettings)
 
 -- | The @\/livez@ arm a process answers from, given whether it runs the worker ('spawnsWorker'): the consume-loop heartbeat where it does, the listener alone where it does not.
 workerLiveness :: Bool -> WorkerHeartbeat -> IO Liveness

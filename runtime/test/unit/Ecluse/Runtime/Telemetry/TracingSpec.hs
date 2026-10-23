@@ -329,7 +329,7 @@ dataPlaneFaultSpec = describe "a data-plane fetch that cannot connect" $ do
     it "hands the caller the transport fault the TLS manager raises alone" $ do
         request <- tlsSignedRequest
         let refusing = tlsManagerSettings{managerTlsConnection = pure (\_ _ _ -> throwIO (TLS.HandshakeFailed (TLS.Error_Misc "refused")))}
-        alone <- newManager refusing >>= \manager -> withExchangeClient manager (fetchFault request)
+        alone <- withExchangeClient (newManager refusing) (fetchFault request)
         observed <- newIORef Nothing
         withSpanCapture (\tracerProvider -> withDataPlaneClient tracerProvider refusing (writeIORef observed . Just <=< fetchFault request)) (const pass)
         readIORef observed `shouldReturn` Just alone
@@ -343,8 +343,7 @@ withDataPlaneClient :: TracerProvider -> ManagerSettings -> (ExchangeClient -> I
 withDataPlaneClient tracerProvider base use = do
     setGlobalTracerProvider tracerProvider
     tracing <- dataPlaneTrace (TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider))
-    manager <- newManager base
-    withExchangeClient manager (\client -> use client{ecTrace = tracing})
+    withExchangeClient (newManager base) (\client -> use client{ecTrace = tracing})
 
 -- The transport fault an exchange hands its caller. An exchange that answers fails the case.
 fetchFault :: Request -> ExchangeClient -> IO TransportFault

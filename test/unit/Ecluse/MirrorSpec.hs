@@ -13,6 +13,7 @@ import Test.Hspec
 import Test.Hspec.Wai
 
 import Ecluse.Composition.Support (expectAppConfig)
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Server.Readiness (
     MountReadiness (MountAwaitingFirstSync, MountReady),
@@ -22,7 +23,6 @@ import Ecluse.Core.Server.Readiness (
 import Ecluse.Core.Worker (Liveness (Liveness, liveHealthy, liveLastPoll))
 import Ecluse.Mirror (mirrorServerConfig)
 import Ecluse.Runtime.Server (probeOnlyApplication)
-import Ecluse.Test.Deadline (newSweptDeadlines)
 import Ecluse.Test.Wai (bodyContainsAll)
 
 -- | A fixed poll instant, so the rendered probe body is deterministic.
@@ -35,7 +35,7 @@ injected, which is how the composition root wires the consume-loop heartbeat beh
 mirrorApp :: Liveness -> Readiness -> IO Application
 mirrorApp liveness ready = do
     appCfg <- expectAppConfig [] Nothing
-    deadlines <- newSweptDeadlines
+    deadlines <- newDeadlines
     probeOnlyApplication deadlines (mirrorServerConfig appCfg (pure ready) (pure liveness))
 
 spec :: Spec
