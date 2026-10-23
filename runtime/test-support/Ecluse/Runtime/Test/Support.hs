@@ -17,11 +17,10 @@ module Ecluse.Runtime.Test.Support (
 import Katip (LogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Queue (MirrorQueue)
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
 import Ecluse.Runtime.Env (Env, newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryDisabled)
-import Ecluse.Test.Deadline (newSweptDeadlines)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Cache (defaultCacheConfig, newMetadataCache)
@@ -45,7 +44,7 @@ newTestEnvWith queue managers telemetry = do
     newTestEnvLogging logEnv queue managers telemetry
 
 {- | 'newTestEnvWith' over a caller-supplied log environment, so a test can capture what the
-serve path logged. Both clients share one sweeper, as a process's do.
+serve path logged. Nothing sweeps its deadlines, so no case through it may wait one out.
 -}
 newTestEnvLogging :: LogEnv -> MirrorQueue -> (Manager, Manager) -> Telemetry -> IO Env
 newTestEnvLogging logEnv queue (manager, privateManager) telemetry = do
@@ -53,5 +52,5 @@ newTestEnvLogging logEnv queue (manager, privateManager) telemetry = do
     heartbeat <- newWorkerHeartbeat
     admission <- testServeAdmission
     meter <- testMemoryMeter
-    deadlines <- newSweptDeadlines
-    newEnvWithAdmission admission meter queue (ExchangeClient manager deadlines) (ExchangeClient privateManager deadlines) metadataCache logEnv telemetry heartbeat
+    deadlines <- newDeadlines
+    newEnvWithAdmission admission meter queue manager privateManager deadlines metadataCache logEnv telemetry heartbeat

@@ -27,6 +27,10 @@ module Ecluse.Boot (
     logBootWarning,
     logBootInfo,
     superviseBackground,
+
+    -- * The deadline sweeper
+    withDeadlineSweeper,
+    alongsideSweeper,
     buildMirrorQueue,
     applyServerSettings,
     probeServerConfig,
@@ -72,7 +76,13 @@ import Ecluse.Core.Deadline (Deadlines, newDeadlines, sweepTick)
 import Ecluse.Core.Queue (MirrorQueue (deadLetterTerminus, deliveryBudget))
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
-import Ecluse.Core.Supervision (backgroundLoopBackoff, superviseLoop, transientPolicy)
+import Ecluse.Core.Supervision (
+    FaultDisposition (Permanent),
+    SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
+    backgroundLoopBackoff,
+    superviseLoop,
+    transientPolicy,
+ )
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Rts (RuntimeOverrides (RuntimeOverrides, roCores, roCoresCeiling, roMaxHeapBytes), applyRuntimePosture)
 import Ecluse.Runtime.Log (moduleLog, newLogEnv)
@@ -219,20 +229,34 @@ withBootEnv role action = do
                             , beDeadlines = deadlines
                             }
 
-{- Run the sweeper beside the role. It starts once the runtime posture has fixed the capability
-count, and a fault in it fails the process rather than leaving every deadline unarmed. -}
+{- | Run the deadline sweeper beside the role. Start it once the runtime posture has fixed the
+capability count.
+-}
 withDeadlineSweeper :: LogEnv -> (Deadlines -> IO a) -> IO a
 withDeadlineSweeper logEnv action = do
     deadlines <- newDeadlines
-    withAsync (superviseBackground "deadline-sweeper" logEnv (sweepTick deadlines)) (\sweeper -> link sweeper >> action deadlines)
+    alongsideSweeper logEnv (sweepTick deadlines) (action deadlines)
 
-{- | A background loop under the shared supervision combinator. Pacing lives in each loop, so this
-wrapper only stops residue ending the task.
+{- | Run an action beside a sweep step repeated forever. A fault in the step fails the action: a
+sweeper that stops firing deadlines is worse than a restart.
+-}
+alongsideSweeper :: LogEnv -> IO () -> IO a -> IO a
+alongsideSweeper logEnv sweep action =
+    withAsync (superviseUnder sweeperPolicy logEnv sweep) (\sweeper -> link sweeper >> action)
+
+sweeperPolicy :: SupervisionPolicy
+sweeperPolicy = SupervisionPolicy{spLabel = "deadline-sweeper", spClassify = const Permanent, spBackoff = backgroundLoopBackoff}
+
+{- | A background loop under the shared supervision combinator, retrying each fault. Pacing lives in
+each loop, so this wrapper only stops residue ending the task.
 -}
 superviseBackground :: Text -> LogEnv -> IO () -> IO ()
-superviseBackground label logEnv task =
-    void . runKatipContextT logEnv (mempty :: SimpleLogPayload) (Namespace [label]) $
-        superviseLoop (transientPolicy label backgroundLoopBackoff) (liftIO task)
+superviseBackground label = superviseUnder (transientPolicy label backgroundLoopBackoff)
+
+superviseUnder :: SupervisionPolicy -> LogEnv -> IO () -> IO ()
+superviseUnder policy logEnv task =
+    void . runKatipContextT logEnv (mempty :: SimpleLogPayload) (Namespace [spLabel policy]) $
+        superviseLoop policy (liftIO task)
 
 {- Log the report and yield the plan, or refuse. The order is load-bearing: @ecluse check-config@
 prints the same lists in it, so a transcript and a boot log agree line for line. -}

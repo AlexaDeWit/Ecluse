@@ -56,7 +56,7 @@ import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Rts (RtsPosture (rpAllocAreaBytes, rpCapabilities), currentRtsPosture)
 import Ecluse.Test.Corpus (CaptureRecord (crCapturedAt), CorpusPackage (cpPackage), cpName, permissiveAgeRules, readCaptureRecords)
 import Ecluse.Test.Corpus.Advisories (allAdvisoryRules, checkCapturesServed, compileCorpusAdvisories, configuredShippedPolicy)
-import Ecluse.Test.Deadline (newSweptClient)
+import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..), LoadedEntry (..), ecosystemBenches)
 import Ecluse.Test.OsvDb (withServedArtifact)
 import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, fetchTestBody)
@@ -93,15 +93,15 @@ captures = do
 live :: IO ()
 live = do
     benches <- ecosystemBenches
-    client <- newSweptClient =<< newManager tlsManagerSettings
-    now <- getCurrentTime
-    runs <- forM benches $ \bench -> withCorpusAdvisories bench $ \advisories ->
-        (ebEcosystem bench,) <$> traverse (\LoadedEntry{lePackage = package} -> measureLive client advisories (EvalContext now Nothing) bench package) (ebCorpus bench)
-    op <- operatingPoint
-    writeObservations (liveEvidence op runs)
-    publish (renderLiveReport op runs)
-    traverse_ putTextLn (liveAnnotations runs)
-    exitWith (liveExitCode runs)
+    withExchangeClient (newManager tlsManagerSettings) $ \client -> do
+        now <- getCurrentTime
+        runs <- forM benches $ \bench -> withCorpusAdvisories bench $ \advisories ->
+            (ebEcosystem bench,) <$> traverse (\LoadedEntry{lePackage = package} -> measureLive client advisories (EvalContext now Nothing) bench package) (ebCorpus bench)
+        op <- operatingPoint
+        writeObservations (liveEvidence op runs)
+        publish (renderLiveReport op runs)
+        traverse_ putTextLn (liveAnnotations runs)
+        exitWith (liveExitCode runs)
 
 -- Serve the ecosystem's corpus advisories to the advisory legs while the action runs, once every covered capture reaches its rows.
 withCorpusAdvisories :: EcosystemBench -> (RuleDeps -> IO a) -> IO a

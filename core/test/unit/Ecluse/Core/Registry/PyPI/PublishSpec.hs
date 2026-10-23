@@ -30,7 +30,7 @@ import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), P
 import Ecluse.Core.Registry.PyPI.Publish (classifyPublish, pypiPublishCodec)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Security.Limits (defaultLimits)
-import Ecluse.Test.Deadline (newSweptClient)
+import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Osv (osvZipOf)
 import Ecluse.Test.Package (pypiVersion, unscopedPyPI)
 import Ecluse.Test.Port (passthroughTracingPort)
@@ -45,34 +45,34 @@ spec = do
             withStub status200 "ok" $ \stub -> do
                 bytes <- BSL.toStrict <$> osvZipOf [("example-1.dist-info/METADATA", "Metadata-Version: 2.4\nName: example\nVersion: 1\nRequires-Dist: dependency>=2; extra == 'test'\nProvides-Extra: test\n\nA description.\n")]
                 snapshot <- sourceSnapshot bytes
-                exchanges <- newSweptClient =<< newManager defaultManagerSettings
-                let target = loopbackRegistryUrl (stubBaseUrl stub <> "/custom-upload")
-                    transport = MirrorTransport exchanges (pure (Just (ClientCredential (Just "publisher") (mkSecret "password")))) defaultLimits passthroughTracingPort
-                    writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) target pypiPublishCodec
-                version <- expectRight (mpPrepareVersion writer (unscopedPyPI "example") (pypiVersion "1") snapshot)
-                let inventory = pmvInventory version
-                    file = NE.head (inventoryFiles inventory)
-                inventoryPackage inventory `shouldBe` unscopedPyPI "example"
-                inventoryVersion inventory `shouldBe` pypiVersion "1"
-                verified <- expectRight (verifyMirrorBytes file bytes)
-                prepared <- pmvPrepareUpload version (const (pure ())) file verified >>= expectRight
-                publishPrepared prepared (PublishPlan (pypiVersion "1")) `shouldReturn` Right ()
-                captured <- lastCaptured stub
-                capMethod captured `shouldBe` "POST"
-                capPath captured `shouldBe` "/custom-upload"
-                headerValue "authorization" captured `shouldBe` Just "Basic cHVibGlzaGVyOnBhc3N3b3Jk"
-                contentType <- maybe (fail "missing multipart content type") pure (headerValue "content-type" captured)
-                let (_, attributes) = Wai.parseContentType contentType
-                boundary <- maybe (fail "missing multipart boundary") pure (lookup "boundary" attributes)
-                ref <- newIORef (capBody captured)
-                (fields, files) <- Wai.sinkRequestBody Wai.lbsBackEnd (Wai.Multipart boundary) (atomicModifyIORef' ref (BS.empty,))
-                lookup ":action" fields `shouldBe` Just "file_upload"
-                lookup "protocol_version" fields `shouldBe` Just "1"
-                lookup "filetype" fields `shouldBe` Just "bdist_wheel"
-                lookup "pyversion" fields `shouldBe` Just "py3"
-                lookup "sha256_digest" fields `shouldBe` Just (encodeUtf8 (sha256 bytes))
-                lookup "requires_dist" fields `shouldBe` Just "dependency>=2; extra == 'test'"
-                map (BSL.toStrict . Wai.fileContent . snd) files `shouldBe` [bytes]
+                withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                    let target = loopbackRegistryUrl (stubBaseUrl stub <> "/custom-upload")
+                        transport = MirrorTransport exchanges (pure (Just (ClientCredential (Just "publisher") (mkSecret "password")))) defaultLimits passthroughTracingPort
+                        writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) target pypiPublishCodec
+                    version <- expectRight (mpPrepareVersion writer (unscopedPyPI "example") (pypiVersion "1") snapshot)
+                    let inventory = pmvInventory version
+                        file = NE.head (inventoryFiles inventory)
+                    inventoryPackage inventory `shouldBe` unscopedPyPI "example"
+                    inventoryVersion inventory `shouldBe` pypiVersion "1"
+                    verified <- expectRight (verifyMirrorBytes file bytes)
+                    prepared <- pmvPrepareUpload version (const (pure ())) file verified >>= expectRight
+                    publishPrepared prepared (PublishPlan (pypiVersion "1")) `shouldReturn` Right ()
+                    captured <- lastCaptured stub
+                    capMethod captured `shouldBe` "POST"
+                    capPath captured `shouldBe` "/custom-upload"
+                    headerValue "authorization" captured `shouldBe` Just "Basic cHVibGlzaGVyOnBhc3N3b3Jk"
+                    contentType <- maybe (fail "missing multipart content type") pure (headerValue "content-type" captured)
+                    let (_, attributes) = Wai.parseContentType contentType
+                    boundary <- maybe (fail "missing multipart boundary") pure (lookup "boundary" attributes)
+                    ref <- newIORef (capBody captured)
+                    (fields, files) <- Wai.sinkRequestBody Wai.lbsBackEnd (Wai.Multipart boundary) (atomicModifyIORef' ref (BS.empty,))
+                    lookup ":action" fields `shouldBe` Just "file_upload"
+                    lookup "protocol_version" fields `shouldBe` Just "1"
+                    lookup "filetype" fields `shouldBe` Just "bdist_wheel"
+                    lookup "pyversion" fields `shouldBe` Just "py3"
+                    lookup "sha256_digest" fields `shouldBe` Just (encodeUtf8 (sha256 bytes))
+                    lookup "requires_dist" fields `shouldBe` Just "dependency>=2; extra == 'test'"
+                    map (BSL.toStrict . Wai.fileContent . snd) files `shouldBe` [bytes]
     describe "PyPI upload preparation" $
         for_ ["example-1-py3-none-any.whl", "example-1.zip"] $ \filename ->
             it ("refuses verified malformed archive bytes for " <> toString filename) $ do

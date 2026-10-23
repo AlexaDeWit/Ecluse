@@ -202,7 +202,7 @@ floorSpec = describe "the progress floor and the serve-path cap" $ do
                 ["trickle"] -> pacedBody (replicate 400 (50_000, "x")) request
                 _ -> pacedBody [(0, "{}")] request
         testWithApplicationSettings settings (pure application) $ \port ->
-            newManager defaultManagerSettings >>= \manager -> withExchangeClient manager $ \client -> do
+            withExchangeClient (newManager defaultManagerSettings) $ \client -> do
                 let fetch path = parseRequest ("http://127.0.0.1:" <> show port <> "/" <> path) >>= exchangeBody client progress
                 replicateM_ 2 (fetch "healthy" `shouldReturn` Right "{}")
                 readIORef opened `shouldReturn` 1
@@ -242,7 +242,7 @@ bodyResetSpec :: Spec
 bodyResetSpec = describe "a TLS body the peer resets mid-read" $
     it "is an unreachable transport fault after the 200 arrived, at the host:port that served it" $
         withTlsServer resetAfterPartialBody $ \port ->
-            trustingTlsManager >>= \manager -> withExchangeClient manager $ \client -> do
+            withExchangeClient trustingTlsManager $ \client -> do
                 progress <- floorOf 30 1 1
                 bodyStarted <- newIORef False
                 let consume readChunk = writeIORef bodyStarted True >> boundedRead (MetadataBodyLimit 1024) readChunk
@@ -269,8 +269,7 @@ floorOf serveCap window minBytes = either (fail . show) pure (mkProgressFloor se
 withStub :: Application -> (ExchangeClient -> String -> IO a) -> IO a
 withStub application action =
     testWithApplication (pure application) $ \port -> do
-        manager <- newManager defaultManagerSettings
-        withExchangeClient manager (\client -> action client ("http://127.0.0.1:" <> show port <> "/"))
+        withExchangeClient (newManager defaultManagerSettings) (\client -> action client ("http://127.0.0.1:" <> show port <> "/"))
 
 exchangeBody :: ExchangeClient -> ProgressFloor -> Request -> IO (Either FetchFault ByteString)
 exchangeBody client progress = boundedExchange (\_ _ body -> body) client progress (MetadataBodyLimit 1_000_000)
