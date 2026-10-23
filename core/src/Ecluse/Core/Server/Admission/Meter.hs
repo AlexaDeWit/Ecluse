@@ -25,6 +25,7 @@ module Ecluse.Core.Server.Admission.Meter (
     MemoryTicket,
     withMemoryEntry,
     withMemoryEntryE,
+    withMemoryEntryP,
     charge,
     newChargeRegion,
 
@@ -52,7 +53,7 @@ import Ecluse.Core.Server.Admission.Budget (
  )
 import Ecluse.Core.Deadline (Deadlines, withSweptFlag)
 import Ecluse.Core.Server.Admission.Types (BrakeLevel (Calm), FlightKey, MeterSnapshot (..))
-import Ecluse.Core.Server.Admission.Weighted (Shed (..), spikeRoomSwept)
+import Ecluse.Core.Server.Admission.Weighted (Shed (..), spikePlacesFreed, spikeRoomSwept)
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
 -- | The boot-time shape of a meter.
@@ -156,10 +157,14 @@ withMemoryEntry metrics meter body = either (const Nothing) Just <$> withMemoryE
 
 -- | Spike 1866: 'withMemoryEntry' that says why it shed.
 withMemoryEntryE :: (MonadUnliftIO m) => MetricsPort -> MemoryMeter -> (MemoryTicket -> m a) -> m (Either Shed a)
-withMemoryEntryE metrics meter body =
+withMemoryEntryE metrics meter = withMemoryEntryP metrics meter pass
+
+-- | Spike 1866: 'withMemoryEntryE' that runs @placed@ once the request holds a place or its entry step.
+withMemoryEntryP :: (MonadUnliftIO m) => MetricsPort -> MemoryMeter -> IO () -> (MemoryTicket -> m a) -> m (Either Shed a)
+withMemoryEntryP metrics meter placed body =
     UE.mask $ \restore -> do
         ticket <- liftIO (newTicket metrics meter)
-        entered <- liftIO (enter ticket)
+        entered <- liftIO (enter placed ticket)
         case entered of
             Left why -> liftIO (mpMemoryAdmissionShed metrics) $> Left why
             Right waited ->
@@ -177,8 +182,8 @@ newTicket metrics meter = do
 
 -- The gate. 'Just' carries whether the request had to wait. It runs under the caller's mask, and
 -- the queued count taken in the deciding transaction is returned before any interruptible step.
-enter :: MemoryTicket -> IO (Either Shed Bool)
-enter ticket = do
+enter :: IO () -> MemoryTicket -> IO (Either Shed Bool)
+enter placed ticket = do
     gate <- atomically $ do
         view <- readView meter
         waiting <- readTVar (mmEntryWaiting meter)
@@ -187,13 +192,14 @@ enter ticket = do
             EntryQueue -> writeTVar (mmEntryWaiting meter) (waiting + 1) $> EntryQueue
             EntryRefuse -> pure EntryRefuse
     case gate of
-        EntryAdmit -> openHeadroom $> Right False
+        EntryAdmit -> placed >> openHeadroom $> Right False
         EntryRefuse -> pure (Left DoorFull)
         EntryQueue -> do
+            placed
             let waitFor = atomically . entryOrExpire
             admitted <-
                 maybe (registerDelay (mmEntryWaitMicros meter) >>= waitFor) (\d -> withSweptFlag d (mmEntryWaitMicros meter) waitFor) (mmDeadlines meter)
-                    `UE.finally` atomically (modifyTVar' (mmEntryWaiting meter) (subtract 1))
+                    `UE.finally` atomically (modifyTVar' (mmEntryWaiting meter) (subtract 1) >> modifyTVar' spikePlacesFreed (+ 1))
             if admitted then openHeadroom $> Right True else pure (Left WaitExpired)
   where
     meter = tMeter ticket
@@ -241,6 +247,7 @@ takeBytes ticket bytes = do
 
 releaseTicket :: MemoryTicket -> IO ()
 releaseTicket ticket = atomically $ do
+    modifyTVar' spikePlacesFreed (+ 1)
     let meter = tMeter ticket
     held <- readTVar (tCharged ticket)
     writeTVar (tCharged ticket) 0

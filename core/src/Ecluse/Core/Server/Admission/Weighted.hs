@@ -13,6 +13,8 @@ module Ecluse.Core.Server.Admission.Weighted (
     newWeightedAdmissionSwept,
     withWeightedAdmission,
     withWeightedAdmissionE,
+    withWeightedAdmissionP,
+    spikePlacesFreed,
     Shed (..),
     spikeRoomSwept,
     AdmissionObservers (..),
@@ -40,6 +42,11 @@ data WeightedAdmission = WeightedAdmission
 -- | Spike 1866: why a request was shed.
 data Shed = DoorFull | WaitExpired
     deriving stock (Eq, Show)
+
+-- | Spike 1866: bumped whenever a room place or capacity frees, so held requests wake to try again.
+spikePlacesFreed :: TVar Int
+spikePlacesFreed = unsafePerformIO (newTVarIO 0)
+{-# NOINLINE spikePlacesFreed #-}
 
 -- | Spike 1866: SPIKE1866_ROOM=ghc keeps 'registerDelay' for the room wait.
 spikeRoomSwept :: Bool
@@ -128,13 +135,25 @@ withWeightedAdmissionE ::
     Int ->
     m a ->
     m (Either Shed a)
-withWeightedAdmissionE obs wa weight action =
+withWeightedAdmissionE obs wa weight = withWeightedAdmissionP obs wa weight pass
+
+-- | Spike 1866: 'withWeightedAdmissionE' that runs @placed@ once the request holds a place or a slot.
+{-# INLINE withWeightedAdmissionP #-}
+withWeightedAdmissionP ::
+    (MonadUnliftIO m) =>
+    AdmissionObservers ->
+    WeightedAdmission ->
+    Int ->
+    IO () ->
+    m a ->
+    m (Either Shed a)
+withWeightedAdmissionP obs wa weight placed action =
     UE.mask $ \restore -> do
         gate <- atomically (doorDecision wa weight)
         case gate of
             Refused -> shedRecording obs DoorFull
-            Admitted -> admittedRun obs wa weight (pure ()) restore action
-            Queued -> queuedWait obs wa weight restore action
+            Admitted -> liftIO placed >> admittedRun obs wa weight (pure ()) restore action
+            Queued -> liftIO placed >> queuedWait obs wa weight restore action
 
 -- Record the shed and refuse. A room place taken on the queued path is already
 -- surrendered before this runs.
@@ -157,7 +176,7 @@ queuedWait obs wa weight restore action = do
     let waitFor deadline = atomically (acquireOrExpire wa weight deadline)
     acquired <-
         liftIO (maybe (registerDelay (waWaitMicros wa) >>= waitFor) (\d -> withSweptFlag d (waWaitMicros wa) waitFor) (waDeadlines wa))
-            `UE.finally` atomically (modifyTVar' (waWaiting wa) (subtract 1))
+            `UE.finally` atomically (modifyTVar' (waWaiting wa) (subtract 1) >> modifyTVar' spikePlacesFreed (+ 1))
     if acquired
         then admittedRun obs wa weight (onQueued obs) restore action
         else shedRecording obs WaitExpired
@@ -186,7 +205,7 @@ admittedRun obs wa weight afterArm restore action =
 releaseWeight :: (MonadUnliftIO m) => AdmissionObservers -> WeightedAdmission -> Int -> m ()
 releaseWeight obs wa weight =
     liftIO (onInFlightDelta obs (negate weight))
-        `UE.finally` atomically (modifyTVar' (waAvailable wa) (+ weight))
+        `UE.finally` atomically (modifyTVar' (waAvailable wa) (+ weight) >> modifyTVar' spikePlacesFreed (+ 1))
 
 -- | Spike 1866: free capacity and room occupancy, read without a transaction.
 weightedAdmissionLevels :: WeightedAdmission -> IO (Int, Int)

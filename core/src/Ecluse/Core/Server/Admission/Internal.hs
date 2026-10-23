@@ -9,6 +9,7 @@ module Ecluse.Core.Server.Admission.Internal (
     newServeAdmissionSwept,
     withServeAdmission,
     withServeAdmissionE,
+    withServeAdmissionP,
     serveAdmissionLevels,
 
     -- * Internals exported for testing
@@ -28,6 +29,7 @@ import Ecluse.Core.Server.Admission.Weighted (
     newWeightedAdmissionSwept,
     withWeightedAdmission,
     withWeightedAdmissionE,
+    withWeightedAdmissionP,
     weightedAdmissionLevels,
  )
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
@@ -69,6 +71,12 @@ serveAdmissionLevels (ServeAdmission core) = weightedAdmissionLevels core
 withServeAdmissionE :: (MonadUnliftIO m) => MetricsPort -> ServeAdmission -> m a -> m (Either Shed a)
 withServeAdmissionE metrics (ServeAdmission core) =
     withWeightedAdmissionE (serveObservers metrics) core 1
+
+-- | Spike 1866: 'withServeAdmissionE' that runs @placed@ once the request holds a place or a slot.
+{-# INLINE withServeAdmissionP #-}
+withServeAdmissionP :: (MonadUnliftIO m) => MetricsPort -> ServeAdmission -> IO () -> m a -> m (Either Shed a)
+withServeAdmissionP metrics (ServeAdmission core) =
+    withWeightedAdmissionP (serveObservers metrics) core 1
 
 serveObservers :: MetricsPort -> AdmissionObservers
 serveObservers metrics = observers

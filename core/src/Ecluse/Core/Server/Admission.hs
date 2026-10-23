@@ -8,6 +8,7 @@ module Ecluse.Core.Server.Admission (
     newServeAdmission,
     newServeAdmissionSwept,
     withServeAdmissionE,
+    withServeAdmissionP,
     serveAdmissionLevels,
     withServeAdmission,
 
