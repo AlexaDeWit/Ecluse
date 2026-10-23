@@ -324,7 +324,7 @@ back only its own payments and each of them once, and nothing after its ticket i
 stepDown :: ChargePart -> Int -> IO ()
 stepDown (ChargePart ticket paid) kept = UE.mask_ $ do
     surplus <- atomicModifyIORef' paid (\total -> let back = max 0 (total - max 0 kept) in (total - back, back))
-    when (surplus > 0) (atomically (giveBack ticket surplus))
+    when (surplus > 0) (probed MeterGiveBack (giveBack ticket surplus))
 
 -- Return bytes to the meter, never more than the ticket holds, so a released ticket returns nothing.
 giveBack :: MemoryTicket -> Int -> STM ()
