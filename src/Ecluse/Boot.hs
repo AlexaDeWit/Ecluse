@@ -26,7 +26,6 @@ module Ecluse.Boot (
     -- * Boot-time logging and wiring
     logBootWarning,
     logBootInfo,
-    superviseBackground,
     buildMirrorQueue,
     applyServerSettings,
     probeServerConfig,
@@ -35,7 +34,7 @@ module Ecluse.Boot (
 import Data.ByteString qualified as BS
 import Data.List (lookup)
 import Data.Text qualified as T
-import Katip (Environment (Environment), LogEnv, Namespace (Namespace), Severity (InfoS, WarningS), SimpleLogPayload, closeScribes, runKatipContextT)
+import Katip (Environment (Environment), LogEnv, Severity (InfoS, WarningS), closeScribes)
 import System.Environment (getEnvironment)
 import System.IO.Error (ioeGetErrorString, isDoesNotExistError)
 import UnliftIO (bracket, throwIO, tryIO)
@@ -72,7 +71,7 @@ import Ecluse.Core.Deadline (Deadlines, newDeadlines, sweepTick)
 import Ecluse.Core.Queue (MirrorQueue (deadLetterTerminus, deliveryBudget))
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
-import Ecluse.Core.Supervision (backgroundLoopBackoff, superviseLoop, transientPolicy)
+import Ecluse.Core.Supervision (superviseBackground)
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Rts (RuntimeOverrides (RuntimeOverrides, roCores, roCoresCeiling, roMaxHeapBytes), applyRuntimePosture)
 import Ecluse.Runtime.Log (moduleLog, newLogEnv)
@@ -225,14 +224,6 @@ withDeadlineSweeper :: LogEnv -> (Deadlines -> IO a) -> IO a
 withDeadlineSweeper logEnv action = do
     deadlines <- newDeadlines
     withAsync (superviseBackground "deadline-sweeper" logEnv (sweepTick deadlines)) (\sweeper -> link sweeper >> action deadlines)
-
-{- | A background loop under the shared supervision combinator. Pacing lives in each loop, so this
-wrapper only stops residue ending the task.
--}
-superviseBackground :: Text -> LogEnv -> IO () -> IO ()
-superviseBackground label logEnv task =
-    void . runKatipContextT logEnv (mempty :: SimpleLogPayload) (Namespace [label]) $
-        superviseLoop (transientPolicy label backgroundLoopBackoff) (liftIO task)
 
 {- Log the report and yield the plan, or refuse. The order is load-bearing: @ecluse check-config@
 prints the same lists in it, so a transcript and a boot log agree line for line. -}

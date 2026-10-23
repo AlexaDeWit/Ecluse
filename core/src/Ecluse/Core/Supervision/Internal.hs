@@ -95,8 +95,8 @@ superviseLoopWithDelay delayAction policy step = go 0
 {- | Run a background loop that never fails up: every escaped fault backs off and the step reruns.
 Pacing lives in the step, and the loop logs under the label's namespace.
 -}
-superviseBackground :: LogEnv -> Text -> IO () -> IO ()
-superviseBackground logEnv label task =
+superviseBackground :: Text -> LogEnv -> IO () -> IO ()
+superviseBackground label logEnv task =
     void . runKatipContextT logEnv (mempty :: SimpleLogPayload) (Namespace [label]) $
         superviseLoop (transientPolicy label backgroundLoopBackoff) (liftIO task)
 

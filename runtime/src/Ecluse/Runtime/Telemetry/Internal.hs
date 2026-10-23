@@ -241,7 +241,7 @@ initializeObservedMeterProvider logEnv sink = do
             (batched, flushStep) <- batchMeterProvider sdkProvider
             readerHandle <- forkPeriodicMetricReader env exporter readerOptions
             -- The bracket acquires masked, so the flusher unmasks to stay cancellable.
-            flusher <- asyncWithUnmask (\unmask -> unmask (superviseBackground logEnv "metric-flush" flushStep))
+            flusher <- asyncWithUnmask (\unmask -> unmask (superviseBackground "metric-flush" logEnv flushStep))
             let provider = beforeShutdown (stopPeriodicMetricReader readerHandle) (beforeShutdown (cancel flusher) batched)
             setGlobalMeterProvider provider
             scrape <- metricScrapeFor env
