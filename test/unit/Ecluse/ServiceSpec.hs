@@ -2,21 +2,18 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Mirror-pipeline role composition, worker liveness, and ecosystem mount bindings.
+-- | Mirror-pipeline role composition, worker liveness, ecosystem mount bindings, and the data-plane clients and their client spans.
 module Ecluse.ServiceSpec (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Time (addUTCTime, getCurrentTime)
 import Katip (LogEnv)
-import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (InternalException), Request, brConsume, defaultManagerSettings, httpNoBody, newManager, parseRequest, responseBody, withResponse)
+import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (InternalException), Request, brConsume, defaultManagerSettings, httpNoBody, newManager, parseRequest, responseBody)
 import Network.HTTP.Types (status200)
 import Network.Wai (Application, responseLBS)
 import Network.Wai.Handler.Warp qualified as Warp
-import OpenTelemetry.Context (lookupSpan)
-import OpenTelemetry.Context.ThreadLocal (getContext)
 import OpenTelemetry.Internal.Logging (getGlobalErrorHandler, setGlobalErrorHandler)
 import OpenTelemetry.MeterProvider (SdkMeterEnv)
-import OpenTelemetry.Trace.Core (SpanContext, getSpanContext)
 import Test.Hspec
 import UnliftIO (bracket)
 import UnliftIO.Exception (try)
@@ -26,14 +23,14 @@ import Ecluse.Composition.Credential (initTargetCredentialProviders)
 import Ecluse.Composition.Executable (ExecutablePlan (epRoleWiring), MirrorWiring (mwCveSync), RoleWiring (MirrorPipelineWiring), planExecutable)
 import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving, sbProbing))
 import Ecluse.Composition.Support (expectConfig, expectPlanFor, noCeiling, staticEnvVars)
-import Ecluse.Composition.TelemetrySupport (advisoryAgePoints, newAdvisoryHandles, withGlobalRoleTelemetry, withRoleTelemetry)
+import Ecluse.Composition.TelemetrySupport (advisoryAgePoints, newAdvisoryHandles, withGlobalRoleTelemetry, withRoleLog, withRoleTelemetry)
 import Ecluse.Composition.Types (BootRole (BootMirrorPipeline), MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
 import Ecluse.Core.BuildIdentity (parseOperatorContact, renderUserAgent)
 import Ecluse.Core.Cve.Slot (swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Queue (noMirrorQueue)
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecManager))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
 import Ecluse.Core.Registry.ResponseWait qualified as ResponseWait
 import Ecluse.Core.Telemetry.Metrics (Label (LEcosystem), metricAttributes)
@@ -51,7 +48,7 @@ import Ecluse.Runtime.Env (envPrivateClient, envPublicClient)
 import Ecluse.Runtime.Server (MountBinding (bindingPrefix))
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryDisabled)
 import Ecluse.Runtime.Telemetry.Tracing (telemetryWaiMiddleware)
-import Ecluse.Runtime.Test.Telemetry (histogramCounts, sumPoints)
+import Ecluse.Runtime.Test.Telemetry (activeSpanContext, histogramCounts, sumPoints)
 import Ecluse.Service (ServiceRuntime (svcEnv), mountBindingFor, withServiceRuntime, workerLiveness)
 import Ecluse.Test.Cve (fakeCveDb)
 import Ecluse.Test.Deadline (withSweeper)
@@ -123,7 +120,7 @@ spec = do
 dataPlaneSpec :: Spec
 dataPlaneSpec = describe "the data-plane clients" $ do
     it "type a body read the upstream resets after its 200, with telemetry off" $
-        withRoleTelemetry (\logEnv _ _ -> typesBodyResetUnder logEnv telemetryDisabled)
+        withRoleLog (`typesBodyResetUnder` telemetryDisabled)
 
     it "type a body read the upstream resets after its 200, under the client span" $
         withGlobalRoleTelemetry (\logEnv telemetry _ -> typesBodyResetUnder logEnv telemetry)
@@ -187,9 +184,6 @@ exchangeOnce client request = ResponseWait.withResponse client request (void . b
 relayingThrough :: ExchangeClient -> Request -> Application
 relayingThrough client request _ respond = exchangeOnce client request >> respond (responseLBS status200 [] "relayed")
 
-activeSpanContext :: IO (Maybe SpanContext)
-activeSpanContext = getContext >>= traverse getSpanContext . lookupSpan
-
 -- Route the SDK's own diagnostics to the handler for the length of the action.
 withGlobalErrorHandler :: (String -> IO ()) -> IO a -> IO a
 withGlobalErrorHandler handler action =
@@ -207,7 +201,7 @@ outboundIdentitySpec = describe "the runtime's outbound registry identity" $
                     for_ clients $ \client ->
                         withStub status200 "ok" $ \stub -> do
                             request <- parseRequest (toString (stubBaseUrl stub))
-                            fmap mconcat (withResponse request (ecManager client) (brConsume . responseBody)) `shouldReturn` "ok"
+                            fmap mconcat (ResponseWait.withResponse client request (brConsume . responseBody)) `shouldReturn` "ok"
                             captured <- lastCaptured stub
                             headerValue "User-Agent" captured `shouldBe` Just expected
 

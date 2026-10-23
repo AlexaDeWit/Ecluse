@@ -6,6 +6,7 @@
 module Ecluse.Composition.TelemetrySupport (
     withRoleTelemetry,
     withGlobalRoleTelemetry,
+    withRoleLog,
     newAdvisoryHandles,
     advisoryAgePoints,
 ) where
@@ -34,15 +35,16 @@ import Ecluse.Test.Log (newTestLogEnv)
 withRoleTelemetry :: (LogEnv -> Telemetry -> SdkMeterEnv -> IO a) -> IO a
 withRoleTelemetry = withLoggedTelemetry withTestTelemetry
 
--- | 'withRoleTelemetry' with both providers installed as the global ones, which the http-client instrumentation reads.
+-- | 'withRoleTelemetry' with both providers installed as the global ones, as the boot installs them. The client span's tracer is read from there.
 withGlobalRoleTelemetry :: (LogEnv -> Telemetry -> SdkMeterEnv -> IO a) -> IO a
 withGlobalRoleTelemetry = withLoggedTelemetry withGlobalTestTelemetry
 
+-- | A test logger, closed once the role and its assertions finish.
+withRoleLog :: (LogEnv -> IO a) -> IO a
+withRoleLog = bracket newTestLogEnv (void . closeScribes)
+
 withLoggedTelemetry :: ((Telemetry -> SdkMeterEnv -> IO a) -> IO a) -> (LogEnv -> Telemetry -> SdkMeterEnv -> IO a) -> IO a
-withLoggedTelemetry providers use =
-    providers $ \telemetry meterEnv ->
-        bracket newTestLogEnv (void . closeScribes) $ \logEnv ->
-            use logEnv telemetry meterEnv
+withLoggedTelemetry providers use = providers $ \telemetry meterEnv -> withRoleLog (\logEnv -> use logEnv telemetry meterEnv)
 
 -- | Ready slots whose fetch reports no published artifact, so role tasks cannot change their generation.
 newAdvisoryHandles :: [Ecosystem] -> IO [(Ecosystem, CveSyncHandle)]

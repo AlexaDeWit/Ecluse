@@ -2,10 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | In-process telemetry collection without exporters or background readers, and a captured span's events.
-module Ecluse.Runtime.Test.Telemetry (withTestTelemetry, withGlobalTestTelemetry, gaugePoints, sumPoints, histogramCounts, spanEvents) where
+-- | In-process telemetry collection without exporters or background readers, a captured span's events, and the thread's active span.
+module Ecluse.Runtime.Test.Telemetry (withTestTelemetry, withGlobalTestTelemetry, gaugePoints, sumPoints, histogramCounts, spanEvents, activeSpanContext) where
 
 import OpenTelemetry.Attributes (Attributes)
+import OpenTelemetry.Context (lookupSpan)
+import OpenTelemetry.Context.ThreadLocal (getContext)
 import OpenTelemetry.Exporter.Metric (
     GaugeDataPoint (gaugeDataPointAttributes, gaugeDataPointValue),
     HistogramDataPoint (histogramDataPointCount),
@@ -33,7 +35,7 @@ import OpenTelemetry.Trace (
     setGlobalTracerProvider,
     shutdownTracerProvider,
  )
-import OpenTelemetry.Trace.Core (Event, SpanHot (hotEvents))
+import OpenTelemetry.Trace.Core (Event, SpanContext, SpanHot (hotEvents), getSpanContext)
 import OpenTelemetry.Util (appendOnlyBoundedCollectionValues)
 import UnliftIO (bracket)
 
@@ -82,13 +84,10 @@ sumPoints wanted = collectPoints $ \case
 
 -- | How many measurements each histogram point under a metric name holds.
 histogramCounts :: Text -> SdkMeterEnv -> IO [Word64]
-histogramCounts wanted meterEnv = do
-    batches <- collectResourceMetrics meterEnv
-    pure
+histogramCounts wanted meterEnv =
+    collectResourceMetrics meterEnv <&> \batches ->
         [ histogramDataPointCount point
-        | batch <- batches
-        , scope <- toList (resourceMetricsScopes batch)
-        , MetricExportHistogram{mehName = name, mehPoints = points} <- toList (scopeMetricsExports scope)
+        | MetricExportHistogram{mehName = name, mehPoints = points} <- metricExports batches
         , name == wanted
         , point <- toList points
         ]
@@ -97,13 +96,20 @@ histogramCounts wanted meterEnv = do
 spanEvents :: SpanHot -> [Event]
 spanEvents = toList . appendOnlyBoundedCollectionValues . hotEvents
 
+-- | The context of the span active on this thread, if any.
+activeSpanContext :: IO (Maybe SpanContext)
+activeSpanContext = getContext >>= traverse getSpanContext . lookupSpan
+
 collectPoints :: (MetricExport -> [(Attributes, NumberValue)]) -> SdkMeterEnv -> IO [(Attributes, Int64)]
-collectPoints select meterEnv = do
-    batches <- collectResourceMetrics meterEnv
-    pure
-        [ (attrs, value)
-        | batch <- batches
-        , scope <- toList (resourceMetricsScopes batch)
-        , metric <- toList (scopeMetricsExports scope)
-        , (attrs, IntNumber value) <- select metric
-        ]
+collectPoints select meterEnv =
+    collectResourceMetrics meterEnv <&> \batches ->
+        [(attrs, value) | metric <- metricExports batches, (attrs, IntNumber value) <- select metric]
+
+-- Every metric in a collection, across its resources and scopes.
+metricExports :: [ResourceMetricsExport] -> [MetricExport]
+metricExports batches =
+    [ metric
+    | batch <- batches
+    , scope <- toList (resourceMetricsScopes batch)
+    , metric <- toList (scopeMetricsExports scope)
+    ]
