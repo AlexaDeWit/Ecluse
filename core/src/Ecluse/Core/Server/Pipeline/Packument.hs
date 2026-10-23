@@ -12,6 +12,9 @@ module Ecluse.Core.Server.Pipeline.Packument (
     -- * The first-party private miss (exported for its unit spec)
     firstPartyMissDecision,
     firstPartyMissReply,
+
+    -- * The refusal when no version survives (exported for its unit spec)
+    noSurvivors,
 ) where
 
 import Data.ByteString qualified as BS
@@ -23,7 +26,7 @@ import Katip (Severity (DebugS), logFM, ls)
 import Network.HTTP.Types (Method, ResponseHeaders, hContentLength)
 import Network.Wai (Request, ResponseReceived, requestHeaders)
 import UnliftIO (concurrently)
-import UnliftIO.Exception (catchAny, throwIO)
+import UnliftIO.Exception (catchAny, evaluate, throwIO)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Cve.Types (DbEtag)
@@ -182,9 +185,8 @@ data PackumentServing response = PackumentServing
 servingMetrics :: PackumentServing response -> MetricsPort
 servingMetrics = srMetrics . psvRuntime
 
--- The edge token is compared before any upstream is touched, so an unauthenticated client
--- cannot drive egress. The CPU slot is held for the gated work, and the memory ticket until the
--- response is written.
+-- The edge token is checked before any upstream is touched, so an unauthenticated client cannot
+-- drive egress. The reply is evaluated in the CPU slot and written after it, under the ticket.
 packumentWith ::
     PackumentServe ->
     PackumentReplies response ->
@@ -208,7 +210,7 @@ packumentWith mode replies name request respond = do
                 , psvTicket = ticket
                 }
     if edgeTokenMatches (pdInboundToken deps) clientToken
-        then withListingAdmission (ctxRuntime ctx) (\headers -> refuse packumentUnavailable headers shedMessage) (\ticket -> serveAdmittedPackument (serving ticket) clientToken) (liftIO . respond)
+        then withListingAdmission (ctxRuntime ctx) (\headers -> refuse packumentUnavailable headers shedMessage) (\ticket -> serveAdmittedPackument (serving ticket) clientToken >>= evaluate) (liftIO . respond)
         else refuse packumentUnauthorised [] unauthorisedMessage
   where
     refuse reply headers message = liftIO (respond (reply replies headers (mkRefusal Nothing message)))
@@ -448,13 +450,14 @@ noServeableVersions serving etag verdicts decisions = do
     liftIO (mpServeDecision metrics (statusServeDecision status))
     liftIO (recordDenials metrics decisions)
     logDenials (psvName serving) etag verdicts
-    pure (noSurvivors (psvReplies serving) (psvDeps serving) status decisions)
+    pure (noSurvivors (psvReplies serving) (pdHelp (psvDeps serving)) status decisions)
   where
     metrics = servingMetrics serving
     status = packumentStatus decisions
 
-noSurvivors :: PackumentReplies response -> PackumentDeps -> PackumentStatus -> [ServeDecision] -> response
-noSurvivors replies deps status decisions = case status of
+-- | Answer a listing no version survived. Evaluating the reply joins every rejection's text.
+noSurvivors :: PackumentReplies response -> Maybe HelpMessage -> PackumentStatus -> [ServeDecision] -> response
+noSurvivors replies help status decisions = case status of
     PackumentOk -> packumentInternal replies [] body
     PackumentForbidden -> packumentForbidden replies [] body
     PackumentUnavailable retry -> packumentUnavailable replies (retryAfterHeaders retry) body
@@ -467,7 +470,7 @@ noSurvivors replies deps status decisions = case status of
         [] -> "no versions are available for this package"
         reasons -> T.intercalate "; " reasons
 
-    body = mkRefusal (pdHelp deps) message
+    !body = mkRefusal help message
 
 rejectionText :: ServeDecision -> Maybe Text
 rejectionText = \case
