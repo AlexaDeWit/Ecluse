@@ -29,10 +29,11 @@ import Network.HTTP.Client (
     responseTimeoutNone,
  )
 import Network.HTTP.Client.Internal (throwHttp)
-import Text.Show (showParen, showString, shows, showsPrec)
+import Text.Show (showsPrec)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Deadline (withEndableDeadline)
+import Ecluse.Core.Fault.Http (showsUntagged)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (..))
 
 {- | Where an exchange stands, each with the monotonic nanoseconds that bound it: the connection's
@@ -117,10 +118,9 @@ endingWith ended gives needsPopper = gives $ \popper -> needsPopper (popper >>= 
 faults passes it on. 'openResponseAfter' turns it back into the client's fault. -}
 data WaitExpired = WaitExpired (IORef ()) HttpExceptionContent
 
--- Shown as http-client's unexported wrapper shows its own timeout, because the client span records the text.
+-- Shown as http-client shows its own timeout before it tags it with the request.
 instance Show WaitExpired where
-    showsPrec precedence (WaitExpired _ content) =
-        showParen (precedence >= 11) (showString "HttpExceptionContentWrapper {unHttpExceptionContentWrapper = " . shows content . showString "}")
+    showsPrec precedence (WaitExpired _ content) = showsUntagged precedence content
 
 instance Exception WaitExpired where
     toException = asyncExceptionToException

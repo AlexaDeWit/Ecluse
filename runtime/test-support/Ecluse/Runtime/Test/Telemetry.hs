@@ -3,21 +3,36 @@
 -- SPDX-License-Identifier: MIT
 
 -- | In-process telemetry collection without exporters or background readers, and a captured span's events.
-module Ecluse.Runtime.Test.Telemetry (withTestTelemetry, gaugePoints, sumPoints, spanEvents) where
+module Ecluse.Runtime.Test.Telemetry (withTestTelemetry, withGlobalTestTelemetry, gaugePoints, sumPoints, histogramCounts, spanEvents) where
 
 import OpenTelemetry.Attributes (Attributes)
 import OpenTelemetry.Exporter.Metric (
     GaugeDataPoint (gaugeDataPointAttributes, gaugeDataPointValue),
-    MetricExport (MetricExportGauge, MetricExportSum, megGaugePoints, megName, mesName, mesSumPoints),
+    HistogramDataPoint (histogramDataPointCount),
+    MetricExport (MetricExportGauge, MetricExportHistogram, MetricExportSum, megGaugePoints, megName, mehName, mehPoints, mesName, mesSumPoints),
     NumberValue (IntNumber),
     ResourceMetricsExport (resourceMetricsScopes),
     ScopeMetricsExport (scopeMetricsExports),
     SumDataPoint (sumDataPointAttributes, sumDataPointValue),
  )
 import OpenTelemetry.MeterProvider (SdkMeterEnv, collectResourceMetrics)
-import OpenTelemetry.Metric (createMeterProvider, defaultSdkMeterProviderOptions, shutdownMeterProvider)
+import OpenTelemetry.Metric (
+    MeterProvider,
+    createMeterProvider,
+    defaultSdkMeterProviderOptions,
+    getGlobalMeterProvider,
+    setGlobalMeterProvider,
+    shutdownMeterProvider,
+ )
 import OpenTelemetry.Resource (emptyMaterializedResources)
-import OpenTelemetry.Trace (createTracerProvider, emptyTracerProviderOptions, shutdownTracerProvider)
+import OpenTelemetry.Trace (
+    TracerProvider,
+    createTracerProvider,
+    emptyTracerProviderOptions,
+    getGlobalTracerProvider,
+    setGlobalTracerProvider,
+    shutdownTracerProvider,
+ )
 import OpenTelemetry.Trace.Core (Event, SpanHot (hotEvents))
 import OpenTelemetry.Util (appendOnlyBoundedCollectionValues)
 import UnliftIO (bracket)
@@ -26,10 +41,28 @@ import Ecluse.Runtime.Telemetry.Internal (Telemetry (TelemetryEnabled), Telemetr
 
 -- | Keep both SDK providers alive until all measurements and assertions finish.
 withTestTelemetry :: (Telemetry -> SdkMeterEnv -> IO a) -> IO a
-withTestTelemetry use =
+withTestTelemetry use = withTestProviders (\tracer meter -> use (TelemetryEnabled (TelemetryProviders tracer meter)))
+
+-- | 'withTestTelemetry' with both providers installed as the process's global ones, as the boot installs them, until the action ends.
+withGlobalTestTelemetry :: (Telemetry -> SdkMeterEnv -> IO a) -> IO a
+withGlobalTestTelemetry use =
+    withTestProviders $ \tracer meter meterEnv ->
+        bracket (swapGlobals tracer meter) (uncurry swapGlobals) $ \_ ->
+            use (TelemetryEnabled (TelemetryProviders tracer meter)) meterEnv
+
+withTestProviders :: (TracerProvider -> MeterProvider -> SdkMeterEnv -> IO a) -> IO a
+withTestProviders use =
     bracket (createMeterProvider emptyMaterializedResources defaultSdkMeterProviderOptions) (\(meter, _) -> void (shutdownMeterProvider meter Nothing)) $ \(meter, meterEnv) ->
         bracket (createTracerProvider [] emptyTracerProviderOptions) (\tracer -> void (shutdownTracerProvider tracer Nothing)) $ \tracer ->
-            use (TelemetryEnabled (TelemetryProviders tracer meter)) meterEnv
+            use tracer meter meterEnv
+
+-- Install the providers as the global ones and hand back the ones they replaced.
+swapGlobals :: TracerProvider -> MeterProvider -> IO (TracerProvider, MeterProvider)
+swapGlobals tracer meter = do
+    replaced <- (,) <$> getGlobalTracerProvider <*> getGlobalMeterProvider
+    setGlobalTracerProvider tracer
+    setGlobalMeterProvider meter
+    pure replaced
 
 -- | Collect integer gauge observations under a metric name.
 gaugePoints :: Text -> SdkMeterEnv -> IO [(Attributes, Int64)]
@@ -46,6 +79,19 @@ sumPoints wanted = collectPoints $ \case
         | name == wanted ->
             [(sumDataPointAttributes point, sumDataPointValue point) | point <- toList points]
     _ -> []
+
+-- | How many measurements each histogram point under a metric name holds.
+histogramCounts :: Text -> SdkMeterEnv -> IO [Word64]
+histogramCounts wanted meterEnv = do
+    batches <- collectResourceMetrics meterEnv
+    pure
+        [ histogramDataPointCount point
+        | batch <- batches
+        , scope <- toList (resourceMetricsScopes batch)
+        , MetricExportHistogram{mehName = name, mehPoints = points} <- toList (scopeMetricsExports scope)
+        , name == wanted
+        , point <- toList points
+        ]
 
 -- | The events a captured span holds, the library's own @exception@ event included.
 spanEvents :: SpanHot -> [Event]

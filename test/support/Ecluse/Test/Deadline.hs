@@ -15,7 +15,7 @@ import UnliftIO.Async (withAsync)
 import UnliftIO.Concurrent (forkIO)
 
 import Ecluse.Core.Deadline (Deadlines, newDeadlines, sweepTick)
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient), untracedExchange)
 
 -- | Sweep a fresh set of deadlines for the length of the action.
 withSweeper :: (Deadlines -> IO a) -> IO a
@@ -23,9 +23,9 @@ withSweeper action = do
     deadlines <- newDeadlines
     withAsync (forever (sweepTick deadlines)) (\_ -> action deadlines)
 
--- | A client over this manager whose deadlines are swept for the length of the action.
+-- | An untraced client over this manager whose deadlines are swept for the length of the action.
 withExchangeClient :: Manager -> (ExchangeClient -> IO a) -> IO a
-withExchangeClient manager action = withSweeper (action . ExchangeClient manager)
+withExchangeClient manager action = withSweeper (\deadlines -> action (ExchangeClient manager deadlines untracedExchange))
 
 -- | Deadlines swept for the rest of the test process, for a fixture builder with no scope to hold a sweeper.
 newSweptDeadlines :: IO Deadlines
@@ -34,6 +34,6 @@ newSweptDeadlines = do
     _ <- forkIO (forever (sweepTick deadlines))
     pure deadlines
 
--- | 'newSweptDeadlines' under a client over this manager.
+-- | 'newSweptDeadlines' under an untraced client over this manager.
 newSweptClient :: Manager -> IO ExchangeClient
-newSweptClient manager = ExchangeClient manager <$> newSweptDeadlines
+newSweptClient manager = (\deadlines -> ExchangeClient manager deadlines untracedExchange) <$> newSweptDeadlines

@@ -11,12 +11,13 @@ import Network.HTTP.Client (
     Manager,
     ManagerSettings (managerTlsConnection),
     Request (secure),
+    brConsume,
     defaultManagerSettings,
     httpLbs,
-    httpNoBody,
     newManager,
     parseRequest,
     requestHeaders,
+    responseBody,
  )
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types (status200)
@@ -27,7 +28,6 @@ import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
 import OpenTelemetry.Attributes (Attributes, fromAttribute, lookupAttribute)
 import OpenTelemetry.Exporter.InMemory.Span (inMemoryListExporter)
-import OpenTelemetry.Instrumentation.HttpClient (instrumentManagerSettings)
 import OpenTelemetry.Metric (noopMeterProvider)
 import OpenTelemetry.Propagator (setGlobalTextMapPropagator)
 import OpenTelemetry.Propagator.W3CTraceContext (w3cTraceContextPropagator)
@@ -55,6 +55,8 @@ import Ecluse.Core.Fault (TransportCause (TransportTimeout), TransportFault, tra
 import Ecluse.Core.Fault.Http (classifyTransport, displayFaultT)
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Queue (RemoteSpanContext (RemoteSpanContext))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecTrace))
+import Ecluse.Core.Registry.ResponseWait qualified as ResponseWait
 import Ecluse.Core.Rules.Types (AdvisoryScore (Cvss), Reason (AffectedBy, RunsOnInstall), mkAdvisoryIds)
 import Ecluse.Core.Server.Response (
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
@@ -73,8 +75,7 @@ import Ecluse.Runtime.Telemetry.Internal (
  )
 import Ecluse.Runtime.Telemetry.Tracing.Internal (
     JobSpanOutcome (JobSpanOutcome),
-    dataPlaneInstrumentationConfig,
-    instrumentDataPlaneManagerSettings,
+    dataPlaneTrace,
     ruleVerdictFields,
     telemetryWaiMiddleware,
     withAdvisorySyncSpan,
@@ -83,6 +84,7 @@ import Ecluse.Runtime.Telemetry.Tracing.Internal (
     withRuleEvalSpan,
  )
 import Ecluse.Runtime.Test.Telemetry (spanEvents)
+import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Stub (refusedFetch, requestSecrets, signedRequest)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import UnliftIO.Exception (throwIO, try, tryAny)
@@ -175,20 +177,14 @@ scrubSpec :: Spec
 scrubSpec = describe "secret scrubbing" $ do
     it "keeps a forwarded Bearer token off the http-client client span" $
         withSpanCapture
-            ( \tracerProvider -> do
-                -- The http-client manager instrumentation reads the process-global tracer
-                -- provider, so the in-memory one must be installed there.
-                setGlobalTracerProvider tracerProvider
-                settings <- instrumentManagerSettings dataPlaneInstrumentationConfig defaultManagerSettings
-                newManager settings >>= callWithBearer okApp
-            )
+            (\tracerProvider -> withDataPlaneClient tracerProvider defaultManagerSettings (callWithBearer okApp . exchangeThrough))
             scrubbedButRecording
 
     it "keeps the request Authorization header off the WAI server span" $
         withTelemetrySpans
             ( \telemetry -> do
                 middleware <- telemetryWaiMiddleware telemetry
-                newManager defaultManagerSettings >>= callWithBearer (middleware okApp)
+                newManager defaultManagerSettings >>= callWithBearer (middleware okApp) . plainFetch
             )
             scrubbedButRecording
 
@@ -205,11 +201,19 @@ okApp :: Application
 okApp _ respond = respond (responseLBS status200 [] "ok")
 
 -- Send one request carrying the secret Bearer credential and a benign User-Agent.
-callWithBearer :: Application -> Manager -> IO ()
-callWithBearer app manager =
+callWithBearer :: Application -> (Request -> IO ()) -> IO ()
+callWithBearer app fetch =
     Warp.testWithApplication (pure app) $ \port -> do
         request <- parseRequest ("http://127.0.0.1:" <> show port <> "/some/package")
-        void (httpLbs (withBearer request) manager)
+        fetch (withBearer request)
+
+-- A fetch straight through a manager, as a client of Écluse's own front door sends one.
+plainFetch :: Manager -> Request -> IO ()
+plainFetch manager request = void (httpLbs request manager)
+
+-- One upstream exchange through a client, reading the whole body.
+exchangeThrough :: ExchangeClient -> Request -> IO ()
+exchangeThrough client request = ResponseWait.withResponse client request (void . brConsume . responseBody)
 
 withBearer :: Request -> Request
 withBearer req =
@@ -307,13 +311,13 @@ escapedExceptionSpec = describe "an exception escaping a span" $ do
 timedOutFetch :: OsvDbFetchFault
 timedOutFetch = OsvDbTransport (transportFault TransportTimeout "127.0.0.1:1: ResponseTimeout")
 
-{- The TLS manager tags a connection fault with its request, and the client instrumentation records
-what the manager raises. The client span gets the client's reason, and the caller the request. -}
+{- The TLS manager tags a connection fault with its request, and the client span records the fault's
+text. The client span gets the client's reason, and the caller the request. -}
 dataPlaneFaultSpec :: Spec
 dataPlaneFaultSpec = describe "a data-plane fetch that cannot connect" $ do
     it "records the client's reason on the client span, never the request it was sent" $ do
         request <- tlsSignedRequest
-        withSpanCapture (\tracerProvider -> void (fetchFault request =<< dataPlaneManager tracerProvider tlsManagerSettings)) $ \ref -> do
+        withSpanCapture (\tracerProvider -> withDataPlaneClient tracerProvider tlsManagerSettings (void . fetchFault request)) $ \ref -> do
             hots <- traverse (readIORef . spanHot) =<< readIORef ref
             let reasons = [reason | Error reason <- map hotStatus hots]
                 errorTypes = mapMaybe ((`textAttribute` "error.type") . hotAttributes) hots
@@ -325,25 +329,27 @@ dataPlaneFaultSpec = describe "a data-plane fetch that cannot connect" $ do
     it "hands the caller the transport fault the TLS manager raises alone" $ do
         request <- tlsSignedRequest
         let refusing = tlsManagerSettings{managerTlsConnection = pure (\_ _ _ -> throwIO (TLS.HandshakeFailed (TLS.Error_Misc "refused")))}
-        alone <- fetchFault request =<< newManager refusing
+        alone <- newManager refusing >>= \manager -> withExchangeClient manager (fetchFault request)
         observed <- newIORef Nothing
-        withSpanCapture (\tracerProvider -> writeIORef observed . Just =<< fetchFault request =<< dataPlaneManager tracerProvider refusing) (const pass)
+        withSpanCapture (\tracerProvider -> withDataPlaneClient tracerProvider refusing (writeIORef observed . Just <=< fetchFault request)) (const pass)
         readIORef observed `shouldReturn` Just alone
 
 -- 'signedRequest' over TLS, so the fetch takes the TLS manager's connection path.
 tlsSignedRequest :: IO Request
 tlsSignedRequest = (\request -> request{secure = True}) <$> signedRequest
 
--- The data plane's manager over @base@, as production builds it. The instrumentation reads the global tracer provider.
-dataPlaneManager :: TracerProvider -> ManagerSettings -> IO Manager
-dataPlaneManager tracerProvider base = do
+-- A client over @base@ under the data plane's tracing, as production builds one. The tracing reads the global tracer provider.
+withDataPlaneClient :: TracerProvider -> ManagerSettings -> (ExchangeClient -> IO a) -> IO a
+withDataPlaneClient tracerProvider base use = do
     setGlobalTracerProvider tracerProvider
-    newManager =<< instrumentDataPlaneManagerSettings (TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider)) base
+    tracing <- dataPlaneTrace (TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider))
+    manager <- newManager base
+    withExchangeClient manager (\client -> use client{ecTrace = tracing})
 
--- The transport fault a fetch hands its caller. A fetch that answers fails the case.
-fetchFault :: Request -> Manager -> IO TransportFault
-fetchFault request manager =
-    try (httpNoBody request manager) >>= \case
+-- The transport fault an exchange hands its caller. An exchange that answers fails the case.
+fetchFault :: Request -> ExchangeClient -> IO TransportFault
+fetchFault request client =
+    try (ResponseWait.withResponse client request (const pass)) >>= \case
         Left err -> pure (classifyTransport err)
         Right _ -> fail "a fetch of the closed port answered"
 
@@ -352,7 +358,7 @@ throwingBehindMiddleware :: SomeException -> Telemetry -> IO ()
 throwingBehindMiddleware err telemetry = do
     middleware <- telemetryWaiMiddleware telemetry
     manager <- newManager defaultManagerSettings
-    void (tryAny (callWithBearer (middleware (\_ _ -> throwIO err)) manager))
+    void (tryAny (callWithBearer (middleware (\_ _ -> throwIO err)) (plainFetch manager)))
 
 -- Run a span body that throws, and swallow the throw, so the capture reads what the span recorded.
 escapeFrom :: (Telemetry -> IO ()) -> Telemetry -> IO ()
@@ -453,7 +459,7 @@ enqueueAuthoritySpec = describe "enqueue span artifact authority"
         dump `shouldSatisfy` (not . T.isInfixOf "sig=abc")
         dump `shouldSatisfy` (not . T.isInfixOf "left-pad-1.3.0.tgz")
 
-{- The data-plane instrumentation must inject a W3C @traceparent@ on each outbound request,
+{- The data-plane tracing must inject a W3C @traceparent@ on each outbound request,
 so a downstream service continues the trace. -}
 traceparentInjectionSpec :: Spec
 traceparentInjectionSpec = describe "W3C traceparent injection on the data plane" $
@@ -461,15 +467,12 @@ traceparentInjectionSpec = describe "W3C traceparent injection on the data plane
         headersRef <- newIORef []
         withSpanCapture
             ( \tracerProvider -> do
-                setGlobalTracerProvider tracerProvider
                 -- The production posture: the SDK installs the W3C propagator globally, which is
                 -- what the http-client instrumentation injects through.
                 setGlobalTextMapPropagator w3cTraceContextPropagator
-                settings <- instrumentManagerSettings dataPlaneInstrumentationConfig defaultManagerSettings
-                manager <- newManager settings
-                Warp.testWithApplication (pure (captureHeadersApp headersRef)) $ \port -> do
-                    request <- parseRequest ("http://127.0.0.1:" <> show port <> "/some/package")
-                    void (httpLbs request manager)
+                withDataPlaneClient tracerProvider defaultManagerSettings $ \client ->
+                    Warp.testWithApplication (pure (captureHeadersApp headersRef)) $ \port ->
+                        parseRequest ("http://127.0.0.1:" <> show port <> "/some/package") >>= exchangeThrough client
             )
             (const pass)
         received <- readIORef headersRef

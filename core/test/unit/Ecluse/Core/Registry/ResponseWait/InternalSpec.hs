@@ -36,7 +36,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (bracket, try)
 
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient), untracedExchange)
 import Ecluse.Core.Registry.ResponseWait.Internal (ResponseWait (..), connectedAt, openResponseAfter, uploadedAt, waitFault)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Stub.Socket (trustingTlsManager, withRawServer)
@@ -115,7 +115,7 @@ openSpec = describe "openResponseAfter" $ do
 -- Open under a wait of whole seconds, then close: the status, or the timeout's name, and the seconds taken.
 opened :: Word64 -> Manager -> Request -> IO (Either Text Int, Double)
 opened seconds manager request =
-    withSweeper $ \deadlines -> timedOpen (openResponseAfter (seconds * 1_000_000_000) (ExchangeClient manager deadlines) request)
+    withSweeper $ \deadlines -> timedOpen (openResponseAfter (seconds * 1_000_000_000) (ExchangeClient manager deadlines untracedExchange) request)
 
 -- The same through http-client's own one-second response timeout, for reference.
 openedByClient :: Manager -> Request -> IO (Either Text Int, Double)

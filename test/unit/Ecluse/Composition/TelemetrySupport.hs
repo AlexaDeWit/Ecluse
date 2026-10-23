@@ -5,6 +5,7 @@
 -- | In-process telemetry and advisory slots for role composition tests.
 module Ecluse.Composition.TelemetrySupport (
     withRoleTelemetry,
+    withGlobalRoleTelemetry,
     newAdvisoryHandles,
     advisoryAgePoints,
 ) where
@@ -26,13 +27,20 @@ import Ecluse.Cve.Sync (CveSyncHandle (..))
 import Ecluse.Runtime.Cve.Sync (SyncEnv (SyncEnv))
 import Ecluse.Runtime.Telemetry (Telemetry)
 import Ecluse.Runtime.Test.Cve (headOnlyFetch)
-import Ecluse.Runtime.Test.Telemetry (gaugePoints, withTestTelemetry)
+import Ecluse.Runtime.Test.Telemetry (gaugePoints, withGlobalTestTelemetry, withTestTelemetry)
 import Ecluse.Test.Log (newTestLogEnv)
 
 -- | Keep the logger and both SDK providers alive until the role and its assertions finish.
 withRoleTelemetry :: (LogEnv -> Telemetry -> SdkMeterEnv -> IO a) -> IO a
-withRoleTelemetry use =
-    withTestTelemetry $ \telemetry meterEnv ->
+withRoleTelemetry = withLoggedTelemetry withTestTelemetry
+
+-- | 'withRoleTelemetry' with both providers installed as the global ones, which the http-client instrumentation reads.
+withGlobalRoleTelemetry :: (LogEnv -> Telemetry -> SdkMeterEnv -> IO a) -> IO a
+withGlobalRoleTelemetry = withLoggedTelemetry withGlobalTestTelemetry
+
+withLoggedTelemetry :: ((Telemetry -> SdkMeterEnv -> IO a) -> IO a) -> (LogEnv -> Telemetry -> SdkMeterEnv -> IO a) -> IO a
+withLoggedTelemetry providers use =
+    providers $ \telemetry meterEnv ->
         bracket newTestLogEnv (void . closeScribes) $ \logEnv ->
             use logEnv telemetry meterEnv
 

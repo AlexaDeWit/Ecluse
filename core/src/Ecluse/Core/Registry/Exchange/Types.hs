@@ -5,18 +5,29 @@
 -- | The handle every upstream exchange runs through, shared by the composition root that builds it and the exchanges that read it.
 module Ecluse.Core.Registry.Exchange.Types (
     ExchangeClient (..),
+    TraceExchange,
+    untracedExchange,
 ) where
 
-import Network.HTTP.Client (Manager)
+import Network.HTTP.Client (BodyReader, Manager, Request, Response)
 
 import Ecluse.Core.Deadline (Deadlines)
 
-{- | One connection pool and the process's deadline sweeper, built once at startup for each pool.
-Every exchange needs both, so they travel together wherever an exchange starts.
+{- | One connection pool, the process's deadline sweeper, and the tracing of each exchange, built
+once at startup for each pool. Every exchange needs all three, so they travel together.
 -}
 data ExchangeClient = ExchangeClient
     { ecManager :: Manager
     -- ^ The @http-client@ pool the exchange's connection comes from.
     , ecDeadlines :: Deadlines
     -- ^ The sweeper that bounds the connection, the headers, and the body's progress.
+    , ecTrace :: TraceExchange
+    -- ^ Runs once around each exchange, from the request to the response headers.
     }
+
+-- | Open one response through the opener, handing it the request with any headers the tracing adds.
+type TraceExchange = Request -> (Request -> IO (Response BodyReader)) -> IO (Response BodyReader)
+
+-- | Open the response with no client span, for a store the Dredger reads or a process without telemetry.
+untracedExchange :: TraceExchange
+untracedExchange request open = open request

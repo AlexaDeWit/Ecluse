@@ -16,13 +16,9 @@ module Ecluse.Service (
 
     -- * npm front door
     mountBindingFor,
-
-    -- * Data-plane managers
-    dataPlaneManagerSettings,
 ) where
 
 import Katip (LogEnv, katipAddNamespace)
-import Network.HTTP.Client (ManagerSettings)
 
 import Ecluse.Boot (BootEnv (beDeadlines, beLogEnv, beTelemetry), logBootWarning, superviseBackground)
 import Ecluse.Composition (BootWiring (bwBindings, bwPublishTargets))
@@ -93,7 +89,7 @@ import Ecluse.Runtime.Telemetry.Reporters (
     deferredMirrorEnqueueFailure,
     installMetrics,
  )
-import Ecluse.Runtime.Telemetry.Tracing (instrumentDataPlaneManagerSettings)
+import Ecluse.Runtime.Telemetry.Tracing (dataPlaneTrace)
 
 -- | Everything a role needs to start its own tasks, built once by 'withServiceRuntime'. The background tasks arrive already wrapped in their supervision policy.
 data ServiceRuntime = ServiceRuntime
@@ -199,21 +195,14 @@ memoryAdmission memoryPlan = do
                 }
         )
 
-{- The two data-plane clients, each instrumented then pooled at its own bound, over the process's
-one sweeper. They stay split because public reads are anonymous and private reads forward the
-caller's credential. -}
+{- The two data-plane clients, each pooled at its own bound, sharing the sweeper and the client span.
+They stay split because public reads are anonymous and private reads forward the caller's credential. -}
 dataPlaneClients :: Telemetry -> Deadlines -> BootPlan -> IO (ExchangeClient, ExchangeClient)
 dataPlaneClients telemetry deadlines bootPlan = do
-    publicSettings <- dataPlaneManagerSettings telemetry
-    privateSettings <- dataPlaneManagerSettings telemetry
+    tracing <- dataPlaneTrace telemetry
     let renderedAgent = renderUserAgent (egrOperatorContact (cfgEgress (vpSettings (bpValidated bootPlan))))
-    manager <- newPooledManager (bpPublicConnections bootPlan) (identityManagerSettings renderedAgent publicSettings)
-    privateManager <- newPooledManager (bpPrivateConnections bootPlan) (identityManagerSettings renderedAgent privateSettings)
-    pure (ExchangeClient manager deadlines, ExchangeClient privateManager deadlines)
-
--- | The settings each data-plane manager pools from: 'typedTlsManagerSettings', under the client span when telemetry is on.
-dataPlaneManagerSettings :: Telemetry -> IO ManagerSettings
-dataPlaneManagerSettings telemetry = instrumentDataPlaneManagerSettings telemetry typedTlsManagerSettings
+        client connections = (\manager -> ExchangeClient manager deadlines tracing) <$> newPooledManager connections (identityManagerSettings renderedAgent typedTlsManagerSettings)
+    (,) <$> client (bpPublicConnections bootPlan) <*> client (bpPrivateConnections bootPlan)
 
 -- | The @\/livez@ arm a process answers from, given whether it runs the worker ('spawnsWorker'): the consume-loop heartbeat where it does, the listener alone where it does not.
 workerLiveness :: Bool -> WorkerHeartbeat -> IO Liveness
