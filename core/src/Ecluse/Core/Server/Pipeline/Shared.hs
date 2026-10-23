@@ -14,6 +14,8 @@ module Ecluse.Core.Server.Pipeline.Shared (
 
     -- * Admission shed
     withMetadataAdmission,
+    withMetadataAdmissionC,
+    spikeStatsLoop,
     shedStatus,
     shedMessage,
     hRetryAfter,
@@ -36,16 +38,22 @@ module Ecluse.Core.Server.Pipeline.Shared (
 
 import Network.HTTP.Types (Header, HeaderName, ResponseHeaders, Status, status503)
 import Network.Wai (Request, requestHeaders)
-import UnliftIO (MonadUnliftIO)
+import UnliftIO (MonadUnliftIO, withRunInIO)
+import UnliftIO.Exception (finally)
 
 import Ecluse.Core.Credential (ClientCredential (credSecret), Secret)
 import Ecluse.Core.Registry.Request (credentialRecover)
-import Ecluse.Core.Server.Admission (withServeAdmission)
-import Ecluse.Core.Server.Admission.Meter (MemoryTicket, withMemoryEntry)
+import GHC.Clock (getMonotonicTimeNSec)
+import System.IO.Unsafe (unsafePerformIO)
+
+import Ecluse.Core.Deadline (holdSwept)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
+import Ecluse.Core.Server.Admission (withServeAdmissionE)
+import Ecluse.Core.Server.Admission.Meter (MemoryTicket, withMemoryEntryE)
 import Ecluse.Core.Server.Admission.Types (FlightKey (FlightKey))
-import Ecluse.Core.Server.Admission.Weighted (admissionWaitMicros)
+import Ecluse.Core.Server.Admission.Weighted (Shed (..), admissionWaitMicros)
 import Ecluse.Core.Server.Cache.Types (CacheKey, cacheKeyIdentity, cacheKeyStore)
-import Ecluse.Core.Server.Context (MountBinding (bindingCredential), ServeRuntime (srAdmission, srMemoryMeter, srMetrics))
+import Ecluse.Core.Server.Context (MountBinding (bindingCredential), ServeRuntime (srAdmission, srMemoryMeter, srMetrics, srPublicClient))
 import Ecluse.Core.Server.Response (
     HelpMessage,
     Refusal,
@@ -90,16 +98,141 @@ flightOf key = FlightKey (cacheKeyStore key) (cacheKeyIdentity key)
 
 -- | Acquire memory and CPU admission before metadata work. Answer after release, counting a shed once.
 withMetadataAdmission :: (MonadUnliftIO m) => ServeRuntime -> m received -> (MemoryTicket -> m a) -> (a -> m received) -> m received
-withMetadataAdmission runtime shed gated answer =
-    admitted >>= \case
-        Just result -> answer result
-        Nothing -> do
-            liftIO (mpServeDecision metrics Metric.Unavailable)
-            shed
+withMetadataAdmission runtime shed = withMetadataAdmissionC runtime (const shed)
+
+-- Spike 1866: how a request the door refused is handled.
+data SpikeShed = ShedNow | ShedHold | ShedLobby | ShedLobbyFair | ShedLobbyEnd | ShedPause
+    deriving stock (Eq, Show)
+
+spikeEnv :: String -> Maybe String
+spikeEnv key = unsafePerformIO (lookupEnv key)
+{-# NOINLINE spikeEnv #-}
+
+spikeShed :: SpikeShed
+spikeShed = case spikeEnv "SPIKE1866_SHED" of
+    Just "hold" -> ShedHold
+    Just "lobby" -> ShedLobby
+    Just "lobby-fair" -> ShedLobbyFair
+    Just "lobby-end" -> ShedLobbyEnd
+    Just "pause" -> ShedPause
+    _ -> ShedNow
+{-# NOINLINE spikeShed #-}
+
+-- The wait, in microseconds.
+spikeWaitMicros :: Int
+spikeWaitMicros = maybe 1_000_000 (* 1000) (readMaybe =<< spikeEnv "SPIKE1866_WAIT_MS")
+{-# NOINLINE spikeWaitMicros #-}
+
+-- How many requests may wait at once.
+spikeCap :: Int
+spikeCap = fromMaybe 1000 (readMaybe =<< spikeEnv "SPIKE1866_CAP")
+{-# NOINLINE spikeCap #-}
+
+-- Close on every shed (all), past the cap (over), or never.
+spikeCloseAll, spikeCloseOver :: Bool
+spikeCloseAll = spikeEnv "SPIKE1866_CLOSE" == Just "all"
+spikeCloseOver = spikeEnv "SPIKE1866_CLOSE" == Just "over"
+{-# NOINLINE spikeCloseAll #-}
+{-# NOINLINE spikeCloseOver #-}
+
+spikeHeld :: IORef Int
+spikeHeld = unsafePerformIO (newIORef 0)
+{-# NOINLINE spikeHeld #-}
+
+-- Counters: first-attempt door refusals, first-attempt wait expiries, entered the hold, past the cap,
+-- admitted after holding, refused after holding, door retries while held, most held at once.
+spikeCounters :: IORef (Int, Int, Int, Int, Int, Int, Int, Int)
+spikeCounters = unsafePerformIO (newIORef (0, 0, 0, 0, 0, 0, 0, 0))
+{-# NOINLINE spikeCounters #-}
+
+data SpikeCount = CDoor | CExpired | CEntered | COver | CAdmitted | CRefused | CRetry
+
+spikeCount :: SpikeCount -> IO ()
+spikeCount which = atomicModifyIORef' spikeCounters $ \(a, b, c, d, e, f, g, h) -> (,()) $ case which of
+    CDoor -> (a + 1, b, c, d, e, f, g, h)
+    CExpired -> (a, b + 1, c, d, e, f, g, h)
+    CEntered -> (a, b, c + 1, d, e, f, g, h)
+    COver -> (a, b, c, d + 1, e, f, g, h)
+    CAdmitted -> (a, b, c, d, e + 1, f, g, h)
+    CRefused -> (a, b, c, d, e, f + 1, g, h)
+    CRetry -> (a, b, c, d, e, f, g + 1, h)
+
+-- | Spike 1866: append the counters to SPIKE1866_STATS_FILE every second. Never returns.
+spikeStatsLoop :: IO [Int] -> (Int -> IO ()) -> IO ()
+spikeStatsLoop gauges pause = case spikeEnv "SPIKE1866_STATS_FILE" of
+    Nothing -> pass
+    Just path -> forever $ do
+        pause 250_000
+        levels <- gauges
+        held <- readIORef spikeHeld
+        (a, b, c, d, e, f, g, h) <- atomicModifyIORef' spikeCounters (\(a, b, c, d, e, f, g, h) -> let m = max h held in ((a, b, c, d, e, f, g, m), (a, b, c, d, e, f, g, m)))
+        t <- getMonotonicTimeNSec
+        appendFileText path (unwords (map show ([fromIntegral (t `div` 1_000_000) :: Int, a, b, c, d, e, f, g, h, held] <> levels)) <> "\n")
+
+-- Take a place among the held requests, or 'False' past the cap.
+spikeEnterHold :: IO Bool
+spikeEnterHold = do
+    entered <- atomicModifyIORef' spikeHeld (\n -> if n < spikeCap then (n + 1, True) else (n, False))
+    spikeCount (if entered then CEntered else COver)
+    when entered $ do
+        held <- readIORef spikeHeld
+        atomicModifyIORef' spikeCounters (\(a, b, c, d, e, f, g, h) -> ((a, b, c, d, e, f, g, max h held), ()))
+    pure entered
+
+spikeLeaveHold :: IO ()
+spikeLeaveHold = atomicModifyIORef' spikeHeld (\n -> (n - 1, ()))
+
+-- | Spike 1866: 'withMetadataAdmission' whose shed answer learns whether to close the connection.
+withMetadataAdmissionC :: (MonadUnliftIO m) => ServeRuntime -> (Bool -> m received) -> (MemoryTicket -> m a) -> (a -> m received) -> m received
+withMetadataAdmissionC runtime shed gated answer =
+    firstTry >>= \case
+        Right result -> answer result
+        Left WaitExpired -> liftIO (spikeCount CExpired) >> refuse False
+        Left DoorFull -> liftIO (spikeCount CDoor) >> case spikeShed of
+            ShedNow -> refuse False
+            ShedPause -> do
+                entered <- liftIO spikeEnterHold
+                if entered
+                    then do
+                        received <- refuse False
+                        liftIO (holdSwept deadlines spikeWaitMicros `finally` spikeLeaveHold)
+                        pure received
+                    else refuse spikeCloseOver
+            _ -> do
+                entered <- liftIO spikeEnterHold
+                if not entered
+                    then refuse spikeCloseOver
+                    else do
+                        start <- liftIO getMonotonicTimeNSec
+                        outcome <- withRunInIO (\run -> held start run `finally` spikeLeaveHold)
+                        case outcome of
+                            Right result -> liftIO (spikeCount CAdmitted) >> answer result
+                            Left _ -> liftIO (spikeCount CRefused) >> refuse False
   where
     metrics = srMetrics runtime
-    admitted = fmap join . withMemoryEntry metrics (srMemoryMeter runtime) $ \ticket ->
-        withServeAdmission metrics (srAdmission runtime) (gated ticket)
+    deadlines = ecDeadlines (srPublicClient runtime)
+    refuse closing = do
+        liftIO (mpServeDecision metrics Metric.Unavailable)
+        shed (closing || spikeCloseAll)
+    -- A newcomer joins the held requests while any wait, so it never jumps them.
+    firstTry
+        | spikeShed == ShedLobbyFair = liftIO (readIORef spikeHeld) >>= \waiting -> if waiting > 0 then pure (Left DoorFull) else admitted
+        | otherwise = admitted
+    admitted = fmap join . withMemoryEntryE metrics (srMemoryMeter runtime) $ \ticket ->
+        withServeAdmissionE metrics (srAdmission runtime) (gated ticket)
+    held start run = case spikeShed of
+        ShedHold -> holdSwept deadlines spikeWaitMicros $> Left DoorFull
+        ShedLobbyEnd -> holdSwept deadlines spikeWaitMicros >> spikeCount CRetry >> run admitted
+        _ -> lobby start run
+    -- Retry the door each sweeper tick until it lets the request in or the wait runs out.
+    lobby start run = do
+        holdSwept deadlines 100_000
+        now <- getMonotonicTimeNSec
+        spikeCount CRetry
+        outcome <- run admitted
+        case outcome of
+            Left DoorFull | now - start < fromIntegral spikeWaitMicros * 1000 -> lobby start run
+            _ -> pure outcome
 
 -- | Match the configured inbound secret without content-dependent early exit. An unconfigured edge is open.
 edgeTokenMatches :: Maybe Secret -> Maybe ClientCredential -> Bool

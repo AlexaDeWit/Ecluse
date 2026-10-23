@@ -6,6 +6,9 @@
 module Ecluse.Core.Server.Admission (
     ServeAdmission,
     newServeAdmission,
+    newServeAdmissionSwept,
+    withServeAdmissionE,
+    serveAdmissionLevels,
     withServeAdmission,
 
     -- * Internals exported for testing

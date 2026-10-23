@@ -6,7 +6,10 @@
 module Ecluse.Core.Server.Admission.Internal (
     ServeAdmission (..),
     newServeAdmission,
+    newServeAdmissionSwept,
     withServeAdmission,
+    withServeAdmissionE,
+    serveAdmissionLevels,
 
     -- * Internals exported for testing
     newServeAdmissionTuned,
@@ -15,12 +18,17 @@ module Ecluse.Core.Server.Admission.Internal (
 import Control.Exception (ErrorCall (ErrorCall))
 import UnliftIO (MonadUnliftIO, throwIO)
 
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Server.Admission.Weighted (
     AdmissionObservers (..),
+    Shed,
     WeightedAdmission,
     admissionWaitMicros,
     newWeightedAdmission,
+    newWeightedAdmissionSwept,
     withWeightedAdmission,
+    withWeightedAdmissionE,
+    weightedAdmissionLevels,
  )
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
@@ -35,6 +43,12 @@ newServeAdmission capacity
     | capacity <= 0 = throwIO (ErrorCall "ServeAdmission capacity must be positive")
     | otherwise = newServeAdmissionTuned capacity capacity admissionWaitMicros
 
+-- | Spike 1866: capacity with its room wait on the sweeper. SPIKE1866_ROOM_FACTOR scales the room.
+newServeAdmissionSwept :: Deadlines -> Int -> Int -> IO ServeAdmission
+newServeAdmissionSwept deadlines roomFactor capacity
+    | capacity <= 0 = throwIO (ErrorCall "ServeAdmission capacity must be positive")
+    | otherwise = ServeAdmission <$> newWeightedAdmissionSwept (Just deadlines) capacity (capacity * max 1 roomFactor) admissionWaitMicros
+
 -- | Set the waiting-room bound and microsecond wait budget explicitly.
 newServeAdmissionTuned :: Int -> Int -> Int -> IO ServeAdmission
 newServeAdmissionTuned capacity room waitMicros =
@@ -44,7 +58,20 @@ newServeAdmissionTuned capacity room waitMicros =
 {-# INLINE withServeAdmission #-}
 withServeAdmission :: (MonadUnliftIO m) => MetricsPort -> ServeAdmission -> m a -> m (Maybe a)
 withServeAdmission metrics (ServeAdmission core) =
-    withWeightedAdmission observers core 1
+    withWeightedAdmission (serveObservers metrics) core 1
+
+-- | Spike 1866: free slots and room occupancy.
+serveAdmissionLevels :: ServeAdmission -> IO (Int, Int)
+serveAdmissionLevels (ServeAdmission core) = weightedAdmissionLevels core
+
+-- | Spike 1866: 'withServeAdmission' that says why it shed.
+{-# INLINE withServeAdmissionE #-}
+withServeAdmissionE :: (MonadUnliftIO m) => MetricsPort -> ServeAdmission -> m a -> m (Either Shed a)
+withServeAdmissionE metrics (ServeAdmission core) =
+    withWeightedAdmissionE (serveObservers metrics) core 1
+
+serveObservers :: MetricsPort -> AdmissionObservers
+serveObservers metrics = observers
   where
     observers =
         AdmissionObservers
