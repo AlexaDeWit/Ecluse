@@ -48,6 +48,7 @@ spec = do
     assemblyBoundarySpec
     overlaySpec
     entryContractSpec
+    arrayOverlaySpec
     objectOverlaySpec
     allocationSpec
     nameGateSpec
@@ -231,6 +232,9 @@ entryContractSpec = describe "source-scoped admitted-entry contracts" $ do
                 serve (Map.singleton 0 ([(key, "kept"), (key, "refused")] <$ source)) plan `shouldBe` []
             it "refuses duplicate admitted keys" $
                 serve sources plan{mpArtifacts = fmap (\entries -> entries <> entries) (mpArtifacts plan)} `shouldBe` []
+            it "refuses admitted aliases across versions, including unnamed aliases" $
+                for_ ["other.tgz", ""] $ \filename ->
+                    serve sources plan{mpArtifacts = Map.insert "2" (AdmittedEntry (snapshotDigest source) key filename :| []) (mpArtifacts plan), mpSurvivors = Map.insert "2" 0 (mpSurvivors plan)} `shouldBe` []
             it "refuses a different snapshot under the same source position" $
                 serve (Map.singleton 0 source{snapshotDigest = digestOf "different upstream bytes"}) plan `shouldBe` []
             it "refuses a matching snapshot from a losing source" $
@@ -242,6 +246,72 @@ entryContractSpec = describe "source-scoped admitted-entry contracts" $ do
         let key = ArrayEntry (-1)
             source = syntheticSnapshot [(key, "invalid" :: Text)]
         overlaySurvivors id (Map.singleton 0 source) (entryPlan source key) `shouldBe` []
+
+arrayOverlaySpec :: Spec
+arrayOverlaySpec = describe "array selection against the generic selector" $ do
+    it "refuses a duplicate after a long ascending prefix, including its earlier occurrence" $ do
+        let entries = [(ArrayEntry position, show position :: Text) | position <- [0 .. 2047]] <> [(ArrayEntry 0, "duplicate")]
+            source = syntheticSnapshot entries
+            plan = entryPlan source (ArrayEntry 0)
+        overlaySurvivors id (Map.singleton 0 source) plan `shouldBe` []
+
+    it "preserves source order after a long ascending prefix becomes disordered" $ do
+        let keys = map ArrayEntry ([0 .. 2047] <> [4096, 2048])
+            source = syntheticSnapshot [(key, show key :: Text) | key <- keys]
+            plan = (entryPlan source SingletonEntry){mpArtifacts = Map.singleton "1" (AdmittedEntry (snapshotDigest source) (ArrayEntry 4096) "a.whl" :| [AdmittedEntry (snapshotDigest source) (ArrayEntry 2048) "b.whl"])}
+        overlaySurvivors id (Map.singleton 0 source) plan `shouldBe` [("1", "ArrayEntry 4096"), ("1", "ArrayEntry 2048")]
+
+    describe "properties" $
+        it "matches generic selection for ordered, gapped, mixed and repeated keys with adversarial admissions" $
+            hedgehog $ do
+                keys <-
+                    forAll $
+                        Gen.choice
+                            [ map ArrayEntry <$> Gen.subsequence [0 .. 80]
+                            , map ArrayEntry . sort <$> Gen.list (Range.linear 0 80) (Gen.int (Range.constant (-2) 40))
+                            , Gen.list (Range.linear 0 80) (Gen.element [ArrayEntry (-1), ArrayEntry 0, ArrayEntry 2, ArrayEntry 7, ArrayEntry maxBound, ObjectEntry "release", SingletonEntry])
+                            ]
+                let source = syntheticSnapshot [(key, show index :: Text) | (index, key) <- zip [0 :: Int ..] keys]
+                    losing = syntheticSnapshot [(key, "losing" :: Text) | key <- keys]
+                    admittedKeys = Map.keys (Map.fromList [(key, ()) | key <- keys])
+                admissions <- forM (zip [0 :: Int ..] admittedKeys) $ \(index, key) -> do
+                    sid <- forAll (Gen.element [0, 1, 2])
+                    entries <- forAll (admissionVariant 8 (snapshotDigest losing) (AdmittedEntry (snapshotDigest source) key "file.whl"))
+                    pure (show index, (sid, entries))
+                let plan = (entryPlan source SingletonEntry){mpSurvivors = Map.fromList [(version, sid) | (version, (sid, _)) <- admissions], mpArtifacts = Map.fromList [(version, entries) | (version, (_, entries)) <- admissions]}
+                    sources = Map.fromList [(0, source), (1, losing)]
+                overlaySurvivors id sources plan === genericOverlay sources plan
+
+-- The selection at 899ec89d2, frozen: every source builds a uniqueness map over its keys.
+genericOverlay :: Map SourceId (Snapshot [(EntryKey, entry)]) -> MergePlan -> [(Text, entry)]
+genericOverlay sources plan =
+    [ (version, entry)
+    | (sid, source) <- Map.toAscList sources
+    , let entries = snapshotValue source
+    , let unambiguous = onlyOnce entries
+    , (key, entry) <- entries
+    , Map.member key unambiguous
+    , Just (version, kept) <- [Map.lookup (sid, snapshotDigest source, key) admitted]
+    , nonNegativeKey (admittedKey kept)
+    , not (T.null (admittedFilename kept))
+    ]
+  where
+    admitted =
+        onlyOnce
+            [ ((sid, admittedSnapshot entry, admittedKey entry), (version, entry))
+            | (version, entries) <- Map.toList (mpArtifacts plan)
+            , Just sid <- [Map.lookup version (mpSurvivors plan)]
+            , entry <- toList entries
+            ]
+
+onlyOnce :: (Ord key) => [(key, value)] -> Map key value
+onlyOnce = Map.mapMaybe id . Map.fromListWith (\_ _ -> Nothing) . map (second Just)
+
+nonNegativeKey :: EntryKey -> Bool
+nonNegativeKey = \case
+    ArrayEntry position -> position >= 0
+    ObjectEntry _ -> True
+    SingletonEntry -> True
 
 allocationSpec :: Spec
 allocationSpec = describe "entry selection allocation growth" $ do

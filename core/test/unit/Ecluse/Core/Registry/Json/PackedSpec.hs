@@ -1,6 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+{-# LANGUAGE UnboxedTuples #-}
 
 {- | Packed rendering, decoding and stored lengths against independent expected values.
 Hostile values pass through the production reader and writer.
@@ -12,6 +13,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Short qualified as SBS
+import Data.Primitive.ByteArray (ByteArray, indexByteArray)
 import Data.Scientific (Scientific, scientific)
 import Data.Text qualified as T
 import Data.Vector qualified as V
@@ -88,6 +90,25 @@ spec = modifyMaxSuccess (const 2000) $ do
                 renderAlone table (Just (urlPrefix prefix)) form === Just expected
                 renderAlone table Nothing form === Just (toStrict (encode value))
                 renderAlone table (Just (urlPrefix prefix)) (withoutHole form) === Just (toStrict (encode value))
+
+        it "rebases a hole from a table string or its own bytes onto the span the frozen file span finds" $
+            hedgehog $ do
+                url <- forAll (Gen.frequency [(3, genUrl), (1, genShortUrl)])
+                prefix <- forAll genHostileText
+                path <- forAll (Gen.element [["url"], ["dist", "tarball"]])
+                let encoded = toStrict (encode (String url))
+                    file = case baseFileSpan (SBS.unShortByteString (SBS.toShort encoded)) 0 (BS.length encoded) of
+                        (# from, len #) -> BS.take len (BS.drop from encoded)
+                    rebased = "\"" <> BS.drop 1 (BS.dropEnd 1 (toStrict (encode (String prefix)))) <> file <> "\""
+                    expected = foldr (\name inner -> "{" <> toStrict (encode (String name)) <> ":" <> inner <> "}") rebased path
+                cover 30 "its own bytes" (path == ["url"])
+                cover 30 "a table string" (path /= ["url"])
+                cover 10 "a question mark or hash" (T.any (`elem` ['?', '#']) url)
+                cover 10 "a slash" (T.any (== '/') url)
+                cover 10 "no slash" (T.all (/= '/') url)
+                cover 5 "at most two characters" (T.length url <= 2)
+                (table, form) <- packedOf (packValue (Generic limit) path (at path (String url) []))
+                renderAlone table (Just (urlPrefix prefix)) form === Just expected
 
         it "writes a value whose path holds no string as read" $
             hedgehog $ do
@@ -281,3 +302,28 @@ genUrl :: Gen Text
 genUrl = mconcat <$> Gen.list (Range.linear 0 8) (Gen.frequency [(3, Gen.element pieces), (1, genHostileText)])
   where
     pieces = ["https://", "registry.example", "/", "//", "?", "#", "a=1", "%2F", ".", "..", "pkg-1.0.0.tgz", "\\", "\"", " "]
+
+-- Strings of up to two characters from separators, escapes and a character outside ASCII.
+genShortUrl :: Gen Text
+genShortUrl = toText <$> Gen.list (Range.linear 0 2) (Gen.element ['/', '?', '#', 'a', '\\', '"', '\x1f600'])
+
+-- Frozen from 9597d0dd55b74e21eef067b1126249af38389d50:core/src/Ecluse/Core/Registry/Json/Packed.hs,
+-- with the loop index renamed from @at@, which this spec defines.
+baseFileSpan :: ByteArray -> Int -> Int -> (# Int, Int #)
+baseFileSpan array start len
+    | len < 2 = (# start, 0 #)
+    | otherwise = (# fileStart, pathEnd - fileStart #)
+  where
+    end = start + len - 1
+    pathEnd = scanPath (start + 1)
+    scanPath !i
+        | i >= end = end
+        | otherwise = case indexByteArray array i :: Word8 of
+            0x3f -> i
+            0x23 -> i
+            _ -> scanPath (i + 1)
+    fileStart = scanSlash pathEnd
+    scanSlash !i
+        | i <= start + 1 = start + 1
+        | (indexByteArray array (i - 1) :: Word8) == 0x2f = i
+        | otherwise = scanSlash (i - 1)

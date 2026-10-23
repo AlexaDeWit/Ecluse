@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | A growable byte buffer that one read writes front to back, rewinds in place, and copies each
+{- | A growable byte buffer that one writer fills front to back, rewinds in place, and copies each
 finished value out of. It writes the bytes aeson writes for strings and integers without building
 them first.
 -}
@@ -18,18 +18,22 @@ module Ecluse.Core.Registry.Json.Scratch (
     putEncodedText,
     putPlainBytes,
     putRawBytes,
+    putRawText,
     putDecimal,
     putAt,
     copyOut,
     decimalLength,
+    scratchBytes,
 ) where
 
-import Control.Monad.ST (ST)
+import Control.Monad.ST (ST, runST)
 import Data.ByteString qualified as BS
+import Data.ByteString.Internal qualified as BSI
 import Data.ByteString.Unsafe qualified as BSU
-import Data.Primitive.ByteArray (ByteArray, MutableByteArray, copyMutableByteArray, getSizeofMutableByteArray, newByteArray, unsafeFreezeByteArray, writeByteArray)
+import Data.Primitive.ByteArray (ByteArray, MutableByteArray, copyByteArray, copyByteArrayToAddr, copyMutableByteArray, getSizeofMutableByteArray, newByteArray, unsafeFreezeByteArray, writeByteArray)
 import Data.Primitive.MutVar (MutVar, newMutVar, readMutVar, writeMutVar)
 import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
+import Data.Text.Internal qualified as TI
 
 import Ecluse.Core.Registry.Json.Packed (varintSize, writeVarint)
 import Ecluse.Core.Registry.Json.StringEncoding (encodedLength, quote, writeEncodedSized)
@@ -105,6 +109,10 @@ putPlainBytes scratch bytes = putAt scratch (BS.length bytes + 2) $ \buffer at -
 putRawBytes :: Scratch st -> ByteString -> ST st ()
 putRawBytes scratch bytes = putAt scratch (BS.length bytes) (copyBytes bytes)
 
+-- | Write a text's UTF-8 bytes as they are.
+putRawText :: Scratch st -> Text -> ST st ()
+putRawText scratch (TI.Text array offset len) = putAt scratch len (\buffer at -> copyByteArray buffer at array offset len >> pure (at + len))
+
 copyBytes :: ByteString -> MutableByteArray st -> Int -> ST st Int
 copyBytes bytes buffer = go 0
   where
@@ -141,3 +149,12 @@ copyOut scratch from to = do
     target <- newByteArray (to - from)
     copyMutableByteArray target 0 buffer from (to - from)
     unsafeFreezeByteArray target
+
+-- | The bytes a writer leaves in a new buffer of the given starting size, copied once into a 'ByteString'.
+scratchBytes :: Int -> (forall st. Scratch st -> ST st ()) -> ByteString
+scratchBytes size write = BSI.unsafeCreate len (\target -> copyByteArrayToAddr target written 0 len)
+  where
+    (written, len) = runST $ do
+        scratch <- newScratch size
+        write scratch
+        (,) <$> (scratchBuffer scratch >>= unsafeFreezeByteArray) <*> scratchCursor scratch

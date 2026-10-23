@@ -7,7 +7,7 @@ module Ecluse.Runtime.Maintenance.CodeArtifactSpec (spec) where
 
 import Data.List (lookup)
 import Data.Text qualified as T
-import Lens.Micro ((.~), (?~), (^.))
+import Lens.Micro ((?~), (^.))
 import Network.HTTP.Types (status403, status503)
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
@@ -60,7 +60,6 @@ import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal (
     CodeArtifactStore (..),
     consentTagKey,
-    consentTagValue,
     cursorTagKey,
     describeRepositoryGrant,
     describeUpstreamRefusal,
@@ -84,6 +83,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Support (
     withNpmStore,
  )
 import Ecluse.Runtime.Test.Aws (loopbackAwsEnv)
+import Ecluse.Runtime.Test.PackageStore.FixedPages (markerTag, packagesPage, taggedWith, versionsPage)
 import Ecluse.Test.Contract.Maintenance (MaintenanceProfile (..), maintenanceConsentContract, maintenanceDeletionContract, maintenanceFactsContract, maintenanceInventoryContract)
 import Ecluse.Test.Maintenance (testDeleteGuard, withBucket)
 import Ecluse.Test.Package (lodashName, sampleManifest, unscopedNpm)
@@ -603,28 +603,10 @@ answersFrom responses = do
 record :: IORef [a] -> a -> IO ()
 record ref value = modifyIORef' ref (<> [value])
 
-packagesPage :: Maybe Text -> [Text] -> CA.ListPackagesResponse
-packagesPage token names =
-    CA.newListPackagesResponse 200
-        & (CAL.listPackagesResponse_nextToken .~ token)
-        & (CAL.listPackagesResponse_packages ?~ [CA.newPackageSummary & CAL.packageSummary_package ?~ name | name <- names])
-
-versionsPage :: Maybe Text -> [Text] -> CA.ListPackageVersionsResponse
-versionsPage token raws =
-    CA.newListPackageVersionsResponse 200
-        & (CAL.listPackageVersionsResponse_nextToken .~ token)
-        & (CAL.listPackageVersionsResponse_versions ?~ [CA.newPackageVersionSummary raw CA.PackageVersionStatus_Published | raw <- raws])
-
 allRemoved :: [Text] -> CA.DeletePackageVersionsResponse
 allRemoved raws =
     CA.newDeletePackageVersionsResponse 200
         & (CAL.deletePackageVersionsResponse_successfulVersions ?~ fromList [(raw, CA.newSuccessfulPackageVersionInfo) | raw <- raws])
-
-taggedWith :: [CA.Tag] -> CA.ListTagsForResourceResponse
-taggedWith tags = CA.newListTagsForResourceResponse 200 & (CAL.listTagsForResourceResponse_tags ?~ tags)
-
-markerTag :: CA.Tag
-markerTag = CA.newTag consentTagKey consentTagValue
 
 describedWithArn :: CA.DescribeRepositoryResponse
 describedWithArn =

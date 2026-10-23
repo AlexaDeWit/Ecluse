@@ -11,7 +11,7 @@
 {- | Incremental Haskell scanning with the inherited lexer's token and chunk semantics.
 State owns immutable byte slices, with no foreign result records.
 -}
-module Data.JsonStream.Lexer.Internal (Cursor, Element (..), Scanned (..), PlainString, mkPlainString, plainBytes, start, next, feed, remaining) where
+module Data.JsonStream.Lexer.Internal (Cursor, Element (..), Scanned (..), Skipped (..), PlainString, mkPlainString, plainBytes, start, next, skipLevels, feed, remaining) where
 
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString as BS
@@ -66,6 +66,16 @@ data Literal = TrueLiteral | FalseLiteral | NullLiteral
 -- | One token, an input boundary, or a terminal failure.
 data Scanned = Token !Element !Cursor | More !Cursor | Failed
 
+-- | Where 'skipLevels' stopped.
+data Skipped
+    = -- | Past the closer of the outermost level.
+      Closed !Cursor
+    | -- | The piece ended with this many levels open. Feed the cursor and skip again.
+      Unclosed {-# UNPACK #-} !Int !Cursor
+    | SkipFailed
+    | -- | The cursor began where 'next' yields 'StringEnd'.
+      StrayStringEnd
+
 -- | Begin a scan over one immutable input piece.
 start :: BS.ByteString -> Cursor
 start bytes = Cursor bytes 0 Base []
@@ -103,6 +113,45 @@ next (Cursor bytes offset mode numbers) = case mode of
     NumberPart retainedBytes -> number bytes offset True retainedBytes numbers
     LiteralPart literal matched -> identifier bytes offset literal matched numbers
 {-# INLINE next #-}
+
+{- | Skip to the closer of the container the given number of levels up, as a loop that drops each
+token of 'next' would, without slicing strings. Any closer closes a level.
+-}
+skipLevels :: Int -> Cursor -> Skipped
+skipLevels !level0 cursor@(Cursor bytes offset0 mode numbers) = case mode of
+    Broken -> SkipFailed
+    StringFinish -> StrayStringEnd
+    _ | offset0 >= size -> Unclosed level0 cursor
+    Base -> go level0 offset0
+    StringPart continued escaped -> pastString level0 offset0 continued escaped
+    NumberPart retainedBytes -> scanned level0 (number bytes offset0 True retainedBytes numbers)
+    LiteralPart literal matched -> scanned level0 (identifier bytes offset0 literal matched numbers)
+  where
+    !size = BS.length bytes
+    go !level !offset
+        | offset >= size = Unclosed level (Cursor bytes offset Base numbers)
+        | emptyByte byte = go level (offset + 1)
+        | byte == openBrace || byte == openBracket = go (level + 1) (offset + 1)
+        | byte == closeBrace || byte == closeBracket = closed level (offset + 1)
+        | byte == quote = opened level (offset + 1)
+        | otherwise = scanned level (base bytes offset numbers)
+      where
+        byte = BS.index bytes offset
+    closed level following
+        | level <= 1 = Closed (Cursor bytes following Base numbers)
+        | otherwise = go (level - 1) following
+    -- 'next' leaves a quote that ends the piece as an unstarted string, not as string content.
+    opened level following
+        | following >= size = Unclosed level (Cursor bytes following (StringPart False False) numbers)
+        | otherwise = pastString level following False False
+    pastString level from continued escaped = case stringStop bytes from continued escaped of
+        StringStop stop escapePending _
+            | stop >= size -> Unclosed level (Cursor bytes stop (StringPart True escapePending) numbers)
+            | otherwise -> go level (stop + 1)
+    scanned level result = case result of
+        Token _ rest -> skipLevels level rest
+        More waiting -> Unclosed level waiting
+        Failed -> SkipFailed
 
 base :: BS.ByteString -> Int -> [BS.ByteString] -> Scanned
 base bytes = skipSpace
@@ -204,27 +253,18 @@ number bytes initial continued retainedBytes numbers = go initial 0 0 False 0 co
     piece offset = BS.take (offset - initial) (BS.drop initial bytes)
     go !offset !computed !digits !dotted !fractionDigits !invalid !sign
         | offset >= size = partial (piece offset)
-        | otherwise =
-            let !byte = BS.index bytes offset
-             in if not (numberByte byte)
-                    then complete (piece offset) offset computed fractionDigits invalid sign
-                    else
-                        if invalid
-                            then go (offset + 1) computed digits dotted fractionDigits True sign
-                            else
-                                if offset == initial && byte == minus
-                                    then go (offset + 1) computed digits dotted fractionDigits False (negate 1)
-                                    else
-                                        if digitByte byte
-                                            then
-                                                let !digits' = digits + 1
-                                                    !computed' = computed * decimalRadix + fromIntegral (byte - digitZero)
-                                                    !fractionDigits' = if dotted then fractionDigits + 1 else fractionDigits
-                                                 in go (offset + 1) computed' digits' dotted fractionDigits' (digits' > fastDigits) sign
-                                            else
-                                                if byte == dot && not dotted
-                                                    then go (offset + 1) computed digits True fractionDigits False sign
-                                                    else go (offset + 1) computed digits dotted fractionDigits True sign
+        | not (numberByte byte) = complete (piece offset) offset computed fractionDigits invalid sign
+        | invalid = go (offset + 1) computed digits dotted fractionDigits True sign
+        | offset == initial && byte == minus = go (offset + 1) computed digits dotted fractionDigits False (negate 1)
+        | digitByte byte =
+            let !digits' = digits + 1
+                !computed' = computed * decimalRadix + fromIntegral (byte - digitZero)
+                !fractionDigits' = if dotted then fractionDigits + 1 else fractionDigits
+             in go (offset + 1) computed' digits' dotted fractionDigits' (digits' > fastDigits) sign
+        | byte == dot && not dotted = go (offset + 1) computed digits True fractionDigits False sign
+        | otherwise = go (offset + 1) computed digits dotted fractionDigits True sign
+      where
+        byte = BS.index bytes offset
     -- The inherited limit excludes the incoming piece and does not govern completion.
     partial part
         | not continued = More (Cursor bytes size (NumberPart (BS.length part)) [part])

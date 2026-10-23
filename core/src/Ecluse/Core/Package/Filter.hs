@@ -21,12 +21,13 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 
 import Ecluse.Core.Package (
+    Artifact,
     InvalidEntry,
     PackageDetails (pkgArtifacts),
     PackageInfo (infoDistTags, infoInvalidEntries, infoVersions),
     pkgVersion,
  )
-import Ecluse.Core.Package.Filter.Internal (ArtifactOrigin, artifactOrigin, partitionArtifacts, resolveArtifact)
+import Ecluse.Core.Package.Filter.Internal (ArtifactOrigin, ArtifactRefusal, AuthorityVerdict, artifactOrigin, noAuthorityVerdict, partitionArtifacts, resolveArtifact)
 import Ecluse.Core.Rules.Types (Decision (Admitted))
 import Ecluse.Core.Security (AllowedHostPorts)
 import Ecluse.Core.Strict (strictElements)
@@ -81,23 +82,39 @@ enforceArtifactLocations ecosystemHosts upstreamBaseUrl info =
     info{infoVersions = kept, infoInvalidEntries = strictElements (infoInvalidEntries info <> drops)}
   where
     origin = artifactOrigin ecosystemHosts upstreamBaseUrl
-    (kept, drops) = Map.foldrWithKey step (Map.empty, []) (infoVersions info)
+    Located kept drops _ = Map.foldrWithKey' step (Located Map.empty [] noAuthorityVerdict) (infoVersions info)
 
-    step rawVersion details (keptAcc, dropAcc) =
-        case locatedVersion origin rawVersion details of
-            (Just located, fileDrops) -> (Map.insert rawVersion located keptAcc, fileDrops <> dropAcc)
-            (Nothing, emptied) -> (keptAcc, emptied <> dropAcc)
+    step rawVersion details (Located keptAcc dropAcc previous) =
+        case locatedVersion origin previous rawVersion details of
+            (verdict, Just located, fileDrops) -> Located (Map.insert rawVersion located keptAcc) (fileDrops <> dropAcc) verdict
+            (verdict, Nothing, emptied) -> Located keptAcc (emptied <> dropAcc) verdict
+
+-- The versions kept so far, their drop records in version-key order, and the verdict the last URL left.
+data Located = Located (Map Text PackageDetails) [InvalidEntry] AuthorityVerdict
 
 {- | The single-version form of 'enforceArtifactLocations', for the selective decode path.
 'Nothing' means no artifact of the version survived, so the version drops.
 -}
 enforceArtifactLocationsOf :: AllowedHostPorts -> Text -> PackageDetails -> Maybe PackageDetails
-enforceArtifactLocationsOf ecosystemHosts upstreamBaseUrl details =
-    fst (locatedVersion (artifactOrigin ecosystemHosts upstreamBaseUrl) (renderVersion (pkgVersion details)) details)
+enforceArtifactLocationsOf ecosystemHosts upstreamBaseUrl details = located
+  where
+    (_, located, _) = locatedVersion (artifactOrigin ecosystemHosts upstreamBaseUrl) noAuthorityVerdict (renderVersion (pkgVersion details)) details
 
--- A version with only its located artifacts, 'Nothing' when it has none, beside its drop records.
-locatedVersion :: ArtifactOrigin -> Text -> PackageDetails -> (Maybe PackageDetails, [InvalidEntry])
-locatedVersion origin rawVersion details =
-    case partitionArtifacts rawVersion (map (resolveArtifact origin) (toList (pkgArtifacts details))) of
-        (Just survivors, drops) -> (Just details{pkgArtifacts = strictElements survivors}, drops)
-        (Nothing, drops) -> (Nothing, drops)
+-- A version with only its located artifacts, 'Nothing' when it has none, beside its drop records and the verdict its last URL left.
+locatedVersion :: ArtifactOrigin -> AuthorityVerdict -> Text -> PackageDetails -> (AuthorityVerdict, Maybe PackageDetails, [InvalidEntry])
+locatedVersion origin previous rawVersion details =
+    case partitionArtifacts rawVersion checked of
+        (Just survivors, drops) -> (verdict, Just details{pkgArtifacts = strictElements survivors}, drops)
+        (Nothing, drops) -> (verdict, Nothing, drops)
+  where
+    (verdict, checked) = resolvedInOrder origin previous (toList (pkgArtifacts details))
+
+-- 'mapAccumL' over 'resolveArtifact', written strict, since 'mapAccumL' builds lazy pairs for every file of a read.
+resolvedInOrder :: ArtifactOrigin -> AuthorityVerdict -> [Artifact] -> (AuthorityVerdict, [Either ArtifactRefusal Artifact])
+resolvedInOrder origin = go
+  where
+    go previous = \case
+        [] -> (previous, [])
+        art : rest -> case resolveArtifact origin previous art of
+            (decided, checked) -> case go decided rest of
+                (final, checkedRest) -> (final, checked : checkedRest)

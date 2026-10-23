@@ -32,6 +32,8 @@ import Ecluse.Core.Package.Hash (
     parseHashAlg,
     renderHashAlg,
     sriAlgorithm,
+    sriBody,
+    sriPrefix,
  )
 
 import Ecluse.Test.Corpus (CorpusPackage (cpPath), captureTexts, corpusPackages, pypiCorpusPackages)
@@ -240,6 +242,16 @@ spec = do
             sriAlgorithm "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
                 `shouldBe` Just SHA384
 
+        modifyMaxSuccess (const 3000) $
+            it "splits SRI text at the first dash as the frozen breakOn forms do" $
+                hedgehog $ do
+                    t <- forAll genSriLike
+                    cover 50 "a dash" (T.any (== '-') t)
+                    cover 5 "no dash" (T.all (/= '-') t)
+                    cover 10 "a non-ASCII character before the first dash" (T.any (> '\x7f') (baseSriPrefix t) && T.any (== '-') t)
+                    sriPrefix t === baseSriPrefix t
+                    sriBody t === baseSriBody t
+
 algorithmNames :: [Text]
 algorithmNames = ["md5", "sha1", "sha-1", "sha256", "sha-256", "sha384", "sha-384", "sha512", "sha-512", "blake2b"]
 
@@ -258,6 +270,26 @@ baseParseHashAlg raw = case T.toLower (T.strip raw) of
     "sha-512" -> Right SHA512
     "blake2b" -> Right Blake2b
     _ -> Left ("unknown integrity algorithm: " <> raw)
+
+-- Frozen from 899ec89d2cae342eda1d1d2a4577af916f4bf3ff:core/src/Ecluse/Core/Package/Hash.hs.
+baseSriPrefix, baseSriBody :: Text -> Text
+baseSriPrefix = fst . T.breakOn "-"
+baseSriBody = T.drop 1 . snd . T.breakOn "-"
+
+-- Dash runs, SRI and near-miss prefixes, digest bodies, and any text. The listed non-ASCII characters
+-- look like a dash, or encode to a byte whose low bits match the dash.
+genSriLike :: Gen Text
+genSriLike = mconcat <$> Gen.list (Range.constant 0 6) piece
+  where
+    piece =
+        Gen.frequency
+            [ (3, Gen.element ["-", "--", "---"])
+            , (3, Gen.element (algorithmNames <> mapMaybe spellingPrefix sriSpellings <> ["sha5", "sha5122", "SHA512", "sri", "sha3-256"]))
+            , (2, base64DigestText <$> Gen.bytes (Range.linear 0 64))
+            , (2, Gen.text (Range.linear 1 6) (Gen.element ("\xad\x12d\x2010\x2011\x2212\xfe63\xff0d\x1002d" :: String)))
+            , (2, Gen.text (Range.linear 0 12) Gen.unicode)
+            , (1, genSpace)
+            ]
 
 decoderSpec :: Spec
 decoderSpec = describe "mkHash agrees with the digest decoder" $ do

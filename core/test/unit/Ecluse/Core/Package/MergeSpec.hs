@@ -24,20 +24,22 @@ import UnliftIO (evaluate)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package
+import Ecluse.Core.Package.Entry (AdmittedEntry (..), EntryKey (..))
 import Ecluse.Core.Package.Hash (canonicalHashValue)
 import Ecluse.Core.Package.Integrity (VersionIntegrity (MeetsFloor), assertedAlg, classifyDigests)
 import Ecluse.Core.Package.Merge hiding (contribute, mergePackuments)
 import Ecluse.Core.Package.Merge qualified as Merge
 
 import Ecluse.Core.Registry.WireSupport (Projection (Projected))
-import Ecluse.Core.Version (mkVersion, renderVersion)
+import Ecluse.Core.Snapshot (Snapshot (..))
+import Ecluse.Core.Version (Version, mkVersion, renderVersion, selectLatest)
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, sriSha256Of, sriSha512Of, thingName, unsafeHash, validSha256, validSha256Sri)
 import Ecluse.Test.Package qualified as Package
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
-import Ecluse.Test.Snapshot (syntheticSnapshot)
+import Ecluse.Test.Snapshot (digestOf, syntheticSnapshot)
 
 mergePackuments :: [(Provenance, PackageInfo)] -> Maybe MergePlan
 mergePackuments = Merge.mergePackuments . map (second syntheticSnapshot)
@@ -145,15 +147,12 @@ sha256Def = validSha256Of "def"
 sriPair :: Text -> (Text, Maybe HashAlg, Text)
 sriPair s = ("thing.tgz", sriAlgorithm s, sriBody s)
 
--- The surviving version keys (the merged union), sorted.
 survivorKeys :: MergePlan -> [Text]
 survivorKeys = sort . Map.keys . mpSurvivors
 
--- The 'SourceId' that won a given surviving key, if it survived.
 winnerOf :: Text -> MergePlan -> Maybe SourceId
 winnerOf key = Map.lookup key . mpSurvivors
 
--- The resolved @latest@ tag's raw text, if present.
 latestKey :: MergePlan -> Maybe Text
 latestKey p = renderVersion <$> Map.lookup "latest" (mpDistTags p)
 
@@ -192,9 +191,7 @@ genSource = do
 genSources :: Gen [(Provenance, PackageInfo)]
 genSources = Gen.list (Range.linear 1 4) genSource
 
-{- | An arbitrary 'Merge' accumulator, a 'foldMap' of 'contribute' over a small source
-list. The empty list yields 'mempty', so the laws are tested over the identity too.
--}
+-- An empty source list yields 'mempty', so the law checks cover the identity too.
 genMerge :: Gen Merge
 genMerge = foldMap (uncurry contribute) <$> Gen.list (Range.linear 0 3) genSource
 
@@ -207,14 +204,39 @@ divergenceFacts =
 
 -- Each version's copies in precedence order, the winner first.
 copiesByVersion :: [(Provenance, PackageInfo)] -> Map Text (NonEmpty PackageDetails)
-copiesByVersion sources =
-    fmap snd . NE.sortWith fst
+copiesByVersion = fmap (fmap snd) . rankedCopies
+
+-- Each version's copies with their precedence rank, the winner first.
+rankedCopies :: [(Provenance, PackageInfo)] -> Map Text (NonEmpty ((Provenance, SourceId), PackageDetails))
+rankedCopies sources =
+    NE.sortWith fst
         <$> Map.fromListWith
             (<>)
             [ (key, one ((prov, position), details))
-            | (position, (prov, info)) <- zip [0 :: Int ..] sources
+            | (position, (prov, info)) <- zip [0 ..] sources
             , (key, details) <- Map.toList (infoVersions info)
             ]
+
+-- What a render reads from the plan, in strict fields, so a deferred field compares by value.
+data RenderFields = RenderFields (Map Text SourceId) (Map Text Version) (Map Text (NonEmpty AdmittedEntry)) (Map Text UTCTime)
+    deriving stock (Eq, Show)
+
+renderFields :: MergePlan -> RenderFields
+renderFields plan = RenderFields (mpSurvivors plan) (mpDistTags plan) (mpArtifacts plan) (mpTime plan)
+
+-- Each version's winning copy, each tag from its highest-precedence source, and @latest@ from the shared selector.
+referenceRenderFields :: [(Provenance, PackageInfo)] -> RenderFields
+referenceRenderFields sources =
+    RenderFields (snd . fst <$> winners) tags (Map.mapMaybe admitted winners) (Map.mapMaybe (pkgPublishedAt . snd) winners)
+  where
+    ranked = sortOn fst [((prov, position), info) | (position, (prov, info)) <- zip [0 ..] sources]
+    winners = NE.head <$> rankedCopies sources
+    digests = Map.fromList [(rank, snapshotDigest (syntheticSnapshot info)) | (rank, info) <- ranked]
+    admitted (rank, details) = (\digest -> admittedAs digest <$> pkgArtifacts details) <$> Map.lookup rank digests
+    admittedAs digest art = AdmittedEntry digest (artEntryKey art) (artFilename art)
+    carried = Map.filter ((`Map.member` winners) . renderVersion) (Map.unions (map (infoDistTags . snd) ranked))
+    publicLatest = listToMaybe [v | ((GatedSource, _), info) <- ranked, Just v <- [Map.lookup "latest" (infoDistTags info)]]
+    tags = maybe (Map.delete "latest" carried) (\v -> Map.insert "latest" v carried) (selectLatest publicLatest (map (pkgVersion . snd) (Map.elems winners)))
 
 -- The divergence set from the fingerprint test and then the contradiction test alone, over every
 -- copy of a version. The merge must agree with it whatever it tests first.
@@ -312,6 +334,20 @@ genCopy (key, release) =
     overHashes f art = art{artHashes = f (artHashes art)}
     swapping xs ys h = fromMaybe h (lookup h (zip (xs <> ys) (ys <> xs)))
 
+-- Sources over four releases whose copies differ in publish time and file, with tags aimed at a release or an absent version.
+genRenderedSources :: Gen [(Provenance, PackageInfo)]
+genRenderedSources = Gen.list (Range.linear 1 4) $ do
+    prov <- Gen.element [TrustedSource, GatedSource]
+    copies <- traverse genCopyOf =<< Gen.subsequence releases
+    tags <- Gen.list (Range.constant 0 3) ((,) <$> Gen.element ["latest", "next", "beta"] <*> Gen.element (map (mkVersion Npm) ("9.9.9" : releases)))
+    pure (prov, (packumentWith []){infoVersions = Map.fromList copies, infoDistTags = Map.fromList tags})
+  where
+    releases = ["1.0.0", "1.1.0", "2.0.0-rc.1", "2.0.0"]
+    genCopyOf key = do
+        published <- Gen.frequency [(1, pure Nothing), (2, Just . (`UTCTime` 0) . fromGregorian 2026 1 <$> Gen.int (Range.constant 1 28))]
+        file <- Gen.element ["thing.tgz", "thing.whl"]
+        pure (key, (detailsWith key []){pkgPublishedAt = published, pkgArtifacts = wheelWith file [] :| []})
+
 -- Two or three sources over three releases, each carrying its own copy of some of them.
 genContestedSources :: Gen [(Provenance, PackageInfo)]
 genContestedSources = do
@@ -339,10 +375,20 @@ mergeAllocation sources = do
     let inputs = map (second syntheticSnapshot) sources
     _ <- evaluate (T.length (show inputs))
     allocationBefore <- getAllocationCounter
-    divergences <- evaluate (maybe (-1) (Set.size . mpDivergences) (Merge.mergePackuments inputs))
+    divergences <- evaluate (maybe (-1) wholePlanDivergences (Merge.mergePackuments inputs))
     allocationAfter <- getAllocationCounter
     divergences `shouldBe` 0
     pure (allocationBefore - allocationAfter)
+
+-- The merge allocation of alike copies from these sources, with one digest per file and then sixteen.
+alikeAllocations :: [Provenance] -> IO (Int64, Int64)
+alikeAllocations provenances = (,) <$> alike 1 <*> alike 16
+  where
+    alike digests = mergeAllocation [(prov, agreeingSource digests) | prov <- provenances]
+
+-- Every field forced, as an npm render forces them, so the allocation bounds price the whole plan.
+wholePlanDivergences :: MergePlan -> Int
+wholePlanDivergences plan = mpDistTags plan `seq` mpArtifacts plan `seq` mpTime plan `seq` Set.size (mpDivergences plan)
 
 spec :: Spec
 spec = do
@@ -395,6 +441,26 @@ spec = do
                 gated = packument [("2.0.0", sriBbb)]
             (survivorKeys <$> mergePackuments [(TrustedSource, trusted), (GatedSource, gated)])
                 `shouldBe` Just ["1.0.0", "2.0.0"]
+
+        it "counts an empty source's position and takes artifacts from the winning snapshot" $ do
+            let digest = digestOf "trusted source bytes"
+                tarball = (artifactWith [unsafeHash SRI sriSame]){artEntryKey = ObjectEntry "1.0.0"}
+                wheel = (wheelWith "thing.whl" [unsafeHash SRI sriSame]){artEntryKey = ArrayEntry 7}
+                trusted = withArtifacts (tarball :| [wheel]) (packument [("1.0.0", sriSame)])
+                plan =
+                    Merge.mergePackuments
+                        [ (GatedSource, syntheticSnapshot (packument []))
+                        , (GatedSource, syntheticSnapshot (packument [("1.0.0", sriSame)]))
+                        , (TrustedSource, Snapshot digest trusted)
+                        , (TrustedSource, syntheticSnapshot trusted)
+                        ]
+            (mpSurvivors <$> plan) `shouldBe` Just (Map.singleton "1.0.0" 2)
+            (mpArtifacts <$> plan)
+                `shouldBe` Just
+                    ( Map.singleton
+                        "1.0.0"
+                        (AdmittedEntry digest (ObjectEntry "1.0.0") "thing.tgz" :| [AdmittedEntry digest (ArrayEntry 7) "thing.whl"])
+                    )
 
         it "reports no divergence when a collision's integrity agrees" $ do
             let trusted = packument [("1.0.0", sriSame)]
@@ -453,12 +519,15 @@ spec = do
 
     describe "copies whose digests are spelled alike" $
         it "cost the same merge whether a file carries one digest or sixteen" $ do
-            let alike digests = mergeAllocation [(TrustedSource, agreeingSource digests), (GatedSource, agreeingSource digests)]
-            oneDigest <- alike 1
-            sixteenDigests <- alike 16
+            (oneDigest, sixteenDigests) <- alikeAllocations [TrustedSource, GatedSource]
             -- A fingerprint entry is over 100 bytes. The allowance is 32 for each added digest: fifteen
             -- in each of two files, in each of two copies.
             sixteenDigests `shouldSatisfy` (<= oneDigest + 32 * 15 * 2 * 2 * agreeingVersions)
+
+    describe "three copies whose digests are spelled alike" $
+        it "cost the same merge whether a file carries one digest or sixteen" $ do
+            (oneDigest, sixteenDigests) <- alikeAllocations [TrustedSource, GatedSource, GatedSource]
+            sixteenDigests `shouldSatisfy` (<= oneDigest + 32 * 15 * 2 * 3 * agreeingVersions)
 
     describe "a version only one source carries" $
         it "is decided before anything is built for a comparison" $ do
@@ -881,6 +950,18 @@ spec = do
                 let keys = Map.keys (mpSurvivors plan)
                 H.assert (all (`elem` keys) (Map.keys (mpTime plan)))
 
+        it "the render's fields equal a strict copy built from each version's winning copy" $
+            hedgehog $ do
+                sources <- forAll genRenderedSources
+                plan <- H.evalMaybe (mergePackuments sources)
+                let copies = rankedCopies sources
+                    targets = concatMap (Map.elems . infoDistTags . snd) sources
+                H.cover 20 "a version two sources carry" (any ((> 1) . length) copies)
+                H.cover 30 "a copy with no publish time" (any (any (isNothing . pkgPublishedAt . snd)) copies)
+                H.cover 10 "a tag aimed at an absent version" (any (\v -> Map.notMember (renderVersion v) copies) targets)
+                H.cover 10 "a public latest" (any (\(prov, info) -> prov == GatedSource && Map.member "latest" (infoDistTags info)) sources)
+                renderFields plan === referenceRenderFields sources
+
         it "a single input is the identity over the plan" $
             hedgehog $ do
                 src@(_, info) <- forAll genSource
@@ -962,8 +1043,8 @@ spec = do
                     divergenceFacts plan === referenceDivergences sources
 
     describe "the merge accumulator is a lawful Monoid" $ do
-        -- The 'Merge' accumulator is associative and identity-respecting, but deliberately
-        -- not commutative, because the 'SourceId' tiebreak is positional.
+        -- The 'Merge' accumulator is associative and has an identity, but it is not commutative,
+        -- because the 'SourceId' tiebreak is positional.
         it "is associative: (a <> b) <> c === a <> (b <> c)" $
             hedgehog $ do
                 a <- forAll genMerge
@@ -990,8 +1071,8 @@ spec = do
                 gated = contribute GatedSource (packument [("1.0.0", sriPub)])
                 forward = planFrom (trusted <> gated)
                 backward = planFrom (gated <> trusted)
-            -- Same decision (trusted wins) but opposite positional label, so the two
-            -- plans, and the two accumulators, are genuinely not equal.
+            -- Same decision (trusted wins) but opposite positional labels, so the two plans and the two
+            -- accumulators are not equal.
             (trusted <> gated == gated <> trusted) `shouldBe` False
             (winnerOf "1.0.0" =<< forward) `shouldBe` Just 0
             (winnerOf "1.0.0" =<< backward) `shouldBe` Just 1
@@ -1007,8 +1088,15 @@ spec = do
 
         it "mergePackuments is planFrom . foldMap contribute" $
             hedgehog $ do
-                sources <- forAll genSources
+                sources <- forAll (Gen.list (Range.linear 0 5) genSource)
                 mergePackuments sources === planFrom (foldMap (uncurry contribute) sources)
+
+        it "mergePackuments equals the accumulator regrouped at any source over contested copies" $
+            hedgehog $ do
+                sources <- forAll genContestedSources
+                (left, right) <- forAll (flip splitAt sources <$> Gen.int (Range.linear 0 (length sources)))
+                let folded = foldMap (uncurry contribute)
+                mergePackuments sources === planFrom (folded left <> folded right)
 
     describe "the laws do not erode the trust hierarchy" $ do
         it "the trust order IS the hierarchy: TrustedSource < GatedSource (keystone -- do not reorder)" $

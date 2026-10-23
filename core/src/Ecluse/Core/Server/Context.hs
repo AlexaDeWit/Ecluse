@@ -197,8 +197,10 @@ data ResponseAction response
       AnswerLocally response
     | -- | A refusal the route decided, rendered where the mount's help message is known.
       AnswerRefusal (Maybe HelpMessage -> response)
-    | -- | A data-plane handler and its pre-commit fallback, both constrained to the route's response type.
-      RunPipeline response (Wai.Request -> (response -> IO ResponseReceived) -> Handler ResponseReceived)
+    | {- | A data-plane handler and its pre-commit fallback, both constrained to the route's response type.
+      The fallback is lazy: only an escape before commit reads it, so a request that commits never builds it.
+      -}
+      RunPipeline ~response (Wai.Request -> (response -> IO ResponseReceived) -> Handler ResponseReceived)
 
 -- | A route's response contract and an action that answers only through it, so dispatch needs no ecosystem's response sum.
 data RouteAction = forall response. RouteAction (ResponseContract response) (ResponseAction response)

@@ -42,9 +42,11 @@ module Ecluse.Core.Rules (
     noSourceReporter,
 ) where
 
+import Data.Fixed (Fixed (MkFixed))
 import Data.Text qualified as T
 import Data.Text.Short qualified as TS
-import Data.Time (NominalDiffTime, diffUTCTime, getCurrentTime)
+import Data.Time (NominalDiffTime, UTCTime (UTCTime), diffDays, diffTimeToPicoseconds, getCurrentTime, secondsToNominalDiffTime)
+import Data.Time.Clock.POSIX (posixDayLength)
 import UnliftIO (evaluate, tryAny)
 import UnliftIO.MVar (withMVar)
 
@@ -131,7 +133,7 @@ verdictSource = \case
     AllowIfOlderThan minAge -> FromEvidence $ \ctx ev -> case evPublishedAt ev of
         Unread -> CannotVet FailDeny PublishTimeUnread
         Known Nothing -> NoDecision PublishTimeUnknown
-        Known (Just publishedAt) -> ageVerdict minAge (diffUTCTime (ctxNow ctx) publishedAt)
+        Known (Just publishedAt) -> ageVerdict minAge (ageSince (ctxNow ctx) publishedAt)
     DenyInstallTimeExecution -> FromEvidence $ \_ ev -> case evInstallCode ev of
         Unread -> CannotVet FailDeny InstallSignalUnread
         Known (RunsCodeOnInstall how) -> Deny Nothing (RunsOnInstall how)
@@ -178,6 +180,17 @@ ageVerdict :: NominalDiffTime -> NominalDiffTime -> RuleVerdict
 ageVerdict minAge age
     | age >= minAge = Allow (PublishedLongEnough age minAge)
     | otherwise = NoDecision (PublishedTooRecently age minAge)
+
+-- Equal to 'diffUTCTime' in exact Pico arithmetic, without its two POSIX conversions through
+-- picosecond products past 2^64. The time of day clamps at 'posixDayLength' as it does there.
+ageSince :: UTCTime -> UTCTime -> NominalDiffTime
+ageSince (UTCTime nowDay nowTime) (UTCTime day time) =
+    secondsToNominalDiffTime (MkFixed (diffDays nowDay day * dayPicos + clamped nowTime - clamped time))
+  where
+    clamped t = min dayPicos (diffTimeToPicoseconds t)
+
+dayPicos :: Integer
+dayPicos = diffTimeToPicoseconds (realToFrac posixDayLength)
 
 -- The score filter and the abstention no version changes are built once per read.
 advisoryDenyVerdict :: DbEtag -> MissingScorePolicy -> AdvisoryScore -> Double -> (AdvisoryRange -> Maybe Double) -> PackageAdvisories -> RuleEvidence -> RuleVerdict
@@ -465,11 +478,13 @@ skippedOf (Passed name res) = case res of
     skipped FailDeny _ = Nothing
 
 -- Only an admission carries evidence: the checks that could not vet ahead of it, in boot order,
--- then the ones it pre-empted.
+-- then the ones it pre-empted. 'decisive' builds it with none, so it stands when none is found.
 withEvidence :: [Passed] -> [PreparedRule] -> Decision -> Decision
-withEvidence passed unreached = \case
-    Admitted name reason _ -> Admitted name reason (reverse (mapMaybe skippedOf passed) <> map (Unreached . prepName) unreached)
-    other -> other
+withEvidence passed unreached decided = case decided of
+    Admitted name reason _ | not (null evidence) -> Admitted name reason evidence
+    _ -> decided
+  where
+    evidence = reverse (mapMaybe skippedOf passed) <> map (Unreached . prepName) unreached
 
 -- 'CannotVet' has no transience evidence, so it produces a plain retryable refusal. An admission's
 -- evidence is attached by the fold, which alone knows what it passed and pre-empted.

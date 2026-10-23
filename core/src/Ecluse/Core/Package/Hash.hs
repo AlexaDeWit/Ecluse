@@ -215,11 +215,11 @@ hashAlgNamed onUnknown = \case
 
 -- | The token before the first dash. Without a dash, the entire string is the prefix.
 sriPrefix :: Text -> Text
-sriPrefix = fst . T.breakOn "-"
+sriPrefix = T.takeWhile (/= '-')
 
 -- | The body after the first dash, or empty text when there is no dash.
 sriBody :: Text -> Text
-sriBody = T.drop 1 . snd . T.breakOn "-"
+sriBody = T.drop 1 . T.dropWhile (/= '-')
 
 -- | Resolve an SRI prefix. An unsupported prefix asserts no algorithm and clears no integrity floor.
 sriAlgorithm :: Text -> Maybe HashAlg

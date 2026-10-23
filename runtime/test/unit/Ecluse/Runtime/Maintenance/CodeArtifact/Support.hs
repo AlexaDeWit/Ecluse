@@ -38,6 +38,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     CodeArtifactStore (..),
     codeArtifactFormat,
  )
+import Ecluse.Runtime.Test.PackageStore.FixedPages (describing)
 
 -- | The npm repository the maintenance specs address, or 'Nothing' if npm resolved to no format.
 npmStore :: Maybe CodeArtifactStore
@@ -61,11 +62,6 @@ withNpmStore cases = maybe noNpmFormat cases npmStore
     noNpmFormat =
         it "has a CodeArtifact format for npm" $
             expectationFailure "npm resolved to no CodeArtifact format"
-
--- | A @DescribeRepository@ answer carrying the given description.
-describing :: CA.RepositoryDescription -> CA.DescribeRepositoryResponse
-describing description =
-    CA.newDescribeRepositoryResponse 200 & (CAL.describeRepositoryResponse_repository ?~ description)
 
 -- | A repository whose own external connection reaches the named registry.
 connectedTo :: Text -> CA.RepositoryDescription

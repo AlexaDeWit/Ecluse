@@ -12,10 +12,10 @@ import Prelude hiding (universe)
 import Data.Aeson (Value (String))
 import Data.Text qualified as T
 import Data.Text.Short qualified as TS
-import Data.Time (NominalDiffTime, addUTCTime, nominalDay)
+import Data.Time (Day (..), DiffTime, NominalDiffTime, UTCTime (..), addDays, addUTCTime, diffUTCTime, nominalDay, picosecondsToDiffTime)
 import Data.Universe.Class (Universe (universe))
 import Database.SQLite.Simple (Connection, Only, query, withConnection)
-import Hedgehog (Gen, forAll, (===))
+import Hedgehog (Gen, forAll, forAllWith, (===))
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -80,7 +80,7 @@ import Ecluse.Core.Rules.Types
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Rules.FrozenEvaluator (frozenEvaluator, frozenPrepare)
 import Ecluse.Rules.Remediation.Support (genEcosystem, genRemediation, genRows, genTenths, referenceRemediation)
-import Ecluse.Rules.Support (SourceState (Faulting, Loaded), ctx, normaliseVerdictIds, now, pkg, sixDayLimit, sourceStateDeps)
+import Ecluse.Rules.Support (SourceState (Faulting, Loaded), ctx, ctxAt, normaliseVerdictIds, now, pkg, sixDayLimit, sourceStateDeps)
 
 listed :: Maybe Text -> RuleEvidence
 listed mScope = identityEvidence (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0
@@ -958,11 +958,14 @@ evaluatorParitySpec = describe "the evaluator against the one frozen at f5f368d3
                 wholeRecordThrows = case evidencePoison of
                     Just PoisonedRecord{} -> True
                     _ -> False
+                admissions = [skippedChecks decision | Reached decision@Admitted{} <- obOutcomes asItStood]
             H.cover 10 "a rule's throw refuses a version" (any isRuleThrew (obOutcomes asItStood))
             H.cover 2 "a throw leaves the evaluator" (any isEscaped (obOutcomes asItStood))
             H.cover 1 "a per-version rule's throw refuses a version an advisory rule read" (any (perVersionThrowAfterRead keys) (obOutcomes asItStood))
             H.cover 2 "a throw inside a PerPackage verdict refuses a version" (not wholeRecordThrows && any (advisoryRuleThrew keys) (obOutcomes asItStood))
             H.cover 10 "an advisory rule's abstention reaches the trail" (any holdsAdvisoryAbstention (obOutcomes asItStood))
+            H.cover 1 "an admission carries no evidence" (any null admissions)
+            H.cover 2 "an admission carries evidence" (not (all null admissions))
             live === asItStood
 
     modifyMaxSuccess (const 200) . it "decides one package's versions concurrently as it did in turn, reading the package at most once" $
@@ -1097,6 +1100,57 @@ ruleSentenceSpec = describe "the sentence each built-in rule's reason reads as" 
             decision `shouldSatisfy` isUndecidable
             sentences decision `shouldBe` [sentence]
 
+quarantineAgeSpec :: Spec
+quarantineAgeSpec = describe "the quarantine age" $
+    modifyMaxSuccess (const 2000) . it "equals diffUTCTime and decides as a verdict built on it, npm and PyPI" $
+        hedgehog $ do
+            instant <- forAll genInstant
+            published <- forAll (Gen.choice [genInstant, genPublishedNear instant])
+            let age = diffUTCTime instant published
+            minAge <- forAll (Gen.element [age, succ age, pred age, 7 * nominalDay])
+            evidence <- forAllWith (show . pkgEcosystem . evName) (Gen.element [pkg Nothing 0, pypiPkg 0])
+            verdict <- liftIO (evalRule inertRuleDeps (ctxAt instant) (AllowIfOlderThan minAge) evidence{evPublishedAt = Known (Just published)})
+            H.cover 20 "the version is old enough" (isAllow verdict)
+            H.cover 20 "the version is too recent" (isNoDecision verdict)
+            H.cover 5 "the version is published after the instant" (published > instant)
+            H.cover 20 "a time of day falls in a leap second" (any ((>= 86_400) . utctDayTime) [instant, published])
+            H.cover 10 "a day falls before day 0" (any ((< 0) . toModifiedJulianDay . utctDay) [instant, published])
+            reportedAge verdict === Just age
+            verdict === referenceAgeVerdict minAge age
+
+-- The quarantine verdict over 'diffUTCTime', the reference for the rule's own age arithmetic.
+referenceAgeVerdict :: NominalDiffTime -> NominalDiffTime -> RuleVerdict
+referenceAgeVerdict minAge age
+    | age >= minAge = Allow (PublishedLongEnough age minAge)
+    | otherwise = NoDecision (PublishedTooRecently age minAge)
+
+reportedAge :: RuleVerdict -> Maybe NominalDiffTime
+reportedAge = \case
+    Allow (PublishedLongEnough age _) -> Just age
+    NoDecision (PublishedTooRecently age _) -> Just age
+    _ -> Nothing
+
+-- An instant over a wide range of days either side of day 0.
+genInstant :: Gen UTCTime
+genInstant = UTCTime . ModifiedJulianDay <$> Gen.integral (Range.linearFrom 61_000 (-1_000_000_000_000) 1_000_000_000_000) <*> genTimeOfDay
+
+-- A publish instant up to ten years before the given one, or up to a month after it.
+genPublishedNear :: UTCTime -> Gen UTCTime
+genPublishedNear (UTCTime day _) = UTCTime . (`addDays` day) <$> Gen.integral (Range.linearFrom 0 (-3650) 30) <*> genTimeOfDay
+
+-- Picoseconds from midnight to the end of a leap second, often past 86,400 s, where 'diffUTCTime' clamps.
+genTimeOfDay :: Gen DiffTime
+genTimeOfDay =
+    picosecondsToDiffTime
+        <$> Gen.choice
+            [ Gen.integral (Range.constant 0 leapSecondEnd)
+            , Gen.integral (Range.constant dayEnd leapSecondEnd)
+            , Gen.element [0, dayEnd - 1, dayEnd, dayEnd + 1, leapSecondEnd]
+            ]
+  where
+    dayEnd = 86_400_000_000_000_000
+    leapSecondEnd = dayEnd + 1_000_000_000_000
+
 spec :: Spec
 spec = do
     knownMaliciousSpec
@@ -1108,6 +1162,7 @@ spec = do
     referenceParitySpec
     evaluatorParitySpec
     ruleSentenceSpec
+    quarantineAgeSpec
     describe "advisory package identity" $ do
         for_ [denyCveAt 0, denyEpssAt 0] $ \rule ->
             it (toString (ruleName rule <> " queries the canonical PyPI name")) $ do

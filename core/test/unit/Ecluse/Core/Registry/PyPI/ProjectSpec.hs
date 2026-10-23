@@ -10,6 +10,7 @@ import Data.Aeson.Types (parseEither, parseJSON)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime (UTCTime), fromGregorian)
 import GHC.Conc (getAllocationCounter)
 import Hedgehog (Gen, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
@@ -38,6 +39,7 @@ import Ecluse.Core.Package (
     parseHashAlg,
     renderPackageName,
  )
+import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Registry.PyPI.Project (
     DistributionKind (Sdist, Wheel),
@@ -48,11 +50,13 @@ import Ecluse.Core.Registry.PyPI.Project (
     fileCoordinate,
     filenameMemo,
     isCanonicalName,
+    projectFile,
     projectName,
+    projectSimpleIndex,
     readCoordinate,
     readLatestCoordinate,
  )
-import Ecluse.Core.Registry.PyPI.Wire (IndexFile (..), SimpleIndex (..), YankState (FileWithdrawn))
+import Ecluse.Core.Registry.PyPI.Wire (IndexFile (..), SimpleIndex (..), YankState (FileOffered, FileWithdrawn))
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected), checkNameAgreement)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Strict (strictElements)
@@ -535,6 +539,22 @@ differentialSpec = describe "release projection against the base implementation"
             selected <- expectRight (projectPyPIVersion defaultLimits requestsName (pkgVersion details) body)
             selected `shouldBe` Just details
 
+    describe "properties" $
+        modifyMaxSuccess (const 1000) $
+            it "groups runs of a release's files as the base projection does, split runs and stray files included" $
+                hedgehog $ do
+                    files <- forAll genReleaseRuns
+                    invalid <- forAll (Gen.subsequence [decodeDrop "files.0", decodeDrop "files.3"])
+                    let keys = [fcVersionKey found | (_, Just found) <- files]
+                        released = [file | (file, Just _) <- files]
+                    cover 30 "a release with adjacent files" (or (zipWith (==) keys (drop 1 keys)))
+                    cover 20 "a release split across runs" (length (NE.group keys) > length (ordNub keys))
+                    cover 20 "a stray file between release files" (any (isNothing . snd) files)
+                    cover 20 "a release file with no upload time" (any (isNothing . ifUploadTime) released)
+                    cover 20 "a withdrawn release file" (any ((== FileWithdrawn) . ifYanked) released)
+                    projectSimpleIndex requestsName invalid (reverse [projectFile file found | (file, found) <- files])
+                        === referenceSimpleIndex requestsName invalid files
+
     for_ pypiCorpusPackages $ \package ->
         it ("preserves the full projection and selected releases of " <> toString (cpName package)) $ do
             body <- readFileBS (cpPath package)
@@ -705,6 +725,43 @@ referenceDetails name entries =
         }
   where
     files = fmap fst entries
+
+-- Runs of one release's files over a few keys, two spellings of one among them, with stray files inside runs.
+genReleaseRuns :: Gen [(IndexFile, Maybe FileCoordinate)]
+genReleaseRuns = zipWith runFile [0 ..] . concat <$> Gen.list (Range.constant 0 8) genRun
+  where
+    genRun = do
+        spelling <- Gen.element ["1.0", "1.0.0", "1.1", "2.0rc1", "2.0"]
+        Gen.list (Range.linear 1 4) $
+            (,,)
+                <$> Gen.frequency [(6, Just . (spelling,) <$> Gen.element [Sdist, Wheel]), (1, pure Nothing)]
+                <*> Gen.frequency [(3, Just <$> Gen.element [UTCTime (fromGregorian 2026 1 1) 0, UTCTime (fromGregorian 2026 6 1) 0]), (1, pure Nothing)]
+                <*> Gen.element [FileOffered, FileWithdrawn]
+
+runFile :: Int -> (Maybe (Text, DistributionKind), Maybe UTCTime, YankState) -> (IndexFile, Maybe FileCoordinate)
+runFile position (release, uploaded, withdrawal) =
+    ( IndexFile
+        { ifEntryKey = ArrayEntry position
+        , ifFilename = filename
+        , ifUrl = "https://files.pythonhosted.org/packages/" <> filename
+        , ifHashes = Map.singleton "sha256" validSha256
+        , ifRequiresPython = Nothing
+        , ifSize = Nothing
+        , ifUploadTime = uploaded
+        , ifYanked = withdrawal
+        , ifCoreMetadata = Nothing
+        , ifProvenance = Nothing
+        }
+    , release >>= \(spelling, kind) -> (`FileCoordinate` kind) <$> canonicalPep440 spelling
+    )
+  where
+    filename = maybe ("urllib3-" <> show position <> ".tar.gz") releaseName release
+    releaseName = \case
+        (spelling, Sdist) -> "requests-" <> spelling <> ".tar.gz"
+        (spelling, Wheel) -> "requests-" <> spelling <> "-py3-none-any.whl"
+
+decodeDrop :: Text -> InvalidEntry
+decodeDrop key = mkInvalidEntry InvalidIndexFile key Null "not a file object"
 
 referenceArtifact :: IndexFile -> Artifact
 referenceArtifact file =

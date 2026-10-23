@@ -4,15 +4,17 @@
 -- SPDX-License-Identifier: BSD-3-Clause
 
 {- | Incremental scanning over immutable input. Tokens and cursors retain their input slices.
-Feed only after 'More'. Empty input is a chunk boundary, not an end-of-document marker.
+Feed only after 'More' or 'Unclosed'. Empty input is a chunk boundary, not an end-of-document marker.
 Callers own body limits and completion checks. Scanning preserves json-stream's lenient rules.
 -}
 module Data.JsonStream.Lexer (
     Cursor,
     Element (..),
     Scanned (..),
+    Skipped (..),
     start,
     next,
+    skipLevels,
     feed,
     remaining,
     PlainString,

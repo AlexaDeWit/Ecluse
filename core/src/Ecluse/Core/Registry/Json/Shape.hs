@@ -28,7 +28,7 @@ import Data.Aeson (Value (..))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.HashMap.Strict qualified as HashMap
-import Data.JsonStream.Lexer (Cursor, Element (..), decodeString)
+import Data.JsonStream.Lexer (Cursor, Element (..), PlainString, decodeString)
 import Data.JsonStream.Lexer qualified as Lexer
 import Data.Vector qualified as V
 
@@ -84,8 +84,11 @@ listedMember members name = case findMember members name of
     Nothing -> Nothing
 {-# INLINE listedMember #-}
 
+-- An empty table skips the lookup, which hashes the name before it looks at the table.
 findMember :: Members -> Name -> Maybe Member
-findMember (Members named _) name = HashMap.lookup (nameBytes name) named
+findMember (Members named _) name
+    | HashMap.null named = Nothing
+    | otherwise = HashMap.lookup (nameBytes name) named
 {-# INLINE findMember #-}
 
 -- | Whether a value's keys and strings go through the document's table or keep their own copies.
@@ -343,40 +346,71 @@ withDirect build scalar table next indirect = case scalar of
     Indirect -> indirect
 {-# INLINE withDirect #-}
 
+-- Inlined at each read site, so the site takes the value apart without building a 'Direct'.
+-- Only a container's fallback still builds one, in 'directThrough'.
 direct :: Shape -> Mode -> InternTable -> Element -> Direct
-direct shape mode table element = case shape of
+direct shape mode table element
+    | takesToken = scalarToken mode table element
+    | otherwise = directThrough shape mode table element
+  where
+    takesToken = case shape of
+        Scalar budget -> budget > 0
+        Generic budget -> budget > 0
+        StringOr budget _ -> budget > 0 && completeString
+        _ -> False
+    completeString = case element of
+        StringPlain{} -> True
+        StringEncoded{} -> True
+        JValue (String _) -> True
+        _ -> False
+{-# INLINE direct #-}
+
+directThrough :: Shape -> Mode -> InternTable -> Element -> Direct
+directThrough shape mode table element = case shape of
     Scalar budget | budget > 0 -> scalarToken mode table element
     Generic budget | budget > 0 -> scalarToken mode table element
-    ObjectWith budget _ fallback | budget > 0 -> direct fallback mode table element
-    ArrayWith budget _ fallback | budget > 0 -> direct fallback mode table element
+    ObjectWith budget _ fallback | budget > 0 -> directThrough fallback mode table element
+    ArrayWith budget _ fallback | budget > 0 -> directThrough fallback mode table element
     StringOr budget other
         | budget > 0 -> case element of
             StringPlain{} -> scalarToken mode table element
             StringEncoded{} -> scalarToken mode table element
             JValue (String _) -> scalarToken mode table element
-            _ -> direct other mode table element
+            _ -> directThrough other mode table element
     ObjectOr fallback _ -> case element of
         StringPlain{} -> DirectWhole fallback
         StringEncoded{} -> DirectWhole fallback
         JValue _ -> DirectWhole fallback
         JInteger _ -> DirectWhole fallback
         _ -> Indirect
-    Checked budget inner | budget > 0 -> direct inner mode table element
+    Checked budget inner | budget > 0 -> directThrough inner mode table element
     _ -> Indirect
 
 scalarToken :: Mode -> InternTable -> Element -> Direct
 scalarToken mode table = \case
-    StringPlain bytes -> direct' (plainName bytes)
-    StringEncoded bytes -> either (const Indirect) (direct' . decodedName) (decodeString bytes)
-    JValue (String text) -> direct' (decodedName text)
+    StringPlain bytes -> case mode of
+        Keep -> DirectOwn (plainName bytes)
+        Share -> shared (internPlain bytes table)
+    StringEncoded bytes -> either (const Indirect) decoded (decodeString bytes)
+    JValue (String text) -> decoded text
     JValue scalar -> DirectWhole scalar
     JInteger number -> DirectInteger (fromIntegral number)
     _ -> Indirect
   where
-    direct' name = case mode of
-        Keep -> DirectOwn name
-        Share -> case internName name table of
-            Interned entry held -> DirectShared entry held
+    decoded text = case mode of
+        Keep -> DirectOwn (decodedName text)
+        Share -> shared (internDecoded text table)
+    shared (Interned entry held) = DirectShared entry held
+{-# INLINE scalarToken #-}
+
+-- Kept out of line, so the read sites share one copy of each hash.
+internPlain :: PlainString -> InternTable -> Interned
+internPlain bytes = internName (plainName bytes)
+{-# NOINLINE internPlain #-}
+
+internDecoded :: Text -> InternTable -> Interned
+internDecoded text = internName (decodedName text)
+{-# NOINLINE internDecoded #-}
 
 emptyArray :: Value
 emptyArray = Array mempty

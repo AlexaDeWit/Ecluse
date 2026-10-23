@@ -6,13 +6,19 @@
 module Ecluse.Core.Registry.PyPI.FileWriterSpec (spec) where
 
 import Data.ByteString qualified as BS
+import Hedgehog (Gen, cover, forAll, (===))
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
+import Ecluse.Core.Package (PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded))
-import Ecluse.Core.Registry.PyPI.Document (packedSimpleDocument)
+import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, packedSimpleDocument)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIPacked)
 import Ecluse.Core.Security (LimitError (TooManyArtifacts, TooManyVersions), Limits (maxArtifactCount, maxVersionCount), defaultLimits)
 import Ecluse.Test.Package (unscopedPyPI)
+import Ecluse.Test.Registry.JsonBytes (genChunks)
 import Ecluse.Test.Registry.JsonStream (byteChunks)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex, projectPyPIPackedChunks)
 
@@ -62,9 +68,22 @@ spec = describe "fileWriter" $ do
 
     it "keeps scalar facts and served values across single-byte chunks" $ do
         let body = "{\"name\":\"thing\",\"files\":[{\"filename\":\"thing-1.0.tar.gz\",\"url\":\"https://files.example/a.tar.gz\",\"hashes\":{\"custom\":\"\\u00e9\"},\"requires-python\":\">=3\",\"provenance\":\"https://files.example/\\u00e9\",\"size\":12345,\"upload-time\":\"2026-01-01T00:00:00Z\",\"yanked\":\"\"}]}"
-            name = unscopedPyPI "thing"
-        (second packedSimpleDocument <$> (projectPyPIPackedChunks defaultLimits name (byteChunks body) >>= projectPyPIPacked defaultLimits name))
-            `shouldBe` (second Just <$> projectPyPIIndex defaultLimits name body)
+        packedRead defaultLimits (byteChunks body) `shouldBe` treeRead defaultLimits body
+
+    modifyMaxSuccess (const 1000) $
+        it "keeps each file's own facts for generated files with repeated, reordered and mistyped members at any chunk cut" $
+            hedgehog $ do
+                files <- forAll (Gen.list (Range.constant 1 6) genFile)
+                bounded <- forAll (Gen.frequency [(2, pure False), (1, pure True)])
+                let body = "{\"name\":\"thing\",\"files\":[" <> BS.intercalate "," (map renderFile files) <> "]}"
+                    limits = if bounded then defaultLimits{maxVersionCount = 1, maxArtifactCount = 1} else defaultLimits
+                chunks <- forAll (genChunks body)
+                let packed = packedRead limits chunks
+                cover 15 "two or more files project" (projectedFiles packed >= 2)
+                cover 30 "a later file lacks a member an earlier file has" (lacksEarlierMember files)
+                cover 20 "a file repeats a member" (any repeatsMember files)
+                cover 5 "a version or artifact bound trips" (isLeft packed)
+                packed === treeRead limits body
 
     it "keeps the first repeated scalar, hash object and digest" $
         agrees ["\"yanked\":true", "\"yanked\":false", "\"hashes\":{\"custom\":\"first\",\"custom\":null}", "\"hashes\":false"]
@@ -119,8 +138,53 @@ agrees :: [ByteString] -> Expectation
 agrees members = compareRead ("{\"name\":\"thing\",\"files\":[{" <> BS.intercalate "," (members <> ["\"filename\":\"thing-1.0.tar.gz\"", "\"url\":\"https://files.example/thing-1.0.tar.gz\""]) <> "}]}")
 
 compareRead :: ByteString -> Expectation
-compareRead body =
-    (second packedSimpleDocument <$> (projectPyPIPackedChunks defaultLimits name [body] >>= projectPyPIPacked defaultLimits name))
-        `shouldBe` (second Just <$> projectPyPIIndex defaultLimits name body)
+compareRead body = packedRead defaultLimits [body] `shouldBe` treeRead defaultLimits body
+
+packedRead :: Limits -> [ByteString] -> Either MetadataError (PackageInfo, Maybe SimpleDocument)
+packedRead limits chunks = second packedSimpleDocument <$> (projectPyPIPackedChunks limits thing chunks >>= projectPyPIPacked limits thing)
+
+treeRead :: Limits -> ByteString -> Either MetadataError (PackageInfo, Maybe SimpleDocument)
+treeRead limits body = second Just <$> projectPyPIIndex limits thing body
+
+thing :: PackageName
+thing = unscopedPyPI "thing"
+
+-- A file's members in source order, or a value that is not an object.
+type GeneratedFile = Either ByteString [(ByteString, ByteString)]
+
+-- Mostly accepted values, so most files project and a fact left from an earlier file shows.
+genFile :: Gen GeneratedFile
+genFile = Gen.frequency [(9, Right <$> members), (1, Left <$> Gen.element ["null", "7", "[]"])]
   where
-    name = unscopedPyPI "thing"
+    members = do
+        required <- Gen.frequency [(4, pure ["filename", "url"]), (1, Gen.subsequence ["filename", "url"])]
+        others <- Gen.list (Range.constant 0 8) (Gen.element ("filename" : "url" : "data-dist-info-metadata" : fields))
+        keys <- Gen.shuffle (required <> others)
+        traverse (\key -> (key,) <$> Gen.frequency [(3, Gen.element (accepted key)), (1, Gen.element values)]) keys
+
+accepted :: ByteString -> [ByteString]
+accepted = \case
+    "filename" -> ["\"thing-1.0.tar.gz\"", "\"thing-1.0-py3-none-any.whl\"", "\"thing-2.0.tar.gz\"", "\"thing-2.0-py3-none-any.whl\""]
+    "url" -> ["\"https://files.example/a\"", "\"https://files.example/b\""]
+    "hashes" -> ["{\"sha256\":\"00\"}", "{\"md5\":\"11\",\"custom\":\"22\"}", "{}", "null"]
+    "core-metadata" -> ["true", "false", "{\"sha256\":\"33\"}"]
+    "requires-python" -> ["\">=3\"", "null"]
+    "size" -> ["12", "345"]
+    "upload-time" -> ["\"2026-01-01T00:00:00Z\"", "\"2025-06-01T12:00:00Z\""]
+    "yanked" -> ["true", "false", "\"reason\""]
+    "provenance" -> ["\"https://files.example/p\"", "null"]
+    _ -> ["null"]
+
+renderFile :: GeneratedFile -> ByteString
+renderFile = either id (\members -> "{" <> BS.intercalate "," ["\"" <> key <> "\":" <> value | (key, value) <- members] <> "}")
+
+projectedFiles :: Either MetadataError (PackageInfo, Maybe SimpleDocument) -> Int
+projectedFiles = either (const 0) (sum . fmap (length . pkgArtifacts) . infoVersions . fst)
+
+lacksEarlierMember :: [GeneratedFile] -> Bool
+lacksEarlierMember files = or [any (`notElem` later) earlier | (earlier : rest) <- tails keys, later <- rest]
+  where
+    keys = map (map fst) (rights files)
+
+repeatsMember :: GeneratedFile -> Bool
+repeatsMember = either (const False) (\members -> length (ordNub (map fst members)) < length members)

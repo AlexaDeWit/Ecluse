@@ -53,6 +53,7 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Package.Integrity (
     IntegrityFloor,
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
+    classifyDigests,
     partitionByFloor,
  )
 import Ecluse.Core.Rules (PreparedRule, prepResilience)
@@ -90,16 +91,19 @@ admitByIntegrity ::
     ServeDecision ->
     PackageInfo ->
     (PackageInfo, [ServeDecision])
-admitByIntegrity floorSpec belowFloorRefusal missingRefusal info =
-    ( info
-        { infoVersions = admissible
-        , infoDistTags = Map.filter ((`Map.member` admissible) . renderVersion) (infoDistTags info)
-        }
-    , refusals
-    )
+admitByIntegrity floorSpec belowFloorRefusal missingRefusal info
+    -- A listing whose every file clears the floor keeps every version whole, so skip the rebuild.
+    | all (all fileMeetsFloor . pkgArtifacts) (infoVersions info) = (withVersions (infoVersions info), [])
+    | otherwise = (withVersions admissible, refusals)
   where
-    -- One walk of an up-to-100k-version map yields the surviving versions and both refusal
-    -- buckets. The partitioned map is that large too.
+    fileMeetsFloor file = classifyDigests floorSpec (artHashes file) == MeetsFloor
+
+    withVersions versions =
+        info
+            { infoVersions = versions
+            , infoDistTags = Map.filter ((`Map.member` versions) . renderVersion) (infoDistTags info)
+            }
+
     partitioned :: Map Text (Either VersionIntegrity PackageDetails)
     partitioned = Map.map admitArtifacts (infoVersions info)
 

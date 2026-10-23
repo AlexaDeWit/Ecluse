@@ -20,6 +20,7 @@ import Ecluse.Core.MetadataGzipBench qualified as MetadataGzipBench
 import Ecluse.Core.MirrorReadBench qualified as MirrorReadBench
 import Ecluse.Core.Package (artUrl, infoVersions, pkgArtifacts)
 import Ecluse.Core.PackedBench qualified as PackedBench
+import Ecluse.Core.Registry.SweepBench qualified as SweepBench
 import Ecluse.Core.RouteBench qualified as RouteBench
 import Ecluse.Core.RulesBench qualified as RulesBench
 import Ecluse.Core.SecurityBench qualified as SecurityBench
@@ -49,12 +50,14 @@ main = do
     gzipped <- MetadataGzipBench.benchmarks ecosystems
     ColdReadBench.withBenchmarks ecosystems $ \coldReads ->
         AdvisoryRulesBench.withBenchmarks ecosystems $ \advisoryRules ->
-            defaultMain
-                [ bgroup
-                    (toString tierName)
-                    (map fullBenchmarkContract ecosystems <> coldReads <> digests <> gzipped <> packed <> advisoryRules <> [StreamBench.benchmarks, cacheBenchmarks, mirrorReads])
-                , testGroup "synthetic generators" (map generatorTests ecosystems)
-                ]
+            SweepBench.withBenchmarks ecosystems $ \dredgerScale ->
+                defaultMain
+                    [ bgroup
+                        (toString tierName)
+                        (map fullBenchmarkContract ecosystems <> coldReads <> digests <> gzipped <> packed <> advisoryRules <> [StreamBench.benchmarks, cacheBenchmarks, mirrorReads])
+                    , testGroup "synthetic generators" (map generatorTests ecosystems)
+                    , dredgerScale
+                    ]
 
 -- | Compose the eight required operation families for one ecosystem.
 fullBenchmarkContract :: EcosystemBench -> TestTree

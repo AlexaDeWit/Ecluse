@@ -239,6 +239,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Wire
     Ecluse.Core.Registry.Origin
     Ecluse.Core.Registry.Progress
+    Ecluse.Core.Registry.Progress.Internal
     Ecluse.Core.Registry.MirrorUpload
     Ecluse.Core.Registry.MirrorUpload.Internal
     Ecluse.Core.Registry.Publish
@@ -990,6 +991,7 @@ library ecluse-runtime-test-support
     Ecluse.Runtime.Test.CodeArtifact
     Ecluse.Runtime.Test.Contract.UnitCatalogue
     Ecluse.Runtime.Test.Cve
+    Ecluse.Runtime.Test.PackageStore.FixedPages
     Ecluse.Runtime.Test.S3
     Ecluse.Runtime.Test.Support
     Ecluse.Runtime.Test.Telemetry
@@ -1005,6 +1007,7 @@ library ecluse-runtime-test-support
     , amazonka          ^>=2.0
     , amazonka-codeartifact ^>=2.0
     , bytestring        ^>=0.12
+    , containers        ^>=0.7
     , directory         ^>=1.3
     , filepath          ^>=1.4 || ^>=1.5
     , hspec             ^>=2.11
@@ -1142,6 +1145,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Json.WriterSpec
     Ecluse.Core.Registry.JsonStreamSpec
     Ecluse.Core.Registry.ProgressSpec
+    Ecluse.Core.Registry.Progress.InternalSpec
     Ecluse.Core.Registry.VersionListSpec
     Ecluse.Core.Registry.Maintenance.BudgetSpec
     Ecluse.Core.Registry.Maintenance.NameSpaceSpec
@@ -2125,6 +2129,7 @@ benchmark ecluse-bench
     Ecluse.Core.MergeBench
     Ecluse.Core.MetadataGzipBench
     Ecluse.Core.PackedBench
+    Ecluse.Core.Registry.SweepBench
     Ecluse.Core.RouteBench
     Ecluse.Core.RulesBench
     Ecluse.Core.SecurityBench
@@ -2138,10 +2143,13 @@ benchmark ecluse-bench
   build-depends:
     , ecluse:ecluse-report-format
     , ecluse:ecluse-core
+    , ecluse:ecluse-runtime
+    , ecluse:ecluse-runtime-test-support
     , ecluse:ecluse-test-support
     , aeson            >=2.2 && <2.4
     , bytestring       ^>=0.12
     , containers       ^>=0.7
+    , directory        ^>=1.3
     , filepath         ^>=1.4 || ^>=1.5
     , http-client      ^>=0.7
     , http-types       ^>=0.12
