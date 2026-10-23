@@ -57,13 +57,12 @@ import OpenTelemetry.Trace (
     setStatus,
     tracerOptions,
  )
-import Text.Show (showsPrec)
+import Text.Show (showParen, showString, shows, showsPrec)
 import UnliftIO (MonadUnliftIO, withRunInIO)
 import UnliftIO.Exception (catch, mask, throwIO, withException)
 
 import Ecluse.Core.Cve.Types (OsvDbFetchFault, renderOsvDbFetchFault)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
-import Ecluse.Core.Fault.Http (showsUntagged)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Queue (RemoteSpanContext (RemoteSpanContext, rscTraceparent, rscTracestate))
 import Ecluse.Core.Registry.Exchange.Types (TraceExchange, untracedExchange)
@@ -117,9 +116,11 @@ tracedExchange config request open =
 -- An HTTP fault crossing the client span, which records the fault's text. The text leaves out the request and its headers.
 newtype UntaggedFault = UntaggedFault HttpException
 
+-- Shown as http-client shows a fault before it tags the fault with its request.
 instance Show UntaggedFault where
     showsPrec precedence (UntaggedFault fault) = case fault of
-        HttpExceptionRequest _ content -> showsUntagged precedence content
+        HttpExceptionRequest _ content ->
+            showParen (precedence >= 11) (showString "HttpExceptionContentWrapper {unHttpExceptionContentWrapper = " . shows content . showString "}")
         InvalidUrlException{} -> showsPrec precedence fault
 
 instance Exception UntaggedFault

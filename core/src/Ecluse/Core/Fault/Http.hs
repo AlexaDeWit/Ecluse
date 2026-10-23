@@ -15,7 +15,6 @@ module Ecluse.Core.Fault.Http (
     displayFaultT,
     isClientFault,
     hostPortLabel,
-    showsUntagged,
 
     -- * Managers
     typedBodyReads,
@@ -41,7 +40,6 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types.Status (statusCode)
 import Network.TLS qualified as TLS
 import System.IO.Error (IOError, ioeGetErrorType)
-import Text.Show (ShowS, showParen, showString, shows)
 import UnliftIO.Exception (catchJust, throwIO)
 
 import Ecluse.Core.Fault (
@@ -122,11 +120,6 @@ outsideRequest err = unHttpExceptionContentWrapper <$> fromException err
 -- | A dialled host and port as a log line names them, so an IPv6 host keeps its brackets.
 hostPortLabel :: Text -> Int -> Text
 hostPortLabel dialledHost dialledPort = dialledAuthorityLabel (dialledHost <> ":" <> show dialledPort)
-
--- | Show a fault's content as http-client shows a fault it has not yet tagged with its request.
-showsUntagged :: Int -> HttpExceptionContent -> ShowS
-showsUntagged precedence content =
-    showParen (precedence >= 11) (showString "HttpExceptionContentWrapper {unHttpExceptionContentWrapper = " . shows content . showString "}")
 
 -- | Raise a socket or TLS failure in a response body read as the 'HttpException' the client raises for one before the body.
 typedBodyReads :: ManagerSettings -> ManagerSettings
