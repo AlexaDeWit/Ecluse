@@ -18,7 +18,7 @@ import GHC.Conc (registerDelay)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Exception qualified as UE
 
-import Ecluse.Core.Server.Admission.Probe (Site (..), probeRetry, probed)
+import Ecluse.Core.Server.Admission.Probe (Site (..), invStrict, probeRetry, probed)
 
 -- | Capacity and waiting-room state. Only the controller can mutate these fields.
 data WeightedAdmission = WeightedAdmission
@@ -66,11 +66,11 @@ doorDecision wa weight = do
     available <- readTVar (waAvailable wa)
     waiting <- weightedAdmissionWaiting wa
     if available >= weight && waiting == 0
-        then writeTVar (waAvailable wa) (available - weight) $> Admitted
+        then writeCell (waAvailable wa) (available - weight) $> Admitted
         else
             if waiting >= waWaitingRoom wa
                 then pure Refused
-                else writeTVar (waWaiting wa) (waiting + 1) $> Queued
+                else writeCell (waWaiting wa) (waiting + 1) $> Queued
 
 -- Take the weight the moment it fits, or report expiry. One transaction, so a
 -- timeout can never race a committed acquire into leaked weight.
@@ -78,10 +78,14 @@ acquireOrExpire :: WeightedAdmission -> Int -> TVar Bool -> STM Bool
 acquireOrExpire wa weight deadline = do
     available <- readTVar (waAvailable wa)
     if available >= weight
-        then writeTVar (waAvailable wa) (available - weight) $> True
+        then writeCell (waAvailable wa) (available - weight) $> True
         else do
             expired <- readTVar deadline
             if expired then pure False else probeRetry GateWait
+
+-- Spike only: the strict model writes evaluated counts.
+writeCell :: TVar Int -> Int -> STM ()
+writeCell cell value = if invStrict then writeTVar cell $! value else writeTVar cell value
 
 -- | Hold the supplied weight through the action. Refusal or expiry returns Nothing.
 

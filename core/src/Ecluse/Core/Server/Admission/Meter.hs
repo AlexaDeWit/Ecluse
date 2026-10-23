@@ -37,7 +37,6 @@ import Data.IntSet qualified as IntSet
 import Data.Map.Strict qualified as Map
 import GHC.Conc (registerDelay)
 import UnliftIO (MonadUnliftIO)
-import System.IO.Unsafe (unsafePerformIO)
 import UnliftIO.Exception qualified as UE
 
 import Ecluse.Core.Server.Admission.Budget (
@@ -49,7 +48,7 @@ import Ecluse.Core.Server.Admission.Budget (
     growthDecision,
     roundUpToStep,
  )
-import Ecluse.Core.Server.Admission.Probe (Site (..), probeRetry, probed, registerPeaks)
+import Ecluse.Core.Server.Admission.Probe (Site (..), invMeterModel, invStrict, nextTicketId, probeRetry, probed, registerPeaks)
 import Ecluse.Core.Server.Admission.Types (BrakeLevel (Calm), FlightKey, MeterSnapshot (..))
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
@@ -159,11 +158,6 @@ withMemoryEntry metrics meter body
     | invMeterModel == "off" = liftIO (oracleTicket metrics meter) >>= fmap Just . body
     | otherwise = withMemoryEntryStm metrics meter body
 
--- Spike only: INV_METER_MODEL picks the meter model. "off" is an oracle that keeps no shared account.
-invMeterModel :: String
-invMeterModel = unsafePerformIO (fromMaybe "stm" <$> lookupEnv "INV_METER_MODEL")
-{-# NOINLINE invMeterModel #-}
-
 oracleTicket :: MetricsPort -> MemoryMeter -> IO MemoryTicket
 oracleTicket metrics meter = do
     charged <- newTVarIO 0
@@ -185,7 +179,7 @@ withMemoryEntryStm metrics meter body =
 
 newTicket :: MetricsPort -> MemoryMeter -> IO MemoryTicket
 newTicket metrics meter = do
-    ticketId <- atomicModifyIORef' (mmNextTicket meter) (\n -> (n + 1, n))
+    ticketId <- if invStrict then nextTicketId else atomicModifyIORef' (mmNextTicket meter) (\n -> (n + 1, n))
     charged <- newTVarIO 0
     headroom <- newIORef 0
     pure MemoryTicket{tMeter = meter, tId = ticketId, tCharged = charged, tHeadroom = headroom, tServes = Nothing, tMetrics = metrics}
@@ -199,7 +193,7 @@ enter ticket = do
         waiting <- readTVar (mmEntryWaiting meter)
         case entryDecision view waiting (mmEntryRoom meter) step of
             EntryAdmit -> takeBytes ticket step $> EntryAdmit
-            EntryQueue -> writeTVar (mmEntryWaiting meter) (waiting + 1) $> EntryQueue
+            EntryQueue -> (if invStrict then writeTVar (mmEntryWaiting meter) $! waiting + 1 else writeTVar (mmEntryWaiting meter) (waiting + 1)) $> EntryQueue
             EntryRefuse -> pure EntryRefuse
     case gate of
         EntryAdmit -> openHeadroom $> Just False

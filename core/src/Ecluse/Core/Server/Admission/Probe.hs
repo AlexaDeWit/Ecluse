@@ -20,6 +20,9 @@ module Ecluse.Core.Server.Admission.Probe (
     probeSelfTest,
     registerPeaks,
     probePeaks,
+    invMeterModel,
+    invStrict,
+    nextTicketId,
 ) where
 
 import Control.Concurrent (forkIO)
@@ -148,6 +151,24 @@ registerPeaks = writeIORef peakSource
 -- | The registered meter's peaks since boot.
 probePeaks :: IO (Int, Int)
 probePeaks = join (readIORef peakSource)
+
+-- | Spike only: INV_METER_MODEL picks the meter model: stm (shipped), strict, or off (the oracle).
+invMeterModel :: String
+invMeterModel = unsafePerformIO (fromMaybe "stm" <$> lookupEnv "INV_METER_MODEL")
+{-# NOINLINE invMeterModel #-}
+
+-- | The strict model: ticket ids from a fetch-and-add counter, and evaluated writes to shared cells.
+invStrict :: Bool
+invStrict = invMeterModel == "strict"
+
+{-# NOINLINE ticketCounter #-}
+ticketCounter :: Cells
+ticketCounter = unsafePerformIO $ IO $ \s -> case newAlignedPinnedByteArray# 64# 64# s of
+    (# s1, arr #) -> case setByteArray# arr 0# 64# 0# s1 of s2 -> (# s2, Cells arr #)
+
+-- | The next ticket id, by one fetch-and-add with no thunk in a shared cell.
+nextTicketId :: IO Int
+nextTicketId = let !(Cells arr) = ticketCounter in IO $ \s -> case fetchAddIntArray# arr 0# 1# s of (# s1, old #) -> (# s1, I# old #)
 
 siteName :: Site -> Text
 siteName = show
