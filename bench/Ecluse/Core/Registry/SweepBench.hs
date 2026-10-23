@@ -3,9 +3,11 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Complete Dredger cycles over CodeArtifact stores of 1,000 and 10,000 names. Each cycle drives
-the production maintenance handles over a fixed-page fixture that waits 20 ms per native call, with
-real advisory catalogues, the shipped quota model, and real chunk pauses. Each cycle is checked
-against counts derived from the inventory alone, then written as one JSON line.
+the production maintenance handles over a fixed-page fixture, with real advisory catalogues and the
+shipped quota model. A paced cycle waits 20 ms per native call and serves its quota waits and chunk
+pauses. An unpaced cycle asks for the same waits and serves none, so it counts a full walk's native
+calls in seconds. Each cycle is checked against counts derived from the inventory alone, then
+written as one JSON line.
 -}
 module Ecluse.Core.Registry.SweepBench (withBenchmarks) where
 
@@ -51,7 +53,7 @@ import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
 import Ecluse.Core.Server.Metadata (selectVersion)
 import Ecluse.Core.Telemetry.Record (DredgerMetricsPort (DredgerMetricsPort))
 import Ecluse.Core.Version (mkVersion, renderVersion)
-import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), codeArtifactFormat)
+import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), codeArtifactFormat, listPageLimit)
 import Ecluse.Runtime.Test.PackageStore.FixedPages (FixedPlane (..), FixedRepository (..), NativeCall (..), fixedCache, fixedMirror, fixedVersion, newFixedPlane)
 import Ecluse.Test.Corpus.Advisories (SyntheticTarget (..), compileAdvisoryInputs, fillerTargets, suggestedDenyIfCve, syntheticAdvisories)
 import Ecluse.Test.Cve (countingCoveredNames)
@@ -144,14 +146,20 @@ data Row = Row
     , rowCovered :: Set Text
     , rowCatalogueNames :: Int
     , rowCycles :: Int
+    , rowPace :: Pace
     }
 
-{- The cheap rows first, so a run cut short still reports them. One full walk of 10,000 names takes
-about 21 minutes, so only npm runs one inside the job's hour. -}
+-- An unpaced row serves no wait and no fixture delay, so a full walk's native calls count in seconds.
+data Pace = Paced | Unpaced
+    deriving stock (Eq)
+
+{- The cheap rows first, so a run cut short still reports them. One paced full walk of 10,000 names
+takes about 21 minutes, so only npm runs one inside the job's hour. -}
 scaleRows :: [Scale] -> [Row]
 scaleRows scales =
     map smallControl scales
         <> [walk scale size SweepCandidates | size <- [1000, 10000], scale <- scales]
+        <> [(walk scale size SweepEverything){rowPace = Unpaced} | size <- [1000, 10000], scale <- scales]
         <> [walk scale 1000 SweepEverything | scale <- scales]
         <> [walk scale 10000 SweepEverything | scale <- scales, ebEcosystem (scBench scale) == Npm]
 
@@ -167,6 +175,7 @@ walk scale size shape =
         , rowCovered = Set.fromList (map scaleName (if full then [0 .. 9999] else coveredIndices))
         , rowCatalogueNames = if full then 20000 else 100
         , rowCycles = if full then 1 else 2
+        , rowPace = Paced
         }
   where
     full = shape == SweepEverything
@@ -193,6 +202,7 @@ rowLabel row =
             <> " buckets, "
             <> show (rowCatalogueNames row)
             <> "-name catalogue"
+            <> (if rowPace row == Unpaced then ", unpaced" else "")
 
 shapeName :: SweepShape -> Text
 shapeName = \case
@@ -202,8 +212,8 @@ shapeName = \case
 -- Run each cycle, check it, write its line, and require the same decisions from every cycle.
 scaleRow :: FilePath -> Row -> TestTree
 scaleRow output row = testCaseInfo (rowLabel row) $ do
-    let wanted = expectedOf row
-    checkDesign row wanted
+    let wanted = expectedOf (fromIntegral listPageLimit) row
+    checkDesign row
     reports <- forM [1 .. rowCycles row] $ \cycleNumber -> do
         measured <- runCycle row
         checkCycle row wanted measured
@@ -225,8 +235,8 @@ data Expected = Expected
     , exCursorWrites :: [Text]
     }
 
-expectedOf :: Row -> Expected
-expectedOf row =
+expectedOf :: Int -> Row -> Expected
+expectedOf pageSize row =
     Expected
         { exNative = Map.fromList [("mirror", mirrorCalls), ("cache", cacheCalls)]
         , exMetered = Map.filter (> 0) (Map.fromList metered)
@@ -251,7 +261,7 @@ expectedOf row =
                 <> [(ListPackageVersions, max 1 (pages (heldVersions h))) | h <- enumerated]
                 <> [(ReadManifest, length enumerated) | not (null enumerated)]
                 <> extra
-    pages n = (n + 99) `div` 100
+    pages n = (n + pageSize - 1) `div` pageSize
     listings = sum [count | calls <- [mirrorCalls, cacheCalls], kind <- [ListPackages, ListPackagesEmpty], count <- maybeToList (Map.lookup kind calls)]
     metered =
         [ (ListingPage, listings)
@@ -273,10 +283,10 @@ requestSeconds = \case
     CursorWrite -> 1 / 25
     DeleteBatch -> 1 / 25
 
--- The npm native totals the scale design calculated, which tie this inventory to that design.
-checkDesign :: Row -> Expected -> IO ()
-checkDesign row wanted = for_ (lookup key designTotals) $ \total ->
-    sum (concatMap Map.elems (Map.elems (exNative wanted))) @?= total
+-- The npm native totals the scale design calculated at its page size, which tie this inventory to that design.
+checkDesign :: Row -> IO ()
+checkDesign row = for_ (lookup key designTotals) $ \total ->
+    sum (concatMap Map.elems (Map.elems (exNative (expectedOf designPageSize row)))) @?= total
   where
     key = (ebEcosystem (scBench (rowScale row)), rowShape row == SweepEverything, length (rowHeld row))
     designTotals = [((Npm, True, 1000), 2790), ((Npm, True, 10000), 25462), ((Npm, False, 1000), 391), ((Npm, False, 10000), 491)]
@@ -346,10 +356,10 @@ tracedRules probe = map traced
 -- Waits a cycle served: how many, the seconds asked for, and the seconds they took.
 data Waits = Waits Int Rational Double
 
-recordWait :: IORef Waits -> NominalDiffTime -> IO ()
-recordWait held duration = do
+recordWait :: Pace -> IORef Waits -> NominalDiffTime -> IO ()
+recordWait pace held duration = do
     started <- monotonicNow
-    waitSeconds duration
+    when (pace == Paced) (waitSeconds duration)
     ended <- monotonicNow
     modifyIORef' held (\(Waits count asked served) -> Waits (count + 1) (asked + toRational duration) (served + monoSecondsBetween started ended))
 
@@ -391,15 +401,15 @@ runCycle row = do
     serving <- rdCurrentAdvisoryEtag (rowCatalogue row)
     let deps = probedDeps probe serving (rowCatalogue row)
     store <- maybe (assertFailure "the ecosystem has no CodeArtifact format") pure (scaleStore (ebEcosystem (scBench (rowScale row))))
-    mirror <- newFixedPlane (repositoryOf store "mirror" (rowHeld row))
-    cache <- newFixedPlane (repositoryOf store "cache" (filter heldCached (rowHeld row)))
+    mirror <- newFixedPlane (repositoryOf (rowPace row) store "mirror" (rowHeld row))
+    cache <- newFixedPlane (repositoryOf (rowPace row) store "cache" (filter heldCached (rowHeld row)))
     rules <- tracedRules probe <$> prepare deps (map atDefaultPrecedence configuredRules)
     recorded <- recordingPortsUnder deletingReport serving
-    (budget, gateFor) <- newBudgetMeter (recordWait quota)
+    (budget, gateFor) <- newBudgetMeter (recordWait (rowPace row) quota)
     let ports =
             (recPorts recorded)
                 { sweepBudget = budget{budgetClose = budgetClose budget >>= \cost -> cost <$ writeIORef closed (Just cost)}
-                , sweepDelay = recordWait chunks
+                , sweepDelay = recordWait (rowPace row) chunks
                 , sweepMetrics = DredgerMetricsPort (\_ _ -> pass)
                 }
         mount = (scaleMount row gateFor mirror cache){smRuleDeps = deps, smRules = rules}
@@ -450,14 +460,18 @@ scaleStore eco = store <$> codeArtifactFormat eco
   where
     store format = CodeArtifactStore{casDomain = "scale", casDomainOwner = "123456789012", casRegion = "us-east-1", casRepository = "", casFormat = format}
 
-repositoryOf :: CodeArtifactStore -> Text -> [Held] -> FixedRepository
-repositoryOf store name held =
+repositoryOf :: Pace -> CodeArtifactStore -> Text -> [Held] -> FixedRepository
+repositoryOf pace store name held =
     FixedRepository
         { frStore = store{casRepository = name}
         , frPackages = Map.fromList [(heldName h, heldVersions h) | h <- held]
-        , frPageSize = 100
-        , frDelay = 0.02
+        , frDefaultPageSize = designPageSize
+        , frDelay = if pace == Paced then 0.02 else 0
         }
+
+-- The page size the scale design declared as a fixture input, not an AWS default.
+designPageSize :: Int
+designPageSize = 100
 
 -- The production full read of each package's synthetic document.
 manifestsOf :: EcosystemBench -> FixedPlane -> StoreManifestRead
@@ -537,6 +551,7 @@ reportOf row cycleNumber measured =
         , "shape" .= shapeName (rowShape row)
         , "buckets" .= length (rowBuckets row)
         , "catalogue_names" .= rowCatalogueNames row
+        , "paced" .= (rowPace row == Paced)
         , "cycle" .= cycleNumber
         , "wall_seconds" .= ctWall timing
         , "cpu_seconds" .= ctCpu timing
@@ -564,7 +579,7 @@ reportOf row cycleNumber measured =
     timing = msTiming measured
     tally = outcomeTally (msOutcome measured)
     examined = tallyExamined tally
-    nativeTotals = Map.unionsWith (+) (Map.elems (msNative measured))
+    nativeTotals = nativeTotalsOf measured
     Identities identities checksum = msIdentities measured
     decisions =
         object
@@ -590,11 +605,18 @@ summaryOf digest measured =
             <> " s, "
             <> show (tallyExamined (outcomeTally (msOutcome measured)))
             <> " versions, "
-            <> show (sum (concatMap Map.elems (Map.elems (msNative measured))))
-            <> " native requests, decisions "
+            <> show (sum native)
+            <> " native requests ("
+            <> T.intercalate ", " [show call <> " " <> show (Map.findWithDefault 0 call native) | call <- walkCalls]
+            <> "), decisions "
             <> T.take 12 digest
   where
+    native = nativeTotalsOf measured
+    walkCalls = [ListPackages, ListPackagesEmpty, ListPackageVersions, DescribeRepository, TagResource]
     tenths seconds = show (fromIntegral (round (seconds * 10) :: Int) / 10 :: Double)
+
+nativeTotalsOf :: Measured -> Map NativeCall Int
+nativeTotalsOf = Map.unionsWith (+) . Map.elems . msNative
 
 -- The rows' lines go beside the run's other benchmark files, which CI uploads.
 rowOutput :: IO FilePath

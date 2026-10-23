@@ -11,7 +11,9 @@ import Test.Hspec
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance (
+    DeleteCeiling (AtMost),
     StoreFault,
+    chunksOfCeiling,
     protocolFault,
  )
 import Ecluse.Core.Registry.Maintenance.NameSpace (
@@ -104,6 +106,15 @@ collectSpec = describe "collectBucketWith" $ do
     it "reads a bucket exactly at the budget rather than splitting it" $ do
         outcome <- withBucket "a" $ \a -> collectBucket alphabet a (pagesOf [atBudget])
         fmap length (namesOf outcome) `shouldBe` Just bucketNameBudget
+
+    it "reads at the budget and splits past it, for pages of 1 to 1,000 names" $
+        for_ [1, 7, 100, 999, 1000] $ \size -> do
+            atLimit <- withBucket "a" $ \a -> collectBucket alphabet a (pagesOf (chunksOfCeiling (AtMost size) atBudget))
+            fmap length (namesOf atLimit) `shouldBe` Just bucketNameBudget
+            pastLimit <- withBucket "a" $ \a -> collectBucket alphabet a (pagesOf (chunksOfCeiling (AtMost size) oversized))
+            case pastLimit of
+                BucketOverflowed _ -> pass
+                _ -> expectationFailure ("expected the oversized bucket to be split at a page size of " <> show size)
 
     it "reports an oversized store whose listing cannot partition" $ do
         outcome <- withBucket "" $ \everything -> collectBucket noNameAlphabet everything (pagesOf [oversized])

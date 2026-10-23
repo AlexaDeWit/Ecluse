@@ -1739,14 +1739,18 @@ workspace is measured by the residency gate, under
 The `dredger scale` group times complete Dredger cycles as a CodeArtifact store grows. Each row
 drives the production CodeArtifact maintenance handles over the fixed-page fixture in
 `Ecluse.Runtime.Test.PackageStore.FixedPages`, which counts every native call by kind. The fixture
-waits 20 ms before each answer and pages 100 names or versions at a time, with one empty page for
-each empty bucket. The cycle runs the shipped CodeArtifact quota model at its computed one-quarter
-share, with a `chunkSize` of 50 and a `chunkPause` of 2 seconds, so every wait is real.
+pages names and versions at the request's `maxResults`, or 100 at a time when the request sets
+none, with one empty page for each empty bucket. Every cycle runs the shipped CodeArtifact quota
+model at its computed one-quarter share, with a `chunkSize` of 50 and a `chunkPause` of 2 seconds.
+In a paced row the fixture waits 20 ms before each answer, and every wait is real. An unpaced row
+asks for the same waits but serves none, and its fixture answers at once, so it counts the native
+calls of a full walk in seconds.
 
 | Row | Store | Shape | Advisory catalogue | Cycles |
 |---|---|---|---|---|
 | Small default control | 3 names with 2 versions each, in one bucket | Default cycle | 100 names | 2 |
 | 1,000 and 10,000 names | Ten populated buckets of the ecosystem's alphabet | Default cycle | 100 names | 2 |
+| 1,000 and 10,000 names, unpaced | As above | Full walk | 20,000 names | 1 |
 | 1,000 names | As above | Full walk | 20,000 names | 1 |
 | 10,000 names, npm only | As above | Full walk | 20,000 names | 1 |
 
@@ -1759,9 +1763,10 @@ bucket. The fixture refuses every delete.
 Each cycle is checked against counts derived from the inventory alone: the tally, the native calls
 per store and kind, the metered requests, the quota and chunk waits asked for, the cursor writes,
 and a checksum of every identity the rules decided. Every advisory read must borrow the served
-generation. The npm rows must also reach the native totals the scale design calculated: 2,790 and
-25,462 calls for the full walks, and 391 and 491 for the default cycles. A row with two cycles
-requires the same decisions from both.
+generation. The Dredger asks for pages of 1,000, the most CodeArtifact allows, and the counts follow
+that size. Derived at the design's 100 per page instead, the npm counts must reach the native totals
+the scale design calculated: 2,790 and 25,462 calls for the full walks, and 391 and 491 for the
+default cycles. A row with two cycles requires the same decisions from both.
 
 Each cycle writes one JSON line to `dredger-scale.jsonl` in `$PERF_ARTIFACT_DIR`, or in
 `scratchpad/performance/` when that is unset. The benchmark workflow uploads it with the run's
@@ -1770,7 +1775,8 @@ out.
 
 | Field | Meaning |
 |---|---|
-| `wall_seconds`, `cpu_seconds` | The whole cycle, waits included |
+| `paced` | Whether the row served its waits and the fixture delay |
+| `wall_seconds`, `cpu_seconds` | The whole cycle, with every wait a paced row serves. An unpaced row serves none |
 | `active_seconds` | Wall time less the quota waits, chunk pauses, and fixture delay |
 | `allocated_bytes` | Bytes allocated during the cycle, the fixture's documents and the counters included |
 | `live_bytes_before`, `live_bytes_after` | The live heap after a major GC on each side of the cycle |
@@ -1778,11 +1784,12 @@ out.
 | `major_gc_live_bytes_peak_sampled` | The largest live heap of those major GCs that a 10 ms sampler saw. It can miss the true peak |
 | `process_max_live_bytes` | The process peak, which includes every earlier benchmark |
 | `native_requests_per_version` | Native calls of each kind per decided version |
-| `versions_per_hour` | Decided versions per hour of wall time at the ceiling pace |
+| `versions_per_hour` | Decided versions per hour of wall time. A paced row runs at the ceiling pace. An unpaced row serves no wait, so its figure is not a rate the quotas allow |
 | `decisions`, `decision_digest` | The tally, request counts, waits asked for, cursor writes, and identity checksum, then their SHA-256. Times and the covered-name query count stay out, so a change that only saves work keeps the digest |
 
-The group takes about 28 minutes, 21 of them in the npm full walk of 10,000 names. A PyPI walk of
-that size would not fit the job's hour. To skip the group in a local run, pass
+The group takes about 28 minutes, 21 of them in the paced npm full walk of 10,000 names. A paced
+PyPI walk of that size would not fit the job's hour, so its native counts come from the unpaced row.
+To skip the group in a local run, pass
 `-p '!/dredger scale/'` in the benchmark options. The fixture shares the process, so the allocation
 and live heap figures include its documents. The RTS measures the live heap only at a major GC, and
 a short cycle may run none, so the rows force none to keep the timings clean. The rows cover
