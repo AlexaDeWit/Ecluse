@@ -655,8 +655,9 @@ exchange, and a pause before a render fails at the 60-second request timeout. On
 time may run past the budget, and it keeps that right until it ends. Work that request waits on, a
 public fetch or a render another request leads, runs past the budget with it. So the overshoot stays
 near one request and the shared work it waits on, and a pause always leaves a request that
-finishes. Everything a request paid returns when it ends. Trusted private artifact hits and
-artifact relay pay nothing.
+finishes. A listing gives up its CPU slot once its response is built, but keeps its charge while
+Écluse writes the body, so a slow client holds memory and no CPU slot. Everything a request paid
+returns when it ends. Trusted private artifact hits and artifact relay pay nothing.
 
 The budget starts at a quarter of the heap the nursery leaves, less the cache budget, the queue
 tenants and the idle process. That is the live data at which the copying collector still runs
