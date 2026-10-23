@@ -1161,7 +1161,9 @@ and starts the proxy as a separate process: `bench-load --serve-proxy`, which bo
 path as `ecluse proxy` and reads its configuration from `ECLUSE_*` variables. The proxy dials the
 stubs over plain HTTP on loopback, which the `dev-http-egress` build allows, and serves RTS
 statistics on a loopback control port. Telemetry is on, with the Prometheus scrape as its only
-exporter, so the harness can sample the admission gauges. The proxy logs into pipes that the
+exporter, so the harness can sample the admission gauges. Telemetry stays on by design, because a
+load run measures the conditions an operator runs in production, not the shipped default of off.
+The proxy logs into pipes that the
 harness drains, keeping only the head and tail of each stream, so its cgroup is charged for unread
 pipe buffers (at most 64 KiB per pipe) but not for the log's page cache. On CI the build step has
 just built or restored the executable, so its text pages are already cached when the proxy starts
