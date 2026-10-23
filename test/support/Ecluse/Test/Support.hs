@@ -16,13 +16,16 @@ module Ecluse.Test.Support (
     parseRequestOrFail,
     TestContractEscape (..),
     incompressibleBytes,
+    withCapabilities,
 ) where
 
 import Data.Aeson (FromJSON, eitherDecodeStrict)
 import Data.Bits (shiftL, shiftR)
 import Data.ByteString qualified as BS
 import Data.Time (UTCTime)
+import GHC.Conc (getNumCapabilities, setNumCapabilities)
 import Network.HTTP.Client qualified as Client
+import UnliftIO (bracket)
 
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), newMemoryMeter)
@@ -73,3 +76,7 @@ incompressibleBytes :: Int -> ByteString
 incompressibleBytes size = BS.pack (take size (map fromIntegral (drop 1 (iterate next (0x9e3779b9 :: Word64)))))
   where
     next x0 = let x1 = x0 `xor` (x0 `shiftL` 13); x2 = x1 `xor` (x1 `shiftR` 7) in x2 `xor` (x2 `shiftL` 17)
+
+-- | Run an action on this many capabilities, then restore the count. A suite starts on one, and a race needs more.
+withCapabilities :: Int -> IO a -> IO a
+withCapabilities count act = bracket getNumCapabilities setNumCapabilities (\_ -> setNumCapabilities count >> act)
