@@ -60,9 +60,14 @@ import Ecluse.Core.Registry.Adapter (
     serveCredential,
     serveRouter,
  )
-import Ecluse.Core.Server.Admission (newServeAdmission)
+import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmissionSwept, serveAdmissionLevels)
+import Ecluse.Core.Server.Pipeline.Shared (spikeStatsLoop)
+import UnliftIO.Async (concurrently_)
+import UnliftIO.Concurrent (threadDelay)
 import Ecluse.Core.Server.Admission.Brake (defaultBrakeMarks)
-import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), meterSnapshot, newMemoryMeter)
+import Ecluse.Core.Deadline (Deadlines)
+import Ecluse.Core.Server.Admission.Types (MeterSnapshot (..))
+import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), meterSnapshot, newMemoryMeterSwept)
 import Ecluse.Core.Server.Admission.Weighted (admissionWaitMicros)
 import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxBytes, cacheMaxEntries), newMetadataCacheWithProvider)
 import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool)
@@ -125,8 +130,9 @@ withServiceRuntime bootEnv plan mirror action = do
         cveSyncPlan = mwCveSync mirror
         baseBindings = bwBindings (mwBootWiring mirror)
 
-    serveAdmission <- newServeAdmission (mpAdmissionCapacity memoryPlan)
-    (memoryMeter, sampler) <- memoryAdmission memoryPlan
+    roomFactor <- fromMaybe 1 . (>>= readMaybe) <$> lookupEnv "SPIKE1866_ROOM_FACTOR"
+    serveAdmission <- newServeAdmissionSwept deadlines roomFactor (mpAdmissionCapacity memoryPlan)
+    (memoryMeter, sampler) <- memoryAdmission deadlines roomFactor memoryPlan
     heartbeat <- newWorkerHeartbeat
     let runsWorkerHere = spawnsWorker role mirrorRuntime
     (queue, mirrorDrain) <- mirrorHandOff role logEnv deferredMetrics mirrorRuntime (mwQueue mirror)
@@ -161,20 +167,28 @@ withServiceRuntime bootEnv plan mirror action = do
                         (envTelemetry builtEnv)
                         (cveSyncScheduleFor appConfig)
                         cveSyncPlan
-                , svcMemorySampler = superviseBackground "memory-sampler" (envLogEnv builtEnv) sampler
+                , svcMemorySampler = superviseBackground "memory-sampler" (envLogEnv builtEnv) (concurrently_ sampler (spikeStatsLoop (spikeGauges serveAdmission memoryMeter) threadDelay))
                 , svcCheckReady = cveSyncReadiness cveSyncPlan
                 , svcCheckLive = workerLiveness runsWorkerHere heartbeat
                 }
 
+-- Spike 1866: free CPU slots, CPU room, memory room, charged MiB, budget MiB, paused.
+spikeGauges :: ServeAdmission -> MemoryMeter -> IO [Int]
+spikeGauges admission meter = do
+    (free, room) <- serveAdmissionLevels admission
+    snap <- meterSnapshot meter
+    pure [free, room, snWaiting snap, snChargedBytes snap `div` 1_048_576, snBudgetBytes snap `div` 1_048_576, snPaused snap]
+
 -- The metadata memory meter and the sampler that steers it, both sized from the memory plan.
-memoryAdmission :: MemoryPlan -> IO (MemoryMeter, IO ())
-memoryAdmission memoryPlan = do
+memoryAdmission :: Deadlines -> Int -> MemoryPlan -> IO (MemoryMeter, IO ())
+memoryAdmission deadlines roomFactor memoryPlan = do
     meter <-
-        newMemoryMeter
+        newMemoryMeterSwept
+            (Just deadlines)
             MeterSettings
                 { msBudgetBytes = tbBootBytes (mpTransientBudget memoryPlan)
                 , msStepBytes = meterStepBytes
-                , msEntryRoom = mpAdmissionCapacity memoryPlan
+                , msEntryRoom = mpAdmissionCapacity memoryPlan * max 1 roomFactor
                 , msEntryWaitMicros = admissionWaitMicros
                 }
     collector <- readCollector
