@@ -170,7 +170,7 @@ probePeaks = join (readIORef peakSource)
 
 -- | Spike only: INV_METER_MODEL picks the meter model: stm (shipped), strict, or off (the oracle).
 invMeterModel :: String
-invMeterModel = unsafePerformIO (fromMaybe "stm" <$> lookupEnv "INV_METER_MODEL")
+invMeterModel = unsafePerformIO (fromMaybe "off" <$> lookupEnv "INV_METER_MODEL")
 {-# NOINLINE invMeterModel #-}
 
 -- | The strict model: ticket ids from a fetch-and-add counter, and evaluated writes to shared cells.
