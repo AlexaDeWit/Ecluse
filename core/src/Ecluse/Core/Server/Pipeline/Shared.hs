@@ -14,6 +14,7 @@ module Ecluse.Core.Server.Pipeline.Shared (
 
     -- * Admission shed
     withMetadataAdmission,
+    withListingAdmission,
     shedStatus,
     shedMessage,
     hRetryAfter,
@@ -89,11 +90,18 @@ retryAfterHeaders = maybe [] (\(RetryAfter secs) -> [(hRetryAfter, show secs)])
 flightOf :: CacheKey -> FlightKey
 flightOf key = FlightKey (cacheKeyStore key) (cacheKeyIdentity key)
 
-{- | Acquire memory and CPU admission before metadata work, queueing a request a full room turns away.
-Answer after release, counting a final shed once. Refusals preserve connection reuse.
--}
+-- | Acquire memory and CPU admission before metadata work. Answer after both release.
 withMetadataAdmission :: (MonadUnliftIO m) => ServeRuntime -> (ResponseHeaders -> m received) -> (MemoryTicket -> m a) -> (a -> m received) -> m received
 withMetadataAdmission runtime shed gated answer =
+    metadataAdmission runtime shed gated pure answer
+
+-- | Write after CPU admission releases, while the memory ticket still covers the response body.
+withListingAdmission :: (MonadUnliftIO m) => ServeRuntime -> (ResponseHeaders -> m received) -> (MemoryTicket -> m response) -> (response -> m received) -> m received
+withListingAdmission runtime shed gated write =
+    metadataAdmission runtime shed gated write pure
+
+metadataAdmission :: (MonadUnliftIO m) => ServeRuntime -> (ResponseHeaders -> m received) -> (MemoryTicket -> m a) -> (a -> m b) -> (b -> m received) -> m received
+metadataAdmission runtime shed gated held answer =
     attempt >>= \case
         Entered result -> answer result
         Expired line -> refuse line [shedRetryAfter]
@@ -115,7 +123,7 @@ withMetadataAdmission runtime shed gated answer =
         shed headers
     attempt =
         either (attemptAfter (meterLine meter) . Left) (attemptAfter (serveAdmissionLine admission))
-            <$> tryMemoryEntry metrics meter (withServeAdmission metrics admission . gated)
+            <$> tryMemoryEntry metrics meter (\ticket -> withServeAdmission metrics admission (gated ticket) >>= traverse held)
 
 -- | Match the configured inbound secret without content-dependent early exit. An unconfigured edge is open.
 edgeTokenMatches :: Maybe Secret -> Maybe ClientCredential -> Bool
