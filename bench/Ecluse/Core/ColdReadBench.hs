@@ -19,12 +19,14 @@ import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfIO)
 import Test.Tasty.HUnit (assertBool, assertFailure, (@?=))
 
 import Ecluse.Bench.Corpus (LoadedEntry (..), entryName)
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault.Http (typedBodyReads)
 import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked, pypiPacked, pypiSimpleCached)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataClient (..), MetadataError (MetadataFetch), VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.Origin (perCallerOrigin)
@@ -33,7 +35,6 @@ import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Metadata (ecosystemMetadataReads, privateMetadataClient)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Corpus (cpPackage)
-import Ecluse.Test.Deadline (unsweptClient)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Snapshot (digestOf)
@@ -146,5 +147,6 @@ sameDocument left right = case (snd npmPacked left, snd npmPacked right, snd pyp
 metadataClient :: HTTP.Manager -> EcosystemBench -> Limits -> IO MetadataClient
 metadataClient manager ecosystem limits = do
     base <- expectRight (mkRegistryUrl (ebOrigin ecosystem))
-    client <- unsweptClient manager
+    -- The bench's stub always answers, so nothing sweeps these deadlines.
+    client <- ExchangeClient manager <$> newDeadlines
     pure (privateMetadataClient (ecosystemMetadataReads (metadataRead (ebMetadata ecosystem)) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) (perCallerOrigin limits client base Nothing)))

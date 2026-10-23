@@ -3,14 +3,28 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Publication fixtures pass through production inventory and byte verification.
-module Ecluse.Test.Registry.Publish (publishOnlyFile, checkedNpmUpload, isMalformedBody) where
+module Ecluse.Test.Registry.Publish (anonymousPublishAt, publishOnlyFile, checkedNpmUpload, isMalformedBody) where
 
+import Network.HTTP.Client (defaultManagerSettings, newManager)
+
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Package (PackageDetails (pkgName, pkgVersion))
 import Ecluse.Core.Registry (PublishBodyFault (PublishMalformed), PublishFault (PublishSourceUnavailable))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.Npm.Publish (NpmUploadMetadata, prepareNpmSource, prepareNpmUpload)
 import Ecluse.Core.Registry.Publish
+import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Test.Port (passthroughTracingPort)
+
+-- | An anonymous publication of one codec to a target URL through the shared transport, over deadlines the caller sweeps.
+anonymousPublishAt :: Deadlines -> PublishCodec -> Text -> IO MirrorPublish
+anonymousPublishAt deadlines codec targetUrl = do
+    manager <- newManager defaultManagerSettings
+    let transport = MirrorTransport{ptClient = ExchangeClient manager deadlines, ptMintCredential = pure Nothing, ptLimits = defaultLimits, ptTracing = passthroughTracingPort}
+    pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) (loopbackRegistryUrl targetUrl) codec)
 
 -- | Exercise a single-file codec through the bound transport without bypassing byte verification.
 publishOnlyFile :: MirrorPublish -> VersionDoc -> PublishPlan -> ByteString -> IO (Either PublishFault ())

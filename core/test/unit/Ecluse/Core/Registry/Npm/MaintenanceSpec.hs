@@ -17,10 +17,11 @@ import Network.HTTP.Client (Request, RequestBody (RequestBodyBS), defaultManager
 import Network.HTTP.Client qualified as Client
 import Test.Hspec
 
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
 import Ecluse.Core.Registry.Maintenance (refusalCode)
 import Ecluse.Core.Registry.Npm.Maintenance (
     listingRequestFor,
@@ -31,7 +32,6 @@ import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version)
-import Ecluse.Test.Deadline (unsweptClient)
 import Ecluse.Test.Json (encodeStrict, keysAt, objectAt)
 import Ecluse.Test.Package (leftpadName, npmVersion, unscopedNpm)
 import Ecluse.Test.Registry.Npm (listingValue, writeTokenNpmConfig)
@@ -177,8 +177,9 @@ deleteSequenceSpec = describe "the version delete verb" $ do
         refusalOf (encodeStrict (withRevision ".." twoVersions)) (npmVersion "1.0.0")
             `shouldReturn` Just "NO_REVISION"
 
+-- Its cases only form requests against store.test, so nothing dials it or arms its deadlines.
 storeOrigin :: IO OriginClient
-storeOrigin = storeOriginOver <$> (unsweptClient =<< newManager defaultManagerSettings)
+storeOrigin = storeOriginOver <$> (ExchangeClient <$> newManager defaultManagerSettings <*> newDeadlines)
 
 -- The shared mirror-write client, against the fixture store's own base URL.
 storeOriginOver :: ExchangeClient -> OriginClient

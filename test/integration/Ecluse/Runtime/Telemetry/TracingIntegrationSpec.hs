@@ -9,6 +9,7 @@ import Data.Char (isDigit)
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Data.Time.Clock.POSIX (getPOSIXTime)
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Test.Hspec
 
@@ -58,6 +59,7 @@ import Ecluse.Runtime.Telemetry.Correlation.Internal (ddContextNow, ddIdentity)
 import Ecluse.Runtime.Telemetry.Resolve (resolveTelemetry)
 import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Service (mountBindingFor)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
 
@@ -97,8 +99,8 @@ driveRequest :: Collector -> TelemetrySwitch -> Text -> IO ()
 driveRequest collector switch marker =
     withSdkEnv (collectorEndpoint collector) tracesExporter $ do
         logEnv <- initLogEnv (Namespace ["itest"]) (Environment "test")
-        withTelemetry switch logEnv $ \telemetry -> do
-            env <- buildEnv telemetry
+        withTelemetry switch logEnv $ \telemetry -> withSweeper $ \deadlines -> do
+            env <- buildEnv deadlines telemetry
             app <- tracedApplication npmTestConfig env
             Warp.testWithApplication (pure app) $ \port -> do
                 manager <- newManager defaultManagerSettings
@@ -119,12 +121,12 @@ npmTestConfig = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentD
 
 -- A minimal composition root for the traced front door. The route under test matches no
 -- mount, so placeholder registry, credential, and cache handles suffice.
-buildEnv :: Telemetry -> IO Env
-buildEnv telemetry = do
+buildEnv :: Deadlines -> Telemetry -> IO Env
+buildEnv deadlines telemetry = do
     manager <- newManager defaultManagerSettings
     privateManager <- newManager defaultManagerSettings
     queue <- newTestMemoryQueue
-    newTestEnvWith queue (manager, privateManager) telemetry
+    newTestEnvWith deadlines queue (manager, privateManager) telemetry
 
 -- A fresh, unique, path-safe marker per case, so one case's spans never satisfy
 -- another's assertion (in particular the off case's absence assertion).

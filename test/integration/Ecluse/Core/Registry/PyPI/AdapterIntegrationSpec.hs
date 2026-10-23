@@ -39,7 +39,7 @@ import Ecluse.Core.Server.Response (mkHelpMessage)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite))
 import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
-import Ecluse.Runtime.Test.Support (newTestEnvSweptBy)
+import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.ServingDriver (pypiServingDriver)
 import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, postPath, requestAt)
 import Ecluse.Service (mountBindingFor)
@@ -532,7 +532,7 @@ withPyPIProxyResponding transform indexFor depsFor k = withSweeper $ \deadlines 
     manager <- newManager defaultManagerSettings
     recorded <- newIORef []
     testWithApplication (pure (transform (upstreamApp indexFor (record recorded)))) $ \upstreamPort -> do
-        env <- newTestEnvSweptBy deadlines queue{enqueue = \_ -> fail "unexpected mirror enqueue"} (manager, manager) telemetryDisabled
+        env <- newTestEnvWith deadlines queue{enqueue = \_ -> fail "unexpected mirror enqueue"} (manager, manager) telemetryDisabled
         deps <- depsFor upstreamPort
         let configured change = application (mkServerConfig (maybeToList (mountBindingFor PyPI (change deps) Nothing))) env
         k (PyPIProxy (configured id) configured (readIORef recorded))

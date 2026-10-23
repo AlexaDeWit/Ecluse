@@ -8,10 +8,11 @@ has ended on any exit path, and a timeout keeps 'System.Timeout.timeout''s contr
 module Ecluse.Core.DeadlineSpec (spec) where
 
 import GHC.Clock (getMonotonicTime, getMonotonicTimeNSec)
+import GHC.Conc (getNumCapabilities, setNumCapabilities, threadCapability)
 import Test.Hspec
-import UnliftIO.Async (async, cancel, mapConcurrently, wait, waitCatch)
-import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (throwIO, try, tryAny, uninterruptibleMask_)
+import UnliftIO.Async (Async, async, asyncOn, cancel, mapConcurrently, wait, waitCatch)
+import UnliftIO.Concurrent (myThreadId, threadDelay)
+import UnliftIO.Exception (bracket_, throwIO, try, tryAny, uninterruptibleMask_)
 
 import Ecluse.Core.Deadline (Deadlines, newDeadlines, sweepTick, timeout, withDeadline)
 import Ecluse.Test.Deadline (withSweeper)
@@ -91,6 +92,25 @@ withDeadlineSpec = describe "withDeadline" $ do
         putMVar release ()
         traverse_ wait holders
 
+    it "asks each core's armed checks once a sweep, and fires or drops a check on its own core alone" $ do
+        cores <- getNumCapabilities
+        bracket_ (setNumCapabilities 4) (setNumCapabilities cores) $ do
+            deadlines <- newDeadlines
+            [c0, c1, c2, c3] <- traverse (pinnedOn deadlines) [0 .. 3]
+            let asked = traverse (readIORef . pAsked) [c0, c1, c2, c3]
+            sweepTick deadlines
+            asked `shouldReturn` [1, 1, 1, 1]
+            putMVar (pRelease c1) ()
+            wait (pOutcome c1) `shouldReturn` Right ()
+            sweepTick deadlines
+            asked `shouldReturn` [2, 1, 2, 2]
+            writeIORef (pFiring c2) True
+            sweepTick deadlines
+            wait (pOutcome c2) `shouldReturn` Left Fired
+            sweepTick deadlines
+            asked `shouldReturn` [4, 1, 3, 4]
+            for_ [c0, c3] $ \pinned -> putMVar (pRelease pinned) () >> (wait (pOutcome pinned) `shouldReturn` Right ())
+
 timeoutSpec :: Spec
 timeoutSpec = describe "timeout" $ do
     it "returns the result of an action that finishes in time" $
@@ -127,6 +147,22 @@ exitsQuietly deadlines exit = do
     seen `shouldSatisfy` (>= 1)
     try (threadDelay 500_000) `shouldReturn` Right @Fired ()
     readIORef askCount `shouldReturn` seen
+
+-- A scope armed from a thread pinned to one core, with the count of sweeps that asked its check.
+data Pinned = Pinned {pAsked :: IORef Int, pFiring :: IORef Bool, pRelease :: MVar (), pOutcome :: Async (Either Fired ())}
+
+pinnedOn :: Deadlines -> Int -> IO Pinned
+pinnedOn deadlines core = do
+    asked <- newIORef 0
+    firing <- newIORef False
+    release <- newEmptyMVar
+    armedOn <- newEmptyMVar
+    let check _ = modifyIORef' asked (+ 1) >> (bool Nothing (Just (toException Fired)) <$> readIORef firing)
+    outcome <- asyncOn core . try . withDeadline deadlines check $ do
+        myThreadId >>= threadCapability >>= putMVar armedOn . fst
+        takeMVar release
+    takeMVar armedOn `shouldReturn` core
+    pure (Pinned asked firing release outcome)
 
 -- Poll a condition for up to 2 s. It never throws, so it can run with exceptions masked.
 holdUntil :: IO Bool -> IO ()
