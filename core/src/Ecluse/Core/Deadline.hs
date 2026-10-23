@@ -17,7 +17,6 @@ module Ecluse.Core.Deadline (
     -- * Armed scopes
     Check,
     withDeadline,
-    withEndableDeadline,
     timeout,
 ) where
 
@@ -88,11 +87,7 @@ throwOnce owner lock failure = do
 thread while the action runs, and never after it ends.
 -}
 withDeadline :: Deadlines -> Check -> IO a -> IO a
-withDeadline deadlines check = withEndableDeadline deadlines check . const
-
--- | 'withDeadline' whose action can end the check early. Once the end returns, nothing the check raised lands.
-withEndableDeadline :: Deadlines -> Check -> (IO () -> IO a) -> IO a
-withEndableDeadline deadlines check action = bracket (arm deadlines check) disarm (action . disarm)
+withDeadline deadlines check action = bracket (arm deadlines check) disarm (const action)
 
 arm :: Deadlines -> Check -> IO (MVar (Maybe ThreadId))
 arm (Deadlines cells) check = do
@@ -103,7 +98,7 @@ arm (Deadlines cells) check = do
     void (IORef.atomicModifyIORef'_ cell (Armed owner lock check :))
     pure lock
 
--- A thrower that claimed the lock first dies before its throw lands, as this thread is uninterruptible here. A second disarm does nothing.
+-- A thrower that claimed the lock first dies before its throw lands, as this thread is uninterruptible here.
 disarm :: MVar (Maybe ThreadId) -> IO ()
 disarm lock = uninterruptibleMask_ $ do
     disarmed <- tryPutMVar lock Nothing
