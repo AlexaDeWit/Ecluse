@@ -24,7 +24,7 @@ module Ecluse.Service (
 import Katip (LogEnv, katipAddNamespace)
 import Network.HTTP.Client (Manager, ManagerSettings)
 
-import Ecluse.Boot (BootEnv (beDeadlines, beLogEnv, beTelemetry), logBootWarning, superviseBackground)
+import Ecluse.Boot (BootEnv (beDeadlines, beLogEnv, beTelemetry), logBootWarning)
 import Ecluse.Composition (BootWiring (bwBindings, bwPublishTargets))
 import Ecluse.Composition.Executable (
     ExecutablePlan (epBootPlan),
@@ -76,6 +76,7 @@ import Ecluse.Core.Supervision (
     FaultDisposition (Permanent, Transient),
     SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
     backgroundLoopBackoff,
+    superviseBackground,
  )
 import Ecluse.Core.Worker (Liveness, WorkerHeartbeat, WorkerPolicies, alwaysLive, heartbeatLivenessNow, runWorkerM, workerLoop)
 import Ecluse.Cve.Sync (cveSyncReadiness, cveSyncScheduleFor, cveSyncTasks, registerAdvisoryAges)

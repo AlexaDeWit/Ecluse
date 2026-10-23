@@ -4,15 +4,16 @@
 
 {- | Route OpenTelemetry export failures into @katip@ through one shared throttle, so a
 persistently unreachable collector is one visible warning and a periodic heartbeat rather than a
-per-flush flood. The span exporter, the metric exporter, and the SDK's own diagnostic stream all
-coalesce through the same sink. None of it reaches the request path: the SDK's batch exporter runs
-asynchronously, so a failed export never touches a served request. The exporter wrappers in
-"Ecluse.Runtime.Telemetry" feed the sink through 'observeExportResult'.
+per-flush flood. The span exporter, the metric exporter, the metric batching's flush, and the SDK's
+own diagnostic stream all coalesce through the same sink. None of it reaches the request path: the
+SDK's batch exporter runs asynchronously, so a failed export never touches a served request. The
+exporter wrappers in "Ecluse.Runtime.Telemetry" feed the sink through 'observeExportResult'.
 -}
 module Ecluse.Runtime.Telemetry.ExportFailure (
     ExportFailureSink,
     exportFailureSink,
     observeExportResult,
+    observeFlushFault,
     installExportErrorHandler,
 ) where
 
@@ -21,4 +22,5 @@ import Ecluse.Runtime.Telemetry.ExportFailure.Internal (
     exportFailureSink,
     installExportErrorHandler,
     observeExportResult,
+    observeFlushFault,
  )
