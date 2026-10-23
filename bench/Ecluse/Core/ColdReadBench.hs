@@ -34,7 +34,7 @@ import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Metadata (ecosystemMetadataReads, privateMetadataClient)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Corpus (cpPackage)
-import Ecluse.Test.Deadline (newSweptClient)
+import Ecluse.Test.Deadline (unsweptClient)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Snapshot (digestOf)
@@ -148,5 +148,5 @@ sameDocument left right = case (snd npmPacked left, snd npmPacked right, snd pyp
 metadataClient :: HTTP.Manager -> EcosystemBench -> Limits -> IO MetadataClient
 metadataClient manager ecosystem limits = do
     base <- expectRight (mkRegistryUrl (ebOrigin ecosystem))
-    client <- newSweptClient manager
+    client <- unsweptClient manager
     pure (privateMetadataClient (ecosystemMetadataReads (metadataRead (ebMetadata ecosystem)) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) (perCallerOrigin limits client (mkBaseRequest base) Nothing)))

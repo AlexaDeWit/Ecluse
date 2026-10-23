@@ -59,7 +59,7 @@ import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Contract.Maintenance (MaintenanceProfile (..), maintenanceConsentContract, maintenanceDeletionContract, maintenanceFactsContract, maintenanceInventoryContract)
-import Ecluse.Test.Deadline (newSweptClient)
+import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Json (keysAt, withKeys)
 import Ecluse.Test.Maintenance (testDeleteGuard, withBucket)
 import Ecluse.Test.Package (leftpadName, npmVersion, unscopedNpm)
@@ -352,9 +352,9 @@ withStoreUnder ::
     IO a
 withStoreUnder permitted limits answer action =
     withRoutedStub reply $ \stub -> do
-        exchanges <- newSweptClient =<< newManager defaultManagerSettings
-        store <- protocolStore permitted (storeOrigin exchanges limits (stubLocalhostUrl stub))
-        action (newProtocolMaintenance store) stub
+        withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+            store <- protocolStore permitted (storeOrigin exchanges limits (stubLocalhostUrl stub))
+            action (newProtocolMaintenance store) stub
   where
     reply captured = let (status, body) = answer captured in (status, [], body)
 
@@ -366,11 +366,11 @@ withSplitOrigins ::
     IO a
 withSplitOrigins answer action =
     withRoutedStub reply $ \stub -> do
-        reading <- newSweptClient =<< newManager defaultManagerSettings
-        deleting <- newSweptClient =<< newManager (singleAttemptSettings defaultManagerSettings{managerModifyRequest = pure . marked})
-        store <- protocolStore True (storeOrigin reading defaultLimits (stubLocalhostUrl stub))
-        let destructive = storeOrigin deleting defaultLimits (stubLocalhostUrl stub)
-        action (newProtocolMaintenance store{psDeleteOrigin = destructive}) stub
+        withExchangeClient (newManager defaultManagerSettings) $ \reading -> do
+            withExchangeClient (newManager (singleAttemptSettings defaultManagerSettings{managerModifyRequest = pure . marked})) $ \deleting -> do
+                store <- protocolStore True (storeOrigin reading defaultLimits (stubLocalhostUrl stub))
+                let destructive = storeOrigin deleting defaultLimits (stubLocalhostUrl stub)
+                action (newProtocolMaintenance store{psDeleteOrigin = destructive}) stub
   where
     reply captured = let (status, body) = answer captured in (status, [], body)
     marked request = request{requestHeaders = (deleteClientHeader, "1") : requestHeaders request}
@@ -387,9 +387,9 @@ withObservation ::
     IO a
 withObservation permitted answer action =
     withRoutedStub reply $ \stub -> do
-        exchanges <- newSweptClient =<< newManager defaultManagerSettings
-        store <- protocolStore permitted (storeOrigin exchanges defaultLimits (stubLocalhostUrl stub))
-        action (newProtocolObservation (psRead store)) stub
+        withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+            store <- protocolStore permitted (storeOrigin exchanges defaultLimits (stubLocalhostUrl stub))
+            action (newProtocolObservation (psRead store)) stub
   where
     reply captured = let (status, body) = answer captured in (status, [], body)
 
@@ -437,8 +437,8 @@ withBoundedStore = withStoreUnder True
 unreachableStore :: IO StoreMaintenance
 unreachableStore = do
     port <- freePort
-    exchanges <- newSweptClient =<< newManager defaultManagerSettings
-    newProtocolMaintenance <$> protocolStore True (storeOrigin exchanges defaultLimits (localhost port))
+    withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+        newProtocolMaintenance <$> protocolStore True (storeOrigin exchanges defaultLimits (localhost port))
 
 {- The listing body is larger than this, so the bounded read refuses it rather than truncating
 what the sweep would then act on. -}

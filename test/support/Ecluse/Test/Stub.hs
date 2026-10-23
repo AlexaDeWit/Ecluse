@@ -61,7 +61,7 @@ import UnliftIO.Exception (try)
 import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
-import Ecluse.Test.Deadline (newSweptClient)
+import Ecluse.Test.Deadline (unsweptClient)
 import Ecluse.Test.Wai (localhost)
 
 -- | The method, path, headers and body received at the HTTP boundary.
@@ -133,7 +133,7 @@ withRoutedStubIO reply action = do
 -- | Build an anonymous origin using the caller's development HTTP egress witness.
 stubConfig :: (Text -> RegistryUrl) -> Stub -> IO OriginClient
 stubConfig egressUrl stub = do
-    client <- newSweptClient =<< newManager defaultManagerSettings
+    client <- unsweptClient =<< newManager defaultManagerSettings
     pure (originClient defaultLimits client (egressUrl (stubBaseUrl stub)) Nothing)
 
 -- | Look up a header (case-insensitively) in a captured request.

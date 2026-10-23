@@ -35,7 +35,7 @@ import Ecluse.Core.Registry.Request (baseRequestUrl)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Test.Deadline (newSweptClient)
+import Ecluse.Test.Deadline (unsweptClient, withExchangeClient)
 import Ecluse.Test.Package (v1_0_0)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry (isBoundExceededPublish, isTransportFetch, isUrlUnformableFetch, isUrlUnformablePublish)
@@ -96,33 +96,33 @@ spec = do
             -- The probe reads the mirror's answer bounded. A body past the budget comes
             -- back as a refusal value, never buffered whole.
             withStub status200 "0123456789 more than sixteen bytes" $ \stub -> do
-                exchanges <- newSweptClient =<< Client.newManager Client.defaultManagerSettings
-                let transport =
-                        MirrorTransport
-                            { ptClient = exchanges
-                            , ptMintCredential = pure Nothing
-                            , ptLimits = defaultLimits{maxMetadataBytes = 16}
-                            , ptTracing = passthroughTracingPort
-                            }
-                    publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec
-                outcome <- mpProbeInventory publish (const (pure ())) isOdd
-                outcome `shouldBe` Left (MetadataFetch (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 16))))
+                withExchangeClient (Client.newManager Client.defaultManagerSettings) $ \exchanges -> do
+                    let transport =
+                            MirrorTransport
+                                { ptClient = exchanges
+                                , ptMintCredential = pure Nothing
+                                , ptLimits = defaultLimits{maxMetadataBytes = 16}
+                                , ptTracing = passthroughTracingPort
+                                }
+                        publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec
+                    outcome <- mpProbeInventory publish (const (pure ())) isOdd
+                    outcome `shouldBe` Left (MetadataFetch (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 16))))
 
         it "refuses an over-cap publish answer fail-closed as a PublishFetch bound breach" $
             -- The write reads the target's answer through the same bounded exchange as the
             -- probe, so a pathological response body never buffers whole.
             withStub status200 "0123456789 more than sixteen bytes" $ \stub -> do
-                exchanges <- newSweptClient =<< Client.newManager Client.defaultManagerSettings
-                let transport =
-                        MirrorTransport
-                            { ptClient = exchanges
-                            , ptMintCredential = pure Nothing
-                            , ptLimits = defaultLimits{maxMetadataBytes = 16}
-                            , ptTracing = passthroughTracingPort
-                            }
-                    publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec
-                outcome <- publishFixture publish
-                outcome `shouldSatisfy` isBoundExceededPublish
+                withExchangeClient (Client.newManager Client.defaultManagerSettings) $ \exchanges -> do
+                    let transport =
+                            MirrorTransport
+                                { ptClient = exchanges
+                                , ptMintCredential = pure Nothing
+                                , ptLimits = defaultLimits{maxMetadataBytes = 16}
+                                , ptTracing = passthroughTracingPort
+                                }
+                        publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec
+                    outcome <- publishFixture publish
+                    outcome `shouldSatisfy` isBoundExceededPublish
 
     describe "the codec's request formers (credential invariants per married client)" $ do
         it "the probe request attaches the bearer at the single attach point with redirects disabled" $
@@ -218,7 +218,7 @@ servedPaths stub = fmap capPath <$> allCaptured stub
 -- fixed token, so the per-call mint is observable.
 mintCountingPublish :: Stub -> IO (MirrorPublish, IORef Int)
 mintCountingPublish stub = do
-    exchanges <- newSweptClient =<< Client.newManager Client.defaultManagerSettings
+    exchanges <- unsweptClient =<< Client.newManager Client.defaultManagerSettings
     mints <- newIORef (0 :: Int)
     let mint = do
             atomicModifyIORef' mints (\n -> (n + 1, ()))
@@ -233,6 +233,6 @@ publishAt = publishWith npmPublishCodec
 -- The anonymous marriage of one codec against an arbitrary target URL.
 publishWith :: PublishCodec -> Text -> IO MirrorPublish
 publishWith codec targetUrl = do
-    exchanges <- newSweptClient =<< Client.newManager Client.defaultManagerSettings
+    exchanges <- unsweptClient =<< Client.newManager Client.defaultManagerSettings
     let transport = MirrorTransport{ptClient = exchanges, ptMintCredential = pure Nothing, ptLimits = defaultLimits, ptTracing = passthroughTracingPort}
     pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) (loopbackRegistryUrl targetUrl) codec)

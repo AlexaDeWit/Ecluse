@@ -68,7 +68,7 @@ import Ecluse.Core.Worker (
 import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchFault)
 import Ecluse.Core.Worker.Types (WorkerMirrorState (..))
 import Ecluse.Test.Cve (fakeCveLookup)
-import Ecluse.Test.Deadline (newSweptClient)
+import Ecluse.Test.Deadline (unsweptClient)
 import Ecluse.Test.Json (fieldAt)
 import Ecluse.Test.Log (captureJsonLog, captureJsonLogAt)
 import Ecluse.Test.Mirror.State
@@ -1091,7 +1091,7 @@ admissionObject = fst npmCached (object ["marker" .= ("admission-time" :: Text)]
 -- refusal is the one under test rather than a recording double's.
 codecPublishAt :: Text -> IO MirrorPublish
 codecPublishAt targetUrl = do
-    exchanges <- newSweptClient =<< newManager defaultManagerSettings
+    exchanges <- unsweptClient =<< newManager defaultManagerSettings
     let transport = MirrorTransport{ptClient = exchanges, ptMintCredential = pure Nothing, ptLimits = defaultLimits, ptTracing = passthroughTracingPort}
     pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) (loopbackRegistryUrl targetUrl) npmPublishCodec)
 

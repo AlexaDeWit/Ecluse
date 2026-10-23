@@ -23,6 +23,7 @@ import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig (cfgMounts), Config (configApp, configMounts), MountConfig (mntPrivateUpstream), PrivateEndpoint, QuotaOverride (QuotaOverride, qoQuotas, qoScope, qoWeights))
 import Ecluse.Core.BuildIdentity (parseOperatorContact, renderUserAgent, userAgent)
 import Ecluse.Core.Credential (AuthToken (AuthToken), CredentialProvider (CredentialProvider), mkSecret)
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
 import Ecluse.Core.Package (PackageName)
@@ -39,7 +40,7 @@ import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocToken), origi
 import Ecluse.Core.Security (Limits, defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Text (joinUrlPath, registryPath)
-import Ecluse.Test.Deadline (newSweptClient, newSweptDeadlines)
+import Ecluse.Test.Deadline (withExchangeClient, withSweeper)
 import Ecluse.Test.Env (withAmbientAws)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore, testDeleteGuard)
 import Ecluse.Test.Package (npmVersion, unsafeRegistryUrl, unscopedNpm)
@@ -175,7 +176,7 @@ protocolHandleFor role permitDeletion = do
 
 anonymousPorts :: IO StorePorts
 anonymousPorts = do
-    deadlines <- newSweptDeadlines
+    deadlines <- newDeadlines
     pure
         StorePorts
             { spTracing = passthroughTracingPort
@@ -206,40 +207,40 @@ planSpec :: Spec
 planSpec = describe "planStoreMaintenance" $ do
     it "builds one handle per cleared store, keyed by the mount that declares it" $ do
         backends <- clearedBackendsFor MirrorPruner twoStoreEnv
-        deadlines <- newSweptDeadlines
-        outcome <-
-            planStoreMaintenance
-                (\_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig)
-                passthroughTracingPort
-                deadlines
-                userAgent
-                unpacedBudget
-                noCredentialProviders
-                defaultLimits
-                backends
-        fmap Map.keys outcome `shouldBe` Right (Map.keys backends)
+        withSweeper $ \deadlines -> do
+            outcome <-
+                planStoreMaintenance
+                    (\_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig)
+                    passthroughTracingPort
+                    deadlines
+                    userAgent
+                    unpacedBudget
+                    noCredentialProviders
+                    defaultLimits
+                    backends
+            fmap Map.keys outcome `shouldBe` Right (Map.keys backends)
 
     it "reports a refusal for every store whose client the environment cannot build" $ do
         backends <- clearedBackendsFor MirrorPruner twoStoreEnv
-        deadlines <- newSweptDeadlines
-        Map.keys backends `shouldBe` [Npm, PyPI]
-        outcome <-
-            planStoreMaintenance
-                (\_ _ _ -> throwIO NoCredentials)
-                passthroughTracingPort
-                deadlines
-                userAgent
-                unpacedBudget
-                noCredentialProviders
-                defaultLimits
-                backends
-        case outcome of
-            Right _ -> expectationFailure "expected both store builds to refuse"
-            Left errs ->
-                map withoutBacktrace errs
-                    `shouldBe` [ StoreMaintenanceUnavailable Npm (ClientBuildFailed "NoCredentials")
-                               , StoreMaintenanceUnavailable PyPI (ClientBuildFailed "NoCredentials")
-                               ]
+        withSweeper $ \deadlines -> do
+            Map.keys backends `shouldBe` [Npm, PyPI]
+            outcome <-
+                planStoreMaintenance
+                    (\_ _ _ -> throwIO NoCredentials)
+                    passthroughTracingPort
+                    deadlines
+                    userAgent
+                    unpacedBudget
+                    noCredentialProviders
+                    defaultLimits
+                    backends
+            case outcome of
+                Right _ -> expectationFailure "expected both store builds to refuse"
+                Left errs ->
+                    map withoutBacktrace errs
+                        `shouldBe` [ StoreMaintenanceUnavailable Npm (ClientBuildFailed "NoCredentials")
+                                   , StoreMaintenanceUnavailable PyPI (ClientBuildFailed "NoCredentials")
+                                   ]
   where
     -- 'displayException' appends GHC's backtrace, so the assertion reads the reason's own line.
     withoutBacktrace = \case
@@ -342,13 +343,13 @@ absentAdapterSpec :: Spec
 absentAdapterSpec = describe "vetStoreBackends" $ do
     it "clears that store a read that reports the absent adapter rather than one that invents one" $ do
         mounts <- mountsFor codeArtifactEnvVars
-        exchanges <- newSweptClient =<< newManager defaultManagerSettings
-        case snd (runVet MirrorPruner (vetStoreBackends noAdapter mounts)) of
-            Right cleared | [backend] <- Map.elems cleared -> do
-                outcome <- cbFetchManifest backend passthroughTracingPort (nowhere exchanges) aPackage
-                leftToMaybe outcome
-                    `shouldBe` Just (MetadataFetch (FetchTransport (transportFault TransportProtocol absentRead)))
-            other -> expectationFailure ("expected one cleared store, got: " <> show (void other))
+        withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+            case snd (runVet MirrorPruner (vetStoreBackends noAdapter mounts)) of
+                Right cleared | [backend] <- Map.elems cleared -> do
+                    outcome <- cbFetchManifest backend passthroughTracingPort (nowhere exchanges) aPackage
+                    leftToMaybe outcome
+                        `shouldBe` Just (MetadataFetch (FetchTransport (transportFault TransportProtocol absentRead)))
+                other -> expectationFailure ("expected one cleared store, got: " <> show (void other))
 
 protocolSpec :: Spec
 protocolSpec = describe "vetStoreBackends -- a store swept through the ecosystem protocol" $ do
