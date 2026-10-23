@@ -2,14 +2,20 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Mirror-pipeline role composition, worker liveness, and ecosystem mount bindings.
+-- | Mirror-pipeline role composition, worker liveness, ecosystem mount bindings, and the data-plane clients and their client spans.
 module Ecluse.ServiceSpec (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Time (addUTCTime, getCurrentTime)
 import Katip (LogEnv)
-import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (InternalException), brConsume, newManager, parseRequest, responseBody, withResponse)
+import Network.HTTP.Client (HttpException (HttpExceptionRequest), HttpExceptionContent (InternalException), Request, brConsume, defaultManagerSettings, httpNoBody, newManager, parseRequest, responseBody)
+import Network.HTTP.Types (status200)
+import Network.Wai (Application, responseLBS)
+import Network.Wai.Handler.Warp qualified as Warp
+import OpenTelemetry.Internal.Logging (getGlobalErrorHandler, setGlobalErrorHandler)
+import OpenTelemetry.MeterProvider (SdkMeterEnv)
 import Test.Hspec
+import UnliftIO (bracket)
 import UnliftIO.Exception (try)
 
 import Ecluse.Boot (BootEnv (BootEnv))
@@ -17,15 +23,16 @@ import Ecluse.Composition.Credential (initTargetCredentialProviders)
 import Ecluse.Composition.Executable (ExecutablePlan (epRoleWiring), MirrorWiring (mwCveSync), RoleWiring (MirrorPipelineWiring), planExecutable)
 import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving, sbProbing))
 import Ecluse.Composition.Support (expectConfig, expectPlanFor, noCeiling, staticEnvVars)
-import Ecluse.Composition.TelemetrySupport (advisoryAgePoints, newAdvisoryHandles, withRoleTelemetry)
+import Ecluse.Composition.TelemetrySupport (advisoryAgePoints, newAdvisoryHandles, withGlobalRoleTelemetry, withRoleLog, withRoleTelemetry)
 import Ecluse.Composition.Types (BootRole (BootMirrorPipeline), MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
 import Ecluse.Core.BuildIdentity (parseOperatorContact, renderUserAgent)
 import Ecluse.Core.Cve.Slot (swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Queue (noMirrorQueue)
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecManager))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
+import Ecluse.Core.Registry.ResponseWait qualified as ResponseWait
 import Ecluse.Core.Telemetry.Metrics (Label (LEcosystem), metricAttributes)
 import Ecluse.Core.Worker (
     Liveness (liveHealthy, liveLastPoll),
@@ -40,7 +47,9 @@ import Ecluse.Runtime.Cve.Sync (SyncEnv (syncSlot))
 import Ecluse.Runtime.Env (envPrivateClient, envPublicClient)
 import Ecluse.Runtime.Server (MountBinding (bindingPrefix))
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryDisabled)
-import Ecluse.Service (ServiceRuntime (svcEnv), dataPlaneManagerSettings, mountBindingFor, withServiceRuntime, workerLiveness)
+import Ecluse.Runtime.Telemetry.Tracing (telemetryWaiMiddleware)
+import Ecluse.Runtime.Test.Telemetry (activeSpanContext, histogramCounts, sumPoints)
+import Ecluse.Service (ServiceRuntime (svcEnv), mountBindingFor, withServiceRuntime, workerLiveness)
 import Ecluse.Test.Cve (fakeCveDb)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation), defaultFakeStoreConfig, newFakeStore)
@@ -49,7 +58,6 @@ import Ecluse.Test.Server.Mount (inertPackumentDeps)
 import Ecluse.Test.Stub (headerValue, lastCaptured, stubBaseUrl, withStub)
 import Ecluse.Test.Stub.Socket (resetAfterPartialBodyOverTcp, withRawServer)
 import Ecluse.Test.Support (newTestClock)
-import Network.HTTP.Types.Status (status200)
 
 stalledHeartbeat :: IO WorkerHeartbeat
 stalledHeartbeat = do
@@ -62,6 +70,7 @@ spec :: Spec
 spec = do
     advisoryAgeSpec
     dataPlaneSpec
+    clientSpanSpec
     outboundIdentitySpec
     describe "workerLiveness, what /livez answers once the spawn decision is derived" $ do
         it "reports a stalled consume loop as not live where the process runs one" $ do
@@ -109,22 +118,76 @@ spec = do
             (bindingPrefix <$> mountBindingFor RubyGems inertPackumentDeps Nothing) `shouldBe` Nothing
 
 dataPlaneSpec :: Spec
-dataPlaneSpec = describe "dataPlaneManagerSettings" $ do
-    it "types a body read the upstream resets after its 200, with telemetry off" $
-        typesBodyResetUnder telemetryDisabled
+dataPlaneSpec = describe "the data-plane clients" $ do
+    it "type a body read the upstream resets after its 200, with telemetry off" $
+        withRoleLog (`typesBodyResetUnder` telemetryDisabled)
 
-    it "types a body read the upstream resets after its 200, under the client span" $
-        withRoleTelemetry (\_ telemetry _ -> typesBodyResetUnder telemetry)
+    it "type a body read the upstream resets after its 200, under the client span" $
+        withGlobalRoleTelemetry (\logEnv telemetry _ -> typesBodyResetUnder logEnv telemetry)
 
--- A body read through a data-plane manager that the upstream resets raises the client's own exception, which the relay and the exchanges catch.
-typesBodyResetUnder :: Telemetry -> IO ()
-typesBodyResetUnder telemetry = withRawServer resetAfterPartialBodyOverTcp $ \port -> do
-    manager <- newManager =<< dataPlaneManagerSettings telemetry
-    request <- parseRequest ("http://127.0.0.1:" <> show port <> "/")
-    try (withResponse request manager (brConsume . responseBody)) >>= \case
-        Left (HttpExceptionRequest _ (InternalException _)) -> pass
-        Left other -> expectationFailure ("expected a typed body-read reset, got " <> show other)
-        Right _ -> expectationFailure "a reset body was read whole"
+-- A body read through a data-plane client that the upstream resets raises the client's own exception, which the relay and the exchanges catch.
+typesBodyResetUnder :: LogEnv -> Telemetry -> IO ()
+typesBodyResetUnder logEnv telemetry = withRuntimeClients staticEnvVars logEnv telemetry $ \clients ->
+    withRawServer resetAfterPartialBodyOverTcp $ \port -> do
+        request <- parseRequest ("http://127.0.0.1:" <> show port <> "/")
+        for_ clients $ \client ->
+            try (ResponseWait.withResponse client request (brConsume . responseBody)) >>= \case
+                Left (HttpExceptionRequest _ (InternalException _)) -> pass
+                Left other -> expectationFailure ("expected a typed body-read reset, got " <> show other)
+                Right _ -> expectationFailure "a reset body was read whole"
+
+{- Each exchange through a data-plane client runs under one client span that ends with it, so the
+in-flight gauge returns to zero and the thread's context is the one it held before. -}
+clientSpanSpec :: Spec
+clientSpanSpec = describe "the data-plane client span" $ do
+    it "counts every exchange once and leaves none in flight" $
+        withTracedClients $ \_ meterEnv clients request -> do
+            for_ clients $ \client -> replicateM_ exchangesPerClient (exchangeOnce client request)
+            let exchanged = fromIntegral (exchangesPerClient * length clients)
+            sum . map snd <$> sumPoints "http.client.active_requests" meterEnv `shouldReturn` 0
+            sum . map snd <$> sumPoints "http.client.request.count" meterEnv `shouldReturn` exchanged
+            sum <$> histogramCounts "http.client.request.duration" meterEnv `shouldReturn` fromIntegral exchanged
+
+    it "leaves the thread's context as it found it" $
+        withTracedClients $ \_ _ clients request ->
+            for_ clients $ \client -> do
+                entered <- activeSpanContext
+                exchangeOnce client request
+                activeSpanContext `shouldReturn` entered
+
+    it "lets the server span's frame around an exchange restore its context with no diagnostic" $
+        withTracedClients $ \telemetry _ clients request -> do
+            diagnostics <- newIORef []
+            middleware <- telemetryWaiMiddleware telemetry
+            caller <- newManager defaultManagerSettings
+            withGlobalErrorHandler (\diagnostic -> modifyIORef' diagnostics (diagnostic :)) $
+                for_ clients $ \client ->
+                    Warp.testWithApplication (pure (middleware (relayingThrough client request))) $ \port ->
+                        parseRequest ("http://127.0.0.1:" <> show port <> "/") >>= void . (`httpNoBody` caller)
+            readIORef diagnostics `shouldReturn` []
+
+exchangesPerClient :: Int
+exchangesPerClient = 5
+
+-- The runtime's data-plane clients under telemetry installed as the boot installs it, and a request to a stub that answers 200.
+withTracedClients :: (Telemetry -> SdkMeterEnv -> [ExchangeClient] -> Request -> IO ()) -> IO ()
+withTracedClients use =
+    withGlobalRoleTelemetry $ \logEnv telemetry meterEnv ->
+        withRuntimeClients staticEnvVars logEnv telemetry $ \clients ->
+            withStub status200 "ok" $ \stub ->
+                parseRequest (toString (stubBaseUrl stub)) >>= use telemetry meterEnv clients
+
+exchangeOnce :: ExchangeClient -> Request -> IO ()
+exchangeOnce client request = ResponseWait.withResponse client request (void . brConsume . responseBody)
+
+-- One upstream exchange inside the request, as the artifact relay makes on the request thread.
+relayingThrough :: ExchangeClient -> Request -> Application
+relayingThrough client request _ respond = exchangeOnce client request >> respond (responseLBS status200 [] "relayed")
+
+-- Route the SDK's own diagnostics to the handler for the length of the action.
+withGlobalErrorHandler :: (String -> IO ()) -> IO a -> IO a
+withGlobalErrorHandler handler action =
+    bracket (getGlobalErrorHandler <* setGlobalErrorHandler handler) setGlobalErrorHandler (const action)
 
 outboundIdentitySpec :: Spec
 outboundIdentitySpec = describe "the runtime's outbound registry identity" $
@@ -134,14 +197,13 @@ outboundIdentitySpec = describe "the runtime's outbound registry identity" $
                 contact <- either (fail . toString) pure (traverse parseOperatorContact contactText)
                 let expected = renderUserAgent contact
                     environment = maybe [] (\value -> [("ECLUSE_EGRESS__OPERATOR_CONTACT", toString value)]) contactText <> staticEnvVars
-                withServicePlan ServeAndMirror environment logEnv telemetry $ \boot plan mirror ->
-                    withServiceRuntime boot plan mirror $ \runtime ->
-                        for_ [envPublicClient (svcEnv runtime), envPrivateClient (svcEnv runtime)] $ \client ->
-                            withStub status200 "ok" $ \stub -> do
-                                request <- parseRequest (toString (stubBaseUrl stub))
-                                fmap mconcat (withResponse request (ecManager client) (brConsume . responseBody)) `shouldReturn` "ok"
-                                captured <- lastCaptured stub
-                                headerValue "User-Agent" captured `shouldBe` Just expected
+                withRuntimeClients environment logEnv telemetry $ \clients ->
+                    for_ clients $ \client ->
+                        withStub status200 "ok" $ \stub -> do
+                            request <- parseRequest (toString (stubBaseUrl stub))
+                            fmap mconcat (ResponseWait.withResponse client request (brConsume . responseBody)) `shouldReturn` "ok"
+                            captured <- lastCaptured stub
+                            headerValue "User-Agent" captured `shouldBe` Just expected
 
 advisoryAgeSpec :: Spec
 advisoryAgeSpec = describe "withServiceRuntime advisory database ages" $
@@ -156,6 +218,13 @@ advisoryAgeSpec = describe "withServiceRuntime advisory database ages" $
                         points <- advisoryAgePoints meterEnv
                         map fst points `shouldMatchList` map (metricAttributes . pure . LEcosystem) [Npm, PyPI]
                         map snd points `shouldSatisfy` all (>= 0)
+
+-- The role's public and private data-plane clients, as 'withServiceRuntime' builds them.
+withRuntimeClients :: [(String, String)] -> LogEnv -> Telemetry -> ([ExchangeClient] -> IO ()) -> IO ()
+withRuntimeClients environment logEnv telemetry use =
+    withServicePlan ServeAndMirror environment logEnv telemetry $ \boot plan mirror ->
+        withServiceRuntime boot plan mirror $ \runtime ->
+            use [envPublicClient (svcEnv runtime), envPrivateClient (svcEnv runtime)]
 
 withServicePlan :: MirrorRole -> [(String, String)] -> LogEnv -> Telemetry -> (BootEnv -> ExecutablePlan -> MirrorWiring -> IO ()) -> IO ()
 withServicePlan role environment logEnv telemetry use = withSweeper $ \deadlines -> do

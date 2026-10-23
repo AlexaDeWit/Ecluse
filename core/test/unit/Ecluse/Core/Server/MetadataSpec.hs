@@ -29,7 +29,6 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (fetchFullManifest, fetchVersionMetadata),
@@ -48,7 +47,7 @@ import Ecluse.Core.Server.Metadata (newMetadataReads, privateMetadataClient, pub
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpUpstreamFetchError, mpVersionCacheRequest))
 import Ecluse.Core.Version (Version)
-import Ecluse.Test.Deadline (withSweeper)
+import Ecluse.Test.Deadline (untracedClient, withSweeper)
 import Ecluse.Test.Package (npmVersion, pypiVersion, requestsName, sampleManifest, unscopedNpm)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig, externalOperations, newMetadataCache)
@@ -60,7 +59,7 @@ spec = do
     selectVersionSpec
     -- Every case here drives the read functions directly, so neither origin is ever dialled or arms a
     -- deadline: only the posture its builder fixes is under test.
-    exchanges <- runIO (ExchangeClient <$> newManager defaultManagerSettings <*> newDeadlines)
+    exchanges <- runIO (untracedClient <$> newManager defaultManagerSettings <*> newDeadlines)
     let anonymous = anonymousOrigin defaultLimits exchanges stubUrl
         perCaller = perCallerOrigin defaultLimits exchanges stubUrl Nothing
 

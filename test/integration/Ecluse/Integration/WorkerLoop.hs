@@ -30,7 +30,6 @@ import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Package (Hash)
 import Ecluse.Core.Queue (MirrorQueue (ack, deadLetter))
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
 import Ecluse.Core.Registry.Npm.Filter (rewriteVersion)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Publish (MirrorPublish, MirrorTransport (MirrorTransport, ptClient, ptLimits, ptMintCredential, ptTracing), newMirrorPublish)
@@ -42,6 +41,7 @@ import Ecluse.Core.Worker (WorkerPolicies)
 import Ecluse.Runtime.Env (Env)
 import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue)
 import Ecluse.Service (runWorker)
+import Ecluse.Test.Deadline (untracedClient)
 import Ecluse.Test.Poll (runUntil)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRightText)
@@ -122,7 +122,7 @@ mirrorPoliciesUnderAt deadlines rules mirrorUrl digests = do
 
 newPublishAt :: Deadlines -> Text -> IO MirrorPublish
 newPublishAt deadlines mirrorUrl = do
-    client <- ExchangeClient <$> newManager defaultManagerSettings <*> pure deadlines
+    client <- untracedClient <$> newManager defaultManagerSettings <*> pure deadlines
     let transport =
             MirrorTransport
                 { ptClient = client

@@ -59,10 +59,10 @@ import Network.Wai.Handler.Warp (Port, testWithApplication)
 import UnliftIO.Exception (try)
 
 import Ecluse.Core.Deadline (Deadlines)
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
 import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
+import Ecluse.Test.Deadline (untracedClient)
 import Ecluse.Test.Wai (localhost)
 
 -- | The method, path, headers and body received at the HTTP boundary.
@@ -134,7 +134,7 @@ withRoutedStubIO reply action = do
 -- | Build an anonymous origin using the caller's development HTTP egress witness and swept deadlines.
 stubConfig :: Deadlines -> (Text -> RegistryUrl) -> Stub -> IO OriginClient
 stubConfig deadlines egressUrl stub = do
-    client <- ExchangeClient <$> newManager defaultManagerSettings <*> pure deadlines
+    client <- untracedClient <$> newManager defaultManagerSettings <*> pure deadlines
     pure (originClient defaultLimits client (egressUrl (stubBaseUrl stub)) Nothing)
 
 -- | Look up a header (case-insensitively) in a captured request.

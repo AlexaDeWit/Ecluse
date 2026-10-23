@@ -11,15 +11,16 @@ module Ecluse.Core.Registry.ResponseWait (
     withResponse,
 ) where
 
-import Network.HTTP.Client (BodyReader, Request, Response, responseOpen)
-import Network.HTTP.Client qualified as HTTP
+import Control.Exception qualified as Exception
+import Network.HTTP.Client (BodyReader, Request, Response, responseClose, responseOpen)
 
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecManager))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecManager, ecTrace))
 
--- | 'responseOpen' over the client's pool. Close the response with 'Network.HTTP.Client.responseClose'.
+-- | 'responseOpen' over the client's pool, under its tracing. Close the response with 'responseClose'.
 openResponse :: ExchangeClient -> Request -> IO (Response BodyReader)
-openResponse client request = responseOpen request (ecManager client)
+openResponse client request = ecTrace client request (`responseOpen` ecManager client)
 
--- | 'HTTP.withResponse' over the client's pool.
+-- | 'Network.HTTP.Client.withResponse' over the client's pool, under its tracing.
 withResponse :: ExchangeClient -> Request -> (Response BodyReader -> IO a) -> IO a
-withResponse client request = HTTP.withResponse request (ecManager client)
+-- Base 'Exception.bracket', as http-client's own uses, so closing a connection stays interruptible.
+withResponse client request = Exception.bracket (openResponse client request) responseClose

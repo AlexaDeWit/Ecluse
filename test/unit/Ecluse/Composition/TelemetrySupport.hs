@@ -5,6 +5,8 @@
 -- | In-process telemetry and advisory slots for role composition tests.
 module Ecluse.Composition.TelemetrySupport (
     withRoleTelemetry,
+    withGlobalRoleTelemetry,
+    withRoleLog,
     newAdvisoryHandles,
     advisoryAgePoints,
 ) where
@@ -26,15 +28,23 @@ import Ecluse.Cve.Sync (CveSyncHandle (..))
 import Ecluse.Runtime.Cve.Sync (SyncEnv (SyncEnv))
 import Ecluse.Runtime.Telemetry (Telemetry)
 import Ecluse.Runtime.Test.Cve (headOnlyFetch)
-import Ecluse.Runtime.Test.Telemetry (gaugePoints, withTestTelemetry)
+import Ecluse.Runtime.Test.Telemetry (gaugePoints, withGlobalTestTelemetry, withTestTelemetry)
 import Ecluse.Test.Log (newTestLogEnv)
 
 -- | Keep the logger and both SDK providers alive until the role and its assertions finish.
 withRoleTelemetry :: (LogEnv -> Telemetry -> SdkMeterEnv -> IO a) -> IO a
-withRoleTelemetry use =
-    withTestTelemetry $ \telemetry meterEnv ->
-        bracket newTestLogEnv (void . closeScribes) $ \logEnv ->
-            use logEnv telemetry meterEnv
+withRoleTelemetry = withLoggedTelemetry withTestTelemetry
+
+-- | 'withRoleTelemetry' with both providers installed as the global ones, as the boot installs them. The client span's tracer is read from there.
+withGlobalRoleTelemetry :: (LogEnv -> Telemetry -> SdkMeterEnv -> IO a) -> IO a
+withGlobalRoleTelemetry = withLoggedTelemetry withGlobalTestTelemetry
+
+-- | A test logger, closed once the role and its assertions finish.
+withRoleLog :: (LogEnv -> IO a) -> IO a
+withRoleLog = bracket newTestLogEnv (void . closeScribes)
+
+withLoggedTelemetry :: ((Telemetry -> SdkMeterEnv -> IO a) -> IO a) -> (LogEnv -> Telemetry -> SdkMeterEnv -> IO a) -> IO a
+withLoggedTelemetry providers use = providers $ \telemetry meterEnv -> withRoleLog (\logEnv -> use logEnv telemetry meterEnv)
 
 -- | Ready slots whose fetch reports no published artifact, so role tasks cannot change their generation.
 newAdvisoryHandles :: [Ecosystem] -> IO [(Ecosystem, CveSyncHandle)]

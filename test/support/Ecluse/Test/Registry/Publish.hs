@@ -10,20 +10,20 @@ import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Package (PackageDetails (pkgName, pkgVersion))
 import Ecluse.Core.Registry (PublishBodyFault (PublishMalformed), PublishFault (PublishSourceUnavailable))
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.Npm.Publish (NpmUploadMetadata, prepareNpmSource, prepareNpmUpload)
 import Ecluse.Core.Registry.Publish
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
+import Ecluse.Test.Deadline (untracedClient)
 import Ecluse.Test.Port (passthroughTracingPort)
 
 -- | An anonymous publication of one codec to a target through the shared transport, over deadlines the caller sweeps.
 anonymousPublishAt :: Deadlines -> PublishCodec -> RegistryUrl -> IO MirrorPublish
 anonymousPublishAt deadlines codec target = do
     manager <- newManager defaultManagerSettings
-    let transport = MirrorTransport{ptClient = ExchangeClient manager deadlines, ptMintCredential = pure Nothing, ptLimits = defaultLimits, ptTracing = passthroughTracingPort}
+    let transport = MirrorTransport{ptClient = untracedClient manager deadlines, ptMintCredential = pure Nothing, ptLimits = defaultLimits, ptTracing = passthroughTracingPort}
     pure (newMirrorPublish transport target target codec)
 
 -- | Exercise a single-file codec through the bound transport without bypassing byte verification.

@@ -55,7 +55,7 @@ import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
 import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient), untracedExchange)
 import Ecluse.Core.Registry.Maintenance (
     StoreFacts (factBudget),
     StoreMaintenance (storeFacts),
@@ -262,7 +262,7 @@ storeOrigin limits cleared client = originClient limits client (cbUrl cleared)
 storeClient :: StorePorts -> IO ExchangeClient
 storeClient ports = do
     manager <- newPooledManager storeConnections (identityManagerSettings (spUserAgent ports) (singleAttemptSettings typedTlsManagerSettings))
-    pure (ExchangeClient manager (spDeadlines ports))
+    pure (ExchangeClient manager (spDeadlines ports) untracedExchange)
 
 -- One store, swept package by package, so the pool holds what one in-flight request needs.
 storeConnections :: Int

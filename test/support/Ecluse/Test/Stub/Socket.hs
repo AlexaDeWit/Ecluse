@@ -9,6 +9,9 @@ module Ecluse.Test.Stub.Socket (
     withTlsServer,
     trustingTlsManager,
 
+    -- * A peer that never answers
+    silentPeer,
+
     -- * Peers that reset mid-body
     resetOnClose,
     resetAfterPartialBody,
@@ -42,6 +45,7 @@ import Network.TLS qualified as TLS
 import Network.Wai.Handler.Warp (openFreePort)
 import Numeric (showHex)
 import UnliftIO.Async (withAsync)
+import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (bracket, finally)
 
 import Ecluse.Core.Fault.Http (typedBodyReads)
@@ -62,6 +66,10 @@ withTlsServer handler action = do
 -- | A manager under 'typedBodyReads', as every production manager is, that skips certificate validation so it accepts 'withTlsServer'.
 trustingTlsManager :: IO Manager
 trustingTlsManager = newManager (typedBodyReads (mkManagerSettings (TLSSettingsSimple True False False TLS.defaultSupported) Nothing))
+
+-- | Hold the connection and send nothing, so a client waits for headers that never come.
+silentPeer :: Socket -> IO ()
+silentPeer _ = forever (threadDelay 1_000_000)
 
 -- | Make the connection's close send RST instead of FIN, through a zero linger time.
 resetOnClose :: Socket -> IO ()
