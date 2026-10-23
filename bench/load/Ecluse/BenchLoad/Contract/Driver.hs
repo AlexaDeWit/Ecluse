@@ -16,6 +16,7 @@ import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..), privateCopyScenarios)
 data LoadReadDriver = LoadReadDriver
     { lrdPrivateCopy :: PrivateCopy
     , lrdColdMetadata :: Scenario
+    , lrdSlowReaders :: Scenario
     , lrdAssembledHit :: Scenario
     , lrdRevalidate :: Scenario
     , lrdCacheFits :: Scenario
@@ -41,7 +42,8 @@ readLoadContract driver extensions =
             , allRulesAdvisories ecosystem cold
             ]
                 <> privateCopyScenarios copy
-                <> [ lrdAssembledHit driver
+                <> [ lrdSlowReaders driver
+                   , lrdAssembledHit driver
                    , revalidate
                    , shippedAdvisories ecosystem revalidate
                    , lrdCacheFits driver

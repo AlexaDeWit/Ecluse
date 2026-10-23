@@ -27,7 +27,7 @@ import Ecluse.BenchLoad.Contract.Driver (LoadReadDriver (..), readLoadContract)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes, delayUpstream, fetchChecked, httpTarget, longCacheTtl, selfHosted, weightedMix, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (DriveBurst, DriveRamp), LoadKnobs (..), Scenario (..), UpstreamFixture, proxied, scenario, urlLoad)
-import Ecluse.BenchLoad.Listing (ListingSetup (..), cacheEvictsLoad, cacheFitsLoad, listingLoad, listingWorkingSet, revalidateLoad, withListingStubs)
+import Ecluse.BenchLoad.Listing (ListingSetup (..), cacheEvictsLoad, cacheFitsLoad, listingLoad, listingWorkingSet, revalidateLoad, slowReaderScenario, withListingStubs)
 import Ecluse.BenchLoad.ManagedMirror (managedMirrorScenarios)
 import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (..))
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
@@ -58,6 +58,7 @@ pypiReadDriver =
     LoadReadDriver
         { lrdPrivateCopy = pypiPrivateCopy
         , lrdColdMetadata = indexColdScenario
+        , lrdSlowReaders = slowReaderScenario pypiListing "index-cold"
         , lrdAssembledHit = indexScenario "assembled-response-hit" "GET the weighted Simple-index corpus with retained assembled responses. Full public and private indexes are fetched per request, except overlapping public reads share active work." longCacheTtl
         , lrdRevalidate = revalidateScenario
         , lrdCacheFits = cacheFitsScenario
