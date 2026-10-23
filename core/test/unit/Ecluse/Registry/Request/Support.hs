@@ -82,9 +82,8 @@ forAllBase = do
     cover 40 "the base kept a parse" (isJust (requestUnder base ""))
     pure (registryUrlText url, base)
 
-{- | A base URL as configuration might write one: respelled schemes, named, numeric, non-ASCII and
-bracketed IPv6 hosts, written ports, directories with spaces and non-ASCII text, and zero or more
-trailing slashes. Now and then it carries a query, a fragment, or a hostile URL's spelling.
+{- | A configured base URL: respelled schemes, named, numeric, non-ASCII and bracketed IPv6 hosts,
+ports, spaced and non-ASCII directories, trailing slashes, and at times a query, fragment or hostile URL.
 -}
 genBaseUrl :: Gen Text
 genBaseUrl = Gen.frequency [(6, genConfiguredBase), (1, genHostileUrl ["registry.npmjs.org", "[::1]:8443", "pypi.org"])]
