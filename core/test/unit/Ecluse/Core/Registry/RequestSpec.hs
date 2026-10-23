@@ -35,14 +35,14 @@ import Ecluse.Core.Registry.Request (
     joinPath,
     mkBaseRequest,
     parseRequestEither,
-    requestUnder,
+    requestAt,
     sealRequest,
  )
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.FieldValue (fieldValues)
 import Ecluse.Core.Server.Path (encodeComponent)
-import Ecluse.Registry.Request.Support (genBaseUrl, genComponent, outcomeFacts)
+import Ecluse.Registry.Request.Support (baseAt, genBaseUrl, genComponent, outcomeFacts)
 import Ecluse.Test.Stub (headerValue, lastCaptured, stubBaseUrl, withStub)
 import Ecluse.Test.Support (parseRequestOrFail)
 
@@ -206,14 +206,14 @@ parseSpec = describe "parseRequestEither maps a parse failure to UrlFormationErr
                 lookup "X-Api-Key" (Client.requestHeaders credentialed) `shouldBe` Just "tok-abc"
 
 underBaseSpec :: Spec
-underBaseSpec = describe "requestUnder builds under a base parsed once" $ do
-    it "keeps no parse for a base with a query or a fragment" $
+underBaseSpec = describe "requestAt builds under a base parsed once" $ do
+    it "builds under a base with a query or a fragment as the joined URL parses" $
         for_ ["https://reg.test/?x", "https://reg.test#x"] $ \text ->
-            requestUnder (mkBaseRequest (loopbackRegistryUrl text)) "pkg" `shouldSatisfy` isNothing
+            outcomeFacts (requestAt (baseAt text) "pkg") `shouldBe` outcomeFacts (joinPath text "pkg" >>= parseRequestEither)
 
-    it "leaves a path a parse would not keep verbatim to the joined parse" $
+    it "encodes a path that is not verbatim path text as the joined URL's parse does" $
         for_ ["a b", "a?b", "a#b", "%4", "%zz", "\xFC"] $ \suffix ->
-            requestUnder (mkBaseRequest (loopbackRegistryUrl "https://reg.test")) suffix `shouldSatisfy` isNothing
+            outcomeFacts (requestAt (baseAt "https://reg.test") suffix) `shouldBe` outcomeFacts (joinPath "https://reg.test" suffix >>= parseRequestEither)
 
     modifyMaxSuccess (const 5000) $
         it "builds what parsing the joined URL builds, field by field, for generated bases and paths" $
@@ -221,16 +221,16 @@ underBaseSpec = describe "requestUnder builds under a base parsed once" $ do
                 url <- loopbackRegistryUrl <$> forAll genBaseUrl
                 suffix <- forAll genSuffix
                 let joined = joinPath (registryUrlText url) suffix >>= parseRequestEither
-                    under = requestUnder (mkBaseRequest url) suffix
-                cover 30 "built under the parsed base" (isJust under)
-                cover 5 "left to the joined parse" (isNothing under)
-                outcomeFacts (maybe joined Right under) === outcomeFacts joined
+                cover 30 "the joined URL parses" (isRight joined)
+                cover 5 "the joined URL is refused" (isLeft joined)
+                outcomeFacts (requestAt (mkBaseRequest url) suffix) === outcomeFacts joined
 
--- An encoded path as the builders write one, or raw text a parse would not keep verbatim.
+-- An encoded path as the builders write one, path text dense in escapes whole and cut short, or raw text.
 genSuffix :: Gen Text
 genSuffix =
     Gen.frequency
         [ (3, T.intercalate "/" <$> Gen.list (Range.linear 0 4) (encodeComponent <$> genComponent))
+        , (1, Gen.text (Range.linear 0 8) (Gen.element ("aFg09-~@/%%%" :: String)))
         , (1, Gen.text (Range.linear 0 12) (Gen.element ("aZ09-._~@/%:?#[] \xFC+!$&'()*,;=\\" :: String)))
         ]
 

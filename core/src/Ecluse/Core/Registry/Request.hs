@@ -32,7 +32,7 @@ module Ecluse.Core.Registry.Request (
     BaseRequest,
     mkBaseRequest,
     baseRequestUrl,
-    requestUnder,
+    requestAt,
 ) where
 
 import Data.Char (isHexDigit)
@@ -181,23 +181,31 @@ mkBaseRequest url = BaseRequest url directory
 baseRequestUrl :: BaseRequest -> RegistryUrl
 baseRequestUrl (BaseRequest url _) = url
 
-{- | The request for the base joined to an already-encoded @suffix@. 'Nothing' when the base kept no
-parse or the suffix is not verbatim path text, so the caller parses the joined URL as before.
+{- | The request for the base joined to an already-encoded @suffix@, equal to 'parseRequestEither' of
+the joined URL. It parses that URL only when the base kept no parse or the suffix is not verbatim.
 -}
+requestAt :: BaseRequest -> Text -> Either UrlFormationError Request
+requestAt base@(BaseRequest url _) suffix =
+    maybe (joinPath (registryUrlText url) suffix >>= parseRequestEither) Right (requestUnder base suffix)
+
 requestUnder :: BaseRequest -> Text -> Maybe Request
 requestUnder (BaseRequest _ directory) suffix = do
     request <- directory
     guard (verbatimPath suffix)
     pure request{Client.path = Client.path request <> encodeUtf8 suffix}
 
+-- How far a scan of path text has got: between characters, inside an escape, or past a refusal.
+data PathScan = Between | AwaitingFirstHexDigit | AwaitingSecondHexDigit | Refused
+    deriving stock (Eq)
+
 {- Text that http-client's parse keeps as path byte for byte: unreserved characters, @\@@, @/@,
 and complete escapes. An encoded component writes nothing else. -}
 verbatimPath :: Text -> Bool
-verbatimPath = (== 0) . T.foldl' step (0 :: Int)
+verbatimPath = (== Between) . T.foldl' step Between
   where
-    step pending c
-        | pending < 0 = pending
-        | pending > 0 = if isHexDigit c then pending - 1 else -1
-        | c == '%' = 2
-        | isAsciiAlphaNum c || c `elem` ("-._~@/" :: String) = 0
-        | otherwise = -1
+    step Between c
+        | c == '%' = AwaitingFirstHexDigit
+        | isAsciiAlphaNum c || c `elem` ("-._~@/" :: String) = Between
+    step AwaitingFirstHexDigit c | isHexDigit c = AwaitingSecondHexDigit
+    step AwaitingSecondHexDigit c | isHexDigit c = Between
+    step _ _ = Refused

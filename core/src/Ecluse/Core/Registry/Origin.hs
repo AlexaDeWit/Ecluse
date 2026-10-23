@@ -7,6 +7,7 @@
 module Ecluse.Core.Registry.Origin (
     OriginClient (..),
     originClient,
+    ocBaseUrl,
     originBaseUrl,
 
     -- * Credential posture, carried in the type
@@ -30,10 +31,8 @@ import Ecluse.Core.Telemetry.Upstream (PublicReadKind)
 
 -- | One origin's coordinates, credential posture, and response bound.
 data OriginClient = OriginClient
-    { ocBaseUrl :: RegistryUrl
-    -- ^ The https-only egress witness the proxy appends a package path to.
-    , ocBaseRequest :: BaseRequest
-    -- ^ 'ocBaseUrl' parsed once. The builders below set the two together.
+    { ocBaseRequest :: BaseRequest
+    -- ^ The https-only egress witness the proxy appends a package path to, parsed once.
     , ocClient :: ExchangeClient
     -- ^ The shared @http-client@ 'ExchangeClient' to issue requests through.
     , ocToken :: Maybe ClientCredential
@@ -52,7 +51,11 @@ originClient limits client = originAt limits client . mkBaseRequest
 
 originAt :: Limits -> ExchangeClient -> BaseRequest -> Maybe ClientCredential -> OriginClient
 originAt limits client base token =
-    OriginClient{ocBaseUrl = baseRequestUrl base, ocBaseRequest = base, ocClient = client, ocToken = token, ocLimits = limits, ocChargeFullRead = const pass, ocPublicControl = Nothing, ocReadKind = Nothing}
+    OriginClient{ocBaseRequest = base, ocClient = client, ocToken = token, ocLimits = limits, ocChargeFullRead = const pass, ocPublicControl = Nothing, ocReadKind = Nothing}
+
+-- | The origin's base URL, read from its one parse so the two cannot disagree.
+ocBaseUrl :: OriginClient -> RegistryUrl
+ocBaseUrl = baseRequestUrl . ocBaseRequest
 
 -- | The origin's base URL as text.
 originBaseUrl :: OriginClient -> Text

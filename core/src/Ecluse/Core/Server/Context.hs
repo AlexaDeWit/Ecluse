@@ -154,11 +154,11 @@ pdPrivateBaseUrl = upstreamPrivateBaseUrl . pdUpstreams
 pdPublicBaseUrl :: PackumentDeps -> RegistryUrl
 pdPublicBaseUrl = upstreamPublicBaseUrl . pdUpstreams
 
--- | 'pdPrivateBaseUrl' parsed once at boot, which the private reads build their requests under.
+-- | 'pdPrivateBaseUrl' parsed once per mount, which the private reads build their requests under.
 pdPrivateBase :: PackumentDeps -> Maybe BaseRequest
 pdPrivateBase = upstreamPrivateBase . pdUpstreams
 
--- | 'pdPublicBaseUrl' parsed once at boot, which the public reads build their requests under.
+-- | 'pdPublicBaseUrl' parsed once per mount, which the public reads build their requests under.
 pdPublicBase :: PackumentDeps -> BaseRequest
 pdPublicBase = upstreamPublicBase . pdUpstreams
 

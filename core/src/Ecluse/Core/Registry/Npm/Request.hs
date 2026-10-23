@@ -14,7 +14,6 @@ module Ecluse.Core.Registry.Npm.Request (
     metadataRequest,
     metadataRequestUnder,
     artifactRequestByFile,
-    artifactRequestUnder,
     artifactRequestByUrl,
     artifactFileUrl,
     packageUrl,
@@ -34,9 +33,8 @@ import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageName, pkgNamespace, renderPackageName, unScope, unscopedName)
 import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
-import Ecluse.Core.Registry.Request (BaseRequest, attachCredential, baseRequestUrl, joinPath, parseRequestEither, requestUnder)
+import Ecluse.Core.Registry.Request (BaseRequest, attachCredential, joinPath, parseRequestEither, requestAt)
 import Ecluse.Core.Registry.Request qualified as Request
-import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Path (encodeComponent)
 
 -- | Which of npm's two metadata documents to request, selected by the @Accept@ header.
@@ -69,16 +67,14 @@ metadataRequest ::
     Either UrlFormationError Request
 metadataRequest baseUrl token form name = metadataGet token form <$> (packageUrl baseUrl name >>= parseRequestEither)
 
--- | 'metadataRequest' under a base parsed once. A path the base does not cover takes 'metadataRequest'.
+-- | 'metadataRequest' under a base parsed once, through 'requestAt'.
 metadataRequestUnder ::
     BaseRequest ->
     Maybe ClientCredential ->
     MetadataForm ->
     PackageName ->
     Either UrlFormationError Request
-metadataRequestUnder base token form name = case requestUnder base (encodePackagePath name) of
-    Just request -> Right (metadataGet token form request)
-    Nothing -> metadataRequest (registryUrlText (baseRequestUrl base)) token form name
+metadataRequestUnder base token form name = metadataGet token form <$> requestAt base (encodePackagePath name)
 
 metadataGet :: Maybe ClientCredential -> MetadataForm -> Request -> Request
 metadataGet token form base =
@@ -90,29 +86,16 @@ metadataGet token form base =
                     : requestHeaders base
             }
 
-{- | Build the artifact @GET@ at @{baseUrl}/{encoded-pkg}/-/{filename}@. It addresses the tarball by
-the filename the client requested, so a registry with its own tarball naming still resolves.
+{- | Build the artifact @GET@ at @{base}/{encoded-pkg}/-/{filename}@, through 'requestAt'. It addresses
+the tarball by the filename the client requested, so a registry with its own tarball naming resolves.
 -}
 artifactRequestByFile ::
-    Text ->
-    Maybe ClientCredential ->
-    PackageName ->
-    Text ->
-    Either UrlFormationError Request
-artifactRequestByFile baseUrl token name filename = do
-    url <- artifactFileUrl baseUrl name filename
-    artifactRequestByUrl token url
-
--- | 'artifactRequestByFile' under a base parsed once. A path the base does not cover takes 'artifactRequestByFile'.
-artifactRequestUnder ::
     BaseRequest ->
     Maybe ClientCredential ->
     PackageName ->
     Text ->
     Either UrlFormationError Request
-artifactRequestUnder base token name filename = case requestUnder base (artifactPath name filename) of
-    Just request -> Right (Request.artifactGet npmCredential token request)
-    Nothing -> artifactRequestByFile (registryUrlText (baseRequestUrl base)) token name filename
+artifactRequestByFile base token name filename = Request.artifactGet npmCredential token <$> requestAt base (artifactPath name filename)
 
 {- | Build npm's artifact @GET@ for the absolute @url@ the projection preserved from the upstream's
 @dist.tarball@, under npm's credential presentation.

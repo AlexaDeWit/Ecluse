@@ -5,10 +5,10 @@
 {- | A mount's configured upstreams, and the tarball-host gate and request bases derived from them,
 as one opaque cluster with a private constructor.
 
-The 'Ecluse.Core.Security.TarballHostGate' and each upstream's 'BaseRequest' are built once per
-mount, so the hot artifact path re-parses nothing. A gate that disagreed with the URLs would
-authorise the wrong authorities, so 'mountUpstreams' is the only builder and neither the
-constructor nor the selectors are exported: an @upstreams{...}@ update alone would break the set.
+The 'Ecluse.Core.Security.TarballHostGate' and each upstream's 'BaseRequest' are derived once per
+mount, so a request under an upstream appends its path to that parse. A gate that disagreed with
+the URLs would authorise the wrong authorities, so 'mountUpstreams' is the only builder and neither
+the constructor nor the selectors are exported: an @upstreams{...}@ update alone would break the set.
 -}
 module Ecluse.Core.Server.Upstream (
     -- * Mirror serve plan
