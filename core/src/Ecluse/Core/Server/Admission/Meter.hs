@@ -149,7 +149,7 @@ withMemoryEntry metrics meter body
 
 -- Spike only: INV_METER_MODEL picks the meter model. "off" is an oracle that keeps no shared account.
 invMeterModel :: String
-invMeterModel = unsafePerformIO (fromMaybe "stm" <$> lookupEnv "INV_METER_MODEL")
+invMeterModel = unsafePerformIO (fromMaybe "off" <$> lookupEnv "INV_METER_MODEL")
 {-# NOINLINE invMeterModel #-}
 
 oracleTicket :: MetricsPort -> MemoryMeter -> IO MemoryTicket
