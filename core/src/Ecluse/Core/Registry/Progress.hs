@@ -6,7 +6,7 @@
 Consumer time and waits for response headers do not count.
 -}
 module Ecluse.Core.Registry.Progress (
-    -- * The watchdog
+    -- * The progress floor
     Watch,
     watched,
     watchedRaising,
@@ -17,20 +17,19 @@ module Ecluse.Core.Registry.Progress (
     meteredUpload,
 ) where
 
-import Control.Exception (throwTo)
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (toLazyByteString)
 import Data.ByteString.Lazy qualified as LBS
 import GHC.Clock (getMonotonicTimeNSec)
 import GHC.IORef qualified as IORef
 import Network.HTTP.Client (BodyReader, GivesPopper, Popper, RequestBody (..))
-import UnliftIO (try, withAsync)
-import UnliftIO.Concurrent (ThreadId, myThreadId, threadDelay)
+import UnliftIO (try)
 
-import Ecluse.Core.Registry.Progress.Internal (Window, beginAt, endAt, freshWindow, pause, waitedBy)
+import Ecluse.Core.Deadline (Check, Deadlines, withDeadline)
+import Ecluse.Core.Registry.Progress.Internal (Window, beginAt, endAt, freshWindow, waitedBy)
 import Ecluse.Core.Security (ProgressFloor, floorWindowMicros)
 
--- | One transfer's progress in the current window, shared by its meters and its watchdog.
+-- | One transfer's progress in the current window, shared by its meters and the sweeper's check.
 data Watch = Watch ProgressFloor (IORef Window)
 
 -- Raised in a transfer's thread as a synchronous failure of the transfer, as a socket error would be.
@@ -39,39 +38,32 @@ data BelowProgressFloor = BelowProgressFloor
 
 instance Exception BelowProgressFloor
 
--- | Identify the watchdog's transport-timeout interruption without exposing its constructor.
+-- | Identify the floor's transport-timeout interruption without exposing its constructor.
 isProgressFloorFailure :: SomeException -> Bool
 isProgressFloorFailure fault = case fromException fault of
     Just BelowProgressFloor -> True
     Nothing -> False
 
--- | Return 'Nothing' below the floor. The catch outlives the watchdog, so its interruption cannot escape later.
-watched :: ProgressFloor -> (Watch -> IO a) -> IO (Maybe a)
-watched progress transfer =
-    try (watchedRaising progress transfer) <&> \case
+-- | Return 'Nothing' below the floor. The catch outlives the check, so its interruption cannot escape later.
+watched :: Deadlines -> ProgressFloor -> (Watch -> IO a) -> IO (Maybe a)
+watched deadlines progress transfer =
+    try (watchedRaising deadlines progress transfer) <&> \case
         Left BelowProgressFloor -> Nothing
         Right result -> Just result
 
--- | Raise a floor failure so an already committed response tears down.
-watchedRaising :: ProgressFloor -> (Watch -> IO a) -> IO a
-watchedRaising progress transfer = do
-    owner <- myThreadId
+-- | Raise a floor failure so an already committed response tears down. It lands up to one sweep late.
+watchedRaising :: Deadlines -> ProgressFloor -> (Watch -> IO a) -> IO a
+watchedRaising deadlines progress transfer = do
     watch <- Watch progress <$> newIORef freshWindow
-    withAsync (watchdog watch owner) (\_ -> transfer watch)
+    withDeadline deadlines (belowFloor watch) (transfer watch)
 
-{- Base 'throwTo' delivers the plain exception, which the synchronous catch in 'watched' sees.
-UnliftIO's would wrap it as asynchronous. -}
-watchdog :: Watch -> ThreadId -> IO ()
-watchdog (Watch progress window) owner = go
+-- The sweeper raises the plain exception, which the synchronous catch in 'watched' sees.
+belowFloor :: Watch -> Check
+belowFloor (Watch progress window) now =
+    readIORef window <&> \current ->
+        if waitedBy now current >= budget then Just (toException BelowProgressFloor) else Nothing
   where
     budget = fromIntegral (floorWindowMicros progress) * 1_000
-    go = do
-        now <- getMonotonicTimeNSec
-        current <- readIORef window
-        let spent = waitedBy now current
-        if spent >= budget
-            then throwTo owner BelowProgressFloor
-            else threadDelay (fromIntegral (pause budget spent current `div` 1_000) + 1) >> go
 
 -- | A reader whose every read counts as a wait on the upstream, and its chunk as progress.
 meteredReader :: Watch -> BodyReader -> BodyReader

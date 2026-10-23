@@ -17,6 +17,7 @@ import Ecluse.Core.Registry.Exchange (withSuccessBodyUsing)
 import Ecluse.Core.Registry.Public (ReadControl (Controlled), classifyPublicResponse)
 import Ecluse.Core.Security (Limits (progressFloor), defaultLimits)
 import Ecluse.Core.Telemetry.Upstream (ExchangeOutcome (ResponseStatus), PublicReadKind (Listing))
+import Ecluse.Test.Deadline (newSweptClient)
 import Ecluse.Test.Registry.Public (PublicFixture (..), newPublicFixture)
 import Ecluse.Test.Stub (allCaptured, stubBaseUrl, withRoutedStubIO)
 
@@ -38,9 +39,9 @@ spec = do
         response <- newIORef (status429, [("Retry-After", "60")], "busy")
         withRoutedStubIO (const (readIORef response)) $ \stub -> do
             fixture <- newPublicFixture
-            manager <- newManager defaultManagerSettings
+            exchanges <- newSweptClient =<< newManager defaultManagerSettings
             request <- parseRequest (toString (stubBaseUrl stub))
-            let fetch = withSuccessBodyUsing (Controlled (pfControl fixture) Listing) manager (progressFloor defaultLimits) (const (pure (Right ()))) request
+            let fetch = withSuccessBodyUsing (Controlled (pfControl fixture) Listing) exchanges (progressFloor defaultLimits) (const (pure (Right ()))) request
             fetch `shouldReturn` Left (FetchCooldown (RetryAfter 60))
             pfAdvance fixture 10
             fetch `shouldReturn` Left (FetchCooldown (RetryAfter 50))

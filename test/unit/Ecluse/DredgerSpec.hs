@@ -65,6 +65,7 @@ import Ecluse.Dredger (dredgerReady, latchedStep, runDredger, withSyncTasks)
 import Ecluse.Dredger.Plan (DredgerOptions (DredgerOptions), SweepMode (SweepDeletes, SweepPreviews), SweepRepetition (SweepOnce), sweepReportFor)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncSlot))
 import Ecluse.Test.Cve (fakeCveDb)
+import Ecluse.Test.Deadline (newSweptDeadlines)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Maintenance (
     FakeStore (fakeMaintenance, fakeObservation, readFakeContents),
@@ -180,10 +181,12 @@ plannedPruner role builds =
     bracket newTestLogEnv (void . closeScribes) $ \logEnv -> do
         config <- expectConfig (withObservablePrivate codeArtifactEnvVars) Nothing
         bootPlan <- expectPlanFor role (withObservablePrivate codeArtifactEnvVars) Nothing config noCeiling
+        deadlines <- newSweptDeadlines
         (_, planned) <-
             planExecutable
                 logEnv
                 passthroughTracingPort
+                deadlines
                 (\_ _ _ -> Nothing)
                 (\_ _ _ -> pure noMirrorQueue)
                 (\_ _ -> pure (Right noCredentialProviders))
@@ -228,10 +231,12 @@ withDredgerAges use = withRoleTelemetry $ \logEnv telemetry meterEnv -> do
     config <- expectConfig (withObservablePrivate codeArtifactEnvVars) Nothing
     bootPlan <- expectPlanFor BootStorePruner codeArtifactEnvVars Nothing config noCeiling
     store <- newFakeStore defaultFakeStoreConfig
+    deadlines <- newSweptDeadlines
     (_, planned) <-
         planExecutable
             logEnv
             passthroughTracingPort
+            deadlines
             (\_ _ _ -> Nothing)
             (\_ _ _ -> pure noMirrorQueue)
             (\_ _ -> pure (Right noCredentialProviders))
@@ -246,7 +251,7 @@ withDredgerAges use = withRoleTelemetry $ \logEnv telemetry meterEnv -> do
             handles <- newAdvisoryHandles [Npm, PyPI]
             let app = configApp config
                 ephemeral = config{configApp = app{cfgServer = (cfgServer app){srvPort = 0}}}
-                boot = BootEnv ephemeral logEnv telemetry bootPlan
+                boot = BootEnv ephemeral logEnv telemetry bootPlan deadlines
             runDredger boot (DredgerOptions SweepDeletes SweepOnce) pruner{pwCveSync = Map.fromList handles}
                 `shouldReturn` Nothing
             use meterEnv handles

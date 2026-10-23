@@ -75,7 +75,7 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
     noNameAlphabet,
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
-import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
+import Ecluse.Core.Registry.Origin (OriginClient (ocClient, ocLimits, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (pcProbeRequest, pcVersionListWalk), fetchVersionList)
 import Ecluse.Core.Registry.VersionList (VersionListState)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes)
@@ -187,7 +187,7 @@ listPackages store =
     fetch request =
         first storeFaultOfFetch
             <$> withSuccessBody
-                (ocManager origin)
+                (ocClient origin)
                 (progressFloor (ocLimits origin))
                 (readJsonWalk (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))) (listingWalk (prListing store)))
                 request
@@ -218,7 +218,7 @@ listVersionsWith store name walk =
   where
     origin = prOrigin store
     codec = prCodec store
-    fetch request = first storeFaultOfFetch <$> fetchVersionList (ocManager origin) (ocLimits origin) (walk (ocLimits origin)) request
+    fetch request = first storeFaultOfFetch <$> fetchVersionList (ocClient origin) (ocLimits origin) (walk (ocLimits origin)) request
     stored version = StoredVersion{storedVersion = version, storedPresence = VersionServed, storedRevision = Nothing}
 
 deleteStoredVersions :: ProtocolStore -> DeleteGuard -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
@@ -277,7 +277,7 @@ refused version refusal = Right [(version, VersionRefused refusal)]
 send :: ProtocolRead -> Request -> IO (Either StoreFault (Int, ByteString))
 send store request =
     first storeFaultOfFetch
-        <$> boundedExchange (\status _ body -> (status, body)) (ocManager origin) (progressFloor (ocLimits origin)) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))) request
+        <$> boundedExchange (\status _ body -> (status, body)) (ocClient origin) (progressFloor (ocLimits origin)) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))) request
   where
     origin = prOrigin store
 

@@ -16,6 +16,7 @@ import Ecluse.Runtime.Server (ServerConfig, mkServerConfig, scPort)
 import Ecluse.Runtime.Telemetry (telemetryDisabled, telemetryMeterProvider, telemetryTracerProvider)
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Service (mountBindingFor, runWorker)
+import Ecluse.Test.Deadline (newSweptClient)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Queue (newTestMemoryQueue, sampleJob)
 import Ecluse.Test.Server.Cache (defaultCacheConfig, newMetadataCache)
@@ -39,8 +40,8 @@ Forcing each accessor to weak-head normal form without a bottom is all a case ca
 -}
 opaqueHandles :: [(String, Env -> IO ())]
 opaqueHandles =
-    [ ("shared HTTP manager", void . evaluate . envManager)
-    , ("trusted private-origin manager", void . evaluate . envPrivateManager)
+    [ ("shared HTTP manager", void . evaluate . envPublicClient)
+    , ("trusted private-origin manager", void . evaluate . envPrivateClient)
     , ("LogEnv", void . evaluate . envLogEnv)
     ]
 
@@ -68,17 +69,17 @@ spec = do
     describe "withEnvWithAdmission" $ do
         it "runs the body against the assembled Env and returns its result" $ do
             queue <- newTestMemoryQueue
-            manager <- newManager defaultManagerSettings
+            exchanges <- newSweptClient =<< newManager defaultManagerSettings
             metadataCache <- newMetadataCache defaultCacheConfig
             logEnv <- newTestLogEnv
             heartbeat <- newWorkerHeartbeat
             admission <- testServeAdmission
             meter <- testMemoryMeter
-            withEnvWithAdmission admission meter queue manager manager metadataCache logEnv telemetryDisabled heartbeat (\_ -> pure ())
+            withEnvWithAdmission admission meter queue exchanges exchanges metadataCache logEnv telemetryDisabled heartbeat (\_ -> pure ())
 
         it "propagates an exception thrown in the body (the Env scopes the action, nothing swallows it)" $ do
             queue <- newTestMemoryQueue
-            manager <- newManager defaultManagerSettings
+            exchanges <- newSweptClient =<< newManager defaultManagerSettings
             metadataCache <- newMetadataCache defaultCacheConfig
             logEnv <- newTestLogEnv
             heartbeat <- newWorkerHeartbeat
@@ -86,7 +87,7 @@ spec = do
             meter <- testMemoryMeter
             let body :: Env -> IO ()
                 body _ = throwIO BodyEscape
-            outcome <- try (withEnvWithAdmission admission meter queue manager manager metadataCache logEnv telemetryDisabled heartbeat body)
+            outcome <- try (withEnvWithAdmission admission meter queue exchanges exchanges metadataCache logEnv telemetryDisabled heartbeat body)
             outcome `shouldBe` Left BodyEscape
 
     describe "split-ready services" $ do

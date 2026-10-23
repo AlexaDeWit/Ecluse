@@ -73,6 +73,7 @@ import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (CodeArtifactC
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEpssRequirement))
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (CodeArtifactStore, casDomain, casDomainOwner, casFormat, casRegion, casRepository), codeArtifactFormat)
 import Ecluse.Service (mountBindingFor)
+import Ecluse.Test.Deadline (newSweptDeadlines)
 import Ecluse.Test.Env (withAmbientAws)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation, readFakeContents), FakeStoreConfig (fakeUpstream), defaultFakeStoreConfig, newFakeStore, seededStoreConfig)
@@ -610,7 +611,8 @@ reportUnder envVars role resolveAdapter buildQueue buildCredentials buildStore =
     config <- expectConfig envVars Nothing
     bootPlan <- expectPlanFor role envVars Nothing config noCeiling
     logEnv <- newTestLogEnv
-    planExecutable logEnv passthroughTracingPort resolveAdapter buildQueue buildCredentials buildStore bootPlan
+    deadlines <- newSweptDeadlines
+    planExecutable logEnv passthroughTracingPort deadlines resolveAdapter buildQueue buildCredentials buildStore bootPlan
 
 -- | 'planFor', failing the test on a refusal.
 expectExecutable :: BootRole -> ResolveAdapter -> BuildMirrorQueue -> StoreBuilds -> IO ExecutablePlan

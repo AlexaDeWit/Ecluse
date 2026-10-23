@@ -28,6 +28,7 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (fetchFullManifest, fetchVersionMetadata),
@@ -46,6 +47,7 @@ import Ecluse.Core.Server.Metadata (newMetadataReads, privateMetadataClient, pub
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpUpstreamFetchError, mpVersionCacheRequest))
 import Ecluse.Core.Version (Version)
+import Ecluse.Test.Deadline (newSweptClient)
 import Ecluse.Test.Package (npmVersion, pypiVersion, requestsName, sampleManifest, unscopedNpm)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig, externalOperations, newMetadataCache)
@@ -57,9 +59,9 @@ spec = do
     selectVersionSpec
     -- Every case here drives the read functions directly, so neither origin is ever dialled:
     -- only the posture its builder fixes is under test.
-    manager <- runIO (newManager defaultManagerSettings)
-    let anonymous = anonymousOrigin defaultLimits manager stubUrl
-        perCaller = perCallerOrigin defaultLimits manager stubUrl Nothing
+    exchanges <- runIO (newSweptClient =<< newManager defaultManagerSettings)
+    let anonymous = anonymousOrigin defaultLimits exchanges stubUrl
+        perCaller = perCallerOrigin defaultLimits exchanges stubUrl Nothing
 
     describe "publicMetadataClient -- selected retention" $ do
         it "keeps full listing and selected retention independent" $ do
@@ -263,7 +265,7 @@ spec = do
             -- A 0.5 s cap, far below the 20 s read.
             progress <- either (fail . show) pure (mkProgressFloor 0.5 0.25 1)
             let stalled = threadDelay 20_000_000 $> Left MetadataAbsent
-                client = privateMetadataClient (withinRequestCap progress (newMetadataReads noopMetricsPort noLog noInvalidLog noFetchLog (\_ _ -> stalled) (\_ _ _ -> stalled) perCaller))
+                client = privateMetadataClient (withinRequestCap (ecDeadlines exchanges) progress (newMetadataReads noopMetricsPort noLog noInvalidLog noFetchLog (\_ _ -> stalled) (\_ _ _ -> stalled) perCaller))
             full <- fetchFullManifest client name
             single <- fetchVersionMetadata client name (npmVersion "1.0.0")
             map timeoutCause [void full, void single] `shouldBe` replicate 2 (Just TransportTimeout)

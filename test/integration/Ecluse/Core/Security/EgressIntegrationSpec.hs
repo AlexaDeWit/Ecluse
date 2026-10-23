@@ -7,7 +7,7 @@ module Ecluse.Core.Security.EgressIntegrationSpec (spec) where
 
 import Data.Aeson (Value, encode, object, (.=))
 import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Network.HTTP.Client (Manager, Request (redirectCount), defaultManagerSettings, newManager)
+import Network.HTTP.Client (Request (redirectCount), defaultManagerSettings, newManager)
 import Network.HTTP.Types (status200, status302, status503)
 import Network.HTTP.Types.Header (hLocation)
 import Network.Wai.Handler.Warp (Port)
@@ -17,10 +17,12 @@ import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody, responseStatusCode))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), metadataRequest)
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes, progressFloor), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Test.Deadline (newSweptClient)
 import Ecluse.Test.Registry.Metadata.Fetch (fetchTestBody)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig)
 import Ecluse.Test.Registry.Npm.Metadata (fetchMetadataFormBounded)
@@ -33,43 +35,43 @@ spec = do
     describe "egress over the validating manager (loopback http opt-in)" $ do
         it (caseLabel "integration/egress/native-001" "reaches a loopback upstream addressed through the test-only http opt-in") $
             withUpstream $ \port -> do
-                manager <- newManager defaultManagerSettings
-                response <- fetchMetadata manager port Nothing
+                exchanges <- newSweptClient =<< newManager defaultManagerSettings
+                response <- fetchMetadata exchanges port Nothing
                 fmap responseBody response `shouldBe` Right (toStrict (encode packument))
 
         it (caseLabel "integration/egress/native-002" "uses the same validating manager for a credential-forwarding (private-origin) fetch") $
             -- The split is the credential, not the manager: a token-forwarding read reaches
             -- the same loopback upstream over the same validating manager.
             withUpstream $ \port -> do
-                manager <- newManager defaultManagerSettings
-                response <- fetchMetadata manager port (Just "tok")
+                exchanges <- newSweptClient =<< newManager defaultManagerSettings
+                response <- fetchMetadata exchanges port (Just "tok")
                 fmap responseBody response `shouldBe` Right (toStrict (encode packument))
 
     describe "no upstream redirect is followed (redirectCount = 0)" $ do
         it (caseLabel "integration/egress/native-003" "returns the original 302 without contacting the local target") $
             withRedirector $ \redirector target -> do
-                manager <- newManager defaultManagerSettings
-                result <- fetchMetadata manager (stubPort redirector) Nothing
+                exchanges <- newSweptClient =<< newManager defaultManagerSettings
+                result <- fetchMetadata exchanges (stubPort redirector) Nothing
                 fmap responseStatusCode result `shouldBe` Right 302
                 length <$> allCaptured redirector `shouldReturn` 1
                 allCaptured target `shouldReturn` []
 
         it (caseLabel "integration/egress/native-004" "records a followed redirect even when the target rejects the fetch") $
             withRedirector $ \redirector target -> do
-                manager <- newManager defaultManagerSettings
+                exchanges <- newSweptClient =<< newManager defaultManagerSettings
                 request <- expectRight (metadataRequest (stubBaseUrl redirector) Nothing Abbreviated thing)
-                result <- fetchTestBody manager (progressFloor defaultLimits) (MetadataBodyLimit (maxMetadataBytes defaultLimits)) request{redirectCount = 1}
+                result <- fetchTestBody exchanges (progressFloor defaultLimits) (MetadataBodyLimit (maxMetadataBytes defaultLimits)) request{redirectCount = 1}
                 fmap responseStatusCode result `shouldBe` Right 503
                 length <$> allCaptured redirector `shouldReturn` 1
                 length <$> allCaptured target `shouldReturn` 1
 
-fetchMetadata :: Manager -> Port -> Maybe Text -> IO (Either FetchFault RegistryResponse)
+fetchMetadata :: ExchangeClient -> Port -> Maybe Text -> IO (Either FetchFault RegistryResponse)
 fetchMetadata manager port token =
     fetchMetadataFormBounded (clientConfig manager port token) Abbreviated thing
 
 -- An origin pointed at the loopback upstream on @port@. Its base URL comes from the
 -- test-only plain-HTTP opt-in, a constructor a release build does not have.
-clientConfig :: Manager -> Port -> Maybe Text -> OriginClient
+clientConfig :: ExchangeClient -> Port -> Maybe Text -> OriginClient
 clientConfig manager port token =
     (defaultNpmConfig (loopbackRegistryUrl ("http://127.0.0.1:" <> show port)) manager)
         { ocToken = bareCredential . mkSecret <$> token

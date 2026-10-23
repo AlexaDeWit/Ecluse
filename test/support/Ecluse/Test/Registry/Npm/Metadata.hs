@@ -19,7 +19,7 @@ import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded), Ver
 import Ecluse.Core.Registry.Npm.Metadata (NpmFullRead, npmFullTable, npmFullWalk, npmPackumentWalk, projectNpmPacked, projectNpmStream, selectNpmRead)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm, metadataRequest)
-import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
+import Ecluse.Core.Registry.Origin (OriginClient (ocClient, ocLimits, ocToken), originBaseUrl)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes, progressFloor))
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks, walkWritingChunks)
@@ -71,5 +71,5 @@ fetchMetadataFormBounded ::
 fetchMetadataFormBounded origin form name =
     formThen
         FetchUrlUnformable
-        (fetchTestBody (ocManager origin) (progressFloor (ocLimits origin)) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
+        (fetchTestBody (ocClient origin) (progressFloor (ocLimits origin)) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
         (metadataRequest (originBaseUrl origin) (ocToken origin) form name)

@@ -37,7 +37,7 @@ import Ecluse.Core.Registry.MirrorUpload (inventoryFiles, verifyMirrorBytes)
 import Ecluse.Core.Registry.Npm.Publish (npmNewReleaseOnly, npmPublishCodec, npmPublishDocument, prepareNpmSource, prepareNpmUpload, uploadClaims)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish,
-    MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintCredential, ptTracing),
+    MirrorTransport (MirrorTransport, ptClient, ptLimits, ptMintCredential, ptTracing),
     PublishCodec (pcNativeComplete),
     PublishPlan (PublishPlan, ppLatest),
     newMirrorPublish,
@@ -54,6 +54,7 @@ import Ecluse.Test.Registry.Publish (checkedNpmUpload, isMalformedBody, publishO
 import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 
+import Ecluse.Test.Deadline (newSweptClient)
 import Ecluse.Test.Stub (
     Stub,
     allCaptured,
@@ -280,8 +281,8 @@ stubPublish stub = publishAt (stubBaseUrl stub)
 
 publishAt :: Text -> IO MirrorPublish
 publishAt targetUrl = do
-    manager <- newManager defaultManagerSettings
-    let transport = MirrorTransport{ptManager = manager, ptMintCredential = pure Nothing, ptLimits = defaultLimits, ptTracing = passthroughTracingPort}
+    exchanges <- newSweptClient =<< newManager defaultManagerSettings
+    let transport = MirrorTransport{ptClient = exchanges, ptMintCredential = pure Nothing, ptLimits = defaultLimits, ptTracing = passthroughTracingPort}
     pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) (loopbackRegistryUrl targetUrl) npmPublishCodec)
 
 sizedArtifact :: MirrorArtifact

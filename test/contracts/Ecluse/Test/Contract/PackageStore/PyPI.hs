@@ -35,6 +35,7 @@ import Ecluse.Core.Version (Version, canonicalPep440, renderVersion)
 import Ecluse.Test.Contract.PackageStore
 import Ecluse.Test.Contract.PackageStore.Provider
 import Ecluse.Test.Contract.PackageStore.PyPI.Fixtures
+import Ecluse.Test.Deadline (newSweptClient)
 import Ecluse.Test.Package (hexSha256Of, pypiVersion, unscopedPyPI)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
@@ -70,9 +71,9 @@ withPyPISession maintenance use = do
                 }
     withRoutedStubIO (reply held order failWrite) $ \stub -> do
         let reopen = do
-                manager <- newManager (singleAttemptSettings defaultManagerSettings)
-                let origin = originClient defaultLimits manager (loopbackRegistryUrl (stubBaseUrl stub)) (Just credential)
-                    publisher = newMirrorPublish (MirrorTransport manager (pure (Just credential)) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (loopbackRegistryUrl (stubBaseUrl stub <> "/legacy/")) pypiPublishCodec
+                exchanges <- newSweptClient =<< newManager (singleAttemptSettings defaultManagerSettings)
+                let origin = originClient defaultLimits exchanges (loopbackRegistryUrl (stubBaseUrl stub)) (Just credential)
+                    publisher = newMirrorPublish (MirrorTransport exchanges (pure (Just credential)) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (loopbackRegistryUrl (stubBaseUrl stub <> "/legacy/")) pypiPublishCodec
                 store <- maintenance origin boundary
                 pure (storeOperations packageName pypiVersion (readRelease origin) (writeRelease publisher) store)
         initial <- reopen
