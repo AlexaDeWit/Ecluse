@@ -83,8 +83,8 @@ privateAuthorisationRefusal help = mkRefusal help "the private upstream refused 
 
 -- | Acquire memory and CPU admission before metadata work. Answer after both release.
 withMetadataAdmission :: (MonadUnliftIO m) => ServeRuntime -> (ResponseHeaders -> m received) -> (MemoryTicket -> m a) -> (a -> m received) -> m received
-withMetadataAdmission runtime shed gated answer =
-    metadataAdmission runtime shed gated pure answer
+withMetadataAdmission runtime shed gated =
+    metadataAdmission runtime shed gated pure
 
 -- | Write after CPU admission releases, while the memory ticket still covers the response body.
 withListingAdmission :: (MonadUnliftIO m) => ServeRuntime -> (ResponseHeaders -> m received) -> (MemoryTicket -> m response) -> (response -> m received) -> m received

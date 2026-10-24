@@ -257,12 +257,12 @@ listingWriteSpec = describe "a listing whose body is being written" $
     chargedNow rt = snChargedBytes <$> meterSnapshot (srMemoryMeter rt)
     clientGone = mkIOError resourceVanishedErrorType "the client closed the connection" Nothing Nothing
 
--- One CPU slot with no waiting room, so a second request is shed while the first holds it, and an exact meter.
+-- One CPU slot with no waiting room, and a meter that charges each byte.
 withOneSlot :: Listing -> (ServeRuntime -> PackumentDeps -> IO a) -> IO a
-withOneSlot listing use = do
-    admission <- newServeAdmissionTuned 1 0 0
-    rt <- testServeRuntimeWith admission noopMetricsPort
-    meter <- newMemoryMeter MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 1000, msEntryWaitMicros = 0}
+withOneSlot listing use = withSweeper $ \deadlines -> do
+    admission <- newServeAdmissionTuned deadlines 1 0 0
+    rt <- testServeRuntimeWith deadlines admission noopMetricsPort
+    meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 1000, msEntryWaitMicros = 0}
     testWithApplication (pure (listingOrigin listing)) (listingDeps listing >=> use rt{srMemoryMeter = meter})
 
 noSurvivorsSpec :: Spec

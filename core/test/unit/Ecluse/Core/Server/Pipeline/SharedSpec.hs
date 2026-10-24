@@ -15,10 +15,10 @@ import UnliftIO.Concurrent (threadDelay)
 import Ecluse.Core.Deadline (Deadlines, newDeadlines)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmissionTuned, serveAdmissionLine, withOverflow, withServeAdmission)
 import Ecluse.Core.Server.Admission.Meter (MeterSettings (..), meterLine, meterSnapshot, newMemoryMeter, withMemoryEntry)
-import Ecluse.Core.Server.Admission.Overflow (Attempt (Entered), Overflow, Waited (Placed), awaitPlace, newOverflowTuned, overflowWaiting)
+import Ecluse.Core.Server.Admission.Overflow (Attempt (Entered), Overflow, Waited (Placed, QueueFull), awaitPlace, newOverflowTuned, overflowWaiting, signalLine)
 import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes, snWaiting))
 import Ecluse.Core.Server.Context (ServeRuntime (srMemoryMeter))
-import Ecluse.Core.Server.Pipeline.Shared (hRetryAfter, withMetadataAdmission)
+import Ecluse.Core.Server.Pipeline.Shared (hRetryAfter, withListingAdmission, withMetadataAdmission)
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Poll (awaitUntil)
@@ -203,3 +203,35 @@ spec = around_ (timeout 10_000_000 >=> (`shouldBe` Just ())) $ describe "withMet
                     wait memoryHolder `shouldReturn` Right ()
                     wait queued `shouldReturn` Left [(hRetryAfter, "1")]
                     readIORef memoryShed `shouldReturn` 0
+
+    for_ [("completes", False), ("is cancelled", True)] $ \(ending, cancelled) ->
+        it ("keeps a queued listing's charge and reservation until its write " <> ending) $ do
+            deadlines <- newDeadlines
+            overflow <- newOverflowTuned deadlines 1 5_000_000
+            admission <- (`withOverflow` overflow) <$> oneSlot deadlines
+            runtime <- testServeRuntimeWith deadlines admission noopMetricsPort
+            finishHolder <- holdSlot runtime
+            writing <- newEmptyMVar
+            releaseWrite <- newEmptyMVar
+            let line = serveAdmissionLine admission
+                write body = putMVar writing () >> takeMVar releaseWrite $> Right body
+            withAsync (withListingAdmission runtime (pure . Left) (const (pure ("listing" :: Text))) write) $ \listing -> do
+                awaitQueued overflow
+                finishHolder `shouldReturn` Right "holder"
+                takeMVar writing
+                overflowWaiting overflow `shouldReturn` 0
+                meterSnapshot (srMemoryMeter runtime) >>= (`shouldSatisfy` (> 0)) . snChargedBytes
+                withServeAdmission noopMetricsPort admission (pure ()) `shouldReturn` Right ()
+                awaitPlace noopMetricsPort overflow line (pure (Entered ())) >>= \case
+                    QueueFull _ -> pass
+                    _ -> expectationFailure "the listing released its overflow reservation during the write"
+                if cancelled
+                    then cancel listing
+                    else putMVar releaseWrite () >> wait listing `shouldReturn` Right "listing"
+            snChargedBytes <$> meterSnapshot (srMemoryMeter runtime) `shouldReturn` 0
+            withAsync (awaitPlace noopMetricsPort overflow line (pure (Entered ()))) $ \queued -> do
+                awaitQueued overflow
+                atomically (signalLine line)
+                wait queued >>= \case
+                    Placed () -> pass
+                    _ -> expectationFailure "the listing did not release its overflow reservation"
