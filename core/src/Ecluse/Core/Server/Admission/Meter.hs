@@ -5,10 +5,11 @@
 {- | The metadata memory gate's meter: one byte budget that requests pay into as they read and build.
 
 A request takes a small entry step before its CPU slot and is shed, as a value, when that step does
-not fit within the admission wait. A started request pays for what it reads one step at a time, and
-pauses instead of failing when the budget is spent. One ticket at a time holds the overdraw token
-until its request ends. Work that request waits on, a shared fetch or render, may overdraw on the
-same token, so the overshoot stays near one request with its shared work, and a pause never deadlocks.
+not fit within the admission wait. A started request pays for what it reads one step at a time,
+pauses instead of failing when the budget is spent, and gives a phase's part back once that phase's
+data is dead. One ticket at a time holds the overdraw token until its request ends. Work that
+request waits on, a shared fetch or render, may overdraw on the same token, so the overshoot stays
+near one request with its shared work, and a pause never deadlocks.
 -}
 module Ecluse.Core.Server.Admission.Meter (
     -- * The meter
@@ -25,6 +26,13 @@ module Ecluse.Core.Server.Admission.Meter (
     withMemoryEntry,
     charge,
     newChargeRegion,
+
+    -- * Giving charge back
+    ChargePart,
+    newChargePart,
+    chargePart,
+    servingPart,
+    stepDown,
 
     -- * Shared work
     awaitingFlight,
@@ -129,7 +137,7 @@ data MemoryTicket = MemoryTicket
     { tMeter :: MemoryMeter
     , tId :: Int
     , tCharged :: TVar Int
-    -- ^ Everything this ticket took from the budget, returned in one transaction at the end.
+    -- ^ What this ticket holds against the budget. Parts give some back early, the rest at the end.
     , tHeadroom :: IORef Int
     -- ^ Paid but not yet used, so most chunks touch no shared state.
     , tServes :: Maybe FlightKey
@@ -255,6 +263,41 @@ newChargeRegion pay = do
         let next = max previous requested
         when (next > previous) (pay (next - previous))
         pure next
+
+{- | What one phase of a request paid onto its ticket, so the phase can give it back once the data it
+paid for is dead.
+-}
+data ChargePart = ChargePart MemoryTicket (IORef Int)
+
+-- | A part of the ticket that has paid nothing yet.
+newChargePart :: MemoryTicket -> IO ChargePart
+newChargePart ticket = ChargePart ticket <$> newIORef 0
+
+-- | Pay through the part, so the part may give the cost back later.
+chargePart :: ChargePart -> Int -> IO ()
+chargePart (ChargePart ticket paid) cost = when (cost > 0) $ do
+    charge ticket cost
+    atomicModifyIORef' paid (\total -> (total + cost, ()))
+
+-- | The same part, paying for shared work as 'servingFlight' does.
+servingPart :: FlightKey -> ChargePart -> ChargePart
+servingPart key (ChargePart ticket paid) = ChargePart (servingFlight key ticket) paid
+
+{- | Give back what the part paid above @kept@ bytes, in one transaction with the meter. A part gives
+back only its own payments and each of them once, and nothing after its ticket is released.
+-}
+stepDown :: ChargePart -> Int -> IO ()
+stepDown (ChargePart ticket paid) kept = UE.mask_ $ do
+    surplus <- atomicModifyIORef' paid (\total -> let back = max 0 (total - max 0 kept) in (total - back, back))
+    when (surplus > 0) (atomically (giveBack ticket surplus))
+
+-- Return bytes to the meter, never more than the ticket holds, so a released ticket returns nothing.
+giveBack :: MemoryTicket -> Int -> STM ()
+giveBack ticket bytes = do
+    held <- readTVar (tCharged ticket)
+    let returned = min held bytes
+    writeTVar (tCharged ticket) (held - returned)
+    modifyTVar' (mmCharged (tMeter ticket)) (subtract returned)
 
 -- | Pay for bytes the request is about to hold, already scaled to their charge.
 charge :: MemoryTicket -> Int -> IO ()

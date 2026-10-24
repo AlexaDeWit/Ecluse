@@ -53,7 +53,7 @@ import Ecluse.Core.Rules (newEvaluator)
 import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext (ctxAdvisoryEtag), completeEvidence, mkEvalContext)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
-import Ecluse.Core.Server.Admission.Meter (MemoryTicket, awaitingFlight, charge, servingFlight)
+import Ecluse.Core.Server.Admission.Meter (ChargePart, MemoryTicket, awaitingFlight, charge, newChargePart, servingFlight, stepDown)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfOutputPermille))
 import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Cache.Types (assembledKey)
@@ -178,6 +178,10 @@ data PackumentServing response = PackumentServing
     , psvRuntime :: ServeRuntime
     , psvTicket :: MemoryTicket
     -- ^ The request's account with the memory meter, which its reads and its output pay into.
+    , psvPrivateRead :: ChargePart
+    -- ^ What the private read paid. It steps down to what the read keeps, and goes once the body exists.
+    , psvPublicRead :: ChargePart
+    -- ^ The same for the public read, which pays only when this request leads the shared fetch.
     }
 
 servingMetrics :: PackumentServing response -> MetricsPort
@@ -197,19 +201,24 @@ packumentWith mode replies name request respond = do
     let mount = ctxMount ctx
         deps = bindingPackumentDeps mount
         clientToken = forwardedCredential mount request
-        serving ticket =
-            PackumentServing
-                { psvMode = mode
-                , psvReplies = replies
-                , psvDeps = deps
-                , psvName = name
-                , psvRequest = request
-                , psvRespond = respond
-                , psvRuntime = ctxRuntime ctx
-                , psvTicket = ticket
-                }
+        serving ticket = do
+            privateRead <- liftIO (newChargePart ticket)
+            publicRead <- liftIO (newChargePart ticket)
+            pure
+                PackumentServing
+                    { psvMode = mode
+                    , psvReplies = replies
+                    , psvDeps = deps
+                    , psvName = name
+                    , psvRequest = request
+                    , psvRespond = respond
+                    , psvRuntime = ctxRuntime ctx
+                    , psvTicket = ticket
+                    , psvPrivateRead = privateRead
+                    , psvPublicRead = publicRead
+                    }
     if edgeTokenMatches (pdInboundToken deps) clientToken
-        then withMetadataAdmission (ctxRuntime ctx) (refuse packumentUnavailable [shedRetryAfter] shedMessage) (\ticket -> serveAdmittedPackument (serving ticket) clientToken) pure
+        then withMetadataAdmission (ctxRuntime ctx) (refuse packumentUnavailable [shedRetryAfter] shedMessage) (serving >=> (`serveAdmittedPackument` clientToken)) pure
         else refuse packumentUnauthorised [] unauthorisedMessage
   where
     refuse reply headers message = liftIO (respond (reply replies headers (mkRefusal Nothing message)))
@@ -223,35 +232,36 @@ serveAdmittedPackument serving clientToken = do
             ((private, checked), public) <-
                 concurrently
                     ( do
-                        private <- fetchPrivateOrigin deps (psvRuntime serving) (psvTicket serving) clientToken (psvName serving)
+                        private <- readPrivate serving clientToken
                         checked <- case private of
                             OriginAuthorisationFailure _ -> pure (Right Nothing)
                             _ -> liftIO (validateMirrorProject mirror (psvTicket serving) (psvName serving))
                         pure (private, checked)
                     )
-                    (fetchPublicOrigin deps (psvRuntime serving) (psvTicket serving) (psvName serving))
+                    (readPublic serving)
             case private of
                 OriginAuthorisationFailure _ -> privateAccessRefused serving
                 _ -> case checked of
                     Left _ -> mirrorUnavailable serving
                     Right record -> serveMergedPackument serving evalCtx record private public
         _ -> do
-            (private, public) <- resolveOrigins deps (psvRuntime serving) (psvTicket serving) clientToken (psvName serving)
+            (private, public) <- resolveOrigins serving clientToken
             case private of
                 OriginAuthorisationFailure _ -> privateAccessRefused serving
                 _ -> serveMergedPackument serving evalCtx Nothing private public
   where
     deps = psvDeps serving
 
-resolveOrigins :: PackumentDeps -> ServeRuntime -> MemoryTicket -> Maybe ClientCredential -> PackageName -> Handler (OriginResult, OriginResult)
-resolveOrigins deps rt ticket clientToken name
-    | pdFirstParty deps name = do
-        privResult <- fetchPrivateOrigin deps rt ticket clientToken name
-        pure (privResult, OriginAbsent)
-    | otherwise =
-        concurrently
-            (fetchPrivateOrigin deps rt ticket clientToken name)
-            (fetchPublicOrigin deps rt ticket name)
+resolveOrigins :: PackumentServing response -> Maybe ClientCredential -> Handler (OriginResult, OriginResult)
+resolveOrigins serving clientToken
+    | pdFirstParty (psvDeps serving) (psvName serving) = (,OriginAbsent) <$> readPrivate serving clientToken
+    | otherwise = concurrently (readPrivate serving clientToken) (readPublic serving)
+
+readPrivate :: PackumentServing response -> Maybe ClientCredential -> Handler OriginResult
+readPrivate serving clientToken = fetchPrivateOrigin (psvDeps serving) (psvRuntime serving) (psvPrivateRead serving) clientToken (psvName serving)
+
+readPublic :: PackumentServing response -> Handler OriginResult
+readPublic serving = fetchPublicOrigin (psvDeps serving) (psvRuntime serving) (psvTicket serving) (psvPublicRead serving) (psvName serving)
 
 -- An explicit private refusal stops the request: no public document may stand in for it.
 privateAccessRefused :: PackumentServing response -> Handler ResponseReceived
@@ -385,6 +395,7 @@ answerPackumentConditional serving sources plan =
                 logFM DebugS (ls ("serving packument for " <> renderPackageName name))
                 -- The assembled cache holds the identity bytes under the identity tag, whatever the coding.
                 bytes <- liftIO (servedBytes serving sources plan identityTag)
+                liftIO (releaseReads serving)
                 listing <- liftIO (codedListing (psvTicket serving) coding bytes)
                 liftIO (respond (packumentResponse replies (psvMode serving) (represented [etagHeader fresh]) listing))
   where
@@ -399,6 +410,10 @@ answerPackumentConditional serving sources plan =
     represented = case pdMetadataCompression deps of
         GzipWhenAccepted -> varyAcceptEncoding
         IdentityOnly -> id
+
+-- Once the body exists nothing reaches the reads' documents, so only the output charge stays while it is sent.
+releaseReads :: PackumentServing response -> IO ()
+releaseReads serving = traverse_ (`stepDown` 0) [psvPrivateRead serving, psvPublicRead serving]
 
 data CodedListing
     = IdentityListing ByteString

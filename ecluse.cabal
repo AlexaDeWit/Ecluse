@@ -1767,6 +1767,7 @@ test-suite ecluse-residency
     Ecluse.Core.Server.MetadataGzipResidencySpec
     Ecluse.Core.Server.MirrorViewResidencySpec
     Ecluse.Core.Mirror.State.WeightResidencySpec
+    Ecluse.Core.Server.Pipeline.PackumentResidencySpec
     Ecluse.Core.Server.Pipeline.TarballResidencySpec
     Ecluse.Server.Pipeline.TestSupport
 
