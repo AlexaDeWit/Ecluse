@@ -11,18 +11,28 @@ import Test.Hspec
 
 import Data.Map.Strict qualified as Map
 
-import Ecluse.BenchLoad.Harness (LoadKnobs (lkProxyTuning), ProxyFigures (pfBurstMemory, pfCpu), Scenario (scenarioPublicLegUnavailableReason), ScenarioReport (..))
+import Ecluse.BenchLoad.Floors (Enforcement (Enforced), Pass (Loaded))
+import Ecluse.BenchLoad.Harness (LoadKnobs (lkProxyTuning), LoadSummary (lsLabel), ProxyFigures (pfBurstMemory, pfCpu), Scenario (scenarioPublicLegUnavailableReason), ScenarioReport (..))
 import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
 import Ecluse.BenchLoad.Pod (CgroupReading (CgroupReading), ProxyTuning (ptCpus), burstMemory, noTuning, parseCpuList)
-import Ecluse.BenchLoad.Report (Section (sectionKnobs), renderReports, renderServiceTime)
+import Ecluse.BenchLoad.Report (Section (sectionEnforcement, sectionKnobs), renderReports, renderServiceTime)
 import Ecluse.BenchLoad.Scenarios (findScenario)
-import Ecluse.BenchLoad.Support (loadedSection, placedWindow, proxyWithPeak, scenarioReport)
+import Ecluse.BenchLoad.Support (loadedSection, placedWindow, proxyWithPeak, scenarioReport, twoCores)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 
 spec :: Spec
 spec = do
     serviceTimeSpec
     describe "renderReports" $ do
+        it "keeps burst refusals visible beside a background-only floor" $ do
+            let name = "npm/herd-under-heavy-private"
+                plain = scenarioReport name 0 100 0 0
+                burst = plain{srLoad = (srLoad plain){lsLabel = "burst"}, srCompanion = Just (srLoad (scenarioReport name 20 30 1 2)), srDiagnosticBurst = True}
+                section = (loadedSection Npm 5_000 [burst]){sectionEnforcement = Enforced twoCores (Map.singleton (name, Loaded) 10)}
+                rendered = renderReports section
+            rendered `shouldSatisfy` T.isInfixOf "| 100 | 0 | 10 (background only) | 100 | 0 |"
+            rendered `shouldSatisfy` T.isInfixOf "| concurrent load: successes / refusals / transport failures | 20 / 30 / 0 |"
+            rendered `shouldSatisfy` T.isInfixOf "including zero successes"
         it "shows the cgroup's memory through a burst only for a scenario that sent one" $ do
             let sock = CgroupReading Nothing Nothing (Just (900 * mib)) mempty (Map.fromList [("anon", 600 * mib), ("sock", 250 * mib)]) mempty Nothing
                 plain = (scenarioReport "npm/heavy-private" 100 0 255 300){srProxy = Just (proxyWithPeak (950 * mib))}

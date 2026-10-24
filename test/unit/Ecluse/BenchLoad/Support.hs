@@ -54,6 +54,7 @@ scenarioReport name successes refusals p50 p99 =
         , srShape = "2cpu-1gib"
         , srLoad = window
         , srCompanion = Nothing
+        , srDiagnosticBurst = False
         , srSteps = []
         , srReplayTotals = Nothing
         , srRtsSource = "the proxy"

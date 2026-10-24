@@ -37,11 +37,13 @@ module Ecluse.BenchLoad.Harness (
     windowSuccesses,
     windowAttempts,
     windowRefusals,
+    hasDiagnosticBurst,
     reportEvidence,
 ) where
 
 import Control.Concurrent (threadDelay)
-import Data.Aeson (FromJSON, ToJSON)
+import Data.Aeson (FromJSON (parseJSON), ToJSON, Value (Bool, Object), defaultOptions, genericParseJSON, withObject)
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import GHC.Clock (getMonotonicTime)
@@ -270,7 +272,7 @@ data Driver
       DriveUnder Load Load
     | -- | Measure the load while the companion runs beside it for the same duration.
       DriveBeside Load Companion
-    | -- | Hold the load for the configured duration. Halfway through, send this many requests for the URL at once on connections of their own.
+    | -- | Run the required background load for the window, with a diagnostic burst halfway through.
       DriveBurstUnder Int Text Load
     | -- | Consume a finite trace once from the fresh fixture, without priming any cache.
       DriveReplay Replay
@@ -352,6 +354,8 @@ data ScenarioReport = ScenarioReport
     , srLoad :: LoadSummary
     , srCompanion :: Maybe LoadSummary
     -- ^ The concurrent load a paired scenario ran beside the measured one.
+    , srDiagnosticBurst :: Bool
+    -- ^ Only 'DriveBurstUnder' reports a diagnostic burst over a required background load.
     , srSteps :: [LoadSummary]
     -- ^ One summary per ramp step. 'srLoad' is then the last, highest step.
     , srReplayTotals :: Maybe ReplayTotals
@@ -367,7 +371,14 @@ data ScenarioReport = ScenarioReport
     -- ^ What a replay observed, and any rule failures in the window.
     }
     deriving stock (Show, Generic)
-    deriving anyclass (FromJSON, ToJSON)
+    deriving anyclass (ToJSON)
+
+instance FromJSON ScenarioReport where
+    parseJSON = withObject "ScenarioReport" $ \fields ->
+        let withRole
+                | KeyMap.member "srDiagnosticBurst" fields = fields
+                | otherwise = KeyMap.insert "srDiagnosticBurst" (Bool False) fields
+         in genericParseJSON defaultOptions (Object withRole)
 
 -- | Measure one fixture. Missing RTS counters fail the harness.
 runScenario :: Pass -> LoadKnobs -> Scenario -> IO ScenarioReport
@@ -417,6 +428,9 @@ measure knobs s shape (Target proxy driver) = do
             , srShape = shape
             , srLoad = doLoad outcome
             , srCompanion = doCompanion outcome
+            , srDiagnosticBurst = case driver of
+                DriveBurstUnder{} -> True
+                _ -> False
             , srSteps = doSteps outcome
             , srReplayTotals = doReplay outcome
             , srRtsSource = if isJust proxy then "proxy process" else "harness process"
@@ -500,9 +514,7 @@ sampling proxy load = case proxy of
         tasks <- proxyTasksNow p
         pure (fromMaybe 0 . seriesTotal inFlightSeries [] <$> scraped, fromIntegral <$> tasks)
 
-{- | How often the harness reads the proxy cgroup through a burst. A herd on an idle proxy completes
-in about a second, so the one-second gauges would miss its peak.
--}
+-- | The burst sampling interval in milliseconds. One-second gauges miss short bursts.
 burstReadingMs :: Int
 burstReadingMs = 10
 
@@ -511,7 +523,6 @@ sampleBurst proxy burst = case proxy of
     Nothing -> (,Nothing) <$> burst
     Just p -> second (Just . burstMemory burstReadingMs . catMaybes) <$> sampleEvery (burstReadingMs * 1_000) (proxyCgroupNow p) burst
 
--- Run the action, reading the probe at the start and then every interval in microseconds until it ends.
 sampleEvery :: Int -> IO s -> IO a -> IO (a, [s])
 sampleEvery micros probe action = do
     readings <- newIORef []
@@ -642,13 +653,25 @@ windowAttempts = sum . map (\l -> lsCompleted l + lsTransportFailures l) . windo
 windowRefusals :: ScenarioReport -> Int
 windowRefusals = sum . map lsRefusals . windowLoads
 
--- | The invariant evidence one report carries: successes per load or step, OOM kills, and the ending.
+-- | Only the combined probe's burst is diagnostic. Its background load still requires successes.
+hasDiagnosticBurst :: ScenarioReport -> Bool
+hasDiagnosticBurst r =
+    srDiagnosticBurst r
+        && lsLabel (srLoad r) == "burst"
+        && isJust (srCompanion r)
+        && null (srSteps r)
+
+-- | Required successes, OOM kills, and process ending. Diagnostic burst counts stay in the report.
 reportEvidence :: ScenarioReport -> RunEvidence
 reportEvidence r =
     RunEvidence
         { reScenario = srName r <> " (" <> srShape r <> ", " <> show (lsConnections (srLoad r)) <> " connections)"
-        , reSuccesses = [(lsLabel l, lsSuccesses l) | l <- windowLoads r]
+        , reSuccesses = [(lsLabel l, lsSuccesses l) | l <- requiredLoads]
         , reOomKills = maybe 0 (counter "oom_kill" . crMemoryEvents) (pfCgroup =<< srProxy r)
         , reEnding = pfEnding <$> srProxy r
         , reExitedEarly = maybe False pfExitedEarly (srProxy r)
         }
+  where
+    requiredLoads
+        | hasDiagnosticBurst r = maybeToList (srCompanion r)
+        | otherwise = windowLoads r

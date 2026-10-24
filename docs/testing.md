@@ -1066,7 +1066,7 @@ Read a red result according to its measurement:
   fault, a 408, a 429, a 5xx, a 401, or a 403 makes the package unavailable instead. The report then marks the run
   incomplete, and the job raises a warning. Live documents grow as packages publish, so no budget applies to them. Its
   report separates upstream time from the legs.
-- Load benchmarks use `oha` against a proxy process. A run fails when a scenario or a ramp step gets no successful response,
+- Load benchmarks use `oha` against a proxy process. A run fails when a required load or ramp step gets no successful response,
   when a count of successes is below its [success floor](#success-floors), when a scheduled run's configuration keeps it
   off the floors, when the kernel OOM-kills a proxy, when a proxy exits on heap overflow, and when a proxy ends any other
   way than the clean shutdown the harness asks for, early exits included. It also fails when the harness or a proxy cannot
@@ -1384,7 +1384,13 @@ there.
 with the rest of the process's own memory. Compare the `sock` peak with `memory.peak` less the RTS
 maximum memory in use. A `sock` peak near that gap shows that socket buffers take the room outside
 the heap. The at-a-glance row shows the burst's successes, and the concurrent load row shows the
-`heavy-private` load's. One floor holds both.
+`heavy-private` load's. Only the background `heavy-private` load requires successes and meets a floor.
+The burst's successes and refusals remain diagnostic, including zero successes. This exception applies
+only to these two combined scenarios. All process and memory-failure checks still apply.
+
+Both scenarios stay in scheduled coverage. Their background floors need fresh measurements after
+the integrated contention fixes in #1868, at the pod shapes used for delivery. Earlier observations
+do not supply this calibration. Until those measurements exist, the missing-floor check remains red.
 
 #### Capability sweeps
 
@@ -1454,7 +1460,7 @@ merge: a breach turns only its own scheduled or dispatched run red.
 | Concurrency-one pass | The same count, for each scenario that joins that pass |
 | `npm/ramp`, `pypi/ramp` | Every step. The one floor comes from the lowest step of the calibration runs, and each step must reach it |
 | `npm/warm-under-cold`, `pypi/warm-under-cold`, `npm/slow-readers`, `pypi/slow-readers` | Both loads, the measured one and the one beside it |
-| `npm/herd-under-heavy-private`, `pypi/herd-under-heavy-private` | Both loads, the burst and the concurrent one |
+| `npm/herd-under-heavy-private`, `pypi/herd-under-heavy-private` | Only the concurrent `heavy-private` background load. Burst successes and refusals stay diagnostic |
 | `npm/worker-mirroring`, `pypi/worker-mirroring` | Complete jobs under `unlimited`, the only shape that runs the in-process worker |
 | The request-pattern replays | A finite trace whose count is the same every night, so the floor is half of it |
 
@@ -1561,7 +1567,8 @@ Read each pod shape's `bench-load-results.md`:
 | Native injected latencies | The "injected upstream latency" row in each ecosystem section's operating point |
 
 Set each floor to half the lowest count over the ten runs, rounded down, and at least 1. A scenario
-with several loads takes the lowest count of any of them. Then write the `calibration` record:
+with several required loads takes the lowest count of those loads. The combined probes use only
+their background counts. Then write the `calibration` record:
 
 - `runs`: each run's URL with the commit it measured. Ten runs can span commits, so every run
   carries its own. Keep the exact measured commit when a later patch changes only calibration data or report wording.
