@@ -210,9 +210,11 @@ and the wiring. Six design facts hold regardless:
   logs a failed export under a throttle.
 - **Metric records batch per capability.** The SDK keeps every series in one shared cell. Écluse
   records into one cell per capability by compare-and-swap, and hands the totals to the SDK once a
-  second and before every collection, the reader's final export at shutdown included, so every
-  export sees each record made before it. Counts, buckets, minimums and maximums stay exact, and
-  exemplars keep the trace of the request that recorded them.
+  second and before every collection, including the reader's final export at shutdown.
+  Records remain exact over time. A collection drains the cells separately, so concurrent records
+  can reach different collections. An up-down counter can briefly report a negative value when its
+  decrement reaches a collection before its increment. The next collection includes the increment.
+  Exemplars keep the trace of the request that recorded them.
 - **Threaded RTS required.** The OTel SDK's batch span processor aborts under the non-threaded
   runtime, so telemetry needs the threaded runtime the image runs.
 - **The resource-attribute header is bounded.** `service.name` travels on `OTEL_SERVICE_NAME`

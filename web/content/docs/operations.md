@@ -666,13 +666,20 @@ near one request and the shared work it waits on, and a pause always leaves a re
 finishes. Everything a request paid returns when it ends. Trusted private artifact hits and
 artifact relay pay nothing.
 
-A new request that finds the memory gate's or the CPU gate's waiting room full does not get a `503`
-at once. It waits up to 0.5 s outside both gates, holding no CPU slot and no memory charge, and the
-oldest such request takes the next place that frees. If no place frees in time, it gets `503` with
-`Retry-After: 1`. At most 8 requests per serve slot wait this way, 320 at 2 CPUs. Past that, Écluse
-answers `503` at once and closes the connection. So a client that ignores `Retry-After` sends at
-most about two requests a second on each connection, and a short burst gets in instead of being
-refused.
+A request that finds either waiting room full can wait in overflow outside both gates, without a
+CPU slot or memory charge. It can retry admission for 0.5 s. The next sweeper tick ends an expired
+wait, normally within another 100 ms. A freed place wakes the oldest request waiting for that gate.
+New requests can still enter first, and a woken request follows the normal admission rule.
+
+A retry uses each gate's normal one-second room wait. Those waits can occur before overflow and
+after its last wake, so total time before a refusal can exceed 0.5 s. No new retry starts after the
+overflow budget expires. A refusal still carries `503` and `Retry-After: 1`.
+
+Overflow has 8 reservations per serve slot, 320 at 2 CPUs. A request keeps its reservation through
+retries and any work they admit. Past that cap, Écluse answers `503` at once and closes the HTTP/1
+connection after the response. HTTP/2 keeps its connection open and returns the same refusal
+status and retry delay. A front proxy controls its downstream connections. This limits held
+overflow state, but does not impose a per-client request rate.
 
 The budget starts at a quarter of the heap the nursery leaves, less the cache budget, the queue
 tenants and the idle process. That is the live data at which the copying collector still runs
@@ -706,15 +713,15 @@ only the collector's share moves it.
 | `ecluse.serve.admission.memory.shed` | Requests refused at the memory gate |
 | `ecluse.serve.admission.memory.pauses` | Times a started request paused for memory |
 | `ecluse.serve.admission.memory.overdraws` | Steps a request took past the budget |
-| `ecluse.serve.admission.overflow.waiting` | Requests a full waiting room turned away, waiting for a place now |
-| `ecluse.serve.admission.overflow.admitted` | Waiting requests that got a place |
-| `ecluse.serve.admission.overflow.shed` | Waiting requests refused after 0.5 s |
-| `ecluse.serve.admission.overflow.full` | Requests refused at once because the wait was full |
+| `ecluse.serve.admission.overflow.waiting` | Requests parked in overflow now, excluding retries and admitted work |
+| `ecluse.serve.admission.overflow.admitted` | Overflow requests that reached a room or ran after a retry, including later room expiry |
+| `ecluse.serve.admission.overflow.shed` | Requests refused when the overflow retry budget expired |
+| `ecluse.serve.admission.overflow.full` | Requests refused because all overflow reservations were occupied |
 
 A `503` with `Retry-After` from either gate is backpressure, so exclude it from alerts. A brake
 level that stays at `2`, or a `shed` count that keeps rising, means the pod needs more memory for
-its package mix. An `overflow.full` count that keeps rising means more clients wait at once than
-the pod can hold, so add replicas or slots.
+its package mix. A rising `overflow.full` count means queued requests, retries and admitted work occupy all overflow
+reservations. Consider more replicas or slots.
 
 ### The rest of the plan
 
