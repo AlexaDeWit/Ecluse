@@ -24,7 +24,6 @@ module Ecluse.Composition.Maintenance (
 ) where
 
 import Data.Map.Strict qualified as Map
-import Network.HTTP.Client (Manager)
 import Validation (eitherToValidation, validationToEither)
 
 import Ecluse.Composition.BootError (
@@ -52,9 +51,11 @@ import Ecluse.Config (
 import Ecluse.Config.Target (resolvePrivateBackend)
 import Ecluse.Core.BuildIdentity (identityManagerSettings)
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), CredentialProvider, bareCredential, mintSecret)
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
 import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient), untracedExchange)
 import Ecluse.Core.Registry.Maintenance (
     StoreFacts (factBudget),
     StoreMaintenance (storeFacts),
@@ -93,6 +94,8 @@ data StorePorts = StorePorts
     -- ^ The credential for this exact target. An anonymous protocol observation holds none.
     , spUserAgent :: ByteString
     -- ^ The precomputed identity shared by this store's registry requests.
+    , spDeadlines :: Deadlines
+    -- ^ The process's sweeper, which bounds this store's registry requests.
     , spBudget :: BudgetPorts
     -- ^ What this store's requests are counted and paced through.
     }
@@ -167,13 +170,13 @@ buildStoreMaintenance :: BuildStoreMaintenance
 buildStoreMaintenance ports limits cleared = budgeted ports cleared <$> built
   where
     built = do
-        (readManifest, manager) <- storeAccess ports limits cleared
+        (readManifest, client) <- storeAccess ports limits cleared
         case cbControl cleared of
             ClearedCodeArtifact store -> newCodeArtifactMaintenance (maxVersionCount limits) (cbAlphabet cleared) readManifest store
             ClearedCodeArtifactCache store -> newCodeArtifactCacheMaintenance (maxVersionCount limits) (cbAlphabet cleared) readManifest store
             ClearedProtocol store -> do
-                deletionManager <- newPooledManager storeConnections (identityManagerSettings (spUserAgent ports) (singleAttemptSettings typedTlsManagerSettings))
-                pure (newProtocolMaintenance (protocolStore limits cleared store readManifest manager deletionManager))
+                deletionClient <- storeClient ports
+                pure (newProtocolMaintenance (protocolStore limits cleared store readManifest client deletionClient))
 
 -- Resolve the capacity pool before metering requests against it.
 budgeted :: StorePorts -> ClearedBackend -> StoreMaintenance -> StoreMaintenance
@@ -190,12 +193,12 @@ buildStoreObservation ports limits cleared = observed <$> built
         let facts = resolvedFacts ports cleared (obFacts handle)
          in (meteredObservation (gateOver ports facts) handle){obFacts = facts}
     built = do
-        (readManifest, manager) <- storeAccess ports limits cleared
+        (readManifest, client) <- storeAccess ports limits cleared
         case cbControl cleared of
             ClearedCodeArtifact store -> newCodeArtifactObservation (maxVersionCount limits) (cbAlphabet cleared) readManifest store
             ClearedCodeArtifactCache store -> newCodeArtifactCacheObservation (maxVersionCount limits) (cbAlphabet cleared) readManifest store
             ClearedProtocol store ->
-                pure (newProtocolObservation (protocolRead limits cleared store readManifest manager))
+                pure (newProtocolObservation (protocolRead limits cleared store readManifest client))
 
 resolvedFacts :: StorePorts -> ClearedBackend -> StoreFacts -> StoreFacts
 resolvedFacts ports cleared facts =
@@ -239,42 +242,44 @@ declared budget override =
   where
     weighted kind costs = maybe costs (\weight -> Map.map (* weight) costs) (Map.lookup kind (qoWeights override))
 
--- One manager of the store's own, and the manifest read that leads over it.
-storeAccess :: StorePorts -> Limits -> ClearedBackend -> IO (StoreManifestRead, Manager)
+-- One client of the store's own, and the manifest read that leads over it.
+storeAccess :: StorePorts -> Limits -> ClearedBackend -> IO (StoreManifestRead, ExchangeClient)
 storeAccess ports limits cleared = do
-    manager <- storeManager (spUserAgent ports)
-    pure (storeManifestRead ports limits cleared manager, manager)
+    client <- storeClient ports
+    pure (storeManifestRead ports limits cleared client, client)
 
 -- Resolve the current secret for each read because managed tokens expire.
-storeManifestRead :: StorePorts -> Limits -> ClearedBackend -> Manager -> StoreManifestRead
-storeManifestRead ports limits cleared manager name = do
+storeManifestRead :: StorePorts -> Limits -> ClearedBackend -> ExchangeClient -> StoreManifestRead
+storeManifestRead ports limits cleared client name = do
     token <- traverse mintSecret (spCredential ports)
     first storeFaultOfMetadata
-        <$> cbFetchManifest cleared (spTracing ports) (storeOrigin limits cleared manager (ClientCredential (cbUsername cleared) <$> token)) name
+        <$> cbFetchManifest cleared (spTracing ports) (storeOrigin limits cleared client (ClientCredential (cbUsername cleared) <$> token)) name
 
-storeOrigin :: Limits -> ClearedBackend -> Manager -> Maybe ClientCredential -> OriginClient
-storeOrigin limits cleared manager = originClient limits manager (cbUrl cleared)
+storeOrigin :: Limits -> ClearedBackend -> ExchangeClient -> Maybe ClientCredential -> OriginClient
+storeOrigin limits cleared client = originClient limits client (cbUrl cleared)
 
 -- Disable hidden HTTP replay so every attempt consumes the store's request budget.
-storeManager :: ByteString -> IO Manager
-storeManager renderedAgent = newPooledManager storeConnections (identityManagerSettings renderedAgent (singleAttemptSettings typedTlsManagerSettings))
+storeClient :: StorePorts -> IO ExchangeClient
+storeClient ports = do
+    manager <- newPooledManager storeConnections (identityManagerSettings (spUserAgent ports) (singleAttemptSettings typedTlsManagerSettings))
+    pure (ExchangeClient manager (spDeadlines ports) untracedExchange)
 
 -- One store, swept package by package, so the pool holds what one in-flight request needs.
 storeConnections :: Int
 storeConnections = 4
 
-protocolStore :: Limits -> ClearedBackend -> ClearedProtocolStore -> StoreManifestRead -> Manager -> Manager -> ProtocolStore
-protocolStore limits cleared store readManifest manager deletionManager =
+protocolStore :: Limits -> ClearedBackend -> ClearedProtocolStore -> StoreManifestRead -> ExchangeClient -> ExchangeClient -> ProtocolStore
+protocolStore limits cleared store readManifest client deletionClient =
     ProtocolStore
-        { psRead = protocolRead limits cleared store readManifest manager
-        , psDeleteOrigin = storeOrigin limits cleared deletionManager (bareCredential <$> cpsToken store)
+        { psRead = protocolRead limits cleared store readManifest client
+        , psDeleteOrigin = storeOrigin limits cleared deletionClient (bareCredential <$> cpsToken store)
         , psDelete = cpsDelete store
         }
 
-protocolRead :: Limits -> ClearedBackend -> ClearedProtocolStore -> StoreManifestRead -> Manager -> ProtocolRead
-protocolRead limits cleared store readManifest manager =
+protocolRead :: Limits -> ClearedBackend -> ClearedProtocolStore -> StoreManifestRead -> ExchangeClient -> ProtocolRead
+protocolRead limits cleared store readManifest client =
     ProtocolRead
-        { prOrigin = storeOrigin limits cleared manager (bareCredential <$> cpsToken store)
+        { prOrigin = storeOrigin limits cleared client (bareCredential <$> cpsToken store)
         , prReadManifest = readManifest
         , prListing = cpsListing store
         , prCodec = cpsCodec store
@@ -287,6 +292,7 @@ protocolRead limits cleared store readManifest manager =
 planStoreMaintenance ::
     (StorePorts -> Limits -> ClearedBackend -> IO store) ->
     TracingPort ->
+    Deadlines ->
     ByteString ->
     BudgetPorts ->
     CredentialProviders ->
@@ -300,13 +306,14 @@ planStoreMaintenanceFor ::
     CredentialTarget ->
     (StorePorts -> Limits -> ClearedBackend -> IO store) ->
     TracingPort ->
+    Deadlines ->
     ByteString ->
     BudgetPorts ->
     CredentialProviders ->
     Limits ->
     Map Ecosystem ClearedBackend ->
     IO (Either [BootError] (Map Ecosystem store))
-planStoreMaintenanceFor target build tracing renderedAgent budget credentials limits backends =
+planStoreMaintenanceFor target build tracing deadlines renderedAgent budget credentials limits backends =
     validationToEither . traverse eitherToValidation <$> Map.traverseWithKey planOne backends
   where
     planOne eco backend =
@@ -318,6 +325,7 @@ planStoreMaintenanceFor target build tracing renderedAgent budget credentials li
         StorePorts
             { spTracing = tracing
             , spUserAgent = renderedAgent
+            , spDeadlines = deadlines
             , spCredential = lookupTargetProvider target eco credentials
             , spBudget = budget
             }

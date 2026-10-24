@@ -55,12 +55,12 @@ import Network.Socket (close, setCloseOnExecIfNeeded, socketPort, withFdSocket, 
 import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, pathInfo, rawPathInfo, requestHeaders, requestMethod)
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Middleware.RealIp (realIp)
-import Network.Wai.Middleware.Timeout (timeout)
 import System.Posix.Signals qualified as Posix
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Async (race_)
 import UnliftIO.Exception (bracket, catchAny, throwIO)
 
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Security (requestTimeoutSeconds)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -77,7 +77,7 @@ import Ecluse.Core.Server.Fault (RequestFault (rqCause, rqDetail), classifyEscap
 import Ecluse.Core.Server.Readiness (Readiness, alwaysReady)
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpRequestPerimeterFault))
 import Ecluse.Core.Worker (Liveness, alwaysLive)
-import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envTelemetry, serveRuntimeOf)
+import Ecluse.Runtime.Env (Env, envDdContext, envDeadlines, envLogEnv, envTelemetry, serveRuntimeOf)
 import Ecluse.Runtime.Log (moduleLog)
 import Ecluse.Runtime.Server.Drain (
     DrainSignal,
@@ -97,6 +97,7 @@ import Ecluse.Runtime.Server.Middleware (
     goingAwayMiddleware,
     jsonResponse,
     probeApplication,
+    requestTimeout,
  )
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Runtime.Telemetry.Tracing (telemetryWaiMiddleware)
@@ -156,13 +157,13 @@ defaultPort = 4873
 middleware stack ('serverMiddleware').
 -}
 application :: ServerConfig -> Env -> Application
-application cfg env = serverMiddleware cfg (dispatch cfg env)
+application cfg env = serverMiddleware (envDeadlines env) cfg (dispatch cfg env)
 
 {- | The WAI 'Application' of a role that serves the health probes and nothing else. Every
 path outside @\/livez@ and @\/readyz@ is the neutral @404@.
 -}
-probeOnlyApplication :: ServerConfig -> IO Application
-probeOnlyApplication cfg = pure (serverMiddleware cfg (probesOf cfg))
+probeOnlyApplication :: Deadlines -> ServerConfig -> IO Application
+probeOnlyApplication deadlines cfg = pure (serverMiddleware deadlines cfg (probesOf cfg))
 
 -- The health probes over one config's drain signal and injected checks.
 probesOf :: ServerConfig -> Application
@@ -286,10 +287,10 @@ dropTrailingSlashes = dropWhileEnd (== "")
 {- | The cross-cutting stack around the proxy 'Application'. The body cap is not a middleware:
 it would throw across the request perimeter, and @Autohead@ and @Gzip@ fight streaming.
 -}
-serverMiddleware :: ServerConfig -> Middleware
-serverMiddleware cfg =
+serverMiddleware :: Deadlines -> ServerConfig -> Middleware
+serverMiddleware deadlines cfg =
     realIp
-        . timeout requestTimeoutSeconds
+        . requestTimeout deadlines requestTimeoutSeconds
         . goingAwayMiddleware (scDrain cfg)
 
 {- | Serve the front door over one live 'DrainSignal', which the probe, the going-away header,

@@ -44,6 +44,7 @@ import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Cve.Slot (swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (mkScope)
@@ -99,6 +100,7 @@ import Ecluse.Runtime.Test.Cve (fetchServingAt, headOnlyFetch)
 import Ecluse.Runtime.Test.Support (newTestEnv, newTestEnvLogging)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Cve (fakeCveDb)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (captureJsonLog, memoryLogEnv, newTestLogEnv)
 import Ecluse.Test.Osv (mkDbWithWrongEpoch, mkMinimalValidDbWithMeta)
 import Ecluse.Test.Package (validSha256, validSha256Sri)
@@ -110,7 +112,7 @@ import Ecluse.Test.Registry.Npm.Publish (npmReleaseDocument)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps, npmServeDeps, pypiServeDeps)
 import Ecluse.Test.Stub (Captured (capHeaders, capPath), stubLocalhostUrl, withRoutedStub)
-import Ecluse.Test.Wai (bodyContainsAll, freePort, selfBaseUrlOf, servedVersions, status)
+import Ecluse.Test.Wai (bodyContainsAll, freePort, selfBaseUrlOf, servedVersions, status, withSweptApp)
 
 -- A mount with the given prefix and router over __inert__ serve dependencies, for routing cases alone.
 mountAt :: NonEmpty Text -> MountRouter -> MountBinding
@@ -129,19 +131,19 @@ publishMountAt prefix router publishDeps =
         }
 
 -- One npm mount over closed-port upstreams and no publish target, resolved as the composition root resolves it.
-npmApp :: IO Application
-npmApp = application (mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))) <$> newTestEnv
+npmApp :: Deadlines -> IO Application
+npmApp deadlines = application (mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))) <$> newTestEnv deadlines
 
 -- One PyPI mount over closed-port upstreams and no publication target.
-pypiApp :: IO Application
-pypiApp = application (mkServerConfig (maybeToList (mountBindingFor PyPI (inertDepsFor pypiAdapter) Nothing))) <$> newTestEnv
+pypiApp :: Deadlines -> IO Application
+pypiApp deadlines = application (mkServerConfig (maybeToList (mountBindingFor PyPI (inertDepsFor pypiAdapter) Nothing))) <$> newTestEnv deadlines
 
 -- | An unreachable target distinguishes a refused publish from one that reached the relay.
-npmMountApp :: IO Application
-npmMountApp = application (mkServerConfig [mountAt ("npm" :| []) npmRouter]) <$> newTestEnv
+npmMountApp :: Deadlines -> IO Application
+npmMountApp deadlines = application (mkServerConfig [mountAt ("npm" :| []) npmRouter]) <$> newTestEnv deadlines
 
 -- | An unreachable publish target distinguishes relay attempts from local guard refusals.
-publishMountApp :: IO Application
+publishMountApp :: Deadlines -> IO Application
 publishMountApp = publishAppWith basePublishDeps
 
 -- | Allow the fixture scope while keeping the target unreachable.
@@ -165,14 +167,14 @@ widgetName :: Text
 widgetName = "@acme/widget"
 
 -- One @\/npm@ mount with the given publish deps and a body budget these cases never contend on.
-publishAppWith :: (ByteAdmission -> PublishDeps) -> IO Application
-publishAppWith mkDeps = do
-    bodyBudget <- newByteAdmission (128 * 1024 * 1024)
-    application (mkServerConfig [publishMountAt ("npm" :| []) npmRouter (Just (mkDeps bodyBudget))]) <$> newTestEnv
+publishAppWith :: (ByteAdmission -> PublishDeps) -> Deadlines -> IO Application
+publishAppWith mkDeps deadlines = do
+    bodyBudget <- newByteAdmission deadlines (128 * 1024 * 1024)
+    application (mkServerConfig [publishMountAt ("npm" :| []) npmRouter (Just (mkDeps bodyBudget))]) <$> newTestEnv deadlines
 
 -- One @\/npm@ mount under a __fake__ router, proving dispatch follows the binding's router.
-fakeRouterApp :: IO Application
-fakeRouterApp = application (mkServerConfig [mountAt ("npm" :| []) fakeRouter]) <$> newTestEnv
+fakeRouterApp :: Deadlines -> IO Application
+fakeRouterApp deadlines = application (mkServerConfig [mountAt ("npm" :| []) fakeRouter]) <$> newTestEnv deadlines
   where
     -- npm's @is-odd@ would be a packument read. Under this router it is a miss, so the two
     -- routers give observably different answers.
@@ -184,26 +186,26 @@ fakeRouterApp = application (mkServerConfig [mountAt ("npm" :| []) fakeRouter]) 
     fakeContract = variableOpaqueContract "application/json" "The fake router's response."
 
 -- No mounts: every path but the health probes is the neutral @404@.
-neutralApp :: IO Application
-neutralApp = application (mkServerConfig []) <$> newTestEnv
+neutralApp :: Deadlines -> IO Application
+neutralApp deadlines = application (mkServerConfig []) <$> newTestEnv deadlines
 
 -- | The probe-only front door the Dredger and Pilot worker roles run.
-probeOnlyApp :: IO Application
-probeOnlyApp = probeOnlyApplication (mkServerConfig [])
+probeOnlyApp :: Deadlines -> IO Application
+probeOnlyApp deadlines = probeOnlyApplication deadlines (mkServerConfig [])
 
 -- | 'probeOnlyApp' with the injected liveness check failing, which only @\/livez@ reads.
-deadProbeOnlyApp :: IO Application
-deadProbeOnlyApp = probeOnlyApplication ((mkServerConfig []){scCheckLive = pure notLive})
+deadProbeOnlyApp :: Deadlines -> IO Application
+deadProbeOnlyApp deadlines = probeOnlyApplication deadlines ((mkServerConfig []){scCheckLive = pure notLive})
 
 -- | A failing liveness verdict with no poll recorded, standing in for a stalled loop.
 notLive :: Liveness
 notLive = Liveness{liveHealthy = False, liveLastPoll = Nothing}
 
 -- An npm mount whose 'DrainSignal' is __already raised__, as mid-shutdown, with no socket bound.
-drainingApp :: IO Application
-drainingApp = do
+drainingApp :: Deadlines -> IO Application
+drainingApp deadlines = do
     drain <- raisedDrain
-    application (mkServerConfig [mountAt ("npm" :| []) npmRouter]){scDrain = drain} <$> newTestEnv
+    application (mkServerConfig [mountAt ("npm" :| []) npmRouter]){scDrain = drain} <$> newTestEnv deadlines
 
 -- | A live 'DrainSignal' raised into the draining state.
 raisedDrain :: IO DrainSignal
@@ -213,14 +215,14 @@ raisedDrain = do
     pure drain
 
 -- An npm mount whose readiness is the Dredger's halt latch, which @\/readyz@ renders with no @mounts@ object.
-latchedApp :: IO Application
-latchedApp =
-    application (mkServerConfig [mountAt ("npm" :| []) npmRouter]){scCheckReady = pure Latched} <$> newTestEnv
+latchedApp :: Deadlines -> IO Application
+latchedApp deadlines =
+    application (mkServerConfig [mountAt ("npm" :| []) npmRouter]){scCheckReady = pure Latched} <$> newTestEnv deadlines
 
 -- An npm mount whose worker heartbeat is past 'workerHeartbeatStaleAfter', so liveness answers @503@.
-stalledWorkerApp :: IO Application
-stalledWorkerApp = do
-    env <- newTestEnv
+stalledWorkerApp :: Deadlines -> IO Application
+stalledWorkerApp deadlines = do
+    env <- newTestEnv deadlines
     now <- getCurrentTime
     -- A poll older than the staleness threshold: the loop did not advance its
     -- heartbeat within the window, so liveness must read it as stalled.
@@ -250,7 +252,7 @@ spec = do
     raceServerAgainstLoopSpec
     uncodedRoutesSpec
     describe "control-plane health probes (above any mount)" $
-        with npmMountApp $ do
+        withSweptApp npmMountApp $ do
             it "reports a null last poll when no background loop is wired behind /livez" $
                 get "/livez" `shouldRespondWith` 200{matchBody = bodyContainsAll ["\"lastPoll\":null"]}
 
@@ -258,12 +260,12 @@ spec = do
                 get "/readyz" `shouldRespondWith` 200
 
     describe "readiness -- the latched arm" $
-        with latchedApp $
+        withSweptApp latchedApp $
             it "fails /readyz with 503 and the halted body a latched Dredger answers" $
                 get "/readyz" `shouldRespondWith` "{\"status\":\"halted\"}"{matchStatus = 503}
 
     describe "liveness -- worker-stall arm of /livez" $
-        with stalledWorkerApp $ do
+        withSweptApp stalledWorkerApp $ do
             it "fails /livez with 503 once the worker heartbeat is stale" $
                 -- Liveness folds in the mirror worker's consume-loop heartbeat, so a loop quiet
                 -- past the threshold flips /livez to 503 even while the front door still serves.
@@ -275,7 +277,7 @@ spec = do
                 get "/readyz" `shouldRespondWith` 200
 
     describe "graceful shutdown -- readiness flip while draining" $
-        with drainingApp $ do
+        withSweptApp drainingApp $ do
             it "fails /readyz with 503 (the LB stops routing new traffic here)" $
                 get "/readyz" `shouldRespondWith` 503
 
@@ -283,19 +285,19 @@ spec = do
                 get "/livez" `shouldRespondWith` 200
 
     describe "graceful shutdown -- going-away header" $ do
-        with drainingApp $
+        withSweptApp drainingApp $
             it "stamps Connection: close on a response while draining" $
                 -- A keep-alive pool (a client's, or a mesh's) must not reuse a socket
                 -- on a closing instance. The header is what tells it to close.
                 get "/npm/-/ping"
                     `shouldRespondWith` 200{matchHeaders = ["Connection" <:> "close"]}
 
-        with npmMountApp $
+        withSweptApp npmMountApp $
             it "adds no Connection header when not draining" $
                 get "/npm/-/ping" `shouldRespondWith` 200{matchHeaders = [matchNoConnectionHeader]}
 
     describe "meta-routes under a mount" $
-        with npmMountApp $ do
+        withSweptApp npmMountApp $ do
             it "answers /npm/-/ping locally with 200 {}" $
                 get "/npm/-/ping" `shouldRespondWith` "{}"{matchStatus = 200}
 
@@ -321,7 +323,7 @@ spec = do
                 request methodDelete "/npm/is-odd" [] "" `shouldRespondWith` 404
 
     describe "dispatch -- /npm mount (prefix strip + npm grammar)" $
-        with npmMountApp $ do
+        withSweptApp npmMountApp $ do
             it "accepts the bare mount prefix with a trailing slash (empty path → 404)" $
                 get "/npm/" `shouldRespondWith` 404
 
@@ -343,13 +345,13 @@ spec = do
                 get "/npm/foo%2Fbar" `shouldRespondWith` 404
 
     describe "first-party publish path (PUT /{pkg})" $ do
-        with npmMountApp $
+        withSweptApp npmMountApp $
             it "405s a publish when no publication target is configured (the opt-in is off)" $
                 -- This mount wires no publish dependencies, so there is no implicit write
                 -- path. A PUT /{pkg} is Method Not Allowed.
                 request methodPut "/npm/widget" [] "" `shouldRespondWith` 405
 
-        with publishMountApp $ do
+        withSweptApp publishMountApp $ do
             it "refuses an out-of-scope publish with 403, before any upstream write (anti-shadowing)" $
                 -- Nothing contacts the unconnectable target, so a 403 rather than a 502 proves the
                 -- guard fired before the relay.
@@ -380,26 +382,26 @@ spec = do
                 -- the URL. It reaches the relay (502 to the unconnectable target), not a 403.
                 request methodPut "/npm/@acme/widget" [] (npmReleaseDocument widgetName widgetName widgetName) `shouldRespondWith` 502
 
-        with (publishAppWith (\b -> (basePublishDeps b){pubAdapter = npmPublish{publishRelay = \_ _ _ -> throwIO (RelayContractEscape "simulated relay contract escape")}})) $
+        withSweptApp (publishAppWith (\b -> (basePublishDeps b){pubAdapter = npmPublish{publishRelay = \_ _ _ -> throwIO (RelayContractEscape "simulated relay contract escape")}})) $
             it "answers a relay contract escape with the route's declared 500 (not a torn session, not a 502)" $
                 -- The relay reports its failures as typed values, so a throw is an invariant break.
                 -- The perimeter answers it with the neutral 500 and the session survives.
                 request methodPut "/npm/@acme/widget" [] (npmReleaseDocument widgetName widgetName widgetName) `shouldRespondWith` 500
 
-        with (publishAppWith (\b -> (basePublishDeps b){pubTargetUrl = loopbackRegistryUrl ""})) $
+        withSweptApp (publishAppWith (\b -> (basePublishDeps b){pubTargetUrl = loopbackRegistryUrl ""})) $
             it "500s an in-scope publish when the publication target URL is unformable (misconfig)" $
                 -- An empty target URL cannot form a request, a configuration fault rather
                 -- than a transient outage, so the publish is a 500 (not a 502).
                 request methodPut "/npm/@acme/widget" [] (npmReleaseDocument widgetName widgetName widgetName) `shouldRespondWith` 500
 
-        with (publishAppWith (\b -> (basePublishDeps b){pubInboundToken = Just (mkSecret "edge-token")})) $ do
+        withSweptApp (publishAppWith (\b -> (basePublishDeps b){pubInboundToken = Just (mkSecret "edge-token")})) $ do
             it "401s a publish that fails the edge token gate (before the scope guard)" $
                 -- With an edge token configured, the edge rejects a publish that carries
                 -- none. It is the same gate the read paths apply.
                 request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 401
 
     describe "the two response tiers (neutral above mounts, route contract within)" $
-        with npmMountApp $ do
+        withSweptApp npmMountApp $ do
             it "renders an UNMOUNTED path as a neutral text/plain 404" $
                 -- No mount matches @/pypi/...@, so there is no ecosystem to shape it. The
                 -- body is the generic plain-text Not Found, not an npm error object.
@@ -417,7 +419,7 @@ spec = do
     describe "dispatch -- injected router (the routing boundary)" $
         -- Dispatch runs under a FAKE router, not npm's, so the action a request takes must
         -- follow the injected function.
-        with fakeRouterApp $ do
+        withSweptApp fakeRouterApp $ do
             it "routes the fake router's recognised path (/npm/beep → answered locally → 200 {})" $
                 get "/npm/beep" `shouldRespondWith` "{}"{matchStatus = 200}
 
@@ -432,7 +434,7 @@ spec = do
     describe "no mounts -- neutral by default" $
         -- With no mount wired, the web layer serves nothing but the health probes.
         -- Every other path matches no mount and is the neutral 404.
-        with neutralApp $ do
+        withSweptApp neutralApp $ do
             it "404s a package-shaped path (no mount is configured)" $
                 get "/npm/is-odd" `shouldRespondWith` "Not Found\n"{matchStatus = 404}
 
@@ -441,7 +443,7 @@ spec = do
                 get "/readyz" `shouldRespondWith` 200
 
     describe "probeOnlyApplication (the worker roles' front door)" $ do
-        with probeOnlyApp $ do
+        withSweptApp probeOnlyApp $ do
             it "answers /livez with 200" $
                 get "/livez" `shouldRespondWith` 200
 
@@ -451,7 +453,7 @@ spec = do
             it "404s every other path (a worker role serves no mount)" $
                 get "/npm/is-odd" `shouldRespondWith` "Not Found\n"{matchStatus = 404}
 
-        with deadProbeOnlyApp $ do
+        withSweptApp deadProbeOnlyApp $ do
             it "fails /livez with 503 when the injected liveness check fails" $
                 get "/livez" `shouldRespondWith` 503
 
@@ -487,13 +489,13 @@ driveGuard handler = do
 -- Native metadata gzip covers admitted listings alone, so every other route ignores Accept-Encoding.
 uncodedRoutesSpec :: Spec
 uncodedRoutesSpec = describe "routes outside native metadata gzip" $ do
-    with npmMountApp $
+    withSweptApp npmMountApp $
         it "answer probes, ping, search, unrouted paths, and a disabled publish alike under Accept-Encoding gzip" $
             for_ [(methodGet, "/livez"), (methodGet, "/readyz"), (methodGet, "/npm/-/ping"), (methodHead, "/npm/-/ping"), (methodGet, "/npm/-/v1/search"), (methodGet, "/npm/-/nope/x"), (methodPut, "/npm/widget")] (uncoded "")
-    with publishMountApp $
+    withSweptApp publishMountApp $
         it "answer a refused and a relayed publish alike under Accept-Encoding gzip" $
             for_ [(methodPut, "/npm/@other/widget"), (methodPut, "/npm/@acme/widget")] (uncoded (npmReleaseDocument widgetName widgetName widgetName))
-    with pypiApp $
+    withSweptApp pypiApp $
         it "answer PyPI distribution, companion, upload, and unrouted refusals alike under Accept-Encoding gzip" $
             for_ [(methodGet, "/pypi/simple/thing/thing-1.0.tar.gz"), (methodHead, "/pypi/simple/thing/thing-1.0.tar.gz"), (methodGet, "/pypi/simple/thing/thing-1.0-py3-none-any.whl.metadata"), (methodPost, "/pypi/legacy"), (methodGet, "/pypi/nope")] (uncoded "")
   where
@@ -533,7 +535,7 @@ perimeterGuardSpec = describe "perimeterGuard (the typed request perimeter)" $ d
 -- Each pipeline route's escape before commit answers the route's own neutral 500, pinned byte for byte.
 pipelineFallbackSpec :: Spec
 pipelineFallbackSpec = describe "a pipeline route's neutral 500 after an escape before commit" $
-    with escapingApp $
+    withSweptApp escapingApp $
         it "answers each npm and PyPI pipeline route with its pinned status, headers, and body" $
             for_ pipelineFallbacks $ \(method, path, expected) -> do
                 response <- request method path [] ""
@@ -560,8 +562,8 @@ pipelineFallbacks =
     npmBody = "{\"error\":\"internal server error\"}"
 
 -- The shipped npm and PyPI mounts, with every pipeline handler escaping before it responds.
-escapingApp :: IO Application
-escapingApp = application (mkServerConfig (map escaping mounts)) <$> newTestEnv
+escapingApp :: Deadlines -> IO Application
+escapingApp deadlines = application (mkServerConfig (map escaping mounts)) <$> newTestEnv deadlines
   where
     mounts = catMaybes [mountBindingFor Npm inertPackumentDeps Nothing, mountBindingFor PyPI (inertDepsFor pypiAdapter) Nothing]
     escaping binding = binding{bindingRouter = escapingBeforeCommit (bindingRouter binding)}
@@ -611,8 +613,8 @@ listeningLineSpec = describe "serveBound -- the listening line" $ do
 -- Serve the probes on a configured port, wait up to ten seconds for the proxy's listening line,
 -- and return the port it names and whether @/livez@ answers on that port.
 listeningOn :: Int -> IO (Maybe Int, Bool)
-listeningOn configured = do
-    app <- probeOnlyApplication (mkServerConfig [])
+listeningOn configured = withSweeper $ \deadlines -> do
+    app <- probeOnlyApplication deadlines (mkServerConfig [])
     bracket memoryLogEnv (void . closeScribes . fst) $ \(logEnv, messages) ->
         withAsync (serveBound logEnv proxyListener (Warp.setPort configured Warp.defaultSettings) app) $ \server -> do
             link server
@@ -660,7 +662,7 @@ raceServerAgainstLoopSpec = describe "raceServerAgainstLoop -- shutdown-race inv
 -- The front door a bare npm mount resolves to, over the composition root's binding, not this module's fixture.
 composedNpmMountSpec :: Spec
 composedNpmMountSpec = describe "the composed npm front door (a bare npm mount over mkServerConfig)" $
-    with npmApp $ do
+    withSweptApp npmApp $ do
         it "mounts npm at /npm (answers /npm/-/ping locally with 200 {})" $
             get "/npm/-/ping" `shouldRespondWith` "{}"{matchStatus = 200}
 
@@ -681,8 +683,8 @@ partialAdvisorySpec = describe "two mounts, one advisory database" $ do
     it "serves npm, refuses the PyPI read, and serves it once the PyPI artifact lands" $
         -- The owner's case: npm synced and the PyPI artifact never arrived. One upstream
         -- serves both documents, so the advisory slot is the only difference between them.
-        withRoutedStub upstreamReply $ \stub -> do
-            (app, handles) <- advisoryApp (stubLocalhostUrl stub) advisoryPolicy [Npm] False
+        withRoutedStub upstreamReply $ \stub -> withSweeper $ \deadlines -> do
+            (app, handles) <- advisoryApp deadlines (stubLocalhostUrl stub) advisoryPolicy [Npm] False
 
             npm <- requestPath app "/npm/leftpad"
             status npm `shouldBe` 200
@@ -708,8 +710,8 @@ partialAdvisorySpec = describe "two mounts, one advisory database" $ do
     it "admits the PyPI read on an identity override while that slot is still empty" $
         -- An intentional allow outranks the advisory deny, so it keeps admitting through
         -- the outage the mount beside it is still waiting out.
-        withRoutedStub upstreamReply $ \stub -> do
-            (app, _) <- advisoryApp (stubLocalhostUrl stub) overridePolicy [Npm] False
+        withRoutedStub upstreamReply $ \stub -> withSweeper $ \deadlines -> do
+            (app, _) <- advisoryApp deadlines (stubLocalhostUrl stub) overridePolicy [Npm] False
             overridden <- requestPath app "/pypi/simple/leftpad/"
             status overridden `shouldBe` 200
 
@@ -719,8 +721,8 @@ startupAdvisorySpec = describe "advisory acquisition at startup" $
         for_ [("refuse", advisoryPolicy, False, 503), ("skip", skipAdvisoryPolicy, False, 200), ("override", overridePolicy, False, 200), ("trusted read", advisoryPolicy, True, 200)] $ \(policyName, policy, trusted, expected) ->
             it (failure <> " keeps serving under " <> policyName <> " and recovers without restart") $
                 withSystemTempDirectory "startup-advisories" $ \dir ->
-                    withRoutedStub upstreamReply $ \stub -> do
-                        (app, handles) <- advisoryApp (stubLocalhostUrl stub) policy [] trusted
+                    withRoutedStub upstreamReply $ \stub -> withSweeper $ \deadlines -> do
+                        (app, handles) <- advisoryApp deadlines (stubLocalhostUrl stub) policy [] trusted
                         handle <- maybe (fail "missing PyPI sync handle") pure (Map.lookup PyPI handles)
                         pushedAt <- csClock handle
                         recovery <- newTVarIO False
@@ -769,34 +771,34 @@ refusedRenderSpec :: Spec
 refusedRenderSpec = describe "a served document whose render the adapter refuses" $
     it "answers the neutral 500 as a render fault, and caches no assembled body" $
         withRoutedStub upstreamReply $ \stub -> do
-            (statuses, logged) <- captureJsonLog $ \logEnv -> do
-                app <- refusingRenderApp (stubLocalhostUrl stub) logEnv
+            (statuses, logged) <- captureJsonLog $ \logEnv -> withSweeper $ \deadlines -> do
+                app <- refusingRenderApp deadlines (stubLocalhostUrl stub) logEnv
                 -- An assembled body cached by the first request would answer the second with 200.
                 replicateM 2 (status <$> requestPath app "/npm/leftpad")
             statuses `shouldBe` [500, 500]
             T.count "\"perimeterCause\":\"RenderFault\"" logged `shouldBe` 2
 
 -- One npm mount over the upstream whose serialiser refuses every render, logging to the given environment.
-refusingRenderApp :: Text -> LogEnv -> IO Application
-refusingRenderApp upstreamBase logEnv = do
+refusingRenderApp :: Deadlines -> Text -> LogEnv -> IO Application
+refusingRenderApp deadlines upstreamBase logEnv = do
     rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan 0)]
     queue <- newTestMemoryQueue
     manager <- newManager defaultManagerSettings
-    env <- newTestEnvLogging logEnv queue (manager, manager) telemetryDisabled
+    env <- newTestEnvLogging deadlines logEnv queue (manager, manager) telemetryDisabled
     let deps = npmServeDeps Nothing (loopbackRegistryUrl upstreamBase) NoMirrorWrite rules (pure servedAt)
         refusing = deps{pdMetadata = (pdMetadata deps){metadataSerialise = const (Left RenderRefused)}}
     pure (application (mkServerConfig (maybeToList (mountBindingFor Npm refusing Nothing))) env)
 
 -- | Bind both mounts to their advisory handles, with the named ecosystems initially loaded.
-advisoryApp :: Text -> [PrecededRule] -> [Ecosystem] -> Bool -> IO (Application, Map.Map Ecosystem CveSyncHandle)
-advisoryApp upstreamBase policy initiallyLoaded trusted = do
+advisoryApp :: Deadlines -> Text -> [PrecededRule] -> [Ecosystem] -> Bool -> IO (Application, Map.Map Ecosystem CveSyncHandle)
+advisoryApp deadlines upstreamBase policy initiallyLoaded trusted = do
     handles <- Map.fromList <$> newAdvisoryHandles [Npm, PyPI]
     for_ handles $ \handle -> atomically (writeTVar (csReady handle) False)
     for_ initiallyLoaded (advisoriesLanded handles)
     let depsFor = cveRuleDepsFor handles noBreakerReporter (\_ _ -> pass)
     npmRules <- prepare (depsFor Npm) policy
     pypiRules <- prepare (depsFor PyPI) policy
-    env <- newTestEnv
+    env <- newTestEnv deadlines
     let public = loopbackRegistryUrl upstreamBase
         private = if trusted then Just public else Nothing
         bindings =

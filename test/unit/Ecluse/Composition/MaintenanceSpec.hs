@@ -7,7 +7,7 @@ module Ecluse.Composition.MaintenanceSpec (spec) where
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Network.HTTP.Client (Manager, Request (path, requestHeaders), defaultManagerSettings, newManager)
+import Network.HTTP.Client (Request (path, requestHeaders), defaultManagerSettings, newManager)
 import Network.HTTP.Types.Header (hAuthorization)
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
@@ -23,12 +23,14 @@ import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig (cfgMounts), Config (configApp, configMounts), MountConfig (mntPrivateUpstream), PrivateEndpoint, QuotaOverride (QuotaOverride, qoQuotas, qoScope, qoWeights))
 import Ecluse.Core.BuildIdentity (parseOperatorContact, renderUserAgent, userAgent)
 import Ecluse.Core.Credential (AuthToken (AuthToken), CredentialProvider (CredentialProvider), mkSecret)
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Maintenance (CompletionNotion (CompletesOnCall), ConsentVerdict (ConsentGranted, ConsentWithheld), DeleteCeiling (AtMost), RefillPosture (RefillPermitted), RetryAdvice (RetryWorthwhile), StoreFacts (..), StoreFault (faultRetry), StoreMaintenance (deleteVersions, readStoreManifest, storeFacts, verifyConsent), StoreManifestRead, StoreObservation (obFacts, obReadManifest, obVerifyConsent), VersionOutcome (VersionRemoved))
 import Ecluse.Core.Registry.Maintenance.Budget (QuotaDimension (StoreRequests), QuotaOrigin (QuotaDeclared, QuotaDerived), RequestGate (RequestGate, gateSpend), RequestKind (CursorWrite, DeleteBatch, ListingPage), StoreBudget (bgCosts, bgOrigin, bgQuotas, bgScope), mkQuotaScope, requestKinds, undeclaredBudget)
 import Ecluse.Core.Registry.Maintenance.Upstream (ExternalConnection (ExternalConnection), RepositoryName (RepositoryName), UndecidabilityReason (NetworkFailure, NoMechanism), UnsafeReason (ConfigurationEvidence), UpstreamSafety (Safe, Undecidable, Unsafe))
@@ -38,6 +40,7 @@ import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl, origi
 import Ecluse.Core.Security (Limits, defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Text (joinUrlPath, registryPath)
+import Ecluse.Test.Deadline (withExchangeClient, withSweeper)
 import Ecluse.Test.Env (withAmbientAws)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore, testDeleteGuard)
 import Ecluse.Test.Package (npmVersion, unsafeRegistryUrl, unscopedNpm)
@@ -58,18 +61,18 @@ spec = do
 
 buildSpec :: Spec
 buildSpec = describe "buildStoreMaintenance -- a store swept through the ecosystem protocol" $ do
-    it "supplies the backend's standing facts under the tag the store was declared with" $ do
-        handle <- protocolHandleFor MirrorPruner "true"
+    it "supplies the backend's standing facts under the tag the store was declared with" $ withSweeper $ \deadlines -> do
+        handle <- protocolHandleFor deadlines MirrorPruner "true"
         let facts = storeFacts handle
         factBackend facts `shouldBe` "verdaccio"
         factDeleteCeiling facts `shouldBe` AtMost 1
         factRefill facts `shouldBe` RefillPermitted
         factCompletion facts `shouldBe` CompletesOnCall
 
-    it "reads a manifest over the store's own endpoint, not the public upstream" $ do
+    it "reads a manifest over the store's own endpoint, not the public upstream" $ withSweeper $ \deadlines -> do
         -- The endpoint answers nothing, so the read reaching the network at all is what this
         -- shows: the handle carries the ecosystem's codec rather than an absent read.
-        handle <- protocolHandleFor MirrorPruner "true"
+        handle <- protocolHandleFor deadlines MirrorPruner "true"
         (fmap faultRetry . leftToMaybe <$> readStoreManifest handle aPackage)
             `shouldReturn` Just RetryWorthwhile
 
@@ -82,8 +85,8 @@ buildSpec = describe "buildStoreMaintenance -- a store swept through the ecosyst
         withRoutedStub answer $ \stub -> do
             cleared <- clearedBackendsFor MirrorPruner (verdaccioEnv "true")
             case Map.elems cleared of
-                [backend] -> do
-                    handle <- buildStoreMaintenance anonymousPorts{spUserAgent = renderedAgent} defaultLimits backend{cbUrl = loopbackRegistryUrl (stubBaseUrl stub)}
+                [backend] -> withSweeper $ \deadlines -> do
+                    handle <- buildStoreMaintenance (anonymousPorts deadlines){spUserAgent = renderedAgent} defaultLimits backend{cbUrl = loopbackRegistryUrl (stubBaseUrl stub)}
                     let version = npmVersion "1.0.0"
                     deleteVersions handle testDeleteGuard aPackage [version] `shouldReturn` [(version, VersionRemoved)]
                     captured <- allCaptured stub
@@ -91,14 +94,14 @@ buildSpec = describe "buildStoreMaintenance -- a store swept through the ecosyst
                     map (headerValue "User-Agent") captured `shouldBe` replicate 2 (Just renderedAgent)
                 _ -> expectationFailure "expected one cleared protocol store"
 
-    it "grants consent on the store the pass cleared" $ do
-        handle <- protocolHandleFor MirrorPruner "true"
+    it "grants consent on the store the pass cleared" $ withSweeper $ \deadlines -> do
+        handle <- protocolHandleFor deadlines MirrorPruner "true"
         verifyConsent handle `shouldReturn` Right ConsentGranted
 
-    it "withholds it, naming the key an operator sets, on a store carrying none" $ do
+    it "withholds it, naming the key an operator sets, on a store carrying none" $ withSweeper $ \deadlines -> do
         -- Only the preview role's pass clears a store carrying no consent, so its boot is the
         -- one that builds the handle reporting the withheld verdict.
-        handle <- protocolHandleFor MirrorPreviewer "false"
+        handle <- protocolHandleFor deadlines MirrorPreviewer "false"
         verifyConsent handle >>= \case
             Right (ConsentWithheld descriptor) ->
                 descriptor `shouldSatisfy` T.isInfixOf "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__PERMIT_DELETION"
@@ -151,29 +154,30 @@ captureMetadataRequests ::
     ClearedBackend ->
     Maybe CredentialProvider ->
     IO [Request]
-captureMetadataRequests eco build cleared credential = do
+captureMetadataRequests eco build cleared credential = withSweeper $ \deadlines -> do
     adapter <- maybe (fail "missing adapter") pure (adapterFor eco)
     captured <- newIORef []
     let capture _ origin name = do
             request <- either (fail . show) pure (erRequest (metadataRead (adapterMetadata adapter)) (originBaseUrl origin) (ocToken origin) name)
             modifyIORef' captured (<> [request])
             pure (Left MetadataAbsent)
-    readManifest <- build anonymousPorts{spCredential = credential} defaultLimits cleared{cbFetchManifest = capture}
+    readManifest <- build (anonymousPorts deadlines){spCredential = credential} defaultLimits cleared{cbFetchManifest = capture}
     replicateM_ 2 (void (readManifest aPackage))
     readIORef captured
 
-protocolHandleFor :: RegistryRole -> String -> IO StoreMaintenance
-protocolHandleFor role permitDeletion = do
+protocolHandleFor :: Deadlines -> RegistryRole -> String -> IO StoreMaintenance
+protocolHandleFor deadlines role permitDeletion = do
     cleared <- clearedBackendsFor role (verdaccioEnv permitDeletion)
     case Map.elems cleared of
-        [backend] -> buildStoreMaintenance anonymousPorts defaultLimits backend
+        [backend] -> buildStoreMaintenance (anonymousPorts deadlines) defaultLimits backend
         other -> fail ("expected one cleared protocol store, got " <> show (length other))
 
-anonymousPorts :: StorePorts
-anonymousPorts =
+anonymousPorts :: Deadlines -> StorePorts
+anonymousPorts deadlines =
     StorePorts
         { spTracing = passthroughTracingPort
         , spUserAgent = userAgent
+        , spDeadlines = deadlines
         , spCredential = Nothing
         , spBudget = unpacedBudget
         }
@@ -189,8 +193,8 @@ aPackage :: PackageName
 aPackage = unscopedNpm "leftpad"
 
 -- An origin the absent read never dials, because it answers before it forms a request.
-nowhere :: Manager -> OriginClient
-nowhere manager = originClient defaultLimits manager (unsafeRegistryUrl "https://store.invalid/") Nothing
+nowhere :: ExchangeClient -> OriginClient
+nowhere client = originClient defaultLimits client (unsafeRegistryUrl "https://store.invalid/") Nothing
 
 absentRead :: Text
 absentRead = "this build serves the mount's ecosystem no metadata read"
@@ -199,36 +203,40 @@ planSpec :: Spec
 planSpec = describe "planStoreMaintenance" $ do
     it "builds one handle per cleared store, keyed by the mount that declares it" $ do
         backends <- clearedBackendsFor MirrorPruner twoStoreEnv
-        outcome <-
-            planStoreMaintenance
-                (\_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig)
-                passthroughTracingPort
-                userAgent
-                unpacedBudget
-                noCredentialProviders
-                defaultLimits
-                backends
-        fmap Map.keys outcome `shouldBe` Right (Map.keys backends)
+        withSweeper $ \deadlines -> do
+            outcome <-
+                planStoreMaintenance
+                    (\_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig)
+                    passthroughTracingPort
+                    deadlines
+                    userAgent
+                    unpacedBudget
+                    noCredentialProviders
+                    defaultLimits
+                    backends
+            fmap Map.keys outcome `shouldBe` Right (Map.keys backends)
 
     it "reports a refusal for every store whose client the environment cannot build" $ do
         backends <- clearedBackendsFor MirrorPruner twoStoreEnv
-        Map.keys backends `shouldBe` [Npm, PyPI]
-        outcome <-
-            planStoreMaintenance
-                (\_ _ _ -> throwIO NoCredentials)
-                passthroughTracingPort
-                userAgent
-                unpacedBudget
-                noCredentialProviders
-                defaultLimits
-                backends
-        case outcome of
-            Right _ -> expectationFailure "expected both store builds to refuse"
-            Left errs ->
-                map withoutBacktrace errs
-                    `shouldBe` [ StoreMaintenanceUnavailable Npm (ClientBuildFailed "NoCredentials")
-                               , StoreMaintenanceUnavailable PyPI (ClientBuildFailed "NoCredentials")
-                               ]
+        withSweeper $ \deadlines -> do
+            Map.keys backends `shouldBe` [Npm, PyPI]
+            outcome <-
+                planStoreMaintenance
+                    (\_ _ _ -> throwIO NoCredentials)
+                    passthroughTracingPort
+                    deadlines
+                    userAgent
+                    unpacedBudget
+                    noCredentialProviders
+                    defaultLimits
+                    backends
+            case outcome of
+                Right _ -> expectationFailure "expected both store builds to refuse"
+                Left errs ->
+                    map withoutBacktrace errs
+                        `shouldBe` [ StoreMaintenanceUnavailable Npm (ClientBuildFailed "NoCredentials")
+                                   , StoreMaintenanceUnavailable PyPI (ClientBuildFailed "NoCredentials")
+                                   ]
   where
     -- 'displayException' appends GHC's backtrace, so the assertion reads the reason's own line.
     withoutBacktrace = \case
@@ -281,7 +289,7 @@ privateEndpointFor envVars = do
         mntPrivateUpstream =<< Map.lookup Npm (cfgMounts (configApp config))
 
 clearedBackendName :: ClearedBackend -> IO Text
-clearedBackendName cleared = factBackend . obFacts <$> buildStoreObservation anonymousPorts defaultLimits cleared
+clearedBackendName cleared = withSweeper $ \deadlines -> factBackend . obFacts <$> buildStoreObservation (anonymousPorts deadlines) defaultLimits cleared
 
 budgetSpec :: Spec
 budgetSpec = describe "the request capacity a boot resolves for a store" $ do
@@ -331,13 +339,13 @@ absentAdapterSpec :: Spec
 absentAdapterSpec = describe "vetStoreBackends" $ do
     it "clears that store a read that reports the absent adapter rather than one that invents one" $ do
         mounts <- mountsFor codeArtifactEnvVars
-        manager <- newManager defaultManagerSettings
-        case snd (runVet MirrorPruner (vetStoreBackends noAdapter mounts)) of
-            Right cleared | [backend] <- Map.elems cleared -> do
-                outcome <- cbFetchManifest backend passthroughTracingPort (nowhere manager) aPackage
-                leftToMaybe outcome
-                    `shouldBe` Just (MetadataFetch (FetchTransport (transportFault TransportProtocol absentRead)))
-            other -> expectationFailure ("expected one cleared store, got: " <> show (void other))
+        withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+            case snd (runVet MirrorPruner (vetStoreBackends noAdapter mounts)) of
+                Right cleared | [backend] <- Map.elems cleared -> do
+                    outcome <- cbFetchManifest backend passthroughTracingPort (nowhere exchanges) aPackage
+                    leftToMaybe outcome
+                        `shouldBe` Just (MetadataFetch (FetchTransport (transportFault TransportProtocol absentRead)))
+                other -> expectationFailure ("expected one cleared store, got: " <> show (void other))
 
 protocolSpec :: Spec
 protocolSpec = describe "vetStoreBackends -- a store swept through the ecosystem protocol" $ do
@@ -361,9 +369,9 @@ previewCachesSpec = describe "vetPrivateCaches" $ do
         config <- expectConfig (withObservablePrivate (withoutPrivateAuthority codeArtifactEnvVars)) Nothing
         case privateCaches adapterFor MirrorPreviewer config of
             Right caches -> case Map.elems caches of
-                [(credential, cleared)] -> do
+                [(credential, cleared)] -> withSweeper $ \deadlines -> do
                     isNothing credential `shouldBe` True
-                    observation <- buildStoreObservation anonymousPorts defaultLimits cleared
+                    observation <- buildStoreObservation (anonymousPorts deadlines) defaultLimits cleared
                     obVerifyConsent observation >>= \case
                         Right (ConsentWithheld _) -> pass
                         other -> expectationFailure ("expected a withheld verdict, got: " <> show other)

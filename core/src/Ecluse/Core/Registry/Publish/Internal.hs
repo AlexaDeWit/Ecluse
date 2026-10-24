@@ -17,12 +17,13 @@ module Ecluse.Core.Registry.Publish.Internal (
 ) where
 
 import Data.JsonStream.Lexer (Cursor)
-import Network.HTTP.Client (Manager, Request)
+import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageInfo, PackageName)
 import Ecluse.Core.Registry (BodyOutcome, FetchFault, ParseError, PublishFault (PublishFetch), UrlFormationError)
 import Ecluse.Core.Registry.Exchange (accumulatingCharge, boundedExchange, withSuccessBody)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Json.Walk (Step, readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError, VersionDoc)
@@ -71,7 +72,7 @@ data PublishCodec = forall source metadata. PublishCodec
 
 -- | Process resources for the target's bounded exchanges.
 data MirrorTransport = MirrorTransport
-    { ptManager :: Manager
+    { ptClient :: ExchangeClient
     , ptMintCredential :: IO (Maybe ClientCredential)
     , ptLimits :: Limits
     , ptTracing :: TracingPort
@@ -106,13 +107,13 @@ probeInventory transport target targetRead factor charge name = do
     pay <- accumulatingCharge charge
     credential <- ptMintCredential transport
     -- The initial and final target snapshots can overlap during completion.
-    let origin = (originClient (ptLimits transport) (ptManager transport) target credential){ocChargeFullRead = pay . scaleCharge (2 * factor)}
+    let origin = (originClient (ptLimits transport) (ptClient transport) target credential){ocChargeFullRead = pay . scaleCharge (2 * factor)}
     fmap manifestInfo <$> fetchManifest targetRead (ptTracing transport) origin name
 
 -- | Read bounded version identifiers for the protocol maintenance caller.
-fetchVersionList :: Manager -> Limits -> (Cursor -> Step VersionListState) -> Request -> IO (Either FetchFault (BodyOutcome (Either ParseError [Version])))
-fetchVersionList manager limits walk request =
-    fmap (fmap versions) <$> withSuccessBody manager (progressFloor limits) (readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) walk) request
+fetchVersionList :: ExchangeClient -> Limits -> (Cursor -> Step VersionListState) -> Request -> IO (Either FetchFault (BodyOutcome (Either ParseError [Version])))
+fetchVersionList client limits walk request =
+    fmap (fmap versions) <$> withSuccessBody client (progressFloor limits) (readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) walk) request
   where
     versions streamed = streamValue streamed >>= finishVersionList
 
@@ -126,7 +127,7 @@ publishUpload transport target request outcome upload plan = do
 
 writeUpload :: MirrorTransport -> (Int -> ByteString -> Either PublishFault ()) -> Request -> IO (Either PublishFault ())
 writeUpload transport outcome request =
-    boundedExchange (\status _ body -> (status, body)) (ptManager transport) (progressFloor (ptLimits transport)) (MetadataBodyLimit (maxMetadataBytes (ptLimits transport))) request
+    boundedExchange (\status _ body -> (status, body)) (ptClient transport) (progressFloor (ptLimits transport)) (MetadataBodyLimit (maxMetadataBytes (ptLimits transport))) request
         <&> \case
             Left fault -> Left (PublishFetch fault)
             Right (status, body) -> outcome status body

@@ -18,6 +18,7 @@ module Ecluse.Runtime.Telemetry.ExportFailure.Internal (
     newExportFailureSink,
     exportFailureSink,
     observeExportResult,
+    observeFlushFault,
     installExportErrorHandler,
 ) where
 
@@ -94,6 +95,10 @@ observeExportResult :: ExportFailureSink -> Text -> ExportResult -> IO ()
 observeExportResult sink signal = \case
     Success -> pass
     Failure mErr -> routeExportFailure sink (signal <> " export failed" <> maybe "" ((": " <>) . displayFaultT) mErr)
+
+-- | Route a metric series the batching flush dropped because its replay into the SDK threw.
+observeFlushFault :: ExportFailureSink -> SomeException -> IO ()
+observeFlushFault sink fault = routeExportFailure sink ("metric flush dropped a series: " <> displayFaultT fault)
 
 -- | Install a process-global handler that forwards the SDK's own diagnostic text verbatim. Failed exports reach the sink separately, through 'observeExportResult'.
 installExportErrorHandler :: ExportFailureSink -> IO ()

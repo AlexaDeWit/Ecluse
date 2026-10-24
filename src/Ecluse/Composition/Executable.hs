@@ -62,6 +62,7 @@ import Ecluse.Config (AppConfig (cfgAdvisories, cfgDredger, cfgEgress), DredgerS
 import Ecluse.Core.BuildIdentity (renderUserAgent)
 import Ecluse.Core.Clock (waitSeconds)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
@@ -159,16 +160,17 @@ environment can settle. Each role has one arm here, and a refusal is spent once 
 planExecutable ::
     LogEnv ->
     TracingPort ->
+    Deadlines ->
     ResolveAdapter ->
     BuildMirrorQueue ->
     BuildCredentials ->
     StoreBuilds ->
     BootPlan ->
     IO ([Advisory], Either [BootError] ExecutablePlan)
-planExecutable logEnv tracing resolveAdapter buildQueue buildCredentials builds bootPlan = case bpRole bootPlan of
+planExecutable logEnv tracing deadlines resolveAdapter buildQueue buildCredentials builds bootPlan = case bpRole bootPlan of
     BootMirrorPipeline role -> do
         (advisories, probed) <- probeServedUpstreams (sbProbing builds) role bootPlan
-        wiring <- planMirrorWiring logEnv resolveAdapter buildQueue buildCredentials role bootPlan
+        wiring <- planMirrorWiring logEnv deadlines resolveAdapter buildQueue buildCredentials role bootPlan
         pure (advisories, accumulate probed (executablePlan . MirrorPipelineWiring <$> wiring))
     BootStorePruner -> prunerArm (deleting (sbDeleting builds))
     BootStorePreview -> prunerArm (previewing (sbObserving builds))
@@ -178,7 +180,7 @@ planExecutable logEnv tracing resolveAdapter buildQueue buildCredentials builds 
 
     prunerArm build =
         second (fmap (executablePlan . StorePrunerWiring))
-            <$> planPrunerWiring logEnv tracing buildCredentials build bootPlan
+            <$> planPrunerWiring logEnv tracing deadlines buildCredentials build bootPlan
 
     deleting build ports limits cleared = deletingCache <$> build ports limits cleared
     previewing build ports limits cleared = previewCache <$> build ports limits cleared
@@ -217,8 +219,8 @@ probeHeldCaches caches =
 
 {- The store roles' shared arm: the advisory sync their rules read, the credential their stores
 answer to, and one store per cleared target. All three refusable steps accumulate. -}
-planPrunerWiring :: LogEnv -> TracingPort -> BuildCredentials -> BuildSweepCache -> BootPlan -> IO ([Advisory], Either [BootError] PrunerWiring)
-planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
+planPrunerWiring :: LogEnv -> TracingPort -> Deadlines -> BuildCredentials -> BuildSweepCache -> BootPlan -> IO ([Advisory], Either [BootError] PrunerWiring)
+planPrunerWiring logEnv tracing deadlines buildCredentials buildStore bootPlan = do
     deferredMetrics <- newDeferredMetrics getCurrentTime
     cveSync <- planAdvisorySync logEnv bootPlan
     credentials <- buildCredentials (credentialReportersOver deferredMetrics) credentialBackends
@@ -228,6 +230,7 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
         planStoreMaintenance
             buildStore
             tracing
+            deadlines
             renderedAgent
             budget
             (fromRight noCredentialProviders credentials)
@@ -238,6 +241,7 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
             PrivateCacheCredential
             buildStore
             tracing
+            deadlines
             renderedAgent
             budget
             (fromRight noCredentialProviders credentials)
@@ -376,13 +380,13 @@ pilotExportPlan validated = maybeToRight [PilotWithoutEcosystem] (exportLoopPlan
 
 {- The mirror pipeline's arm: the advisory sync, the queue backend, and the mount wiring. The three
 refusable steps accumulate, so one launch reports every one rather than the earliest alone. -}
-planMirrorWiring :: LogEnv -> ResolveAdapter -> BuildMirrorQueue -> BuildCredentials -> MirrorRole -> BootPlan -> IO (Either [BootError] MirrorWiring)
-planMirrorWiring logEnv resolveAdapter buildQueue buildCredentials role bootPlan = do
+planMirrorWiring :: LogEnv -> Deadlines -> ResolveAdapter -> BuildMirrorQueue -> BuildCredentials -> MirrorRole -> BootPlan -> IO (Either [BootError] MirrorWiring)
+planMirrorWiring logEnv deadlines resolveAdapter buildQueue buildCredentials role bootPlan = do
     -- The metric instruments do not exist until the assembly builds the telemetry substrate. The
     -- credential providers minted below record through reporters 'installMetrics' makes live.
     deferredMetrics <- newDeferredMetrics getCurrentTime
     cveSync <- planAdvisorySync logEnv bootPlan
-    publishBudget <- planPublishBudget memoryPlan
+    publishBudget <- planPublishBudget deadlines memoryPlan
     queue <- planMirrorQueue buildQueue logEnv (mpQueueMemoryMaxDepth memoryPlan) (bpMirrorRuntime bootPlan)
     -- A refused sync leaves the rules abstaining, so the wiring below still builds and still
     -- reports what it refuses. The accumulation then discards it along with the sync.
@@ -452,10 +456,10 @@ planMirrorQueue buildQueue logEnv memoryDepth = \case
 
 {- One process-wide byte aggregate serves every publishing mount. It exists exactly when a
 publication target is configured, the same predicate the plan's tenant derives from. -}
-planPublishBudget :: MemoryPlan -> IO (Maybe PublishBudget)
-planPublishBudget memoryPlan =
+planPublishBudget :: Deadlines -> MemoryPlan -> IO (Maybe PublishBudget)
+planPublishBudget deadlines memoryPlan =
     forM (mpPublishTenant memoryPlan) $ \tenant -> do
-        bodyBudget <- newByteAdmission (ptAggregateBytes tenant)
+        bodyBudget <- newByteAdmission deadlines (ptAggregateBytes tenant)
         pure PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = mpMaxRequestBytes memoryPlan}
 
 -- Where a store's mirror-write credential provider records its mint breaker and refresh outcomes.

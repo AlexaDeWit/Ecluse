@@ -38,10 +38,13 @@ import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Response (mkHelpMessage)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite))
 import Ecluse.Runtime.Server (application, mkServerConfig)
+import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.ServingDriver (pypiServingDriver)
-import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, newTestEnvWithQueue, postPath, requestAt)
+import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, postPath, requestAt)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Contract.Serving (servingContract)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Json (asObject, fieldAt, textAtPath, withKeys)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -524,12 +527,12 @@ withPyPIProxyOver :: (Text -> Value) -> (Int -> IO PackumentDeps) -> (PyPIProxy 
 withPyPIProxyOver = withPyPIProxyResponding id
 
 withPyPIProxyResponding :: (Application -> Application) -> (Text -> Value) -> (Int -> IO PackumentDeps) -> (PyPIProxy -> IO a) -> IO a
-withPyPIProxyResponding transform indexFor depsFor k = do
+withPyPIProxyResponding transform indexFor depsFor k = withSweeper $ \deadlines -> do
     queue <- newTestMemoryQueue
     manager <- newManager defaultManagerSettings
     recorded <- newIORef []
     testWithApplication (pure (transform (upstreamApp indexFor (record recorded)))) $ \upstreamPort -> do
-        env <- newTestEnvWithQueue queue{enqueue = \_ -> fail "unexpected mirror enqueue"} manager
+        env <- newTestEnvWith deadlines queue{enqueue = \_ -> fail "unexpected mirror enqueue"} (manager, manager) telemetryDisabled
         deps <- depsFor upstreamPort
         let configured change = application (mkServerConfig (maybeToList (mountBindingFor PyPI (change deps) Nothing))) env
         k (PyPIProxy (configured id) configured (readIORef recorded))

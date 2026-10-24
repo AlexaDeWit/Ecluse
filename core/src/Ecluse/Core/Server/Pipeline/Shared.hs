@@ -36,12 +36,13 @@ module Ecluse.Core.Server.Pipeline.Shared (
 
 import Network.HTTP.Types (Header, HeaderName, ResponseHeaders, Status, status503)
 import Network.Wai (Request, requestHeaders)
-import UnliftIO (MonadUnliftIO)
+import UnliftIO (MonadUnliftIO, withRunInIO)
 
 import Ecluse.Core.Credential (ClientCredential (credSecret), Secret)
 import Ecluse.Core.Registry.Request (credentialRecover)
-import Ecluse.Core.Server.Admission (withServeAdmission)
-import Ecluse.Core.Server.Admission.Meter (MemoryTicket, withMemoryEntry)
+import Ecluse.Core.Server.Admission (serveAdmissionLine, serveAdmissionOverflow, withServeAdmission)
+import Ecluse.Core.Server.Admission.Meter (MemoryTicket, meterLine, tryMemoryEntry)
+import Ecluse.Core.Server.Admission.Overflow (Attempt (..), Waited (..), attemptAfter, awaitPlace)
 import Ecluse.Core.Server.Admission.Types (FlightKey (FlightKey))
 import Ecluse.Core.Server.Admission.Weighted (admissionWaitMicros)
 import Ecluse.Core.Server.Cache.Types (CacheKey, cacheKeyIdentity, cacheKeyStore)
@@ -59,7 +60,7 @@ import Ecluse.Core.Server.Response (
     rejectUnavailable,
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Telemetry.Record (MetricsPort (mpServeDecision))
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpMemoryAdmissionShed, mpServeDecision))
 
 -- | The fixed refusal shared by private metadata and artifact access failures.
 privateAuthorisationRefusal :: Maybe HelpMessage -> Refusal
@@ -88,18 +89,33 @@ retryAfterHeaders = maybe [] (\(RetryAfter secs) -> [(hRetryAfter, show secs)])
 flightOf :: CacheKey -> FlightKey
 flightOf key = FlightKey (cacheKeyStore key) (cacheKeyIdentity key)
 
--- | Acquire memory and CPU admission before metadata work. Answer after release, counting a shed once.
-withMetadataAdmission :: (MonadUnliftIO m) => ServeRuntime -> m received -> (MemoryTicket -> m a) -> (a -> m received) -> m received
+{- | Acquire memory and CPU admission before metadata work, queueing a request a full room turns away.
+Answer after release, counting a final shed once. Refusals preserve connection reuse.
+-}
+withMetadataAdmission :: (MonadUnliftIO m) => ServeRuntime -> (ResponseHeaders -> m received) -> (MemoryTicket -> m a) -> (a -> m received) -> m received
 withMetadataAdmission runtime shed gated answer =
-    admitted >>= \case
-        Just result -> answer result
-        Nothing -> do
-            liftIO (mpServeDecision metrics Metric.Unavailable)
-            shed
+    attempt >>= \case
+        Entered result -> answer result
+        Expired line -> refuse line [shedRetryAfter]
+        TurnedAway line -> case serveAdmissionOverflow admission of
+            Nothing -> refuse line [shedRetryAfter]
+            Just overflow ->
+                withRunInIO (\run -> awaitPlace metrics overflow line (run attempt)) >>= \case
+                    Placed result -> answer result
+                    WaitedOut refusedAt -> refuse refusedAt [shedRetryAfter]
+                    QueueFull refusedAt -> refuse refusedAt [shedRetryAfter]
   where
     metrics = srMetrics runtime
-    admitted = fmap join . withMemoryEntry metrics (srMemoryMeter runtime) $ \ticket ->
-        withServeAdmission metrics (srAdmission runtime) (gated ticket)
+    admission = srAdmission runtime
+    meter = srMemoryMeter runtime
+    refuse line headers = do
+        liftIO $ do
+            when (line == meterLine meter) (mpMemoryAdmissionShed metrics)
+            mpServeDecision metrics Metric.Unavailable
+        shed headers
+    attempt =
+        either (attemptAfter (meterLine meter) . Left) (attemptAfter (serveAdmissionLine admission))
+            <$> tryMemoryEntry metrics meter (withServeAdmission metrics admission . gated)
 
 -- | Match the configured inbound secret without content-dependent early exit. An unconfigured edge is open.
 edgeTokenMatches :: Maybe Secret -> Maybe ClientCredential -> Bool

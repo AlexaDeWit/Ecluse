@@ -12,6 +12,7 @@ import Test.Hspec
 import UnliftIO.Async (AsyncCancelled (AsyncCancelled), cancel, race_, wait, waitCatch, withAsync)
 import UnliftIO.Exception (throwIO)
 
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned, withServeAdmission)
 import Ecluse.Core.Server.Admission.Meter (MeterSettings (..), charge, meterSnapshot, newMemoryMeter, withMemoryEntry)
 import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
@@ -60,8 +61,9 @@ spec = describe "gzipMetadata" $ do
             outcome <- waitCatch worker
             either (\fault -> fromException fault `shouldBe` Just AsyncCancelled) (const (expectationFailure "compression ignored its cancellation")) outcome
     it "returns its admission slot and every charge when cancelled at its third output buffer" $ do
-        meter <- newMemoryMeter MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 10, msEntryWaitMicros = 0}
-        admission <- newServeAdmissionTuned 1 0 0
+        deadlines <- newDeadlines
+        meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 10, msEntryWaitMicros = 0}
+        admission <- newServeAdmissionTuned deadlines 1 0 0
         ready <- MVar.newEmptyMVar
         blocked <- MVar.newEmptyMVar
         buffers <- newIORef (0 :: Int)
@@ -77,7 +79,7 @@ spec = describe "gzipMetadata" $ do
             snChargedBytes <$> meterSnapshot meter `shouldReturn` gzipWorkspaceBytes + 3 * gzipBufferChargeBytes
             cancel worker
         snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
-        withServeAdmission noopMetricsPort admission pass `shouldReturn` Just ()
+        withServeAdmission noopMetricsPort admission pass `shouldReturn` Right ()
   where
     bodies :: [(Text, ByteString)]
     bodies =

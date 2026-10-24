@@ -37,6 +37,7 @@ import Ecluse.Core.Server.Metadata (ecosystemMetadataReads, privateMetadataClien
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Deadline (withExchangeClient, withSweeper)
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Registry (isBoundExceededFetch, isTransportFetch)
 import Ecluse.Test.Registry.Metadata.Fetch (heldBody)
@@ -56,38 +57,38 @@ statusSpec eco = describe "upstream statuses" $ do
     for_ statusOutcomes $ \(code, expected) ->
         fetchCase eco ("status-" <> show code) ("preserves HTTP " <> show code <> " over a valid manifest body on full and version reads") $
             withStub (mkStatus code "test") (toLazy document) $ \stub -> do
-                manager <- newManager defaultManagerSettings
-                events <- newIORef ([] :: [(Text, PackageName)])
-                let record phase who action = modifyIORef' events (<> [(phase, who)]) >> action
-                    tracing = passthroughTracingPort{spanMetadataFetch = record "fetch", spanMetadataDecode = record "decode"}
-                    origin = perCallerOrigin defaultLimits manager (loopbackRegistryUrl (stubBaseUrl stub)) Nothing
-                    client = privateMetadataClient (ecosystemMetadataReads (rdRead eco) tracing noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
-                full <- fetchFullManifest client (thing eco)
-                void full `shouldBe` expected
-                single <- fetchVersionMetadata client (thing eco) (releaseOf eco)
-                void single `shouldBe` expected
-                -- The decode span opens only after success headers.
-                readIORef events `shouldReturn` concat (replicate 2 ([("fetch", thing eco)] <> [("decode", thing eco) | isRight expected]))
-                when (isRight expected) $ do
-                    fmap manifestBodyBytes full `shouldBe` Right (BS.length document)
-                    fmap manifestDigest full `shouldBe` Right (digestOf document)
-                    fmap vrBodyBytes single `shouldBe` Right (BS.length document)
+                withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                    events <- newIORef ([] :: [(Text, PackageName)])
+                    let record phase who action = modifyIORef' events (<> [(phase, who)]) >> action
+                        tracing = passthroughTracingPort{spanMetadataFetch = record "fetch", spanMetadataDecode = record "decode"}
+                        origin = perCallerOrigin defaultLimits exchanges (loopbackRegistryUrl (stubBaseUrl stub)) Nothing
+                        client = privateMetadataClient (ecosystemMetadataReads (rdRead eco) tracing noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
+                    full <- fetchFullManifest client (thing eco)
+                    void full `shouldBe` expected
+                    single <- fetchVersionMetadata client (thing eco) (releaseOf eco)
+                    void single `shouldBe` expected
+                    -- The decode span opens only after success headers.
+                    readIORef events `shouldReturn` concat (replicate 2 ([("fetch", thing eco)] <> [("decode", thing eco) | isRight expected]))
+                    when (isRight expected) $ do
+                        fmap manifestBodyBytes full `shouldBe` Right (BS.length document)
+                        fmap manifestDigest full `shouldBe` Right (digestOf document)
+                        fmap vrBodyBytes single `shouldBe` Right (BS.length document)
 
     fetchCase eco "full-charge" "charges a full read for every source byte and a selected read for none" $
         withStub status200 (toLazy document) $ \stub -> do
-            manager <- newManager defaultManagerSettings
-            charges <- newIORef (0 :: Int)
-            let origin = chargingFullReads (\n -> modifyIORef' charges (+ n)) (perCallerOrigin defaultLimits manager (loopbackRegistryUrl (stubBaseUrl stub)) Nothing)
-                client = privateMetadataClient (ecosystemMetadataReads (rdRead eco) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
-            _ <- fetchVersionMetadata client (thing eco) (releaseOf eco)
-            readIORef charges `shouldReturn` 0
-            _ <- fetchFullManifest client (thing eco)
-            readIORef charges `shouldReturn` BS.length document
+            withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                charges <- newIORef (0 :: Int)
+                let origin = chargingFullReads (\n -> modifyIORef' charges (+ n)) (perCallerOrigin defaultLimits exchanges (loopbackRegistryUrl (stubBaseUrl stub)) Nothing)
+                    client = privateMetadataClient (ecosystemMetadataReads (rdRead eco) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
+                _ <- fetchVersionMetadata client (thing eco) (releaseOf eco)
+                readIORef charges `shouldReturn` 0
+                _ <- fetchFullManifest client (thing eco)
+                readIORef charges `shouldReturn` BS.length document
 
     for_ [401, 403] $ \code ->
         fetchCase eco ("oversized-auth-" <> show code) ("retains HTTP " <> show code <> " before an oversized error body") $
-            withStub (mkStatus code "test") (toLazy (rdDocument eco "thing" 256)) $ \stub -> do
-                origin <- stubConfig loopbackRegistryUrl stub
+            withStub (mkStatus code "test") (toLazy (rdDocument eco "thing" 256)) $ \stub -> withSweeper $ \deadlines -> do
+                origin <- stubConfig deadlines loopbackRegistryUrl stub
                 outcome <- fetchManifest (rdRead eco) passthroughTracingPort origin{ocLimits = defaultLimits{maxMetadataBytes = 64}} (thing eco)
                 void outcome `shouldBe` Left (MetadataAuthorisationFailure code)
   where
@@ -96,8 +97,8 @@ statusSpec eco = describe "upstream statuses" $ do
 responseBoundSpec :: ReadFixture -> Spec
 responseBoundSpec eco = describe "the body bound on a response" $ do
     fetchCase eco "exact-byte-bound" "digests the complete source body within maxMetadataBytes" $
-        withStub status200 (toLazy small) $ \stub -> do
-            origin <- stubConfig loopbackRegistryUrl stub
+        withStub status200 (toLazy small) $ \stub -> withSweeper $ \deadlines -> do
+            origin <- stubConfig deadlines loopbackRegistryUrl stub
             manifest <- fetchManifest (rdRead eco) passthroughTracingPort origin{ocLimits = defaultLimits{maxMetadataBytes = BS.length small}} (thing eco)
             fmap manifestDigest manifest `shouldBe` Right (digestOf small)
 
@@ -125,33 +126,33 @@ responseBoundSpec eco = describe "the body bound on a response" $ do
     padded = rdDocument eco "thing" 256
     inflating = rdDocument eco "thing" 65536
     withGzipped body action =
-        withStubHeaders status200 [(hContentEncoding, "gzip")] (GZip.compress (toLazy body)) (stubConfig loopbackRegistryUrl >=> action)
+        withSweeper $ \deadlines -> withStubHeaders status200 [(hContentEncoding, "gzip")] (GZip.compress (toLazy body)) (stubConfig deadlines loopbackRegistryUrl >=> action)
 
 requestSpec :: ReadFixture -> Spec
 requestSpec eco = describe "the request" $ do
     for_ [("empty-url", ""), ("refused-connection", "http://127.0.0.1:1")] $ \(identifier, url) ->
         fetchCase eco ("decode-span-" <> identifier) ("does not open a decode span for request failure at " <> url) $ do
-            manager <- newManager defaultManagerSettings
-            count <- newIORef (0 :: Int)
-            let tracing = passthroughTracingPort{spanMetadataDecode = \_ action -> modifyIORef' count (+ 1) >> action}
-            outcome <- fetchManifest (rdRead eco) tracing (originClient defaultLimits manager (loopbackRegistryUrl url) Nothing) (thing eco)
-            void outcome `shouldSatisfy` isLeft
-            readIORef count `shouldReturn` 0
+            withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                count <- newIORef (0 :: Int)
+                let tracing = passthroughTracingPort{spanMetadataDecode = \_ action -> modifyIORef' count (+ 1) >> action}
+                outcome <- fetchManifest (rdRead eco) tracing (originClient defaultLimits exchanges (loopbackRegistryUrl url) Nothing) (thing eco)
+                void outcome `shouldSatisfy` isLeft
+                readIORef count `shouldReturn` 0
 
     fetchCase eco "empty-url-fault" "reports an empty base URL as a FetchUrlUnformable value, never thrown" $ do
-        manager <- newManager defaultManagerSettings
-        outcome <- fetchManifest (rdRead eco) passthroughTracingPort (originClient defaultLimits manager (loopbackRegistryUrl "") Nothing) (thing eco)
-        void outcome `shouldBe` Left (MetadataFetch (FetchUrlUnformable EmptyBaseUrl))
+        withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+            outcome <- fetchManifest (rdRead eco) passthroughTracingPort (originClient defaultLimits exchanges (loopbackRegistryUrl "") Nothing) (thing eco)
+            void outcome `shouldBe` Left (MetadataFetch (FetchUrlUnformable EmptyBaseUrl))
 
     fetchCase eco "transport-fault" "reports a refused connection as a FetchTransport value, never thrown" $ do
         -- Port 1 on the loopback is privileged and unbound, so the kernel refuses the connect.
-        manager <- newManager defaultManagerSettings
-        outcome <- fetchManifest (rdRead eco) passthroughTracingPort (originClient defaultLimits manager (loopbackRegistryUrl "http://127.0.0.1:1") Nothing) (thing eco)
-        fetchFault outcome `shouldSatisfy` isTransportFetch
+        withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+            outcome <- fetchManifest (rdRead eco) passthroughTracingPort (originClient defaultLimits exchanges (loopbackRegistryUrl "http://127.0.0.1:1") Nothing) (thing eco)
+            fetchFault outcome `shouldSatisfy` isTransportFetch
 
     fetchCase eco "no-redirect" "follows no redirect when the ecosystem's request builder did not seal its request" $
-        withRoutedStub redirectOnce $ \stub -> do
-            origin <- stubConfig loopbackRegistryUrl stub
+        withRoutedStub redirectOnce $ \stub -> withSweeper $ \deadlines -> do
+            origin <- stubConfig deadlines loopbackRegistryUrl stub
             outcome <- fetchManifest (rdRead eco){erRequest = unsealedRequest} passthroughTracingPort origin (thing eco)
             void outcome `shouldBe` Left (MetadataHttpFailure 302)
             map capPath <$> allCaptured stub `shouldReturn` ["/"]
@@ -212,8 +213,8 @@ heldSpec eco = describe "held chunks, against the response" $ do
 the same bytes held in three chunks. The held reads must equal the response's. -}
 bothWays :: ReadFixture -> Limits -> (Int -> IO ()) -> (Text -> ByteString) -> IO (Either MetadataError ManifestFields, Either MetadataError VersionRead)
 bothWays eco limits charge document =
-    withRoutedStub (\captured -> (status200, [], toLazy (document ("http://" <> maybe "" decodeUtf8 (headerValue "Host" captured))))) $ \stub -> do
-        served <- stubConfig loopbackRegistryUrl stub
+    withRoutedStub (\captured -> (status200, [], toLazy (document ("http://" <> maybe "" decodeUtf8 (headerValue "Host" captured))))) $ \stub -> withSweeper $ \deadlines -> do
+        served <- stubConfig deadlines loopbackRegistryUrl stub
         let origin = served{ocLimits = limits}
             terms = ReadTerms{rtLimits = limits, rtBaseUrl = originBaseUrl origin, rtChargeFullRead = charge}
             bytes = document (stubBaseUrl stub)

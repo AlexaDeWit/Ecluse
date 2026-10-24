@@ -26,10 +26,6 @@ tests: True
 -- component in the plan to avoid Cabal-7043.
 benchmarks: True
 
--- warp 3.4.10 to 3.4.13.1 closes testWithApplication connections before writing.
--- The stub then reports NoResponseDataReceived. Remove the cap after a fix.
-constraints: warp < 3.4.10
-
 -- Match the Nix overlays until upstream widens. regression-simple caps base, aeson 2.3 fixes
 -- HSEC-2026-0007, amazonka-core caps crypton, crypton-connection caps x509 below 1.10.
 allow-newer:

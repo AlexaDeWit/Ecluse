@@ -29,6 +29,7 @@ import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Mirror.State.S3 (newS3MirrorState)
 import Ecluse.Runtime.Mirror.State.S3.Internal (ObjectRead (..), ObjectWrite (..), readObject, writeObject)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Mirror.State
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Poll (retryingIO)
@@ -36,11 +37,11 @@ import Ecluse.Test.Support (expectRight)
 
 spec :: MinistackPool -> Spec
 spec pool = aroundAll (withMinistack pool) $ describe "durable project mirror state" $ do
-    it (caseLabel "integration/mirror-state-s3/native-001" "recovers pending companions and preserves concurrent versions, additions, and references") $ \container -> do
+    it (caseLabel "integration/mirror-state-s3/native-001" "recovers pending companions and preserves concurrent versions, additions, and references") $ \container -> withSweeper $ \deadlines -> do
         let endpoint = Just (endpointFor container)
             bucket = "mirror-state-recovery"
             target = stateTarget "https://private.test/simple"
-            fresh = newS3MirrorState endpoint defaultLimits bucket "recovery" target
+            fresh = newS3MirrorState endpoint deadlines defaultLimits bucket "recovery" target
         env <- buildS3Env endpoint
         retryingIO 21 500_000 (void (runResourceT (AWS.send env (S3.newCreateBucket (S3.BucketName bucket)))))
         store <- fresh
@@ -96,20 +97,20 @@ spec pool = aroundAll (withMinistack pool) $ describe "durable project mirror st
         let CompanionRef digest size = reference
         msReadCompanion final (const pass) (CompanionRef digest (size + 1)) >>= (`shouldSatisfy` invalidState)
         let objectKey = "recovery/companions/sha256/" <> companionDigest reference
-        object <- readObject (const pass) env defaultLimits bucket objectKey Nothing >>= expectRight
+        object <- readObject (const pass) deadlines env defaultLimits bucket objectKey Nothing >>= expectRight
         case object of
             ObjectLoaded revision _ -> do
-                writeObject (const pass) env defaultLimits bucket objectKey (Just revision) "corrupt" >>= expectRight >>= \case
+                writeObject (const pass) deadlines env defaultLimits bucket objectKey (Just revision) "corrupt" >>= expectRight >>= \case
                     ObjectStored _ -> pass
                     ObjectConflict -> expectationFailure "the corruption fixture lost its known revision"
                 msReadCompanion final (const pass) reference >>= (`shouldSatisfy` invalidState)
             other -> expectationFailure ("missing retained companion: " <> show other)
 
-    it (caseLabel "integration/mirror-state-s3/native-002" "reconciles a lost successful write and rejects malformed or oversized persisted records") $ \container -> do
+    it (caseLabel "integration/mirror-state-s3/native-002" "reconciles a lost successful write and rejects malformed or oversized persisted records") $ \container -> withSweeper $ \deadlines -> do
         let endpoint = Just (endpointFor container)
             bucket = "mirror-state-faults"
             target = stateTarget "https://private.test/simple"
-            fresh prefix limits = newS3MirrorState endpoint limits bucket prefix target
+            fresh prefix limits = newS3MirrorState endpoint deadlines limits bucket prefix target
         env <- buildS3Env endpoint
         retryingIO 21 500_000 (void (runResourceT (AWS.send env (S3.newCreateBucket (S3.BucketName bucket)))))
         store <- fresh "lost" defaultLimits
@@ -132,7 +133,7 @@ spec pool = aroundAll (withMinistack pool) $ describe "durable project mirror st
         restarted <- fresh "lost" defaultLimits
         snd <$> loaded restarted `shouldReturn` persisted
         let malformedKey = "malformed/" <> projectKey target mirrorPackage <> "/project.json"
-        writeObject (const pass) env defaultLimits bucket malformedKey Nothing "{broken" >>= expectRight >>= \case
+        writeObject (const pass) deadlines env defaultLimits bucket malformedKey Nothing "{broken" >>= expectRight >>= \case
             ObjectStored _ -> pass
             ObjectConflict -> expectationFailure "malformed fixture unexpectedly exists"
         malformed <- fresh "malformed" defaultLimits

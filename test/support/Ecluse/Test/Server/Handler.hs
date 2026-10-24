@@ -19,16 +19,18 @@ import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.Wai.Internal (Response (ResponseBuilder), ResponseReceived (ResponseReceived))
 import UnliftIO.Exception (throwIO)
 
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Registry.Public (newPublicControl)
-import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission)
+import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Context (Handler, MountBinding, RequestCtx (RequestCtx), ServeRuntime (ServeRuntime), runHandler)
 import Ecluse.Core.Server.Contract (ResponseContract, responseToWai)
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpUpstreamRequest))
+import Ecluse.Test.Deadline (untracedClient)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Cache (defaultCacheConfig, newMetadataCache)
-import Ecluse.Test.Support (testMemoryMeter)
+import Ecluse.Test.Support (testMemoryMeter, testServeAdmission)
 
 -- | Run a handler under the given runtime and mount, and return the response it rendered.
 captureServe :: ResponseContract response -> ServeRuntime -> MountBinding -> ((response -> IO ResponseReceived) -> Handler ResponseReceived) -> IO Response
@@ -60,18 +62,18 @@ data MissingFixtureResponse = MissingFixtureResponse
 
 instance Exception MissingFixtureResponse
 
--- | A runtime whose admission, meter, and cache never bind, over the given metrics port.
-testServeRuntime :: MetricsPort -> IO ServeRuntime
-testServeRuntime metricsPort = do
-    admission <- newServeAdmission 1_000_000
-    testServeRuntimeWith admission metricsPort
+-- | A runtime whose admission, meter, and cache never bind, over the given metrics port and deadlines the caller sweeps.
+testServeRuntime :: Deadlines -> MetricsPort -> IO ServeRuntime
+testServeRuntime deadlines metricsPort = do
+    admission <- testServeAdmission
+    testServeRuntimeWith deadlines admission metricsPort
 
 -- | 'testServeRuntime' under the given serve admission.
-testServeRuntimeWith :: ServeAdmission -> MetricsPort -> IO ServeRuntime
-testServeRuntimeWith admission metricsPort = do
-    manager <- newManager defaultManagerSettings
+testServeRuntimeWith :: Deadlines -> ServeAdmission -> MetricsPort -> IO ServeRuntime
+testServeRuntimeWith deadlines admission metricsPort = do
+    client <- untracedClient <$> newManager defaultManagerSettings <*> pure deadlines
     cache <- newMetadataCache defaultCacheConfig
     queue <- newTestMemoryQueue
     meter <- testMemoryMeter
     publicControl <- newPublicControl (mpUpstreamRequest metricsPort) (\_ _ -> pass)
-    pure (ServeRuntime admission meter manager publicControl manager cache queue metricsPort passthroughTracingPort)
+    pure (ServeRuntime admission meter client publicControl client cache queue metricsPort passthroughTracingPort)

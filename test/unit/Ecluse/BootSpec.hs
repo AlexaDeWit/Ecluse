@@ -7,6 +7,7 @@ module Ecluse.BootSpec (spec) where
 
 import Prelude hiding (get)
 
+import Control.Exception qualified as Exception
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Network.HTTP.Types.Status (status200, status404)
@@ -17,9 +18,10 @@ import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import UnliftIO (throwIO, timeout, try)
+import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse (run)
-import Ecluse.Boot (BootAborted (..), BootEnv (beLogEnv), applySecretFileIndirection, applyServerSettings, logBootInfo, orExit, probeServerConfig, readConfigDocument, withBootEnv)
+import Ecluse.Boot (BootAborted (..), BootEnv (beLogEnv), alongsideSweeper, applySecretFileIndirection, applyServerSettings, logBootInfo, orExit, probeServerConfig, readConfigDocument, withBootEnv, withDeadlineSweeper)
 import Ecluse.Composition.BootError (
     BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, PrivateUpstreamOnPublicUpstream, RuleBlockedOnMount, SplitRoleNeedsDurableQueue),
     renderBootError,
@@ -28,6 +30,7 @@ import Ecluse.Composition.Support (captureBoot, collapsedMirrorRefusal, collapsi
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
+import Ecluse.Core.Deadline qualified as Deadline
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyIfYankedType, DenyInstallTimeExecutionType))
 import Ecluse.Core.Server.Readiness (Readiness (Latched), alwaysReady)
@@ -43,7 +46,7 @@ import Ecluse.Runtime.Server (
     newDrainSignal,
  )
 import Ecluse.Test.Env (withEnvVars)
-import Ecluse.Test.Log (captureStderrWith, captureStdout)
+import Ecluse.Test.Log (captureStderrWith, captureStdout, newTestLogEnv)
 import Ecluse.Test.OsvDb (denyIfEpssRules, epssFreeRules, stubSourceEnv)
 import Ecluse.Test.Stub (Stub, allCaptured, stubBaseUrl, withStub)
 
@@ -139,6 +142,17 @@ spec = sequential $ do
             isDraining (scDrain cfg) `shouldReturn` False
             beginDrain drain
             isDraining (scDrain cfg) `shouldReturn` True
+
+    describe "the deadline sweeper" $ do
+        it "fires a deadline armed inside the role" $ do
+            logEnv <- newTestLogEnv
+            withDeadlineSweeper logEnv (\deadlines -> Deadline.timeout deadlines 200_000 (threadDelay 5_000_000)) `shouldReturn` Nothing
+
+        it "fails the role when a sweep faults, rather than retrying while no deadline fires" $ do
+            logEnv <- newTestLogEnv
+            -- The link raises the fault asynchronously, which only base 'Exception.try' catches.
+            outcome <- timeout 5_000_000 (Exception.try @SomeException (alongsideSweeper logEnv (throwIO SweepFault) (threadDelay 20_000_000)))
+            fmap isLeft outcome `shouldBe` Just True
 
     describe "process log cleanup" $
         forM_ [("normal return", Right ()), ("exceptional exit", Left (SimulatedServiceFault "role failed"))] $ \(label, expected) ->
@@ -543,3 +557,9 @@ newtype SimulatedServiceFault = SimulatedServiceFault Text
     deriving stock (Eq, Show)
 
 instance Exception SimulatedServiceFault
+
+-- A sweep step that faults.
+data SweepFault = SweepFault
+    deriving stock (Show)
+
+instance Exception SweepFault

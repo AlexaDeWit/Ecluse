@@ -17,10 +17,10 @@ import Data.ByteArray.Encoding (Base (Base64), convertFromBase)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (status200, status404, status409, status500)
 import Test.Hspec (Expectation, Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportFault (tfDetail))
 import Ecluse.Core.Package (Artifact (artFilename, artHashes, artSize), HashAlg (SHA1, SHA256, SRI), PackageDetails (pkgArtifacts, pkgName, pkgVersion), PackageInfo (..), mkHash, mkSriHashes)
@@ -37,23 +37,20 @@ import Ecluse.Core.Registry.MirrorUpload (inventoryFiles, verifyMirrorBytes)
 import Ecluse.Core.Registry.Npm.Publish (npmNewReleaseOnly, npmPublishCodec, npmPublishDocument, prepareNpmSource, prepareNpmUpload, uploadClaims)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish,
-    MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintCredential, ptTracing),
     PublishCodec (pcNativeComplete),
     PublishPlan (PublishPlan, ppLatest),
-    newMirrorPublish,
  )
-import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityVerified), verifyIntegrity)
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, pypiVersion, sriSha256Of, sriSha512Of, unsafeHash, unscopedNpm, unscopedPyPI, v1_0_0)
-import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc, mirrorVersionDoc)
 import Ecluse.Test.Registry.Npm.Publish (npmDeprecateDocument, npmMisfiledVersion, npmProvenanceRelease, npmReleaseDocument, npmRepeatedAttachments, npmStarDocument, npmTaggedRelease)
-import Ecluse.Test.Registry.Publish (checkedNpmUpload, isMalformedBody, publishOnlyFile)
+import Ecluse.Test.Registry.Publish (anonymousPublishAt, checkedNpmUpload, isMalformedBody, publishOnlyFile)
 import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Stub (
     Stub,
     allCaptured,
@@ -79,8 +76,8 @@ spec = do
 publishSpec :: Spec
 publishSpec = describe "the npm mirror write (codec over the shared transport)" $ do
     it "PUTs the publish document to the package path" $
-        withStub status200 "{}" $ \stub -> do
-            publish <- stubPublish stub
+        withStub status200 "{}" $ \stub -> withSweeper $ \deadlines -> do
+            publish <- stubPublish deadlines stub
             _ <- publishFixture publish isOddVersionDoc planV1 sizedArtifact dummyTarballBytes
             cap <- lastCaptured stub
             capMethod cap `shouldBe` "PUT"
@@ -97,29 +94,29 @@ publishSpec = describe "the npm mirror write (codec over the shared transport)" 
         KeyMap.keys versions `shouldBe` ["1.0.0"]
 
     it "treats a 2xx as success" $
-        withStub status200 "{}" $ \stub -> do
-            publish <- stubPublish stub
+        withStub status200 "{}" $ \stub -> withSweeper $ \deadlines -> do
+            publish <- stubPublish deadlines stub
             publishFixture publish isOddVersionDoc planV1 sizedArtifact dummyTarballBytes `shouldReturn` Right ()
 
     it "treats a 409 Conflict as idempotent success (the immutable version is already present)" $
-        withStub status409 "{\"error\":\"version already exists\"}" $ \stub -> do
-            publish <- stubPublish stub
+        withStub status409 "{\"error\":\"version already exists\"}" $ \stub -> withSweeper $ \deadlines -> do
+            publish <- stubPublish deadlines stub
             publishFixture publish isOddVersionDoc planV1 sizedArtifact dummyTarballBytes `shouldReturn` Right ()
 
     it "reports a 404 as a publish error naming the status (so the mirror job is retried)" $
-        withStub status404 "{\"error\":\"Not found\"}" $ \stub -> do
-            publish <- stubPublish stub
+        withStub status404 "{\"error\":\"Not found\"}" $ \stub -> withSweeper $ \deadlines -> do
+            publish <- stubPublish deadlines stub
             outcome <- publishFixture publish isOddVersionDoc planV1 sizedArtifact dummyTarballBytes
             leftMessage outcome `shouldSatisfy` maybe False (T.isInfixOf "404")
 
     it "reports a 500 as a publish error" $
-        withStub status500 "boom" $ \stub -> do
-            publish <- stubPublish stub
+        withStub status500 "boom" $ \stub -> withSweeper $ \deadlines -> do
+            publish <- stubPublish deadlines stub
             outcome <- publishFixture publish isOddVersionDoc planV1 sizedArtifact dummyTarballBytes
             leftMessage outcome `shouldSatisfy` maybe False (T.isInfixOf "500")
 
-    it "reports a transport failure as a PublishFetch value, never thrown" $ do
-        publish <- publishAt "http://127.0.0.1:1"
+    it "reports a transport failure as a PublishFetch value, never thrown" $ withSweeper $ \deadlines -> do
+        publish <- publishAt deadlines "http://127.0.0.1:1"
         outcome <- publishFixture publish isOddVersionDoc planV1 sizedArtifact dummyTarballBytes
         outcome `shouldSatisfy` isTransport
 
@@ -140,12 +137,12 @@ integritySpec = describe "verified integrity in the published document" $ do
 
 assertPublishedIntegrity :: [Text] -> Maybe Text -> Expectation
 assertPublishedIntegrity tokens expectedIntegrity =
-    withStub status200 "{}" $ \stub -> do
+    withStub status200 "{}" $ \stub -> withSweeper $ \deadlines -> do
         let shasum = T.toUpper (hexSha1Of dummyTarballBytes)
             hashes = unsafeHash SHA1 shasum :| map (unsafeHash SRI) tokens
             artifact = sizedArtifact{maHashes = hashes}
         verifyIntegrity hashes dummyTarballBytes `shouldBe` IntegrityVerified
-        publish <- stubPublish stub
+        publish <- stubPublish deadlines stub
         publishFixture publish isOddVersionDoc planV1 artifact dummyTarballBytes `shouldReturn` Right ()
         cap <- lastCaptured stub
         document <- decodeJsonOrFail (capBody cap) :: IO Object
@@ -224,8 +221,8 @@ fieldRewriteSpec = describe "the field-rewrite contract on the published version
         checked (fst npmCached (String "not an object")) `shouldSatisfy` isSourceRefusal
 
     it "writes nothing to the mirror target for a refused version object" $
-        withStub status200 "{}" $ \stub -> do
-            publish <- stubPublish stub
+        withStub status200 "{}" $ \stub -> withSweeper $ \deadlines -> do
+            publish <- stubPublish deadlines stub
             outcome <- publishFixture publish (fst npmCached (String "not an object")) planV1 sizedArtifact dummyTarballBytes
             outcome `shouldSatisfy` isSourceRefusal
             allCaptured stub `shouldReturn` []
@@ -275,14 +272,11 @@ sourceObject =
         , "_hasShrinkwrap" .= Bool False
         ]
 
-stubPublish :: Stub -> IO MirrorPublish
-stubPublish stub = publishAt (stubBaseUrl stub)
+stubPublish :: Deadlines -> Stub -> IO MirrorPublish
+stubPublish deadlines stub = publishAt deadlines (stubBaseUrl stub)
 
-publishAt :: Text -> IO MirrorPublish
-publishAt targetUrl = do
-    manager <- newManager defaultManagerSettings
-    let transport = MirrorTransport{ptManager = manager, ptMintCredential = pure Nothing, ptLimits = defaultLimits, ptTracing = passthroughTracingPort}
-    pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) (loopbackRegistryUrl targetUrl) npmPublishCodec)
+publishAt :: Deadlines -> Text -> IO MirrorPublish
+publishAt deadlines = anonymousPublishAt deadlines npmPublishCodec . loopbackRegistryUrl
 
 sizedArtifact :: MirrorArtifact
 sizedArtifact = dummyArtifact{maSize = Just 1234, maHashes = unsafeHash SHA1 (hexSha1Of dummyTarballBytes) :| []}

@@ -29,6 +29,10 @@ module Ecluse.Boot (
     buildMirrorQueue,
     applyServerSettings,
     probeServerConfig,
+
+    -- * The deadline sweeper
+    withDeadlineSweeper,
+    alongsideSweeper,
 ) where
 
 import Data.ByteString qualified as BS
@@ -38,6 +42,7 @@ import Katip (Environment (Environment), LogEnv, Severity (InfoS, WarningS), clo
 import System.Environment (getEnvironment)
 import System.IO.Error (ioeGetErrorString, isDoesNotExistError)
 import UnliftIO (bracket, throwIO, tryIO)
+import UnliftIO.Async (link, withAsync)
 
 import Ecluse.Composition.BootError (renderAdvisory, renderBootErrors)
 import Ecluse.Composition.MirrorQueue (
@@ -66,9 +71,16 @@ import Ecluse.Config (
     renderConfigError,
  )
 import Ecluse.Config.Resolve (secretEnvSpellings)
+import Ecluse.Core.Deadline (Deadlines, newDeadlines, sweepTick)
 import Ecluse.Core.Queue (MirrorQueue (deadLetterTerminus, deliveryBudget))
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
+import Ecluse.Core.Supervision (
+    FaultDisposition (Permanent),
+    SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
+    backgroundLoopBackoff,
+    superviseUnder,
+ )
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Rts (RuntimeOverrides (RuntimeOverrides, roCores, roCoresCeiling, roMaxHeapBytes), applyRuntimePosture)
 import Ecluse.Runtime.Log (moduleLog, newLogEnv)
@@ -92,6 +104,8 @@ data BootEnv = BootEnv
     -- ^ The telemetry handle, inert unless @ECLUSE_OBSERVABILITY__TELEMETRY@ enabled it.
     , beBootPlan :: BootPlan
     -- ^ The resolved plan, whose diagnostics were logged before role work starts.
+    , beDeadlines :: Deadlines
+    -- ^ The process's one deadline sweeper, which runs as long as the role does.
     }
 
 {- | The environment, the secret files it names, the config document, and the parse, in that order.
@@ -203,13 +217,33 @@ withBootEnv role action = do
                             }
             prepareTelemetryBoot (obsTelemetry observability) logEnv
             withTelemetry (obsTelemetry observability) logEnv $ \telemetry ->
-                action
-                    BootEnv
-                        { beConfig = config
-                        , beLogEnv = logEnv
-                        , beTelemetry = telemetry
-                        , beBootPlan = bootPlan
-                        }
+                withDeadlineSweeper logEnv $ \deadlines ->
+                    action
+                        BootEnv
+                            { beConfig = config
+                            , beLogEnv = logEnv
+                            , beTelemetry = telemetry
+                            , beBootPlan = bootPlan
+                            , beDeadlines = deadlines
+                            }
+
+{- | Run the deadline sweeper beside the role. Start it once the runtime posture has fixed the
+capability count.
+-}
+withDeadlineSweeper :: LogEnv -> (Deadlines -> IO a) -> IO a
+withDeadlineSweeper logEnv action = do
+    deadlines <- newDeadlines
+    alongsideSweeper logEnv (sweepTick deadlines) (action deadlines)
+
+{- | Run an action beside a sweep step repeated forever. A fault in the step fails the action: a
+sweeper that stops firing deadlines is worse than a restart.
+-}
+alongsideSweeper :: LogEnv -> IO () -> IO a -> IO a
+alongsideSweeper logEnv sweep action =
+    withAsync (superviseUnder sweeperPolicy logEnv sweep) (\sweeper -> link sweeper >> action)
+
+sweeperPolicy :: SupervisionPolicy
+sweeperPolicy = SupervisionPolicy{spLabel = "deadline-sweeper", spClassify = const Permanent, spBackoff = backgroundLoopBackoff}
 
 {- Log the report and yield the plan, or refuse. The order is load-bearing: @ecluse check-config@
 prints the same lists in it, so a transcript and a boot log agree line for line. -}

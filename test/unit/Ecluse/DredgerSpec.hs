@@ -29,6 +29,7 @@ import Ecluse.Composition.Types (BootRole (BootStorePreview, BootStorePruner))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvPort))
 import Ecluse.Core.Cve.Slot (swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Queue (noMirrorQueue)
@@ -65,6 +66,7 @@ import Ecluse.Dredger (dredgerReady, latchedStep, runDredger, withSyncTasks)
 import Ecluse.Dredger.Plan (DredgerOptions (DredgerOptions), SweepMode (SweepDeletes, SweepPreviews), SweepRepetition (SweepOnce), sweepReportFor)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncSlot))
 import Ecluse.Test.Cve (fakeCveDb)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Maintenance (
     FakeStore (fakeMaintenance, fakeObservation, readFakeContents),
@@ -180,10 +182,12 @@ plannedPruner role builds =
     bracket newTestLogEnv (void . closeScribes) $ \logEnv -> do
         config <- expectConfig (withObservablePrivate codeArtifactEnvVars) Nothing
         bootPlan <- expectPlanFor role (withObservablePrivate codeArtifactEnvVars) Nothing config noCeiling
+        deadlines <- newDeadlines
         (_, planned) <-
             planExecutable
                 logEnv
                 passthroughTracingPort
+                deadlines
                 (\_ _ _ -> Nothing)
                 (\_ _ _ -> pure noMirrorQueue)
                 (\_ _ -> pure (Right noCredentialProviders))
@@ -228,29 +232,31 @@ withDredgerAges use = withRoleTelemetry $ \logEnv telemetry meterEnv -> do
     config <- expectConfig (withObservablePrivate codeArtifactEnvVars) Nothing
     bootPlan <- expectPlanFor BootStorePruner codeArtifactEnvVars Nothing config noCeiling
     store <- newFakeStore defaultFakeStoreConfig
-    (_, planned) <-
-        planExecutable
-            logEnv
-            passthroughTracingPort
-            (\_ _ _ -> Nothing)
-            (\_ _ _ -> pure noMirrorQueue)
-            (\_ _ -> pure (Right noCredentialProviders))
-            StoreBuilds
-                { sbDeleting = \_ _ _ -> pure (fakeMaintenance store)
-                , sbObserving = \_ _ _ -> pure (fakeObservation store)
-                , sbProbing = \_ _ -> noUpstreamMechanism
-                }
-            bootPlan
-    case epRoleWiring <$> planned of
-        Right (StorePrunerWiring pruner) -> do
-            handles <- newAdvisoryHandles [Npm, PyPI]
-            let app = configApp config
-                ephemeral = config{configApp = app{cfgServer = (cfgServer app){srvPort = 0}}}
-                boot = BootEnv ephemeral logEnv telemetry bootPlan
-            runDredger boot (DredgerOptions SweepDeletes SweepOnce) pruner{pwCveSync = Map.fromList handles}
-                `shouldReturn` Nothing
-            use meterEnv handles
-        _ -> expectationFailure "expected the Dredger role plan"
+    withSweeper $ \deadlines -> do
+        (_, planned) <-
+            planExecutable
+                logEnv
+                passthroughTracingPort
+                deadlines
+                (\_ _ _ -> Nothing)
+                (\_ _ _ -> pure noMirrorQueue)
+                (\_ _ -> pure (Right noCredentialProviders))
+                StoreBuilds
+                    { sbDeleting = \_ _ _ -> pure (fakeMaintenance store)
+                    , sbObserving = \_ _ _ -> pure (fakeObservation store)
+                    , sbProbing = \_ _ -> noUpstreamMechanism
+                    }
+                bootPlan
+        case epRoleWiring <$> planned of
+            Right (StorePrunerWiring pruner) -> do
+                handles <- newAdvisoryHandles [Npm, PyPI]
+                let app = configApp config
+                    ephemeral = config{configApp = app{cfgServer = (cfgServer app){srvPort = 0}}}
+                    boot = BootEnv ephemeral logEnv telemetry bootPlan deadlines
+                runDredger boot (DredgerOptions SweepDeletes SweepOnce) pruner{pwCveSync = Map.fromList handles}
+                    `shouldReturn` Nothing
+                use meterEnv handles
+            _ -> expectationFailure "expected the Dredger role plan"
 
 stepped :: Int -> IO (FakeStore, RecordedSweep, IORef (Maybe CycleHalt))
 stepped steps = do

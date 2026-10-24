@@ -109,7 +109,7 @@ servePublicArtifactWithCoverage covered ctx = do
     -- A selected read keeps one release, so its entry step is its whole charge.
     withMetadataAdmission
         (arRuntime ctx)
-        (liftIO (arRespond ctx (tarballError (arReplies ctx) shedStatus [shedRetryAfter] (mkRefusal Nothing shedMessage))))
+        (\headers -> liftIO (arRespond ctx (tarballError (arReplies ctx) shedStatus headers (mkRefusal Nothing shedMessage))))
         (const (preparePublicMetadata (arRuntime ctx) (arDeps ctx) (arPackage ctx) (arVersion ctx) >>= gatePublicVersion covered ctx advisoryEtag))
         $ \case
             Admitted artifact skipped -> serveAdmitted ctx advisoryEtag artifact skipped
@@ -197,7 +197,7 @@ streamPublicArtifact ctx artifact observeVerdict
     | otherwise = case publicRequest of
         Left _ -> respond (internalArtifactError replies)
         Right req ->
-            relayPublicResult (srPublicControl (arRuntime ctx)) PublicRead.Artifact (arMode ctx) (srPublicManager (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) req (const True) relayJudged (relayResponder replies respond) >>= \case
+            relayPublicResult (srPublicControl (arRuntime ctx)) PublicRead.Artifact (arMode ctx) (srPublicClient (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) req (const True) relayJudged (relayResponder replies respond) >>= \case
                 UpstreamRelayed (verdict, received) -> do
                     observeVerdict verdict
                     mirrorOnAdmit ctx artifact verdict

@@ -27,7 +27,8 @@ import Ecluse.Core.Registry (
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishRelay, publishUploadClaims), PublishRequestBody (..))
 import Ecluse.Core.Registry.Exchange (withinServeCap)
-import Ecluse.Core.Registry.Origin (OriginClient, originClient)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
+import Ecluse.Core.Registry.Origin (OriginClient (ocClient), originClient)
 import Ecluse.Core.Security (BodyLimit (PublishRequestBodyLimit), Limits (maxPublishRequestBytes, progressFloor), boundedRead)
 import Ecluse.Core.Server.Admission.Bytes (withByteAdmission)
 import Ecluse.Core.Server.Context (
@@ -117,7 +118,7 @@ readAndRelay replies deps target name request =
                 Left fault -> pure (bodyRefusal replies deps fault)
                 Right declared -> case resolveName declared of
                     Left refusal -> pure refusal
-                    Right agreed -> renderRelay replies deps <$> withinServeCap (progressFloor (pubLimits deps)) id (publishRelay (pubAdapter deps) target agreed body)
+                    Right agreed -> renderRelay replies deps <$> withinServeCap (ecDeadlines (ocClient target)) (progressFloor (pubLimits deps)) id (publishRelay (pubAdapter deps) target agreed body)
   where
     resolveName claims = case name of
         Just pathName -> case bodyNameDisagreement (pubProjectName deps) pathName claims of
@@ -137,7 +138,7 @@ publicationTarget :: PublishDeps -> ServeRuntime -> Maybe ClientCredential -> Or
 publicationTarget deps rt clientToken =
     originClient
         (pubLimits deps)
-        (srPrivateManager rt)
+        (srPrivateClient rt)
         (pubTargetUrl deps)
         (publicationCredential deps clientToken)
 

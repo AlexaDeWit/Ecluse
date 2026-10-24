@@ -209,7 +209,7 @@ packumentWith mode replies name request respond = do
                 , psvTicket = ticket
                 }
     if edgeTokenMatches (pdInboundToken deps) clientToken
-        then withMetadataAdmission (ctxRuntime ctx) (refuse packumentUnavailable [shedRetryAfter] shedMessage) (\ticket -> serveAdmittedPackument (serving ticket) clientToken) pure
+        then withMetadataAdmission (ctxRuntime ctx) (\headers -> refuse packumentUnavailable headers shedMessage) (\ticket -> serveAdmittedPackument (serving ticket) clientToken) pure
         else refuse packumentUnauthorised [] unauthorisedMessage
   where
     refuse reply headers message = liftIO (respond (reply replies headers (mkRefusal Nothing message)))

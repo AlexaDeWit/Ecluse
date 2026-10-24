@@ -21,6 +21,7 @@ import UnliftIO.Concurrent (threadDelay)
 import Ecluse.Core.Registry.Exchange.Observe (ExchangeOutcome (..), observeExchange)
 import Ecluse.Core.Registry.Progress (meteredUpload, watched)
 import Ecluse.Core.Security (mkProgressFloor)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Stub.Retry (withLostAnswer)
 import Ecluse.Test.Stub.Socket (resetAfterPartialBodyOverTcp, withRawServer)
 import Ecluse.Test.Wai (localhost)
@@ -93,7 +94,7 @@ spec = describe "observeExchange" $ do
             other -> expectationFailure ("expected four requests, received " <> show other)
         readIORef events `shouldReturn` [ResponseStatus 200, ResponseStatus 200]
 
-    it "preserves upload bytes and progress metering through attempt notification" $ do
+    it "preserves upload bytes and progress metering through attempt notification" $ withSweeper $ \deadlines -> do
         events <- newIORef []
         let bytes = BS.replicate 200_000 0x61
             application request respond = Wai.strictRequestBody request >>= respond . Wai.responseLBS status200 []
@@ -102,6 +103,7 @@ spec = describe "observeExchange" $ do
             manager <- newManager defaultManagerSettings
             request <- parseRequest (toString (localhost port))
             watched
+                deadlines
                 progress
                 ( \watch ->
                     observedBody manager (append events) request{method = "POST", requestBody = meteredUpload watch (RequestBodyBS bytes)}
@@ -109,12 +111,13 @@ spec = describe "observeExchange" $ do
                 `shouldReturn` Just (LBS.fromStrict bytes)
         readIORef events `shouldReturn` [ResponseStatus 200]
 
-    it "records a stalled upload once and preserves the watchdog result" $ do
+    it "records a stalled upload once and preserves the progress floor's result" $ withSweeper $ \deadlines -> do
         events <- newIORef []
         progress <- either (fail . show) pure (mkProgressFloor 60 0.3 1024)
         request <- parseRequest "http://localhost/"
         let upload = request{requestBody = RequestBodyBS (BS.replicate 2048 0x61)}
         watched
+            deadlines
             progress
             ( \watch ->
                 observeExchange (append events) upload $ \modified _ ->

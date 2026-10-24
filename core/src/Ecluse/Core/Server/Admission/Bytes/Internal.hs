@@ -14,6 +14,7 @@ module Ecluse.Core.Server.Admission.Bytes.Internal (
 
 import UnliftIO (MonadUnliftIO)
 
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Server.Admission.Weighted (
     AdmissionObservers (..),
     WeightedAdmission,
@@ -33,22 +34,22 @@ data ByteAdmission = ByteAdmission
 byteAdmissionWaiterRoom :: Int
 byteAdmissionWaiterRoom = 8
 
--- | Allocate byte capacity, clamped to one, with the shared wait budget.
-newByteAdmission :: Int -> IO ByteAdmission
-newByteAdmission capacity = newByteAdmissionTuned capacity byteAdmissionWaiterRoom admissionWaitMicros
+-- | Allocate byte capacity, clamped to one, with the shared wait budget timed on the deadlines.
+newByteAdmission :: Deadlines -> Int -> IO ByteAdmission
+newByteAdmission deadlines capacity = newByteAdmissionTuned deadlines capacity byteAdmissionWaiterRoom admissionWaitMicros
 
 -- | Set the waiting-room bound and microsecond wait budget explicitly.
-newByteAdmissionTuned :: Int -> Int -> Int -> IO ByteAdmission
-newByteAdmissionTuned capacity room waitMicros = do
+newByteAdmissionTuned :: Deadlines -> Int -> Int -> Int -> IO ByteAdmission
+newByteAdmissionTuned deadlines capacity room waitMicros = do
     let cap = max 1 capacity
-    core <- newWeightedAdmission cap room waitMicros
+    core <- newWeightedAdmission deadlines cap room waitMicros
     pure ByteAdmission{baCore = core, baCapacity = cap}
 
 -- | Hold a weight clamped to capacity. A full room or expired wait returns Nothing.
 {-# INLINE withByteAdmission #-}
 withByteAdmission :: (MonadUnliftIO m) => MetricsPort -> ByteAdmission -> Int -> m a -> m (Maybe a)
 withByteAdmission metrics ba rawWeight =
-    withWeightedAdmission observers (baCore ba) weight
+    fmap rightToMaybe . withWeightedAdmission observers (baCore ba) weight
   where
     weight = min (baCapacity ba) (max 0 rawWeight)
 

@@ -46,6 +46,7 @@ import Ecluse.Config (
     renderConfigError,
  )
 import Ecluse.Core.Credential (unSecret)
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (HashAlg (SHA1, SHA512), mkScope)
 import Ecluse.Core.Package.Integrity (
@@ -128,7 +129,7 @@ planFromWith mintPlan limits envVars mDocBytes = do
             Right plan -> do
                 -- The root always pairs a publishing mount with a body budget. A
                 -- generous test budget keeps these specs about the wiring.
-                bodyBudget <- newByteAdmission (128 * 1024 * 1024)
+                bodyBudget <- newDeadlines >>= \deadlines -> newByteAdmission deadlines (128 * 1024 * 1024)
                 let publishBudget = PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = 26214400}
                 fmap bwBindings <$> resolveBootWiring testWiringPorts mintPlan limits (Just publishBudget) plan
 

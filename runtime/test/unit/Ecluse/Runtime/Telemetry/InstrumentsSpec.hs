@@ -61,6 +61,7 @@ import Ecluse.Runtime.Telemetry.Instruments.Internal (
     registerAdvisoryDatabaseAge,
     registerAdvisorySourceAge,
     registerCredentialTokenTtl,
+    registerOverflowQueue,
     reportAdvisoryDatabaseAge,
     reportAdvisorySourceAge,
  )
@@ -119,8 +120,6 @@ spec = describe "Ecluse.Telemetry.Instruments" $ do
 
     it "records every catalogue signal as an inert no-op without throwing" $ do
         m <- newMetrics telemetryDisabled
-        -- One representative call per instrument, spanning the bounded label domains,
-        -- so the whole emit surface is exercised. None must throw or block.
         traverse_ (recordServeDecision m) [Admit, Deny, Unavailable]
         mpUpstreamRequest (metricsPortOf m) "registry.npmjs.org" Artifact (ResponseStatus 429)
         mpUpstreamRequest (metricsPortOf m) "registry.npmjs.org" Artifact TransportFailure
@@ -212,6 +211,27 @@ spec = describe "Ecluse.Telemetry.Instruments" $ do
 
 admissionMetricsSpec :: Spec
 admissionMetricsSpec = describe "enabled admission observations" $ do
+    it "collects current overflow depth and distinct cumulative outcomes through batching" $
+        withTestTelemetry $ \telemetry meterEnv -> do
+            metrics <- newMetrics telemetry
+            waiting <- newIORef 3
+            registerOverflowQueue metrics (readIORef waiting)
+            let port = metricsPortOf metrics
+                observe = do
+                    gaugePoints "ecluse.serve.admission.overflow.waiting" meterEnv `shouldReturn` [(emptyAttributes, 3)]
+                    sumPoints "ecluse.serve.admission.overflow.admitted" meterEnv `shouldReturn` [(emptyAttributes, 2)]
+                    sumPoints "ecluse.serve.admission.overflow.shed" meterEnv `shouldReturn` [(emptyAttributes, 3)]
+                    sumPoints "ecluse.serve.admission.overflow.full" meterEnv `shouldReturn` [(emptyAttributes, 4)]
+            replicateM_ 2 (mpOverflowAdmitted port)
+            replicateM_ 3 (mpOverflowShed port)
+            replicateM_ 4 (mpOverflowFull port)
+            observe
+            observe
+            writeIORef waiting 0
+            mpOverflowAdmitted port
+            gaugePoints "ecluse.serve.admission.overflow.waiting" meterEnv `shouldReturn` [(emptyAttributes, 0)]
+            sumPoints "ecluse.serve.admission.overflow.admitted" meterEnv `shouldReturn` [(emptyAttributes, 3)]
+
     it "tracks outstanding parse and publish reservations until each release" $
         withTestTelemetry $ \telemetry meterEnv -> do
             port <- metricsPortOf <$> newMetrics telemetry

@@ -16,7 +16,7 @@ module Ecluse.Core.Server.Pipeline.Tarball.Private (
 
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (status403, status404, status503)
+import Network.HTTP.Types (ResponseHeaders, status403, status404, status503)
 import Network.Wai (ResponseReceived)
 
 import Ecluse.Core.Credential (ClientCredential)
@@ -99,16 +99,18 @@ streamPrivateArtifact ctx token = do
     selected <- case pdMirrorState (arDeps ctx) of
         Just _
             | not (pdFirstParty (arDeps ctx) (arPackage ctx)) ->
-                withMetadataAdmission (arRuntime ctx) (pure PrivateUnavailable) (\ticket -> privateArtifactRequest (Just ticket) ctx token) pure
+                withMetadataAdmission (arRuntime ctx) (pure . PrivateShed) (\ticket -> privateArtifactRequest (Just ticket) ctx token) pure
         _ -> privateArtifactRequest Nothing ctx token
     case selected of
+        -- The admission shed already counted its decision.
+        PrivateShed headers -> PrivateHandled <$> liftIO (respond (tarballError replies shedStatus headers (mkRefusal Nothing shedMessage)))
         PrivateUnavailable -> PrivateAnswered Metric.Unavailable <$> liftIO unavailable
         PrivateIncomplete expected -> PrivateHandled <$> servePublicArtifactWithCoverage (covered expected) ctx
         PrivateRefused -> PrivateAnswered Metric.Deny <$> liftIO refuse
         PrivateMissing miss -> pure (PrivateMissed miss)
         PrivateRequest managed req ->
             liftIO $
-                relayUpstreamResult (arMode ctx) (srPrivateManager (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) (shaped req) acceptPrivateArtifact relayUnjudged privateResponder >>= \case
+                relayUpstreamResult (arMode ctx) (srPrivateClient (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) (shaped req) acceptPrivateArtifact relayUnjudged privateResponder >>= \case
                     UpstreamRelayed (_, (decision, received)) -> pure (PrivateAnswered decision received)
                     UpstreamRejected status -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed (if status == status404 then MissAbsent else MissUnresolved))
                     UpstreamTransportFailure -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed MissUnresolved)
@@ -132,6 +134,7 @@ data PrivateArtifact
     | PrivateRefused
     | PrivateMissing OriginMiss
     | PrivateUnavailable
+    | PrivateShed ResponseHeaders
     | PrivateIncomplete MirrorVersion
 
 privateArtifactRequest :: Maybe MemoryTicket -> ArtifactRequest response -> Maybe ClientCredential -> Handler PrivateArtifact
@@ -149,7 +152,7 @@ privateArtifactRequest ticket ctx token = case pdPrivateBaseUrl deps of
 
     byConventionalPath privateBase =
         either (const (PrivateMissing MissAbsent)) (PrivateRequest False) $
-            artifactByFile (pdArtifact deps) (mountOrigin deps (srPrivateManager (arRuntime ctx)) privateBase token) (arPackage ctx) (unFilename (arFile ctx))
+            artifactByFile (pdArtifact deps) (mountOrigin deps (srPrivateClient (arRuntime ctx)) privateBase token) (arPackage ctx) (unFilename (arFile ctx))
 
 byIndexedLocation :: Maybe MemoryTicket -> ArtifactRequest response -> Maybe ClientCredential -> RegistryUrl -> Maybe HostPort -> Handler PrivateArtifact
 byIndexedLocation ticket ctx token privateBase privateHostPort = do

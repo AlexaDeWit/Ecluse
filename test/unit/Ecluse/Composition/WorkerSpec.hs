@@ -17,6 +17,7 @@ import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite))
 import Ecluse.Composition.MirrorState (MirrorStateBinding (MirrorStateBinding))
 import Ecluse.Composition.Support (expectConfig, expectProviders, expectValidated, fixedNow, overrideEnv, pypiMirrorEnv, scopedName, staticEnvVars, testLimits)
 import Ecluse.Composition.Worker (mirrorTransportFor, workerPoliciesWithState)
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (RetryAfter (RetryAfter))
 import Ecluse.Core.Mirror.State (MirrorState (..), stateTarget)
@@ -43,6 +44,7 @@ import Ecluse.Core.Worker.Types (WorkerMirrorState (..), WorkerStateBudget (..))
 import Ecluse.Runtime.Env (Env (envMemoryMeter, envPublicControl))
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Service (mountBindingFor)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Package (pypiVersion, requestsName, sampleDetails, thingName, unsafeFilename, v1_0_0)
 import Ecluse.Test.Registry.Public (PublicFixture (..), newPublicFixture)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleIndexWith)
@@ -58,12 +60,12 @@ spec = do
 
 policyInputsSpec :: Spec
 policyInputsSpec = describe "workerPoliciesWithState policy inputs" $ do
-    it "builds one bundle per served mount, keyed by its ecosystem" $ do
-        (env, bindings, targets) <- composedFixtures
+    it "builds one bundle per served mount, keyed by its ecosystem" $ withSweeper $ \deadlines -> do
+        (env, bindings, targets) <- composedFixtures deadlines
         Map.keys (workerPoliciesWithState env Map.empty bindings targets testArtifactCap) `shouldBe` [Npm]
 
-    it "reuses the mount's own serve-side policy inputs on the bundle" $ do
-        (env, bindings, targets) <- composedFixtures
+    it "reuses the mount's own serve-side policy inputs on the bundle" $ withSweeper $ \deadlines -> do
+        (env, bindings, targets) <- composedFixtures deadlines
         deps <- case bindings of
             [binding] -> pure (bindingPackumentDeps binding)
             _ -> fail "expected exactly one served binding"
@@ -74,8 +76,8 @@ policyInputsSpec = describe "workerPoliciesWithState policy inputs" $ do
                 now <- wpNow policy
                 now `shouldBe` fixedNow
 
-    it "carries the mount's own first-party predicate onto the bundle" $ do
-        (env, bindings, targets) <- composedFixturesFrom firstPartyEnvVars testLimits
+    it "carries the mount's own first-party predicate onto the bundle" $ withSweeper $ \deadlines -> do
+        (env, bindings, targets) <- composedFixturesFrom deadlines firstPartyEnvVars testLimits
         deps <- case bindings of
             [binding] -> pure (bindingPackumentDeps binding)
             _ -> fail "expected exactly one served binding"
@@ -85,10 +87,10 @@ policyInputsSpec = describe "workerPoliciesWithState policy inputs" $ do
                 map (wpFirstParty policy) names `shouldBe` [True, False, False]
                 map (wpFirstParty policy) names `shouldBe` map (pdFirstParty deps) names
 
-    it "carries a deny limited to admission onto the bundle, so ingest refuses what the gate refuses" $ do
+    it "carries a deny limited to admission onto the bundle, so ingest refuses what the gate refuses" $ withSweeper $ \deadlines -> do
         -- The pin below the deny would admit the version to a reader of the revocation rules alone.
         let rules = "{\"withdrawn\":{\"type\":\"DenyByIdentity\",\"identity\":\"thing\",\"appliesTo\":[\"admission\"]},\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"thing\"}}"
-        (env, bindings, targets) <- composedFixturesFrom (overrideEnv "ECLUSE_RULES" rules staticEnvVars) testLimits
+        (env, bindings, targets) <- composedFixturesFrom deadlines (overrideEnv "ECLUSE_RULES" rules staticEnvVars) testLimits
         case Map.lookup Npm (workerPoliciesWithState env Map.empty bindings targets testArtifactCap) of
             Nothing -> expectationFailure "expected an npm bundle"
             Just policy -> do
@@ -98,18 +100,18 @@ policyInputsSpec = describe "workerPoliciesWithState policy inputs" $ do
                     AdmissionDenied decision -> blockedBy decision `shouldBe` Just "DenyByIdentity"
                     other -> expectationFailure ("expected the bundle's rules to refuse the version, got " <> show other)
 
-    it "contributes no bundle for an ecosystem without a resolved publish target" $ do
-        (env, bindings, _) <- composedFixtures
+    it "contributes no bundle for an ecosystem without a resolved publish target" $ withSweeper $ \deadlines -> do
+        (env, bindings, _) <- composedFixtures deadlines
         Map.keys (workerPoliciesWithState env Map.empty bindings [] testArtifactCap) `shouldBe` []
 
-    it "sizes the bundle's artifact fetch cap from the supplied plan value" $ do
-        (env, bindings, targets) <- composedFixtures
+    it "sizes the bundle's artifact fetch cap from the supplied plan value" $ withSweeper $ \deadlines -> do
+        (env, bindings, targets) <- composedFixtures deadlines
         case Map.lookup Npm (workerPoliciesWithState env Map.empty bindings targets testArtifactCap) of
             Nothing -> expectationFailure "expected an npm bundle"
             Just policy -> maxMirrorArtifactBytes (wpArtifactLimits policy) `shouldBe` testArtifactCap
 
-    it "reads the mirror presence probe under the mount's plan-resolved response bound, not the metadata-path default (issue #851)" $ do
-        (env, bindings, targets) <- composedFixturesWith probeLimits
+    it "reads the mirror presence probe under the mount's plan-resolved response bound, not the metadata-path default (issue #851)" $ withSweeper $ \deadlines -> do
+        (env, bindings, targets) <- composedFixturesWith deadlines probeLimits
         deps <- case bindings of
             [binding] -> pure (bindingPackumentDeps binding)
             _ -> fail "expected exactly one served binding"
@@ -120,9 +122,9 @@ policyInputsSpec = describe "workerPoliciesWithState policy inputs" $ do
         ptLimits transport `shouldBe` pdLimits deps
         ptLimits transport `shouldNotBe` defaultLimits
 
-    it "fetches a job's artifact under the mount's own progress floor, not the default one" $ do
+    it "fetches a job's artifact under the mount's own progress floor, not the default one" $ withSweeper $ \deadlines -> do
         tightFloor <- either (fail . show) pure (mkProgressFloor 50 5 4096)
-        (env, bindings, targets) <- composedFixturesWith defaultLimits{progressFloor = tightFloor}
+        (env, bindings, targets) <- composedFixturesWith deadlines defaultLimits{progressFloor = tightFloor}
         case Map.lookup Npm (workerPoliciesWithState env Map.empty bindings targets testArtifactCap) of
             Nothing -> expectationFailure "expected an npm bundle"
             Just policy -> do
@@ -132,9 +134,9 @@ policyInputsSpec = describe "workerPoliciesWithState policy inputs" $ do
 pypiCapabilitiesSpec :: Spec
 pypiCapabilitiesSpec = describe "composed PyPI worker capabilities" $ do
     it "counts worker metadata once and reuses its shared cooldown for another job" $
-        withStubHeaders status429 [("Retry-After", "60")] "busy" $ \source -> do
+        withStubHeaders status429 [("Retry-After", "60")] "busy" $ \source -> withSweeper $ \deadlines -> do
             fixture <- newPublicFixture
-            policy <- composedPyPIAtWith (\env -> env{envPublicControl = pfControl fixture}) (stubBaseUrl source) "http://localhost:1"
+            policy <- composedPyPIAtWith deadlines (\env -> env{envPublicControl = pfControl fixture}) (stubBaseUrl source) "http://localhost:1"
             replicateM_ 2 $
                 wpResolveVersion policy (const pass) requestsName (pypiVersion "2.34.2") `shouldReturn` VersionCooling (RetryAfter 60)
             length <$> allCaptured source `shouldReturn` 1
@@ -146,8 +148,8 @@ pypiCapabilitiesSpec = describe "composed PyPI worker capabilities" $ do
             document filenames = encode (simpleIndexWith "requests" [("project-status", object ["status" .= ("active" :: Text)])] (filesNamed filenames))
         sourceBody <- newIORef (document initial)
         withRoutedStubIO (const ((status200,[],) <$> readIORef sourceBody)) $ \source ->
-            withStub status200 (document initial) $ \target -> do
-                policy <- composedPyPIAt (stubBaseUrl source) (stubBaseUrl target)
+            withStub status200 (document initial) $ \target -> withSweeper $ \deadlines -> do
+                policy <- composedPyPIAt deadlines (stubBaseUrl source) (stubBaseUrl target)
                 charges <- newIORef ([] :: [Int])
                 let resolve expected = do
                         writeIORef charges []
@@ -175,8 +177,8 @@ pypiCapabilitiesSpec = describe "composed PyPI worker capabilities" $ do
 
 managedBudgetSpec :: Spec
 managedBudgetSpec = describe "composed managed worker budget" $ do
-    it "charges overlapping regions separately and returns the ticket after success" $ do
-        (env, binding) <- composedManagedBudget 1000
+    it "charges overlapping regions separately and returns the ticket after success" $ withSweeper $ \deadlines -> do
+        (env, binding) <- composedManagedBudget deadlines 1000
         let charged = snChargedBytes <$> meterSnapshot (envMemoryMeter env)
         wmsTarget binding `shouldBe` stateTarget "https://target.example.test/"
         wmsLimits binding `shouldBe` testLimits{maxMirrorArtifactBytes = testArtifactCap}
@@ -199,8 +201,8 @@ managedBudgetSpec = describe "composed managed worker budget" $ do
         wmsWithinBudget binding (const charged) `shouldReturn` Just 1
         charged `shouldReturn` 0
 
-    it "returns the ticket when the managed action throws its typed failure" $ do
-        (env, binding) <- composedManagedBudget 1000
+    it "returns the ticket when the managed action throws its typed failure" $ withSweeper $ \deadlines -> do
+        (env, binding) <- composedManagedBudget deadlines 1000
         reached <- newIORef False
         let escaped = TestContractEscape "managed action escaped"
         wmsWithinBudget
@@ -216,19 +218,19 @@ managedBudgetSpec = describe "composed managed worker budget" $ do
         snChargedBytes <$> meterSnapshot (envMemoryMeter env) `shouldReturn` 0
         wmsWithinBudget binding (\_ -> pure ()) `shouldReturn` Just ()
 
-    it "refuses entry without reaching the managed action when no ticket fits" $ do
-        (env, binding) <- composedManagedBudget 0
+    it "refuses entry without reaching the managed action when no ticket fits" $ withSweeper $ \deadlines -> do
+        (env, binding) <- composedManagedBudget deadlines 0
         reached <- newIORef False
         wmsWithinBudget binding (\_ -> writeIORef reached True) `shouldReturn` Nothing
         readIORef reached `shouldReturn` False
         snChargedBytes <$> meterSnapshot (envMemoryMeter env) `shouldReturn` 0
 
-composedPyPIAt :: Text -> Text -> IO WorkerPolicy
-composedPyPIAt = composedPyPIAtWith id
+composedPyPIAt :: Deadlines -> Text -> Text -> IO WorkerPolicy
+composedPyPIAt deadlines = composedPyPIAtWith deadlines id
 
-composedPyPIAtWith :: (Env -> Env) -> Text -> Text -> IO WorkerPolicy
-composedPyPIAtWith changeEnv source target = do
-    (env, bindings, targets) <- composedFixturesFrom pypiMirrorEnv testLimits
+composedPyPIAtWith :: Deadlines -> (Env -> Env) -> Text -> Text -> IO WorkerPolicy
+composedPyPIAtWith deadlines changeEnv source target = do
+    (env, bindings, targets) <- composedFixturesFrom deadlines pypiMirrorEnv testLimits
     let bind mount = mount{bindingPackumentDeps = deps{pdUpstreams = mountUpstreams pypiArtifactHosts Nothing (loopbackRegistryUrl source) (MirrorOnAdmit (loopbackRegistryUrl target))}}
           where
             deps = bindingPackumentDeps mount
@@ -236,10 +238,10 @@ composedPyPIAtWith changeEnv source target = do
     maybe (fail "missing composed PyPI policy") pure $
         Map.lookup PyPI (workerPoliciesWithState (changeEnv env) Map.empty (map bind bindings) (map retarget targets) testArtifactCap)
 
-composedManagedBudget :: Int -> IO (Env, WorkerMirrorState)
-composedManagedBudget allowance = do
-    (original, bindings, targets) <- composedFixturesFrom pypiMirrorEnv testLimits
-    meter <- newMemoryMeter (MeterSettings allowance 1 0 0)
+composedManagedBudget :: Deadlines -> Int -> IO (Env, WorkerMirrorState)
+composedManagedBudget deadlines allowance = do
+    (original, bindings, targets) <- composedFixturesFrom deadlines pypiMirrorEnv testLimits
+    meter <- newMemoryMeter deadlines (MeterSettings allowance 1 0 0)
     pool <- newLocalPool 1 1024
     retention <- newMirrorRetention pool 60 (StoreBudget 0 0)
     let env = original{envMemoryMeter = meter}
@@ -276,14 +278,14 @@ testArtifactCap = 40 * 1024 * 1024
 probeLimits :: Limits
 probeLimits = defaultLimits{maxMetadataBytes = 3 * 1024 * 1024}
 
-composedFixtures :: IO (Env, [MountBinding], [PublishTarget])
-composedFixtures = composedFixturesWith testLimits
+composedFixtures :: Deadlines -> IO (Env, [MountBinding], [PublishTarget])
+composedFixtures deadlines = composedFixturesWith deadlines testLimits
 
-composedFixturesWith :: Limits -> IO (Env, [MountBinding], [PublishTarget])
-composedFixturesWith = composedFixturesFrom staticEnvVars
+composedFixturesWith :: Deadlines -> Limits -> IO (Env, [MountBinding], [PublishTarget])
+composedFixturesWith deadlines = composedFixturesFrom deadlines staticEnvVars
 
-composedFixturesFrom :: [(String, String)] -> Limits -> IO (Env, [MountBinding], [PublishTarget])
-composedFixturesFrom envVars limits = do
+composedFixturesFrom :: Deadlines -> [(String, String)] -> Limits -> IO (Env, [MountBinding], [PublishTarget])
+composedFixturesFrom deadlines envVars limits = do
     config <- expectConfig envVars Nothing
     providers <- expectProviders config
     plan <- expectValidated config
@@ -292,5 +294,5 @@ composedFixturesFrom envVars limits = do
             >>= either (\errs -> fail ("unexpected boot errors: " <> show errs)) pure
     targets <-
         either (\errs -> fail ("unexpected publish-target errors: " <> show errs)) pure (planPublishTargets MintMirrorWrite providers plan)
-    env <- newTestEnv
+    env <- newTestEnv deadlines
     pure (env, bindings, targets)
