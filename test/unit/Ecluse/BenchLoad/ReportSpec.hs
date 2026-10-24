@@ -27,7 +27,7 @@ spec = do
         it "keeps burst refusals visible beside a background-only floor" $ do
             let name = "npm/herd-under-heavy-private"
                 plain = scenarioReport name 0 100 0 0
-                burst = plain{srLoad = (srLoad plain){lsLabel = "burst"}, srCompanion = Just (srLoad (scenarioReport name 20 30 1 2)), srDiagnosticBurst = True}
+                burst = plain{srLoad = (srLoad plain){lsLabel = "burst"}, srCompanion = Just (srLoad (scenarioReport name 20 30 1 2)){lsLabel = "concurrent load"}, srDiagnosticBurst = True}
                 section = (loadedSection Npm 5_000 [burst]){sectionEnforcement = Enforced twoCores (Map.singleton (name, Loaded) 10)}
                 rendered = renderReports section
             rendered `shouldSatisfy` T.isInfixOf "| 100 | 0 | 10 (background only) | 100 | 0 |"
