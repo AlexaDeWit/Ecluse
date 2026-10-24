@@ -141,8 +141,8 @@
               "16018v8rxxcl3axzz0d8c4r7dhpazyll9k7d6lfbg571sbpd61wv";
             http-semantics = fromHackage "http-semantics" "0.4.1"
               "0pl6fm4q11j2i9li736i4ynrrzbcvyn3fd7q34ckslmlsq860cwg";
-            time-manager = fromHackage "time-manager" "0.3.2"
-              "1fsydc5yxjc8aa5aalcpd9awczbyvjrqb1slbmrxb67w9x9gf8a5";
+            time-manager = fromHackage "time-manager" "0.4.0"
+              "sha256-olmyB/haQjdvaPKOoB0GqUcu6Ncp5JzW+AjKRwSUq1I=";
             network = fromHackage "network" "3.2.9.0"
               "1vabvmmyypr8p2y7skw62i3q7m0dl9ia930x8ivfd3ad4nd5a92n";
             recv = fromHackage "recv" "0.1.2"
