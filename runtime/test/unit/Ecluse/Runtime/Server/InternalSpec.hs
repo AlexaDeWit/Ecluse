@@ -12,8 +12,9 @@ import Data.Char (toLower)
 import Data.List (lookup)
 import Data.Text qualified as T
 import Katip (closeScribes)
+import Network.HPACK qualified as HPACK
 import Network.HTTP.Semantics (tokenFoldedKey)
-import Network.HTTP.Types (Method, ResponseHeaders, hContentLength, methodGet, methodHead, status200)
+import Network.HTTP.Types (HeaderName, Method, ResponseHeaders, hContentLength, methodGet, methodHead, status200)
 import Network.HTTP2.Client qualified as H2
 import Network.Socket qualified as Socket
 import Network.Socket.ByteString (recv, sendAll)
@@ -81,6 +82,81 @@ spec = around_ (timeout 5_000_000 >=> (`shouldBe` Just ())) $ describe "runWarp 
     it "processes the second ordinary request on the same connection" $ do
         wire <- pipelined "HTTP/1.1" methodGet (\_ respond -> respond (responseLBS status200 [] "ok"))
         countResponses wire `shouldBe` 2
+
+    it "enforces decoded header bounds and reuses the HTTP/2 connection after a refusal" $ do
+        entered <- newIORef (0 :: Int)
+        let app _ respond = do
+                atomicModifyIORef'_ entered (+ 1)
+                respond (responseLBS status200 [] "ok")
+        withRealWarp app $ \port ->
+            withLoopbackSocket port $ \client ->
+                bracket (H2.allocSimpleConfig client 4096) H2.freeSimpleConfig $ \config ->
+                    H2.run H2.defaultClientConfig config $ \sendRequest _aux -> do
+                        let request size = H2.requestNoBody methodGet "/" (replicate 80 ("x-padding", BS.replicate size 97))
+                            accept response = do
+                                H2.responseStatus response `shouldBe` Just status200
+                                boundedRead (MetadataBodyLimit 1024) (H2.getResponseBodyChunk response)
+                                    `shouldReturn` Right (2, "ok")
+                        sendRequest (request 700) accept
+                        sendRequest (request 800) accept `shouldThrow` \case
+                            H2.StreamResetIsReceived H2.ProtocolError _ -> True
+                            _ -> False
+                        sendRequest (H2.requestNoBody methodGet "/" []) accept
+        readIORef entered `shouldReturn` 2
+
+    describe "decoded HTTP/2 header bounds" $ do
+        it "uses a finite default header limit" $
+            H2.maxHeaderListSize H2.defaultSettings `shouldBe` Just 65536
+
+        it "accepts fields exactly at the decoded limit" $
+            decodeBoundedHeaders (Just 72) [("x-a", "1"), ("x-b", "2")]
+                `shouldReturn` [("x-a", "1"), ("x-b", "2")]
+
+        it "refuses fields one octet above the decoded limit" $
+            decodeBoundedHeaders (Just 71) [("x-a", "1"), ("x-b", "2")]
+                `shouldThrow` (== HPACK.TooLargeHeader)
+
+        it "counts pseudo-header names and field overhead" $
+            decodeBoundedHeaders (Just 37) [(":path", "/")]
+                `shouldThrow` (== HPACK.TooLargeHeader)
+
+        it "refuses a non-empty block at a zero limit" $
+            decodeBoundedHeaders (Just 0) [("x-a", "1")]
+                `shouldThrow` (== HPACK.TooLargeHeader)
+
+        it "accepts empty trailers at a zero limit" $
+            decodeBoundedHeaders (Just 0) [] `shouldReturn` []
+
+        it "joins ordinary repeated Cookie fields within the limit" $
+            decodeBoundedHeaders (Just 82) [("cookie", "a=1"), ("cookie", "b=2")]
+                `shouldReturn` [("cookie", "a=1; b=2")]
+
+        it "retains ordinary repeated fields in order" $
+            decodeBoundedHeaders (Just 72) [("x-a", "1"), ("x-a", "2")]
+                `shouldReturn` [("x-a", "1"), ("x-a", "2")]
+
+        it "retains the existing field-count bound" $
+            decodeBoundedHeaders Nothing (replicate 203 ("x-a", "1"))
+                `shouldThrow` (== HPACK.TooLargeHeader)
+
+        it "keeps the decoder table current after a bound refusal" $
+            HPACK.withDynamicTableForEncoding 4096 $ \encoder ->
+                HPACK.withDynamicTableForDecoding 4096 4096 $ \decoder -> do
+                    HPACK.setHeaderListSizeLimit (Just 36) decoder
+                    initialBlock <- HPACK.encodeHeader HPACK.defaultEncodeStrategy 4096 encoder [("x-a", "1"), ("x-b", "2")]
+                    HPACK.decodeTokenHeader decoder initialBlock `shouldThrow` (== HPACK.TooLargeHeader)
+                    followingBlock <- HPACK.encodeHeader HPACK.defaultEncodeStrategy 4096 encoder [("x-b", "2")]
+                    (fields, _) <- HPACK.decodeTokenHeader decoder followingBlock
+                    [(tokenFoldedKey token, value) | (token, value) <- fields] `shouldBe` [("x-b", "2")]
+
+decodeBoundedHeaders :: Maybe Int -> [(HeaderName, ByteString)] -> IO [(ByteString, ByteString)]
+decodeBoundedHeaders limit fields =
+    HPACK.withDynamicTableForEncoding 4096 $ \encoder ->
+        HPACK.withDynamicTableForDecoding 4096 4096 $ \decoder -> do
+            HPACK.setHeaderListSizeLimit limit decoder
+            block <- HPACK.encodeHeader HPACK.defaultEncodeStrategy 4096 encoder fields
+            (decoded, _) <- HPACK.decodeTokenHeader decoder block
+            pure [(tokenFoldedKey token, value) | (token, value) <- decoded]
 
 pastCapApplication :: ServeRuntime -> Application
 pastCapApplication runtime request respond =
