@@ -51,6 +51,7 @@ import Ecluse.Composition.Worker (workerPoliciesWithState)
 import Ecluse.Config (AppConfig (cfgEgress), EgressSettings (egrOperatorContact))
 import Ecluse.Core.BuildIdentity (identityManagerSettings, renderUserAgent)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured))
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
 import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
 import Ecluse.Core.Queue (MirrorQueue)
@@ -64,18 +65,15 @@ import Ecluse.Core.Registry.Adapter (
     serveRouter,
  )
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmissionSwept, serveAdmissionLevels)
-import Ecluse.Core.Server.Pipeline.Shared (spikeStatsLoop)
-import UnliftIO.Async (concurrently_)
-import UnliftIO.Concurrent (threadDelay)
 import Ecluse.Core.Server.Admission.Brake (defaultBrakeMarks)
-import Ecluse.Core.Deadline (Deadlines)
-import Ecluse.Core.Server.Admission.Types (MeterSnapshot (..))
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), meterSnapshot, newMemoryMeterSwept)
+import Ecluse.Core.Server.Admission.Types (MeterSnapshot (..))
 import Ecluse.Core.Server.Admission.Weighted (admissionWaitMicros)
 import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxBytes, cacheMaxEntries), newMetadataCacheWithProvider)
 import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool)
 import Ecluse.Core.Server.Cache.Provider (localCacheProviderWithPool)
 import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps)
+import Ecluse.Core.Server.Pipeline.Shared (spikeEnableQueue, spikeStatsLoop)
 import Ecluse.Core.Server.Readiness (Readiness)
 import Ecluse.Core.Supervision (
     FaultDisposition (Permanent, Transient),
@@ -97,6 +95,8 @@ import Ecluse.Runtime.Telemetry.Reporters (
     installMetrics,
  )
 import Ecluse.Runtime.Telemetry.Tracing (instrumentDataPlaneManagerSettings)
+import UnliftIO.Async (concurrently_)
+import UnliftIO.Concurrent (threadDelay)
 
 -- | Everything a role needs to start its own tasks, built once by 'withServiceRuntime'. The background tasks arrive already wrapped in their supervision policy.
 data ServiceRuntime = ServiceRuntime
@@ -134,6 +134,7 @@ withServiceRuntime bootEnv plan mirror action = do
         cveSyncPlan = mwCveSync mirror
         baseBindings = bwBindings (mwBootWiring mirror)
 
+    spikeEnableQueue
     roomFactor <- fromMaybe 1 . (>>= readMaybe) <$> lookupEnv "SPIKE1866_ROOM_FACTOR"
     serveAdmission <- newServeAdmissionSwept deadlines roomFactor (mpAdmissionCapacity memoryPlan)
     (memoryMeter, sampler) <- memoryAdmission deadlines roomFactor memoryPlan

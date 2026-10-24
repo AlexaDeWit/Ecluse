@@ -16,6 +16,7 @@ module Ecluse.Core.Server.Pipeline.Shared (
     withMetadataAdmission,
     withMetadataAdmissionC,
     spikeStatsLoop,
+    spikeEnableQueue,
     shedStatus,
     shedMessage,
     hRetryAfter,
@@ -48,12 +49,12 @@ import System.IO.Unsafe (unsafePerformIO)
 
 import Control.Concurrent.STM (check, orElse)
 
+import Data.Sequence qualified as Seq
 import Ecluse.Core.Deadline (holdSwept, withSweptFlag)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Server.Admission (withServeAdmissionP)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, withMemoryEntryP)
 import Ecluse.Core.Server.Admission.Types (FlightKey (FlightKey))
-import Data.Sequence qualified as Seq
 
 import Ecluse.Core.Server.Admission.Weighted (Shed (..), admissionWaitMicros, spikePlacesFreed, spikeSignalOne, spikeWaiters)
 import Ecluse.Core.Server.Cache.Types (CacheKey, cacheKeyIdentity, cacheKeyStore)
@@ -112,17 +113,28 @@ spikeEnv :: String -> Maybe String
 spikeEnv key = unsafePerformIO (lookupEnv key)
 {-# NOINLINE spikeEnv #-}
 
-spikeShed :: SpikeShed
-spikeShed = case spikeEnv "SPIKE1866_SHED" of
-    Just "hold" -> ShedHold
-    Just "lobby" -> ShedLobby
-    Just "lobby-fair" -> ShedLobbyFair
-    Just "lobby-event" -> ShedLobbyEvent
-    Just "lobby-wake" -> ShedLobbyWake
-    Just "lobby-end" -> ShedLobbyEnd
-    Just "pause" -> ShedPause
-    _ -> ShedLobbyWake
-{-# NOINLINE spikeShed #-}
+-- The arm SPIKE1866_SHED names, if any.
+spikeShedFromEnv :: Maybe SpikeShed
+spikeShedFromEnv = case spikeEnv "SPIKE1866_SHED" of
+    Just "now" -> Just ShedNow
+    Just "hold" -> Just ShedHold
+    Just "lobby" -> Just ShedLobby
+    Just "lobby-fair" -> Just ShedLobbyFair
+    Just "lobby-event" -> Just ShedLobbyEvent
+    Just "lobby-wake" -> Just ShedLobbyWake
+    Just "lobby-end" -> Just ShedLobbyEnd
+    Just "pause" -> Just ShedPause
+    _ -> Nothing
+{-# NOINLINE spikeShedFromEnv #-}
+
+-- Today's immediate refusal until the service boots, so a runtime a test builds directly keeps it.
+spikeShedRef :: IORef SpikeShed
+spikeShedRef = unsafePerformIO (newIORef (fromMaybe ShedNow spikeShedFromEnv))
+{-# NOINLINE spikeShedRef #-}
+
+-- | Spike 1866: the service's boot turns the queue on, unless SPIKE1866_SHED names another arm.
+spikeEnableQueue :: IO ()
+spikeEnableQueue = when (isNothing spikeShedFromEnv) (writeIORef spikeShedRef ShedLobbyWake)
 
 -- The wait, in microseconds.
 spikeWaitMicros :: Int
@@ -191,38 +203,40 @@ spikeLeaveHold = atomicModifyIORef' spikeHeld (\n -> (n - 1, ()))
 -- | Spike 1866: 'withMetadataAdmission' whose shed answer learns whether to close the connection.
 withMetadataAdmissionC :: (MonadUnliftIO m) => ServeRuntime -> (Bool -> m received) -> (MemoryTicket -> m a) -> (a -> m received) -> m received
 withMetadataAdmissionC runtime shed gated answer =
-    firstTry >>= \case
-        Right result -> answer result
-        Left WaitExpired -> liftIO (spikeCount CExpired) >> refuse False
-        Left DoorFull -> liftIO (spikeCount CDoor) >> case spikeShed of
-            ShedNow -> refuse False
-            ShedLobbyWake -> do
-                entered <- liftIO spikeEnterHold
-                if not entered
-                    then refuse spikeCloseOver
-                    else do
-                        outcome <- withRunInIO (\run -> wakeLobby run)
-                        case outcome of
-                            Right result -> liftIO (spikeCount CAdmitted) >> answer result
-                            Left _ -> liftIO (spikeCount CRefused) >> refuse False
-            ShedPause -> do
-                entered <- liftIO spikeEnterHold
-                if entered
-                    then do
-                        received <- refuse False
-                        liftIO (holdSwept deadlines spikeWaitMicros `finally` spikeLeaveHold)
-                        pure received
-                    else refuse spikeCloseOver
-            _ -> do
-                entered <- liftIO spikeEnterHold
-                if not entered
-                    then refuse spikeCloseOver
-                    else do
-                        start <- liftIO getMonotonicTimeNSec
-                        outcome <- withRunInIO (\run -> held start run `finally` spikeLeaveHold)
-                        case outcome of
-                            Right result -> liftIO (spikeCount CAdmitted) >> answer result
-                            Left _ -> liftIO (spikeCount CRefused) >> refuse False
+    liftIO (readIORef spikeShedRef) >>= \mode ->
+        firstTry mode >>= \case
+            Right result -> answer result
+            Left WaitExpired -> liftIO (spikeCount CExpired) >> refuse False
+            Left DoorFull ->
+                liftIO (spikeCount CDoor) >> case mode of
+                    ShedNow -> refuse False
+                    ShedLobbyWake -> do
+                        entered <- liftIO spikeEnterHold
+                        if not entered
+                            then refuse spikeCloseOver
+                            else do
+                                outcome <- withRunInIO (\run -> wakeLobby run)
+                                case outcome of
+                                    Right result -> liftIO (spikeCount CAdmitted) >> answer result
+                                    Left _ -> liftIO (spikeCount CRefused) >> refuse False
+                    ShedPause -> do
+                        entered <- liftIO spikeEnterHold
+                        if entered
+                            then do
+                                received <- refuse False
+                                liftIO (holdSwept deadlines spikeWaitMicros `finally` spikeLeaveHold)
+                                pure received
+                            else refuse spikeCloseOver
+                    _ -> do
+                        entered <- liftIO spikeEnterHold
+                        if not entered
+                            then refuse spikeCloseOver
+                            else do
+                                start <- liftIO getMonotonicTimeNSec
+                                outcome <- withRunInIO (\run -> held mode start run `finally` spikeLeaveHold)
+                                case outcome of
+                                    Right result -> liftIO (spikeCount CAdmitted) >> answer result
+                                    Left _ -> liftIO (spikeCount CRefused) >> refuse False
   where
     metrics = srMetrics runtime
     deadlines = ecDeadlines (srPublicClient runtime)
@@ -230,13 +244,13 @@ withMetadataAdmissionC runtime shed gated answer =
         liftIO (mpServeDecision metrics Metric.Unavailable)
         shed (closing || spikeCloseAll)
     -- A newcomer joins the held requests while any wait, so it never jumps them.
-    firstTry
-        | spikeShed `elem` [ShedLobbyFair, ShedLobbyEvent] = liftIO (readIORef spikeHeld) >>= \waiting -> if waiting > 0 then pure (Left DoorFull) else admitted
+    firstTry mode
+        | mode `elem` [ShedLobbyFair, ShedLobbyEvent] = liftIO (readIORef spikeHeld) >>= \waiting -> if waiting > 0 then pure (Left DoorFull) else admitted
         | otherwise = admitted
     admitted = admittedP pass
     admittedP placed = fmap join . withMemoryEntryP metrics (srMemoryMeter runtime) placed $ \ticket ->
         withServeAdmissionP metrics (srAdmission runtime) placed (gated ticket)
-    held start run = case spikeShed of
+    held mode start run = case mode of
         ShedHold -> holdSwept deadlines spikeWaitMicros $> Left DoorFull
         ShedLobbyEnd -> holdSwept deadlines spikeWaitMicros >> spikeCount CRetry >> run admitted
         ShedLobbyEvent -> eventLobby run
@@ -247,7 +261,8 @@ withMetadataAdmissionC runtime shed gated answer =
         entry <- newTVarIO (0 :: Int)
         atomically (modifyTVar' spikeWaiters (Seq.|> entry))
         current <- newIORef entry
-        let -- Leave the queue and the count. A signal that arrived meanwhile goes to the next waiter.
+        let
+            -- Leave the queue and the count. A signal that arrived meanwhile goes to the next waiter.
             leave = do
                 me <- readIORef current
                 was <- atomically $ do

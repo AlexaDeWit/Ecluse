@@ -27,10 +27,10 @@ import Ecluse.Core.Server.Admission.Weighted (
     admissionWaitMicros,
     newWeightedAdmission,
     newWeightedAdmissionSwept,
+    weightedAdmissionLevels,
     withWeightedAdmission,
     withWeightedAdmissionE,
     withWeightedAdmissionP,
-    weightedAdmissionLevels,
  )
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
