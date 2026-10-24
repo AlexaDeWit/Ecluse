@@ -227,7 +227,9 @@ spec = around_ (timeout 10_000_000 >=> (`shouldBe` Just ())) $ describe "withMet
                     _ -> expectationFailure "the listing released its overflow reservation during the write"
                 if cancelled
                     then cancel listing
-                    else putMVar releaseWrite () >> wait listing `shouldReturn` Right "listing"
+                    else do
+                        putMVar releaseWrite ()
+                        wait listing `shouldReturn` Right "listing"
             snChargedBytes <$> meterSnapshot (srMemoryMeter runtime) `shouldReturn` 0
             withAsync (awaitPlace noopMetricsPort overflow line (pure (Entered ()))) $ \queued -> do
                 awaitQueued overflow
