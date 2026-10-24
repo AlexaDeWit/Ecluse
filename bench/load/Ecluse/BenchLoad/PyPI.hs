@@ -194,7 +194,6 @@ herdScenario =
         { scenarioServiceTime = False
         }
 
--- | The heavy-tier capture.
 herdPackage :: Text
 herdPackage = "boto3"
 

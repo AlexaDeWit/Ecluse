@@ -235,7 +235,6 @@ herdScenario =
         { scenarioServiceTime = False
         }
 
--- | The largest npm capture.
 herdPackage :: Text
 herdPackage = "typescript"
 
