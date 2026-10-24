@@ -10,6 +10,7 @@ data ProbeMode
     = Retained String
     | Evaluation
     | Listing
+    | ListingCensus
     | Merge FilePath FilePath
     | Source String String String String String
     | SelectedRetention String String String String
@@ -22,6 +23,7 @@ parseProbeMode = \case
     ["--metadata-probe", shape, path] -> Just (Retained shape, path)
     ["--metadata-evaluation-probe", path] -> Just (Evaluation, path)
     ["--metadata-listing-probe", path] -> Just (Listing, path)
+    ["--metadata-listing-census-probe", path] -> Just (ListingCensus, path)
     ["--metadata-merge-probe", private, public, path] -> Just (Merge private public, path)
     ["--metadata-source-probe", ecosystem, mode, name, version, limit, path] -> Just (Source ecosystem mode name version limit, path)
     ["--metadata-selected-retention-probe", ecosystem, name, version, limit, path] -> Just (SelectedRetention ecosystem name version limit, path)
@@ -34,6 +36,7 @@ renderProbeMode = \case
     Retained shape -> ["--metadata-probe", shape]
     Evaluation -> ["--metadata-evaluation-probe"]
     Listing -> ["--metadata-listing-probe"]
+    ListingCensus -> ["--metadata-listing-census-probe"]
     Merge private public -> ["--metadata-merge-probe", private, public]
     Source ecosystem mode name version limit -> ["--metadata-source-probe", ecosystem, mode, name, version, limit]
     SelectedRetention ecosystem name version limit -> ["--metadata-selected-retention-probe", ecosystem, name, version, limit]

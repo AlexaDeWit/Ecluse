@@ -55,6 +55,7 @@ runProbe mode path = case mode of
     Mode.Retained shape -> childMain probe shape path
     Mode.Evaluation -> packageMain probeEvaluation path
     Mode.Listing -> packageMain probeListing path
+    Mode.ListingCensus -> packageMain PackumentResidencySpec.probeListingCensus path
     Mode.Merge private public -> packageMain (probeMerge private public) path
     Mode.Source ecosystem source name version limit -> MemoryModelResidencySpec.sourceMain ecosystem source name version limit path
     Mode.SelectedRetention ecosystem name version limit -> MemoryModelResidencySpec.selectedMain SelectedValue ecosystem name version limit path

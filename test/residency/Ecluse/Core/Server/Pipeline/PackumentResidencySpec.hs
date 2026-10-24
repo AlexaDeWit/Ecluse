@@ -2,22 +2,23 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | A heap census of the live listing path over corpus captures. Before the render, the meter covers
-what the request holds. Once the body exists, the request no longer reaches its reads' documents.
+{- | Isolated heap censuses of the live listing path. The meter covers each phase, and the request
+releases its source documents before writing the body.
 -}
-module Ecluse.Core.Server.Pipeline.PackumentResidencySpec (spec) where
+module Ecluse.Core.Server.Pipeline.PackumentResidencySpec (spec, Census, probeListingCensus) where
 
-import Data.Aeson (encode, object, (.=))
+import Data.Aeson (FromJSON, ToJSON, encode, object, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
+import Foreign.StablePtr (deRefStablePtr, freeStablePtr, newStablePtr)
 import Network.HTTP.Types (methodGet, status200, statusCode)
 import Network.Wai (Application, defaultRequest, requestMethod, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
-import UnliftIO.Exception (evaluate, throwIO)
+import UnliftIO.Exception (bracket, evaluate, throwIO)
 
 import Ecluse.Composition.MemoryPlan.Transient (meterStepBytes)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
@@ -31,7 +32,8 @@ import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
 import Ecluse.Core.Server.Context (MountBinding (bindingRouter), ResponseAction (RunPipeline), RouteAction (RouteAction), ServeRuntime (srMemoryMeter))
 import Ecluse.Core.Server.MemoryModel.Calibration (Figures (readPeak, retainedShared))
 import Ecluse.Core.Server.MemoryModel.HeapSample (HeapSample (live), sample)
-import Ecluse.Core.Server.MemoryModel.Probe (Residency (residencyFigures, residencyUpstream), packages, residencyFor)
+import Ecluse.Core.Server.MemoryModel.Probe (Residency (residencyFigures, residencyUpstream), measureInChild, packages, requireResidency, residencyFor)
+import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpRuleEvalDuration, mpServeDecision))
 import Ecluse.Service (mountBindingFor)
@@ -42,15 +44,15 @@ import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureResponse), deliverServe, testServeRuntime)
 import Ecluse.Test.Server.Mount (serveDepsFor)
-import Ecluse.Test.Support (testMemoryMeter)
+import Ecluse.Test.Support (expectRight, testMemoryMeter)
 import Ecluse.Test.Wai (rebaseAuthority, selfBaseUrl)
 
 -- | Each capture of at least one meter step, read from a private and a public origin that both serve it.
 spec :: Spec
 spec = describe "listing heap census" $
-    for_ censused $ \(package, record, figures) -> it (toString (cpName package)) $ do
+    for_ censused $ \(package, figures) -> it (toString (cpName package)) $ do
         capture <- readCapture package
-        census <- takeCensus package (upstreamOrigin (residencyUpstream record)) capture
+        census <- measureInChild Mode.ListingCensus package >>= expectRight
         report package census
         censusStatus census `shouldBe` statusCode status200
         -- The control: the census sees a document while the request holds it.
@@ -63,9 +65,9 @@ spec = describe "listing heap census" $
 requestState :: Int
 requestState = 64 * 1024
 
-censused :: [(CorpusPackage, Residency, Figures)]
+censused :: [(CorpusPackage, Figures)]
 censused =
-    [ (package, record, figures)
+    [ (package, figures)
     | package <- packages
     , Just record <- [residencyFor (pkgEcosystem (cpPackage package))]
     , Just figures <- [Map.lookup (cpName package) (residencyFigures record)]
@@ -84,12 +86,27 @@ data Census = Census
     , censusAfter :: Integer
     -- ^ After the request, while the test still holds the response it sent.
     }
+    deriving stock (Generic)
 
--- | Live bytes and what the meter held at one point inside the request.
+instance FromJSON Census
+instance ToJSON Census
+
+-- Live bytes and what the meter held at one point inside the request.
 data Point = Point {pointLive :: Integer, pointCharged :: Int}
+    deriving stock (Generic)
+
+instance FromJSON Point
+instance ToJSON Point
 
 held :: Census -> Point -> Integer
 held census point = pointLive point - censusBefore census
+
+-- | Measure one authenticated capture with no previous example's pools or caches in the process.
+probeListingCensus :: CorpusPackage -> IO Census
+probeListingCensus package = do
+    record <- requireResidency (pkgEcosystem (cpPackage package))
+    capture <- readCapture package
+    takeCensus package (upstreamOrigin (residencyUpstream record)) capture
 
 {- A warm-up listing settles one-off state first. The measured listing runs on a fresh cache, so it
 renders its body instead of finding the warm-up's. -}
@@ -110,23 +127,26 @@ takeCensus package captured capture = withSweeper $ \deadlines -> do
             listing logEnv warmUp binding (const pass)
             meter <- testMemoryMeter
             measured <- testServeRuntime deadlines noopMetricsPort{mpRuleEvalDuration = \_ _ -> samplePoint meter gate, mpServeDecision = \_ -> samplePoint meter planned}
-            atStart <- live <$> sample
-            listing logEnv measured{srMemoryMeter = meter} binding $ \response -> do
-                atRespond <- live <$> sample
-                writeIORef responded (Just (response, atRespond))
-            atEnd <- live <$> sample
-            (response, atRespond) <- maybe (throwIO MissingFixtureResponse) pure =<< readIORef responded
-            atGate <- maybe (throwIO MissingFixtureResponse) pure =<< readIORef gate
-            atPlan <- maybe (throwIO MissingFixtureResponse) pure =<< readIORef planned
-            pure
-                Census
-                    { censusStatus = statusCode (responseStatus response)
-                    , censusBefore = toInteger atStart
-                    , censusGate = atGate
-                    , censusPlanned = atPlan
-                    , censusAtRespond = toInteger atRespond
-                    , censusAfter = toInteger atEnd
-                    }
+            -- The process keeps its runtime alive. Its pools and caches must outlive every sample too.
+            bracket (newStablePtr (warmUp, measured)) freeStablePtr $ \root -> do
+                atStart <- live <$> sample
+                listing logEnv measured{srMemoryMeter = meter} binding $ \response -> do
+                    atRespond <- live <$> sample
+                    writeIORef responded (Just (response, atRespond))
+                atEnd <- live <$> sample
+                _ <- deRefStablePtr root
+                (response, atRespond) <- maybe (throwIO MissingFixtureResponse) pure =<< readIORef responded
+                atGate <- maybe (throwIO MissingFixtureResponse) pure =<< readIORef gate
+                atPlan <- maybe (throwIO MissingFixtureResponse) pure =<< readIORef planned
+                pure
+                    Census
+                        { censusStatus = statusCode (responseStatus response)
+                        , censusBefore = toInteger atStart
+                        , censusGate = atGate
+                        , censusPlanned = atPlan
+                        , censusAtRespond = toInteger atRespond
+                        , censusAfter = toInteger atEnd
+                        }
   where
     name = cpPackage package
     origin port = loopbackRegistryUrl ("http://localhost:" <> show port)

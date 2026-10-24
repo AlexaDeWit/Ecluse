@@ -350,12 +350,14 @@ Each `metadata-merge` report adds `derived_full_read_permille` and
 Merged reads retain the whole-step checks above, without a per-byte read gate.
 Single-document read limits and realistic output limits retain their existing checks.
 
-`PackumentResidencySpec` takes a heap census of the live listing path. For each capture of at
-least one meter step, a private and a public origin both serve the capture, and one listing runs
-through the production route after a warm-up. It samples live bytes after major collections at four
-points: before the listing, when policy has decided every version, when the merge is planned, and
-while the response is sent. A last sample follows the listing while the test still holds the
-response. The checks are:
+`PackumentResidencySpec` takes a heap census of the live listing path in a fresh child process
+for each capture of at least one meter step. A private and a public origin both serve the capture,
+and one listing runs through the production route after a warm-up. Both runtimes stay rooted
+through every sample, so their pools and caches keep the process-wide lifetime used in production.
+Isolation prevents an earlier example's fixture cleanup from changing a later example's baseline.
+It samples live bytes after major collections before the listing and after policy decides every
+version. It also samples after merge planning and while the response is sent. A last sample follows
+the listing while the test still holds the response. The checks are:
 
 - At both points before the render, what the listing holds fits what the meter holds. This covers
   the policy's and the merge plan's working sets, which the listing probe does not run.
