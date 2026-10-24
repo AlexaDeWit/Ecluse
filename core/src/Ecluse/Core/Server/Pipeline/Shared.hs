@@ -34,7 +34,7 @@ module Ecluse.Core.Server.Pipeline.Shared (
     trustedIntegrityBelowFloor,
 ) where
 
-import Network.HTTP.Types (Header, HeaderName, ResponseHeaders, Status, hConnection, status503)
+import Network.HTTP.Types (Header, HeaderName, ResponseHeaders, Status, status503)
 import Network.Wai (Request, requestHeaders)
 import UnliftIO (MonadUnliftIO, withRunInIO)
 
@@ -90,7 +90,7 @@ flightOf :: CacheKey -> FlightKey
 flightOf key = FlightKey (cacheKeyStore key) (cacheKeyIdentity key)
 
 {- | Acquire memory and CPU admission before metadata work, queueing a request a full room turns away.
-Answer after release, counting a final shed once. Past the cap, ask the client to close the connection.
+Answer after release, counting a final shed once. Refusals preserve connection reuse.
 -}
 withMetadataAdmission :: (MonadUnliftIO m) => ServeRuntime -> (ResponseHeaders -> m received) -> (MemoryTicket -> m a) -> (a -> m received) -> m received
 withMetadataAdmission runtime shed gated answer =
@@ -103,7 +103,7 @@ withMetadataAdmission runtime shed gated answer =
                 withRunInIO (\run -> awaitPlace metrics overflow line (run attempt)) >>= \case
                     Placed result -> answer result
                     WaitedOut refusedAt -> refuse refusedAt [shedRetryAfter]
-                    QueueFull refusedAt -> refuse refusedAt [shedRetryAfter, (hConnection, "close")]
+                    QueueFull refusedAt -> refuse refusedAt [shedRetryAfter]
   where
     metrics = srMetrics runtime
     admission = srAdmission runtime

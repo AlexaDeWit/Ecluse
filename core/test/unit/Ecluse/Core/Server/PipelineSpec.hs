@@ -376,7 +376,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
 overflowRouteSpec :: Spec
 overflowRouteSpec = describe "overflow refusal through ecosystem routes" $
-    for_ [("after queue expiry", 1, Nothing), ("past the queue cap", 0, Just "close")] $ \(ending, cap, connection) ->
+    for_ [("after queue expiry", 1), ("past the queue cap", 0)] $ \(ending, cap) ->
         for_ [("npm", npmRouter, npmCredential, ["leftpad"], ["leftpad", "-", "leftpad-1.0.0.tgz"]), ("PyPI", pypiRouter, pypiCredential, ["simple", "requests"], ["simple", "requests", "requests-1.0.0.tar.gz"])] $ \(ecosystem, router, credential, listingPath, artifactPath) ->
             for_ [("listing", listingPath, False), ("public artifact", artifactPath, False), ("managed private artifact", artifactPath, True)] $ \(route, path, managed) ->
                 it (ecosystem <> " " <> route <> " keeps its refusal " <> ending) $ do
@@ -410,7 +410,7 @@ overflowRouteSpec = describe "overflow refusal through ecosystem routes" $
                                 response <- either (const unexpected) pure held
                                 simpleStatus response `shouldBe` status503
                                 lookup hRetryAfter (simpleHeaders response) `shouldBe` Just "1"
-                                lookup hConnection (simpleHeaders response) `shouldBe` connection
+                                lookup hConnection (simpleHeaders response) `shouldBe` Nothing
                                 if ecosystem == "npm"
                                     then
                                         (eitherDecode (simpleBody response) :: Either String Value)
