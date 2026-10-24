@@ -23,6 +23,7 @@ module Ecluse.Runtime.Telemetry.Internal (
     -- * Lifecycle
     withTelemetry,
     initializeObservedOpenTelemetryWith,
+    initializeMeterWorkers,
 
     -- * Export-failure observation (exporter wrappers)
     observeSpanExporter,
@@ -248,13 +249,22 @@ initializeObservedMeterProvider logEnv sink = do
             let resources = materializeResources (mergeResources envResources builtInResources)
             Exception.bracketOnError (createMeterProvider resources defaultSdkMeterProviderOptions) (\(provider, _) -> void (shutdownMeterProvider provider Nothing)) $ \(sdkProvider, env) -> do
                 (batched, flushStep) <- batchMeterProvider (observeFlushFault sink) sdkProvider
-                Exception.bracketOnError (forkPeriodicMetricReader env exporter readerOptions) stopPeriodicMetricReader $ \readerHandle ->
-                    -- The acquisition is masked. The flusher must remain cancellable.
-                    Exception.bracketOnError (asyncWithUnmask (\unmask -> unmask (superviseBackground "metric-flush" logEnv flushStep))) cancel $ \flusher -> do
-                        let provider = beforeShutdown (stopPeriodicMetricReader readerHandle) (beforeShutdown (cancel flusher) batched)
-                        setGlobalMeterProvider provider
-                        scrape <- metricScrapeFor env
-                        pure (provider, scrape)
+                initializeMeterWorkers logEnv flushStep (forkPeriodicMetricReader env exporter readerOptions) $ \stop -> do
+                    let provider = beforeShutdown stop batched
+                    setGlobalMeterProvider provider
+                    scrape <- metricScrapeFor env
+                    pure (provider, scrape)
+
+-- | Release the reader and flusher if final setup fails. The supplied stop always attempts both.
+initializeMeterWorkers :: LogEnv -> IO () -> IO PeriodicMetricReaderHandle -> (IO () -> IO a) -> IO a
+initializeMeterWorkers logEnv flushStep acquireReader use = Exception.mask $ \restore -> do
+    reader <- acquireReader
+    -- Acquisition is masked. The flusher must remain cancellable.
+    flusher <-
+        asyncWithUnmask (\unmask -> unmask (superviseBackground "metric-flush" logEnv flushStep))
+            `Exception.onException` (stopPeriodicMetricReader reader `catchAny` const pass)
+    let stop = stopPeriodicMetricReader reader `Exception.finally` cancel flusher
+    restore (use stop) `Exception.onException` (stop `catchAny` const pass)
 
 {- Run a stop before the provider shuts down: the reader's, whose final export is the last, then the
 flusher's. The order mirrors the SDK's own, so it is part of the same version-pin re-diff surface. -}
