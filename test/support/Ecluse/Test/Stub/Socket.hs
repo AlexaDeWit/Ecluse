@@ -6,6 +6,7 @@
 module Ecluse.Test.Stub.Socket (
     -- * Listeners
     withRawServer,
+    awaitRequestHead,
     withTlsServer,
     withTlsLostAnswerThenSilent,
     withTlsLostAnswerThenSlow,
@@ -219,7 +220,7 @@ cutAnswer cut body = heading <> LBS.toStrict (LBS.take (LBS.length body `div` 2)
 lengthHeading :: LByteString -> ByteString
 lengthHeading body = "HTTP/1.1 200 OK\r\nContent-Length: " <> show (LBS.length body) <> "\r\nConnection: close\r\n\r\n"
 
--- The request head in full, so a clean close leaves nothing unread that would turn it into a reset.
+-- | Consume request headers so a close leaves no unread bytes that would turn it into a reset.
 awaitRequestHead :: Socket -> ByteString -> IO ()
 awaitRequestHead conn seen = unless ("\r\n\r\n" `BS.isInfixOf` seen) $ do
     chunk <- recv conn 4096

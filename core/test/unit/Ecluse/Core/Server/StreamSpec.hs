@@ -23,6 +23,7 @@ import Network.HTTP.Client (
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (Method, ResponseHeaders, Status, methodGet, methodHead, status200, status206, status304, status404, status502, status503, statusCode, statusIsSuccessful)
 import Network.HTTP.Types.Header (HeaderName, hContentType, hETag)
+import Network.Socket.ByteString (recv, sendAll)
 import Network.Wai (Application, Response, ResponseReceived, responseLBS, responseRaw, responseStream)
 import Network.Wai.Handler.Warp (testWithApplication)
 import System.Timeout qualified as Timeout
@@ -30,7 +31,7 @@ import Test.Hspec
 import UnliftIO (concurrently)
 import UnliftIO.Async (asyncThreadId, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay, yield)
-import UnliftIO.Exception (mask_, tryAny, withException)
+import UnliftIO.Exception (mask, tryAny, withException)
 
 import Ecluse.Core.Fault (RetryAfter (RetryAfter), TransportCause (TransportUnreachable), TransportFault (tfCause))
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecManager, ecTrace))
@@ -40,7 +41,7 @@ import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamBody 
 import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Registry.JsonStream (sliceChunks)
 import Ecluse.Test.Stub (requestSecrets, signedRequest)
-import Ecluse.Test.Stub.Socket (resetAfterPartialBody, trustingTlsManager, withTlsServer)
+import Ecluse.Test.Stub.Socket (awaitRequestHead, resetAfterPartialBody, trustingTlsManager, withRawServer, withTlsServer)
 import Ecluse.Test.Wai (pacedBody)
 
 spec :: Spec
@@ -93,16 +94,24 @@ spec = do
             reached <- newEmptyMVar
             released <- newIORef False
             closed <- newEmptyMVar
-            let peer _ respond =
-                    respond $ responseRaw (\receive send -> send "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nx" >> receive >>= putMVar closed) (responseLBS status404 [] "")
-                traced request open = mask_ $ do
-                    response <- open request
-                    putMVar reached ()
-                    let spin = readIORef released >>= \done -> unless done (yield >> spin)
-                    spin
+            retained <- newIORef Nothing
+            let peer connection = do
+                    awaitRequestHead connection ""
+                    sendAll connection "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nx"
+                    recv connection 1 >>= putMVar closed
+                traced request open = do
+                    response <- mask $ \restore -> do
+                        acquired <- restore (open request)
+                        writeIORef retained (Just acquired)
+                        putMVar reached ()
+                        let spin = readIORef released >>= \done -> unless done (yield >> spin)
+                        spin
+                        pure acquired
+                    -- Offer a scheduling point after bookkeeping, before ownership returns.
+                    yield
                     pure response
                 unused = RelayResponder (\_ _ _ -> expectationFailure "cancelled relay reached responder") (\_ _ -> expectationFailure "cancelled relay reached responder")
-            testWithApplication (pure peer) $ \port ->
+            withRawServer peer $ \port ->
                 withExchangeClient (newManager defaultManagerSettings) $ \client -> do
                     request <- parseRequest ("http://127.0.0.1:" <> show port <> "/")
                     withAsync (withUpstreamResult client{ecTrace = traced} (progressFloor defaultLimits) request StreamBody statusIsSuccessful relayVerbatim unused) $ \relay -> do
@@ -118,6 +127,7 @@ spec = do
                             outcome <- waitCatch relay
                             either fromException (const Nothing) outcome `shouldBe` Just ThreadKilled
                             Timeout.timeout 5_000_000 (takeMVar closed) `shouldReturn` Just ""
+                            isJust <$> readIORef retained `shouldReturn` True
 
     describe "withUpstreamResult, a large body end to end over an in-process upstream" $
         it "relays a large body through with the upstream status" $ do
