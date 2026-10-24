@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | HTTP connection lifetime through the production listener and its exception observer.
+-- | Connection reuse for admission refusals through the production listener.
 module Ecluse.Runtime.Server.InternalSpec (spec) where
 
 import Data.ByteString qualified as BS
@@ -13,24 +13,23 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Katip (closeScribes)
 import Network.HPACK.Token (tokenFoldedKey)
-import Network.HTTP.Client qualified as HttpClient
-import Network.HTTP.Types (Method, ResponseHeaders, hConnection, hContentLength, methodGet, methodHead, status200, status204, status500)
+import Network.HTTP.Types (Method, ResponseHeaders, hContentLength, methodGet, methodHead, status200)
 import Network.HTTP2.Client qualified as H2
 import Network.Socket qualified as Socket
 import Network.Socket.ByteString (recv, sendAll)
-import Network.Wai (Application, Request, responseLBS, responseStream)
+import Network.Wai (Application, responseLBS, responseStream)
 import System.Posix.Signals qualified as Posix
 import Test.Hspec
 import UnliftIO (timeout)
 import UnliftIO.Async (link, withAsync)
-import UnliftIO.Exception (bracket, throwIO, withException)
+import UnliftIO.Exception (bracket, throwIO)
 
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), boundedRead)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned, withOverflow, withServeAdmission)
 import Ecluse.Core.Server.Admission.Overflow (newOverflowTuned)
 import Ecluse.Core.Server.Context (ServeRuntime)
 import Ecluse.Core.Server.Pipeline.Shared (shedMessage, shedStatus, withMetadataAdmission)
-import Ecluse.Runtime.Server.Internal (ServerConfig (scOnException, scPort), listeningPrefix, mkServerConfig, runWarp)
+import Ecluse.Runtime.Server.Internal (ServerConfig (scPort), listeningPrefix, mkServerConfig, runWarp)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (memoryLogEnv)
 import Ecluse.Test.Poll (pollUntil)
@@ -42,24 +41,22 @@ spec :: Spec
 spec = around_ (timeout 5_000_000 >=> (`shouldBe` Just ())) $ describe "runWarp connection lifetime" $ do
     for_ ["HTTP/1.0", "HTTP/1.1"] $ \version ->
         for_ [methodGet, methodHead] $ \method ->
-            it ("closes after the complete past-cap 503 for " <> B8.unpack version <> " " <> B8.unpack method) $
-                withPastCapResponse $ \headers -> do
-                    wire <- pipelined version method (bufferedShed headers)
-                    assertShedHeaders version wire
-                    let (_, body) = BS.breakSubstring "\r\n\r\n" wire
-                    BS.drop 4 body `shouldBe` if method == methodHead then "" else encodeUtf8 shedMessage
-                    countResponses wire `shouldBe` 1
+            it ("reuses one connection for two complete past-cap 503 responses with " <> B8.unpack version <> " " <> B8.unpack method) $
+                withSaturatedAdmission $ \runtime -> do
+                    wire <- pipelined version method (pastCapApplication runtime)
+                    let (firstHeaders, firstRest) = BS.breakSubstring "\r\n\r\n" wire
+                        firstBody = if method == methodHead then "" else encodeUtf8 shedMessage
+                        (body, followingResponse) = BS.splitAt (BS.length firstBody) (BS.drop 4 firstRest)
+                        (secondHeaders, secondRest) = BS.breakSubstring "\r\n\r\n" followingResponse
+                    assertShedHeaders version firstHeaders
+                    body `shouldBe` firstBody
+                    assertShedHeaders version secondHeaders
+                    BS.drop 4 secondRest `shouldBe` encodeUtf8 shedMessage
+                    countResponses wire `shouldBe` 2
 
     it "keeps one HTTP/2 connection open for two complete past-cap 503 streams while admission stays full" $
         withSaturatedAdmission $ \runtime -> do
-            let app request respond =
-                    withMetadataAdmission
-                        runtime
-                        (\headers -> bufferedShed headers request respond)
-                        -- An unexpected admission invalidates this refusal fixture.
-                        (const (throwIO (TestContractEscape "past-cap request entered")))
-                        pure
-            withRealWarp (\_ _ -> pass) app $ \port ->
+            withRealWarp (pastCapApplication runtime) $ \port ->
                 withLoopbackSocket port $ \client ->
                     bracket (H2.allocSimpleConfig client 4096) H2.freeSimpleConfig $ \config ->
                         H2.run H2.defaultClientConfig config $ \sendRequest _aux ->
@@ -72,70 +69,27 @@ spec = around_ (timeout 5_000_000 >=> (`shouldBe` Just ())) $ describe "runWarp 
                                     body <- boundedRead (MetadataBodyLimit 1024) (H2.getResponseBodyChunk response)
                                     body `shouldBe` Right (BS.length (encodeUtf8 shedMessage), encodeUtf8 shedMessage)
 
-    it "finishes a streamed closing response before EOF" $ do
-        let app _ respond = respond (responseStream shedStatus [(hConnection, "close")] (\write _ -> write "busy"))
-        wire <- pipelined "HTTP/1.1" methodGet app
-        countResponses wire `shouldBe` 1
-        wire `shouldSatisfy` BS.isSuffixOf "4\r\nbusy\r\n0\r\n\r\n"
+    it "finishes two streamed refusals on one reusable connection" $
+        withPastCapResponse $ \headers -> do
+            let app _ respond = respond (responseStream shedStatus headers (\write _ -> write "busy"))
+            wire <- pipelined "HTTP/1.1" methodGet app
+            countResponses wire `shouldBe` 2
+            wire `shouldSatisfy` BS.isInfixOf "4\r\nbusy\r\n0\r\n\r\nHTTP/1.1 503 "
+            wire `shouldSatisfy` BS.isSuffixOf "4\r\nbusy\r\n0\r\n\r\n"
+            B8.map toLower wire `shouldSatisfy` (not . BS.isInfixOf "\r\nconnection:")
 
-    it "closes a bodyless response with a mixed-case close token" $ do
-        let app _ respond = respond (responseLBS status204 [(hConnection, "keep-alive, Close")] "")
-        wire <- pipelined "HTTP/1.1" methodGet app
-        countResponses wire `shouldBe` 1
-        wire `shouldSatisfy` BS.isPrefixOf "HTTP/1.1 204 "
-        BS.drop 4 (snd (BS.breakSubstring "\r\n\r\n" wire)) `shouldBe` ""
-
-    it "processes the second request when the first response permits reuse" $ do
+    it "processes the second ordinary request on the same connection" $ do
         wire <- pipelined "HTTP/1.1" methodGet (\_ respond -> respond (responseLBS status200 [] "ok"))
         countResponses wire `shouldBe` 2
 
-    it "lets the inner application finish without observing a close as an error" $ do
-        finished <- newIORef False
-        innerErrors <- newIORef (0 :: Int)
-        warpErrors <- newIORef ([] :: [Text])
-        let app request respond =
-                ( do
-                    received <- bufferedShed [(hConnection, "close")] request respond
-                    writeIORef finished True
-                    pure received
-                )
-                    `withException` \(_ :: SomeException) -> modifyIORef' innerErrors (+ 1)
-        wire <- pipelinedObserved (recordException warpErrors) "HTTP/1.1" methodGet app
-        countResponses wire `shouldBe` 1
-        readIORef finished `shouldReturn` True
-        readIORef innerErrors `shouldReturn` 0
-        readIORef warpErrors `shouldReturn` []
-
-    it "observes a real failure after a closing response instead of replacing it" $ do
-        observed <- newIORef ([] :: [Text])
-        let app request respond = do
-                _ <- bufferedShed [(hConnection, "close")] request respond
-                -- Warp's observer owns application failures after a committed response.
-                throwIO TransportFailure
-        wire <- pipelinedObserved (recordException observed) "HTTP/1.1" methodGet app
-        countResponses wire `shouldBe` 1
-        readIORef observed `shouldReturn` ["TransportFailure"]
-
-    it "keeps a pre-response application failure visible to Warp" $ do
-        observed <- newIORef ([] :: [Text])
-        -- The fixture drives Warp's exception response and observer.
-        let app _ _ = throwIO TransportFailure
-        errors <- withRealWarp (recordException observed) app $ \port -> do
-            manager <- HttpClient.newManager HttpClient.defaultManagerSettings
-            request <- HttpClient.parseRequest ("http://127.0.0.1:" <> show port <> "/")
-            response <- HttpClient.httpLbs request manager
-            HttpClient.responseStatus response `shouldBe` status500
-            pollUntil 200 5_000 (not . null) (readIORef observed)
-        errors `shouldSatisfy` (not . null)
-        errors `shouldSatisfy` all (== "TransportFailure")
-
-recordException :: IORef [Text] -> Maybe Request -> SomeException -> IO ()
-recordException observed _ exception = modifyIORef' observed (show exception :)
-
-data TransportFailure = TransportFailure
-    deriving stock (Show)
-
-instance Exception TransportFailure
+pastCapApplication :: ServeRuntime -> Application
+pastCapApplication runtime request respond =
+    withMetadataAdmission
+        runtime
+        (\headers -> bufferedShed headers request respond)
+        -- An unexpected admission invalidates this refusal fixture.
+        (const (throwIO (TestContractEscape "past-cap request entered")))
+        pure
 
 bufferedShed :: ResponseHeaders -> Application
 bufferedShed headers _ respond =
@@ -146,9 +100,9 @@ bufferedShed headers _ respond =
 assertShedHeaders :: ByteString -> ByteString -> Expectation
 assertShedHeaders version wire = do
     wire `shouldSatisfy` BS.isPrefixOf (version <> " 503 ")
-    let folded = B8.map toLower wire
+    let folded = B8.map toLower (wire <> "\r\n")
     folded `shouldSatisfy` BS.isInfixOf "\r\nretry-after: 1\r\n"
-    folded `shouldSatisfy` BS.isInfixOf "\r\nconnection: close\r\n"
+    folded `shouldSatisfy` (not . BS.isInfixOf "\r\nconnection:")
 
 withPastCapResponse :: (ResponseHeaders -> IO ()) -> IO ()
 withPastCapResponse action = withSaturatedAdmission $ \runtime ->
@@ -169,11 +123,8 @@ withSaturatedAdmission action = withSweeper $ \deadlines -> do
 
 -- The second request asks for close, so the reuse control also ends with EOF.
 pipelined :: ByteString -> Method -> Application -> IO ByteString
-pipelined = pipelinedObserved (\_ _ -> pass)
-
-pipelinedObserved :: (Maybe Request -> SomeException -> IO ()) -> ByteString -> Method -> Application -> IO ByteString
-pipelinedObserved observe version method app =
-    withRealWarp observe app $ \port ->
+pipelined version method app =
+    withRealWarp app $ \port ->
         withLoopbackSocket port $ \client -> do
             sendAll client (method <> " / " <> version <> "\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\nGET / " <> version <> "\r\nHost: localhost\r\nConnection: close\r\n\r\n")
             receiveAll client
@@ -184,10 +135,10 @@ withLoopbackSocket port action =
         Socket.connect client (Socket.SockAddrInet (fromIntegral port) (Socket.tupleToHostAddress (127, 0, 0, 1)))
         action client
 
-withRealWarp :: (Maybe Request -> SomeException -> IO ()) -> Application -> (Int -> IO a) -> IO a
-withRealWarp observe app action = withSavedSignalHandlers $
+withRealWarp :: Application -> (Int -> IO a) -> IO a
+withRealWarp app action = withSavedSignalHandlers $
     bracket memoryLogEnv (void . closeScribes . fst) $ \(logEnv, messages) -> do
-        let cfg = (mkServerConfig []){scPort = 0, scOnException = observe}
+        let cfg = (mkServerConfig []){scPort = 0}
         withAsync (runWarp logEnv "transport-test" cfg (const (pure app))) $ \server -> do
             link server
             port <- pollUntil 200 5_000 isJust (loggedPort <$> messages)

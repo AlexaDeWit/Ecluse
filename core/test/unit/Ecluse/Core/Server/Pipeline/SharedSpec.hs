@@ -2,15 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Metadata admission queues a request a full room turns away, holding nothing while it waits,
-refuses at once with @Connection: close@ past the queue's cap, and without a queue refuses a full
-room at once as before.
--}
+-- | Metadata admission queues full-room requests and preserves refusal headers without closing connections.
 module Ecluse.Core.Server.Pipeline.SharedSpec (spec) where
 
 import GHC.Clock (getMonotonicTime)
 import GHC.Conc (BlockReason (BlockedOnSTM), ThreadStatus (ThreadBlocked), threadStatus)
-import Network.HTTP.Types (ResponseHeaders, hConnection)
+import Network.HTTP.Types (ResponseHeaders)
 import Test.Hspec
 import UnliftIO (async, asyncThreadId, cancel, timeout, wait, withAsync)
 import UnliftIO.Concurrent (threadDelay)
@@ -65,7 +62,7 @@ spec = around_ (timeout 10_000_000 >=> (`shouldBe` Just ())) $ describe "withMet
         wait queued `shouldReturn` Right "queued"
         overflowWaiting overflow `shouldReturn` 0
 
-    it "refuses at once with Retry-After and Connection: close past the queue's cap" $
+    it "refuses at once with Retry-After alone past the queue's cap" $
         withSweeper $ \deadlines -> do
             overflow <- newOverflowTuned deadlines 0 5_000_000
             admission <- (`withOverflow` overflow) <$> oneSlot deadlines
@@ -74,7 +71,7 @@ spec = around_ (timeout 10_000_000 >=> (`shouldBe` Just ())) $ describe "withMet
             started <- getMonotonicTime
             refused <- request runtime (pure "never")
             elapsed <- subtract started <$> getMonotonicTime
-            refused `shouldBe` Left [(hRetryAfter, "1"), (hConnection, "close")]
+            refused `shouldBe` Left [(hRetryAfter, "1")]
             elapsed `shouldSatisfy` (< 0.1)
             finishHolder `shouldReturn` Right "holder"
 

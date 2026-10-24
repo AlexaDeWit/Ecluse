@@ -2,14 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Request deadlines, connection closure, and control-plane health responses.
+{- | The front door's cross-cutting middleware pieces and its control-plane health endpoints: the
+request timeout, the drain-aware going-away header, and the @\/livez@ \/ @\/readyz@ probe
+application. "Ecluse.Runtime.Server"'s @serverMiddleware@ composes the pieces around the proxy
+'Application', and its dispatch answers the probes through 'probeApplication'. The request-body cap
+is a route concern, enforced where the only body-consuming route (publish) reads its body.
+-}
 module Ecluse.Runtime.Server.Middleware (
     -- * The request timeout
     requestTimeout,
-
-    -- * HTTP/1 connection closure
-    closeResponseConnections,
-    ignoreResponseClose,
 
     -- * Drain-aware going-away header
     goingAwayMiddleware,
@@ -24,13 +25,11 @@ module Ecluse.Runtime.Server.Middleware (
 import Data.Aeson (Value, encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Map.Strict qualified as Map
-import Network.HTTP.Types (Status, hConnection, hContentType, http20, status200, status404, status503)
-import Network.Wai (Application, Middleware, Request, Response, httpVersion, mapResponseHeaders, modifyResponse, pathInfo, responseHeaders, responseLBS)
-import UnliftIO.Exception (throwIO)
+import Network.HTTP.Types (Status, hConnection, hContentType, status200, status404, status503)
+import Network.Wai (Application, Middleware, Response, mapResponseHeaders, modifyResponse, pathInfo, responseLBS)
 
 import Ecluse.Core.Deadline (Deadlines, timeout)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
-import Ecluse.Core.Server.FieldValue (fieldValues, listMembers, lowerAscii)
 import Ecluse.Core.Server.Readiness (
     MountReadiness (MountAwaitingFirstSync, MountReady),
     Readiness (AwaitingMounts, Latched, Routable),
@@ -39,42 +38,16 @@ import Ecluse.Core.Server.Readiness (
 import Ecluse.Core.Worker (Liveness (liveHealthy, liveLastPoll))
 import Ecluse.Runtime.Server.Drain (DrainSignal, isDraining)
 
--- | Answer an empty @503@ about one sweep after the deadline, even if a response started.
+{- | Answer an empty @503@ for a request that outlives this many seconds, about one sweep late. Like
+wai-extra's @timeout@, it answers even when a response has already begun.
+-}
 requestTimeout :: Deadlines -> Int -> Middleware
 requestTimeout deadlines seconds app request respond =
     timeout deadlines (seconds * 1_000_000) (app request respond) >>= maybe (respond (responseLBS status503 [] "")) pure
 
--- | Honour response close after the inner application returns. Install outside request observation.
-closeResponseConnections :: Middleware
-closeResponseConnections app request respond
-    | httpVersion request >= http20 = app request respond
-    | otherwise = do
-        closing <- newIORef False
-        received <- app request $ \response -> do
-            sent <- respond response
-            when (responseClosesConnection response) (writeIORef closing True)
-            pure sent
-        -- Warp 3.4.9 closes a completed response through its exception path.
-        whenM (readIORef closing) (throwIO ResponseClose)
-        pure received
-
--- | Keep the transport close signal out of Warp's application-failure observer.
-ignoreResponseClose :: (Maybe Request -> SomeException -> IO ()) -> Maybe Request -> SomeException -> IO ()
-ignoreResponseClose observe request exception =
-    case fromException exception of
-        Just ResponseClose -> pass
-        Nothing -> observe request exception
-
-data ResponseClose = ResponseClose
-    deriving stock (Show)
-
-instance Exception ResponseClose
-
-responseClosesConnection :: Response -> Bool
-responseClosesConnection =
-    any (any ((== "close") . lowerAscii) . listMembers) . fieldValues hConnection . responseHeaders
-
--- | Mark every response for connection closure while the instance drains.
+{- | While the instance is draining, stamp @Connection: close@ on every response. A keep-alive
+client or a mesh connection pool then stops reusing the socket on a closing instance.
+-}
 goingAwayMiddleware :: DrainSignal -> Middleware
 goingAwayMiddleware drain app request respond = do
     draining <- isDraining drain
@@ -82,10 +55,13 @@ goingAwayMiddleware drain app request respond = do
         then modifyResponse closeConnection app request respond
         else app request respond
 
+-- A streaming response keeps streaming: only its headers are rewritten.
 closeConnection :: Response -> Response
 closeConnection = mapResponseHeaders ((hConnection, "close") :)
 
--- | Answer liveness and readiness above every mount. Other paths receive @404@.
+{- | The control-plane health probes, answered above any mount: @\/livez@ from the injected
+liveness check, @\/readyz@ from the drain signal and startup gate. Any other path is a @404@.
+-}
 probeApplication :: DrainSignal -> IO Readiness -> IO Liveness -> Application
 probeApplication drain checkReady checkLiveness request respond =
     case pathInfo request of
@@ -93,7 +69,8 @@ probeApplication drain checkReady checkLiveness request respond =
         ["readyz"] -> readiness drain checkReady >>= respond
         _ -> respond notFound
 
--- The last progress time lets worker orchestrators detect stalled polling.
+{- The @\/livez@ body carries the loop's last recorded progress beside the verdict, so a
+dedicated worker fleet's orchestrator can judge staleness rather than only pass or fail. -}
 livenessResponse :: Liveness -> Response
 livenessResponse liveness
     | liveHealthy liveness = body status200 "live"
@@ -103,14 +80,17 @@ livenessResponse liveness
     body status label =
         jsonResponse status (encode (object ["status" .= label, "lastPoll" .= liveLastPoll liveness]))
 
--- Public outages do not remove a pod that can still serve private registries.
+{- Readiness stays lenient about public-upstream reachability, because the proxy still serves
+private-upstream hits when public is down. A blip must not flap a healthy pod out of rotation.
+-}
 readiness :: DrainSignal -> IO Readiness -> IO Response
 readiness drain checkReady =
     isDraining drain >>= \case
         True -> pure (statusOnly status503 "draining")
         False -> readinessResponse <$> checkReady
 
--- Name each mount so operators can identify the advisory database still loading.
+{- The body names every configured mount beside the verdict, so an operator sees which ecosystem
+awaits its advisory database while the others keep serving. -}
 readinessResponse :: Readiness -> Response
 readinessResponse verdict = case verdict of
     Routable mounts -> withMounts readyLabel mounts

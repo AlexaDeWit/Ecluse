@@ -2,7 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Internal dispatch, request perimeter, and listener wiring behind "Ecluse.Runtime.Server".
+{- | The dispatch, the request perimeter and the listener behind "Ecluse.Runtime.Server", which
+documents the front door and re-exports the curated surface. Importing this module opts out of
+that stability promise, the convention @text@ and @bytestring@ use, so production code imports
+the public one.
+-}
 module Ecluse.Runtime.Server.Internal (
     -- * The WAI application
     ServerConfig (..),
@@ -90,9 +94,7 @@ import Ecluse.Runtime.Server.Halt (
     withInteractiveHalt,
  )
 import Ecluse.Runtime.Server.Middleware (
-    closeResponseConnections,
     goingAwayMiddleware,
-    ignoreResponseClose,
     jsonResponse,
     probeApplication,
     requestTimeout,
@@ -291,7 +293,9 @@ serverMiddleware deadlines cfg =
         . requestTimeout deadlines requestTimeoutSeconds
         . goingAwayMiddleware (scDrain cfg)
 
--- | Run the listener with shared drain state and transport closure outside request observation.
+{- | Serve the front door over one live 'DrainSignal', which the probe, the going-away header,
+and the shutdown handler share. @warp@ drains under 'scDrainTimeout', and a TTY adds Ctrl-D.
+-}
 runWarp :: LogEnv -> Text -> ServerConfig -> (ServerConfig -> IO Application) -> IO ()
 runWarp logEnv listener cfg0 getApp = do
     drain <- newDrainSignal
@@ -301,12 +305,13 @@ runWarp logEnv listener cfg0 getApp = do
             Warp.setPort (scPort cfg)
                 . Warp.setInstallShutdownHandler (installShutdownHandler drain)
                 . Warp.setGracefulShutdownTimeout (Just timeoutSecs)
-                . Warp.setOnException (ignoreResponseClose (scOnException cfg))
-                -- Faults without a mount receive no internal detail.
+                . Warp.setOnException (scOnException cfg)
+                -- Defence in depth for a fault with no mount context, from a middleware or
+                -- warp itself: a neutral 500 with no detail. A handler escape never gets here.
                 . Warp.setOnExceptionResponse (const onExceptionResponse)
                 $ Warp.defaultSettings
     app <- getApp cfg
-    withInteractiveHalt defaultInteractiveHalt (serveBound logEnv listener settings (closeResponseConnections app))
+    withInteractiveHalt defaultInteractiveHalt (serveBound logEnv listener settings app)
 
 -- | Bind as 'Warp.runSettings' does, log the bound port, then serve.
 serveBound :: LogEnv -> Text -> Warp.Settings -> Application -> IO ()
