@@ -14,13 +14,28 @@ import UnliftIO.Async (Async, async, asyncOn, cancel, mapConcurrently, wait, wai
 import UnliftIO.Concurrent (myThreadId, threadDelay)
 import UnliftIO.Exception (bracket_, throwIO, try, tryAny, uninterruptibleMask_)
 
-import Ecluse.Core.Deadline (Deadlines, newDeadlines, sweepTick, timeout, withDeadline, withEndableDeadline)
+import Ecluse.Core.Deadline (Deadlines, newDeadlines, sweepTick, timeout, withDeadline, withDeadlineFlag, withEndableDeadline)
 import Ecluse.Test.Deadline (withSweeper)
 
 spec :: Spec
 spec = do
     withDeadlineSpec
     timeoutSpec
+    describe "withDeadlineFlag" $ do
+        it "starts raised at zero and negative bounds without a sweep" $ do
+            deadlines <- newDeadlines
+            for_ [0, -1] $ \micros ->
+                withDeadlineFlag deadlines micros (\flag -> readTVarIO flag `shouldReturn` True)
+        it "raises a positive bound only on a due sweep and stops changing after scope exit" $ do
+            deadlines <- newDeadlines
+            flag <- withDeadlineFlag deadlines 1 $ \due -> do
+                readTVarIO due `shouldReturn` False
+                sweepTick deadlines
+                readTVarIO due `shouldReturn` True
+                pure due
+            atomically (writeTVar flag False)
+            sweepTick deadlines
+            readTVarIO flag `shouldReturn` False
 
 withDeadlineSpec :: Spec
 withDeadlineSpec = describe "withDeadline" $ do

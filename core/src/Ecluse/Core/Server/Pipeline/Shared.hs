@@ -41,7 +41,7 @@ import UnliftIO (MonadUnliftIO, withRunInIO)
 import Ecluse.Core.Credential (ClientCredential (credSecret), Secret)
 import Ecluse.Core.Registry.Request (credentialRecover)
 import Ecluse.Core.Server.Admission (serveAdmissionLine, serveAdmissionOverflow, withServeAdmission)
-import Ecluse.Core.Server.Admission.Meter (MemoryTicket, meterLine, withMemoryEntry)
+import Ecluse.Core.Server.Admission.Meter (MemoryTicket, meterLine, tryMemoryEntry)
 import Ecluse.Core.Server.Admission.Overflow (Attempt (..), Waited (..), attemptAfter, awaitPlace)
 import Ecluse.Core.Server.Admission.Types (FlightKey (FlightKey))
 import Ecluse.Core.Server.Admission.Weighted (admissionWaitMicros)
@@ -60,7 +60,7 @@ import Ecluse.Core.Server.Response (
     rejectUnavailable,
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Telemetry.Record (MetricsPort (mpServeDecision))
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpMemoryAdmissionShed, mpServeDecision))
 
 -- | The fixed refusal shared by private metadata and artifact access failures.
 privateAuthorisationRefusal :: Maybe HelpMessage -> Refusal
@@ -90,28 +90,32 @@ flightOf :: CacheKey -> FlightKey
 flightOf key = FlightKey (cacheKeyStore key) (cacheKeyIdentity key)
 
 {- | Acquire memory and CPU admission before metadata work, queueing a request a full room turns away.
-Answer after release, counting a shed once. Past the queue's cap the shed's headers close the connection.
+Answer after release, counting a final shed once. Past the cap, ask the client to close the connection.
 -}
 withMetadataAdmission :: (MonadUnliftIO m) => ServeRuntime -> (ResponseHeaders -> m received) -> (MemoryTicket -> m a) -> (a -> m received) -> m received
 withMetadataAdmission runtime shed gated answer =
     attempt >>= \case
         Entered result -> answer result
-        Expired -> refuse [shedRetryAfter]
+        Expired line -> refuse line [shedRetryAfter]
         TurnedAway line -> case serveAdmissionOverflow admission of
-            Nothing -> refuse [shedRetryAfter]
+            Nothing -> refuse line [shedRetryAfter]
             Just overflow ->
                 withRunInIO (\run -> awaitPlace metrics overflow line (run attempt)) >>= \case
                     Placed result -> answer result
-                    WaitedOut -> refuse [shedRetryAfter]
-                    QueueFull -> refuse [shedRetryAfter, (hConnection, "close")]
+                    WaitedOut refusedAt -> refuse refusedAt [shedRetryAfter]
+                    QueueFull refusedAt -> refuse refusedAt [shedRetryAfter, (hConnection, "close")]
   where
     metrics = srMetrics runtime
     admission = srAdmission runtime
     meter = srMemoryMeter runtime
-    refuse headers = liftIO (mpServeDecision metrics Metric.Unavailable) >> shed headers
+    refuse line headers = do
+        liftIO $ do
+            when (line == meterLine meter) (mpMemoryAdmissionShed metrics)
+            mpServeDecision metrics Metric.Unavailable
+        shed headers
     attempt =
         either (attemptAfter (meterLine meter) . Left) (attemptAfter (serveAdmissionLine admission))
-            <$> withMemoryEntry metrics meter (withServeAdmission metrics admission . gated)
+            <$> tryMemoryEntry metrics meter (withServeAdmission metrics admission . gated)
 
 -- | Match the configured inbound secret without content-dependent early exit. An unconfigured edge is open.
 edgeTokenMatches :: Maybe Secret -> Maybe ClientCredential -> Bool

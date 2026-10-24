@@ -2,12 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The queue a metadata request joins when a gate's waiting room is full. It waits there for up to
-0.5 s, holding no slot, room place or memory charge. Each gate wakes the oldest request on its own
-line when it frees a place, and the sweeper wakes the front request every tick in case a place freed
-without a signal. A woken request tries the door again by the normal rule, so it never passes a
-request already in a room. The waits rely on the sweeper's ticks, so the composition root, which
-supervises the sweeper, turns the queue on.
+{- | Bounded overflow ahead of the metadata gates. Each request keeps its permit and arrival
+order through retries. Gate signals and sweeper ticks wake requests without request timers.
 -}
 module Ecluse.Core.Server.Admission.Overflow (
     -- * A gate's line
@@ -29,31 +25,35 @@ module Ecluse.Core.Server.Admission.Overflow (
 ) where
 
 import Control.Concurrent.STM (check, orElse)
-import Data.Sequence qualified as Seq
+import Data.Map.Strict qualified as Map
 import GHC.Clock (getMonotonicTimeNSec)
-import UnliftIO.Exception (mask, onException)
+import UnliftIO.Exception (finally, mask)
 
 import Ecluse.Core.Deadline (Check, Deadlines, withDeadline, withDeadlineFlag)
 import Ecluse.Core.Server.Admission.Types (Shed (..))
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
--- | Requests one gate turned away, oldest first. Waking a request takes it off the line.
-newtype Line = Line (TVar (Seq (TVar Bool)))
+-- | Requests one gate turned away, oldest first. Equality identifies the gate of a final refusal.
+data Line = Line (TVar (Map Integer (TVar Bool))) (TVar Word64)
+    deriving stock (Eq)
 
+-- | An empty gate line, with one periodic wake allowed per sweep.
 newLine :: IO Line
-newLine = Line <$> newTVarIO Seq.empty
+newLine = Line <$> newTVarIO Map.empty <*> newTVarIO 0
 
 -- | Wake the oldest request on the line. A gate runs it in the transaction that frees a place.
 signalLine :: Line -> STM ()
-signalLine (Line entries) =
-    readTVar entries >>= \queue -> case Seq.viewl queue of
-        Seq.EmptyL -> pass
-        oldest Seq.:< rest -> writeTVar entries rest >> writeTVar oldest True
+signalLine (Line entries _) =
+    readTVar entries >>= \queue -> case Map.minView queue of
+        Nothing -> pass
+        Just (oldest, rest) -> writeTVar entries rest >> writeTVar oldest True
 
 -- | The queue in front of both gates: how many requests wait, how many may, and for how long.
 data Overflow = Overflow
     { ovDeadlines :: Deadlines
     , ovWaiting :: TVar Int
+    , ovReserved :: TVar Int
+    , ovNext :: TVar Integer
     , ovCap :: Int
     , ovWaitMicros :: Int
     }
@@ -66,9 +66,11 @@ newOverflow deadlines slots = newOverflowTuned deadlines (8 * max 1 slots) 500_0
 newOverflowTuned :: Deadlines -> Int -> Int -> IO Overflow
 newOverflowTuned deadlines cap waitMicros = do
     waiting <- newTVarIO 0
-    pure Overflow{ovDeadlines = deadlines, ovWaiting = waiting, ovCap = max 0 cap, ovWaitMicros = max 0 waitMicros}
+    reserved <- newTVarIO 0
+    next <- newTVarIO 0
+    pure Overflow{ovDeadlines = deadlines, ovWaiting = waiting, ovReserved = reserved, ovNext = next, ovCap = max 0 cap, ovWaitMicros = max 0 waitMicros}
 
--- | How many requests wait in the queue now.
+-- | Requests parked on the gate lines, excluding retries and admitted callbacks.
 overflowWaiting :: Overflow -> IO Int
 overflowWaiting = readTVarIO . ovWaiting
 
@@ -79,23 +81,23 @@ data Attempt a
     | -- | A gate's room was full, so the request waits on that gate's line.
       TurnedAway Line
     | -- | It took a room place, and the room's wait ran out first.
-      Expired
+      Expired Line
 
 -- | Read a gate's answer, where the line is that gate's.
 attemptAfter :: Line -> Either Shed a -> Attempt a
 attemptAfter line = \case
     Right result -> Entered result
     Left RoomFull -> TurnedAway line
-    Left WaitExpired -> Expired
+    Left WaitExpired -> Expired line
 
 -- | How a queued request ended.
 data Waited a
     = -- | It got a place after waiting, and its action ran.
       Placed a
     | -- | No place freed within the wait, or the room it reached ran out of time.
-      WaitedOut
+      WaitedOut Line
     | -- | The queue already held its cap, so the request never joined it.
-      QueueFull
+      QueueFull Line
 
 {- | Queue a request the gate behind the line turned away, and run @try@ each time it wakes, until it
 gets a place or the wait runs out. Past the cap it answers 'QueueFull' at once.
@@ -104,65 +106,73 @@ awaitPlace :: MetricsPort -> Overflow -> Line -> IO (Attempt a) -> IO (Waited a)
 awaitPlace metrics overflow line try = mask $ \restore -> do
     start <- getMonotonicTimeNSec
     entry <- newTVarIO False
-    joined <- atomically (joinLine overflow line entry)
+    joined <- atomically $ do
+        reserved <- readTVar (ovReserved overflow)
+        if reserved >= ovCap overflow
+            then pure Nothing
+            else do
+                age <- readTVar (ovNext overflow)
+                writeTVar (ovNext overflow) (age + 1)
+                writeTVar (ovReserved overflow) (reserved + 1)
+                modifyTVar' (ovWaiting overflow) (+ 1)
+                insertLine line age entry
+                pure (Just age)
     let remaining = (\now -> ovWaitMicros overflow - fromIntegral ((now - start) `div` 1_000)) <$> getMonotonicTimeNSec
-        queued waitingOn waiting = do
-            woken <- waitInLine overflow waitingOn waiting =<< remaining
-            if not woken
-                then mpOverflowShed metrics $> WaitedOut
+        shed waitingOn = mpOverflowShed metrics $> WaitedOut waitingOn
+        queued age waitingOn waiting = do
+            micros <- remaining
+            woken <- waitInLine overflow waitingOn age waiting micros
+            left <- remaining
+            if not woken || left <= 0
+                then do
+                    when woken (atomically (signalLine waitingOn))
+                    shed waitingOn
                 else
                     restore try >>= \case
                         Entered result -> mpOverflowAdmitted metrics $> Placed result
-                        Expired -> mpOverflowAdmitted metrics $> WaitedOut
+                        Expired refusedAt -> mpOverflowAdmitted metrics $> WaitedOut refusedAt
                         TurnedAway next -> do
-                            fresh <- newTVarIO False
-                            atomically (rejoinLine overflow next fresh)
-                            queued next fresh
-    if joined then queued line entry else mpOverflowFull metrics $> QueueFull
+                            leftAfterTry <- remaining
+                            if leftAfterTry <= 0
+                                then shed next
+                                else do
+                                    fresh <- newTVarIO False
+                                    atomically (modifyTVar' (ovWaiting overflow) (+ 1) >> insertLine next age fresh)
+                                    queued age next fresh
+    case joined of
+        Nothing -> mpOverflowFull metrics $> QueueFull line
+        Just age -> queued age line entry `finally` atomically (modifyTVar' (ovReserved overflow) (subtract 1))
 
--- True once woken, and False once the wait ran out. Either way the request has left the line and the count.
-waitInLine :: Overflow -> Line -> TVar Bool -> Int -> IO Bool
-waitInLine overflow line entry micros =
-    withDeadlineFlag (ovDeadlines overflow) micros $ \due ->
-        withDeadline (ovDeadlines overflow) (wakeIfOldest line entry) $ do
-            woken <- atomically (wokenOrDue entry due) `onException` atomically (leaveLine overflow line entry)
-            atomically (if woken then modifyTVar' (ovWaiting overflow) (subtract 1) else leaveLine overflow line entry)
-            pure woken
+-- Line membership ends before retrying. The permit survives until the whole request exits.
+waitInLine :: Overflow -> Line -> Integer -> TVar Bool -> Int -> IO Bool
+waitInLine overflow line age entry micros =
+    withDeadlineFlag (ovDeadlines overflow) micros wait
+        `finally` atomically (leaveLine line age entry >> modifyTVar' (ovWaiting overflow) (subtract 1))
+  where
+    wait due = withDeadline (ovDeadlines overflow) (wakeIfOldest line age) $ do
+        woken <- atomically (wokenOrDue entry due)
+        when woken (atomically (writeTVar entry False))
+        pure woken
 
 wokenOrDue :: TVar Bool -> TVar Bool -> STM Bool
-wokenOrDue entry due = ((readTVar entry >>= check) $> True) `orElse` ((readTVar due >>= check) $> False)
+wokenOrDue entry due = ((readTVar due >>= check) $> False) `orElse` ((readTVar entry >>= check) $> True)
 
-joinLine :: Overflow -> Line -> TVar Bool -> STM Bool
-joinLine overflow (Line entries) entry = do
-    waiting <- readTVar (ovWaiting overflow)
-    let room = waiting < ovCap overflow
-    when room $ do
-        writeTVar (ovWaiting overflow) (waiting + 1)
-        modifyTVar' entries (Seq.|> entry)
-    pure room
+insertLine :: Line -> Integer -> TVar Bool -> STM ()
+insertLine (Line entries _) age entry = modifyTVar' entries (Map.insert age entry)
 
--- Back to the front after a try that found no place: it is still the oldest, and it already holds a place in the count.
-rejoinLine :: Overflow -> Line -> TVar Bool -> STM ()
-rejoinLine overflow (Line entries) entry = do
-    modifyTVar' (ovWaiting overflow) (+ 1)
-    modifyTVar' entries (entry Seq.<|)
-
--- A wake that came after the request stopped waiting goes to the next request on the line.
-leaveLine :: Overflow -> Line -> TVar Bool -> STM ()
-leaveLine overflow line@(Line entries) entry = do
+-- A late wake passes on when cancellation or expiry removes its recipient.
+leaveLine :: Line -> Integer -> TVar Bool -> STM ()
+leaveLine line@(Line entries _) age entry = do
     woken <- readTVar entry
-    if woken then signalLine line else modifyTVar' entries (Seq.filter (/= entry))
-    modifyTVar' (ovWaiting overflow) (subtract 1)
+    modifyTVar' entries (Map.delete age)
+    when woken (signalLine line)
 
--- The sweeper asks every queued request each tick, and only the oldest on its line wakes.
-wakeIfOldest :: Line -> TVar Bool -> Check
-wakeIfOldest line@(Line entries) entry _ = do
-    queue <- readTVarIO entries
-    when (Seq.lookup 0 queue == Just entry) (atomically (wakeEntry line entry))
+wakeIfOldest :: Line -> Integer -> Check
+wakeIfOldest line@(Line entries lastSweep) age now = do
+    atomically $ do
+        queue <- readTVar entries
+        previous <- readTVar lastSweep
+        when (previous /= now && fmap fst (Map.lookupMin queue) == Just age) $ do
+            writeTVar lastSweep now
+            signalLine line
     pure Nothing
-
-wakeEntry :: Line -> TVar Bool -> STM ()
-wakeEntry (Line entries) entry =
-    readTVar entries >>= \queue -> case Seq.viewl queue of
-        oldest Seq.:< rest | oldest == entry -> writeTVar entries rest >> writeTVar entry True
-        _ -> pass
