@@ -134,9 +134,8 @@ selfSignedServerParams = do
     credential <- selfSignedCredential
     pure TLS.defaultParamsServer{TLS.serverShared = TLS.defaultShared{TLS.sharedCredentials = TLS.Credentials [credential]}}
 
-{- | Over plain TCP, answer the first connection's first request, then fill the listener's queue and
-reset that connection once the next request's head is in, filling the variable. A later connection
-never completes: the kernel drops its handshake.
+{- | Serve one response before a full TCP accept queue prevents later handshakes.
+Reset the existing connection and signal after its next request head.
 -}
 withResetAfterHeadThenFull :: MVar () -> (Int -> IO a) -> IO a
 withResetAfterHeadThenFull reset action =

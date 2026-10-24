@@ -80,9 +80,8 @@ selfBaseUrl = selfBaseUrlOf . requestHeaders
 selfBaseUrlOf :: [Header] -> Text
 selfBaseUrlOf headers = "http://" <> maybe "localhost" decodeUtf8 (lookup hHost headers)
 
-{- | Re-point every location a fixture body names at another authority. A committed fixture names
-one fixed host, and an artifact location on any authority but the one that served the document is
-dropped at projection, so a stub serving that fixture must first make the locations its own.
+{- | Rebase committed fixture locations to the serving stub's authority.
+Projection drops artifact locations on other authorities.
 -}
 rebaseAuthority :: Text -> Text -> LByteString -> LByteString
 rebaseAuthority from to = encodeUtf8 . T.replace from to . decodeUtf8
