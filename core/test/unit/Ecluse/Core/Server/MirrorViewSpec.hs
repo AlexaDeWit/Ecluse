@@ -24,8 +24,6 @@ import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, MeterSettings (..), newMemoryMeter, withMemoryEntry)
-import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool)
-import Ecluse.Core.Server.Cache.Types (StoreBudget (StoreBudget))
 import Ecluse.Core.Server.MirrorView
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Mirror.State
@@ -87,7 +85,7 @@ spec = do
             let readState _ previous = do
                     modifyIORef' requests (<> [previous])
                     pure (Right (maybe (StateLoaded revision record) StateUnchanged previous))
-            view <- viewWith readState
+            view <- mirrorViewWith target readState
             runRead view `shouldReturn` Right (Just (revision, record))
             runRead view `shouldReturn` Right (Just (revision, record))
             readIORef requests `shouldReturn` [Nothing, Just revision]
@@ -95,7 +93,7 @@ spec = do
         it "owns a retained revision without changing its bytes" $ do
             record <- sampleRecord
             let original = BS.take 4 (BS.replicate 65536 97)
-            view <- viewWith (\_ _ -> pure (Right (StateLoaded (rev original) record)))
+            view <- mirrorViewWith target (\_ _ -> pure (Right (StateLoaded (rev original) record)))
             result <- runRead view >>= expectRight
             case result of
                 Just (StateRevision _ _ owned, _) -> do
@@ -108,17 +106,17 @@ spec = do
         it "rejects stale cached state during an outage despite a smaller current public inventory" $ do
             record <- sampleRecord
             answer <- newIORef (Right (StateLoaded revision record))
-            view <- viewWith (\_ _ -> readIORef answer)
+            view <- mirrorViewWith target (\_ _ -> readIORef answer)
             runRead view `shouldReturn` Right (Just (revision, record))
             writeIORef answer (Left (StateInvalid "outage"))
             runRead view `shouldReturn` Left (StateInvalid "outage")
 
         it "rejects an unsolicited 304 and a 304 for a different revision" $ do
-            view <- viewWith (\_ _ -> pure (Right (StateUnchanged revision)))
+            view <- mirrorViewWith target (\_ _ -> pure (Right (StateUnchanged revision)))
             runRead view `shouldReturn` Left StateRevisionMismatch
             record <- sampleRecord
             answer <- newIORef (Right (StateLoaded revision record))
-            warmed <- viewWith (\_ _ -> readIORef answer)
+            warmed <- mirrorViewWith target (\_ _ -> readIORef answer)
             void (runRead warmed)
             writeIORef answer (Right (StateUnchanged (rev "other")))
             runRead warmed `shouldReturn` Left StateRevisionMismatch
@@ -127,7 +125,7 @@ spec = do
             record <- sampleRecord
             requests <- newIORef (0 :: Int)
             answer <- newIORef (Right StateAbsent)
-            view <- viewWith (\_ _ -> modifyIORef' requests (+ 1) >> readIORef answer)
+            view <- mirrorViewWith target (\_ _ -> modifyIORef' requests (+ 1) >> readIORef answer)
             runRead view `shouldReturn` Right Nothing
             writeIORef answer (Right (StateLoaded revision record))
             runRead view `shouldReturn` Right (Just (revision, record))
@@ -161,13 +159,6 @@ revision = rev "one"
 
 rev :: ByteString -> StateRevision
 rev = StateRevision target mirrorPackage
-
-viewWith :: (PackageName -> Maybe StateRevision -> IO (Either MirrorStateFault StateRead)) -> IO MirrorView
-viewWith readState = do
-    pool <- newLocalPool 20 10_000_000
-    cache <- newMirrorRetention pool 60 (StoreBudget 0 0)
-    let store = MirrorState (const readState) (\_ _ _ _ -> pure (Left (StateInvalid "unexpected write"))) (\_ _ -> pure (Left StateMissingCompanion)) (\_ _ -> pure (Left StateMissingCompanion))
-    pure (newMirrorView defaultLimits target store cache)
 
 runRead :: MirrorView -> IO (Either MirrorStateFault (Maybe (StateRevision, ProjectMirrorRecord)))
 runRead view = withTicket (\ticket -> validateMirrorProject view ticket mirrorPackage)
