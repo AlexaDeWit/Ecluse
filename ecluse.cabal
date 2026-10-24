@@ -1630,6 +1630,7 @@ test-suite ecluse-runtime-unit
     Ecluse.Runtime.Telemetry.EscapeSpec
     Ecluse.Runtime.Telemetry.ExportFailureSpec
     Ecluse.Runtime.Telemetry.InstrumentsSpec
+    Ecluse.Runtime.Telemetry.InternalSpec
     Ecluse.Runtime.Telemetry.ReportersSpec
     Ecluse.Runtime.Telemetry.ResolveSpec
     Ecluse.Runtime.Telemetry.ScrapeSpec

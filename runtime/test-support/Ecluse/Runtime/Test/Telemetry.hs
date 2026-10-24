@@ -2,9 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | In-process telemetry collection without exporters or background readers, a captured span's events, and the thread's active span.
+-- | Production metric batching with in-process collection, captured span events, and the active span.
 module Ecluse.Runtime.Test.Telemetry (withTestTelemetry, withGlobalTestTelemetry, gaugePoints, sumPoints, sumPointsIn, histogramCounts, metricExports, spanEvents, activeSpanContext) where
 
+import Control.Exception qualified as Exception
 import OpenTelemetry.Attributes (Attributes)
 import OpenTelemetry.Context (lookupSpan)
 import OpenTelemetry.Context.ThreadLocal (getContext)
@@ -38,6 +39,9 @@ import OpenTelemetry.Trace (
 import OpenTelemetry.Trace.Core (Event, SpanContext, SpanHot (hotEvents), getSpanContext)
 import OpenTelemetry.Util (appendOnlyBoundedCollectionValues)
 import UnliftIO (bracket)
+import UnliftIO.Exception (throwIO)
+
+import Ecluse.Runtime.Telemetry.Batched (batchMeterProvider)
 
 import Ecluse.Runtime.Telemetry.Internal (Telemetry (TelemetryEnabled), TelemetryProviders (TelemetryProviders))
 
@@ -45,7 +49,7 @@ import Ecluse.Runtime.Telemetry.Internal (Telemetry (TelemetryEnabled), Telemetr
 withTestTelemetry :: (Telemetry -> SdkMeterEnv -> IO a) -> IO a
 withTestTelemetry use = withTestProviders (\tracer meter -> use (TelemetryEnabled (TelemetryProviders tracer meter)))
 
--- | 'withTestTelemetry' with both providers installed as the process's global ones, as the boot installs them, until the action ends.
+-- | Install both test providers globally until the action ends.
 withGlobalTestTelemetry :: (Telemetry -> SdkMeterEnv -> IO a) -> IO a
 withGlobalTestTelemetry use =
     withTestProviders $ \tracer meter meterEnv ->
@@ -54,9 +58,14 @@ withGlobalTestTelemetry use =
 
 withTestProviders :: (TracerProvider -> MeterProvider -> SdkMeterEnv -> IO a) -> IO a
 withTestProviders use =
-    bracket (createMeterProvider emptyMaterializedResources defaultSdkMeterProviderOptions) (\(meter, _) -> void (shutdownMeterProvider meter Nothing)) $ \(meter, meterEnv) ->
+    bracket createBatchedProvider (\(meter, _) -> void (shutdownMeterProvider meter Nothing)) $ \(meter, meterEnv) ->
         bracket (createTracerProvider [] emptyTracerProviderOptions) (\tracer -> void (shutdownTracerProvider tracer Nothing)) $ \tracer ->
             use tracer meter meterEnv
+  where
+    createBatchedProvider =
+        Exception.bracketOnError (createMeterProvider emptyMaterializedResources defaultSdkMeterProviderOptions) (\(sdk, _) -> void (shutdownMeterProvider sdk Nothing)) $ \(sdk, meterEnv) -> do
+            (meter, _) <- batchMeterProvider throwIO sdk
+            pure (meter, meterEnv)
 
 -- Install the providers as the global ones and hand back the ones they replaced.
 swapGlobals :: TracerProvider -> MeterProvider -> IO (TracerProvider, MeterProvider)
