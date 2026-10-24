@@ -112,9 +112,9 @@ spec = do
                                     threadStatus (asyncThreadId thrower) >>= \case
                                         ThreadBlocked BlockedOnException -> pure ()
                                         _ -> threadDelay 1000 >> awaitPending
-                            pending <- Timeout.timeout 5_000_000 awaitPending
+                            queuedException <- Timeout.timeout 5_000_000 awaitPending
                             writeIORef released True
-                            pending `shouldBe` Just ()
+                            queuedException `shouldBe` Just ()
                             outcome <- waitCatch relay
                             either fromException (const Nothing) outcome `shouldBe` Just ThreadKilled
                             Timeout.timeout 5_000_000 (takeMVar closed) `shouldReturn` Just ""
