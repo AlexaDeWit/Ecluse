@@ -57,8 +57,8 @@ causeOf = \case
 causeText :: Cause -> Text
 causeText = \case
     Policy (RuleName name) -> name <> ": " <> policyExplanation name
-    IntegrityMissing -> "MissingIntegrity: public artifacts lack an integrity digest"
-    IntegrityBelowFloor -> "BelowIntegrityFloor: public artifact digests fall below the configured integrity floor"
+    IntegrityMissing -> "MissingIntegrity: artifacts lack an integrity digest"
+    IntegrityBelowFloor -> "BelowIntegrityFloor: artifact digests fall below the configured integrity floor"
     VettingUnavailable -> "Unavailable: versions could not be vetted"
     InvalidUpstream -> "UpstreamInvalid: an upstream document names a different package"
 

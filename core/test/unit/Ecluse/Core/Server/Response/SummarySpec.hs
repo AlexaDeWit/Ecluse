@@ -28,7 +28,7 @@ spec = describe "grouped rejection text" $ do
 
     it "keeps each integrity category separate from policy denials in a deterministic order" $
         summarisedRejections [Reject (Rejection BelowIntegrityFloor "sha1"), deny "custom" [] "custom detail", Reject (Rejection MissingIntegrity "1.0.0 lacks digest"), Reject (Rejection MissingIntegrity "2.0.0 lacks digest")]
-            `shouldBe` "custom: the policy rule denied admission (rejection entries: 1). MissingIntegrity: public artifacts lack an integrity digest (rejection entries: 2). BelowIntegrityFloor: public artifact digests fall below the configured integrity floor (rejection entries: 1)"
+            `shouldBe` "custom: the policy rule denied admission (rejection entries: 1). MissingIntegrity: artifacts lack an integrity digest (rejection entries: 2). BelowIntegrityFloor: artifact digests fall below the configured integrity floor (rejection entries: 1)"
 
     it "does not evaluate per-version policy reasons" $
         summarisedRejections [deny "BlockedByDefault" [impureThrow DiagnosticRead] "full diagnostic"]

@@ -42,7 +42,7 @@ import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfKeptPermille, cfOutp
 import Ecluse.Core.Server.Context (
     MountBinding (..),
     MountRouter,
-    PackumentDeps (pdHelp, pdInboundToken, pdMetadata, pdMetadataCompression, pdMountBaseUrl, pdRules),
+    PackumentDeps (pdFirstParty, pdHelp, pdInboundToken, pdMetadata, pdMetadataCompression, pdMountBaseUrl, pdRules),
     RequestCtx (RequestCtx),
     ResponseAction (RunPipeline),
     RouteAction (RouteAction),
@@ -77,9 +77,9 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpAssembledCacheRequest, mpRuleEvalDuration))
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Package (sriSha512Of, thingName)
+import Ecluse.Test.Package (sriSha512Of, thingName, validSha1)
 import Ecluse.Test.Port (noopMetricsPort)
-import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, versionSpec, versionValue)
+import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity, vsShasum), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureResponse), deliverServe, responseBytes, testServeRuntime, testServeRuntimeWith)
@@ -329,6 +329,21 @@ noSurvivorsSpec = describe "the refusal for a listing no version survived" $ do
         statusOf response `shouldBe` 403
         responseBytes response `shouldReturn` encode (object ["error" .= ("private access was refused Help." :: Text)])
 
+    for_ [(Nothing, "MissingIntegrity: artifacts lack an integrity digest"), (Just validSha1, "BelowIntegrityFloor: artifact digests fall below the configured integrity floor")] $ \(shasum, cause) ->
+        for_ (filter ((== "npm") . listingLabel) listings) $ \listing ->
+            it ("summarises a private-only integrity refusal without claiming a public source: " <> toString (cause :: Text)) $
+                withSweeper $ \deadlines -> do
+                    rt <- testServeRuntime deadlines noopMetricsPort
+                    let privateIntegrityOrigin = npmOriginWith (\version -> version{vsIntegrity = Nothing, vsShasum = shasum})
+                    testWithApplication (pure privateIntegrityOrigin) $ \privatePort -> do
+                        original <- listingDeps listing 1
+                        let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) original{pdFirstParty = const True, pdHelp = Just (mkHelpMessage "Contact the operator.")}
+                        denied <- captureListing rt listing deps methodGet []
+                        headed <- captureListing rt listing deps methodHead []
+                        map statusOf [denied, headed] `shouldBe` [403, 403]
+                        responseBytes headed `shouldReturn` ""
+                        responseBytes denied `shouldReturn` encode (object ["error" .= (cause <> " (rejection entries: 1) Contact the operator.")])
+
     for_ listings $ \listing -> do
         it ("preserves the " <> listingLabel listing <> " denial body and HEAD status through its route") $
             withSweeper $ \deadlines -> do
@@ -417,12 +432,15 @@ listings =
         pure (serveDeps Nothing (loopbackRegistryUrl ("http://localhost:" <> show port)) NoMirrorWrite prepared (pure now)){pdMountBaseUrl = "http://proxy.test"}
 
 npmOrigin :: Application
-npmOrigin request respond
+npmOrigin = npmOriginWith id
+
+npmOriginWith :: (VersionSpec -> VersionSpec) -> Application
+npmOriginWith changeVersion request respond
     | rawPathInfo request == "/leftpad" = respond (responseLBS status200 [] (encode document))
     | otherwise = respond (responseLBS status404 [] "")
   where
     tarball = selfBaseUrl request <> "/leftpad/-/leftpad-1.0.0.tgz"
-    document = packumentValue "leftpad" "1.0.0" [("1.0.0", versionValue (versionSpec "leftpad" "1.0.0" tarball){vsIntegrity = Just (sriSha512Of "leftpad bytes")})] ["1.0.0" .= ("2019-01-01T00:00:00.000Z" :: Text)] []
+    document = packumentValue "leftpad" "1.0.0" [("1.0.0", versionValue (changeVersion (versionSpec "leftpad" "1.0.0" tarball){vsIntegrity = Just (sriSha512Of "leftpad bytes")}))] ["1.0.0" .= ("2019-01-01T00:00:00.000Z" :: Text)] []
 
 pypiOrigin :: Application
 pypiOrigin request respond
