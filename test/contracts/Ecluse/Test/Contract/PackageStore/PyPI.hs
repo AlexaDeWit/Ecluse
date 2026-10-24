@@ -23,7 +23,7 @@ import Ecluse.Core.Registry.Maintenance (StoreMaintenance, StoreManifestRead, st
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (vrVersion))
 import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest, fetchVersion)
 import Ecluse.Core.Registry.MirrorUpload (expectedArtifact, inventoryFiles, verifyMirrorBytes)
-import Ecluse.Core.Registry.Origin (OriginClient (..), originClient)
+import Ecluse.Core.Registry.Origin (OriginClient (..), ocBaseUrl, originClient)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), PublishPlan (..), newMirrorPublish, pmvInventory, pmvPrepareUpload, publishPrepared)
 import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiMirrorRead, pypiRead)

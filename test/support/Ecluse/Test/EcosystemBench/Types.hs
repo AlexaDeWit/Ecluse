@@ -8,15 +8,18 @@ Raw corpus bytes cross the interface, while prepared serving uses the production
 module Ecluse.Test.EcosystemBench.Types (
     EcosystemBench (..),
     LoadedEntry (..),
+    RequestBuild (..),
     RouteCase (..),
     RouteScaling (..),
 ) where
 
 import Data.Aeson (Value)
+import Network.HTTP.Client (Request)
 import Network.HTTP.Types (Method)
 
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
+import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError)
@@ -58,6 +61,8 @@ data EcosystemBench = EcosystemBench
     , ebAction :: (Method, [Text]) -> Maybe RouteAction
     -- ^ The action the route table names for a request, as dispatch receives it.
     , ebRouteScaling :: [RouteScaling]
+    , ebRequestBuilds :: [RequestBuild]
+    -- ^ The upstream requests a serve builds for one package, as its origin builds them.
     }
 
 -- | A capture and its production read. Lazy fields preserve the original tuple's evaluation boundaries.
@@ -72,6 +77,12 @@ data LoadedEntry = LoadedEntry
 data RouteCase = RouteCase
     { rcName :: String
     , rcRequests :: [(Method, [Text])]
+    }
+
+-- | One upstream request a serve builds for a package, named for the bench report.
+data RequestBuild = RequestBuild
+    { rbName :: String
+    , rbBuild :: PackageName -> Either UrlFormationError Request
     }
 
 -- | A request family whose length controls the input to a routing complexity check.

@@ -12,6 +12,7 @@ module Ecluse.Core.Registry.Npm.Request (
 
     -- * Request building
     metadataRequest,
+    metadataRequestUnder,
     artifactRequestByFile,
     artifactRequestByUrl,
     artifactFileUrl,
@@ -32,7 +33,7 @@ import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageName, pkgNamespace, renderPackageName, unScope, unscopedName)
 import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
-import Ecluse.Core.Registry.Request (attachCredential, joinPath, parseRequestEither)
+import Ecluse.Core.Registry.Request (BaseRequest, attachCredential, joinPath, parseRequestEither, requestAt)
 import Ecluse.Core.Registry.Request qualified as Request
 import Ecluse.Core.Server.Path (encodeComponent)
 
@@ -64,30 +65,37 @@ metadataRequest ::
     MetadataForm ->
     PackageName ->
     Either UrlFormationError Request
-metadataRequest baseUrl token form name = do
-    url <- packageUrl baseUrl name
-    base <- parseRequestEither url
-    pure
-        . withToken token
-        $ base
+metadataRequest baseUrl token form name = metadataGet token form <$> (packageUrl baseUrl name >>= parseRequestEither)
+
+-- | 'metadataRequest' under a base parsed once, through 'requestAt'.
+metadataRequestUnder ::
+    BaseRequest ->
+    Maybe ClientCredential ->
+    MetadataForm ->
+    PackageName ->
+    Either UrlFormationError Request
+metadataRequestUnder base token form name = metadataGet token form <$> requestAt base (encodePackagePath name)
+
+metadataGet :: Maybe ClientCredential -> MetadataForm -> Request -> Request
+metadataGet token form base =
+    withToken token $
+        base
             { requestHeaders =
                 (hAccept, metadataAccept form)
                     : (hAcceptEncoding, "gzip")
                     : requestHeaders base
             }
 
-{- | Build the artifact @GET@ at @{baseUrl}/{encoded-pkg}/-/{filename}@. It addresses the tarball by
-the filename the client requested, so a registry with its own tarball naming still resolves.
+{- | Build the artifact @GET@ at @{base}/{encoded-pkg}/-/{filename}@, through 'requestAt'. It addresses
+the tarball by the filename the client requested, so a registry with its own tarball naming resolves.
 -}
 artifactRequestByFile ::
-    Text ->
+    BaseRequest ->
     Maybe ClientCredential ->
     PackageName ->
     Text ->
     Either UrlFormationError Request
-artifactRequestByFile baseUrl token name filename = do
-    url <- artifactFileUrl baseUrl name filename
-    artifactRequestByUrl token url
+artifactRequestByFile base token name filename = Request.artifactGet npmCredential token <$> requestAt base (artifactPath name filename)
 
 {- | Build npm's artifact @GET@ for the absolute @url@ the projection preserved from the upstream's
 @dist.tarball@, under npm's credential presentation.
@@ -100,15 +108,16 @@ artifactRequestByUrl = Request.artifactRequestByUrl npmCredential
 
 -- The metadata and publish URL for a package: @{baseUrl}/{encoded-name}@.
 packageUrl :: Text -> PackageName -> Either UrlFormationError Text
-packageUrl baseUrl name =
-    joinPath baseUrl (encodePackagePath name)
+packageUrl baseUrl name = joinPath baseUrl (encodePackagePath name)
 
 {- | The artifact URL @{baseUrl}\/{encoded-name}\/-\/{encoded-filename}@, with @filename@
 percent-encoded as one component so a once-decoded escape cannot reach the upstream raw.
 -}
 artifactFileUrl :: Text -> PackageName -> Text -> Either UrlFormationError Text
-artifactFileUrl baseUrl name filename =
-    joinPath baseUrl (encodePackagePath name <> "/-/" <> encodeComponent filename)
+artifactFileUrl baseUrl name filename = joinPath baseUrl (artifactPath name filename)
+
+artifactPath :: PackageName -> Text -> Text
+artifactPath name filename = encodePackagePath name <> "/-/" <> encodeComponent filename
 
 {- This builder writes the @\@@ and the @%2F@ itself and percent-encodes every component, so a
 reserved byte in a decoded name never reaches the upstream URL raw. -}

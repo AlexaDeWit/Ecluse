@@ -41,6 +41,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionDoc (vdDetails),
     VersionRead (vrVersion),
  )
+import Ecluse.Core.Registry.Request (BaseRequest)
 import Ecluse.Core.Security (
     HostPort,
     Limits (progressFloor),
@@ -50,13 +51,12 @@ import Ecluse.Core.Security (
     thgEcosystemHosts,
     thgPrivateHostPort,
  )
-import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket)
 import Ecluse.Core.Server.Context (
     Handler,
     PackumentDeps (..),
     ServeRuntime (..),
-    pdPrivateBaseUrl,
+    pdPrivateBase,
     pdTarballHostGate,
     tarballHostHonoured,
  )
@@ -135,7 +135,7 @@ data PrivateArtifact
     | PrivateIncomplete MirrorVersion
 
 privateArtifactRequest :: Maybe MemoryTicket -> ArtifactRequest response -> Maybe ClientCredential -> Handler PrivateArtifact
-privateArtifactRequest ticket ctx token = case pdPrivateBaseUrl deps of
+privateArtifactRequest ticket ctx token = case pdPrivateBase deps of
     -- An unconfigured leg and a refused host settle the request here: neither changes on a retry.
     Nothing -> pure (PrivateMissing MissAbsent)
     Just privateBase
@@ -151,7 +151,7 @@ privateArtifactRequest ticket ctx token = case pdPrivateBaseUrl deps of
         either (const (PrivateMissing MissAbsent)) (PrivateRequest False) $
             artifactByFile (pdArtifact deps) (mountOrigin deps (srPrivateClient (arRuntime ctx)) privateBase token) (arPackage ctx) (unFilename (arFile ctx))
 
-byIndexedLocation :: Maybe MemoryTicket -> ArtifactRequest response -> Maybe ClientCredential -> RegistryUrl -> Maybe HostPort -> Handler PrivateArtifact
+byIndexedLocation :: Maybe MemoryTicket -> ArtifactRequest response -> Maybe ClientCredential -> BaseRequest -> Maybe HostPort -> Handler PrivateArtifact
 byIndexedLocation ticket ctx token privateBase privateHostPort = do
     resolved <- tryAny (withPrivateMetadataClient (arRuntime ctx) deps privateBase token (\client -> fetchVersionMetadata client (arPackage ctx) (arVersion ctx)))
     case resolved of

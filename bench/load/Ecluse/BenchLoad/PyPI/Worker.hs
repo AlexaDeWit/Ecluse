@@ -35,6 +35,7 @@ import Ecluse.Core.Registry.Publish (MirrorPublish (mpProbeInventory), MirrorTra
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiMirrorRead)
 import Ecluse.Core.Registry.PyPI.Publish (pypiPublishCodec)
+import Ecluse.Core.Registry.Request (mkBaseRequest)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
 import Ecluse.Core.Security (defaultLimits)
@@ -83,7 +84,7 @@ boot knobs use = do
                     heartbeat <- newWorkerHeartbeat
                     logEnv <- newTestLogEnv
                     let publish = newMirrorPublish (MirrorTransport client (pure Nothing) defaultLimits passthroughTracingPort) (loopbackRegistryUrl (localhost targetPort)) (loopbackRegistryUrl (localhost targetPort <> "/upload")) pypiPublishCodec
-                        sourceOrigin = originClientOf (controlPublicOrigin publicControl (Just WorkerMetadata) (anonymousOrigin defaultLimits client (loopbackRegistryUrl (localhost sourcePort))))
+                        sourceOrigin = originClientOf (controlPublicOrigin publicControl (Just WorkerMetadata) (anonymousOrigin defaultLimits client (mkBaseRequest (loopbackRegistryUrl (localhost sourcePort)))))
                         policy =
                             WorkerPolicy
                                 { wpFirstParty = const False

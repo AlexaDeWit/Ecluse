@@ -9,6 +9,7 @@ module Ecluse.Core.Registry.PyPI.Request (
 
     -- * Request building
     simpleIndexRequest,
+    simpleIndexRequestUnder,
     artifactRequestByFile,
     artifactRequestByUrl,
 
@@ -27,7 +28,7 @@ import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Project (canonicalName)
 import Ecluse.Core.Registry.PyPI.Wire (simpleIndexMediaType)
-import Ecluse.Core.Registry.Request (attachCredential, joinPath, parseRequestEither)
+import Ecluse.Core.Registry.Request (BaseRequest, attachCredential, joinPath, parseRequestEither, requestAt)
 import Ecluse.Core.Registry.Request qualified as Request
 import Ecluse.Core.Server.Path (encodeComponent)
 
@@ -37,20 +38,26 @@ admits the files host without an operator naming it.
 pypiArtifactHosts :: [Text]
 pypiArtifactHosts = ["https://files.pythonhosted.org"]
 
-{- | Build the Simple-index @GET@ for a project. It fails only when the URL cannot be formed,
-which here means an empty base URL.
--}
+-- | Build the Simple-index @GET@ for a project. It fails only on an empty or unparseable base URL.
 simpleIndexRequest ::
     Text ->
     Maybe ClientCredential ->
     PackageName ->
     Either UrlFormationError Request
-simpleIndexRequest baseUrl credential name = do
-    url <- simpleIndexUrl baseUrl name
-    base <- parseRequestEither url
-    pure
-        . attachCredential pypiCredential credential
-        $ base
+simpleIndexRequest baseUrl credential name = indexGet credential <$> (simpleIndexUrl baseUrl name >>= parseRequestEither)
+
+-- | 'simpleIndexRequest' under a base parsed once, through 'requestAt'.
+simpleIndexRequestUnder ::
+    BaseRequest ->
+    Maybe ClientCredential ->
+    PackageName ->
+    Either UrlFormationError Request
+simpleIndexRequestUnder base credential name = indexGet credential <$> requestAt base (indexPath name)
+
+indexGet :: Maybe ClientCredential -> Request -> Request
+indexGet credential base =
+    attachCredential pypiCredential credential $
+        base
             { requestHeaders =
                 (hAccept, simpleIndexMediaType)
                     : (hAcceptEncoding, "gzip")
@@ -81,7 +88,10 @@ artifactRequestByUrl = Request.artifactRequestByUrl pypiCredential
 
 -- | The Simple-index URL @{baseUrl}\/simple\/{canonical-name}\/@.
 simpleIndexUrl :: Text -> PackageName -> Either UrlFormationError Text
-simpleIndexUrl baseUrl name = joinPath baseUrl (projectPath (canonicalName name) <> "/")
+simpleIndexUrl baseUrl name = joinPath baseUrl (indexPath name)
+
+indexPath :: PackageName -> Text
+indexPath name = projectPath (canonicalName name) <> "/"
 
 -- | The artifact URL @{baseUrl}\/simple\/{canonical-name}\/{encoded-filename}@.
 artifactFileUrl :: Text -> PackageName -> Text -> Either UrlFormationError Text

@@ -3,7 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Ecosystem-agnostic request mechanics: the outbound finaliser, the credential presentation,
-and URL parsing into a typed 'UrlFormationError'. An adapter supplies only its own protocol facts.
+URL parsing into a typed 'UrlFormationError', and a base URL parsed once for the paths under it.
+An adapter supplies only its own protocol facts.
 
 'parseRequestEither' seals what it parses, so an adapter cannot obtain an unsealed 'Request'
 from this module at all.
@@ -22,24 +23,35 @@ module Ecluse.Core.Registry.Request (
 
     -- * Request building
     artifactRequestByUrl,
+    artifactGet,
     joinPath,
     sidecarUrl,
     parseRequestEither,
+
+    -- * Requests under a base parsed once
+    BaseRequest,
+    mkBaseRequest,
+    baseRequestUrl,
+    requestAt,
 ) where
 
+import Data.Char (isHexDigit)
 import Data.Text qualified as T
 import Network.HTTP.Client (Request (decompress, redirectCount, requestHeaders), parseRequest)
+import Network.HTTP.Client qualified as Client
 import Network.HTTP.Types.Header (
     HeaderName,
     RequestHeaders,
     hAcceptEncoding,
     hAuthorization,
  )
+import Text.Show (showsPrec)
 
 import Ecluse.Core.BuildIdentity (identifyRequest)
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
-import Ecluse.Core.Text (joinUrlPath)
+import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Text (isAsciiAlphaNum, joinUrlPath)
 
 {- | Seal the outbound invariants onto a request, idempotently. A followed redirect could
 re-send a credential cross-host or steer an anonymous fetch past the host allowlist.
@@ -104,15 +116,17 @@ authorizationUnder scheme headers = do
     guard (T.toLower presented == T.toLower scheme)
     pure (T.dropWhile (== ' ') rest)
 
-{- | Build the artifact @GET@ at the preserved upstream URL, in identity coding and never decompressed.
+-- | Build the artifact @GET@ at the preserved upstream URL through 'artifactGet'.
+artifactRequestByUrl :: CredentialMapping -> Maybe ClientCredential -> Text -> Either UrlFormationError Request
+artifactRequestByUrl mapping credential url = artifactGet mapping credential <$> parseRequestEither url
+
+{- | Make a parsed request the artifact @GET@, in identity coding and never decompressed.
 Without the field, http-client asks for gzip, and gzip bytes miss the advertised digest.
 -}
-artifactRequestByUrl :: CredentialMapping -> Maybe ClientCredential -> Text -> Either UrlFormationError Request
-artifactRequestByUrl mapping credential url = do
-    base <- parseRequestEither url
-    pure
-        . attachCredential mapping credential
-        $ base
+artifactGet :: CredentialMapping -> Maybe ClientCredential -> Request -> Request
+artifactGet mapping credential base =
+    attachCredential mapping credential $
+        base
             { decompress = const False
             , requestHeaders = (hAcceptEncoding, "identity") : requestHeaders base
             }
@@ -139,3 +153,59 @@ sidecarUrl :: Text -> Text
 sidecarUrl url = path <> ".metadata" <> suffix
   where
     (path, suffix) = T.break (\character -> character == '?' || character == '#') url
+
+{- | An upstream base URL and its one parse, so a request under it appends its path rather than
+parsing the joined URL again. 'mkBaseRequest' is the only builder.
+-}
+data BaseRequest = BaseRequest RegistryUrl (Maybe Request)
+
+-- The parse is a function of the URL, so the URL alone decides equality and display.
+instance Eq BaseRequest where
+    left == right = baseRequestUrl left == baseRequestUrl right
+
+instance Show BaseRequest where
+    showsPrec precedence = showsPrec precedence . baseRequestUrl
+
+{- | Parse @url@ joined to an empty path, which is the request every path under it extends. A URL
+with a query or a fragment keeps no parse, because a path joined after either lands inside it.
+-}
+mkBaseRequest :: RegistryUrl -> BaseRequest
+mkBaseRequest url = BaseRequest url directory
+  where
+    text = registryUrlText url
+    directory
+        | T.any (\c -> c == '?' || c == '#') text = Nothing
+        | otherwise = rightToMaybe (joinPath text "" >>= parseRequestEither)
+
+-- | The URL the base was parsed from.
+baseRequestUrl :: BaseRequest -> RegistryUrl
+baseRequestUrl (BaseRequest url _) = url
+
+{- | The request for the base joined to an already-encoded @suffix@, equal to 'parseRequestEither' of
+the joined URL. It parses that URL only when the base kept no parse or the suffix is not verbatim.
+-}
+requestAt :: BaseRequest -> Text -> Either UrlFormationError Request
+requestAt base@(BaseRequest url _) suffix =
+    maybe (joinPath (registryUrlText url) suffix >>= parseRequestEither) Right (requestUnder base suffix)
+
+requestUnder :: BaseRequest -> Text -> Maybe Request
+requestUnder (BaseRequest _ directory) suffix = do
+    request <- directory
+    guard (verbatimPath suffix)
+    pure request{Client.path = Client.path request <> encodeUtf8 suffix}
+
+-- How far a scan of path text has got: between characters, inside an escape, or past a refusal.
+data PathScan = Between | AwaitingFirstHexDigit | AwaitingSecondHexDigit | Refused
+    deriving stock (Eq)
+
+{- Text that http-client's parse keeps as path byte for byte: unreserved characters, @\@@, @/@,
+and complete escapes. An encoded component writes nothing else. -}
+verbatimPath :: Text -> Bool
+verbatimPath = (== Between) . T.foldl' step Between
+  where
+    step Between c
+        | c == '%' = AwaitingFirstHexDigit
+        | isAsciiAlphaNum c || c `elem` ("-._~@/" :: String) = Between
+    step AwaitingFirstHexDigit c | isHexDigit c = AwaitingSecondHexDigit
+    step AwaitingSecondHexDigit c | isHexDigit c = Between
+    step _ _ = Refused

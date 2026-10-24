@@ -30,6 +30,7 @@ import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ExchangeClient))
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataClient (..), MetadataError (MetadataFetch), VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.Origin (perCallerOrigin)
+import Ecluse.Core.Registry.Request (mkBaseRequest)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Metadata (ecosystemMetadataReads, privateMetadataClient)
@@ -54,7 +55,8 @@ withBenchmarks ecosystems action = do
 
 replayResponse :: (EcosystemBench, LoadedEntry) -> IO (ByteString, BL.ByteString)
 replayResponse (ecosystem, LoadedEntry{lePackage = package, leBytes = raw}) = do
-    request <- expectRight (erRequest (metadataRead (ebMetadata ecosystem)) (ebOrigin ecosystem) Nothing (cpPackage package))
+    base <- expectRight (mkRegistryUrl (ebOrigin ecosystem))
+    request <- expectRight (erRequest (metadataRead (ebMetadata ecosystem)) (mkBaseRequest base) Nothing (cpPackage package))
     pure (HTTP.path request, BL.fromStrict raw)
 
 replayApplication :: Map ByteString BL.ByteString -> Application
@@ -149,4 +151,4 @@ metadataClient manager ecosystem limits = do
     base <- expectRight (mkRegistryUrl (ebOrigin ecosystem))
     -- The bench's stub always answers, so nothing sweeps these deadlines.
     client <- ExchangeClient manager <$> newDeadlines
-    pure (privateMetadataClient (ecosystemMetadataReads (metadataRead (ebMetadata ecosystem)) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) (perCallerOrigin limits client base Nothing)))
+    pure (privateMetadataClient (ecosystemMetadataReads (metadataRead (ebMetadata ecosystem)) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) (perCallerOrigin limits client (mkBaseRequest base) Nothing)))

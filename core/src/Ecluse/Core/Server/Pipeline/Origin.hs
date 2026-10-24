@@ -46,9 +46,10 @@ import Ecluse.Core.Registry.Metadata (
     ),
     VersionRead,
  )
-import Ecluse.Core.Registry.Origin (OriginClient (ocClient), OriginFor, Private, Public, anonymousOrigin, chargingFullReads, controlPublicOrigin, originBaseUrl, originClient, originClientOf, perCallerOrigin)
+import Ecluse.Core.Registry.Origin (OriginClient (ocClient), OriginFor, Private, Public, anonymousOrigin, chargingFullReads, controlPublicOrigin, originBaseUrl, originClientOf, perCallerOrigin)
+import Ecluse.Core.Registry.Request (BaseRequest)
 import Ecluse.Core.Security (Limits (progressFloor))
-import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, awaitingFlight, charge, servingFlight)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
@@ -58,7 +59,8 @@ import Ecluse.Core.Server.Context (
     Handler,
     PackumentDeps (..),
     ServeRuntime (..),
-    pdPrivateBaseUrl,
+    pdPrivateBase,
+    pdPublicBase,
     pdPublicBaseUrl,
  )
 import Ecluse.Core.Server.Metadata (MetadataReads, ecosystemMetadataReads, preparePublicVersion, privateMetadataClient, publicMetadataClient, withinRequestCap)
@@ -128,7 +130,7 @@ originResultOf = \case
 
 -- | Resolve the private origin uncached with the caller's credential, retaining explicit access refusals.
 fetchPrivateOrigin :: PackumentDeps -> ServeRuntime -> MemoryTicket -> Maybe ClientCredential -> PackageName -> Handler OriginResult
-fetchPrivateOrigin deps rt ticket token name = case pdPrivateBaseUrl deps of
+fetchPrivateOrigin deps rt ticket token name = case pdPrivateBase deps of
     Nothing -> pure OriginAbsent
     Just privateBase -> do
         logFM DebugS (ls ("fetching private origin for " <> renderPackageName name))
@@ -171,24 +173,24 @@ fullReadCharge :: PackumentDeps -> MemoryTicket -> Int -> IO ()
 fullReadCharge deps ticket = charge ticket . scaleCharge (cfFullReadPermille (metadataChargeFactors (pdMetadata deps)))
 
 -- | Bypass shared caching so the private upstream authorises each caller's credential.
-withPrivateMetadataClient :: ServeRuntime -> PackumentDeps -> RegistryUrl -> Maybe ClientCredential -> (MetadataClient -> IO a) -> Handler a
-withPrivateMetadataClient rt deps baseUrl token =
-    withMetadataClient rt deps privateMetadataClient (privateOrigin rt deps baseUrl token)
+withPrivateMetadataClient :: ServeRuntime -> PackumentDeps -> BaseRequest -> Maybe ClientCredential -> (MetadataClient -> IO a) -> Handler a
+withPrivateMetadataClient rt deps base token =
+    withMetadataClient rt deps privateMetadataClient (privateOrigin rt deps base token)
 
 -- | Pin a public local value without starting remote work.
 preparePublicMetadata :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Handler (PreparedStore MetadataError VersionRead)
 preparePublicMetadata rt deps name version =
     withMetadataClient rt deps (preparePublicVersion (srMetadataCache rt) (publicSource deps)) (publicOrigin rt deps) (\prepare -> prepare name version)
 
-privateOrigin :: ServeRuntime -> PackumentDeps -> RegistryUrl -> Maybe ClientCredential -> OriginFor Private
+privateOrigin :: ServeRuntime -> PackumentDeps -> BaseRequest -> Maybe ClientCredential -> OriginFor Private
 privateOrigin rt deps = perCallerOrigin (pdLimits deps) (srPrivateClient rt)
 
 publicOrigin :: ServeRuntime -> PackumentDeps -> OriginFor Public
-publicOrigin rt deps = controlPublicOrigin (srPublicControl rt) Nothing (anonymousOrigin (pdLimits deps) (srPublicClient rt) (pdPublicBaseUrl deps))
+publicOrigin rt deps = controlPublicOrigin (srPublicControl rt) Nothing (anonymousOrigin (pdLimits deps) (srPublicClient rt) (pdPublicBase deps))
 
 publicSource :: PackumentDeps -> Source
 publicSource deps = Source (registryUrlText (pdPublicBaseUrl deps))
 
 -- | Build an origin with the mount's response bound and the caller-selected manager and credential.
-mountOrigin :: PackumentDeps -> ExchangeClient -> RegistryUrl -> Maybe ClientCredential -> OriginClient
-mountOrigin deps = originClient (pdLimits deps)
+mountOrigin :: PackumentDeps -> ExchangeClient -> BaseRequest -> Maybe ClientCredential -> OriginClient
+mountOrigin deps client base = originClientOf . perCallerOrigin (pdLimits deps) client base

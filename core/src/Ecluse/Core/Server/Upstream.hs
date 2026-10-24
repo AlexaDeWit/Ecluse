@@ -2,13 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | A mount's configured upstreams and the tarball-host gate derived from them, as one opaque
-cluster with a private constructor.
+{- | A mount's configured upstreams, and the tarball-host gate and request bases derived from them,
+as one opaque cluster with a private constructor.
 
-The 'Ecluse.Core.Security.TarballHostGate' is built once per mount from the three upstream URLs,
-so the hot artifact path re-parses nothing. A gate that disagreed with those URLs would silently
-authorise the wrong authorities, so 'mountUpstreams' is the only builder and neither the
-constructor nor the selectors are exported: an @upstreams{...}@ update alone would break the pair.
+The 'Ecluse.Core.Security.TarballHostGate' and each upstream's 'BaseRequest' are derived once per
+mount, so a request under an upstream appends its path to that parse. A gate that disagreed with
+the URLs would authorise the wrong authorities, so 'mountUpstreams' is the only builder and neither
+the constructor nor the selectors are exported: an @upstreams{...}@ update alone would break the set.
 -}
 module Ecluse.Core.Server.Upstream (
     -- * Mirror serve plan
@@ -19,10 +19,13 @@ module Ecluse.Core.Server.Upstream (
     mountUpstreams,
     upstreamPrivateBaseUrl,
     upstreamPublicBaseUrl,
+    upstreamPrivateBase,
+    upstreamPublicBase,
     upstreamMirror,
     upstreamTarballHostGate,
 ) where
 
+import Ecluse.Core.Registry.Request (BaseRequest, baseRequestUrl, mkBaseRequest)
 import Ecluse.Core.Security (TarballHostGate, tarballHostGate)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 
@@ -38,12 +41,12 @@ data MirrorServePlan
       NoMirrorWrite
     deriving stock (Eq, Show)
 
-{- | A mount's three configured upstreams and the tarball-host gate they derive. Exported
-__abstract__, so the carried gate is always the gate of the carried URLs.
+{- | A mount's three configured upstreams and the tarball-host gate and request bases they derive.
+Exported __abstract__, so the carried gate and bases always derive from the carried URLs.
 -}
 data MountUpstreams = MountUpstreams
-    { muPrivateBaseUrl :: Maybe RegistryUrl
-    , muPublicBaseUrl :: RegistryUrl
+    { muPrivateBase :: Maybe BaseRequest
+    , muPublicBase :: BaseRequest
     , muMirror :: MirrorServePlan
     , muTarballHostGate :: TarballHostGate
     }
@@ -55,11 +58,10 @@ outside that gate's own specs, so the allowlist and the reference authorities ha
 mountUpstreams :: [Text] -> Maybe RegistryUrl -> RegistryUrl -> MirrorServePlan -> MountUpstreams
 mountUpstreams ecosystemHostUrls privateBaseUrl publicBaseUrl mirror =
     MountUpstreams
-        { muPrivateBaseUrl = privateBaseUrl
-        , muPublicBaseUrl = publicBaseUrl
+        { muPrivateBase = mkBaseRequest <$> privateBaseUrl
+        , muPublicBase = mkBaseRequest publicBaseUrl
         , muMirror = mirror
-        , -- The gate reasons over authorities, so it takes the URLs as text. That is the
-          -- one place the egress witness is read for its characters.
+        , -- The gate reasons over authorities, so it takes the URLs as text.
           muTarballHostGate =
             tarballHostGate
                 ecosystemHostUrls
@@ -79,11 +81,19 @@ mirrorTargetUrl = \case
 the private leg is structurally absent rather than misconfigured.
 -}
 upstreamPrivateBaseUrl :: MountUpstreams -> Maybe RegistryUrl
-upstreamPrivateBaseUrl = muPrivateBaseUrl
+upstreamPrivateBaseUrl = fmap baseRequestUrl . muPrivateBase
 
 -- | The public upstream base URL.
 upstreamPublicBaseUrl :: MountUpstreams -> RegistryUrl
-upstreamPublicBaseUrl = muPublicBaseUrl
+upstreamPublicBaseUrl = baseRequestUrl . muPublicBase
+
+-- | The private upstream base URL, parsed once for the requests under it.
+upstreamPrivateBase :: MountUpstreams -> Maybe BaseRequest
+upstreamPrivateBase = muPrivateBase
+
+-- | The public upstream base URL, parsed once for the requests under it.
+upstreamPublicBase :: MountUpstreams -> BaseRequest
+upstreamPublicBase = muPublicBase
 
 -- | The mirror serve plan, carrying the mirror-target endpoint when there is one.
 upstreamMirror :: MountUpstreams -> MirrorServePlan

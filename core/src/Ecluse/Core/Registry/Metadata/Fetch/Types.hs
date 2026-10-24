@@ -30,6 +30,7 @@ import Ecluse.Core.Registry.Json.Intern (InternTable)
 import Ecluse.Core.Registry.JsonStream (StreamResult)
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError, VersionRead)
 import Ecluse.Core.Registry.Origin (OriginClient)
+import Ecluse.Core.Registry.Request (BaseRequest)
 import Ecluse.Core.Security (BodyLimit, LimitError, Limits)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version)
@@ -38,8 +39,8 @@ import Ecluse.Core.Version (Version)
 results, hidden so that one adapter field holds any ecosystem's reads.
 -}
 data EcosystemRead = forall full selected. EcosystemRead
-    { erRequest :: Text -> Maybe ClientCredential -> PackageName -> Either UrlFormationError Request
-    -- ^ The request for a package's whole document, from an origin's base URL and credential.
+    { erRequest :: BaseRequest -> Maybe ClientCredential -> PackageName -> Either UrlFormationError Request
+    -- ^ The request for a package's whole document, under an origin's parsed base URL and with its credential.
     , erUniqueFields :: [Text]
     -- ^ The fields whose values differ in every entry, which the read's table keeps as read.
     , erWalkFull :: Limits -> PackageName -> Text -> DocumentWalk full

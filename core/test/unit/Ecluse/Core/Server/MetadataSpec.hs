@@ -38,6 +38,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionRead (VersionRead, vrBodyBytes, vrUpstreamLatest, vrVersion),
  )
 import Ecluse.Core.Registry.Origin (OriginFor, Public, anonymousOrigin, perCallerOrigin)
+import Ecluse.Core.Registry.Request (mkBaseRequest)
 import Ecluse.Core.Security (defaultLimits, mkProgressFloor)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -61,8 +62,8 @@ spec = do
     -- Every case here drives the read functions directly, so neither origin is ever dialled or arms a
     -- deadline: only the posture its builder fixes is under test.
     exchanges <- runIO (ExchangeClient <$> newManager defaultManagerSettings <*> newDeadlines)
-    let anonymous = anonymousOrigin defaultLimits exchanges stubUrl
-        perCaller = perCallerOrigin defaultLimits exchanges stubUrl Nothing
+    let anonymous = anonymousOrigin defaultLimits exchanges (mkBaseRequest stubUrl)
+        perCaller = perCallerOrigin defaultLimits exchanges (mkBaseRequest stubUrl) Nothing
 
     describe "publicMetadataClient -- selected retention" $ do
         it "keeps full listing and selected retention independent" $ do
