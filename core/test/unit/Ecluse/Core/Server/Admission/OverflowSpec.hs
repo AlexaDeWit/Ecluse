@@ -8,11 +8,13 @@ the oldest request first, and drops a cancelled request from the line and the co
 module Ecluse.Core.Server.Admission.OverflowSpec (spec) where
 
 import GHC.Clock (getMonotonicTime)
+import GHC.Conc (BlockReason (BlockedOnSTM), ThreadStatus (ThreadBlocked), getNumCapabilities, setNumCapabilities, threadStatus)
 import Test.Hspec
-import UnliftIO (async, cancel, timeout, wait, withAsync)
+import UnliftIO (Async, async, asyncOn, asyncThreadId, cancel, timeout, wait, withAsync)
 import UnliftIO.Concurrent (threadDelay)
+import UnliftIO.Exception (bracket_, throwIO, tryAny)
 
-import Ecluse.Core.Deadline (newDeadlines)
+import Ecluse.Core.Deadline (newDeadlines, sweepTick)
 import Ecluse.Core.Server.Admission.Overflow (
     Attempt (..),
     Overflow,
@@ -24,8 +26,11 @@ import Ecluse.Core.Server.Admission.Overflow (
     overflowWaiting,
     signalLine,
  )
+import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Test.Deadline (withSweeper)
+import Ecluse.Test.Poll (awaitUntil)
 import Ecluse.Test.Port (noopMetricsPort)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 -- Block until the queue holds this many requests.
 awaitWaiting :: Overflow -> Int -> IO ()
@@ -33,11 +38,16 @@ awaitWaiting overflow count = do
     waiting <- overflowWaiting overflow
     unless (waiting == count) (threadDelay 1_000 >> awaitWaiting overflow count)
 
+awaitLine :: Async a -> IO ()
+awaitLine worker =
+    awaitUntil 1_000_000 1_000 ((== ThreadBlocked BlockedOnSTM) <$> threadStatus (asyncThreadId worker))
+        `shouldReturn` True
+
 outcomeName :: Waited a -> Text
 outcomeName = \case
     Placed _ -> "placed"
-    WaitedOut -> "waited out"
-    QueueFull -> "queue full"
+    WaitedOut _ -> "waited out"
+    QueueFull _ -> "queue full"
 
 spec :: Spec
 spec = around_ (timeout 10_000_000 >=> (`shouldBe` Just ())) $ describe "awaitPlace" $ do
@@ -99,4 +109,173 @@ spec = around_ (timeout 10_000_000 >=> (`shouldBe` Just ())) $ describe "awaitPl
         atomically (signalLine line)
         takeMVar woken `shouldReturn` ("behind" :: Text)
         outcomeName <$> wait behind `shouldReturn` "placed"
+        overflowWaiting overflow `shouldReturn` 0
+
+    it "keeps the cap while all woken retries pause and releases cancelled permits" $ do
+        deadlines <- newDeadlines
+        overflow <- newOverflow deadlines 1
+        line <- newLine
+        entered <- newEmptyMVar
+        release <- newEmptyMVar
+        let retry = putMVar entered () >> takeMVar release $> (TurnedAway line :: Attempt ())
+        workers <- forM [1 .. 8] $ \count -> do
+            worker <- async (awaitPlace noopMetricsPort overflow line retry)
+            awaitWaiting overflow count
+            pure worker
+        for_ workers $ \_ -> atomically (signalLine line) >> takeMVar entered
+        overflowWaiting overflow `shouldReturn` 0
+        outcomeName <$> awaitPlace noopMetricsPort overflow line retry `shouldReturn` "queue full"
+        traverse_ cancel workers
+        overflowWaiting overflow `shouldReturn` 0
+        withAsync (awaitPlace noopMetricsPort overflow line (pure (Entered ()))) $ \worker -> do
+            awaitWaiting overflow 1
+            atomically (signalLine line)
+            outcomeName <$> wait worker `shouldReturn` "placed"
+
+    it "orders cross-line returns by immutable arrival, even when retries return backwards" $ do
+        deadlines <- newDeadlines
+        overflow <- newOverflowTuned deadlines 8 5_000_000
+        source <- newLine
+        destination <- newLine
+        olderStarted <- newEmptyMVar
+        youngerStarted <- newEmptyMVar
+        olderRelease <- newEmptyMVar
+        youngerRelease <- newEmptyMVar
+        order <- newEmptyMVar
+        let attempts name started release = do
+                initialAttempt <- newIORef True
+                pure $
+                    atomicModifyIORef' initialAttempt (False,) >>= \case
+                        True -> putMVar started () >> takeMVar release $> TurnedAway destination
+                        False -> putMVar order name $> Entered ()
+        olderTry <- attempts ("older" :: Text) olderStarted olderRelease
+        youngerTry <- attempts "younger" youngerStarted youngerRelease
+        withAsync (awaitPlace noopMetricsPort overflow source olderTry) $ \older -> do
+            awaitWaiting overflow 1
+            withAsync (awaitPlace noopMetricsPort overflow source youngerTry) $ \younger -> do
+                awaitWaiting overflow 2
+                atomically (signalLine source)
+                takeMVar olderStarted
+                atomically (signalLine source)
+                takeMVar youngerStarted
+                putMVar youngerRelease ()
+                awaitLine younger
+                putMVar olderRelease ()
+                awaitLine older
+                atomically (signalLine destination)
+                takeMVar order `shouldReturn` "older"
+                outcomeName <$> wait older `shouldReturn` "placed"
+                atomically (signalLine destination)
+                takeMVar order `shouldReturn` "younger"
+                outcomeName <$> wait younger `shouldReturn` "placed"
+
+    it "does not retry a wake delivered after the absolute deadline without a sweep" $ do
+        deadlines <- newDeadlines
+        overflow <- newOverflowTuned deadlines 1 20_000
+        line <- newLine
+        tries <- newIORef (0 :: Int)
+        withAsync (awaitPlace noopMetricsPort overflow line (modifyIORef' tries (+ 1) $> Entered ())) $ \worker -> do
+            awaitWaiting overflow 1
+            threadDelay 40_000
+            atomically (signalLine line)
+            outcomeName <$> wait worker `shouldReturn` "waited out"
+        readIORef tries `shouldReturn` 0
+        overflowWaiting overflow `shouldReturn` 0
+
+    it "does not renew overflow after a retry crosses its deadline" $ do
+        deadlines <- newDeadlines
+        overflow <- newOverflowTuned deadlines 1 20_000
+        line <- newLine
+        started <- newEmptyMVar
+        release <- newEmptyMVar
+        withAsync (awaitPlace noopMetricsPort overflow line (putMVar started () >> takeMVar release $> (TurnedAway line :: Attempt ()))) $ \worker -> do
+            awaitWaiting overflow 1
+            atomically (signalLine line)
+            takeMVar started
+            threadDelay 40_000
+            putMVar release ()
+            outcomeName <$> wait worker `shouldReturn` "waited out"
+        overflowWaiting overflow `shouldReturn` 0
+
+    it "counts a room expiry as admitted and a tick alone retries an unsignalled line" $ do
+        deadlines <- newDeadlines
+        overflow <- newOverflowTuned deadlines 1 5_000_000
+        line <- newLine
+        admitted <- newIORef (0 :: Int)
+        shed <- newIORef (0 :: Int)
+        let metrics = noopMetricsPort{mpOverflowAdmitted = modifyIORef' admitted (+ 1), mpOverflowShed = modifyIORef' shed (+ 1)}
+        withAsync (awaitPlace metrics overflow line (pure (Expired line :: Attempt ()))) $ \worker -> do
+            awaitWaiting overflow 1
+            sweepTick deadlines
+            outcomeName <$> wait worker `shouldReturn` "waited out"
+        readIORef admitted `shouldReturn` 1
+        readIORef shed `shouldReturn` 0
+        overflowWaiting overflow `shouldReturn` 0
+
+    it "passes an expired oldest wake to a younger live waiter without a sweep" $ do
+        deadlines <- newDeadlines
+        overflow <- newOverflowTuned deadlines 2 100_000
+        line <- newLine
+        tries <- newIORef ([] :: [Text])
+        withAsync (awaitPlace noopMetricsPort overflow line (modifyIORef' tries ("old" :) $> Entered ())) $ \older -> do
+            awaitWaiting overflow 1
+            threadDelay 150_000
+            withAsync (awaitPlace noopMetricsPort overflow line (modifyIORef' tries ("young" :) $> Entered ())) $ \younger -> do
+                awaitWaiting overflow 2
+                atomically (signalLine line)
+                outcomeName <$> wait older `shouldReturn` "waited out"
+                outcomeName <$> wait younger `shouldReturn` "placed"
+        readIORef tries `shouldReturn` ["young"]
+        overflowWaiting overflow `shouldReturn` 0
+
+    it "returns its permit when an admission metric throws" $ do
+        deadlines <- newDeadlines
+        overflow <- newOverflowTuned deadlines 1 5_000_000
+        line <- newLine
+        let metrics = noopMetricsPort{mpOverflowAdmitted = throwIO (TestContractEscape "metric failed")}
+        withAsync (tryAny (awaitPlace metrics overflow line (pure (Entered ())))) $ \worker -> do
+            awaitWaiting overflow 1
+            atomically (signalLine line)
+            isLeft <$> wait worker `shouldReturn` True
+        overflowWaiting overflow `shouldReturn` 0
+
+    it "wakes only one request per line in a sweep across capabilities" $ do
+        capabilities <- getNumCapabilities
+        bracket_ (setNumCapabilities (max 2 capabilities)) (setNumCapabilities capabilities) $ do
+            deadlines <- newDeadlines
+            overflow <- newOverflowTuned deadlines 2 5_000_000
+            line <- newLine
+            tries <- newTVarIO (0 :: Int)
+            release <- newEmptyMVar
+            let retry = atomically (modifyTVar' tries (+ 1)) >> takeMVar release $> (TurnedAway line :: Attempt ())
+            older <- asyncOn 0 (awaitPlace noopMetricsPort overflow line retry)
+            awaitWaiting overflow 1
+            younger <- asyncOn 1 (awaitPlace noopMetricsPort overflow line retry)
+            awaitWaiting overflow 2
+            awaitLine older
+            awaitLine younger
+            sweepTick deadlines
+            awaitUntil 1_000_000 1_000 ((>= 1) <$> readTVarIO tries) `shouldReturn` True
+            awaitLine younger
+            readTVarIO tries `shouldReturn` 1
+            cancel older
+            cancel younger
+            overflowWaiting overflow `shouldReturn` 0
+
+    it "recovers on the next tick when a consumed wake's retry is cancelled" $ do
+        deadlines <- newDeadlines
+        overflow <- newOverflowTuned deadlines 2 5_000_000
+        line <- newLine
+        started <- newEmptyMVar
+        release <- newEmptyMVar
+        withAsync (awaitPlace noopMetricsPort overflow line (putMVar started () >> takeMVar release $> Entered ())) $ \older -> do
+            awaitWaiting overflow 1
+            withAsync (awaitPlace noopMetricsPort overflow line (pure (Entered ()))) $ \younger -> do
+                awaitWaiting overflow 2
+                atomically (signalLine line)
+                takeMVar started
+                cancel older
+                overflowWaiting overflow `shouldReturn` 1
+                sweepTick deadlines
+                outcomeName <$> wait younger `shouldReturn` "placed"
         overflowWaiting overflow `shouldReturn` 0

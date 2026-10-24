@@ -260,14 +260,27 @@ serve-path cap, and a pause before a render at the request timeout. Both gates s
 metadata evaluation and the listing response. Public artifact requests release both after the
 metadata decision, before streaming the admitted artifact.
 
-Each gate has a bounded waiting room and a 1 s wait budget, timed on the deadline sweeper. A request
-that finds a room full waits up to 0.5 s in one queue in front of both gates, holding no slot or
-charge, and each freed place wakes the oldest queued request to try the door again. An expired wait,
-or 0.5 s in the queue with no place, sheds with `503` and `Retry-After`. Past the queue's cap of 8
-requests per serve slot, the `503` comes at once and closes the connection, so a client that ignores
-`Retry-After` cannot spin on refusals and take CPU from admitted work. Health probes, cheap local routes and trusted private artifact
-hits bypass both gates. The mirror worker runs outside them. A slow artifact client therefore holds
-no serve metadata slot while its download drains.
+Each gate has a bounded waiting room and a 1 s wait budget. The deadline sweeper ends an expired
+wait on its next tick, normally within another 100 ms. A request that finds a room full joins
+bounded overflow outside both gates. While queued, it holds no slot, room place or memory charge.
+Each gate wakes the oldest request on its own overflow line when a room place frees. The CPU gate
+also signals when a slot returns to an empty room. Sweeper ticks cover capacity changes without a
+signal. Original arrival order survives retries and movement between lines. A new request can
+still take a place before a woken request retries.
+
+Overflow allows retries for 0.5 s from joining overflow. Expiry normally ends the queue wait within another
+100 ms. A retry started before expiry uses each gate's normal room wait and lets admitted work
+finish. The overflow budget therefore does not bound total request latency. Eight reservations
+per serve slot cover queued requests and their retries, including work admitted by a retry.
+Cancellation and completion release each reservation once. Holding it through admitted work can
+cause more immediate refusals than counting only parked requests, but preserves the resource cap.
+
+An expired wait sheds with `503` and `Retry-After: 1`. A full overflow refuses at once and closes
+the HTTP/1 connection after the response. HTTP/2 keeps its multiplexed connection open and returns
+the same refusal status and retry delay. A front proxy controls its downstream connections, so
+this backpressure does not impose a per-client request rate. Health probes, cheap local routes
+and trusted private artifact hits bypass both gates. The mirror worker runs outside them. A slow
+artifact client therefore holds no serve metadata slot while its download drains.
 
 The public and private connection pools take independent settings. The private pool takes the larger
 share, because a trusted tarball hit streams outside admission, which makes its demand the

@@ -2,13 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The metadata memory gate's meter: one byte budget that requests pay into as they read and build.
-
-A request takes a small entry step before its CPU slot and is shed, as a value, when that step does
-not fit within the admission wait, which runs on the deadline sweeper. A started request pays for what it reads one step at a time, and
-pauses instead of failing when the budget is spent. One ticket at a time holds the overdraw token
-until its request ends. Work that request waits on, a shared fetch or render, may overdraw on the
-same token, so the overshoot stays near one request with its shared work, and a pause never deadlocks.
+{- | The metadata memory budget and ticket accounting. Entry waits use the deadline sweeper.
+Started work pays in steps and shares one overdraw token with the work it awaits.
 -}
 module Ecluse.Core.Server.Admission.Meter (
     -- * The meter
@@ -24,6 +19,7 @@ module Ecluse.Core.Server.Admission.Meter (
     -- * A request's ticket
     MemoryTicket,
     withMemoryEntry,
+    tryMemoryEntry,
     charge,
     newChargeRegion,
 
@@ -154,12 +150,19 @@ data MemoryTicket = MemoryTicket
 step did not fit within the wait. Everything the ticket paid returns on every exit path.
 -}
 withMemoryEntry :: (MonadUnliftIO m) => MetricsPort -> MemoryMeter -> (MemoryTicket -> m a) -> m (Either Shed a)
-withMemoryEntry metrics meter body =
+withMemoryEntry metrics meter body = do
+    result <- tryMemoryEntry metrics meter body
+    when (isLeft result) (liftIO (mpMemoryAdmissionShed metrics))
+    pure result
+
+-- | Try memory entry without recording a final refusal, so callers can retry admission.
+tryMemoryEntry :: (MonadUnliftIO m) => MetricsPort -> MemoryMeter -> (MemoryTicket -> m a) -> m (Either Shed a)
+tryMemoryEntry metrics meter body =
     UE.mask $ \restore -> do
         ticket <- liftIO (newTicket metrics meter)
         entered <- liftIO (enter ticket)
         case entered of
-            Left why -> liftIO (mpMemoryAdmissionShed metrics) $> Left why
+            Left why -> pure (Left why)
             Right waited ->
                 Right
                     <$> ( restore (liftIO (when waited (mpMemoryAdmissionQueued metrics)) >> body ticket)
@@ -173,8 +176,7 @@ newTicket metrics meter = do
     headroom <- newIORef 0
     pure MemoryTicket{tMeter = meter, tId = ticketId, tCharged = charged, tHeadroom = headroom, tServes = Nothing, tMetrics = metrics}
 
--- The gate. 'Right' carries whether the request had to wait. It runs under the caller's mask, and
--- the queued count taken in the deciding transaction is returned before any interruptible step.
+-- The caller's mask protects acquired charges and room places until cleanup is installed.
 enter :: MemoryTicket -> IO (Either Shed Bool)
 enter ticket = do
     gate <- atomically $ do

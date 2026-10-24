@@ -268,10 +268,12 @@ advisories:
 #   maxHeapBytes: 1073741824
 #   # Concurrent metadata operations: max(8, 20 x capabilities), independent of memory.
 #   # A positive explicit value stays exact, and it also sizes the waiting room at the
-#   # memory gate. A request waits up to 1 s at either gate, then gets 503 with
-#   # Retry-After: 1. A request that finds a waiting room full first waits up to 0.5 s
-#   # for a place, among at most 8 per slot. Past that it gets the 503 at once, and the
-#   # connection closes. Treat these responses as backpressure.
+#   # memory gate. Each gate has a 1 s room wait. Overflow permits retries for 0.5 s
+#   # when a room is full. Sweeper expiry normally adds up to 100 ms to a wait.
+#   # A retry keeps the normal room waits, so 0.5 s is not a total response deadline.
+#   # Overflow holds at most 8 reservations per slot, including retries and work they
+#   # admit. Past that cap, 503 closes the HTTP/1 connection after the response.
+#   # Every admission refusal keeps Retry-After: 1. Treat it as backpressure.
 #   serveMaxInFlight: 128
 #   # Pooled connections per public upstream host: clamp (32, 1024) (nofile / 8).
 #   # Connections beyond the pool still open, but re-handshake TLS each time.

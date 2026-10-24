@@ -10,6 +10,7 @@ module Ecluse.Test.Mirror.State (
     mirrorSample,
     mirrorSource,
     withMirrorEnvelope,
+    mirrorViewWith,
 ) where
 
 import Data.Aeson (Object, Value (String), object, toJSON, (.=))
@@ -18,11 +19,17 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
+import Ecluse.Core.Mirror.State (MirrorState (MirrorState), MirrorStateFault (StateInvalid, StateMissingCompanion), StateRead, StateTarget)
+import Ecluse.Core.Mirror.State.Internal (StateRevision)
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.MirrorUpload (MirrorInventory, MirrorReadData (..), inventoryDetails, inventoryReadData)
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleFiles)
+import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool)
+import Ecluse.Core.Server.Cache.Types (StoreBudget (StoreBudget))
+import Ecluse.Core.Server.MirrorView (MirrorView, newMirrorRetention, newMirrorView)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Support (expectRight)
 
@@ -73,3 +80,11 @@ withMirrorEnvelope :: Object -> MirrorInventory -> IO MirrorInventory
 withMirrorEnvelope envelope inventory = case inventoryReadData inventory of
     PyPIMirrorRead document -> expectRight (restoreMirrorInventory (inventoryDetails inventory) (PyPIMirrorRead (simpleDocument envelope (simpleFiles document))))
     NpmMirrorRead _ -> fail "expected PyPI inventory"
+
+-- | A bounded managed view with a supplied reader and no write or companion capabilities.
+mirrorViewWith :: StateTarget -> (PackageName -> Maybe StateRevision -> IO (Either MirrorStateFault StateRead)) -> IO MirrorView
+mirrorViewWith target readState = do
+    pool <- newLocalPool 20 10_000_000
+    cache <- newMirrorRetention pool 60 (StoreBudget 0 0)
+    let store = MirrorState (const readState) (\_ _ _ _ -> pure (Left (StateInvalid "unexpected write"))) (\_ _ -> pure (Left StateMissingCompanion)) (\_ _ -> pure (Left StateMissingCompanion))
+    pure (newMirrorView defaultLimits target store cache)
