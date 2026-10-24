@@ -58,7 +58,7 @@ data PodShape
 
 -- | The shapes the committed floors must hold. The workflow's matrix lists the scheduled ones.
 scheduledPodShapes :: [PodShape]
-scheduledPodShapes = [Unlimited, Limited 2 gib, Limited 4 gib, Limited 4 (2 * gib)]
+scheduledPodShapes = [Unlimited, Limited 2 gib, Limited 3 gib, Limited 3 (2 * gib)]
 
 -- | A mebibyte in bytes.
 mib :: Int
