@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | The request timeout answers a stalled request with an empty 503 and passes a prompt one through, as wai-extra's did.
+-- | Request deadlines and protocol-specific transport middleware.
 module Ecluse.Runtime.Server.MiddlewareSpec (spec) where
 
 import GHC.Clock (getMonotonicTime)
@@ -18,19 +18,31 @@ import Network.HTTP.Client (
     responseStatus,
     responseTimeoutNone,
  )
-import Network.HTTP.Types (status200, statusCode)
-import Network.Wai (Application, Middleware, responseLBS, responseStream)
+import Network.HTTP.Types (hConnection, http20, status200, statusCode)
+import Network.Wai (Application, Middleware, defaultRequest, httpVersion, responseLBS, responseStream)
 import Network.Wai.Handler.Warp (testWithApplication)
+import Network.Wai.Internal (ResponseReceived (ResponseReceived))
 import Network.Wai.Middleware.Timeout qualified as WaiExtra
 import Test.Hspec
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (try)
 
-import Ecluse.Runtime.Server.Middleware (requestTimeout)
+import Ecluse.Runtime.Server.Middleware (closeResponseConnections, requestTimeout)
 import Ecluse.Test.Deadline (withSweeper)
 
 spec :: Spec
-spec = describe "requestTimeout" $ do
+spec = do
+    requestTimeoutSpec
+    describe "closeResponseConnections" $
+        it "passes HTTP/2 responses through without a close exception" $ do
+            sent <- newIORef (0 :: Int)
+            let respond _ = modifyIORef' sent (+ 1) $> ResponseReceived
+                app _ reply = reply (responseLBS status200 [(hConnection, "close")] "ok")
+            _ <- closeResponseConnections app defaultRequest{httpVersion = http20} respond
+            readIORef sent `shouldReturn` 1
+
+requestTimeoutSpec :: Spec
+requestTimeoutSpec = describe "requestTimeout" $ do
     it "answers an empty 503 once a request outlives its seconds" $
         withSweeper $ \deadlines -> do
             (outcome, elapsed) <- served (requestTimeout deadlines 1) stalling
@@ -47,7 +59,6 @@ spec = describe "requestTimeout" $ do
             (theirs, _) <- served (WaiExtra.timeout 1) beginsThenStalls
             ours `shouldBe` theirs
 
--- One request through the middleware: the status and body, or the client's fault, and the seconds taken.
 served :: Middleware -> Application -> IO (Text, Double)
 served middleware app =
     testWithApplication (pure (middleware app)) $ \port -> do
