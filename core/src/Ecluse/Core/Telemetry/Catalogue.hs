@@ -57,6 +57,14 @@ data MetricName
       MemoryAdmissionPauses
     | -- | @ecluse.serve.admission.memory.overdraws@: steps the token holder took past the budget (counter).
       MemoryAdmissionOverdraws
+    | -- | @ecluse.serve.admission.overflow.waiting@: requests a full room turned away, waiting for a place (observable gauge).
+      OverflowWaiting
+    | -- | @ecluse.serve.admission.overflow.admitted@: queued requests that got a place (counter).
+      OverflowAdmitted
+    | -- | @ecluse.serve.admission.overflow.shed@: queued requests refused after the wait (counter).
+      OverflowShed
+    | -- | @ecluse.serve.admission.overflow.full@: requests refused at once because the queue was full (counter).
+      OverflowFull
     | -- | @ecluse.publish.body.in_flight_bytes@: bytes reserved for buffered publish bodies (up-down counter).
       PublishBodyInFlightBytes
     | -- | @ecluse.publish.body.shed@: publishes shed at the body-byte budget (counter).
@@ -141,6 +149,10 @@ metricName = \case
     MemoryAdmissionShed -> "ecluse.serve.admission.memory.shed"
     MemoryAdmissionPauses -> "ecluse.serve.admission.memory.pauses"
     MemoryAdmissionOverdraws -> "ecluse.serve.admission.memory.overdraws"
+    OverflowWaiting -> "ecluse.serve.admission.overflow.waiting"
+    OverflowAdmitted -> "ecluse.serve.admission.overflow.admitted"
+    OverflowShed -> "ecluse.serve.admission.overflow.shed"
+    OverflowFull -> "ecluse.serve.admission.overflow.full"
     PublishBodyInFlightBytes -> "ecluse.publish.body.in_flight_bytes"
     PublishBodyShed -> "ecluse.publish.body.shed"
     MergeDivergence -> "ecluse.registry.merge.divergence"

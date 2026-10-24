@@ -2,12 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The memory gate's shared vocabulary: what adapters charge, what the meter reports, and the
-bounds the boot hands the brake. "Ecluse.Core.Server.Admission.Meter" and
-"Ecluse.Core.Server.Admission.Brake" act on these, and the adapters, the sampler, the memory plan
+{- | The admission gates' shared vocabulary: why a gate turns a request away, what adapters charge,
+what the meter reports, and the bounds the boot hands the brake. "Ecluse.Core.Server.Admission.Meter"
+and "Ecluse.Core.Server.Admission.Brake" act on these, and the adapters, the sampler, the memory plan
 and the gauges read or build them.
 -}
 module Ecluse.Core.Server.Admission.Types (
+    -- * Refusals
+    Shed (..),
+
     -- * Charges
     ChargeFactors (..),
     FlightKey (..),
@@ -22,6 +25,14 @@ module Ecluse.Core.Server.Admission.Types (
 ) where
 
 import Ecluse.Core.Telemetry.Metrics (CacheStore)
+
+-- | Why a gate turned a request away.
+data Shed
+    = -- | Its waiting room was full when the request arrived.
+      RoomFull
+    | -- | The request waited in the room, and the room's wait ran out first.
+      WaitExpired
+    deriving stock (Eq, Show)
 
 -- | Live heap bytes charged per byte of a read or an output basis, in thousandths, for one ecosystem.
 data ChargeFactors = ChargeFactors

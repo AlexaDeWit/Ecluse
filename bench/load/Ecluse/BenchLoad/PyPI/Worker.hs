@@ -129,7 +129,7 @@ boot knobs use = do
                     use (Target Nothing (DriveInProcess measured))
 
 withinBudget :: MemoryMeter -> (WorkerStateBudget -> IO a) -> IO (Maybe a)
-withinBudget meter action = withMemoryEntry noopMetricsPort meter $ \ticket -> do
+withinBudget meter action = fmap rightToMaybe . withMemoryEntry noopMetricsPort meter $ \ticket -> do
     budget <- WorkerStateBudget <$> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket
     action budget
   where

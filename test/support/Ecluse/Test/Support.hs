@@ -29,17 +29,21 @@ import GHC.Conc (getNumCapabilities, setNumCapabilities)
 import Network.HTTP.Client qualified as Client
 import UnliftIO (bracket)
 
-import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission)
+import Ecluse.Core.Deadline (newDeadlines)
+import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmissionTuned)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), newMemoryMeter)
 
--- | A serve admission for suites that do not test overload. Its capacity is far above any test's load.
+{- | A serve admission for suites that do not test overload, far above any test's load. It has no
+overflow queue and no room, so nothing it does waits on a sweep.
+-}
 testServeAdmission :: IO ServeAdmission
-testServeAdmission = newServeAdmission 1_000_000
+testServeAdmission = newDeadlines >>= \deadlines -> newServeAdmissionTuned deadlines 1_000_000 0 0
 
--- | A memory meter for suites that do not test memory pressure. Its budget never binds.
+-- | A memory meter for suites that do not test memory pressure. Its budget never binds, and its zero wait needs no sweep.
 testMemoryMeter :: IO MemoryMeter
 testMemoryMeter =
-    newMemoryMeter MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1_048_576, msEntryRoom = 1_000_000, msEntryWaitMicros = 0}
+    newDeadlines >>= \deadlines ->
+        newMemoryMeter deadlines MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1_048_576, msEntryRoom = 1_000_000, msEntryWaitMicros = 0}
 
 -- | A clock a test advances by hand, as its read action and its setter, so no case sleeps.
 newTestClock :: UTCTime -> IO (IO UTCTime, UTCTime -> IO ())

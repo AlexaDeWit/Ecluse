@@ -16,7 +16,7 @@ module Ecluse.Core.Server.Pipeline.Tarball.Private (
 
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (status403, status404, status503)
+import Network.HTTP.Types (ResponseHeaders, status403, status404, status503)
 import Network.Wai (ResponseReceived)
 
 import Ecluse.Core.Credential (ClientCredential)
@@ -99,9 +99,11 @@ streamPrivateArtifact ctx token = do
     selected <- case pdMirrorState (arDeps ctx) of
         Just _
             | not (pdFirstParty (arDeps ctx) (arPackage ctx)) ->
-                withMetadataAdmission (arRuntime ctx) (pure PrivateUnavailable) (\ticket -> privateArtifactRequest (Just ticket) ctx token) pure
+                withMetadataAdmission (arRuntime ctx) (pure . PrivateShed) (\ticket -> privateArtifactRequest (Just ticket) ctx token) pure
         _ -> privateArtifactRequest Nothing ctx token
     case selected of
+        -- The admission shed already counted its decision.
+        PrivateShed headers -> PrivateHandled <$> liftIO (respond (tarballError replies shedStatus headers (mkRefusal Nothing shedMessage)))
         PrivateUnavailable -> PrivateAnswered Metric.Unavailable <$> liftIO unavailable
         PrivateIncomplete expected -> PrivateHandled <$> servePublicArtifactWithCoverage (covered expected) ctx
         PrivateRefused -> PrivateAnswered Metric.Deny <$> liftIO refuse
@@ -132,6 +134,7 @@ data PrivateArtifact
     | PrivateRefused
     | PrivateMissing OriginMiss
     | PrivateUnavailable
+    | PrivateShed ResponseHeaders
     | PrivateIncomplete MirrorVersion
 
 privateArtifactRequest :: Maybe MemoryTicket -> ArtifactRequest response -> Maybe ClientCredential -> Handler PrivateArtifact

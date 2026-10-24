@@ -6,7 +6,7 @@
 thread. GHC's timers share one process-wide queue, and every arm and disarm edits it in turn. Here
 arming adds to a list owned by the arming thread's capability, and a deadline fires about one tick
 late. A due check is thrown from a forked thread, as 'System.Timeout.timeout' does, so a disarm can
-stop a throw still in flight.
+stop a throw still in flight. A flag scope raises a 'TVar' instead, for a transaction that waits.
 -}
 module Ecluse.Core.Deadline (
     -- * The sweeper
@@ -18,14 +18,10 @@ module Ecluse.Core.Deadline (
     Check,
     withDeadline,
     withEndableDeadline,
+    withDeadlineFlag,
     timeout,
-
-    -- * Spike 1866: swept waits
-    withSweptFlag,
-    holdSwept,
 ) where
 
-import Control.Concurrent.STM qualified as STM
 import Control.Exception (asyncExceptionFromException, asyncExceptionToException, handleJust, throwTo)
 import Data.Primitive.SmallArray (SmallArray, indexSmallArray, sizeofSmallArray, smallArrayFromList)
 import GHC.Clock (getMonotonicTimeNSec)
@@ -114,6 +110,21 @@ disarm lock = uninterruptibleMask_ $ do
     disarmed <- tryPutMVar lock Nothing
     unless disarmed (readMVar lock >>= traverse_ killThread)
 
+{- | Run an action with a flag the first sweep after the microseconds raises, so a transaction can wait
+for the deadline without a GHC timer. A bound of zero or less starts raised and needs no sweep.
+-}
+withDeadlineFlag :: Deadlines -> Int -> (TVar Bool -> IO a) -> IO a
+withDeadlineFlag deadlines micros action
+    | micros <= 0 = newTVarIO True >>= action
+    | otherwise = do
+        flag <- newTVarIO False
+        limit <- (`nanosAfter` micros) <$> getMonotonicTimeNSec
+        withDeadline deadlines (raiseFrom limit flag) (action flag)
+
+-- Raising throws nothing, so the check stays until its scope ends, and it writes the flag once.
+raiseFrom :: Word64 -> TVar Bool -> Check
+raiseFrom limit flag now = Nothing <$ when (now >= limit) (atomically (readTVar flag >>= \raised -> unless raised (writeTVar flag True)))
+
 {- | 'System.Timeout.timeout' on the sweeper: 'Nothing' once the action outlives the microseconds,
 about a tick late. A negative bound never fires, and zero fires at once.
 -}
@@ -128,20 +139,6 @@ timeout deadlines micros action
         -- Base 'handleJust', because the unliftio one never catches an asynchronous exception.
         handleJust (\caught -> if caught == expiry then Just () else Nothing) (\() -> pure Nothing) $
             Just <$> withDeadline deadlines due action
-
-{- | Spike 1866: run an action with a flag the sweeper raises once the microseconds pass, about a
-tick late, in place of 'GHC.Conc.registerDelay'. The flag is written once.
--}
-withSweptFlag :: Deadlines -> Int -> (TVar Bool -> IO a) -> IO a
-withSweptFlag deadlines micros action = do
-    flag <- newTVarIO False
-    limit <- (`nanosAfter` micros) <$> getMonotonicTimeNSec
-    let raise now = Nothing <$ when (now >= limit) (atomically (readTVar flag >>= \raised -> unless raised (writeTVar flag True)))
-    withDeadline deadlines raise (action flag)
-
--- | Spike 1866: wait about the microseconds on the sweeper, without a GHC timer.
-holdSwept :: Deadlines -> Int -> IO ()
-holdSwept deadlines micros = withSweptFlag deadlines micros (atomically . (readTVar >=> STM.check))
 
 -- The monotonic nanoseconds this many microseconds after an instant, saturating rather than wrapping.
 nanosAfter :: Word64 -> Int -> Word64

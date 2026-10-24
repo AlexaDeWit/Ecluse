@@ -76,7 +76,7 @@ workerPoliciesWithState env states bindings targets artifactMaxBytes =
                 , wmsTarget = msbTarget binding
                 , wmsLimits = limits
                 , wmsWithinBudget = \action ->
-                    withMemoryEntry (metricsPortOf (envMetrics env)) (envMemoryMeter env) $ \ticket -> do
+                    fmap rightToMaybe . withMemoryEntry (metricsPortOf (envMetrics env)) (envMemoryMeter env) $ \ticket -> do
                         stateCharge <- newChargeRegion (charge ticket)
                         recordCharge <- newChargeRegion (charge ticket)
                         companionCharge <- newChargeRegion (charge ticket)

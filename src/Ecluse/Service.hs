@@ -48,7 +48,6 @@ import Ecluse.Composition.Worker (workerPoliciesWithState)
 import Ecluse.Config (AppConfig (cfgEgress), EgressSettings (egrOperatorContact))
 import Ecluse.Core.BuildIdentity (identityManagerSettings, renderUserAgent)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured))
-import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
 import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
 import Ecluse.Core.Queue (MirrorQueue)
@@ -61,16 +60,16 @@ import Ecluse.Core.Registry.Adapter (
     serveCredential,
     serveRouter,
  )
-import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmissionSwept, serveAdmissionLevels)
+import Ecluse.Core.Deadline (Deadlines)
+import Ecluse.Core.Server.Admission (newServeAdmission, serveAdmissionOverflow)
 import Ecluse.Core.Server.Admission.Brake (defaultBrakeMarks)
-import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), meterSnapshot, newMemoryMeterSwept)
-import Ecluse.Core.Server.Admission.Types (MeterSnapshot (..))
+import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), meterSnapshot, newMemoryMeter)
+import Ecluse.Core.Server.Admission.Overflow (overflowWaiting)
 import Ecluse.Core.Server.Admission.Weighted (admissionWaitMicros)
 import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxBytes, cacheMaxEntries), newMetadataCacheWithProvider)
 import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool)
 import Ecluse.Core.Server.Cache.Provider (localCacheProviderWithPool)
 import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps)
-import Ecluse.Core.Server.Pipeline.Shared (spikeStatsLoop)
 import Ecluse.Core.Server.Readiness (Readiness)
 import Ecluse.Core.Supervision (
     FaultDisposition (Permanent, Transient),
@@ -85,14 +84,12 @@ import Ecluse.Rts.Sampler (SamplerSettings (..), readCollector, runMemorySampler
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Server (MountBinding (..))
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
-import Ecluse.Runtime.Telemetry.Instruments (registerMemoryMeter)
+import Ecluse.Runtime.Telemetry.Instruments (registerMemoryMeter, registerOverflowQueue)
 import Ecluse.Runtime.Telemetry.Reporters (
     DeferredMetrics,
     deferredMirrorEnqueueFailure,
     installMetrics,
  )
-import UnliftIO.Async (concurrently_)
-import UnliftIO.Concurrent (threadDelay)
 
 -- | Everything a role needs to start its own tasks, built once by 'withServiceRuntime'. The background tasks arrive already wrapped in their supervision policy.
 data ServiceRuntime = ServiceRuntime
@@ -130,9 +127,9 @@ withServiceRuntime bootEnv plan mirror action = do
         cveSyncPlan = mwCveSync mirror
         baseBindings = bwBindings (mwBootWiring mirror)
 
-    roomFactor <- fromMaybe 1 . (>>= readMaybe) <$> lookupEnv "SPIKE1866_ROOM_FACTOR"
-    serveAdmission <- newServeAdmissionSwept deadlines roomFactor (mpAdmissionCapacity memoryPlan)
-    (memoryMeter, sampler) <- memoryAdmission deadlines roomFactor memoryPlan
+    -- The overflow queue in front of both gates waits on this process's sweeper, which the boot supervises.
+    serveAdmission <- newServeAdmission deadlines (mpAdmissionCapacity memoryPlan)
+    (memoryMeter, sampler) <- memoryAdmission deadlines memoryPlan
     heartbeat <- newWorkerHeartbeat
     let runsWorkerHere = spawnsWorker role mirrorRuntime
     (queue, mirrorDrain) <- mirrorHandOff role logEnv deferredMetrics mirrorRuntime (mwQueue mirror)
@@ -148,6 +145,7 @@ withServiceRuntime bootEnv plan mirror action = do
         -- reporters live for the rest of the run.
         installMetrics deferredMetrics (envMetrics builtEnv)
         registerMemoryMeter (envMetrics builtEnv) (meterSnapshot memoryMeter)
+        traverse_ (registerOverflowQueue (envMetrics builtEnv) . overflowWaiting) (serveAdmissionOverflow serveAdmission)
         registerAdvisoryAges (envMetrics builtEnv) cveSyncPlan
         -- 'MirrorWith' always carries the artifact tenant.
         let workerArtifactMaxBytes = maybe mirrorArtifactBytesCap matMaxBytes (mpMirrorArtifactTenant memoryPlan)
@@ -167,28 +165,21 @@ withServiceRuntime bootEnv plan mirror action = do
                         (envTelemetry builtEnv)
                         (cveSyncScheduleFor appConfig)
                         cveSyncPlan
-                , svcMemorySampler = superviseBackground "memory-sampler" (envLogEnv builtEnv) (concurrently_ sampler (spikeStatsLoop (spikeGauges serveAdmission memoryMeter) threadDelay))
+                , svcMemorySampler = superviseBackground "memory-sampler" (envLogEnv builtEnv) sampler
                 , svcCheckReady = cveSyncReadiness cveSyncPlan
                 , svcCheckLive = workerLiveness runsWorkerHere heartbeat
                 }
 
--- Spike 1866: free CPU slots, CPU room, memory room, charged MiB, budget MiB, paused.
-spikeGauges :: ServeAdmission -> MemoryMeter -> IO [Int]
-spikeGauges admission meter = do
-    (free, room) <- serveAdmissionLevels admission
-    snap <- meterSnapshot meter
-    pure [free, room, snWaiting snap, snChargedBytes snap `div` 1_048_576, snBudgetBytes snap `div` 1_048_576, snPaused snap]
-
 -- The metadata memory meter and the sampler that steers it, both sized from the memory plan.
-memoryAdmission :: Deadlines -> Int -> MemoryPlan -> IO (MemoryMeter, IO ())
-memoryAdmission deadlines roomFactor memoryPlan = do
+memoryAdmission :: Deadlines -> MemoryPlan -> IO (MemoryMeter, IO ())
+memoryAdmission deadlines memoryPlan = do
     meter <-
-        newMemoryMeterSwept
-            (Just deadlines)
+        newMemoryMeter
+            deadlines
             MeterSettings
                 { msBudgetBytes = tbBootBytes (mpTransientBudget memoryPlan)
                 , msStepBytes = meterStepBytes
-                , msEntryRoom = mpAdmissionCapacity memoryPlan * max 1 roomFactor
+                , msEntryRoom = mpAdmissionCapacity memoryPlan
                 , msEntryWaitMicros = admissionWaitMicros
                 }
     collector <- readCollector

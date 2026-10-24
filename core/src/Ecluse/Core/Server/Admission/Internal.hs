@@ -2,84 +2,79 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Unit-slot admission over the shared weighted controller.
+{- | Unit-slot admission over the shared weighted controller, and the overflow queue that both
+metadata gates' refusals share. The composition root builds both with the process's sweeper. A
+runtime built without the queue refuses a full room at once.
+-}
 module Ecluse.Core.Server.Admission.Internal (
     ServeAdmission (..),
     newServeAdmission,
-    newServeAdmissionSwept,
     withServeAdmission,
-    withServeAdmissionE,
-    withServeAdmissionP,
-    serveAdmissionLevels,
+    serveAdmissionLine,
+    serveAdmissionOverflow,
 
     -- * Internals exported for testing
     newServeAdmissionTuned,
+    withOverflow,
 ) where
 
 import Control.Exception (ErrorCall (ErrorCall))
 import UnliftIO (MonadUnliftIO, throwIO)
 
 import Ecluse.Core.Deadline (Deadlines)
+import Ecluse.Core.Server.Admission.Overflow (Line, Overflow, newOverflow)
+import Ecluse.Core.Server.Admission.Types (Shed)
 import Ecluse.Core.Server.Admission.Weighted (
     AdmissionObservers (..),
-    Shed,
     WeightedAdmission,
     admissionWaitMicros,
     newWeightedAdmission,
-    newWeightedAdmissionSwept,
-    weightedAdmissionLevels,
+    weightedAdmissionLine,
     withWeightedAdmission,
-    withWeightedAdmissionE,
-    withWeightedAdmissionP,
  )
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
--- | Process-wide serve capacity and bounded waiting-room state.
-newtype ServeAdmission = ServeAdmission WeightedAdmission
+-- | Process-wide serve capacity and its bounded waiting room, and the overflow queue when it is on.
+data ServeAdmission = ServeAdmission
+    { saSlots :: WeightedAdmission
+    , saOverflow :: Maybe Overflow
+    }
 
--- | Allocate positive capacity with a matching waiting room and the shared wait budget.
+{- | Allocate positive capacity, a waiting room of the same size, and an overflow queue for it. The
+deadlines must be swept, as the composition root's are, or a queued request never times out.
+-}
 
 -- The configuration parser guarantees capacity > 0. This bounds check is defence in depth.
-newServeAdmission :: Int -> IO ServeAdmission
-newServeAdmission capacity
+newServeAdmission :: Deadlines -> Int -> IO ServeAdmission
+newServeAdmission deadlines capacity
     | capacity <= 0 = throwIO (ErrorCall "ServeAdmission capacity must be positive")
-    | otherwise = newServeAdmissionTuned capacity capacity admissionWaitMicros
+    | otherwise = do
+        slots <- newServeAdmissionTuned deadlines capacity capacity admissionWaitMicros
+        withOverflow slots <$> newOverflow deadlines capacity
 
--- | Spike 1866: capacity with its room wait on the sweeper. SPIKE1866_ROOM_FACTOR scales the room.
-newServeAdmissionSwept :: Deadlines -> Int -> Int -> IO ServeAdmission
-newServeAdmissionSwept deadlines roomFactor capacity
-    | capacity <= 0 = throwIO (ErrorCall "ServeAdmission capacity must be positive")
-    | otherwise = ServeAdmission <$> newWeightedAdmissionSwept (Just deadlines) capacity (capacity * max 1 roomFactor) admissionWaitMicros
+-- | Set the waiting-room bound and microsecond wait budget explicitly, with no overflow queue.
+newServeAdmissionTuned :: Deadlines -> Int -> Int -> Int -> IO ServeAdmission
+newServeAdmissionTuned deadlines capacity room waitMicros = do
+    slots <- newWeightedAdmission deadlines capacity room waitMicros
+    pure ServeAdmission{saSlots = slots, saOverflow = Nothing}
 
--- | Set the waiting-room bound and microsecond wait budget explicitly.
-newServeAdmissionTuned :: Int -> Int -> Int -> IO ServeAdmission
-newServeAdmissionTuned capacity room waitMicros =
-    ServeAdmission <$> newWeightedAdmission capacity room waitMicros
+-- | Put an overflow queue in front of the gates.
+withOverflow :: ServeAdmission -> Overflow -> ServeAdmission
+withOverflow admission overflow = admission{saOverflow = Just overflow}
 
--- | Hold one slot for the action. A full room or expired wait returns Nothing.
+-- | The line of requests the serve slots' full room turned away.
+serveAdmissionLine :: ServeAdmission -> Line
+serveAdmissionLine = weightedAdmissionLine . saSlots
+
+-- | The overflow queue in front of the gates, when it is on.
+serveAdmissionOverflow :: ServeAdmission -> Maybe Overflow
+serveAdmissionOverflow = saOverflow
+
+-- | Hold one slot for the action, or say why the gate turned the request away.
 {-# INLINE withServeAdmission #-}
-withServeAdmission :: (MonadUnliftIO m) => MetricsPort -> ServeAdmission -> m a -> m (Maybe a)
-withServeAdmission metrics (ServeAdmission core) =
-    withWeightedAdmission (serveObservers metrics) core 1
-
--- | Spike 1866: free slots and room occupancy.
-serveAdmissionLevels :: ServeAdmission -> IO (Int, Int)
-serveAdmissionLevels (ServeAdmission core) = weightedAdmissionLevels core
-
--- | Spike 1866: 'withServeAdmission' that says why it shed.
-{-# INLINE withServeAdmissionE #-}
-withServeAdmissionE :: (MonadUnliftIO m) => MetricsPort -> ServeAdmission -> m a -> m (Either Shed a)
-withServeAdmissionE metrics (ServeAdmission core) =
-    withWeightedAdmissionE (serveObservers metrics) core 1
-
--- | Spike 1866: 'withServeAdmissionE' that runs @placed@ once the request holds a place or a slot.
-{-# INLINE withServeAdmissionP #-}
-withServeAdmissionP :: (MonadUnliftIO m) => MetricsPort -> ServeAdmission -> IO () -> m a -> m (Either Shed a)
-withServeAdmissionP metrics (ServeAdmission core) =
-    withWeightedAdmissionP (serveObservers metrics) core 1
-
-serveObservers :: MetricsPort -> AdmissionObservers
-serveObservers metrics = observers
+withServeAdmission :: (MonadUnliftIO m) => MetricsPort -> ServeAdmission -> m a -> m (Either Shed a)
+withServeAdmission metrics admission =
+    withWeightedAdmission observers (saSlots admission) 1
   where
     observers =
         AdmissionObservers

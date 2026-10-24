@@ -109,7 +109,7 @@ servePublicArtifactWithCoverage covered ctx = do
     -- A selected read keeps one release, so its entry step is its whole charge.
     withMetadataAdmission
         (arRuntime ctx)
-        (liftIO (arRespond ctx (tarballError (arReplies ctx) shedStatus [shedRetryAfter] (mkRefusal Nothing shedMessage))))
+        (\headers -> liftIO (arRespond ctx (tarballError (arReplies ctx) shedStatus headers (mkRefusal Nothing shedMessage))))
         (const (preparePublicMetadata (arRuntime ctx) (arDeps ctx) (arPackage ctx) (arVersion ctx) >>= gatePublicVersion covered ctx advisoryEtag))
         $ \case
             Admitted artifact skipped -> serveAdmitted ctx advisoryEtag artifact skipped

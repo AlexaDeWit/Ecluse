@@ -170,7 +170,7 @@ planExecutable ::
 planExecutable logEnv tracing deadlines resolveAdapter buildQueue buildCredentials builds bootPlan = case bpRole bootPlan of
     BootMirrorPipeline role -> do
         (advisories, probed) <- probeServedUpstreams (sbProbing builds) role bootPlan
-        wiring <- planMirrorWiring logEnv resolveAdapter buildQueue buildCredentials role bootPlan
+        wiring <- planMirrorWiring logEnv deadlines resolveAdapter buildQueue buildCredentials role bootPlan
         pure (advisories, accumulate probed (executablePlan . MirrorPipelineWiring <$> wiring))
     BootStorePruner -> prunerArm (deleting (sbDeleting builds))
     BootStorePreview -> prunerArm (previewing (sbObserving builds))
@@ -380,13 +380,13 @@ pilotExportPlan validated = maybeToRight [PilotWithoutEcosystem] (exportLoopPlan
 
 {- The mirror pipeline's arm: the advisory sync, the queue backend, and the mount wiring. The three
 refusable steps accumulate, so one launch reports every one rather than the earliest alone. -}
-planMirrorWiring :: LogEnv -> ResolveAdapter -> BuildMirrorQueue -> BuildCredentials -> MirrorRole -> BootPlan -> IO (Either [BootError] MirrorWiring)
-planMirrorWiring logEnv resolveAdapter buildQueue buildCredentials role bootPlan = do
+planMirrorWiring :: LogEnv -> Deadlines -> ResolveAdapter -> BuildMirrorQueue -> BuildCredentials -> MirrorRole -> BootPlan -> IO (Either [BootError] MirrorWiring)
+planMirrorWiring logEnv deadlines resolveAdapter buildQueue buildCredentials role bootPlan = do
     -- The metric instruments do not exist until the assembly builds the telemetry substrate. The
     -- credential providers minted below record through reporters 'installMetrics' makes live.
     deferredMetrics <- newDeferredMetrics getCurrentTime
     cveSync <- planAdvisorySync logEnv bootPlan
-    publishBudget <- planPublishBudget memoryPlan
+    publishBudget <- planPublishBudget deadlines memoryPlan
     queue <- planMirrorQueue buildQueue logEnv (mpQueueMemoryMaxDepth memoryPlan) (bpMirrorRuntime bootPlan)
     -- A refused sync leaves the rules abstaining, so the wiring below still builds and still
     -- reports what it refuses. The accumulation then discards it along with the sync.
@@ -456,10 +456,10 @@ planMirrorQueue buildQueue logEnv memoryDepth = \case
 
 {- One process-wide byte aggregate serves every publishing mount. It exists exactly when a
 publication target is configured, the same predicate the plan's tenant derives from. -}
-planPublishBudget :: MemoryPlan -> IO (Maybe PublishBudget)
-planPublishBudget memoryPlan =
+planPublishBudget :: Deadlines -> MemoryPlan -> IO (Maybe PublishBudget)
+planPublishBudget deadlines memoryPlan =
     forM (mpPublishTenant memoryPlan) $ \tenant -> do
-        bodyBudget <- newByteAdmission (ptAggregateBytes tenant)
+        bodyBudget <- newByteAdmission deadlines (ptAggregateBytes tenant)
         pure PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = mpMaxRequestBytes memoryPlan}
 
 -- Where a store's mirror-write credential provider records its mint breaker and refresh outcomes.

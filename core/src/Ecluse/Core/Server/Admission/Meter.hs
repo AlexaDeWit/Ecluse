@@ -5,7 +5,7 @@
 {- | The metadata memory gate's meter: one byte budget that requests pay into as they read and build.
 
 A request takes a small entry step before its CPU slot and is shed, as a value, when that step does
-not fit within the admission wait. A started request pays for what it reads one step at a time, and
+not fit within the admission wait, which runs on the deadline sweeper. A started request pays for what it reads one step at a time, and
 pauses instead of failing when the budget is spent. One ticket at a time holds the overdraw token
 until its request ends. Work that request waits on, a shared fetch or render, may overdraw on the
 same token, so the overshoot stays near one request with its shared work, and a pause never deadlocks.
@@ -15,7 +15,7 @@ module Ecluse.Core.Server.Admission.Meter (
     MemoryMeter,
     MeterSettings (..),
     newMemoryMeter,
-    newMemoryMeterSwept,
+    meterLine,
     steerMeter,
     meterSnapshot,
     meterFigures,
@@ -24,8 +24,6 @@ module Ecluse.Core.Server.Admission.Meter (
     -- * A request's ticket
     MemoryTicket,
     withMemoryEntry,
-    withMemoryEntryE,
-    withMemoryEntryP,
     charge,
     newChargeRegion,
 
@@ -38,11 +36,9 @@ import Control.Concurrent.MVar qualified as MVar
 import Control.Concurrent.STM (retry, stateTVar)
 import Data.IntSet qualified as IntSet
 import Data.Map.Strict qualified as Map
-import GHC.Conc (registerDelay)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Exception qualified as UE
 
-import Ecluse.Core.Deadline (Deadlines, withSweptFlag)
 import Ecluse.Core.Server.Admission.Budget (
     EntryGate (..),
     GrowthGate (..),
@@ -52,8 +48,9 @@ import Ecluse.Core.Server.Admission.Budget (
     growthDecision,
     roundUpToStep,
  )
-import Ecluse.Core.Server.Admission.Types (BrakeLevel (Calm), FlightKey, MeterSnapshot (..))
-import Ecluse.Core.Server.Admission.Weighted (Shed (..), spikeRoomSwept, spikeSignalOne)
+import Ecluse.Core.Deadline (Deadlines, withDeadlineFlag)
+import Ecluse.Core.Server.Admission.Overflow (Line, newLine, signalLine)
+import Ecluse.Core.Server.Admission.Types (BrakeLevel (Calm), FlightKey, MeterSnapshot (..), Shed (..))
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
 -- | The boot-time shape of a meter.
@@ -86,17 +83,16 @@ data MemoryMeter = MemoryMeter
     , mmStepBytes :: Int
     , mmEntryRoom :: Int
     , mmEntryWaitMicros :: Int
-    , mmDeadlines :: Maybe Deadlines
-    -- ^ Spike 1866: time the entry wait on the sweeper.
+    , mmDeadlines :: Deadlines
+    , mmLine :: Line
+    -- ^ Requests this gate turned away at a full room, woken as places in it free.
     }
 
--- | Build a meter. The step floors at one byte, and the room and the wait at zero.
-newMemoryMeter :: MeterSettings -> IO MemoryMeter
-newMemoryMeter = newMemoryMeterSwept Nothing
-
--- | Spike 1866: 'newMemoryMeter' whose entry wait runs on the sweeper.
-newMemoryMeterSwept :: Maybe Deadlines -> MeterSettings -> IO MemoryMeter
-newMemoryMeterSwept deadlines settings =
+{- | Build a meter. The step floors at one byte, and the room and the wait at zero. A positive wait ends
+on a sweep of the deadlines, so a fixture that never waits one out may leave them unswept.
+-}
+newMemoryMeter :: Deadlines -> MeterSettings -> IO MemoryMeter
+newMemoryMeter deadlines settings =
     MemoryMeter
         <$> newTVarIO (max 0 (msBudgetBytes settings))
         <*> newTVarIO 0
@@ -110,7 +106,12 @@ newMemoryMeterSwept deadlines settings =
         <*> pure (max 1 (msStepBytes settings))
         <*> pure (max 0 (msEntryRoom settings))
         <*> pure (max 0 (msEntryWaitMicros settings))
-        <*> pure (if spikeRoomSwept then deadlines else Nothing)
+        <*> pure deadlines
+        <*> newLine
+
+-- | The line of requests this gate turned away at a full room.
+meterLine :: MemoryMeter -> Line
+meterLine = mmLine
 
 -- | Move the budget and record the brake level that moved it. Paused reads and queued entries retry at once.
 steerMeter :: MemoryMeter -> Int -> BrakeLevel -> IO ()
@@ -149,22 +150,14 @@ data MemoryTicket = MemoryTicket
     , tMetrics :: MetricsPort
     }
 
-{- | Run a request under the meter. 'Nothing' is a shed: the waiting room was full, or the entry
+{- | Run a request under the meter, or say why it was shed: the waiting room was full, or the entry
 step did not fit within the wait. Everything the ticket paid returns on every exit path.
 -}
-withMemoryEntry :: (MonadUnliftIO m) => MetricsPort -> MemoryMeter -> (MemoryTicket -> m a) -> m (Maybe a)
-withMemoryEntry metrics meter body = either (const Nothing) Just <$> withMemoryEntryE metrics meter body
-
--- | Spike 1866: 'withMemoryEntry' that says why it shed.
-withMemoryEntryE :: (MonadUnliftIO m) => MetricsPort -> MemoryMeter -> (MemoryTicket -> m a) -> m (Either Shed a)
-withMemoryEntryE metrics meter = withMemoryEntryP metrics meter pass
-
--- | Spike 1866: 'withMemoryEntryE' that runs @placed@ once the request holds a place or its entry step.
-withMemoryEntryP :: (MonadUnliftIO m) => MetricsPort -> MemoryMeter -> IO () -> (MemoryTicket -> m a) -> m (Either Shed a)
-withMemoryEntryP metrics meter placed body =
+withMemoryEntry :: (MonadUnliftIO m) => MetricsPort -> MemoryMeter -> (MemoryTicket -> m a) -> m (Either Shed a)
+withMemoryEntry metrics meter body =
     UE.mask $ \restore -> do
         ticket <- liftIO (newTicket metrics meter)
-        entered <- liftIO (enter placed ticket)
+        entered <- liftIO (enter ticket)
         case entered of
             Left why -> liftIO (mpMemoryAdmissionShed metrics) $> Left why
             Right waited ->
@@ -180,10 +173,10 @@ newTicket metrics meter = do
     headroom <- newIORef 0
     pure MemoryTicket{tMeter = meter, tId = ticketId, tCharged = charged, tHeadroom = headroom, tServes = Nothing, tMetrics = metrics}
 
--- The gate. 'Just' carries whether the request had to wait. It runs under the caller's mask, and
+-- The gate. 'Right' carries whether the request had to wait. It runs under the caller's mask, and
 -- the queued count taken in the deciding transaction is returned before any interruptible step.
-enter :: IO () -> MemoryTicket -> IO (Either Shed Bool)
-enter placed ticket = do
+enter :: MemoryTicket -> IO (Either Shed Bool)
+enter ticket = do
     gate <- atomically $ do
         view <- readView meter
         waiting <- readTVar (mmEntryWaiting meter)
@@ -192,14 +185,12 @@ enter placed ticket = do
             EntryQueue -> writeTVar (mmEntryWaiting meter) (waiting + 1) $> EntryQueue
             EntryRefuse -> pure EntryRefuse
     case gate of
-        EntryAdmit -> placed >> openHeadroom $> Right False
-        EntryRefuse -> pure (Left DoorFull)
+        EntryAdmit -> openHeadroom $> Right False
+        EntryRefuse -> pure (Left RoomFull)
         EntryQueue -> do
-            placed
-            let waitFor = atomically . entryOrExpire
             admitted <-
-                maybe (registerDelay (mmEntryWaitMicros meter) >>= waitFor) (\d -> withSweptFlag d (mmEntryWaitMicros meter) waitFor) (mmDeadlines meter)
-                    `UE.finally` atomically (modifyTVar' (mmEntryWaiting meter) (subtract 1) >> spikeSignalOne)
+                withDeadlineFlag (mmDeadlines meter) (mmEntryWaitMicros meter) (atomically . entryOrExpire)
+                    `UE.finally` atomically (modifyTVar' (mmEntryWaiting meter) (subtract 1) >> signalLine (mmLine meter))
             if admitted then openHeadroom $> Right True else pure (Left WaitExpired)
   where
     meter = tMeter ticket

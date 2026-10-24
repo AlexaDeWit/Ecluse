@@ -204,7 +204,7 @@ validateManagedProject :: ReadSession -> IO Int
 validateManagedProject (ReadSession view meter _ _ _) = do
     _ <- takeLargestCharge meter
     outcome <- withMemoryEntry noopMetricsPort meter $ \ticket -> validateMirrorProject view ticket mirrorPackage >>= expectRight
-    when (isNothing (join outcome)) (fail "missing validated mirror project")
+    when (isNothing (join (rightToMaybe outcome))) (fail "missing validated mirror project")
     takeLargestCharge meter
 
 -- | Advance the remote revision without clearing the retained old record.
@@ -232,7 +232,7 @@ readManagedProject (ReadSession view meter private _ _) = do
         let bytes = LBS.toStrict body
         _ <- evaluate (BS.length bytes)
         pure (ReadResult bytes (versions managed) (versions unmanaged) (Map.size pending) (manifestRaw private) (manifestRaw <$> unmanaged))
-    maybe (fail "memory entry refused") pure outcome
+    either (const (fail "memory entry refused")) pure outcome
   where
     versions = maybe 0 (Map.size . infoVersions . manifestInfo)
     contribution manifest = Contribution TrustedSource (manifestInfo manifest) (manifestRaw manifest) (manifestDigest manifest) (manifestBodyBytes manifest)

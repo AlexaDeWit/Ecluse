@@ -76,7 +76,7 @@ admittedRead ctx readSelection answer =
         readSelection ticket >>= \case
             Retained bytes -> Left <$> serveRetained ctx bytes
             selected -> pure (Right selected)
-    shed = liftIO (arRespond ctx (tarballError (arReplies ctx) shedStatus [shedRetryAfter] (mkRefusal Nothing shedMessage)))
+    shed headers = liftIO (arRespond ctx (tarballError (arReplies ctx) shedStatus headers (mkRefusal Nothing shedMessage)))
 
 privateSelection :: ArtifactRequest response -> Maybe ClientCredential -> MemoryTicket -> Handler Selection
 privateSelection ctx token ticket = case pdPrivateBaseUrl deps of
