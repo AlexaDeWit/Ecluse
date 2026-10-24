@@ -5,12 +5,8 @@
 -- segments in 'takePackage' and 'takeScoped' ((,rest) / (,more)). See docs/style.md §2.
 {-# LANGUAGE TupleSections #-}
 
-{- | The npm route table itself: the router, the fallback action, the route-scoped pipeline
-contracts, the capture values, and the leaf parsers.
-"Ecluse.Core.Registry.Npm.Route" curates what a caller outside needs of it.
-
-Importing this module opts out of the public surface's stability promises. It exists so a spec can
-match one route, one contract, or one parser on its own.
+{- | npm routes, response contracts and capture parsers.
+Importing this internal module opts out of the public API's stability promise.
 -}
 module Ecluse.Core.Registry.Npm.Route.Internal (
     -- * The mount's router and fallback action
@@ -88,6 +84,7 @@ import Ecluse.Core.Server.Pipeline.Publish (PublishReplies (..), servePublish)
 import Ecluse.Core.Server.Pipeline.Tarball (tarballAction)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (..))
 import Ecluse.Core.Server.Response (renderRefusal)
+import Ecluse.Core.Server.Response.Summary (summarisedRejections)
 import Ecluse.Core.Server.Route (
     Capture (Capture),
     MediaNegotiation (AcceptsAnything),
@@ -348,7 +345,8 @@ npmPackumentContract =
 npmPackumentReplies :: PackumentReplies NpmPackumentResponse
 npmPackumentReplies =
     PackumentReplies
-        { packumentOk = \headers body -> FirstResponse (responseValue headers body)
+        { packumentForbiddenText = summarisedRejections
+        , packumentOk = \headers body -> FirstResponse (responseValue headers body)
         , packumentNotModified = \headers -> SecondResponse (FirstResponse (responseValue headers ()))
         , packumentUnauthorised = \headers message -> SecondResponse (SecondResponse (FirstResponse (npmRefusal headers message)))
         , packumentForbidden = \headers message -> SecondResponse (SecondResponse (SecondResponse (FirstResponse (npmRefusal headers message))))

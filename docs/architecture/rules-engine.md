@@ -144,8 +144,7 @@ pipeline applies verdicts across it. For the cross-upstream merge, see
 - **No survivors → 503, 502, 500, or 403.** If nothing survives, the status follows the most
   recoverable cause. `503` (with `Retry-After`) when any rejection was transient or a needed
   upstream was unavailable. `502` when an upstream returned a document Écluse could not use.
-  `500` when an exclusion is a permanent inability and none is retryable. `403` with the
-  collected denial reasons when every rejection is by policy. Never `404`: the package exists,
+  `500` when an exclusion is a permanent inability and none is retryable. `403` when all exclusions are policy or integrity refusals. Never `404`: the package exists,
   and Écluse withheld its versions. The HTTP status mapping belongs to the
   [error model](web-layer.md#error-model).
 
@@ -564,9 +563,16 @@ When Écluse denies a request, because no allow rule matched or a deny rule fire
   emits the npm error object:
   ```json
   {
-    "error": "Package @evil/pkg@1.0.0 was denied: AllowIfOlderThan, published 3 hours ago, minimum age is 7 days. Contact #platform-eng on Slack for assistance."
+    "error": "BlockedByDefault: no allow rule matched (rejection entries: 42) Contact #platform-eng for assistance."
   }
   ```
-- Every denial carries its reason: which rule decided, and why.
-- The ecosystem-neutral `appendHelp` adds `ECLUSE_SERVER__HELP_MESSAGE`, if configured, to
-  every denial before the renderer wraps the body.
+- npm metadata with no surviving version and a `403` groups typed causes by deciding rule or
+  integrity category. Each group gives a short explanation and a count of rejection entries.
+  Different source contributions can reject the same version, so counts are not unique versions.
+  The summary discards the mapping from each version to its full reason. Existing audit records
+  do not preserve every removed detail. The completed text retains no per-version reasons or decisions.
+- Partial listings, private-access refusals, concrete-artifact errors, PyPI responses and
+  `500`/`502`/`503` responses keep their existing bodies. Status selection, HEAD responses,
+  denial audits and metrics do not change.
+- The ecosystem-neutral `mkRefusal` retains `ECLUSE_SERVER__HELP_MESSAGE`, if configured,
+  alongside the reason. The ecosystem renderer chooses the body and adds the help once.
