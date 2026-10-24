@@ -37,7 +37,7 @@ import Ecluse.BenchLoad.Floors (
     triggerIn,
     unheldViolations,
  )
-import Ecluse.BenchLoad.Pod (PodShape (Unlimited), ProxyTuning (..), noTuning, parseCpuList)
+import Ecluse.BenchLoad.Pod (PodShape (Limited, Unlimited), ProxyTuning (..), defaultProxyTuning, mib, noTuning, parseCpuList)
 import Ecluse.BenchLoad.Support (floorsAtTwoCores, slowNetwork, twoCores)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 
@@ -101,6 +101,14 @@ spec = do
                 `shouldBe` ["BENCH_PATTERN_NAMES", "BENCH_PATTERN_ROUNDS"]
 
     describe "enforce" $ do
+        it "holds placed 3cpu defaults and rejects missing or changed placement" $
+            for_ [Limited 3 (1024 * mib), Limited 3 (2048 * mib)] $ \shape -> do
+                let placedFloors = sample{floorsByShape = Map.singleton shape floorsAtTwoCores}
+                    facts = held{rfShape = shape, rfSettings = calibrated{opProxyTuning = defaultProxyTuning shape}}
+                enforce placedFloors facts `shouldBe` Enforced shape floorsAtTwoCores
+                for_ [noTuning, noTuning{ptCpus = rightToMaybe (parseCpuList "2-3")}] $ \tuning ->
+                    enforce placedFloors facts{rfSettings = calibrated{opProxyTuning = tuning}}
+                        `shouldBe` NotHeld (SettingsDiffer ("proxyCpus" :| []) :| [])
         it "holds a run that matches the calibration to its pod shape's floors" $
             enforce sample held `shouldBe` Enforced twoCores floorsAtTwoCores
         it "holds a run whose npm fixture injects the ceiling, and not one a millisecond above it" $ do

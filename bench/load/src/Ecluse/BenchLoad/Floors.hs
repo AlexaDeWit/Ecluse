@@ -54,7 +54,7 @@ import Data.Text qualified as T
 import Data.Universe.Class (Universe (universe))
 import Data.Universe.Generic (universeGeneric)
 
-import Ecluse.BenchLoad.Pod (PodShape, ProxyTuning (..), noTuning, parsePodShape, renderPodShape)
+import Ecluse.BenchLoad.Pod (PodShape, ProxyTuning (..), defaultProxyTuning, noTuning, parsePodShape, renderPodShape)
 import Ecluse.BenchLoad.Selection (measurementConditionVersion)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
 
@@ -124,7 +124,7 @@ instance FromJSON OperatingPoint where
             <*> o .: "privateConnectionsPerHost"
             <*> o .: "scenarios"
             <*> o .: "patternOverrides"
-            -- The floors are calibrated on both passes of an untuned proxy, so the file records neither.
+            -- Shape defaults supply placement. Both passes run without runtime overrides.
             <*> pure EveryPass
             <*> pure noTuning
 
@@ -369,9 +369,10 @@ enforce floors facts = case (Map.lookup shape (floorsByShape floors), reasons) o
   where
     shape = rfShape facts
     calibration = floorsCalibration floors
+    calibrated = (calOperatingPoint calibration){opProxyTuning = defaultProxyTuning shape}
     ceilings = [(Npm, rfNpmLatencyMs facts, calNpmLatency calibration)] <> [(PyPI, rfPypiLatencyMs facts, latencyBound) | latencyBound <- maybeToList (calPypiLatency calibration)]
     reasons =
-        [SettingsDiffer settings | Just settings <- [nonEmpty (differingSettings (calOperatingPoint calibration) (rfSettings facts))]]
+        [SettingsDiffer settings | Just settings <- [nonEmpty (differingSettings calibrated (rfSettings facts))]]
             <> [OtherRunner (calRunner calibration) (calRunnerKind calibration) (rfRunner facts) | rfRunner facts /= readingOn (calRunnerKind calibration)]
             <> [ConditionsDiffer (calConditions calibration) (rfConditions facts) | calConditions calibration /= rfConditions facts]
             <> [LatencyAboveCeiling ecosystem injected most | (ecosystem, injected, latencyBound) <- ceilings, let most = lcCeilingMs latencyBound, injected > most]

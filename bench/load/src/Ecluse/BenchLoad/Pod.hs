@@ -3,10 +3,8 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE DeriveAnyClass #-}
 
-{- | The pod shapes a load run bounds the proxy with, the CPUs and runtime settings it may pin on
-the proxy, and the cgroup v2 files it writes and reads back. A shape becomes the proxy's own cgroup
-limits, so its boot derives the runtime posture and memory plan as it would in a pod. The load
-generator and the stub upstreams stay outside the limit.
+{- | Resource limits and CPU placement for measured proxies.
+The load generator and upstream stubs run outside each proxy's cgroup.
 -}
 module Ecluse.BenchLoad.Pod (
     -- * Pod shapes
@@ -28,6 +26,7 @@ module Ecluse.BenchLoad.Pod (
     cpusLeft,
     ProxyTuning (..),
     noTuning,
+    defaultProxyTuning,
     proxyCgroupFiles,
     needsCgroup,
     memoryBackstopBytes,
@@ -169,9 +168,15 @@ data ProxyTuning = ProxyTuning
     }
     deriving stock (Eq, Show)
 
--- | The proxy as the scheduled runs boot it.
+-- | No CPU placement or runtime overrides.
 noTuning :: ProxyTuning
 noTuning = ProxyTuning Nothing Nothing Nothing Nothing
+
+-- | The scheduled 3cpu shapes reserve CPUs 1-3 for the proxy and leave CPU 0 for the harness.
+defaultProxyTuning :: PodShape -> ProxyTuning
+defaultProxyTuning shape
+    | shape `elem` scheduledPodShapes && podCpuQuota shape == Just 3 = noTuning{ptCpus = Just (CpuList (Set.fromList [1, 2, 3]))}
+    | otherwise = noTuning
 
 -- | The files the harness writes into the proxy's cgroup. Only the untuned unlimited control gets no memory bound.
 proxyCgroupFiles :: PodShape -> ProxyTuning -> [(FilePath, Text)]
@@ -189,7 +194,6 @@ needsCgroup shape tuning = shape /= Unlimited || isJust (ptCpus tuning)
 memoryBackstopBytes :: Int
 memoryBackstopBytes = 4 * gib
 
--- A run of decimal digits as a number.
 natural :: Text -> Maybe Int
 natural digits
     | not (T.null digits) && T.all isDigit digits = readMaybe (toString digits)

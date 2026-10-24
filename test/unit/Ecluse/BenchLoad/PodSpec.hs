@@ -18,6 +18,7 @@ import Ecluse.BenchLoad.Pod (
     cpuListMembers,
     cpuMaxValue,
     cpusLeft,
+    defaultProxyTuning,
     keyedCounters,
     memoryBackstopBytes,
     needsCgroup,
@@ -71,6 +72,17 @@ spec = do
             renderCpuList <$> left "0-3" "2-3" `shouldBe` Just "0-1"
             renderCpuList <$> left "0-3" "3" `shouldBe` Just "0-2"
             left "0-3" "0-3" `shouldBe` Nothing
+    describe "defaultProxyTuning" $ do
+        it "places both scheduled 3cpu proxies on CPUs 1-3 with a three-CPU quota" $
+            for_ [Limited 3 gib, Limited 3 (2 * gib)] $ \shape -> do
+                let tuning = defaultProxyTuning shape
+                ptCpus tuning `shouldBe` cpus "1-3"
+                lookup "cpu.max" (proxyCgroupFiles shape tuning) `shouldBe` Just "300000 100000"
+                lookup "cpuset.cpus" (proxyCgroupFiles shape tuning) `shouldBe` Just "1-3"
+                renderCpuList <$> join (cpusLeft <$> cpus "0-3" <*> ptCpus tuning) `shouldBe` Just "0"
+        it "preserves the controls and leaves custom shapes unplaced" $
+            for_ [Unlimited, Limited 2 gib, Limited 3 (512 * 1024 * 1024), QuotaOnly 3] $ \shape ->
+                defaultProxyTuning shape `shouldBe` noTuning
     describe "proxyCgroupFiles" $ do
         it "writes the scheduled shapes' limits as before, and nothing for the untuned unlimited control" $ do
             proxyCgroupFiles Unlimited noTuning `shouldBe` []

@@ -12,8 +12,8 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.BenchLoad.Floors (Calibration (calNpmLatency, calOperatingPoint, calPypiLatency, calRuns), Enforcement (Enforced), Floors (floorsByShape, floorsCalibration), LatencyCeiling (lcCeilingMs), Pass (ConcurrencyOne, Loaded), RunFacts (..), RunnerReading (RunnerReading), Trigger (Scheduled), enforce, loadFloors, unheldViolations)
-import Ecluse.BenchLoad.Harness (UpstreamFixture (fixtureScenarios), defaultLoadKnobs, operatingPoint)
-import Ecluse.BenchLoad.Pod (PodShape (Unlimited), renderPodShape, scheduledPodShapes)
+import Ecluse.BenchLoad.Harness (LoadKnobs (lkProxyTuning), UpstreamFixture (fixtureScenarios), defaultLoadKnobs, operatingPoint)
+import Ecluse.BenchLoad.Pod (PodShape (Unlimited), defaultProxyTuning, renderPodShape, scheduledPodShapes)
 import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScenario, fixtures)
 import Ecluse.BenchLoad.Selection (measurementConditionVersion)
 import Ecluse.BenchLoad.Support (twoCores)
@@ -68,7 +68,7 @@ spec = do
                         for_ scheduledPodShapes $ \shape -> do
                             let facts =
                                     RunFacts
-                                        { rfSettings = operatingPoint defaultLoadKnobs Nothing []
+                                        { rfSettings = operatingPoint defaultLoadKnobs{lkProxyTuning = defaultProxyTuning shape} Nothing []
                                         , rfRunner = RunnerReading (Just "true") (Just "Linux") (Just "ARM64")
                                         , rfShape = shape
                                         , rfNpmLatencyMs = lcCeilingMs (calNpmLatency (floorsCalibration floors))

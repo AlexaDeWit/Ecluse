@@ -64,7 +64,7 @@ import Ecluse.BenchLoad.Oha (OhaReport (..), OhaRun (..), RunLength (ForRequests
 import Ecluse.BenchLoad.PatternReport (ReplayTotals (..))
 import Ecluse.BenchLoad.Patterns (RequestTrace (rtClients))
 import Ecluse.BenchLoad.Placement (cpuSampleNow, cpuWindowSince)
-import Ecluse.BenchLoad.Pod (CgroupReading (..), ProxyTuning (..), counter, noTuning, parseCpuList, positive, renderPodShape)
+import Ecluse.BenchLoad.Pod (CgroupReading (..), ProxyTuning (..), counter, defaultProxyTuning, noTuning, parseCpuList, positive, renderPodShape)
 import Ecluse.BenchLoad.ProxyProcess (
     AdvisoryFeed,
     ProxyEnd (..),
@@ -137,6 +137,7 @@ defaultLoadKnobs =
 -- | Read @BENCH_LOAD_*@ overrides. A malformed load knob keeps its default, and a malformed pass or proxy setting fails the run.
 loadKnobsFromEnv :: IO LoadKnobs
 loadKnobsFromEnv = do
+    shape <- podShapeFromEnv
     concurrency <- readEnvInt "BENCH_LOAD_CONCURRENCY" (lkConcurrency defaultLoadKnobs)
     duration <- readEnvInt "BENCH_LOAD_DURATION_SECONDS" (lkDurationSeconds defaultLoadKnobs)
     latencyMs <- readEnvInt "BENCH_LOAD_UPSTREAM_LATENCY_MS" (lkUpstreamLatencyMicros defaultLoadKnobs `div` 1_000)
@@ -166,7 +167,7 @@ loadKnobsFromEnv = do
             , lkPrivateConnectionsPerHost = max 1 <$> privateConnections
             , lkAdvisories = Nothing
             , lkPasses = fromMaybe EveryPass passes
-            , lkProxyTuning = tuning
+            , lkProxyTuning = tuning{ptCpus = ptCpus tuning <|> ptCpus (defaultProxyTuning shape)}
             }
   where
     readEnvInt :: String -> Int -> IO Int

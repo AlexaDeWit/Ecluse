@@ -8,11 +8,25 @@ module Ecluse.BenchLoad.HarnessSpec (spec) where
 import Test.Hspec
 
 import Ecluse.BenchLoad.Floors (Pass (ConcurrencyOne, Loaded))
-import Ecluse.BenchLoad.Harness (LoadKnobs (..), Scenario (..), defaultLoadKnobs, scenarioKnobs)
+import Ecluse.BenchLoad.Harness (LoadKnobs (..), Scenario (..), defaultLoadKnobs, loadKnobsFromEnv, scenarioKnobs)
+import Ecluse.BenchLoad.Pod (ProxyTuning (ptCpus), parseCpuList)
 import Ecluse.BenchLoad.Scenarios (findScenario)
+import Ecluse.Test.Env (withEnvVars)
 
 spec :: Spec
 spec = do
+    describe "proxy placement defaults" $ do
+        it "reads both 3cpu shapes with CPUs 1-3 and preserves explicit placement" $
+            for_ ["3cpu-1gib", "3cpu-2gib"] $ \shape ->
+                for_ [("", "1-3"), ("2-3", "2-3")] $ \(override, expected) ->
+                    withEnvVars ["BENCH_LOAD_POD", "BENCH_LOAD_PROXY_CPUS"] [("BENCH_LOAD_POD", shape), ("BENCH_LOAD_PROXY_CPUS", override)] $ do
+                        knobsFromEnv <- loadKnobsFromEnv
+                        ptCpus (lkProxyTuning knobsFromEnv) `shouldBe` rightToMaybe (parseCpuList expected)
+        it "keeps the unlimited and 2cpu controls unplaced" $
+            for_ ["unlimited", "2cpu-1gib"] $ \shape ->
+                withEnvVars ["BENCH_LOAD_POD", "BENCH_LOAD_PROXY_CPUS"] [("BENCH_LOAD_POD", shape)] $ do
+                    knobsFromEnv <- loadKnobsFromEnv
+                    ptCpus (lkProxyTuning knobsFromEnv) `shouldBe` Nothing
     describe "tarball-ceiling settings" $
         case findScenario "npm/tarball-ceiling" of
             Nothing -> it "exists" (expectationFailure "missing npm/tarball-ceiling scenario")

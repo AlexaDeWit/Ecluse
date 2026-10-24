@@ -1083,7 +1083,7 @@ thread at a time. Its count does not reserve a processor or set CPU affinity.
 
 | Setting or report label | Meaning |
 |---|---|
-| `2cpu` or `3cpu` in a load pod shape, and `BENCH_LOAD_THRASH_CPUS` | CPU-time quota in CPU equivalents. `2cpu` writes `200000 100000` to `cpu.max`, allowing 200 ms of CPU time per 100 ms period. It assigns no specific CPUs. |
+| `2cpu` or `3cpu` in a load pod shape, and `BENCH_LOAD_THRASH_CPUS` | CPU-time quota in CPU equivalents. `2cpu` writes `200000 100000` to `cpu.max`, allowing 200 ms of CPU time per 100 ms period. The scheduled 3cpu shapes also place the proxy on CPUs 1-3. |
 | Runner logical processors | The runner's online logical CPUs, from `/sys/devices/system/cpu/online`, separate from the capability count and from any placement |
 | Load harness `-N3` | Three GHC capabilities for the harness and each scenario child. The measured proxy resolves its own count at boot. |
 | Unlimited load shape `runtime.cores` | Sets the proxy's GHC capability count to the harness's count, unless `BENCH_LOAD_PROXY_CORES` sets it. The harness imposes no CPU-time quota. |
@@ -1094,9 +1094,9 @@ thread at a time. Its count does not reserve a processor or set CPU affinity.
 | Serve admission (requests) | Concurrent-request limit, explicit or derived from the proxy's resolved GHC capabilities. It is neither a CPU quota nor a capability count. |
 | GC share of CPU, and CPU throttled during the window | Time measurements from RTS counters and `cpu.stat`, respectively |
 
-`BENCH_LOAD_ISOLATE_OHA=1` pins only `oha` to logical CPU 0 with `taskset`. Without
-`BENCH_LOAD_PROXY_CPUS`, the harness and proxy keep their inherited CPU affinity, so they can also
-run on CPU 0.
+`BENCH_LOAD_ISOLATE_OHA=1` pins `oha` to logical CPU 0 with `taskset`. The scheduled `3cpu`
+shapes place the proxy on CPUs 1-3 and the harness on CPU 0. Other shapes keep their inherited
+affinity unless `BENCH_LOAD_PROXY_CPUS` overrides it.
 The [GHC RTS guide](https://downloads.haskell.org/ghc/9.10.3/docs/users_guide/using-concurrent.html#rts-options-for-smp-parallelism)
 defines capabilities and affinity. The [cgroup v2 reference](https://docs.kernel.org/admin-guide/cgroup-v2.html#cpu-interface-files)
 defines CPU bandwidth quotas.
@@ -1192,12 +1192,12 @@ retires any proxy cgroup a killed run left. A scheduled run measures `unlimited`
 `3cpu-1gib`, and `3cpu-2gib` in a matrix. A dispatch picks one shape, `all`, or `thrash` for the
 GC-thrash probe. To measure a branch, dispatch the workflow on that branch after merging this
 harness into it.
-Hosted runners have four logical processors. A `3cpu` shape therefore leaves at least one CPU of
-time to `oha`, the stubs, and the harness. The proxy has no placement, so its threads can still run
-on CPU 0 beside `oha`.
+Hosted runners have four logical processors. Both scheduled `3cpu` shapes give the proxy a
+3-CPU quota and CPUs 1-3. The existing placement code confines the harness and upstream stubs to
+CPU 0, where `oha` runs. The `unlimited` and `2cpu-1gib` controls keep their inherited placement.
 
-A run can also pin settings on every measured proxy. A scheduled run sets none of them, and a run
-that sets any of them is not held to the [success floors](#success-floors):
+A run can override the shape's default settings on every measured proxy. A run that changes a
+default is not held to the [success floors](#success-floors):
 
 | Variable | Effect |
 |---|---|
@@ -1428,7 +1428,7 @@ A run is held to the floors only when it matches what they were calibrated at. T
 | Part | A held run | The harness reads |
 |---|---|---|
 | Runner | Runs on GitHub Actions under `runnerOs` and `runnerArch` (Linux, ARM64) | `GITHUB_ACTIONS`, `RUNNER_OS`, `RUNNER_ARCH` |
-| Settings | Equals `operatingPoint`. Every load knob is at its default: 30 seconds, 100 connections, the default payload, and the proxy's computed admission and pools. Both passes run, over every scenario, with no pinned proxy setting and no `BENCH_PATTERN_*` variable set | The `BENCH_LOAD_*` knobs, `BENCH_LOAD_SCENARIOS`, `BENCH_LOAD_PASSES`, the `BENCH_LOAD_PROXY_*` settings, and the names of the `BENCH_PATTERN_*` variables that are set |
+| Settings | Equals `operatingPoint`. Every load knob is at its default: 30 seconds, 100 connections, the default payload, and the proxy's computed admission and pools. Both passes run, over every scenario, with the shape's default CPU placement, no runtime override and no `BENCH_PATTERN_*` variable set | The `BENCH_LOAD_*` knobs, `BENCH_LOAD_SCENARIOS`, `BENCH_LOAD_PASSES`, the `BENCH_LOAD_PROXY_*` settings, and the names of the `BENCH_PATTERN_*` variables that are set |
 | Pod shape | Runs under a shape that `floors` holds | `BENCH_LOAD_POD` |
 | Measurement conditions | Matches `measurementConditions` | The harness reports `unified-v2` |
 | Native injected latency | Each ecosystem stays below its own ceiling | Each native public RTT, or the declared configured fallback |
@@ -1439,9 +1439,9 @@ applies to it. A dispatch that changes only the pod shape, among the four, is he
 another machine is not, and neither is the GC-thrash probe.
 
 A scheduled run must be held. When its settings, its runner, or its pod shape keep it off the
-floors, when its measurement conditions differ, or when it runs the GC-thrash probe, it fails with one violation that names the reason. A
-changed workflow default therefore turns the next scheduled run red, where it would otherwise
-switch the floors off. Latency above the ceiling is the one exception: the network decides it, so
+floors, when its measurement conditions differ, or when it runs the GC-thrash probe, it fails with
+one violation that names the reason. A changed workflow default therefore turns the next scheduled
+run red, where it would otherwise switch the floors off. Latency above the ceiling is the one exception: the network decides it, so
 that run stays green and not held.
 
 After the calibration conditions match, the harness compares nothing else:
