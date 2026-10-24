@@ -13,13 +13,15 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Pair)
 import Data.ByteString qualified as BS
 import Data.List (lookup)
-import Network.HTTP.Client (Manager, Request, RequestBody (RequestBodyBS), defaultManagerSettings, newManager)
+import Network.HTTP.Client (Request, RequestBody (RequestBodyBS), defaultManagerSettings, newManager)
 import Network.HTTP.Client qualified as Client
 import Test.Hspec
 
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Maintenance (refusalCode)
 import Ecluse.Core.Registry.Npm.Maintenance (
     listingRequestFor,
@@ -30,6 +32,7 @@ import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version)
+import Ecluse.Test.Deadline (untracedClient)
 import Ecluse.Test.Json (encodeStrict, keysAt, objectAt)
 import Ecluse.Test.Package (leftpadName, npmVersion, unscopedNpm)
 import Ecluse.Test.Registry.Npm (listingValue, writeTokenNpmConfig)
@@ -175,13 +178,14 @@ deleteSequenceSpec = describe "the version delete verb" $ do
         refusalOf (encodeStrict (withRevision ".." twoVersions)) (npmVersion "1.0.0")
             `shouldReturn` Just "NO_REVISION"
 
+-- Its cases only form requests against store.test, so nothing dials it or arms its deadlines.
 storeOrigin :: IO OriginClient
-storeOrigin = storeOriginOver <$> newManager defaultManagerSettings
+storeOrigin = storeOriginOver <$> (untracedClient <$> newManager defaultManagerSettings <*> newDeadlines)
 
 -- The shared mirror-write client, against the fixture store's own base URL.
-storeOriginOver :: Manager -> OriginClient
-storeOriginOver manager =
-    writeTokenNpmConfig (loopbackRegistryUrl "http://store.test") manager defaultLimits
+storeOriginOver :: ExchangeClient -> OriginClient
+storeOriginOver client =
+    writeTokenNpmConfig (loopbackRegistryUrl "http://store.test") client defaultLimits
 
 headerOf :: ByteString -> Request -> Maybe ByteString
 headerOf header = lookup (fromString (decodeUtf8 header)) . Client.requestHeaders

@@ -67,6 +67,12 @@ data MetricsPort = MetricsPort
     -- ^ Record one started request pausing for memory (@ecluse.serve.admission.memory.pauses@).
     , mpMemoryAdmissionOverdraw :: IO ()
     -- ^ Record one step taken past the memory budget (@ecluse.serve.admission.memory.overdraws@).
+    , mpOverflowAdmitted :: IO ()
+    -- ^ Record one queued request that got a place (@ecluse.serve.admission.overflow.admitted@).
+    , mpOverflowShed :: IO ()
+    -- ^ Record one queued request refused after the wait (@ecluse.serve.admission.overflow.shed@).
+    , mpOverflowFull :: IO ()
+    -- ^ Record one request refused at once at a full queue (@ecluse.serve.admission.overflow.full@).
     , mpPublishBodyInFlightBytes :: Int -> IO ()
     {- ^ Record a change in the bytes held for buffered publish bodies, the reserved weight
     signed (@ecluse.publish.body.in_flight_bytes@).

@@ -49,6 +49,7 @@ import Ecluse.Runtime.Queue.Sqs.Internal (SqsConfig (sqsWaitSeconds), newSqsQueu
 import Ecluse.Runtime.Server (MountBinding, application, mkServerConfig)
 import Ecluse.Server.Pipeline.TestSupport (getPath)
 import Ecluse.Service (mountBindingFor)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Package (hexSha1Of, sriSha512Of, unsafeHash)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
@@ -97,11 +98,11 @@ withAwsProxy :: Container -> Text -> (TestProxy -> IO a) -> IO a
 withAwsProxy container queueName body =
     withPrivateUpstream $ \privateUrl ->
         withPublicUpstream $ \publicUrl ->
-            withMirrorTarget status201 $ \mirrorUrl mirrorLog -> do
+            withMirrorTarget status201 $ \mirrorUrl mirrorLog -> withSweeper $ \deadlines -> do
                 queue <- configDrivenQueue container queueName
                 (observedQueue, acknowledged) <- observeAcknowledgement queue
-                env <- newQueueEnv observedQueue
-                policies <- workerSourceAt (publicUrl <> "/left-pad/-/left-pad-1.0.0.tgz") <$> mirrorPoliciesAt Nothing mirrorUrl (unsafeHash SRI sha512Integrity :| [])
+                env <- newQueueEnv deadlines observedQueue
+                policies <- workerSourceAt (publicUrl <> "/left-pad/-/left-pad-1.0.0.tgz") <$> mirrorPoliciesAt deadlines Nothing mirrorUrl (unsafeHash SRI sha512Integrity :| [])
                 binding <- mountBinding privateUrl publicUrl mirrorUrl
                 let app = application (mkServerConfig (maybeToList binding)) env
                 body TestProxy{tpApp = app, tpEnv = env, tpPolicies = policies, tpMirrorLog = mirrorLog, tpAcknowledged = acknowledged}

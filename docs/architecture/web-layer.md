@@ -106,6 +106,16 @@ artifact size, with backpressure for free. Only the time spent waiting on upstre
 progress floor (`limits.progressWindow`, `limits.minProgressBytes`), so a slow client never trips it.
 An upstream that falls below it aborts the stream, and the client sees an incomplete download.
 
+Four deadlines bound a request and its upstream exchanges: the 60-second request timeout, the
+serve-path cap 10 seconds under it, the progress floor, and a fixed 30-second wait for a connection
+and then the response headers. As in http-client, that wait gives the headers what the connection
+left of it, counted from the end of any request body. When http-client retries on a new connection
+because a pooled one was stale, the retry keeps what is left of the same wait. One sweeper thread
+checks every deadline in the process every 100 ms, so each one ends about 100 ms late: one tick,
+plus the sweep and scheduling. Arming a deadline adds it to a list for the arming thread's core, so
+request threads never wait on each other to arm one, as they would on GHC's process-wide timer
+queue. Amazonka's S3 calls and the OSV and EPSS fetches keep their own clients' timers.
+
 The proxy streams artifact responses without hashing their bodies. Integrity on this path depends
 on the client checking the preserved metadata hashes. The proxy therefore asks the upstream for
 every artifact and Core Metadata companion in identity coding. A registry CDN gzips a companion
@@ -250,10 +260,28 @@ serve-path cap, and a pause before a render at the request timeout. Both gates s
 metadata evaluation and the listing response. Public artifact requests release both after the
 metadata decision, before streaming the admitted artifact.
 
-Each gate has a bounded waiting room and a 1 s wait budget. A full waiting room or an expired wait
-sheds with `503` and `Retry-After`. Health probes, cheap local routes and trusted private artifact
-hits bypass both gates. The mirror worker runs outside them. A slow artifact client therefore holds
-no serve metadata slot while its download drains.
+Each gate has a bounded waiting room and a 1 s wait budget. The deadline sweeper ends an expired
+wait on its next tick, normally within another 100 ms. A request that finds a room full joins
+bounded overflow outside both gates. While queued, it holds no slot, room place or memory charge.
+Each gate wakes the oldest request on its own overflow line when a room place frees. The CPU gate
+also signals when a slot returns to an empty room. Sweeper ticks cover capacity changes without a
+signal. Original arrival order survives retries and movement between lines. A new request can
+still take a place before a woken request retries.
+
+Overflow allows retries for 0.5 s from joining overflow. Expiry normally ends the queue wait within another
+100 ms. A retry started before expiry uses each gate's normal room wait and lets admitted work
+finish. The overflow budget therefore does not bound total request latency. Eight reservations
+per serve slot cover queued requests and their retries, including work admitted by a retry.
+Cancellation and completion release each reservation once. Holding it through admitted work can
+cause more immediate refusals than counting only parked requests, but preserves the resource cap.
+
+An expired wait sheds with `503` and `Retry-After: 1`. A full overflow refuses at once with the
+same headers and permits normal connection reuse. An ingress or sidecar can pool its connections
+to the pod. Closing those connections adds accepts and pool reconnections without requiring the
+end client to slow down. Overflow bounds held admission state, but does not impose a per-client
+request rate. Health probes, cheap local routes and trusted private artifact hits bypass both
+gates. The mirror worker runs outside them. A slow artifact client therefore holds no serve
+metadata slot while its download drains.
 
 The public and private connection pools take independent settings. The private pool takes the larger
 share, because a trusted tarball hit streams outside admission, which makes its demand the

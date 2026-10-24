@@ -52,6 +52,7 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.E2E.Harness.Npm (npmArtifactPath)
 import Ecluse.E2E.Harness.Types
+import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Maintenance (withBucket)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (passthroughTracingPort)
@@ -132,8 +133,7 @@ hasTimeKey body = maybe False (KeyMap.member "time") (decodeStrict body :: Maybe
 -- | Walk a prefix through the store's own listing, including the empty prefix for the whole store.
 verdaccioNamesUnder :: E2E -> Text -> IO [Text]
 verdaccioNamesUnder e2e raw = do
-    store <- verdaccioObservation e2e
-    result <- withBucket raw (collectPages . obListPackagesIn store)
+    result <- withVerdaccioObservation e2e (\store -> withBucket raw (collectPages . obListPackagesIn store))
     names <- expectRightText (first (\fault -> "Verdaccio bucket " <> raw <> ": " <> show fault) result)
     pure (sort (map renderPackageName names))
 
@@ -201,21 +201,23 @@ verdaccioSnapshot e2e = do
     names <- verdaccioListing e2e
     Map.fromList <$> traverse (\name -> (name,) <$> verdaccioVersions e2e name) names
 
-verdaccioObservation :: E2E -> IO StoreObservation
-verdaccioObservation e2e = do
+-- The store observed over the harness's manager, with its reads swept for the length of the action.
+withVerdaccioObservation :: E2E -> (StoreObservation -> IO a) -> IO a
+withVerdaccioObservation e2e action = do
     listing <- expectRightText (maybeToRight "npm has no listing capability" (maintenanceListing npmMaintenance))
     store <- serviceUrl <$> packageStore e2e
-    let origin = originClient defaultLimits (e2eManager e2e) (loopbackRegistryUrl store) Nothing
-    pure . newProtocolObservation $
-        ProtocolRead
-            { prOrigin = origin
-            , prListing = listing
-            , prCodec = npmPublishCodec
-            , prReadManifest = fmap (first storeFaultOfMetadata) . fetchManifest npmRead passthroughTracingPort origin
-            , prBackendName = "verdaccio"
-            , prPermitDeletion = False
-            , prConsentDescriptor = "these observing calls carry no deletion consent"
-            }
+    withExchangeClient (pure (e2eManager e2e)) $ \client -> do
+        let origin = originClient defaultLimits client (loopbackRegistryUrl store) Nothing
+        action . newProtocolObservation $
+            ProtocolRead
+                { prOrigin = origin
+                , prListing = listing
+                , prCodec = npmPublishCodec
+                , prReadManifest = fmap (first storeFaultOfMetadata) . fetchManifest npmRead passthroughTracingPort origin
+                , prBackendName = "verdaccio"
+                , prPermitDeletion = False
+                , prConsentDescriptor = "these observing calls carry no deletion consent"
+                }
 
 verdaccioPackages :: E2E -> IO [PackageName]
 verdaccioPackages e2e = do

@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE RankNTypes #-}
 
-{- | The middleware, the manager settings, the domain-span brackets and the attribute mappings
+{- | The middleware, the exchange tracing, the domain-span brackets and the attribute mappings
 behind "Ecluse.Runtime.Telemetry.Tracing", which documents the tracing layer and re-exports the
 curated surface. Importing this module opts out of that stability promise, the convention @text@
 and @bytestring@ use, so production code imports the public one.
@@ -12,9 +12,9 @@ module Ecluse.Runtime.Telemetry.Tracing.Internal (
     -- * WAI server span
     telemetryWaiMiddleware,
 
-    -- * http-client data-plane instrumentation
-    instrumentDataPlaneManagerSettings,
-    dataPlaneInstrumentationConfig,
+    -- * The data plane's client spans
+    dataPlaneTrace,
+    tracedExchange,
 
     -- * Domain spans
     withRuleEvalSpan,
@@ -32,18 +32,14 @@ module Ecluse.Runtime.Telemetry.Tracing.Internal (
     ruleVerdictFields,
 ) where
 
-import Network.HTTP.Client (
-    HttpException (HttpExceptionRequest),
-    HttpExceptionContent (InternalException),
-    ManagerSettings (managerWrapException),
- )
-import Network.HTTP.Client.Internal (throwHttp)
+import Network.HTTP.Client (HttpException (HttpExceptionRequest, InvalidUrlException))
 import Network.Wai (Middleware)
 import OpenTelemetry.Instrumentation.HttpClient (
-    HttpClientInstrumentationConfig,
+    HttpClientInstrumentationConfig (httpClientMetrics),
     httpClientInstrumentationConfig,
-    instrumentManagerSettings,
+    tracedHttpRequest,
  )
+import OpenTelemetry.Instrumentation.HttpClient.Raw (createHttpClientMetricsFromMeter)
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
 import OpenTelemetry.Metric.Core (getMeter)
 import OpenTelemetry.Propagator.W3CTraceContext (decodeSpanContext, encodeSpanContext)
@@ -60,13 +56,15 @@ import OpenTelemetry.Trace (
     setStatus,
     tracerOptions,
  )
+import Text.Show (showParen, showString, shows, showsPrec)
 import UnliftIO (MonadUnliftIO, withRunInIO)
-import UnliftIO.Exception (catch, throwIO, withException)
+import UnliftIO.Exception (catch, mask, throwIO, withException)
 
 import Ecluse.Core.Cve.Types (OsvDbFetchFault, renderOsvDbFetchFault)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Queue (RemoteSpanContext (RemoteSpanContext, rscTraceparent, rscTracestate))
+import Ecluse.Core.Registry.Exchange.Types (TraceExchange, untracedExchange)
 import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Server.Response (
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
@@ -93,26 +91,42 @@ telemetryWaiMiddleware telemetry =
             (. escapeRecordingMiddleware) <$> newOpenTelemetryWaiMiddleware' tracerProvider meter
         _ -> pure id
 
--- | Make upstream fetches open a client span and carry W3C trace-context headers, when telemetry is enabled.
-instrumentDataPlaneManagerSettings :: Telemetry -> ManagerSettings -> IO ManagerSettings
-instrumentDataPlaneManagerSettings telemetry settings =
-    case telemetryTracerProvider telemetry of
-        Nothing -> pure settings
-        Just _ -> instrumentManagerSettings dataPlaneInstrumentationConfig (wrapWithoutRequest settings)
+{- | Open each upstream exchange under one client span that carries W3C trace-context headers, when
+telemetry is enabled. The span comes from the global tracer provider, which the library reads.
+-}
+dataPlaneTrace :: Telemetry -> IO TraceExchange
+dataPlaneTrace telemetry =
+    case (telemetryTracerProvider telemetry, telemetryMeterProvider telemetry) of
+        (Just _, Just meterProvider) -> do
+            -- The library's instruments under its own scope, built once for the process.
+            metrics <- createHttpClientMetricsFromMeter =<< getMeter meterProvider "hs-opentelemetry-instrumentation-http-client"
+            -- It records __no__ header, so an @Authorization@ header never reaches a span.
+            pure (tracedExchange httpClientInstrumentationConfig{httpClientMetrics = Just metrics})
+        _ -> pure untracedExchange
 
-{- The client span records what the base wrapper raises, and the TLS wrapper tags a connection fault
-with its request. Raise it untagged: @responseOpen@ tags it again with the same request. -}
-wrapWithoutRequest :: ManagerSettings -> ManagerSettings
-wrapWithoutRequest settings =
-    settings{managerWrapException = \request action -> managerWrapException settings request action `catch` untagged}
-  where
-    untagged = \case
-        HttpExceptionRequest _ content@(InternalException _) -> throwHttp content
-        other -> throwIO other
+{- | One client span from the request to the response headers, with its bookkeeping masked. An
+asynchronous exception lands in the opener, where the span records it and ends, or in a thread's first
+context attach, which can wait on the context table's growth and leave the span unended.
+-}
+tracedExchange :: HttpClientInstrumentationConfig -> TraceExchange
+tracedExchange config request open =
+    mask $ \restore ->
+        tracedHttpRequest config request (\sent -> restore (open sent) `catch` (throwIO . UntaggedFault))
+            `catch` \(UntaggedFault original) -> throwIO original
 
--- | The data plane's http-client instrumentation. It records __no__ headers, so an @Authorization@ header never reaches a span.
-dataPlaneInstrumentationConfig :: HttpClientInstrumentationConfig
-dataPlaneInstrumentationConfig = httpClientInstrumentationConfig
+{- An HTTP fault crossing the client span, which records its text, shown without the request it is
+tagged with. StatusCodeException and TooManyRedirects show a response that still holds the request,
+and stay unreachable only while requests keep redirectCount 0 and the default checkResponse. -}
+newtype UntaggedFault = UntaggedFault HttpException
+
+-- Shown as http-client shows a fault before it tags the fault with its request.
+instance Show UntaggedFault where
+    showsPrec precedence (UntaggedFault fault) = case fault of
+        HttpExceptionRequest _ content ->
+            showParen (precedence >= 11) (showString "HttpExceptionContentWrapper {unHttpExceptionContentWrapper = " . shows content . showString "}")
+        InvalidUrlException{} -> showsPrec precedence fault
+
+instance Exception UntaggedFault
 
 -- | Run a rule-evaluation span around an action that yields its result and the verdict to record ('ruleVerdictFields').
 withRuleEvalSpan ::

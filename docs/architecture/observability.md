@@ -25,6 +25,9 @@ request opens a WAI server span with a child span for each upstream fetch. Ordin
 requests fetch private and public sources concurrently. First-party metadata uses only the
 private source. Artifact requests prefer the private source before a public fallback.
 A child span carries W3C TraceContext to the next hop. Metrics ride the same OTLP pipeline.
+A child span covers one exchange, from the request to the response headers, and the
+`http.client.*` metrics count the same exchanges. `http.client.active_requests` counts the
+exchanges still waiting for their headers. The Dredger's reads of a store open no child span.
 Hand-added domain spans carry the decisions operators care about:
 
 - **Rule evaluation**: the verdict, and on denial the `RuleName` and `RejectReason` (the
@@ -186,7 +189,7 @@ The credential then sits in a secret-typed key, which the dump redacts
 
 Telemetry is off until an operator sets `ECLUSE_OBSERVABILITY__TELEMETRY`. The operator manual's
 [Telemetry section](https://ecluse-proxy.com/docs/operations/#telemetry-opt-in) owns the variables
-and the wiring. Five design facts hold regardless:
+and the wiring. Six design facts hold regardless:
 
 - **Metrics push or pull, and the pull side gets its own port.** OTLP push is the default and
   shares the traces' pipeline, which suits the Datadog Agent and any Collector. A shop that
@@ -205,6 +208,13 @@ and the wiring. Five design facts hold regardless:
   destination, so it is deliberately not SSRF-classified.
 - **Export never touches the request path.** The batch exporter runs asynchronously, and Écluse
   logs a failed export under a throttle.
+- **Metric records batch per capability.** The SDK keeps every series in one shared cell. Écluse
+  records into one cell per capability by compare-and-swap, and hands the totals to the SDK once a
+  second and before every collection, including the reader's final export at shutdown.
+  Records remain exact over time. A collection drains the cells separately, so concurrent records
+  can reach different collections. An up-down counter can briefly report a negative value when its
+  decrement reaches a collection before its increment. The next collection includes the increment.
+  Exemplars keep the trace of the request that recorded them.
 - **Threaded RTS required.** The OTel SDK's batch span processor aborts under the non-threaded
   runtime, so telemetry needs the threaded runtime the image runs.
 - **The resource-attribute header is bounded.** `service.name` travels on `OTEL_SERVICE_NAME`

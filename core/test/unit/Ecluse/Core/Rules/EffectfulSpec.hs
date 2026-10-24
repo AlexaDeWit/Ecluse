@@ -23,6 +23,7 @@ import Ecluse.Core.Breaker (Breaker, BreakerPhase (..), BreakerReporter (..), ad
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), CveLookup (cveAdvisoriesFor), CveQueryFault (CveQueryFault))
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, Unbounded))
 import Ecluse.Core.Package
@@ -945,8 +946,9 @@ recoverySpec = describe "owned advisory recovery" $ do
 
     it "returns refused followers' CPU and memory capacity while recovery remains blocked" $ do
         (res, _) <- recoveryResilience []
-        meter <- newMemoryMeter MeterSettings{msBudgetBytes = 20, msStepBytes = 10, msEntryRoom = 0, msEntryWaitMicros = 0}
-        cpu <- newWeightedAdmission 2 0 0
+        deadlines <- newDeadlines
+        meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = 20, msStepBytes = 10, msEntryRoom = 0, msEntryWaitMicros = 0}
+        cpu <- newWeightedAdmission deadlines 2 0 0
         inFlight <- newIORef (0 :: Int)
         let observers = AdmissionObservers pass pass (\delta -> modifyIORef' inFlight (+ delta))
             admitted action = withMemoryEntry noopMetricsPort meter (const (withWeightedAdmission observers cpu 1 action))
@@ -954,14 +956,14 @@ recoverySpec = describe "owned advisory recovery" $ do
         gate <- newEmptyTMVarIO
         withAsync (admitted (runResilient res (atomically (putTMVar entered ()) >> atomically (takeTMVar gate)))) $ \winner -> do
             timeout 1_000_000 (atomically (takeTMVar entered)) `shouldReturn` Just ()
-            replicateM_ 8 $ admitted (runResilient res (pure ())) `shouldReturn` Just (Just (Left breakerOpenFault))
+            replicateM_ 8 $ admitted (runResilient res (pure ())) `shouldReturn` Right (Right (Left breakerOpenFault))
             snChargedBytes <$> meterSnapshot meter `shouldReturn` 10
             readIORef inFlight `shouldReturn` 1
-            admitted (pure ()) `shouldReturn` Just (Just ())
+            admitted (pure ()) `shouldReturn` Right (Right ())
             cancel winner
         snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
         readIORef inFlight `shouldReturn` 0
-        admitted (runResilient res (pure ())) `shouldReturn` Just (Just (Right ()))
+        admitted (runResilient res (pure ())) `shouldReturn` Right (Right (Right ()))
 
     it "reuses one recovering read across versions and keeps each rule's refusal alignment" $ do
         entered <- newEmptyTMVarIO

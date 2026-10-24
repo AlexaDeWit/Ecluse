@@ -7,6 +7,7 @@ module Ecluse.Rts.SamplerSpec (spec) where
 import Test.Hspec
 import UnliftIO (withAsync)
 
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Server.Admission.Brake (CollectorReading (..), defaultBrakeMarks)
 import Ecluse.Core.Server.Admission.Meter (MeterSettings (..), meterSnapshot, newMemoryMeter)
 import Ecluse.Core.Server.Admission.Types (BrakeBounds (..), BrakeLevel (Braking, Calm), MeterSnapshot (..))
@@ -37,7 +38,7 @@ spec = describe "runMemorySampler" $ do
     -- Feed a fixed number of readings with no pause between samples, then read the meter. Asking
     -- for the reading after the last counted one means every counted sample has steered the meter.
     sampledFor reading = do
-        meter <- newMemoryMeter MeterSettings{msBudgetBytes = bbBootBytes bounds, msStepBytes = 1, msEntryRoom = 1, msEntryWaitMicros = 0}
+        meter <- newDeadlines >>= \deadlines -> newMemoryMeter deadlines MeterSettings{msBudgetBytes = bbBootBytes bounds, msStepBytes = 1, msEntryRoom = 1, msEntryWaitMicros = 0}
         ticks <- newIORef (0 :: Int64)
         settled <- newEmptyMVar
         let collector = do

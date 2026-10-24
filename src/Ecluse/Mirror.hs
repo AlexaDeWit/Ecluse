@@ -19,7 +19,7 @@ import Ecluse.Boot (probeServerConfig)
 import Ecluse.Config (AppConfig)
 import Ecluse.Core.Server.Readiness (Readiness)
 import Ecluse.Core.Worker (Liveness)
-import Ecluse.Runtime.Env (envLogEnv)
+import Ecluse.Runtime.Env (envDeadlines, envLogEnv)
 import Ecluse.Runtime.Log (moduleLog)
 import Ecluse.Runtime.Server (
     ServerConfig (scCheckLive, scCheckReady),
@@ -38,7 +38,7 @@ runMirror runtime = do
         cfg = mirrorServerConfig (svcAppConfig runtime) (svcCheckReady runtime) (svcCheckLive runtime)
     moduleLog (envLogEnv env) "Ecluse.Mirror" InfoS "Mirror worker starting up"
     raceServerAgainstLoop
-        (runWarp (envLogEnv env) "mirror worker health probes" cfg probeOnlyApplication)
+        (runWarp (envLogEnv env) "mirror worker health probes" cfg (probeOnlyApplication (envDeadlines env)))
         (concurrently_ (runWorker (svcWorkerPolicies runtime) env) (mapConcurrently_ id (svcSyncTasks runtime)))
 
 {- | The dedicated worker's health surface: no mount, the shared @server.port@, and the

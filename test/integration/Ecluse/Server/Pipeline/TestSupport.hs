@@ -116,6 +116,7 @@ import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SResponse, defaultRequest, request, runSession, setPath)
 
 import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (PackageName)
@@ -142,6 +143,7 @@ import Ecluse.Runtime.Server (
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Test.Support (newTestEnvLogging, newTestEnvWith)
 import Ecluse.Service (mountBindingFor)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (sriSha256Of, sriSha512Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -504,9 +506,9 @@ selfHostedEmptyDigest baseUrl version =
             }
         )
 
--- | A fresh 'Env' over handle doubles and a real (no-TLS) manager, carrying the given mirror queue.
-newTestEnvWithQueue :: MirrorQueue -> Manager -> IO Env
-newTestEnvWithQueue queue manager = newTestEnvWith queue (manager, manager) telemetryDisabled
+-- | A fresh 'Env' over handle doubles, a real (no-TLS) manager and swept deadlines, carrying the given mirror queue.
+newTestEnvWithQueue :: Deadlines -> MirrorQueue -> Manager -> IO Env
+newTestEnvWithQueue deadlines queue manager = newTestEnvWith deadlines queue (manager, manager) telemetryDisabled
 
 -- | Use local upstreams, deterministic rules, and an optional edge token.
 deps :: Int -> Int -> Maybe Text -> IO PackumentDeps
@@ -549,9 +551,9 @@ withProxyOverRuntime ::
     (forall a. (Application -> Env -> Int -> IO a) -> IO a)
 withProxyOverRuntime tweakEnv logEnv queue privateUp publicUp inbound tweakDeps k =
     testWithApplication (pure (upApp privateUp)) $ \privatePort ->
-        testWithApplication (pure (upApp publicUp)) $ \publicPort -> do
+        testWithApplication (pure (upApp publicUp)) $ \publicPort -> withSweeper $ \deadlines -> do
             manager <- newManager defaultManagerSettings
-            env <- tweakEnv <$> newTestEnvLogging logEnv queue (manager, manager) telemetryDisabled
+            env <- tweakEnv <$> newTestEnvLogging deadlines logEnv queue (manager, manager) telemetryDisabled
             baseDeps <- deps privatePort publicPort inbound
             let cfg = mkServerConfig (maybeToList (mountBindingFor Npm (tweakDeps baseDeps) Nothing))
             k (application cfg env) env publicPort

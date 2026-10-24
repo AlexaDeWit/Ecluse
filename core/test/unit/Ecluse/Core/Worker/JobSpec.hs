@@ -15,6 +15,7 @@ import UnliftIO.Exception (impureThrow)
 
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Mirror.State
@@ -49,9 +50,7 @@ import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish (mpProbeInventory),
-    MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintCredential, ptTracing),
     PublishPlan (ppLatest),
-    newMirrorPublish,
  )
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Decision (Undecidable), DenyIfCveParams (DenyIfCveParams), FailureAlignment (FailDeny, FailNoDecision), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan, DenyIfCve, DenyIfDeprecated, DenyIfKnownMalicious, DenyIfYanked), Transience (WillResolve, WontResolve), ruleName)
@@ -68,20 +67,21 @@ import Ecluse.Core.Worker (
 import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchFault)
 import Ecluse.Core.Worker.Types (WorkerMirrorState (..))
 import Ecluse.Test.Cve (fakeCveLookup)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Json (fieldAt)
 import Ecluse.Test.Log (captureJsonLog, captureJsonLogAt)
 import Ecluse.Test.Mirror.State
 import Ecluse.Test.Package (hexSha256Of, npmVersion, unsafeFilename, unsafeHash)
-import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughTracingPort)
+import Ecluse.Test.Port (noopWorkerMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (sourceVersionDoc)
+import Ecluse.Test.Registry.Publish (anonymousPublishAt)
 import Ecluse.Test.Rules (admissionOnly, admitRule, atDefaultPrecedence, cannotVetRule, constRule, denyRule, inertRuleDeps, servingRuleDeps)
 import Ecluse.Test.Snapshot (versionDocOf)
 import Ecluse.Test.Stub (allCaptured, capMethod, capPath, stubBaseUrl, withRoutedStub, withStub)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape), decodeJsonOrFail, expectRight)
 import Ecluse.Worker.Support
 import Ecluse.Worker.Support.Managed
-import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (status200, status404)
 
 spec :: Spec
@@ -718,8 +718,8 @@ spec = do
 
         it "reports invalid source metadata as source-unavailable before publication" $
             withUpstream $ \url ->
-                withStub status404 "" $ \mirror -> do
-                    publish <- codecPublishAt (stubBaseUrl mirror)
+                withStub status404 "" $ \mirror -> withSweeper $ \deadlines -> do
+                    publish <- codecPublishAt deadlines (stubBaseUrl mirror)
                     withRuntimeRegistry (const publish) (npmPolicies (resolverCarrying (fst npmCached (String "not an object"))) [admitRule]) noopWorkerMetricsPort $ \runtime queue _logRef -> do
                         job <- enqueueAndReceive queue sampleMirrorJob
                         outcome <- runWM (sourceAt url runtime) (processJob job)
@@ -731,8 +731,8 @@ spec = do
 
         it "refuses malformed source metadata before downloading the artifact" $
             withStub status200 (toLazy tarballBytes) $ \upstream ->
-                withStub status404 "" $ \mirror -> do
-                    publish <- codecPublishAt (stubBaseUrl mirror)
+                withStub status404 "" $ \mirror -> withSweeper $ \deadlines -> do
+                    publish <- codecPublishAt deadlines (stubBaseUrl mirror)
                     let policies = npmPolicies (resolverCarrying (fst npmCached (String "not an object"))) [admitRule]
                     withRuntimeRegistry (const publish) policies noopWorkerMetricsPort $ \runtime queue _ -> do
                         queued <- enqueueAndReceive queue sampleMirrorJob
@@ -1088,11 +1088,8 @@ admissionObject = fst npmCached (object ["marker" .= ("admission-time" :: Text)]
 
 -- The real npm codec over the shared transport against a stub mirror target, so the codec's own
 -- refusal is the one under test rather than a recording double's.
-codecPublishAt :: Text -> IO MirrorPublish
-codecPublishAt targetUrl = do
-    manager <- newManager defaultManagerSettings
-    let transport = MirrorTransport{ptManager = manager, ptMintCredential = pure Nothing, ptLimits = defaultLimits, ptTracing = passthroughTracingPort}
-    pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) (loopbackRegistryUrl targetUrl) npmPublishCodec)
+codecPublishAt :: Deadlines -> Text -> IO MirrorPublish
+codecPublishAt deadlines = anonymousPublishAt deadlines npmPublishCodec . loopbackRegistryUrl
 
 -- A resolver whose present verdict carries the given raw object beside the sample details.
 resolverCarrying :: CachedDoc -> PackageName -> Version -> IO VersionEvaluation

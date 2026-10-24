@@ -6,6 +6,7 @@
 module Ecluse.Core.Worker.LoopIntegrationSpec (spec) where
 
 import Data.Map.Strict qualified as Map
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Network.HTTP.Types (status200, status201, status409, status503)
 import Test.Hspec
@@ -41,6 +42,7 @@ import Ecluse.Integration.WorkerLoop (
  )
 import Ecluse.Runtime.Env (envWorkerHeartbeat, lastPoll)
 import Ecluse.Service (runWorker)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Package (sriSha512Of, unsafeFilename, unsafeHash)
 import Ecluse.Test.Poll (runUntil)
 import Ecluse.Test.Rules (admitRule, denyRule)
@@ -55,11 +57,11 @@ spec pool =
         describe "mirror worker (ministack + WAI stubs)" $ do
             it (caseLabel "integration/worker/native-001" "fetches, verifies, publishes, and acks a faithful job (via the loop)") $ \container ->
                 withUpstream $ \upstreamUrl ->
-                    withMirrorTarget status201 $ \mirrorUrl publishLog -> do
+                    withMirrorTarget status201 $ \mirrorUrl publishLog -> withSweeper $ \deadlines -> do
                         queue <- freshQueue container "worker-success" defaultQueueOptions
                         (observedQueue, acknowledged) <- observeAcknowledgement queue
-                        env <- newQueueEnv observedQueue
-                        policies <- faithfulPolicies mirrorUrl
+                        env <- newQueueEnv deadlines observedQueue
+                        policies <- faithfulPolicies deadlines mirrorUrl
                         expectRightIO (enqueue queue job)
                         runLoopUntil (workerSourceAt upstreamUrl policies) env acknowledged
                         acknowledged `shouldReturn` True
@@ -71,11 +73,11 @@ spec pool =
 
             it (caseLabel "integration/worker/native-009" "retires an incomplete npm inventory without fetching or publishing a selected subset") $ \container ->
                 withStub status200 "artifact bytes" $ \upstream ->
-                    withMirrorTarget status201 $ \mirrorUrl publishLog -> do
+                    withMirrorTarget status201 $ \mirrorUrl publishLog -> withSweeper $ \deadlines -> do
                         queue <- freshQueue container "worker-incomplete-upload-data" defaultQueueOptions
                         (observedQueue, acknowledged) <- observeAcknowledgement queue
-                        env <- newQueueEnv observedQueue
-                        policies <- Map.map duplicateInventory <$> faithfulPolicies mirrorUrl
+                        env <- newQueueEnv deadlines observedQueue
+                        policies <- Map.map duplicateInventory <$> faithfulPolicies deadlines mirrorUrl
                         expectRightIO (enqueue queue job)
                         runLoopUntil (workerSourceAt (stubBaseUrl upstream) policies) env acknowledged
                         acknowledged `shouldReturn` True
@@ -85,13 +87,13 @@ spec pool =
 
             it (caseLabel "integration/worker/native-002" "publishes nothing when the artifact fails its integrity digest") $ \container ->
                 withUpstream $ \upstreamUrl ->
-                    withMirrorTarget status201 $ \mirrorUrl publishLog -> do
+                    withMirrorTarget status201 $ \mirrorUrl publishLog -> withSweeper $ \deadlines -> do
                         queue <- freshQueue container "worker-tamper" defaultQueueOptions
                         (observedQueue, acknowledged) <- observeAcknowledgement queue
-                        env <- newQueueEnv observedQueue
+                        env <- newQueueEnv deadlines observedQueue
                         -- The re-admitted digest is well-formed but does not match the served
                         -- bytes: a tampered artifact the worker must refuse to publish.
-                        tamperPolicies <- mirrorPoliciesAt Nothing mirrorUrl (unsafeHash SRI mismatchSri :| [])
+                        tamperPolicies <- mirrorPoliciesAt deadlines Nothing mirrorUrl (unsafeHash SRI mismatchSri :| [])
                         expectRightIO (enqueue queue job)
                         runLoopUntil (workerSourceAt upstreamUrl tamperPolicies) env acknowledged
                         acknowledged `shouldReturn` True
@@ -100,11 +102,11 @@ spec pool =
 
             it (caseLabel "integration/worker/native-003" "requires target identity proof after a 409 and acknowledges the whole version") $ \container ->
                 withUpstream $ \upstreamUrl ->
-                    withMirrorTarget status409 $ \mirrorUrl _publishLog -> do
+                    withMirrorTarget status409 $ \mirrorUrl _publishLog -> withSweeper $ \deadlines -> do
                         queue <- freshQueue container "worker-idempotent" defaultQueueOptions
                         (observedQueue, acknowledged) <- observeAcknowledgement queue
-                        env <- newQueueEnv observedQueue
-                        policies <- faithfulPolicies mirrorUrl
+                        env <- newQueueEnv deadlines observedQueue
+                        policies <- faithfulPolicies deadlines mirrorUrl
                         expectRightIO (enqueue queue job)
                         runLoopUntil (workerSourceAt upstreamUrl policies) env acknowledged
                         acknowledged `shouldReturn` True
@@ -115,10 +117,10 @@ spec pool =
                 withUpstream $ \upstreamUrl ->
                     -- The mirror target answers 503 (a retryable rejection). The worker
                     -- must not ack, so the message redelivers: a real second delivery.
-                    withMirrorTarget status503 $ \mirrorUrl publishLog -> do
+                    withMirrorTarget status503 $ \mirrorUrl publishLog -> withSweeper $ \deadlines -> do
                         queue <- freshQueue container "worker-retry" defaultQueueOptions
-                        env <- newQueueEnv queue
-                        policies <- faithfulPolicies mirrorUrl
+                        env <- newQueueEnv deadlines queue
+                        policies <- faithfulPolicies deadlines mirrorUrl
                         expectRightIO (enqueue queue job)
                         -- A second PUT exists only because the un-acked 503 message redelivered
                         -- through 'releaseForRetry'. Stopping at the first PUT races that release.
@@ -131,13 +133,13 @@ spec pool =
 
             it (caseLabel "integration/worker/native-005" "dead-letters an over-cap artifact without mirroring it") $ \container ->
                 withUpstream $ \upstreamUrl ->
-                    withMirrorTarget status201 $ \mirrorUrl publishLog -> do
+                    withMirrorTarget status201 $ \mirrorUrl publishLog -> withSweeper $ \deadlines -> do
                         queue <- freshQueue container "worker-overcap" defaultQueueOptions
                         (observedQueue, disposed) <- observeDeadLetter queue
-                        env <- newQueueEnv observedQueue
+                        env <- newQueueEnv deadlines observedQueue
                         -- A fetch cap below the artifact's size. The bounded fetch aborts fail-
                         -- closed, so the worker dead-letters the job and never mirrors it.
-                        policies <- mirrorPoliciesAt (Just 8) mirrorUrl (unsafeHash SRI trueSri :| [])
+                        policies <- mirrorPoliciesAt deadlines (Just 8) mirrorUrl (unsafeHash SRI trueSri :| [])
                         expectRightIO (enqueue queue job)
                         runLoopUntil (workerSourceAt upstreamUrl policies) env disposed
                         disposed `shouldReturn` True
@@ -146,12 +148,12 @@ spec pool =
 
             it (caseLabel "integration/worker/native-006" "refuses a queued job under the stricter policy the consuming worker booted") $ \container ->
                 withUpstream $ \upstreamUrl ->
-                    withMirrorTarget status201 $ \mirrorUrl publishLog -> do
+                    withMirrorTarget status201 $ \mirrorUrl publishLog -> withSweeper $ \deadlines -> do
                         queue <- freshQueue container "worker-rollout-strict" rolloutQueueOptions
-                        env <- newQueueEnv queue
+                        env <- newQueueEnv deadlines queue
                         -- A permissive role queued this job. The queue carries no policy, so the
                         -- worker's own boot rules decide, and a deny is terminal rather than retried.
-                        strict <- mirrorPoliciesUnderAt [denyRule] mirrorUrl (unsafeHash SRI trueSri :| [])
+                        strict <- mirrorPoliciesUnderAt deadlines [denyRule] mirrorUrl (unsafeHash SRI trueSri :| [])
                         expectRightIO (enqueue queue job)
                         runLoopFor (workerSourceAt upstreamUrl strict) env rolloutLoopWindow
                         readIORef publishLog `shouldReturn` []
@@ -159,10 +161,10 @@ spec pool =
 
             it (caseLabel "integration/worker/native-007" "publishes that same queued job under the older policy the consuming worker booted") $ \container ->
                 withUpstream $ \upstreamUrl ->
-                    withMirrorTarget status201 $ \mirrorUrl publishLog -> do
+                    withMirrorTarget status201 $ \mirrorUrl publishLog -> withSweeper $ \deadlines -> do
                         queue <- freshQueue container "worker-rollout-old" rolloutQueueOptions
-                        env <- newQueueEnv queue
-                        old <- mirrorPoliciesUnderAt [admitRule] mirrorUrl (unsafeHash SRI trueSri :| [])
+                        env <- newQueueEnv deadlines queue
+                        old <- mirrorPoliciesUnderAt deadlines [admitRule] mirrorUrl (unsafeHash SRI trueSri :| [])
                         expectRightIO (enqueue queue job)
                         -- A fixed window rather than a stop at the first publish, so the ack lands
                         -- inside the run and a missing one shows up as a second delivery.
@@ -172,10 +174,10 @@ spec pool =
 
             it (caseLabel "integration/worker/native-008" "advances the heartbeat as the loop polls a real queue") $ \container ->
                 withUpstream $ \_upstreamUrl ->
-                    withMirrorTarget status201 $ \mirrorUrl _publishLog -> do
+                    withMirrorTarget status201 $ \mirrorUrl _publishLog -> withSweeper $ \deadlines -> do
                         queue <- freshQueue container "worker-heartbeat" defaultQueueOptions{qoWaitSeconds = 1}
-                        env <- newQueueEnv queue
-                        policies <- faithfulPolicies mirrorUrl
+                        env <- newQueueEnv deadlines queue
+                        policies <- faithfulPolicies deadlines mirrorUrl
                         pollBefore <- lastPoll (envWorkerHeartbeat env)
                         pollBefore `shouldBe` Nothing
                         -- No job enqueued: an idle loop still completes real polls, so
@@ -187,14 +189,14 @@ spec pool =
             for_ [("integration/worker/native-010", status201), ("integration/worker/native-011", status409)] $ \(identifier, replyStatus) ->
                 it (caseLabel identifier "fails the acknowledgement wait when publication succeeds but acknowledgement is withheld") $ \container ->
                     withUpstream $ \upstreamUrl ->
-                        withMirrorTarget replyStatus $ \mirrorUrl publishLog -> do
+                        withMirrorTarget replyStatus $ \mirrorUrl publishLog -> withSweeper $ \deadlines -> do
                             queue <- freshQueue container (if replyStatus == status201 then "worker-withheld-success" else "worker-withheld-conflict") defaultQueueOptions
                             attempted <- newIORef False
                             blocked <- newEmptyMVar
                             let withheld = queue{ack = \_ -> writeIORef attempted True >> takeMVar blocked}
                             (observedQueue, acknowledged) <- observeAcknowledgement withheld
-                            env <- newQueueEnv observedQueue
-                            policies <- faithfulPolicies mirrorUrl
+                            env <- newQueueEnv deadlines observedQueue
+                            policies <- faithfulPolicies deadlines mirrorUrl
                             expectRightIO (enqueue queue job)
                             runUntil 5_000_000 50_000 (runWorker (workerSourceAt upstreamUrl policies) env) acknowledged
                                 `shouldThrow` (\(TestContractEscape message) -> message == "worker progress timed out")
@@ -234,8 +236,8 @@ mismatchSri = sriSha512Of "completely-different-bytes"
 
 -- Policies whose re-admitted artifact carries the served bytes' true digest, so
 -- verification passes and the pipeline publishes at that mirror target.
-faithfulPolicies :: Text -> IO WorkerPolicies
-faithfulPolicies mirrorUrl = mirrorPoliciesAt Nothing mirrorUrl (unsafeHash SRI trueSri :| [])
+faithfulPolicies :: Deadlines -> Text -> IO WorkerPolicies
+faithfulPolicies deadlines mirrorUrl = mirrorPoliciesAt deadlines Nothing mirrorUrl (unsafeHash SRI trueSri :| [])
 
 npmPublishPath :: ByteString
 npmPublishPath = "/left-pad"

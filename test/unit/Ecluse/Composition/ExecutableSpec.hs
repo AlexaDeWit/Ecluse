@@ -48,6 +48,7 @@ import Ecluse.Composition.Types (
  )
 import Ecluse.Config (DeletionConsent (DeletionPermitted), StoreBackend (BackendCodeArtifact, BackendRegistry, BackendVerdaccio))
 import Ecluse.Core.Credential (mintSecret, mkSecret, unSecret)
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired))
 import Ecluse.Core.Queue (noMirrorQueue)
@@ -610,7 +611,8 @@ reportUnder envVars role resolveAdapter buildQueue buildCredentials buildStore =
     config <- expectConfig envVars Nothing
     bootPlan <- expectPlanFor role envVars Nothing config noCeiling
     logEnv <- newTestLogEnv
-    planExecutable logEnv passthroughTracingPort resolveAdapter buildQueue buildCredentials buildStore bootPlan
+    deadlines <- newDeadlines
+    planExecutable logEnv passthroughTracingPort deadlines resolveAdapter buildQueue buildCredentials buildStore bootPlan
 
 -- | 'planFor', failing the test on a refusal.
 expectExecutable :: BootRole -> ResolveAdapter -> BuildMirrorQueue -> StoreBuilds -> IO ExecutablePlan

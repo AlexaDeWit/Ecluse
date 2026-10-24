@@ -16,13 +16,14 @@ import Ecluse.Integration.Ministack (MinistackPool, endpointFor, withMinistack)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Mirror.State.S3.Internal
 import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Poll (retryingIO)
 import Ecluse.Test.Support (expectRight)
 
 spec :: MinistackPool -> Spec
 spec pool = aroundAll (withMinistack pool) $
     describe "S3 mirror state conditional persistence" $
-        it (caseLabel "integration/mirror-state-s3-internal/native-001" "enforces create, stale revision refusal, and read-after-write across fresh clients") $ \container -> do
+        it (caseLabel "integration/mirror-state-s3-internal/native-001" "enforces create, stale revision refusal, and read-after-write across fresh clients") $ \container -> withSweeper $ \deadlines -> do
             let endpoint = Just (endpointFor container)
                 bucket = "mirror-state-cas"
                 key = "state/v1/project.json"
@@ -30,22 +31,22 @@ spec pool = aroundAll (withMinistack pool) $
             retryingIO 21 500_000 (void (runResourceT (AWS.send env (S3.newCreateBucket (S3.BucketName bucket)))))
             (a, b) <-
                 concurrently
-                    (writeObject (const pass) env defaultLimits bucket key Nothing "first")
-                    (writeObject (const pass) env defaultLimits bucket key Nothing "second")
+                    (writeObject (const pass) deadlines env defaultLimits bucket key Nothing "first")
+                    (writeObject (const pass) deadlines env defaultLimits bucket key Nothing "second")
             let successes = [revision | Right (ObjectStored revision) <- [a, b]]
                 collisions = [() | Right ObjectConflict <- [a, b]]
             length successes `shouldBe` 1
             length collisions `shouldBe` 1
-            firstRead <- readObject (const pass) env defaultLimits bucket key Nothing >>= expectRight
+            firstRead <- readObject (const pass) deadlines env defaultLimits bucket key Nothing >>= expectRight
             case firstRead of
                 ObjectLoaded revision body -> do
                     body `shouldSatisfy` (`elem` ["first", "second"])
-                    replaced <- writeObject (const pass) env defaultLimits bucket key (Just revision) "extended" >>= expectRight
+                    replaced <- writeObject (const pass) deadlines env defaultLimits bucket key (Just revision) "extended" >>= expectRight
                     case replaced of
                         ObjectStored current -> do
-                            writeObject (const pass) env defaultLimits bucket key (Just revision) "stale" `shouldReturn` Right ObjectConflict
+                            writeObject (const pass) deadlines env defaultLimits bucket key (Just revision) "stale" `shouldReturn` Right ObjectConflict
                             restarted <- buildS3Env endpoint
-                            readObject (const pass) restarted defaultLimits bucket key Nothing `shouldReturn` Right (ObjectLoaded current "extended")
-                            readObject (const pass) restarted defaultLimits bucket key (Just current) `shouldReturn` Right (ObjectUnchanged current)
+                            readObject (const pass) deadlines restarted defaultLimits bucket key Nothing `shouldReturn` Right (ObjectLoaded current "extended")
+                            readObject (const pass) deadlines restarted defaultLimits bucket key (Just current) `shouldReturn` Right (ObjectUnchanged current)
                         ObjectConflict -> expectationFailure "the current revision unexpectedly conflicted"
                 other -> expectationFailure ("missing successfully written state: " <> show other)

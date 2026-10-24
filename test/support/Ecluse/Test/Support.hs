@@ -16,25 +16,34 @@ module Ecluse.Test.Support (
     parseRequestOrFail,
     TestContractEscape (..),
     incompressibleBytes,
+    givesTimes,
+    between,
+    withCapabilities,
 ) where
 
 import Data.Aeson (FromJSON, eitherDecodeStrict)
 import Data.Bits (shiftL, shiftR)
 import Data.ByteString qualified as BS
 import Data.Time (UTCTime)
+import GHC.Conc (getNumCapabilities, setNumCapabilities)
 import Network.HTTP.Client qualified as Client
+import UnliftIO (bracket)
 
-import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission)
+import Ecluse.Core.Deadline (newDeadlines)
+import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmissionTuned)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), newMemoryMeter)
 
--- | A serve admission for suites that do not test overload. Its capacity is far above any test's load.
+{- | A serve admission for suites that do not test overload, far above any test's load. It has no
+overflow queue and no room, so nothing it does waits on a sweep.
+-}
 testServeAdmission :: IO ServeAdmission
-testServeAdmission = newServeAdmission 1_000_000
+testServeAdmission = newDeadlines >>= \deadlines -> newServeAdmissionTuned deadlines 1_000_000 0 0
 
--- | A memory meter for suites that do not test memory pressure. Its budget never binds.
+-- | A memory meter for suites that do not test memory pressure. Its budget never binds, and its zero wait needs no sweep.
 testMemoryMeter :: IO MemoryMeter
 testMemoryMeter =
-    newMemoryMeter MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1_048_576, msEntryRoom = 1_000_000, msEntryWaitMicros = 0}
+    newDeadlines >>= \deadlines ->
+        newMemoryMeter deadlines MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1_048_576, msEntryRoom = 1_000_000, msEntryWaitMicros = 0}
 
 -- | A clock a test advances by hand, as its read action and its setter, so no case sleeps.
 newTestClock :: UTCTime -> IO (IO UTCTime, UTCTime -> IO ())
@@ -68,8 +77,22 @@ newtype TestContractEscape = TestContractEscape Text
 
 instance Exception TestContractEscape
 
+-- | A streamed request body that hands over the chunk this many times, then ends.
+givesTimes :: Int -> ByteString -> Client.GivesPopper ()
+givesTimes count chunk needsPopper = do
+    remaining <- newIORef count
+    needsPopper $ atomicModifyIORef' remaining $ \left -> if left <= 0 then (0, BS.empty) else (left - 1, chunk)
+
+-- | Whether a duration in seconds is at least the low bound and below the high one.
+between :: Double -> Double -> Double -> Bool
+between low high seconds = seconds >= low && seconds < high
+
 -- | Deterministic bytes no compressor can shrink: an xorshift stream.
 incompressibleBytes :: Int -> ByteString
 incompressibleBytes size = BS.pack (take size (map fromIntegral (drop 1 (iterate next (0x9e3779b9 :: Word64)))))
   where
     next x0 = let x1 = x0 `xor` (x0 `shiftL` 13); x2 = x1 `xor` (x1 `shiftR` 7) in x2 `xor` (x2 `shiftL` 17)
+
+-- | Run an action on this many capabilities, then restore the count. A suite starts on one, and a race needs more.
+withCapabilities :: Int -> IO a -> IO a
+withCapabilities count act = bracket getNumCapabilities setNumCapabilities (\_ -> setNumCapabilities count >> act)

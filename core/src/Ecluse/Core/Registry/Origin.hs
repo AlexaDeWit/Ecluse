@@ -20,9 +20,8 @@ module Ecluse.Core.Registry.Origin (
     controlPublicOrigin,
 ) where
 
-import Network.HTTP.Client (Manager)
-
 import Ecluse.Core.Credential (ClientCredential)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Public (PublicControl)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
@@ -32,8 +31,8 @@ import Ecluse.Core.Telemetry.Upstream (PublicReadKind)
 data OriginClient = OriginClient
     { ocBaseUrl :: RegistryUrl
     -- ^ The https-only egress witness the proxy appends a package path to.
-    , ocManager :: Manager
-    -- ^ The shared @http-client@ 'Manager' to issue requests through.
+    , ocClient :: ExchangeClient
+    -- ^ The shared connection pool and deadline sweeper to issue requests through.
     , ocToken :: Maybe ClientCredential
     -- ^ 'Nothing' for an anonymous origin. A passthrough read carries the caller's own verbatim.
     , ocLimits :: Limits
@@ -45,9 +44,9 @@ data OriginClient = OriginClient
     }
 
 -- | Build an origin with caller-supplied limits, transport, and credential posture.
-originClient :: Limits -> Manager -> RegistryUrl -> Maybe ClientCredential -> OriginClient
-originClient limits manager baseUrl token =
-    OriginClient{ocBaseUrl = baseUrl, ocManager = manager, ocToken = token, ocLimits = limits, ocChargeFullRead = const pass, ocPublicControl = Nothing, ocReadKind = Nothing}
+originClient :: Limits -> ExchangeClient -> RegistryUrl -> Maybe ClientCredential -> OriginClient
+originClient limits client baseUrl token =
+    OriginClient{ocBaseUrl = baseUrl, ocClient = client, ocToken = token, ocLimits = limits, ocChargeFullRead = const pass, ocPublicControl = Nothing, ocReadKind = Nothing}
 
 -- | The origin's base URL as text, which is how every request builder takes it.
 originBaseUrl :: OriginClient -> Text
@@ -65,12 +64,12 @@ data Public
 data Private
 
 -- | An origin dialled with no credential, so no caller's authorisation scopes what it reads.
-anonymousOrigin :: Limits -> Manager -> RegistryUrl -> OriginFor Public
-anonymousOrigin limits manager baseUrl = OriginFor (originClient limits manager baseUrl Nothing)
+anonymousOrigin :: Limits -> ExchangeClient -> RegistryUrl -> OriginFor Public
+anonymousOrigin limits client baseUrl = OriginFor (originClient limits client baseUrl Nothing)
 
 -- | An origin presenting one caller's credential, so what it reads is scoped to that caller.
-perCallerOrigin :: Limits -> Manager -> RegistryUrl -> Maybe ClientCredential -> OriginFor Private
-perCallerOrigin limits manager baseUrl token = OriginFor (originClient limits manager baseUrl token)
+perCallerOrigin :: Limits -> ExchangeClient -> RegistryUrl -> Maybe ClientCredential -> OriginFor Private
+perCallerOrigin limits client baseUrl token = OriginFor (originClient limits client baseUrl token)
 
 -- | The plain record behind a tagged origin, for the operations that take any origin.
 originClientOf :: OriginFor posture -> OriginClient

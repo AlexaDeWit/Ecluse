@@ -75,6 +75,7 @@ startPlannedRole resolveAdapter dredgerOptions bootEnv = do
         planExecutable
             (beLogEnv bootEnv)
             (tracingPortOf (beTelemetry bootEnv))
+            (beDeadlines bootEnv)
             resolveAdapter
             buildMirrorQueue
             initTargetCredentialProviders

@@ -493,6 +493,14 @@ it, and a scrape never enters the proxy's request path, so it adds nothing to th
 `http.server.*` series. The listener runs only while telemetry is on, and a port it cannot bind
 is an error in the log rather than a failed start.
 
+Écluse hands its metric records to the SDK in batches: once a second, and again before every
+scrape and OTLP export, the final export at shutdown included. A scrape or an export therefore
+still sees every record made before it. Three details follow from the batching. A gauge point
+carries the time of the batch, at most a second after the record. An exemplar carries the trace
+and span of the request that made the record, but the time of the batch. A counter's exemplar
+holds the total added since the previous batch, not one request's increment, and a gauge's
+exemplar holds the newest reading in the batch.
+
 **Give every co-located Prometheus exporter its own port.** These exporters all read
 the same variable, so two on one host race for 9464. The loser logs the bind failure and serves
 nothing. A scraper pointed at that port then collects one role's series and sees no sign the
@@ -648,8 +656,9 @@ corpus can hold more than its charge. The sampler measures the excess as live da
 charges after the next major collection.
 The ceiling the budget may reach, described below, falls as that remainder grows.
 
-A new request that cannot take its entry step waits up to 1 s at the memory gate, then gets `503`
-with `Retry-After: 1`. A request that has started reading pauses instead, keeping its CPU slot until
+A request in the memory gate's waiting room has a 1 s budget for its entry step. If that wait
+expires, it gets `503` with `Retry-After: 1`. A request that has started reading pauses instead,
+keeping its CPU slot until
 memory frees. A pause during an upstream read fails when it outlives the 50-second cap on that
 exchange, and a pause before a render fails at the 60-second request timeout. Only one request at a
 time may run past the budget, and it keeps that right until it ends. Work that request waits on, a
@@ -657,6 +666,22 @@ public fetch or a render another request leads, runs past the budget with it. So
 near one request and the shared work it waits on, and a pause always leaves a request that
 finishes. Everything a request paid returns when it ends. Trusted private artifact hits and
 artifact relay pay nothing.
+
+A request that finds either waiting room full can wait in overflow outside both gates, without a
+CPU slot or memory charge. It can retry admission for 0.5 s. The next sweeper tick ends an expired
+wait, normally within another 100 ms. A freed place wakes the oldest request waiting for that gate.
+New requests can still enter first, and a woken request follows the normal admission rule.
+
+A retry uses each gate's normal one-second room wait. Those waits can occur before overflow and
+after its last wake, so total time before a refusal can exceed 0.5 s. No new retry starts after the
+overflow budget expires. A refusal still carries `503` and `Retry-After: 1`.
+
+Overflow has 8 reservations per serve slot, 320 at 2 CPUs. A request keeps its reservation through
+retries and any work they admit. Past that cap, Écluse answers `503` at once with `Retry-After: 1`
+and permits normal connection reuse. This avoids forcing new connections after overflow refusals between an ingress or sidecar and
+the pod. It applies to HTTP/1 and HTTP/2. The queue limits held overflow state, but
+does not impose a per-client request rate. A proxy can retry `503` responses according to its
+configured policy, independently of connection reuse.
 
 The budget starts at a quarter of the heap the nursery leaves, less the cache budget, the queue
 tenants and the idle process. That is the live data at which the copying collector still runs
@@ -690,10 +715,15 @@ only the collector's share moves it.
 | `ecluse.serve.admission.memory.shed` | Requests refused at the memory gate |
 | `ecluse.serve.admission.memory.pauses` | Times a started request paused for memory |
 | `ecluse.serve.admission.memory.overdraws` | Steps a request took past the budget |
+| `ecluse.serve.admission.overflow.waiting` | Requests parked in overflow now, excluding retries and admitted work |
+| `ecluse.serve.admission.overflow.admitted` | Overflow requests that reached a room or ran after a retry, including later room expiry |
+| `ecluse.serve.admission.overflow.shed` | Requests refused when the overflow retry budget expired |
+| `ecluse.serve.admission.overflow.full` | Requests refused because all overflow reservations were occupied |
 
 A `503` with `Retry-After` from either gate is backpressure, so exclude it from alerts. A brake
 level that stays at `2`, or a `shed` count that keeps rising, means the pod needs more memory for
-its package mix.
+its package mix. A rising `overflow.full` count means queued requests, retries and admitted work occupy all overflow
+reservations. Consider more replicas or slots.
 
 ### The rest of the plan
 

@@ -13,6 +13,7 @@ import Test.Hspec
 import Test.Hspec.Wai
 
 import Ecluse.Composition.Support (expectAppConfig)
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Server.Readiness (
     MountReadiness (MountAwaitingFirstSync, MountReady),
@@ -22,7 +23,7 @@ import Ecluse.Core.Server.Readiness (
 import Ecluse.Core.Worker (Liveness (Liveness, liveHealthy, liveLastPoll))
 import Ecluse.Mirror (mirrorServerConfig)
 import Ecluse.Runtime.Server (probeOnlyApplication)
-import Ecluse.Test.Wai (bodyContainsAll)
+import Ecluse.Test.Wai (bodyContainsAll, withSweptApp)
 
 -- | A fixed poll instant, so the rendered probe body is deterministic.
 polledAt :: UTCTime
@@ -31,15 +32,15 @@ polledAt = UTCTime (fromGregorian 2026 6 23) 0
 {- | The dedicated worker's front door with the given liveness verdict and readiness gate
 injected, which is how the composition root wires the consume-loop heartbeat behind it.
 -}
-mirrorApp :: Liveness -> Readiness -> IO Application
-mirrorApp liveness ready = do
+mirrorApp :: Liveness -> Readiness -> Deadlines -> IO Application
+mirrorApp liveness ready deadlines = do
     appCfg <- expectAppConfig [] Nothing
-    probeOnlyApplication (mirrorServerConfig appCfg (pure ready) (pure liveness))
+    probeOnlyApplication deadlines (mirrorServerConfig appCfg (pure ready) (pure liveness))
 
 spec :: Spec
 spec = do
     describe "the dedicated worker's probes -- a healthy consume loop" $
-        with (mirrorApp alive bothSynced) $ do
+        withSweptApp (mirrorApp alive bothSynced) $ do
             it "answers /livez with 200 and the last successful poll an orchestrator can judge" $
                 get "/livez"
                     `shouldRespondWith` 200{matchBody = bodyContainsAll ["\"lastPoll\"", "2026-06-23T00:00:00"]}
@@ -52,13 +53,13 @@ spec = do
                 get "/npm/is-odd" `shouldRespondWith` "Not Found\n"{matchStatus = 404}
 
     describe "the dedicated worker's probes -- a stalled consume loop" $
-        with (mirrorApp stalled bothSynced) $
+        withSweptApp (mirrorApp stalled bothSynced) $
             it "fails /livez with 503, so the orchestrator restarts the pod" $
                 get "/livez"
                     `shouldRespondWith` 503{matchBody = bodyContainsAll ["liveness check failed", "2026-06-23T00:00:00"]}
 
     describe "the dedicated worker's probes -- awaiting the advisory database" $
-        with (mirrorApp alive neitherSynced) $ do
+        withSweptApp (mirrorApp alive neitherSynced) $ do
             it "fails /readyz with 503 until an advisory sync lands, naming both mounts" $
                 get "/readyz"
                     `shouldRespondWith` 503{matchBody = bodyContainsAll ["\"npm\":\"awaiting the advisory database that ecluse pilot publishes\"", "\"pypi\":\"awaiting the advisory database that ecluse pilot publishes\""]}
@@ -67,7 +68,7 @@ spec = do
                 get "/livez" `shouldRespondWith` 200
 
     describe "the dedicated worker's probes -- one ecosystem's artifact missing" $
-        with (mirrorApp alive npmOnly) $
+        withSweptApp (mirrorApp alive npmOnly) $
             it "answers /readyz with 200 and names the mount still awaiting its database" $
                 -- A missing PyPI database must not pull the pod, and its healthy npm mount,
                 -- out of rotation.

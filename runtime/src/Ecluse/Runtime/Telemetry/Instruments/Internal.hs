@@ -57,6 +57,7 @@ module Ecluse.Runtime.Telemetry.Instruments.Internal (
 
     -- * Memory budget (observable)
     registerMemoryMeter,
+    registerOverflowQueue,
 
     -- * Advisory compile
     recordAdvisoryCompileAccepted,
@@ -168,6 +169,10 @@ data Metrics = Metrics
     , mMemoryAdmissionShed :: Counter Int64
     , mMemoryAdmissionPauses :: Counter Int64
     , mMemoryAdmissionOverdraws :: Counter Int64
+    , mOverflowWaiting :: ObservableGauge Int64
+    , mOverflowAdmitted :: Counter Int64
+    , mOverflowShed :: Counter Int64
+    , mOverflowFull :: Counter Int64
     }
 
 -- | Build instruments on the telemetry meter, or the SDK's no-op meter when disabled.
@@ -222,6 +227,10 @@ newMetrics telemetry = do
     memoryAdmissionShed <- counter meter MemoryAdmissionShed "{request}" "requests shed at the memory gate"
     memoryAdmissionPauses <- counter meter MemoryAdmissionPauses "{pause}" "times a started request paused for memory"
     memoryAdmissionOverdraws <- counter meter MemoryAdmissionOverdraws "{step}" "steps the overdraw token holder took past the memory budget"
+    overflowWaiting <- observableGauge meter OverflowWaiting "requests a full waiting room turned away, waiting for a place"
+    overflowAdmitted <- counter meter OverflowAdmitted "{request}" "queued requests that got a place"
+    overflowShed <- counter meter OverflowShed "{request}" "queued requests refused after the wait"
+    overflowFull <- counter meter OverflowFull "{request}" "requests refused at once because the queue was full"
     pure
         Metrics
             { mServeDecision = serveDecision
@@ -270,6 +279,10 @@ newMetrics telemetry = do
             , mMemoryAdmissionShed = memoryAdmissionShed
             , mMemoryAdmissionPauses = memoryAdmissionPauses
             , mMemoryAdmissionOverdraws = memoryAdmissionOverdraws
+            , mOverflowWaiting = overflowWaiting
+            , mOverflowAdmitted = overflowAdmitted
+            , mOverflowShed = overflowShed
+            , mOverflowFull = overflowFull
             }
 
 counter :: Meter -> MetricName -> Text -> Text -> IO (Counter Int64)
@@ -308,6 +321,9 @@ metricsPortOf m =
         , mpMemoryAdmissionShed = addOne (mMemoryAdmissionShed m) []
         , mpMemoryAdmissionPause = addOne (mMemoryAdmissionPauses m) []
         , mpMemoryAdmissionOverdraw = addOne (mMemoryAdmissionOverdraws m) []
+        , mpOverflowAdmitted = addOne (mOverflowAdmitted m) []
+        , mpOverflowShed = addOne (mOverflowShed m) []
+        , mpOverflowFull = addOne (mOverflowFull m) []
         , mpMergeDivergence = recordMergeDivergence m
         , mpRuleDenial = recordRuleDenial m
         , mpRuleEvalDuration = recordRuleEvalDuration m
@@ -567,6 +583,13 @@ registerMemoryMeter m readMeter = do
     observeWith (brakeLevelCode . snBrakeLevel) (mMemoryAdmissionBrakeLevel m)
     observeWith snWaiting (mMemoryAdmissionWaiting m)
     observeWith snPaused (mMemoryAdmissionPausedNow m)
+
+-- | Attach the overflow queue's depth to its gauge, read at each collection.
+registerOverflowQueue :: Metrics -> IO Int -> IO ()
+registerOverflowQueue m readWaiting =
+    void . observableGaugeRegisterCallback (mOverflowWaiting m) $ \result -> do
+        waiting <- readWaiting
+        observe result (fromIntegral waiting) (metricAttributes [])
 
 -- | Record the advisory entries one compile pass accepted (@ecluse.advisory.compile.accepted@).
 recordAdvisoryCompileAccepted :: (MonadIO m) => Metrics -> Ecosystem -> Int -> m ()

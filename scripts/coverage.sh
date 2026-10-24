@@ -83,6 +83,7 @@ case "$suite" in
       ./runtime/src/Ecluse/Runtime/Queue/Sqs.hs
       ./runtime/src/Ecluse/Runtime/Server.hs
       ./runtime/src/Ecluse/Runtime/Telemetry.hs
+      ./runtime/src/Ecluse/Runtime/Telemetry/Batched.hs
       ./runtime/src/Ecluse/Runtime/Telemetry/Correlation.hs
       ./runtime/src/Ecluse/Runtime/Telemetry/ExportFailure.hs
       ./runtime/src/Ecluse/Runtime/Telemetry/Instruments.hs

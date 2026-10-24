@@ -27,11 +27,12 @@ import Network.Wai.Handler.Warp (testWithApplication)
 import UnliftIO (timeout)
 
 import Ecluse.Core.Credential (bareCredential, mkSecret)
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Package (Hash)
 import Ecluse.Core.Queue (MirrorQueue (ack, deadLetter))
 import Ecluse.Core.Registry.Npm.Filter (rewriteVersion)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
-import Ecluse.Core.Registry.Publish (MirrorPublish, MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintCredential, ptTracing), newMirrorPublish)
+import Ecluse.Core.Registry.Publish (MirrorPublish, MirrorTransport (MirrorTransport, ptClient, ptLimits, ptMintCredential, ptTracing), newMirrorPublish)
 import Ecluse.Core.Registry.ServedDocument (documentObject, objectField)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (defaultLimits)
@@ -40,6 +41,7 @@ import Ecluse.Core.Worker (WorkerPolicies)
 import Ecluse.Runtime.Env (Env)
 import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue)
 import Ecluse.Service (runWorker)
+import Ecluse.Test.Deadline (untracedClient)
 import Ecluse.Test.Poll (runUntil)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRightText)
@@ -107,29 +109,29 @@ withMirrorTarget replyStatus body = do
                 Just publication -> respond (responseLBS status200 [("Content-Type", "application/json")] (encode publication))
 
 -- | Admit every version through the npm writer, with an optional artifact fetch cap.
-mirrorPoliciesAt :: Maybe Int -> Text -> NonEmpty Hash -> IO WorkerPolicies
-mirrorPoliciesAt cap mirrorUrl digests = do
-    publish <- newPublishAt mirrorUrl
+mirrorPoliciesAt :: Deadlines -> Maybe Int -> Text -> NonEmpty Hash -> IO WorkerPolicies
+mirrorPoliciesAt deadlines cap mirrorUrl digests = do
+    publish <- newPublishAt deadlines mirrorUrl
     pure (maybe admitAllPolicies admitAllPoliciesCapped cap publish digests)
 
 -- | Apply the consuming worker's rules while retaining the default artifact fetch cap.
-mirrorPoliciesUnderAt :: [PreparedRule] -> Text -> NonEmpty Hash -> IO WorkerPolicies
-mirrorPoliciesUnderAt rules mirrorUrl digests = do
-    publish <- newPublishAt mirrorUrl
+mirrorPoliciesUnderAt :: Deadlines -> [PreparedRule] -> Text -> NonEmpty Hash -> IO WorkerPolicies
+mirrorPoliciesUnderAt deadlines rules mirrorUrl digests = do
+    publish <- newPublishAt deadlines mirrorUrl
     pure (mirrorPoliciesUnder rules publish digests)
 
-newPublishAt :: Text -> IO MirrorPublish
-newPublishAt mirrorUrl = do
-    manager <- newManager defaultManagerSettings
+newPublishAt :: Deadlines -> Text -> IO MirrorPublish
+newPublishAt deadlines mirrorUrl = do
+    client <- untracedClient <$> newManager defaultManagerSettings <*> pure deadlines
     let transport =
             MirrorTransport
-                { ptManager = manager
+                { ptClient = client
                 , ptMintCredential = pure (Just (bareCredential (mkSecret "test-token")))
                 , ptLimits = defaultLimits
                 , ptTracing = passthroughTracingPort
                 }
     pure (newMirrorPublish transport (loopbackRegistryUrl mirrorUrl) (loopbackRegistryUrl mirrorUrl) npmPublishCodec)
 
--- | An 'Env' over handle doubles and a real (no-TLS) manager, carrying only the given queue.
-newQueueEnv :: MirrorQueue -> IO Env
-newQueueEnv queue = newManager defaultManagerSettings >>= newTestEnvWithQueue queue
+-- | An 'Env' over handle doubles, a real (no-TLS) manager and swept deadlines, carrying only the given queue.
+newQueueEnv :: Deadlines -> MirrorQueue -> IO Env
+newQueueEnv deadlines queue = newManager defaultManagerSettings >>= newTestEnvWithQueue deadlines queue

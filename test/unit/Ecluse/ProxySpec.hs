@@ -33,6 +33,7 @@ import Ecluse.Runtime.Env (envMetrics)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Test.Cve (fetchServingAt, headOnlyFetch)
 import Ecluse.Service (ServiceRuntime (svcEnv, svcSyncTasks), mountBindingFor, withServiceRuntime)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (captureJsonLog)
 import Ecluse.Test.Osv (mkDbWithWrongEpoch, mkMinimalValidDbWithMeta)
 import Ecluse.Test.Poll (awaitUntil, pollUntil)
@@ -85,12 +86,13 @@ withProxyRuntime logEnv port handles use = do
     let vars = ("ECLUSE_SERVER__PORT", show port) : filter ((/= "ECLUSE_SERVER__PORT") . fst) publicGateEnv
     config <- expectConfig vars Nothing
     bootPlan <- expectPlanFor (BootMirrorPipeline ServeOnly) vars Nothing config noCeiling
-    (_, outcome) <- planExecutable logEnv passthroughTracingPort mountBindingFor (\_ _ _ -> pure noMirrorQueue) initTargetCredentialProviders unusedStores bootPlan
-    case outcome of
-        Right plan
-            | MirrorPipelineWiring mirror <- epRoleWiring plan ->
-                withServiceRuntime (BootEnv config logEnv telemetryDisabled bootPlan) plan mirror{mwCveSync = handles} use
-        other -> expectationFailure ("expected the serve-only plan, got " <> either show (const "another role") other)
+    withSweeper $ \deadlines -> do
+        (_, outcome) <- planExecutable logEnv passthroughTracingPort deadlines mountBindingFor (\_ _ _ -> pure noMirrorQueue) initTargetCredentialProviders unusedStores bootPlan
+        case outcome of
+            Right plan
+                | MirrorPipelineWiring mirror <- epRoleWiring plan ->
+                    withServiceRuntime (BootEnv config logEnv telemetryDisabled bootPlan deadlines) plan mirror{mwCveSync = handles} use
+            other -> expectationFailure ("expected the serve-only plan, got " <> either show (const "another role") other)
   where
     unusedStores = StoreBuilds (\_ _ _ -> fail "serve-only must not build a deleting store") (\_ _ _ -> fail "serve-only must not build an observing store") (\_ _ -> noUpstreamMechanism)
 
