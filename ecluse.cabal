@@ -1970,6 +1970,7 @@ test-suite ecluse-e2e-npm
 
 test-suite ecluse-e2e-pypi
   import:          shared
+  ghc-options:     -threaded
   if !flag(dev-http-egress)
     buildable: False
   type:            exitcode-stdio-1.0
