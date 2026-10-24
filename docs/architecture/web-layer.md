@@ -275,12 +275,13 @@ per serve slot cover queued requests and their retries, including work admitted 
 Cancellation and completion release each reservation once. Holding it through admitted work can
 cause more immediate refusals than counting only parked requests, but preserves the resource cap.
 
-An expired wait sheds with `503` and `Retry-After: 1`. A full overflow refuses at once and closes
-the HTTP/1 connection after the response. HTTP/2 keeps its multiplexed connection open and returns
-the same refusal status and retry delay. A front proxy controls its downstream connections, so
-this backpressure does not impose a per-client request rate. Health probes, cheap local routes
-and trusted private artifact hits bypass both gates. The mirror worker runs outside them. A slow
-artifact client therefore holds no serve metadata slot while its download drains.
+An expired wait sheds with `503` and `Retry-After: 1`. A full overflow refuses at once with the
+same headers and permits normal connection reuse. An ingress or sidecar can pool its connections
+to the pod. Closing those connections adds accepts and pool reconnections without requiring the
+end client to slow down. Overflow bounds held admission state, but does not impose a per-client
+request rate. Health probes, cheap local routes and trusted private artifact hits bypass both
+gates. The mirror worker runs outside them. A slow artifact client therefore holds no serve
+metadata slot while its download drains.
 
 The public and private connection pools take independent settings. The private pool takes the larger
 share, because a trusted tarball hit streams outside admission, which makes its demand the

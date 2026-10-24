@@ -656,8 +656,9 @@ corpus can hold more than its charge. The sampler measures the excess as live da
 charges after the next major collection.
 The ceiling the budget may reach, described below, falls as that remainder grows.
 
-A new request that cannot take its entry step waits up to 1 s at the memory gate, then gets `503`
-with `Retry-After: 1`. A request that has started reading pauses instead, keeping its CPU slot until
+A request in the memory gate's waiting room has a 1 s budget for its entry step. If that wait
+expires, it gets `503` with `Retry-After: 1`. A request that has started reading pauses instead,
+keeping its CPU slot until
 memory frees. A pause during an upstream read fails when it outlives the 50-second cap on that
 exchange, and a pause before a render fails at the 60-second request timeout. Only one request at a
 time may run past the budget, and it keeps that right until it ends. Work that request waits on, a
@@ -676,10 +677,11 @@ after its last wake, so total time before a refusal can exceed 0.5 s. No new ret
 overflow budget expires. A refusal still carries `503` and `Retry-After: 1`.
 
 Overflow has 8 reservations per serve slot, 320 at 2 CPUs. A request keeps its reservation through
-retries and any work they admit. Past that cap, Écluse answers `503` at once and closes the HTTP/1
-connection after the response. HTTP/2 keeps its connection open and returns the same refusal
-status and retry delay. A front proxy controls its downstream connections. This limits held
-overflow state, but does not impose a per-client request rate.
+retries and any work they admit. Past that cap, Écluse answers `503` at once with `Retry-After: 1`
+and permits normal connection reuse. This avoids forcing new connections after overflow refusals between an ingress or sidecar and
+the pod. It applies to HTTP/1 and HTTP/2. The queue limits held overflow state, but
+does not impose a per-client request rate. A proxy can retry `503` responses according to its
+configured policy, independently of connection reuse.
 
 The budget starts at a quarter of the heap the nursery leaves, less the cache budget, the queue
 tenants and the idle process. That is the live data at which the copying collector still runs

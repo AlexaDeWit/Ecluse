@@ -272,7 +272,7 @@ advisories:
 #   # when a room is full. Sweeper expiry normally adds up to 100 ms to a wait.
 #   # A retry keeps the normal room waits, so 0.5 s is not a total response deadline.
 #   # Overflow holds at most 8 reservations per slot, including retries and work they
-#   # admit. Past that cap, 503 closes the HTTP/1 connection after the response.
+#   # admit. Past that cap, 503 refuses at once and permits normal connection reuse.
 #   # Every admission refusal keeps Retry-After: 1. Treat it as backpressure.
 #   serveMaxInFlight: 128
 #   # Pooled connections per public upstream host: clamp (32, 1024) (nofile / 8).
