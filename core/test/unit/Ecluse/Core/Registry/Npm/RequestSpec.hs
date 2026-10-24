@@ -72,9 +72,8 @@ pathEncodingSpec =
 contentNegotiationSpec :: Spec
 contentNegotiationSpec =
     describe "metadata content negotiation" $ do
-        -- The two @Accept@ values are npm's wire contract. The abbreviated install view is
-        -- the primary one, and only the full packument carries the @time@ map a publish-age
-        -- rule reads.
+        -- npm uses the abbreviated install view. Only the full packument carries the @time@ map
+        -- that a publish-age rule reads.
         it "asks for the abbreviated install view" $
             acceptHeaderOf Abbreviated `shouldBe` Just "application/vnd.npm.install-v1+json"
 

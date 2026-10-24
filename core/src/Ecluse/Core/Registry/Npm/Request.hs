@@ -106,7 +106,7 @@ artifactRequestByUrl ::
     Either UrlFormationError Request
 artifactRequestByUrl = Request.artifactRequestByUrl npmCredential
 
--- The metadata and publish URL for a package: @{baseUrl}/{encoded-name}@.
+-- | The metadata and publish URL for a package: @{baseUrl}/{encoded-name}@.
 packageUrl :: Text -> PackageName -> Either UrlFormationError Text
 packageUrl baseUrl name = joinPath baseUrl (encodePackagePath name)
 
@@ -143,7 +143,8 @@ jsonPutRequest credential url document = do
                     : requestHeaders base
             }
 
--- Attach the injected credential under npm's presentation. The redirect pin and the proxy
--- identity belong to Ecluse.Core.Registry.Request, which seals every request it parses.
+{- | Attach the injected credential under npm's presentation. The redirect pin and the proxy
+identity belong to Ecluse.Core.Registry.Request, which seals every request it parses.
+-}
 withToken :: Maybe ClientCredential -> Request -> Request
 withToken = attachCredential npmCredential

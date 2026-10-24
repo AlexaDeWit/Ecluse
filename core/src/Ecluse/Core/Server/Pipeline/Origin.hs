@@ -191,6 +191,6 @@ publicOrigin rt deps = controlPublicOrigin (srPublicControl rt) Nothing (anonymo
 publicSource :: PackumentDeps -> Source
 publicSource deps = Source (registryUrlText (pdPublicBaseUrl deps))
 
--- | Build an origin with the mount's response bound and the caller-selected manager and credential.
+-- | Build an origin with the mount's response bound and the caller-selected transport and credential.
 mountOrigin :: PackumentDeps -> ExchangeClient -> BaseRequest -> Maybe ClientCredential -> OriginClient
-mountOrigin deps manager base = originClientOf . perCallerOrigin (pdLimits deps) manager base
+mountOrigin deps client base = originClientOf . perCallerOrigin (pdLimits deps) client base

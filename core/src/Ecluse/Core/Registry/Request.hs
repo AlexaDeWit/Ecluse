@@ -131,7 +131,7 @@ artifactGet mapping credential base =
             , requestHeaders = (hAcceptEncoding, "identity") : requestHeaders base
             }
 
-{- Join a base URL and an already-encoded path with exactly one slash, whatever trailing
+{- | Join a base URL and an already-encoded path with exactly one slash, whatever trailing
 slashes the configured base writes.
 -}
 joinPath :: Text -> Text -> Either UrlFormationError Text

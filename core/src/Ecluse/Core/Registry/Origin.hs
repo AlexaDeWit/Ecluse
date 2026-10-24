@@ -34,7 +34,7 @@ data OriginClient = OriginClient
     { ocBaseRequest :: BaseRequest
     -- ^ The https-only egress witness the proxy appends a package path to, parsed once.
     , ocClient :: ExchangeClient
-    -- ^ The shared @http-client@ 'ExchangeClient' to issue requests through.
+    -- ^ The shared connection pool and deadline sweeper to issue requests through.
     , ocToken :: Maybe ClientCredential
     -- ^ 'Nothing' for an anonymous origin. A passthrough read carries the caller's own verbatim.
     , ocLimits :: Limits
