@@ -2,7 +2,7 @@
 
 Both build paths use http2 5.3.10 at upstream commit
 `fe92e9c1b9cc4e774ddc45962cd71b340496bf9b` and `decoded-header-bounds.patch`.
-The patch retains the existing receiver and timer behaviour.
+The patch retains the existing receiver, timer behaviour and exposed internal decoder signature.
 
 The backport derives from upstream pull requests
 [216](https://github.com/kazu-yamamoto/http2/pull/216) and

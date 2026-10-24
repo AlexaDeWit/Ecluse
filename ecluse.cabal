@@ -1664,6 +1664,7 @@ test-suite ecluse-runtime-unit
     , hspec-wai         ^>=0.11
     , microlens         ^>=0.4.13
     , network           ^>=3.2
+    , network-byte-order ^>=0.1
     , universe-base     ^>=1.1
     , unordered-containers  ^>=0.2
     , http-client       ^>=0.7

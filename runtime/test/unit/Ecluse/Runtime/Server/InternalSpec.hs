@@ -12,8 +12,10 @@ import Data.Char (toLower)
 import Data.List (lookup)
 import Data.Text qualified as T
 import Katip (closeScribes)
+import Network.ByteOrder (withReadBuffer)
 import Network.HPACK qualified as HPACK
-import Network.HPACK.Token (tokenFoldedKey)
+import Network.HPACK.Internal qualified as HPACKInternal
+import Network.HPACK.Token (tokenCookie, tokenFoldedKey)
 import Network.HTTP.Types (HeaderName, Method, ResponseHeaders, hContentLength, methodGet, methodHead, status200)
 import Network.HTTP2.Client qualified as H2
 import Network.Socket qualified as Socket
@@ -84,6 +86,11 @@ spec = around_ (timeout 5_000_000 >=> (`shouldBe` Just ())) $ describe "runWarp 
         countResponses wire `shouldBe` 2
 
     describe "decoded HTTP/2 header bounds" $ do
+        it "retains the internal decoder signature and Cookie joining" $
+            withReadBuffer "\0\0" $ \buffer -> do
+                (fields, _) <- HPACKInternal.decodeSophisticated (\_ _ -> pure (tokenCookie, "a=1")) buffer
+                [(tokenFoldedKey token, value) | (token, value) <- fields] `shouldBe` [("cookie", "a=1; a=1")]
+
         it "uses a finite default header limit" $
             H2.maxHeaderListSize H2.defaultSettings `shouldBe` Just 65536
 

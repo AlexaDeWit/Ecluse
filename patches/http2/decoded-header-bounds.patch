@@ -6,7 +6,7 @@ index 35344a7..9de134a 100644
 +    setHeaderListSizeLimit,
 +    getHeaderListSizeLimit,
 diff --git a/Network/HPACK/HeaderBlock/Decode.hs b/Network/HPACK/HeaderBlock/Decode.hs
-index 113c771..f3df5db 100644
+index 113c771..5b767a3 100644
 --- a/Network/HPACK/HeaderBlock/Decode.hs
 +++ b/Network/HPACK/HeaderBlock/Decode.hs
 @@ -67,2 +67,4 @@ decodeTokenHeader
@@ -14,7 +14,7 @@ index 113c771..f3df5db 100644
 -    decodeHPACK dyntbl inp (decodeSophisticated (toTokenHeader dyntbl)) `catch` \BufferOverrun -> throwIO HeaderBlockTruncated
 +decodeTokenHeader dyntbl inp = do
 +    lim <- getHeaderListSizeLimit dyntbl
-+    decodeHPACK dyntbl inp (decodeSophisticated lim (toTokenHeader dyntbl))
++    decodeHPACK dyntbl inp (decodeSophisticatedBounded lim (toTokenHeader dyntbl))
 +        `catch` \BufferOverrun -> throwIO HeaderBlockTruncated
 @@ -78,5 +80,4 @@ decodeHPACK dyntbl inp dec = withReadBuffer inp chkChange
 -        w <- read8 rbuf
@@ -39,7 +39,7 @@ index 113c771..f3df5db 100644
 +                        dec rbuf
 @@ -91 +97,0 @@ decodeHPACK dyntbl inp dec = withReadBuffer inp chkChange
 ---   * 'BufferOverrun' will be thrown if the temporary buffer for Huffman decoding is too small.
-@@ -114,15 +120,2 @@ headerLimit = 200
+@@ -114,15 +120 @@ headerLimit = 200
 --- | Converting to 'TokenHeaderList' and 'ValueTable'.
 ---
 ---   * Multiple values of Cookie: are concatenated.
@@ -55,74 +55,76 @@ index 113c771..f3df5db 100644
 ---     'TooLargeHeader' is thrown
 ---   * 'DecodeError' would be thrown if the HPACK format is broken.
 ---   * 'BufferOverrun' will be thrown if the temporary buffer for Huffman decoding is too small.
-+-- | Decode headers, joining Cookie values and enforcing field syntax and size.
-+-- Malformed messages update the dynamic table before the decoder throws.
-@@ -130 +123,3 @@ decodeSophisticated
--    :: (Word8 -> ReadBuffer -> IO TokenHeader)
-+    :: Maybe Int
-+    -- ^ The limit on the decoded header list size ('Nothing' means no limit)
-+    -> (Word8 -> ReadBuffer -> IO TokenHeader)
-@@ -133 +128 @@ decodeSophisticated
++-- | Decode headers, joining Cookie values and enforcing field syntax and count.
+@@ -133 +125,9 @@ decodeSophisticated
 -decodeSophisticated decTokenHeader rbuf = do
-+decodeSophisticated lim decTokenHeader rbuf = do
-@@ -139,0 +135,5 @@ decodeSophisticated decTokenHeader rbuf = do
++decodeSophisticated = decodeSophisticatedBounded Nothing
++
++-- | Decode headers with an optional RFC 9113 decoded size limit.
++decodeSophisticatedBounded
++    :: Maybe Int
++    -> (Word8 -> ReadBuffer -> IO TokenHeader)
++    -> ReadBuffer
++    -> IO TokenHeaderTable
++decodeSophisticatedBounded lim decTokenHeader rbuf = do
+@@ -139,0 +140,5 @@ decodeSophisticated decTokenHeader rbuf = do
 +    -- RFC 9113 section 6.5.2 counts each name, value and 32 octets.
 +    tooLarge :: Int -> Bool
 +    tooLarge siz = maybe False (siz >) lim
 +    fieldSize :: TokenHeader -> Int
 +    fieldSize (Token{..}, v) = BS.length (original tokenKey) + BS.length v + 32
-@@ -141 +141 @@ decodeSophisticated decTokenHeader rbuf = do
+@@ -141 +146 @@ decodeSophisticated decTokenHeader rbuf = do
 -    pseudoNormal arr = pseudo
 +    pseudoNormal arr = pseudo 0
-@@ -143 +143 @@ decodeSophisticated decTokenHeader rbuf = do
+@@ -143 +148 @@ decodeSophisticated decTokenHeader rbuf = do
 -        pseudo = do
 +        pseudo siz = do
-@@ -148,0 +149 @@ decodeSophisticated decTokenHeader rbuf = do
+@@ -148,0 +154 @@ decodeSophisticated decTokenHeader rbuf = do
 +                    let siz' = siz + fieldSize tv
-@@ -153 +154 @@ decodeSophisticated decTokenHeader rbuf = do
+@@ -153 +159 @@ decodeSophisticated decTokenHeader rbuf = do
 -                            when (isJust mx) $ throwIO IllegalHeaderName
 +                            when (isJust mx) $ malformed IllegalHeaderName
-@@ -155 +156,2 @@ decodeSophisticated decTokenHeader rbuf = do
+@@ -155 +161,2 @@ decodeSophisticated decTokenHeader rbuf = do
 -                            when (isMaxTokenIx tokenIx) $ throwIO IllegalHeaderName
 +                            when (isMaxTokenIx tokenIx) $ malformed IllegalHeaderName
 +                            when (tooLarge siz') $ malformed TooLargeHeader
-@@ -157 +159 @@ decodeSophisticated decTokenHeader rbuf = do
+@@ -157 +164 @@ decodeSophisticated decTokenHeader rbuf = do
 -                            pseudo
 +                            pseudo siz'
-@@ -160 +162 @@ decodeSophisticated decTokenHeader rbuf = do
+@@ -160 +167 @@ decodeSophisticated decTokenHeader rbuf = do
 -                            when (tokenKey == "") $ throwIO IllegalHeaderName
 +                            when (tokenKey == "") $ malformed IllegalHeaderName
-@@ -162 +164,2 @@ decodeSophisticated decTokenHeader rbuf = do
+@@ -162 +169,2 @@ decodeSophisticated decTokenHeader rbuf = do
 -                                throwIO IllegalHeaderName
 +                                malformed IllegalHeaderName
 +                            when (tooLarge siz') $ malformed TooLargeHeader
-@@ -165,2 +168,2 @@ decodeSophisticated decTokenHeader rbuf = do
+@@ -165,2 +173,2 @@ decodeSophisticated decTokenHeader rbuf = do
 -                                then normal 0 empty (empty << v)
 -                                else normal 0 (empty << tv) empty
 +                                then normal 0 siz' empty (empty << v)
 +                                else normal 0 siz' (empty << tv) empty
-@@ -168,2 +171,2 @@ decodeSophisticated decTokenHeader rbuf = do
+@@ -168,2 +176,2 @@ decodeSophisticated decTokenHeader rbuf = do
 -        normal n builder cookie
 -            | n > headerLimit = throwIO TooLargeHeader
 +        normal n siz builder cookie
 +            | n > headerLimit = malformed TooLargeHeader
-@@ -176 +179 @@ decodeSophisticated decTokenHeader rbuf = do
+@@ -176 +184 @@ decodeSophisticated decTokenHeader rbuf = do
 -                        when isPseudo $ throwIO IllegalHeaderName
 +                        when isPseudo $ malformed IllegalHeaderName
-@@ -178 +181 @@ decodeSophisticated decTokenHeader rbuf = do
+@@ -178 +186 @@ decodeSophisticated decTokenHeader rbuf = do
 -                        when (tokenKey == "") $ throwIO IllegalHeaderName
 +                        when (tokenKey == "") $ malformed IllegalHeaderName
-@@ -180 +183,3 @@ decodeSophisticated decTokenHeader rbuf = do
+@@ -180 +188,3 @@ decodeSophisticated decTokenHeader rbuf = do
 -                            throwIO IllegalHeaderName
 +                            malformed IllegalHeaderName
 +                        let siz' = siz + fieldSize tv
 +                        when (tooLarge siz') $ malformed TooLargeHeader
-@@ -183,2 +188,2 @@ decodeSophisticated decTokenHeader rbuf = do
+@@ -183,2 +193,2 @@ decodeSophisticated decTokenHeader rbuf = do
 -                            then normal (n + 1) builder (cookie << v)
 -                            else normal (n + 1) (builder << tv) cookie
 +                            then normal (n + 1) siz' builder (cookie << v)
 +                            else normal (n + 1) siz' (builder << tv) cookie
-@@ -195,0 +201,10 @@ decodeSophisticated decTokenHeader rbuf = do
+@@ -195,0 +206,10 @@ decodeSophisticated decTokenHeader rbuf = do
 +    -- Decode the remaining fields to keep the dynamic table current.
 +    malformed :: DecodeError -> IO a
 +    malformed err = skipRest >> throwIO err

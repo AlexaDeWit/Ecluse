@@ -19,7 +19,7 @@ source-repository-package
   type:     git
   location: https://github.com/kazu-yamamoto/http2.git
   tag:      fe92e9c1b9cc4e774ddc45962cd71b340496bf9b
-  post-checkout-command: ecluse-apply-http2-patch 4183265a3161a8e3b867dc1dbae657ef315f30075e584722248ee39fe34451ef
+  post-checkout-command: ecluse-apply-http2-patch d2c56dc4cac6265ee657bfc55ed168fc2e0f50cedfc2a58db54efd08a57fe08d
 
 -- Keep this index recent enough for the versions task freeze takes from Nix.
 -- See docs/getting-started.md, Dependency locking, for task bump-index-state.
