@@ -1232,6 +1232,8 @@ Each scenario reports:
   proxy's boot log, with the runtime lines quoted
 - `ecluse.serve.admission.in_flight` and the proxy's thread count (`pids.current`) sampled each
   second, and every admission series at the end of the window
+- the serve slot held per success: the in-flight gauge's mean times the window, divided by the
+  window's successes. It estimates how long one success kept its CPU slot
 - the metadata cache's hit, miss, and collapsed request counts in the window for the full,
   version, and assembled stores, from scrapes of the proxy's Prometheus exposition at each end of
   the window. A collapsed request waited for another request's fetch instead of making its own
@@ -1276,6 +1278,21 @@ Three scenarios per ecosystem stress admission under memory pressure.
 A second generator drives heavy-tier listings that never reuse an assembled response.
 `npm/ramp` and `pypi/ramp` step from 10 to 400 connections, one configured duration per step, and report each step.
 None of these six scenarios joins the concurrency-one pass.
+
+`npm/slow-readers` and `pypi/slow-readers` measure what slow clients cost the requests beside them.
+Each repeats its ecosystem's cold listing load (`npm/merge-cold`, `pypi/index-cold`) and reports
+that load. Beside it, the same number of further clients request the same listings and read each
+response at 1 MiB/s. These slow readers run in the harness process:
+
+- Each advertises a 1448-byte segment size, as an Ethernet path does. The proxy's socket send
+  buffer then stays near a few hundred KiB, where loopback lets it grow to 4 MiB, so a listing
+  larger than that buffer keeps the proxy writing while the client reads.
+- After a `429` or `503`, or a failed request, a slow reader waits one second, the proxy's
+  admission wait, before it asks again. It does not read `Retry-After`.
+- The scenario's section shows the slow readers' successes, refusals, and time to the last byte
+  beside the measured load. The report lists the scenario after the private-copy rows.
+
+Neither slow-reader scenario joins the concurrency-one pass.
 
 The private-copy scenarios model a mirror target that is also the private upstream. Its document
 for a package holds the versions the deployment has mirrored. Every listing decodes its own private
@@ -1400,7 +1417,7 @@ merge: a breach turns only its own scheduled or dispatched run red.
 | Loaded pass | The successes in the scenario's window |
 | Concurrency-one pass | The same count, for each scenario that joins that pass |
 | `npm/ramp`, `pypi/ramp` | Every step. The one floor comes from the lowest step of the calibration runs, and each step must reach it |
-| `npm/warm-under-cold`, `pypi/warm-under-cold` | Both loads, the measured one and the concurrent one |
+| `npm/warm-under-cold`, `pypi/warm-under-cold`, `npm/slow-readers`, `pypi/slow-readers` | Both loads, the measured one and the one beside it |
 | `npm/worker-mirroring`, `pypi/worker-mirroring` | Complete jobs under `unlimited`, the only shape that runs the in-process worker |
 | The request-pattern replays | A finite trace whose count is the same every night, so the floor is half of it |
 
@@ -1502,7 +1519,7 @@ Read each pod shape's `bench-load-results.md`:
 |---|---|
 | Loaded pass | The `successes` column of "At a glance" |
 | Each ramp step | The step table in the scenario's own section |
-| The concurrent load of a paired scenario | The "concurrent load: successes" row in the scenario's own section |
+| The second load of a paired scenario | The "concurrent load: successes" or "slow readers: successes" row in the scenario's own section |
 | Concurrency-one pass | The count of successes in the first "at base concurrency one" column of "Loaded cost against concurrency one" |
 | Native injected latencies | The "injected upstream latency" row in each ecosystem section's operating point |
 

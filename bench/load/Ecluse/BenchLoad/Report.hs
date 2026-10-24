@@ -263,6 +263,7 @@ renderScenario tuning r =
         <> rtsRows r
         <> maybe [] proxyRows (srProxy r)
         <> [row "memory.peak less RTS max memory in use" (maybe "n/a" signedMib (offHeapGap r)) | isJust (srProxy r)]
+        <> [row "serve slot held per success: in-flight mean x window / successes" (msCell (slotPerSuccessMs r)) | isJust (srProxy r)]
         <> maybe [] (cpuRows (isJust (ptCpus tuning)) r) (pfCpu =<< srProxy r)
         <> [""]
         <> stepsTable (srSteps r)
@@ -284,9 +285,9 @@ loadRows l =
 
 companionRows :: LoadSummary -> [Text]
 companionRows l =
-    [ row "concurrent load: successes / refusals / transport failures" (show (lsSuccesses l) <> " / " <> show (lsRefusals l) <> " / " <> show (lsTransportFailures l))
-    , row "concurrent load: success latency p50 / p99" (msCell (pP50Ms (lsLatency l)) <> " / " <> msCell (pP99Ms (lsLatency l)))
-    , row "concurrent load: distribution" (lsNote l)
+    [ row (lsLabel l <> ": successes / refusals / transport failures") (show (lsSuccesses l) <> " / " <> show (lsRefusals l) <> " / " <> show (lsTransportFailures l))
+    , row (lsLabel l <> ": success latency p50 / p99") (msCell (pP50Ms (lsLatency l)) <> " / " <> msCell (pP99Ms (lsLatency l)))
+    , row (lsLabel l <> ": distribution") (lsNote l)
     ]
 
 rtsRows :: ScenarioReport -> [Text]
@@ -406,7 +407,7 @@ readingNotes =
     , "- **Native metadata gzip is off** in every proxy. The harness sets `ECLUSE_SERVER__METADATA_GZIP=false` and refuses a proxy that logs another posture, so these figures measure identity listings, not gzip-enabled throughput. A report from a build before the setting shows it as unreported."
     , "- **memory.peak** is the kernel's high-water mark for the proxy's cgroup. **RTS max memory in use** is what the heap held, the figure `-M` is compared with. The gap is off-heap and kernel memory."
     , "- **CPU figures** cover the window. The proxy's come from its cgroup's `cpu.stat` and from the RTS. The harness cgroup holds the load generator, the stubs, and the harness. The generator keeps its headroom while that cgroup and the CPU `oha` runs on each stay below " <> show (round (headroomLimit * 100) :: Int) <> "% busy. For a proxy placed on its own CPUs, busy time on them that the proxy did not spend comes from `/proc/stat`: runner services and the kernel."
-    , "- **The in-flight gauge** is `ecluse.serve.admission.in_flight`, sampled each second. Requests that hold admission without finishing show as a flat, nonzero gauge beside zero successes."
+    , "- **The in-flight gauge** is `ecluse.serve.admission.in_flight`, sampled each second. Requests that hold admission without finishing show as a flat, nonzero gauge beside zero successes. The serve slot held per success multiplies the gauge's mean by the window and divides by the successes, so it estimates how long one success kept its CPU slot."
     , "- **The rule policy** is what the first scenario's proxy logged at boot: each rule its configuration names, with its type and keys, and the order each mount evaluates the rules in. A proxy of either pass that logged a different policy is named."
     , "- **Allocation per refusal** divides the same window's allocation by its refusals instead of its successes. Each figure charges the whole window to one kind of response, so each is an upper bound on that kind's cost, and a small count makes it large."
     , "- **Concurrency-one** figures come from the concurrency-one pass, which runs the same scenario on a fresh proxy after the same warm-up, with exactly one connection regardless of loaded-pass scaling. Scenarios outside that pass show n/a. A loaded allocation per success far above its concurrency-one figure points at contention, or at work the concurrent requests did not share."
@@ -495,6 +496,17 @@ offHeapGap r = do
     peak <- crMemoryPeak =<< pfCgroup =<< srProxy r
     inUse <- rsMaxMemInUseBytes <$> srRtsEnd r
     pure (peak - fromIntegral inUse)
+
+-- Little's law over the sampled gauge: slot-milliseconds in the window shared out over its successes.
+slotPerSuccessMs :: ScenarioReport -> Maybe Double
+slotPerSuccessMs r = do
+    held <- gsMean . pfInFlight =<< srProxy r
+    guard (windowSuccesses r > 0)
+    pure (held * windowSeconds * 1_000 / fromIntegral (windowSuccesses r))
+  where
+    windowSeconds = case srSteps r of
+        [] -> lsElapsedSeconds (srLoad r)
+        steps -> sum (map lsElapsedSeconds steps)
 
 -- The posture at the window's end, or at the idle floor when the proxy died before the window closed.
 posture :: ScenarioReport -> Maybe RtsSnapshot

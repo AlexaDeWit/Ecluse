@@ -9,6 +9,7 @@ module Ecluse.BenchLoad.Latency (
     noPercentiles,
     percentiles,
     isSuccessStatus,
+    isRefusalStatus,
 ) where
 
 import Data.Aeson (FromJSON, ToJSON)
@@ -40,3 +41,7 @@ percentiles latencies =
 -- | A 2xx or 3xx status: the harness counts a @304@ revalidation as a success.
 isSuccessStatus :: Int -> Bool
 isSuccessStatus status = status >= 200 && status < 400
+
+-- | A @429@ or @503@: the back-pressure the admission answers with, counted apart from other failures.
+isRefusalStatus :: Int -> Bool
+isRefusalStatus status = status == 429 || status == 503

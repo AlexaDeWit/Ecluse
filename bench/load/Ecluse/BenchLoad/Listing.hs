@@ -6,6 +6,7 @@
 module Ecluse.BenchLoad.Listing (
     ListingSetup (..),
     listingLoad,
+    slowReaderScenario,
     revalidateLoad,
     cacheFitsLoad,
     cacheEvictsLoad,
@@ -17,9 +18,10 @@ import Network.Wai (Application)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (httpTarget, loadCorpusBodies, longCacheTtl, preflightDistinct, primeETag, weightedMix, withProxyOverStubs)
-import Ecluse.BenchLoad.Harness (Driver (DriveHttp), Load (Load), LoadKnobs (..), Target, proxied)
+import Ecluse.BenchLoad.Harness (Driver (DriveBeside, DriveHttp), Load (Load), LoadKnobs (..), Scenario (scenarioServiceTime), Target, proxied, scenario, urlLoad)
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
+import Ecluse.BenchLoad.SlowReader (slowReaderDescription, slowReaders)
 import Ecluse.Test.Corpus (CorpusPackage (cpWeight))
 
 -- | Native policies run before the unchanged measurement callback.
@@ -37,6 +39,18 @@ data ListingSetup = ListingSetup
 listingLoad :: ListingSetup -> Int -> LoadKnobs -> (Target -> IO a) -> IO a
 listingLoad setup ttl knobs k =
     withListings setup knobs ttl Nothing (pcPackages (lsCopy setup)) cpWeight (httpTarget k)
+
+-- | The named cold scenario's listing load, measured while as many slow readers read the same listings.
+slowReaderScenario :: ListingSetup -> Text -> Scenario
+slowReaderScenario setup cold =
+    (scenario "slow-readers" (slowReaderDescription (pcListing (lsCopy setup)) cold) (slowReaderLoad setup))
+        { scenarioServiceTime = False
+        }
+
+slowReaderLoad :: ListingSetup -> LoadKnobs -> (Target -> IO a) -> IO a
+slowReaderLoad setup knobs k =
+    withListings setup knobs 0 Nothing (pcPackages (lsCopy setup)) cpWeight $ \proxy urls ->
+        k (proxied proxy (DriveBeside (urlLoad urls) (slowReaders (lkConcurrency knobs) urls)))
 
 -- | Prime and validate the first listing before driving conditional requests.
 revalidateLoad :: ListingSetup -> LoadKnobs -> (Target -> IO a) -> IO a

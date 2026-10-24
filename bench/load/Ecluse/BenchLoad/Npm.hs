@@ -34,7 +34,7 @@ import Ecluse.BenchLoad.Contract.Driver (LoadReadDriver (..), readLoadContract)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, delayUpstream, fetchChecked, httpTarget, longCacheTtl, selfHosted, weightedMix, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (..), LoadKnobs (..), Scenario (..), Target (Target), UpstreamFixture, proxied, scenario, urlLoad)
-import Ecluse.BenchLoad.Listing (ListingSetup (..), cacheEvictsLoad, cacheFitsLoad, listingLoad, revalidateLoad, withListingStubs)
+import Ecluse.BenchLoad.Listing (ListingSetup (..), cacheEvictsLoad, cacheFitsLoad, listingLoad, revalidateLoad, slowReaderScenario, withListingStubs)
 import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (saProxyPath))
 import Ecluse.BenchLoad.PatternScenario (loadPins, selectArtifacts)
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
@@ -102,6 +102,7 @@ npmReadDriver =
     LoadReadDriver
         { lrdPrivateCopy = npmPrivateCopy
         , lrdColdMetadata = mergeScenario
+        , lrdSlowReaders = slowReaderScenario npmListing "merge-cold"
         , lrdAssembledHit = assembledHitScenario
         , lrdRevalidate = revalidateScenario
         , lrdCacheFits = cacheFitsScenario

@@ -22,6 +22,7 @@ module Ecluse.BenchLoad.Harness (
     Target (..),
     proxied,
     Driver (..),
+    Companion (..),
     Load (..),
     urlLoad,
 
@@ -59,7 +60,7 @@ import Ecluse.BenchLoad.Exposition (
     summariseGauge,
  )
 import Ecluse.BenchLoad.Floors (OperatingPoint (..), Pass (ConcurrencyOne, Loaded), PassSelection (EveryPass), parsePassSelection)
-import Ecluse.BenchLoad.Latency (Percentiles, isSuccessStatus, percentiles)
+import Ecluse.BenchLoad.Latency (Percentiles, isRefusalStatus, isSuccessStatus, percentiles)
 import Ecluse.BenchLoad.Oha (OhaReport (..), OhaRun (..), RunLength (ForRequests, ForSeconds), runOha)
 import Ecluse.BenchLoad.PatternReport (ReplayTotals (..))
 import Ecluse.BenchLoad.Patterns (RequestTrace (rtClients))
@@ -266,10 +267,20 @@ data Driver
       DriveRamp [Int] Load
     | -- | Measure the first load while the second runs beside it on its own connections.
       DriveUnder Load Load
+    | -- | Measure the load while the companion runs beside it for the same duration.
+      DriveBeside Load Companion
     | -- | Consume a finite trace once from the fresh fixture, without priming any cache.
       DriveReplay Replay
     | -- | Run the in-process load for the configured duration, returning each unit's latency in seconds.
       DriveInProcess (IO [Double])
+
+-- | Clients the harness runs itself, reported in the shape of an @oha@ run.
+data Companion = Companion
+    { companionLabel :: Text
+    , companionConnections :: Int
+    , companionRun :: Int -> IO OhaReport
+    -- ^ Apply the load for this many seconds.
+    }
 
 -- | One load's outcome over its window. Latencies cover successful responses only.
 data LoadSummary = LoadSummary
@@ -496,6 +507,7 @@ warmUp = \case
     DriveHttp load -> warm load
     DriveRamp _ load -> warm load
     DriveUnder measured beside -> warm measured >> warm beside
+    DriveBeside measured _ -> warm measured
     DriveBurst _ _ -> pass
     DriveReplay _ -> pass
     DriveInProcess _ -> pass
@@ -518,9 +530,9 @@ drive knobs = \case
         let stepSummaries = [summariseOha (show c <> " connections") c r | (c, r) <- reports]
             highest = fromMaybe (summariseOha "" 0 (OhaReport 0 mempty mempty [])) (listToMaybe (reverse stepSummaries))
         pure (DriveOutcome highest Nothing stepSummaries Nothing)
-    DriveUnder measured beside -> do
-        (m, b) <- concurrently (runOha (timed connections measured)) (runOha (timed connections beside))
-        pure (DriveOutcome (summariseOha "measured" connections m) (Just (summariseOha "concurrent load" connections b)) [] Nothing)
+    DriveUnder measured beside -> paired measured (summariseOha "concurrent load" connections) (runOha (timed connections beside))
+    DriveBeside measured companion ->
+        paired measured (summariseOha (companionLabel companion) (companionConnections companion)) (companionRun companion (lkDurationSeconds knobs))
     DriveReplay replay -> do
         result <- runReplay replay
         let totals = replayTotals result
@@ -537,6 +549,9 @@ drive knobs = \case
     connections = lkConcurrency knobs
     timed c load = OhaRun c (ForSeconds (lkDurationSeconds knobs)) (loadHeaders load) (loadUrls load) True
     alone summary = DriveOutcome summary Nothing [] Nothing
+    paired measured summariseBeside beside = do
+        (m, b) <- concurrently (runOha (timed connections measured)) beside
+        pure (DriveOutcome (summariseOha "measured" connections m) (Just (summariseBeside b)) [] Nothing)
 
 summariseOha :: Text -> Int -> OhaReport -> LoadSummary
 summariseOha label connections report =
@@ -557,7 +572,7 @@ summariseOha label connections report =
     statuses = [(readMaybe (toString status) :: Maybe Int, n) | (status, n) <- Map.toList (ohaStatusCounts report)]
     completed = sum (map snd statuses)
     successes = sum [n | (Just status, n) <- statuses, isSuccessStatus status]
-    refusals = sum [n | (Just status, n) <- statuses, status == 429 || status == 503]
+    refusals = sum [n | (Just status, n) <- statuses, isRefusalStatus status]
     aborts = deadlineAbortsOf report
 
 -- oha labels a request abandoned at the run's deadline "aborted due to deadline".
