@@ -92,7 +92,7 @@ withUpstreamResultUsing control client progress request body accept relay respon
     opened <- newIORef False
     result <- tryAny $ withReadControl control request $ \observed recordHeaders ->
         mask $ \restore -> do
-            upstream <- restore (openResponse client observed)
+            upstream <- openResponse client observed
             writeIORef opened True
             restore (recordHeaders (responseStatus upstream) (responseHeaders upstream) >> answer upstream) `finally` responseClose upstream
     case result of

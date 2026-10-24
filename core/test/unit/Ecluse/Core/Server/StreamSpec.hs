@@ -7,10 +7,12 @@ module Ecluse.Core.Server.StreamSpec (spec) where
 
 import Prelude hiding (get)
 
+import Control.Exception (AsyncException (ThreadKilled))
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (Builder, byteString, toLazyByteString)
 import Data.Text qualified as T
 import GHC.Clock (getMonotonicTime)
+import GHC.Conc (BlockReason (BlockedOnException), ThreadStatus (ThreadBlocked), threadStatus, throwTo)
 import Network.HTTP.Client (
     defaultManagerSettings,
     httpLbs,
@@ -23,12 +25,15 @@ import Network.HTTP.Types (Method, ResponseHeaders, Status, methodGet, methodHea
 import Network.HTTP.Types.Header (HeaderName, hContentType, hETag)
 import Network.Wai (Application, Response, ResponseReceived, responseLBS, responseRaw, responseStream)
 import Network.Wai.Handler.Warp (testWithApplication)
+import System.Timeout qualified as Timeout
 import Test.Hspec
 import UnliftIO (concurrently)
-import UnliftIO.Exception (tryAny, withException)
+import UnliftIO.Async (asyncThreadId, waitCatch, withAsync)
+import UnliftIO.Concurrent (threadDelay, yield)
+import UnliftIO.Exception (mask_, tryAny, withException)
 
 import Ecluse.Core.Fault (RetryAfter (RetryAfter), TransportCause (TransportUnreachable), TransportFault (tfCause))
-import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecManager))
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecManager, ecTrace))
 import Ecluse.Core.Security (Limits (progressFloor), ProgressFloor, defaultLimits, mkProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
 import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamBody (NoBody, StreamBody), UpstreamBodyFailed (UpstreamBodyFailed), UpstreamResult (..), pumpBody, withUpstreamResult)
@@ -42,8 +47,6 @@ spec :: Spec
 spec = do
     describe "pumpBody, constant memory and backpressure" $ do
         it "holds at most one chunk in flight regardless of body size (constant memory)" $ do
-            -- Each 'write' blocks until the consumer acks, so the producer never runs ahead.
-            -- A high-water mark of 1 for a 256-chunk body is the constant-memory property.
             let chunks = replicate 256 (BS.replicate 4096 0x61)
                 total = length chunks
             sink <- newEmptyMVar -- producer -> consumer handoff
@@ -85,10 +88,39 @@ spec = do
             pumpBody (srcNext src) (const (pure ())) (modifyIORef' flushes (+ 1))
             readIORef flushes `shouldReturn` 1
 
+    describe "withUpstreamResult, response acquisition cancellation" $
+        it "closes an acquired response before propagating cancellation during trace bookkeeping" $ do
+            reached <- newEmptyMVar
+            released <- newIORef False
+            closed <- newEmptyMVar
+            let peer _ respond =
+                    respond $ responseRaw (\receive send -> send "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nx" >> receive >>= putMVar closed) (responseLBS status404 [] "")
+                traced request open = mask_ $ do
+                    response <- open request
+                    putMVar reached ()
+                    let spin = readIORef released >>= \done -> unless done (yield >> spin)
+                    spin
+                    pure response
+                unused = RelayResponder (\_ _ _ -> expectationFailure "cancelled relay reached responder") (\_ _ -> expectationFailure "cancelled relay reached responder")
+            testWithApplication (pure peer) $ \port ->
+                withExchangeClient (newManager defaultManagerSettings) $ \client -> do
+                    request <- parseRequest ("http://127.0.0.1:" <> show port <> "/")
+                    withAsync (withUpstreamResult client{ecTrace = traced} (progressFloor defaultLimits) request StreamBody statusIsSuccessful relayVerbatim unused) $ \relay -> do
+                        takeMVar reached
+                        withAsync (throwTo (asyncThreadId relay) ThreadKilled) $ \thrower -> do
+                            let awaitPending =
+                                    threadStatus (asyncThreadId thrower) >>= \case
+                                        ThreadBlocked BlockedOnException -> pure ()
+                                        _ -> threadDelay 1000 >> awaitPending
+                            pending <- Timeout.timeout 5_000_000 awaitPending
+                            writeIORef released True
+                            pending `shouldBe` Just ()
+                            outcome <- waitCatch relay
+                            either fromException (const Nothing) outcome `shouldBe` Just ThreadKilled
+                            Timeout.timeout 5_000_000 (takeMVar closed) `shouldReturn` Just ""
+
     describe "withUpstreamResult, a large body end to end over an in-process upstream" $
         it "relays a large body through with the upstream status" $ do
-            -- A 4 MiB body must arrive intact through the full http-client wiring. The pump case
-            -- above is the proof that this path never buffers the body whole.
             let bigBody = BS.replicate (4 * 1024 * 1024) 0x7a
             resp <- throughProxy (upstreamApp bigBody) conditionalProxy
             statusCode (HTTP.responseStatus resp) `shouldBe` 206
@@ -96,8 +128,6 @@ spec = do
 
     describe "withUpstreamResult, a conditional relay (hit, miss, open failure)" $ do
         it "relays the body AND the upstream content headers when the status passes accept" $ do
-            -- The client verifies dist.integrity over the relayed bytes and headers, so the relay
-            -- must forward the upstream's content headers along with the body.
             resp <- throughProxy headeredUpstream conditionalProxy
             toStrict (responseBody resp) `shouldBe` "the-bytes"
             headerOf hContentType resp `shouldBe` Just "application/octet-stream"
@@ -113,8 +143,6 @@ spec = do
             responseBody resp `shouldBe` "TRANSPORT-FAILURE"
 
         it "relays an upstream 304 as a bodiless 304, forwarding its validator (the pass-through conditional relay)" $ do
-            -- A 304 passes the artifact relay's accept predicate (a 2xx or a 304). The relay sends
-            -- it back bodiless with the upstream's ETag forwarded, never pumped as a streamed body.
             resp <- throughProxy notModifiedUpstream notModifiedProxy
             statusCode (HTTP.responseStatus resp) `shouldBe` 304
             responseBody resp `shouldBe` ""
@@ -153,8 +181,6 @@ spec = do
 
     describe "withUpstreamResult, a bodiless relay (HEAD, no pump)" $
         it "relays the upstream status and content headers with no body on a hit" $ do
-            -- The helper never pumps the body on a HEAD, which is the amplification a HEAD must
-            -- never trigger.
             resp <- throughProxy headLengthUpstream probeProxy
             responseBody resp `shouldBe` ""
             headerOf hContentType resp `shouldBe` Just "application/octet-stream"
@@ -198,7 +224,6 @@ truncatedUpstream :: Application
 truncatedUpstream _req respond =
     respond (responseRaw (\_ send -> send "HTTP/1.1 200 OK\r\nContent-Length: 20\r\nConnection: close\r\n\r\nshort") (responseLBS status404 [] ""))
 
--- A hit is observable as the relayed upstream body.
 conditionalProxy :: ProxyApp
 conditionalProxy = relayProxy (progressFloor defaultLimits) StreamBody statusIsSuccessful methodGet
 
@@ -241,21 +266,17 @@ upstreamApp :: ByteString -> Application
 upstreamApp body _req respond =
     respond (responseStream status206 [] (\write flush -> writeChunks write flush (sliceChunks 65536 body)))
 
--- An upstream that answers 200 with a body and a content header to relay.
 headeredUpstream :: Application
 headeredUpstream _req respond =
     respond (responseLBS status200 [(hContentType, "application/octet-stream")] "the-bytes")
 
--- An upstream that always 404s: the conditional relay's recoverable miss.
 missingUpstream :: Application
 missingUpstream _req respond = respond (responseLBS status404 [] "not found")
 
--- An upstream that answers a bodiless 304 with a validator (an ETag).
 notModifiedUpstream :: Application
 notModifiedUpstream _req respond =
     respond (responseLBS status304 [(hETag, "\"v1\"")] "")
 
--- An upstream that answers a content header with no body, as a HEAD reply does.
 headLengthUpstream :: Application
 headLengthUpstream _req respond =
     respond (responseLBS status200 [(hContentType, "application/octet-stream")] "")
@@ -309,6 +330,5 @@ newSource chunks = do
                     pure c
     pure Source{srcNext = next, srcProduced = produced, srcOutstanding = outstanding, srcHighWater = highWater}
 
--- Render a one-builder write back to the strict bytes it carried.
 builtBytes :: Builder -> ByteString
 builtBytes = toStrict . toLazyByteString
