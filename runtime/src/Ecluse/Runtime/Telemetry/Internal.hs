@@ -258,12 +258,12 @@ initializeObservedMeterProvider logEnv sink = do
 -- | Release the reader and flusher if final setup fails. The supplied stop always attempts both.
 initializeMeterWorkers :: LogEnv -> IO () -> IO PeriodicMetricReaderHandle -> (IO () -> IO a) -> IO a
 initializeMeterWorkers logEnv flushStep acquireReader use = Exception.mask $ \restore -> do
-    reader <- acquireReader
+    readerHandle <- acquireReader
     -- Acquisition is masked. The flusher must remain cancellable.
     flusher <-
         asyncWithUnmask (\unmask -> unmask (superviseBackground "metric-flush" logEnv flushStep))
-            `Exception.onException` (stopPeriodicMetricReader reader `catchAny` const pass)
-    let stop = stopPeriodicMetricReader reader `Exception.finally` cancel flusher
+            `Exception.onException` (stopPeriodicMetricReader readerHandle `catchAny` const pass)
+    let stop = stopPeriodicMetricReader readerHandle `Exception.finally` cancel flusher
     restore (use stop) `Exception.onException` (stop `catchAny` const pass)
 
 {- Run a stop before the provider shuts down: the reader's, whose final export is the last, then the
