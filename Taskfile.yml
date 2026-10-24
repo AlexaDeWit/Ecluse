@@ -429,6 +429,7 @@ tasks:
       - 'bench/load/sweeps/*.json'
       - 'flake.lock'
     cmds:
+      - bash scripts/apply-http2-patch.test.sh
       - bash scripts/ci-build-diagnostics.test.sh
       - bash scripts/ci-cabal-diff.test.sh
       - bash scripts/ci-classify-change.test.sh

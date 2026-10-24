@@ -126,7 +126,7 @@ task gate          # task check, then the integration suite and the Haddock buil
 
 `task check` runs the unit and integration suites under coverage, so it needs a running Docker
 daemon and starts the integration containers. `task gate` is not the whole CI gate. It omits the
-end-to-end tier, the allocation budgets, the release dry-run, and the two dependency-lock checks
+end-to-end tier, the allocation budgets, the release dry-run, and the three dependency-lock checks
 that `task nix-check` runs.
 
 [Getting Started](docs/getting-started.md) covers full setup, the `task` workflow, and
@@ -146,6 +146,7 @@ DCO sign-off. The [Code of Conduct](CODE_OF_CONDUCT.md) governs participation, a
 | `report/`   | Pure Markdown formatting shared by reports and generated site pages |
 | `taskfiles/` | Task orchestration for tests, coverage, and performance measurements                                                      |
 | `json-stream/` | Maintained json-stream fork: the private lexer and parser library, retaining upstream BSD-3-Clause attribution |
+| `patches/` | Attributed dependency patches shared by the Nix and Cabal builds |
 | `vendor/` | Attributed native decoder sources with bounded resource lifetime support |
 | `examples/` | Operator starting points, including the Datadog Terraform dashboard example |
 | `config/`   | The embedded defaults (`default.yaml`), the schema guidepost operator configs override                                    |

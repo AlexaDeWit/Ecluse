@@ -1,0 +1,203 @@
+diff --git a/Network/HPACK.hs b/Network/HPACK.hs
+index 35344a7..9de134a 100644
+--- a/Network/HPACK.hs
++++ b/Network/HPACK.hs
+@@ -24,0 +25,2 @@ module Network.HPACK (
++    setHeaderListSizeLimit,
++    getHeaderListSizeLimit,
+diff --git a/Network/HPACK/HeaderBlock/Decode.hs b/Network/HPACK/HeaderBlock/Decode.hs
+index 113c771..f3df5db 100644
+--- a/Network/HPACK/HeaderBlock/Decode.hs
++++ b/Network/HPACK/HeaderBlock/Decode.hs
+@@ -67,2 +67,4 @@ decodeTokenHeader
+-decodeTokenHeader dyntbl inp =
+-    decodeHPACK dyntbl inp (decodeSophisticated (toTokenHeader dyntbl)) `catch` \BufferOverrun -> throwIO HeaderBlockTruncated
++decodeTokenHeader dyntbl inp = do
++    lim <- getHeaderListSizeLimit dyntbl
++    decodeHPACK dyntbl inp (decodeSophisticated lim (toTokenHeader dyntbl))
++        `catch` \BufferOverrun -> throwIO HeaderBlockTruncated
+@@ -78,5 +80,4 @@ decodeHPACK dyntbl inp dec = withReadBuffer inp chkChange
+-        w <- read8 rbuf
+-        if isTableSizeUpdate w
+-            then do
+-                tableSizeUpdate dyntbl w rbuf
+-                chkChange rbuf
++        -- Empty trailers contain no field bytes.
++        leftover <- remainingSize rbuf
++        if leftover < 1
++            then dec rbuf
+@@ -84,2 +85,8 @@ decodeHPACK dyntbl inp dec = withReadBuffer inp chkChange
+-                ff rbuf (-1)
+-                dec rbuf
++                w <- read8 rbuf
++                if isTableSizeUpdate w
++                    then do
++                        tableSizeUpdate dyntbl w rbuf
++                        chkChange rbuf
++                    else do
++                        ff rbuf (-1)
++                        dec rbuf
+@@ -91 +97,0 @@ decodeHPACK dyntbl inp dec = withReadBuffer inp chkChange
+---   * 'BufferOverrun' will be thrown if the temporary buffer for Huffman decoding is too small.
+@@ -114,15 +120,2 @@ headerLimit = 200
+--- | Converting to 'TokenHeaderList' and 'ValueTable'.
+---
+---   * Multiple values of Cookie: are concatenated.
+---   * If a pseudo header appears multiple times,
+---     'IllegalHeaderName' is thrown.
+---   * If unknown pseudo headers appear,
+---     'IllegalHeaderName' is thrown.
+---   * If pseudo headers are found after normal headers,
+---     'IllegalHeaderName' is thrown.
+---   * If a header key contains capital letters,
+---     'IllegalHeaderName' is thrown.
+---   * If the number of header fields is too large,
+---     'TooLargeHeader' is thrown
+---   * 'DecodeError' would be thrown if the HPACK format is broken.
+---   * 'BufferOverrun' will be thrown if the temporary buffer for Huffman decoding is too small.
++-- | Decode headers, joining Cookie values and enforcing field syntax and size.
++-- Malformed messages update the dynamic table before the decoder throws.
+@@ -130 +123,3 @@ decodeSophisticated
+-    :: (Word8 -> ReadBuffer -> IO TokenHeader)
++    :: Maybe Int
++    -- ^ The limit on the decoded header list size ('Nothing' means no limit)
++    -> (Word8 -> ReadBuffer -> IO TokenHeader)
+@@ -133 +128 @@ decodeSophisticated
+-decodeSophisticated decTokenHeader rbuf = do
++decodeSophisticated lim decTokenHeader rbuf = do
+@@ -139,0 +135,5 @@ decodeSophisticated decTokenHeader rbuf = do
++    -- RFC 9113 section 6.5.2 counts each name, value and 32 octets.
++    tooLarge :: Int -> Bool
++    tooLarge siz = maybe False (siz >) lim
++    fieldSize :: TokenHeader -> Int
++    fieldSize (Token{..}, v) = BS.length (original tokenKey) + BS.length v + 32
+@@ -141 +141 @@ decodeSophisticated decTokenHeader rbuf = do
+-    pseudoNormal arr = pseudo
++    pseudoNormal arr = pseudo 0
+@@ -143 +143 @@ decodeSophisticated decTokenHeader rbuf = do
+-        pseudo = do
++        pseudo siz = do
+@@ -148,0 +149 @@ decodeSophisticated decTokenHeader rbuf = do
++                    let siz' = siz + fieldSize tv
+@@ -153 +154 @@ decodeSophisticated decTokenHeader rbuf = do
+-                            when (isJust mx) $ throwIO IllegalHeaderName
++                            when (isJust mx) $ malformed IllegalHeaderName
+@@ -155 +156,2 @@ decodeSophisticated decTokenHeader rbuf = do
+-                            when (isMaxTokenIx tokenIx) $ throwIO IllegalHeaderName
++                            when (isMaxTokenIx tokenIx) $ malformed IllegalHeaderName
++                            when (tooLarge siz') $ malformed TooLargeHeader
+@@ -157 +159 @@ decodeSophisticated decTokenHeader rbuf = do
+-                            pseudo
++                            pseudo siz'
+@@ -160 +162 @@ decodeSophisticated decTokenHeader rbuf = do
+-                            when (tokenKey == "") $ throwIO IllegalHeaderName
++                            when (tokenKey == "") $ malformed IllegalHeaderName
+@@ -162 +164,2 @@ decodeSophisticated decTokenHeader rbuf = do
+-                                throwIO IllegalHeaderName
++                                malformed IllegalHeaderName
++                            when (tooLarge siz') $ malformed TooLargeHeader
+@@ -165,2 +168,2 @@ decodeSophisticated decTokenHeader rbuf = do
+-                                then normal 0 empty (empty << v)
+-                                else normal 0 (empty << tv) empty
++                                then normal 0 siz' empty (empty << v)
++                                else normal 0 siz' (empty << tv) empty
+@@ -168,2 +171,2 @@ decodeSophisticated decTokenHeader rbuf = do
+-        normal n builder cookie
+-            | n > headerLimit = throwIO TooLargeHeader
++        normal n siz builder cookie
++            | n > headerLimit = malformed TooLargeHeader
+@@ -176 +179 @@ decodeSophisticated decTokenHeader rbuf = do
+-                        when isPseudo $ throwIO IllegalHeaderName
++                        when isPseudo $ malformed IllegalHeaderName
+@@ -178 +181 @@ decodeSophisticated decTokenHeader rbuf = do
+-                        when (tokenKey == "") $ throwIO IllegalHeaderName
++                        when (tokenKey == "") $ malformed IllegalHeaderName
+@@ -180 +183,3 @@ decodeSophisticated decTokenHeader rbuf = do
+-                            throwIO IllegalHeaderName
++                            malformed IllegalHeaderName
++                        let siz' = siz + fieldSize tv
++                        when (tooLarge siz') $ malformed TooLargeHeader
+@@ -183,2 +188,2 @@ decodeSophisticated decTokenHeader rbuf = do
+-                            then normal (n + 1) builder (cookie << v)
+-                            else normal (n + 1) (builder << tv) cookie
++                            then normal (n + 1) siz' builder (cookie << v)
++                            else normal (n + 1) siz' (builder << tv) cookie
+@@ -195,0 +201,10 @@ decodeSophisticated decTokenHeader rbuf = do
++    -- Decode the remaining fields to keep the dynamic table current.
++    malformed :: DecodeError -> IO a
++    malformed err = skipRest >> throwIO err
++    skipRest = do
++        leftover <- remainingSize rbuf
++        when (leftover >= 1) $ do
++            w <- read8 rbuf
++            _ <- decTokenHeader w rbuf
++            skipRest
++
+diff --git a/Network/HPACK/Table.hs b/Network/HPACK/Table.hs
+index 2ffc59b..0373a44 100644
+--- a/Network/HPACK/Table.hs
++++ b/Network/HPACK/Table.hs
+@@ -18,0 +19,2 @@ module Network.HPACK.Table (
++    setHeaderListSizeLimit,
++    getHeaderListSizeLimit,
+diff --git a/Network/HPACK/Table/Dynamic.hs b/Network/HPACK/Table/Dynamic.hs
+index bdbec4c..1b8d99d 100644
+--- a/Network/HPACK/Table/Dynamic.hs
++++ b/Network/HPACK/Table/Dynamic.hs
+@@ -16,0 +17,2 @@ module Network.HPACK.Table.Dynamic (
++    setHeaderListSizeLimit,
++    getHeaderListSizeLimit,
+@@ -118,0 +121,2 @@ data DynamicTable = DynamicTable
++    , headerListSizeLimit :: IORef (Maybe Size)
++    -- ^ RFC 9113 section 6.5.2 decoded size limit. Nothing disables the limit.
+@@ -188,0 +193,9 @@ needChangeTableSize DynamicTable{..} = do
++-- | Set the decoded size limit. Nothing disables it, and zero refuses every field.
++setHeaderListSizeLimit :: Maybe Int -> DynamicTable -> IO ()
++setHeaderListSizeLimit lim DynamicTable{..} =
++    writeIORef headerListSizeLimit lim
++
++-- | Get the decoded header size limit. 'Nothing' means no limit.
++getHeaderListSizeLimit :: DynamicTable -> IO (Maybe Int)
++getHeaderListSizeLimit DynamicTable{..} = readIORef headerListSizeLimit
++
+@@ -237,0 +251 @@ newDynamicTable maxsiz info = do
++        <*> newIORef Nothing -- headerListSizeLimit (no limit)
+diff --git a/Network/HTTP2/Client/Run.hs b/Network/HTTP2/Client/Run.hs
+index 599e60e..e739d48 100644
+--- a/Network/HTTP2/Client/Run.hs
++++ b/Network/HTTP2/Client/Run.hs
+@@ -56 +56 @@ data ClientConfig = ClientConfig
+--- ClientConfig {scheme = "http", authority = "localhost", cacheLimit = 64, connectionWindowSize = 16777216, settings = Settings {headerTableSize = 4096, enablePush = True, maxConcurrentStreams = Just 64, initialWindowSize = 262144, maxFrameSize = 16384, maxHeaderListSize = Nothing, pingRateLimit = 10, emptyFrameRateLimit = 4, settingsRateLimit = 4, rstRateLimit = 4}}
++-- ClientConfig {scheme = "http", authority = "localhost", cacheLimit = 64, connectionWindowSize = 16777216, settings = Settings {headerTableSize = 4096, enablePush = True, maxConcurrentStreams = Just 64, initialWindowSize = 262144, maxFrameSize = 16384, maxHeaderListSize = Just 65536, pingRateLimit = 10, emptyFrameRateLimit = 4, settingsRateLimit = 4, rstRateLimit = 4}}
+diff --git a/Network/HTTP2/H2/Context.hs b/Network/HTTP2/H2/Context.hs
+index d722da0..fb4b7e4 100644
+--- a/Network/HTTP2/H2/Context.hs
++++ b/Network/HTTP2/H2/Context.hs
+@@ -126,0 +127,3 @@ newContext roleInfo Config{..} cacheSiz connRxWS mySettings timmgr = do
++    setHeaderListSizeLimit
++        (Just (fromMaybe defaultHeaderListSizeLimit (maxHeaderListSize mySettings)))
++        decodeDynamicTable
+diff --git a/Network/HTTP2/H2/Settings.hs b/Network/HTTP2/H2/Settings.hs
+index e23afe7..26c43df 100644
+--- a/Network/HTTP2/H2/Settings.hs
++++ b/Network/HTTP2/H2/Settings.hs
+@@ -24 +24 @@ data Settings = Settings
+-    -- ^ SETTINGS_MAX_HEADER_LIST_SIZE
++    -- ^ Advertised decoded header limit, also enforced locally. 'Nothing' enforces 64 KiB without advertising it.
+@@ -58 +58 @@ baseSettings =
+--- Settings {headerTableSize = 4096, enablePush = True, maxConcurrentStreams = Just 64, initialWindowSize = 262144, maxFrameSize = 16384, maxHeaderListSize = Nothing, pingRateLimit = 10, emptyFrameRateLimit = 4, settingsRateLimit = 4, rstRateLimit = 4}
++-- Settings {headerTableSize = 4096, enablePush = True, maxConcurrentStreams = Just 64, initialWindowSize = 262144, maxFrameSize = 16384, maxHeaderListSize = Just 65536, pingRateLimit = 10, emptyFrameRateLimit = 4, settingsRateLimit = 4, rstRateLimit = 4}
+@@ -63,0 +64 @@ defaultSettings =
++        , maxHeaderListSize = Just defaultHeaderListSizeLimit
+@@ -65,0 +67,4 @@ defaultSettings =
++-- | Default decoded field-block limit in octets, including RFC 9113 field overhead.
++defaultHeaderListSizeLimit :: Int
++defaultHeaderListSizeLimit = 64 * 1024
++
+diff --git a/Network/HTTP2/Server/Run.hs b/Network/HTTP2/Server/Run.hs
+index b186b0f..f5ff3a8 100644
+--- a/Network/HTTP2/Server/Run.hs
++++ b/Network/HTTP2/Server/Run.hs
+@@ -37 +37 @@ data ServerConfig = ServerConfig
+--- ServerConfig {numberOfWorkers = 8, connectionWindowSize = 16777216, settings = Settings {headerTableSize = 4096, enablePush = True, maxConcurrentStreams = Just 64, initialWindowSize = 262144, maxFrameSize = 16384, maxHeaderListSize = Nothing, pingRateLimit = 10, emptyFrameRateLimit = 4, settingsRateLimit = 4, rstRateLimit = 4}}
++-- ServerConfig {numberOfWorkers = 8, connectionWindowSize = 16777216, settings = Settings {headerTableSize = 4096, enablePush = True, maxConcurrentStreams = Just 64, initialWindowSize = 262144, maxFrameSize = 16384, maxHeaderListSize = Just 65536, pingRateLimit = 10, emptyFrameRateLimit = 4, settingsRateLimit = 4, rstRateLimit = 4}}

@@ -28,8 +28,8 @@ exact Nix-store closure (GHC and C libraries from `flake.lock`), use the Nix out
 | Build the `ecluse` binary | `task nix-build` (`nix build`) → `./result/bin/ecluse` |
 | Evaluate the flake and build its checks | `task nix-check` (`nix flake check`) |
 
-`nix flake check` builds the `docs`, `freeze-sync`, and `amazonka-lockstep`
-checks. The first builds library Haddock. The other two verify the dependency
+`nix flake check` builds the `docs`, `freeze-sync`, `amazonka-lockstep`
+and `http2-lockstep` checks. The first builds library Haddock. The others verify the dependency
 locks described below. Test suites, formatting, and linting run through
 separate `task` targets. The authoritative CI tiers and their
 external-service requirements are in [Testing Strategy](testing.md#what-gates-and-what-doesnt).
@@ -55,7 +55,11 @@ flake check fails CI whenever the committed freeze drifts from the set. The `ind
 version, so advance it with `task bump-index-state` only when cabal reports a pinned version as
 unknown. One source pin is held in two places. amazonka's are `amazonkaRev` in `flake.nix` and
 its `source-repository-package` tag in `cabal.project`, and the `amazonka-lockstep` flake check
-keeps them equal. The maintained json-stream fork lives under `json-stream/` and builds as a private Cabal library.
+keeps them equal. The http2 source pin and decoded-header patch use the same rule.
+The `http2-lockstep` check compares the revision and patch digest.
+The Nix shell supplies Cabal's immutable checkout hook, including offline reruns.
+See [`patches/http2/README.md`](../patches/http2/README.md) for provenance and cache behaviour.
+The maintained json-stream fork lives under `json-stream/` and builds as a private Cabal library.
 Its README records the upstream origin and licence. Frozen compatibility fixtures record the
 historical implementations used to establish the parser contract.
 

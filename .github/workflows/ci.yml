@@ -683,6 +683,7 @@ jobs:
           ".#checks.$NIX_SYSTEM.docs"
           ".#checks.$NIX_SYSTEM.freeze-sync"
           ".#checks.$NIX_SYSTEM.amazonka-lockstep"
+          ".#checks.$NIX_SYSTEM.http2-lockstep"
 
   analysis:
     name: Dead-code and static analysis (weeder, stan)

@@ -161,6 +161,32 @@
             amazonka-s3 = fromMonorepo "amazonka-s3" "lib/services/amazonka-s3";
           };
 
+        http2Rev = "fe92e9c1b9cc4e774ddc45962cd71b340496bf9b";
+        http2Patch = ./patches/http2/decoded-header-bounds.patch;
+        http2PatchHash = builtins.hashFile "sha256" http2Patch;
+        http2Src = pkgs.fetchFromGitHub {
+          owner = "kazu-yamamoto";
+          repo = "http2";
+          rev = http2Rev;
+          hash = "sha256-GmpWEKao7mR8ZwZnHfLlxPjaTlR6sRdYY56GumIiLSQ=";
+        };
+        http2Overlay = hself: _hsuper: {
+          http2 = hlib.overrideCabal
+            (hlib.dontCheck (hself.callCabal2nix "http2" http2Src { }))
+            (old: {
+              patches = (old.patches or [ ]) ++ [ http2Patch ];
+              prePatch = (old.prePatch or "") + "\npatchFlags=(-p1 --fuzz=0)\n";
+            });
+        };
+        applyHttp2Patch = pkgs.writeShellApplication {
+          name = "ecluse-apply-http2-patch";
+          runtimeInputs = [ pkgs.git pkgs.coreutils pkgs.diffutils ];
+          text = ''
+            exec ${pkgs.bash}/bin/bash ${./scripts/apply-http2-patch.sh} \
+              ${http2Rev} ${http2Patch} "$@"
+          '';
+        };
+
         # Fixes for HSEC-2026-0007 (JSON decoding DoS) and HSEC-2026-0008 (X.509 Name Constraints).
         # tls 2.4.11 needs hpke 0.3, x509 1.10, and crypton 2.1.9 or later.
         advisoryOverlay = hself: hsuper:
@@ -273,6 +299,7 @@
           overrides = pkgs.lib.composeManyExtensions [
             otelOverlay
             amazonkaOverlay
+            http2Overlay
             advisoryOverlay
             upstreamSuitesOverlay
             managedLzmaOverlay
@@ -433,6 +460,7 @@
           pkgs.bashInteractive
           toolHpkgs.ghc
           pkgs.cabal-install
+          applyHttp2Patch
           pkgs.zlib
           pkgs.bzip2
           pkgs.xz
@@ -635,9 +663,7 @@
         # doHaddock forces documentation generation. dontCheck skips tests.
         checks.docs = sequentialHaddock (hlib.doHaddock ecluse);
 
-      # The two checks below clear the same bar in a different way. Each compares
-      # the Nix and cabal views of one pin, which only Nix evaluation can see side
-      # by side.
+      # Compare the dependency locks that Nix and Cabal use.
 
       # The committed freeze must equal the one derived from the package set.
       checks.freeze-sync = pkgs.runCommand "freeze-sync" { } ''
@@ -658,6 +684,12 @@
           echo "Bump both in the same commit, then run 'task freeze'." >&2
           exit 1
         fi
+        touch $out
+      '';
+
+      checks.http2-lockstep = pkgs.runCommand "http2-lockstep" { } ''
+        bash ${./scripts/check-http2-lockstep.sh} ${./cabal.project} \
+          ${http2Rev} ${http2PatchHash}
         touch $out
       '';
 
