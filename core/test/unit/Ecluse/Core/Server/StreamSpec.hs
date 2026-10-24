@@ -21,7 +21,7 @@ import Network.HTTP.Client (
     responseBody,
  )
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (Method, ResponseHeaders, Status, methodGet, methodHead, status200, status206, status304, status404, status502, status503, statusCode, statusIsSuccessful)
+import Network.HTTP.Types (Method, Status, methodGet, methodHead, status200, status206, status304, status404, status502, status503, statusCode, statusIsSuccessful)
 import Network.HTTP.Types.Header (HeaderName, hContentType, hETag)
 import Network.Socket.ByteString (recv, sendAll)
 import Network.Wai (Application, Response, ResponseReceived, responseLBS, responseRaw, responseStream)
@@ -37,6 +37,7 @@ import Ecluse.Core.Fault (RetryAfter (RetryAfter), TransportCause (TransportUnre
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecManager, ecTrace))
 import Ecluse.Core.Security (Limits (progressFloor), ProgressFloor, defaultLimits, mkProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
+import Ecluse.Core.Server.Pipeline.Tarball.Relay (relayUnjudged)
 import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamBody (NoBody, StreamBody), UpstreamBodyFailed (UpstreamBodyFailed), UpstreamResult (..), pumpBody, withUpstreamResult)
 import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Registry.JsonStream (sliceChunks)
@@ -114,7 +115,7 @@ spec = do
             withRawServer peer $ \port ->
                 withExchangeClient (newManager defaultManagerSettings) $ \client -> do
                     request <- parseRequest ("http://127.0.0.1:" <> show port <> "/")
-                    withAsync (withUpstreamResult client{ecTrace = traced} (progressFloor defaultLimits) request StreamBody statusIsSuccessful relayVerbatim unused) $ \relay -> do
+                    withAsync (withUpstreamResult client{ecTrace = traced} (progressFloor defaultLimits) request StreamBody statusIsSuccessful relayUnjudged unused) $ \relay -> do
                         takeMVar reached
                         withAsync (throwTo (asyncThreadId relay) ThreadKilled) $ \thrower -> do
                             let awaitPending =
@@ -209,7 +210,7 @@ relayProxy progress body accept method client upPort _req respond = do
             upstream{HTTP.method = method}
             body
             accept
-            relayVerbatim
+            relayUnjudged
             (waiRelayResponder respond)
     answerOutcome respond outcome
 
@@ -218,7 +219,7 @@ recordingSignedRelay :: (HTTP.Request -> HTTP.Request) -> IORef (Maybe SomeExcep
 recordingSignedRelay scheme escaped client upPort _req respond = do
     upstream <- (\request -> scheme request{HTTP.port = upPort}) <$> signedRequest
     outcome <-
-        withUpstreamResult client (progressFloor defaultLimits) upstream StreamBody statusIsSuccessful relayVerbatim (waiRelayResponder respond)
+        withUpstreamResult client (progressFloor defaultLimits) upstream StreamBody statusIsSuccessful relayUnjudged (waiRelayResponder respond)
             `withException` record
     answerOutcome respond outcome
   where
@@ -290,11 +291,6 @@ notModifiedUpstream _req respond =
 headLengthUpstream :: Application
 headLengthUpstream _req respond =
     respond (responseLBS status200 [(hContentType, "application/octet-stream")] "")
-
--- The pre-commit relay these proxies run: forward the upstream status and headers, with
--- no verdict of their own to carry back.
-relayVerbatim :: Status -> ResponseHeaders -> IO (Status, ResponseHeaders, ())
-relayVerbatim status headers = pure (status, headers, ())
 
 answerOutcome :: (Response -> IO ResponseReceived) -> UpstreamResult ((), ResponseReceived) -> IO ResponseReceived
 answerOutcome respond = \case

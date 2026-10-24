@@ -197,12 +197,13 @@ withSaturatedAdmission action = withSweeper $ \deadlines -> do
         takeMVar entered
         action runtime
 
--- The second request asks for close, so the reuse control also ends with EOF.
+-- A write half-close ends the fixture without asking either response to close the connection.
 pipelined :: ByteString -> Method -> Application -> IO ByteString
 pipelined version method app =
     withRealWarp app $ \port ->
         withLoopbackSocket port $ \client -> do
-            sendAll client (method <> " / " <> version <> "\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\nGET / " <> version <> "\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            sendAll client (method <> " / " <> version <> "\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\nGET / " <> version <> "\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n")
+            Socket.shutdown client Socket.ShutdownSend
             receiveAll client
 
 withLoopbackSocket :: Int -> (Socket.Socket -> IO a) -> IO a
