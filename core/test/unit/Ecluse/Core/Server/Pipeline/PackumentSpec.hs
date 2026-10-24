@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Coding negotiation and first-party private misses through the request pipeline.
+-- | Coding negotiation, write-time admission and refusals through the request pipeline.
 module Ecluse.Core.Server.Pipeline.PackumentSpec (spec) where
 
 import Codec.Compression.GZip qualified as GZip
@@ -16,11 +16,15 @@ import Network.HTTP.Types (Header, Method, methodGet, methodHead, status200, sta
 import Network.HTTP.Types.Header (RequestHeaders, hAcceptEncoding, hAuthorization, hContentEncoding, hContentLength, hETag, hIfNoneMatch, hVary)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders, requestMethod), Response, defaultRequest, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
+import Network.Wai.Internal (ResponseReceived (ResponseReceived))
+import System.IO.Error (mkIOError, resourceVanishedErrorType)
 import Test.Hspec
 import UnliftIO.Async (cancel, race_, wait, withAsync)
-import UnliftIO.Exception (throwIO)
+import UnliftIO.Exception (evaluate, impureThrow, throwIO)
 
 import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
@@ -36,9 +40,11 @@ import Ecluse.Core.Server.Context (
     MountBinding (..),
     MountRouter,
     PackumentDeps (pdInboundToken, pdMetadataCompression, pdMountBaseUrl, pdRules),
+    RequestCtx (RequestCtx),
     ResponseAction (RunPipeline),
     RouteAction (RouteAction),
     ServeRuntime (srMemoryMeter),
+    runHandler,
  )
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
 import Ecluse.Core.Server.MetadataGzip (gzipBufferChargeBytes, gzipWorkspaceBytes)
@@ -48,10 +54,14 @@ import Ecluse.Core.Server.Pipeline.Packument (
     PackumentReplies (..),
     firstPartyMissDecision,
     firstPartyMissReply,
+    noSurvivors,
+    servePackument,
  )
 import Ecluse.Core.Server.Response (
-    RejectReason (Unavailable),
-    ServeDecision,
+    PackumentStatus (PackumentForbidden),
+    RejectReason (Unavailable, UpstreamInvalid),
+    Rejection (Rejection),
+    ServeDecision (Reject),
     Transience (WillResolve),
  )
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
@@ -73,6 +83,8 @@ import Ecluse.Test.Wai (selfBaseUrl)
 spec :: Spec
 spec = do
     metadataGzipSpec
+    listingWriteSpec
+    noSurvivorsSpec
     firstPartyMissSpec
 
 metadataGzipSpec :: Spec
@@ -213,6 +225,59 @@ privateOrigin current origin request respond =
         PrivateServes -> origin request respond
         PrivateRefuses -> respond (responseLBS status403 [] "")
 
+listingWriteSpec :: Spec
+listingWriteSpec = describe "a listing whose body is being written" $
+    for_ listings $ \listing -> describe (listingLabel listing) $ do
+        it "has freed its CPU slot and still holds its whole memory charge" $
+            withOneSlot listing $ \rt deps -> do
+                observed <- newIORef Nothing
+                runListing rt listing deps methodGet [] $ \_ -> do
+                    held <- chargedNow rt
+                    beside <- captureListing rt listing deps methodGet []
+                    writeIORef observed (Just (held, statusCode (responseStatus beside)))
+                whole <- takeLargestCharge (srMemoryMeter rt)
+                readIORef observed `shouldReturn` Just (whole, 200)
+                chargedNow rt `shouldReturn` 0
+        it "evaluates its reply in the CPU slot, before the write" $
+            withOneSlot listing $ \rt deps -> do
+                logEnv <- newTestLogEnv
+                let replies = namedReplies{packumentOk = \_ _ -> impureThrow Evaluated}
+                    binding = MountBinding (listingPrefix listing :| []) (listingRouter listing) (listingCredential listing) deps Nothing
+                runHandler logEnv mempty (RequestCtx rt binding) (servePackument replies (listingName listing) defaultRequest (\_ -> pure ResponseReceived))
+                    `shouldThrow` (== Evaluated)
+        it "returns its charge when the client goes away mid-body, and leaves the slot free" $
+            withOneSlot listing $ \rt deps -> do
+                held <- newIORef 0
+                runListing rt listing deps methodGet [] (\_ -> chargedNow rt >>= writeIORef held >> throwIO clientGone)
+                    `shouldThrow` (== clientGone)
+                readIORef held >>= (`shouldSatisfy` (> 0))
+                chargedNow rt `shouldReturn` 0
+                statusCode . responseStatus <$> captureListing rt listing deps methodGet [] `shouldReturn` 200
+  where
+    chargedNow rt = snChargedBytes <$> meterSnapshot (srMemoryMeter rt)
+    clientGone = mkIOError resourceVanishedErrorType "the client closed the connection" Nothing Nothing
+
+-- One CPU slot with no waiting room, and a meter that charges each byte.
+withOneSlot :: Listing -> (ServeRuntime -> PackumentDeps -> IO a) -> IO a
+withOneSlot listing use = withSweeper $ \deadlines -> do
+    admission <- newServeAdmissionTuned deadlines 1 0 0
+    rt <- testServeRuntimeWith deadlines admission noopMetricsPort
+    meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 1000, msEntryWaitMicros = 0}
+    testWithApplication (pure (listingOrigin listing)) (listingDeps listing >=> use rt{srMemoryMeter = meter})
+
+noSurvivorsSpec :: Spec
+noSurvivorsSpec =
+    describe "the refusal for a listing no version survived" $
+        it "joins the rejection texts as soon as its reply is evaluated" $
+            evaluate (noSurvivors namedReplies Nothing PackumentForbidden [Reject (Rejection UpstreamInvalid (impureThrow Evaluated))])
+                `shouldThrow` (== Evaluated)
+
+-- Raised by a value a spec expects the pipeline to evaluate before it writes.
+data Evaluated = Evaluated
+    deriving stock (Eq, Show)
+
+instance Exception Evaluated
+
 firstPartyMissSpec :: Spec
 firstPartyMissSpec = describe "a first-party name whose private origin yielded nothing" $ do
     it "renders an origin that answered 404 as a 404" $
@@ -254,6 +319,7 @@ decisionFor = firstPartyMissDecision thingName
 -- One ecosystem's listing route, mount, and the public origin that serves its document.
 data Listing = Listing
     { listingLabel :: String
+    , listingName :: PackageName
     , listingRouter :: MountRouter
     , listingPath :: [Text]
     , listingPrefix :: Text
@@ -266,9 +332,9 @@ data Listing = Listing
 
 listings :: [Listing]
 listings =
-    [ Listing "npm" npmRouter ["leftpad"] "npm" npmCredential (hAuthorization, "Bearer edge-token") (agedDeps npmServeDeps (UTCTime (fromGregorian 2020 1 1) 0)) npmOrigin
+    [ Listing "npm" (mkPackageName Npm Nothing "leftpad") npmRouter ["leftpad"] "npm" npmCredential (hAuthorization, "Bearer edge-token") (agedDeps npmServeDeps (UTCTime (fromGregorian 2020 1 1) 0)) npmOrigin
     , -- HTTP Basic, user:edge-token.
-      Listing "PyPI" pypiRouter ["simple", "requests"] "pypi" pypiCredential (hAuthorization, "Basic dXNlcjplZGdlLXRva2Vu") (agedDeps pypiServeDeps (UTCTime (fromGregorian 2026 6 20) 0)) pypiOrigin
+      Listing "PyPI" (mkPackageName PyPI Nothing "requests") pypiRouter ["simple", "requests"] "pypi" pypiCredential (hAuthorization, "Basic dXNlcjplZGdlLXRva2Vu") (agedDeps pypiServeDeps (UTCTime (fromGregorian 2026 6 20) 0)) pypiOrigin
     ]
   where
     agedDeps serveDeps now port = do

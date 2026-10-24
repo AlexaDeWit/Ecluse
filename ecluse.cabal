@@ -1438,6 +1438,8 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.Scenarios
     Ecluse.BenchLoad.ScenariosSpec
     Ecluse.BenchLoad.SelectionSpec
+    Ecluse.BenchLoad.SlowReader
+    Ecluse.BenchLoad.SlowReaderSpec
     Ecluse.BenchLoad.Support
     Ecluse.BenchLoad.SweepSpec
     Ecluse.BenchLoad.Error
@@ -1569,6 +1571,7 @@ test-suite ecluse-unit
     , katip             ^>=0.8.8
     , ram               ^>=0.22
     , mtl               ^>=2.3
+    , network           ^>=3.2
     , retry             ^>=0.9
     , text              ^>=2.1
     , time              ^>=1.12
@@ -2233,6 +2236,7 @@ executable bench-load
     Ecluse.BenchLoad.Report
     Ecluse.BenchLoad.RtsProbe
     Ecluse.BenchLoad.Scenarios
+    Ecluse.BenchLoad.SlowReader
     Ecluse.BenchLoad.PatternScenario
     Ecluse.BenchLoad.PrivateCopy
 
