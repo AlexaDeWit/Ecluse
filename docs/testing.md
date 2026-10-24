@@ -2034,7 +2034,7 @@ The lower tiers have no product image, while E2E binds the prepared image digest
 Measurement runners keep their existing process and sampling boundaries.
 `checkBenchmarkCoverage` compares reviewed npm/PyPI obligations, concrete providers, and production adapter registration before loading the corpus.
 Both the benchmark and allocation harness call that loader.
-The load harness composes 26 shared read and stress laws with `readLoadContract` for each ecosystem.
+The load harness composes 27 shared read and stress laws with `readLoadContract` for each ecosystem.
 `requiredLoadLaws` stays independent of each fixture's actual scenario names.
 `loadCoverageGaps` names a missing or duplicate law before measured work begins.
 `FullLoad` also requires worker mirroring, which both npm and PyPI fixtures provide.
