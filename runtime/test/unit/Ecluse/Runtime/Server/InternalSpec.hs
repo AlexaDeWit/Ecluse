@@ -12,7 +12,7 @@ import Data.Char (toLower)
 import Data.List (lookup)
 import Data.Text qualified as T
 import Katip (closeScribes)
-import Network.HPACK.Token (tokenFoldedKey)
+import Network.HTTP.Semantics (tokenFoldedKey)
 import Network.HTTP.Types (Method, ResponseHeaders, hContentLength, methodGet, methodHead, status200)
 import Network.HTTP2.Client qualified as H2
 import Network.Socket qualified as Socket

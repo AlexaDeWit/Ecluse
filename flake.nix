@@ -130,6 +130,25 @@
                 "sha256-/+XwCJzMYtmBoHBuDGkmHR8ETKkxpMMtWNNWpbAGPYQ=";
           };
 
+        transportOverlay = hself: _hsuper:
+          let fromHackage = hackageNoCheck hself;
+          in {
+            warp = fromHackage "warp" "3.4.16"
+              "03sn2vjpy99xhkj7yi80hc00hr7aaskwjypv6crknj1arhc7h4pd";
+            wai = fromHackage "wai" "3.2.5"
+              "17ay74pj72jhzvs60xqmhx50qrc0779mac3a1f4vfnfmp57z8s1y";
+            http2 = fromHackage "http2" "5.4.9"
+              "16018v8rxxcl3axzz0d8c4r7dhpazyll9k7d6lfbg571sbpd61wv";
+            http-semantics = fromHackage "http-semantics" "0.4.1"
+              "0pl6fm4q11j2i9li736i4ynrrzbcvyn3fd7q34ckslmlsq860cwg";
+            time-manager = fromHackage "time-manager" "0.3.2"
+              "1fsydc5yxjc8aa5aalcpd9awczbyvjrqb1slbmrxb67w9x9gf8a5";
+            network = fromHackage "network" "3.2.9.0"
+              "1vabvmmyypr8p2y7skw62i3q7m0dl9ia930x8ivfd3ad4nd5a92n";
+            recv = fromHackage "recv" "0.1.2"
+              "12cs8cibkx6mz6593x708j3wj4iv76ga90sc7v31bg0dzzgphpdd";
+          };
+
         # The rev cabal.project pins, not nixpkgs' (Hackage's amazonka stops at GHC 9.6).
         # checks.amazonka-lockstep keeps the two equal: bump both, then run `task freeze`.
         amazonkaRev = "b562aa3f24845e34b95748daae671860017426be";
@@ -221,19 +240,24 @@
             "cborg"
             "conduit"
             "conduit-extra"
+            "crypton-socks"
             "hspec-wai"
             "http2"
             "insert-ordered-containers"
+            "iproute"
             "katip"
             "libyaml"
             "microlens-aeson"
             "mono-traversable"
+            "network-bsd"
             "openapi3"
             "regression-simple"
             "simple-sendfile"
+            "streaming-commons"
             "tasty-bench-fit"
             "vector-algorithms"
             "wai-extra"
+            "wai-logger"
             "warp"
             "xml-conduit"
             "yaml"
@@ -272,6 +296,7 @@
         hpkgs = pkgs.haskell.packages.ghc910.override {
           overrides = pkgs.lib.composeManyExtensions [
             otelOverlay
+            transportOverlay
             amazonkaOverlay
             advisoryOverlay
             upstreamSuitesOverlay
