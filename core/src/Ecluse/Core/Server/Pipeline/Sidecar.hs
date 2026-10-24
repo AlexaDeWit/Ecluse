@@ -32,7 +32,7 @@ import Ecluse.Core.Security (HostPort, Limits (progressFloor), Origin (..), host
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket)
 import Ecluse.Core.Server.Cache.Store (executePrepared)
 import Ecluse.Core.Server.Conditional (Conditional (..), etagHeader, evaluateETag, forwardValidators, mkStrongETag)
-import Ecluse.Core.Server.Context (Handler, MountBinding (bindingPackumentDeps), PackumentDeps (..), ResponseAction (RunPipeline), ServeRuntime (..), ctxMount, ctxRuntime, pdPrivateBaseUrl, pdTarballHostGate, tarballHostHonoured)
+import Ecluse.Core.Server.Context (Handler, MountBinding (bindingPackumentDeps), PackumentDeps (..), ResponseAction (RunPipeline), ServeRuntime (..), ctxMount, ctxRuntime, pdPrivateBase, pdTarballHostGate, tarballHostHonoured)
 import Ecluse.Core.Server.MirrorView (mirrorVersionView, publicMirrorCoverage, readMirrorCompanion, validateMirrorProject)
 import Ecluse.Core.Server.Path (Filename, unFilename)
 import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (..), preparePublicMetadata, withPrivateMetadataClient)
@@ -79,7 +79,7 @@ admittedRead ctx readSelection answer =
     shed headers = liftIO (arRespond ctx (tarballError (arReplies ctx) shedStatus headers (mkRefusal Nothing shedMessage)))
 
 privateSelection :: ArtifactRequest response -> Maybe ClientCredential -> MemoryTicket -> Handler Selection
-privateSelection ctx token ticket = case pdPrivateBaseUrl deps of
+privateSelection ctx token ticket = case pdPrivateBase deps of
     Nothing -> pure (Missing MissAbsent)
     Just base -> do
         result <- tryAny (withPrivateMetadataClient (arRuntime ctx) deps base token (\client -> fetchVersionMetadata client (arPackage ctx) (arVersion ctx)))

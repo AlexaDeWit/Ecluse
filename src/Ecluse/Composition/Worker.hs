@@ -40,6 +40,7 @@ import Ecluse.Core.Server.Context (
     pdMetadata,
     pdMinIntegrity,
     pdNow,
+    pdPublicBase,
     pdPublicBaseUrl,
     pdRules,
     pdTarballHostGate,
@@ -149,4 +150,4 @@ workerPolicyFor env eco deps publish artifactMaxBytes =
 
     publicBaseUrl = pdPublicBaseUrl deps
 
-    publicOrigin = controlPublicOrigin (envPublicControl env) (Just WorkerMetadata) (anonymousOrigin (pdLimits deps) (envPublicClient env) publicBaseUrl)
+    publicOrigin = controlPublicOrigin (envPublicControl env) (Just WorkerMetadata) (anonymousOrigin (pdLimits deps) (envPublicClient env) (pdPublicBase deps))

@@ -5,8 +5,11 @@
 module Ecluse.Core.Registry.Npm.RequestSpec (spec) where
 
 import Data.List (lookup)
+import Hedgehog (Gen, forAll, (===))
+import Hedgehog.Gen qualified as Gen
 import Network.HTTP.Client qualified as Client
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -20,8 +23,10 @@ import Ecluse.Core.Registry.Npm.Request (
     artifactRequestByFile,
     artifactRequestByUrl,
     metadataRequest,
+    metadataRequestUnder,
  )
 
+import Ecluse.Registry.Request.Support (baseAt, forAllBase, genComponent, genCredential, outcomeFacts)
 import Ecluse.Test.Registry.Npm (isOdd)
 
 spec :: Spec
@@ -33,6 +38,7 @@ spec = do
     redirectSpec
     artifactSpec
     urlFailureSpec
+    underBaseSpec
 
 requestShapingSpec :: Spec
 requestShapingSpec =
@@ -66,9 +72,8 @@ pathEncodingSpec =
 contentNegotiationSpec :: Spec
 contentNegotiationSpec =
     describe "metadata content negotiation" $ do
-        -- The two @Accept@ values are npm's wire contract. The abbreviated install view is
-        -- the primary one, and only the full packument carries the @time@ map a publish-age
-        -- rule reads.
+        -- npm uses the abbreviated install view. Only the full packument carries the @time@ map
+        -- that a publish-age rule reads.
         it "asks for the abbreviated install view" $
             acceptHeaderOf Abbreviated `shouldBe` Just "application/vnd.npm.install-v1+json"
 
@@ -105,7 +110,7 @@ redirectSpec = describe "no data-plane request follows an upstream redirect" $ d
         expectRedirectCount 0 (metadataRequest "https://reg.test" Nothing Abbreviated isOdd)
 
     it "a token-bearing by-filename artifact request has redirectCount 0 (the private tarball leg)" $ do
-        expectRedirectCount 0 (artifactRequestByFile "https://reg.test" (Just (bareCredential (mkSecret "tok"))) isOdd "is-odd-1.0.0.tgz")
+        expectRedirectCount 0 (artifactRequestByFile (baseAt "https://reg.test") (Just (bareCredential (mkSecret "tok"))) isOdd "is-odd-1.0.0.tgz")
 
     it "a token-bearing publish relay request has redirectCount 0" $ do
         expectRedirectCount 0 (publishRequest "https://reg.test" (Just (bareCredential (mkSecret "tok"))) isOdd "{}")
@@ -118,7 +123,7 @@ redirectSpec = describe "no data-plane request follows an upstream redirect" $ d
 artifactSpec :: Spec
 artifactSpec = describe "artifact request building" $ do
     it "artifactRequestByFile fetches by the preserved filename in identity coding, non-decompressing" $ do
-        case artifactRequestByFile "https://reg.test" Nothing babelCodeFrame "code-frame-7.0.0.tgz" of
+        case artifactRequestByFile (baseAt "https://reg.test") Nothing babelCodeFrame "code-frame-7.0.0.tgz" of
             Left err -> fail ("artifactRequestByFile failed: " <> show err)
             Right req -> do
                 Client.path req `shouldBe` "/@babel%2Fcode-frame/-/code-frame-7.0.0.tgz"
@@ -142,7 +147,7 @@ urlFailureSpec = describe "URL-formation failures" $ do
         metadataRequest "" Nothing Abbreviated isOdd `shouldSatisfy` urlErrorWas EmptyBaseUrl
 
     it "artifactRequestByFile refuses an empty base URL as a UrlFormationError" $ do
-        artifactRequestByFile "" Nothing isOdd "is-odd-1.0.0.tgz" `shouldSatisfy` urlErrorWas EmptyBaseUrl
+        artifactRequestByFile (baseAt "") Nothing isOdd "is-odd-1.0.0.tgz" `shouldSatisfy` urlErrorWas EmptyBaseUrl
 
     it "artifactFileUrl refuses an empty base URL as a UrlFormationError" $ do
         artifactFileUrl "" isOdd "is-odd-1.0.0.tgz" `shouldSatisfy` urlErrorWas EmptyBaseUrl
@@ -157,6 +162,29 @@ urlFailureSpec = describe "URL-formation failures" $ do
         -- The base carries a trailing slash, which must not double against the package path.
         fmap Client.path (metadataRequest "https://reg.test/" Nothing Abbreviated isOdd)
             `shouldBe` Right "/is-odd"
+
+underBaseSpec :: Spec
+underBaseSpec = describe "requests under a base parsed once" $
+    modifyMaxSuccess (const 2000) $ do
+        it "artifactRequestByFile builds what parsing the joined artifact URL builds, field by field" $
+            hedgehog $ do
+                (baseUrl, base) <- forAllBase
+                name <- forAll genNpmName
+                filename <- forAll genComponent
+                token <- forAll genCredential
+                let joined = artifactFileUrl baseUrl name filename >>= artifactRequestByUrl token
+                outcomeFacts (artifactRequestByFile base token name filename) === outcomeFacts joined
+
+        it "metadataRequestUnder builds what metadataRequest builds, field by field" $
+            hedgehog $ do
+                (baseUrl, base) <- forAllBase
+                name <- forAll genNpmName
+                form <- forAll (Gen.element [Abbreviated, Full])
+                token <- forAll genCredential
+                outcomeFacts (metadataRequestUnder base token form name) === outcomeFacts (metadataRequest baseUrl token form name)
+
+genNpmName :: Gen PackageName
+genNpmName = mkPackageName Npm <$> Gen.maybe (mkScope <$> genComponent) <*> genComponent
 
 babelCodeFrame :: PackageName
 babelCodeFrame = mkPackageName Npm (Just (mkScope "babel")) "code-frame"

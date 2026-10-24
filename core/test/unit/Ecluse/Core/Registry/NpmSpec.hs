@@ -9,7 +9,7 @@ import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Test.Hspec (Spec, describe, it, shouldBe)
 import UnliftIO (evaluate)
 
-import Ecluse.Core.Registry.Origin (OriginClient (..))
+import Ecluse.Core.Registry.Origin (OriginClient (..), ocBaseUrl)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
 import Ecluse.Test.Deadline (withExchangeClient)

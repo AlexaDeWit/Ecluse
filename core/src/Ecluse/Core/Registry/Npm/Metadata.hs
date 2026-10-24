@@ -50,7 +50,7 @@ import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk, EcosystemRead (.
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
-import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), metadataRequest, npmArtifactHosts, packageUrl)
+import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), metadataRequestUnder, npmArtifactHosts, packageUrl)
 import Ecluse.Core.Registry.Npm.StreamingProjection (PackedRead, TreeRead, emptyPackedRead, emptyTreeRead, finishPacked, finishTree, keepsPackedRelease, keepsTreeRelease, packedStep, treeStep)
 import Ecluse.Core.Registry.Npm.VersionWriter (VersionWriter, newVersionWriter)
 import Ecluse.Core.Registry.ServedDocument (objectField)
@@ -62,7 +62,7 @@ import Ecluse.Core.Version (Version, renderVersion)
 npmRead :: EcosystemRead
 npmRead =
     EcosystemRead
-        { erRequest = \base token -> metadataRequest base token Full
+        { erRequest = \base token -> metadataRequestUnder base token Full
         , erUniqueFields = releaseUniqueFields
         , erWalkFull = readNpmFull
         , erFinishFull = finishNpmFull

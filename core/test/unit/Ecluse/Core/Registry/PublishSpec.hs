@@ -32,7 +32,9 @@ import Ecluse.Core.Registry.Publish (
     PublishPlan (PublishPlan, ppLatest),
     newMirrorPublish,
  )
+import Ecluse.Core.Registry.Request (baseRequestUrl)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
+import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Deadline (untracedClient, withExchangeClient, withSweeper)
 import Ecluse.Test.Package (v1_0_0)
@@ -173,7 +175,7 @@ unsealedCodec =
         , pcVersionListWalk = pcVersionListWalk npmPublishCodec
         , pcNativeComplete = pcNativeComplete npmPublishCodec
         , pcTargetReadPermille = pcTargetReadPermille npmPublishCodec
-        , pcTargetRead = npmRead{erRequest = \targetUrl _ _ -> unsealed (targetUrl <> "/probe")}
+        , pcTargetRead = npmRead{erRequest = \target _ _ -> unsealed (registryUrlText (baseRequestUrl target) <> "/probe")}
         , pcPrepareSource = prepareNpmSource
         , pcPrepareUpload = \_ _ inventory source file bytes -> pure (prepareNpmUpload inventory source file bytes)
         , pcPublishRequest = \targetUrl _token _plan _upload ->

@@ -1299,6 +1299,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Worker.RealiseSpec
     Ecluse.Core.ZlibSpec
     Ecluse.Package.Filter.Support
+    Ecluse.Registry.Request.Support
     Ecluse.Rules.FrozenEvaluator
     Ecluse.Rules.Outage.Support
     Ecluse.Rules.Remediation.Support

@@ -5,8 +5,10 @@
 module Ecluse.Core.Registry.PyPI.RequestSpec (spec) where
 
 import Data.List (lookup)
+import Hedgehog (forAll, (===))
 import Network.HTTP.Client qualified as Client
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.BuildIdentity (userAgent)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
@@ -18,8 +20,10 @@ import Ecluse.Core.Registry.PyPI.Request (
     artifactRequestByUrl,
     pypiArtifactHosts,
     simpleIndexRequest,
+    simpleIndexRequestUnder,
     simpleIndexUrl,
  )
+import Ecluse.Registry.Request.Support (forAllBase, genComponent, genCredential, outcomeFacts)
 import Ecluse.Test.Package (requestsName)
 import Ecluse.Test.Registry.PyPI (alicePair)
 import Ecluse.Test.Support (expectRight)
@@ -30,6 +34,7 @@ spec = do
     artifactSpec
     filesHostSpec
     sealSpec
+    underBaseSpec
 
 indexSpec :: Spec
 indexSpec = describe "the Simple-index read" $ do
@@ -113,6 +118,16 @@ sealSpec = describe "every request carries the shared outbound seal" $ do
     it "identifies the proxy without spelling a User-Agent of its own" $ do
         req <- expectRight (simpleIndexRequest "https://pypi.org" Nothing requestsName)
         lookup "User-Agent" (Client.requestHeaders req) `shouldBe` Just userAgent
+
+underBaseSpec :: Spec
+underBaseSpec = describe "the Simple-index read under a base parsed once" $
+    modifyMaxSuccess (const 2000) $
+        it "simpleIndexRequestUnder builds what simpleIndexRequest builds, field by field" $
+            hedgehog $ do
+                (baseUrl, base) <- forAllBase
+                name <- forAll (mkPackageName PyPI Nothing <$> genComponent)
+                credential <- forAll genCredential
+                outcomeFacts (simpleIndexRequestUnder base credential name) === outcomeFacts (simpleIndexRequest baseUrl credential name)
 
 -- | A project whose published spelling is not its canonical one.
 zopeInterface :: PackageName
