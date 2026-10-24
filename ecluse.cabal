@@ -1668,6 +1668,7 @@ test-suite ecluse-runtime-unit
     , http-client       ^>=0.7
     , http-client-tls   >=0.3.6 && <0.5
     , http-types        ^>=0.12
+    , http2             ^>=5.3
     , hs-opentelemetry-api  ^>=1.0
     , hs-opentelemetry-exporter-in-memory  ^>=1.0
     , hs-opentelemetry-instrumentation-http-client  ^>=1.0

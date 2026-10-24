@@ -2,17 +2,20 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | HTTP/1 connection closure through the production listener and its exception observer.
+-- | HTTP connection lifetime through the production listener and its exception observer.
 module Ecluse.Runtime.Server.InternalSpec (spec) where
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as B8
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (toLower)
+import Data.List (lookup)
 import Data.Text qualified as T
 import Katip (closeScribes)
+import Network.HPACK.Token (tokenFoldedKey)
 import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Types (Method, ResponseHeaders, hConnection, hContentLength, methodGet, methodHead, status200, status204, status500)
+import Network.HTTP2.Client qualified as H2
 import Network.Socket qualified as Socket
 import Network.Socket.ByteString (recv, sendAll)
 import Network.Wai (Application, Request, responseLBS, responseStream)
@@ -22,8 +25,10 @@ import UnliftIO (timeout)
 import UnliftIO.Async (link, withAsync)
 import UnliftIO.Exception (bracket, throwIO, withException)
 
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), boundedRead)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned, withOverflow, withServeAdmission)
 import Ecluse.Core.Server.Admission.Overflow (newOverflowTuned)
+import Ecluse.Core.Server.Context (ServeRuntime)
 import Ecluse.Core.Server.Pipeline.Shared (shedMessage, shedStatus, withMetadataAdmission)
 import Ecluse.Runtime.Server.Internal (ServerConfig (scOnException, scPort), listeningPrefix, mkServerConfig, runWarp)
 import Ecluse.Test.Deadline (withSweeper)
@@ -34,7 +39,7 @@ import Ecluse.Test.Server.Handler (testServeRuntimeWith)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 spec :: Spec
-spec = around_ (timeout 5_000_000 >=> (`shouldBe` Just ())) $ describe "runWarp HTTP/1 connection lifetime" $ do
+spec = around_ (timeout 5_000_000 >=> (`shouldBe` Just ())) $ describe "runWarp connection lifetime" $ do
     for_ ["HTTP/1.0", "HTTP/1.1"] $ \version ->
         for_ [methodGet, methodHead] $ \method ->
             it ("closes after the complete past-cap 503 for " <> B8.unpack version <> " " <> B8.unpack method) $
@@ -44,6 +49,28 @@ spec = around_ (timeout 5_000_000 >=> (`shouldBe` Just ())) $ describe "runWarp 
                     let (_, body) = BS.breakSubstring "\r\n\r\n" wire
                     BS.drop 4 body `shouldBe` if method == methodHead then "" else encodeUtf8 shedMessage
                     countResponses wire `shouldBe` 1
+
+    it "keeps one HTTP/2 connection open for two complete past-cap 503 streams while admission stays full" $
+        withSaturatedAdmission $ \runtime -> do
+            let app request respond =
+                    withMetadataAdmission
+                        runtime
+                        (\headers -> bufferedShed headers request respond)
+                        -- An unexpected admission invalidates this refusal fixture.
+                        (const (throwIO (TestContractEscape "past-cap request entered")))
+                        pure
+            withRealWarp (\_ _ -> pass) app $ \port ->
+                withLoopbackSocket port $ \client ->
+                    bracket (H2.allocSimpleConfig client 4096) H2.freeSimpleConfig $ \config ->
+                        H2.run H2.defaultClientConfig config $ \sendRequest _aux ->
+                            replicateM_ 2 $
+                                sendRequest (H2.requestNoBody methodGet "/" []) $ \response -> do
+                                    H2.responseStatus response `shouldBe` Just shedStatus
+                                    let headers = [(tokenFoldedKey token, value) | (token, value) <- fst (H2.responseHeaders response)]
+                                    lookup "retry-after" headers `shouldBe` Just "1"
+                                    lookup "connection" headers `shouldBe` Nothing
+                                    body <- boundedRead (MetadataBodyLimit 1024) (H2.getResponseBodyChunk response)
+                                    body `shouldBe` Right (BS.length (encodeUtf8 shedMessage), encodeUtf8 shedMessage)
 
     it "finishes a streamed closing response before EOF" $ do
         let app _ respond = respond (responseStream shedStatus [(hConnection, "close")] (\write _ -> write "busy"))
@@ -124,7 +151,11 @@ assertShedHeaders version wire = do
     folded `shouldSatisfy` BS.isInfixOf "\r\nconnection: close\r\n"
 
 withPastCapResponse :: (ResponseHeaders -> IO ()) -> IO ()
-withPastCapResponse action = withSweeper $ \deadlines -> do
+withPastCapResponse action = withSaturatedAdmission $ \runtime ->
+    withMetadataAdmission runtime action (const (expectationFailure "past-cap request entered")) pure
+
+withSaturatedAdmission :: (ServeRuntime -> IO ()) -> IO ()
+withSaturatedAdmission action = withSweeper $ \deadlines -> do
     overflow <- newOverflowTuned deadlines 0 500_000
     admission <- (`withOverflow` overflow) <$> newServeAdmissionTuned deadlines 1 0 0
     runtime <- testServeRuntimeWith deadlines admission noopMetricsPort
@@ -134,7 +165,7 @@ withPastCapResponse action = withSweeper $ \deadlines -> do
     withAsync hold $ \holder -> do
         link holder
         takeMVar entered
-        withMetadataAdmission runtime action (const (expectationFailure "past-cap request entered")) pure
+        action runtime
 
 -- The second request asks for close, so the reuse control also ends with EOF.
 pipelined :: ByteString -> Method -> Application -> IO ByteString
@@ -143,10 +174,15 @@ pipelined = pipelinedObserved (\_ _ -> pass)
 pipelinedObserved :: (Maybe Request -> SomeException -> IO ()) -> ByteString -> Method -> Application -> IO ByteString
 pipelinedObserved observe version method app =
     withRealWarp observe app $ \port ->
-        bracket (Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol) Socket.close $ \client -> do
-            Socket.connect client (Socket.SockAddrInet (fromIntegral port) (Socket.tupleToHostAddress (127, 0, 0, 1)))
+        withLoopbackSocket port $ \client -> do
             sendAll client (method <> " / " <> version <> "\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\nGET / " <> version <> "\r\nHost: localhost\r\nConnection: close\r\n\r\n")
             receiveAll client
+
+withLoopbackSocket :: Int -> (Socket.Socket -> IO a) -> IO a
+withLoopbackSocket port action =
+    bracket (Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol) Socket.close $ \client -> do
+        Socket.connect client (Socket.SockAddrInet (fromIntegral port) (Socket.tupleToHostAddress (127, 0, 0, 1)))
+        action client
 
 withRealWarp :: (Maybe Request -> SomeException -> IO ()) -> Application -> (Int -> IO a) -> IO a
 withRealWarp observe app action = withSavedSignalHandlers $
