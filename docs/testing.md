@@ -352,8 +352,10 @@ Single-document read limits and realistic output limits retain their existing ch
 
 `PackumentResidencySpec` takes a heap census of the live listing path in a fresh child process
 for each capture of at least one meter step. A private and a public origin both serve the capture,
-and one listing runs through the production route after a warm-up. Both runtimes stay rooted
-through every sample, so their pools and caches keep the process-wide lifetime used in production.
+and one listing runs through the production route after a warm-up. The requests share connection
+pools but use separate caches, so the measured request reads and renders over warmed transport.
+Both runtimes stay rooted through every sample, so their pools and caches keep the process-wide
+lifetime used in production.
 Isolation prevents an earlier example's fixture cleanup from changing a later example's baseline.
 It samples live bytes after major collections before the listing and after policy decides every
 version. It also samples after merge planning and while the response is sent. A last sample follows

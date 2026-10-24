@@ -29,7 +29,7 @@ import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, meterSnapshot)
 import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
-import Ecluse.Core.Server.Context (MountBinding (bindingRouter), ResponseAction (RunPipeline), RouteAction (RouteAction), ServeRuntime (srMemoryMeter))
+import Ecluse.Core.Server.Context (MountBinding (bindingRouter), ResponseAction (RunPipeline), RouteAction (RouteAction), ServeRuntime (srMemoryMeter, srMetadataCache, srMetrics))
 import Ecluse.Core.Server.MemoryModel.Calibration (Figures (readPeak, retainedShared))
 import Ecluse.Core.Server.MemoryModel.HeapSample (HeapSample (live), sample)
 import Ecluse.Core.Server.MemoryModel.Probe (Residency (residencyFigures, residencyUpstream), measureInChild, packages, requireResidency, residencyFor)
@@ -42,6 +42,7 @@ import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureResponse), deliverServe, testServeRuntime)
 import Ecluse.Test.Server.Mount (serveDepsFor)
 import Ecluse.Test.Support (expectRight, testMemoryMeter)
@@ -108,8 +109,7 @@ probeListingCensus package = do
     capture <- readCapture package
     takeCensus package (upstreamOrigin (residencyUpstream record)) capture
 
-{- A warm-up listing settles one-off state first. The measured listing runs on a fresh cache, so it
-renders its body instead of finding the warm-up's. -}
+-- A fresh cache forces the measured request to read and render over the warmed connection pools.
 takeCensus :: CorpusPackage -> Text -> ByteString -> IO Census
 takeCensus package captured capture = withSweeper $ \deadlines -> do
     logEnv <- newTestLogEnv
@@ -126,7 +126,8 @@ takeCensus package captured capture = withSweeper $ \deadlines -> do
             warmUp <- testServeRuntime deadlines noopMetricsPort
             listing logEnv warmUp binding (const pass)
             meter <- testMemoryMeter
-            measured <- testServeRuntime deadlines noopMetricsPort{mpRuleEvalDuration = \_ _ -> samplePoint meter gate, mpServeDecision = \_ -> samplePoint meter planned}
+            cache <- newMetadataCache defaultCacheConfig
+            let measured = warmUp{srMetadataCache = cache, srMetrics = noopMetricsPort{mpRuleEvalDuration = \_ _ -> samplePoint meter gate, mpServeDecision = \_ -> samplePoint meter planned}}
             -- The process keeps its runtime alive. Its pools and caches must outlive every sample too.
             bracket (newStablePtr (warmUp, measured)) freeStablePtr $ \root -> do
                 atStart <- live <$> sample
