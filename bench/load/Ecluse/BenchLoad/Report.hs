@@ -47,7 +47,7 @@ import Ecluse.BenchLoad.Normalise (
     renderSaturation,
  )
 import Ecluse.BenchLoad.PatternReport (renderReplayTotals)
-import Ecluse.BenchLoad.Pod (CgroupReading (..), PodShape (Unlimited), ProxyTuning (..), counter, noTuning, proxyCgroupFiles, renderCpuList, renderPodShape)
+import Ecluse.BenchLoad.Pod (BurstMemory (..), CgroupReading (..), PodShape (Unlimited), ProxyTuning (..), counter, noTuning, proxyCgroupFiles, renderCpuList, renderPodShape)
 import Ecluse.BenchLoad.ReportLabels (admissionRow, generatorHeadroomRow, headroomHeld, headroomSaturated, loadCell, loadRow, memoryEventsRow, memoryPeakColumn, postureRow)
 import Ecluse.BenchLoad.RtsWindow (RtsSnapshot (..), RtsWindow (..), compactionThresholdCrossed, gcCpuShare, meanLiveAtMajors, perSuccess)
 import Ecluse.BenchLoad.Selection (measurementConditionVersion)
@@ -322,6 +322,7 @@ proxyRows p =
     , row "proxy threads (pids.current): max / mean / last (samples, missed)" (gaugeCell (pfTasks p))
     , row "metadata cache hit / miss / collapsed in the window" (maybe "n/a (a scrape failed)" cacheCell (pfCacheWindow p))
     ]
+        <> maybe [] burstRows (pfBurstMemory p)
   where
     cgroup = pfCgroup p
     limits = bootLimits (pfBootLines p)
@@ -333,7 +334,6 @@ proxyRows p =
             <> maybe "n/a" (mib . fromIntegral) (pfIdleCgroupBytes p)
     cacheCell stores = T.intercalate ", " [store <> " " <> show (coHits o) <> " / " <> show (coMisses o) <> " / " <> show (coCollapsed o) | (store, o) <- stores]
     eventsCell c = T.intercalate " / " [show (counter key (crMemoryEvents c)) | key <- ["oom_kill", "oom", "max", "high"]]
-    statCell c = T.intercalate " / " [mib (fromIntegral (counter key (crMemoryStat c))) | key <- ["anon", "file", "kernel", "sock"]]
     gaugeCell g =
         T.intercalate " / " (map (maybe "n/a" fmt1) [gsMax g, gsMean g, gsLast g])
             <> " ("
@@ -341,6 +341,22 @@ proxyRows p =
             <> ", "
             <> show (gsMissed g)
             <> ")"
+
+-- The cgroup's memory through a burst: the reading with the most charged, and the one with the most in socket buffers.
+-- Every burst reads its cgroup at least once, so a burst without a reading had no cgroup to read.
+burstRows :: BurstMemory -> [Text]
+burstRows b
+    | bmSamples b == 0 = [row "cgroup readings through the burst" "no cgroup"]
+    | otherwise =
+        [ row ("cgroup readings through the burst, every " <> show (bmIntervalMs b) <> " ms") (show (bmSamples b))
+        , row "highest memory.current in the burst, then memory.stat anon / file / kernel / sock" (maybe "n/a" (\c -> currentCell c <> ", then " <> statCell c) (bmHighestCurrent b))
+        , row "highest memory.stat sock in the burst, then memory.current" (maybe "n/a" (\c -> mib (fromIntegral (counter "sock" (crMemoryStat c))) <> ", then " <> currentCell c) (bmHighestSock b))
+        ]
+  where
+    currentCell = maybe "n/a" (mib . fromIntegral) . crMemoryCurrent
+
+statCell :: CgroupReading -> Text
+statCell c = T.intercalate " / " [mib (fromIntegral (counter key (crMemoryStat c))) | key <- ["anon", "file", "kernel", "sock"]]
 
 -- The CPU time of the window: the proxy against its CPUs, and the load generator's headroom.
 cpuRows :: Bool -> ScenarioReport -> CpuWindow -> [Text]

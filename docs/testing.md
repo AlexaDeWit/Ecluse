@@ -1225,7 +1225,9 @@ Each scenario reports:
   `memory.current`
 - cgroup `memory.peak` against `memory.max` and against the RTS's own peak, `memory.stat` (`anon`,
   `file`, `kernel`, `sock`) as the window closes, the `memory.events` counters, and the CPU time
-  the quota withheld during the window
+  the quota withheld during the window. A scenario that sends a burst also shows the cgroup's
+  memory through the burst, as [The herd under heavy private load](#the-herd-under-heavy-private-load)
+  describes
 - how the proxy ended: a clean shutdown, a heap overflow (from its own report or the RTS exit
   status), a kernel OOM kill, or another exit
 - the serve-admission limit in requests and the memory admission budget at boot, read from the
@@ -1269,13 +1271,15 @@ failure is a task limit reached outside the harness, which sets none. The harnes
 failure with the process limits, the task counts, and the failed attempt's cgroup as it read them,
 and the report counts the boot attempts. Any other boot failure fails the scenario.
 
-Three scenarios per ecosystem stress admission under memory pressure.
+Four scenarios per ecosystem stress admission under memory pressure.
 `npm/herd` sends 100 simultaneous cold `typescript` listings to an idle proxy.
 `pypi/herd` sends the same burst of cold `boto3` Simple-index requests.
+`npm/herd-under-heavy-private` and `pypi/herd-under-heavy-private` send that burst during a heavy
+private load, as [The herd under heavy private load](#the-herd-under-heavy-private-load) describes.
 `npm/warm-under-cold` and `pypi/warm-under-cold` measure assembled hits and retained selected reads.
 A second generator drives heavy-tier listings that never reuse an assembled response.
 `npm/ramp` and `pypi/ramp` step from 10 to 400 connections, one configured duration per step, and report each step.
-None of these six scenarios joins the concurrency-one pass.
+None of these eight scenarios joins the concurrency-one pass.
 
 The private-copy scenarios model a mirror target that is also the private upstream. Its document
 for a package holds the versions the deployment has mirrored. Every listing decodes its own private
@@ -1332,6 +1336,38 @@ that 503 with the admission refusals. When the proxy records such a failure in
 `BENCH_LOAD_THRASH_CPUS` CPU equivalents (two unless set) under each listed memory limit, highest
 first. The probe records OOM kills and
 heap overflows as its reading, so they do not fail it. It fails only when no limit produced a report.
+
+#### The herd under heavy private load
+
+The heap ceiling leaves room in the memory limit for memory outside the heap, such as kernel socket
+buffers ([runtime-sizing arithmetic](../web/content/docs/operations.md#appendix-runtime-sizing-arithmetic)).
+`npm/herd-under-heavy-private` and `pypi/herd-under-heavy-private` measure that memory while the
+proxy sends a burst of large responses and private reads hold its heap high. A change that lets the
+proxy hold more live data shrinks the margin, so run these scenarios under every pod shape for such
+a change. Like every scenario, each fails on an OOM kill or a heap overflow.
+
+Each scenario runs its ecosystem's `heavy-private` load at the base concurrency for the window.
+Halfway through, 100 more connections each send one request for the herd's listing at the same
+moment: `typescript` for npm and `boto3` for PyPI. The burst passes through the same admission as
+the load. From that moment until the last burst response ends, the harness reads the proxy cgroup's
+files every 10 ms. A herd on an idle proxy completes in about a second, so the one-second gauges
+would miss its peak. The scenario's own section adds three rows to the usual figures:
+
+| Row | What it shows |
+|---|---|
+| Cgroup readings through the burst | How many readings the harness took |
+| Highest `memory.current` in the burst | The most memory charged to the cgroup, with `anon`, `file`, `kernel` and `sock` from `memory.stat` at the same reading |
+| Highest `memory.stat` `sock` in the burst | The most memory in kernel socket buffers, with `memory.current` at the same reading |
+
+`npm/herd` and `pypi/herd` show the same rows for their burst on an idle proxy. A run without
+`BENCH_LOAD_CGROUP` starts its proxy outside any cgroup of its own, so these rows read `no cgroup`
+there.
+
+`sock` counts response bytes the kernel holds until the client reads them, and `anon` holds the heap
+with the rest of the process's own memory. Compare the `sock` peak with `memory.peak` less the RTS
+maximum memory in use. A `sock` peak near that gap shows that socket buffers take the room outside
+the heap. The at-a-glance row shows the burst's successes, and the concurrent load row shows the
+`heavy-private` load's. One floor holds both.
 
 #### Capability sweeps
 
@@ -1401,6 +1437,7 @@ merge: a breach turns only its own scheduled or dispatched run red.
 | Concurrency-one pass | The same count, for each scenario that joins that pass |
 | `npm/ramp`, `pypi/ramp` | Every step. The one floor comes from the lowest step of the calibration runs, and each step must reach it |
 | `npm/warm-under-cold`, `pypi/warm-under-cold` | Both loads, the measured one and the concurrent one |
+| `npm/herd-under-heavy-private`, `pypi/herd-under-heavy-private` | Both loads, the burst and the concurrent one |
 | `npm/worker-mirroring`, `pypi/worker-mirroring` | Complete jobs under `unlimited`, the only shape that runs the in-process worker |
 | The request-pattern replays | A finite trace whose count is the same every night, so the floor is half of it |
 
@@ -1973,7 +2010,7 @@ The lower tiers have no product image, while E2E binds the prepared image digest
 Measurement runners keep their existing process and sampling boundaries.
 `checkBenchmarkCoverage` compares reviewed npm/PyPI obligations, concrete providers, and production adapter registration before loading the corpus.
 Both the benchmark and allocation harness call that loader.
-The load harness composes 25 shared read and stress laws with `readLoadContract` for each ecosystem.
+The load harness composes 26 shared read and stress laws with `readLoadContract` for each ecosystem.
 `requiredLoadLaws` stays independent of each fixture's actual scenario names.
 `loadCoverageGaps` names a missing or duplicate law before measured work begins.
 `FullLoad` also requires worker mirroring, which both npm and PyPI fixtures provide.

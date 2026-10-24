@@ -36,10 +36,13 @@ module Ecluse.BenchLoad.Pod (
     CgroupReading (..),
     keyedCounters,
     counter,
+    BurstMemory (..),
+    burstMemory,
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), withText)
 import Data.Char (isDigit)
+import Data.Foldable1 qualified as Foldable1
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -227,3 +230,27 @@ keyedCounters body = Map.fromList (mapMaybe entry (lines body))
 -- | A counter from a flat-keyed file, zero when the kernel did not report it.
 counter :: Text -> Map Text Int -> Int
 counter = Map.findWithDefault 0
+
+-- | The proxy cgroup's memory read at a fixed interval through a burst, kept as two of its readings.
+data BurstMemory = BurstMemory
+    { bmIntervalMs :: Int
+    , bmSamples :: Int
+    , bmHighestCurrent :: Maybe CgroupReading
+    -- ^ The reading with the most @memory.current@.
+    , bmHighestSock :: Maybe CgroupReading
+    -- ^ The reading with the most @sock@ in @memory.stat@: kernel socket buffers.
+    }
+    deriving stock (Eq, Show, Generic)
+    deriving anyclass (FromJSON, ToJSON)
+
+-- | Keep the readings taken this many milliseconds apart that hold the most memory and the most socket memory.
+burstMemory :: Int -> [CgroupReading] -> BurstMemory
+burstMemory intervalMs readings =
+    BurstMemory
+        { bmIntervalMs = intervalMs
+        , bmSamples = length readings
+        , bmHighestCurrent = highest (fromMaybe 0 . crMemoryCurrent)
+        , bmHighestSock = highest (counter "sock" . crMemoryStat)
+        }
+  where
+    highest by = viaNonEmpty (Foldable1.maximumBy (comparing by)) readings

@@ -10,7 +10,7 @@ import Network.Wai (Application)
 import Ecluse.BenchLoad.Advisories (allRulesAdvisories, shippedAdvisories)
 import Ecluse.BenchLoad.Harness (LoadKnobs, Scenario, UpstreamFixture (..))
 import Ecluse.BenchLoad.PatternScenario (patternScenarios)
-import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..), privateCopyScenarios)
+import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..), herdUnderWholeCopy, privateCopyScenarios)
 
 -- | Drivers supply native operations, while the contract owns the shared scenario sequence.
 data LoadReadDriver = LoadReadDriver
@@ -50,6 +50,7 @@ readLoadContract driver extensions =
                    , lrdPublicArtifact driver
                    , lrdArtifactCeiling driver
                    , lrdHerd driver
+                   , herdUnderWholeCopy copy
                    , lrdWarmUnderCold driver
                    , lrdRamp driver
                    ]
