@@ -2,10 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Exercise core serve handlers through their runtime ports.
-Responses and emitted metrics remain observable independently of application wiring.
-Admission lifetime cases connect sweep deletions to the next private request.
--}
+-- | Client responses and metrics through core handlers and ecosystem routes.
 module Ecluse.Core.Server.PipelineSpec (spec) where
 
 import Data.Aeson (Value (Bool, Object, String), eitherDecode, eitherDecodeStrict, encode, object, (.=))
@@ -23,6 +20,7 @@ import Ecluse.Core.Credential (ClientCredential (credSecret), bareCredential, mk
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Deadline (Deadlines)
+import Ecluse.Core.Mirror.State (stateTarget)
 import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
 import Ecluse.Core.Package (HashAlg (SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity)
@@ -47,8 +45,9 @@ import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Rules.Types qualified as Rules
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Admission (newServeAdmission, newServeAdmissionTuned, withServeAdmission)
+import Ecluse.Core.Server.Admission (newServeAdmission, newServeAdmissionTuned, withOverflow, withServeAdmission)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), meterSnapshot, newMemoryMeter, withMemoryEntry)
+import Ecluse.Core.Server.Admission.Overflow (newOverflowTuned)
 import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
 import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Context (
@@ -85,6 +84,7 @@ import Ecluse.Test.Maintenance (
     servedVersion,
     servedVersions,
  )
+import Ecluse.Test.Mirror.State (mirrorViewWith)
 import Ecluse.Test.Package (hexSha1Of, leftpadName, npmVersion, requestsName, sampleDetails, sampleManifest, sriSha256Of, sriSha512Of, unsafeFilename)
 import Ecluse.Test.Port (noopMetricsPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
@@ -96,7 +96,7 @@ import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureRespons
 import Ecluse.Test.Server.Mount (npmServeDeps, pypiServeDeps, withPrivateBaseUrl)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recTargetResults), recordingPorts, testMount, testPacing, withPrivateCache)
 import Ecluse.Test.Wai (countingUpstream, selfBaseUrl)
-import Network.HTTP.Types.Header (RequestHeaders, hAcceptEncoding, hContentEncoding, hContentRange, hDate, hETag, hHost, hIfNoneMatch)
+import Network.HTTP.Types.Header (RequestHeaders, hAcceptEncoding, hConnection, hContentEncoding, hContentRange, hDate, hETag, hHost, hIfNoneMatch)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders, requestMethod), defaultRequest, mapResponseHeaders, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Internal (Response)
@@ -111,6 +111,7 @@ spec :: Spec
 spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)" $ do
     admissionLifetimeSpec
     memoryAdmissionSpec
+    overflowRouteSpec
     cacheRetentionSpec
     divergenceEvidenceSpec
     skippedCheckAuditSpec
@@ -372,6 +373,53 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                     (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
             statusCode (responseStatus response) `shouldBe` 200
             readIORef released `shouldReturn` Just (Right (), 0)
+
+overflowRouteSpec :: Spec
+overflowRouteSpec = describe "overflow refusal through ecosystem routes" $
+    for_ [("after queue expiry", 1, Nothing), ("past the queue cap", 0, Just "close")] $ \(ending, cap, connection) ->
+        for_ [("npm", npmRouter, npmCredential, ["leftpad"], ["leftpad", "-", "leftpad-1.0.0.tgz"]), ("PyPI", pypiRouter, pypiCredential, ["simple", "requests"], ["simple", "requests", "requests-1.0.0.tar.gz"])] $ \(ecosystem, router, credential, listingPath, artifactPath) ->
+            for_ [("listing", listingPath, False), ("public artifact", artifactPath, False), ("managed private artifact", artifactPath, True)] $ \(route, path, managed) ->
+                it (ecosystem <> " " <> route <> " keeps its refusal " <> ending) $ do
+                    lookups <- newIORef (0 :: Int)
+                    stateReads <- newIORef (0 :: Int)
+                    testWithApplication (pure (countingUpstream lookups upstreamApp)) $ \port -> withSweeper $ \deadlines -> do
+                        (metrics, decisions) <- recordingMetricsPort
+                        gate <- newServeAdmissionTuned deadlines 1 0 0
+                        overflow <- newOverflowTuned deadlines cap 0
+                        let admission = withOverflow gate overflow
+                            origin = loopbackRegistryUrl ("http://localhost:" <> show port)
+                        rt <- testServeRuntimeWith deadlines admission metrics
+                        prepared <- prepare inertRuleDeps allowPolicy
+                        view <- mirrorViewWith (stateTarget "http://private.test/") (\_ _ -> modifyIORef' stateReads (+ 1) >> throwIO MissingFixtureResponse)
+                        let unexpected = throwIO MissingFixtureResponse
+                            base =
+                                if ecosystem == "npm"
+                                    then npmServeDeps Nothing origin NoMirrorWrite prepared (pure fixedNow)
+                                    else pypiServeDeps Nothing origin NoMirrorWrite prepared (pure fixedNow)
+                            deps =
+                                (withPrivateBaseUrl (if managed then Just origin else Nothing) base)
+                                    { pdMirrorState = if managed then Just view else Nothing
+                                    }
+                            binding = (mountUnder credential deps){bindingRouter = router}
+                        case router methodGet [] path of
+                            RouteAction contract (RunPipeline _ action) -> do
+                                logEnv <- newTestLogEnv
+                                held <- withServeAdmission metrics admission $
+                                    runSession (WaiTest.request defaultRequest) $ \req respond ->
+                                        runHandler logEnv mempty (RequestCtx rt binding) (action req (respond . responseToWai contract))
+                                response <- either (const unexpected) pure held
+                                simpleStatus response `shouldBe` status503
+                                lookup hRetryAfter (simpleHeaders response) `shouldBe` Just "1"
+                                lookup hConnection (simpleHeaders response) `shouldBe` connection
+                                if ecosystem == "npm"
+                                    then
+                                        (eitherDecode (simpleBody response) :: Either String Value)
+                                            `shouldBe` Right (object ["error" .= ("server is busy; retry later" :: Text)])
+                                    else simpleBody response `shouldBe` ""
+                            _ -> expectationFailure "fixture did not select a pipeline route"
+                        decisions `shouldReturn` [Unavailable]
+                        readIORef lookups `shouldReturn` 0
+                        readIORef stateReads `shouldReturn` 0
 
 memoryAdmissionSpec :: Spec
 memoryAdmissionSpec = describe "memory admission on live request paths" $ do
@@ -766,8 +814,7 @@ admissionLifetimeSpec = describe "admission lifetime after removing an allow" $
                 (LifetimePolicy [unavailableCveDeny] isUndecidable Retained)
                 ManifestMissing
 
-{- The cache a next read refills. The trusted private leg serves a hit untouched, so the read puts
-the version back whatever the rules say, and the next grouped cycle decides on that state. -}
+-- A trusted read restores the deleted version before the next grouped sweep.
 cacheRetentionSpec :: Spec
 cacheRetentionSpec = describe "a private read that retains a version the cycle removed" $
     it "serves the read untouched, removes the copy it restored, and keeps the version policy allows" $ do
@@ -809,8 +856,7 @@ keptVersion = npmVersion "2.0.0"
 data CopyDisposition = Retained | Removed
     deriving stock (Eq)
 
-{- The store's shape for one cycle: what holds a delete back, and whether its metadata read answers.
-An unread manifest is evidence rather than a guard, so a rule reading only identity still decides. -}
+-- An unread manifest still lets a rule that reads only identity decide.
 data LifetimeStore = Sweepable | FirstParty | ConsentMissing | TargetPreserved | ManifestMissing
     deriving stock (Eq, Show)
 
