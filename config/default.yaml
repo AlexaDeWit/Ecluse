@@ -269,7 +269,9 @@ advisories:
 #   # Concurrent metadata operations: max(8, 20 x capabilities), independent of memory.
 #   # A positive explicit value stays exact, and it also sizes the waiting room at the
 #   # memory gate. A request waits up to 1 s at either gate, then gets 503 with
-#   # Retry-After: 1. Treat these responses as backpressure.
+#   # Retry-After: 1. A request that finds a waiting room full first waits up to 0.5 s
+#   # for a place, among at most 8 per slot. Past that it gets the 503 at once, and the
+#   # connection closes. Treat these responses as backpressure.
 #   serveMaxInFlight: 128
 #   # Pooled connections per public upstream host: clamp (32, 1024) (nofile / 8).
 #   # Connections beyond the pool still open, but re-handshake TLS each time.

@@ -1234,6 +1234,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.Admission.BudgetSpec
     Ecluse.Core.Server.Admission.Bytes.InternalSpec
     Ecluse.Core.Server.Admission.MeterSpec
+    Ecluse.Core.Server.Admission.OverflowSpec
     Ecluse.Core.Server.AcceptSpec
     Ecluse.Core.Server.Admission.InternalSpec
     Ecluse.Core.Server.Cache.BackendSpec
@@ -1260,6 +1261,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.Pipeline.OriginSpec
     Ecluse.Core.Server.Pipeline.PackumentSpec
     Ecluse.Core.Server.Pipeline.Packument.RepresentationSpec
+    Ecluse.Core.Server.Pipeline.SharedSpec
     Ecluse.Core.Server.Pipeline.SidecarSpec
     Ecluse.Core.Server.Pipeline.Tarball.PrivateSpec
     Ecluse.Core.Server.Pipeline.Tarball.PublicSpec

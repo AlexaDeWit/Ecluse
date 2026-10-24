@@ -260,8 +260,12 @@ serve-path cap, and a pause before a render at the request timeout. Both gates s
 metadata evaluation and the listing response. Public artifact requests release both after the
 metadata decision, before streaming the admitted artifact.
 
-Each gate has a bounded waiting room and a 1 s wait budget. A full waiting room or an expired wait
-sheds with `503` and `Retry-After`. Health probes, cheap local routes and trusted private artifact
+Each gate has a bounded waiting room and a 1 s wait budget, timed on the deadline sweeper. A request
+that finds a room full waits up to 0.5 s in one queue in front of both gates, holding no slot or
+charge, and each freed place wakes the oldest queued request to try the door again. An expired wait,
+or 0.5 s in the queue with no place, sheds with `503` and `Retry-After`. Past the queue's cap of 8
+requests per serve slot, the `503` comes at once and closes the connection, so a client that ignores
+`Retry-After` cannot spin on refusals and take CPU from admitted work. Health probes, cheap local routes and trusted private artifact
 hits bypass both gates. The mirror worker runs outside them. A slow artifact client therefore holds
 no serve metadata slot while its download drains.
 

@@ -155,7 +155,7 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
                 (GZip.decompress <$> responseBytes packed) `shouldReturn` plainBytes
                 reverse <$> readIORef results `shouldReturn` [Miss, Hit]
         it "charges a gzip response its workspace and buffer, and returns every charge" $ withSweeper $ \deadlines -> do
-            meter <- newMemoryMeter MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 1000, msEntryWaitMicros = 0}
+            meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 1000, msEntryWaitMicros = 0}
             unmetered <- testServeRuntime deadlines noopMetricsPort
             withListingIn unmetered{srMemoryMeter = meter} listing $ \serve -> do
                 void (serve GzipWhenAccepted methodGet [])
@@ -185,7 +185,7 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
                     statusOf <$> serve publicOnly ((hIfNoneMatch, publicTag) : signed) `shouldReturn` 304
                     statusOf <$> serve publicOnly{pdRules = []} ((hIfNoneMatch, publicTag) : signed) `shouldReturn` 403
         it "returns its admission slot and charges when cancelled while it responds" $ withSweeper $ \deadlines -> do
-            admission <- newServeAdmissionTuned 1 0 0
+            admission <- newServeAdmissionTuned deadlines 1 0 0
             rt <- testServeRuntimeWith deadlines admission noopMetricsPort
             testWithApplication (pure (listingOrigin listing)) $ \port -> do
                 deps <- listingDeps listing port

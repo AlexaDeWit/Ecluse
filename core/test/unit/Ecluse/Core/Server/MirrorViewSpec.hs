@@ -13,6 +13,7 @@ import Data.ByteString.Internal qualified as BSI
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
+import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Internal (StateRevision (StateRevision))
 import Ecluse.Core.Package
@@ -173,6 +174,6 @@ runRead view = withTicket (\ticket -> validateMirrorProject view ticket mirrorPa
 
 withTicket :: (MemoryTicket -> IO a) -> IO a
 withTicket action = do
-    meter <- newMemoryMeter (MeterSettings maxBound 1024 1 1000)
+    meter <- newDeadlines >>= \deadlines -> newMemoryMeter deadlines (MeterSettings maxBound 1024 1 1000)
     admitted <- withMemoryEntry noopMetricsPort meter action
-    maybe (fail "test memory admission unexpectedly refused") pure admitted
+    either (const (fail "test memory admission unexpectedly refused")) pure admitted

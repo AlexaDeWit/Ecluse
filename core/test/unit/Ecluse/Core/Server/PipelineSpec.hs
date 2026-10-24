@@ -301,28 +301,28 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
     it "sheds packument work when metadata admission refuses" $ withSweeper $ \deadlines -> do
         (metricsPort, _decisions) <- recordingMetricsPort
-        admission <- newServeAdmissionTuned 1 0 0
+        admission <- newServeAdmissionTuned deadlines 1 0 0
         rt <- testServeRuntimeWith deadlines admission metricsPort
         deps <- depsFor 1
         held <- withServeAdmission (srMetrics rt) admission (captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest))
-        response <- maybe (throwIO MissingFixtureResponse) pure held
+        response <- either (const (throwIO MissingFixtureResponse)) pure held
         statusCode (responseStatus response) `shouldBe` 503
         (snd <$> find ((== hRetryAfter) . fst) (responseHeaders response)) `shouldBe` Just "1"
 
     it "releases metadata admission after an admitted operation completes" $
         testWithApplication (pure upstreamApp) $ \port -> withSweeper $ \deadlines -> do
             (metricsPort, _decisions) <- recordingMetricsPort
-            admission <- newServeAdmissionTuned 1 0 0
+            admission <- newServeAdmissionTuned deadlines 1 0 0
             rt <- testServeRuntimeWith deadlines admission metricsPort
             deps <- depsFor port
             saturated <- withServeAdmission (srMetrics rt) admission (captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest))
-            (statusCode . responseStatus <$> saturated) `shouldBe` Just 503
+            (statusCode . responseStatus <$> saturated) `shouldBe` Right 503
             admitted <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
             statusCode (responseStatus admitted) `shouldBe` 200
 
     it "sheds a tarball miss when its public metadata gate cannot acquire admission" $ withSweeper $ \deadlines -> do
         (metricsPort, _decisions) <- recordingMetricsPort
-        admission <- newServeAdmissionTuned 1 0 0
+        admission <- newServeAdmissionTuned deadlines 1 0 0
         rt <- testServeRuntimeWith deadlines admission metricsPort
         deps <- depsFor 1
         held <-
@@ -332,14 +332,14 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                     rt
                     (mountWith deps)
                     (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
-        response <- maybe (throwIO MissingFixtureResponse) pure held
+        response <- either (const (throwIO MissingFixtureResponse)) pure held
         statusCode (responseStatus response) `shouldBe` 503
         (snd <$> find ((== hRetryAfter) . fst) (responseHeaders response)) `shouldBe` Just "1"
 
     it "does not hold metadata admission around a trusted private tarball stream" $
         testWithApplication (pure upstreamApp) $ \port -> withSweeper $ \deadlines -> do
             (metricsPort, _decisions) <- recordingMetricsPort
-            admission <- newServeAdmission 1
+            admission <- newServeAdmission deadlines 1
             rt <- testServeRuntimeWith deadlines admission metricsPort
             deps <- depsFor 1
             let privateDeps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) deps
@@ -350,10 +350,10 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                         rt
                         (mountWith privateDeps)
                         (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
-            (statusCode . responseStatus <$> held) `shouldBe` Just 200
+            (statusCode . responseStatus <$> held) `shouldBe` Right 200
 
     it "releases both gates before public artifact relay starts" $ withSweeper $ \deadlines -> do
-        admission <- newServeAdmissionTuned 1 0 0
+        admission <- newServeAdmissionTuned deadlines 1 0 0
         rt <- testServeRuntimeWith deadlines admission noopMetricsPort
         released <- newIORef Nothing
         let upstream req respond = do
@@ -371,7 +371,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                     (mountWith deps)
                     (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
             statusCode (responseStatus response) `shouldBe` 200
-            readIORef released `shouldReturn` Just (Just (), 0)
+            readIORef released `shouldReturn` Just (Right (), 0)
 
 memoryAdmissionSpec :: Spec
 memoryAdmissionSpec = describe "memory admission on live request paths" $ do
@@ -426,7 +426,7 @@ memoryAdmissionSpec = describe "memory admission on live request paths" $ do
             let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) base
             held <- withMemoryEntry noopMetricsPort meter $ \_ ->
                 captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
-            response <- maybe (throwIO MissingFixtureResponse) pure held
+            response <- either (const (throwIO MissingFixtureResponse)) pure held
             statusCode (responseStatus response) `shouldBe` 503
             (snd <$> find ((== hRetryAfter) . fst) (responseHeaders response)) `shouldBe` Just "1"
             readIORef lookups `shouldReturn` 0
@@ -442,7 +442,7 @@ memoryAdmissionSpec = describe "memory admission on live request paths" $ do
                     rt
                     (mountWith deps)
                     (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
-            (statusCode . responseStatus <$> held) `shouldBe` Just 503
+            (statusCode . responseStatus <$> held) `shouldBe` Right 503
             readIORef lookups `shouldReturn` 0
 
     it "charges a public artifact decision its entry step alone" $
@@ -1034,7 +1034,7 @@ pypiPrivateApp privateStatus req respond
 fullDoorRuntime :: Deadlines -> MetricsPort -> IO (ServeRuntime, MemoryMeter)
 fullDoorRuntime deadlines metricsPort = do
     rt <- testServeRuntime deadlines metricsPort
-    meter <- newMemoryMeter MeterSettings{msBudgetBytes = 1, msStepBytes = 1, msEntryRoom = 0, msEntryWaitMicros = 0}
+    meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = 1, msStepBytes = 1, msEntryRoom = 0, msEntryWaitMicros = 0}
     pure (rt{srMemoryMeter = meter}, meter)
 
 mountWith :: PackumentDeps -> MountBinding

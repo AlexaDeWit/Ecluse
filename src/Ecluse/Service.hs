@@ -48,6 +48,7 @@ import Ecluse.Composition.Worker (workerPoliciesWithState)
 import Ecluse.Config (AppConfig (cfgEgress), EgressSettings (egrOperatorContact))
 import Ecluse.Core.BuildIdentity (identityManagerSettings, renderUserAgent)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured))
+import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
 import Ecluse.Core.Fault.Http (typedTlsManagerSettings)
 import Ecluse.Core.Queue (MirrorQueue)
@@ -60,7 +61,6 @@ import Ecluse.Core.Registry.Adapter (
     serveCredential,
     serveRouter,
  )
-import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Server.Admission (newServeAdmission, serveAdmissionOverflow)
 import Ecluse.Core.Server.Admission.Brake (defaultBrakeMarks)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), meterSnapshot, newMemoryMeter)
@@ -127,7 +127,7 @@ withServiceRuntime bootEnv plan mirror action = do
         cveSyncPlan = mwCveSync mirror
         baseBindings = bwBindings (mwBootWiring mirror)
 
-    -- The overflow queue in front of both gates waits on this process's sweeper, which the boot supervises.
+    -- Only the boot turns the overflow queue on, with the sweeper it supervises. A test-built runtime refuses a full room at once.
     serveAdmission <- newServeAdmission deadlines (mpAdmissionCapacity memoryPlan)
     (memoryMeter, sampler) <- memoryAdmission deadlines memoryPlan
     heartbeat <- newWorkerHeartbeat

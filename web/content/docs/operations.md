@@ -666,6 +666,14 @@ near one request and the shared work it waits on, and a pause always leaves a re
 finishes. Everything a request paid returns when it ends. Trusted private artifact hits and
 artifact relay pay nothing.
 
+A new request that finds the memory gate's or the CPU gate's waiting room full does not get a `503`
+at once. It waits up to 0.5 s outside both gates, holding no CPU slot and no memory charge, and the
+oldest such request takes the next place that frees. If no place frees in time, it gets `503` with
+`Retry-After: 1`. At most 8 requests per serve slot wait this way, 320 at 2 CPUs. Past that, Écluse
+answers `503` at once and closes the connection. So a client that ignores `Retry-After` sends at
+most about two requests a second on each connection, and a short burst gets in instead of being
+refused.
+
 The budget starts at a quarter of the heap the nursery leaves, less the cache budget, the queue
 tenants and the idle process. That is the live data at which the copying collector still runs
 normally. A sampler reads the collector and the cgroup ten times a second and moves the budget:
@@ -698,10 +706,15 @@ only the collector's share moves it.
 | `ecluse.serve.admission.memory.shed` | Requests refused at the memory gate |
 | `ecluse.serve.admission.memory.pauses` | Times a started request paused for memory |
 | `ecluse.serve.admission.memory.overdraws` | Steps a request took past the budget |
+| `ecluse.serve.admission.overflow.waiting` | Requests a full waiting room turned away, waiting for a place now |
+| `ecluse.serve.admission.overflow.admitted` | Waiting requests that got a place |
+| `ecluse.serve.admission.overflow.shed` | Waiting requests refused after 0.5 s |
+| `ecluse.serve.admission.overflow.full` | Requests refused at once because the wait was full |
 
 A `503` with `Retry-After` from either gate is backpressure, so exclude it from alerts. A brake
 level that stays at `2`, or a `shed` count that keeps rising, means the pod needs more memory for
-its package mix.
+its package mix. An `overflow.full` count that keeps rising means more clients wait at once than
+the pod can hold, so add replicas or slots.
 
 ### The rest of the plan
 

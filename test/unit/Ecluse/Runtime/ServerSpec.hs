@@ -169,7 +169,7 @@ widgetName = "@acme/widget"
 -- One @\/npm@ mount with the given publish deps and a body budget these cases never contend on.
 publishAppWith :: (ByteAdmission -> PublishDeps) -> Deadlines -> IO Application
 publishAppWith mkDeps deadlines = do
-    bodyBudget <- newByteAdmission (128 * 1024 * 1024)
+    bodyBudget <- newByteAdmission deadlines (128 * 1024 * 1024)
     application (mkServerConfig [publishMountAt ("npm" :| []) npmRouter (Just (mkDeps bodyBudget))]) <$> newTestEnv deadlines
 
 -- One @\/npm@ mount under a __fake__ router, proving dispatch follows the binding's router.

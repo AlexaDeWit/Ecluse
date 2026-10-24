@@ -39,6 +39,7 @@ import Data.Map.Strict qualified as Map
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Exception qualified as UE
 
+import Ecluse.Core.Deadline (Deadlines, withDeadlineFlag)
 import Ecluse.Core.Server.Admission.Budget (
     EntryGate (..),
     GrowthGate (..),
@@ -48,7 +49,6 @@ import Ecluse.Core.Server.Admission.Budget (
     growthDecision,
     roundUpToStep,
  )
-import Ecluse.Core.Deadline (Deadlines, withDeadlineFlag)
 import Ecluse.Core.Server.Admission.Overflow (Line, newLine, signalLine)
 import Ecluse.Core.Server.Admission.Types (BrakeLevel (Calm), FlightKey, MeterSnapshot (..), Shed (..))
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))

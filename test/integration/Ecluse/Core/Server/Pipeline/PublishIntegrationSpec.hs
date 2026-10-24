@@ -88,7 +88,7 @@ proxyOver deadlines publishDeps = do
 
 proxyWith :: Deadlines -> Maybe (ByteAdmission -> PublishDeps) -> IO Application
 proxyWith deadlines mkPublishDeps =
-    forM mkPublishDeps (\mk -> mk <$> newByteAdmission (128 * 1024 * 1024)) >>= proxyOver deadlines
+    forM mkPublishDeps (\mk -> mk <$> newByteAdmission deadlines (128 * 1024 * 1024)) >>= proxyOver deadlines
 
 -- The body cap fires before relay, so the target port is an unconnectable placeholder.
 cappedProxyWith :: Deadlines -> Int -> IO Application
@@ -149,7 +149,7 @@ npmPublishSpec = describe "first-party npm publication relay" $ do
                 takeMVar gate
                 respond (responseLBS (mkStatus 201 "OK") [(hContentType, "application/json")] "{}")
         testWithApplication (pure blockingApp) $ \targetPort -> withSweeper $ \deadlines -> do
-            tightBudget <- newByteAdmissionTuned 1 0 50_000
+            tightBudget <- newByteAdmissionTuned deadlines 1 0 50_000
             app <- proxyOver deadlines (Just (publishDepsAt targetPort Nothing tightBudget))
             firstPublish <- async (putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app)
             -- Wait until the first publish holds the budget (its body reached the
@@ -348,7 +348,7 @@ npmPublishSpec = describe "first-party npm publication relay" $ do
 pypiProxy :: Deadlines -> Maybe (ByteAdmission -> PublishDeps) -> IO Application
 pypiProxy deadlines build = do
     env <- newTestEnv deadlines
-    deps <- traverse (\mk -> mk <$> newByteAdmission (128 * 1024 * 1024)) build
+    deps <- traverse (\mk -> mk <$> newByteAdmission deadlines (128 * 1024 * 1024)) build
     pure (application (mkServerConfig (maybeToList (mountBindingFor PyPI (inertDepsFor pypiAdapter) deps))) env)
 
 pypiDeps :: Int -> ByteAdmission -> PublishDeps
@@ -507,7 +507,7 @@ pypiPublishSpec = describe "first-party PyPI publication relay" $ do
                 takeMVar release
                 respond (responseLBS (mkStatus 201 "") [] "accepted")
         testWithApplication (pure blockingApp) $ \port -> withSweeper $ \deadlines -> do
-            budget <- newByteAdmissionTuned 1 0 50_000
+            budget <- newByteAdmissionTuned deadlines 1 0 50_000
             app <- pypiProxy deadlines (Just (const (pypiDeps port budget)))
             let send = postUpload ChunkedBody [("Content-Type", multipartType)] (multipartBody ["acme-widget"]) app
             heldRequest <- async send

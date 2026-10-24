@@ -241,7 +241,7 @@ composedPyPIAtWith deadlines changeEnv source target = do
 composedManagedBudget :: Deadlines -> Int -> IO (Env, WorkerMirrorState)
 composedManagedBudget deadlines allowance = do
     (original, bindings, targets) <- composedFixturesFrom deadlines pypiMirrorEnv testLimits
-    meter <- newMemoryMeter (MeterSettings allowance 1 0 0)
+    meter <- newMemoryMeter deadlines (MeterSettings allowance 1 0 0)
     pool <- newLocalPool 1 1024
     retention <- newMirrorRetention pool 60 (StoreBudget 0 0)
     let env = original{envMemoryMeter = meter}
