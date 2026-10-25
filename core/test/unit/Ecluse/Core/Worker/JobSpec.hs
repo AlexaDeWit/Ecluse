@@ -645,8 +645,8 @@ spec = do
                             presentResolver name version <&> \case
                                 VersionPresent doc latest -> VersionPresent doc{vdDetails = (vdDetails doc){pkgInstallCode = CodeExecUnknown}} latest
                                 other -> other
-                        provider = InstallEvidenceProvider $ \context -> do
-                            ieRole context `shouldBe` InstallWorkerReadmission
+                        provider = InstallEvidenceProvider $ \evidenceContext -> do
+                            ieRole evidenceContext `shouldBe` InstallWorkerReadmission
                             pure (\_ -> pure (Just (InstallEvidenceRead (modifyIORef' calls (+ 1) $> InstallReadFailed (ReadFault transience EvaluationFailed InstallSignalUnread)))))
                         policies = Map.map (\policy -> policy{wpInstallEvidence = Just provider}) (npmPolicies resolver rules)
                     withRuntimePolicies policies noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do

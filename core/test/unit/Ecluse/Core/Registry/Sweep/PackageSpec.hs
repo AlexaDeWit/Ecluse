@@ -283,13 +283,13 @@ installEvidenceSpec = describe "stored install evidence" $ do
         recorded <- recordingPorts generation
         let handle = fakeMaintenance store
             tracked = store{fakeMaintenance = handle{storeReadArtifact = \_ selected _ -> modifyIORef' artifactReads (selected :) $> Right "authenticated archive"}}
-            provider = InstallEvidenceProvider $ \context -> do
-                ieRole context `shouldBe` InstallStoreRevocation
+            provider = InstallEvidenceProvider $ \evidenceContext -> do
+                ieRole evidenceContext `shouldBe` InstallStoreRevocation
                 pure $ \details -> do
                     let selected :| _ = pkgArtifacts details
                     pure . Just . InstallEvidenceRead $ do
                         modifyIORef' subjects (details :)
-                        result <- ieReadArtifact context defaultLimits selected (const (pure ()))
+                        result <- ieReadArtifact evidenceContext defaultLimits selected (const (pure ()))
                         pure (either InstallReadFailed (const (InstallDetermined (RunsCodeOnInstall "stored declaration"))) result)
         runStep recorded testPacing (mount tracked rules){smInstallEvidence = Just provider} (served ["1.0.0"]) `shouldReturn` Nothing
         held store `shouldReturn` []
@@ -312,8 +312,8 @@ installEvidenceSpec = describe "stored install evidence" $ do
         recorded <- recordingPorts generation
         calls <- newIORef (0 :: Int)
         let provider = InstallEvidenceProvider (\_ -> modifyIORef' calls (+ 1) $> const (pure Nothing))
-            guarded = (mount store rules){smFirstParty = const True, smInstallEvidence = Just provider}
-        runStep recorded testPacing guarded (served ["1.0.0"]) `shouldReturn` Nothing
+            ownedMount = (mount store rules){smFirstParty = const True, smInstallEvidence = Just provider}
+        runStep recorded testPacing ownedMount (served ["1.0.0"]) `shouldReturn` Nothing
         readIORef calls `shouldReturn` 0
         held store `shouldReturn` [version]
 

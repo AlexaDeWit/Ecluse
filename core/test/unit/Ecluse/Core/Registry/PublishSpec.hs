@@ -201,6 +201,7 @@ unsealedCodec =
         , pcNativeComplete = pcNativeComplete npmPublishCodec
         , pcTargetReadPermille = pcTargetReadPermille npmPublishCodec
         , pcTargetRead = staticRead npmRead{erRequest = \target _ _ -> unsealed (registryUrlText (baseRequestUrl target) <> "/probe")}
+        , pcPrepareTarget = pcPrepareTarget npmPublishCodec
         , pcPrepareSource = prepareNpmSource
         , pcPrepareUpload = \_ _ inventory source file bytes -> pure (prepareNpmUpload inventory source file bytes)
         , pcPublishRequest = \targetUrl _token _plan _upload ->

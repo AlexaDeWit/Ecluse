@@ -41,6 +41,7 @@ spec = do
     describe "Cargo durable source restoration" $ do
         it "restores original yank, time and additive fields after durable reopen and target replacement" $ do
             (original, inventory) <- cargoInventory
+            fmap cargoRecords (snd cargoCached (raw inventory)) `shouldBe` fmap cargoRecords (vdRaw original >>= snd cargoCached)
             record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
             bytes <- expectRight (encodeProjectRecord defaultLimits record)
             reopened <- chargedDecodeProjectRecord (const (pure ())) defaultLimits target (pkgName (vdDetails original)) bytes >>= expectRight
@@ -48,14 +49,14 @@ spec = do
             restored <- expectRight (mirrorVersionView (pkgVersion (vdDetails original)) reopened (Just current))
             fmap vdDetails restored `shouldBe` Just (vdDetails original){pkgArtifacts = pkgArtifacts (vdDetails current)}
             fmap (fmap cargoRecords . (snd cargoCached <=< vdRaw)) restored `shouldBe` Just (fmap cargoRecords (vdRaw original >>= snd cargoCached))
-            let revision = StateRevision target (pkgName (vdDetails original)) "reopened"
+            let reopenedRevision = StateRevision target (pkgName (vdDetails original)) "reopened"
                 details = vdDetails current
                 manifest = Manifest (PackageInfo (pkgName details) (Map.singleton "1.0.0" details) mempty []) (fromMaybe (fst cargoCached (cargoDocument [])) (vdRaw current)) 0 (digestOf "target")
-            (_, managed, pending) <- expectRight (mirrorProjectViews revision reopened (Just manifest))
-            Map.null pending `shouldBe` True
+            (_, managed, incomplete) <- expectRight (mirrorProjectViews reopenedRevision reopened (Just manifest))
+            Map.null incomplete `shouldBe` True
             let rows = concat [cargoRecords source | value <- maybeToList managed, source <- maybeToList (snd cargoCached (manifestRaw value))]
             map fst rows `shouldBe` [RecordEntry 0]
-            map snd rows `shouldBe` [value | raw <- maybeToList (vdRaw original >>= snd cargoCached), (_, value) <- cargoRecords raw]
+            map snd rows `shouldBe` [value | source <- maybeToList (vdRaw original >>= snd cargoCached), (_, value) <- cargoRecords source]
         it "refuses absent, missing-digest and conflicting target identity" $ do
             (original, inventory) <- cargoInventory
             record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
@@ -192,6 +193,7 @@ raw :: MirrorInventory -> CachedDoc
 raw inventory = case inventoryReadData inventory of
     PyPIMirrorRead document -> fst pypiSimpleCached document
     NpmMirrorRead fields -> fst npmCached (Object fields)
+    CargoMirrorRead document -> fst cargoCached document
 
 sampleRecord :: IO ProjectMirrorRecord
 sampleRecord = mirrorSample [1, 2, 3] False "https://public.test/" "source" >>= \inventory -> expectRight (extendProjectRecord defaultLimits target inventory Nothing)

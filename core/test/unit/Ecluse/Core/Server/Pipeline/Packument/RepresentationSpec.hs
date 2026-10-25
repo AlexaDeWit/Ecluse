@@ -51,7 +51,7 @@ codedETagSpec = describe "codedETag -- one validator per content coding" $ do
 
 packumentETagSpec :: Spec
 packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
-    it "pins the v4 byte framing for every entry constructor" $ do
+    it "pins the v4 byte framing for array, object and singleton entries" $ do
         let sources =
                 [ (TrustedSource, privateDigest base, [("1\0é", [ArrayEntry 0, ArrayEntry 10, ArrayEntry (-1), ObjectEntry "é\0x", SingletonEntry])])
                 , (GatedSource, publicDigest base, [])
@@ -110,6 +110,8 @@ packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
             tag [ArrayEntry 0, ArrayEntry 1] `shouldNotBe` tag [ArrayEntry 1]
         it ("distinguishes entry constructors for " <> show provenance) $ do
             tag [ArrayEntry 0] `shouldNotBe` tag [ObjectEntry "0"]
+            tag [RecordEntry 0] `shouldNotBe` tag [ArrayEntry 0]
+            tag [RecordEntry 0] `shouldNotBe` tag [RecordEntry 1]
             tag [SingletonEntry] `shouldNotBe` tag [ObjectEntry "s"]
         it ("frames arbitrary object keys for " <> show provenance) $
             tag [ObjectEntry "a", ObjectEntry "b"] `shouldNotBe` tag [ObjectEntry "a\0b"]
@@ -121,8 +123,11 @@ packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
                 origins <- forAll (Gen.list (Range.constant 0 3) genFingerprintText)
                 name <- forAll (mkPackageName <$> Gen.element [Npm, PyPI] <*> pure Nothing <*> genFingerprintText)
                 sources <- forAll (Gen.list (Range.constant 0 3) genSourcePiece)
-                let indices = [index | (_, _, survivors) <- sources, (_, entries) <- survivors, ArrayEntry index <- entries]
+                let coordinates = [key | (_, _, survivors) <- sources, (_, entries) <- survivors, key <- entries]
+                    recordIndices = [index | RecordEntry index <- coordinates]
+                    indices = [index | ArrayEntry index <- coordinates] <> recordIndices
                     texts = mount : origins <> [text | (_, _, survivors) <- sources, (version, entries) <- survivors, text <- version : [key | ObjectEntry key <- entries]]
+                cover 5 "record coordinates" (not (null recordIndices))
                 cover 5 "an index at minBound" (minBound `elem` indices)
                 cover 5 "an index at maxBound" (maxBound `elem` indices)
                 cover 5 "another negative index" (any (\index -> index < 0 && index /= minBound) indices)
@@ -153,6 +158,7 @@ builderETag mountBaseUrl originBaseUrls name sources =
     entryPiece :: EntryKey -> Builder
     entryPiece = \case
         ArrayEntry index -> "a" <> frame (show index)
+        RecordEntry index -> "r" <> frame (show index)
         ObjectEntry key -> "o" <> frame (encodeUtf8 key)
         SingletonEntry -> "s"
     provenanceTag :: Provenance -> Builder
@@ -168,7 +174,7 @@ genSourcePiece =
         <*> Gen.list (Range.constant 0 3) ((,) <$> genFingerprintText <*> Gen.list (Range.constant 0 4) genEntryKey)
 
 genEntryKey :: Gen EntryKey
-genEntryKey = Gen.choice [ArrayEntry <$> genIndex, ObjectEntry <$> genFingerprintText, pure SingletonEntry]
+genEntryKey = Gen.choice [ArrayEntry <$> genIndex, RecordEntry <$> genIndex, ObjectEntry <$> genFingerprintText, pure SingletonEntry]
   where
     genIndex = Gen.choice [Gen.element [minBound, maxBound, 0, -1], Gen.int (Range.constantFrom 0 minBound maxBound)]
 

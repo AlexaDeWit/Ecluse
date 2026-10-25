@@ -173,7 +173,7 @@ objectOverlaySpec = describe "overlayObjectSurvivors" $ do
         serve (Map.singleton 0 (raw <$ source)) multiple `shouldBe` [("1", "first"), ("1", "last")]
     it "refuses unnamed artifacts and non-object coordinates" $ do
         serve sources plan{mpArtifacts = fmap (fmap (\entry -> entry{admittedFilename = ""})) (mpArtifacts plan)} `shouldBe` []
-        for_ [ArrayEntry (-1), ArrayEntry 0, SingletonEntry] $ \other ->
+        for_ [ArrayEntry (-1), ArrayEntry 0, RecordEntry (-1), RecordEntry 0, SingletonEntry] $ \other ->
             serve sources (entryPlan source other) `shouldBe` []
     it "matches ordered selection for mixed winning sources and adversarial admissions" $
         hedgehog $ do
@@ -212,7 +212,7 @@ objectAlias count = ObjectEntry . show <$> Gen.int (Range.constant 0 count)
 
 entryContractSpec :: Spec
 entryContractSpec = describe "source-scoped admitted-entry contracts" $ do
-    for_ [ArrayEntry 2, ObjectEntry "release", SingletonEntry] $ \key ->
+    for_ [ArrayEntry 2, RecordEntry 2, ObjectEntry "release", SingletonEntry] $ \key ->
         describe (show key) $ do
             let source = syntheticSnapshot [(key, "kept" :: Text)]
                 sources = Map.singleton 0 source
@@ -245,10 +245,10 @@ entryContractSpec = describe "source-scoped admitted-entry contracts" $ do
             it "does not confuse identical content from two source positions" $
                 serve (Map.insert 1 ([(key, "losing")] <$ source) sources) plan `shouldBe` [("1", "kept")]
 
-    it "refuses negative array positions" $ do
-        let key = ArrayEntry (-1)
-            source = syntheticSnapshot [(key, "invalid" :: Text)]
-        overlaySurvivors id (Map.singleton 0 source) (entryPlan source key) `shouldBe` []
+    it "refuses negative array and record positions" $
+        for_ [ArrayEntry (-1), RecordEntry (-1)] $ \key -> do
+            let source = syntheticSnapshot [(key, "invalid" :: Text)]
+            overlaySurvivors id (Map.singleton 0 source) (entryPlan source key) `shouldBe` []
 
 arrayOverlaySpec :: Spec
 arrayOverlaySpec = describe "array selection against the generic selector" $ do
@@ -312,7 +312,7 @@ genSourceKeys =
     Gen.choice
         [ map ArrayEntry <$> Gen.subsequence [0 .. 80]
         , map ArrayEntry . sort <$> Gen.list (Range.linear 0 80) (Gen.int (Range.constant (-2) 40))
-        , Gen.list (Range.linear 0 80) (Gen.element [ArrayEntry (-1), ArrayEntry 0, ArrayEntry 2, ArrayEntry 7, ArrayEntry maxBound, ObjectEntry "release", SingletonEntry])
+        , Gen.list (Range.linear 0 80) (Gen.element [ArrayEntry (-1), ArrayEntry 0, ArrayEntry 2, ArrayEntry 7, ArrayEntry maxBound, RecordEntry (-1), RecordEntry 0, RecordEntry 2, RecordEntry maxBound, ObjectEntry "release", SingletonEntry])
         , (\count -> map ArrayEntry [0 .. count - 1]) <$> Gen.int (Range.linear 0 80)
         , map (ArrayEntry . (* 50)) <$> Gen.subsequence [0 .. 20]
         ]
@@ -361,6 +361,7 @@ onlyOnce = Map.mapMaybe id . Map.fromListWith (\_ _ -> Nothing) . map (second Ju
 nonNegativeKey :: EntryKey -> Bool
 nonNegativeKey = \case
     ArrayEntry position -> position >= 0
+    RecordEntry position -> position >= 0
     ObjectEntry _ -> True
     SingletonEntry -> True
 
