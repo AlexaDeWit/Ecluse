@@ -93,7 +93,7 @@ chargingSpec = describe "selected row reservations" $ do
                     selectedVersion = "1.0.0"
                     input = if version == selectedVersion then row "2.0.0" <> "\n" <> large else row selectedVersion <> "\n" <> large
                 paid <- newIORef (0 :: Int)
-                parsed <- chargedResult (\cost -> modifyIORef' paid (max cost)) selectedVersion input
+                parsed <- chargedResult (modifyIORef' paid . max) selectedVersion input
                 Map.keys (infoVersions (cargoIndexInfo parsed)) `shouldBe` [selectedVersion]
                 peak <- readIORef paid
                 peak `shouldSatisfy` (>= 12 * size)
@@ -103,13 +103,13 @@ chargingSpec = describe "selected row reservations" $ do
         let target = featureRow "1.0.0" 8192
             other = featureRow "2.0.0" 8192
         peak <- newIORef (0 :: Int)
-        _ <- chargedResult (\cost -> modifyIORef' peak (max cost)) "1.0.0" (target <> "\n" <> other)
+        _ <- chargedResult (modifyIORef' peak . max) "1.0.0" (target <> "\n" <> other)
         readIORef peak `shouldReturn` rowCost target + rowCost other
     it "does not charge the sum of discarded rows" $ do
         let target = row "1.0.0"
             other = featureRow "2.0.0" 8192
         peak <- newIORef (0 :: Int)
-        _ <- chargedResult (\cost -> modifyIORef' peak (max cost)) "1.0.0" (BS.intercalate "\n" (target : replicate 100 other))
+        _ <- chargedResult (modifyIORef' peak . max) "1.0.0" (BS.intercalate "\n" (target : replicate 100 other))
         readIORef peak >>= (`shouldSatisfy` (< 3 * (rowCost target + rowCost other)))
     for_ ["1.0.0", "2.0.0"] $ \version ->
         it ("stops before reading the rest of a refused row " <> toString version) $ do

@@ -45,7 +45,7 @@ heldFor :: CargoRead -> Limits -> Int -> IO Integer
 heldFor mode limits count = do
     discovery <- expectRight cargoTestDiscovery
     peak <- newIORef (0 :: Int)
-    heldReading (\bound -> readCargoIndexCharged (\cost -> modifyIORef' peak (max cost)) discovery limits cargoTestName mode bound (testTable ["vers", "cksum"])) (body count)
+    heldReading (\bound -> readCargoIndexCharged (modifyIORef' peak . max) discovery limits cargoTestName mode bound (testTable ["vers", "cksum"])) (body count)
 
 body :: Int -> ByteString
 body count = foldMap row [0 .. count]
