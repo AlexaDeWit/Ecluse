@@ -32,8 +32,7 @@ import Network.HTTP.Types (status401, statusCode)
 import Network.Wai (Application, pathInfo, requestHeaders, requestMethod, responseLBS)
 import System.Directory (renameFile)
 import System.FilePath ((</>))
-import UnliftIO (bracket, bracket_)
-import UnliftIO.STM (swapTVar)
+import UnliftIO (bracket_)
 
 import Ecluse.E2E.Fixtures.PyPI (pypiWheelFor)
 import Ecluse.E2E.Fixtures.PyPI.Dredger (buildDredgerDistributions, firstPartyName)
@@ -210,15 +209,12 @@ withSourceWithheld plane name version action = foldr hide action paths
 
 -- | The cache reports a native per-version refusal while its files remain readable.
 withDeleteRefusal :: PyPISweepPlane -> IO a -> IO a
-withDeleteRefusal plane = replacing (cafRefusedDeletes (pspControl plane)) ["cache"]
+withDeleteRefusal plane = withFixtureValue (cafRefusedDeletes (pspControl plane)) ["cache"]
 
 -- | Removing the mirror's repository marker must stop the product before any deletion.
 withConsentWithheld :: PyPISweepPlane -> IO a -> IO a
 withConsentWithheld plane action = do
     tags <- readTVarIO variable
-    replacing variable (Map.adjust (Map.delete "ecluse-dredger-consent") "mirror" tags) action
+    withFixtureValue variable (Map.adjust (Map.delete "ecluse-dredger-consent") "mirror" tags) action
   where
     variable = cafTags (pspControl plane)
-
-replacing :: TVar a -> a -> IO b -> IO b
-replacing variable value action = bracket (atomically (swapTVar variable value)) (atomically . writeTVar variable) (const action)

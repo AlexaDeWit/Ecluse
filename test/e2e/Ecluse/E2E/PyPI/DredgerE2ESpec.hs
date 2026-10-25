@@ -23,7 +23,7 @@ import Ecluse.E2E.Fixtures.PyPI.Dredger
 import Ecluse.E2E.Fixtures.PyPI.Mirror (Distribution (..))
 import Ecluse.E2E.Harness.Advisories (advisoryStoreEnv, publishAdvisoryExport)
 import Ecluse.E2E.Harness.Client (shouldSucceed)
-import Ecluse.E2E.Harness.CodeArtifact (CodeArtifactFixture (cafRequests))
+import Ecluse.E2E.Harness.CodeArtifact (creditCodeArtifactDeletes, withCodeArtifactDeleteAudit)
 import Ecluse.E2E.Harness.Docker (RoleRun (..), awaitContainerLog, containerLogs, runRoleOnce, sharedMirrorQueue, withDataPlane, withMirrorRole)
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
 import Ecluse.E2E.Harness.Proxy (awaitProxyLog)
@@ -210,32 +210,18 @@ workerRelease release = case T.splitOn "@" release of
     [name, version] | not (T.null name) -> (name,) <$> canonicalVersion version
     _ -> fail "expected a PyPI package@version fixture coordinate"
 
--- | From boot to stop, the worker sees only the CodeArtifact deletes credited to Dredger runs.
 withObservedWorker :: Native.PyPISweepPlane -> Text -> (String -> IO a) -> IO a
-withObservedWorker plane queue action = do
-    prior <- deleteRequests plane
-    credited <- length <$> readTVarIO (Native.pspDredgerDeletes plane)
-    result <- withMirrorRole (Native.pspGlobal plane) environment action
-    made <- drop credited <$> readTVarIO (Native.pspDredgerDeletes plane)
-    deleteRequests plane `shouldReturn` prior <> made
-    pure result
+withObservedWorker plane queue action =
+    withCodeArtifactDeleteAudit (Native.pspControl plane) (Native.pspDredgerDeletes plane) $
+        withMirrorRole (Native.pspGlobal plane) environment action
   where
     environment =
         Native.proxyRoleEnv
             <> permissiveEnv
             <> [("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873"), ("ECLUSE_QUEUE__URL", queue), ("AWS_ENDPOINT_URL_SQS", "http://ministack:4566")]
 
--- | Credit the CodeArtifact deletes a Dredger run makes to that run.
 creditDeletes :: Native.PyPISweepPlane -> IO SweepRun -> IO SweepRun
-creditDeletes plane run = do
-    prior <- length <$> deleteRequests plane
-    swept <- run
-    made <- drop prior <$> deleteRequests plane
-    atomically (modifyTVar' (Native.pspDredgerDeletes plane) (<> made))
-    pure swept
-
-deleteRequests :: Native.PyPISweepPlane -> IO [(Text, Text)]
-deleteRequests plane = filter ((== "v1/package/versions/delete") . snd) <$> readTVarIO (cafRequests (Native.pspControl plane))
+creditDeletes plane = creditCodeArtifactDeletes (Native.pspControl plane) (Native.pspDredgerDeletes plane)
 
 advisoryOps :: AdvisoryOps Native.PyPISweepPlane Native.PyPISweepStore
 advisoryOps =

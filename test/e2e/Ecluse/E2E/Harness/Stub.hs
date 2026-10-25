@@ -83,6 +83,10 @@ data StubFault
     | -- | Route native PyPI stores and the AWS API to one host fixture.
       PyPICodeArtifactBackend Int
     | CargoBackend Int Bool
+    | -- | Route Cargo repositories and the native AWS control plane to one host fixture.
+      CargoCodeArtifactBackend Int
+    | -- | Observe anonymous public-native reads at a host fixture.
+      CargoPublicBackend Int
     deriving stock (Eq, Show)
 
 -- | The stub's configuration: every route in declaration order, under the fault if there is one.
@@ -114,6 +118,9 @@ serverBlock fault route =
         <> maybe [] (`faultLines` route) fault
         <> [line | isPublic route, line <- publicCoding]
         <> ( case (fault, route) of
+                (Just (CargoPublicBackend port), CargoPublic) -> forwarded 16777216 port
+                (Just (CargoCodeArtifactBackend port), selected)
+                    | selected `elem` [PyPICodeArtifactData, PyPICodeArtifactControl, CargoPrivate, CargoMirror] -> forwarded 16777216 port
                 (Just (CargoBackend port _), CargoPrivate) -> forwarded 16777216 port
                 (Just (CargoBackend port _), CargoMirror) -> forwarded 16777216 port
                 (Just (PyPIMirrorBackend port _), PyPIMirror) -> forwarded nativeUploadLimit port
@@ -141,6 +148,8 @@ faultLines = \case
     PyPIMirrorBackend _ down -> \route -> [closeUnanswered | down && isPublic route]
     PyPICodeArtifactBackend _ -> const []
     CargoBackend _ down -> \route -> [closeUnanswered | down && isPublic route]
+    CargoCodeArtifactBackend _ -> const []
+    CargoPublicBackend _ -> const []
   where
     closeUnanswered = "    return " <> show unansweredStatus <> ";"
     refuseWrites = "    if ($request_method !~ ^(GET|HEAD)$) { return 503; }"
