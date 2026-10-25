@@ -63,13 +63,13 @@ withProxyPortsConfigured :: Ecosystem -> LoadKnobs -> (Int -> Int -> IO (ProxySe
 withProxyPortsConfigured ecosystem knobs configure privateApp publicApp mkMix body =
     testWithApplication (pure privateApp) $ \privatePort ->
         testWithApplication (pure publicApp) $ \publicPort -> do
-            withState privatePort publicPort $ \nativeState -> do
+            withNativeState privatePort publicPort $ \nativeState -> do
                 adjust <- configure privatePort publicPort
                 let settings = adjust knobSettings
                 withProxyProcess settings{psMirrorStatePort = psMirrorStatePort settings <|> nativeState} publicPort (Just privatePort) $ \proxy ->
                     body proxy (mkMix (proxyPort proxy))
   where
-    withState privatePort publicPort use
+    withNativeState privatePort publicPort use
         | ecosystem == Cargo = withCopyState (lkUpstreamLatencyMicros knobs) privatePort publicPort mirrorStateBucket (use . Just)
         | otherwise = use Nothing
     knobSettings =
