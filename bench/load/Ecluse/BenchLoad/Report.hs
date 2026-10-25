@@ -35,7 +35,7 @@ import Ecluse.BenchLoad.CpuUse (
  )
 import Ecluse.BenchLoad.Exposition (CacheOutcomes (..), GaugeSummary (..))
 import Ecluse.BenchLoad.Floors (Calibration (calConditions), Enforcement, FloorCheck (..), Pass (ConcurrencyOne, Loaded), PassSelection (LoadedPassOnly), describeEnforcement, describeRetainedConditions, floorCheck, floorsPath)
-import Ecluse.BenchLoad.Harness (LoadKnobs (..), LoadSummary (..), ProxyFigures (..), ScenarioReport (..), windowAttempts, windowRefusals, windowSuccesses)
+import Ecluse.BenchLoad.Harness (LoadKnobs (..), LoadSummary (..), ProxyFigures (..), ScenarioReport (..), hasDiagnosticBurst, windowAttempts, windowRefusals, windowSuccesses)
 import Ecluse.BenchLoad.Latency (Percentiles (..))
 import Ecluse.BenchLoad.Normalise (
     BaselineSource,
@@ -47,7 +47,7 @@ import Ecluse.BenchLoad.Normalise (
     renderSaturation,
  )
 import Ecluse.BenchLoad.PatternReport (renderReplayTotals)
-import Ecluse.BenchLoad.Pod (CgroupReading (..), PodShape (Unlimited), ProxyTuning (..), counter, noTuning, proxyCgroupFiles, renderCpuList, renderPodShape)
+import Ecluse.BenchLoad.Pod (BurstMemory (..), CgroupReading (..), PodShape (Unlimited), ProxyTuning (..), counter, noTuning, proxyCgroupFiles, renderCpuList, renderPodShape)
 import Ecluse.BenchLoad.ReportLabels (admissionRow, generatorHeadroomRow, headroomHeld, headroomSaturated, loadCell, loadRow, memoryEventsRow, memoryPeakColumn, postureRow)
 import Ecluse.BenchLoad.RtsWindow (RtsSnapshot (..), RtsWindow (..), compactionThresholdCrossed, gcCpuShare, meanLiveAtMajors, perSuccess)
 import Ecluse.BenchLoad.Selection (measurementConditionVersion)
@@ -205,13 +205,13 @@ glanceRow floorOf r =
   where
     load = srLoad r
 
--- A floor as a table cell. A scenario with several loads holds each of them to the one floor.
 floorCell :: ScenarioReport -> FloorCheck -> Text
 floorCell r = \case
     Unchecked -> "not held"
     NoFloor _ -> "**none**"
     AtLeast least
         | not (null (srSteps r)) -> show least <> " (every step)"
+        | hasDiagnosticBurst r -> show least <> " (background only)"
         | isJust (srCompanion r) -> show least <> " (both loads)"
         | otherwise -> show least
 
@@ -323,6 +323,7 @@ proxyRows p =
     , row "proxy threads (pids.current): max / mean / last (samples, missed)" (gaugeCell (pfTasks p))
     , row "metadata cache hit / miss / collapsed in the window" (maybe "n/a (a scrape failed)" cacheCell (pfCacheWindow p))
     ]
+        <> maybe [] burstRows (pfBurstMemory p)
   where
     cgroup = pfCgroup p
     limits = bootLimits (pfBootLines p)
@@ -334,7 +335,6 @@ proxyRows p =
             <> maybe "n/a" (mib . fromIntegral) (pfIdleCgroupBytes p)
     cacheCell stores = T.intercalate ", " [store <> " " <> show (coHits o) <> " / " <> show (coMisses o) <> " / " <> show (coCollapsed o) | (store, o) <- stores]
     eventsCell c = T.intercalate " / " [show (counter key (crMemoryEvents c)) | key <- ["oom_kill", "oom", "max", "high"]]
-    statCell c = T.intercalate " / " [mib (fromIntegral (counter key (crMemoryStat c))) | key <- ["anon", "file", "kernel", "sock"]]
     gaugeCell g =
         T.intercalate " / " (map (maybe "n/a" fmt1) [gsMax g, gsMean g, gsLast g])
             <> " ("
@@ -342,6 +342,22 @@ proxyRows p =
             <> ", "
             <> show (gsMissed g)
             <> ")"
+
+-- The cgroup's memory through a burst: the reading with the most charged, and the one with the most in socket buffers.
+-- Every burst reads its cgroup at least once, so a burst without a reading had no cgroup to read.
+burstRows :: BurstMemory -> [Text]
+burstRows b
+    | bmSamples b == 0 = [row "cgroup readings through the burst" "no cgroup"]
+    | otherwise =
+        [ row ("cgroup readings through the burst, every " <> show (bmIntervalMs b) <> " ms") (show (bmSamples b))
+        , row "highest memory.current in the burst, then memory.stat anon / file / kernel / sock" (maybe "n/a" (\c -> currentCell c <> ", then " <> statCell c) (bmHighestCurrent b))
+        , row "highest memory.stat sock in the burst, then memory.current" (maybe "n/a" (\c -> mib (fromIntegral (counter "sock" (crMemoryStat c))) <> ", then " <> currentCell c) (bmHighestSock b))
+        ]
+  where
+    currentCell = maybe "n/a" (mib . fromIntegral) . crMemoryCurrent
+
+statCell :: CgroupReading -> Text
+statCell c = T.intercalate " / " [mib (fromIntegral (counter key (crMemoryStat c))) | key <- ["anon", "file", "kernel", "sock"]]
 
 -- The CPU time of the window: the proxy against its CPUs, and the load generator's headroom.
 cpuRows :: Bool -> ScenarioReport -> CpuWindow -> [Text]
@@ -398,8 +414,8 @@ readingNotes =
     [ "### Reading the numbers"
     , ""
     , "- **Successes are the primary figure.** A 2xx or 3xx response is a success. A `503` shed or a `429` is a refusal: a client retries it at once, so refusal counts measure retry speed, not demand."
-    , "- **The run fails** when a scenario or a ramp step has no successful response, when a count of successes is below its floor, when a scheduled run's configuration keeps it off the floors, when the kernel OOM-kills a proxy, when a proxy exits on heap overflow or ends any other way than the clean shutdown the harness asks for, or when it exits early. Latency and memory have no threshold and never fail it."
-    , "- **A success floor** is the fewest successes a scenario may have in one pass under this pod shape, from `" <> toText floorsPath <> "`. The at-a-glance table shows the loaded pass's floor, and the cost table the concurrency-one pass's. A ramp holds every step to its floor, and a paired scenario both of its loads. A run held to the floors also fails on a scenario without one, and on a floor that names no scenario."
+    , "- **The run fails** when a required load or ramp step has no successful response or misses its floor. A scheduled run also fails when its configuration keeps it off the floors. Proxy OOM kills, heap overflows, abnormal shutdowns, and early exits fail the run. Latency and memory figures have no threshold."
+    , "- **A success floor** is the minimum count of successes for a scenario and pass under this pod shape, from `" <> toText floorsPath <> "`. The at-a-glance table shows the loaded floor. The cost table shows the concurrency-one floor. A ramp holds every step to its floor. A paired scenario holds both loads to its floor. The combined `herd-under-heavy-private` probes hold only the concurrent background load to a floor. Their burst successes and refusals remain diagnostic, including zero successes. A held run also fails on a missing floor or a floor that names no scenario."
     , "- **A run is held to the floors** only on the runner they were calibrated on, at the calibrated settings, under a pod shape the floors hold, and while each ecosystem fixture stays below its own latency ceiling and measurement conditions match. The Success floors section says whether this run is held, and names every reason when it is not. A run that is not held shows `not held` for each floor."
     , "- **Allocation and collector figures describe the proxy process alone** over the measured window, and divide by every successful request in it: both generators of a paired scenario, every step of a ramp. The stub upstreams and the load generator run outside it."
     , "- **The proxy's cgroup is not charged for its logs.** They go through pipes the harness drains, and only unread pipe buffers, at most 64 KiB per pipe, count against the limit. On CI the build step has just built or restored the executable, so its text pages are already in the page cache when the proxy starts and are not charged to it either. The harness does not enforce that."
@@ -486,7 +502,7 @@ renderVerdict violations =
     T.unlines $
         ["## Verdict", ""]
             <> case violations of
-                [] -> ["Every scenario had successful responses and reached any floor it is held to, and no proxy was OOM-killed or exited on heap overflow."]
+                [] -> ["Every required load had successful responses and reached any applicable floor. No proxy was OOM-killed or exited on heap overflow."]
                 _ -> "**The run fails:**" : "" : map ("- " <>) violations
 
 -- memory.peak less the RTS's own high-water mark: off-heap and kernel memory, and the overshoot

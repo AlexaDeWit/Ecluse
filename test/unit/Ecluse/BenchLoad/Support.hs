@@ -54,6 +54,7 @@ scenarioReport name successes refusals p50 p99 =
         , srShape = "2cpu-1gib"
         , srLoad = window
         , srCompanion = Nothing
+        , srDiagnosticBurst = False
         , srSteps = []
         , srReplayTotals = Nothing
         , srRtsSource = "the proxy"
@@ -113,6 +114,7 @@ proxyWithPeak peak =
         , pfTasks = summariseGauge []
         , pfAdmissionSeries = []
         , pfCacheWindow = Nothing
+        , pfBurstMemory = Nothing
         }
 
 -- | A 30 s window with the proxy on CPUs 2-3, the harness cgroup at half of CPUs 0-1, and CPU 0 this many of 2000 ticks busy.

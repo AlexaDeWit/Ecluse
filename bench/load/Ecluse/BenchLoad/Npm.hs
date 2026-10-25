@@ -152,6 +152,7 @@ npmPrivateCopy =
             pure (corpusPublicStub rewritten latency bodies Map.empty)
         , pcUrl = packageUrl
         , pcPreflight = traverse_ (preflightNpmListing False) . ordNub
+        , pcHerdPackage = herdPackage
         }
 
 assembledHitScenario :: Scenario
@@ -224,15 +225,18 @@ herdScenario :: Scenario
 herdScenario =
     ( scenario
         "herd"
-        ("Send " <> show herdSize <> " simultaneous cold GET /npm/typescript to an idle proxy, once, with public cache TTL 0 and no warm-up. Any admission that reacts to measured memory sees this burst late.")
+        ("Send " <> show herdSize <> " simultaneous cold GET /npm/" <> herdPackage <> " to an idle proxy, once, with public cache TTL 0 and no warm-up. Any admission that reacts to measured memory sees this burst late.")
         ( \knobs k ->
-            withNpmProxy knobs 0 Nothing (\port -> [packageUrl port "typescript"]) $ \proxy -> \case
+            withNpmProxy knobs 0 Nothing (\port -> [packageUrl port herdPackage]) $ \proxy -> \case
                 url : _ -> k (proxied proxy (DriveBurst herdSize url))
                 [] -> benchFail "herd: no URL to drive"
         )
     )
         { scenarioServiceTime = False
         }
+
+herdPackage :: Text
+herdPackage = "typescript"
 
 warmUnderColdScenario :: Scenario
 warmUnderColdScenario =

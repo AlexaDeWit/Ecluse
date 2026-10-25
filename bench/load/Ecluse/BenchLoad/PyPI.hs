@@ -122,6 +122,7 @@ pypiPrivateCopy =
             pure (indexStub rewritten latency bodies)
         , pcUrl = indexUrl
         , pcPreflight = traverse_ (void . checkedIndex) . ordNub
+        , pcHerdPackage = herdPackage
         }
 
 revalidateScenario :: Scenario
@@ -183,15 +184,18 @@ herdScenario :: Scenario
 herdScenario =
     ( scenario
         "herd"
-        ("Send " <> show herdSize <> " simultaneous cold GET /pypi/simple/boto3 to an idle proxy, once, with public cache TTL 0 and no warm-up. Any admission that reacts to measured memory sees this burst late.")
+        ("Send " <> show herdSize <> " simultaneous cold GET /pypi/simple/" <> herdPackage <> " to an idle proxy, once, with public cache TTL 0 and no warm-up. Any admission that reacts to measured memory sees this burst late.")
         ( \knobs k ->
-            withUnprimedIndexProxy knobs 0 Nothing pypiCorpusPackages (\port -> [indexUrl port "boto3"]) $ \proxy -> \case
+            withUnprimedIndexProxy knobs 0 Nothing pypiCorpusPackages (\port -> [indexUrl port herdPackage]) $ \proxy -> \case
                 url : _ -> k (proxied proxy (DriveBurst herdSize url))
                 [] -> benchFail "pypi/herd: no URL to drive"
         )
     )
         { scenarioServiceTime = False
         }
+
+herdPackage :: Text
+herdPackage = "boto3"
 
 warmUnderColdScenario :: Scenario
 warmUnderColdScenario =

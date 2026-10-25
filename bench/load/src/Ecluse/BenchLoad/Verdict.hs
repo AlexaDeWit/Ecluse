@@ -3,11 +3,7 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE DeriveAnyClass #-}
 
-{- | How a measured proxy ended, and the invariants that fail a load run: a load with no successful
-response, a count of successes below its floor in "Ecluse.BenchLoad.Floors", a scheduled run its
-configuration keeps off the floors, and a proxy that did not end in the clean shutdown the harness
-asked for. Latency and memory stay informational.
--}
+-- | Process endings and required successes. Latency and memory figures stay informational.
 module Ecluse.BenchLoad.Verdict (
     ProxyEnding (..),
     classifyEnding,
@@ -79,7 +75,7 @@ describeEnding = \case
 data RunEvidence = RunEvidence
     { reScenario :: Text
     , reSuccesses :: [(Text, Int)]
-    -- ^ Successful responses per load or ramp step, labelled for the failure message.
+    -- ^ Successful responses per required load or ramp step, labelled for the failure message.
     , reOomKills :: Int
     , reEnding :: Maybe ProxyEnding
     -- ^ 'Nothing' for a scenario that runs in the harness process.
@@ -88,7 +84,7 @@ data RunEvidence = RunEvidence
     }
     deriving stock (Eq, Show)
 
--- | One line per invariant a scenario broke in one pass, with every load held to the pass's floor.
+-- | One line per invariant a scenario broke, with every required load held to the pass's floor.
 runViolations :: FloorCheck -> RunEvidence -> [Text]
 runViolations check evidence =
     concatMap successViolations (reSuccesses evidence)
