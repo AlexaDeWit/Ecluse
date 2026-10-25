@@ -150,7 +150,8 @@ publishMountApp = publishAppWith basePublishDeps
 basePublishDeps :: ByteAdmission -> PublishDeps
 basePublishDeps bodyBudget =
     PublishDeps
-        { pubTargetUrl = loopbackRegistryUrl "http://127.0.0.1:1" -- an unconnectable port
+        { pubReadUrl = loopbackRegistryUrl "http://127.0.0.1:1"
+        , pubTargetUrl = loopbackRegistryUrl "http://127.0.0.1:1" -- an unconnectable port
         , pubAllowed = NpmPublish.npmPublishAllowed [mkScope "acme"]
         , pubStaticCredential = Nothing
         , pubMaxRequestBytes = maxPublishRequestBytes defaultLimits

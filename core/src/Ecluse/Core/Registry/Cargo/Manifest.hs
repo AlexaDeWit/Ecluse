@@ -14,6 +14,7 @@ module Ecluse.Core.Registry.Cargo.Manifest (
     publicationMetadata,
     checkPublicationIndex,
     publishMetadataValue,
+    cratesIoIndex,
 ) where
 
 import Control.Monad (foldM)
@@ -292,6 +293,7 @@ dependency target kind alias value = do
             , "explicit_name_in_toml" .= (if original == alias then Nothing else Just alias)
             ]
 
+-- | The logical crates.io dependency source. This identity grants no transport authority.
 cratesIoIndex :: Text
 cratesIoIndex = "https://github.com/rust-lang/crates.io-index"
 

@@ -177,6 +177,7 @@ extendProjectRecord limits target inventory previous = do
     let envelope = case inventoryReadData inventory of
             PyPIMirrorRead document -> simpleEnvelope document
             NpmMirrorRead _ -> mempty
+            CargoMirrorRead _ -> mempty
         result = record{projectEnvelope = envelope, projectVersions = Map.insert key updated (recordVersions record)}
     first StateBound (checkVersionCountOf limits (Map.size (recordVersions result)))
     first StateBound (checkArtifactCount limits (sum (map (Map.size . versionFiles) (Map.elems (recordVersions result)))))
@@ -198,6 +199,7 @@ extendVersion inventory previous = do
             let ownedSource = case source of
                     PyPIMirrorRead document -> PyPIMirrorRead (simpleDocument mempty (simpleFiles document))
                     NpmMirrorRead _ -> source
+                    CargoMirrorRead _ -> source
             files <- first (const (StateInvalid "invalid source fragment")) (restoreMirrorFragment details ownedSource)
             let fragment = StoredMirrorFragment details ownedSource files
                 companions = Map.fromList [(name, CompanionPending) | (name, file) <- Map.toList additions, declaredCompanion (expectedArtifact file)]

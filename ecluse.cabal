@@ -147,6 +147,8 @@ library ecluse-core
     Ecluse.Core.Registry.Archive.Tar
     Ecluse.Core.Registry.Cargo.Archive
     Ecluse.Core.Registry.Cargo.Manifest
+    Ecluse.Core.Registry.Cargo.Publish
+    Ecluse.Core.Registry.Cargo.Publish.Body
     Ecluse.Core.Registry.PyPI.Archive.Path
     Ecluse.Core.Registry.PyPI.Archive.BZip
     Ecluse.Core.Registry.PyPI.Archive.Inflate
@@ -858,6 +860,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.Cargo.Reference
     Ecluse.Test.Registry.Cargo.Fixtures
     Ecluse.Test.Registry.Cargo.Metadata
+    Ecluse.Test.Registry.Cargo.Publish
     Ecluse.Test.Registry.Npm.Metadata
     Ecluse.Test.Registry.Npm.StoredVersions
     Ecluse.Test.Registry.Npm.Maintenance
@@ -1255,6 +1258,8 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Cargo.ServingSpec
     Ecluse.Core.Registry.Cargo.ArchiveSpec
     Ecluse.Core.Registry.Cargo.ManifestSpec
+    Ecluse.Core.Registry.Cargo.PublishSpec
+    Ecluse.Core.Registry.Cargo.Publish.BodySpec
     Ecluse.Core.Registry.Cargo.RouteSpec
     Ecluse.Core.Registry.Cargo.Route.InternalSpec
     Ecluse.Core.Registry.PyPI.RequestSpec

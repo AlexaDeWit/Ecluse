@@ -129,6 +129,12 @@ admissionSpec = describe "the tags and keys each endpoint admits" $ do
             loadsWith [decl "publicationTarget" "codeArtifact" [url codeArtifactInternal, field "token" "t"]]
             loadsWith [decl "publicationTarget" "verdaccio" [url verdaccioUrl, field "token" "t"]]
 
+        it "admits a separate approved publication API base" $
+            loadsWith [decl "publicationTarget" "registry" [url publishUrl, field "uploadUrl" (publishUrl <> "/api-base")]]
+
+        it "refuses an upload API on a configured public upstream host" $
+            refuses [decl "publicationTarget" "registry" [url publishUrl, field "uploadUrl" publicUrl]] "publicationTarget.uploadUrl must not address a configured public upstream host"
+
         it "requires the url and admits neither a mint lifetime nor a consent flag" $ do
             refuses [decl "publicationTarget" "codeArtifact" []] "publicationTarget.codeArtifact.url is required"
             refuses

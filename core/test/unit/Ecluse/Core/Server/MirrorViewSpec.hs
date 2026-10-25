@@ -5,20 +5,23 @@
 -- | Managed reads validate fresh state and restore fields only after current private identity proof.
 module Ecluse.Core.Server.MirrorViewSpec (spec) where
 
-import Data.Aeson (Value (Object, String))
+import Data.Aeson (Value (Object, String, Bool, Array), encode, eitherDecodeStrict)
 import Data.Aeson.Key (Key)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
 import Data.ByteString.Internal qualified as BSI
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
 import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Mirror.State
+import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (StateRevision))
 import Ecluse.Core.Package
-import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiPacked, pypiSimpleCached)
+import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry, RecordEntry))
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, npmCached, pypiPacked, pypiSimpleCached)
+import Ecluse.Core.Registry.Cargo.Document (cargoDocument, cargoRecords)
 import Ecluse.Core.Registry.Metadata (Manifest (..), VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
@@ -27,12 +30,54 @@ import Ecluse.Core.Server.Admission.Meter (MemoryTicket, MeterSettings (..), new
 import Ecluse.Core.Server.MirrorView
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Mirror.State
+import Ecluse.Test.Registry.Cargo.Fixtures (cargoIndexRecord)
+import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoSourceVersion)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = do
+    describe "Cargo durable source restoration" $ do
+        it "restores original yank, time and additive fields after durable reopen and target replacement" $ do
+            (original, inventory) <- cargoInventory
+            record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+            bytes <- expectRight (encodeProjectRecord defaultLimits record)
+            reopened <- chargedDecodeProjectRecord (const (pure ())) defaultLimits target (pkgName (vdDetails original)) bytes >>= expectRight
+            current <- cargoTarget original
+            restored <- expectRight (mirrorVersionView (pkgVersion (vdDetails original)) reopened (Just current))
+            fmap vdDetails restored `shouldBe` Just (vdDetails original){pkgArtifacts = pkgArtifacts (vdDetails current)}
+            fmap (fmap cargoRecords . (>>= snd cargoCached) . vdRaw) restored `shouldBe` Just (fmap cargoRecords (vdRaw original >>= snd cargoCached))
+            let revision = StateRevision target (pkgName (vdDetails original)) "reopened"
+                details = vdDetails current
+                manifest = Manifest (PackageInfo (pkgName details) (Map.singleton "1.0.0" details) mempty []) (fromMaybe (fst cargoCached (cargoDocument [])) (vdRaw current)) 0 (digestOf "target")
+            (_, managed, pending) <- expectRight (mirrorProjectViews revision reopened (Just manifest))
+            Map.null pending `shouldBe` True
+            let rows = concat [cargoRecords source | value <- maybeToList managed, source <- maybeToList (snd cargoCached (manifestRaw value))]
+            map fst rows `shouldBe` [RecordEntry 0]
+            map snd rows `shouldBe` [value | raw <- maybeToList (vdRaw original >>= snd cargoCached), (_, value) <- cargoRecords raw]
+        it "refuses absent, missing-digest and conflicting target identity" $ do
+            (original, inventory) <- cargoInventory
+            record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+            current <- cargoTarget original
+            let details = vdDetails current
+                noHash = current{vdDetails = details{pkgArtifacts = fmap (\artifact -> artifact{artHashes = []}) (pkgArtifacts details)}}
+            mirrorVersionView (pkgVersion details) record Nothing `shouldSatisfy` isLeft
+            mirrorVersionView (pkgVersion details) record (Just noHash) `shouldSatisfy` isLeft
+            other <- expectRight (mkHash SHA256 ("a" <> toText (replicate 63 '0')))
+            let conflicting = current{vdDetails = details{pkgArtifacts = fmap (\artifact -> artifact{artHashes = [other]}) (pkgArtifacts details)}}
+            mirrorVersionView (pkgVersion details) record (Just conflicting) `shouldSatisfy` isLeft
+        it "rejects corrupt retained source facts and retains the first admitted row on re-admission" $ do
+            (original, inventory) <- cargoInventory
+            record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+            current <- cargoTarget original
+            currentRaw <- maybe (fail "missing target row") pure (vdRaw current >>= snd cargoCached)
+            admittedAgain <- expectRight (checkedMirrorInventory (pkgName (vdDetails current)) (pkgVersion (vdDetails current)) current (CargoMirrorRead currentRaw))
+            extendProjectRecord defaultLimits target admittedAgain (Just record) `shouldBe` Right record
+            encoded <- expectRight (encodeProjectRecord defaultLimits record)
+            value <- expectRight (eitherDecodeStrict encoded)
+            let corrupt = rewriteCargoSource value
+            chargedDecodeProjectRecord (const (pure ())) defaultLimits target (pkgName (vdDetails original)) (LBS.toStrict (encode corrupt)) >>= (`shouldSatisfy` isLeft)
     describe "managed mirror source restoration" $ do
         it "retains every source entry across colliding fragment coordinates and changed native URLs" $ do
             originalInventory <- mirrorSample [1] False "https://public.test/" "first"
@@ -168,3 +213,32 @@ withTicket action = do
     meter <- newDeadlines >>= \deadlines -> newMemoryMeter deadlines (MeterSettings maxBound 1024 1 1000)
     admitted <- withMemoryEntry noopMetricsPort meter action
     either (const (fail "test memory admission unexpectedly refused")) pure admitted
+
+cargoInventory :: IO (VersionDoc, MirrorInventory)
+cargoInventory = do
+    release <- cargoPublicationFixture
+    let row = case cargoIndexRecord release of
+            Object fields -> Object (KeyMap.insert "yanked" (Bool True) fields)
+            other -> other
+    doc <- cargoSourceVersion row
+    source <- maybe (fail "missing Cargo source") pure (vdRaw doc >>= snd cargoCached)
+    inventory <- expectRight (checkedMirrorInventory (pkgName (vdDetails doc)) (pkgVersion (vdDetails doc)) doc (CargoMirrorRead source))
+    pure (doc, inventory)
+
+cargoTarget :: VersionDoc -> IO VersionDoc
+cargoTarget original = do
+    source <- maybe (fail "missing Cargo source") pure (vdRaw original >>= snd cargoCached)
+    row <- maybe (fail "missing Cargo row") (pure . snd) (listToMaybe (cargoRecords source))
+    let changed = case row of
+            Object fields -> Object (KeyMap.delete "ecluse-fixture" (KeyMap.insert "pubtime" (String "2026-10-25T00:00:00Z") (KeyMap.insert "yanked" (Bool False) fields)))
+            other -> other
+    doc <- cargoSourceVersion changed
+    pure doc{vdDetails = (vdDetails doc){pkgArtifacts = fmap (\artifact -> artifact{artUrl = "https://target.test/current/archive"}) (pkgArtifacts (vdDetails doc))}}
+
+rewriteCargoSource :: Value -> Value
+rewriteCargoSource = \case
+    Object fields
+        | KeyMap.lookup "kind" fields == Just (String "cargo") -> Object (KeyMap.insert "sourceIndex" (String "https://unapproved.test/index") fields)
+        | otherwise -> Object (fmap rewriteCargoSource fields)
+    Array values -> Array (fmap rewriteCargoSource values)
+    value -> value

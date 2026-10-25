@@ -304,8 +304,8 @@ publishReplies =
     PublishReplies
         { publishAllowedMethods = "PUT"
         , publishDisabledReply = \headers _ -> localError status405 headers "publishing is not enabled on this view"
-        , publishRelayed = \status headers body -> passthroughResponse status headers (PassthroughBytes body)
-        , publishError = localError
+        , publishRelayed = \status headers body -> passthroughResponse status (if status == status401 then challenge <> headers else headers) (PassthroughBytes body)
+        , publishError = \status headers -> localError status (if status == status401 then challenge <> headers else headers)
         }
 
 notFound :: RouteAction

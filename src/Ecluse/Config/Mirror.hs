@@ -7,7 +7,7 @@ module Ecluse.Config.Mirror (validateMirrorSettings) where
 
 import Data.Map.Strict qualified as Map
 
-import Ecluse.Config.Target (resolveStoreBackend, resolveUploadBackend)
+import Ecluse.Config.Target (resolveStoreBackend, resolveUploadBackend, vetPublicationRepository)
 import Ecluse.Config.Types
 import Ecluse.Core.Security (hostPortAddress)
 import Ecluse.Core.Security.Egress (registryUrlText)
@@ -31,6 +31,10 @@ validateMirrorSettings app = traverse_ validate (Map.toList (cfgMounts app))
                 WriteCodeArtifact{} -> unless (maybe True (== "aws") (meUsername target)) (refuse "CodeArtifact requires the aws credential username")
                 _ -> pure ()
         for_ (mntPublicationTarget mount) $ \target -> do
+            first pure (vetPublicationRepository eco target)
+            for_ (peUploadUrl target) $ \upload ->
+                when (hostPortAddress (registryUrlText upload) `elem` publicHosts) $
+                    refuse "publicationTarget.uploadUrl must not address a configured public upstream host"
             when (isJust (peUsername target) && isNothing (peToken target)) $
                 refuse "publicationTarget.username requires a static token"
             when (tgtTag (peTarget target) == TagCodeArtifact && maybe False (/= "aws") (peUsername target)) $

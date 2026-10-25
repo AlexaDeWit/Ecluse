@@ -85,7 +85,7 @@ parsePublicationTarget :: String -> Value -> Parser PublicationEndpoint
 parsePublicationTarget = taggedTarget (map publishCase [TagRegistry, TagCodeArtifact, TagVerdaccio])
   where
     publishCase tag =
-        TagCase (tagKey tag) (PublicationEndpoint . Target tag <$> targetUrl <*> optionalKey "token" parseSecret <*> optionalKey "username" parseCredentialUsername)
+        TagCase (tagKey tag) (PublicationEndpoint . Target tag <$> targetUrl <*> optionalKey "uploadUrl" parseRegistryUrl <*> optionalKey "token" parseSecret <*> optionalKey "username" parseCredentialUsername)
 
 parseCredentialUsername :: String -> Text -> Parser Text
 parseCredentialUsername field username

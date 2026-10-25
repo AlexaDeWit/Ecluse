@@ -206,6 +206,8 @@ meTarget endpoint = Target (writeTag (meWrite endpoint)) (meUrl endpoint)
 -- | A publication endpoint and the credential that replaces an authenticated edge token.
 data PublicationEndpoint = PublicationEndpoint
     { peTarget :: Target
+    , peUploadUrl :: Maybe RegistryUrl
+    -- ^ Approved API base, separate from the read/index root.
     , peToken :: Maybe Secret
     , peUsername :: Maybe Text
     -- ^ Username paired with the configured publication token.

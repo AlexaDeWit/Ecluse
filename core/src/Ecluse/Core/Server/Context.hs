@@ -191,7 +191,9 @@ tarballHostHonoured origin deps =
 
 -- | First-party publish inputs. Their presence enables the mount's publish route.
 data PublishDeps = PublishDeps
-    { pubTargetUrl :: RegistryUrl
+    { pubReadUrl :: RegistryUrl
+    -- ^ The origin for credential-scoped native publication discovery.
+    , pubTargetUrl :: RegistryUrl
     -- ^ The https-only publication target a publish is relayed to, with the package path appended.
     , pubAllowed :: PackageName -> Bool
     -- ^ Whether this package may publish here, checked before any upstream write. It is 'pdFirstParty'.

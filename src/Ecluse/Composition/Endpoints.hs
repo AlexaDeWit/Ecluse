@@ -16,6 +16,7 @@ module Ecluse.Composition.Endpoints (
     -- * The endpoints it clears
     PublicationTarget,
     publicationTargetUrl,
+    publicationReadUrl,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -41,7 +42,7 @@ import Ecluse.Composition.Vet (
 import Ecluse.Config (
     MountConfig (..),
     PrivateEndpoint (preTarget),
-    PublicationEndpoint (peTarget),
+    PublicationEndpoint (peTarget, peUploadUrl),
     StoreTag (TagRegistry),
     Target (Target, tgtTag, tgtUrl),
     meTarget,
@@ -64,15 +65,19 @@ role earns, and the endpoints a pass that refused nothing clears it to use.
 vetEndpoints :: Map Ecosystem MountConfig -> Vet VettedEndpoints
 vetEndpoints mounts = cleared <$ endpointRules mounts
   where
-    cleared = VettedEndpoints (Map.mapMaybe (fmap (PublicationTarget . tgtUrl . peTarget) . mntPublicationTarget) mounts)
+    cleared = VettedEndpoints (Map.mapMaybe (fmap (\endpoint -> PublicationTarget (tgtUrl (peTarget endpoint)) (fromMaybe (tgtUrl (peTarget endpoint)) (peUploadUrl endpoint))) . mntPublicationTarget) mounts)
 
 -- | A publication target cleared for this role. The relay requires this value, never a configured URL.
-newtype PublicationTarget = PublicationTarget RegistryUrl
+data PublicationTarget = PublicationTarget RegistryUrl RegistryUrl
     deriving stock (Eq, Show)
 
 -- | The vetted endpoint the publish relay dials.
 publicationTargetUrl :: PublicationTarget -> RegistryUrl
-publicationTargetUrl (PublicationTarget url) = url
+publicationTargetUrl (PublicationTarget _ url) = url
+
+-- | The read root remains distinct from the approved publication API base.
+publicationReadUrl :: PublicationTarget -> RegistryUrl
+publicationReadUrl (PublicationTarget url _) = url
 
 {- Every endpoint rule, in the order a boot report lists them. A mirror target on another mount's
 publication target is 'publicationOffNeighbourEndpoints', read from the publishing side. -}

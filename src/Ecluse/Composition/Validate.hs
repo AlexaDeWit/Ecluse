@@ -58,7 +58,7 @@ import Ecluse.Config (
     Mount,
     MountConfig (mntFirstParty, mntMaxRequestBytes, mntMirrorTarget, mntPrivateUpstream, mntPublicationTarget),
     PrivateEndpoint (preTarget),
-    PublicationEndpoint (peTarget, peToken, peUsername),
+    PublicationEndpoint (peTarget, peToken, peUsername, peUploadUrl),
     QuotaOverride (qoQuotas, qoScope, qoWeights),
     ServerSettings (srvAuthToken),
     StoreBackend,
@@ -73,7 +73,7 @@ import Ecluse.Config (
     storeTagName,
  )
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), Secret)
-import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor, adapterPublish, adapterRuleBlocks)
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterPublish (publishIdentity, publishMirrorRequirements),
@@ -152,7 +152,8 @@ vetMirrorCapabilities role app = decided $ case missing of
       where
         requirements = publishMirrorRequirements publish
     publicationNeeds eco publish endpoint =
-        [required eco "publicationTarget" (peTarget endpoint) "username" | publishIdentity publish == NamedIdentity, clientWrites, isJust (peToken endpoint), tgtTag (peTarget endpoint) /= TagCodeArtifact, isNothing (peUsername endpoint)]
+        [required eco "publicationTarget" (peTarget endpoint) "uploadUrl" | eco == Cargo, clientWrites, isNothing (peUploadUrl endpoint)]
+            <> [required eco "publicationTarget" (peTarget endpoint) "username" | publishIdentity publish == NamedIdentity, clientWrites, isJust (peToken endpoint), tgtTag (peTarget endpoint) /= TagCodeArtifact, isNothing (peUsername endpoint)]
     required eco endpoint target key = UploadConfigurationRequired eco (endpoint <> "." <> storeTagName (tgtTag target) <> "." <> key)
 
 -- | Accumulate every pure refusal and advisory for one role before constructing its plan.

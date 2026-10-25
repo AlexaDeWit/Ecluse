@@ -58,6 +58,7 @@ pypiPublishCodec =
         , pcTargetReadPermille = cfFullReadPermille pypiChargeFactors
         , pcProbeRequest = simpleIndexRequest
         , pcVersionListWalk = Nothing
+        , pcPrepareTarget = \_ _ target -> pure (Right target)
         , pcPublishRequest = \target credential _ -> publishRequest target credential
         , pcPublishOutcome = classifyPublish
         }

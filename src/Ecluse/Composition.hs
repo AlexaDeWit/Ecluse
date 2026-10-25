@@ -39,7 +39,7 @@ import Ecluse.Composition.Credential (
     lookupProvider,
     noCredentialProviders,
  )
-import Ecluse.Composition.Endpoints (publicationTargetUrl)
+import Ecluse.Composition.Endpoints (publicationReadUrl, publicationTargetUrl)
 import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite, SkipMirrorWrite))
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMounts, vpPublications, vpSettings),
@@ -313,7 +313,8 @@ publishDepsFor adapter app limits publishBudget helpMessage publication = do
     publish <- adapterPublish adapter
     pure
         PublishDeps
-            { pubTargetUrl = publicationTargetUrl (vpubTarget publication)
+            { pubReadUrl = publicationReadUrl (vpubTarget publication)
+            , pubTargetUrl = publicationTargetUrl (vpubTarget publication)
             , pubAllowed = firstPartyName (vpubFirstParty publication)
             , pubStaticCredential = vpubStaticCredential publication
             , pubInboundToken = srvAuthToken (cfgServer app)
