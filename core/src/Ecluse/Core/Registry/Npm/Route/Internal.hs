@@ -64,7 +64,6 @@ import Ecluse.Core.Server.Contract (
     PassthroughBody (PassthroughBytes, PassthroughEmpty, PassthroughStream),
     PassthroughResponse,
     RequestSpec (RequestSpec),
-    ResponseChoice (FirstResponse, SecondResponse),
     ResponseContract,
     ResponseValue,
     VariableResponse,
@@ -79,7 +78,8 @@ import Ecluse.Core.Server.Contract (
     variableOpaqueContract,
     variableResponse,
  )
-import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), packumentAction)
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies, packumentAction)
+import Ecluse.Core.Server.Pipeline.Packument.Response (MetadataResponse, metadataReplies)
 import Ecluse.Core.Server.Pipeline.Publish (PublishReplies (..), servePublish)
 import Ecluse.Core.Server.Pipeline.Tarball (tarballAction)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (..))
@@ -291,29 +291,7 @@ distTagContract = jsonContract status501 "Not implemented: dist-tags are not sup
 unsupportedContract :: ResponseContract (ResponseValue NpmError)
 unsupportedContract = jsonContract status404 "Unrecognised path; deny by default." npmErrorCodec
 
--- | The closed packument response sum. The pipeline selects a constructor only through 'npmPackumentReplies'.
-type NpmPackumentResponse =
-    ResponseChoice
-        (ResponseValue LByteString)
-        ( ResponseChoice
-            (ResponseValue ())
-            ( ResponseChoice
-                (ResponseValue NpmError)
-                ( ResponseChoice
-                    (ResponseValue NpmError)
-                    ( ResponseChoice
-                        (ResponseValue NpmError)
-                        ( ResponseChoice
-                            (ResponseValue NpmError)
-                            ( ResponseChoice
-                                (ResponseValue NpmError)
-                                (ResponseChoice (ResponseValue NpmError) (ResponseValue NpmError))
-                            )
-                        )
-                    )
-                )
-            )
-        )
+type NpmPackumentResponse = MetadataResponse NpmError
 
 npmPackumentContract :: ResponseContract NpmPackumentResponse
 npmPackumentContract =
@@ -343,23 +321,8 @@ npmPackumentContract =
         )
 
 npmPackumentReplies :: PackumentReplies NpmPackumentResponse
-npmPackumentReplies =
-    PackumentReplies
-        { packumentForbiddenText = summarisedRejections
-        , packumentOk = \headers body -> FirstResponse (responseValue headers body)
-        , packumentNotModified = \headers -> SecondResponse (FirstResponse (responseValue headers ()))
-        , packumentUnauthorised = \headers message -> SecondResponse (SecondResponse (FirstResponse (npmRefusal headers message)))
-        , packumentForbidden = \headers message -> SecondResponse (SecondResponse (SecondResponse (FirstResponse (npmRefusal headers message))))
-        , packumentNotFound = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (npmRefusal headers message)))))
-        , packumentNotAcceptable = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (npmRefusal headers message))))))
-        , packumentInternal = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (npmRefusal headers message)))))))
-        , packumentBadGateway = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (npmRefusal headers message))))))))
-        , packumentUnavailable = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (npmRefusal headers message))))))))
-        }
-  where
-    npmRefusal headers message = responseValue headers (NpmError (renderRefusal message))
+npmPackumentReplies = metadataReplies summarisedRejections (NpmError . renderRefusal)
 
--- | The tarball is deliberately an open relay: the route can forward any upstream status, headers, media type, and bytes.
 npmTarballContract :: ResponseContract PassthroughResponse
 npmTarballContract =
     passthroughContract
@@ -439,7 +402,6 @@ data NpmCap
     | NpmFilename Text
     | NpmTag Text
 
--- | The package capture: one npm package unit, both scoped wire encodings handled by 'takePackage'.
 capPackage :: Capture NpmCap
 capPackage =
     Capture
@@ -451,7 +413,6 @@ capPackage =
         )
         renderPackage
 
--- | The artifact-file capture. The coordinate parse (the @.tgz@ basename and the version) is 'tarballCoordinate''s, applied in 'buildTarball'.
 capFilename :: Capture NpmCap
 capFilename =
     Capture
@@ -460,7 +421,6 @@ capFilename =
         (safeSegment NpmFilename)
         renderSegment
 
--- | Accept one checked dist-tag segment. Tag routes remain unsupported.
 capTag :: Capture NpmCap
 capTag =
     Capture

@@ -328,6 +328,7 @@ library ecluse-core
     Ecluse.Core.Server.Pipeline.Origin
     Ecluse.Core.Server.Pipeline.Packument
     Ecluse.Core.Server.Pipeline.Packument.Representation
+    Ecluse.Core.Server.Pipeline.Packument.Response
     Ecluse.Core.Server.Pipeline.Sidecar
     Ecluse.Core.Server.Pipeline.Tarball
     Ecluse.Core.Server.Pipeline.Tarball.Private

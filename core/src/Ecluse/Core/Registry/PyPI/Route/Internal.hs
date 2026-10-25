@@ -53,7 +53,6 @@ import Ecluse.Core.Server.Contract (
     BodySchema (SchemaDocumented, SchemaText),
     PassthroughBody (PassthroughBytes, PassthroughEmpty, PassthroughStream),
     PassthroughResponse,
-    ResponseChoice (FirstResponse, SecondResponse),
     ResponseContract,
     ResponseValue,
     chooseContract,
@@ -65,7 +64,8 @@ import Ecluse.Core.Server.Contract (
     responseValue,
  )
 import Ecluse.Core.Server.Path (Filename, mkFilename)
-import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), packumentAction)
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (packumentNotAcceptable), packumentAction)
+import Ecluse.Core.Server.Pipeline.Packument.Response (MetadataResponse, metadataReplies)
 import Ecluse.Core.Server.Pipeline.Publish (PublishReplies (..), servePublish)
 import Ecluse.Core.Server.Pipeline.Sidecar (sidecarAction)
 import Ecluse.Core.Server.Pipeline.Tarball (tarballAction)
@@ -174,29 +174,7 @@ uploadRoute =
 simpleIndexSchema :: Text
 simpleIndexSchema = "PyPISimpleIndex"
 
--- The closed Simple-index response sum: every status the index route may answer.
-type PyPIIndexResponse =
-    ResponseChoice
-        (ResponseValue LByteString)
-        ( ResponseChoice
-            (ResponseValue ())
-            ( ResponseChoice
-                (ResponseValue (Maybe LByteString))
-                ( ResponseChoice
-                    (ResponseValue (Maybe LByteString))
-                    ( ResponseChoice
-                        (ResponseValue (Maybe LByteString))
-                        ( ResponseChoice
-                            (ResponseValue (Maybe LByteString))
-                            ( ResponseChoice
-                                (ResponseValue (Maybe LByteString))
-                                (ResponseChoice (ResponseValue (Maybe LByteString)) (ResponseValue (Maybe LByteString)))
-                            )
-                        )
-                    )
-                )
-            )
-        )
+type PyPIIndexResponse = MetadataResponse (Maybe LByteString)
 
 pypiIndexContract :: ResponseContract PyPIIndexResponse
 pypiIndexContract =
@@ -231,19 +209,7 @@ refusalContract status description =
     optionalBodyContract status (description <> " The body is empty unless `server.helpMessage` is configured.") (SchemaText "text/plain")
 
 pypiIndexReplies :: PackumentReplies PyPIIndexResponse
-pypiIndexReplies =
-    PackumentReplies
-        { packumentForbiddenText = detailedRejections
-        , packumentOk = \headers body -> FirstResponse (responseValue headers body)
-        , packumentNotModified = \headers -> SecondResponse (FirstResponse (responseValue headers ()))
-        , packumentUnauthorised = \headers refusal -> SecondResponse (SecondResponse (FirstResponse (helpBody headers refusal)))
-        , packumentForbidden = \headers refusal -> SecondResponse (SecondResponse (SecondResponse (FirstResponse (helpBody headers refusal))))
-        , packumentNotFound = \headers refusal -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (helpBody headers refusal)))))
-        , packumentNotAcceptable = \headers refusal -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (helpBody headers refusal))))))
-        , packumentInternal = \headers refusal -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (helpBody headers refusal)))))))
-        , packumentBadGateway = \headers refusal -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (helpBody headers refusal))))))))
-        , packumentUnavailable = \headers refusal -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (helpBody headers refusal))))))))
-        }
+pypiIndexReplies = metadataReplies detailedRejections helpBytes
 
 -- The router's @406@, for an @Accept@ that admits no JSON form, before any handler runs.
 notAcceptable :: ResponseHeaders -> Maybe HelpMessage -> PyPIIndexResponse
@@ -289,8 +255,6 @@ unsupportedContract = refusalContract status404 "Unrecognised path; deny by defa
 helpBody :: ResponseHeaders -> Refusal -> ResponseValue (Maybe LByteString)
 helpBody headers refusal = responseValue headers (helpBytes refusal)
 
-{- The body of a refusal the route table decides rather than the pipeline, rendered through
-'helpBody' too so a configured help message reaches every arm alike. -}
 declaredRefusal :: Text -> ResponseHeaders -> Maybe HelpMessage -> ResponseValue (Maybe LByteString)
 declaredRefusal reason headers help = helpBody headers (mkRefusal help reason)
 
