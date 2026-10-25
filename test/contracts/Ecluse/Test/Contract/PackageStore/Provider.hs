@@ -3,20 +3,25 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Shared store observations and maintenance operations for protocol providers.
-module Ecluse.Test.Contract.PackageStore.Provider (StoreBoundary (..), storeOperations, fetchStoreArtifact, takeStoreFailure) where
+module Ecluse.Test.Contract.PackageStore.Provider (StoreBoundary (..), withStoreSession, storeOperations, fetchStoreArtifact, takeStoreFailure) where
 
-import Network.HTTP.Client (Request)
+import Network.HTTP.Client (Request, defaultManagerSettings, newManager)
+import Network.HTTP.Types (Header, Status)
 
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (RegistryResponse (..), UrlFormationError)
+import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
+import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Maintenance (StoreMaintenance (..), VersionOutcome (VersionRemoved), collectPages, storedVersion)
 import Ecluse.Core.Registry.Maintenance.NameSpace (wholeNameSpace)
 import Ecluse.Core.Registry.Origin (OriginClient (..))
 import Ecluse.Core.Security (BodyLimit, Limits (progressFloor))
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Contract.PackageStore
+import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Maintenance (testDeleteGuard)
 import Ecluse.Test.Registry.Metadata.Fetch (fetchTestBody)
+import Ecluse.Test.Stub (Captured, stubBaseUrl, withRoutedStubIO)
 
 -- | Control planes observe only state accepted from independently decoded wire requests.
 data StoreBoundary = StoreBoundary
@@ -24,6 +29,21 @@ data StoreBoundary = StoreBoundary
     , sbRemove :: [Text] -> IO ()
     , sbTakeDeleteFailure :: IO Bool
     }
+
+-- | Keep the native wire boundary alive across initial and reopened transport handles.
+withStoreSession :: (Captured -> IO (Status, [Header], LByteString)) -> (Text -> ExchangeClient -> IO PackageStoreOperations) -> IO [PackageStoreRelease] -> IORef Bool -> IORef Bool -> (PackageStoreSession -> IO ()) -> IO ()
+withStoreSession respond build observed failWrite failDelete use =
+    withRoutedStubIO respond $ \stub -> do
+        let reopen = withExchangeClient (newManager (singleAttemptSettings defaultManagerSettings)) (build (stubBaseUrl stub))
+        initial <- reopen
+        use
+            PackageStoreSession
+                { pssOperations = initial
+                , pssObservedWrites = observed
+                , pssFailNextWrite = writeIORef failWrite True
+                , pssFailNextDelete = writeIORef failDelete True
+                , pssReopen = reopen
+                }
 
 -- | Native read and write providers share the production maintenance interface.
 storeOperations :: PackageName -> (Text -> Version) -> (Text -> IO (Either Text (Maybe PackageStoreRelease))) -> (PackageStoreRelease -> IO (Either Text ())) -> StoreMaintenance -> PackageStoreOperations

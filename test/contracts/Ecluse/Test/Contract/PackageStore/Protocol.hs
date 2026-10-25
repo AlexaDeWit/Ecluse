@@ -19,14 +19,12 @@ import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Header, Status, status200, status201, status400, status401, status404, status409, status503)
 
 import Ecluse.Core.Credential (bareCredential)
 import Ecluse.Core.Package (Artifact (..), HashAlg (SRI), PackageDetails (pkgArtifacts), PackageName, hashAlg, hashValue)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMaintenance (maintenanceListing, maintenanceVersionDelete))
 import Ecluse.Core.Registry.CachedDocument (npmCached)
-import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
 import Ecluse.Core.Registry.Maintenance (StoreMaintenance (..), StoreManifestRead, storeFaultOfMetadata)
 import Ecluse.Core.Registry.Maintenance.Protocol (ProtocolRead (..), ProtocolStore (..), newProtocolMaintenance)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (vrVersion))
@@ -41,13 +39,12 @@ import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Contract.PackageStore
 import Ecluse.Test.Contract.PackageStore.Provider
-import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Package (npmVersion, sriSha512Of, unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Npm (mirrorWriteToken, writeTokenNpmConfig)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmVersion)
 import Ecluse.Test.Registry.Publish (publishOnlyFile)
-import Ecluse.Test.Stub (Captured (..), headerValue, stubBaseUrl, withRoutedStubIO)
+import Ecluse.Test.Stub (Captured (..), headerValue)
 
 -- | Verdaccio's supported npm profile includes protocol inventory and deletion.
 verdaccioDriver :: FullPackageStoreDriver
@@ -76,22 +73,13 @@ withNpmSession maintenance use = do
                 , sbRemove = \versions -> modifyIORef' held (\releases -> foldr Map.delete releases versions)
                 , sbTakeDeleteFailure = takeStoreFailure failDelete
                 }
-    withRoutedStubIO (reply held writes failWrite failDelete) $ \stub -> do
-        let reopen = do
-                withExchangeClient (newManager (singleAttemptSettings defaultManagerSettings)) $ \exchanges -> do
-                    let origin = writeTokenNpmConfig (loopbackRegistryUrl (stubBaseUrl stub)) exchanges defaultLimits
-                        publisher = newMirrorPublish (MirrorTransport exchanges (pure (Just (bareCredential mirrorWriteToken))) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (ocBaseUrl origin) npmPublishCodec
-                    store <- maintenance origin boundary
-                    pure (operations origin publisher store)
-        initial <- reopen
-        use
-            PackageStoreSession
-                { pssOperations = initial
-                , pssObservedWrites = reverse <$> readIORef writes
-                , pssFailNextWrite = writeIORef failWrite True
-                , pssFailNextDelete = writeIORef failDelete True
-                , pssReopen = reopen
-                }
+    withStoreSession (reply held writes failWrite failDelete) (build boundary) (reverse <$> readIORef writes) failWrite failDelete use
+  where
+    build boundary base exchanges = do
+        let origin = writeTokenNpmConfig (loopbackRegistryUrl base) exchanges defaultLimits
+            publisher = newMirrorPublish (MirrorTransport exchanges (pure (Just (bareCredential mirrorWriteToken))) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (ocBaseUrl origin) npmPublishCodec
+        store <- maintenance origin boundary
+        pure (operations origin publisher store)
 
 operations :: OriginClient -> MirrorPublish -> StoreMaintenance -> PackageStoreOperations
 operations origin publisher = storeOperations packageName npmVersion (readRelease origin) (writeRelease publisher)
