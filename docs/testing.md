@@ -714,6 +714,9 @@ decompressed byte accounting and overrides, not the heap cost of arbitrary 128 M
 
 ## Smoke tests: `ecluse-smoke` (allowed to fail, non-gating)
 
+CI runs smoke tests on main pushes, the nightly schedule and manual dispatches.
+A pull request skips them. Dispatch `ci.yml` on the PR branch when its change needs a live registry check.
+
 Make live calls to the public npm and PyPI registries to check JSON decoding and protocol handling.
 The PyPI case reads a project index and one bounded wheel through the shipped adapter, then checks
 the bytes against the advertised integrity. Only transport unavailability makes that case pending.
@@ -1071,6 +1074,22 @@ run attempt, and recorded build conditions. A missing or failed row keeps the al
 Use the benchmark tier to assess cost alongside the Cabal test suites. None of its
 three workflows gates a merge or belongs in branch protection as a required check.
 The workflow YAML owns schedules and run options.
+
+Full work-per-request measurements and live performance acceptance do not run automatically on PRs.
+The CI build still compiles the benchmark, including its correctness and complexity assertions.
+Main supplies performance baselines, and the nightly live run checks registry drift.
+Dispatch on the reviewed PR branch when its change needs performance evidence:
+
+```bash
+gh workflow run bench.yml --ref <branch>
+gh workflow run perf-acceptance.yml --ref <branch>
+```
+
+The work-per-request run retains every generator, advisory, scaling and complexity assertion.
+The [handoff requirements](../.agents/orchestration-strategy.md#definition-of-done) still require
+work-per-request and default load evidence for changes to npm serving or fetching.
+A later push requires evidence from the new head.
+
 Each workflow puts its report in the GitHub run summary and uploads the listed files on that run's page.
 A run off `main` also sets its figures beside the latest run on `main`, in a [comparison against main](#comparison-against-main).
 The load test alone stores reviewed minimums, its [success floors](#success-floors), and its scheduled run fails below them.
@@ -1144,9 +1163,9 @@ defines CPU bandwidth quotas.
 
 Use this section of a run summary to see what a branch changed without a download and a hand
 diff. A run of any of the three workflows on a ref other than `main` sets its figures beside the
-most recent successful run of the same workflow on `main`. That is every pull request for the two
-workflows that run on one, and a load test dispatched on a branch. The section has a part for each
-ecosystem, and the run's artifact holds it as `against-main.md`.
+most recent successful run of the same workflow on `main`. Dispatch on the PR branch to obtain
+that comparison. The section has a part for each ecosystem, and the run's artifact holds it as
+`against-main.md`.
 
 | Workflow | Figure compared | Rows |
 |---|---|---|
@@ -2203,7 +2222,7 @@ Beyond the test tiers, two static-analysis tools gate. **`weeder`** reports libr
 from the entry point (`Ecluse.run`). **`stan`** runs HIE-based partial-function and bug analysis at
 the floor in `.stan.toml`. The `analysis` job builds their `.hie` input once and runs each tool in its
 own step, and stan also runs after a weeder failure. Any weeder finding, or a stan finding above
-its floor, blocks the merge. Among the always-on jobs, only `smoke` is non-gating.
+its floor, blocks the merge. The non-gating smoke job runs outside ordinary PR validation.
 
 The Haskell jobs run in parallel where their prerequisites permit it. `build` compiles every
 target and then runs the residency suite, the doctests, and `cabal check`. `coverage` is a matrix

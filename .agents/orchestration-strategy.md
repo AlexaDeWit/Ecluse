@@ -412,12 +412,12 @@ Two jobs of the CI workflow are absent from the `needs` of the `gate` job:
 
 | CI job | Display name (`gh pr checks`) | Runs on | Local command |
 | --- | --- | --- | --- |
-| `smoke` | Smoke tests (live registries, non-gating) | every run that is not documentation-only | `task test-smoke` |
+| `smoke` | Smoke tests (live registries, non-gating) | main pushes, the nightly schedule and manual dispatches | `task test-smoke` |
 | `grype` | Vulnerability scan (grype, report-only) | the nightly schedule and a manual dispatch | `task scan`, for the host's architecture |
 
-Neither job gates a merge. An agent still gets both green on its PR, and hands off a red one only
-with a very good reason, stated in the hand-off. A pull request shows `grype` as skipped. For a PR
-that changes dependencies or the image, dispatch the CI workflow on the branch
+Neither job gates a merge. A pull request skips both. Read any requested run before handoff,
+and state the reason for accepting a red result. For a PR that changes dependencies or the image,
+dispatch the CI workflow on the branch
 (`gh workflow run ci.yml --ref <branch>`) so that `grype` runs, and read it before the hand-off.
 
 ## Definition of done
@@ -432,9 +432,10 @@ A PR reaches the architect only when **all** hold:
       does not stand in for it.
 - [ ] A PR that touches npm serving or fetching (the serve path or the worker's back-fill) does
       not flip ready until the team lead reads both perf suites against main's latest artifacts:
-      the PR's own Work-per-request benchmarks run, and a load run dispatched with
-      `gh workflow run bench-load.yml --ref <branch>`. That dispatch runs at the default knobs, so
-      at or below the latency ceiling it is held to the success floors
+      a Work-per-request benchmarks run dispatched with `gh workflow run bench.yml --ref <branch>`,
+      and a load run dispatched with `gh workflow run bench-load.yml --ref <branch>`.
+      The load dispatch runs at the default knobs. At or below the latency ceiling, it is held to
+      the success floors
       ([`docs/testing.md`, Success floors](../docs/testing.md#success-floors)) and goes red below
       one. The floors are loose minimums, so the comparison with main stays a manual artifact
       read. Allocations per request are the signal. Normalise by successes when shedding

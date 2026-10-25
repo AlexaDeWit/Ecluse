@@ -2,17 +2,15 @@ name: Benchmarks
 
 # Benchmark policy: ../../docs/testing.md#benchmarks-non-gating
 on:
-  pull_request:
   push:
     branches:
       - main
   workflow_dispatch:
 
-# One run per ref. Cancel a superseded PR run when a newer commit lands, because only
-# the latest commit's numbers matter. Never cancel a manual dispatch.
+# Main supplies baselines. Dispatch on a reviewed PR branch when measurements are required.
 concurrency:
   group: bench-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 # Artifact upload uses the run's runtime token, not the GITHUB_TOKEN. The baseline fetch
 # reads main's runs and artifacts with the GITHUB_TOKEN.
