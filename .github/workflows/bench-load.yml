@@ -4,6 +4,11 @@ name: Load test
 on:
   workflow_dispatch:
     inputs:
+      profile:
+        description: "Named scenario selection. Full retains calibration coverage. Explicit scenarios override this choice."
+        type: choice
+        options: [read-paths, memory-admission, artifacts, full]
+        default: read-paths
       pod-shape:
         description: "Proxy CPU-time quota and memory limit (2cpu means two CPUs' worth of time), or thrash for the GC-thrash probe"
         type: choice
@@ -14,9 +19,9 @@ on:
           - 4cpu-1gib
           - 4cpu-2gib
           - thrash
-        default: all
+        default: 2cpu-1gib
       scenarios:
-        description: "Comma-separated scenario keys, such as npm/merge-cold,npm/herd (blank: every scenario)"
+        description: "Comma-separated scenario keys, such as npm/merge-cold,npm/herd (blank: use the profile)"
         required: false
       thrash-limits-mib:
         description: "Memory limits in MiB the GC-thrash probe steps down through, highest first"
@@ -73,6 +78,7 @@ env:
   BENCH_LOAD_SERVE_MAX_IN_FLIGHT: ${{ inputs.serve-max-in-flight }}
   BENCH_LOAD_PAYLOAD_BYTES: ${{ inputs.payload-bytes || '363520' }}
   BENCH_LOAD_SCENARIOS: ${{ inputs.scenarios }}
+  BENCH_LOAD_PROFILE: ${{ inputs.profile || 'full' }}
   BENCH_LOAD_PROBE_RTT: ${{ inputs.upstream-latency-ms == '' && '1' || '0' }}
   BENCH_LOAD_UPSTREAM_LATENCY_MS: ${{ inputs.upstream-latency-ms || '5' }}
   BENCH_LOAD_ISOLATE_OHA: "1"

@@ -1430,6 +1430,7 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.PyPISpec
     Ecluse.BenchLoad.NormaliseSpec
     Ecluse.BenchLoad.PodSpec
+    Ecluse.BenchLoad.ProfileSpec
     Ecluse.BenchLoad.Placement
     Ecluse.BenchLoad.PlacementSpec
     Ecluse.BenchLoad.ProxyProcess
@@ -2290,6 +2291,7 @@ library ecluse-bench-load
     Ecluse.BenchLoad.NpmArtifact
     Ecluse.BenchLoad.Normalise
     Ecluse.BenchLoad.Pod
+    Ecluse.BenchLoad.Profile
     Ecluse.BenchLoad.ReportLabels
     Ecluse.BenchLoad.RtsWindow
     Ecluse.BenchLoad.Selection

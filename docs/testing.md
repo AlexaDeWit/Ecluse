@@ -1245,11 +1245,33 @@ count instead. The workflow delegates the cgroup subtree with `sudo` before the 
 cpuset, cpu, memory, and pids controllers for it without a task limit, and turns swap off. The cgroup
 outlives the proxy, so an OOM kill stays countable after the process is gone, and the harness
 retires any proxy cgroup a killed run left. A scheduled run measures `unlimited`, `2cpu-1gib`,
-`4cpu-1gib`, and `4cpu-2gib` in a matrix. A dispatch picks one shape, `all`, or `thrash` for the
-GC-thrash probe. To measure a branch, dispatch the workflow on that branch after merging this
-harness into it.
+`4cpu-1gib`, and `4cpu-2gib` in a matrix. A manual dispatch defaults to the `read-paths` profile
+under `2cpu-1gib`. It can select another profile, one shape, `all`, or `thrash` for the GC-thrash probe.
+To measure a branch, dispatch the workflow on that branch after merging this harness into it.
 Hosted runners have four logical processors. Without a placement, a four-CPU quota still shares
 those processors with `oha` and the stubs.
+
+Manual profiles select complete native scenarios, including their usual loaded and concurrency-one passes.
+They keep the duration, traffic, limits and assertions unchanged.
+
+| Profile | Selected measurements |
+| --- | --- |
+| `read-paths` | Cold metadata, shipped advisories, full private copies, assembled hits, 304 revalidation, cache-fit and eviction controls, and every managed PyPI read |
+| `memory-admission` | Full private copies, slow readers, idle bursts, bursts under private load, warm reads under cold load, and admission ramps |
+| `artifacts` | Private artifact relay, public onboarding, and relay ceilings for npm and PyPI |
+| `full` | Every existing scenario, including worker and replay measurements |
+
+Explicit `scenarios` override the profile and appear as `custom` in the native report.
+Named partial profiles remain diagnostic. They do not enforce calibrated floors or produce full completion receipts.
+The full nightly grid, its floor values, and its eligibility checks stay unchanged.
+The npm serving handoff still requires an explicit full run:
+
+```bash
+gh workflow run bench-load.yml --ref <branch> -f profile=full -f pod-shape=all
+```
+
+Local callers keep the full selection unless they set `BENCH_LOAD_PROFILE`.
+Capability sweeps retain their explicit scenario selections.
 
 A run can also pin settings on every measured proxy. A scheduled run sets none of them, and a run
 that sets any of them is not held to the [success floors](#success-floors):
