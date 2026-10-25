@@ -10,6 +10,8 @@ module Ecluse.E2E.Fixtures.Advisories (
     npmAdvisoryExportBase,
     npmAdvisoryId,
     pypiAdvisoryId,
+    cargoAdvisoryExportBase,
+    cargoAdvisoryId,
     maliciousExportBase,
     maliciousAdvisoryId,
     partialFixExportBase,
@@ -23,7 +25,7 @@ import Data.Aeson (Value, encode, object, (.=))
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.E2E.Fixtures.Npm (corpusRevokedPkg, psName)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2), osvCorpusZip, osvZipOf)
 import Ecluse.Test.Osv.Withdrawal (maliciousZip)
@@ -57,6 +59,11 @@ npmAdvisoryId = "GHSA-e2e-npm"
 pypiAdvisoryId :: Text
 pypiAdvisoryId = "GHSA-e2e-flask"
 
+-- | Cargo uses its native OSV source and exact SemVer fixes.
+cargoAdvisoryExportBase, cargoAdvisoryId :: Text
+cargoAdvisoryExportBase = "advisories/cargo-proof"
+cargoAdvisoryId = "GHSA-e2e-cargo"
+
 -- | The stub-relative base for derived MAL records targeting inert client fixtures.
 maliciousExportBase :: Text
 maliciousExportBase = "advisories/mal-derived"
@@ -89,9 +96,12 @@ buildAdvisoryFixtures root = do
         >>= writeUnder (pypiAdvisoryExportBase <> "/PyPI/all.zip")
     osvZipOf [("npm.json", ecosystemAdvisory Npm npmAdvisoryId "e2e-advisory" "1.19.0")]
         >>= writeUnder (npmAdvisoryExportBase <> "/npm/all.zip")
+    osvZipOf [("cargo.json", ecosystemAdvisory Cargo cargoAdvisoryId "ecluse-e2e-advisory" "1.19.0")]
+        >>= writeUnder (cargoAdvisoryExportBase <> "/crates.io/all.zip")
+    maliciousZip Cargo [("ecluse-e2e-advisory", ["1.18.0"])] Nothing >>= writeUnder (maliciousExportBase <> "/crates.io/all.zip")
     maliciousZip Npm [(psName corpusRevokedPkg, ["1.0.0"])] Nothing >>= writeUnder (maliciousExportBase <> "/npm/all.zip")
     maliciousZip PyPI [("Flask", ["1.18"])] Nothing >>= writeUnder (maliciousExportBase <> "/PyPI/all.zip")
-    for_ [(Npm, "npm", "e2e-advisory", "1.19.0"), (PyPI, "PyPI", "Flask", "1.19")] $ \(ecosystem, directory, name, fixed) ->
+    for_ [(Npm, "npm", "e2e-advisory", "1.19.0"), (PyPI, "PyPI", "Flask", "1.19"), (Cargo, "crates.io", "ecluse-e2e-advisory", "1.19.0")] $ \(ecosystem, directory, name, fixed) ->
         osvZipOf [("severe.json", ecosystemAdvisory ecosystem partialFixAdvisoryId name fixed), ("minor.json", minorAdvisory ecosystem name fixed)]
             >>= writeUnder (partialFixExportBase <> "/" <> directory <> "/all.zip")
     epssFixtureWith [(minorAlias, "0.005")] >>= writeUnder advisoryEpssPath
@@ -123,7 +133,7 @@ scoredAdvisory ecosystem advisory alias vector name events =
             , "severity" .= [object ["type" .= ("CVSS_V3" :: Text), "score" .= vector]]
             , "affected"
                 .= [ object
-                        [ "package" .= object ["name" .= name, "ecosystem" .= (if ecosystem == PyPI then "PyPI" else "npm" :: Text)]
+                        [ "package" .= object ["name" .= name, "ecosystem" .= (case ecosystem of PyPI -> "PyPI"; Cargo -> "crates.io"; _ -> "npm" :: Text)]
                         , "ranges" .= [object ["type" .= (if ecosystem == PyPI then "ECOSYSTEM" else "SEMVER" :: Text), "events" .= events]]
                         ]
                    ]

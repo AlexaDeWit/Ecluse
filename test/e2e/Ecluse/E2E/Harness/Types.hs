@@ -9,6 +9,7 @@ module Ecluse.E2E.Harness.Types (
     Topology (..),
     npmTopology,
     pypiTopology,
+    cargoTopology,
     pypiAdvisoryTopology,
     dredgerTopology,
     mixedTopology,
@@ -24,7 +25,7 @@ module Ecluse.E2E.Harness.Types (
 ) where
 
 import Data.Map.Strict qualified as Map
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Test.Contract.Install (ClientResult (..))
 import Network.HTTP.Client (Manager)
 
@@ -69,6 +70,10 @@ npmTopology = Topology [Npm] True False
 -- | PyPI reads need neither a package store nor an AWS emulator.
 pypiTopology :: Topology
 pypiTopology = Topology [PyPI] False False
+
+-- | Native Cargo reads use the shared TLS registry fixture.
+cargoTopology :: Topology
+cargoTopology = Topology [Cargo] False False
 
 -- | Advisory compilation and reads share the S3 emulator.
 pypiAdvisoryTopology :: Topology

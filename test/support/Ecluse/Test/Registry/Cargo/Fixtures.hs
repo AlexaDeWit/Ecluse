@@ -14,6 +14,7 @@ module Ecluse.Test.Registry.Cargo.Fixtures (
     cargoExecutable,
     cargoExpectedOutput,
     loadCargoGraph,
+    cargoLeafRelease,
 
     -- * Registry and publication bytes
     cargoShard,
@@ -156,10 +157,25 @@ loadCargoGraph fixtureRoot = do
   where
     release generated spec = do
         files <- forM (crateFiles spec) $ \path -> (path,) <$> readFileBS (fixtureRoot </> crateDirectory spec </> path)
-        let prefix = toString (crateName spec <> "-" <> crateVersion spec)
-        archive <- LBS.toStrict . GZip.compress <$> tarBytes [(prefix </> path, bytes) | (path, bytes) <- files <> generated]
         readme <- readFileText (fixtureRoot </> crateDirectory spec </> "README.md")
-        pure (CargoRelease spec archive (hexSha256Of archive) readme)
+        packageCargoRelease spec (files <> generated) readme
+
+-- | Retain the owned leaf source while varying the native name and version for isolated policy cases.
+cargoLeafRelease :: Text -> Text -> IO CargoRelease
+cargoLeafRelease name version = do
+    let spec = CargoCrate name version "leaf-v1" [] emptyFeatures emptyFeatures commonFiles
+        source = "test/fixtures/cargo/graph/leaf-v1"
+    files <- forM commonFiles $ \path -> do
+        bytes <- readFileBS (source </> path)
+        pure (path, if path == "Cargo.toml" then encodeUtf8 (T.replace "ecluse-e2e-leaf" name (T.replace "1.0.0" version (decodeUtf8 bytes))) else bytes)
+    readme <- readFileText (source </> "README.md")
+    packageCargoRelease spec files readme
+
+packageCargoRelease :: CargoCrate -> [(FilePath, ByteString)] -> Text -> IO CargoRelease
+packageCargoRelease spec files readme = do
+    let prefix = toString (crateName spec <> "-" <> crateVersion spec)
+    archive <- LBS.toStrict . GZip.compress <$> tarBytes [(prefix </> path, bytes) | (path, bytes) <- files]
+    pure (CargoRelease spec archive (hexSha256Of archive) readme)
 
 cratesIoLockSource :: Text
 cratesIoLockSource = "registry+https://github.com/rust-lang/crates.io-index"
