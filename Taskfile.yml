@@ -140,6 +140,12 @@ tasks:
       ECLTEST_ARGUMENTS: '{{.CLI_ARGS}}'
     cmds:
       - task: test:e2e-pypi
+  test-e2e-cargo:
+    desc: Run the fixed Cargo E2E subject
+    env:
+      ECLTEST_ARGUMENTS: '{{.CLI_ARGS}}'
+    cmds:
+      - task: test:e2e-cargo
   test-e2e-shared-system:
     desc: Run the fixed shared-system E2E subject
     env:
@@ -158,6 +164,12 @@ tasks:
       ECLTEST_ARGUMENTS: '{{.CLI_ARGS}}'
     cmds:
       - task: test:pypi-completion
+  test-e2e-cargo-completion:
+    desc: Audit Cargo completion against unit, integration and E2E reports
+    env:
+      ECLTEST_ARGUMENTS: '{{.CLI_ARGS}}'
+    cmds:
+      - task: test:cargo-completion
   test-conformance-verdaccio:
     desc: Run the fixed Verdaccio package-store contract
     env:

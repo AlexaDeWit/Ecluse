@@ -38,6 +38,10 @@ extra-source-files:
   test/fixtures/cargo/graph/*/README.md
   test/fixtures/cargo/graph/*/*.rs
   test/fixtures/cargo/graph/*/src/*.rs
+  test/fixtures/cargo/foreign/Cargo.toml
+  test/fixtures/cargo/foreign/README.md
+  test/fixtures/cargo/foreign/src/*.rs
+  bench/corpus/cargo/README.md
   test/fixtures/osv/v1/*.json
   test/fixtures/osv/v2/*.json
   test/fixtures/osv/withdrawal/*.json
@@ -1259,6 +1263,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.ProjectSpec
     Ecluse.Core.Registry.Cargo.ProjectSpec
     Ecluse.Core.Registry.Cargo.FirstPartySpec
+    Ecluse.Core.Registry.Cargo.AdapterSpec
     Ecluse.Core.Registry.Cargo.CredentialSpec
     Ecluse.Core.Registry.Cargo.RequestSpec
     Ecluse.Core.Registry.Cargo.DiscoverySpec
@@ -1792,6 +1797,7 @@ test-suite ecluse-integration
     Ecluse.Core.Security.EgressIntegrationSpec
     Ecluse.Core.Server.Pipeline.OriginIntegrationSpec
     Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec
+    Ecluse.Core.Registry.Cargo.AdapterIntegrationSpec
     Ecluse.Core.Server.MirrorViewIntegrationSpec
     Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec
     Ecluse.Core.Server.Pipeline.PublishIntegrationSpec
@@ -1969,6 +1975,23 @@ library ecluse-e2e-test-support
   hs-source-dirs:     test/e2e
   exposed-modules:
     Ecluse.E2E.Fixtures.PyPI.Mirror
+    Ecluse.E2E.Fixtures.Cargo
+    Ecluse.E2E.Fixtures.Cargo.Advisories
+    Ecluse.E2E.Fixtures.Cargo.Dredger
+    Ecluse.E2E.Harness.CargoGateway
+    Ecluse.E2E.Harness.CargoRegistry
+    Ecluse.E2E.Harness.CargoDredger
+    Ecluse.E2E.Harness.CargoDredger.Client
+    Ecluse.E2E.Cargo.InstallE2ESpec
+    Ecluse.E2E.Cargo.MirrorInstallE2ESpec
+    Ecluse.E2E.Cargo.MirrorProofE2ESpec
+    Ecluse.E2E.Cargo.PublishE2ESpec
+    Ecluse.E2E.Cargo.AdvisoriesE2ESpec
+    Ecluse.E2E.Cargo.DredgerE2ESpec
+    Ecluse.E2E.Cargo.TelemetryE2ESpec
+    Ecluse.E2E.Cargo.NativeE2ESpec
+    Ecluse.E2E.Drivers.Cargo
+    Ecluse.E2E.Suites.Cargo
     Ecluse.E2E.Fixtures.PyPI.Dredger
     Ecluse.E2E.Harness.PyPIMirror
     Ecluse.E2E.Harness.CodeArtifact
@@ -2063,6 +2086,18 @@ test-suite ecluse-e2e-pypi
   type:            exitcode-stdio-1.0
   main-is:         Main.hs
   hs-source-dirs:   test/e2e-pypi
+  build-depends:
+    , ecluse:ecluse-e2e-test-support
+    , ecluse:ecluse-test-contracts
+
+test-suite ecluse-e2e-cargo
+  import:          shared
+  ghc-options:     -threaded
+  if !flag(dev-http-egress)
+    buildable: False
+  type:            exitcode-stdio-1.0
+  main-is:         Main.hs
+  hs-source-dirs:   test/e2e-cargo
   build-depends:
     , ecluse:ecluse-e2e-test-support
     , ecluse:ecluse-test-contracts
@@ -2173,6 +2208,19 @@ executable ecluse-completion-pypi-audit
     buildable: False
   main-is:         Main.hs
   hs-source-dirs:   test/tools/completion-pypi-audit test/tools/completion-support
+  other-modules:   Ecluse.Test.Contract.CompletionAudit
+  build-depends:
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-runtime-test-support
+    , ecluse:ecluse-e2e-test-support
+    , text           ^>=2.1
+
+executable ecluse-completion-cargo-audit
+  import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
+  main-is:         Main.hs
+  hs-source-dirs:   test/tools/completion-cargo-audit test/tools/completion-support
   other-modules:   Ecluse.Test.Contract.CompletionAudit
   build-depends:
     , ecluse:ecluse-test-contracts
