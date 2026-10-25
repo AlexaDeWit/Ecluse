@@ -238,7 +238,7 @@ runCargoConsumer runtime deps ticket consume =
 runCargoRead :: ServeRuntime -> PackumentDeps -> MemoryTicket -> (IO (Either MetadataError VersionRead) -> IO a) -> IO a
 runCargoRead runtime deps ticket consume = do
     logEnv <- newTestLogEnv
-    let binding = MountBinding ("cargo" :| []) cargoRouter cargoCredential deps Nothing
+    let binding = MountBinding ("cargo" :| []) (cargoRouter Nothing) cargoCredential deps Nothing
     runHandler logEnv mempty (RequestCtx runtime binding) $
         withPublicMetadata runtime deps ticket cargoTestName (cargoTestVersion "1.0.0") (liftIO . consume)
 

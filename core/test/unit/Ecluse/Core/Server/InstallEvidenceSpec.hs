@@ -77,7 +77,7 @@ spec = describe "public install evidence boundary" $ do
             let provider = InstallEvidenceProvider (\_ -> pure (\_ -> modifyIORef' built (+ 1) $> Nothing))
                 deps = (dependencies stub){pdFirstParty = const True, pdInstallEvidence = Just provider}
             evidenceReads <- boundReads deps runtime
-            evidenceReads (subject stub) >>= (`shouldSatisfy` isNothing)
+            isNothing <$> evidenceReads (subject stub) `shouldReturn` True
             readIORef built `shouldReturn` 0
             allCaptured stub `shouldReturn` []
     it "refuses a foreign artifact authority before HTTP" $
