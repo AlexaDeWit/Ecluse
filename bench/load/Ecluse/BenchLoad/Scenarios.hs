@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Every scenario the harness defines, and the counts of successes a run of all of them checks.
+-- | Registered load scenarios and the counts required by the routine full profile.
 module Ecluse.BenchLoad.Scenarios (
     fixtures,
     checkFixtureCoverage,
@@ -15,7 +15,7 @@ module Ecluse.BenchLoad.Scenarios (
 import Data.Set qualified as Set
 
 import Ecluse.BenchLoad.Advisories (MaliciousSource (MaliciousHit, MaliciousMixedHeavy), maliciousQualification)
-import Ecluse.BenchLoad.Contract (LoadScope (FullLoad), loadCoverageGaps)
+import Ecluse.BenchLoad.Contract (LoadScope (FullLoad), loadCoverageGaps, loadScenarioName, onRequestLoadLaws)
 import Ecluse.BenchLoad.Floors (FloorKey, Pass (ConcurrencyOne, Loaded))
 import Ecluse.BenchLoad.Harness (Scenario (scenarioInProcess, scenarioName, scenarioServiceTime), UpstreamFixture (fixtureEcosystem, fixtureScenarios))
 import Ecluse.BenchLoad.Npm (npmFixture)
@@ -49,20 +49,24 @@ findScenario name =
 runsUnder :: PodShape -> Scenario -> Bool
 runsUnder shape s = shape == Unlimited || not (scenarioInProcess s)
 
--- | Every count a run of every scenario checks under the shape: each loaded pass, and each concurrency-one pass.
+-- | Every loaded and concurrency-one count the full profile checks under the shape.
 checkedCounts :: PodShape -> Set FloorKey
 checkedCounts shape =
     Set.fromList
         [ (scenarioKey (fixtureEcosystem fixture) (scenarioName s), whichPass)
         | fixture <- fixtures
-        , s <- fixtureScenarios fixture
+        , s <- scenariosForSelection Nothing fixture
         , runsUnder shape s
         , whichPass <- Loaded : [ConcurrencyOne | scenarioServiceTime s]
         ]
 
--- | Keep historical default runs intact. Extra qualification rows require explicit selection.
+-- | Full runs omit optional variants. Explicit selections can reach every native and qualification row.
 scenariosForSelection :: Maybe [Text] -> UpstreamFixture -> [Scenario]
-scenariosForSelection selected fixture = fixtureScenarios fixture <> maybe [] (const (qualificationScenarios fixture)) selected
+scenariosForSelection selected fixture = case selected of
+    Nothing -> filter ((`notElem` optionalNames) . scenarioName) (fixtureScenarios fixture)
+    Just _ -> fixtureScenarios fixture <> qualificationScenarios fixture
+  where
+    optionalNames = mapMaybe (loadScenarioName (fixtureEcosystem fixture)) onRequestLoadLaws
 
 qualificationScenarios :: UpstreamFixture -> [Scenario]
 qualificationScenarios fixture =

@@ -61,6 +61,7 @@ import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt
 import Ecluse.BenchLoad.Oha (ohaPinned)
 import Ecluse.BenchLoad.Placement (runnerProcessors, withHarnessPlacement)
 import Ecluse.BenchLoad.Pod (PodShape (Limited), ProxyTuning (ptCpus), renderPodShape)
+import Ecluse.BenchLoad.Profile (parseLoadProfile, selectProfile)
 import Ecluse.BenchLoad.ProxyProcess (podShapeFromEnv, serveProxyFlag, sweepProxyCgroups)
 import Ecluse.BenchLoad.ProxyServe (runServeProxy)
 import Ecluse.BenchLoad.PyPI (pypiLoadNotes)
@@ -96,15 +97,15 @@ measureRun :: LoadKnobs -> IO ()
 measureRun knobs = do
     processors <- runnerProcessors
     shape <- podShapeFromEnv
-    selected <- selectedKeys
+    (profile, selected) <- selectedKeys
     thrash <- thrashLimitsFromEnv
     environment <- Map.fromList . map (bimap toText toText) <$> getEnvironment
     (rendered, violations) <- case thrash of
         -- The probe is never held to the floors, which a scheduled run must be.
         Just limits -> second (unheldViolations (triggerIn environment) (NotHeld (ThrashProbe :| [])) <>) <$> runThrashProbe knobs limits
-        Nothing -> runPasses environment knobs processors shape selected
+        Nothing -> runPasses environment knobs processors shape profile selected
     -- The probe reads OOM kills and heap overflows as results, so only a broken probe has a verdict.
-    let output = T.intercalate "\n" (rendered <> [renderVerdict violations | isNothing thrash || not (null violations)])
+    let output = T.intercalate "\n" (["Load profile: `" <> profile <> "`.\n" | isNothing thrash] <> rendered <> [renderVerdict violations | isNothing thrash || not (null violations)])
     putText output
     lookupEnv "GITHUB_STEP_SUMMARY" >>= traverse_ (`appendFileText` output)
     unless (null violations) $
@@ -122,8 +123,8 @@ data Setup = Setup
     , setupProcessors :: Int
     }
 
-runPasses :: Map Text Text -> LoadKnobs -> Int -> PodShape -> Maybe [Text] -> IO ([Text], [Text])
-runPasses environment knobs processors shape selected = do
+runPasses :: Map Text Text -> LoadKnobs -> Int -> PodShape -> Text -> Maybe [Text] -> IO ([Text], [Text])
+runPasses environment knobs processors shape profile selected = do
     -- Read before any scenario runs, so floors that do not decode cost no load.
     floors <- either benchFail pure =<< loadFloors
     npmBaseline <- probePublicRtt Npm knobs
@@ -148,7 +149,7 @@ runPasses environment knobs processors shape selected = do
     let outcomes = concatMap snd ran
         violations = runVerdict (triggerIn environment) enforcement (checkedCounts shape) outcomes
     let calibration = floorsCalibration floors
-        provenance = Map.fromList [("floorMeasurementConditions", calConditions calibration), ("retainedFloorConditions", show (calRetainedConditions calibration))]
+        provenance = Map.fromList [("loadProfile", profile), ("floorMeasurementConditions", calConditions calibration), ("retainedFloorConditions", show (calRetainedConditions calibration))]
     writeLoadObservations (Map.union provenance (measurementConditions setup facts)) enforcement violations outcomes
     pure
         ( map fst ran <> [renderFloors (floorsCalibration floors) enforcement]
@@ -249,10 +250,13 @@ runThrashProbe knobs limitsMib = do
 childRts :: Int -> (String, String)
 childRts capabilities = ("GHCRTS", rtsStatsFlag <> " -N" <> show capabilities)
 
--- The scenario keys in BENCH_LOAD_SCENARIOS, or every scenario when it is unset or blank.
-selectedKeys :: IO (Maybe [Text])
-selectedKeys =
-    commaListFromEnv "BENCH_LOAD_SCENARIOS" >>= traverse known
+-- An explicit selection takes precedence over the profile. Local callers default to full.
+selectedKeys :: IO (Text, Maybe [Text])
+selectedKeys = do
+    profile <- lookupEnv "BENCH_LOAD_PROFILE" >>= either benchFail pure . parseLoadProfile . maybe "full" toText
+    explicit <- commaListFromEnv "BENCH_LOAD_SCENARIOS"
+    let (name, selected) = selectProfile profile explicit
+    (name,) <$> traverse known selected
   where
     known keys = do
         let unknown = filter (isNothing . findScenario) keys

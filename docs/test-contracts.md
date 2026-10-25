@@ -200,7 +200,7 @@ Each mutation must fail validation. Genuine unlabelled native smoke examples rem
 | npm repeated release keys, members, dependencies, and selected containers | `retention/npm/{selected,full}/{keys,members,dependencies}` and `retention/npm/selected/containers` through `Contract.Retention` | Original generators, 2,000 and 16,000 repeats, original read operations, chunking, GC sampling, and strict 256 KiB growth allowance. |
 | PyPI repeated containers/members, unselected releases, and past-limit files | `retention/pypi/selected/{containers,members,other-releases}`, `retention/pypi/full/{members,past-limit}` through `Contract.Retention` | Original generators and read modes. Each selected input still proves exactly one kept file before sampling. The past-limit case still uses `maxArtifactCount = 2`. |
 | Benchmark and allocation provider registration | `Ecluse.Test.EcosystemBench.checkBenchmarkCoverage`, enforced by `ecosystemBenches` | Reviewed npm/PyPI obligations and concrete providers must match the production adapter registry. Missing, duplicate, and unshipped providers fail before corpus loading. Empty corpora fail. |
-| Load read and stress registration | `readLoadContract` with `LoadReadDriver`, checked by `Ecluse.BenchLoad.Scenarios.checkFixtureCoverage` before `runDriver` | Each ecosystem owes 27 shared read and stress laws. `requiredLoadLaws` supplies independent requirements, and `loadCoverageGaps` names omitted scenarios. Existing native extensions, floor checks, and verdicts remain. |
+| Load read and stress registration | `readLoadContract` with `LoadReadDriver`, checked by `Ecluse.BenchLoad.Scenarios.checkFixtureCoverage` before `runDriver` | Each ecosystem owes the shared routine read and stress laws. `requiredLoadLaws` supplies independent requirements, and `loadCoverageGaps` names omitted scenarios. Existing native extensions, floor checks, and verdicts remain. |
 
 These measurement paths retain their native sampling and verdict logic:
 
@@ -213,10 +213,11 @@ These measurement paths retain their native sampling and verdict logic:
 | Load | `BenchLoad.Harness`, native fixtures, `Scenarios`, and `Verdict` | Process isolation, quotas, affinity, RTS flags, upstream latency, request patterns, concurrency-one passes, success floors, refused/unavailable rows, and gating semantics. |
 | Live native protocol | npm and PyPI registry smoke specs | npm abbreviated parsing, bounded abbreviated fetch, raw SHA-1/SRI syntax, and PyPI exact wheel observations remain native. |
 
-Existing corpus bytes, expected outputs, floor values, and RTS settings stay fixed.
+Existing corpus bytes, expected outputs, remaining floor values, and RTS settings stay fixed.
 Provider coverage runs outside measured operations. New PyPI stress rows add samples without changing that boundary.
 
-The `ReadLoadFoundation` scope requires the 27 shared read and stress laws for npm and PyPI.
+The `ReadLoadFoundation` scope requires the shared routine read and stress laws for npm and PyPI.
+The 5% private-copy and default restart variants remain available through explicit selection.
 `FullLoad` adds `MirrorWorker` as a separate requirement.
 Active npm and PyPI fixtures and receipts use `FullLoad`, including their native worker rows.
 PyPI also requires its three managed-read comparisons.

@@ -100,6 +100,7 @@ receiptDiagnostic :: Text -> Map Text Text -> Maybe NativePerformance -> Maybe T
 receiptDiagnostic kind conditions native
     | kind `elem` ["load", "load-foundation"] && nonempty "thrashLimitsMiB" = Just "GC-thrash probe"
     | kind `elem` ["load", "load-foundation"] && nonempty "selectedScenarios" = Just "selected scenarios"
+    | kind `elem` ["load", "load-foundation"] && maybe False (/= "full") (Map.lookup "loadProfile" conditions) = Just "selected load profile"
     | kind `elem` ["load", "load-foundation"] = native >>= loadFloorProblem . npConditions
     | kind == "live-allocation" && any ((== NativeUnavailable) . npOutcome) native = Just "live upstream unavailable"
     | otherwise = Nothing

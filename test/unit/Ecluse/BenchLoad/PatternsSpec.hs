@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Finite replay traces preserve their identities and parameter bounds.
 module Ecluse.BenchLoad.PatternsSpec (spec) where
 
 import Data.Map.Strict qualified as Map
@@ -9,6 +10,7 @@ import Test.Hspec
 
 import Ecluse.BenchLoad.Patterns
 
+-- | Compare client schedules without booting a proxy.
 spec :: Spec
 spec = describe "finite request patterns" $ do
     let names = ["a", "b", "c", "d", "e", "f", "g", "h"]
@@ -34,6 +36,11 @@ spec = describe "finite request patterns" $ do
         let result = requestTrace Scan knobs
         map (length . ctNames) (rtClients result) `shouldBe` [12]
         length (rtNames result) `shouldBe` 4
+    it "makes the default restart replay identical to the CI fleet control" $
+        for_ [1, 3, 8] $ \count -> do
+            let settings = defaultPatternKnobs{pkNames = count}
+            makeTrace CiFleet settings names `shouldSatisfy` isRight
+            makeTrace Restart settings names `shouldBe` makeTrace CiFleet settings names
     it "schedules restart arrivals independently of client service times" $
         map ctStartMicros (rtClients (requestTrace Restart knobs{pkArrivalMicros = 500_000})) `shouldBe` [0, 500_000]
     it "reproduces Zipf draws with a seed and changes draws with another seed" $ do

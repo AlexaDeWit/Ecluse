@@ -433,7 +433,7 @@ A PR reaches the architect only when **all** hold:
 - [ ] A PR that touches npm serving or fetching (the serve path or the worker's back-fill) does
       not flip ready until the team lead reads both perf suites against main's latest artifacts:
       a Work-per-request benchmarks run dispatched with `gh workflow run bench.yml --ref <branch>`,
-      and a load run dispatched with `gh workflow run bench-load.yml --ref <branch>`.
+      and a load run dispatched with `gh workflow run bench-load.yml --ref <branch> -f profile=full -f pod-shape=all`.
       The load dispatch runs at the default knobs. At or below the latency ceiling, it is held to
       the success floors
       ([`docs/testing.md`, Success floors](../docs/testing.md#success-floors)) and goes red below

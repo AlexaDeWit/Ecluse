@@ -1245,11 +1245,37 @@ count instead. The workflow delegates the cgroup subtree with `sudo` before the 
 cpuset, cpu, memory, and pids controllers for it without a task limit, and turns swap off. The cgroup
 outlives the proxy, so an OOM kill stays countable after the process is gone, and the harness
 retires any proxy cgroup a killed run left. A scheduled run measures `unlimited`, `2cpu-1gib`,
-`4cpu-1gib`, and `4cpu-2gib` in a matrix. A dispatch picks one shape, `all`, or `thrash` for the
-GC-thrash probe. To measure a branch, dispatch the workflow on that branch after merging this
-harness into it.
+`4cpu-1gib`, and `4cpu-2gib` in a matrix. A manual dispatch defaults to the `read-paths` profile
+under `2cpu-1gib`. It can select another profile, one shape, `all`, or `thrash` for the GC-thrash probe.
+To measure a branch, dispatch the workflow on that branch after merging this harness into it.
 Hosted runners have four logical processors. Without a placement, a four-CPU quota still shares
 those processors with `oha` and the stubs.
+
+Manual profiles select complete native scenarios, including their usual loaded and concurrency-one passes.
+They keep the duration, traffic, limits and assertions unchanged.
+
+| Profile | Selected measurements |
+| --- | --- |
+| `read-paths` | Cold metadata, shipped advisories, full private copies, assembled hits, 304 revalidation, cache-fit and eviction controls, and every managed PyPI read |
+| `memory-admission` | Full private copies, slow readers, idle bursts, bursts under private load, warm reads under cold load, and admission ramps |
+| `artifacts` | Private artifact relay, public onboarding, and relay ceilings for npm and PyPI |
+| `full` | Every routine scenario, including worker and replay measurements |
+
+Explicit `scenarios` override the profile and appear as `custom` in the native report.
+Named partial profiles remain diagnostic. They do not enforce calibrated floors or produce full completion receipts.
+
+Full nightly runs retain all four pod shapes. Remaining floor values and eligibility checks stay unchanged.
+The full profile now omits the 5% private-copy cases and default restart replays.
+They remain available through explicit scenario selection. The routine grid contains 332 pass observations, down from 356.
+
+The npm serving handoff still requires an explicit full run:
+
+```bash
+gh workflow run bench-load.yml --ref <branch> -f profile=full -f pod-shape=all
+```
+
+Local callers keep the full selection unless they set `BENCH_LOAD_PROFILE`.
+Capability sweeps retain their explicit scenario selections.
 
 A run can also pin settings on every measured proxy. A scheduled run sets none of them, and a run
 that sets any of them is not held to the [success floors](#success-floors):
@@ -1373,8 +1399,9 @@ TTL is 0. The private copy stays fixed for the run, so each scenario measures on
 | `npm/heavy-private-25pct`, `pypi/heavy-private-25pct` | The newest 25% of the versions |
 | `npm/heavy-private`, `pypi/heavy-private` | The complete capture, as a private registry that proxies the public one returns |
 
-Each ecosystem's report lists the last three rows in that order, after the cold listing and its
-advisory variants. All four rows join the concurrency-one pass.
+The full profile runs the 25% and complete-copy cases after the cold listing and its advisory variants.
+The 25% case keeps an intermediate comparison, and the complete copy keeps the stress case.
+The 5% case requires explicit scenario selection. All four rows join the concurrency-one pass when selected.
 
 Three npm and three PyPI scenarios load an advisory database, so the per-version advisory cost
 shows in the load report. Before the proxy boots, the scenario compiles the captured advisories
@@ -1527,7 +1554,7 @@ not a constrained worker pod. The three managed-read HTTP rows retain constraine
 The worker payload setting controls uncompressed bytes per archive file. Its timer excludes fixture
 reset, queue setup and assertions, while the scenario duration includes that work.
 
-The check fails closed, and it covers every scenario the zero-success check covers:
+The floor checks fail closed over the routine full profile:
 
 - A run held to the floors fails on a scenario that has no floor for its pass.
 - It fails on a floor for a count that no scenario reports.
@@ -1543,21 +1570,23 @@ A run is held to the floors only when it matches what they were calibrated at. T
 | Part | A held run | The harness reads |
 |---|---|---|
 | Runner | Runs on GitHub Actions under `runnerOs` and `runnerArch` (Linux, ARM64) | `GITHUB_ACTIONS`, `RUNNER_OS`, `RUNNER_ARCH` |
-| Settings | Equals `operatingPoint`. Every load knob is at its default: 30 seconds, 100 connections, the default payload, and the proxy's computed admission and pools. Both passes run, over every scenario, with no pinned proxy setting and no `BENCH_PATTERN_*` variable set | The `BENCH_LOAD_*` knobs, `BENCH_LOAD_SCENARIOS`, `BENCH_LOAD_PASSES`, the `BENCH_LOAD_PROXY_*` settings, and the names of the `BENCH_PATTERN_*` variables that are set |
+| Settings | Uses the `full` profile at `operatingPoint`: 30 seconds, 100 connections, default payload, computed admission and pools. Both passes cover every scenario. The run pins no proxy setting or `BENCH_PATTERN_*` variable. | The `BENCH_LOAD_*` knobs, `BENCH_LOAD_PROFILE`, `BENCH_LOAD_SCENARIOS`, `BENCH_LOAD_PASSES`, the `BENCH_LOAD_PROXY_*` settings, and the names of the `BENCH_PATTERN_*` variables that are set |
 | Pod shape | Runs under a shape that `floors` holds | `BENCH_LOAD_POD` |
 | Measurement conditions | Matches `measurementConditions` | The harness reports `unified-v2` |
 | Native injected latency | Each ecosystem stays below its own ceiling | Each native public RTT, or the declared configured fallback |
 
-A run that misses a part is not held. It skips the floor check, its floor cells read `not held`,
-and the "Success floors" section of its report names every reason in one line. Every other check
-applies to it. A dispatch that changes only the pod shape, among the four, is held. A run on
-another machine is not, and neither is the GC-thrash probe.
+The harness skips floors when a calibration condition does not match.
+Report cells read `not held`, and the "Success floors" section names every reason.
+Every other check still runs.
+The harness applies floors to any full-profile dispatch under the four pod shapes when all calibration conditions match.
+Runs on other machines and GC-thrash probes remain unheld.
 
-A scheduled run must be held. When its settings, its runner, or its pod shape keep it off the
-floors, when its measurement conditions differ, or when it runs the GC-thrash probe, it fails with one violation that names the reason. A
-changed workflow default therefore turns the next scheduled run red, where it would otherwise
-switch the floors off. Latency above the ceiling is the one exception: the network decides it, so
-that run stays green and not held.
+The harness requires a scheduled run to enforce floors.
+It fails the run if the settings, runner, shape, measurement conditions or GC-thrash probe keep the floors off.
+The violation names the reason.
+An uncalibrated change to the scheduled settings therefore fails the next scheduled run.
+Latency above a ceiling remains the network exception.
+That run stays green and does not enforce floors.
 
 After the calibration conditions match, the harness compares nothing else:
 
@@ -1639,7 +1668,8 @@ their background counts. Then write the `calibration` record:
   latency by pod shape and its derived ceiling. Preserve the measured baseline and fallback identities
   when deciding whether an observation qualifies.
 
-Two cases have no ten scheduled runs to take:
+Two cases have no ten scheduled runs to take.
+Request `profile=full` and `pod-shape=all` for either case:
 
 | Case | Why | What to do |
 |---|---|---|
@@ -1936,6 +1966,8 @@ turns on for each scenario it runs. Substitute `pypi` for its Simple-index trace
 Each cell stops when its finite sequence completes or its whole-replay deadline expires.
 Duration knobs apply only to the legacy duration drivers.
 Clients send sequential requests after their scheduled start. Slow responses extend the run.
+The full profile omits Restart because its default trace duplicates CI fleet at 100 ms client spacing.
+Select `npm/pattern-restart` or `pypi/pattern-restart` explicitly to vary its arrival interval.
 Restart models post-restart arrivals into an empty cache, with the production 60-second TTL.
 It does not model a pre-restart heap or claim that a short default run measures expiry.
 

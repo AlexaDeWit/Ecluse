@@ -35,6 +35,11 @@ spec = do
             receiptDiagnostic "load" (Map.singleton "selectedScenarios" "npm/merge-cold") Nothing `shouldBe` Just "selected scenarios"
             receiptDiagnostic "load" (Map.singleton "thrashLimitsMiB" "2048,1536") Nothing `shouldBe` Just "GC-thrash probe"
             receiptDiagnostic "load" (Map.singleton "selectedScenarios" " \t\n") (Just held) `shouldBe` Nothing
+        it "keeps named partial profiles diagnostic despite a claimed held native result" $ do
+            for_ ["read-paths", "memory-admission", "artifacts"] $ \profile ->
+                for_ ["load", "load-foundation"] $ \kind ->
+                    receiptDiagnostic kind (Map.singleton "loadProfile" profile) (Just held) `shouldBe` Just "selected load profile"
+            receiptDiagnostic "load" (Map.singleton "loadProfile" "full") (Just held) `shouldBe` Nothing
         it "uses native floor reasons for every diagnostic exclusion"
             $ forM_
                 [ (Map.empty, "load floor enforcement missing")
