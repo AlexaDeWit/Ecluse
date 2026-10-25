@@ -19,7 +19,7 @@ import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (benchNow)
 import Ecluse.BenchLoad.Harness (Driver (DriveInProcess), LoadKnobs (..), Scenario (..), Target (Target), scenario)
 import Ecluse.BenchLoad.PyPI.WorkerFixture
-import Ecluse.BenchLoad.Worker (runWorkerLoad)
+import Ecluse.BenchLoad.Worker (runWorkerLoad, withinWorkerBudget)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Package (infoVersions, pkgArtifacts)
@@ -40,18 +40,17 @@ import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Admission.Meter (MemoryMeter, charge, newChargeRegion, withMemoryEntry)
 import Ecluse.Core.Server.MemoryModel (decodedDocumentCharge)
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Published))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (wmpMirrorJobProcessed))
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind (WorkerMetadata))
 import Ecluse.Core.Worker (JobOutcome (Retried), WorkerPolicy (..), WorkerRuntime (..), newWorkerHeartbeat, processBatch, processJob, runWorkerM)
-import Ecluse.Core.Worker.Types (WorkerMirrorState (..), WorkerStateBudget (..))
+import Ecluse.Core.Worker.Types (WorkerMirrorState (..))
 import Ecluse.Runtime.Mirror.State.S3 (mirrorStateForEnv)
 import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (defaultMinIntegrity, unsafeFilename)
-import Ecluse.Test.Port (noopMetricsPort, noopWorkerMetricsPort, passthroughTracingPort, passthroughWorkerTracingPort)
+import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughTracingPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Support (expectRight, testMemoryMeter)
 import Ecluse.Test.Wai (localhost)
@@ -97,7 +96,7 @@ boot knobs use = do
                                 , wpArtifact = adapterArtifact pypiAdapter
                                 , wpPublish = publish
                                 , wpArtifactLimits = defaultLimits
-                                , wpMirrorState = Just (WorkerMirrorState store target defaultLimits (withinBudget meter))
+                                , wpMirrorState = Just (WorkerMirrorState store target defaultLimits (withinWorkerBudget meter))
                                 , wpNow = pure benchNow
                                 }
                         recordingQueue = queue{ack = ack queue >=> traverse (\() -> modifyIORef' acknowledgements (+ 1))}
@@ -129,13 +128,6 @@ boot knobs use = do
                             TIO.hPutStrLn stderr ("pypi-worker-completed-jobs " <> show (length latencies) <> " files-per-job 4")
                             pure latencies
                     use (Target Nothing (DriveInProcess measured))
-
-withinBudget :: MemoryMeter -> (WorkerStateBudget -> IO a) -> IO (Maybe a)
-withinBudget meter action = fmap rightToMaybe . withMemoryEntry noopMetricsPort meter $ \ticket -> do
-    budget <- WorkerStateBudget <$> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> pure Nothing
-    action budget
-  where
-    region = newChargeRegion . charge
 
 job :: MirrorJob
 job = MirrorJob fixturePackage fixtureVersion (Just (unsafeFilename fixtureTrigger)) Nothing
