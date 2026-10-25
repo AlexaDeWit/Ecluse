@@ -147,7 +147,7 @@ servingSpec = describe "native sparse serving" $ do
             (template, _, _, _) <- expectRight (Reference.referenceDiscovery (toStrict (simpleBody discovery)))
             template `shouldBe` "http://ecluse.test/cargo/crates/{crate}/{version}/{crate}-{version}.crate"
             listing <- getPath publicIndex (proxyApp proxy)
-            fields <- expectRight . maybeToRight "missing native row" . listToMaybe =<< observedRows listing
+            fields <- expectRight . maybeToRight ("missing native row" :: Text) . listToMaybe =<< observedRows listing
             KeyMap.lookup "cksum" fields `shouldBe` Just (String (hexSha256Of archiveBytes))
             archive <- getPath publicArchive (proxyApp proxy)
             simpleStatus archive `shouldBe` status200
