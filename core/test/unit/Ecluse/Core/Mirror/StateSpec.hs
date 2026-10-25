@@ -211,6 +211,7 @@ spec = describe "durable mirror expectations" $ do
             for_ (versionFragments version) $ \fragment -> case fragmentReadData fragment of
                 PyPIMirrorRead document -> simpleEnvelope document `shouldBe` mempty
                 NpmMirrorRead _ -> expectationFailure "unexpected npm fragment"
+                CargoMirrorRead _ -> expectationFailure "unexpected Cargo fragment"
         encoded <- expectRight (encodeProjectRecord defaultLimits updated)
         chargedDecodeProjectRecord (const (pure ())) defaultLimits target mirrorPackage encoded `shouldReturn` Right updated
         Map.keys (recordVersions updated) `shouldBe` ["1", "2"]

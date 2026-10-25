@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Native documents and independent response readers for the shared serving laws.
-module Ecluse.Server.Pipeline.ServingDriver (npmServingDriver, pypiServingDriver) where
+module Ecluse.Server.Pipeline.ServingDriver (npmServingDriver, pypiServingDriver, cargoServingDriver) where
 
 import Codec.Compression.GZip qualified as GZip
 import Data.Aeson (Value (Array, Object, String), encode, object, (.=))
@@ -11,6 +11,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
@@ -21,24 +22,44 @@ import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SResponse (..))
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Core.Mirror.State (StateRead (..), extendProjectRecord, stateTarget)
+import Ecluse.Core.Mirror.State.Internal (StateRevision (..), retainVerifiedIdentity)
+import Ecluse.Core.Package (mkPackageName)
+import Ecluse.Core.Registry.Adapter (adapterFor)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
+import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
+import Ecluse.Core.Registry.CachedDocument (cargoCached)
+import Ecluse.Core.Registry.Metadata (VersionDoc (..), VersionRead (..))
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareVersion)
+import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (CargoMirrorRead), checkedMirrorInventory, inventoryFiles, verifyMirrorBytes)
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
+import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Rules (prepare)
+import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Context (PackumentDeps (..), ReadSourceSelection (ManagedMirrorAndPublic, PrivateOnly))
 import Ecluse.Core.Server.Encoding (CodingChoice (ServeCoding), ContentCoding (GzipCoding), MetadataCompression (GzipWhenAccepted), chooseCoding, gzipEncodingHeader)
+import Ecluse.Core.Server.MirrorView (MirrorView)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
+import Ecluse.Core.Version (mkVersion)
+import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue, packument, proxyApplication, publishedDaysAgo, requestAt)
-import Ecluse.Test.Contract.Serving (ServingDriver (..), ServingRelease (..), ServingResponse (..), ServingSession (..))
-import Ecluse.Test.Deadline (withSweeper)
+import Ecluse.Service (mountBindingFor)
+import Ecluse.Test.Contract.Serving (ServingDriver (..), ServingLayout (..), ServingRelease (..), ServingResponse (..), ServingSession (..))
+import Ecluse.Test.Deadline (untracedClient, withSweeper)
 import Ecluse.Test.Json (fieldAt, textAtPath)
+import Ecluse.Test.Mirror.State (mirrorViewWith)
 import Ecluse.Test.Package (hexSha256Of, sriSha256Of)
+import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Registry.Cargo.Fixtures qualified as Cargo
+import Ecluse.Test.Registry.Cargo.Reference qualified as Reference
 import Ecluse.Test.Registry.Npm (VersionSpec (..), versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (serveDepsFor)
+import Ecluse.Test.Support (expectRight)
 import Ecluse.Test.Wai (decodedBody, localhost, selfBaseUrl)
 
 -- | npm's native JSON and tarball paths.
@@ -48,6 +69,13 @@ npmServingDriver = nativeDriver Npm npmAdapter "/npm" "/thing" npmArtifact npmDo
 -- | PyPI's Simple JSON and distribution paths.
 pypiServingDriver :: ServingDriver
 pypiServingDriver = nativeDriver PyPI pypiAdapter "/pypi" "/simple/thing" pypiArtifact pypiDocument pypiObservation hexSha256Of
+
+-- | Cargo uses the production registration, native LF records and checksum observations.
+cargoServingDriver :: ServingDriver
+cargoServingDriver = cargoDriver
+
+requiredCargoAdapter :: IO RegistryAdapter
+requiredCargoAdapter = maybe (fail "Cargo has no production adapter registration") pure (adapterFor Cargo)
 
 nativeDriver :: Ecosystem -> RegistryAdapter -> ByteString -> ByteString -> (Text -> ByteString) -> (Text -> [ServingRelease] -> Value) -> (SResponse -> ServingResponse) -> (ByteString -> Text) -> ServingDriver
 nativeDriver ecosystem adapter mount metadataPath artifactPath document observe digest =
@@ -71,7 +99,12 @@ nativeDriver ecosystem adapter mount metadataPath artifactPath document observe 
                         ServingSession
                             { requestMetadata = (`request` metadataPath)
                             , requestArtifact = \method headers version -> request method (artifactPath version) headers
+                            , requestPrivateMetadata = (`request` metadataPath)
+                            , requestPrivateArtifact = \method headers version -> request method (artifactPath version) headers
+                            , publicSourceIdentity = decodeUtf8 mount
+                            , privateSourceIdentity = decodeUtf8 mount
                             }
+        , servingLayout = CombinedRegistry
         , servingIdentity = ("thing@" <>)
         , servingDigest = digest
         }
@@ -169,3 +202,95 @@ responseEvidence response versions digests =
         , responseVersions = versions
         , responseDigests = digests
         }
+
+cargoArtifact :: Text -> ByteString
+cargoArtifact version = encodeUtf8 ("/crates/thing/" <> version <> "/thing-" <> version <> ".crate")
+
+cargoDocument :: Text -> [ServingRelease] -> ByteString
+cargoDocument _ = BS.intercalate "\n" . map row
+  where
+    row release = toStrict (encode (Object (KeyMap.insert "pubtime" (String (publishedDaysAgo (releaseAgeDays release))) (KeyMap.insert "cksum" (String checksum) fields))))
+      where
+        checksum = if releaseHasIntegrity release then hexSha256Of (releaseBytes release) else ""
+        fields = case Cargo.cargoIndexRecord (Cargo.minimalCargoRelease "thing" (releaseVersion release)) of
+            Object values -> values
+            _ -> KeyMap.empty
+
+cargoObservation :: SResponse -> ServingResponse
+cargoObservation response = responseEvidence response versions digests
+  where
+    values = [fields | row <- Reference.referenceIndex bytes, Right fields <- [Reference.indexValue row]]
+    versions = sort [version | fields <- values, Just (String version) <- [KeyMap.lookup "vers" fields]]
+    digests = Map.fromList [(version, [digest]) | fields <- values, Just (String version) <- [KeyMap.lookup "vers" fields], Just (String digest) <- [KeyMap.lookup "cksum" fields]]
+    bytes = toStrict $ if lookup "Content-Encoding" (simpleHeaders response) == Just "gzip" then GZip.decompress (simpleBody response) else simpleBody response
+
+cargoDriver :: ServingDriver
+cargoDriver =
+    ServingDriver
+        { withServing = \compression rules privateReleases publicReleases action ->
+            testWithApplication (pure (cargoUpstream privateReleases)) $ \privatePort ->
+                testWithApplication (pure (cargoUpstream publicReleases)) $ \publicPort -> withSweeper $ \deadlines -> do
+                    adapter <- requiredCargoAdapter
+                    queue <- newTestMemoryQueue
+                    manager <- newManager defaultManagerSettings
+                    env <- newTestEnvWithQueue deadlines queue manager
+                    prepared <- prepare inertRuleDeps (map atDefaultPrecedence rules)
+                    let privateUrl = loopbackRegistryUrl (localhost privatePort)
+                        publicUrl = loopbackRegistryUrl (localhost publicPort)
+                        origin = originClient defaultLimits (untracedClient manager deadlines) publicUrl Nothing
+                    view <- cargoManagedView adapter origin (localhost privatePort) privateReleases publicReleases
+                    let publicDeps =
+                            (serveDepsFor adapter (Just privateUrl) publicUrl NoMirrorWrite prepared (pure now))
+                                { pdReadSourceSelection = ManagedMirrorAndPublic
+                                , pdMountBaseUrl = "http://ecluse.test/cargo"
+                                , pdMirrorState = Just view
+                                , pdEgressUrl = Right . loopbackRegistryUrl
+                                , pdMetadataCompression = compression
+                                }
+                        privateDeps = publicDeps{pdReadSourceSelection = PrivateOnly, pdMountBaseUrl = "http://ecluse.test/cargo/private", pdMirrorState = Nothing}
+                        app = application (mkServerConfig (maybeToList (mountBindingFor Cargo publicDeps (Just privateDeps) Nothing))) env
+                        request base method path headers = cargoObservation <$> requestAt method (base <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
+                    action
+                        ServingSession
+                            { requestMetadata = \method headers -> request "/cargo" method "/th/in/thing" headers
+                            , requestArtifact = \method headers version -> request "/cargo" method (cargoArtifact version) headers
+                            , requestPrivateMetadata = \method headers -> request "/cargo/private" method "/th/in/thing" headers
+                            , requestPrivateArtifact = \method headers version -> request "/cargo/private" method (cargoArtifact version) headers
+                            , publicSourceIdentity = "sparse+http://ecluse.test/cargo/"
+                            , privateSourceIdentity = "sparse+http://ecluse.test/cargo/private/"
+                            }
+        , servingLayout = SeparateRegistries
+        , servingIdentity = ("thing@" <>)
+        , servingDigest = hexSha256Of
+        }
+  where
+    now = UTCTime (fromGregorian 2026 6 20) 0
+
+cargoUpstream :: [ServingRelease] -> Wai.Application
+cargoUpstream releases request respond
+    | rawPathInfo request == "/config.json" =
+        respond (responseLBS status200 [] (toLazy (Cargo.cargoDiscovery (selfBaseUrl request) Nothing False)))
+    | rawPathInfo request == "/th/in/thing" =
+        respond (responseLBS status200 [] (toLazy (cargoDocument (selfBaseUrl request) releases)))
+    | Just release <- find ((== rawPathInfo request) . cargoArtifact . releaseVersion) releases =
+        respond (artifactResponse (Wai.requestHeaders request) (releaseBytes release))
+    | otherwise = respond (responseLBS status404 [] "")
+
+cargoManagedView :: RegistryAdapter -> OriginClient -> Text -> [ServingRelease] -> [ServingRelease] -> IO MirrorView
+cargoManagedView adapter origin targetUrl private public = do
+    record <- foldM copy Nothing copies
+    mirrorViewWith target (\_ _ -> pure (Right (maybe StateAbsent (StateLoaded (StateRevision target name "complete")) record)))
+  where
+    target = stateTarget targetUrl
+    name = mkPackageName Cargo Nothing "thing"
+    copies = [release | release <- public, releaseHasIntegrity release, any (sameIdentity release) private]
+    sameIdentity publicRelease privateRelease = releaseVersion publicRelease == releaseVersion privateRelease && releaseBytes publicRelease == releaseBytes privateRelease && releaseHasIntegrity privateRelease
+    copy previous release = do
+        let version = mkVersion Cargo (releaseVersion release)
+        result <- expectRight =<< prepareVersion (metadataRead (adapterMetadata adapter)) passthroughTracingPort origin name version
+        doc <- maybe (fail "completed fixture has no admitted source version") pure (vrVersion result)
+        source <- maybe (fail "completed fixture has no native source records") pure (vdRaw doc >>= snd cargoCached)
+        inventory <- expectRight (checkedMirrorInventory name version doc (CargoMirrorRead source))
+        expected <- expectRight (extendProjectRecord defaultLimits target inventory previous)
+        verified <- expectRight (verifyMirrorBytes (head (inventoryFiles inventory)) (releaseBytes release))
+        Just <$> expectRight (retainVerifiedIdentity version verified expected)

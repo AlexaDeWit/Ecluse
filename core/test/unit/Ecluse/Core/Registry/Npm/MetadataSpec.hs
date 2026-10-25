@@ -77,7 +77,7 @@ import Ecluse.Core.Server.Pipeline.Packument.Representation (packumentETag)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Contract.Metadata.Projection (ProjectionDriver (..), metadataProjectionContract)
+import Ecluse.Test.Contract.Metadata.Projection (MetadataFraming (SingleDocument), ProjectionDriver (..), metadataProjectionContract)
 import Ecluse.Test.Corpus (CorpusPackage (cpPath), corpusPackages, cpName)
 import Ecluse.Test.Json (fieldAt, isObject, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
@@ -797,8 +797,9 @@ baseFinishPacked limits requested authorPointer table (BasePackedRead acc heldRe
 projectionDriver :: ProjectionDriver
 projectionDriver =
     ProjectionDriver
-        { projectFull = \limits -> fmap fst . projectNpmManifest limits (unscopedNpm "is-odd")
-        , projectSelected = \limits version -> selectedDetails limits (unscopedNpm "is-odd") (mkVersion Npm version)
+        { projectFull = \limits bytes -> pure (fst <$> projectNpmManifest limits (unscopedNpm "is-odd") bytes)
+        , projectSelected = \limits version bytes -> pure (selectedDetails limits (unscopedNpm "is-odd") (mkVersion Npm version) bytes)
+        , projectionFraming = SingleDocument
         , projectionDocument = richPackumentBytes
         , projectionPackageName = "is-odd"
         , projectionOtherName = "is-even"

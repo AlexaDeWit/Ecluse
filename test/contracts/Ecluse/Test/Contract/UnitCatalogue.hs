@@ -28,7 +28,7 @@ coreUnitCatalogue groups =
     Catalogue
         { catalogueProductionEcosystems = map ecosystemName (filter (isJust . adapterFor) universe)
         , catalogueProfiles =
-            [ Profile "unit/metadata" ["npm", "pypi"] [] ["metadata-read", "metadata-projection"]
+            [ Profile "unit/metadata" ["npm", "pypi", "cargo"] [] ["metadata-read", "metadata-projection"]
             , Profile "unit/memory" [] ["memory"] ["payload", "ephemeral-delivery"]
             , Profile "unit/static" [] ["static"] ["token"]
             , Profile "unit/protocol" ["npm"] ["verdaccio"] protocolCapabilities
@@ -39,8 +39,9 @@ coreUnitCatalogue groups =
                 "metadata-fetch"
                 "unit/metadata"
                 ["metadata-read"]
-                ["core.metadata.fetch." <> ecosystem <> "." <> suffix | ecosystem <- ["npm", "pypi"], suffix <- metadataFetchLaws]
+                (["core.metadata.fetch." <> ecosystem <> "." <> suffix | ecosystem <- ["npm", "pypi", "cargo"], suffix <- metadataFetchLaws] <> ["core.metadata.fetch.cargo.record-framing"])
             , unitObligation "core/metadata/projection/npm" "metadata-projection" "unit/metadata" ["metadata-projection"] (projectionCases "npm")
+            , unitObligation "core/metadata/projection/cargo" "metadata-projection" "unit/metadata" ["metadata-projection"] (projectionCases "cargo" <> map ("core.metadata.projection.cargo." <>) ["record-framing", "invalid-evidence-control", "record-siblings"])
             , unitObligation "core/metadata/projection/pypi" "metadata-projection" "unit/metadata" ["metadata-projection"] (projectionCases "pypi")
             , unitObligation
                 "core/queue/memory"

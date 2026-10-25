@@ -7,6 +7,7 @@ module Ecluse.Test.Contract.Integration.Catalogue (
     integrationCatalogue,
     awsComposition,
     pypiHttp,
+    cargoHttp,
     mirrorViewHttp,
     egressHttp,
     originHttp,
@@ -43,12 +44,13 @@ integrationCatalogue =
         { catalogueProductionEcosystems = map ecosystemName (filter (isJust . adapterFor) universe)
         , catalogueProfiles =
             [ Profile "integration/aws-composition" ["npm"] ["ministack"] ["serving", "mirror-worker"]
+            , Profile "integration/cargo" ["cargo"] ["wai"] ["metadata-read", "artifact-read", "serving"]
             , Profile "integration/pypi" ["pypi"] ["wai"] ["metadata-read", "artifact-read", "serving"]
             , Profile "integration/mirror-view" ["pypi"] ["wai"] ["metadata-read", "artifact-read", "serving"]
             , Profile "integration/egress" [] ["wai"] ["egress"]
             , Profile "integration/origin" ["npm"] ["wai"] ["origin"]
             , Profile "integration/npm-metadata" ["npm"] ["wai"] ["metadata-read", "serving"]
-            , Profile "integration/publication" ["npm"] ["wai"] ["publication"]
+            , Profile "integration/publication" ["npm", "pypi", "cargo"] ["wai"] ["publication"]
             , Profile "integration/pipeline-faults" ["npm"] ["wai"] ["pipeline-faults"]
             , Profile "integration/npm-artifact" ["npm"] ["wai"] ["artifact-read"]
             , Profile "integration/worker" ["npm"] ["ministack"] ["queue-lease", "mirror-worker"]
@@ -66,6 +68,7 @@ integrationCatalogue =
         , catalogueObligations = integrationObligations
         , catalogueGroups =
             [ awsComposition
+            , cargoHttp
             , pypiHttp
             , mirrorViewHttp
             , egressHttp
@@ -107,6 +110,10 @@ pypiHttp =
         ["metadata-read", "artifact-read", "serving"]
         []
         ["wai"]
+
+-- | Native sparse HTTP and shared serving laws use local upstreams.
+cargoHttp :: Group
+cargoHttp = expectedGroup "integration/cargo" "serving" ["metadata-read", "artifact-read", "serving"] [] ["wai"]
 
 -- | Scheduling metadata for integration/mirror-view.
 mirrorViewHttp :: Group

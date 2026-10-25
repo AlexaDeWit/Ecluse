@@ -32,7 +32,7 @@ import Ecluse.Core.Security (
     Limits (maxArtifactCount, maxVersionCount),
     defaultLimits,
  )
-import Ecluse.Test.Contract.Metadata.Projection (ProjectionDriver (..), metadataProjectionContract)
+import Ecluse.Test.Contract.Metadata.Projection (MetadataFraming (SingleDocument), ProjectionDriver (..), metadataProjectionContract)
 import Ecluse.Test.Json (encodeStrict)
 import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
@@ -244,8 +244,9 @@ indexNamed name = encodeStrict . simpleIndex name . filesNamed
 projectionDriver :: ProjectionDriver
 projectionDriver =
     ProjectionDriver
-        { projectFull = \limits -> fmap fst . projectPyPIIndex limits requestsName
-        , projectSelected = \limits version -> projectPyPIVersion limits requestsName (pypiVersion version)
+        { projectFull = \limits bytes -> pure (fst <$> projectPyPIIndex limits requestsName bytes)
+        , projectSelected = \limits version bytes -> pure (projectPyPIVersion limits requestsName (pypiVersion version) bytes)
+        , projectionFraming = SingleDocument
         , projectionDocument = \name versions -> indexNamed name [name <> "-" <> version <> ".tar.gz" | version <- versions]
         , projectionPackageName = "requests"
         , projectionOtherName = "urllib3"
