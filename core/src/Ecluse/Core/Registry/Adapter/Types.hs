@@ -2,11 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The capability record an ecosystem registers ('RegistryAdapter') and the serve surface it
-carries. A record holds no URL, credential, limit, or policy: it is a static fact of the build.
-It sits apart from the registration ("Ecluse.Core.Registry.Adapter") as the cycle-breaking
-@.Types@ split of docs/style.md 4.3, so an adapter module never imports that registry. The
-embedded slices live in "Ecluse.Core.Registry.Adapter.Capability".
+{- | Static ecosystem capabilities and request-time route factories.
+This separate type module keeps adapter implementations independent of registration.
 -}
 module Ecluse.Core.Registry.Adapter.Types (
     -- * The capability record
@@ -26,7 +23,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
  )
 import Ecluse.Core.Registry.Request (CredentialMapping)
 import Ecluse.Core.Rules.Types (RuleType)
-import Ecluse.Core.Server.Context (MountRouter)
+import Ecluse.Core.Server.Context (MountRouter, PackumentDeps)
 import Ecluse.Core.Server.RouteDescription (RouteSpec)
 
 {- | One ecosystem's complete capability record, which the composition root wires every
@@ -59,8 +56,8 @@ data RegistryAdapter = RegistryAdapter
 declarative route table, so the routed surface and the documented one cannot drift apart.
 -}
 data AdapterServe = AdapterServe
-    { serveRouter :: MountRouter
-    -- ^ Which path a mount-relative request names. An unrecognised one yields the default @404@.
+    { serveRouter :: Maybe PackumentDeps -> MountRouter
+    -- ^ Bind an optional private view before routing. Unrecognised paths answer @404@.
     , serveRoutes :: NonEmpty RouteSpec
     -- ^ The same route table as data, which the OpenAPI spec ("Ecluse.Manifest") renders.
     , serveCredential :: CredentialMapping

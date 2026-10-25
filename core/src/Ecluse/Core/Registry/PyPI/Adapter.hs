@@ -61,7 +61,7 @@ pypiAdapter =
                 ]
         , adapterServe =
             AdapterServe
-                { serveRouter = PyPIRoute.pypiRouter
+                { serveRouter = const PyPIRoute.pypiRouter
                 , serveRoutes = PyPIRoute.pypiRouteSpecs
                 , serveCredential = pypiCredential
                 }

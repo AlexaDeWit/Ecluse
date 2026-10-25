@@ -2,13 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Serve artifacts from the private origin or an admitted public fallback.
-
-Private access refusals stop the fallback, and other private misses keep the first-party
-restriction. @GET@ and @HEAD@ share policy. The private leg lives in
-"Ecluse.Core.Server.Pipeline.Tarball.Private", the gated public leg in
-"Ecluse.Core.Server.Pipeline.Tarball.Public", and this module and the public leg render refusals
-through "Ecluse.Core.Server.Pipeline.Tarball.Refusal".
+{- | Serve caller-authorised private artifacts and policy-admitted public artifacts.
+The selected view controls fallback. GET and HEAD share admission.
 -}
 module Ecluse.Core.Server.Pipeline.Tarball (
     tarballAction,
@@ -16,7 +11,7 @@ module Ecluse.Core.Server.Pipeline.Tarball (
     headTarball,
 ) where
 
-import Network.HTTP.Types (Method, status401, status500)
+import Network.HTTP.Types (Method, status401, status404, status500)
 import Network.Wai (Request, ResponseReceived, requestHeaders)
 
 import Ecluse.Core.Credential (ClientCredential)
@@ -26,6 +21,7 @@ import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps),
     PackumentDeps (..),
+    ReadSourceSelection (..),
     ResponseAction (RunPipeline),
     ServeRuntime (..),
     ctxMount,
@@ -116,9 +112,12 @@ tarballWith mode replies name version file request respond = do
                 , arFile = file
                 , arRespond = respond
                 }
-    if edgeTokenMatches (pdInboundToken deps) token
-        then serveArtifactLegs ctx token
-        else liftIO (respond (tarballError replies status401 [] (mkRefusal Nothing unauthorisedMessage)))
+    if not (edgeTokenMatches (pdInboundToken deps) token)
+        then liftIO (respond (tarballError replies status401 [] (mkRefusal Nothing unauthorisedMessage)))
+        else
+            if pdReadSourceSelection deps == ManagedMirrorAndPublic && pdFirstParty deps name
+                then liftIO (respond (tarballError replies status404 [] (mkRefusal (pdHelp deps) "first-party packages require the private registry view")))
+                else serveArtifactLegs ctx token
 
 -- The private leg first, then the gated public leg on a miss.
 serveArtifactLegs :: ArtifactRequest response -> Maybe ClientCredential -> Handler ResponseReceived
@@ -129,7 +128,7 @@ serveArtifactLegs ctx token =
             liftIO (mpServeDecision (srMetrics (arRuntime ctx)) decision)
             pure received
         PrivateMissed miss
-            | pdFirstParty (arDeps ctx) (arPackage ctx) -> refuseFirstParty ctx miss
+            | pdReadSourceSelection (arDeps ctx) == PrivateOnly || pdFirstParty (arDeps ctx) (arPackage ctx) -> refuseFirstParty ctx miss
             | otherwise -> servePublicArtifact ctx
 
 -- A first-party name has one authority, so its private miss ends the request here rather than

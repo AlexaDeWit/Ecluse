@@ -12,6 +12,7 @@ module Ecluse.Core.Server.Pipeline.Tarball.Public (
     publicArtifactGate,
 ) where
 
+import Network.HTTP.Types (status404)
 import Network.Wai (ResponseReceived)
 
 import Ecluse.Core.Cve.Types (DbEtag)
@@ -49,6 +50,7 @@ import Ecluse.Core.Server.Cache.Store (PreparedStore, executePrepared)
 import Ecluse.Core.Server.Context (
     Handler,
     PackumentDeps (..),
+    ReadSourceSelection (..),
     ServeRuntime (..),
     pdMirror,
     pdTarballHostGate,
@@ -104,7 +106,13 @@ servePublicArtifact = servePublicArtifactWithCoverage (const True)
 
 -- | A managed fallback must cover the whole expected version before its requested file is admitted.
 servePublicArtifactWithCoverage :: (Maybe PackageDetails -> Bool) -> ArtifactRequest response -> Handler ResponseReceived
-servePublicArtifactWithCoverage covered ctx = do
+servePublicArtifactWithCoverage covered ctx
+    | pdReadSourceSelection (arDeps ctx) == PrivateOnly || (pdReadSourceSelection (arDeps ctx) == ManagedMirrorAndPublic && pdFirstParty (arDeps ctx) (arPackage ctx)) =
+        liftIO (arRespond ctx (tarballError (arReplies ctx) status404 [] (mkRefusal (pdHelp (arDeps ctx)) "this registry view has no public fallback")))
+    | otherwise = servePublicWithCoverage covered ctx
+
+servePublicWithCoverage :: (Maybe PackageDetails -> Bool) -> ArtifactRequest response -> Handler ResponseReceived
+servePublicWithCoverage covered ctx = do
     advisoryEtag <- liftIO (pdAdvisoryEtag (arDeps ctx))
     -- A selected read keeps one release, so its entry step is its whole charge.
     withMetadataAdmission

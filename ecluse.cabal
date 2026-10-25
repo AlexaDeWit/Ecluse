@@ -275,6 +275,9 @@ library ecluse-core
     Ecluse.Core.Registry.PyPI.Project
     Ecluse.Core.Registry.Cargo.Project
     Ecluse.Core.Registry.Cargo.FirstParty
+    Ecluse.Core.Registry.Cargo.Adapter
+    Ecluse.Core.Registry.Cargo.Route
+    Ecluse.Core.Registry.Cargo.Route.Internal
     Ecluse.Core.Registry.PyPI.Reader
     Ecluse.Core.Registry.PyPI.Request
     Ecluse.Core.Registry.PyPI.Route
@@ -1225,6 +1228,8 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.ProjectSpec
     Ecluse.Core.Registry.Cargo.ProjectSpec
     Ecluse.Core.Registry.Cargo.FirstPartySpec
+    Ecluse.Core.Registry.Cargo.RouteSpec
+    Ecluse.Core.Registry.Cargo.Route.InternalSpec
     Ecluse.Core.Registry.PyPI.RequestSpec
     Ecluse.Core.Registry.PyPI.RouteSpec
     Ecluse.Core.Registry.PyPI.ReaderSpec

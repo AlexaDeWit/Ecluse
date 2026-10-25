@@ -3,10 +3,8 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE TupleSections #-}
 
-{- | The trusted leg of the artifact path: read the private origin under the caller's credential.
-
-An access refusal commits the local error and never relays upstream's body, so a private @401@ or
-@403@ cannot be answered from the public registry. Any other miss falls through to the caller.
+{- | Read private archives under the caller's credential and the selected source policy.
+Access refusals stop fallback, and managed views require retained completion proof.
 -}
 module Ecluse.Core.Server.Pipeline.Tarball.Private (
     PrivateLeg (..),
@@ -55,6 +53,7 @@ import Ecluse.Core.Server.Admission.Meter (MemoryTicket)
 import Ecluse.Core.Server.Context (
     Handler,
     PackumentDeps (..),
+    ReadSourceSelection (..),
     ServeRuntime (..),
     pdPrivateBase,
     pdTarballHostGate,
@@ -98,7 +97,7 @@ streamPrivateArtifact ::
 streamPrivateArtifact ctx token = do
     selected <- case pdMirrorState (arDeps ctx) of
         Just _
-            | not (pdFirstParty (arDeps ctx) (arPackage ctx)) ->
+            | pdReadSourceSelection (arDeps ctx) /= PrivateOnly && not (pdFirstParty (arDeps ctx) (arPackage ctx)) ->
                 withMetadataAdmission (arRuntime ctx) (pure . PrivateShed) (\ticket -> privateArtifactRequest (Just ticket) ctx token) pure
         _ -> privateArtifactRequest Nothing ctx token
     case selected of
@@ -142,7 +141,9 @@ privateArtifactRequest ticket ctx token = case pdPrivateBase deps of
     Just privateBase
         | not (tarballHostHonoured TrustedOrigin deps privateHostPort privateHostPort) -> pure (PrivateMissing MissAbsent)
         | otherwise -> case artifactPrivateAddressing (pdArtifact deps) of
-            ConventionalArtifactPath -> pure (byConventionalPath privateBase)
+            ConventionalArtifactPath
+                | pdReadSourceSelection deps == ManagedMirrorAndPublic -> pure (PrivateMissing MissAbsent)
+                | otherwise -> pure (byConventionalPath privateBase)
             IndexedArtifactLocation -> byIndexedLocation ticket ctx token privateBase privateHostPort
   where
     deps = arDeps ctx
@@ -162,16 +163,23 @@ byIndexedLocation ticket ctx token privateBase privateHostPort = do
             (Just mirror, Just admitted) ->
                 liftIO (validateMirrorProject mirror admitted (arPackage ctx)) >>= \case
                     Left _ -> pure PrivateUnavailable
-                    Right Nothing -> pure (ordinary resolved)
+                    Right Nothing -> pure (unmanaged resolved)
                     Right (Just (_, record)) -> case recordVersion (arVersion ctx) record of
-                        Nothing -> pure (ordinary resolved)
+                        Nothing -> pure (unmanaged resolved)
                         Just expected -> case mirrorVersionView (arVersion ctx) record (either (const Nothing) (either (const Nothing) vrVersion) resolved) of
                             Left _ -> pure (PrivateIncomplete expected)
                             Right _ | Map.notMember (unFilename (arFile ctx)) (versionFiles expected) -> pure (PrivateMissing MissAbsent)
                             Right restored -> pure (maybe PrivateUnavailable (PrivateRequest True) (restored >>= requestForDetails . vdDetails))
-            _ -> pure (ordinary resolved)
+            _ -> pure (unmanaged resolved)
   where
     deps = arDeps ctx
+
+    unmanaged resolved
+        | pdReadSourceSelection deps == ManagedMirrorAndPublic = case resolved of
+            Right (Left err) -> maybe PrivateRefused PrivateMissing (privateMetadataMiss err)
+            Left _ -> PrivateMissing MissUnresolved
+            _ -> PrivateMissing MissAbsent
+        | otherwise = ordinary resolved
 
     ordinary = \case
         Left _ -> PrivateMissing MissUnresolved

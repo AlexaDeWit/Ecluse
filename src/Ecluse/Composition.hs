@@ -2,13 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The wiring half of the boot's effectful tier: turn the 'ValidatedPlan' that
-"Ecluse.Composition.Plan" resolves and "Ecluse.Composition.Validate" clears into the served
-'MountBinding's and the worker's publish targets. Every refusal 'resolveBootWiring' reports needs a
-live environment: a writing role mints each mount's mirror-write credential, and every role runs
-'Ecluse.Core.Rules.prepare', which allocates per-rule engine state once at boot. That is why this
-is 'IO' and why @ecluse check-config@ reaches none of it. 'WiringPorts' carries every capability in,
-so a unit test runs the assembly without opening a listener.
+{- | Bind validated mounts, source views and publication targets without origin discovery.
+Live wiring prepares rule state and the credentials required by each role.
 -}
 module Ecluse.Composition (
     -- * The environment-dependent wiring
@@ -70,7 +65,7 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Credential (CredentialProvider)
 import Ecluse.Core.Credential.Refresh (CredentialReporters)
-import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo), prefixFor)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
@@ -80,6 +75,7 @@ import Ecluse.Core.Registry.Adapter (
     adapterPublish,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactHosts))
+import Ecluse.Core.Registry.Cargo.FirstParty (cargoFirstPartyName)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
 import Ecluse.Core.Registry.PyPI.FirstParty (pypiFirstPartyName)
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag, rdSourceReporter)
@@ -87,13 +83,13 @@ import Ecluse.Core.Rules.Outage (SourceReporter (noteAdmission))
 import Ecluse.Core.Security (Limits, maxPublishRequestBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
-import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
+import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..), ReadSourceSelection (..))
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), mountUpstreams)
 import Ecluse.Core.Text (stripTrailingSlash)
 
 -- | Resolve an ecosystem's deps to its mount, 'Nothing' without an adapter. "Ecluse.Service" implements it.
-type ResolveAdapter = Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
+type ResolveAdapter = Ecosystem -> PackumentDeps -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
 
 -- | The capabilities the wiring is built through, injected so a unit test assembles it with no listener.
 data WiringPorts = WiringPorts
@@ -183,7 +179,7 @@ planMounts resolveAdapter clock ruleDepsFor mintPlan providers limits publishBud
     bindingFor :: VettedMount -> IO (Either [BootError] MountBinding)
     bindingFor vetted = do
         deps <- packumentDepsFor ctx (vmAdapter vetted) (vmMount vetted) (vmConfig vetted)
-        pure $ case (credentialError mintPlan providers (vmMount vetted), resolveAdapter eco deps (mountPublishDeps ctx plan vetted)) of
+        pure $ case (credentialError mintPlan providers (vmMount vetted), resolveAdapter eco (primaryView vetted deps) (privateView vetted deps) (mountPublishDeps ctx plan vetted)) of
             (Nothing, Just binding) -> Right binding
             (mCredErr, mBinding) ->
                 Left (maybeToList mCredErr <> [MissingAdapter eco | isNothing mBinding])
@@ -200,6 +196,41 @@ data WiringContext = WiringContext
     , wcPublishBudget :: Maybe PublishBudget
     , wcHelp :: Maybe HelpMessage
     }
+
+primaryView :: VettedMount -> PackumentDeps -> PackumentDeps
+primaryView vetted deps
+    | vmEcosystem vetted == Cargo =
+        deps
+            { pdReadSourceSelection = ManagedMirrorAndPublic
+            , pdUpstreams =
+                mountUpstreams
+                    (artifactHosts (pdArtifact deps))
+                    (mtUrl <$> regMirrorTarget regs)
+                    (regPublicUpstream regs)
+                    (maybe NoMirrorWrite (MirrorOnAdmit . mtUrl) (regMirrorTarget regs))
+            }
+    | otherwise = deps
+  where
+    regs = mountRegistries (vmMount vetted)
+
+privateView :: VettedMount -> PackumentDeps -> Maybe PackumentDeps
+privateView vetted deps
+    | vmEcosystem vetted == Cargo =
+        Just
+            deps
+                { pdReadSourceSelection = PrivateOnly
+                , pdMountBaseUrl = pdMountBaseUrl deps <> "/private"
+                , pdMirrorState = Nothing
+                , pdUpstreams =
+                    mountUpstreams
+                        (artifactHosts (pdArtifact deps))
+                        (regPrivateUpstream regs)
+                        (regPublicUpstream regs)
+                        NoMirrorWrite
+                }
+    | otherwise = Nothing
+  where
+    regs = mountRegistries (vmMount vetted)
 
 -- A mount the pass cleared no publication for leaves @PUT \/{pkg}@ answering @405@.
 mountPublishDeps :: WiringContext -> ValidatedPlan -> VettedMount -> Maybe PublishDeps
@@ -245,6 +276,7 @@ packumentDepsFor ctx adapter mount mcfg = do
             , pdMetadata = adapterMetadata adapter
             , pdArtifact = adapterArtifact adapter
             , pdEgressUrl = mkRegistryUrl
+            , pdReadSourceSelection = MergePrivateAndPublic
             , pdMirrorState = Nothing
             , pdMetadataCompression = srvMetadataGzip (cfgServer app)
             }
@@ -298,6 +330,7 @@ firstPartyName :: FirstParty -> PackageName -> Bool
 firstPartyName = \case
     FirstPartyNpmScopes scopes -> npmPublishAllowed (toList scopes)
     FirstPartyPyPI entries -> pypiFirstPartyName entries
+    FirstPartyCargo entries -> cargoFirstPartyName entries
 
 -- | One ecosystem's publish target, resolved once: the worker's write endpoint and its token provider.
 data PublishTarget = PublishTarget

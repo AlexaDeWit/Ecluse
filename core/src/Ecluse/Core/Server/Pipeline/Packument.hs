@@ -64,6 +64,7 @@ import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps),
     PackumentDeps (..),
+    ReadSourceSelection (..),
     ResponseAction (RunPipeline),
     ServeRuntime (..),
     ctxMount,
@@ -218,9 +219,12 @@ packumentWith mode replies name request respond = do
                     , psvPrivateRead = privateRead
                     , psvPublicRead = publicRead
                     }
-    if edgeTokenMatches (pdInboundToken deps) clientToken
-        then withListingAdmission (ctxRuntime ctx) (\headers -> refuse packumentUnavailable headers shedMessage) (serving >=> (`serveAdmittedPackument` clientToken) >=> evaluate) (liftIO . respond)
-        else refuse packumentUnauthorised [] unauthorisedMessage
+    if not (edgeTokenMatches (pdInboundToken deps) clientToken)
+        then refuse packumentUnauthorised [] unauthorisedMessage
+        else
+            if pdReadSourceSelection deps == ManagedMirrorAndPublic && pdFirstParty deps name
+                then refuse packumentNotFound [] "first-party packages require the private registry view"
+                else withListingAdmission (ctxRuntime ctx) (\headers -> refuse packumentUnavailable headers shedMessage) (serving >=> (`serveAdmittedPackument` clientToken) >=> evaluate) (liftIO . respond)
   where
     refuse reply headers message = liftIO (respond (reply replies headers (mkRefusal Nothing message)))
 
@@ -229,7 +233,7 @@ serveAdmittedPackument serving clientToken = do
     logFM DebugS (ls ("serving packument request for " <> renderPackageName (psvName serving)))
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pdAdvisoryEtag deps))
     case pdMirrorState deps of
-        Just mirror | not (pdFirstParty deps (psvName serving)) -> do
+        Just mirror | pdReadSourceSelection deps /= PrivateOnly && not (pdFirstParty deps (psvName serving)) -> do
             ((private, checked), public) <-
                 concurrently
                     ( do
@@ -255,7 +259,7 @@ serveAdmittedPackument serving clientToken = do
 
 resolveOrigins :: PackumentServing response -> Maybe ClientCredential -> Handler (OriginResult, OriginResult)
 resolveOrigins serving clientToken
-    | pdFirstParty (psvDeps serving) (psvName serving) = (,OriginAbsent) <$> readPrivate serving clientToken
+    | pdReadSourceSelection (psvDeps serving) == PrivateOnly || pdFirstParty (psvDeps serving) (psvName serving) = (,OriginAbsent) <$> readPrivate serving clientToken
     | otherwise = concurrently (readPrivate serving clientToken) (readPublic serving)
 
 readPrivate :: PackumentServing response -> Maybe ClientCredential -> Handler OriginResult
@@ -292,6 +296,7 @@ serveMergedPackument serving evalCtx record privResult pubResult =
             if not covered || fmap (infoVersions . manifestInfo) managedManifest /= fmap (infoVersions . srcInfo) managed
                 then mirrorUnavailableWithRetry serving (case pubResult of OriginCooling retry -> Just retry; _ -> Nothing)
                 else case originMiss privResult of
+                    Just miss | pdReadSourceSelection deps == PrivateOnly -> privateViewMissed serving miss
                     Just miss | pdFirstParty deps name -> firstPartyMissed serving miss
                     _ -> case packumentPlan sources trustedVersions (paDeniedEvidence public) of
                         Just plan -> serveResolved serving sources plan
@@ -303,8 +308,12 @@ serveMergedPackument serving evalCtx record privResult pubResult =
     name = psvName serving
     rt = psvRuntime serving
     views = case record of
-        Nothing -> Right (originManifest privResult, Nothing, Map.empty)
-        Just (revision, current) -> mirrorProjectViews revision current (originManifest privResult)
+        Nothing
+            | pdReadSourceSelection deps == ManagedMirrorAndPublic -> Right (Nothing, Nothing, Map.empty)
+            | otherwise -> Right (originManifest privResult, Nothing, Map.empty)
+        Just (revision, current) -> do
+            (unmanaged, managed, pending) <- mirrorProjectViews revision current (originManifest privResult)
+            pure (if pdReadSourceSelection deps == ManagedMirrorAndPublic then Nothing else unmanaged, managed, pending)
 
 mirrorUnavailable :: PackumentServing response -> Handler response
 mirrorUnavailable serving = mirrorUnavailableWithRetry serving Nothing
@@ -517,6 +526,16 @@ neededUpstreamUnavailable = Reject (Rejection (Unavailable (WillResolve Nothing)
 
 upstreamInvalidDecision :: ServeDecision
 upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")
+
+privateViewMissed :: PackumentServing response -> OriginMiss -> Handler response
+privateViewMissed serving miss = do
+    liftIO (mpServeDecision (servingMetrics serving) (if miss == MissAbsent then Metric.Deny else Metric.Unavailable))
+    pure $ case miss of
+        MissAbsent -> packumentNotFound replies [] (mkRefusal help "the private registry has no such package")
+        MissUnresolved -> packumentUnavailable replies [] (mkRefusal help "the private registry is unavailable")
+  where
+    replies = psvReplies serving
+    help = pdHelp (psvDeps serving)
 
 firstPartyMissed :: PackumentServing response -> OriginMiss -> Handler response
 firstPartyMissed serving miss = do
