@@ -44,7 +44,8 @@ import Ecluse.Core.Registry.Metadata (
         MetadataNameMismatch,
         MetadataUndecodable
     ),
-    VersionRead,
+    VersionDoc (..),
+    VersionRead (..),
  )
 import Ecluse.Core.Registry.Origin (OriginClient (ocClient), OriginFor, Private, Public, anonymousOrigin, chargingFullReads, chargingSelectedMetadata, controlPublicOrigin, originBaseUrl, originClientOf, perCallerOrigin)
 import Ecluse.Core.Registry.Request (BaseRequest)
@@ -55,6 +56,7 @@ import Ecluse.Core.Server.Admission.Meter (ChargePart, MemoryTicket, awaitingFli
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfKeptPermille))
 import Ecluse.Core.Server.Cache.Store (executePrepared)
 import Ecluse.Core.Server.Cache.Types (Source (Source), fullKey, versionKey)
+import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Server.Context (
     Handler,
     PackumentDeps (..),
@@ -193,14 +195,31 @@ withPrivateMetadataClient rt deps ticket base token action = do
     let origin = chargingSelectedMetadata workspace (chargingFullReads (workspace . scaleCharge (cfFullReadPermille (chargeFactors deps))) (privateOrigin rt deps base token))
     withMetadataClient rt deps privateMetadataClient origin action
 
--- | Pin public selected metadata while every follower lends its admission priority to the leader.
+-- | Reserve each consumer's selected facts. Serving consumers never retain the cached source row.
 withPublicMetadata :: ServeRuntime -> PackumentDeps -> MemoryTicket -> PackageName -> Version -> (IO (Either MetadataError VersionRead) -> Handler a) -> Handler a
 withPublicMetadata rt deps ticket name version action = do
     let flight = flightOf (versionKey (publicSource deps) name version)
     workspace <- liftIO (newChargeRegion (charge (servingFlight flight ticket)))
     let origin = chargingSelectedMetadata workspace (chargingFullReads (workspace . scaleCharge (cfFullReadPermille (chargeFactors deps))) (publicOrigin rt deps))
-    prepared <- withMetadataClient rt deps (preparePublicVersion (srMetadataCache rt) (publicSource deps)) origin (\prepare -> prepare name version)
-    action (awaitingFlight ticket flight (executePrepared prepared))
+    retained <- liftIO (newChargeRegion (charge ticket))
+    readSelected <- withMetadataClient rt deps (preparePublicVersion (srMetadataCache rt) (publicSource deps)) origin $ \prepare ->
+        pure (awaitingFlight ticket flight (prepare name version >>= executePrepared))
+    action $
+        readSelected
+            >>= traverse
+                ( \result -> do
+                    let !served = servingVersion result
+                    retained (weighVersion served)
+                    pure served
+                )
+
+servingVersion :: VersionRead -> VersionRead
+servingVersion result = case vrVersion result of
+    Nothing -> result
+    Just document ->
+        let !details = vdDetails document
+            !selected = VersionDoc details Nothing
+         in VersionRead (Just selected) (vrBodyBytes result) (vrUpstreamLatest result)
 
 privateOrigin :: ServeRuntime -> PackumentDeps -> BaseRequest -> Maybe ClientCredential -> OriginFor Private
 privateOrigin rt deps = perCallerOrigin (pdLimits deps) (srPrivateClient rt)
