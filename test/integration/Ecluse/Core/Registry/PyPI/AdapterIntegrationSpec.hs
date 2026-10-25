@@ -37,12 +37,10 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Response (mkHelpMessage)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite))
-import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.ServingDriver (pypiServingDriver)
-import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, postPath, requestAt)
-import Ecluse.Service (mountBindingFor)
+import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, postPath, proxyApplication, requestAt)
 import Ecluse.Test.Contract.Serving (servingContract)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Json (asObject, fieldAt, textAtPath, withKeys)
@@ -534,7 +532,7 @@ withPyPIProxyResponding transform indexFor depsFor k = withSweeper $ \deadlines 
     testWithApplication (pure (transform (upstreamApp indexFor (record recorded)))) $ \upstreamPort -> do
         env <- newTestEnvWith deadlines queue{enqueue = \_ -> fail "unexpected mirror enqueue"} (manager, manager) telemetryDisabled
         deps <- depsFor upstreamPort
-        let configured change = application (mkServerConfig (maybeToList (mountBindingFor PyPI (change deps) Nothing))) env
+        let configured change = proxyApplication PyPI env (change deps)
         k (PyPIProxy (configured id) configured (readIORef recorded))
   where
     record ref request =

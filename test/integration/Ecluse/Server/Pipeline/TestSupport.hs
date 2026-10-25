@@ -63,6 +63,7 @@ module Ecluse.Server.Pipeline.TestSupport (
 
     -- * The proxy harness
     newTestEnvWithQueue,
+    proxyApplication,
     withProxyOver,
     withProxyOverRuntime,
     withProxyEnvQueueDeps,
@@ -196,7 +197,7 @@ upstreamRespondingWith response = recordingUpstream (const response)
 servingUpstream :: LByteString -> IO Upstream
 servingUpstream = servingUpstreamPer . const
 
--- | 'servingUpstream' over a body that depends on the request, for a double whose answer turns on what the client sent.
+-- | Choose metadata from the request and rebase its artifact locations.
 servingUpstreamPer :: (Request -> LByteString) -> IO Upstream
 servingUpstreamPer bodyFor = servingUpstreamIO (pure . bodyFor)
 
@@ -206,7 +207,7 @@ servingUpstreamIO bodyFor = recordingUpstreamIO $ \req -> do
     body <- bodyFor req
     pure (bodyAt (\base -> rebaseAuthority fixtureAuthority base body) req)
 
--- | An upstream double that always answers @500@: a failed or unavailable upstream, for the partial-upstream-availability and no-survivors paths.
+-- | Return HTTP 500 for upstream availability cases.
 failingUpstream :: IO Upstream
 failingUpstream = upstreamRespondingWith (responseLBS status500 [] "upstream error")
 
@@ -222,17 +223,15 @@ mutatingUpstream bodies = do
     serveNext [b] = ([b], b)
     serveNext [] = ([], "")
 
--- The auth headers an upstream double saw, in arrival order.
+-- | Credentials received by the upstream, in arrival order.
 seenAuth :: Upstream -> IO [Maybe ByteString]
 seenAuth up = reverse <$> readIORef (upSeenAuth up)
 
--- The HTTP methods an upstream double saw on artifact-slot requests, in arrival order. A test
--- asserts a HEAD reached upstream as a HEAD, never as a body-pumping GET.
+-- | Artifact methods received by the upstream, in arrival order.
 seenArtifactMethods :: Upstream -> IO [ByteString]
 seenArtifactMethods up = reverse <$> readIORef (upSeenArtifactMethods up)
 
--- The @If-None-Match@ validators an upstream double saw on artifact-slot requests, in arrival
--- order. 'Nothing' for a request that carried none.
+-- | Artifact validators in arrival order, including requests without a validator.
 seenArtifactValidators :: Upstream -> IO [Maybe ByteString]
 seenArtifactValidators up = reverse <$> readIORef (upSeenArtifactValidators up)
 
@@ -300,12 +299,12 @@ artifactUpstream :: Text -> LByteString -> IO Upstream
 artifactUpstream version tarballBody =
     recordingUpstream (tarballOr (okBytes [] tarballBody) (selfHostedPackument version))
 
--- | Like 'artifactUpstream' but answering the artifact slot with the given arbitrary response, for the public-relay verdict cases.
+-- | Supply an artifact response for public relay verdicts.
 artifactUpstreamAnswering :: Text -> Response -> IO Upstream
 artifactUpstreamAnswering version artifactResponse =
     recordingUpstream (tarballOr (const artifactResponse) (selfHostedPackument version))
 
--- | Like 'artifactUpstream' but serving the given packument body verbatim, for tests that shape the gating packument themselves.
+-- | Supply metadata bytes and artifact bytes for admission cases.
 artifactUpstreamServing :: (Text -> LByteString) -> LByteString -> IO Upstream
 artifactUpstreamServing packumentFor tarballBody =
     recordingUpstream (tarballOr (okBytes [] tarballBody) (bodyAt packumentFor))
@@ -467,7 +466,7 @@ shasumOnlyVersion version =
             }
         )
 
--- | A version object carrying neither @integrity@ nor @shasum@. The integrity-presence policy refuses such a version from a public upstream.
+-- | Omit both digest fields for public integrity refusal cases.
 hashlessVersion :: Text -> Value
 hashlessVersion version =
     versionValue (versionFixture version (fixtureAuthority <> "/thing/-/thing-" <> version <> ".tgz"))
@@ -506,7 +505,7 @@ selfHostedEmptyDigest baseUrl version =
             }
         )
 
--- | A fresh 'Env' over handle doubles, a real (no-TLS) manager and swept deadlines, carrying the given mirror queue.
+-- | Use the supplied queue, HTTP manager, and swept deadlines with runtime doubles.
 newTestEnvWithQueue :: Deadlines -> MirrorQueue -> Manager -> IO Env
 newTestEnvWithQueue deadlines queue manager = newTestEnvWith deadlines queue (manager, manager) telemetryDisabled
 
@@ -555,8 +554,12 @@ withProxyOverRuntime tweakEnv logEnv queue privateUp publicUp inbound tweakDeps 
             manager <- newManager defaultManagerSettings
             env <- tweakEnv <$> newTestEnvLogging deadlines logEnv queue (manager, manager) telemetryDisabled
             baseDeps <- deps privatePort publicPort inbound
-            let cfg = mkServerConfig (maybeToList (mountBindingFor Npm (tweakDeps baseDeps) Nothing))
-            k (application cfg env) env publicPort
+            k (proxyApplication Npm env (tweakDeps baseDeps)) env publicPort
+
+-- | Mount one ecosystem over the supplied runtime and native dependencies.
+proxyApplication :: Ecosystem -> Env -> PackumentDeps -> Application
+proxyApplication ecosystem env dependencies =
+    application (mkServerConfig (maybeToList (mountBindingFor ecosystem dependencies Nothing))) env
 
 -- | Apply dependency changes before the proxy handles requests.
 withProxyEnvQueueDeps ::
@@ -664,7 +667,7 @@ getTarball version bearer = requestAt methodGet (tarballPathFor version) (bearer
 getTarballWith :: Text -> [Header] -> Application -> IO SResponse
 getTarballWith version extra = requestAt methodGet (tarballPathFor version) (headersRequest extra)
 
--- | A @HEAD \/npm\/thing\/-\/thing-{version}.tgz@ carrying the given optional bearer credential. The serve path must answer without pumping the full artifact body.
+-- | Request artifact headers with an optional bearer credential.
 headTarball :: Text -> Maybe Text -> Application -> IO SResponse
 headTarball version bearer = requestAt methodHead (tarballPathFor version) (bearerRequest bearer)
 
