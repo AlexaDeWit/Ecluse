@@ -9,9 +9,10 @@ import Data.Text qualified as T
 import Test.Hspec
 import UnliftIO.Exception (evaluate, impureThrow)
 
-import Ecluse.Core.Rules.Types (Reason (..), mkAdvisoryIds)
+import Ecluse.Core.Rules.Types (AdvisoryScore (Epss), Reason (..), mkAdvisoryIds)
 import Ecluse.Core.Server.Response (RejectReason (..), Rejection (..), RuleName (..), ServeDecision (..))
 import Ecluse.Core.Server.Response.Summary (detailedRejections, summarisedRejections)
+import Ecluse.Test.Rules (exposure, revocation)
 
 spec :: Spec
 spec = describe "grouped rejection text" $ do
@@ -26,6 +27,29 @@ spec = describe "grouped rejection text" $ do
         summarisedRejections (contribution <> contribution)
             `shouldBe` "DenyInstallTimeExecution: installation runs code (rejection entries: 2)"
 
+    for_
+        [ ("DenyIfCve", exposure, "DenyIfCve: advisories deny admission under the configured severity policy (rejection entries: 1)")
+        , ("DenyIfEpss", AffectedBy Epss 0.5 (mkAdvisoryIds ("GHSA-test-0001" :| [])), "DenyIfEpss: advisories deny admission under the configured exploit probability policy (rejection entries: 1)")
+        , ("DenyIfYanked", VersionYanked, "DenyIfYanked: the versions are yanked (rejection entries: 1)")
+        , ("DenyIfDeprecated", VersionDeprecated, "DenyIfDeprecated: the versions are deprecated (rejection entries: 1)")
+        , ("DenyByIdentity", revocation, "DenyByIdentity: the operator revoked the package identity (rejection entries: 1)")
+        ]
+        $ \(name, reason, expected) ->
+            it ("gives the short policy explanation for " <> toString name) $
+                summarisedRejections [deny name [reason] "version-specific diagnostic"] `shouldBe` expected
+
+    it "keeps each cause and its rejection count when admissions surround and separate the denied entries" $
+        summarisedRejections
+            [ Admit
+            , deny "DenyIfYanked" [VersionYanked] "first yanked version"
+            , Admit
+            , deny "DenyIfDeprecated" [VersionDeprecated] "deprecated version"
+            , Admit
+            , deny "DenyIfYanked" [VersionYanked] "second yanked version"
+            , Admit
+            ]
+            `shouldBe` "DenyIfDeprecated: the versions are deprecated (rejection entries: 1). DenyIfYanked: the versions are yanked (rejection entries: 2)"
+
     it "keeps each integrity category separate from policy denials in a deterministic order" $
         summarisedRejections [Reject (Rejection BelowIntegrityFloor "sha1"), deny "custom" [] "custom detail", Reject (Rejection MissingIntegrity "1.0.0 lacks digest"), Reject (Rejection MissingIntegrity "2.0.0 lacks digest")]
             `shouldBe` "custom: the policy rule denied admission (rejection entries: 1). MissingIntegrity: artifacts lack an integrity digest (rejection entries: 2). BelowIntegrityFloor: artifact digests fall below the configured integrity floor (rejection entries: 1)"
@@ -38,8 +62,10 @@ spec = describe "grouped rejection text" $ do
         evaluate (summarisedRejections (deny "BlockedByDefault" [] "detail" : impureThrow DiagnosticRead))
             `shouldThrow` (== DiagnosticRead)
 
-    it "retains the empty-listing fallback and ignores admissions" $
-        summarisedRejections [Admit] `shouldBe` detailedRejections []
+    for_ [("empty", []), ("admitted-only", [Admit]), ("repeated admissions", [Admit, Admit])] $ \(label, decisions) ->
+        it ("keeps the exact fallback text for " <> label <> " inputs") $ do
+            summarisedRejections decisions `shouldBe` "no versions are available for this package"
+            detailedRejections decisions `shouldBe` "no versions are available for this package"
 
     it "keeps the detailed renderer's existing messages" $
         detailedRejections [Admit, deny "first" [] "first detail", Reject (Rejection MissingIntegrity "second detail")]
