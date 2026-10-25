@@ -11,7 +11,7 @@ import Network.Wai (Application, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Fault (TransportFault (tfDetail))
 import Ecluse.Core.Package (mkPackageName, mkScope)
 import Ecluse.Core.Queue (
@@ -82,6 +82,15 @@ pypiJob =
         , jobTraceContext = Nothing
         }
 
+cargoJob :: MirrorJob
+cargoJob =
+    MirrorJob
+        { jobPackage = mkPackageName Cargo Nothing "Published_Name"
+        , jobVersion = mkVersion Cargo "1.0.0-rc.1+build"
+        , jobTriggerFilename = Just (unsafeFilename "Published_Name-1.0.0-rc.1+build.crate")
+        , jobTraceContext = Nothing
+        }
+
 -- The wire mapping must preserve namespaces outside npm.
 namespacedPypiJob :: MirrorJob
 namespacedPypiJob =
@@ -134,6 +143,15 @@ spec = do
 
         it "takes a RubyGems name as given: RubyGems has no scope grammar either" $
             decodeJob mirrorJobPackage mkRegistryUrl (jobBodyFor "rubygems" "a b") `shouldSatisfy` isRight
+
+    describe "Cargo identity at the queue boundary" $ do
+        it "keeps published case, separators and raw prerelease versions" $
+            decodeJob mirrorJobPackage mkRegistryUrl (encodeJob cargoJob) `shouldBe` Right cargoJob
+        it "refuses Cargo namespaces and malformed native names" $
+            for_ ["scope/crate", "1crate", "bad.name", "bad name"] $ \raw ->
+                decodeJob mirrorJobPackage mkRegistryUrl (jobBodyFor "cargo" raw) `shouldSatisfy` isLeft
+        it "refuses whitespace namespaces instead of discarding them" $
+            mirrorJobPackage Cargo (Just " ") "crate" `shouldSatisfy` isLeft
 
     describe "defaultSqsConfig" $
         it "carries the queue URL and region through, and ships every other knob defaulted" $ do
@@ -226,6 +244,7 @@ roundTripJobs =
     [ ("round-trips an unscoped npm job", npmJob)
     , ("round-trips a scoped npm job (namespace and bare name both recovered)", scopedJob)
     , ("round-trips a PyPI job (ecosystem carried through)", pypiJob)
+    , ("round-trips a Cargo job with its native package and raw version", cargoJob)
     , ("round-trips a namespaced non-npm job, so the namespace is not npm's alone", namespacedPypiJob)
     ]
 
