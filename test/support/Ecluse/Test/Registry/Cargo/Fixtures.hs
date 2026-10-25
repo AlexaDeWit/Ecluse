@@ -163,7 +163,8 @@ loadCargoGraph fixtureRoot = do
 -- | Retain the owned leaf source while varying the native name and version for isolated policy cases.
 cargoLeafRelease :: Text -> Text -> IO CargoRelease
 cargoLeafRelease name version = do
-    let spec = CargoCrate name version "leaf-v1" [] emptyFeatures emptyFeatures commonFiles
+    let features = object ["default" .= ["base" :: Text], "base" .= ([] :: [Text]), "extra" .= ([] :: [Text])]
+        spec = CargoCrate name version "leaf-v1" [] features emptyFeatures commonFiles
         source = "test/fixtures/cargo/graph/leaf-v1"
     files <- forM commonFiles $ \path -> do
         bytes <- readFileBS (source </> path)
