@@ -78,10 +78,10 @@ spec = describe "Cargo upload framing" $ do
         release <- cargoPublicationFixture
         case cargoUploadMetadata release of
             Object fields -> for_ [False, True] $ \includeNulls -> do
-                let optional = ["description", "documentation", "homepage", "readme", "readme_file", "license", "license_file", "repository", "links", "badges", "rust_version"]
+                let optionalFields = ["description", "documentation", "homepage", "readme", "readme_file", "license", "license_file", "repository", "links", "badges", "rust_version"]
                     update current key = if includeNulls then KeyMap.insert key Null current else KeyMap.delete key current
                     dependency = if includeNulls then KeyMap.insert "kind" Null uploadDependency else foldr KeyMap.delete uploadDependency ["target", "kind", "registry", "explicit_name_in_toml"]
-                    metadata = Object (KeyMap.insert "deps" (toJSON [Object dependency]) (KeyMap.insert "authors" (toJSON ["42", "<untrusted>" :: Text]) (foldl' update fields optional)))
+                    metadata = Object (KeyMap.insert "deps" (toJSON [Object dependency]) (KeyMap.insert "authors" (toJSON ["42", "<untrusted>" :: Text]) (foldl' update fields optionalFields)))
                     bytes = frame (LBS.toStrict (encode metadata)) <> frame (releaseArchive release)
                 decoded <- expectRight (decodeUpload defaultLimits bytes)
                 uploadMetadataValue decoded `shouldBe` metadata

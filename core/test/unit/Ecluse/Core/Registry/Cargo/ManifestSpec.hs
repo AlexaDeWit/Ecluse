@@ -58,16 +58,16 @@ spec = do
             manifest <- expectRight (parse (basic <> "build='./scripts/../build.rs'\n"))
             manifestExecution manifest (Set.singleton "build.rs") `shouldBe` Right True
         it "keeps unsupported build lists and escaping paths unknown" $
-            for_ ["build=['a.rs','b.rs']\n", "build='../build.rs'\n"] $ \field -> do
-                manifest <- expectRight (parse (basic <> field))
+            for_ ["build=['a.rs','b.rs']\n", "build='../build.rs'\n"] $ \declaration -> do
+                manifest <- expectRight (parse (basic <> declaration))
                 manifestExecution manifest Set.empty `shouldSatisfy` isLeft
         it "recognises each native procedural macro spelling and crate type form" $
-            for_ ["proc-macro=true", "proc_macro=true", "crate-type=['proc-macro']", "crate_type=['proc-macro']"] $ \field -> do
-                manifest <- expectRight (parse (basic <> "[lib]\n" <> field <> "\n"))
+            for_ ["proc-macro=true", "proc_macro=true", "crate-type=['proc-macro']", "crate_type=['proc-macro']"] $ \declaration -> do
+                manifest <- expectRight (parse (basic <> "[lib]\n" <> declaration <> "\n"))
                 manifestExecution manifest Set.empty `shouldBe` Right True
         it "rejects ambiguous or unsupported native library declarations" $
-            for_ ["proc-macro=true\nproc_macro=false", "proc-macro='false'", "crate-type=['unknown']"] $ \field -> do
-                manifest <- expectRight (parse (basic <> "[lib]\n" <> field <> "\n"))
+            for_ ["proc-macro=true\nproc_macro=false", "proc-macro='false'", "crate-type=['unknown']"] $ \declaration -> do
+                manifest <- expectRight (parse (basic <> "[lib]\n" <> declaration <> "\n"))
                 manifestExecution manifest Set.empty `shouldSatisfy` isLeft
     describe "publicationMetadata" $ do
         it "uses Cargo README defaults and preserves publication-only data" $ do

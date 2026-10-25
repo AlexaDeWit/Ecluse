@@ -27,13 +27,13 @@ import Ecluse.Test.Support (expectRight)
 spec :: Spec
 spec = describe "native Cargo assembly" $ do
     it "keeps winning source order rather than numeric or lexical version order" $ do
-        first <- source ["2.0.0", "1.0.0"]
-        second <- source ["3.0.0", "2.0.0"]
-        plan <- expectRight (maybeToRight ("missing merge plan" :: Text) (mergePackuments [(TrustedSource, info first), (GatedSource, info second)]))
-        let sources = Map.fromList [(0, raw first), (1, raw second)]
+        trustedSource <- source ["2.0.0", "1.0.0"]
+        gatedSource <- source ["3.0.0", "2.0.0"]
+        plan <- expectRight (maybeToRight ("missing merge plan" :: Text) (mergePackuments [(TrustedSource, info trustedSource), (GatedSource, info gatedSource)]))
+        let sources = Map.fromList [(0, raw trustedSource), (1, raw gatedSource)]
         bytes <- expectRight (serialiseCargoDocument (assembleCargoDocument "https://proxy.test/cargo" sources plan Nothing))
         map (fmap Object . indexValue) (referenceIndex (toStrict bytes)) `shouldBe` map (Right . cargoTestRecord) ["2.0.0", "1.0.0", "3.0.0"]
-        let wrongSnapshot = Map.insert 0 (Snapshot (digestOf "different source") (manifestRaw first)) sources
+        let wrongSnapshot = Map.insert 0 (Snapshot (digestOf "different source") (manifestRaw trustedSource)) sources
         refused <- expectRight (serialiseCargoDocument (assembleCargoDocument "https://proxy.test/cargo" wrongSnapshot plan Nothing))
         map (fmap Object . indexValue) (referenceIndex (toStrict refused)) `shouldBe` [Right (cargoTestRecord "3.0.0")]
     it "refuses a foreign ecosystem document" $
