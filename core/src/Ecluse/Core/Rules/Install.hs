@@ -10,6 +10,7 @@ module Ecluse.Core.Rules.Install (
     InstallEvidenceContext (..),
     InstallEvidenceRole (..),
     InstallArtifactRead,
+    unavailableInstallArtifactRead,
     installEvidenceMode,
     InstallEvidenceBudget (..),
     InstallEvidenceBudgetExceeded (..),
@@ -17,8 +18,8 @@ module Ecluse.Core.Rules.Install (
 ) where
 
 import Ecluse.Core.Package (Artifact, CodeExecSignal, PackageDetails)
-import Ecluse.Core.Rules.Effectful (ReadFault)
-import Ecluse.Core.Rules.Types (Inability)
+import Ecluse.Core.Rules.Effectful (ReadFault (ReadFault))
+import Ecluse.Core.Rules.Types (Inability (EvaluationFailed, InstallSignalUnread), Transience (WontResolve))
 import Ecluse.Core.Security (Limits)
 
 -- | Required resolution refuses missing evidence at a reached install-code rule.
@@ -41,6 +42,10 @@ data InstallEvidenceRole = InstallPublicAdmission | InstallWorkerReadmission | I
 
 -- | Charge buffered bytes before retention. The reader checks this artifact's approved authority.
 type InstallArtifactRead = Limits -> Artifact -> (Int -> IO ()) -> IO (Either ReadFault ByteString)
+
+-- | Refuse required resolution when no reader is bound, without attempting transport.
+unavailableInstallArtifactRead :: InstallArtifactRead
+unavailableInstallArtifactRead _ _ _ = pure (Left (ReadFault WontResolve EvaluationFailed InstallSignalUnread))
 
 -- | One operation owns its reader, deadline and two separate absolute memory reservations.
 data InstallEvidenceContext = InstallEvidenceContext

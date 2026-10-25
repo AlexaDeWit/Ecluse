@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | CodeArtifact maintenance handles over separate read and write control planes.
+-- | CodeArtifact control-plane handles with authenticated data-plane readers bound by composition.
 module Ecluse.Runtime.Maintenance.CodeArtifact.Internal (
     newCodeArtifactMaintenance,
     newCodeArtifactObservation,
@@ -59,6 +59,7 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UpstreamSafety (Undecidable, Unsafe),
     walkUpstreamChain,
  )
+import Ecluse.Core.Rules.Install (unavailableInstallArtifactRead)
 import Ecluse.Core.Version (Version)
 import Ecluse.Runtime.Aws.Env (newAwsEnv, singleAttemptEnv)
 import Ecluse.Runtime.Aws.Fault (sendClassified)
@@ -189,13 +190,14 @@ maintenanceFor alphabet readManifest store plane =
             , dlCursor = Just (walkCursor alphabet plane store)
             }
 
--- | The observing calls over one 'ReadPlane', which is every effect they have.
+-- | Bind observations to the supplied metadata reader. Composition binds artifact evidence separately.
 observationFor :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ReadPlane -> StoreObservation
 observationFor alphabet readManifest store observer =
     StoreObservation
         { obFacts = codeArtifactFacts alphabet store
         , obListPackagesIn = pageSource . packagePage observer store
         , obEnumerateVersions = pageAll . versionPage observer store
+        , obReadArtifact = unavailableInstallArtifactRead
         , obReadManifest = readManifest
         , obVerifyConsent = readConsent observer store
         , obClassifyStore = fmap (fmap classifyRepository) (describeStore observer store)

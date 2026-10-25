@@ -108,6 +108,8 @@ inabilityPins =
     , (PushUndated, "the object store reported no publication time for the serving advisory artifact")
     , (SourceBreakerOpen, "the rule source circuit breaker is open")
     , (EvaluationFailed, "the rule could not be evaluated")
+    , (InstallEvidenceFailed "unsupported manifest", "install evidence could not be read: unsupported manifest")
+    , (InstallEvidenceFailed "", "install evidence could not be read: ")
     , (RuleThrew "advisory database exploded", "the rule threw: advisory database exploded")
     , (RuleThrew "", "the rule threw: ")
     , (AttemptTimedOut, "the attempt timed out")
@@ -195,6 +197,7 @@ data InabilityTag
     | PushUndatedTag
     | SourceBreakerOpenTag
     | EvaluationFailedTag
+    | InstallEvidenceFailedTag
     | RuleThrewTag
     | AttemptTimedOutTag
     deriving stock (Bounded, Enum, Eq, Ord, Show)
@@ -209,6 +212,7 @@ inabilityTag = \case
     PushUndated -> PushUndatedTag
     SourceBreakerOpen -> SourceBreakerOpenTag
     EvaluationFailed -> EvaluationFailedTag
+    InstallEvidenceFailed{} -> InstallEvidenceFailedTag
     RuleThrew{} -> RuleThrewTag
     AttemptTimedOut -> AttemptTimedOutTag
 
@@ -425,6 +429,7 @@ oracleInability = \case
     PushUndated -> "the object store reported no publication time for the serving advisory artifact"
     SourceBreakerOpen -> "the rule source circuit breaker is open"
     EvaluationFailed -> "the rule could not be evaluated"
+    InstallEvidenceFailed detail -> "install evidence could not be read: " <> detail
     RuleThrew thrown -> "the rule threw: " <> thrown
     AttemptTimedOut -> "the attempt timed out"
 
@@ -484,6 +489,7 @@ genInability =
         , pure PushUndated
         , pure SourceBreakerOpen
         , pure EvaluationFailed
+        , InstallEvidenceFailed <$> genFact
         , RuleThrew <$> genFact
         , pure AttemptTimedOut
         ]

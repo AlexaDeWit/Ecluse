@@ -82,8 +82,8 @@ import Ecluse.Core.Rules (
     PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence),
     Resilience,
     RuleDeps (..),
-    RuleEval (PerPackage, PerVersion),
-    VerdictSource (FromAdvisories, FromEvidence),
+    RuleEval (PerInstallEvidence, PerPackage, PerVersion),
+    VerdictSource (FromAdvisories, FromEvidence, FromInstallEvidence),
     newEvaluator,
     noSourceReporter,
     prepare,
@@ -186,6 +186,7 @@ admissionOnly (PrecededRule prec _ rule) = PrecededRule prec AdmissionOnly rule
 evalRule :: RuleDeps -> EvalContext -> Rule -> RuleEvidence -> IO RuleVerdict
 evalRule deps ctx rule ev = case verdictSource rule of
     FromEvidence verdict -> pure (verdict ctx ev)
+    FromInstallEvidence verdict -> pure (verdict ctx ev)
     FromAdvisories _ verdict -> (`verdict` ev) <$> withCveLookup deps (readAdvisories (evName ev))
 
 -- | Return a fixed verdict for any version.
@@ -219,6 +220,7 @@ mapPackageRead :: (PackageRead -> PackageRead) -> PreparedRule -> PreparedRule
 mapPackageRead adjust rule = case prepEval rule of
     PerPackage packageRead -> rule{prepEval = PerPackage (adjust packageRead)}
     PerVersion _ -> rule
+    PerInstallEvidence _ -> rule
 
 -- | Adjust the resilience around a prepared rule's package read.
 mapResilience :: (Resilience -> Resilience) -> PreparedRule -> PreparedRule

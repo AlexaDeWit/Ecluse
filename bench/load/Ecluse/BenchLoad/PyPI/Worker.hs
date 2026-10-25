@@ -89,6 +89,7 @@ boot knobs use = do
                             WorkerPolicy
                                 { wpFirstParty = const False
                                 , wpResolveVersion = \pay name version -> versionEvaluation <$> fetchVersion (chargingSelectedReads decodedDocumentCharge pay pypiMirrorRead) passthroughTracingPort sourceOrigin name version
+                                , wpInstallEvidence = Nothing
                                 , wpRules = rules
                                 , wpMinIntegrity = defaultMinIntegrity
                                 , wpArtifactHostHonoured = const True
@@ -131,7 +132,7 @@ boot knobs use = do
 
 withinBudget :: MemoryMeter -> (WorkerStateBudget -> IO a) -> IO (Maybe a)
 withinBudget meter action = fmap rightToMaybe . withMemoryEntry noopMetricsPort meter $ \ticket -> do
-    budget <- WorkerStateBudget <$> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket
+    budget <- WorkerStateBudget <$> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> region ticket <*> pure Nothing
     action budget
   where
     region = newChargeRegion . charge
