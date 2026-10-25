@@ -28,6 +28,10 @@ import Ecluse.Test.Support (expectRight)
 spec :: Spec
 spec = do
     describe "inspectCargoArchive" $ do
+        it "counts complete inflated bytes across headers, payloads and the trailer" $ do
+            tar <- tarBytes [("example-1.2.3/Cargo.toml", manifest), ("example-1.2.3/src/lib.rs", "pub fn value() {}")]
+            metadata <- inspect defaultLimits (compress tar) >>= expectRight
+            cargoArchiveInflatedBytes metadata `shouldBe` fromIntegral (BSL.length tar)
         it "checks compressed SHA-256 before allocating decoder workspace" $ do
             bytes <- fixture [("Cargo.toml", manifest)]
             requests <- newIORef ([] :: [Int])

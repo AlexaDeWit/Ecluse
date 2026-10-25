@@ -9,6 +9,7 @@ module Ecluse.Core.Registry.Cargo.Archive (
     inspectCargoArchive,
     cargoArchiveManifest,
     cargoArchiveInventory,
+    cargoArchiveInflatedBytes,
     cargoArchiveExecution,
     cargoPublicationMetadata,
 ) where
@@ -35,6 +36,7 @@ data CargoArchiveMetadata = CargoArchiveMetadata
     , caSource :: ByteString
     , caRoot :: Text
     , caRetainedBytes :: Int
+    , caInflatedBytes :: Int
     }
 
 instance Show CargoArchiveMetadata where
@@ -51,12 +53,12 @@ inspectCargoArchive limits charge name version checksum bytes = deadline $ do
                 else do
                     let root = name <> "-" <> version
                     result <- archivePass limits charge root (Set.singleton "Cargo.toml") bytes
-                    case result >>= archiveFacts root of
+                    case result >>= \(scan, inflated) -> (,inflated) <$> archiveFacts root scan of
                         Left fault -> pure (Left fault)
-                        Right (manifestBytes, inventory, retained) -> do
+                        Right ((manifestBytes, inventory, retained), inflated) -> do
                             charge (retained + manifestMemory manifestBytes)
                             parsed <- evaluate (decodeManifest limits name version manifestBytes)
-                            pure $ (\manifest -> CargoArchiveMetadata manifest inventory bytes root (retained + manifestMemory manifestBytes)) <$> parsed
+                            pure $ (\manifest -> CargoArchiveMetadata manifest inventory bytes root (retained + manifestMemory manifestBytes) inflated) <$> parsed
 
 -- | The effective normalised manifest carries exact native package spelling and version.
 cargoArchiveManifest :: CargoArchiveMetadata -> CargoManifest
@@ -65,6 +67,10 @@ cargoArchiveManifest = caManifest
 -- | Only regular-file paths appear, relative to the admitted single archive root.
 cargoArchiveInventory :: CargoArchiveMetadata -> Set Text
 cargoArchiveInventory = caInventory
+
+-- | Complete first-pass decoder output, including tar headers, padding and trailers.
+cargoArchiveInflatedBytes :: CargoArchiveMetadata -> Int
+cargoArchiveInflatedBytes = caInflatedBytes
 
 -- | An unsupported declaration remains an error. Source declarations alone do not establish harmlessness.
 cargoArchiveExecution :: CargoArchiveMetadata -> Either ParseError Bool
@@ -80,7 +86,7 @@ cargoPublicationMetadata limits charge metadata = deadline $
             result <- archivePass limits (charge . (+ retained)) (caRoot metadata) (Set.fromList paths) (caSource metadata)
             case result of
                 Left fault -> pure (Left fault)
-                Right scan -> do
+                Right (scan, _) -> do
                     let content = Map.mapKeys (T.drop (T.length (caRoot metadata) + 1)) (tarContents scan)
                         textBytes = sum (map BS.length (Map.elems content))
                     charge (retained + 65536 + 8 * textBytes + 512 * Map.size content)
@@ -104,11 +110,18 @@ archiveFacts root scan = do
     manifest <- maybe (bad "Cargo archive lacks its effective Cargo.toml") Right (Map.lookup (prefix <> "Cargo.toml") (tarContents scan))
     pure (manifest, files, retained)
 
-archivePass :: Limits -> (Int -> IO ()) -> Text -> Set Text -> ByteString -> IO (Either ParseError TarScan)
+archivePass :: Limits -> (Int -> IO ()) -> Text -> Set Text -> ByteString -> IO (Either ParseError (TarScan, Int))
 archivePass limits charge root selected bytes = do
     (decoderCharge, retainedCharge) <- splitArchiveCharge charge
-    scanTar limits retainedCharge select $ \consume ->
-        withInflatedChunks (GzipMembers (maxArtifactCount limits)) decoderCharge bytes (consume . sourceReader)
+    inflated <- newIORef (0 :: Integer)
+    result <- scanTar limits retainedCharge select $ \consume ->
+        withInflatedChunks (GzipMembers (maxArtifactCount limits)) decoderCharge bytes $ \pull ->
+            consume . sourceReader $ do
+                outcome <- pull
+                for_ outcome $ \chunk -> modifyIORef' inflated (+ toInteger (BS.length chunk))
+                pure outcome
+    count <- readIORef inflated
+    pure ((,fromInteger count) <$> result)
   where
     select parts = case parts of
         actualRoot : relative | actualRoot == root -> Right (Set.member (T.intercalate "/" relative) selected)
