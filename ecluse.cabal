@@ -32,6 +32,10 @@ extra-source-files:
   core/test/unit/fixtures/json-stream/README.md
   core/test/unit/fixtures/version-ordering.txt
   test/fixtures/package-store/pypi/README.md
+  test/fixtures/cargo/graph/*/Cargo.toml
+  test/fixtures/cargo/graph/*/README.md
+  test/fixtures/cargo/graph/*/*.rs
+  test/fixtures/cargo/graph/*/src/*.rs
   test/fixtures/osv/v1/*.json
   test/fixtures/osv/v2/*.json
   test/fixtures/osv/withdrawal/*.json
@@ -833,6 +837,8 @@ library ecluse-test-support
     Ecluse.Test.Registry.Publish
     Ecluse.Test.Registry.Public
     Ecluse.Test.Registry.Npm
+    Ecluse.Test.Registry.Cargo.Reference
+    Ecluse.Test.Registry.Cargo.Fixtures
     Ecluse.Test.Registry.Npm.Metadata
     Ecluse.Test.Registry.Npm.StoredVersions
     Ecluse.Test.Registry.Npm.Maintenance
@@ -1932,6 +1938,7 @@ library ecluse-e2e-test-support
     Ecluse.E2E.Harness.Advisories
     Ecluse.E2E.Harness.Availability
     Ecluse.E2E.Harness.Client
+    Ecluse.E2E.Harness.Cargo
     Ecluse.E2E.Harness.Container
     Ecluse.E2E.Harness.Lifecycle
     Ecluse.E2E.Harness.Collector
