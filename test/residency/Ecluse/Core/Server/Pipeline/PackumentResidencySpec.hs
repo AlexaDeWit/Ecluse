@@ -22,7 +22,7 @@ import UnliftIO.Exception (bracket, evaluate, throwIO)
 
 import Ecluse.Composition.MemoryPlan.Transient (meterStepBytes)
 import Ecluse.Core.Deadline (Deadlines, sweepTick)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageName, pkgEcosystem, renderPackageName)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Rules (prepare)
@@ -42,6 +42,7 @@ import Ecluse.Test.Corpus (CaptureUpstream (upstreamOrigin), CorpusPackage (cpPa
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Port (noopMetricsPort)
+import Ecluse.Test.Registry.Cargo.Fixtures (cargoShard)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureResponse), deliverServe, testServeRuntime)
@@ -170,6 +171,7 @@ listingPath :: PackageName -> [Text]
 listingPath name = case pkgEcosystem name of
     Npm -> T.splitOn "/" (renderPackageName name)
     PyPI -> ["simple", renderPackageName name]
+    Cargo -> T.splitOn "/" (cargoShard (renderPackageName name))
     RubyGems -> [renderPackageName name]
 
 {- Serve the capture with its locations on this origin's own authority, as projection keeps no other.
