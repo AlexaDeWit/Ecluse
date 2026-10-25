@@ -17,7 +17,7 @@ import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails), VersionRead (vrVersion))
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
-import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
+import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream, pypiRead)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), defaultLimits, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Test.Corpus (cpPath, pypiCaptureUpstream, pypiCorpusPackages)
@@ -52,6 +52,7 @@ corpusRead :: CorpusRead
 corpusRead =
     CorpusRead
         { crUpstream = pypiCaptureUpstream
+        , crRead = pypiRead
         , crMetadata = adapterMetadata pypiAdapter
         , crVersionReads = \versionRead _ _ -> [("selected", rendered (fmap (releaseFacts . vdDetails) . vrVersion <$> versionRead))]
         , crDocumentReads = \_ _ -> []

@@ -51,6 +51,7 @@ import Ecluse.Core.Registry (
  )
 import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw))
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (staticRead)
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
 import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, npmRead)
@@ -96,7 +97,7 @@ npmPublishCodec =
         { pcPrepareSource = prepareNpmSource
         , pcPrepareUpload = \_ _ inventory metadata file bytes -> pure (prepareNpmUpload inventory metadata file bytes)
         , pcNativeComplete = nativeNpmComplete
-        , pcTargetRead = npmRead
+        , pcTargetRead = staticRead npmRead
         , pcTargetReadPermille = cfFullReadPermille npmChargeFactors
         , pcProbeRequest = \targetUrl credential -> metadataRequest targetUrl credential Abbreviated
         , pcVersionListWalk = Just (\limits -> npmVersionListWalk limits (collectVersionList limits) emptyVersionList)

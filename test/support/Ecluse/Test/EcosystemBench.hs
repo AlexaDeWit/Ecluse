@@ -27,15 +27,17 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageName, infoVersions, renderPackageName, unscopedName)
 import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.Adapter (adapterFor)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl), AdapterMetadata (metadataRead))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (Manifest (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
+import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Registry.Npm.Route.Internal (npmRoutes)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
+import Ecluse.Core.Registry.PyPI.Metadata (pypiRead)
 import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, filenameMemo, readCoordinate)
 import Ecluse.Core.Registry.PyPI.Route.Internal (pypiRoutes)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifFilename), SimpleIndex (siFiles))
@@ -119,8 +121,8 @@ npmBench =
         , ebSyntheticName = benchPackageName
         , ebDecode = \_ -> first show . fmap (map renderVersion) . parseVersionBytes
         , ebProject = projectNpmFull defaultLimits
-        , ebRead = captureManifest (adapterMetadata npmAdapter) npmCaptureUpstream
-        , ebSelective = \name version -> fmap (fmap readDetails) . captureVersion (adapterMetadata npmAdapter) npmCaptureUpstream name version
+        , ebRead = captureManifest npmRead npmCaptureUpstream
+        , ebSelective = \name version -> fmap (fmap readDetails) . captureVersion npmRead npmCaptureUpstream name version
         , ebReadDocument = readDocument (fst npmCached)
         , ebNestingDepth = nestingDepth (snd npmCached)
         , ebMetadata = adapterMetadata npmAdapter
@@ -131,7 +133,7 @@ npmBench =
         , ebRouteScaling = []
         , ebRequestBuilds =
             [ RequestBuild "artifact request" (\name -> NpmRequest.artifactRequestByFile npmBase benchCredential name (unscopedName name <> "-1.0.0.tgz"))
-            , RequestBuild "metadata request" (originRequest (adapterMetadata npmAdapter) npmBase)
+            , RequestBuild "metadata request" (originRequest npmRead npmBase)
             ]
         }
 
@@ -150,8 +152,8 @@ pypiBench =
         , ebSyntheticName = benchProject
         , ebDecode = \name raw -> pypiReleaseKeys name . siFiles <$> first toText (eitherDecodeStrict raw)
         , ebProject = \name -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits name
-        , ebRead = captureManifest (adapterMetadata pypiAdapter) pypiCaptureUpstream
-        , ebSelective = \name version -> fmap (fmap readDetails) . captureVersion (adapterMetadata pypiAdapter) pypiCaptureUpstream name version
+        , ebRead = captureManifest pypiRead pypiCaptureUpstream
+        , ebSelective = \name version -> fmap (fmap readDetails) . captureVersion pypiRead pypiCaptureUpstream name version
         , ebReadDocument = readDocument (fst pypiSimpleCached . documentFromValue)
         , ebNestingDepth = nestingDepth (fmap simpleValue . snd pypiSimpleCached)
         , ebMetadata = adapterMetadata pypiAdapter
@@ -168,7 +170,7 @@ pypiBench =
             , RouteScaling "valid filename separators" (\count -> distribution ("requests" <> T.replicate (fromIntegral count) "_" <> "1.tar.gz"))
             ]
         , ebRequestBuilds =
-            [ RequestBuild "index request" (originRequest (adapterMetadata pypiAdapter) pypiBase)
+            [ RequestBuild "index request" (originRequest pypiRead pypiBase)
             , RequestBuild "artifact request" (artifactByUrl (adapterArtifact pypiAdapter) benchCredential . wheelUrl)
             ]
         }
@@ -191,8 +193,8 @@ benchCredential :: Maybe ClientCredential
 benchCredential = Just (bareCredential (mkSecret "bench-token"))
 
 -- The whole-document request a metadata read seals before it sends.
-originRequest :: AdapterMetadata -> BaseRequest -> PackageName -> Either UrlFormationError Request
-originRequest metadata base name = sealRequest <$> erRequest (metadataRead metadata) base benchCredential name
+originRequest :: EcosystemRead -> BaseRequest -> PackageName -> Either UrlFormationError Request
+originRequest reader base name = sealRequest <$> erRequest reader base benchCredential name
 
 -- A wheel location as the index lists it, which the artifact read fetches by URL.
 wheelUrl :: PackageName -> Text

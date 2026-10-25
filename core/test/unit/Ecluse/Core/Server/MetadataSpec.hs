@@ -11,10 +11,12 @@ import Data.Aeson (Value, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (defaultManagerSettings, newManager)
+import Network.HTTP.Types (status200)
 import Test.Hspec
 import UnliftIO (concurrently, mapConcurrently, timeout)
 import UnliftIO.Concurrent (threadDelay)
 
+import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Fault (TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause), transportFault)
 import Ecluse.Core.Package (
@@ -36,7 +38,9 @@ import Ecluse.Core.Registry.Metadata (
     VersionDoc (VersionDoc, vdDetails, vdRaw),
     VersionRead (VersionRead, vrBodyBytes, vrUpstreamLatest, vrVersion),
  )
-import Ecluse.Core.Registry.Origin (OriginFor, Public, anonymousOrigin, perCallerOrigin)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (..))
+import Ecluse.Core.Registry.Npm.Metadata (npmRead)
+import Ecluse.Core.Registry.Origin (OriginClient (ocToken), OriginFor, Public, anonymousOrigin, perCallerOrigin)
 import Ecluse.Core.Registry.Request (mkBaseRequest)
 import Ecluse.Core.Security (defaultLimits, mkProgressFloor)
 import Ecluse.Core.Security.Egress (RegistryUrl)
@@ -44,22 +48,23 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), newMetadataCacheWithProvider)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage))
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
-import Ecluse.Core.Server.Metadata (newMetadataReads, privateMetadataClient, publicMetadataClient, selectVersion, withinRequestCap)
+import Ecluse.Core.Server.Metadata (ecosystemMetadataReads, newMetadataReads, privateMetadataClient, publicMetadataClient, selectVersion, withinRequestCap)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpUpstreamFetchError, mpVersionCacheRequest))
 import Ecluse.Core.Version (Version)
-import Ecluse.Test.Deadline (untracedClient, withSweeper)
+import Ecluse.Test.Deadline (untracedClient, withExchangeClient, withSweeper)
 import Ecluse.Test.Package (npmVersion, pypiVersion, requestsName, sampleManifest, unscopedNpm)
-import Ecluse.Test.Port (noopMetricsPort)
+import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig, externalOperations, newMetadataCache)
 import Ecluse.Test.Snapshot (digestOf, readDetails)
+import Ecluse.Test.Stub (allCaptured, headerValue, stubBaseUrl, withStub)
 
 -- | Selected reads use the chosen provider without hydrating a full document.
 spec :: Spec
 spec = do
     selectVersionSpec
-    -- Every case here drives the read functions directly, so neither origin is ever dialled or arms a
-    -- deadline: only the posture its builder fixes is under test.
+    preparationSpec
+    -- Raw callback fixtures below need only the origin's credential posture.
     exchanges <- runIO (untracedClient <$> newManager defaultManagerSettings <*> newDeadlines)
     let anonymous = anonymousOrigin defaultLimits exchanges (mkBaseRequest stubUrl)
         perCaller = perCallerOrigin defaultLimits exchanges (mkBaseRequest stubUrl) Nothing
@@ -392,6 +397,91 @@ httpFailures =
         <> [(MetadataAbsent, Metric.UpstreamStatus)]
         <> [(MetadataHttpFailure code, Metric.UpstreamStatus) | code <- [301, 400, 408, 429, 500, 503]]
         <> [(MetadataUndecodable, Metric.Decode)]
+
+preparationSpec :: Spec
+preparationSpec = describe "origin preparation" $ do
+    it "prepares only public full and selected cache leaders" $
+        withStub status200 "{\"name\":\"is-odd\",\"versions\":{}}" $ \stub ->
+            withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                prepared <- newIORef (0 :: Int)
+                fullValues <- newIORef Map.empty
+                versionValues <- newIORef Map.empty
+                let fullStore = externalOperations (\_ key -> Map.lookup key <$> readIORef fullValues) (\key value -> modifyIORef' fullValues (Map.insert key value))
+                    versionStore = externalOperations (\_ key -> Map.lookup key <$> readIORef versionValues) (\key value -> modifyIORef' versionValues (Map.insert key value))
+                cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) (Just fullStore) (Just versionStore) Nothing)
+                let factory = PrepareRead $ \_ selectedOrigin -> do
+                        ocToken selectedOrigin `shouldBe` Nothing
+                        atomicModifyIORef' prepared (\count -> (count + 1, ()))
+                        pure (Right npmRead)
+                    origin = anonymousOrigin defaultLimits exchanges (mkBaseRequest (loopbackRegistryUrl (stubBaseUrl stub)))
+                    preparedReads = ecosystemMetadataReads factory passthroughTracingPort noopMetricsPort noLog noInvalidLog noFetchLog origin
+                    client = publicMetadataClient cache source preparedReads
+                full <- mapConcurrently (const (fetchFullManifest client name)) [1 .. 8 :: Int]
+                map void full `shouldBe` replicate 8 (Right ())
+                single <- mapConcurrently (const (fetchVersionMetadata client name (npmVersion "1.0.0"))) [1 .. 8 :: Int]
+                map void single `shouldBe` replicate 8 (Right ())
+                void <$> fetchFullManifest client name `shouldReturn` Right ()
+                void <$> fetchVersionMetadata client name (npmVersion "1.0.0") `shouldReturn` Right ()
+                readIORef prepared `shouldReturn` 2
+                length <$> allCaptured stub `shouldReturn` 2
+
+    it "prepares private reads separately with each caller's actual credential" $
+        withStub status200 "{\"name\":\"is-odd\",\"versions\":{}}" $ \stub ->
+            withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                prepared <- newIORef []
+                let firstToken = Just (bareCredential (mkSecret "first"))
+                    secondToken = Just (bareCredential (mkSecret "second"))
+                    factory = PrepareRead $ \_ selectedOrigin -> do
+                        atomicModifyIORef' prepared (\tokens -> (ocToken selectedOrigin : tokens, ()))
+                        pure (Right npmRead)
+                    client token =
+                        privateMetadataClient $
+                            ecosystemMetadataReads
+                                factory
+                                passthroughTracingPort
+                                noopMetricsPort
+                                noLog
+                                noInvalidLog
+                                noFetchLog
+                                (perCallerOrigin defaultLimits exchanges (mkBaseRequest (loopbackRegistryUrl (stubBaseUrl stub))) token)
+                outcomes <-
+                    mapConcurrently
+                        (\token -> concurrently (void <$> fetchFullManifest (client token) name) (void <$> fetchVersionMetadata (client token) name (npmVersion "1.0.0")))
+                        [firstToken, firstToken, secondToken, secondToken]
+                outcomes `shouldBe` replicate 4 (Right (), Right ())
+                tokens <- readIORef prepared
+                length tokens `shouldBe` 8
+                map (\token -> length (filter (== token) tokens)) [firstToken, secondToken] `shouldBe` [4, 4]
+                sort . map (headerValue "Authorization") <$> allCaptured stub
+                    `shouldReturn` (replicate 4 (Just "Bearer first") <> replicate 4 (Just "Bearer second"))
+
+    it "preserves preparation failures without fetching or retaining metadata" $
+        withStub status200 "{}" $ \stub ->
+            withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                prepared <- newIORef (0 :: Int)
+                cache <- newMetadataCache defaultCacheConfig
+                let refusal = MetadataAuthorisationFailure 401
+                    factory = PrepareRead $ \_ _ -> do
+                        modifyIORef' prepared (+ 1)
+                        pure (Left refusal)
+                    origin = anonymousOrigin defaultLimits exchanges (mkBaseRequest (loopbackRegistryUrl (stubBaseUrl stub)))
+                    client = publicMetadataClient cache source (ecosystemMetadataReads factory passthroughTracingPort noopMetricsPort noLog noInvalidLog noFetchLog origin)
+                replicateM_ 2 $ do
+                    void <$> fetchFullManifest client name `shouldReturn` Left refusal
+                    void <$> fetchVersionMetadata client name (npmVersion "1.0.0") `shouldReturn` Left refusal
+                readIORef prepared `shouldReturn` 4
+                allCaptured stub `shouldReturn` []
+
+    it "includes preparation in the raw read's request deadline" $
+        withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> withSweeper $ \deadlines -> do
+            progress <- either (fail . show) pure (mkProgressFloor 0.5 0.25 1)
+            let factory = PrepareRead (\_ _ -> threadDelay 20_000_000 $> Left MetadataAbsent)
+                origin = perCallerOrigin defaultLimits exchanges (mkBaseRequest stubUrl) Nothing
+                preparedReads = ecosystemMetadataReads factory passthroughTracingPort noopMetricsPort noLog noInvalidLog noFetchLog origin
+                client = privateMetadataClient (withinRequestCap deadlines progress preparedReads)
+            full <- fetchFullManifest client name
+            single <- fetchVersionMetadata client name (npmVersion "1.0.0")
+            map timeoutCause [void full, void single] `shouldBe` replicate 2 (Just TransportTimeout)
 
 name :: PackageName
 name = unscopedNpm "is-odd"

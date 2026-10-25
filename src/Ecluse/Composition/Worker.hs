@@ -20,6 +20,7 @@ import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead), AdapterPublish (publishCodec, publishMirrorRequirements), MirrorRequirements (mirrorWorkerRead), WorkerMetadataRead (..))
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Metadata.Fetch (chargingSelectedReads)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (..))
 import Ecluse.Core.Registry.Origin (anonymousOrigin, controlPublicOrigin)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish,
@@ -112,19 +113,13 @@ mirrorTransportFor env deps target =
 workerPolicyFor :: Env -> MirrorRequirements -> PackumentDeps -> MirrorPublish -> Int -> WorkerPolicy
 workerPolicyFor env requirements deps publish artifactMaxBytes =
     WorkerPolicy
-        { -- The mount's own first-party predicate, so the worker refuses a name the
-          -- deployment owns exactly as the serve and publish paths do.
-          wpFirstParty = pdFirstParty deps
+        { wpFirstParty = pdFirstParty deps
         , wpResolveVersion = fetchVersionDetails . client
         , wpRules = pdRules deps
         , wpMinIntegrity = pdMinIntegrity deps
         , wpArtifactHostHonoured =
-            -- The same host gate the serve path applies before its public artifact fetch, closed
-            -- against the public upstream authority.
             tarballHostHonoured UntrustedOrigin deps (thgPublicHostPort (pdTarballHostGate deps))
-        , -- The mount's own artifact capability, the adapter record the serve deps
-          -- carry, so the worker fetches a job's bytes exactly as the serve path would.
-          wpArtifact = pdArtifact deps
+        , wpArtifact = pdArtifact deps
         , wpEgressUrl = pdEgressUrl deps
         , wpPublish = publish
         , wpArtifactLimits = (pdLimits deps){maxMirrorArtifactBytes = artifactMaxBytes}
@@ -133,7 +128,10 @@ workerPolicyFor env requirements deps publish artifactMaxBytes =
         }
   where
     client pay = case mirrorWorkerRead requirements of
-        ChargedWorkerRead nativeRead -> uncachedPublicMetadataClient (readCapability (chargingSelectedReads decodedDocumentCharge pay nativeRead))
+        ChargedWorkerRead nativeRead ->
+            uncachedPublicMetadataClient . readCapability $
+                PrepareRead $ \tracing origin ->
+                    fmap (chargingSelectedReads decodedDocumentCharge pay) <$> prepareRead nativeRead tracing origin
         CachedWorkerRead -> publicMetadataClient (envMetadataCache env) (Source (registryUrlText publicBaseUrl)) (readCapability (metadataRead (pdMetadata deps)))
     readCapability ecosystemRead =
         ecosystemMetadataReads

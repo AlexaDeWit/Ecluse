@@ -10,10 +10,11 @@ import Data.Aeson.Key qualified as Key
 import Data.ByteString qualified as BS
 import Data.Universe.Class (Universe (universe))
 import Ecluse.Core.Registry.Adapter (adapterFor)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
-import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterEcosystem, adapterMetadata))
+import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterEcosystem))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
+import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
+import Ecluse.Core.Registry.PyPI.Metadata (pypiRead)
 import Ecluse.Test.Contract.Metadata.Fetch (ReadFixture (..), metadataFetchContract)
 import Ecluse.Test.Registry.Npm (packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleIndex)
@@ -30,7 +31,7 @@ registered :: [ReadFixture]
 registered =
     [ ReadFixture
         { rdEcosystem = adapterEcosystem npmAdapter
-        , rdRead = metadataRead (adapterMetadata npmAdapter)
+        , rdRead = npmRead
         , rdDocument = \name padding -> "{\"name\":\"" <> name <> "\",\"versions\":{}" <> paddingMember padding
         , rdReleases = \base versions ->
             packumentValue
@@ -42,7 +43,7 @@ registered =
         }
     , ReadFixture
         { rdEcosystem = adapterEcosystem pypiAdapter
-        , rdRead = metadataRead (adapterMetadata pypiAdapter)
+        , rdRead = pypiRead
         , rdDocument = \name padding -> "{\"meta\":{\"api-version\":\"1.0\"},\"name\":\"" <> name <> "\",\"files\":[]" <> paddingMember padding
         , rdReleases = \_ versions -> simpleIndex "thing" (filesNamed ["thing-" <> version <> ".tar.gz" | version <- versions])
         }

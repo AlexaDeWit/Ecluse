@@ -54,7 +54,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
  )
 import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet, noNameAlphabet)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
-import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareManifest)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (ManifestFetch)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Security.Egress (RegistryUrl)
@@ -185,7 +185,7 @@ clearedBackend url username adapter control =
     ClearedBackend
         { cbUrl = url
         , cbAlphabet = maybe noNameAlphabet (maintenanceAlphabet . adapterMaintenance) adapter
-        , cbFetchManifest = maybe absentManifestRead (fetchManifest . metadataRead . adapterMetadata) adapter
+        , cbFetchManifest = maybe absentManifestRead (prepareManifest . metadataRead . adapterMetadata) adapter
         , cbUsername = username
         , cbControl = control
         }

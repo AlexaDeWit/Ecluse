@@ -23,7 +23,7 @@ import Ecluse.Core.Registry.JsonStream (StreamResult (..), nestingLimit)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw), VersionRead (vrVersion))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
-import Ecluse.Core.Registry.Npm.Metadata (selectNpmVersionDoc)
+import Ecluse.Core.Registry.Npm.Metadata (npmRead, selectNpmVersionDoc)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Registry.Npm.Streaming
 import Ecluse.Core.Registry.Npm.StreamingProjection (emptyTreeRead, finishTree, treeStep)
@@ -493,6 +493,7 @@ corpusRead :: CorpusRead
 corpusRead =
     CorpusRead
         { crUpstream = npmCaptureUpstream
+        , crRead = npmRead
         , crMetadata = adapterMetadata npmAdapter
         , crVersionReads = \selected document version ->
             [("selected", rendered (selectedFacts <$> selected)), ("mirror", rendered (selectNpmVersionDoc version document))]

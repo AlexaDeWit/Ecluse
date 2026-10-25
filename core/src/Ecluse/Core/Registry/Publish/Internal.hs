@@ -28,8 +28,7 @@ import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Json.Walk (Step, readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError, VersionDoc)
-import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
-import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead, prepareManifest)
 import Ecluse.Core.Registry.MirrorUpload (ExpectedMirrorFile, MirrorInventory, MirrorUploadData, VerifiedArtifactBytes)
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocClient, ocLimits), originClient)
 import Ecluse.Core.Registry.Request (sealRequest)
@@ -61,7 +60,7 @@ data PublishCodec = forall source metadata. PublishCodec
     , pcPrepareUpload :: Limits -> (Int -> IO ()) -> MirrorInventory -> source -> ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault (MirrorUploadData metadata))
     , pcNativeComplete :: PackageName -> Version -> PackageInfo -> Bool
     -- ^ Atomic native inventories may prove completion without retained external source state.
-    , pcTargetRead :: EcosystemRead
+    , pcTargetRead :: PrepareRead
     , pcTargetReadPermille :: Int
     -- ^ The adapter's existing full-read heap charge per thousand source bytes.
     , pcProbeRequest :: Text -> Maybe ClientCredential -> PackageName -> Either UrlFormationError Request
@@ -103,13 +102,13 @@ newMirrorPublish transport readTarget uploadTarget PublishCodec{pcPrepareSource,
                     }
         }
 
-probeInventory :: MirrorTransport -> RegistryUrl -> EcosystemRead -> Int -> (Int -> IO ()) -> PackageName -> IO (Either MetadataError PackageInfo)
+probeInventory :: MirrorTransport -> RegistryUrl -> PrepareRead -> Int -> (Int -> IO ()) -> PackageName -> IO (Either MetadataError PackageInfo)
 probeInventory transport target targetRead factor charge name = do
     pay <- accumulatingCharge charge
     credential <- ptMintCredential transport
     -- The initial and final target snapshots can overlap during completion.
     let origin = (originClient (ptLimits transport) (ptClient transport) target credential){ocChargeFullRead = pay . scaleCharge (2 * factor)}
-    fmap manifestInfo <$> fetchManifest targetRead (ptTracing transport) origin name
+    fmap manifestInfo <$> prepareManifest targetRead (ptTracing transport) origin name
 
 -- | Preserve the native publication response under the origin's metadata and progress limits.
 relayPublishRequest :: OriginClient -> Either UrlFormationError Request -> IO (Either FetchFault PublishRelayResponse)

@@ -58,17 +58,19 @@ import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, pkgEcosyste
 import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource), mergePackuments)
 import Ecluse.Core.Registry (ParseError)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata))
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead, metadataSerialise))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, estimateValueBytes, npmCached, weighCachedDoc)
 import Ecluse.Core.Registry.Json.Walk (readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (Manifest (..), VersionDoc (..), VersionRead (vrBodyBytes, vrVersion))
 import Ecluse.Core.Registry.Metadata.Fetch (readManifest, readVersion)
-import Ecluse.Core.Registry.Metadata.Fetch.Types (Body, ReadTerms (..))
+import Ecluse.Core.Registry.Metadata.Fetch.Types (Body, EcosystemRead, ReadTerms (..))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
+import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Project qualified as Npm
 import Ecluse.Core.Registry.Npm.VersionListReader (npmVersionListWalk)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
+import Ecluse.Core.Registry.PyPI.Metadata (pypiRead)
 import Ecluse.Core.Registry.PyPI.Project qualified as PyPI
 import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, finishVersionList)
 import Ecluse.Core.Registry.WireSupport (Projection)
@@ -185,6 +187,7 @@ packages = concatMap residencyPackages (mapMaybe residencyFor universe)
 -- | All mandatory measurements and probe hooks for one registered ecosystem.
 data Residency = Residency
     { residencyPackages :: [CorpusPackage]
+    , residencyRead :: EcosystemRead
     , residencyMetadata :: AdapterMetadata
     , residencyUpstream :: CaptureUpstream
     , residencyCalibration :: Calibration
@@ -203,6 +206,7 @@ residencyFor = \case
         Just
             Residency
                 { residencyPackages = corpusPackages
+                , residencyRead = npmRead
                 , residencyMetadata = adapterMetadata npmAdapter
                 , residencyUpstream = npmCaptureUpstream
                 , residencyCalibration = npmCalibration
@@ -217,6 +221,7 @@ residencyFor = \case
         Just
             Residency
                 { residencyPackages = pypiCorpusPackages
+                , residencyRead = pypiRead
                 , residencyMetadata = adapterMetadata pypiAdapter
                 , residencyUpstream = pypiCaptureUpstream
                 , residencyCalibration = pypiCalibration
@@ -482,11 +487,11 @@ project package bytes = (\manifest -> (manifestInfo manifest, manifestRaw manife
 
 readCapture :: CorpusPackage -> ByteString -> IO Manifest
 readCapture package bytes = do
-    (metadata, upstream) <- maybe noResidencyCorpus pure (captureSource (pkgEcosystem (cpPackage package)))
-    captureManifest metadata upstream (cpPackage package) [bytes] >>= either (fail . show) pure
+    (reader, upstream) <- maybe noResidencyCorpus pure (captureSource (pkgEcosystem (cpPackage package)))
+    captureManifest reader upstream (cpPackage package) [bytes] >>= either (fail . show) pure
 
-captureSource :: Ecosystem -> Maybe (AdapterMetadata, CaptureUpstream)
-captureSource = fmap (\record -> (residencyMetadata record, residencyUpstream record)) . residencyFor
+captureSource :: Ecosystem -> Maybe (EcosystemRead, CaptureUpstream)
+captureSource = fmap (\record -> (residencyRead record, residencyUpstream record)) . residencyFor
 
 noResidencyCorpus :: IO a
 noResidencyCorpus = fail "no metadata residency record"
@@ -584,14 +589,14 @@ readVersionList limits next = readJsonWalk (MetadataBodyLimit (maxMetadataBytes 
 readFull :: Limits -> PackageName -> Body -> IO (Either Text CacheEntry)
 readFull limits name body = case captureSource (pkgEcosystem name) of
     Nothing -> pure (Left "no metadata residency record")
-    Just (metadata, upstream) -> bimap show manifestEntry <$> readManifest (metadataRead metadata) passthroughTracingPort (sourceTerms limits upstream) name body
+    Just (reader, upstream) -> bimap show manifestEntry <$> readManifest reader passthroughTracingPort (sourceTerms limits upstream) name body
 
 streamSelected :: Limits -> PackageName -> Version -> IO ByteString -> IO (Either Text (Held, Int, Maybe ContentDigest))
 streamSelected limits name version next = case captureSource (pkgEcosystem name) of
     Nothing -> pure (Left "no metadata residency record")
-    Just (metadata, upstream) ->
+    Just (reader, upstream) ->
         bimap show (\selected -> (HeldSelected selected, vrBodyBytes selected, Nothing))
-            <$> readVersion (metadataRead metadata) passthroughTracingPort (sourceTerms limits upstream) name version (sourceBody next)
+            <$> readVersion reader passthroughTracingPort (sourceTerms limits upstream) name version (sourceBody next)
 
 -- A read from the capture's registry under the probe's own limits, outside the memory gate.
 sourceTerms :: Limits -> CaptureUpstream -> ReadTerms

@@ -16,6 +16,7 @@ import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS))
 import Network.HTTP.Types (hContentType)
 
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (staticRead)
 import Ecluse.Core.Registry.Request (attachCredential, parseRequestEither)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
@@ -66,7 +67,7 @@ pypiAdapter =
                 }
         , adapterMetadata =
             AdapterMetadata
-                { metadataRead = pypiRead
+                { metadataRead = staticRead pypiRead
                 , metadataAssemble = assembleSimpleDocument
                 , metadataSerialise = serialiseSimpleDocument
                 , metadataChargeFactors = pypiChargeFactors
@@ -106,6 +107,6 @@ pypiPublish =
                 )
         , publishUploadClaims = \limits body -> Multipart.uploadClaims limits (publishBodyContentType body) (publishBodyBytes body)
         , publishCodec = pypiPublishCodec
-        , publishMirrorRequirements = MirrorRequirements (ChargedWorkerRead pypiMirrorRead) DurableVersionState ExplicitUploadEndpoint
+        , publishMirrorRequirements = MirrorRequirements (ChargedWorkerRead (staticRead pypiMirrorRead)) DurableVersionState ExplicitUploadEndpoint
         , publishIdentity = NamedIdentity
         }

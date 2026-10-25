@@ -2,9 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | npm's entry in the ecosystem adapter registry. Every field names a function the
-@Ecluse.Core.Registry.Npm.*@ modules export, so no protocol decision is made here.
--}
+-- | npm capabilities for serving, publication, and store maintenance.
 module Ecluse.Core.Registry.Npm.Adapter (
     npmAdapter,
     npmPublish,
@@ -28,6 +26,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     WorkerMetadataRead (..),
  )
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (staticRead)
 import Ecluse.Core.Registry.Npm (relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
@@ -53,7 +52,7 @@ npmAdapter =
                 }
         , adapterMetadata =
             AdapterMetadata
-                { metadataRead = npmRead
+                { metadataRead = staticRead npmRead
                 , metadataAssemble = assembleMergedDocument
                 , metadataSerialise = serialiseMergedDocument
                 , metadataChargeFactors = npmChargeFactors

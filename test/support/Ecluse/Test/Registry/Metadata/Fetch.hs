@@ -22,7 +22,6 @@ import Network.HTTP.Types.Status (statusCode)
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (BodyOutcome (SuccessBody), FetchFault (FetchBoundExceeded), RegistryResponse (RegistryResponse), isAuthorisationFailure)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.Exchange (runExchange)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError, VersionRead)
@@ -62,13 +61,13 @@ heldManifest :: EcosystemRead -> Limits -> Text -> PackageName -> [ByteString] -
 heldManifest eco limits base name chunks = readManifest eco passthroughTracingPort (heldTerms limits base chunks) name (heldBody chunks)
 
 -- | 'heldManifest' of a capture, under the default limits and against the registry it came from.
-captureManifest :: AdapterMetadata -> CaptureUpstream -> PackageName -> [ByteString] -> IO (Either MetadataError Manifest)
-captureManifest metadata upstream = heldManifest (metadataRead metadata) defaultLimits (upstreamOrigin upstream)
+captureManifest :: EcosystemRead -> CaptureUpstream -> PackageName -> [ByteString] -> IO (Either MetadataError Manifest)
+captureManifest reader upstream = heldManifest reader defaultLimits (upstreamOrigin upstream)
 
 -- | The production selected read of a capture's chunks, on the terms of 'captureManifest'.
-captureVersion :: AdapterMetadata -> CaptureUpstream -> PackageName -> Version -> [ByteString] -> IO (Either MetadataError VersionRead)
-captureVersion metadata upstream name version chunks =
-    readVersion (metadataRead metadata) passthroughTracingPort (heldTerms defaultLimits (upstreamOrigin upstream) chunks) name version (heldBody chunks)
+captureVersion :: EcosystemRead -> CaptureUpstream -> PackageName -> Version -> [ByteString] -> IO (Either MetadataError VersionRead)
+captureVersion reader upstream name version chunks =
+    readVersion reader passthroughTracingPort (heldTerms defaultLimits (upstreamOrigin upstream) chunks) name version (heldBody chunks)
 
 heldTerms :: Limits -> Text -> [ByteString] -> ReadTerms
 heldTerms limits base chunks =

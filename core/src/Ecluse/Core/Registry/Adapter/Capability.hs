@@ -48,7 +48,7 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Json.Walk (Step)
 import Ecluse.Core.Registry.Maintenance (StoreRefusal)
 import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet)
-import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead)
 import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Registry.ServedDocument (RenderRefused)
@@ -62,8 +62,8 @@ type ProjectName = Text -> Maybe PackageName
 
 -- | The ecosystem's metadata read, served-document assembly, and encoding ('Ecluse.Core.Server.Context.pdMetadata').
 data AdapterMetadata = AdapterMetadata
-    { metadataRead :: EcosystemRead
-    -- ^ The ecosystem's part of a metadata read, which "Ecluse.Core.Registry.Metadata.Fetch" runs for every caller.
+    { metadataRead :: PrepareRead
+    -- ^ Prepare under the selected origin before reading its metadata.
     , metadataAssemble :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
     -- ^ Select exact admitted entries from the supplied snapshots before rendering their wire shape.
     , metadataSerialise :: CachedDoc -> Either RenderRefused LByteString
@@ -99,7 +99,7 @@ data PublishRequestBody = PublishRequestBody
 -- | Worker reads reuse the cache or charge the selected native read directly.
 data WorkerMetadataRead
     = CachedWorkerRead
-    | ChargedWorkerRead EcosystemRead
+    | ChargedWorkerRead PrepareRead
 
 -- | Completion uses native inventory or requires durable version state.
 data MirrorStateRequirement

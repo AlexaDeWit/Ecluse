@@ -29,6 +29,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionRead (vrBodyBytes, vrVersion),
  )
 import Ecluse.Core.Registry.Metadata.Fetch (chargingSelectedReads, fetchManifest, fetchVersion, readManifest, readVersion)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (staticRead)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest), ReadTerms (..))
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocLimits), chargingFullReads, originBaseUrl, originClient, perCallerOrigin)
 import Ecluse.Core.Registry.Request (baseRequestUrl, mkBaseRequest)
@@ -64,7 +65,7 @@ statusSpec eco = describe "upstream statuses" $ do
                     let record phase who action = modifyIORef' events (<> [(phase, who)]) >> action
                         tracing = passthroughTracingPort{spanMetadataFetch = record "fetch", spanMetadataDecode = record "decode"}
                         origin = perCallerOrigin defaultLimits exchanges (mkBaseRequest (loopbackRegistryUrl (stubBaseUrl stub))) Nothing
-                        client = privateMetadataClient (ecosystemMetadataReads (rdRead eco) tracing noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
+                        client = privateMetadataClient (ecosystemMetadataReads (staticRead (rdRead eco)) tracing noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
                     full <- fetchFullManifest client (thing eco)
                     void full `shouldBe` expected
                     single <- fetchVersionMetadata client (thing eco) (releaseOf eco)
@@ -81,7 +82,7 @@ statusSpec eco = describe "upstream statuses" $ do
             withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
                 charges <- newIORef (0 :: Int)
                 let origin = chargingFullReads (\n -> modifyIORef' charges (+ n)) (perCallerOrigin defaultLimits exchanges (mkBaseRequest (loopbackRegistryUrl (stubBaseUrl stub))) Nothing)
-                    client = privateMetadataClient (ecosystemMetadataReads (rdRead eco) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
+                    client = privateMetadataClient (ecosystemMetadataReads (staticRead (rdRead eco)) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
                 _ <- fetchVersionMetadata client (thing eco) (releaseOf eco)
                 readIORef charges `shouldReturn` 0
                 _ <- fetchFullManifest client (thing eco)

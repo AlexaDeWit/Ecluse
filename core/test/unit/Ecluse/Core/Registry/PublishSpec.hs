@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Target credential, charging, and transport contracts for mirror publication.
 module Ecluse.Core.Registry.PublishSpec (spec) where
 
 import Data.ByteString.Lazy qualified as LBS
@@ -20,11 +21,13 @@ import Ecluse.Core.Registry (
     PublishFault (PublishFetch),
     UrlFormationError (UnparseableUrl),
  )
-import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch, MetadataUndecodable))
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (..), staticRead)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.MirrorUpload (inventoryFiles, verifyMirrorBytes)
 import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, prepareNpmSource, prepareNpmUpload)
+import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish (mpProbeInventory),
     MirrorTransport (MirrorTransport, ptClient, ptLimits, ptMintCredential, ptTracing),
@@ -36,6 +39,7 @@ import Ecluse.Core.Registry.Request (baseRequestUrl)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Test.Deadline (untracedClient, withExchangeClient, withSweeper)
 import Ecluse.Test.Package (v1_0_0)
 import Ecluse.Test.Port (passthroughTracingPort)
@@ -58,8 +62,6 @@ spec :: Spec
 spec = do
     describe "newMirrorPublish (the codec-over-transport marriage)" $ do
         it "mints the bearer per probe and attaches it to the wire" $
-            -- A managed mirror (CodeArtifact) needs auth on reads as on writes, so the probe
-            -- presents a current token. The transport mints it per call and never caches it.
             withStub status200 "{\"name\":\"is-odd\"}" $ \stub -> withSweeper $ \deadlines -> do
                 (publish, mints) <- mintCountingPublish deadlines stub
                 _ <- mpProbeInventory publish (const (pure ())) isOdd
@@ -68,6 +70,33 @@ spec = do
                 _ <- mpProbeInventory publish (const (pure ())) isOdd
                 minted <- readIORef mints
                 minted `shouldBe` 2
+
+        it "prepares a target after minting with the overlapping-inventory charge" $
+            withStub status200 "{}" $ \stub ->
+                withExchangeClient (Client.newManager Client.defaultManagerSettings) $ \exchanges -> do
+                    events <- newIORef ([] :: [Text])
+                    charges <- newIORef []
+                    let credential = Just (bareCredential (mkSecret "service-token"))
+                        target = loopbackRegistryUrl (stubBaseUrl stub)
+                        transport =
+                            MirrorTransport
+                                { ptClient = exchanges
+                                , ptMintCredential = modifyIORef' events (<> ["mint"]) $> credential
+                                , ptLimits = defaultLimits
+                                , ptTracing = passthroughTracingPort
+                                }
+                        factory = PrepareRead $ \_ origin -> do
+                            modifyIORef' events (<> ["prepare"])
+                            ocToken origin `shouldBe` credential
+                            originBaseUrl origin `shouldBe` registryUrlText target
+                            ocChargeFullRead origin 13
+                            pure (Left MetadataUndecodable)
+                        codec = npmPublishCodec{pcTargetRead = factory}
+                        publish = newMirrorPublish transport target target codec
+                    mpProbeInventory publish (\bytes -> modifyIORef' charges (<> [bytes])) isOdd `shouldReturn` Left MetadataUndecodable
+                    readIORef events `shouldReturn` ["mint", "prepare"]
+                    readIORef charges `shouldReturn` [scaleCharge (2 * pcTargetReadPermille npmPublishCodec) 13]
+                    allCaptured stub `shouldReturn` []
 
         it "mints the bearer per publish and attaches it to the wire" $
             withStub status200 "{}" $ \stub -> withSweeper $ \deadlines -> do
@@ -94,8 +123,6 @@ spec = do
             outcome `shouldSatisfy` isProbeTransportFault
 
         it "refuses an over-cap probe body fail-closed as a FetchBoundExceeded value" $
-            -- The probe reads the mirror's answer bounded. A body past the budget comes
-            -- back as a refusal value, never buffered whole.
             withStub status200 "0123456789 more than sixteen bytes" $ \stub -> do
                 withExchangeClient (Client.newManager Client.defaultManagerSettings) $ \exchanges -> do
                     let transport =
@@ -110,8 +137,6 @@ spec = do
                     outcome `shouldBe` Left (MetadataFetch (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 16))))
 
         it "refuses an over-cap publish answer fail-closed as a PublishFetch bound breach" $
-            -- The write reads the target's answer through the same bounded exchange as the
-            -- probe, so a pathological response body never buffers whole.
             withStub status200 "0123456789 more than sixteen bytes" $ \stub -> do
                 withExchangeClient (Client.newManager Client.defaultManagerSettings) $ \exchanges -> do
                     let transport =
@@ -175,7 +200,7 @@ unsealedCodec =
         , pcVersionListWalk = pcVersionListWalk npmPublishCodec
         , pcNativeComplete = pcNativeComplete npmPublishCodec
         , pcTargetReadPermille = pcTargetReadPermille npmPublishCodec
-        , pcTargetRead = npmRead{erRequest = \target _ _ -> unsealed (registryUrlText (baseRequestUrl target) <> "/probe")}
+        , pcTargetRead = staticRead npmRead{erRequest = \target _ _ -> unsealed (registryUrlText (baseRequestUrl target) <> "/probe")}
         , pcPrepareSource = prepareNpmSource
         , pcPrepareUpload = \_ _ inventory source file bytes -> pure (prepareNpmUpload inventory source file bytes)
         , pcPublishRequest = \targetUrl _token _plan _upload ->
@@ -215,8 +240,6 @@ redirectFrom source cap
 servedPaths :: Stub -> IO [ByteString]
 servedPaths stub = fmap capPath <$> allCaptured stub
 
--- The marriage against a stub with a mint that counts its calls and answers a
--- fixed token, so the per-call mint is observable.
 mintCountingPublish :: Deadlines -> Stub -> IO (MirrorPublish, IORef Int)
 mintCountingPublish deadlines stub = do
     exchanges <- untracedClient <$> Client.newManager Client.defaultManagerSettings <*> pure deadlines
