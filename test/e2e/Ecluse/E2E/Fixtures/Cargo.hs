@@ -80,7 +80,7 @@ cargoFixtureReleases = loadCargoGraph "test/fixtures/cargo/graph"
 cargoReadIndex :: E2E -> Text -> Text -> IO [KeyMap.KeyMap Value]
 cargoReadIndex proxy view name = do
     (status, body) <- proxyGet proxy (view <> cargoShard name)
-    unless (status == 200) (fail ("native index returned " <> show status <> " for " <> name))
+    unless (status == 200) (fail (toString ("native index returned " <> show status <> " for " <> name)))
     traverse (either (fail . toString) pure . indexValue) (referenceIndex (LBS.toStrict body))
 
 -- | Native version spelling comes from the served record without production decoding.
@@ -95,4 +95,4 @@ cargoReadVersions proxy view name = mapM version =<< cargoReadIndex proxy view n
 cargoRelease :: [CargoRelease] -> Text -> Text -> IO CargoRelease
 cargoRelease releases name version = case filter (\release -> crateName (releaseCrate release) == name && crateVersion (releaseCrate release) == version) releases of
     [release] -> pure release
-    _ -> fail ("Cargo fixture coordinate is absent or ambiguous: " <> name <> "@" <> version)
+    _ -> fail (toString ("Cargo fixture coordinate is absent or ambiguous: " <> name <> "@" <> version))
