@@ -13,10 +13,10 @@ import Data.List (partition)
 import Data.Set qualified as Set
 
 import Ecluse.Core.Cve.Types (DbEtag)
-import Ecluse.Core.Package (PackageName, renderPackageName)
+import Ecluse.Core.Package (PackageDetails, PackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
     StoreFault,
-    StoreObservation (obReadManifest),
+    StoreObservation (obReadArtifact, obReadManifest),
     StoredVersion (storedPresence, storedVersion),
     VersionOutcome (VersionRefused, VersionRemoved, VersionRemoving, VersionUncertain, VersionUnreached),
     VersionPresence (VersionServed),
@@ -33,7 +33,7 @@ import Ecluse.Core.Registry.Sweep.Outcome (
  )
 import Ecluse.Core.Registry.Sweep.Types (
     SweepAudit (auditError, auditInfo),
-    SweepMount (smConfigured, smEcosystem, smFirstParty, smRuleDeps, smRules, smStore),
+    SweepMount (smConfigured, smEcosystem, smFirstParty, smInstallBudget, smInstallEvidence, smInstallLimits, smRuleDeps, smRules, smStore),
     SweepPacing (swpDeletionCap),
     SweepPorts (sweepAdvisoryEtag, sweepAudit, sweepNow, sweepReport),
     SweepReport (reportOpening, reportRemoval),
@@ -46,7 +46,9 @@ import Ecluse.Core.Registry.Sweep.Types (
     recordMetric,
     recordTally,
  )
-import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness), newEvaluator, pushInability)
+import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness), newEvaluatorWithInstallRead, pushInability)
+import Ecluse.Core.Rules.Effectful (ReadFault (rfDetail))
+import Ecluse.Core.Rules.Install
 import Ecluse.Core.Rules.Render (renderInability, renderReason)
 import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext, Inability, Reason, RuleEvidence (evName, evVersion), completeEvidence, identityEvidence, mkEvalContext, readsAdvisories, ruleName)
 import Ecluse.Core.Server.Metadata (selectVersion)
@@ -127,19 +129,36 @@ selectPackage counting ports counters mount ctx name stored
             Left fault -> do
                 recordGap counters unreadManifest
                 announceUnread ports name served fault
-                decideAll (identityEvidence name)
+                decideAll (\version -> (identityEvidence name version, Nothing))
             Right manifest -> decideAll (evidenceIn name manifest)
   where
     served = [storedVersion s | s <- stored, storedPresence s == VersionServed]
     decideAll evidence = do
-        decide <- newEvaluator ctx (smRules mount)
-        catMaybes <$> traverse (decideVersion counting ports counters decide evidence) served
+        decide <- newEvaluatorWithInstallRead (installEvidenceMode (smInstallEvidence mount)) ctx (smRules mount)
+        reads <- case smInstallEvidence mount of
+            Nothing -> pure (const (pure Nothing))
+            Just provider ->
+                newInstallEvidenceReads
+                    provider
+                    InstallEvidenceContext
+                        { ieLimits = smInstallLimits mount
+                        , ieRole = InstallStoreRevocation
+                        , ieReadArtifact = obReadArtifact (ssObserve (smStore mount))
+                        , ieBudget = smInstallBudget mount
+                        , ieFlightBudget = Nothing
+                        , ieDiagnostic = \fault -> auditError (sweepAudit ports) (renderPackageName name <> ": " <> renderInability (rfDetail fault))
+                        }
+        let decideSubject version = do
+                let (ev, details) = evidence version
+                reader <- maybe (pure Nothing) reads details
+                decide ev reader
+        catMaybes <$> traverse (decideVersion counting ports counters decideSubject) served
 
 -- The listing establishes exact identity even when the manifest keys an equivalent spelling.
-evidenceIn :: PackageName -> Manifest -> Version -> RuleEvidence
+evidenceIn :: PackageName -> Manifest -> Version -> (RuleEvidence, Maybe PackageDetails)
 evidenceIn name manifest version = case selectVersion version (manifestInfo manifest) of
-    Nothing -> identityEvidence name version
-    Just details -> (completeEvidence details){evName = name, evVersion = version}
+    Nothing -> (identityEvidence name version, Nothing)
+    Just details -> ((completeEvidence details){evName = name, evVersion = version}, Just details)
 
 {- Decide one version from whatever evidence it has and count it. Only a named decisive deny
 condemns, so this reads the engine's decision rather than the wrapper that folds in deny-by-default. -}
@@ -147,13 +166,12 @@ decideVersion ::
     Bool ->
     SweepPorts ->
     SweepState ->
-    (RuleEvidence -> IO Decision) ->
-    (Version -> RuleEvidence) ->
+    (Version -> IO Decision) ->
     Version ->
     IO (Maybe Condemned)
-decideVersion counting ports counters decide evidence version = do
+decideVersion counting ports counters decide version = do
     when counting (record ports counters SweepExamined)
-    decide (evidence version) >>= \case
+    decide version >>= \case
         Blocked rule etag reason -> pure (Just Condemned{cdVersion = version, cdRule = rule, cdAdvisoryEtag = etag, cdReason = reason})
         _ -> when counting (record ports counters SweepKept) $> Nothing
 

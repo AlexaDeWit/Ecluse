@@ -12,8 +12,10 @@ module Ecluse.Core.Server.Pipeline.Tarball.Public (
     publicArtifactGate,
 ) where
 
+import Katip (Severity (ErrorS), logFM, ls)
 import Network.HTTP.Types (status404)
 import Network.Wai (ResponseReceived)
+import UnliftIO (withRunInIO)
 
 import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Fault (TransportFault, tfDetail)
@@ -28,7 +30,7 @@ import Ecluse.Core.Package.Admission (
         AdmissionUndecidable
     ),
     admissionTransience,
-    admitArtifactWithEvidence,
+    admitArtifactWithInstallRead,
  )
 import Ecluse.Core.Queue (
     MirrorJob (MirrorJob, jobPackage, jobTraceContext, jobTriggerFilename, jobVersion),
@@ -43,9 +45,12 @@ import Ecluse.Core.Registry.Metadata (
     VersionRead,
     versionEvaluation,
  )
-import Ecluse.Core.Rules.Render (renderDecision)
-import Ecluse.Core.Rules.Types (EvalContext, SkippedCheck, completeEvidence, mkEvalContext)
+import Ecluse.Core.Rules.Effectful (ReadFault (rfDetail))
+import Ecluse.Core.Rules.Install (InstallEvidenceRead, InstallEvidenceRole (InstallPublicAdmission), installEvidenceMode)
+import Ecluse.Core.Rules.Render (renderDecision, renderInability)
+import Ecluse.Core.Rules.Types (EvalContext, SkippedCheck, completeEvidence, mkEvalContext, skippedChecks)
 import Ecluse.Core.Security (Limits (progressFloor), Origin (UntrustedOrigin), hostPortAddress, thgPublicHostPort)
+import Ecluse.Core.Server.Admission.Meter (MemoryTicket, charge, newChargeRegion)
 import Ecluse.Core.Server.Cache.Store (PreparedStore, executePrepared)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -56,6 +61,7 @@ import Ecluse.Core.Server.Context (
     pdTarballHostGate,
     tarballHostHonoured,
  )
+import Ecluse.Core.Server.InstallEvidence (newPublicInstallEvidenceReads, newTicketInstallEvidenceFlightBudget)
 import Ecluse.Core.Server.Path (Filename)
 import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
@@ -98,7 +104,6 @@ import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (spanMirrorEnqueue, spanRuleEval)
 import Ecluse.Core.Telemetry.Upstream qualified as PublicRead
 import Ecluse.Core.Version (renderVersion)
-import UnliftIO (withRunInIO)
 
 -- | Gate the requested version under the mount's admission budget, then relay it.
 servePublicArtifact :: ArtifactRequest response -> Handler ResponseReceived
@@ -118,7 +123,7 @@ servePublicWithCoverage covered ctx = do
     withMetadataAdmission
         (arRuntime ctx)
         (\headers -> liftIO (arRespond ctx (tarballError (arReplies ctx) shedStatus headers (mkRefusal Nothing shedMessage))))
-        (const (preparePublicMetadata (arRuntime ctx) (arDeps ctx) (arPackage ctx) (arVersion ctx) >>= gatePublicVersion covered ctx advisoryEtag))
+        (\ticket -> preparePublicMetadata (arRuntime ctx) (arDeps ctx) (arPackage ctx) (arVersion ctx) >>= gatePublicVersion ticket covered ctx advisoryEtag)
         $ \case
             Admitted artifact skipped -> serveAdmitted ctx advisoryEtag artifact skipped
             Refused decision -> refusePublic ctx advisoryEtag decision
@@ -146,8 +151,8 @@ data PublicArtifactGate
     | -- | The gate refused the version: a policy denial, an upstream outage, or absence.
       Refused ServeDecision
 
-gatePublicVersion :: (Maybe PackageDetails -> Bool) -> ArtifactRequest response -> Maybe DbEtag -> PreparedStore MetadataError VersionRead -> Handler PublicArtifactGate
-gatePublicVersion covered ctx advisoryEtag prepared = do
+gatePublicVersion :: MemoryTicket -> (Maybe PackageDetails -> Bool) -> ArtifactRequest response -> Maybe DbEtag -> PreparedStore MetadataError VersionRead -> Handler PublicArtifactGate
+gatePublicVersion ticket covered ctx advisoryEtag prepared = do
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pure advisoryEtag))
     eval <-
         liftIO $
@@ -159,12 +164,19 @@ gatePublicVersion covered ctx advisoryEtag prepared = do
         VersionMetadataUnavailable -> pure (Refused upstreamUnavailable)
         VersionMissing -> pure (Refused (if covered Nothing then versionAbsent else upstreamUnavailable))
         VersionPresent doc _ | not (covered (Just (vdDetails doc))) -> pure (Refused upstreamUnavailable)
-        VersionPresent doc _ ->
-            liftIO $
-                spanRuleEval (srTracing rt) (arPackage ctx) (arVersion ctx) $ do
-                    (gate, seconds) <- timedSeconds (gateVersion evalCtx deps (arFile ctx) (vdDetails doc))
+        VersionPresent doc _ -> withRunInIO $ \run -> do
+            let evaluateWith reader = spanRuleEval (srTracing rt) (arPackage ctx) (arVersion ctx) $ do
+                    (gate, seconds) <- timedSeconds (gateVersion evalCtx deps reader (arFile ctx) (vdDetails doc))
                     mpRuleEvalDuration (srMetrics rt) (evalTier (pdRules deps)) seconds
                     pure (gate, gateVerdict gate)
+            case pdInstallEvidence deps of
+                Nothing -> evaluateWith Nothing
+                Just _ -> do
+                    bytes <- newChargeRegion (charge ticket)
+                    inspection <- newChargeRegion (charge ticket)
+                    sharing <- newTicketInstallEvidenceFlightBudget ticket
+                    reads <- newPublicInstallEvidenceReads deps (srPublicClient rt) (srPublicControl rt) InstallPublicAdmission bytes inspection (Just sharing) (\fault -> run (logFM ErrorS (ls (renderInability (rfDetail fault)))))
+                    reads (vdDetails doc) >>= evaluateWith
   where
     rt = arRuntime ctx
     deps = arDeps ctx
@@ -174,9 +186,10 @@ gateVerdict = \case
     Admitted{} -> Admit
     Refused decision -> decision
 
-gateVersion :: EvalContext -> PackumentDeps -> Filename -> PackageDetails -> IO PublicArtifactGate
-gateVersion ctx deps file details =
-    uncurry (publicArtifactGate details) <$> admitArtifactWithEvidence ctx (pdRules deps) (pdMinIntegrity deps) file details
+gateVersion :: EvalContext -> PackumentDeps -> Maybe InstallEvidenceRead -> Filename -> PackageDetails -> IO PublicArtifactGate
+gateVersion ctx deps reader file details = do
+    (admission, decision) <- admitArtifactWithInstallRead (installEvidenceMode (pdInstallEvidence deps)) reader ctx (pdRules deps) (pdMinIntegrity deps) file details
+    pure (publicArtifactGate details admission (skippedChecks decision))
 
 -- | Render the shared admission verdict on the serve surface.
 publicArtifactGate :: PackageDetails -> ArtifactAdmission -> [SkippedCheck] -> PublicArtifactGate

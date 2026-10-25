@@ -21,10 +21,10 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
-import Katip (Severity (DebugS), logFM, ls)
+import Katip (Severity (DebugS, ErrorS), logFM, ls)
 import Network.HTTP.Types (Method, ResponseHeaders, hContentLength)
 import Network.Wai (Request, ResponseReceived, requestHeaders)
-import UnliftIO (concurrently)
+import UnliftIO (concurrently, withRunInIO)
 import UnliftIO.Exception (catchAny, evaluate, throwIO)
 
 import Ecluse.Core.Credential (ClientCredential)
@@ -51,11 +51,14 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
     Manifest (manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw),
  )
-import Ecluse.Core.Rules (newEvaluator)
+import Ecluse.Core.Rules (newEvaluatorWithInstallRead)
+import Ecluse.Core.Rules.Effectful (ReadFault (rfDetail))
+import Ecluse.Core.Rules.Install (InstallEvidenceRead, InstallEvidenceRole (InstallPublicAdmission), installEvidenceMode)
+import Ecluse.Core.Rules.Render (renderInability)
 import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext (ctxAdvisoryEtag), completeEvidence, mkEvalContext)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
-import Ecluse.Core.Server.Admission.Meter (ChargePart, MemoryTicket, awaitingFlight, charge, newChargePart, servingFlight, stepDown)
+import Ecluse.Core.Server.Admission.Meter (ChargePart, MemoryTicket, awaitingFlight, charge, newChargePart, newChargeRegion, servingFlight, stepDown)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfOutputPermille))
 import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Cache.Types (assembledKey)
@@ -81,6 +84,7 @@ import Ecluse.Core.Server.Encoding (
     varyAcceptEncoding,
  )
 import Ecluse.Core.Server.Fault (RenderEscape (RenderEscape))
+import Ecluse.Core.Server.InstallEvidence (newPublicInstallEvidenceReads, newTicketInstallEvidenceFlightBudget)
 import Ecluse.Core.Server.MetadataGzip (GzipBody (gzipLength), gzipLazyBody, gzipMetadata)
 import Ecluse.Core.Server.MirrorView (mirrorProjectViews, publicMirrorCoverage, validateMirrorProject)
 import Ecluse.Core.Server.Pipeline.Diagnostics (warnDivergences)
@@ -289,7 +293,12 @@ serveMergedPackument serving evalCtx record privResult pubResult =
                 (managed, managedExclusions) = admitTrusted (pdMinTrustedIntegrity deps) managedManifest
                 privateSources = catMaybes [unmanaged, managed]
                 trustedVersions = Map.unions (map (infoVersions . srcInfo) privateSources)
-            public <- liftIO (gatePublic (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) (originManifest pubResult))
+            evidenceBytes <- liftIO (newChargeRegion (charge (psvTicket serving)))
+            evidenceInspection <- liftIO (newChargeRegion (charge (psvTicket serving)))
+            public <- withRunInIO $ \run -> do
+                sharing <- newTicketInstallEvidenceFlightBudget (psvTicket serving)
+                evidenceReads <- newPublicInstallEvidenceReads deps (srPublicClient rt) (srPublicControl rt) InstallPublicAdmission evidenceBytes evidenceInspection (Just sharing) (\fault -> run (logFM ErrorS (ls (renderInability (rfDetail fault)))))
+                gatePublic evidenceReads (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) (originManifest pubResult)
             let sources = privateSources <> maybeToList (paContribution public)
                 required = Map.withoutKeys pending (paBlockedPending public)
                 covered = Map.null required || maybe False (publicMirrorCoverage required . srcInfo) (paContribution public)
@@ -343,12 +352,12 @@ data PublicAdmission = PublicAdmission
       -- Integrity-admitted but rule-denied versions contribute alarms, never served entries.
     }
 
-gatePublic :: TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Map Text PackageDetails -> Set Text -> Maybe Manifest -> IO PublicAdmission
-gatePublic tracing metrics deps name ctx trustedVersions pendingVersions = \case
+gatePublic :: (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Map Text PackageDetails -> Set Text -> Maybe Manifest -> IO PublicAdmission
+gatePublic evidenceReads tracing metrics deps name ctx trustedVersions pendingVersions = \case
     Nothing -> pure (PublicAdmission Nothing [] [] Set.empty Map.empty)
     Just manifest -> spanPackumentGate tracing name $ do
         let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) integrityBelowFloor integrityMissing (manifestInfo manifest)
-        (decisions, seconds) <- timedSeconds (decideVersions deps ctx admissible)
+        (decisions, seconds) <- timedSeconds (decideVersions evidenceReads deps ctx admissible)
         mpRuleEvalDuration metrics (evalTier (pdRules deps)) seconds
         recordEffectfulFailures metrics (Map.elems decisions)
         let plan = filterPlanFromDecisions decisions
@@ -367,10 +376,10 @@ gatePublic tracing metrics deps name ctx trustedVersions pendingVersions = \case
                         blockedPending
                         deniedEvidence
 
-decideVersions :: PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text Decision)
-decideVersions deps ctx info = do
-    decide <- newEvaluator ctx (pdRules deps)
-    traverse (decide . completeEvidence) (infoVersions info)
+decideVersions :: (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text Decision)
+decideVersions evidenceReads deps ctx info = do
+    decide <- newEvaluatorWithInstallRead (installEvidenceMode (pdInstallEvidence deps)) ctx (pdRules deps)
+    traverse (\details -> evidenceReads details >>= decide (completeEvidence details)) (infoVersions info)
 
 projectDecisions :: PackageInfo -> [Decision] -> [VersionVerdict]
 projectDecisions info =

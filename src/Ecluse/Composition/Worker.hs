@@ -36,6 +36,7 @@ import Ecluse.Core.Server.Context (
     pdArtifact,
     pdEgressUrl,
     pdFirstParty,
+    pdInstallEvidence,
     pdLimits,
     pdMetadata,
     pdMinIntegrity,
@@ -46,6 +47,7 @@ import Ecluse.Core.Server.Context (
     pdTarballHostGate,
     tarballHostHonoured,
  )
+import Ecluse.Core.Server.InstallEvidence (newTicketInstallEvidenceFlightBudget)
 import Ecluse.Core.Server.MemoryModel (decodedDocumentCharge)
 import Ecluse.Core.Server.Metadata (ecosystemMetadataReads, publicMetadataClient, uncachedPublicMetadataClient)
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind (WorkerMetadata))
@@ -85,7 +87,8 @@ workerPoliciesWithState env states bindings targets artifactMaxBytes =
                         archiveCharge <- newChargeRegion (charge ticket)
                         sourceCharge <- newChargeRegion (charge ticket)
                         targetCharge <- newChargeRegion (charge ticket)
-                        action WorkerStateBudget{wsbState = stateCharge, wsbRecords = recordCharge, wsbCompanions = companionCharge, wsbArtifacts = artifactCharge, wsbArchive = archiveCharge, wsbSource = sourceCharge, wsbTargets = targetCharge}
+                        evidenceFlight <- newTicketInstallEvidenceFlightBudget ticket
+                        action WorkerStateBudget{wsbState = stateCharge, wsbRecords = recordCharge, wsbCompanions = companionCharge, wsbArtifacts = artifactCharge, wsbArchive = archiveCharge, wsbSource = sourceCharge, wsbTargets = targetCharge, wsbEvidenceFlight = Just evidenceFlight}
                 }
     targetsByEcosystem = Map.fromList [(ptEcosystem target, target) | target <- targets]
 
@@ -115,6 +118,7 @@ workerPolicyFor env requirements deps publish artifactMaxBytes =
     WorkerPolicy
         { wpFirstParty = pdFirstParty deps
         , wpResolveVersion = fetchVersionDetails . client
+        , wpInstallEvidence = pdInstallEvidence deps
         , wpRules = pdRules deps
         , wpMinIntegrity = pdMinIntegrity deps
         , wpArtifactHostHonoured =

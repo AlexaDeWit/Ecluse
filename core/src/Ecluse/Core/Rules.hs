@@ -33,6 +33,8 @@ module Ecluse.Core.Rules (
 
     -- * Evaluation
     newEvaluator,
+    newEvaluatorWithInstallRead,
+    evalRulesWithInstallRead,
     evalRules,
     pushInability,
 
@@ -48,7 +50,7 @@ import Data.Text.Short qualified as TS
 import Data.Time (NominalDiffTime, UTCTime (UTCTime), diffDays, diffTimeToPicoseconds, getCurrentTime, secondsToNominalDiffTime)
 import Data.Time.Clock.POSIX (posixDayLength)
 import UnliftIO (evaluate, tryAny)
-import UnliftIO.MVar (withMVar)
+import UnliftIO.MVar (modifyMVar, withMVar)
 
 import Ecluse.Core.Breaker (BreakerReporter (..))
 import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), MissingScorePolicy (..), PackageAdvisories, advisoryIdsOf, affecting, hasAdvisories, keepAdvisories, packageAdvisories, scoreAtLeast)
@@ -62,6 +64,7 @@ import Ecluse.Core.Rules.Effectful (
     runResilient,
  )
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated))
+import Ecluse.Core.Rules.Install
 import Ecluse.Core.Rules.Outage (SourceHealth (..), SourceReporter (..), noSourceReporter)
 import Ecluse.Core.Rules.Remediation (remediationVerdict)
 import Ecluse.Core.Rules.Types
@@ -113,6 +116,8 @@ readAdvisories name =
 data VerdictSource
     = -- | One version's evidence and the request context.
       FromEvidence (EvalContext -> RuleEvidence -> RuleVerdict)
+    | -- | Resolve an install fact only when this rule is reached.
+      FromInstallEvidence (EvalContext -> RuleEvidence -> RuleVerdict)
     | -- | The package's advisory rows, with how the rule resolves when it cannot read them.
       FromAdvisories AdvisoryAlignment (AdvisoryRows -> RuleEvidence -> RuleVerdict)
 
@@ -134,7 +139,7 @@ verdictSource = \case
         Unread -> CannotVet FailDeny PublishTimeUnread
         Known Nothing -> NoDecision PublishTimeUnknown
         Known (Just publishedAt) -> ageVerdict minAge (ageSince (ctxNow ctx) publishedAt)
-    DenyInstallTimeExecution -> FromEvidence $ \_ ev -> case evInstallCode ev of
+    DenyInstallTimeExecution -> FromInstallEvidence $ \_ ev -> case evInstallCode ev of
         Unread -> CannotVet FailDeny InstallSignalUnread
         Known (RunsCodeOnInstall how) -> Deny Nothing (RunsOnInstall how)
         Known NoCodeOnInstall -> NoDecision NothingRunsOnInstall
@@ -234,6 +239,8 @@ data PreparedRule = PreparedRule
 data RuleEval
     = -- | Each version's verdict. It can run more than once for a version and must answer alike. A throw refuses admission.
       PerVersion (EvalContext -> RuleEvidence -> IO RuleVerdict)
+    | -- | Resolve unknown install facts at this rule in boot order.
+      PerInstallEvidence (EvalContext -> RuleEvidence -> RuleVerdict)
     | -- | A verdict for each version from the evaluator's one advisory read of the package.
       PerPackage PackageRead
 
@@ -255,6 +262,7 @@ data PackageRead = PackageRead
 prepResilience :: PreparedRule -> Maybe Resilience
 prepResilience rule = case prepEval rule of
     PerVersion _ -> Nothing
+    PerInstallEvidence _ -> Nothing
     PerPackage packageRead -> prResilience packageRead
 
 -- | Allocate each advisory rule's breaker once. Unconfigured databases need no resilience.
@@ -265,6 +273,7 @@ prepareRule :: RuleDeps -> PrecededRule -> IO PreparedRule
 prepareRule deps (PrecededRule prec _ rule) = do
     eval <- case verdictSource rule of
         FromEvidence verdict -> pure (PerVersion (\ctx -> pure . verdict ctx))
+        FromInstallEvidence verdict -> pure (PerInstallEvidence verdict)
         FromAdvisories alignment verdict -> PerPackage <$> advisoryRead deps alignment verdict
     pure PreparedRule{prepName = ruleName rule, prepPrecedence = prec, prepEval = eval}
 
@@ -331,15 +340,48 @@ renderReach = \case
 -- | Decide a request's versions in boot order, catching throws. Advisory rules sharing one 'prepare' read one generation.
 newEvaluator :: EvalContext -> [PreparedRule] -> IO (RuleEvidence -> IO Decision)
 newEvaluator ctx rules = do
+    decide <- newEvaluatorWithInstallRead ProjectedInstallFacts ctx rules
+    pure (\ev -> decide ev Nothing)
+
+-- | Memoise one immutable subject across both evaluation passes. Advisory rows remain package-scoped.
+newEvaluatorWithInstallRead :: InstallEvidenceMode -> EvalContext -> [PreparedRule] -> IO (RuleEvidence -> Maybe InstallEvidenceRead -> IO Decision)
+newEvaluatorWithInstallRead mode ctx rules = do
     shared <- newPackageCell
-    bound <- traverse (\rule -> (rule,) <$> bindRule ctx shared rule) (bootOrder rules)
-    -- One handler per version. A throw decides the version again with a handler per rule. The fast pass
-    -- forces the evidence first, so evidence that throws leaves no held result for the second pass to meet.
-    pure (\ev -> tryAny (evaluate ev *> stepRules forceEvaluation ev bound []) >>= either (const (stepRules caughtEvaluation ev bound [])) pure)
+    binders <- traverse (\rule -> (rule,) <$> bindRule ctx shared rule) (bootOrder rules)
+    let projected = map (second (\bind -> bind ProjectedInstallFacts False (pure (Right (InstallUndetermined InstallSignalUnread))))) binders
+        hasInstallRule =
+            any
+                ( \rule -> case prepEval rule of
+                    PerInstallEvidence _ -> True
+                    _ -> False
+                )
+                rules
+    pure $ \ev reader ->
+        if not hasInstallRule || (mode == ProjectedInstallFacts && isNothing reader)
+            then runBound ev projected
+            else do
+                memo <- newMVar Nothing
+                let resolve = modifyMVar memo $ \case
+                        Just result -> pure (Just result, result)
+                        Nothing -> do
+                            result <- caught (resolveInstall reader)
+                            pure (Just result, result)
+                    bound = map (second (\bind -> bind mode (isJust reader) resolve)) binders
+                runBound ev bound
+  where
+    runBound ev bound =
+        tryAny (evaluate ev *> stepRules forceEvaluation ev bound [])
+            >>= either (const (stepRules caughtEvaluation ev bound [])) pure
+    resolveInstall Nothing = pure (InstallUndetermined InstallSignalUnread)
+    resolveInstall (Just (InstallEvidenceRead readFact)) = readFact
 
 -- | Decide one version through a fresh 'newEvaluator'.
 evalRules :: EvalContext -> [PreparedRule] -> RuleEvidence -> IO Decision
 evalRules ctx rules ev = newEvaluator ctx rules >>= ($ ev)
+
+-- | Decide one immutable version with its optional closed install-fact read.
+evalRulesWithInstallRead :: InstallEvidenceMode -> EvalContext -> [PreparedRule] -> RuleEvidence -> Maybe InstallEvidenceRead -> IO Decision
+evalRulesWithInstallRead mode ctx rules ev reader = newEvaluatorWithInstallRead mode ctx rules >>= (\decide -> decide ev reader)
 
 -- How the fold runs one rule's evaluation. Each way forces it with 'forceEvaluation'.
 type RunEvaluation = IO RuleEvaluation -> IO RuleEvaluation
@@ -349,15 +391,27 @@ type VersionEval = RuleEvidence -> IO (IO RuleEvaluation)
 
 -- A rule's closures are built once here, not per version. 'eval ctx' is bound outside the version
 -- lambda because a prepared rule builds its verdict function for each context it is given.
-bindRule :: EvalContext -> PackageCell (Either Text AdvisoryRead) -> PreparedRule -> IO VersionEval
+bindRule :: EvalContext -> PackageCell (Either Text AdvisoryRead) -> PreparedRule -> IO (InstallEvidenceMode -> Bool -> IO (Either Text InstallEvidenceResult) -> VersionEval)
 bindRule ctx shared rule = case prepEval rule of
     PerVersion eval -> do
         let decide = eval ctx
-        pure (\ev -> pure (Decided <$!> decide ev))
+        pure (\_ _ _ ev -> pure (Decided <$!> decide ev))
+    PerInstallEvidence verdict -> pure $ \mode hasReader resolve ev -> pure $
+        case evInstallCode ev of
+            Known (RunsCodeOnInstall _) -> pure (Decided (verdict ctx ev))
+            Known NoCodeOnInstall -> pure (Decided (verdict ctx ev))
+            _ | mode == ProjectedInstallFacts && not hasReader -> pure (Decided (verdict ctx ev))
+            _ ->
+                resolve >>= \case
+                    Left escape -> pure (threw escape)
+                    Right (InstallDetermined CodeExecUnknown) -> pure (Decided (CannotVet FailDeny InstallSignalUnread))
+                    Right (InstallDetermined signal) -> pure (Decided (verdict ctx ev{evInstallCode = Known signal}))
+                    Right (InstallUndetermined why) -> pure (Decided (CannotVet FailDeny why))
+                    Right (InstallReadFailed fault) -> pure (Unavailable (rfTransience fault) FailDeny (rfReason fault))
     PerPackage packageRead -> do
         own <- newPackageCell
         let resolve = heldFor own (decideFromRead (prepName rule) packageRead shared)
-        pure $ \ev ->
+        pure $ \_ _ _ ev ->
             resolve ev <&> \case
                 Left escape -> pure (threw escape)
                 Right decideVersion -> pure (decideVersion ev)

@@ -55,7 +55,9 @@ import Ecluse.Core.Registry.Maintenance (
 import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort)
 import Ecluse.Core.Registry.Sweep.Outcome (EvidenceGaps, SweepTally (..), TargetPrerequisites)
 import Ecluse.Core.Rules (PreparedRule, RuleDeps)
+import Ecluse.Core.Rules.Install (InstallEvidenceBudget, InstallEvidenceProvider)
 import Ecluse.Core.Rules.Types (Rule)
+import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (..), SweepTarget (SweepMirror, SweepPrivate))
 import Ecluse.Core.Telemetry.Record (DredgerMetricsPort (dmpSweptVersion))
 
@@ -65,6 +67,9 @@ data SweepMount = SweepMount
     -- ^ The mount's ecosystem, which names it in an audit line.
     , smStore :: SweepStore
     -- ^ The store's own calls. Every backend-varying fact is a value on it.
+    , smInstallEvidence :: Maybe InstallEvidenceProvider
+    , smInstallBudget :: InstallEvidenceBudget
+    , smInstallLimits :: Limits
     , smRules :: [PreparedRule]
     -- ^ The mount's prepared rules that apply at revocation.
     , smConfigured :: [Rule]

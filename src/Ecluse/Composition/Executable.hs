@@ -63,16 +63,19 @@ import Ecluse.Core.BuildIdentity (renderUserAgent)
 import Ecluse.Core.Clock (waitSeconds)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Deadline (Deadlines)
-import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
 import Ecluse.Core.Registry.Adapter (adapterProjectName)
 import Ecluse.Core.Registry.Adapter.Capability (ProjectName)
+import Ecluse.Core.Registry.Cargo.Execution (newCargoInstallEvidence)
+import Ecluse.Core.Registry.InstallEvidence (newInstallEvidenceBudget)
 import Ecluse.Core.Registry.Maintenance (StoreFacts (factBackend), StoreObservation (obFacts, obProbeUpstream))
 import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort, QuotaScope, RequestGate, newBudgetMeter)
 import Ecluse.Core.Registry.Sweep.Pacing (nominalPackagePace)
 import Ecluse.Core.Registry.Sweep.Types (SweepCache (..), SweepMount (..), SweepStore, deletingCache, pairedStore, previewCache)
 import Ecluse.Core.Rules (PreparedRule, RuleDeps, prepare)
+import Ecluse.Core.Rules.Install (InstallEvidenceBudget, InstallEvidenceProvider)
 import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule, revocationRules)
 import Ecluse.Core.Security (Limits (maxVersionCount))
 import Ecluse.Core.Security.Egress (registryUrlText)
@@ -255,7 +258,7 @@ planPrunerWiring logEnv tracing deadlines buildCredentials buildStore bootPlan =
                 (deferredBreakerReporter deferredMetrics EffectfulRule)
                 (katipOutageReporter logEnv)
         heldCaches = fromRight mempty caches
-    policies <- Map.fromList <$> traverse (sweepPolicyFor ruleDepsFor) (vpMounts validated)
+    policies <- Map.fromList <$> traverse (sweepPolicyFor (bpLimits bootPlan) deadlines ruleDepsFor) (vpMounts validated)
     (advisories, probed) <- probeHeldCaches heldCaches
     pure . (advisories,) . validationToEither $
         prunerWiringFrom deferredMetrics budgetPort policies
@@ -317,10 +320,12 @@ labelObservation role backend observation =
 
 {- What decides for one mount's store: the mount's rules that apply at revocation, prepared as the
 serve path prepares its, and the shared first-party predicate. A mount declaring no namespaces owns none. -}
-sweepPolicyFor :: (Ecosystem -> RuleDeps) -> VettedMount -> IO (Ecosystem, SweepPolicy)
-sweepPolicyFor ruleDepsFor vetted = do
+sweepPolicyFor :: Limits -> Deadlines -> (Ecosystem -> RuleDeps) -> VettedMount -> IO (Ecosystem, SweepPolicy)
+sweepPolicyFor limits deadlines ruleDepsFor vetted = do
     prepared <- prepare deps configured
-    pure (eco, SweepPolicy{spRules = prepared, spConfigured = map prRule configured, spDeps = deps, spProject = project, spFirstParty = firstParty})
+    provider <- if eco == Cargo then Just <$> newCargoInstallEvidence limits else pure Nothing
+    budget <- newInstallEvidenceBudget deadlines limits
+    pure (eco, SweepPolicy{spRules = prepared, spConfigured = map prRule configured, spDeps = deps, spProject = project, spFirstParty = firstParty, spInstallEvidence = provider, spInstallBudget = budget, spInstallLimits = limits})
   where
     eco = vmEcosystem vetted
     deps = ruleDepsFor eco
@@ -336,6 +341,9 @@ data SweepPolicy = SweepPolicy
     , spDeps :: RuleDeps
     , spProject :: ProjectName
     , spFirstParty :: PackageName -> Bool
+    , spInstallEvidence :: Maybe InstallEvidenceProvider
+    , spInstallBudget :: InstallEvidenceBudget
+    , spInstallLimits :: Limits
     }
 
 {- The artefact the arm yields. The join is on the ecosystem, and only a mount declaring a mirror
@@ -353,6 +361,9 @@ prunerWiringFrom deferredMetrics budgetPort policies cveSync stores =
             [ SweepMount
                 { smEcosystem = eco
                 , smStore = store
+                , smInstallEvidence = spInstallEvidence policy
+                , smInstallBudget = spInstallBudget policy
+                , smInstallLimits = spInstallLimits policy
                 , smRules = spRules policy
                 , smConfigured = spConfigured policy
                 , smRuleDeps = spDeps policy
