@@ -24,7 +24,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Registry.Json.Intern (tableTexts)
-import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, Piece (..), Pieces (..), RenderPlan (..), docTable, hasHole, opShared, packed, packedEncodedLength, packedResident, packedValue, planResident, planValue, renderPlan, tableResident, urlPrefix, withoutHole)
+import Ecluse.Core.Registry.Json.Packed (DocTable, LinePlan (..), Packed, Piece (..), Pieces (..), RenderPlan (..), docTable, hasHole, linePlanValues, opShared, packed, packedEncodedLength, packedResident, packedValue, planResident, planValue, renderPackedLines, renderPlan, tableResident, urlPrefix, withoutHole)
 import Ecluse.Core.Registry.Json.Shape (Mode (Share), Shape (Generic), Trees (..), readShape)
 import Ecluse.Core.Registry.Json.StringEncoding (plain)
 import Ecluse.Core.Registry.Json.Walk (Steps (Finished), withElement)
@@ -37,6 +37,18 @@ import Ecluse.Test.Registry.Packed (packBytes, packTable, packValue, renderAlone
 
 spec :: Spec
 spec = modifyMaxSuccess (const 2000) $ do
+    describe "renderPackedLines" $ do
+        it "resolves each ordered record through its own source table and appends LF" $
+            case (packValue (Generic limit) [] (String "left"), packValue (Generic limit) [] (String "right")) of
+                (Right (StreamResult (Right (leftTable, leftRecord)) _), Right (StreamResult (Right (rightTable, rightRecord)) _)) -> do
+                    let plan = LinePlan (fromList [leftTable, rightTable]) [Piece 1 rightRecord, Piece 0 leftRecord]
+                    renderPackedLines plan `shouldBe` Just "\"right\"\n\"left\"\n"
+                    linePlanValues plan `shouldBe` Just [String "right", String "left"]
+                    renderPackedLines (LinePlan mempty [Piece 0 leftRecord]) `shouldBe` Nothing
+                    renderPackedLines (LinePlan (fromList [docTable mempty]) [Piece 0 leftRecord]) `shouldBe` Nothing
+                _ -> expectationFailure "did not pack independent native records"
+        it "renders an empty native index without a JSON envelope" $
+            renderPackedLines (LinePlan mempty []) `shouldBe` Just ""
     describe "docTable" $ do
         it "renders each sliced string between adjacent offsets with unequal encoded lengths" $ do
             let table = docTable (fromList [T.drop 1 (T.dropEnd 1 ("\x1f600" <> text <> "\\")) | (text, _) <- legacyStringEncodings])

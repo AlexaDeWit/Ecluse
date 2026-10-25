@@ -12,6 +12,7 @@ module Ecluse.Core.Registry.JsonStream (
     Steps (..),
     Step,
     readSteps,
+    readStepsWithEnd,
     readJsonStream,
 
     -- * Retained values
@@ -19,6 +20,7 @@ module Ecluse.Core.Registry.JsonStream (
     withinRetainedDepth,
     nestingLimit,
     isNestingLimit,
+    isJsonSpace,
     Members,
     everyMember,
     retainedScalar,
@@ -57,7 +59,11 @@ type Step = Steps Identity
 
 -- | Enforce the body ceiling with pieces of at most 32 KiB, then drain until an empty chunk ends the body.
 readSteps :: (Monad n) => (forall a. m a -> n a) -> BodyLimit -> Steps m s -> n ByteString -> n (Either LimitError (StreamResult s))
-readSteps run bound start readChunk = go 0 start
+readSteps run = readStepsWithEnd run pure
+
+-- | Finalise a framed read at EOF without feeding an invented source byte to its consumer.
+readStepsWithEnd :: (Monad n) => (forall a. m a -> n a) -> (Steps m s -> n (Steps m s)) -> BodyLimit -> Steps m s -> n ByteString -> n (Either LimitError (StreamResult s))
+readStepsWithEnd run end bound start readChunk = go 0 start
   where
     go !seen step = case step of
         Refused fault -> pure (Left fault)
@@ -65,7 +71,12 @@ readSteps run bound start readChunk = go 0 start
         _ -> do
             chunk <- readChunk
             if BS.null chunk
-                then pure . Right $ StreamResult (finish step) seen
+                then do
+                    ended <- end step
+                    pure $ case ended of
+                        Refused fault -> Left fault
+                        Failed err -> Right (StreamResult (Left (ParseError err)) seen)
+                        _ -> Right (StreamResult (finish ended) seen)
                 else
                     if BS.length chunk > bodyLimitBytes bound - seen
                         then pure (Left (BodyTooLarge bound))
@@ -108,6 +119,10 @@ nestingLimit = "retained JSON nesting limit"
 -- | Distinguish a retained-depth refusal from malformed JSON.
 isNestingLimit :: ParseError -> Bool
 isNestingLimit (ParseError message) = message == nestingLimit
+
+-- | JSON permits only space, tab, CR and LF as whitespace.
+isJsonSpace :: Word8 -> Bool
+isJsonSpace byte = byte == 32 || byte == 10 || byte == 13 || byte == 9
 
 -- | Charge the parsed value's own level, including empty containers. Children need one less level.
 withinRetainedDepth :: Int -> J.Parser a -> J.Parser a

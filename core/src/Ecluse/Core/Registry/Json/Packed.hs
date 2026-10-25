@@ -45,6 +45,10 @@ module Ecluse.Core.Registry.Json.Packed (
     renderPlan,
     planValue,
     planResident,
+    LinePlan (..),
+    renderPackedLines,
+    linePlanValues,
+    linePlanResident,
 
     -- * Reading back
     TableStrings (..),
@@ -604,3 +608,46 @@ planResident plan =
         ArrayPieces list -> sum [48 + pieceResident item | item <- list]
   where
     pieceResident (Piece _ value) = packedResident value
+
+-- | Ordered native records reference their source tables without a JSON envelope or URL holes.
+data LinePlan = LinePlan
+    { lineTables :: !(SmallArray DocTable)
+    , linePieces :: ![Piece]
+    }
+    deriving stock (Eq, Show)
+
+-- | Emit each record followed by LF, refusing missing tables, strings or an inexact buffer fill.
+renderPackedLines :: LinePlan -> Maybe ByteString
+renderPackedLines plan = do
+    lengths <- traverse pieceLength (linePieces plan)
+    let total = sum (map ((+ 1) . toInteger) lengths)
+    guard (total <= toInteger (maxBound :: Int))
+    let size = fromInteger total
+        rendered = BSI.unsafeCreateUptoN size $ \target -> do
+            final <- foldlM (writeLine target size) 0 (linePieces plan)
+            pure (if final == size then size else 0)
+    guard (BS.length rendered == size)
+    pure rendered
+  where
+    pieceLength (Piece index value) = do
+        table <- tableAt (lineTables plan) index
+        let len = renderedLength table Nothing value
+        guard (len >= 0)
+        pure len
+    writeLine target size offset (Piece index value) = case tableAt (lineTables plan) index of
+        Just table | offset < size -> do
+            end <- pokePacked target size offset table Nothing value
+            if end < size
+                then pokeByteOff target end (10 :: Word8) $> (end + 1)
+                else pure (size + 1)
+        _ -> pure (size + 1)
+
+-- | Materialise a native line plan only for callers that need tree access.
+linePlanValues :: LinePlan -> Maybe [Value]
+linePlanValues plan = traverse value (linePieces plan)
+  where
+    value (Piece index packedValue') = tableAt (lineTables plan) index >>= (`packedValue` packedValue')
+
+-- | Charge source tables once and every retained packed record and list cell.
+linePlanResident :: LinePlan -> Int
+linePlanResident plan = sum (map tableResident (toList (lineTables plan))) + sum [48 + packedResident value | Piece _ value <- linePieces plan]

@@ -19,6 +19,9 @@ module Ecluse.Core.Registry.CachedDocument (
     -- * PyPI's packed full reads and their renders
     pypiPacked,
     pypiRendered,
+    cargoCached,
+    cargoPacked,
+    cargoRendered,
 ) where
 
 import Data.Aeson (Value (..))
@@ -28,8 +31,9 @@ import Data.Scientific (coefficient)
 import Data.Text.Internal qualified as Text
 import Math.NumberTheory.Logarithms (integerLog2)
 
-import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
-import Ecluse.Core.Registry.Json.Packed (RenderPlan (planMembers), planResident, planValue)
+import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry, RecordEntry))
+import Ecluse.Core.Registry.Cargo.Document (CargoDocument, PackedIndex, cargoDocument, cargoRecords, packedIndexDocument, packedIndexResident)
+import Ecluse.Core.Registry.Json.Packed (LinePlan, RenderPlan (planMembers), linePlanResident, linePlanValues, planResident, planValue)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (packumentTop), packumentResident, packumentValue)
 import Ecluse.Core.Registry.PyPI.Document (PackedSimple, SimpleDocument, packedEnvelope, packedSimpleDocument, packedSimpleResident, simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Server.MemoryModel (chargeForResident)
@@ -42,6 +46,9 @@ data CachedDoc
     | RenderedNpm RenderPlan
     | PackedPyPI PackedSimple
     | RenderedPyPI RenderPlan
+    | CachedCargo CargoDocument ~Int64
+    | PackedCargo PackedIndex
+    | RenderedCargo LinePlan
     deriving stock (Eq, Show)
 
 -- | Estimate compact cache units without measuring retained heap. Packed storage estimates use the consumer's expansion factor.
@@ -53,6 +60,9 @@ weighCachedDoc = \case
     RenderedNpm plan -> estimateValueBytes (Object (planMembers plan)) + fromIntegral (chargeForResident (planResident plan))
     PackedPyPI document -> estimateValueBytes (Object (packedEnvelope document)) + fromIntegral (chargeForResident (packedSimpleResident document))
     RenderedPyPI plan -> estimateValueBytes (Object (planMembers plan)) + fromIntegral (chargeForResident (planResident plan))
+    CachedCargo _ charge -> charge
+    PackedCargo document -> fromIntegral (chargeForResident (packedIndexResident document))
+    RenderedCargo plan -> fromIntegral (chargeForResident (linePlanResident plan))
 
 -- | Explicit cases require updates for new ecosystems. npm projects packed or rendered forms to trees, refusing missing strings or tables.
 npmCached :: (Value -> CachedDoc, CachedDoc -> Maybe Value)
@@ -65,6 +75,9 @@ npmCached = (\v -> CachedNpm v (estimateValueBytes v), project)
         CachedPyPISimple _ _ -> Nothing
         PackedPyPI _ -> Nothing
         RenderedPyPI _ -> Nothing
+        CachedCargo _ _ -> Nothing
+        PackedCargo _ -> Nothing
+        RenderedCargo _ -> Nothing
 
 -- | PyPI's boundary pair, spelled out arm by arm for the same reason as 'npmCached'.
 pypiSimpleCached :: (SimpleDocument -> CachedDoc, CachedDoc -> Maybe SimpleDocument)
@@ -77,6 +90,9 @@ pypiSimpleCached = (\v -> CachedPyPISimple v (simpleBytes v), project)
         RenderedNpm _ -> Nothing
         PackedPyPI document -> packedSimpleDocument document
         RenderedPyPI plan -> fromValue =<< planValue plan
+        CachedCargo _ _ -> Nothing
+        PackedCargo _ -> Nothing
+        RenderedCargo _ -> Nothing
     fromValue = \case
         Object fields -> case KeyMap.lookup "files" fields of
             Just (Array files) -> Just (simpleDocument fields (zipWith (\position value -> (ArrayEntry position, value)) [0 ..] (toList files)))
@@ -98,6 +114,32 @@ pypiPacked = (PackedPyPI, \case PackedPyPI document -> Just document; _ -> Nothi
 -- | An assembled PyPI listing that renders directly from packed files and source tables.
 pypiRendered :: (RenderPlan -> CachedDoc, CachedDoc -> Maybe RenderPlan)
 pypiRendered = (RenderedPyPI, \case RenderedPyPI plan -> Just plan; _ -> Nothing)
+
+-- | Cargo's native source records, preserving physical source coordinates on tree projection.
+cargoCached :: (CargoDocument -> CachedDoc, CachedDoc -> Maybe CargoDocument)
+cargoCached = (\document -> CachedCargo document (cargoBytes document), project)
+  where
+    project = \case
+        CachedCargo document _ -> Just document
+        PackedCargo document -> packedIndexDocument document
+        RenderedCargo plan -> cargoDocument . zipWith (\position value -> (RecordEntry position, value)) [0 ..] <$> linePlanValues plan
+        CachedNpm _ _ -> Nothing
+        CachedPyPISimple _ _ -> Nothing
+        PackedNpm _ -> Nothing
+        RenderedNpm _ -> Nothing
+        PackedPyPI _ -> Nothing
+        RenderedPyPI _ -> Nothing
+
+-- | Cargo's packed full source remains available without materialising native records.
+cargoPacked :: (PackedIndex -> CachedDoc, CachedDoc -> Maybe PackedIndex)
+cargoPacked = (PackedCargo, \case PackedCargo document -> Just document; _ -> Nothing)
+
+-- | A native output plan keeps ordered records over their separate source tables.
+cargoRendered :: (LinePlan -> CachedDoc, CachedDoc -> Maybe LinePlan)
+cargoRendered = (RenderedCargo, \case RenderedCargo plan -> Just plan; _ -> Nothing)
+
+cargoBytes :: CargoDocument -> Int64
+cargoBytes document = sum [64 + estimateValueBytes value | (_, value) <- cargoRecords document]
 
 simpleBytes :: SimpleDocument -> Int64
 simpleBytes document = estimateValueBytes (Object (simpleEnvelope document)) + 12 + sum [32 + estimateValueBytes value | (_, value) <- simpleFiles document]

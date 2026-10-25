@@ -50,6 +50,7 @@ import Ecluse.Core.Registry (
     isSuccessStatus,
  )
 import Ecluse.Core.Registry.CachedDocument (npmCached)
+import Ecluse.Core.Registry.JsonStream (isJsonSpace)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw))
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (staticRead)
 import Ecluse.Core.Registry.MirrorUpload
@@ -240,9 +241,6 @@ tagsOnly version = \case
     Nothing -> True
     Just (Object tags) -> all (== String (Key.toText version)) tags
     Just _ -> False
-
-isJsonSpace :: Word8 -> Bool
-isJsonSpace byte = byte == 32 || byte == 10 || byte == 13 || byte == 9
 
 -- @_id@, @name@ and each version's name, which the anti-shadowing guard compares with the path name.
 declaredNames :: Value -> [Text]

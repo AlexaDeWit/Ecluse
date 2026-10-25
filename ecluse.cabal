@@ -280,6 +280,15 @@ library ecluse-core
     Ecluse.Core.Registry.PyPI.Project
     Ecluse.Core.Registry.Cargo.Project
     Ecluse.Core.Registry.Cargo.FirstParty
+    Ecluse.Core.Registry.Cargo.Credential
+    Ecluse.Core.Registry.Cargo.Request
+    Ecluse.Core.Registry.Cargo.Discovery
+    Ecluse.Core.Registry.Cargo.Wire
+    Ecluse.Core.Registry.Cargo.Reader
+    Ecluse.Core.Registry.Cargo.Projection
+    Ecluse.Core.Registry.Cargo.Document
+    Ecluse.Core.Registry.Cargo.Metadata
+    Ecluse.Core.Registry.Cargo.Serving
     Ecluse.Core.Registry.Cargo.Adapter
     Ecluse.Core.Registry.Cargo.Route
     Ecluse.Core.Registry.Cargo.Route.Internal
@@ -848,6 +857,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.Npm
     Ecluse.Test.Registry.Cargo.Reference
     Ecluse.Test.Registry.Cargo.Fixtures
+    Ecluse.Test.Registry.Cargo.Metadata
     Ecluse.Test.Registry.Npm.Metadata
     Ecluse.Test.Registry.Npm.StoredVersions
     Ecluse.Test.Registry.Npm.Maintenance
@@ -1234,6 +1244,15 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.ProjectSpec
     Ecluse.Core.Registry.Cargo.ProjectSpec
     Ecluse.Core.Registry.Cargo.FirstPartySpec
+    Ecluse.Core.Registry.Cargo.CredentialSpec
+    Ecluse.Core.Registry.Cargo.RequestSpec
+    Ecluse.Core.Registry.Cargo.DiscoverySpec
+    Ecluse.Core.Registry.Cargo.WireSpec
+    Ecluse.Core.Registry.Cargo.ReaderSpec
+    Ecluse.Core.Registry.Cargo.ProjectionSpec
+    Ecluse.Core.Registry.Cargo.DocumentSpec
+    Ecluse.Core.Registry.Cargo.MetadataSpec
+    Ecluse.Core.Registry.Cargo.ServingSpec
     Ecluse.Core.Registry.Cargo.ArchiveSpec
     Ecluse.Core.Registry.Cargo.ManifestSpec
     Ecluse.Core.Registry.Cargo.RouteSpec

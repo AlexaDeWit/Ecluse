@@ -10,7 +10,9 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as BSL
 import Test.Hspec
 
-import Ecluse.Core.Registry.CachedDocument (npmCached, npmPacked, weighCachedDoc)
+import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
+import Ecluse.Core.Registry.CachedDocument (cargoCached, cargoPacked, cargoRendered, npmCached, npmPacked, pypiSimpleCached, weighCachedDoc)
+import Ecluse.Core.Registry.Cargo.Document (cargoDocument, packCargoDocument, packedIndexPlan)
 import Ecluse.Core.Registry.Json.Packed (docTable)
 import Ecluse.Core.Registry.Json.Shape (Shape (Generic))
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
@@ -22,6 +24,15 @@ damaged packed document projects to nothing.
 -}
 spec :: Spec
 spec = describe "CachedDocument (npm's opaque-carrier boundary)" $ do
+    it "retains native Cargo records across tree, packed and output representations" $ do
+        let source = cargoDocument [(RecordEntry 0, object ["native" .= True])]
+            packed = packCargoDocument source
+            documents = [fst cargoCached source, fst cargoPacked packed, fst cargoRendered (packedIndexPlan packed)]
+        for_ documents $ \document -> do
+            snd cargoCached document `shouldBe` Just source
+            snd npmCached document `shouldBe` Nothing
+            snd pypiSimpleCached document `shouldBe` Nothing
+            weighCachedDoc document `shouldSatisfy` (> 0)
     it "inject then project round-trips every sample to Just" $
         map (project . inject) samples `shouldBe` map Just samples
 
