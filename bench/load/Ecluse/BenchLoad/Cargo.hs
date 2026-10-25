@@ -14,7 +14,7 @@ module Ecluse.BenchLoad.Cargo (
 
 import Data.Aeson (Object, Value (Object), eitherDecodeStrict, encode, object, (.:), (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Aeson.Types (Pair, parseEither)
+import Data.Aeson.Types (Pair, Parser, parseEither)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
@@ -409,5 +409,5 @@ checkCrate bytes name url = do
     unless (HTTP.responseBody response == bytes) (benchFail ("Cargo archive bytes differ: " <> url))
     let root = fst (T.breakOnEnd "/cargo/" url) <> if "/cargo/private/" `T.isInfixOf` url then "private/" else ""
     fields <- checkedIndex (root <> cargoShard name)
-    records <- traverse (either (benchFail . toText) pure . parseEither (\row -> (,,) <$> row .: "name" <*> row .: "vers" <*> row .: "cksum")) fields
+    records <- traverse (either (benchFail . toText) pure . parseEither (\row -> (,,) <$> row .: "name" <*> (row .: "vers" :: Parser Text) <*> row .: "cksum")) fields
     unless (records == [(name, "9999.0.2", hexSha256Of (LBS.toStrict bytes))]) (benchFail "Cargo archive preflight index identity or checksum differs")
