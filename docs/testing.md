@@ -356,6 +356,9 @@ and one listing runs through the production route after a warm-up. The requests 
 pools but use separate caches, so the measured request reads and renders over warmed transport.
 Both runtimes stay rooted through every sample, so their pools and caches keep the process-wide
 lifetime used in production.
+Each census point runs a deadline sweep before collecting. Disarmed deadlines otherwise retain
+completed upstream read workers until the next sweep. A sweep between the response samples can
+release those workers' stacks and inflate the apparent request state.
 Isolation prevents an earlier example's fixture cleanup from changing a later example's baseline.
 It samples live bytes after major collections before the listing and after policy decides every
 version. It also samples after merge planning and while the response is sent. A last sample follows

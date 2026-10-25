@@ -19,6 +19,14 @@ Read the registry and client specifications before choosing an existing adapter 
 Record the supported client versions, index protocol, registry operations, and backend capabilities in the implementation issue.
 Follow relevant predecessor decisions before raising a design question.
 
+Before writing adapter code, agree each rule's support and default with the repository owner.
+Record its native meaning, evidence source, acquisition cost, and behaviour when evidence is unavailable in the implementation issue.
+Choose whether to enable the rule by default, offer it as opt-in, or block it through `adapterRuleBlocks`.
+
+Check whether the rule rejects routine ecosystem behaviour, such as source builds that execute code during installation.
+A technically available signal does not make a rule practical.
+Resolve this before adding evidence acquisition such as archive inspection.
+
 Answer these questions with protocol evidence:
 
 - How do names, namespaces, versions, and artifact filenames form identities?

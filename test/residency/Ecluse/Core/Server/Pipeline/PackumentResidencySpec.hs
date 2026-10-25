@@ -21,6 +21,7 @@ import Test.Hspec
 import UnliftIO.Exception (bracket, evaluate, throwIO)
 
 import Ecluse.Composition.MemoryPlan.Transient (meterStepBytes)
+import Ecluse.Core.Deadline (Deadlines, sweepTick)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageName, pkgEcosystem, renderPackageName)
 import Ecluse.Core.Registry.Adapter (adapterFor)
@@ -127,14 +128,14 @@ takeCensus package captured capture = withSweeper $ \deadlines -> do
             listing logEnv warmUp binding (const pass)
             meter <- testMemoryMeter
             cache <- newMetadataCache defaultCacheConfig
-            let measured = warmUp{srMetadataCache = cache, srMetrics = noopMetricsPort{mpRuleEvalDuration = \_ _ -> samplePoint meter gate, mpServeDecision = \_ -> samplePoint meter planned}}
+            let measured = warmUp{srMetadataCache = cache, srMetrics = noopMetricsPort{mpRuleEvalDuration = \_ _ -> samplePoint deadlines meter gate, mpServeDecision = \_ -> samplePoint deadlines meter planned}}
             -- The process keeps its runtime alive. Its pools and caches must outlive every sample too.
             bracket (newStablePtr (warmUp, measured)) freeStablePtr $ \root -> do
-                atStart <- live <$> sample
+                atStart <- live <$> sampleAfterSweep deadlines
                 listing logEnv measured{srMemoryMeter = meter} binding $ \response -> do
-                    atRespond <- live <$> sample
+                    atRespond <- live <$> sampleAfterSweep deadlines
                     writeIORef responded (Just (response, atRespond))
-                atEnd <- live <$> sample
+                atEnd <- live <$> sampleAfterSweep deadlines
                 _ <- deRefStablePtr root
                 (response, atRespond) <- maybe (throwIO MissingFixtureResponse) pure =<< readIORef responded
                 atGate <- maybe (throwIO MissingFixtureResponse) pure =<< readIORef gate
@@ -155,9 +156,13 @@ takeCensus package captured capture = withSweeper $ \deadlines -> do
         RouteAction contract (RunPipeline _ action) -> deliverServe logEnv contract rt binding (action defaultRequest{requestMethod = methodGet}) deliver
         _ -> throwIO MissingFixtureResponse
 
-samplePoint :: MemoryMeter -> IORef (Maybe Point) -> IO ()
-samplePoint meter point = do
-    now <- live <$> sample
+-- Disarmed deadlines retain worker stacks until the sweeper removes their entries.
+sampleAfterSweep :: Deadlines -> IO HeapSample
+sampleAfterSweep deadlines = sweepTick deadlines >> sample
+
+samplePoint :: Deadlines -> MemoryMeter -> IORef (Maybe Point) -> IO ()
+samplePoint deadlines meter point = do
+    now <- live <$> sampleAfterSweep deadlines
     charged <- snChargedBytes <$> meterSnapshot meter
     writeIORef point (Just (Point (toInteger now) charged))
 
