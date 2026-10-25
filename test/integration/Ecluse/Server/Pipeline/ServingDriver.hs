@@ -6,6 +6,7 @@
 module Ecluse.Server.Pipeline.ServingDriver (npmServingDriver, pypiServingDriver, cargoServingDriver) where
 
 import Codec.Compression.GZip qualified as GZip
+import Control.Monad (foldM)
 import Data.Aeson (Value (Array, Object, String), encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap

@@ -6,6 +6,7 @@
 module Ecluse.BenchLoad.Cargo.CopyState (withCopyState) where
 
 import Control.Concurrent (threadDelay)
+import Control.Monad (foldM)
 import Data.Aeson (Object, Value (Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.List (lookup)
