@@ -1014,7 +1014,10 @@ library ecluse-test-contracts
       Ecluse.Test.Contract.PackageStore.Protocol
       Ecluse.Test.Contract.PackageStore.Provider
       Ecluse.Test.Contract.PackageStore.PyPI
-    other-modules: Ecluse.Test.Contract.PackageStore.PyPI.Fixtures
+      Ecluse.Test.Contract.PackageStore.Cargo
+    other-modules:
+      Ecluse.Test.Contract.PackageStore.PyPI.Fixtures
+      Ecluse.Test.Contract.PackageStore.Cargo.Fixtures
 
   build-depends:
     , ecluse:ecluse-core

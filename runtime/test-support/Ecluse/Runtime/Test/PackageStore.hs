@@ -2,10 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | CodeArtifact conformance over npm and PyPI data planes and an independent typed control plane.
+-- | CodeArtifact conformance over native data planes and an independent typed control plane.
 module Ecluse.Runtime.Test.PackageStore (
     codeArtifactDriver,
     codeArtifactPyPIDriver,
+    codeArtifactCargoDriver,
     codeArtifactCatalogue,
     codeArtifactSuiteGroups,
     validateCodeArtifact,
@@ -16,7 +17,7 @@ import Amazonka.CodeArtifact.Lens qualified as CAL
 import Lens.Micro ((?~), (^.))
 
 import Data.Text qualified as T
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Registry.Maintenance (StoreFault, StoreMaintenance, StoreManifestRead, protocolFault)
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Registry.Origin (OriginClient)
@@ -27,6 +28,7 @@ import Ecluse.Test.Contract.Catalogue (combineCatalogues)
 import Ecluse.Test.Contract.Completion (validateCompletion)
 import Ecluse.Test.Contract.Manifest (failRunner)
 import Ecluse.Test.Contract.PackageStore (FullPackageStoreDriver, PackageStoreRelease (psrVersion), packageStoreCatalogueFor, packageStoreCompletion)
+import Ecluse.Test.Contract.PackageStore.Cargo (cargoStoreDriver, readCargoStoreManifestOver)
 import Ecluse.Test.Contract.PackageStore.Protocol (npmStoreDriver, readStoreManifestOver)
 import Ecluse.Test.Contract.PackageStore.Provider (StoreBoundary (..))
 import Ecluse.Test.Contract.PackageStore.PyPI (pypiStoreDriver, readPyPIStoreManifestOver)
@@ -41,21 +43,26 @@ codeArtifactDriver = npmStoreDriver "codeartifact" (codeArtifactMaintenance Npm 
 codeArtifactPyPIDriver :: FullPackageStoreDriver
 codeArtifactPyPIDriver = pypiStoreDriver "codeartifact-pypi" (codeArtifactMaintenance PyPI CA.PackageFormat_Pypi readPyPIStoreManifestOver)
 
--- | Both ecosystem profiles belong to the same backend and fixed conformance job.
+-- | Native Cargo executes every law through prepared authenticated metadata and physical deletion.
+codeArtifactCargoDriver :: FullPackageStoreDriver
+codeArtifactCargoDriver = cargoStoreDriver "codeartifact-cargo" (codeArtifactMaintenance Cargo (CA.PackageFormat' "cargo") readCargoStoreManifestOver)
+
+-- | All native profiles belong to the same backend and fixed conformance job.
 codeArtifactCatalogue :: Catalogue
 codeArtifactCatalogue =
     combineCatalogues
         [ packageStoreCatalogueFor "npm" "codeartifact" "package-store-codeartifact" "codeartifact"
         , packageStoreCatalogueFor "pypi" "codeartifact" "package-store-codeartifact" "codeartifact-pypi"
+        , packageStoreCatalogueFor "cargo" "codeartifact" "package-store-codeartifact" "codeartifact-cargo"
         ]
 
 -- | Preserve each concrete registration while assigning the existing backend job.
 codeArtifactSuiteGroups :: [DeclaredGroup] -> [DeclaredGroup]
 codeArtifactSuiteGroups = map (\declaration -> declaration{declaredGroup = (declaredGroup declaration){groupPartition = "package-store-codeartifact"}})
 
--- | Independent completion claims require both formats, regardless of actual registrations.
+-- | Independent completion claims require every format, regardless of actual registrations.
 validateCodeArtifact :: IO ()
-validateCodeArtifact = for_ ["codeartifact", "codeartifact-pypi"] $ \subject ->
+validateCodeArtifact = for_ ["codeartifact", "codeartifact-pypi", "codeartifact-cargo"] $ \subject ->
     either (failRunner . T.unlines) (const (pure ())) (validateCompletion (packageStoreCompletion subject) [codeArtifactCatalogue])
 
 codeArtifactMaintenance :: Ecosystem -> CA.PackageFormat -> (OriginClient -> StoreManifestRead) -> OriginClient -> StoreBoundary -> IO StoreMaintenance

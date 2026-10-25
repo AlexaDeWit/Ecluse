@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Both CodeArtifact formats execute the full laws and reject incomplete registration.
+-- | Every CodeArtifact format executes the full laws and rejects incomplete registration.
 module Ecluse.Runtime.Test.PackageStoreSpec (spec) where
 
 import Data.List.NonEmpty qualified as NE
@@ -22,33 +22,49 @@ spec :: Spec
 spec = do
     packageStoreSpec codeArtifactDriver
     packageStoreSpec codeArtifactPyPIDriver
+    packageStoreSpec codeArtifactCargoDriver
     describe "CodeArtifact format completeness" $ do
-        it "discovers both formats without acquiring either provider" $ do
+        it "discovers all formats without acquiring a provider" $ do
             let discoveryOnly driver = driver{psdWithSession = \_ -> fail "discovery acquired a provider"}
             validateDeclaredGroups
                 codeArtifactCatalogue
                 "package-store-codeartifact"
-                (codeArtifactSuiteGroups (fullPackageStoreContract (discoveryOnly codeArtifactDriver) <> fullPackageStoreContract (discoveryOnly codeArtifactPyPIDriver)))
+                (codeArtifactSuiteGroups (fullPackageStoreContract (discoveryOnly codeArtifactDriver) <> fullPackageStoreContract (discoveryOnly codeArtifactPyPIDriver) <> fullPackageStoreContract (discoveryOnly codeArtifactCargoDriver)))
             validateCodeArtifact
         it "rejects the fixed suite when the PyPI registration is missing" $
             validateDeclaredGroups
                 codeArtifactCatalogue
                 "package-store-codeartifact"
-                (codeArtifactSuiteGroups (fullPackageStoreContract codeArtifactDriver))
+                (codeArtifactSuiteGroups (fullPackageStoreContract codeArtifactDriver <> fullPackageStoreContract codeArtifactCargoDriver))
                 `shouldThrow` (== ExitFailure 1)
         it "rejects completion when the PyPI profile and its groups disappear" $ do
             let withoutPyPI =
                     codeArtifactCatalogue
-                        { catalogueProductionEcosystems = ["npm"]
+                        { catalogueProductionEcosystems = ["npm", "cargo"]
                         , catalogueProfiles = filter ((/= "package-store/codeartifact-pypi") . profileId) (catalogueProfiles codeArtifactCatalogue)
                         , catalogueObligations = filter ((/= "package-store/codeartifact-pypi") . obligationProfile) (catalogueObligations codeArtifactCatalogue)
                         , catalogueGroups = filter ((/= "package-store/codeartifact-pypi") . groupProfileId) (catalogueGroups codeArtifactCatalogue)
                         }
             validateCompletion (packageStoreCompletion "codeartifact-pypi") [withoutPyPI] `shouldSatisfy` isLeft
-        it "keeps both format profiles under one backend and one fixed job" $ do
-            map profileBackends (catalogueProfiles codeArtifactCatalogue) `shouldBe` [["codeartifact"], ["codeartifact"]]
+        it "rejects the fixed suite when the Cargo registration is missing" $
+            validateDeclaredGroups
+                codeArtifactCatalogue
+                "package-store-codeartifact"
+                (codeArtifactSuiteGroups (fullPackageStoreContract codeArtifactDriver <> fullPackageStoreContract codeArtifactPyPIDriver))
+                `shouldThrow` (== ExitFailure 1)
+        it "rejects completion when the Cargo profile and its groups disappear" $ do
+            let withoutCargo =
+                    codeArtifactCatalogue
+                        { catalogueProductionEcosystems = ["npm", "pypi"]
+                        , catalogueProfiles = filter ((/= "package-store/codeartifact-cargo") . profileId) (catalogueProfiles codeArtifactCatalogue)
+                        , catalogueObligations = filter ((/= "package-store/codeartifact-cargo") . obligationProfile) (catalogueObligations codeArtifactCatalogue)
+                        , catalogueGroups = filter ((/= "package-store/codeartifact-cargo") . groupProfileId) (catalogueGroups codeArtifactCatalogue)
+                        }
+            validateCompletion (packageStoreCompletion "codeartifact-cargo") [withoutCargo] `shouldSatisfy` isLeft
+        it "keeps all format profiles under one backend and one fixed job" $ do
+            map profileBackends (catalogueProfiles codeArtifactCatalogue) `shouldBe` replicate 3 ["codeartifact"]
             ordNub (map groupPartition (catalogueGroups codeArtifactCatalogue)) `shouldBe` ["package-store-codeartifact"]
-    for_ [("npm", codeArtifactDriver), ("PyPI", codeArtifactPyPIDriver)] $ \(ecosystem, driver) ->
+    for_ [("npm", codeArtifactDriver), ("PyPI", codeArtifactPyPIDriver), ("Cargo", codeArtifactCargoDriver)] $ \(ecosystem, driver) ->
         describe (ecosystem <> " integrity negative controls") $
             for_ corruptions $ \(label, corrupt) ->
                 it label (integrityNegativeControl driver corrupt)
