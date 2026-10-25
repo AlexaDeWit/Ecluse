@@ -19,10 +19,10 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Package.Merge (MergePlan (mpName, mpSurvivors), SourceId)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, pypiPacked, pypiRendered, pypiSimpleCached)
-import Ecluse.Core.Registry.Json.Packed (Piece (..), Pieces (ArrayPieces), RenderPlan (..), hasHole, urlPrefix)
+import Ecluse.Core.Registry.Json.Packed (Piece (..), Pieces (ArrayPieces), RenderPlan (..), hasHole, renderPlan, urlPrefix)
 import Ecluse.Core.Registry.PyPI.Document (PackedSimple (..), SimpleDocument, packedSimplePlan, simpleDocument, simpleEncoding, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Route (distributionPath)
-import Ecluse.Core.Registry.ServedDocument (RenderRefused, assembleAcross, overlaySurvivors, rebaseArtifactUrl, serialiseDocument, stringField)
+import Ecluse.Core.Registry.ServedDocument (RenderRefused (RenderRefused), assembleAcross, overlaySurvivors, rebaseArtifactUrl, serialiseAcross, stringField)
 import Ecluse.Core.Snapshot (Snapshot, snapshotValue)
 import Ecluse.Core.Text (joinUrlPath)
 
@@ -76,7 +76,6 @@ assembleSimpleDocument mountBase bySource plan base =
 
 -- | Serialise a PyPI document to compact JSON, or an empty object for another ecosystem.
 serialiseSimpleDocument :: CachedDoc -> Either RenderRefused LByteString
-serialiseSimpleDocument =
-    serialiseDocument
-        (\doc -> snd pypiRendered doc <|> (packedSimplePlan <$> snd pypiPacked doc))
-        (fmap simpleEncoding . snd pypiSimpleCached)
+serialiseSimpleDocument doc = case snd pypiRendered doc <|> (packedSimplePlan <$> snd pypiPacked doc) of
+    Just plan -> maybe (Left RenderRefused) (Right . fromStrict) (renderPlan plan)
+    Nothing -> Right (serialiseAcross (fmap simpleEncoding . snd pypiSimpleCached) doc)

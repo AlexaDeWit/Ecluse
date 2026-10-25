@@ -87,9 +87,8 @@ Use [CachedDocument](../core/src/Ecluse/Core/Registry/CachedDocument.hs) for the
 New native representations require explicit boundary cases and corresponding retention coverage.
 
 The shared merge chooses admitted source entries.
-[ServedDocument](../core/src/Ecluse/Core/Registry/ServedDocument.hs) supplies exact entry selection, name checks, URL rebasing, and `serialiseDocument`.
-The latter shares packed-render refusal and native-encoding fallback.
-Adapters retain their object or array assembly, native envelope fields, ordering, and document projections.
+[ServedDocument](../core/src/Ecluse/Core/Registry/ServedDocument.hs) supplies exact entry selection, name checks, URL rebasing, and native encoding through `serialiseAcross`.
+Adapters retain packed-render refusal, object or array assembly, native envelope fields, ordering, and document projections.
 Never reconstruct installable metadata from policy facts alone.
 
 Validate artifact locations through the existing [package filter](../core/src/Ecluse/Core/Package/Filter.hs).
