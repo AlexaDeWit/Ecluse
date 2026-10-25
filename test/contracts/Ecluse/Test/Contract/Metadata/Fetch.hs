@@ -3,7 +3,11 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Metadata transport laws shared by every registered ecosystem.
-module Ecluse.Test.Contract.Metadata.Fetch (ReadFixture (..), metadataFetchContract) where
+module Ecluse.Test.Contract.Metadata.Fetch (
+    ReadFixture (..),
+    metadataFetchContract,
+    metadataStatusLaw,
+) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception (throwIO)
@@ -28,8 +32,8 @@ import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
     VersionRead (vrBodyBytes, vrVersion),
  )
-import Ecluse.Core.Registry.Metadata.Fetch (chargingSelectedReads, fetchManifest, fetchVersion, readManifest, readVersion)
-import Ecluse.Core.Registry.Metadata.Fetch.Preparation (staticRead)
+import Ecluse.Core.Registry.Metadata.Fetch (chargingSelectedReads, readManifest, readVersion)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (..), prepareManifest, prepareVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest), ReadTerms (..))
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocLimits), chargingFullReads, originBaseUrl, originClient, perCallerOrigin)
 import Ecluse.Core.Registry.Request (baseRequestUrl, mkBaseRequest)
@@ -59,30 +63,14 @@ statusSpec :: ReadFixture -> Spec
 statusSpec eco = describe "upstream statuses" $ do
     for_ statusOutcomes $ \(code, expected) ->
         fetchCase eco ("status-" <> show code) ("preserves HTTP " <> show code <> " over a valid manifest body on full and version reads") $
-            withStub (mkStatus code "test") (toLazy document) $ \stub -> do
-                withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
-                    events <- newIORef ([] :: [(Text, PackageName)])
-                    let record phase who action = modifyIORef' events (<> [(phase, who)]) >> action
-                        tracing = passthroughTracingPort{spanMetadataFetch = record "fetch", spanMetadataDecode = record "decode"}
-                        origin = perCallerOrigin defaultLimits exchanges (mkBaseRequest (loopbackRegistryUrl (stubBaseUrl stub))) Nothing
-                        client = privateMetadataClient (ecosystemMetadataReads (staticRead (rdRead eco)) tracing noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
-                    full <- fetchFullManifest client (thing eco)
-                    void full `shouldBe` expected
-                    single <- fetchVersionMetadata client (thing eco) (releaseOf eco)
-                    void single `shouldBe` expected
-                    -- The decode span opens only after success headers.
-                    readIORef events `shouldReturn` concat (replicate 2 ([("fetch", thing eco)] <> [("decode", thing eco) | isRight expected]))
-                    when (isRight expected) $ do
-                        fmap manifestBodyBytes full `shouldBe` Right (BS.length document)
-                        fmap manifestDigest full `shouldBe` Right (digestOf document)
-                        fmap vrBodyBytes single `shouldBe` Right (BS.length document)
+            metadataStatusLaw eco (code, expected)
 
     fetchCase eco "full-charge" "charges a full read for every source byte and a selected read for none" $
         withStub status200 (toLazy document) $ \stub -> do
             withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
                 charges <- newIORef (0 :: Int)
                 let origin = chargingFullReads (\n -> modifyIORef' charges (+ n)) (perCallerOrigin defaultLimits exchanges (mkBaseRequest (loopbackRegistryUrl (stubBaseUrl stub))) Nothing)
-                    client = privateMetadataClient (ecosystemMetadataReads (staticRead (rdRead eco)) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
+                    client = privateMetadataClient (ecosystemMetadataReads (rdPrepareRead eco) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
                 _ <- fetchVersionMetadata client (thing eco) (releaseOf eco)
                 readIORef charges `shouldReturn` 0
                 _ <- fetchFullManifest client (thing eco)
@@ -92,8 +80,31 @@ statusSpec eco = describe "upstream statuses" $ do
         fetchCase eco ("oversized-auth-" <> show code) ("retains HTTP " <> show code <> " before an oversized error body") $
             withStub (mkStatus code "test") (toLazy (rdDocument eco "thing" 256)) $ \stub -> withSweeper $ \deadlines -> do
                 origin <- stubConfig deadlines loopbackRegistryUrl stub
-                outcome <- fetchManifest (rdRead eco) passthroughTracingPort origin{ocLimits = defaultLimits{maxMetadataBytes = 64}} (thing eco)
+                outcome <- prepareManifest (rdPrepareRead eco) passthroughTracingPort origin{ocLimits = defaultLimits{maxMetadataBytes = 64}} (thing eco)
                 void outcome `shouldBe` Left (MetadataAuthorisationFailure code)
+  where
+    document = rdDocument eco "thing" 0
+
+-- | Apply the canonical full and selected status checks to a registered reader factory.
+metadataStatusLaw :: ReadFixture -> (Int, Either MetadataError ()) -> IO ()
+metadataStatusLaw eco (code, expected) =
+    withStub (mkStatus code "test") (toLazy document) $ \stub -> do
+        withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+            events <- newIORef ([] :: [(Text, PackageName)])
+            let record phase who action = modifyIORef' events (<> [(phase, who)]) >> action
+                tracing = passthroughTracingPort{spanMetadataFetch = record "fetch", spanMetadataDecode = record "decode"}
+                origin = perCallerOrigin defaultLimits exchanges (mkBaseRequest (loopbackRegistryUrl (stubBaseUrl stub))) Nothing
+                client = privateMetadataClient (ecosystemMetadataReads (rdPrepareRead eco) tracing noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
+            full <- fetchFullManifest client (thing eco)
+            single <- fetchVersionMetadata client (thing eco) (releaseOf eco)
+            void full `shouldBe` expected
+            void single `shouldBe` expected
+            -- The decode span opens only after success headers.
+            readIORef events `shouldReturn` concat (replicate 2 ([("fetch", thing eco)] <> [("decode", thing eco) | isRight expected]))
+            when (isRight expected) $ do
+                fmap manifestBodyBytes full `shouldBe` Right (BS.length document)
+                fmap manifestDigest full `shouldBe` Right (digestOf document)
+                fmap vrBodyBytes single `shouldBe` Right (BS.length document)
   where
     document = rdDocument eco "thing" 0
 
@@ -102,19 +113,19 @@ responseBoundSpec eco = describe "the body bound on a response" $ do
     fetchCase eco "exact-byte-bound" "digests the complete source body within maxMetadataBytes" $
         withStub status200 (toLazy small) $ \stub -> withSweeper $ \deadlines -> do
             origin <- stubConfig deadlines loopbackRegistryUrl stub
-            manifest <- fetchManifest (rdRead eco) passthroughTracingPort origin{ocLimits = defaultLimits{maxMetadataBytes = BS.length small}} (thing eco)
+            manifest <- prepareManifest (rdPrepareRead eco) passthroughTracingPort origin{ocLimits = defaultLimits{maxMetadataBytes = BS.length small}} (thing eco)
             fmap manifestDigest manifest `shouldBe` Right (digestOf small)
 
     fetchCase eco "gzip-bytes" "reports decompressed bytes for an accepted gzip body" $
         withGzipped padded $ \origin -> do
-            manifest <- fetchManifest (rdRead eco) passthroughTracingPort origin{ocLimits = defaultLimits{maxMetadataBytes = BS.length padded}} (thing eco)
+            manifest <- prepareManifest (rdPrepareRead eco) passthroughTracingPort origin{ocLimits = defaultLimits{maxMetadataBytes = BS.length padded}} (thing eco)
             fmap manifestBodyBytes manifest `shouldBe` Right (BS.length padded)
             fmap manifestDigest manifest `shouldBe` Right (digestOf padded)
 
     fetchCase eco "gzip-charge" "charges a full read for every decompressed byte it hands the parser" $
         withGzipped padded $ \origin -> do
             charges <- newIORef []
-            _ <- fetchManifest (rdRead eco) passthroughTracingPort origin{ocLimits = defaultLimits{maxMetadataBytes = BS.length padded}, ocChargeFullRead = \n -> modifyIORef' charges (n :)} (thing eco)
+            _ <- prepareManifest (rdPrepareRead eco) passthroughTracingPort origin{ocLimits = defaultLimits{maxMetadataBytes = BS.length padded}, ocChargeFullRead = \n -> modifyIORef' charges (n :)} (thing eco)
             recorded <- readIORef charges
             sum recorded `shouldBe` BS.length padded
 
@@ -122,7 +133,7 @@ responseBoundSpec eco = describe "the body bound on a response" $ do
         -- The compressed body is under the cap, so only the decompressed-size bound explains a refusal.
         BS.length (toStrict (GZip.compress (toLazy inflating))) `shouldSatisfy` (< 1024)
         withGzipped inflating $ \origin -> do
-            outcome <- fetchManifest (rdRead eco) passthroughTracingPort origin{ocLimits = defaultLimits{maxMetadataBytes = 1024}} (thing eco)
+            outcome <- prepareManifest (rdPrepareRead eco) passthroughTracingPort origin{ocLimits = defaultLimits{maxMetadataBytes = 1024}} (thing eco)
             fetchFault outcome `shouldSatisfy` isBoundExceededFetch
   where
     small = rdDocument eco "thing" 0
@@ -138,25 +149,27 @@ requestSpec eco = describe "the request" $ do
             withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
                 count <- newIORef (0 :: Int)
                 let tracing = passthroughTracingPort{spanMetadataDecode = \_ action -> modifyIORef' count (+ 1) >> action}
-                outcome <- fetchManifest (rdRead eco) tracing (originClient defaultLimits exchanges (loopbackRegistryUrl url) Nothing) (thing eco)
+                outcome <- prepareManifest (rdPrepareRead eco) tracing (originClient defaultLimits exchanges (loopbackRegistryUrl url) Nothing) (thing eco)
                 void outcome `shouldSatisfy` isLeft
                 readIORef count `shouldReturn` 0
 
     fetchCase eco "empty-url-fault" "reports an empty base URL as a FetchUrlUnformable value, never thrown" $ do
         withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
-            outcome <- fetchManifest (rdRead eco) passthroughTracingPort (originClient defaultLimits exchanges (loopbackRegistryUrl "") Nothing) (thing eco)
+            outcome <- prepareManifest (rdPrepareRead eco) passthroughTracingPort (originClient defaultLimits exchanges (loopbackRegistryUrl "") Nothing) (thing eco)
             void outcome `shouldBe` Left (MetadataFetch (FetchUrlUnformable EmptyBaseUrl))
 
     fetchCase eco "transport-fault" "reports a refused connection as a FetchTransport value, never thrown" $ do
         -- Port 1 on the loopback is privileged and unbound, so the kernel refuses the connect.
         withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
-            outcome <- fetchManifest (rdRead eco) passthroughTracingPort (originClient defaultLimits exchanges (loopbackRegistryUrl "http://127.0.0.1:1") Nothing) (thing eco)
+            outcome <- prepareManifest (rdPrepareRead eco) passthroughTracingPort (originClient defaultLimits exchanges (loopbackRegistryUrl "http://127.0.0.1:1") Nothing) (thing eco)
             fetchFault outcome `shouldSatisfy` isTransportFetch
 
     fetchCase eco "no-redirect" "follows no redirect when the ecosystem's request builder did not seal its request" $
         withRoutedStub redirectOnce $ \stub -> withSweeper $ \deadlines -> do
             origin <- stubConfig deadlines loopbackRegistryUrl stub
-            outcome <- fetchManifest (rdRead eco){erRequest = unsealedRequest} passthroughTracingPort origin (thing eco)
+            let factory = PrepareRead $ \tracing selectedOrigin ->
+                    fmap (\reader -> reader{erRequest = unsealedRequest}) <$> prepareRead (rdPrepareRead eco) tracing selectedOrigin
+            outcome <- prepareManifest factory passthroughTracingPort origin (thing eco)
             void outcome `shouldBe` Left (MetadataHttpFailure 302)
             map capPath <$> allCaptured stub `shouldReturn` ["/"]
   where
@@ -224,10 +237,10 @@ bothWays eco limits charge document =
             (front, rest) = BS.splitAt (BS.length bytes `div` 3) bytes
             (middle, back) = BS.splitAt (BS.length rest `div` 2) rest
             held = heldBody [front, middle, back]
-        fetched <- fetchManifest (rdRead eco) passthroughTracingPort origin (thing eco)
+        fetched <- prepareManifest (rdPrepareRead eco) passthroughTracingPort origin (thing eco)
         heldFull <- readManifest (rdRead eco) passthroughTracingPort terms (thing eco) held
         fmap manifestFields heldFull `shouldBe` fmap manifestFields fetched
-        fetchedVersion <- fetchVersion (rdRead eco) passthroughTracingPort origin (thing eco) (releaseOf eco)
+        fetchedVersion <- prepareVersion (rdPrepareRead eco) passthroughTracingPort origin (thing eco) (releaseOf eco)
         heldVersion <- readVersion (rdRead eco) passthroughTracingPort terms (thing eco) (releaseOf eco) held
         heldVersion `shouldBe` fetchedVersion
         pure (fmap manifestFields heldFull, heldVersion)
@@ -242,10 +255,13 @@ fetchFault = \case
     Left (MetadataFetch fault) -> Left fault
     _ -> Right ()
 
--- | A native read implementation and documents with controlled names and releases.
+-- | A registered factory, held-body reader, and documents with controlled names and releases.
 data ReadFixture = ReadFixture
     { rdEcosystem :: Ecosystem
+    , rdPrepareRead :: PrepareRead
+    -- ^ The registered adapter factory used by every network read.
     , rdRead :: EcosystemRead
+    -- ^ The explicit reader used only for held bodies.
     , rdDocument :: ByteString -> Int -> ByteString
     -- ^ A valid document with no release that reports the name, padded by that many bytes no read keeps.
     , rdReleases :: Text -> [Text] -> Value
