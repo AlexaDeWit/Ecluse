@@ -11,6 +11,7 @@ module Ecluse.Core.Registry.Publish.Internal (
     PreparedMirrorUpload (..),
     PublishCodec (..),
     fetchVersionList,
+    relayPublishRequest,
     MirrorTransport (..),
     MirrorPublish (..),
     newMirrorPublish,
@@ -21,8 +22,8 @@ import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageInfo, PackageName)
-import Ecluse.Core.Registry (BodyOutcome, FetchFault, ParseError, PublishFault (PublishFetch), UrlFormationError)
-import Ecluse.Core.Registry.Exchange (accumulatingCharge, boundedExchange, withSuccessBody)
+import Ecluse.Core.Registry (BodyOutcome, FetchFault (FetchUrlUnformable), ParseError, PublishFault (PublishFetch), PublishRelayResponse, UrlFormationError)
+import Ecluse.Core.Registry.Exchange (accumulatingCharge, boundedExchange, boundedRelay, formThen, withSuccessBody)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Json.Walk (Step, readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
@@ -30,7 +31,7 @@ import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError, Ve
 import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
 import Ecluse.Core.Registry.MirrorUpload (ExpectedMirrorFile, MirrorInventory, MirrorUploadData, VerifiedArtifactBytes)
-import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead), originClient)
+import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocClient, ocLimits), originClient)
 import Ecluse.Core.Registry.Request (sealRequest)
 import Ecluse.Core.Registry.VersionList (VersionListState, finishVersionList)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes)
@@ -109,6 +110,13 @@ probeInventory transport target targetRead factor charge name = do
     -- The initial and final target snapshots can overlap during completion.
     let origin = (originClient (ptLimits transport) (ptClient transport) target credential){ocChargeFullRead = pay . scaleCharge (2 * factor)}
     fmap manifestInfo <$> fetchManifest targetRead (ptTracing transport) origin name
+
+-- | Preserve the native publication response under the origin's metadata and progress limits.
+relayPublishRequest :: OriginClient -> Either UrlFormationError Request -> IO (Either FetchFault PublishRelayResponse)
+relayPublishRequest origin =
+    formThen
+        FetchUrlUnformable
+        (boundedRelay (ocClient origin) (progressFloor (ocLimits origin)) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
 
 -- | Read bounded version identifiers for the protocol maintenance caller.
 fetchVersionList :: ExchangeClient -> Limits -> (Cursor -> Step VersionListState) -> Request -> IO (Either FetchFault (BodyOutcome (Either ParseError [Version])))

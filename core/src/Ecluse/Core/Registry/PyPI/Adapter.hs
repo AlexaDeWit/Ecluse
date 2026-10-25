@@ -16,10 +16,7 @@ import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS))
 import Network.HTTP.Types (hContentType)
 
-import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
-import Ecluse.Core.Registry.Exchange (boundedRelay, formThen)
 import Ecluse.Core.Registry.Request (attachCredential, parseRequestEither)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes, progressFloor))
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Registry.Adapter.Capability (
@@ -31,7 +28,8 @@ import Ecluse.Core.Registry.Adapter.Capability (
  )
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
-import Ecluse.Core.Registry.Origin (OriginClient (ocClient, ocLimits, ocToken), originBaseUrl)
+import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
+import Ecluse.Core.Registry.Publish (relayPublishRequest)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleDocument, serialiseSimpleDocument)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiChargeFactors, pypiRead)
@@ -88,9 +86,8 @@ pypiPublish :: AdapterPublish
 pypiPublish =
     AdapterPublish
         { publishRelay = \origin _ body ->
-            formThen
-                FetchUrlUnformable
-                (boundedRelay (ocClient origin) (progressFloor (ocLimits origin)) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
+            relayPublishRequest
+                origin
                 ( do
                     base <- parseRequestEither (originBaseUrl origin)
                     pure . attachCredential pypiCredential (ocToken origin) $

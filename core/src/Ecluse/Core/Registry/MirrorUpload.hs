@@ -5,6 +5,7 @@
 -- | Complete mirror inventories and verified per-file upload data.
 module Ecluse.Core.Registry.MirrorUpload (
     MirrorReadData (..),
+    mirrorReadDocument,
     MirrorInventory,
     ExpectedMirrorFile,
     VerifiedArtifactBytes,
