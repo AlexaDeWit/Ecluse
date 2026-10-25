@@ -26,7 +26,7 @@ import Ecluse.Core.Package (
     PackageDetails (pkgArtifacts),
     PackageInfo (PackageInfo),
  )
-import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByFile, artifactByUrl, artifactHosts))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByFile, artifactByUrl, artifactPrivateAddressing), PrivateArtifactAddressing (..))
 import Ecluse.Core.Registry.Metadata (
     MetadataClient (fetchVersionMetadata),
     MetadataError (
@@ -141,8 +141,9 @@ privateArtifactRequest ticket ctx token = case pdPrivateBase deps of
     Nothing -> pure (PrivateMissing MissAbsent)
     Just privateBase
         | not (tarballHostHonoured TrustedOrigin deps privateHostPort privateHostPort) -> pure (PrivateMissing MissAbsent)
-        | null (artifactHosts (pdArtifact deps)) -> pure (byConventionalPath privateBase)
-        | otherwise -> byIndexedLocation ticket ctx token privateBase privateHostPort
+        | otherwise -> case artifactPrivateAddressing (pdArtifact deps) of
+            ConventionalArtifactPath -> pure (byConventionalPath privateBase)
+            IndexedArtifactLocation -> byIndexedLocation ticket ctx token privateBase privateHostPort
   where
     deps = arDeps ctx
 

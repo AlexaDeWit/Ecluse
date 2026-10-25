@@ -26,6 +26,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     AdapterPublish (..),
     MirrorRequirements (..),
     MirrorStateRequirement (..),
+    PrivateArtifactAddressing (..),
     PublishRequestBody (..),
     UploadEndpointRequirement (..),
     UploadIdentityRequirement (..),
@@ -75,6 +76,7 @@ pypiAdapter =
                 { artifactByFile = \origin -> PyPIRequest.artifactRequestByFile (originBaseUrl origin) (ocToken origin)
                 , artifactByUrl = PyPIRequest.artifactRequestByUrl
                 , artifactHosts = PyPIRequest.pypiArtifactHosts
+                , artifactPrivateAddressing = IndexedArtifactLocation
                 }
         , adapterProjectName = rightToMaybe . projectName
         , adapterPublish = Just pypiPublish

@@ -21,6 +21,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     AdapterPublish (..),
     MirrorRequirements (..),
     MirrorStateRequirement (..),
+    PrivateArtifactAddressing (..),
     PublishRequestBody (..),
     UploadEndpointRequirement (..),
     UploadIdentityRequirement (..),
@@ -62,6 +63,7 @@ npmAdapter =
                 { artifactByFile = \origin -> NpmRequest.artifactRequestByFile (ocBaseRequest origin) (ocToken origin)
                 , artifactByUrl = NpmRequest.artifactRequestByUrl
                 , artifactHosts = NpmRequest.npmArtifactHosts
+                , artifactPrivateAddressing = ConventionalArtifactPath
                 }
         , adapterProjectName = rightToMaybe . projectName
         , adapterPublish = Just npmPublish

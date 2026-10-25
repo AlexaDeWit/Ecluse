@@ -11,6 +11,7 @@ module Ecluse.Core.Registry.Adapter.Capability (
 
     -- * Artifact requests
     AdapterArtifact (..),
+    PrivateArtifactAddressing (..),
 
     -- * Publish
     AdapterPublish (..),
@@ -71,6 +72,12 @@ data AdapterMetadata = AdapterMetadata
     -- ^ What this ecosystem's full reads and listings charge the memory budget per source byte.
     }
 
+-- | Private artifact locations come from a conventional path or authoritative index metadata.
+data PrivateArtifactAddressing
+    = ConventionalArtifactPath
+    | IndexedArtifactLocation
+    deriving stock (Eq, Show)
+
 -- | Artifact request formation by filename or authoritative URL, shared by serve and worker ('Ecluse.Core.Server.Context.pdArtifact').
 data AdapterArtifact = AdapterArtifact
     { artifactByFile :: OriginClient -> PackageName -> Text -> Either UrlFormationError Request
@@ -79,6 +86,8 @@ data AdapterArtifact = AdapterArtifact
     -- ^ Build the request at the authoritative upstream URL. It names no origin, because the mirror worker has none.
     , artifactHosts :: [Text]
     -- ^ Hosts the same-host tarball gate admits unnamed. Empty for npm, whose artifacts ride the registry host.
+    , artifactPrivateAddressing :: PrivateArtifactAddressing
+    -- ^ How private requests find their artifact location, independent of the admitted public hosts.
     }
 
 -- | Original request bytes and their declared media type, retained under byte admission.

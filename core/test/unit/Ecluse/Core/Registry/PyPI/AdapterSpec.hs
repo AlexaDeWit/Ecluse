@@ -12,11 +12,12 @@ import Ecluse.Core.Registry.Adapter (
     adapterFor,
  )
 import Ecluse.Core.Registry.Adapter.Capability (
-    AdapterArtifact (artifactHosts),
+    AdapterArtifact (artifactHosts, artifactPrivateAddressing),
     AdapterMaintenance (maintenanceListing, maintenanceVersionDelete),
     AdapterPublish (publishIdentity, publishMirrorRequirements),
     MirrorRequirements (mirrorStateRequirement, mirrorUploadEndpoint, mirrorWorkerRead),
     MirrorStateRequirement (..),
+    PrivateArtifactAddressing (..),
     UploadEndpointRequirement (..),
     UploadIdentityRequirement (..),
     WorkerMetadataRead (..),
@@ -32,6 +33,13 @@ spec = describe "the PyPI adapter" $ do
         -- the files host with no operator naming a hostname.
         fmap (artifactHosts . adapterArtifact) (adapterFor PyPI)
             `shouldBe` Just ["https://files.pythonhosted.org"]
+
+    it "declares indexed private addressing independently of its public files host" $
+        fmap (artifactPrivateAddressing . adapterArtifact) (adapterFor PyPI) `shouldBe` Just IndexedArtifactLocation
+
+    it "keeps npm's conventional private path and empty public host list" $ do
+        fmap (artifactPrivateAddressing . adapterArtifact) (adapterFor Npm) `shouldBe` Just ConventionalArtifactPath
+        fmap (artifactHosts . adapterArtifact) (adapterFor Npm) `shouldBe` Just []
 
     it "carries the native upload capability for a configured publication target" $
         fmap (isJust . adapterPublish) (adapterFor PyPI) `shouldBe` Just True
