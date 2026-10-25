@@ -2,12 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Every mount's declared endpoints, vetted against each other. A collision between two roles on
-one registry is the finding: a publish or a mirror write carries a credential that must not reach
-the endpoint it landed on, and a sweep deletes from a store another role owns. Three rules turn on
-'RegistryRole': the deleting role and its preview refuse a collision the writing role warns about
-or ignores. The rest refuse for every role.
--}
+-- | Vet declared read and upload coordinates while preserving each role's store-sharing rules.
 module Ecluse.Composition.Endpoints (
     -- * The endpoint pass
     VettedEndpoints (..),
@@ -41,6 +36,7 @@ import Ecluse.Composition.Vet (
  )
 import Ecluse.Config (
     MountConfig (..),
+    MirrorEndpoint (meUploadUrl),
     PrivateEndpoint (preTarget),
     PublicationEndpoint (peTarget, peUploadUrl),
     StoreTag (TagRegistry),
@@ -59,9 +55,7 @@ newtype VettedEndpoints = VettedEndpoints
     -- ^ Each mount's cleared publish endpoint.
     }
 
-{- | Vet every mount's declared endpoints against each other: the refusals and advisories this
-role earns, and the endpoints a pass that refused nothing clears it to use.
--}
+-- | Check every declared read and upload coordinate before clearing publication targets.
 vetEndpoints :: Map Ecosystem MountConfig -> Vet VettedEndpoints
 vetEndpoints mounts = cleared <$ endpointRules mounts
   where
@@ -250,11 +244,11 @@ comparedPairs :: EndpointComparison -> Map Ecosystem MountConfig -> [EndpointPai
 comparedPairs cmp mounts =
     [ EndpointPair eco (cmpSubject cmp) target other otherKey otherTarget
     | (eco, mcfg) <- Map.toAscList mounts
-    , Just target <- [endpointOf (cmpSubject cmp) mcfg]
+    , target <- endpointsOf (cmpSubject cmp) mcfg
     , (other, otherCfg) <- Map.toAscList mounts
     , withinScope (cmpScope cmp) eco other
     , otherKey <- cmpAgainst cmp
-    , Just otherTarget <- [endpointOf otherKey otherCfg]
+    , otherTarget <- endpointsOf otherKey otherCfg
     ]
 
 -- Each unordered pair of declared endpoints once, so one collision earns one refusal.
@@ -270,7 +264,7 @@ declaredEndpoints mounts =
     [ (eco, key, target)
     | (eco, mcfg) <- Map.toAscList mounts
     , key <- [KeyPublicUpstream, KeyPrivateUpstream, KeyMirrorTarget, KeyPublicationTarget]
-    , Just target <- [endpointOf key mcfg]
+    , target <- endpointsOf key mcfg
     ]
 
 collidingPair :: RegistryMatch -> EndpointPair -> Maybe EndpointPair
@@ -278,14 +272,15 @@ collidingPair match pair
     | sameStore match (tgtUrl (epTarget pair)) (tgtUrl (epOtherTarget pair)) = Just pair
     | otherwise = Nothing
 
-{- The endpoint a mount declares under one key. Only @registry@ is admitted on the public
-upstream, so its tag is the one the parser pinned rather than one the mount wrote. -}
-endpointOf :: EndpointKey -> MountConfig -> Maybe Target
-endpointOf key mcfg = case key of
-    KeyPublicUpstream -> Just (Target TagRegistry (mntPublicUpstream mcfg))
-    KeyPrivateUpstream -> preTarget <$> mntPrivateUpstream mcfg
-    KeyMirrorTarget -> meTarget <$> mntMirrorTarget mcfg
-    KeyPublicationTarget -> peTarget <$> mntPublicationTarget mcfg
+endpointsOf :: EndpointKey -> MountConfig -> [Target]
+endpointsOf key mount = case key of
+    KeyPublicUpstream -> [Target TagRegistry (mntPublicUpstream mount)]
+    KeyPrivateUpstream -> maybeToList (preTarget <$> mntPrivateUpstream mount)
+    KeyMirrorTarget -> maybe [] (\endpoint -> withUpload (meTarget endpoint) (meUploadUrl endpoint)) (mntMirrorTarget mount)
+    KeyPublicationTarget -> maybe [] (\endpoint -> withUpload (peTarget endpoint) (peUploadUrl endpoint)) (mntPublicationTarget mount)
+
+withUpload :: Target -> Maybe RegistryUrl -> [Target]
+withUpload target upload = target : [target{tgtUrl = url} | url <- maybeToList upload, not (sameRegistry (tgtUrl target) url)]
 
 withinScope :: MountScope -> Ecosystem -> Ecosystem -> Bool
 withinScope scope eco other = case scope of
