@@ -7,7 +7,6 @@ module Ecluse.Core.Registry.Cargo.Publish.Body (
     CargoUploadBody,
     decodeUpload,
     readUpload,
-    uploadMetadataValue,
     uploadName,
     uploadVersion,
     uploadArchive,
@@ -29,24 +28,20 @@ import Ecluse.Core.Security.Limits (Limits (..))
 import Ecluse.Core.Version.Cargo (parseCargo)
 
 -- | The decoded claims and archive remain paired with one fully consumed native body.
-data CargoUploadBody = CargoUploadBody Value Text Text ByteString
+data CargoUploadBody = CargoUploadBody Text Text ByteString
     deriving stock (Eq, Show)
-
--- | Publication metadata excludes both length prefixes and the compressed archive.
-uploadMetadataValue :: CargoUploadBody -> Value
-uploadMetadataValue (CargoUploadBody value _ _ _) = value
 
 -- | Preserve the declared published spelling for archive agreement.
 uploadName :: CargoUploadBody -> Text
-uploadName (CargoUploadBody _ name _ _) = name
+uploadName (CargoUploadBody name _ _) = name
 
 -- | Preserve the declared raw native version, including build metadata.
 uploadVersion :: CargoUploadBody -> Text
-uploadVersion (CargoUploadBody _ _ version _) = version
+uploadVersion (CargoUploadBody _ version _) = version
 
 -- | These bytes are a slice of the validated original body.
 uploadArchive :: CargoUploadBody -> ByteString
-uploadArchive (CargoUploadBody _ _ _ bytes) = bytes
+uploadArchive (CargoUploadBody _ _ bytes) = bytes
 
 -- | Decode strict native framing and JSON under the configured request and metadata bounds.
 decodeUpload :: Limits -> ByteString -> Either ParseError CargoUploadBody
@@ -85,7 +80,7 @@ decodeSections :: Limits -> ByteString -> ByteString -> Either ParseError CargoU
 decodeSections limits metadata archive = do
     value <- first (const (ParseError "Cargo upload metadata is malformed or exceeds its nesting bound")) (decodeCargoRecord (maxNestingDepth limits) metadata)
     (name, version) <- first (ParseError . toText) (parseEither metadataIdentity value)
-    pure (CargoUploadBody value name version archive)
+    pure (CargoUploadBody name version archive)
 
 metadataIdentity :: Value -> Parser (Text, Text)
 metadataIdentity = withObject "Cargo upload metadata" $ \fields -> do
