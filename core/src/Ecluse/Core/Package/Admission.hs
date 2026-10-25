@@ -8,8 +8,6 @@ The serve path and worker share rules, filename selection, and integrity-floor c
 module Ecluse.Core.Package.Admission (
     ArtifactAdmission (..),
     admissionTransience,
-    admitArtifactWithEvidence,
-    admitArtifactWithDecision,
     admitArtifactWithInstallRead,
 ) where
 
@@ -20,14 +18,12 @@ import Ecluse.Core.Package.Integrity (
     classifyDigests,
  )
 import Ecluse.Core.Rules (PreparedRule, evalRulesWithInstallRead)
-import Ecluse.Core.Rules.Install (InstallEvidenceMode (ProjectedInstallFacts), InstallEvidenceRead)
+import Ecluse.Core.Rules.Install (InstallEvidenceMode, InstallEvidenceRead)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     EvalContext,
-    SkippedCheck,
     Transience (WontResolve),
     completeEvidence,
-    skippedChecks,
  )
 import Ecluse.Core.Server.Path (Filename, unFilename)
 
@@ -46,28 +42,6 @@ data ArtifactAdmission
     | -- | The selected artifact has digests, but none meets the public floor.
       AdmissionBelowFloor
     deriving stock (Show)
-
--- | Decide one public artifact and retain the rule evidence beside its verdict.
-admitArtifactWithEvidence ::
-    EvalContext ->
-    [PreparedRule] ->
-    MinIntegrity ->
-    Filename ->
-    PackageDetails ->
-    IO (ArtifactAdmission, [SkippedCheck])
-admitArtifactWithEvidence ctx rules minIntegrity file details = do
-    (admission, decision) <- admitArtifactWithDecision ctx rules minIntegrity file details
-    pure (admission, skippedChecks decision)
-
--- | Retain the evaluated decision for a mirror publication audit without running the rules again.
-admitArtifactWithDecision ::
-    EvalContext ->
-    [PreparedRule] ->
-    MinIntegrity ->
-    Filename ->
-    PackageDetails ->
-    IO (ArtifactAdmission, Decision)
-admitArtifactWithDecision = admitArtifactWithInstallRead ProjectedInstallFacts Nothing
 
 -- | Retain the selected version and the closed evidence read through the shared admission gate.
 admitArtifactWithInstallRead :: InstallEvidenceMode -> Maybe InstallEvidenceRead -> EvalContext -> [PreparedRule] -> MinIntegrity -> Filename -> PackageDetails -> IO (ArtifactAdmission, Decision)

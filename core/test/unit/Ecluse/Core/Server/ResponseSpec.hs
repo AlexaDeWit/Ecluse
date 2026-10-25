@@ -20,7 +20,7 @@ import Ecluse.Core.Package (
     mkScope,
     renderPackageName,
  )
-import Ecluse.Core.Rules (evalRules, prepare)
+import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Render (renderDecision)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
@@ -53,7 +53,7 @@ import Ecluse.Core.Server.Response (
  )
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Package (sampleDetails, v1_0_0)
-import Ecluse.Test.Rules (atDefaultPrecedence, blockedBy, inertRuleDeps, isBlockedByDefault, remediation, revocation)
+import Ecluse.Test.Rules (atDefaultPrecedence, blockedBy, evalRules, inertRuleDeps, isBlockedByDefault, remediation, revocation)
 
 -- | A fixed "now" so age-based fixtures are deterministic.
 now :: UTCTime

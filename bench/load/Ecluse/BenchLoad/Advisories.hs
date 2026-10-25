@@ -35,7 +35,7 @@ import Ecluse.BenchLoad.ProxyProcess (AdvisoryFeed (AdvisoryFeed), advisoryBucke
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
 import Ecluse.Core.Osv.Schema (osvDbFileName)
 import Ecluse.Core.Package (PackageInfo (infoVersions), mkPackageName)
-import Ecluse.Core.Rules (evalRules, prepare)
+import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Decision (Blocked), DenyIfCveParams (..), DenyIfEpssParams (..), EvalContext (EvalContext), FailureAlignment (FailDeny, FailNoDecision), Reason (KnownMalicious), identityEvidence)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Version (mkVersion)
@@ -44,6 +44,7 @@ import Ecluse.Test.OsvDb (withServedArtifact)
 import Ecluse.Test.Package (hexSha1OfLazy, hexSha256Of)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
+import Ecluse.Test.Rules (evalRules)
 import Ecluse.Test.Stub (Captured (capPath), Stub (stubPort), withRoutedStub)
 
 -- | The scenario under the shipped policy, with its proxy syncing the corpus advisories.

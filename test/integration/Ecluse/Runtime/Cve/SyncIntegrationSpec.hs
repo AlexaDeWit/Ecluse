@@ -29,7 +29,7 @@ import Ecluse.Config (loadConfig)
 import Ecluse.Core.Cve.Slot (newCveSlot)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
-import Ecluse.Core.Rules (RuleDeps, evalRules, prepare)
+import Ecluse.Core.Rules (RuleDeps, prepare)
 import Ecluse.Core.Rules.Types (
     Decision (BlockedByDefault),
     EvalContext (EvalContext),
@@ -61,7 +61,7 @@ import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, passthroughAdvisorySyncTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
-import Ecluse.Test.Rules (atDefaultPrecedence, blockedBy, differentialRemediation, slotRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, blockedBy, differentialRemediation, evalRules, slotRuleDeps)
 import Ecluse.Test.Server.Mount (npmServeDeps)
 import Ecluse.Test.Stub (Captured (capHeaders), stubLocalhostUrl, withRoutedStub, withStub)
 import Ecluse.Test.Wai (rebaseAuthority, selfBaseUrlOf, status)

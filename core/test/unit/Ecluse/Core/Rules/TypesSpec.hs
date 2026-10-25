@@ -32,7 +32,7 @@ import Ecluse.Core.Package (
     mkScope,
     pkgEcosystem,
  )
-import Ecluse.Core.Rules (RuleDeps (rdAdvisoryDatabase), evalRules, prepare)
+import Ecluse.Core.Rules (RuleDeps (rdAdvisoryDatabase), prepare)
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh, AdvisoryUndated))
 import Ecluse.Core.Rules.Types (
     AdvisoryScore (Cvss, Epss),
@@ -71,7 +71,7 @@ import Ecluse.Rules.Remediation.Support (genRemediation)
 import Ecluse.Rules.Support (ctx, now)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, unscopedPyPI, v1_0_0)
-import Ecluse.Test.Rules (admissionOnly, atPrecedence, blockedBy, differentialRemediation, evalRule, inertRuleDeps, isAllow, isApproved, isUndecidable, remediationWith, servingRuleDeps, shippedRemediation, staticAdvisoryDatabase, withAdvisoryFreshness)
+import Ecluse.Test.Rules (admissionOnly, atPrecedence, blockedBy, differentialRemediation, evalRule, evalRules, inertRuleDeps, isAllow, isApproved, isUndecidable, remediationWith, servingRuleDeps, shippedRemediation, staticAdvisoryDatabase, withAdvisoryFreshness)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 import Ecluse.Core.Rules.Types qualified as Types

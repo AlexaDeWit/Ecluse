@@ -32,10 +32,8 @@ module Ecluse.Core.Rules (
     renderBootOrder,
 
     -- * Evaluation
-    newEvaluator,
     newEvaluatorWithInstallRead,
     evalRulesWithInstallRead,
-    evalRules,
     pushInability,
 
     -- * Observing the advisory source
@@ -337,12 +335,6 @@ renderReach = \case
     AdmissionAndRevocation -> "applies at admission and revocation"
     AdmissionOnly -> "applies at admission only"
 
--- | Decide a request's versions in boot order, catching throws. Advisory rules sharing one 'prepare' read one generation.
-newEvaluator :: EvalContext -> [PreparedRule] -> IO (RuleEvidence -> IO Decision)
-newEvaluator ctx rules = do
-    decide <- newEvaluatorWithInstallRead ProjectedInstallFacts ctx rules
-    pure (`decide` Nothing)
-
 -- | Memoise one immutable subject across both evaluation passes. Advisory rows remain package-scoped.
 newEvaluatorWithInstallRead :: InstallEvidenceMode -> EvalContext -> [PreparedRule] -> IO (RuleEvidence -> Maybe InstallEvidenceRead -> IO Decision)
 newEvaluatorWithInstallRead mode ctx rules = do
@@ -374,10 +366,6 @@ newEvaluatorWithInstallRead mode ctx rules = do
             >>= either (const (stepRules caughtEvaluation ev bound [])) pure
     resolveInstall Nothing = pure (InstallUndetermined InstallSignalUnread)
     resolveInstall (Just (InstallEvidenceRead readFact)) = readFact
-
--- | Decide one version through a fresh 'newEvaluator'.
-evalRules :: EvalContext -> [PreparedRule] -> RuleEvidence -> IO Decision
-evalRules ctx rules ev = newEvaluator ctx rules >>= ($ ev)
 
 -- | Decide one immutable version with its optional closed install-fact read.
 evalRulesWithInstallRead :: InstallEvidenceMode -> EvalContext -> [PreparedRule] -> RuleEvidence -> Maybe InstallEvidenceRead -> IO Decision

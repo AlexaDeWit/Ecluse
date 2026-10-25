@@ -41,7 +41,7 @@ import Ecluse.Config.Resolve (deepMerge)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), defaultDeliveryBudget)
-import Ecluse.Core.Rules (evalRules, prepare)
+import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (
     AllowIfRemediatesCveParams (..),
     Decision,
@@ -62,7 +62,7 @@ import Ecluse.Core.Rules.Types (
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Readiness (DatabaseRequirement (DatabaseOptional, DatabaseRequired))
 import Ecluse.Test.Package (pypiVersion, thingName, unscopedPyPI, v1_0_0)
-import Ecluse.Test.Rules (admittedBy, blockedBy, inertRuleDeps, withInstallScripts)
+import Ecluse.Test.Rules (admittedBy, blockedBy, evalRules, inertRuleDeps, withInstallScripts)
 import Ecluse.Test.Support (expectRight)
 
 -- | Configuration loading and operator diagnostics.

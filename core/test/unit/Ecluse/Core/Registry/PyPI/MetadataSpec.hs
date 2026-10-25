@@ -17,7 +17,7 @@ import Ecluse.Core.Package (
     PackageInfo (infoName, infoVersions),
     renderPackageName,
  )
-import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionAdmit, AdmissionDenied), admitArtifactWithEvidence)
+import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionAdmit, AdmissionDenied))
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataUndecodable),
@@ -25,7 +25,7 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
-import Ecluse.Core.Rules (evalRules, prepare)
+import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), Rule (AllowByIdentity, AllowIfOlderThan), completeEvidence)
 import Ecluse.Core.Security (
     LimitError (TooManyArtifacts, TooManyVersions),
@@ -35,9 +35,10 @@ import Ecluse.Core.Security (
 import Ecluse.Test.Contract.Metadata.Projection (MetadataFraming (SingleDocument), ProjectionDriver (..), metadataProjectionContract)
 import Ecluse.Test.Json (encodeStrict)
 import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename)
+import Ecluse.Test.Package.Admission (admitArtifactWithEvidence)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, projectPyPIVersion, simpleValue)
-import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, evalRules, inertRuleDeps)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
