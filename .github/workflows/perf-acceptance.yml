@@ -2,7 +2,6 @@ name: Performance Acceptance
 
 # Benchmark policy: ../../docs/testing.md#benchmarks-non-gating
 on:
-  pull_request:
   push:
     branches:
       - main
@@ -10,11 +9,10 @@ on:
     - cron: "37 6 * * *"
   workflow_dispatch:
 
-# One run per ref. Cancel a superseded PR run when a newer commit lands, because only
-# the latest commit's verdict matters. Never cancel a scheduled or dispatch run.
+# Keep live checks on main and request them on a PR branch when its change needs them.
 concurrency:
   group: perf-acceptance-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 # Least privilege: read-only is all this workflow needs. The baseline fetch reads the
 # runs and artifacts of main with the GITHUB_TOKEN.

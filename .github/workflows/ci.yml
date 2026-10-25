@@ -314,11 +314,10 @@ jobs:
   smoke:
     name: Smoke tests (live registries, non-gating)
     needs: changes
-    if: ${{ needs.changes.outputs.docs-only != 'true' }}
+    if: ${{ github.event_name != 'pull_request' && needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 60
-    # Catches protocol drift when the live registries change their wire behaviour. Not a
-    # `gate` dependency, so a transient blip shows red on the PR but blocks no merge.
+    # Detect live registry drift on main, the nightly schedule, and manual runs.
     continue-on-error: true
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
