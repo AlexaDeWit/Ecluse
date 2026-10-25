@@ -67,7 +67,8 @@ spec = describe "Cargo install evidence" $ do
         active <- fixture "1.2.3" [("build.rs", "unexecuted bytes")]
         count <- newIORef (0 :: Int)
         provider <- newCargoInstallEvidence defaultLimits
-        let artifactRead _ artifact pay = do
+        let artifactRead :: InstallArtifactRead
+            artifactRead _ artifact pay = do
                 modifyIORef' count (+ 1)
                 let bytes = if any ((== sha256Hex active) . hashValue) (artHashes artifact) then active else inert
                 pay (BS.length bytes)
