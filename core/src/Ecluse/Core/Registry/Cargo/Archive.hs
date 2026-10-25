@@ -88,7 +88,7 @@ cargoPublicationMetadata limits charge metadata = deadline $
             case result of
                 Left fault -> pure (Left fault)
                 Right (scan, _) -> do
-                    let content = Map.mapKeys (T.drop (T.length (caRoot metadata) + 1)) (tarContents scan)
+                    let content = Map.mapKeys dropArchiveRoot (tarContents scan)
                         textBytes = sum (map BS.length (Map.elems content))
                     charge (retained + 65536 + 8 * textBytes + 512 * Map.size content)
                     evaluate (publicationMetadata (caManifest metadata) content)
@@ -103,13 +103,16 @@ archiveFacts root scan = do
         Link _ -> bad "Cargo packaged archive contains an unflattened link"
         _ -> Right ()
     let prefix = root <> "/"
-        files = Set.fromList [T.drop (T.length prefix) path | (path, Regular) <- Map.toList (tarMembers scan)]
+        files = Set.fromList [dropArchiveRoot path | (path, Regular) <- Map.toList (tarMembers scan)]
         retained = 65536 + sum [256 + 4 * BS.length (TE.encodeUtf8 path) | path <- Set.toList files]
     for_ (Set.toList files) $ \path -> do
         let prefixes = drop 1 (scanl (\held part -> if T.null held then part else held <> "/" <> part) "" (T.splitOn "/" path))
         when (any (`Set.member` files) (take (length prefixes - 1) prefixes)) (bad "Cargo archive file traverses another regular file")
     manifest <- maybe (bad "Cargo archive lacks its effective Cargo.toml") Right (Map.lookup (prefix <> "Cargo.toml") (tarContents scan))
     pure (manifest, files, retained)
+
+dropArchiveRoot :: Text -> Text
+dropArchiveRoot = T.drop 1 . snd . T.breakOn "/"
 
 archivePass :: Limits -> (Int -> IO ()) -> Text -> Set Text -> ByteString -> IO (Either ParseError (TarScan, Int))
 archivePass limits charge root selected bytes = do

@@ -13,6 +13,7 @@ module Ecluse.Core.Version.Cargo (
     cargoUniquenessKey,
 ) where
 
+import Data.ByteString qualified as BS
 import Data.Char (isDigit)
 import Data.Text qualified as T
 
@@ -24,7 +25,7 @@ import Ecluse.Core.Version.Token (withinVersionLength)
 data CargoKey = CargoKey Word64 Word64 Word64 [Identifier] (Maybe Text)
     deriving stock (Show)
 
-data Identifier = Numeric Text | Alphanumeric Text
+data Identifier = Numeric ByteString | Alphanumeric Text
     deriving stock (Eq, Show)
 
 instance Eq CargoKey where
@@ -35,7 +36,7 @@ instance Ord CargoKey where
         compare (a, b, c) (x, y, z) <> comparePrerelease pre other
 
 instance Ord Identifier where
-    compare (Numeric a) (Numeric b) = compare (T.length a) (T.length b) <> compare a b
+    compare (Numeric a) (Numeric b) = compare (BS.length a) (BS.length b) <> compare a b
     compare (Alphanumeric a) (Alphanumeric b) = compare a b
     compare Numeric{} Alphanumeric{} = LT
     compare Alphanumeric{} Numeric{} = GT
@@ -64,13 +65,13 @@ validNumber :: Text -> Bool
 validNumber raw =
     not (T.null raw)
         && T.all isDigit raw
-        && (T.length raw == 1 || not (T.isPrefixOf "0" raw))
+        && (T.compareLength raw 1 == EQ || not (T.isPrefixOf "0" raw))
 
 identifier :: Text -> Maybe Identifier
 identifier raw = do
     guard (validIdentifier raw)
     if T.all isDigit raw
-        then Numeric (T.copy raw) <$ guard (validNumber raw)
+        then Numeric (encodeUtf8 raw) <$ guard (validNumber raw)
         else pure (Alphanumeric (T.copy raw))
 
 buildIdentifiers :: Text -> Maybe Text
@@ -101,5 +102,5 @@ cargoUniquenessKey (CargoKey major minor patch pre _) =
 
 renderIdentifier :: Identifier -> Text
 renderIdentifier = \case
-    Numeric raw -> raw
+    Numeric raw -> decodeUtf8 raw
     Alphanumeric raw -> raw

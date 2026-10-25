@@ -29,12 +29,13 @@ cargoArtifactHosts = ["https://static.crates.io"]
 
 -- | Prefix spelling follows Cargo's length rule and preserves its input's case.
 cargoPrefix :: Text -> Text
-cargoPrefix name = case T.length name of
-    0 -> ""
-    1 -> "1"
-    2 -> "2"
-    3 -> "3/" <> T.take 1 name
-    _ -> T.take 2 name <> "/" <> T.take 2 (T.drop 2 name)
+cargoPrefix name = case T.compareLength name 3 of
+    LT
+        | T.null name -> ""
+        | T.compareLength name 1 == EQ -> "1"
+        | otherwise -> "2"
+    EQ -> "3/" <> T.take 1 name
+    GT -> T.take 2 name <> "/" <> T.take 2 (T.drop 2 name)
 
 -- | Derive a sparse lookup path, folding ASCII case alone.
 cargoIndexPath :: PackageName -> Text
