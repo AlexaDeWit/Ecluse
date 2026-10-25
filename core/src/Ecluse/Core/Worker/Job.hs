@@ -159,7 +159,7 @@ firstPartyReason job =
         <> "; refusing to mirror public content under a first-party name"
 
 mirrorUnlessPresent :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> WorkerM JobOutcome
-mirrorUnlessPresent charge policy job = withWorkerInstallReads charge policy $ \reads -> do
+mirrorUnlessPresent charge policy job = withWorkerInstallReads charge policy $ \evidenceReads -> do
     result <- runExceptT $ do
         target <- ExceptT (probeInventory charge policy job)
         if isNothing (wpMirrorState policy) && triggerPresent (\name -> any ((== name) . artFilename) (targetFiles job target)) && mpNativeComplete (wpPublish policy) (jobPackage job) (jobVersion job) target
@@ -171,7 +171,7 @@ mirrorUnlessPresent charge policy job = withWorkerInstallReads charge policy $ \
                         | triggerPresent (`Map.member` versionFiles version)
                         , checkMirrorCompletion version (targetFiles job target) == MirrorComplete ->
                             DebugS <$ verifyRecordedCompanions charge policy version
-                    _ -> InfoS <$ completePass reads charge policy job 3 target previous
+                    _ -> InfoS <$ completePass evidenceReads charge policy job 3 target previous
     case result of
         Left failure -> pure failure
         Right severity -> Succeeded <$ logFM severity (ls ("mirror version complete: " <> renderJob job))
@@ -180,8 +180,8 @@ mirrorUnlessPresent charge policy job = withWorkerInstallReads charge policy $ \
 
 -- A pass rereads native inventory before state, so concurrent additions cannot hide behind an old proof.
 completePass :: (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> WorkerStateBudget -> WorkerPolicy -> MirrorJob -> Int -> PackageInfo -> Maybe ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ()
-completePass reads charge policy job attempts target previous = do
-    admitted <- ExceptT (reevaluatePolicy reads charge policy job)
+completePass evidenceReads charge policy job attempts target previous = do
+    admitted <- ExceptT (reevaluatePolicy evidenceReads charge policy job)
     record <- stateAction (persistInventory charge (wpArtifactLimits policy) (wpMirrorState policy) (pmvInventory (raPrepared admitted)) previous)
     copied <- copyRecorded charge policy job target admitted record
     finalTarget <- ExceptT (probeInventory charge policy job)
@@ -193,7 +193,7 @@ completePass reads charge policy job attempts target previous = do
         MirrorComplete -> verifyRecordedCompanions charge policy version
         MirrorIncomplete faults
             | any conflicting faults -> throwError (Dropped ("mirror target identity conflicts: " <> show faults))
-            | attempts > 1 && any (newlyRequired copiedNames) faults -> completePass reads charge policy job (attempts - 1) finalTarget (Just current)
+            | attempts > 1 && any (newlyRequired copiedNames) faults -> completePass evidenceReads charge policy job (attempts - 1) finalTarget (Just current)
             | otherwise -> throwError (Retried AfterPublish ("mirror remains incomplete: " <> show faults))
   where
     conflicting (ConflictingMirrorFile _) = True
@@ -285,7 +285,7 @@ withWorkerInstallReads :: WorkerStateBudget -> WorkerPolicy -> ((PackageDetails 
 withWorkerInstallReads charge policy use = withRunInIO $ \run -> do
     client <- run (asks wrClient)
     control <- run (asks wrPublicControl)
-    reads <- case wpInstallEvidence policy of
+    evidenceReads <- case wpInstallEvidence policy of
         Nothing -> pure (const (pure Nothing))
         Just provider ->
             newInstallEvidenceReads
@@ -300,14 +300,14 @@ withWorkerInstallReads charge policy use = withRunInIO $ \run -> do
                     , ieFlightBudget = wsbEvidenceFlight charge
                     , ieDiagnostic = run . logFM ErrorS . ls . renderInability . rfDetail
                     }
-    run (use reads)
+    run (use evidenceReads)
 
 reevaluatePolicy :: (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> WorkerStateBudget -> WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome Readmitted)
-reevaluatePolicy reads charge policy job =
-    liftIO (wpResolveVersion policy (wsbSource charge) (jobPackage job) (jobVersion job)) >>= admitEvaluation reads policy job
+reevaluatePolicy evidenceReads charge policy job =
+    liftIO (wpResolveVersion policy (wsbSource charge) (jobPackage job) (jobVersion job)) >>= admitEvaluation evidenceReads policy job
 
 admitEvaluation :: (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> WorkerPolicy -> MirrorJob -> VersionEvaluation -> WorkerM (Either JobOutcome Readmitted)
-admitEvaluation reads policy job evaluation = case evaluation of
+admitEvaluation evidenceReads policy job evaluation = case evaluation of
     VersionCooling _ -> pure (Left (unresolved "the public upstream is cooling down"))
     VersionMetadataUnavailable -> pure (Left (unresolved ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job)))
     VersionMissing -> pure (Left (unresolved ("the public upstream no longer offers " <> renderJob job)))
@@ -315,7 +315,7 @@ admitEvaluation reads policy job evaluation = case evaluation of
         Nothing -> pure (Left (Dropped "the source inventory has no supported trigger artifact"))
         Just trigger -> do
             ctx <- liftIO (mkEvalContext (wpNow policy) (pure Nothing))
-            installRead <- liftIO (reads (vdDetails doc))
+            installRead <- liftIO (evidenceReads (vdDetails doc))
             (admission, decision) <- liftIO (admitArtifactWithInstallRead (installEvidenceMode (wpInstallEvidence policy)) installRead ctx (wpRules policy) (wpMinIntegrity policy) trigger (vdDetails doc))
             case outcomeOfAdmission job admission of
                 Left outcome -> pure (Left outcome)
@@ -329,7 +329,7 @@ admitEvaluation reads policy job evaluation = case evaluation of
                             Left fault -> Left <$> outcomeOfPublish job (Left fault)
                             Right prepared -> pure $ do
                                 locations <- traverse (admittedLocation policy job) (inventoryFiles (pmvInventory prepared))
-                                pure (Readmitted prepared locations upstreamLatest reads decision)
+                                pure (Readmitted prepared locations upstreamLatest evidenceReads decision)
   where
     unresolved = retryOrDrop (versionTransience evaluation)
 

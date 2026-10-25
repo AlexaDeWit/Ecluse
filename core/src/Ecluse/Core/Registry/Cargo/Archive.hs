@@ -19,6 +19,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Text.Show (showString, shows, showsPrec)
 import UnliftIO.Exception (evaluate)
 import UnliftIO.Timeout (timeout)
 

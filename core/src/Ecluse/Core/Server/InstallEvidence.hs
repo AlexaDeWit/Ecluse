@@ -5,7 +5,6 @@
 -- | Bind native install evidence to the mount's anonymous guarded public artifact reader.
 module Ecluse.Core.Server.InstallEvidence (newPublicInstallEvidenceReads, newTicketInstallEvidenceFlightBudget) where
 
-import Data.ByteString.Short (toShort)
 import UnliftIO.Exception (finally)
 import UnliftIO.MVar (withMVar)
 
@@ -30,7 +29,7 @@ newPublicInstallEvidenceReads :: PackumentDeps -> ExchangeClient -> PublicContro
 newPublicInstallEvidenceReads deps client control role bytes inspection sharing diagnose = case pdInstallEvidence deps of
     Nothing -> pure (const (pure Nothing))
     Just provider -> do
-        reads <-
+        evidenceReads <-
             newInstallEvidenceReads
                 provider
                 InstallEvidenceContext
@@ -41,13 +40,13 @@ newPublicInstallEvidenceReads deps client control role bytes inspection sharing 
                     , ieFlightBudget = sharing
                     , ieDiagnostic = diagnose
                     }
-        pure (\details -> if pdFirstParty deps (pkgName details) then pure Nothing else reads details)
+        pure (\details -> if pdFirstParty deps (pkgName details) then pure Nothing else evidenceReads details)
   where
-    readArtifact bounded artifact charge
+    readArtifact bounded artifact pay
         | not (tarballHostHonoured UntrustedOrigin deps (thgPublicHostPort (pdTarballHostGate deps)) (hostPortAddress (artUrl artifact))) = pure (Left unavailable)
         | otherwise = case pdEgressUrl deps (artUrl artifact) of
             Left _ -> pure (Left unavailable)
-            Right url -> readInstallArtifact ((pdLimits deps){maxMirrorArtifactBytes = min (maxMirrorArtifactBytes (pdLimits deps)) (maxMirrorArtifactBytes bounded)}) client (Controlled control kind) (artifactByUrl (pdArtifact deps) Nothing (registryUrlText url)) charge
+            Right url -> readInstallArtifact ((pdLimits deps){maxMirrorArtifactBytes = min (maxMirrorArtifactBytes (pdLimits deps)) (maxMirrorArtifactBytes bounded)}) client (Controlled control kind) (artifactByUrl (pdArtifact deps) Nothing (registryUrlText url)) pay
     kind = if role == InstallWorkerReadmission then PublicRead.WorkerArtifact else PublicRead.Artifact
     unavailable = ReadFault WontResolve EvaluationFailed InstallSignalUnread
 

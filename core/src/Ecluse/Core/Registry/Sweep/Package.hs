@@ -135,7 +135,7 @@ selectPackage counting ports counters mount ctx name stored
     served = [storedVersion s | s <- stored, storedPresence s == VersionServed]
     decideAll evidence = do
         decide <- newEvaluatorWithInstallRead (installEvidenceMode (smInstallEvidence mount)) ctx (smRules mount)
-        reads <- case smInstallEvidence mount of
+        evidenceReads <- case smInstallEvidence mount of
             Nothing -> pure (const (pure Nothing))
             Just provider ->
                 newInstallEvidenceReads
@@ -150,7 +150,7 @@ selectPackage counting ports counters mount ctx name stored
                         }
         let decideSubject version = do
                 let (ev, details) = evidence version
-                installRead <- maybe (pure Nothing) reads details
+                installRead <- maybe (pure Nothing) evidenceReads details
                 decide ev installRead
         catMaybes <$> traverse (decideVersion counting ports counters decideSubject) served
 
