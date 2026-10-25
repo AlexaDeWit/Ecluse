@@ -66,9 +66,9 @@ spec = describe "durable mirror state allocation" $ do
         let expectedTarget = stateTarget "https://target.example.test/"
             revision = StateRevision expectedTarget mirrorPackage "revision"
         record <- expectRight (extendProjectRecord testLimits expectedTarget inventory Nothing)
-        reads <- newIORef []
+        observedReads <- newIORef []
         let store = readOnlyStore $ \name previous -> do
-                modifyIORef' reads (<> [(name, previous)])
+                modifyIORef' observedReads (<> [(name, previous)])
                 pure (Right (StateLoaded revision record))
         calls <- newIORef []
         bindings <- allocateWith (recordingAllocator calls store) app mounts
@@ -81,7 +81,7 @@ spec = describe "durable mirror state allocation" $ do
         admitted <- withMemoryEntry noopMetricsPort meter $ \ticket -> validateMirrorProject (msbView binding) ticket mirrorPackage
         result <- expectRight admitted
         result `shouldBe` Right (Just (revision, record))
-        readIORef reads `shouldReturn` [(mirrorPackage, Nothing), (mirrorPackage, Nothing)]
+        readIORef observedReads `shouldReturn` [(mirrorPackage, Nothing), (mirrorPackage, Nothing)]
 
     it "allocates from the vetted npm capability and uses the root storage prefix when absent" $ do
         (app, mounts) <- settings (("ECLUSE_MIRROR_STATE__URL", "s3://root-state") : staticEnvVars)
@@ -117,7 +117,7 @@ forbiddenAllocator :: Text -> Text -> StateTarget -> IO MirrorState
 forbiddenAllocator _ _ _ = unexpected
 
 readOnlyStore :: (PackageName -> Maybe StateRevision -> IO (Either MirrorStateFault StateRead)) -> MirrorState
-readOnlyStore readProject = MirrorState (\_ -> readProject) (\_ _ _ _ -> unexpected) (\_ _ -> unexpected) (\_ _ -> unexpected)
+readOnlyStore readProject = MirrorState (const readProject) (\_ _ _ _ -> unexpected) (\_ _ -> unexpected) (\_ _ -> unexpected)
 
 unexpected :: IO a
 unexpected = throwIO (TestContractEscape "unexpected durable state operation")

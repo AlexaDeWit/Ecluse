@@ -25,8 +25,8 @@ import Ecluse.Runtime.Mirror.State.S3 (newS3MirrorState)
 
 -- | Reuse the metadata pool's aggregate bounds. Unconfigured mounts allocate no state client or retention.
 newMirrorStates :: Maybe AwsEndpoint -> Deadlines -> AppConfig -> [VettedMount] -> Limits -> CacheConfig -> LocalPool -> IO (Map Ecosystem MirrorStateBinding)
-newMirrorStates endpoint deadlines app mounts limits cacheConfig pool =
-    newMirrorStatesWith (newS3MirrorState endpoint deadlines limits) app mounts limits cacheConfig pool
+newMirrorStates endpoint deadlines app mounts limits =
+    newMirrorStatesWith (newS3MirrorState endpoint deadlines limits) app mounts limits
 
 -- | Attach state only to the matching mount. First-party handling remains in the read pipeline.
 bindMirrorStates :: Map Ecosystem MirrorStateBinding -> [MountBinding] -> [MountBinding]
