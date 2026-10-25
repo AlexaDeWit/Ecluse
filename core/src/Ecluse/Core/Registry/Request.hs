@@ -2,12 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Ecosystem-agnostic request mechanics: the outbound finaliser, the credential presentation,
-URL parsing into a typed 'UrlFormationError', and a base URL parsed once for the paths under it.
-An adapter supplies only its own protocol facts.
-
-'parseRequestEither' seals what it parses, so an adapter cannot obtain an unsealed 'Request'
-from this module at all.
+{- | Shared HTTP requests with typed URL failures and ecosystem-specific credential presentation.
+Requests parsed here refuse redirects, including after credentials attach.
 -}
 module Ecluse.Core.Registry.Request (
     -- * Request finalisation
@@ -22,6 +18,7 @@ module Ecluse.Core.Registry.Request (
     authorizationUnder,
 
     -- * Request building
+    metadataGet,
     artifactRequestByUrl,
     artifactGet,
     joinPath,
@@ -42,6 +39,7 @@ import Network.HTTP.Client qualified as Client
 import Network.HTTP.Types.Header (
     HeaderName,
     RequestHeaders,
+    hAccept,
     hAcceptEncoding,
     hAuthorization,
  )
@@ -115,6 +113,17 @@ authorizationUnder scheme headers = do
     let (presented, rest) = T.break (== ' ') (decodeUtf8 raw)
     guard (T.toLower presented == T.toLower scheme)
     pure (T.dropWhile (== ' ') rest)
+
+-- | Negotiate compressed metadata under the ecosystem's media type and credential presentation.
+metadataGet :: CredentialMapping -> Maybe ClientCredential -> ByteString -> Request -> Request
+metadataGet mapping credential mediaType base =
+    attachCredential mapping credential $
+        base
+            { requestHeaders =
+                (hAccept, mediaType)
+                    : (hAcceptEncoding, "gzip")
+                    : requestHeaders base
+            }
 
 -- | Build the artifact @GET@ at the preserved upstream URL through 'artifactGet'.
 artifactRequestByUrl :: CredentialMapping -> Maybe ClientCredential -> Text -> Either UrlFormationError Request

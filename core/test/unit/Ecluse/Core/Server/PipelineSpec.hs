@@ -24,6 +24,7 @@ import Ecluse.Core.Mirror.State (stateTarget)
 import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
 import Ecluse.Core.Package (HashAlg (SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactHosts))
 import Ecluse.Core.Registry.Maintenance (ConsentVerdict (ConsentWithheld), StoreClass (StorePreserved), StoreFacts (factBackend))
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
@@ -1025,6 +1026,27 @@ publicControlSpec = describe "public authority control" $ do
 
 pypiPrivateArtifactSpec :: Spec
 pypiPrivateArtifactSpec = describe "PyPI first-party private artifacts" $ do
+    it "keeps indexed private addressing when the public artifact host list is empty" $ withSweeper $ \deadlines -> do
+        rt <- testServeRuntime deadlines noopMetricsPort
+        privateHits <- newIORef (0 :: Int)
+        testWithApplication (pure (countingUpstream privateHits (pypiPrivateApp status404))) $ \privatePort -> do
+            let deps = pypiPrivateDeps privatePort 1
+                independent = deps{pdArtifact = (pdArtifact deps){artifactHosts = []}}
+            response <- capturePypiArtifact rt independent methodGet
+            statusCode (responseStatus response) `shouldBe` 404
+            readIORef privateHits `shouldReturn` 2
+
+    it "keeps npm's conventional private path when it declares a public artifact host" $ withSweeper $ \deadlines -> do
+        rt <- testServeRuntime deadlines noopMetricsPort
+        privateHits <- newIORef (0 :: Int)
+        testWithApplication (pure (countingUpstream privateHits upstreamApp)) $ \privatePort -> do
+            deps <- depsFor 1
+            let privateDeps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) deps
+                independent = privateDeps{pdArtifact = (pdArtifact privateDeps){artifactHosts = ["https://artifacts.example"]}}
+            response <- captureServe npmTarballContract rt (mountWith independent) (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+            statusCode (responseStatus response) `shouldBe` 200
+            readIORef privateHits `shouldReturn` 1
+
     it "answers 503 without a suggested delay when the private origin cannot be read" $ withSweeper $ \deadlines -> do
         (metricsPort, decisions) <- recordingMetricsPort
         rt <- testServeRuntime deadlines metricsPort

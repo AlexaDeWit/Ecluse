@@ -81,7 +81,7 @@ import Ecluse.Core.Server.Pipeline.Tarball.Relay (
     withMethod,
     withValidators,
  )
-import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..))
+import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..), relayResponder)
 import Ecluse.Core.Server.Response (
     ServeDecision (Admit),
     Transience (WontResolve),
@@ -89,7 +89,7 @@ import Ecluse.Core.Server.Response (
     rejectUnavailable,
     serveDecisionOf,
  )
-import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamResult (..))
+import Ecluse.Core.Server.Stream (UpstreamResult (..))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
@@ -223,14 +223,6 @@ mirrorOnAdmit ctx artifact verdict = case (verdict, pdMirror (arDeps ctx)) of
     (RelayedArtifact, NoMirrorWrite) -> pass
     (RelayedOddShape _, _) -> pass
     (RelayedNonSuccess _, _) -> pass
-
--- Adapt the route's typed response constructors to the streaming helper's callback. The
--- upstream connection stays open until the selected response completes.
-relayResponder :: TarballReplies response -> (response -> IO received) -> RelayResponder received
-relayResponder replies respond =
-    RelayResponder
-        (\status headers body -> respond (tarballStream replies status headers body))
-        (\status headers -> respond (tarballEmpty replies status headers))
 
 enqueueMirror :: ArtifactRequest response -> Artifact -> IO ()
 enqueueMirror ctx artifact =

@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Bind durable PyPI inventories and source-only retention to each configured mirror target.
+-- | Bind durable mirror inventories and source-only retention to each configured mirror target.
 module Ecluse.Composition.MirrorState (
     MirrorStateBinding (..),
     newMirrorStates,
@@ -11,44 +11,22 @@ module Ecluse.Composition.MirrorState (
 
 import Data.Map.Strict qualified as Map
 
-import Ecluse.Config (
-    AdvisoryStoreTarget (S3Store),
-    AppConfig (cfgMirrorState, cfgMounts),
-    MirrorEndpoint (meUrl),
-    MountConfig (mntMirrorTarget),
-    advisoryStoreTarget,
- )
+import Ecluse.Composition.MirrorState.Internal (MirrorStateBinding (..), newMirrorStatesWith)
+import Ecluse.Composition.Validate (VettedMount)
+import Ecluse.Config (AppConfig)
 import Ecluse.Core.Deadline (Deadlines)
-import Ecluse.Core.Ecosystem (Ecosystem (PyPI), parseEcosystem)
-import Ecluse.Core.Mirror.State (MirrorState, StateTarget, stateTarget)
+import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Security (Limits)
-import Ecluse.Core.Security.Egress (registryUrlText)
-import Ecluse.Core.Server.Cache (CacheConfig (cacheTtl), StoreBudget (StoreBudget))
+import Ecluse.Core.Server.Cache (CacheConfig)
 import Ecluse.Core.Server.Cache.Backend.Local (LocalPool)
 import Ecluse.Core.Server.Context (MountBinding (bindingPackumentDeps, bindingPrefix), PackumentDeps (pdMirrorState))
-import Ecluse.Core.Server.MirrorView (MirrorView, newMirrorRetention, newMirrorView)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Mirror.State.S3 (newS3MirrorState)
 
--- | Foreground and worker roles share one target identity and durable state port.
-data MirrorStateBinding = MirrorStateBinding
-    { msbStore :: MirrorState
-    , msbTarget :: StateTarget
-    , msbView :: MirrorView
-    }
-
 -- | Reuse the metadata pool's aggregate bounds. Unconfigured mounts allocate no state client or retention.
-newMirrorStates :: Maybe AwsEndpoint -> Deadlines -> AppConfig -> Limits -> CacheConfig -> LocalPool -> IO (Map Ecosystem MirrorStateBinding)
-newMirrorStates endpoint deadlines app limits cacheConfig pool = case configured of
-    Nothing -> pure Map.empty
-    Just (storeUrl, mirror) -> do
-        let S3Store bucket prefix = advisoryStoreTarget storeUrl
-            target = stateTarget (registryUrlText (meUrl mirror))
-        store <- newS3MirrorState endpoint deadlines limits bucket (fromMaybe "" prefix) target
-        retention <- newMirrorRetention pool (cacheTtl cacheConfig) (StoreBudget 0 0)
-        pure (Map.singleton PyPI (MirrorStateBinding store target (newMirrorView limits target store retention)))
-  where
-    configured = (,) <$> cfgMirrorState app <*> (mntMirrorTarget =<< Map.lookup PyPI (cfgMounts app))
+newMirrorStates :: Maybe AwsEndpoint -> Deadlines -> AppConfig -> [VettedMount] -> Limits -> CacheConfig -> LocalPool -> IO (Map Ecosystem MirrorStateBinding)
+newMirrorStates endpoint deadlines app mounts limits =
+    newMirrorStatesWith (newS3MirrorState endpoint deadlines limits) app mounts limits
 
 -- | Attach state only to the matching mount. First-party handling remains in the read pipeline.
 bindMirrorStates :: Map Ecosystem MirrorStateBinding -> [MountBinding] -> [MountBinding]

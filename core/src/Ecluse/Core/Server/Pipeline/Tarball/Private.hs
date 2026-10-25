@@ -26,7 +26,7 @@ import Ecluse.Core.Package (
     PackageDetails (pkgArtifacts),
     PackageInfo (PackageInfo),
  )
-import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByFile, artifactByUrl, artifactHosts))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByFile, artifactByUrl, artifactPrivateAddressing), PrivateArtifactAddressing (..))
 import Ecluse.Core.Registry.Metadata (
     MetadataClient (fetchVersionMetadata),
     MetadataError (
@@ -77,9 +77,9 @@ import Ecluse.Core.Server.Pipeline.Tarball.Relay (
     withMethod,
     withValidators,
  )
-import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..))
+import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..), relayResponder)
 import Ecluse.Core.Server.Response (mkRefusal)
-import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamResult (..))
+import Ecluse.Core.Server.Stream (UpstreamResult (..))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Version (renderVersion)
 import UnliftIO (tryAny)
@@ -125,9 +125,7 @@ streamPrivateArtifact ctx token = do
     refuse = respond (tarballError replies status403 [] (privateAuthorisationRefusal (pdHelp (arDeps ctx))))
     privateResponder =
         privateArtifactResponder ((Metric.Deny,) <$> refuse) (Metric.Admit,) $
-            RelayResponder
-                (\status headers body -> respond (tarballStream replies status headers body))
-                (\status headers -> respond (tarballEmpty replies status headers))
+            relayResponder replies respond
 
 data PrivateArtifact
     = PrivateRequest Bool HTTP.Request
@@ -143,8 +141,9 @@ privateArtifactRequest ticket ctx token = case pdPrivateBase deps of
     Nothing -> pure (PrivateMissing MissAbsent)
     Just privateBase
         | not (tarballHostHonoured TrustedOrigin deps privateHostPort privateHostPort) -> pure (PrivateMissing MissAbsent)
-        | null (artifactHosts (pdArtifact deps)) -> pure (byConventionalPath privateBase)
-        | otherwise -> byIndexedLocation ticket ctx token privateBase privateHostPort
+        | otherwise -> case artifactPrivateAddressing (pdArtifact deps) of
+            ConventionalArtifactPath -> pure (byConventionalPath privateBase)
+            IndexedArtifactLocation -> byIndexedLocation ticket ctx token privateBase privateHostPort
   where
     deps = arDeps ctx
 

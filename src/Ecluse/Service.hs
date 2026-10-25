@@ -43,7 +43,7 @@ import Ecluse.Composition.Plan (
 import Ecluse.Composition.Sizing (newPooledManager)
 import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Composition.Types (MirrorRole)
-import Ecluse.Composition.Validate (ValidatedPlan (vpSettings))
+import Ecluse.Composition.Validate (ValidatedPlan (vpMounts, vpSettings))
 import Ecluse.Composition.Worker (workerPoliciesWithState)
 import Ecluse.Config (AppConfig (cfgEgress), EgressSettings (egrOperatorContact))
 import Ecluse.Core.BuildIdentity (identityManagerSettings, renderUserAgent)
@@ -136,7 +136,7 @@ withServiceRuntime bootEnv plan mirror action = do
     let cacheConfig = bpCacheConfig bootPlan
     pool <- newLocalPool (cacheMaxEntries cacheConfig) (cacheMaxBytes cacheConfig)
     metadataCache <- localCacheProviderWithPool pool cacheConfig >>= newMetadataCacheWithProvider
-    states <- newMirrorStates (bpS3Endpoint bootPlan) deadlines appConfig (bpLimits bootPlan) cacheConfig pool
+    states <- newMirrorStates (bpS3Endpoint bootPlan) deadlines appConfig (vpMounts (bpValidated bootPlan)) (bpLimits bootPlan) cacheConfig pool
     let bindings = bindMirrorStates states baseBindings
 
     (manager, privateManager) <- dataPlaneManagers bootPlan

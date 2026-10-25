@@ -73,8 +73,15 @@ import Ecluse.Config (
     storeTagName,
  )
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), Secret)
-import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor, adapterPublish, adapterRuleBlocks)
+import Ecluse.Core.Registry.Adapter.Capability (
+    AdapterPublish (publishIdentity, publishMirrorRequirements),
+    MirrorRequirements (mirrorStateRequirement, mirrorUploadEndpoint),
+    MirrorStateRequirement (DurableVersionState),
+    UploadEndpointRequirement (ExplicitUploadEndpoint),
+    UploadIdentityRequirement (NamedIdentity),
+ )
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
 import Ecluse.Core.Rules.Types (
     AllowIfRemediatesCveParams (aircOnUnavailable),
@@ -133,15 +140,19 @@ vetMirrorCapabilities role app = decided $ case missing of
     mirrorWrites = pipeline `elem` [Just ServeAndMirror, Just MirrorOnly]
     clientWrites = pipeline `elem` [Just ServeAndMirror, Just ServeOnly]
     missing = concatMap missingOnMount (Map.toList (cfgMounts app))
-    missingOnMount (eco, mount)
-        | eco /= PyPI = []
-        | otherwise = maybe [] (mirrorNeeds eco) (mntMirrorTarget mount) <> maybe [] (publicationNeeds eco) (mntPublicationTarget mount)
-    mirrorNeeds eco endpoint =
-        [MirrorStateRequired eco | isJust pipeline, isNothing (cfgMirrorState app)]
-            <> [required eco "mirrorTarget" (meTarget endpoint) "uploadUrl" | mirrorWrites, isNothing (meUploadUrl endpoint)]
-            <> [required eco "mirrorTarget" (meTarget endpoint) "username" | mirrorWrites, tgtTag (meTarget endpoint) /= TagCodeArtifact, isNothing (meUsername endpoint)]
-    publicationNeeds eco endpoint =
-        [required eco "publicationTarget" (peTarget endpoint) "username" | clientWrites, isJust (peToken endpoint), tgtTag (peTarget endpoint) /= TagCodeArtifact, isNothing (peUsername endpoint)]
+    missingOnMount (eco, mount) = case adapterFor eco >>= adapterPublish of
+        Nothing -> []
+        Just publish ->
+            maybe [] (mirrorNeeds eco publish) (mntMirrorTarget mount)
+                <> maybe [] (publicationNeeds eco publish) (mntPublicationTarget mount)
+    mirrorNeeds eco publish endpoint =
+        [MirrorStateRequired eco | mirrorStateRequirement requirements == DurableVersionState, isJust pipeline, isNothing (cfgMirrorState app)]
+            <> [required eco "mirrorTarget" (meTarget endpoint) "uploadUrl" | mirrorUploadEndpoint requirements == ExplicitUploadEndpoint, mirrorWrites, isNothing (meUploadUrl endpoint)]
+            <> [required eco "mirrorTarget" (meTarget endpoint) "username" | publishIdentity publish == NamedIdentity, mirrorWrites, tgtTag (meTarget endpoint) /= TagCodeArtifact, isNothing (meUsername endpoint)]
+      where
+        requirements = publishMirrorRequirements publish
+    publicationNeeds eco publish endpoint =
+        [required eco "publicationTarget" (peTarget endpoint) "username" | publishIdentity publish == NamedIdentity, clientWrites, isJust (peToken endpoint), tgtTag (peTarget endpoint) /= TagCodeArtifact, isNothing (peUsername endpoint)]
     required eco endpoint target key = UploadConfigurationRequired eco (endpoint <> "." <> storeTagName (tgtTag target) <> "." <> key)
 
 -- | Accumulate every pure refusal and advisory for one role before constructing its plan.

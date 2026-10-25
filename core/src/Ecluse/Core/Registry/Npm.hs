@@ -10,14 +10,13 @@ module Ecluse.Core.Registry.Npm (
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
-    FetchFault (FetchUrlUnformable),
+    FetchFault,
     PublishRelayResponse,
  )
 
-import Ecluse.Core.Registry.Exchange (boundedRelay, formThen)
 import Ecluse.Core.Registry.Npm.Publish (publishRequest)
-import Ecluse.Core.Registry.Origin (OriginClient (ocClient, ocLimits, ocToken), originBaseUrl)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes)
+import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
+import Ecluse.Core.Registry.Publish (relayPublishRequest)
 
 -- | Relay a client's npm publish document to the publication target and return its own response.
 relayPublishDocument ::
@@ -26,7 +25,6 @@ relayPublishDocument ::
     ByteString ->
     IO (Either FetchFault PublishRelayResponse)
 relayPublishDocument origin name document =
-    formThen
-        FetchUrlUnformable
-        (boundedRelay (ocClient origin) (progressFloor (ocLimits origin)) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
+    relayPublishRequest
+        origin
         (publishRequest (originBaseUrl origin) (ocToken origin) name document)

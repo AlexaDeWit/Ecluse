@@ -15,9 +15,9 @@ import Data.Map.Strict qualified as Map
 import Ecluse.Composition (PublishTarget (ptCredentials, ptEcosystem, ptMirrorUrl, ptUploadUrl, ptUsername))
 import Ecluse.Composition.MirrorState (MirrorStateBinding (msbStore, msbTarget))
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), mintSecret)
-import Ecluse.Core.Ecosystem (Ecosystem (PyPI), parseEcosystem)
+import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead), AdapterPublish (publishCodec))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead), AdapterPublish (publishCodec, publishMirrorRequirements), MirrorRequirements (mirrorWorkerRead), WorkerMetadataRead (..))
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Metadata.Fetch (chargingSelectedReads)
 import Ecluse.Core.Registry.Origin (anonymousOrigin, controlPublicOrigin)
@@ -26,7 +26,6 @@ import Ecluse.Core.Registry.Publish (
     MirrorTransport (MirrorTransport, ptClient, ptLimits, ptMintCredential, ptTracing),
     newMirrorPublish,
  )
-import Ecluse.Core.Registry.PyPI.Metadata (pypiMirrorRead)
 import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes), Origin (UntrustedOrigin), thgPublicHostPort)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Meter (charge, newChargeRegion, withMemoryEntry)
@@ -60,12 +59,12 @@ import Ecluse.Runtime.Telemetry.Tracing (tracingPortOf)
 workerPoliciesWithState :: Env -> Map Ecosystem MirrorStateBinding -> [MountBinding] -> [PublishTarget] -> Int -> WorkerPolicies
 workerPoliciesWithState env states bindings targets artifactMaxBytes =
     Map.fromList
-        [ (eco, (workerPolicyFor env eco deps publish artifactMaxBytes){wpMirrorState = managedState eco deps})
+        [ (eco, (workerPolicyFor env requirements deps publish artifactMaxBytes){wpMirrorState = managedState eco deps})
         | binding <- bindings
         , let prefixHead :| _ = bindingPrefix binding
         , let deps = bindingPackumentDeps binding
         , Just eco <- [parseEcosystem prefixHead]
-        , Just publish <- [mirrorPublishFor env deps targetsByEcosystem artifactMaxBytes eco]
+        , Just (publish, requirements) <- [mirrorPublishFor env deps targetsByEcosystem artifactMaxBytes eco]
         ]
   where
     managedState eco deps = do
@@ -89,16 +88,15 @@ workerPoliciesWithState env states bindings targets artifactMaxBytes =
                 }
     targetsByEcosystem = Map.fromList [(ptEcosystem target, target) | target <- targets]
 
-{- Marry one ecosystem's mirror write to the shared publish transport. 'Nothing' when it
-resolves no publish target or no adapter, so the caller wires no half-publish bundle. -}
-mirrorPublishFor :: Env -> PackumentDeps -> Map.Map Ecosystem PublishTarget -> Int -> Ecosystem -> Maybe MirrorPublish
+-- Resolve the publication bundle once, including its worker read obligations.
+mirrorPublishFor :: Env -> PackumentDeps -> Map.Map Ecosystem PublishTarget -> Int -> Ecosystem -> Maybe (MirrorPublish, MirrorRequirements)
 mirrorPublishFor env deps targets artifactMaxBytes eco = do
     target <- Map.lookup eco targets
     adapter <- adapterFor eco
     publish <- adapterPublish adapter
     let transport = mirrorTransportFor env deps target
         bounded = transport{ptLimits = (ptLimits transport){maxMirrorArtifactBytes = artifactMaxBytes}}
-    pure (newMirrorPublish bounded (ptMirrorUrl target) (ptUploadUrl target) (publishCodec publish))
+    pure (newMirrorPublish bounded (ptMirrorUrl target) (ptUploadUrl target) (publishCodec publish), publishMirrorRequirements publish)
 
 -- | Use the mount's metadata limits for mirror presence probes and publication.
 mirrorTransportFor :: Env -> PackumentDeps -> PublishTarget -> MirrorTransport
@@ -110,10 +108,9 @@ mirrorTransportFor env deps target =
         , ptTracing = tracingPortOf (envTelemetry env)
         }
 
-{- Build one mount's worker bundle. The metadata client is anonymous, so no client credential reaches
-the public origin, pdTarballHostGate owns the artifact host gate, and the no-op logs defer to the worker's per-job log. -}
-workerPolicyFor :: Env -> Ecosystem -> PackumentDeps -> MirrorPublish -> Int -> WorkerPolicy
-workerPolicyFor env eco deps publish artifactMaxBytes =
+-- The public client is anonymous. Worker jobs own their logs and share the mount's artifact host gate.
+workerPolicyFor :: Env -> MirrorRequirements -> PackumentDeps -> MirrorPublish -> Int -> WorkerPolicy
+workerPolicyFor env requirements deps publish artifactMaxBytes =
     WorkerPolicy
         { -- The mount's own first-party predicate, so the worker refuses a name the
           -- deployment owns exactly as the serve and publish paths do.
@@ -135,9 +132,9 @@ workerPolicyFor env eco deps publish artifactMaxBytes =
         , wpNow = pdNow deps
         }
   where
-    client pay = case eco of
-        PyPI -> uncachedPublicMetadataClient (readCapability (chargingSelectedReads decodedDocumentCharge pay pypiMirrorRead))
-        _ -> publicMetadataClient (envMetadataCache env) (Source (registryUrlText publicBaseUrl)) (readCapability (metadataRead (pdMetadata deps)))
+    client pay = case mirrorWorkerRead requirements of
+        ChargedWorkerRead nativeRead -> uncachedPublicMetadataClient (readCapability (chargingSelectedReads decodedDocumentCharge pay nativeRead))
+        CachedWorkerRead -> publicMetadataClient (envMetadataCache env) (Source (registryUrlText publicBaseUrl)) (readCapability (metadataRead (pdMetadata deps)))
     readCapability ecosystemRead =
         ecosystemMetadataReads
             ecosystemRead

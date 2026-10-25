@@ -86,14 +86,7 @@ npmMirrorFixture =
     ConcreteFixture
         { withFixture = withGlobalDataPlane
         , fixtureMetadata =
-            FamilyMetadata
-                { familyId = "npm/mirror"
-                , familyProfile = "npm/registry"
-                , familyCapabilities = ["read", "mirror", "client-install"]
-                , familyPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
-                , familyResources = ["proxy", "nginx", "verdaccio"]
-                , familyIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
-                }
+            concreteMetadata "npm/mirror" "npm/registry" ["read", "mirror", "client-install"] ["npm", "node"] ["proxy", "nginx", "verdaccio"]
         }
 
 -- | First-party npm publication through the declared Verdaccio target.
@@ -102,14 +95,7 @@ npmPublicationFixture =
     ConcreteFixture
         { withFixture = withGlobalDataPlane
         , fixtureMetadata =
-            FamilyMetadata
-                { familyId = "npm/publish"
-                , familyProfile = "npm/registry"
-                , familyCapabilities = ["read", "publication", "client-install"]
-                , familyPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
-                , familyResources = ["proxy", "nginx", "verdaccio"]
-                , familyIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
-                }
+            concreteMetadata "npm/publish" "npm/registry" ["read", "publication", "client-install"] ["npm", "node"] ["proxy", "nginx", "verdaccio"]
         }
 
 -- | npm maintenance with Verdaccio stores and the advisory and queue emulators.
@@ -118,14 +104,7 @@ npmDredgerFixture =
     ConcreteFixture
         { withFixture = withDataPlane dredgerTopology
         , fixtureMetadata =
-            FamilyMetadata
-                { familyId = "npm/dredger"
-                , familyProfile = "npm/maintenance"
-                , familyCapabilities = ["read", "mirror", "maintenance", "advisories"]
-                , familyPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
-                , familyResources = ["proxy", "nginx", "verdaccio", "ministack"]
-                , familyIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
-                }
+            concreteMetadata "npm/dredger" "npm/maintenance" ["read", "mirror", "maintenance", "advisories"] ["npm", "node"] ["proxy", "nginx", "verdaccio", "ministack"]
         }
 
 -- | Wheel-only pip installations through a public PyPI mount.
@@ -162,14 +141,7 @@ pypiPilotFixture =
     ConcreteFixture
         { withFixture = withDataPlane pypiAdvisoryTopology
         , fixtureMetadata =
-            FamilyMetadata
-                { familyId = "pypi/advisories"
-                , familyProfile = "pypi/advisories"
-                , familyCapabilities = ["read", "advisories", "client-install"]
-                , familyPrerequisites = ["docker", "image", "openssl", "tar", "python3", "pip"]
-                , familyResources = ["proxy", "nginx", "ministack"]
-                , familyIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
-                }
+            concreteMetadata "pypi/advisories" "pypi/advisories" ["read", "advisories", "client-install"] ["python3", "pip"] ["proxy", "nginx", "ministack"]
         }
 
 -- | npm traffic with per-case collector and exporter configurations.
@@ -178,14 +150,7 @@ npmTelemetryFixture =
     ConcreteFixture
         { withFixture = withGlobalDataPlane
         , fixtureMetadata =
-            FamilyMetadata
-                { familyId = "npm/telemetry-read"
-                , familyProfile = "npm/telemetry"
-                , familyCapabilities = ["read", "mirror", "telemetry", "client-install"]
-                , familyPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
-                , familyResources = ["proxy", "nginx", "verdaccio", "collector"]
-                , familyIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
-                }
+            concreteMetadata "npm/telemetry-read" "npm/telemetry" ["read", "mirror", "telemetry", "client-install"] ["npm", "node"] ["proxy", "nginx", "verdaccio", "collector"]
         }
 
 -- | Alternating npm and pip clients behind one proxy.
@@ -226,12 +191,16 @@ pypiInstallationFixture =
 
 installationMetadata :: Text -> Text -> [Text] -> FamilyMetadata
 installationMetadata ecosystem profile tools =
+    concreteMetadata (ecosystem <> "/installation") profile ["read", "client-install"] tools ["proxy", "nginx"]
+
+concreteMetadata :: Text -> Text -> [Text] -> [Text] -> [Text] -> FamilyMetadata
+concreteMetadata identifier profile capabilities tools resources =
     FamilyMetadata
-        { familyId = ecosystem <> "/installation"
+        { familyId = identifier
         , familyProfile = profile
-        , familyCapabilities = ["read", "client-install"]
+        , familyCapabilities = capabilities
         , familyPrerequisites = ["docker", "image", "openssl", "tar"] <> tools
-        , familyResources = ["proxy", "nginx"]
+        , familyResources = resources
         , familyIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
         }
 
@@ -241,14 +210,7 @@ pypiTelemetryFixture =
     ConcreteFixture
         { withFixture = withDataPlane pypiTopology
         , fixtureMetadata =
-            FamilyMetadata
-                { familyId = "pypi/telemetry"
-                , familyProfile = "pypi/telemetry"
-                , familyCapabilities = ["read", "telemetry", "client-install"]
-                , familyPrerequisites = ["docker", "image", "openssl", "tar", "python3", "pip"]
-                , familyResources = ["proxy", "nginx", "collector"]
-                , familyIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
-                }
+            concreteMetadata "pypi/telemetry" "pypi/telemetry" ["read", "telemetry", "client-install"] ["python3", "pip"] ["proxy", "nginx", "collector"]
         }
 
 -- | Worker and private-fetch telemetry retains its own mutable mirror lifetime.
@@ -294,14 +256,7 @@ pypiMirrorFixture =
     ConcreteFixture
         { withFixture = withDataPlane pypiAdvisoryTopology
         , fixtureMetadata =
-            FamilyMetadata
-                { familyId = "pypi/mirror"
-                , familyProfile = "pypi/write"
-                , familyCapabilities = ["read", "mirror", "client-install", "telemetry"]
-                , familyPrerequisites = ["docker", "image", "openssl", "tar", "python3", "pip"]
-                , familyResources = ["proxy", "nginx", "native-target", "ministack"]
-                , familyIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
-                }
+            concreteMetadata "pypi/mirror" "pypi/write" ["read", "mirror", "client-install", "telemetry"] ["python3", "pip"] ["proxy", "nginx", "native-target", "ministack"]
         }
 
 -- | Native field preservation, restart, lost-response and mirrored-yank cases retain separate identities.

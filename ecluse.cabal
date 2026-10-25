@@ -328,6 +328,7 @@ library ecluse-core
     Ecluse.Core.Server.Pipeline.Origin
     Ecluse.Core.Server.Pipeline.Packument
     Ecluse.Core.Server.Pipeline.Packument.Representation
+    Ecluse.Core.Server.Pipeline.Packument.Response
     Ecluse.Core.Server.Pipeline.Sidecar
     Ecluse.Core.Server.Pipeline.Tarball
     Ecluse.Core.Server.Pipeline.Tarball.Private
@@ -509,6 +510,7 @@ library
     Ecluse.Composition.MirrorQueue
     Ecluse.Composition.MirrorRole
     Ecluse.Composition.MirrorState
+    Ecluse.Composition.MirrorState.Internal
     Ecluse.Composition.Plan
     Ecluse.Composition.Sizing
     Ecluse.Composition.Types
@@ -1485,6 +1487,7 @@ test-suite ecluse-unit
     Ecluse.Composition.MemoryPlanSpec
     Ecluse.Composition.MirrorQueueSpec
     Ecluse.Composition.MirrorRoleSpec
+    Ecluse.Composition.MirrorState.InternalSpec
     Ecluse.Composition.PlanSpec
     Ecluse.Composition.SizingSpec
     Ecluse.Composition.Support
@@ -2283,6 +2286,7 @@ library ecluse-bench-load
     Ecluse.BenchLoad.Contract
     Ecluse.BenchLoad.BootLines
     Ecluse.BenchLoad.CpuUse
+    Ecluse.BenchLoad.CapturedArtifact
     Ecluse.BenchLoad.Evidence
     Ecluse.BenchLoad.Exposition
     Ecluse.BenchLoad.Floors

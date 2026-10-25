@@ -302,11 +302,8 @@ parseFirstParty eco field v = case eco of
     PyPI -> FirstPartyPyPI <$> parsePyPIFirstParty field v
     RubyGems -> fail (field <> " is not supported for " <> toString (ecosystemName eco) <> " yet")
 
--- A configured list that names nothing privileges nothing, so it fails the load instead.
 parseNpmScopes :: String -> Value -> Parser (NonEmpty Scope)
-parseNpmScopes field v = do
-    scopes <- commaSeparated field parseScopeEntry v
-    maybe (fail (field <> " must name at least one scope")) pure (nonEmpty scopes)
+parseNpmScopes field = nonEmptyCommaSeparated field parseScopeEntry (field <> " must name at least one scope")
 
 -- Reject a firstParty segment no scope can equal, an empty one or a wrong separator, so a typo
 -- fails the load instead of seeding a privilege that covers nothing.
@@ -314,11 +311,8 @@ parseScopeEntry :: Text -> Parser Scope
 parseScopeEntry entry =
     either (const (fail ("invalid scope in firstParty: " <> show entry))) pure (projectScope entry)
 
--- A configured list that names nothing privileges nothing, so it fails the load instead.
 parsePyPIFirstParty :: String -> Value -> Parser (NonEmpty PyPIFirstParty)
-parsePyPIFirstParty field v = do
-    entries <- commaSeparated field (parsePyPIEntry field) v
-    maybe (fail (field <> " must name at least one distribution or prefix")) pure (nonEmpty entries)
+parsePyPIFirstParty field = nonEmptyCommaSeparated field (parsePyPIEntry field) (field <> " must name at least one distribution or prefix")
 
 -- Reject a firstParty segment no distribution name or prefix can equal, so a typo fails the load
 -- instead of seeding a privilege that covers nothing.

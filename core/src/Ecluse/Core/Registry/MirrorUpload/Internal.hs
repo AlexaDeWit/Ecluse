@@ -5,6 +5,7 @@
 -- | Checked version membership and verified bytes shared by mirror codecs and durable records.
 module Ecluse.Core.Registry.MirrorUpload.Internal (
     MirrorReadData (..),
+    mirrorReadDocument,
     MirrorInventory,
     ExpectedMirrorFile,
     VerifiedArtifactBytes,
@@ -46,7 +47,7 @@ import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Package.Hash (canonicalHashValue, computeDigest, hexDigestText)
 import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest)
 import Ecluse.Core.Registry (MirrorArtifact (..), PublishFault (PublishIntegrityMismatch, PublishSourceUnavailable))
-import Ecluse.Core.Registry.CachedDocument (npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, restrictSimpleFiles, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Project (fileCoordinate, projectFile, projectName, projectSimpleIndex)
@@ -61,6 +62,12 @@ data MirrorReadData
     = NpmMirrorRead Object
     | PyPIMirrorRead SimpleDocument
     deriving stock (Eq, Show)
+
+-- | Restore retained source fields without encoding or reparsing them.
+mirrorReadDocument :: MirrorReadData -> CachedDoc
+mirrorReadDocument = \case
+    NpmMirrorRead fields -> fst npmCached (Object fields)
+    PyPIMirrorRead document -> fst pypiSimpleCached document
 
 -- | Membership comes from the complete paired version snapshot, never a requested-file subset.
 data MirrorInventory = MirrorInventory

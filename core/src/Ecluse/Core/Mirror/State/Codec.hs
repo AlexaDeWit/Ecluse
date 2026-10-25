@@ -29,10 +29,10 @@ import Ecluse.Core.Mirror.State.Internal
 import Ecluse.Core.Mirror.State.Weight (retainedRecordWeight)
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (..))
-import Ecluse.Core.Registry.CachedDocument (estimateValueBytes, npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (estimateValueBytes)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream, retainedValue)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..), VersionRead (..))
-import Ecluse.Core.Registry.MirrorUpload (MirrorInventory, MirrorReadData (..), expectedArtifact, inventoryDetails, inventoryReadData)
+import Ecluse.Core.Registry.MirrorUpload (MirrorInventory, MirrorReadData (..), expectedArtifact, inventoryDetails, inventoryReadData, mirrorReadDocument)
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorFragment)
 import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Security
@@ -127,11 +127,7 @@ mirrorInventoryWeight :: MirrorInventory -> Int
 mirrorInventoryWeight inventory = fragmentWeight (inventoryDetails inventory) (inventoryReadData inventory)
 
 fragmentWeight :: PackageDetails -> MirrorReadData -> Int
-fragmentWeight details source = weighVersion (VersionRead (Just (VersionDoc details (Just raw))) 0 Nothing)
-  where
-    raw = case source of
-        NpmMirrorRead fields -> fst npmCached (Object fields)
-        PyPIMirrorRead document -> fst pypiSimpleCached document
+fragmentWeight details source = weighVersion (VersionRead (Just (VersionDoc details (Just (mirrorReadDocument source)))) 0 Nothing)
 
 -- | Materialise source fields and domain weights under the reservation. Callers keep it until they release the returned record.
 chargedDecodeProjectRecord :: StateCharge -> Limits -> StateTarget -> PackageName -> ByteString -> IO (Either MirrorStateFault ProjectMirrorRecord)

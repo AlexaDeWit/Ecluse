@@ -3,9 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 -- | A finite matrix over authenticated captures, with independent cache and upstream evidence.
-module Ecluse.BenchLoad.PatternScenario (patternScenarios, loadPins, selectArtifacts) where
+module Ecluse.BenchLoad.PatternScenario (PatternProvider (..), patternScenarios) where
 
-import Data.Aeson ((.:))
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -16,16 +15,16 @@ import Network.Wai (Application, rawPathInfo)
 import UnliftIO (evaluate)
 
 import Ecluse.BenchLoad.BootLines (BootLimits (blCacheBytes, blCacheEntries), bootLimits)
+import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact (..))
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Exposition (CacheOutcomes (..), Sample, expositionName, seriesTotal, storeLabel, storeOutcomes)
 import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, loadCorpusBodies, withProxyConfigured)
 import Ecluse.BenchLoad.Harness (Driver (DriveReplay), LoadKnobs (..), Scenario (scenarioServiceTime), Target, proxied, scenario)
-import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (..), selectedNpmArtifact)
 import Ecluse.BenchLoad.PatternReport (StoreEvidence (..), renderStoreEvidence)
 import Ecluse.BenchLoad.Patterns
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, ProxySettings (..), proxyBootLines, proxyScrape)
 import Ecluse.BenchLoad.Replay (Replay (..))
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.Metadata (Manifest (..))
@@ -34,14 +33,20 @@ import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Telemetry.Catalogue (MetricName (AssembledCacheResidentBytes, MetadataCacheRefused, MetadataCacheResidentBytes, SingleVersionCacheResidentBytes))
 import Ecluse.Core.Telemetry.Metrics (CacheStore (AssembledStore, FullStore, VersionStore), Label (LCacheStore), renderLabel)
-import Ecluse.Test.Corpus (CaptureRecord (crCapturedAt), CorpusPackage (cpPackage), cpName, readCaptureRecords, readCorpusPins)
+import Ecluse.Test.Corpus (CaptureRecord (crCapturedAt), CorpusPackage (cpPackage), cpName, readCaptureRecords)
 import Ecluse.Test.Registry.Metadata.Fetch (heldManifest)
 import Ecluse.Test.Server.Cache (weighCacheEntry)
 import Ecluse.Test.Wai (localhost, rebaseAuthority)
 
+-- | Native replay inputs keep capture rewriting and artifact selection with the provider.
+data PatternProvider = PatternProvider
+    { ppCaptureAuthority :: Text
+    , ppSelectedArtifacts :: Maybe String -> [CorpusPackage] -> Map Text LByteString -> IO (Map Text SelectedArtifact)
+    }
+
 -- | Every family receives a fresh proxy. No preflight request consumes or warms its trace.
-patternScenarios :: Ecosystem -> [CorpusPackage] -> (LoadKnobs -> Application) -> (LoadKnobs -> Map Text LByteString -> Map ByteString LByteString -> IO Application) -> (Int -> Text -> Text) -> [Scenario]
-patternScenarios ecosystem packages privateApp publicApp urlFor =
+patternScenarios :: PatternProvider -> Ecosystem -> [CorpusPackage] -> (LoadKnobs -> Application) -> (LoadKnobs -> Map Text LByteString -> Map ByteString LByteString -> IO Application) -> (Int -> Text -> Text) -> [Scenario]
+patternScenarios provider ecosystem packages privateApp publicApp urlFor =
     [cell patternKind False | patternKind <- [minBound .. maxBound]]
         <> [cell ColdInstall True]
   where
@@ -76,8 +81,7 @@ patternScenarios ecosystem packages privateApp publicApp urlFor =
         capacity <- traverse (maybe (benchFail "invalid BENCH_PATTERN_CACHE_BYTES") pure . readMaybe) =<< lookupEnv "BENCH_PATTERN_CACHE_BYTES"
         when (maybe False (<= 0) capacity) (benchFail "pattern cache budget must be positive")
         let configure publicPort = do
-                let authority = if ecosystem == Npm then "https://registry.npmjs.org" else "https://files.pythonhosted.org"
-                    servedBodies = Map.map (rebaseAuthority authority (localhost publicPort)) captures
+                let servedBodies = Map.map (rebaseAuthority (ppCaptureAuthority provider) (localhost publicPort)) captures
                     servedSizes = Map.map (fromIntegral . LBS.length) servedBodies
                     servedLargest = foldl' max 0 (Map.elems servedSizes)
                     bodyCap = if defaultCap then maxMetadataBytes defaultLimits else max (maxMetadataBytes defaultLimits) servedLargest
@@ -100,8 +104,7 @@ patternScenarios ecosystem packages privateApp publicApp urlFor =
         deadlineMicros <- readKnob "BENCH_PATTERN_DEADLINE_US" (120_000_000 :: Int)
         when (deadlineMicros <= 0) (benchFail "BENCH_PATTERN_DEADLINE_US must be positive")
         selected <- lookupEnv "BENCH_PATTERN_SELECTED_VERSION"
-        pins <- loadPins
-        selectedArtifacts <- either benchFail pure (selectArtifacts ecosystem selected pins [package | package <- packages, cpName package `elem` rtNames requestTrace] captures)
+        selectedArtifacts <- ppSelectedArtifacts provider selected [package | package <- packages, cpName package `elem` rtNames requestTrace] captures
         artifactRequests <- traverse (HTTP.parseRequest . toString . saUpstreamUrl) (Map.elems selectedArtifacts)
         let artifactBodies = Map.fromList [(HTTP.path request, artifactBytes (lkPayloadBytes knobs)) | request <- artifactRequests]
         upstreamCount <- newIORef (0 :: Int, 0 :: Int)
@@ -128,10 +131,6 @@ patternScenarios ecosystem packages privateApp publicApp urlFor =
                         )
                     )
             _ -> benchFail "pattern fixture requires exactly one URL root"
-
--- | The captured version pins in @bench/corpus/pins.json@, by package name.
-loadPins :: IO (Map Text Text)
-loadPins = readCorpusPins (.: "pins") >>= either (benchFail . toText) pure
 
 knobsFromEnv :: Pattern -> Int -> IO PatternKnobs
 knobsFromEnv family available = do
@@ -212,20 +211,6 @@ accountedFullBytes eco upstreamBase package bytes =
     bimap show weigh <$> heldManifest eco defaultLimits upstreamBase (cpPackage package) [LBS.toStrict bytes]
   where
     weigh manifest = weighCacheEntry (CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestBodyBytes manifest) (manifestDigest manifest))
-
--- | The captured artifact each package's selected version names, keyed by package name. npm only.
-selectArtifacts :: Ecosystem -> Maybe String -> Map Text Text -> [CorpusPackage] -> Map Text LByteString -> Either Text (Map Text SelectedArtifact)
-selectArtifacts ecosystem selected pins packages captures =
-    case selected of
-        Just choice | ecosystem == Npm -> Map.fromList <$> traverse (select choice) packages
-        _ -> Right Map.empty
-  where
-    select choice package = do
-        let name = cpName package
-        version <- if choice == "pinned" then maybe (Left ("missing captured pin: " <> name)) Right (Map.lookup name pins) else Right (toText choice)
-        bytes <- maybe (Left ("missing captured body: " <> name)) Right (Map.lookup name captures)
-        artifact <- selectedNpmArtifact (cpPackage package) version (LBS.toStrict bytes)
-        pure (name, artifact)
 
 patternClock :: UTCTime -> IO UTCTime
 patternClock fallback =

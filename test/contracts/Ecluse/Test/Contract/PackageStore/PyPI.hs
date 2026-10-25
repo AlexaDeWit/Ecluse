@@ -11,14 +11,12 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Header, Status, status200, status400, status401, status404, status503)
 import Network.Wai.Parse (FileInfo (fileContent, fileName))
 
 import Ecluse.Core.Credential (ClientCredential (..), mkSecret)
 import Ecluse.Core.Package (Artifact (..), HashAlg (SHA256), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, hashAlg, hashValue)
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
-import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
 import Ecluse.Core.Registry.Maintenance (StoreMaintenance, StoreManifestRead, storeFaultOfMetadata)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (vrVersion))
 import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest, fetchVersion)
@@ -35,12 +33,11 @@ import Ecluse.Core.Version (Version, canonicalPep440, renderVersion)
 import Ecluse.Test.Contract.PackageStore
 import Ecluse.Test.Contract.PackageStore.Provider
 import Ecluse.Test.Contract.PackageStore.PyPI.Fixtures
-import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Package (hexSha256Of, pypiVersion, unscopedPyPI)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Registry.PyPI.Multipart (decodeUpload)
-import Ecluse.Test.Stub (Captured (..), headerValue, stubBaseUrl, withRoutedStubIO)
+import Ecluse.Test.Stub (Captured (..), headerValue)
 
 -- | Each version contains two wheels and one sdist with independently pinned metadata and digests.
 pypiStoreDriver :: Text -> (OriginClient -> StoreBoundary -> IO StoreMaintenance) -> FullPackageStoreDriver
@@ -69,22 +66,13 @@ withPyPISession maintenance use = do
                 , sbRemove = \versions -> modifyIORef' held (Map.filter (\file -> nativeVersion file `notElem` versions))
                 , sbTakeDeleteFailure = takeStoreFailure failDelete
                 }
-    withRoutedStubIO (reply held order failWrite) $ \stub -> do
-        let reopen = do
-                withExchangeClient (newManager (singleAttemptSettings defaultManagerSettings)) $ \exchanges -> do
-                    let origin = originClient defaultLimits exchanges (loopbackRegistryUrl (stubBaseUrl stub)) (Just credential)
-                        publisher = newMirrorPublish (MirrorTransport exchanges (pure (Just credential)) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (loopbackRegistryUrl (stubBaseUrl stub <> "/legacy/")) pypiPublishCodec
-                    store <- maintenance origin boundary
-                    pure (storeOperations packageName pypiVersion (readRelease origin) (writeRelease publisher) store)
-        initial <- reopen
-        use
-            PackageStoreSession
-                { pssOperations = initial
-                , pssObservedWrites = observed
-                , pssFailNextWrite = writeIORef failWrite True
-                , pssFailNextDelete = writeIORef failDelete True
-                , pssReopen = reopen
-                }
+    withStoreSession (reply held order failWrite) (build boundary) observed failWrite failDelete use
+  where
+    build boundary base exchanges = do
+        let origin = originClient defaultLimits exchanges (loopbackRegistryUrl base) (Just credential)
+            publisher = newMirrorPublish (MirrorTransport exchanges (pure (Just credential)) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (loopbackRegistryUrl (base <> "/legacy/")) pypiPublishCodec
+        store <- maintenance origin boundary
+        pure (storeOperations packageName pypiVersion (readRelease origin) (writeRelease publisher) store)
 
 -- | Maintenance uses the production PyPI manifest reader independently of upload preparation.
 readPyPIStoreManifestOver :: OriginClient -> StoreManifestRead

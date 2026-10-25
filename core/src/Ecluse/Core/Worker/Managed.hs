@@ -13,14 +13,12 @@ module Ecluse.Core.Worker.Managed (
     fragmentDocument,
 ) where
 
-import Data.Aeson (Value (Object))
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Codec (projectRecordWorkWeight)
 import Ecluse.Core.Mirror.State.Internal (retainVerifiedIdentity)
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry.CachedDocument (npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (VersionDoc))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Security (Limits)
@@ -85,8 +83,4 @@ chargeRecord budget limits result = case result of
 
 -- | Restore the original admitted source fields for a missing historic file.
 fragmentDocument :: StoredMirrorFragment -> VersionDoc
-fragmentDocument fragment = VersionDoc (fragmentDetails fragment) (Just source)
-  where
-    source = case fragmentReadData fragment of
-        NpmMirrorRead value -> fst npmCached (Object value)
-        PyPIMirrorRead value -> fst pypiSimpleCached value
+fragmentDocument fragment = VersionDoc (fragmentDetails fragment) (Just (mirrorReadDocument (fragmentReadData fragment)))

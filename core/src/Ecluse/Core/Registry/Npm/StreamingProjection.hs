@@ -40,17 +40,17 @@ import Data.Time (UTCTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (..), PackageDetails (..), PackageInfo (..), PackageName, mkInvalidEntry)
-import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, withoutHole)
+import Ecluse.Core.Registry.Json.Packed (DocTable, Packed)
 import Ecluse.Core.Registry.Json.Writer (Pick (..), decodePicked, decodeWhole, replacedMember)
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
-import Ecluse.Core.Registry.Metadata.Projection (projectionResult, validateReportedName)
+import Ecluse.Core.Registry.Metadata.Projection (validateNameAgreement)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole, tarballUrl)
 import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult, projectVersionManifest)
 import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmFieldOf (..), versionListFields)
 import Ecluse.Core.Registry.Npm.VersionWriter (VersionValue, VersionWriter, discardVersion, packedWriter, sealVersion, versionFacts)
 import Ecluse.Core.Registry.Npm.Wire (Dist (distTarball), VersionManifest (vmDist), distFields)
-import Ecluse.Core.Registry.ServedDocument (rebaseArtifactUrl)
-import Ecluse.Core.Registry.WireSupport (checkNameAgreement, parsePublishTime)
+import Ecluse.Core.Registry.ServedDocument (artifactUrlPacked)
+import Ecluse.Core.Registry.WireSupport (parsePublishTime)
 import Ecluse.Core.Security (LimitError, Limits, checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, mkVersion)
@@ -155,8 +155,7 @@ data NpmParts = NpmParts Value (Map Text Value)
 finishParts :: Limits -> PackageName -> NpmProjection -> Either MetadataError (PackageInfo, NpmParts)
 finishParts limits requested acc = do
     when (projectedInvalidContainer acc) (Left MetadataUndecodable)
-    reported <- validateReportedName projectName (projectedName acc)
-    _ <- projectionResult (checkNameAgreement requested reported ())
+    _ <- validateNameAgreement projectName requested (projectedName acc)
     first MetadataBoundExceeded (checkArtifactCount limits artifacts)
     pure (package, NpmParts (fromMaybe Null (projectedName acc)) (projectedBookkeeping acc))
   where
@@ -233,17 +232,17 @@ packedStep writer limits name (PackedRead acc served) field next = case field of
     VersionField key (Just value)
         | keepsRelease acc key -> do
             sealed <- sealVersion writer tarballHole
-            (typed, rebased) <- case versionFacts value of
+            (typed, url) <- case versionFacts value of
                 Just facts ->
-                    pure (Right $! projectVersionManifest name (mkVersion Npm key) Nothing facts, rebases (Just (distTarball (vmDist facts))))
+                    pure (Right $! projectVersionManifest name (mkVersion Npm key) Nothing facts, Just (distTarball (vmDist facts)))
                 Nothing -> do
                     let diagnostic = packedWriter writer
                     picked <- decodePicked diagnostic typedMembers sealed
                     typed <- case projectRelease name key picked of
                         Right details -> pure (Right details)
                         Left reason -> (\whole original -> invalidRelease key (asRead original whole) reason) <$> decodeWhole diagnostic sealed <*> replacedMember diagnostic
-                    pure (typed, rebases (tarballUrl picked))
-            let !release = if rebased then sealed else withoutHole sealed
+                    pure (typed, tarballUrl picked)
+            let !release = artifactUrlPacked url sealed
             next $! do
                 kept <- collectRelease limits acc field key typed
                 pure (PackedRead kept ((key, release) : served))
@@ -255,9 +254,6 @@ packedStep writer limits name (PackedRead acc served) field next = case field of
     asRead original = \case
         Object fields -> Object (maybe (KeyMap.delete "author") (KeyMap.insert "author") original fields)
         other -> other
-
-rebases :: Maybe Text -> Bool
-rebases url = isJust (url >>= rebaseArtifactUrl Just)
 
 -- Keep the diagnostic field selection to preserve decoder refusal priority.
 typedMembers :: Pick

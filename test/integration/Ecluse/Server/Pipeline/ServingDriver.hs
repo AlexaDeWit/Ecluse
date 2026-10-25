@@ -30,9 +30,7 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Encoding (CodingChoice (ServeCoding), ContentCoding (GzipCoding), MetadataCompression (GzipWhenAccepted), chooseCoding, gzipEncodingHeader)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
-import Ecluse.Runtime.Server (application, mkServerConfig)
-import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue, packument, publishedDaysAgo, requestAt)
-import Ecluse.Service (mountBindingFor)
+import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue, packument, proxyApplication, publishedDaysAgo, requestAt)
 import Ecluse.Test.Contract.Serving (ServingDriver (..), ServingRelease (..), ServingResponse (..), ServingSession (..))
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Json (fieldAt, textAtPath)
@@ -67,7 +65,7 @@ nativeDriver ecosystem adapter mount metadataPath artifactPath document observe 
                                 , pdEgressUrl = Right . loopbackRegistryUrl
                                 , pdMetadataCompression = compression
                                 }
-                        app = application (mkServerConfig (maybeToList (mountBindingFor ecosystem deps Nothing))) env
+                        app = proxyApplication ecosystem env deps
                         request method path headers = observe <$> requestAt method (mount <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
                     action
                         ServingSession

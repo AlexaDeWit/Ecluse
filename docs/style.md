@@ -200,7 +200,7 @@ sliced, parsed, or rewritten (a URL rewritten at serve, an SRI digest parsed), k
 `Scope` and `PackageName`'s canonical and display keys are `ShortText`. `Hash.hashValue` and
 `Artifact.artUrl` stay `Text`. The typed metadata view keeps the `Text` it shares with its served
 document, for the reason in
-[Adding an ecosystem](adding-an-ecosystem.md#8-keep-only-what-a-reader-uses-in-the-typed-view).
+[Metadata readers and performance](ecosystem-metadata.md#8-keep-only-what-a-reader-uses-in-the-typed-view).
 
 ---
 

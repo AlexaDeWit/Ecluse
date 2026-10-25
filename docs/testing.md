@@ -2034,9 +2034,9 @@ upstream json-stream's token behaviour. These checks cover its public interface 
 
 ## One pattern for every ecosystem
 
-Every ecosystem follows the testing pattern that npm and PyPI follow. npm is the model, because it
-has the most work put into it.
-[Adding an ecosystem](adding-an-ecosystem.md) sets out the matching performance pattern. Two
+Every ecosystem follows the testing pattern that npm and PyPI follow.
+[Adding an ecosystem](adding-an-ecosystem.md) gives the lifecycle sequence, and
+[Metadata readers and performance](ecosystem-metadata.md) gives the reader techniques. Two
 obligations come with the testing pattern, beside the checklist in
 [Onboarding an ecosystem](#onboarding-an-ecosystem):
 

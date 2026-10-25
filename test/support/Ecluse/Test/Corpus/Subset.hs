@@ -85,15 +85,16 @@ keepPyPIVersions info kept = onFields $ \field value -> case (field, value) of
 
 -- | The newest share of an npm capture's versions by publish time, cut as 'keepNpmVersions' cuts.
 newestNpmShare :: Rational -> PackageName -> ByteString -> Either String Value
-newestNpmShare share name bytes = do
-    (info, _) <- first show (projectNpmManifest defaultLimits name bytes)
-    keepNpmVersions (newestVersions share info) <$> eitherDecodeStrict bytes
+newestNpmShare = newestShare (\name bytes -> fst <$> first show (projectNpmManifest defaultLimits name bytes)) (const keepNpmVersions)
 
 -- | The newest share of a PyPI capture's versions by upload time, cut as 'keepPyPIVersions' cuts.
 newestPyPIShare :: Rational -> PackageName -> ByteString -> Either String Value
-newestPyPIShare share name bytes = do
-    (info, _) <- first show (projectPyPIIndex defaultLimits name bytes)
-    keepPyPIVersions info (newestVersions share info) <$> eitherDecodeStrict bytes
+newestPyPIShare = newestShare (\name bytes -> fst <$> first show (projectPyPIIndex defaultLimits name bytes)) keepPyPIVersions
+
+newestShare :: (PackageName -> ByteString -> Either String PackageInfo) -> (PackageInfo -> Set Text -> Value -> Value) -> Rational -> PackageName -> ByteString -> Either String Value
+newestShare project keep share name bytes = do
+    info <- project name bytes
+    keep info (newestVersions share info) <$> eitherDecodeStrict bytes
 
 onFields :: (Text -> Value -> Value) -> Value -> Value
 onFields change = \case

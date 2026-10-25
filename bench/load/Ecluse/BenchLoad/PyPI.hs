@@ -23,20 +23,20 @@ import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (Application, Request, pathInfo, rawPathInfo, responseLBS)
 
+import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact (saProxyPath), selectedArtifact)
 import Ecluse.BenchLoad.Contract.Driver (LoadReadDriver (..), readLoadContract)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes, delayUpstream, fetchChecked, httpTarget, longCacheTtl, selfHosted, weightedMix, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (DriveBurst, DriveRamp), LoadKnobs (..), Scenario (..), UpstreamFixture, proxied, scenario, urlLoad)
 import Ecluse.BenchLoad.Listing (ListingSetup (..), cacheEvictsLoad, cacheFitsLoad, listingLoad, listingWorkingSet, revalidateLoad, slowReaderScenario, withListingStubs)
 import Ecluse.BenchLoad.ManagedMirror (managedMirrorScenarios)
-import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (..))
+import Ecluse.BenchLoad.PatternScenario (PatternProvider (..))
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
 import Ecluse.BenchLoad.PyPI.Worker (pypiWorkerScenario)
 import Ecluse.BenchLoad.Selection (evictionEntries)
 import Ecluse.BenchLoad.Stress (WarmLoadDriver (..), herdSize, pairedLoad, rampSteps)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
-import Ecluse.Core.Package (artFilename, artUrl, infoVersions, pkgArtifacts)
 import Ecluse.Core.Registry.PyPI.Route (distributionPath)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (..), SimpleIndex (..), simpleIndexMediaType)
 import Ecluse.Core.Security (defaultLimits)
@@ -69,6 +69,12 @@ pypiReadDriver =
         , lrdHerd = herdScenario
         , lrdWarmUnderCold = warmUnderColdScenario
         , lrdRamp = rampScenario
+        , lrdPatternProvider =
+            PatternProvider
+                { ppCaptureAuthority = "https://files.pythonhosted.org"
+                , -- Selected replay remains unsupported. Warm reads use native pins separately.
+                  ppSelectedArtifacts = \_ _ _ -> pure Map.empty
+                }
         , lrdPatternPrivate = lsPrivate pypiListing
         , lrdPatternPublic = \knobs bodies _artifacts -> do
             rewritten <- newIORef mempty
@@ -227,10 +233,9 @@ selectWarmArtifacts packages captures = do
         canonical <- maybe (Left ("invalid captured PyPI pin: " <> version)) (Right . renderVersion) (canonicalPep440 version)
         bytes <- maybe (Left ("missing captured PyPI body: " <> name)) Right (Map.lookup name captures)
         (info, _) <- first show (projectPyPIIndex defaultLimits (cpPackage package) (LBS.toStrict bytes))
-        details <- maybe (Left ("captured PyPI version is absent: " <> version)) Right (Map.lookup canonical (infoVersions info))
-        let artifact :| _ = pkgArtifacts details
-        path <- maybe (Left "captured artifact filename has no PyPI route") Right (distributionPath (cpPackage package) (artFilename artifact))
-        pure (name, SelectedArtifact path (artUrl artifact))
+        let route = maybe (Left "captured artifact filename has no PyPI route") Right . distributionPath (cpPackage package)
+        artifact <- selectedArtifact canonical ("captured PyPI version is absent: " <> version) route info
+        pure (name, artifact)
 
 rampScenario :: Scenario
 rampScenario =
