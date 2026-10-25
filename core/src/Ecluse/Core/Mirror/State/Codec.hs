@@ -183,6 +183,7 @@ forceRecordSources record = force (recordEnvelope record) `seq` foldl' forceVers
         PyPIMirrorRead document -> force (simpleEnvelope document) `seq` foldl' forceEntry () (simpleFiles document)
     forceEntry () (key, value) = forceKey key `seq` force value `seq` ()
     forceKey (ArrayEntry position) = force position `seq` ()
+    forceKey (RecordEntry position) = force position `seq` ()
     forceKey (ObjectEntry name) = force name `seq` ()
     forceKey SingletonEntry = ()
 
@@ -368,6 +369,7 @@ parseMetadata value = withObject "companion declaration" (fmap MetadataDigests .
 
 keyValue :: EntryKey -> Value
 keyValue (ArrayEntry position) = object ["array" .= position]
+keyValue (RecordEntry position) = object ["record" .= position]
 keyValue (ObjectEntry text) = object ["object" .= text]
 keyValue SingletonEntry = Null
 
@@ -382,6 +384,11 @@ parseKey value =
                 when (position < 0) (fail "negative source coordinate")
                 pure (ArrayEntry position)
             )
+                <|> ( do
+                        position <- fields .: "record"
+                        when (position < 0) (fail "negative source coordinate")
+                        pure (RecordEntry position)
+                    )
                 <|> (ObjectEntry <$> fields .: "object")
         )
         value

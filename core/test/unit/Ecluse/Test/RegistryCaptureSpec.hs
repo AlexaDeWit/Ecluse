@@ -97,7 +97,7 @@ sampleCatalogue =
 
 -- A catalogue whose smokeNames names an ecosystem the build does not serve.
 unknownEcoCatalogue :: LByteString
-unknownEcoCatalogue = "{\"pins\":{},\"smokeNames\":{\"cargo\":[\"x\"]}}"
+unknownEcoCatalogue = "{\"pins\":{},\"smokeNames\":{\"unknown\":[\"x\"]}}"
 
 -- A minimal npm packument: two versions, each a manifest the wire decoder keeps.
 npmBody :: LByteString

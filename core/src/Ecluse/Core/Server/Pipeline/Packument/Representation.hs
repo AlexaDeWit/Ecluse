@@ -90,6 +90,7 @@ putVersionPiece scratch (version, entries) = do
 putEntryPiece :: Scratch st -> EntryKey -> ST st ()
 putEntryPiece scratch = \case
     ArrayEntry index -> putByte scratch (c2w 'a') >> putFrame scratch (decimalLength index) (putDecimal scratch index)
+    RecordEntry index -> putByte scratch (c2w 'r') >> putFrame scratch (decimalLength index) (putDecimal scratch index)
     ObjectEntry key -> putByte scratch (c2w 'o') >> putFramedText scratch key
     SingletonEntry -> putByte scratch (c2w 's')
 

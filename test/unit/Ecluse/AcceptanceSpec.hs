@@ -61,7 +61,7 @@ spec = do
         it "rejects an unknown leg" $
             decodeCriteria (document validCalibration [("npm", object ["lodash" .= object ["partial" .= (1 :: Int)]])]) `shouldSatisfy` isLeft
         it "rejects an unknown ecosystem" $
-            decodeCriteria (document validCalibration [("cargo", object [])]) `shouldSatisfy` isLeft
+            decodeCriteria (document validCalibration [("unknown", object [])]) `shouldSatisfy` isLeft
         it "rejects a figure that is not positive" $
             decodeCriteria (document validCalibration [("npm", object ["lodash" .= object ["full" .= (0 :: Int)]])]) `shouldSatisfy` isLeft
         it "rejects a calibration without a commit" $

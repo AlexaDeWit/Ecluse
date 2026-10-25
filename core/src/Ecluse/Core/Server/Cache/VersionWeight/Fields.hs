@@ -82,5 +82,6 @@ metadataWeight (MetadataDigests digests) = 64 + itemsWeight (\(name, value) -> t
 weighEntryKey :: EntryKey -> Integer
 weighEntryKey = \case
     ArrayEntry _ -> 64
+    RecordEntry _ -> 64
     ObjectEntry key -> 64 + textWeight key
     SingletonEntry -> 16
