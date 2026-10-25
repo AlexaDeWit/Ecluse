@@ -1990,6 +1990,7 @@ library ecluse-e2e-test-support
     Ecluse.E2E.Cargo.DredgerE2ESpec
     Ecluse.E2E.Cargo.TelemetryE2ESpec
     Ecluse.E2E.Cargo.NativeE2ESpec
+    Ecluse.E2E.Cargo.ExecutionE2ESpec
     Ecluse.E2E.Drivers.Cargo
     Ecluse.E2E.Suites.Cargo
     Ecluse.E2E.Fixtures.PyPI.Dredger
