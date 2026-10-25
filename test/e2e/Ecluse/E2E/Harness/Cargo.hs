@@ -253,7 +253,7 @@ cargoLock :: CargoProject -> IO (Either Text [CargoLocked])
 cargoLock project = do
     let path = cargoDirectory project </> "Cargo.lock"
     present <- doesFileExist path
-    if present then referenceLock <$> readFileText path else pure (Left "Cargo wrote no lockfile")
+    if present then referenceLock . decodeUtf8 <$> readFileBS path else pure (Left "Cargo wrote no lockfile")
 
 -- | Retain source files, exact archives, install metadata and the consumer lockfile for contract assertions.
 cargoTree :: CargoProject -> IO InstalledTree

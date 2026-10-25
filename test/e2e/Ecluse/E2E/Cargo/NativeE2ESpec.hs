@@ -307,7 +307,7 @@ foreignRegistry plane = withCargoRegistry $ \registry -> withStubFault plane (Ca
     config = cargoPublicationConfig{ecExtraEnv = [(key, if key == "ECLUSE_MOUNTS__CARGO__FIRST_PARTY" then name else value) | (key, value) <- ecExtraEnv cargoPublicationConfig, key /= "ECLUSE_SERVER__AUTH_TOKEN"]}
     addForeign project source = do
         let path = cargoDirectory project </> "home/config.toml"
-        existing <- readFileText path
+        existing <- decodeUtf8 <$> readFileBS path
         writeFileText path (existing <> "\n[registries.foreign]\nindex = " <> quoted source <> "\n")
     quoted = decodeUtf8 . LBS.toStrict . encode
 
