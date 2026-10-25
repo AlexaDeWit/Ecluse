@@ -1565,21 +1565,23 @@ A run is held to the floors only when it matches what they were calibrated at. T
 | Part | A held run | The harness reads |
 |---|---|---|
 | Runner | Runs on GitHub Actions under `runnerOs` and `runnerArch` (Linux, ARM64) | `GITHUB_ACTIONS`, `RUNNER_OS`, `RUNNER_ARCH` |
-| Settings | Equals `operatingPoint`. Every load knob is at its default: 30 seconds, 100 connections, the default payload, and the proxy's computed admission and pools. Both passes run, over every scenario, with no pinned proxy setting and no `BENCH_PATTERN_*` variable set | The `BENCH_LOAD_*` knobs, `BENCH_LOAD_SCENARIOS`, `BENCH_LOAD_PASSES`, the `BENCH_LOAD_PROXY_*` settings, and the names of the `BENCH_PATTERN_*` variables that are set |
+| Settings | Uses the `full` profile at `operatingPoint`: 30 seconds, 100 connections, default payload, computed admission and pools. Both passes cover every scenario. The run pins no proxy setting or `BENCH_PATTERN_*` variable. | The `BENCH_LOAD_*` knobs, `BENCH_LOAD_PROFILE`, `BENCH_LOAD_SCENARIOS`, `BENCH_LOAD_PASSES`, the `BENCH_LOAD_PROXY_*` settings, and the names of the `BENCH_PATTERN_*` variables that are set |
 | Pod shape | Runs under a shape that `floors` holds | `BENCH_LOAD_POD` |
 | Measurement conditions | Matches `measurementConditions` | The harness reports `unified-v2` |
 | Native injected latency | Each ecosystem stays below its own ceiling | Each native public RTT, or the declared configured fallback |
 
-A run that misses a part is not held. It skips the floor check, its floor cells read `not held`,
-and the "Success floors" section of its report names every reason in one line. Every other check
-applies to it. A dispatch that changes only the pod shape, among the four, is held. A run on
-another machine is not, and neither is the GC-thrash probe.
+The harness skips floors when a calibration condition does not match.
+Report cells read `not held`, and the "Success floors" section names every reason.
+Every other check still runs.
+The harness applies floors to any full-profile dispatch under the four pod shapes when all calibration conditions match.
+Runs on other machines and GC-thrash probes remain unheld.
 
-A scheduled run must be held. When its settings, its runner, or its pod shape keep it off the
-floors, when its measurement conditions differ, or when it runs the GC-thrash probe, it fails with one violation that names the reason. A
-changed workflow default therefore turns the next scheduled run red, where it would otherwise
-switch the floors off. Latency above the ceiling is the one exception: the network decides it, so
-that run stays green and not held.
+The harness requires a scheduled run to enforce floors.
+It fails the run if the settings, runner, shape, measurement conditions or GC-thrash probe keep the floors off.
+The violation names the reason.
+An uncalibrated change to the scheduled settings therefore fails the next scheduled run.
+Latency above a ceiling remains the network exception.
+That run stays green and does not enforce floors.
 
 After the calibration conditions match, the harness compares nothing else:
 
