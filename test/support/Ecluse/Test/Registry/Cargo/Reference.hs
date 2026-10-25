@@ -84,6 +84,7 @@ data CargoPackage = CargoPackage
     , cargoPackageDependencies :: [CargoDependency]
     , cargoPackageTargets :: [Value]
     , cargoPackageRustVersion :: Maybe Text
+    , cargoPackageManifestPath :: FilePath
     }
     deriving stock (Eq, Show)
 
@@ -146,7 +147,7 @@ referenceGraph bytes = do
         resolved <- fields .: "resolve"
         withObject "Cargo resolve" (\resolution -> (packages,,) <$> (resolution .: "nodes" >>= traverse node) <*> resolution .:? "root") resolved
     package = withObject "Cargo package" $ \fields ->
-        (,) <$> fields .: "id" <*> (CargoPackage <$> fields .: "name" <*> fields .: "version" <*> fields .:? "source" <*> fields .: "dependencies" <*> fields .: "targets" <*> fields .:? "rust_version")
+        (,) <$> fields .: "id" <*> (CargoPackage <$> fields .: "name" <*> fields .: "version" <*> fields .:? "source" <*> fields .: "dependencies" <*> fields .: "targets" <*> fields .:? "rust_version" <*> fields .: "manifest_path")
     node = withObject "Cargo node" $ \fields ->
         (,) <$> fields .: "id" <*> (CargoNode <$> fields .: "features" <*> (fields .: "deps" >>= traverse edge))
     edge = withObject "Cargo edge" $ \fields -> (,,) <$> fields .: "name" <*> fields .: "pkg" <*> fields .: "dep_kinds"

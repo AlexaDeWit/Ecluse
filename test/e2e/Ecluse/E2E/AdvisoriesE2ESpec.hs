@@ -10,6 +10,8 @@ module Ecluse.E2E.AdvisoriesE2ESpec (
     withPolicy,
     pypiReleaseDriver,
     refusesPyPIRelease,
+    scenarioFamily,
+    awaitDenials,
 ) where
 
 import Data.Aeson (encode, object, (.=))

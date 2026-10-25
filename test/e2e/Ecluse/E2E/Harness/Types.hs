@@ -83,9 +83,9 @@ pypiAdvisoryTopology = pypiTopology{topologyAws = True}
 dredgerTopology :: Topology
 dredgerTopology = npmTopology{topologyAws = True}
 
--- | The supported shared-proxy configuration enables both ecosystems.
+-- | The shared proxy serves every supported ecosystem in one process.
 mixedTopology :: Topology
-mixedTopology = npmTopology{topologyMounts = [Npm, PyPI]}
+mixedTopology = npmTopology{topologyMounts = [Npm, PyPI, Cargo]}
 
 -- | Resolve a required client capability before constructing a project.
 clientEndpoint :: Ecosystem -> E2E -> IO Text

@@ -23,13 +23,13 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Network.HTTP.Types (ResponseHeaders, Status, status200, status400, status401, status404, status409, status413, status503)
+import Network.HTTP.Types (ResponseHeaders, Status, status200, status400, status401, status404, status409, status413, status503, statusCode)
 import Network.Wai (Application, Request, Response, ResponseReceived, getRequestBodyChunk, pathInfo, requestHeaderHost, requestHeaders, requestMethod, responseLBS, responseRaw)
 
 import Ecluse.Core.Security.Limits (BodyLimit (PublishRequestBodyLimit), boundedRead)
 import Ecluse.E2E.Harness.Cargo (CargoRequest (..))
 import Ecluse.E2E.Harness.Container (withBridgeApplication)
-import Ecluse.E2E.Harness.Stub (StubRoute (CargoMirror, CargoPrivate), stubUrl)
+import Ecluse.E2E.Harness.Stub (StubRoute (CargoMirror, CargoPrivate, CargoPublic), stubUrl)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Registry.Cargo.Fixtures
@@ -43,7 +43,7 @@ data CargoStored = CargoStored
     deriving stock (Eq, Show)
 
 -- | Faults affect real exchanges after the target receives the request.
-data CargoRegistryFault = CargoRegistryHealthy | CargoRegistryUnavailable | CargoRegistryLoseReply | CargoRegistryRequireToken Bool
+data CargoRegistryFault = CargoRegistryHealthy | CargoRegistryUnavailable | CargoRegistryLoseReply | CargoRegistryRequireToken Bool | CargoRegistryMissingArchive Text Text
     deriving stock (Eq, Show)
 
 -- | Two native store roles share one fixture server and retain separate inventories.
@@ -99,7 +99,7 @@ cargoRegistryApplication registry request respond = do
     fault <- readTVarIO (registryFault registry)
     atomically (modifyTVar' (registryTokens registry) (<> [(host, lookup "Authorization" (requestHeaders request))]))
     let answer status headers body = do
-            atomically (modifyTVar' (registryRequests registry) (<> [CargoRequest host (decodeUtf8 (requestMethod request)) path (statusNumber status)]))
+            atomically (modifyTVar' (registryRequests registry) (<> [CargoRequest host (decodeUtf8 (requestMethod request)) path (statusCode status)]))
             respond (responseLBS status headers (if requestMethod request == "HEAD" then "" else body))
         unauthorised = answer status401 [("WWW-Authenticate", "Cargo login_url=\"https://cargo-private/login\"")] "credential required"
         authenticated = lookup "Authorization" (requestHeaders request) == Just (encodeUtf8 cargoRegistryToken)
@@ -112,14 +112,17 @@ cargoRegistryApplication registry request respond = do
                 if authenticated then upload registry request host fault answer respond else unauthorised
             | requestMethod request `elem` ["GET", "HEAD"] -> do
                 files <- cargoRegistryFiles registry
-                let nativeBase = if host == "cargo-private" then stubUrl CargoPrivate else stubUrl CargoMirror
+                let nativeBase = case host of
+                        "cargo-private" -> stubUrl CargoPrivate
+                        "cargo-upstream" -> stubUrl CargoPublic
+                        _ -> stubUrl CargoMirror
                     rows = [(name, version, stored) | ((origin, name, version), stored) <- Map.toList files, origin == host]
                 case pathInfo request of
-                    ["config.json"] -> answer status200 [("Content-Type", "application/json")] (LBS.fromStrict (cargoDiscovery nativeBase (Just (T.dropWhileEnd (== '/') nativeBase)) (case fault of CargoRegistryRequireToken _ -> True; _ -> False)))
+                    ["config.json"] -> answer status200 [("Content-Type", "application/json")] (LBS.fromStrict (cargoDiscovery nativeBase (if host == "cargo-upstream" then Nothing else Just (T.dropWhileEnd (== '/') nativeBase)) (case fault of CargoRegistryRequireToken _ -> True; _ -> False)))
                     ["crates", name, version, filename]
                         | filename == name <> "-" <> version <> ".crate"
                         , Just stored <- Map.lookup (host, name, version) files ->
-                            answer status200 [] (LBS.fromStrict (storedArchive stored))
+                            if fault == CargoRegistryMissingArchive name version then answer status404 [] "missing archive" else answer status200 [] (LBS.fromStrict (storedArchive stored))
                     _ -> case [storedRow stored | (name, _, stored) <- rows, cargoShard name == T.intercalate "/" (pathInfo request)] of
                         [] -> answer status404 [] "missing"
                         records -> answer status200 [("Content-Type", "application/octet-stream")] (foldMap ((<> "\n") . encode) records)
@@ -127,14 +130,6 @@ cargoRegistryApplication registry request respond = do
   where
     host = decodeUtf8 (fromMaybe "cargo-private" (requestHeaderHost request))
     path = "/" <> T.intercalate "/" (pathInfo request)
-    statusNumber status
-        | status == status200 = 200
-        | status == status400 = 400
-        | status == status401 = 401
-        | status == status404 = 404
-        | status == status409 = 409
-        | status == status413 = 413
-        | otherwise = 503
 
 upload :: CargoRegistry -> Request -> Text -> CargoRegistryFault -> (Status -> ResponseHeaders -> LByteString -> IO ResponseReceived) -> (Response -> IO ResponseReceived) -> IO ResponseReceived
 upload registry request host fault answer respond =

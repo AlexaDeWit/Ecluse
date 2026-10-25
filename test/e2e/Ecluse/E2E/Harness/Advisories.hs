@@ -9,6 +9,7 @@ module Ecluse.E2E.Harness.Advisories (
     createAdvisoryBucket,
     publishAdvisoryGeneration,
     publishAdvisoryExport,
+    s3CredentialScope,
 ) where
 
 import Data.Text qualified as T

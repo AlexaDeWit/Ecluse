@@ -169,7 +169,7 @@ mixedRegistryFixture =
                     [ Case "mixed/alternating-clients" ["mixed"]
                     ]
                 , groupCapabilities = ["read", "mirror", "client-install"]
-                , groupPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node", "python3", "pip"]
+                , groupPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node", "python3", "pip", "cargo", "rustc"]
                 , groupResources = ["proxy", "nginx", "verdaccio"]
                 , groupIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
                 }

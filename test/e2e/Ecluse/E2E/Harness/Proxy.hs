@@ -9,6 +9,7 @@ module Ecluse.E2E.Harness.Proxy (
     proxyGetCoded,
     proxyHead,
     proxyPut,
+    proxyRequest,
     shouldSucceedThroughProxy,
 
     -- * Logs
@@ -23,7 +24,8 @@ module Ecluse.E2E.Harness.Proxy (
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Network.HTTP.Client (
-    Request (decompress, method, requestHeaders),
+    Request (decompress, method, requestBody, requestHeaders),
+    RequestBody (RequestBodyBS),
     brConsume,
     httpLbs,
     parseRequest,
@@ -32,7 +34,7 @@ import Network.HTTP.Client (
     responseStatus,
     withResponse,
  )
-import Network.HTTP.Types (Method, statusCode)
+import Network.HTTP.Types (Method, RequestHeaders, statusCode)
 import Network.HTTP.Types.Header (hAcceptEncoding)
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec (expectationFailure)
@@ -63,9 +65,13 @@ proxyGetCoded :: E2E -> Text -> IO Serving.ServingResponse
 proxyGetCoded = proxyRaw "GET"
 
 proxyRaw :: Method -> E2E -> Text -> IO Serving.ServingResponse
-proxyRaw verb e2e path = do
+proxyRaw verb = proxyRequest verb [(hAcceptEncoding, "gzip")] ""
+
+-- | Send one explicit native request and retain its exact response bytes and headers.
+proxyRequest :: Method -> RequestHeaders -> ByteString -> E2E -> Text -> IO Serving.ServingResponse
+proxyRequest verb headers body e2e path = do
     base <- parseRequest (toString (e2eBaseUrl e2e <> path))
-    let request = base{method = verb, decompress = const False, requestHeaders = [(hAcceptEncoding, "gzip")]}
+    let request = base{method = verb, decompress = const False, requestHeaders = headers, requestBody = RequestBodyBS body}
     withResponse request (e2eManager e2e) $ \resp -> do
         chunks <- brConsume (responseBody resp)
         pure

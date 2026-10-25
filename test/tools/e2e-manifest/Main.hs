@@ -5,6 +5,7 @@
 module Main (main) where
 
 import Ecluse.E2E.Catalogue (catalogue)
+import Ecluse.E2E.Suites.Cargo qualified as Cargo
 import Ecluse.E2E.Suites.Npm qualified as Npm
 import Ecluse.E2E.Suites.PyPI qualified as PyPI
 import Ecluse.E2E.Suites.SharedSystem qualified as SharedSystem
@@ -17,5 +18,6 @@ main = do
     unless (null arguments) $ failRunner "usage: ecluse-e2e-manifest"
     validateDeclaredGroups catalogue "npm" Npm.declarations
     validateDeclaredGroups catalogue "pypi" PyPI.declarations
+    validateDeclaredGroups catalogue "cargo" Cargo.declarations
     validateDeclaredGroups catalogue "shared-system" SharedSystem.declarations
     writePlan catalogue

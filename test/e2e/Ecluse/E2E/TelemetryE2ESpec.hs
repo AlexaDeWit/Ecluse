@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Native traffic for the shared read telemetry and npm mirror telemetry contracts.
-module Ecluse.E2E.TelemetryE2ESpec (npmReadTelemetryFamily, pypiReadTelemetryFamily, npmMirrorTelemetryFamily, collectorDriver) where
+module Ecluse.E2E.TelemetryE2ESpec (npmReadTelemetryFamily, pypiReadTelemetryFamily, npmMirrorTelemetryFamily, collectorDriver, readDriver) where
 
 import Data.List (lookup)
 import Data.Text qualified as T

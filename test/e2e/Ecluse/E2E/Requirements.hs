@@ -150,5 +150,75 @@ obligations =
         Supported
         ["read", "mirror", "maintenance", "advisories"]
         (map ("pypi/dredger/" <>) ["inventory", "admission-only", "denied-versions", "dry-run", "consent-refusal", "first-party", "two-stores", "advisory-revocation", "mal-revocation", "denied-install", "delete-recovery", "refill", "missing-source", "late-copy", "old-worker", "old-dredger-refill", "old-dredger-loss"])
+    , Obligation
+        "cargo/installation"
+        "cargo/read"
+        "cargo/installation"
+        Supported
+        ["read", "client-install"]
+        (map ("cargo/installation/" <>) ["accepted-install", "default-denial", "artifact-integrity", "artifact-head", "artifact-identity-coding"])
+    , Obligation
+        "cargo/advisories"
+        "cargo/write"
+        "cargo/advisories"
+        Supported
+        ["read", "advisories", "client-install"]
+        (map ("cargo/advisories/" <>) ["exact-fix", "partial-fix", "deny-cve", "deny-epss", "mal-denial"])
+    , Obligation
+        "cargo/mirror"
+        "cargo/write"
+        "cargo/mirror"
+        Supported
+        ["read", "mirror", "client-install"]
+        (map ("cargo/mirror/" <>) ["cross-target-install", "dependency-graph", "module-exports", "linked-executable", "origin-evidence", "installed-tree", "empty-store-control"])
+    , Obligation
+        "cargo/publish"
+        "cargo/write"
+        "cargo/publish"
+        Supported
+        ["read", "publication", "client-install"]
+        (map ("cargo/publish/" <>) ["publish-install", "scope-refusal", "non-upload-refusal"])
+    , Obligation
+        "cargo/dredger"
+        "cargo/maintenance"
+        "cargo/dredger"
+        Supported
+        ["read", "mirror", "maintenance", "advisories"]
+        (map ("cargo/dredger/" <>) ["inventory", "admission-only", "denied-versions", "dry-run", "consent-refusal", "first-party", "two-stores", "advisory-revocation", "mal-revocation", "denied-install", "delete-recovery", "refill", "missing-source", "late-copy", "old-worker", "old-dredger-refill", "old-dredger-loss"])
+    , Obligation
+        "cargo/telemetry"
+        "cargo/read"
+        "cargo/telemetry"
+        Supported
+        ["read", "telemetry", "client-install"]
+        (map ("cargo/telemetry/" <>) ["signals", "disabled", "export-failure", "datadog"])
+    , Obligation
+        "cargo/telemetry-write"
+        "cargo/write"
+        "cargo/telemetry-write"
+        Supported
+        ["read", "mirror", "client-install", "telemetry"]
+        (map ("cargo/telemetry/" <>) ["domain-spans", "private-fetch"])
+    , Obligation
+        "cargo/native"
+        "cargo/write"
+        "cargo/native"
+        Supported
+        ["read", "mirror", "publication", "client-install"]
+        (map ("cargo/native/" <>) ["current-client", "floor-client", "asset-routing", "metadata-no-archives", "denial-control", "features", "targets", "lock-checksums", "msrv", "discovery-views", "private-no-public", "raw-auth", "private-auth-required", "public-token-control", "private-anonymous", "publication-framing", "foreign-registry"])
+    , Obligation
+        "cargo/mirror-proof"
+        "cargo/write"
+        "cargo/mirror-proof"
+        Supported
+        ["read", "mirror", "client-install"]
+        (map ("cargo/mirror-proof/" <>) ["source-roundtrip", "pinned-yank", "yank-negative-control", "lost-reply", "missing-archive", "checksum-mutation", "missing-state", "corrupt-state", "private-auth"])
+    , Obligation
+        "cargo/dredger-native-safety"
+        "cargo/maintenance"
+        "cargo/native-safety"
+        Supported
+        ["read", "mirror", "maintenance", "advisories"]
+        (map ("cargo/dredger-native-safety/" <>) ["deletion-cap", "unsafe-upstream", "native-yank-not-deletion"])
     , Obligation "s3/packages" "s3/packages" "publication" (Planned "https://github.com/AlexaDeWit/Ecluse/issues/1239") ["publication"] []
     ]

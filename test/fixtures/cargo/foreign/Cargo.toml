@@ -1,0 +1,11 @@
+[package]
+name = "ecluse-e2e-private-foreign"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT"
+description = "Owned Cargo foreign-registry fixture"
+readme = "README.md"
+
+[dependencies]
+ecluse-e2e-leaf = { version = "=1.0.0", registry = "foreign" }
