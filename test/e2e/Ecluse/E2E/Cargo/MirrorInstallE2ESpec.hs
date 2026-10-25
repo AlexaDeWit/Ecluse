@@ -18,7 +18,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import System.FilePath (joinPath, splitDirectories)
-import Test.Hspec (shouldBe, shouldReturn)
+import Test.Hspec (shouldReturn)
 import UnliftIO (finally)
 
 import Ecluse.E2E.Cargo.InstallE2ESpec (assertCargoAssets, cargoConsumer)

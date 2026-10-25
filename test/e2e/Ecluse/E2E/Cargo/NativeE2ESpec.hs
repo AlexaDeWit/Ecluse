@@ -228,9 +228,9 @@ privateNoPublic plane = withPrivateRegistry plane CargoRegistryHealthy $ \_ obse
     proxyStatus (observedProxy observed) ("/cargo/private/" <> cargoShard cargoRoot) `shouldReturn` 404
     (filter ((== CargoPublic) . srRoute) <$> stubReadsNow plane) `shouldReturn` []
     let config = privateConfig{ecExtraEnv = ecExtraEnv privateConfig <> [("ECLUSE_MOUNTS__CARGO__FIRST_PARTY", "ecluse-e2e-build")]}
-    withObservedCargoProxy config plane $ \guarded -> do
+    withObservedCargoProxy config plane $ \firstPartyProxy -> do
         before <- stubReadsNow plane
-        proxyStatus (observedProxy guarded) ("/cargo/" <> cargoShard "ecluse-e2e-build") `shouldReturn` 404
+        proxyStatus (observedProxy firstPartyProxy) ("/cargo/" <> cargoShard "ecluse-e2e-build") `shouldReturn` 404
         stubReadsNow plane `shouldReturn` before
 
 discoveryViews :: GlobalDataPlane -> IO ()

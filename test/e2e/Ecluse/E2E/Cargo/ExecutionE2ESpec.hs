@@ -247,9 +247,9 @@ workerReadmission global = withExecutionStores global $ \plane _ -> do
             logs `shouldSatisfy` not . T.isInfixOf ("mirrored artifact published: " <> name <> "@" <> cargoVersion)
         cargoRegistryVersions (Native.cspRegistry plane) "cargo-mirror" plainName `shouldReturn` [cargoVersion]
         after <- stubReadsNow global
-        let reads = drop (length before) after
+        let workerRequests = drop (length before) after
         for_ [cargoRoot, macroName, plainName] $ \name ->
-            reads `shouldSatisfy` any (\request -> srRoute request == CargoPublic && srMethod request == "GET" && srPath request == archivePath name && srStatus request == 200)
+            workerRequests `shouldSatisfy` any (\request -> srRoute request == CargoPublic && srMethod request == "GET" && srPath request == archivePath name && srStatus request == 200)
 
 dredgerRevocation :: GlobalDataPlane -> IO ()
 dredgerRevocation global = withExecutionStores global $ \plane releases ->

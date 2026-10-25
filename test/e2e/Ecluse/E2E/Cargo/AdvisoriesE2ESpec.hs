@@ -19,7 +19,6 @@ import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Cargo
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
 import Ecluse.Test.Contract.Install.Advisory
-import Ecluse.Test.Registry.Cargo.Fixtures
 
 -- | CVSS, EPSS, MAL and remediation cases keep separate source and client lifetimes.
 cargoAdvisoryFamily :: FamilyFixture AdvisoryScenarioDriver
