@@ -8,6 +8,7 @@ module Ecluse.BenchLoad.Contract (
     LoadLaw (..),
     LoadGap (..),
     requiredLoadLaws,
+    onRequestLoadLaws,
     loadScenarioName,
     loadCoverageGaps,
     requiredLoadPasses,
@@ -24,7 +25,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 data LoadScope = ReadLoadFoundation | FullLoad
     deriving stock (Eq, Show)
 
--- | Required measurements use business identities across native protocol names.
+-- | Load measurements use business identities across native protocol names.
 data LoadLaw
     = ColdMetadata
     | ShippedAdvisoryMetadata
@@ -73,7 +74,6 @@ requiredLoadLaws scope =
     , ShippedAdvisoryMetadata
     , AllAdvisoryMetadata
     , SlowReaders
-    , PrivateCopyFivePercent
     , PrivateCopyQuarter
     , PrivateCopyWhole
     , AssembledResponseHit
@@ -88,7 +88,6 @@ requiredLoadLaws scope =
     , PatternCiFleet
     , PatternHeterogeneous
     , PatternZipf
-    , PatternRestart
     , PatternScan
     , PatternDefaultBodyCap
     , PrivateArtifactCeiling
@@ -100,6 +99,10 @@ requiredLoadLaws scope =
         <> case scope of
             ReadLoadFoundation -> []
             FullLoad -> [MirrorWorker]
+
+-- | Extra variants remain available through explicit scenario selection.
+onRequestLoadLaws :: [LoadLaw]
+onRequestLoadLaws = [PrivateCopyFivePercent, PatternRestart]
 
 -- | Resolve native names without changing measured work or accepting an unknown protocol.
 loadScenarioName :: Ecosystem -> LoadLaw -> Maybe Text

@@ -1259,11 +1259,15 @@ They keep the duration, traffic, limits and assertions unchanged.
 | `read-paths` | Cold metadata, shipped advisories, full private copies, assembled hits, 304 revalidation, cache-fit and eviction controls, and every managed PyPI read |
 | `memory-admission` | Full private copies, slow readers, idle bursts, bursts under private load, warm reads under cold load, and admission ramps |
 | `artifacts` | Private artifact relay, public onboarding, and relay ceilings for npm and PyPI |
-| `full` | Every existing scenario, including worker and replay measurements |
+| `full` | Every routine scenario, including worker and replay measurements |
 
 Explicit `scenarios` override the profile and appear as `custom` in the native report.
 Named partial profiles remain diagnostic. They do not enforce calibrated floors or produce full completion receipts.
-The full nightly grid, its floor values, and its eligibility checks stay unchanged.
+
+Full nightly runs retain all four pod shapes. Remaining floor values and eligibility checks stay unchanged.
+The full profile now omits the 5% private-copy cases and default restart replays.
+They remain available through explicit scenario selection. The routine grid contains 332 pass observations, down from 356.
+
 The npm serving handoff still requires an explicit full run:
 
 ```bash
@@ -1395,8 +1399,9 @@ TTL is 0. The private copy stays fixed for the run, so each scenario measures on
 | `npm/heavy-private-25pct`, `pypi/heavy-private-25pct` | The newest 25% of the versions |
 | `npm/heavy-private`, `pypi/heavy-private` | The complete capture, as a private registry that proxies the public one returns |
 
-Each ecosystem's report lists the last three rows in that order, after the cold listing and its
-advisory variants. All four rows join the concurrency-one pass.
+The full profile runs the 25% and complete-copy cases after the cold listing and its advisory variants.
+The 25% case keeps an intermediate comparison, and the complete copy keeps the stress case.
+The 5% case requires explicit scenario selection. All four rows join the concurrency-one pass when selected.
 
 Three npm and three PyPI scenarios load an advisory database, so the per-version advisory cost
 shows in the load report. Before the proxy boots, the scenario compiles the captured advisories
@@ -1549,7 +1554,7 @@ not a constrained worker pod. The three managed-read HTTP rows retain constraine
 The worker payload setting controls uncompressed bytes per archive file. Its timer excludes fixture
 reset, queue setup and assertions, while the scenario duration includes that work.
 
-The check fails closed, and it covers every scenario the zero-success check covers:
+The floor checks fail closed over the routine full profile:
 
 - A run held to the floors fails on a scenario that has no floor for its pass.
 - It fails on a floor for a count that no scenario reports.
@@ -1961,6 +1966,8 @@ turns on for each scenario it runs. Substitute `pypi` for its Simple-index trace
 Each cell stops when its finite sequence completes or its whole-replay deadline expires.
 Duration knobs apply only to the legacy duration drivers.
 Clients send sequential requests after their scheduled start. Slow responses extend the run.
+The full profile omits Restart because its default trace duplicates CI fleet at 100 ms client spacing.
+Select `npm/pattern-restart` or `pypi/pattern-restart` explicitly to vary its arrival interval.
 Restart models post-restart arrivals into an empty cache, with the production 60-second TTL.
 It does not model a pre-restart heap or claim that a short default run measures expiry.
 

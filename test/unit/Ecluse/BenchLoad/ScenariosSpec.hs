@@ -12,13 +12,14 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.BenchLoad.Floors (Calibration (calNpmLatency, calOperatingPoint, calPypiLatency, calRuns), Enforcement (Enforced), Floors (floorsByShape, floorsCalibration), LatencyCeiling (lcCeilingMs), Pass (ConcurrencyOne, Loaded), RunFacts (..), RunnerReading (RunnerReading), Trigger (Scheduled), enforce, loadFloors, unheldViolations)
-import Ecluse.BenchLoad.Harness (UpstreamFixture (fixtureScenarios), defaultLoadKnobs, operatingPoint)
+import Ecluse.BenchLoad.Harness (Scenario (scenarioName), UpstreamFixture (fixtureEcosystem, fixtureScenarios), defaultLoadKnobs, operatingPoint)
 import Ecluse.BenchLoad.Pod (PodShape (Unlimited), renderPodShape, scheduledPodShapes)
-import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScenario, fixtures)
-import Ecluse.BenchLoad.Selection (measurementConditionVersion)
+import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScenario, fixtures, scenariosForSelection)
+import Ecluse.BenchLoad.Selection (measurementConditionVersion, scenarioKey)
 import Ecluse.BenchLoad.Support (twoCores)
 import Ecluse.BenchLoad.Sweep (Sweep (swScenarios), loadSweep)
 
+-- | Check native fixtures, floor coverage and default selection without starting load.
 spec :: Spec
 spec = do
     describe "load provider coverage" $ do
@@ -37,6 +38,17 @@ spec = do
             it ("requires explicit selection for " <> toString name) $ do
                 isJust (findScenario name) `shouldBe` True
                 checkedCounts twoCores `shouldSatisfy` Set.notMember (name, Loaded)
+
+    describe "optional load cases" $ do
+        for_ ["heavy-private-5pct", "pattern-restart"] $ \name ->
+            it ("keeps " <> toString name <> " available only through explicit selection") $
+                for_ fixtures $ \fixture -> do
+                    let key = scenarioKey (fixtureEcosystem fixture) name
+                    isJust (findScenario key) `shouldBe` True
+                    map scenarioName (scenariosForSelection Nothing fixture) `shouldSatisfy` notElem name
+                    map scenarioName (scenariosForSelection (Just [key]) fixture) `shouldSatisfy` elem name
+        it "removes only the approved pass observations from the full grid" $
+            sum (map (Set.size . checkedCounts) scheduledPodShapes) `shouldBe` 332
 
     describe "checkedCounts" $ do
         it "checks in-process work only under the unlimited shape, the one shape that runs it" $ do

@@ -48,10 +48,19 @@ spec = describe "canonical load contract" $ do
             `shouldBe` [MissingLoadScenario PrivateArtifact "wheel-hot-path"]
     it "refuses a protocol without load drivers" $
         loadCoverageGaps FullLoad RubyGems [] `shouldBe` [NoLoadProtocol RubyGems]
-    it "requires the exact passes the complete fixtures execute under each shape" $
+    it "requires the exact passes the full profile executes under each shape" $
         for_ scheduledPodShapes $ \shape ->
             fmap (Set.fromList . map snd) ((<>) <$> requiredLoadPasses FullLoad Npm shape <*> requiredLoadPasses FullLoad PyPI shape)
                 `shouldBe` Right (checkedCounts shape)
+    it "keeps optional variants out of full obligations while retaining private-copy controls" $
+        for_ [Npm, PyPI] $ \ecosystem ->
+            case requiredLoadPasses FullLoad ecosystem twoCores of
+                Left gaps -> expectationFailure (toString (show gaps :: Text))
+                Right passes -> do
+                    map fst passes `shouldSatisfy` notElem PrivateCopyFivePercent
+                    map fst passes `shouldSatisfy` notElem PatternRestart
+                    for_ [PrivateCopyQuarter, PrivateCopyWhole, PatternCiFleet] $ \law ->
+                        map fst passes `shouldSatisfy` elem law
     it "retains both worker passes only under the unlimited shape" $
         for_ [(Npm, "npm/worker-mirroring"), (PyPI, "pypi/worker-mirroring")] $ \(ecosystem, key) -> do
             fmap (filter ((== MirrorWorker) . fst)) (requiredLoadPasses FullLoad ecosystem Unlimited)
