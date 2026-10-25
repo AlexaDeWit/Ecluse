@@ -280,7 +280,9 @@ Keep these native shapes separate while reusing the writer, packed values, and r
   (`decodePicked`). The read decodes a release whole only to record why it dropped an invalid one.
 - A packed release holds at most one hole: the string that an assembly rebases for each request.
   npm's hole is the tarball URL (`tarballHole`). The read keeps the hole only when the rebase rule
-  rewrites that URL.
+  rewrites that URL. Use `artifactUrlPacked` in
+  [ServedDocument](../core/src/Ecluse/Core/Registry/ServedDocument.hs) for that eligibility check.
+  It removes an unusable URL hole without changing the source payload or encoded length.
 - Assemble a listing into a `RenderPlan`: the small top-level members as aeson's tree, and the
   surviving releases, each over its own source's table. `renderPlan` writes the listing into one
   buffer of its exact length, which it adds up from the lengths the releases hold. It copies the
@@ -335,7 +337,10 @@ To calibrate them:
 - Read each capture's `metadata-merge` lines from the same job, one per merge shape. Each reports
   the read peak per source byte, the basis and the output working set per basis byte. Give
   `Ecluse.Test.Corpus.Subset` a cut for the ecosystem's document, as npm and PyPI have, so the
-  probes can shape its captures. Give `Ecluse.Test.Corpus.Merge` the ecosystem's heavy-base text,
+  probes can shape its captures. Its [newestShare](../test/support/Ecluse/Test/Corpus/Subset.hs)
+  shares projection, newest-version selection, and decoding.
+  Native callbacks retain object or array cuts and the fields tied to selected releases.
+  Give `Ecluse.Test.Corpus.Merge` the ecosystem's heavy-base text,
   and explicit arms in its `keepVersions` and `weighDown`.
 - Derive the read-peak and output limits by the rule in [Listing peaks](testing.md#listing-peaks),
   and add the captures to that section's tables.
@@ -391,7 +396,8 @@ a read:
 |---|---|
 | Compressed metadata headers, native credential attachment, redirect refusal | `metadataGet` in `Ecluse.Core.Registry.Request` |
 | The exchange, spans, table key, charge, digest and `Manifest` of a read | `Ecluse.Core.Registry.Metadata.Fetch` |
-| Reported-name checks and stream error mapping | `Ecluse.Core.Registry.Metadata.Projection`, `Ecluse.Core.Registry.WireSupport` |
+| Reported-name parsing and agreement, preserving the mismatched name | `validateNameAgreement` in [Metadata.Projection](../core/src/Ecluse/Core/Registry/Metadata/Projection.hs) |
+| Stream error mapping | `Ecluse.Core.Registry.Metadata.Projection`, `Ecluse.Core.Registry.WireSupport` |
 | Decoding a publish time | `parsePublishTime` in `Ecluse.Core.Registry.WireSupport` |
 | Replaying a merge plan, rebasing artifact URLs, the name gate, and native encoding fallback | `Ecluse.Core.Registry.ServedDocument` |
 | Caching, metrics and failure logs around the reads | `Ecluse.Core.Server.Metadata` |

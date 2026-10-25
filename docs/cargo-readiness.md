@@ -32,6 +32,7 @@ An independent native reader must define the expected result. Do not derive it f
 Cargo's [Web API](https://doc.rust-lang.org/cargo/reference/registry-web-api.html) uses raw API tokens in `Authorization`.
 Publication sends length-prefixed metadata and archive bytes to a path without the package name.
 Reuse `CredentialMapping`, `PublishRequestBody`, byte admission, and the first-party identity guard.
+Use [Publish.relayPublishRequest](../core/src/Ecluse/Core/Registry/Publish/Internal.hs) for bounded forwarding after native validation.
 Add native body decoding and identity agreement. Neither npm JSON nor PyPI multipart framing fits this body.
 Preserve the difference between publication metadata and index entries rather than treating one as the other's wire format.
 
@@ -105,6 +106,12 @@ Required shared integration points include these explicit sums and registrations
 - [CodeArtifact maintenance](../runtime/src/Ecluse/Runtime/Maintenance/CodeArtifact.hs) and applicable configuration validation.
 - [E2E drivers](../test/e2e/Ecluse/E2E/Drivers/), [contract catalogues](../test/contracts/Ecluse/Test/Contract/), [Cabal registration](../ecluse.cabal), and the [CI workflow](../.github/workflows/ci.yml).
 - Corpus, advisory, benchmark, allocation, residency, and load providers in the [onboarding checklist](testing.md#onboarding-an-ecosystem).
+
+Declare worker reads, state needs, and upload endpoints through `AdapterPublish.publishMirrorRequirements` in [Adapter.Capability](../core/src/Ecluse/Core/Registry/Adapter/Capability.hs).
+Declare upload identity through `publishIdentity`, and private artifact addressing through `AdapterArtifact.artifactPrivateAddressing`, independently of public `artifactHosts`.
+These declarations reuse composition checks. They do not add Cargo source reconstruction, persistence, publication, or completion semantics.
+A `DurableVersionState` flag alone cannot make the native state codec support Cargo.
+Supply those native contracts and their evidence before enabling the role.
 
 These are integration changes, not evidence that every pipeline needs a Cargo branch.
 Keep native formats in the adapter and backend operations in their backend.

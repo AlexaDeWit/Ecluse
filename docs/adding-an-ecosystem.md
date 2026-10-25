@@ -68,6 +68,8 @@ Declare native routes with [Server.Route](../core/src/Ecluse/Core/Server/Route.h
 Derive routing and the published route descriptions from the same table.
 Check metadata, artifacts, publication, discovery documents, errors, `GET`, and `HEAD` against the native client contract.
 Identify any response action the current pipeline cannot express before adding adapter code.
+Use `MetadataResponse` and `metadataReplies` in [Packument.Response](../core/src/Ecluse/Core/Server/Pipeline/Packument/Response.hs) for shared metadata status choices.
+Keep native refusal bodies, denial wording, media types, and route descriptions in the adapter.
 
 ## 4. Supply reads, retained documents, and assembly
 
@@ -94,6 +96,9 @@ Never reconstruct installable metadata from policy facts alone.
 Validate artifact locations through the existing [package filter](../core/src/Ecluse/Core/Package/Filter.hs).
 Preserve the distinction between source digest claims and verified bytes.
 Keep private-source authorisation, first-party precedence, and merge provenance under the existing registry contract.
+Declare `AdapterArtifact.artifactPrivateAddressing` independently of `artifactHosts` in [Adapter.Capability](../core/src/Ecluse/Core/Registry/Adapter/Capability.hs).
+`ConventionalArtifactPath` uses a native path. `IndexedArtifactLocation` requires an authoritative private metadata location.
+The public host allowance does not select private addressing.
 
 ## 5. Map policy and advisory evidence
 
@@ -119,6 +124,12 @@ The shared worker owns orchestration over the complete version.
 [MirrorUpload](../core/src/Ecluse/Core/Registry/MirrorUpload.hs) carries checked membership and verified file facts, paired with required native metadata.
 Do not add a dormant codec or publish helper without an active caller.
 
+Declare `AdapterPublish.publishMirrorRequirements` and `publishIdentity` in [Adapter.Capability](../core/src/Ecluse/Core/Registry/Adapter/Capability.hs).
+`MirrorRequirements` selects cached or charged worker reads, native or durable version state, and read-root or explicit upload endpoints.
+`UploadIdentityRequirement` declares token-only or named identity for static credentials.
+Composition uses these declarations for worker wiring and boot checks, without switching on ecosystem names.
+Use `relayPublishRequest` in [Publish](../core/src/Ecluse/Core/Registry/Publish/Internal.hs) to retain native replies under metadata and progress limits.
+
 | Responsibility | Reuse | Native work |
 |---|---|---|
 | Mirror input | Complete version inventory and verified file identities | Retained read data and required upload metadata |
@@ -138,6 +149,9 @@ They do not promise atomic visibility to consumers that bypass Écluse.
 
 npm is the one-tarball instance. PyPI includes every wheel, sdist, and declared metadata companion required by its contract.
 Native archive extraction and publication formats stay separate when their meanings differ.
+[MirrorUpload.mirrorReadDocument](../core/src/Ecluse/Core/Registry/MirrorUpload/Internal.hs) reconstructs retained native source documents without encoding or reparsing.
+The [state codec](../core/src/Ecluse/Core/Mirror/State/Codec.hs) still persists and restores native payloads.
+A durable-state declaration does not add another protocol's source reconstruction or completion proof.
 Neither the worker nor a completion mechanism gains Dredger's deletion authority.
 
 ## 7. Register evidence in the existing test system
@@ -175,6 +189,12 @@ The [reproduction procedure](test-contracts.md#reproduction) owns the commands, 
 Supply concrete operation records to the shared contracts in [test/contracts](../test/contracts/Ecluse/Test/Contract/).
 Contracts own common assertions and scenario order.
 Providers own clients, setup, teardown, native decoding, faults, and observations.
+Reuse these setup helpers where their contracts fit:
+
+- [PackageStore.Provider.withStoreSession](../test/contracts/Ecluse/Test/Contract/PackageStore/Provider.hs) keeps the native wire stub alive across reopened transport handles.
+- [TestSupport.proxyApplication](../test/integration/Ecluse/Server/Pipeline/TestSupport.hs) mounts an ecosystem over supplied runtime and native dependencies.
+- [Fixtures.Contracts.concreteMetadata](../test/e2e/Ecluse/E2E/Fixtures/Contracts.hs) shares fixture prerequisites and isolation while retaining native tools, resources, and capabilities.
+
 Keep expected bytes and reference readers independent of production parsers and serialisers.
 Retain native tests for obligations with no common meaning.
 
@@ -187,6 +207,13 @@ The [contract coverage map](test-contracts.md) identifies the common laws and re
 Add corpus captures and pins before recording expected outputs or calibration figures.
 Register the existing benchmark, allocation, and residency providers instead of editing each benchmark group.
 Use the existing load fixture contract for the ecosystem's future load coverage.
+
+[CapturedArtifact](../bench/load/src/Ecluse/BenchLoad/CapturedArtifact.hs) holds neutral artifact coordinates and selection over projected facts.
+Native providers retain parsing, version canonicalisation, route construction, and error wording.
+[PatternProvider](../bench/load/Ecluse/BenchLoad/PatternScenario.hs) supplies capture authority and selected artifacts through `LoadReadDriver.lrdPatternProvider`.
+The [npm provider](../bench/load/Ecluse/BenchLoad/Npm.hs) supplies selected replay from native pins.
+The [PyPI provider](../bench/load/Ecluse/BenchLoad/PyPI.hs) keeps selected pattern replay unsupported and selects warm-read artifacts separately.
+
 Keep allocation, heap retention, native memory, complete-request throughput, and latency claims distinct.
 The [metadata reference](ecosystem-metadata.md#lessons-from-earlier-changes) records lessons from earlier work.
 The testing guide remains the authority for measurement duties and supported claims.
