@@ -24,7 +24,12 @@ import Ecluse.Core.Registry.Adapter.Capability (
     AdapterMaintenance (..),
     AdapterMetadata (..),
     AdapterPublish (..),
+    MirrorRequirements (..),
+    MirrorStateRequirement (..),
     PublishRequestBody (..),
+    UploadEndpointRequirement (..),
+    UploadIdentityRequirement (..),
+    WorkerMetadataRead (..),
  )
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
@@ -32,7 +37,7 @@ import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (relayPublishRequest)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleDocument, serialiseSimpleDocument)
-import Ecluse.Core.Registry.PyPI.Metadata (pypiChargeFactors, pypiRead)
+import Ecluse.Core.Registry.PyPI.Metadata (pypiChargeFactors, pypiMirrorRead, pypiRead)
 import Ecluse.Core.Registry.PyPI.Project (projectName, pypiNameLeadChars)
 import Ecluse.Core.Registry.PyPI.Publish (pypiPublishCodec)
 import Ecluse.Core.Registry.PyPI.Publish.Multipart qualified as Multipart
@@ -99,4 +104,6 @@ pypiPublish =
                 )
         , publishUploadClaims = \limits body -> Multipart.uploadClaims limits (publishBodyContentType body) (publishBodyBytes body)
         , publishCodec = pypiPublishCodec
+        , publishMirrorRequirements = MirrorRequirements (ChargedWorkerRead pypiMirrorRead) DurableVersionState ExplicitUploadEndpoint
+        , publishIdentity = NamedIdentity
         }

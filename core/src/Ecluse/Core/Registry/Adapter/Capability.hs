@@ -15,6 +15,11 @@ module Ecluse.Core.Registry.Adapter.Capability (
     -- * Publish
     AdapterPublish (..),
     PublishRequestBody (..),
+    MirrorRequirements (..),
+    WorkerMetadataRead (..),
+    MirrorStateRequirement (..),
+    UploadEndpointRequirement (..),
+    UploadIdentityRequirement (..),
 
     -- * Names
     ProjectName,
@@ -82,6 +87,39 @@ data PublishRequestBody = PublishRequestBody
     , publishBodyContentType :: Maybe ByteString
     }
 
+-- | Worker reads reuse the cache or charge the selected native read directly.
+data WorkerMetadataRead
+    = CachedWorkerRead
+    | ChargedWorkerRead EcosystemRead
+
+-- | Completion uses native inventory or requires durable version state.
+data MirrorStateRequirement
+    = NativeVersionState
+    | DurableVersionState
+    deriving stock (Eq, Show)
+
+-- | Mirror uploads use the read root or require a separate endpoint.
+data UploadEndpointRequirement
+    = ReadRootUpload
+    | ExplicitUploadEndpoint
+    deriving stock (Eq, Show)
+
+-- | Named protocols require a username when using a static token.
+data UploadIdentityRequirement
+    = TokenIdentity
+    | NamedIdentity
+    deriving stock (Eq, Show)
+
+-- | Static mirror obligations, separate from runtime completion observations.
+data MirrorRequirements = MirrorRequirements
+    { mirrorWorkerRead :: WorkerMetadataRead
+    -- ^ Cache and charging policy for worker metadata.
+    , mirrorStateRequirement :: MirrorStateRequirement
+    -- ^ State the configured mirror requires at boot.
+    , mirrorUploadEndpoint :: UploadEndpointRequirement
+    -- ^ Whether the writer requires a separate endpoint.
+    }
+
 -- | Native relay, identity validation, and mirror publication for one ecosystem.
 data AdapterPublish = AdapterPublish
     { publishRelay :: OriginClient -> PackageName -> PublishRequestBody -> IO (Either FetchFault PublishRelayResponse)
@@ -90,6 +128,10 @@ data AdapterPublish = AdapterPublish
     -- ^ Every identity claim of a body shaped as a new-release upload, or why the body is not relayed.
     , publishCodec :: PublishCodec
     -- ^ The mirror write's document, requests, probe, and status semantics. The transport owns the manager, mint, and fault classification.
+    , publishMirrorRequirements :: MirrorRequirements
+    -- ^ The worker read and boot obligations for configured mirrors.
+    , publishIdentity :: UploadIdentityRequirement
+    -- ^ Static credential requirements for mirror and client uploads.
     }
 
 -- | Store maintenance verbs for "Ecluse.Core.Registry.Maintenance.Protocol". A missing verb makes the Dredger refuse.

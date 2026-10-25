@@ -14,6 +14,12 @@ import Ecluse.Core.Registry.Adapter (
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterArtifact (artifactHosts),
     AdapterMaintenance (maintenanceListing, maintenanceVersionDelete),
+    AdapterPublish (publishIdentity, publishMirrorRequirements),
+    MirrorRequirements (mirrorStateRequirement, mirrorUploadEndpoint, mirrorWorkerRead),
+    MirrorStateRequirement (..),
+    UploadEndpointRequirement (..),
+    UploadIdentityRequirement (..),
+    WorkerMetadataRead (..),
  )
 
 spec :: Spec
@@ -30,6 +36,20 @@ spec = describe "the PyPI adapter" $ do
     it "carries the native upload capability for a configured publication target" $
         fmap (isJust . adapterPublish) (adapterFor PyPI) `shouldBe` Just True
 
+    it "declares PyPI's charged read, durable state, explicit endpoint, and named identity" $ do
+        let selected = adapterFor PyPI >>= adapterPublish
+        fmap (mirrorStateRequirement . publishMirrorRequirements) selected `shouldBe` Just DurableVersionState
+        fmap (mirrorUploadEndpoint . publishMirrorRequirements) selected `shouldBe` Just ExplicitUploadEndpoint
+        fmap publishIdentity selected `shouldBe` Just NamedIdentity
+        fmap (charged . mirrorWorkerRead . publishMirrorRequirements) selected `shouldBe` Just True
+
+    it "declares npm's cached read, native state, root endpoint, and token identity" $ do
+        let selected = adapterFor Npm >>= adapterPublish
+        fmap (mirrorStateRequirement . publishMirrorRequirements) selected `shouldBe` Just NativeVersionState
+        fmap (mirrorUploadEndpoint . publishMirrorRequirements) selected `shouldBe` Just ReadRootUpload
+        fmap publishIdentity selected `shouldBe` Just TokenIdentity
+        fmap (charged . mirrorWorkerRead . publishMirrorRequirements) selected `shouldBe` Just False
+
     it "spells neither store-maintenance verb, so a Dredger against such a store refuses" $ do
         -- PyPI has no public wire endpoint for listing a store's projects or deleting a
         -- release, so the Dredger names the missing verb rather than sweeping half the store.
@@ -41,3 +61,6 @@ spec = describe "the PyPI adapter" $ do
 
     it "leaves an ecosystem this build ships no adapter for unresolved" $
         fmap adapterEcosystem (adapterFor RubyGems) `shouldBe` Nothing
+  where
+    charged CachedWorkerRead = False
+    charged (ChargedWorkerRead _) = True

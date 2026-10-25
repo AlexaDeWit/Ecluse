@@ -19,7 +19,12 @@ import Ecluse.Core.Registry.Adapter.Capability (
     AdapterArtifact (..),
     AdapterMetadata (..),
     AdapterPublish (..),
+    MirrorRequirements (..),
+    MirrorStateRequirement (..),
     PublishRequestBody (..),
+    UploadEndpointRequirement (..),
+    UploadIdentityRequirement (..),
+    WorkerMetadataRead (..),
  )
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
 import Ecluse.Core.Registry.Npm (relayPublishDocument)
@@ -70,4 +75,6 @@ npmPublish =
         { publishRelay = \origin name -> relayPublishDocument origin name . publishBodyBytes
         , publishUploadClaims = \_ -> pure . uploadClaims . publishBodyBytes
         , publishCodec = npmPublishCodec
+        , publishMirrorRequirements = MirrorRequirements CachedWorkerRead NativeVersionState ReadRootUpload
+        , publishIdentity = TokenIdentity
         }
