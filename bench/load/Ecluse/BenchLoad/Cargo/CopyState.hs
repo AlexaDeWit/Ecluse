@@ -1,0 +1,112 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
+-- | Native private-copy fixtures retain only checked source rows present in the actual target index.
+module Ecluse.BenchLoad.Cargo.CopyState (withCopyState) where
+
+import Control.Concurrent (threadDelay)
+import Data.Aeson (Object, Value (Object, String))
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.List (lookup)
+import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Network.HTTP.Client (defaultManagerSettings, newManager, parseRequest)
+import Network.HTTP.Types (hContentType, status200, status304, status404)
+import Network.HTTP.Types.Header (hETag, hIfNoneMatch)
+import Network.Wai (Application, rawPathInfo, requestHeaders, responseLBS)
+import Network.Wai.Handler.Warp (testWithApplication)
+
+import Ecluse.BenchLoad.Error (benchFail)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
+import Ecluse.Core.Mirror.State (encodeProjectRecord, extendProjectRecord, stateTarget)
+import Ecluse.Core.Mirror.State.Internal (projectKey, retainVerifiedIdentity)
+import Ecluse.Core.Package (Artifact (artUrl), PackageInfo (infoVersions), renderPackageName)
+import Ecluse.Core.Registry (RegistryResponse (..))
+import Ecluse.Core.Registry.CachedDocument (cargoCached)
+import Ecluse.Core.Registry.Cargo.Discovery (parseCargoDiscovery)
+import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
+import Ecluse.Core.Registry.Cargo.Metadata (cargoRead, selectCargoVersionDoc)
+import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts)
+import Ecluse.Core.Registry.Metadata (Manifest (..), VersionDoc (VersionDoc))
+import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (CargoMirrorRead), checkedMirrorInventory, expectedArtifact, inventoryFiles, verifyMirrorBytes)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit, MirrorArtifactBodyLimit), Limits (maxMetadataBytes, maxMirrorArtifactBytes, progressFloor), defaultLimits, ecosystemArtifactAuthorities)
+import Ecluse.Core.Version (mkVersion)
+import Ecluse.Test.Corpus (CaptureUpstream (CaptureUpstream), CorpusPackage (cpPackage), cargoCorpusPackages)
+import Ecluse.Test.Deadline (withExchangeClient)
+import Ecluse.Test.Package (hexSha256Of)
+import Ecluse.Test.Registry.Cargo.Fixtures (cargoShard)
+import Ecluse.Test.Registry.Cargo.Reference (IndexLine (indexValue), referenceIndex)
+import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, fetchTestBody)
+
+-- | Prepare records before proxy boot. Unmatched private records never acquire managed status.
+withCopyState :: Int -> Int -> Int -> Text -> (Int -> IO a) -> IO a
+withCopyState latency privatePort publicPort bucket use = do
+    records <- withExchangeClient (newManager defaultManagerSettings) $ \client -> do
+        config <- fetch client (MetadataBodyLimit 65536) (publicBase <> "/config.json")
+        discovery <- either (benchFail . show) pure (parseCargoDiscovery (ecosystemArtifactAuthorities cargoArtifactHosts) publicBase (responseBody config))
+        fmap Map.fromList . fmap catMaybes $ forM cargoCorpusPackages $ \package -> do
+            let name = cpPackage package
+                path = "/" <> cargoShard (renderPackageName name)
+            private <- fetch client (MetadataBodyLimit (maxMetadataBytes defaultLimits)) (privateBase <> path)
+            public <- fetch client (MetadataBodyLimit (maxMetadataBytes defaultLimits)) (publicBase <> path)
+            case (responseStatusCode private, responseStatusCode public) of
+                (404, _) -> pure Nothing
+                (_, 404) -> pure Nothing
+                (200, 200) -> do
+                    targetRows <- either benchFail pure (nativeRows (responseBody private))
+                    source <- captureManifest (cargoRead discovery) (CaptureUpstream publicBase (ecosystemArtifactAuthorities cargoArtifactHosts)) name [responseBody public] >>= either (benchFail . show) pure
+                    record <- foldM (retain client name targetRows source) Nothing (Map.toList (infoVersions (manifestInfo source)))
+                    traverse
+                        ( \value -> do
+                            body <- either (benchFail . show) pure (encodeProjectRecord defaultLimits value)
+                            let key = encodeUtf8 ("/" <> bucket <> "/" <> projectKey target name <> "/project.json")
+                            pure (key, body)
+                        )
+                        record
+                statuses -> benchFail ("Cargo copy-state preparation received HTTP " <> show statuses)
+    testWithApplication (pure (stateApp latency records)) use
+  where
+    publicBase = "http://localhost:" <> show publicPort
+    privateBase = "http://localhost:" <> show privatePort
+    target = stateTarget ("https://localhost:" <> show privatePort)
+    fetch client bound url = do
+        request <- parseRequest (toString url)
+        fetchTestBody client (progressFloor defaultLimits) bound request >>= either (benchFail . show) pure
+    retain client name targetRows source previous (rawVersion, details) = do
+        let version = mkVersion Cargo rawVersion
+        selected <- maybe (benchFail "Cargo source has no selected native row") pure (selectCargoVersionDoc version (manifestRaw source))
+        document <- maybe (benchFail "Cargo source selection lost native coordinates") pure (snd cargoCached selected)
+        case cargoRecords document of
+            [(_, Object fields)] | Map.lookup rawVersion targetRows == Just [fields] -> do
+                inventory <- either (benchFail . show) pure (checkedMirrorInventory name version (VersionDoc details (Just selected)) (CargoMirrorRead document))
+                verified <- forM (toList (inventoryFiles inventory)) $ \file -> do
+                    path <- maybe (benchFail "Cargo relay source archive escaped its owned origin") pure (T.stripPrefix publicBase (artUrl (expectedArtifact file)))
+                    bytes <- fetch client (MirrorArtifactBodyLimit (maxMirrorArtifactBytes defaultLimits)) (privateBase <> path)
+                    unless (responseStatusCode bytes == 200) (benchFail "Cargo copy-state target archive is absent")
+                    either (benchFail . show) pure (verifyMirrorBytes file (responseBody bytes))
+                record <- either (benchFail . show) pure (extendProjectRecord defaultLimits target inventory previous)
+                Just <$> foldM (\current proof -> either (benchFail . show) pure (retainVerifiedIdentity version proof current)) record verified
+            _ | Map.member rawVersion targetRows -> benchFail "Cargo private-copy row differs from its owned source"
+            _ -> pure previous
+
+nativeRows :: ByteString -> Either Text (Map Text [Object])
+nativeRows bytes = Map.fromListWith (<>) <$> traverse row (referenceIndex bytes)
+  where
+    row line = do
+        fields <- indexValue line
+        version <- case KeyMap.lookup "vers" fields of
+            Just (String value) -> Right value
+            _ -> Left "Cargo private index has no raw version"
+        pure (version, [fields])
+
+stateApp :: Int -> Map ByteString ByteString -> Application
+stateApp latency records request respond = do
+    when (latency > 0) (threadDelay latency)
+    respond $ case Map.lookup (rawPathInfo request) records of
+        Nothing -> responseLBS status404 [(hContentType, "application/xml")] "<Error><Code>NoSuchKey</Code></Error>"
+        Just body
+            | lookup hIfNoneMatch (requestHeaders request) == Just (revision body) -> responseLBS status304 [(hETag, revision body)] ""
+            | otherwise -> responseLBS status200 [(hETag, revision body), (hContentType, "application/json")] (fromStrict body)
+  where
+    revision body = "\"" <> encodeUtf8 (hexSha256Of body) <> "\""

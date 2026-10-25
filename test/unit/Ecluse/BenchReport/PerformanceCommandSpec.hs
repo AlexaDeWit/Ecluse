@@ -31,5 +31,13 @@ spec = describe "independent conditions" $ do
         for_ ["worker-mirroring", "mirror-native-baseline", "mirror-managed-warm", "mirror-managed-revision"] $ \scenario ->
             for_ ["loaded", "concurrencyOne"] $ \whichPass ->
                 poRows obligation `shouldSatisfy` elem ("pypi/" <> scenario <> "/" <> whichPass)
+    it "requires every native Cargo capture and allocation leg independently" $ do
+        let conditions = Map.fromList [("compiler", "declared"), ("optimisation", "-O1"), ("profiling", "off")]
+        obligation <- expectRight (compileObligation "allocation" "ecosystem-cargo" conditions)
+        poRows obligation
+            `shouldMatchList` [ "cargo/" <> package <> "/" <> leg
+                              | package <- ["tokio", "windows", "aws-sdk-ec2"]
+                              , leg <- ["full", "singleVersion", "fullShippedAdvisories", "fullAllAdvisoryRules"]
+                              ]
     it "rejects a missing measurement declaration" $
         compileObligation "allocation" "ecosystem-npm" Map.empty `shouldSatisfy` isLeft

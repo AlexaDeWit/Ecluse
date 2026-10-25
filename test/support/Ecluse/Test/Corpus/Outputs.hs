@@ -2,10 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The typed facts, served documents, ETags and single-version reads of each corpus capture, as
-byte lengths and SHA-256 digests. @core/test/unit/fixtures/corpus-outputs.tsv@ records them, so a
-change to how a read holds its result must reproduce each output byte for byte.
--}
+-- | Frozen corpus facts and rendered bytes record output changes independently from timing.
 module Ecluse.Test.Corpus.Outputs (
     CorpusRead (..),
     captureOutputs,
@@ -32,7 +29,6 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Filter (restrictToSurvivors)
 import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource), mergePackuments)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble, metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, weighCachedDoc)
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError, VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
@@ -42,13 +38,14 @@ import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage), cpName, syntheticProxyBase)
 import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, captureVersion)
+import Ecluse.Test.Registry.Metadata.Rendering (MetadataRendering (metadataAssemble, metadataSerialise))
 
 -- | One ecosystem's reads of a capture, bound to the upstream it was captured from.
 data CorpusRead = CorpusRead
     { crUpstream :: CaptureUpstream
     , crRead :: EcosystemRead
     -- ^ The held-body reader, with origin discovery already fixed by the fixture.
-    , crMetadata :: AdapterMetadata
+    , crMetadata :: MetadataRendering
     -- ^ Assembly and serialisation of the capture's admitted records.
     , crVersionReads :: Either MetadataError VersionRead -> CachedDoc -> Version -> [(Text, LByteString)]
     -- ^ Labelled outputs of one version's selected read, beside the full read's document.
@@ -56,9 +53,7 @@ data CorpusRead = CorpusRead
     -- ^ Labelled outputs of any other read of the whole capture.
     }
 
-{- | One tab-separated line per output of the production reads: capture, label, length and SHA-256.
-The survivor sets are all versions, the least key and the greatest, each served alone and merged.
--}
+-- | Record byte lengths and SHA-256 for all versions and both end keys, served alone and merged.
 captureOutputs :: CorpusRead -> CorpusPackage -> ByteString -> IO (Either Text [Text])
 captureOutputs corpus package raw =
     captureManifest (crRead corpus) (crUpstream corpus) name [raw] >>= \case

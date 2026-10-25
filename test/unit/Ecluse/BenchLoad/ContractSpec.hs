@@ -8,6 +8,7 @@ module Ecluse.BenchLoad.ContractSpec (spec) where
 import Data.Set qualified as Set
 import Test.Hspec
 
+import Ecluse.BenchLoad.Cargo (cargoFixture)
 import Ecluse.BenchLoad.Contract
 import Ecluse.BenchLoad.Floors (Pass (ConcurrencyOne, Loaded))
 import Ecluse.BenchLoad.Harness (Scenario (scenarioName), UpstreamFixture (..))
@@ -16,7 +17,7 @@ import Ecluse.BenchLoad.Pod (PodShape (Unlimited), scheduledPodShapes)
 import Ecluse.BenchLoad.PyPI (pypiFixture)
 import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, fixtures)
 import Ecluse.BenchLoad.Support (twoCores)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 
 -- | Audit real registrations without booting a proxy or starting a measurement.
 spec :: Spec
@@ -40,6 +41,12 @@ spec = describe "canonical load contract" $ do
         loadCoverageGaps FullLoad PyPI (names pypiFixture) `shouldBe` []
         loadCoverageGaps FullLoad PyPI (filter (/= "worker-mirroring") (names pypiFixture))
             `shouldBe` [MissingLoadScenario MirrorWorker "worker-mirroring"]
+    it "requires the complete Cargo native reads and worker measurement" $ do
+        loadCoverageGaps FullLoad Cargo (names cargoFixture) `shouldBe` []
+        loadCoverageGaps FullLoad Cargo (filter (/= "worker-mirroring") (names cargoFixture))
+            `shouldBe` [MissingLoadScenario MirrorWorker "worker-mirroring"]
+        loadCoverageGaps ReadLoadFoundation Cargo ("wheel-hot-path" : filter (/= "crate-hot-path") (names cargoFixture))
+            `shouldBe` [MissingLoadScenario PrivateArtifact "crate-hot-path"]
     it "rejects duplicated extensions as well as duplicated read laws" $
         loadCoverageGaps FullLoad Npm (names npmFixture <> ["worker-mirroring"])
             `shouldBe` [DuplicateLoadScenario "worker-mirroring"]
@@ -50,10 +57,10 @@ spec = describe "canonical load contract" $ do
         loadCoverageGaps FullLoad RubyGems [] `shouldBe` [NoLoadProtocol RubyGems]
     it "requires the exact passes the full profile executes under each shape" $
         for_ scheduledPodShapes $ \shape ->
-            fmap (Set.fromList . map snd) ((<>) <$> requiredLoadPasses FullLoad Npm shape <*> requiredLoadPasses FullLoad PyPI shape)
+            fmap (Set.fromList . map snd . concat) (traverse (\ecosystem -> requiredLoadPasses FullLoad ecosystem shape) [Npm, PyPI, Cargo])
                 `shouldBe` Right (checkedCounts shape)
     it "keeps optional variants out of full obligations while retaining private-copy controls" $
-        for_ [Npm, PyPI] $ \ecosystem ->
+        for_ [Npm, PyPI, Cargo] $ \ecosystem ->
             case requiredLoadPasses FullLoad ecosystem twoCores of
                 Left gaps -> expectationFailure (toString (show gaps :: Text))
                 Right passes -> do
@@ -62,7 +69,7 @@ spec = describe "canonical load contract" $ do
                     for_ [PrivateCopyQuarter, PrivateCopyWhole, PatternCiFleet] $ \law ->
                         map fst passes `shouldSatisfy` elem law
     it "retains both worker passes only under the unlimited shape" $
-        for_ [(Npm, "npm/worker-mirroring"), (PyPI, "pypi/worker-mirroring")] $ \(ecosystem, key) -> do
+        for_ [(Npm, "npm/worker-mirroring"), (PyPI, "pypi/worker-mirroring"), (Cargo, "cargo/worker-mirroring")] $ \(ecosystem, key) -> do
             fmap (filter ((== MirrorWorker) . fst)) (requiredLoadPasses FullLoad ecosystem Unlimited)
                 `shouldBe` Right [(MirrorWorker, (key, Loaded)), (MirrorWorker, (key, ConcurrencyOne))]
             fmap (filter ((== MirrorWorker) . fst)) (requiredLoadPasses FullLoad ecosystem twoCores) `shouldBe` Right []

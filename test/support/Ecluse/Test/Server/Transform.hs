@@ -24,9 +24,9 @@ import UnliftIO.Exception (throwIO)
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName, artHashes, pkgArtifacts)
 import Ecluse.Core.Package.Filter (fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource), SourceId, mergePackuments)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble, metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
+import Ecluse.Test.Registry.Metadata.Rendering (MetadataRendering (metadataAssemble, metadataSerialise))
 
 import Ecluse.Core.Rules (RuleDeps)
 import Ecluse.Core.Rules.Types (EvalContext, PrecededRule)
@@ -45,18 +45,18 @@ serveTransformSize ctx input = fromIntegral . BSL.length <$> transformBody inert
     assemble sources plan base = encode (assembleMergedPackument syntheticProxyBase sources plan base)
 
 -- | Transform an adapter's cached document using the supplied fetch snapshot and projection.
-serveDocumentBytes :: AdapterMetadata -> EvalContext -> (Snapshot CachedDoc, PackageInfo) -> IO ByteString
+serveDocumentBytes :: MetadataRendering -> EvalContext -> (Snapshot CachedDoc, PackageInfo) -> IO ByteString
 serveDocumentBytes adapter ctx input = BSL.toStrict <$> serveDocumentBody inertRuleDeps permissiveAgeRules adapter ctx input
 
 -- | Force the served body without adding a strict-buffer copy to the measured transform.
-serveDocumentSize :: AdapterMetadata -> EvalContext -> (Snapshot CachedDoc, PackageInfo) -> IO Int
+serveDocumentSize :: MetadataRendering -> EvalContext -> (Snapshot CachedDoc, PackageInfo) -> IO Int
 serveDocumentSize = serveDocumentSizeUnder inertRuleDeps permissiveAgeRules
 
 -- | 'serveDocumentSize' with the rule phase's dependencies and policy supplied.
-serveDocumentSizeUnder :: RuleDeps -> [PrecededRule] -> AdapterMetadata -> EvalContext -> (Snapshot CachedDoc, PackageInfo) -> IO Int
+serveDocumentSizeUnder :: RuleDeps -> [PrecededRule] -> MetadataRendering -> EvalContext -> (Snapshot CachedDoc, PackageInfo) -> IO Int
 serveDocumentSizeUnder deps policy adapter ctx input = fromIntegral . BSL.length <$> serveDocumentBody deps policy adapter ctx input
 
-serveDocumentBody :: RuleDeps -> [PrecededRule] -> AdapterMetadata -> EvalContext -> (Snapshot CachedDoc, PackageInfo) -> IO LByteString
+serveDocumentBody :: RuleDeps -> [PrecededRule] -> MetadataRendering -> EvalContext -> (Snapshot CachedDoc, PackageInfo) -> IO LByteString
 serveDocumentBody deps policy adapter ctx input = transformBody deps policy (Right BSL.empty) assemble ctx input >>= either throwIO pure
   where
     assemble sources plan base =

@@ -37,14 +37,16 @@ import Network.Wai (Application)
 import Network.Wai.Handler.Warp (testWithApplication)
 import UnliftIO (evaluate)
 
+import Ecluse.BenchLoad.Cargo.CopyState (withCopyState)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttp), LoadKnobs (..), Target, proxied, urlLoad)
 import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
-import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, ProxySettings (..), proxyPort, proxySettings, withProxyProcess)
-import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Package (PackageName)
+import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, ProxySettings (..), mirrorStateBucket, proxyPort, proxySettings, withProxyProcess)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
+import Ecluse.Core.Package (PackageName, pkgEcosystem)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName)
 import Ecluse.Test.Corpus qualified as Corpus
+import Ecluse.Test.Corpus.Cargo (encodeCargoValues)
 import Ecluse.Test.Wai (rebaseAuthority)
 
 -- | Boot a proxy over two stubs with the given cache TTL and optional entry bound.
@@ -61,10 +63,15 @@ withProxyPortsConfigured :: Ecosystem -> LoadKnobs -> (Int -> Int -> IO (ProxySe
 withProxyPortsConfigured ecosystem knobs configure privateApp publicApp mkMix body =
     testWithApplication (pure privateApp) $ \privatePort ->
         testWithApplication (pure publicApp) $ \publicPort -> do
-            adjust <- configure privatePort publicPort
-            withProxyProcess (adjust knobSettings) publicPort (Just privatePort) $ \proxy ->
-                body proxy (mkMix (proxyPort proxy))
+            withState privatePort publicPort $ \nativeState -> do
+                adjust <- configure privatePort publicPort
+                let settings = adjust knobSettings
+                withProxyProcess settings{psMirrorStatePort = psMirrorStatePort settings <|> nativeState} publicPort (Just privatePort) $ \proxy ->
+                    body proxy (mkMix (proxyPort proxy))
   where
+    withState privatePort publicPort use
+        | ecosystem == Cargo = withCopyState (lkUpstreamLatencyMicros knobs) privatePort publicPort mirrorStateBucket (use . Just)
+        | otherwise = use Nothing
     knobSettings =
         (proxySettings ecosystem 60)
             { psServeMaxInFlight = lkServeMaxInFlight knobs
@@ -97,7 +104,9 @@ loadCorpusCuts cut packages = Map.fromList <$> traverse load packages
     load cp = do
         bytes <- readCapture cp
         document <- either (\reason -> benchFail ("bench-load: cannot cut " <> toText (cpPath cp) <> ": " <> toText reason)) pure (cut (cpPackage cp) (toStrict bytes))
-        body <- evaluate (toStrict (encode document))
+        body <- case pkgEcosystem (cpPackage cp) of
+            Cargo -> either benchFail evaluate (encodeCargoValues document)
+            _ -> evaluate (toStrict (encode document))
         pure (cpName cp, toLazy body)
 
 -- | Each package's URL on the proxy's port, repeated by its weight.

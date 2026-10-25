@@ -112,13 +112,13 @@ spec = do
                 Just (Left failure) -> expectationFailure failure
                 Just (Right peaks) -> do
                     record <- requireResidency (pkgEcosystem (cpPackage package))
-                    let derived = fullReadCharge (residencyCalibration record)
+                    let derived = fullReadCharge <$> residencyCalibration record
                         observed = fromInteger (rise listingReadPeak listingBaseline peaks) / fromIntegral (listingSourceBytes peaks) :: Double
                     reportListing
                         "metadata-merge"
                         [ "shape" .= (show shape :: Text)
                         , "derived_full_read_permille" .= derived
-                        , "full_read_headroom_per_source_byte" .= (fromInteger derived / 1000 - observed)
+                        , "full_read_headroom_per_source_byte" .= fmap (\charge -> fromInteger charge / 1000 - observed) derived
                         ]
                         package
                         peaks

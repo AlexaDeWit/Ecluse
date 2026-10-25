@@ -29,18 +29,18 @@ spec = describe "load profiles" $ do
     it "retains both cache controls and every managed PyPI read in read paths" $ do
         let keys = selected ReadPaths
         keys `shouldContain` ["npm/merge-cold", "npm/merge-cold-advisories", "npm/heavy-private"]
-        for_ ["npm", "pypi"] $ \ecosystem ->
+        for_ ["npm", "pypi", "cargo"] $ \ecosystem ->
             for_ ["assembled-response-hit", "revalidate-not-modified", "cache-fits-large", "cache-evicts-large"] $ \name ->
                 keys `shouldSatisfy` elem (ecosystem <> "/" <> name)
         keys `shouldContain` ["pypi/mirror-native-baseline", "pypi/mirror-managed-warm", "pypi/mirror-managed-revision"]
-        length keys `shouldBe` 17
+        length keys `shouldBe` 24
     it "keeps slow clients, bursts under private load and the full admission ramp" $
-        for_ ["npm", "pypi"] $ \ecosystem ->
+        for_ ["npm", "pypi", "cargo"] $ \ecosystem ->
             [name | key <- selected MemoryAdmission, Just name <- [T.stripPrefix (ecosystem <> "/") key]]
                 `shouldMatchList` ["heavy-private", "slow-readers", "herd", "herd-under-heavy-private", "warm-under-cold", "ramp"]
     it "keeps private, public onboarding and relay-ceiling artifact comparisons" $
         selected Artifacts
-            `shouldMatchList` ["npm/tarball-hot-path", "npm/tarball-onboarding", "npm/tarball-ceiling", "pypi/wheel-hot-path", "pypi/wheel-onboarding", "pypi/wheel-ceiling"]
+            `shouldMatchList` ["npm/tarball-hot-path", "npm/tarball-onboarding", "npm/tarball-ceiling", "pypi/wheel-hot-path", "pypi/wheel-onboarding", "pypi/wheel-ceiling", "cargo/crate-hot-path", "cargo/crate-onboarding", "cargo/crate-ceiling"]
     it "resolves every selected row under the manual default shape without duplicates" $
         for_ [ReadPaths, MemoryAdmission, Artifacts] $ \profile -> do
             let keys = selected profile

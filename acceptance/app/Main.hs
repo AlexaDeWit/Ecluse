@@ -44,7 +44,6 @@ import Ecluse.Acceptance (
  )
 import Ecluse.Acceptance.Evidence (capturesEvidence, liveEvidence)
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Metadata (Manifest (manifestDigest, manifestInfo, manifestRaw))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
@@ -139,7 +138,8 @@ fetchDocument client ecosystem pkg = case liveRequest ecosystem pkg of
 liveRequest :: EcosystemBench -> PackageName -> Either Text Request
 liveRequest ecosystem name = do
     origin <- mkRegistryUrl (ebOrigin ecosystem)
-    first show (erRequest (metadataRead (ebMetadata ecosystem)) (mkBaseRequest origin) Nothing name)
+    reader <- first show (ebReader ecosystem)
+    first show (erRequest reader (mkBaseRequest origin) Nothing name)
 
 outcomeFrom :: Text -> Maybe Double -> Either Text (Int, [(Leg, Measurement)]) -> PackageOutcome
 outcomeFrom name upstreamMs = \case

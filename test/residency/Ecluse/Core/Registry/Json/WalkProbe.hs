@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Live bytes a token walk holds while it reads a body, sampled between the body's chunks.
-module Ecluse.Core.Registry.Json.WalkProbe (heldDuring, heldWritingDuring, allowance) where
+module Ecluse.Core.Registry.Json.WalkProbe (heldDuring, heldWritingDuring, heldReading, allowance) where
 
 import Control.Monad.ST (RealWorld, ST, stToIO)
 import Data.ByteString qualified as BS
@@ -24,6 +24,7 @@ heldDuring walk = heldReading (`readJsonWalk` walk)
 heldWritingDuring :: ST RealWorld (Cursor -> ST RealWorld (Steps (ST RealWorld) s)) -> ByteString -> IO Integer
 heldWritingDuring setup = heldReading $ \bound next -> stToIO setup >>= \walk -> readJsonWalkST stToIO bound walk next
 
+-- | Sample the same chunk boundaries for a format-specific body reader.
 heldReading :: (BodyLimit -> IO ByteString -> IO result) -> ByteString -> IO Integer
 heldReading readBody body = do
     enabled <- getRTSStatsEnabled

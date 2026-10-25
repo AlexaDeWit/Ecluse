@@ -96,7 +96,7 @@ generatorTests ecosystem =
         , testCase "rewrites every artifact onto the proxy origin" $ do
             input@(_, original) <- expectRight (syntheticInput ecosystem sampleCount)
             bytes <- serveDocumentBytes (ebMetadata ecosystem) benchEvalContext input
-            (served, _) <- expectRight (ebProject ecosystem name bytes)
+            (served, _) <- expectRight (ebProjectServed ecosystem name bytes)
             let artifacts info = concatMap (toList . pkgArtifacts) (Map.elems (infoVersions info))
             Map.size (infoVersions served) @?= sampleCount
             length (artifacts served) @?= length (artifacts original)

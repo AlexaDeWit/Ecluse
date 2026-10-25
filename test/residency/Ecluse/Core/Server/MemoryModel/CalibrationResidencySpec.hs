@@ -9,6 +9,7 @@ import Data.Ratio ((%))
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Server.MemoryModel.Calibration
@@ -39,8 +40,8 @@ spec = do
             marginCharge (outputMaximum pypiCalibration) `shouldBe` 1900
         for_ [(Npm, npmCalibration), (PyPI, pypiCalibration)] $ \(ecosystem, calibration) ->
             it (show ecosystem <> " matches its adapter") $ do
-                record <- requireResidency ecosystem
-                let factors = metadataChargeFactors (residencyMetadata record)
+                adapter <- maybe (fail "missing registered adapter") pure (adapterFor ecosystem)
+                let factors = metadataChargeFactors (adapterMetadata adapter)
                 toInteger (cfFullReadPermille factors) `shouldBe` fullReadCharge calibration
                 toInteger (cfOutputPermille factors) `shouldBe` marginCharge (outputMaximum calibration)
         it "pins the kept charges" $ do
@@ -49,4 +50,5 @@ spec = do
         for_ [Npm, PyPI] $ \ecosystem ->
             it (show ecosystem <> " keeps its adapter's kept charge") $ do
                 record <- requireResidency ecosystem
-                toInteger (cfKeptPermille (metadataChargeFactors (residencyMetadata record))) `shouldBe` keptCharge (residencyFigures record)
+                adapter <- maybe (fail "missing registered adapter") pure (adapterFor ecosystem)
+                toInteger (cfKeptPermille (metadataChargeFactors (adapterMetadata adapter))) `shouldBe` keptCharge (residencyFigures record)

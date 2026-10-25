@@ -23,8 +23,10 @@ extra-source-files:
   bench/corpus/advisories/epss.csv
   bench/corpus/advisories/npm/*.json
   bench/corpus/advisories/pypi/*.json
+  bench/corpus/advisories/cargo/*.json
   bench/corpus/npm/*.json
   bench/corpus/pypi/*.json
+  bench/corpus/cargo/*.index.ndjson
   bench/corpus/pins.json
   bench/load/floors.json
   core/test/unit/fixtures/npm/*.json
@@ -836,6 +838,7 @@ library ecluse-test-support
     Ecluse.Test.Corpus.Npm
     Ecluse.Test.Corpus.Outputs
     Ecluse.Test.Corpus.PyPI
+    Ecluse.Test.Corpus.Cargo
     Ecluse.Test.Corpus.Subset
     Ecluse.Test.Credential
     Ecluse.Test.Cve
@@ -877,6 +880,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.Packed
     Ecluse.Test.Registry.Shape
     Ecluse.Test.Registry.Metadata.Fetch
+    Ecluse.Test.Registry.Metadata.Rendering
     Ecluse.Test.Registry.Metadata.Projection
     Ecluse.Test.Registry.WireSupport
     Ecluse.Test.Registry.PyPI
@@ -1095,6 +1099,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPISmokeSpec
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
+    Ecluse.Core.Registry.Cargo.ReaderResidencySpec
     Ecluse.Core.Registry.Json.WalkProbe
     Ecluse.Core.Server.MemoryModel.HeapSample
     Ecluse.Core.StreamBench.Sink
@@ -1259,6 +1264,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Cargo.ProjectionSpec
     Ecluse.Core.Registry.Cargo.DocumentSpec
     Ecluse.Core.Registry.Cargo.MetadataSpec
+    Ecluse.Core.Registry.Cargo.StreamingSpec
     Ecluse.Core.Registry.Cargo.ServingSpec
     Ecluse.Core.Registry.Cargo.ExecutionSpec
     Ecluse.Core.Registry.Cargo.ArchiveSpec
@@ -1482,6 +1488,11 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.Npm
     Ecluse.BenchLoad.Worker
     Ecluse.BenchLoad.PyPI.Worker
+    Ecluse.BenchLoad.Cargo
+    Ecluse.BenchLoad.Cargo.CopyState
+    Ecluse.BenchLoad.Cargo.Worker
+    Ecluse.BenchLoad.Cargo.WorkerFixture
+    Ecluse.BenchLoad.WorkerState
     Ecluse.BenchLoad.PyPI.WorkerFixture
     Ecluse.BenchLoad.PatternScenario
     Ecluse.BenchLoad.PrivateCopy
@@ -1853,6 +1864,7 @@ test-suite ecluse-residency
     Ecluse.Core.Registry.MetadataResidencySpec
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
+    Ecluse.Core.Registry.Cargo.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ArchiveResidencySpec
     Ecluse.Core.Server.MemoryModel.Calibration
     Ecluse.Core.Server.MemoryModel.CalibrationResidencySpec
@@ -2293,6 +2305,11 @@ executable bench-load
     Ecluse.BenchLoad.Npm
     Ecluse.BenchLoad.Worker
     Ecluse.BenchLoad.PyPI.Worker
+    Ecluse.BenchLoad.Cargo
+    Ecluse.BenchLoad.Cargo.CopyState
+    Ecluse.BenchLoad.Cargo.Worker
+    Ecluse.BenchLoad.Cargo.WorkerFixture
+    Ecluse.BenchLoad.WorkerState
     Ecluse.BenchLoad.PyPI.WorkerFixture
     Ecluse.BenchLoad.Oha
     Ecluse.BenchLoad.Placement

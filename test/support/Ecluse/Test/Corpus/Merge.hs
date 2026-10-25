@@ -2,9 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The private and public documents of a two-source listing, drawn from one corpus capture in a
-chosen shape, for the residency probe.
--}
+-- | Corpus merge shapes preserve native records for the existing residency sampler.
 module Ecluse.Test.Corpus.Merge (
     MergeShape (..),
     realisticShape,
@@ -19,8 +17,10 @@ import Data.Map.Strict qualified as Map
 import Data.Ratio ((%))
 import Data.Set qualified as Set
 
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (PackageInfo (infoName, infoVersions), pkgEcosystem)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage))
+import Ecluse.Test.Corpus.Cargo (decodeCargoValues, encodeCargoValues)
 import Ecluse.Test.Corpus.Subset (byPublishTime, newestVersions, oldestVersions)
 import Ecluse.Test.EcosystemBench (EcosystemBench (ebHeavyBase, ebKeepVersions, ebTreeRead), ecosystemBenchFor)
 
@@ -51,7 +51,7 @@ realisticShape = \case
     HeavyOldBase -> False
 
 -- | One side of a merge: the capture as captured, or a document rewritten from it.
-data MergeDocument = Captured | Rewritten Value
+data MergeDocument = Captured | Rewritten Value | RewrittenNative ByteString
 
 -- | 'mergeDocuments' for a corpus capture's bytes, projected under the default limits.
 captureDocuments :: MergeShape -> CorpusPackage -> ByteString -> Either String (MergeDocument, MergeDocument)
@@ -76,7 +76,9 @@ mergeDocuments shape info bytes = do
         HeavyBase -> privateOnly (ebHeavyBase ecosystem (BS.length bytes `div` 2) . ebKeepVersions ecosystem info (everyTenth (byPublishTime info)))
         HeavyOldBase -> privateOnly (ebHeavyBase ecosystem (BS.length bytes `div` 2) . ebKeepVersions ecosystem info (oldestVersions (1 % 10) info))
       where
-        rewrite keep = Rewritten . keep <$> eitherDecodeStrict bytes
+        rewrite keep = case pkgEcosystem (infoName info) of
+            Cargo -> RewrittenNative <$> (first toString (decodeCargoValues bytes) >>= first toString . encodeCargoValues . keep)
+            _ -> Rewritten . keep <$> eitherDecodeStrict bytes
         both private public = (,) <$> rewrite (ebKeepVersions ecosystem info private) <*> rewrite (ebKeepVersions ecosystem info public)
         privateOnly keep = (,Captured) <$> rewrite keep
         byKey keeps = Set.fromList [key | (position, key) <- zip [0 :: Int ..] (Map.keys (infoVersions info)), keeps position]

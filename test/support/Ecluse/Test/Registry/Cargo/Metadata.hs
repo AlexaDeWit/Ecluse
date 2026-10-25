@@ -40,7 +40,7 @@ cargoTestRecord version = Fixtures.cargoIndexRecord (Fixtures.minimalCargoReleas
 
 -- | A fixed anonymous source with an independently declared download authority.
 cargoTestDiscovery :: Either MetadataError CargoDiscovery
-cargoTestDiscovery = parseCargoDiscovery (ecosystemArtifactAuthorities cargoArtifactHosts) "https://index.crates.io" (Fixtures.cargoDiscovery "https://static.crates.io/crates/{crate}/{crate}-{version}.crate" Nothing False)
+cargoTestDiscovery = parseCargoDiscovery (ecosystemArtifactAuthorities cargoArtifactHosts) "https://index.crates.io" "{\"dl\":\"https://static.crates.io/crates/{crate}/{crate}-{version}.crate\"}"
 
 -- | Run the real framing and body-bound driver with a deterministic test-only intern table.
 readCargoChunks :: Limits -> CargoRead -> [ByteString] -> IO (Either LimitError (StreamResult CargoIndexResult))

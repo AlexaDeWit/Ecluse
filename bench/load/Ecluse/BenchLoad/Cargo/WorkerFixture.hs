@@ -1,0 +1,153 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
+-- | Native Cargo archives, index rows and independent upload observations for worker load.
+module Ecluse.BenchLoad.Cargo.WorkerFixture (
+    WorkerFixture (..),
+    newWorkerFixture,
+    resetWorkerFixture,
+    sourceApp,
+    targetApp,
+    stateApp,
+    fixturePackage,
+    fixtureVersion,
+    fixtureTrigger,
+) where
+
+import Codec.Compression.GZip qualified as GZip
+import Data.Aeson (Value (Object), object)
+import Data.ByteString.Lazy qualified as LBS
+import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Network.HTTP.Types (hContentType, status200, status400, status404, status503)
+import Network.Wai (Application, pathInfo, requestMethod, responseLBS, strictRequestBody)
+
+import Ecluse.BenchLoad.Fixture (artifactBytes, delayUpstream)
+import Ecluse.BenchLoad.WorkerState (stateAppFor)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
+import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Test.Package (hexSha256Of)
+import Ecluse.Test.Registry.Cargo.Fixtures (CargoCrate (..), CargoRelease (..), cargoDiscovery, cargoIndex, cargoShard, cargoUploadMetadata)
+import Ecluse.Test.Registry.Cargo.Reference (UploadFrame (..), referenceUpload)
+import Ecluse.Test.Registry.PyPI.Archive (tarBytes)
+import Ecluse.Test.Wai (selfBaseUrl)
+
+-- | Each run owns its complete target copy and conditional durable object state.
+data WorkerFixture = WorkerFixture
+    { wfFiles :: Map Text ByteString
+    , wfRelease :: CargoRelease
+    , wfTarget :: IORef (Map Text ByteString)
+    , wfObjects :: IORef (Map ByteString (ByteString, ByteString))
+    , wfCounts :: IORef (Map Text Int)
+    , wfReject :: IORef Bool
+    }
+
+-- | Package owned source bytes without executing the crate or a toolchain.
+newWorkerFixture :: Int -> IO WorkerFixture
+newWorkerFixture payloadBytes = do
+    archive <-
+        LBS.toStrict . GZip.compress
+            <$> tarBytes
+                [ ("example-1.0.0/Cargo.toml", encodeUtf8 manifest)
+                , ("example-1.0.0/README.md", readme)
+                , ("example-1.0.0/src/lib.rs", "pub fn marker() {}\n")
+                , ("example-1.0.0/data", LBS.toStrict (artifactBytes payloadBytes))
+                ]
+    let spec = CargoCrate "example" "1.0.0" "unused" [] (object []) (object []) []
+        release = CargoRelease spec archive (hexSha256Of archive) (decodeUtf8 readme)
+    WorkerFixture (Map.singleton fixtureTrigger archive) release <$> newIORef mempty <*> newIORef mempty <*> newIORef mempty <*> newIORef False
+  where
+    readme = "Owned Cargo worker load fixture\n"
+    manifest =
+        T.unlines
+            [ "[package]"
+            , "name = \"example\""
+            , "version = \"1.0.0\""
+            , "edition = \"2021\""
+            , "rust-version = \"1.74\""
+            , "authors = [\"Ecluse contributors\"]"
+            , "description = \"Owned Cargo registry contract fixture\""
+            , "license = \"MIT\""
+            , "readme = \"README.md\""
+            ]
+
+-- | Remove the archive and state together before each measured complete copy.
+resetWorkerFixture :: WorkerFixture -> IO ()
+resetWorkerFixture fixture = do
+    writeIORef (wfTarget fixture) mempty
+    writeIORef (wfObjects fixture) mempty
+    writeIORef (wfCounts fixture) mempty
+
+-- | The single native archive identifies the version trigger.
+fixtureTrigger :: Text
+fixtureTrigger = "example-1.0.0.crate"
+
+-- | The archive and index use one exact native identity.
+fixturePackage :: PackageName
+fixturePackage = mkPackageName Cargo Nothing "example"
+
+-- | The raw native version agrees with the packaged manifest.
+fixtureVersion :: Version
+fixtureVersion = mkVersion Cargo "1.0.0"
+
+-- | Discovery and complete index requests remain separate from archive reads.
+sourceApp :: Int -> WorkerFixture -> Application
+sourceApp latency fixture request respond = do
+    delayUpstream latency
+    case filter (not . T.null) (pathInfo request) of
+        ["config.json"] -> do
+            count fixture "source-discovery"
+            respond (responseLBS status200 [(hContentType, "application/json")] (fromStrict (cargoDiscovery (selfBaseUrl request <> "/crates/{crate}/{crate}-{version}.crate") Nothing False)))
+        segments | segments == T.splitOn "/" (cargoShard "example") -> do
+            count fixture "source-index"
+            respond (responseLBS status200 [(hContentType, "text/plain")] (fromStrict (cargoIndex [wfRelease fixture])))
+        ["crates", "example", filename] | Just bytes <- Map.lookup filename (wfFiles fixture) -> do
+            count fixture "source-file"
+            respond (responseLBS status200 [(hContentType, "application/octet-stream")] (fromStrict bytes))
+        _ -> respond (responseLBS status404 [] "missing")
+
+-- | Accept only native frames whose complete metadata and archive match the independent fixture.
+targetApp :: Int -> WorkerFixture -> Application
+targetApp latency fixture request respond = do
+    delayUpstream latency
+    case (requestMethod request, filter (not . T.null) (pathInfo request)) of
+        ("GET", ["config.json"]) -> do
+            count fixture "target-discovery"
+            respond (responseLBS status200 [(hContentType, "application/json")] (fromStrict (cargoDiscovery (selfBaseUrl request <> "/crates/{crate}/{crate}-{version}.crate") (Just (selfBaseUrl request)) False)))
+        ("GET", segments) | segments == T.splitOn "/" (cargoShard "example") -> do
+            count fixture "target-index"
+            files <- readIORef (wfTarget fixture)
+            respond (responseLBS status200 [(hContentType, "text/plain")] (fromStrict (cargoIndex [wfRelease fixture | files == wfFiles fixture])))
+        ("GET", ["crates", "example", filename]) -> do
+            files <- readIORef (wfTarget fixture)
+            respond $ maybe (responseLBS status404 [] "missing") (responseLBS status200 [] . fromStrict) (Map.lookup filename files)
+        ("PUT", ["api", "v1", "crates", "new"]) -> do
+            bytes <- LBS.toStrict <$> strictRequestBody request
+            reject <- readIORef (wfReject fixture)
+            case referenceUpload bytes of
+                Right uploaded
+                    | Object expected <- cargoUploadMetadata (wfRelease fixture)
+                    , uploadMetadata uploaded == expected
+                    , uploadArchive uploaded == releaseArchive (wfRelease fixture) -> do
+                        count fixture "upload-attempt"
+                        if reject
+                            then respond (responseLBS status503 [] "injected upload rejection")
+                            else do
+                                objects <- readIORef (wfObjects fixture)
+                                if Map.null objects
+                                    then respond (responseLBS status400 [] "upload preceded durable inventory")
+                                    else do
+                                        modifyIORef' (wfTarget fixture) (Map.insert fixtureTrigger (uploadArchive uploaded))
+                                        count fixture "upload"
+                                        respond (responseLBS status200 [(hContentType, "application/json")] "{\"ok\":true}")
+                _ -> respond (responseLBS status400 [] "Cargo upload fields or archive differ from the independent native fixture")
+        _ -> respond (responseLBS status404 [] "missing")
+
+-- | Reuse the same conditional object fixture as the existing PyPI worker row.
+stateApp :: Int -> WorkerFixture -> Application
+stateApp latency fixture = stateAppFor (wfObjects fixture) (wfCounts fixture) latency
+
+count :: WorkerFixture -> Text -> IO ()
+count fixture name = atomicModifyIORef' (wfCounts fixture) (\counts -> (Map.insertWith (+) name 1 counts, ()))

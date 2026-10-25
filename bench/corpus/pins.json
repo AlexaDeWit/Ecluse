@@ -1,5 +1,5 @@
 {
-  "_note": "Complete npm packuments and PyPI PEP 691 Simple JSON response bodies, preserved byte for byte including prereleases and registry metadata. pins and pypiPins identify workloads, not capture cutoffs. captures records each source, actual Content-Type, identity Content-Encoding, byte size, SHA-256 digest and UTC capture time. Capture paths are relative to this catalogue. Identity encoding makes these JSON entity bytes match the decompressed input measured by boundedRead, not compressed transport bytes. task gen-bench-corpus deliberately replaces snapshots. Committed bytes are the measurement authority. BENCH_CORPUS_VERIFY=1 checks them offline. Simple HTML and legacy PyPI project JSON are not benchmark inputs. smokeNames supplies live version-oracle names. Renovate does not update this catalogue.",
+  "_note": "Complete npm packuments, PyPI PEP 691 Simple JSON bodies and Cargo sparse LF records, preserved byte for byte including prereleases and registry metadata. pins, pypiPins and cargoPins identify workloads, not capture cutoffs. captures records each source, actual Content-Type, identity Content-Encoding, byte size, SHA-256 digest and UTC capture time. Capture paths are relative to this catalogue. Identity encoding makes these JSON entity bytes match the decompressed input measured by boundedRead, not compressed transport bytes. task gen-bench-corpus deliberately replaces snapshots. Committed bytes are the measurement authority. BENCH_CORPUS_VERIFY=1 checks them offline. Simple HTML and legacy PyPI project JSON are not benchmark inputs. smokeNames supplies live version-oracle names. Renovate does not update this catalogue.",
   "pins": {
     "lodash": "4.18.1",
     "request": "2.88.2",
@@ -156,11 +156,40 @@
         "sha256": "32251be3a0e6f09c3a2533f5d36dd3d9203ca2772b509ee93d0089cf8559368b",
         "capturedAt": "2026-09-20T02:01:49.938Z"
       }
+    },
+    "cargo": {
+      "tokio": {
+        "path": "cargo/tokio.index.ndjson",
+        "source": "https://index.crates.io/to/ki/tokio",
+        "mediaType": "text/plain",
+        "contentEncoding": "identity",
+        "bytes": 870666,
+        "sha256": "7d835ff2a881f2a69e7bfb3971acb4c93fe8455035912ea528e2e381af3e193c",
+        "capturedAt": "2026-10-25T18:19:28.410993Z"
+      },
+      "windows": {
+        "path": "cargo/windows.index.ndjson",
+        "source": "https://index.crates.io/wi/nd/windows",
+        "mediaType": "text/plain",
+        "contentEncoding": "identity",
+        "bytes": 1403289,
+        "sha256": "9481b1c16f863f8ab57e7d5378eb5feb27b64d64135a4017988672e387e9cb20",
+        "capturedAt": "2026-10-25T18:19:28.882629Z"
+      },
+      "aws-sdk-ec2": {
+        "path": "cargo/aws-sdk-ec2.index.ndjson",
+        "source": "https://index.crates.io/aw/s-/aws-sdk-ec2",
+        "mediaType": "text/plain",
+        "contentEncoding": "identity",
+        "bytes": 1427352,
+        "sha256": "9fb18c468017f34e2ffe2882c82a60dc62426a02882b32530aea80ea2092e4cd",
+        "capturedAt": "2026-10-25T18:19:29.316987Z"
+      }
     }
   },
   "advisories": {
-    "_note": "Every OSV record osv.dev listed against a corpus package, copied byte for byte from the osv.dev export's per-record objects, and the rows of the EPSS daily feed for their CVE aliases under the feed's two header lines. advisories/README.md carries their licences and attribution. The benchmark compiles them through the OSV compile path at run time, never fetches, and refuses a file whose size or SHA-256 differs from its record here. records pins the files by id, so a stray file cannot join the fixture.",
-    "source": "https://osv-vulnerabilities.storage.googleapis.com/{npm,PyPI}/<id>.json",
+    "_note": "Selected OSV records against corpus packages, copied byte for byte from the listed export or API sources, and the rows of the EPSS daily feed for their CVE aliases under the feed's two header lines. advisories/README.md carries their licences and attribution. The benchmark compiles them through the OSV compile path at run time, never fetches, and refuses a file whose size or SHA-256 differs from its record here. records pins the files by id, so a stray file cannot join the fixture.",
+    "source": "https://osv-vulnerabilities.storage.googleapis.com/{npm,PyPI}/<id>.json or each Cargo record source",
     "capturedAt": "2026-09-27T18:01:25Z",
     "records": {
       "npm": {
@@ -446,14 +475,37 @@
           "bytes": 3047,
           "sha256": "0fc6eae8e111b015711c5e6f2fa023fe65404f226fea5ba22a1f61404bfbc349"
         }
+      },
+      "cargo": {
+        "RUSTSEC-2021-0124": {
+          "path": "advisories/cargo/RUSTSEC-2021-0124.json",
+          "source": "https://api.osv.dev/v1/vulns/RUSTSEC-2021-0124",
+          "capturedAt": "2026-10-25T18:20:37.538570Z",
+          "bytes": 2141,
+          "sha256": "1d6053e6aa014b4b9784db2405b1cd8e900efbbc45afc50a97b1445c4e4e2595",
+          "licence": "CC0-1.0",
+          "licenceSource": "https://github.com/RustSec/advisory-db/blob/main/LICENSE.txt"
+        }
       }
     },
     "epss": {
       "path": "advisories/epss.csv",
-      "bytes": 1237,
-      "sha256": "5dc901a82704585e92083704c5197fea15f4d3746e107779447fdd95dd31daee",
+      "bytes": 1276,
+      "sha256": "3cf76fb34ce24fb5efa60670fdb8a30c0b6dc250bb21c7ce20c4d338f4b6f71b",
       "source": "https://epss.empiricalsecurity.com/epss_scores-2026-09-27.csv.gz",
-      "capturedAt": "2026-09-27T18:03:19Z"
+      "capturedAt": "2026-09-27T18:03:19Z",
+      "additionalRows": [
+        {
+          "source": "https://api.first.org/data/v1/epss?cve=CVE-2021-45710&date=2026-09-27",
+          "capturedAt": "2026-10-25T18:24:14.837318Z",
+          "cve": "CVE-2021-45710"
+        }
+      ]
     }
+  },
+  "cargoPins": {
+    "tokio": "1.53.1",
+    "windows": "0.62.2",
+    "aws-sdk-ec2": "1.243.0"
   }
 }

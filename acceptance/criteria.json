@@ -85,6 +85,11 @@
         "fullShippedAdvisories": 74508464,
         "fullAllAdvisoryRules": 75158680
       }
+    },
+    "cargo": {
+      "tokio": {},
+      "windows": {},
+      "aws-sdk-ec2": {}
     }
   }
 }

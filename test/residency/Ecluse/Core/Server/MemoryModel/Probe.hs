@@ -2,10 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Isolated heap probes for the shipping metadata representation, each run in a fresh child
-process of the residency executable. A forced preparation renders its shape, so its allocation and
-high-water counters include that work.
--}
+-- | Isolated native heap probes use the residency executable's existing child-process sampler.
 module Ecluse.Core.Server.MemoryModel.Probe (
     HeapSample (..),
     sample,
@@ -53,16 +50,17 @@ import System.IO (withBinaryFile)
 import System.Process (readProcessWithExitCode)
 import UnliftIO.Exception (bracket, evaluate, throwIO)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, pkgEcosystem)
 import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource), mergePackuments)
-import Ecluse.Core.Registry (ParseError)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata))
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, estimateValueBytes, npmCached, weighCachedDoc)
+import Ecluse.Core.Registry.Cargo.Metadata (cargoRead)
+import Ecluse.Core.Registry.Cargo.Project qualified as CargoProject
+import Ecluse.Core.Registry.Cargo.Serving (assembleCargoDocument, serialiseCargoDocument)
 import Ecluse.Core.Registry.Json.Walk (readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
-import Ecluse.Core.Registry.Metadata (Manifest (..), VersionDoc (..), VersionRead (vrBodyBytes, vrVersion))
+import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (MetadataUndecodable), VersionDoc (..), VersionRead (vrBodyBytes, vrVersion))
 import Ecluse.Core.Registry.Metadata.Fetch (readManifest, readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (Body, EcosystemRead, ReadTerms (..))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
@@ -73,7 +71,6 @@ import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiRead)
 import Ecluse.Core.Registry.PyPI.Project qualified as PyPI
 import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, finishVersionList)
-import Ecluse.Core.Registry.WireSupport (Projection)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, boundedRead, defaultLimits, maxMetadataBytes)
 import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
@@ -81,15 +78,17 @@ import Ecluse.Core.Server.MemoryModel (expandWireBytes)
 import Ecluse.Core.Server.MemoryModel.Calibration (Calibration, Figures (..), npmCalibration, npmFigures, pypiCalibration, pypiFigures)
 import Ecluse.Core.Server.MemoryModel.HeapSample (HeapSample (..), sample)
 import Ecluse.Core.Server.MemoryModel.ProbeMode (ProbeMode, probeArguments)
-import Ecluse.Core.Server.Pipeline.Packument.Representation (Contribution (..), assembleServedBody, outputBasisBytes)
+import Ecluse.Core.Server.Pipeline.Packument.Representation (Contribution (..), outputBasisBytes)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
-import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), corpusPackages, cpName, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, syntheticProxyBase)
+import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), cargoCaptureUpstream, cargoCorpusPackages, corpusPackages, cpName, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, syntheticProxyBase)
 import Ecluse.Test.Corpus qualified as Corpus
-import Ecluse.Test.Corpus.Merge (MergeDocument (Captured, Rewritten), MergeShape, captureDocuments)
+import Ecluse.Test.Corpus.Cargo qualified as Cargo
+import Ecluse.Test.Corpus.Merge (MergeDocument (Captured, Rewritten, RewrittenNative), MergeShape, captureDocuments)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, heldBody, sourceBody)
 import Ecluse.Test.Registry.Metadata.Projection (projectMetadata)
+import Ecluse.Test.Registry.Metadata.Rendering (MetadataRendering (..), renderingOf)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
 import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
 import Ecluse.Test.Server.Cache (diagnosticDocumentValue, weighCacheEntry)
@@ -188,12 +187,12 @@ packages = concatMap residencyPackages (mapMaybe residencyFor universe)
 data Residency = Residency
     { residencyPackages :: [CorpusPackage]
     , residencyRead :: EcosystemRead
-    , residencyMetadata :: AdapterMetadata
+    , residencyMetadata :: MetadataRendering
     , residencyUpstream :: CaptureUpstream
-    , residencyCalibration :: Calibration
+    , residencyCalibration :: Maybe Calibration
     , residencyFigures :: Map Text Figures
     , residencyEntryBelowSource :: Bool
-    , residencyLegacyProject :: PackageName -> Value -> Either ParseError (Projection PackageInfo)
+    , residencyLegacyRead :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)
     , residencyLegacyHeld :: PackageInfo -> Value -> Int -> ContentDigest -> Held
     , residencyIdentity :: String -> String -> IO (PackageName, Version)
     , residencyVersionList :: Limits -> IO ByteString -> IO (Either Text (Held, Int, Maybe ContentDigest))
@@ -207,12 +206,12 @@ residencyFor = \case
             Residency
                 { residencyPackages = corpusPackages
                 , residencyRead = npmRead
-                , residencyMetadata = adapterMetadata npmAdapter
+                , residencyMetadata = renderingOf (adapterMetadata npmAdapter)
                 , residencyUpstream = npmCaptureUpstream
-                , residencyCalibration = npmCalibration
+                , residencyCalibration = Just npmCalibration
                 , residencyFigures = npmFigures
                 , residencyEntryBelowSource = True
-                , residencyLegacyProject = parsePackageInfoFromValue
+                , residencyLegacyRead = \limits name -> projectMetadata (parsePackageInfoFromValue name) limits
                 , residencyLegacyHeld = \info raw size digest -> HeldShared (CacheEntry info (fst npmCached raw) size digest)
                 , residencyIdentity = \name version -> (,mkVersion Npm (toText version)) <$> either (fail . show) pure (Npm.projectName (toText name))
                 , residencyVersionList = readVersionList
@@ -222,15 +221,31 @@ residencyFor = \case
             Residency
                 { residencyPackages = pypiCorpusPackages
                 , residencyRead = pypiRead
-                , residencyMetadata = adapterMetadata pypiAdapter
+                , residencyMetadata = renderingOf (adapterMetadata pypiAdapter)
                 , residencyUpstream = pypiCaptureUpstream
-                , residencyCalibration = pypiCalibration
+                , residencyCalibration = Just pypiCalibration
                 , residencyFigures = pypiFigures
                 , residencyEntryBelowSource = False
-                , residencyLegacyProject = projectSimpleIndexFromValue
+                , residencyLegacyRead = \limits name -> projectMetadata (projectSimpleIndexFromValue name) limits
                 , residencyLegacyHeld = \info raw _ _ -> HeldLegacy info raw
                 , residencyIdentity = \name version -> (,) <$> either (fail . show) pure (PyPI.projectName (toText name)) <*> maybe (fail "invalid PEP 440 probe version") pure (canonicalPep440 (toText version))
                 , residencyVersionList = \_ _ -> pure (Left "PyPI exposes no version-list-only read")
+                }
+    Cargo -> do
+        discovery <- rightToMaybe Cargo.cargoCaptureDiscovery
+        pure
+            Residency
+                { residencyPackages = cargoCorpusPackages
+                , residencyRead = cargoRead discovery
+                , residencyMetadata = MetadataRendering assembleCargoDocument serialiseCargoDocument
+                , residencyUpstream = cargoCaptureUpstream
+                , residencyCalibration = Nothing
+                , residencyFigures = mempty
+                , residencyEntryBelowSource = False
+                , residencyLegacyRead = \limits name bytes -> first (const MetadataUndecodable) (Cargo.decodeCargoValues bytes) >>= Cargo.projectCargoValues limits name
+                , residencyLegacyHeld = \info raw _ _ -> HeldLegacy info raw
+                , residencyIdentity = \name version -> (,mkVersion Cargo (toText version)) <$> either (fail . show) pure (CargoProject.projectName (toText name))
+                , residencyVersionList = \_ _ -> pure (Left "Cargo exposes no version-list-only read")
                 }
     RubyGems -> Nothing
 
@@ -383,9 +398,12 @@ prepareListingRender ecosystem sources = do
     metadata <- residencyMetadata <$> requireResidency ecosystem
     plan <- maybe (fail "capture has no merge plan") pure (mergePackuments [(srcProvenance s, Snapshot (srcDigest s) (srcInfo s)) | s <- sources])
     basis <- evaluate (outputBasisBytes plan sources)
-    served <- either throwIO (evaluate . LBS.toStrict) (metadataSerialise metadata (assembleServedBody metadata syntheticProxyBase sources plan))
+    served <- either throwIO (evaluate . LBS.toStrict) (metadataSerialise metadata (metadataAssemble metadata syntheticProxyBase bySource plan base))
     root <- newStablePtr served
     pure (root, basis)
+  where
+    bySource = Map.fromList (zip [0 ..] [Snapshot (srcDigest source) (srcValue source) | source <- sources])
+    base = srcValue <$> (find ((== TrustedSource) . srcProvenance) sources <|> listToMaybe sources)
 
 -- | Write a merge's rewritten documents under the directory, and return both documents' paths.
 writeMergeDocuments :: MergeShape -> FilePath -> CorpusPackage -> IO (FilePath, FilePath)
@@ -396,6 +414,7 @@ writeMergeDocuments shape directory package = do
     place file = \case
         Captured -> pure (cpPath package)
         Rewritten document -> (directory <> "/" <> file) <$ LBS.writeFile (directory <> "/" <> file) (encode document)
+        RewrittenNative bytes -> (directory <> "/" <> file) <$ BS.writeFile (directory <> "/" <> file) bytes
 
 -- | Use matched selected-value and discard controls to resolve retention above harness overhead.
 probeSelected :: SelectedShape -> Limits -> PackageName -> Version -> FilePath -> IO Measurement
@@ -458,7 +477,9 @@ prepare shape package = do
     (held, compact, weight, count) <- case shape of
         Wire -> pure (HeldWire bytes, 0, 0, 0)
         Raw -> do
-            raw <- either fail pure (eitherDecodeStrict bytes)
+            raw <- either fail pure $ case pkgEcosystem (cpPackage package) of
+                Cargo -> first toString (Cargo.decodeCargoValues bytes)
+                _ -> eitherDecodeStrict bytes
             _ <- forceShown raw
             compact <- evaluate (LBS.length (encode raw))
             pure (HeldRaw raw, compact, 0, 0)
@@ -612,7 +633,7 @@ readLegacySource :: Residency -> Limits -> PackageName -> IO ByteString -> IO (E
 readLegacySource record limits name next = boundedRead (MetadataBodyLimit (maxMetadataBytes limits)) next <&> (first show >=> projectBody)
   where
     projectBody (size, body) = do
-        (info, raw) <- first show (projectMetadata (residencyLegacyProject record name) limits body)
+        (info, raw) <- first show (residencyLegacyRead record limits name body)
         let digest = digestOf body
         pure (residencyLegacyHeld record info raw size digest, size, Just digest)
 

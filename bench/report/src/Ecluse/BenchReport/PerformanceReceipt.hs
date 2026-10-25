@@ -57,9 +57,9 @@ clearPerformanceReceipts root = do
   where
     paths =
         (root </> "diagnostic.json")
-            : [root </> subject </> name | subject <- ["ecosystem-npm", "ecosystem-pypi"], name <- ["obligation.json", "request.json", "receipt.json"]]
+            : [root </> subject </> name | subject <- ["ecosystem-npm", "ecosystem-pypi", "ecosystem-cargo"], name <- ["obligation.json", "request.json", "receipt.json"]]
 
--- | Fixed callers choose the evidence kind. Both ecosystems retain receipts before any audit failure.
+-- | Fixed callers choose the evidence kind. All ecosystems retain receipts before any audit failure.
 writePerformanceReceipts :: Text -> FilePath -> FilePath -> IO ()
 writePerformanceReceipts kind root conditionsPath = do
     clearPerformanceReceipts root
@@ -71,7 +71,7 @@ writePerformanceReceipts kind root conditionsPath = do
     case receiptDiagnostic kind conditions native of
         Just reason -> publishDiagnostic root kind conditions outcome attempt reason native
         Nothing -> do
-            results <- traverse (publishSubject root kind conditions outcome attempt native) ["npm", "pypi"]
+            results <- traverse (publishSubject root kind conditions outcome attempt native) ["npm", "pypi", "cargo"]
             unless (and results) exitFailure
 
 publishSubject :: FilePath -> Text -> Map Text Text -> NativeOutcome -> Text -> Maybe NativePerformance -> Text -> IO Bool

@@ -20,12 +20,11 @@ import Test.Tasty.HUnit (assertBool, assertFailure, (@?=))
 
 import Ecluse.Bench.Corpus (LoadedEntry (..), entryName)
 import Ecluse.Core.Deadline (newDeadlines)
-import Ecluse.Core.Ecosystem (ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo), ecosystemName)
 import Ecluse.Core.Fault.Http (typedBodyReads)
 import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded))
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked, pypiPacked, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, cargoPacked, npmCached, npmPacked, pypiPacked, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataClient (..), MetadataError (MetadataFetch), VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.Origin (perCallerOrigin)
@@ -38,6 +37,7 @@ import Ecluse.Test.Corpus (cpPackage)
 import Ecluse.Test.Deadline (untracedClient)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
+import Ecluse.Test.Registry.Cargo.Fixtures (cargoDiscovery)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRight)
 
@@ -45,18 +45,22 @@ import Ecluse.Test.Support (expectRight)
 withBenchmarks :: [EcosystemBench] -> ([Benchmark] -> IO a) -> IO a
 withBenchmarks ecosystems action = do
     responses <- fmap Map.fromList (traverse replayResponse [(ecosystem, entry) | ecosystem <- ecosystems, entry <- ebCorpus ecosystem])
-    testWithApplication (pure (replayApplication responses)) $ \port -> do
+    testWithApplication (pure (replayApplication (withDiscovery responses))) $ \port -> do
         manager <- HTTP.newManager (typedBodyReads (HTTP.managerSetProxy HTTP.noProxy HTTP.defaultManagerSettings{HTTP.managerModifyRequest = pure . redirect port}))
         groups <- traverse (ecosystemGroup manager) ecosystems
         action groups
   where
     -- Every request stays on loopback, including requests for an unexpected origin.
     redirect port request = request{HTTP.host = "127.0.0.1", HTTP.port = port, HTTP.secure = False, HTTP.proxy = Nothing}
+    withDiscovery responses
+        | any ((== Cargo) . ebEcosystem) ecosystems = Map.insert "/config.json" (fromStrict (cargoDiscovery "https://static.crates.io/crates/{crate}/{crate}-{version}.crate" Nothing False)) responses
+        | otherwise = responses
 
 replayResponse :: (EcosystemBench, LoadedEntry) -> IO (ByteString, BL.ByteString)
 replayResponse (ecosystem, LoadedEntry{lePackage = package, leBytes = raw}) = do
     base <- expectRight (mkRegistryUrl (ebOrigin ecosystem))
-    request <- expectRight (erRequest (metadataRead (ebMetadata ecosystem)) (mkBaseRequest base) Nothing (cpPackage package))
+    reader <- expectRight (ebReader ecosystem)
+    request <- expectRight (erRequest reader (mkBaseRequest base) Nothing (cpPackage package))
     pure (HTTP.path request, BL.fromStrict raw)
 
 replayApplication :: Map ByteString BL.ByteString -> Application
@@ -138,17 +142,20 @@ sameSelected expected actual =
 
 -- Compare held payloads without forcing cache estimates or decoding packed releases and files during timing.
 sameDocument :: CachedDoc -> CachedDoc -> Bool
-sameDocument left right = case (snd npmPacked left, snd npmPacked right, snd pypiPacked left, snd pypiPacked right) of
-    (Just expected, Just actual, _, _) -> expected == actual
-    (_, _, Just expected, Just actual) -> expected == actual
-    _ -> case (snd npmCached left, snd npmCached right, snd pypiSimpleCached left, snd pypiSimpleCached right) of
+sameDocument left right
+    | Just expected <- snd cargoPacked left, Just actual <- snd cargoPacked right = expected == actual
+    | Just expected <- snd cargoCached left, Just actual <- snd cargoCached right = expected == actual
+    | otherwise = case (snd npmPacked left, snd npmPacked right, snd pypiPacked left, snd pypiPacked right) of
         (Just expected, Just actual, _, _) -> expected == actual
         (_, _, Just expected, Just actual) -> expected == actual
-        _ -> False
+        _ -> case (snd npmCached left, snd npmCached right, snd pypiSimpleCached left, snd pypiSimpleCached right) of
+            (Just expected, Just actual, _, _) -> expected == actual
+            (_, _, Just expected, Just actual) -> expected == actual
+            _ -> False
 
 metadataClient :: HTTP.Manager -> EcosystemBench -> Limits -> IO MetadataClient
 metadataClient manager ecosystem limits = do
     base <- expectRight (mkRegistryUrl (ebOrigin ecosystem))
     -- The bench's stub always answers, so nothing sweeps these deadlines.
     client <- untracedClient manager <$> newDeadlines
-    pure (privateMetadataClient (ecosystemMetadataReads (metadataRead (ebMetadata ecosystem)) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) (perCallerOrigin limits client (mkBaseRequest base) Nothing)))
+    pure (privateMetadataClient (ecosystemMetadataReads (ebReadFactory ecosystem) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) (perCallerOrigin limits client (mkBaseRequest base) Nothing)))

@@ -16,13 +16,13 @@ import Ecluse.Config (RulePolicy (policyRules), decodeDefaultConfig, sourceDefau
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), CveDb (cveDbLookup), CveLookup (CveLookup, cveCoveredNames))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions), mkPackageName)
 import Ecluse.Core.Rules (RuleDeps, evalRules, prepare)
 import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), EvalContext (EvalContext), FailureAlignment (FailDeny), Rule (AllowIfOlderThan, DenyIfCve), completeEvidence)
 import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Test.Corpus (corpusPackages, cpName, cpPackage, pypiCorpusPackages)
+import Ecluse.Test.Corpus (cargoCorpusPackages, corpusPackages, cpName, cpPackage, pypiCorpusPackages)
 import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (..), checkCapturesServed, compileAdvisoryInputs, compileCorpusAdvisories, configuredShippedPolicy, corpusAdvisories, shippedPolicy)
 import Ecluse.Test.Osv (osvZipOf)
 import Ecluse.Test.OsvDb (withServedArtifact)
@@ -34,7 +34,7 @@ import Ecluse.Test.Support (expectRight)
 spec :: Spec
 spec = do
     describe "compileCorpusAdvisories" $
-        for_ [(Npm, corpusPackages, ["@babel/core", "express", "lodash", "react", "request", "webpack"]), (PyPI, pypiCorpusPackages, ["numpy", "requests"])] $ \(eco, captures, advised) ->
+        for_ [(Npm, corpusPackages, ["@babel/core", "express", "lodash", "react", "request", "webpack"]), (PyPI, pypiCorpusPackages, ["numpy", "requests"]), (Cargo, cargoCorpusPackages, ["tokio"])] $ \(eco, captures, advised) ->
             it ("covers the " <> show eco <> " captures the corpus records name, and the rules read their rows") $
                 withSystemTempDirectory "ecluse-corpus-advisories" $ \dir -> do
                     compiled <- compileCorpusAdvisories eco dir

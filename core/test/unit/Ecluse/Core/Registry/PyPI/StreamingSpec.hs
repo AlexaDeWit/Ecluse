@@ -25,6 +25,7 @@ import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutp
 import Ecluse.Test.Json (encodeStrict, fieldAt)
 import Ecluse.Test.Package (requestsName, validSha256)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sameTexts, sharesKey, sharesString)
+import Ecluse.Test.Registry.Metadata.Rendering (renderingOf)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, simpleValue)
 import Ecluse.Test.Registry.PyPI.Streaming (pypiFields)
@@ -53,7 +54,7 @@ corpusRead =
     CorpusRead
         { crUpstream = pypiCaptureUpstream
         , crRead = pypiRead
-        , crMetadata = adapterMetadata pypiAdapter
+        , crMetadata = renderingOf (adapterMetadata pypiAdapter)
         , crVersionReads = \versionRead _ _ -> [("selected", rendered (fmap (releaseFacts . vdDetails) . vrVersion <$> versionRead))]
         , crDocumentReads = \_ _ -> []
         }

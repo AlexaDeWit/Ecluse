@@ -39,6 +39,7 @@ import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutp
 import Ecluse.Test.Json (fieldAt, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonStream (byteChunks, parseJsonChunks, sameTexts, sharesKey, sharesString, sliceChunks, walkJsonChunks)
+import Ecluse.Test.Registry.Metadata.Rendering (renderingOf)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionBytes)
 import Ecluse.Test.Registry.Npm.Streaming (NpmRead (..), npmFields)
@@ -494,7 +495,7 @@ corpusRead =
     CorpusRead
         { crUpstream = npmCaptureUpstream
         , crRead = npmRead
-        , crMetadata = adapterMetadata npmAdapter
+        , crMetadata = renderingOf (adapterMetadata npmAdapter)
         , crVersionReads = \selected document version ->
             [("selected", rendered (selectedFacts <$> selected)), ("mirror", rendered (selectNpmVersionDoc version document))]
         , crDocumentReads = \_ raw -> [("versions", rendered (parseVersionBytes raw))]
