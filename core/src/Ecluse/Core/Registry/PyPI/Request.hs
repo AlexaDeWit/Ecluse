@@ -19,8 +19,7 @@ module Ecluse.Core.Registry.PyPI.Request (
     artifactPath,
 ) where
 
-import Network.HTTP.Client (Request (requestHeaders))
-import Network.HTTP.Types.Header (hAccept, hAcceptEncoding)
+import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageName)
@@ -28,13 +27,11 @@ import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Project (canonicalName)
 import Ecluse.Core.Registry.PyPI.Wire (simpleIndexMediaType)
-import Ecluse.Core.Registry.Request (BaseRequest, attachCredential, joinPath, parseRequestEither, requestAt)
+import Ecluse.Core.Registry.Request (BaseRequest, joinPath, parseRequestEither, requestAt)
 import Ecluse.Core.Registry.Request qualified as Request
 import Ecluse.Core.Server.Path (encodeComponent)
 
-{- | PyPI's canonical artifact hosts, declared to the artifact-host gate so the same-host default
-admits the files host without an operator naming it.
--}
+-- | PyPI's files host, admitted alongside the registry host by the artifact gate.
 pypiArtifactHosts :: [Text]
 pypiArtifactHosts = ["https://files.pythonhosted.org"]
 
@@ -55,18 +52,9 @@ simpleIndexRequestUnder ::
 simpleIndexRequestUnder base credential name = indexGet credential <$> requestAt base (indexPath name)
 
 indexGet :: Maybe ClientCredential -> Request -> Request
-indexGet credential base =
-    attachCredential pypiCredential credential $
-        base
-            { requestHeaders =
-                (hAccept, simpleIndexMediaType)
-                    : (hAcceptEncoding, "gzip")
-                    : requestHeaders base
-            }
+indexGet credential = Request.metadataGet pypiCredential credential simpleIndexMediaType
 
-{- | Build the artifact @GET@ at @{baseUrl}\/simple\/{canonical-name}\/{filename}@, the spelling
-this mount serves and a private index addresses its own files under.
--}
+-- | Fetch @{baseUrl}/simple/{canonical-name}/{filename}@ from a private index.
 artifactRequestByFile ::
     Text ->
     Maybe ClientCredential ->
@@ -77,9 +65,7 @@ artifactRequestByFile baseUrl credential name filename = do
     url <- artifactFileUrl baseUrl name filename
     artifactRequestByUrl credential url
 
-{- | Build PyPI's artifact @GET@ for the absolute @url@ the projection preserved from the index's
-own @files[].url@, so it names no base URL of its own.
--}
+-- | Fetch the preserved @files[].url@ under PyPI's credential presentation.
 artifactRequestByUrl ::
     Maybe ClientCredential ->
     Text ->
@@ -97,12 +83,9 @@ indexPath name = projectPath (canonicalName name) <> "/"
 artifactFileUrl :: Text -> PackageName -> Text -> Either UrlFormationError Text
 artifactFileUrl baseUrl name filename = joinPath baseUrl (artifactPath (canonicalName name) filename)
 
-{- | @simple\/{canonical-project}\/{file}@, relative to an index root. Each component is
-percent-encoded, so a decoded escape cannot reach upstream raw.
--}
+-- | Encode each component of @simple/{canonical-project}/{file}@ relative to the index root.
 artifactPath :: Text -> Text -> Text
 artifactPath project filename = projectPath project <> "/" <> encodeComponent filename
 
--- The project's index path, @simple\/{canonical-name}@.
 projectPath :: Text -> Text
 projectPath project = "simple/" <> encodeComponent project

@@ -27,7 +27,7 @@ import Network.HTTP.Client (
     Request (method, requestBody, requestHeaders),
     RequestBody (RequestBodyBS),
  )
-import Network.HTTP.Types.Header (hAccept, hAcceptEncoding, hContentType)
+import Network.HTTP.Types.Header (hAccept, hContentType)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageName, pkgNamespace, renderPackageName, unScope, unscopedName)
@@ -50,15 +50,11 @@ metadataAccept = \case
     Abbreviated -> "application/vnd.npm.install-v1+json"
     Full -> "application/json"
 
-{- | npm's canonical artifact hosts: none, because a registry serves its own tarball bytes.
-The gate and the projection read this one list, so an artifact authority means one thing on both.
--}
+-- | npm registries serve their own artifacts, so no extra hosts enter the artifact gate.
 npmArtifactHosts :: [Text]
 npmArtifactHosts = []
 
-{- | Build the metadata @GET@ request for a package at @{baseUrl}/{encoded-name}@. It asks for
-@gzip@, because a popular packument is megabytes.
--}
+-- | Fetch @{baseUrl}/{encoded-name}@ with the requested metadata form and gzip negotiation.
 metadataRequest ::
     Text ->
     Maybe ClientCredential ->
@@ -77,18 +73,9 @@ metadataRequestUnder ::
 metadataRequestUnder base token form name = metadataGet token form <$> requestAt base (encodePackagePath name)
 
 metadataGet :: Maybe ClientCredential -> MetadataForm -> Request -> Request
-metadataGet token form base =
-    withToken token $
-        base
-            { requestHeaders =
-                (hAccept, metadataAccept form)
-                    : (hAcceptEncoding, "gzip")
-                    : requestHeaders base
-            }
+metadataGet token form = Request.metadataGet npmCredential token (metadataAccept form)
 
-{- | Build the artifact @GET@ at @{base}/{encoded-pkg}/-/{filename}@, through 'requestAt'. It addresses
-the tarball by the filename the client requested, so a registry with its own tarball naming resolves.
--}
+-- | Fetch @{base}/{encoded-pkg}/-/{filename}@ under the client's filename through 'requestAt'.
 artifactRequestByFile ::
     BaseRequest ->
     Maybe ClientCredential ->
@@ -97,9 +84,7 @@ artifactRequestByFile ::
     Either UrlFormationError Request
 artifactRequestByFile base token name filename = Request.artifactGet npmCredential token <$> requestAt base (artifactPath name filename)
 
-{- | Build npm's artifact @GET@ for the absolute @url@ the projection preserved from the upstream's
-@dist.tarball@, under npm's credential presentation.
--}
+-- | Fetch the preserved @dist.tarball@ URL under npm's credential presentation.
 artifactRequestByUrl ::
     Maybe ClientCredential ->
     Text ->
@@ -110,9 +95,7 @@ artifactRequestByUrl = Request.artifactRequestByUrl npmCredential
 packageUrl :: Text -> PackageName -> Either UrlFormationError Text
 packageUrl baseUrl name = joinPath baseUrl (encodePackagePath name)
 
-{- | The artifact URL @{baseUrl}\/{encoded-name}\/-\/{encoded-filename}@, with @filename@
-percent-encoded as one component so a once-decoded escape cannot reach the upstream raw.
--}
+-- | Encode the filename as one component in @{baseUrl}/{encoded-name}/-/{encoded-filename}@.
 artifactFileUrl :: Text -> PackageName -> Text -> Either UrlFormationError Text
 artifactFileUrl baseUrl name filename = joinPath baseUrl (artifactPath name filename)
 
@@ -126,9 +109,7 @@ encodePackagePath name = case pkgNamespace name of
     Just scope -> "@" <> encodeComponent (unScope scope) <> "%2F" <> encodeComponent (unscopedName name)
     Nothing -> encodeComponent (renderPackageName name)
 
-{- | Build the JSON @PUT@ at @url@ carrying @document@, under the injected credential. An npm
-registry answers 415 unless the body declares @application\/json@.
--}
+-- | Publish JSON under the injected credential, declaring the media type npm registries require.
 jsonPutRequest :: Maybe ClientCredential -> Text -> ByteString -> Either UrlFormationError Request
 jsonPutRequest credential url document = do
     base <- parseRequestEither url
@@ -143,8 +124,6 @@ jsonPutRequest credential url document = do
                     : requestHeaders base
             }
 
-{- | Attach the injected credential under npm's presentation. The redirect pin and the proxy
-identity belong to Ecluse.Core.Registry.Request, which seals every request it parses.
--}
+-- | Attach npm's credential presentation and preserve the shared redirect and identity controls.
 withToken :: Maybe ClientCredential -> Request -> Request
 withToken = attachCredential npmCredential
