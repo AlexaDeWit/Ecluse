@@ -646,6 +646,11 @@ to the versions the starting document does not hold. A package mirrored into a p
 renders about one document, so it pays for about one. A listing of one document, or of two that
 share no version, pays for every byte it merges.
 
+A listing gives charges back as it finishes each phase. When a full read completes, its charge
+steps down to what the read keeps: 0.9 bytes per source byte for npm, 3.3 bytes for PyPI. A failed
+read keeps nothing. Once the response body exists, the reads' charges go back, so only the response
+charge and any gzip charge stay while the body is sent.
+
 For a listing that reads at least 1 MiB, the per-byte charges sit above the largest the residency
 tests measure on the captured package corpus, for one document and for merges that model the
 private copies deployments serve. Those are the most its full reads hold while they parse, and a

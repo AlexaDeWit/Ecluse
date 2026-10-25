@@ -33,7 +33,7 @@ import Ecluse.Core.Registry (FetchFault (FetchCooldown))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead))
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Metadata (
-    Manifest,
+    Manifest (manifestBodyBytes),
     MetadataClient (fetchFullManifest),
     MetadataError (
         MetadataAbsent,
@@ -51,8 +51,8 @@ import Ecluse.Core.Registry.Request (BaseRequest)
 import Ecluse.Core.Security (Limits (progressFloor))
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
-import Ecluse.Core.Server.Admission.Meter (MemoryTicket, awaitingFlight, charge, servingFlight)
-import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
+import Ecluse.Core.Server.Admission.Meter (ChargePart, MemoryTicket, awaitingFlight, chargePart, servingPart, stepDown)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfKeptPermille))
 import Ecluse.Core.Server.Cache.Store (PreparedStore)
 import Ecluse.Core.Server.Cache.Types (Source (Source), fullKey)
 import Ecluse.Core.Server.Context (
@@ -129,22 +129,34 @@ originResultOf = \case
     Right (Right manifest) -> OriginResolved manifest
 
 -- | Resolve the private origin uncached with the caller's credential, retaining explicit access refusals.
-fetchPrivateOrigin :: PackumentDeps -> ServeRuntime -> MemoryTicket -> Maybe ClientCredential -> PackageName -> Handler OriginResult
-fetchPrivateOrigin deps rt ticket token name = case pdPrivateBase deps of
+fetchPrivateOrigin :: PackumentDeps -> ServeRuntime -> ChargePart -> Maybe ClientCredential -> PackageName -> Handler OriginResult
+fetchPrivateOrigin deps rt part token name = case pdPrivateBase deps of
     Nothing -> pure OriginAbsent
     Just privateBase -> do
         logFM DebugS (ls ("fetching private origin for " <> renderPackageName name))
-        let origin = chargingFullReads (fullReadCharge deps ticket) (privateOrigin rt deps privateBase token)
-        originResultOf <$> tryAny (withMetadataClient rt deps privateMetadataClient origin (`fetchFullManifest` name))
+        let origin = chargingFullReads (fullReadCharge deps part) (privateOrigin rt deps privateBase token)
+        keepingRead deps part . originResultOf =<< tryAny (withMetadataClient rt deps privateMetadataClient origin (`fetchFullManifest` name))
 
 -- | Cache anonymous public metadata under the origin's base URL.
-fetchPublicOrigin :: PackumentDeps -> ServeRuntime -> MemoryTicket -> PackageName -> Handler OriginResult
-fetchPublicOrigin deps rt ticket name = do
+fetchPublicOrigin :: PackumentDeps -> ServeRuntime -> MemoryTicket -> ChargePart -> PackageName -> Handler OriginResult
+fetchPublicOrigin deps rt ticket part name = do
     logFM DebugS (ls ("fetching public origin for " <> renderPackageName name))
     -- Every request that shares this read waits on it, so whichever request leads it pays with their priority.
     let flight = flightOf (fullKey (publicSource deps) name)
-        origin = chargingFullReads (fullReadCharge deps (servingFlight flight ticket)) (publicOrigin rt deps)
-    originResultOf <$> tryAny (awaitingFlight ticket flight (withMetadataClient rt deps (publicMetadataClient (srMetadataCache rt) (publicSource deps)) origin (`fetchFullManifest` name)))
+        origin = chargingFullReads (fullReadCharge deps (servingPart flight part)) (publicOrigin rt deps)
+    keepingRead deps part . originResultOf =<< tryAny (awaitingFlight ticket flight (withMetadataClient rt deps (publicMetadataClient (srMetadataCache rt) (publicSource deps)) origin (`fetchFullManifest` name)))
+
+-- Once its result is evaluated a read holds only its manifest, so its part steps down to the kept charge.
+keepingRead :: PackumentDeps -> ChargePart -> OriginResult -> Handler OriginResult
+keepingRead deps part result = do
+    settled <- evaluateWHNF result
+    liftIO (stepDown part (keptCharge deps settled))
+    pure settled
+
+keptCharge :: PackumentDeps -> OriginResult -> Int
+keptCharge deps = \case
+    OriginResolved manifest -> scaleCharge (cfKeptPermille (chargeFactors deps)) (manifestBodyBytes manifest)
+    _ -> 0
 
 {- Run an action over a per-request read handle for one origin. 'withRunInIO' captures the request's
 @katip@ context into the failure logs, and each read holds to the mount's 'Limits' and the serve cap. -}
@@ -169,8 +181,11 @@ withMetadataClient rt deps settle origin k =
   where
     baseUrl = originBaseUrl (originClientOf origin)
 
-fullReadCharge :: PackumentDeps -> MemoryTicket -> Int -> IO ()
-fullReadCharge deps ticket = charge ticket . scaleCharge (cfFullReadPermille (metadataChargeFactors (pdMetadata deps)))
+fullReadCharge :: PackumentDeps -> ChargePart -> Int -> IO ()
+fullReadCharge deps part = chargePart part . scaleCharge (cfFullReadPermille (chargeFactors deps))
+
+chargeFactors :: PackumentDeps -> ChargeFactors
+chargeFactors = metadataChargeFactors . pdMetadata
 
 -- | Bypass shared caching so the private upstream authorises each caller's credential.
 withPrivateMetadataClient :: ServeRuntime -> PackumentDeps -> BaseRequest -> Maybe ClientCredential -> (MetadataClient -> IO a) -> Handler a

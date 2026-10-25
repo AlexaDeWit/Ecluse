@@ -29,14 +29,16 @@ spec = describe "metadata child modes" $ do
     it "keeps both listing RTS groups in their original positions" $ do
         probeArguments Listing "capture.json" `shouldBe` ["--metadata-listing-probe", "+RTS", "-F1", "-A128k", "-RTS", "capture.json", "+RTS", "-T", "-N1", "-RTS"]
         probeArguments (Merge "private" "public") "capture.json" `shouldBe` ["--metadata-merge-probe", "private", "public", "+RTS", "-F1", "-A128k", "-RTS", "capture.json", "+RTS", "-T", "-N1", "-RTS"]
-    it "keeps retained and evaluation RTS arguments unchanged" $ do
+    it "keeps the default RTS arguments for retained, evaluation and census probes" $ do
         probeArguments (Retained "Shared") "capture.json" `shouldBe` ["--metadata-probe", "Shared", "capture.json", "+RTS", "-T", "-N1", "-RTS"]
         probeArguments Evaluation "capture.json" `shouldBe` ["--metadata-evaluation-probe", "capture.json", "+RTS", "-T", "-N1", "-RTS"]
+        probeArguments ListingCensus "capture.json" `shouldBe` ["--metadata-listing-census-probe", "capture.json", "+RTS", "-T", "-N1", "-RTS"]
   where
     cases =
         [ (Retained "Shared", ["--metadata-probe", "Shared"])
         , (Evaluation, ["--metadata-evaluation-probe"])
         , (Listing, ["--metadata-listing-probe"])
+        , (ListingCensus, ["--metadata-listing-census-probe"])
         , (Merge "private" "public", ["--metadata-merge-probe", "private", "public"])
         , (Source "npm" "Full" "react" "1" "42", ["--metadata-source-probe", "npm", "Full", "react", "1", "42"])
         , (SelectedRetention "pypi" "numpy" "1" "42", ["--metadata-selected-retention-probe", "pypi", "numpy", "1", "42"])

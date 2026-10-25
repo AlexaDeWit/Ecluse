@@ -63,7 +63,7 @@ pypiReadWith mode retain =
 
 -- | Charges per 1000 source or output-basis bytes, calibrated with native memory probes. See @docs/testing.md@.
 pypiChargeFactors :: ChargeFactors
-pypiChargeFactors = ChargeFactors{cfFullReadPermille = 3500, cfOutputPermille = 1900}
+pypiChargeFactors = ChargeFactors{cfFullReadPermille = 3500, cfKeptPermille = 3300, cfOutputPermille = 1900}
 
 readPyPIIndex :: Limits -> PackageName -> PyPIRead -> DocumentWalk PyPIProjection
 readPyPIIndex limits name mode bound table = readJsonWalk bound (pypiIndexWalk limits name mode table)

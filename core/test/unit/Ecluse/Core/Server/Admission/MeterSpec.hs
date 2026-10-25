@@ -6,7 +6,7 @@ module Ecluse.Core.Server.Admission.MeterSpec (spec) where
 
 import Control.Concurrent.STM (check)
 import Test.Hspec
-import UnliftIO (Async, async, cancel, concurrently_, poll, wait, waitCatch, withAsync)
+import UnliftIO (Async, async, cancel, concurrently_, forConcurrently_, poll, wait, waitCatch, withAsync)
 import UnliftIO.Exception (throwIO, try)
 
 import Ecluse.Core.Deadline (Deadlines)
@@ -16,12 +16,15 @@ import Ecluse.Core.Server.Admission.Meter (
     MeterSettings (..),
     awaitingFlight,
     charge,
+    chargePart,
     meterFigures,
     meterSnapshot,
+    newChargePart,
     newChargeRegion,
     newMemoryMeter,
     servingFlight,
     steerMeter,
+    stepDown,
     takeLargestCharge,
     withMemoryEntry,
  )
@@ -230,6 +233,107 @@ spec = around withSweeper $ describe "Ecluse.Core.Server.Admission.Meter" $ do
         void (waitCatch paused)
         awaitFigures meter ((== 0) . snPaused)
         finish
+        wait holder `shouldReturn` Right ()
+        charged meter `shouldReturn` 0
+
+    it "steps a part down to what it keeps, and gives each payment back once" $ \deadlines -> do
+        (meter, port, _) <- newMeter deadlines 100
+        inside <- withMemoryEntry port meter $ \ticket -> do
+            part <- newChargePart ticket
+            chargePart part 25
+            paid <- charged meter
+            stepDown part 10
+            kept <- charged meter
+            stepDown part 10
+            again <- charged meter
+            stepDown part 0
+            drained <- charged meter
+            stepDown part 0
+            (paid,kept,again,drained,) <$> charged meter
+        inside `shouldBe` Right (30, 15, 15, 5, 5)
+        charged meter `shouldReturn` 0
+
+    it "gives back only the part's own payments" $ \deadlines -> do
+        (meter, port, _) <- newMeter deadlines 100
+        inside <- withMemoryEntry port meter $ \ticket -> do
+            own <- newChargePart ticket
+            other <- newChargePart ticket
+            unpaid <- newChargePart ticket
+            chargePart own 20
+            chargePart other 30
+            stepDown unpaid 0
+            stepDown own 0
+            stepDown own 0
+            charged meter
+        inside `shouldBe` Right 30
+        charged meter `shouldReturn` 0
+
+    it "keeps the meter and its tickets in step while parts give back at once" $ \deadlines -> do
+        meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = 1_000_000, msStepBytes = 1, msEntryRoom = 2, msEntryWaitMicros = 0}
+        inside <- withMemoryEntry noopMetricsPort meter $ \ticket -> do
+            parts <- replicateM 64 (newChargePart ticket)
+            forConcurrently_ parts $ \part -> do
+                chargePart part 100
+                stepDown part 30
+                stepDown part 30
+            charged meter
+        inside `shouldBe` Right (64 * 30)
+        charged meter `shouldReturn` 0
+
+    it "gives back nothing once the part's request has ended" $ \deadlines -> do
+        (meter, port, _) <- newMeter deadlines 100
+        escaped <- newEmptyMVar
+        _ <- withMemoryEntry port meter $ \ticket -> do
+            part <- newChargePart ticket
+            chargePart part 25
+            putMVar escaped part
+        (release, holder) <- holdEntry port meter
+        part <- takeMVar escaped
+        stepDown part 0
+        charged meter `shouldReturn` 10
+        release
+        wait holder `shouldReturn` Right ()
+        charged meter `shouldReturn` 0
+
+    it "returns every charge when cancelled between two phases" $ \deadlines -> do
+        (meter, port, _) <- newMeter deadlines 100
+        stepped <- newEmptyMVar
+        blocked <- newEmptyMVar
+        worker <- async . withMemoryEntry port meter $ \ticket -> do
+            fullRead <- newChargePart ticket
+            chargePart fullRead 45
+            stepDown fullRead 20
+            output <- newChargePart ticket
+            chargePart output 30
+            putMVar stepped ()
+            takeMVar blocked
+        takeMVar stepped
+        charged meter `shouldReturn` 55
+        cancel worker
+        charged meter `shouldReturn` 0
+        putMVar blocked ()
+
+    it "lets a paused request move once another gives back what its read no longer holds" $ \deadlines -> do
+        (meter, port, counted) <- newMeter deadlines 30
+        (paused, go) <- enteredCharger port meter (`charge` 15)
+        overdrawn <- newEmptyMVar
+        giveBack <- newEmptyMVar
+        ends <- newEmptyMVar
+        holder <- async . withMemoryEntry port meter $ \ticket -> do
+            part <- newChargePart ticket
+            chargePart part 25
+            putMVar overdrawn ()
+            takeMVar giveBack
+            stepDown part 0
+            takeMVar ends
+        takeMVar overdrawn
+        go
+        awaitFigures meter ((== 1) . snPaused)
+        putMVar giveBack ()
+        wait paused `shouldReturn` Right ()
+        (isNothing <$> poll holder) `shouldReturn` True
+        cOverdraws <$> counted `shouldReturn` 1
+        putMVar ends ()
         wait holder `shouldReturn` Right ()
         charged meter `shouldReturn` 0
 

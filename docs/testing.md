@@ -182,6 +182,11 @@ ecosystem's adapter. The same test checks the listing output charge: twice a sha
 size, for the lazy encoding and its strict copy, must stay within the output charge. The
 [listing probe](#listing-peaks) checks both charges against a read's peak and a render's working
 set. Raise a charge in the adapter, not here, when a representation outgrows it.
+
+The largest shared entry also sets the kept charge: what a completed read holds until the render.
+The kept charge is 1.25 times the largest shared figure, rounded up to a tenth. That is 0.9 for npm
+(react, 0.699300) and 3.3 for PyPI (requests, 2.601638). Each shared entry's regression limit must
+stay below the kept charge, and `CalibrationResidencySpec` derives the charge from these figures.
 Each denominator is the original authenticated source size, including omitted fields.
 For example, the TypeScript shared shape retains 7,343,736 heap bytes from 15,693,959 source bytes.
 Its re-encoded serving document is 10,181,045 bytes. That encoded size and the source probe's
@@ -207,6 +212,14 @@ or derived rendering, so they do not establish the same fully forced retained en
 
 PyPI's full-read charge is 3.5 after retaining canonical sidecars.
 npm keeps its full-read charge of 1.1. Output charges are 2.0 for npm and 1.9 for PyPI.
+Kept charges are 0.9 for npm and 3.3 for PyPI.
+
+A listing's charges end in phases. Each full read pays its full-read charge per byte as it reads.
+When the read completes, its charge steps down to the kept charge on the bytes it read. A read that
+failed keeps nothing. The render adds the output charge. When the body exists, the reads' kept
+charges go back, so only the output charge and a gzip response's compression charges stay while
+the body is sent. Everything left returns when the request ends. A request that joins another's
+public read paid nothing for it, so it gives nothing back.
 
 [Build job 114592183296](https://github.com/AlexaDeWit/Ecluse/actions/runs/38180562637/job/114592183296)
 measured all 84 listing shapes and 48 retained probes at actual checkout `372e02a14222e65128bd6cae284e335ca4e41b46`.
@@ -307,6 +320,10 @@ The checks compare bytes with each ecosystem's charges:
   working set repeats to the byte between runs.
 - Every regression limit stays below its charge. Measurements must use the same main base as the
   candidate.
+- Each phase fits what the meter holds once the reads step down. The held entries fit the kept
+  charges and the headroom of the reads' whole steps. The entries and the output working set fit
+  the kept charges and what the output charge adds. The output charge spends that headroom first,
+  then takes whole steps. The served body fits what the meter holds once the kept charges go back.
 - Every single-source npm listing's held entry stays smaller than the source it was read from.
   Each residency record's `residencyEntryBelowSource` selects this check. PyPI's packed files and typed view
   still outgrow the source, so that boundary remains npm-only.
@@ -317,7 +334,8 @@ The residency-only [Calibration module](../test/residency/Ecluse/Core/Server/Mem
 stores exact `Rational` figures. One `Calibration` record per ecosystem holds the listing maxima
 that set the charges, and `marginCharge` and `fullReadCharge` apply the charge rule. One `Figures`
 record per capture holds its retained shapes, its single listing's read peak, and each realistic
-listing's output working set. `heldLimit` and `readPeakLimit` apply the regression rules.
+listing's output working set. `heldLimit` and `readPeakLimit` apply the regression rules, and
+`keptCharge` applies the charge rule to the largest shared entry.
 Production keeps its admission literals. `CalibrationResidencySpec` checks their equality with the
 derived charges and pins the rounding. The coverage check fails when a capture has no `Figures`
 record, or a record names no capture.
@@ -331,6 +349,27 @@ Each `metadata-merge` report adds `derived_full_read_permille` and
 `full_read_headroom_per_source_byte`. These fields are informational and add no gate.
 Merged reads retain the whole-step checks above, without a per-byte read gate.
 Single-document read limits and realistic output limits retain their existing checks.
+
+`PackumentResidencySpec` takes a heap census of the live listing path in a fresh child process
+for each capture of at least one meter step. A private and a public origin both serve the capture,
+and one listing runs through the production route after a warm-up. The requests share connection
+pools but use separate caches, so the measured request reads and renders over warmed transport.
+Both runtimes stay rooted through every sample, so their pools and caches keep the process-wide
+lifetime used in production.
+Isolation prevents an earlier example's fixture cleanup from changing a later example's baseline.
+It samples live bytes after major collections before the listing and after policy decides every
+version. It also samples after merge planning and while the response is sent. A last sample follows
+the listing while the test still holds the response. The checks are:
+
+- At both points before the render, what the listing holds fits what the meter holds. This covers
+  the policy's and the merge plan's working sets, which the listing probe does not run.
+- When policy has decided, the listing holds at least one shared entry, so the census sees the
+  documents while the request holds them.
+- While the response is sent, the request holds at most 64 KiB more than the test holds after
+  it. So the reads' documents are unreachable once the body exists, and their kept charges can go
+  back. One shared entry of a capture this size is at least 1.4 MB.
+
+Each example reports a `listing-census` line with the held and charged bytes at each point.
 
 #### Qualified packed integration
 

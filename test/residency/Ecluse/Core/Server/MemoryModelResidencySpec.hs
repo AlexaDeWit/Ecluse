@@ -28,7 +28,7 @@ import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterF
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Admission.Budget (roundUpToStep, scaleCharge)
-import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfOutputPermille))
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfKeptPermille, cfOutputPermille))
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
 import Ecluse.Core.Server.MemoryModel.Calibration (Figures (..), fullReadCharge, heldLimit, readPeakLimit)
 import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), Measurement (..), Residency (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), SingleListing (..), measureInChild, packages, probeSelected, probeSource, requireFigures, requireResidency, retainedFigure, writeMergeDocuments)
@@ -72,6 +72,12 @@ spec = do
                     for_ (residencyFigures record) $ \figures -> do
                         map readPeakLimit (maybeToList (readPeak figures)) `shouldSatisfy` all (< toInteger (cfFullReadPermille factors))
                         map heldLimit (maybeToList (singleOutput figures) <> Map.elems (mergedOutputs figures)) `shouldSatisfy` all (< toInteger (cfOutputPermille factors))
+        it "keeps each shared entry's regression limit below the kept charge" $
+            for_ universe $ \ecosystem ->
+                for_ (adapterFor ecosystem) $ \adapter -> do
+                    record <- requireResidency ecosystem
+                    let kept = toInteger (cfKeptPermille (metadataChargeFactors (adapterMetadata adapter)))
+                    map (heldLimit . retainedShared) (Map.elems (residencyFigures record)) `shouldSatisfy` all (< kept)
         forM_ packages $ \package -> it (toString (cpName package)) $ do
             (size, _) <- authenticate package
             measureInChild Mode.Listing package >>= \case
@@ -91,6 +97,7 @@ spec = do
                     (record, factors) <- listingBounds package
                     figures <- requireFigures package
                     checkPaid factors peaks
+                    checkPhases factors peaks
                     checkReadPeak (readPeak figures) peaks
                     checkOutputCharge factors peaks
                     checkOutputLimit (singleOutput figures) peaks
@@ -119,6 +126,7 @@ spec = do
                     (_, factors) <- listingBounds package
                     figures <- requireFigures package
                     checkPaid factors peaks
+                    checkPhases factors peaks
                     checkOutputCharge factors peaks
                     when (realisticShape shape) (checkOutputLimit (Map.lookup shape (mergedOutputs figures)) peaks)
 
@@ -167,7 +175,26 @@ checkPaid factors peaks = do
   where
     fullRead = scaleCharge (cfFullReadPermille factors) (listingSourceBytes peaks)
     output = scaleCharge (cfOutputPermille factors) (listingBasisBytes peaks)
-    paid = toInteger . roundUpToStep meterStepBytes . max meterStepBytes
+    paid = toInteger . paidSteps
+
+-- What the meter holds for a charge: whole steps, at least the entry step.
+paidSteps :: Int -> Int
+paidSteps = roundUpToStep meterStepBytes . max meterStepBytes
+
+-- After the reads step down to what they keep, the meter covers the entries, then the entries and the render,
+-- then the body it sends once the reads' charge is gone. The output spends the reads' headroom first.
+checkPhases :: ChargeFactors -> ListingPeaks -> Expectation
+checkPhases factors peaks = do
+    entries `shouldSatisfy` (<= toInteger (kept + headroom))
+    entries + outputWorkingSet peaks `shouldSatisfy` (<= toInteger (kept + sending))
+    toInteger (listingServedBytes peaks) `shouldSatisfy` (<= toInteger sending)
+  where
+    entries = rise listingEntryLive listingBaseline peaks
+    fullRead = scaleCharge (cfFullReadPermille factors) (listingSourceBytes peaks)
+    kept = scaleCharge (cfKeptPermille factors) (listingSourceBytes peaks)
+    headroom = paidSteps fullRead - fullRead
+    output = scaleCharge (cfOutputPermille factors) (listingBasisBytes peaks)
+    sending = headroom + roundUpToStep meterStepBytes (max 0 (output - headroom))
 
 -- From one step of source up, a read's peak stays under its capture's limit, which sits below its charge.
 checkReadPeak :: Maybe Rational -> ListingPeaks -> Expectation
