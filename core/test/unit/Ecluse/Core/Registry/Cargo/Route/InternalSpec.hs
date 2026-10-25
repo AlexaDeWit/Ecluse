@@ -2,21 +2,54 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Sparse path captures and native archive identity validation.
+-- | Native response contracts, sparse captures and archive identity validation.
 module Ecluse.Core.Registry.Cargo.Route.InternalSpec (spec) where
 
-import Network.HTTP.Types (Method, methodGet, methodHead, methodPut)
+import Data.List (lookup)
+import Network.HTTP.Types (Method, methodGet, methodHead, methodPut, status401, status403)
+import Network.Wai (responseHeaders, responseStatus)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm))
 import Ecluse.Core.Package (mkPackageName, renderPackageName)
-import Ecluse.Core.Registry.Cargo.Route.Internal (artifactCoordinate, cargoRoutes, takeIndexPath)
+import Ecluse.Core.Registry.Cargo.Route.Internal (artifactContract, artifactCoordinate, artifactReplies, cargoRoutes, indexContract, indexReplies, takeIndexPath)
+import Ecluse.Core.Registry.Npm.Route.Internal (npmPackumentContract, npmPackumentReplies, npmTarballContract, npmTarballReplies)
+import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Path (unFilename)
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (packumentPrivateRefused))
+import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (tarballPrivateRefused))
+import Ecluse.Core.Server.Response (mkRefusal)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Version (mkVersion)
+import Ecluse.Test.Server.Handler (responseBytes)
 
 spec :: Spec
 spec = do
+    describe "native private refusals" $
+        for_ [(401, status401, Just "Cargo"), (403, status403, Nothing)] $ \(code, status, challenge) ->
+            it ("retains private HTTP " <> show code <> " in sparse and archive responses") $ do
+                let headers = [("Cache-Control", "no-store")]
+                    refusal = mkRefusal Nothing "private access was refused"
+                    metadata = responseToWai indexContract (packumentPrivateRefused indexReplies code headers refusal)
+                    archive = responseToWai artifactContract (tarballPrivateRefused artifactReplies code headers refusal)
+                for_ [metadata, archive] $ \response -> do
+                    responseStatus response `shouldBe` status
+                    lookup "WWW-Authenticate" (responseHeaders response) `shouldBe` challenge
+                    lookup "Cache-Control" (responseHeaders response) `shouldBe` Just "no-store"
+                    responseBytes response `shouldReturn` ""
+
+    describe "legacy private refusals" $
+        for_ [401, 403] $ \code ->
+            it ("keeps npm HTTP " <> show code <> " mapped to 403") $ do
+                let refusal = mkRefusal Nothing "private access was refused"
+                    responses =
+                        [ responseToWai npmPackumentContract (packumentPrivateRefused npmPackumentReplies code [] refusal)
+                        , responseToWai npmTarballContract (tarballPrivateRefused npmTarballReplies code [] refusal)
+                        ]
+                for_ responses $ \response -> do
+                    responseStatus response `shouldBe` status403
+                    lookup "WWW-Authenticate" (responseHeaders response) `shouldBe` Nothing
+
     describe "takeIndexPath" $ do
         it "checks native prefixes for every name length" $
             for_ [["1", "a"], ["2", "ab"], ["3", "a", "abc"], ["ab", "cd", "abcde"]] $ \path ->

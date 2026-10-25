@@ -94,14 +94,14 @@ acceptPrivateArtifact :: Status -> Bool
 acceptPrivateArtifact status = acceptArtifact status || isAuthorisationFailure (statusCode status)
 
 -- | Replace private access refusals without invoking either upstream responder.
-privateArtifactResponder :: IO result -> (response -> result) -> RelayResponder response -> RelayResponder result
+privateArtifactResponder :: (Status -> IO result) -> (response -> result) -> RelayResponder response -> RelayResponder result
 privateArtifactResponder refuse admitted responder =
     RelayResponder
         (\status headers body -> answer status (relayStreamResponse responder status headers body))
         (\status headers -> answer status (relayEmptyResponse responder status headers))
   where
     answer status response
-        | isAuthorisationFailure (statusCode status) = refuse
+        | isAuthorisationFailure (statusCode status) = refuse status
         | otherwise = admitted <$> response
 
 -- | Forward private headers without the public leg's anomaly scan.

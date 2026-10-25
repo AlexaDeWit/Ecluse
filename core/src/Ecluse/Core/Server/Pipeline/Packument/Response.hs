@@ -51,7 +51,8 @@ metadataReplies forbiddenText refusalBody =
         , packumentOk = \headers body -> FirstResponse (responseValue headers body)
         , packumentNotModified = \headers -> SecondResponse (FirstResponse (responseValue headers ()))
         , packumentUnauthorised = \headers message -> SecondResponse (SecondResponse (FirstResponse (refusalValue headers message)))
-        , packumentForbidden = \headers message -> SecondResponse (SecondResponse (SecondResponse (FirstResponse (refusalValue headers message))))
+        , packumentPrivateRefused = const forbiddenReply
+        , packumentForbidden = forbiddenReply
         , packumentNotFound = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (refusalValue headers message)))))
         , packumentNotAcceptable = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (refusalValue headers message))))))
         , packumentInternal = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (refusalValue headers message)))))))
@@ -59,4 +60,5 @@ metadataReplies forbiddenText refusalBody =
         , packumentUnavailable = \headers message -> SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (refusalValue headers message))))))))
         }
   where
+    forbiddenReply headers message = SecondResponse (SecondResponse (SecondResponse (FirstResponse (refusalValue headers message))))
     refusalValue headers message = responseValue headers (refusalBody message)

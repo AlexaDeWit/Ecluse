@@ -10,6 +10,10 @@ module Ecluse.Core.Registry.Cargo.Route.Internal (
     cargoArtifactPath,
     takeIndexPath,
     artifactCoordinate,
+    indexContract,
+    indexReplies,
+    artifactContract,
+    artifactReplies,
 ) where
 
 import Data.List.NonEmpty qualified as NE
@@ -201,6 +205,7 @@ fileCapture = Capture "file" "The exact crate-version.crate logical filename." (
 
 type IndexResponse = MetadataResponse (Maybe LByteString)
 
+-- | Responses for admitted sparse metadata and local refusals.
 indexContract :: ResponseContract IndexResponse
 indexContract =
     chooseContract (mediaContract status200 "Admitted native sparse records." (SchemaOpaque "text/plain")) $
@@ -217,21 +222,32 @@ indexContract =
 refusalContract :: Status -> Text -> ResponseContract (ResponseValue (Maybe LByteString))
 refusalContract status description = optionalBodyContract status description (SchemaText "text/plain")
 
+-- | Private 401 replies retain the Cargo credential-provider challenge.
 indexReplies :: PackumentReplies IndexResponse
-indexReplies = base{packumentUnauthorised = \headers -> packumentUnauthorised base (challenge <> headers)}
+indexReplies =
+    base
+        { packumentUnauthorised = \headers -> packumentUnauthorised base (challenge <> headers)
+        , packumentPrivateRefused = \code ->
+            if code == 401
+                then packumentUnauthorised indexReplies
+                else packumentForbidden base
+        }
   where
     base = metadataReplies detailedRejections helpBytes
 
 helpBytes :: Refusal -> Maybe LByteString
 helpBytes = fmap (fromStrict . encodeUtf8) . refusalHelp
 
+-- | Native archives share streamed responses and local refusal status codes.
 artifactContract :: ResponseContract PassthroughResponse
 artifactContract = passthroughContract "Relays the selected archive. Authentication, admission, integrity and availability failures return a local refusal."
 
+-- | Private archive refusals retain native 401 and 403 status codes.
 artifactReplies :: TarballReplies PassthroughResponse
 artifactReplies =
     TarballReplies
         { tarballError = \status headers refusal -> passthroughResponse status (if status == status401 then challenge <> headers else headers) (maybe PassthroughEmpty PassthroughBytes (helpBytes refusal))
+        , tarballPrivateRefused = \code -> tarballError artifactReplies (if code == 401 then status401 else status403)
         , tarballStream = \status headers body -> passthroughResponse status headers (PassthroughStream body)
         , tarballEmpty = \status headers -> passthroughResponse status headers PassthroughEmpty
         }

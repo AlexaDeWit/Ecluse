@@ -135,6 +135,8 @@ data PackumentReplies response = PackumentReplies
     , packumentOk :: ResponseHeaders -> LByteString -> response
     , packumentNotModified :: ResponseHeaders -> response
     , packumentUnauthorised :: ResponseHeaders -> Refusal -> response
+    , packumentPrivateRefused :: Int -> ResponseHeaders -> Refusal -> response
+    -- ^ Preserve or collapse the private origin status according to the native protocol.
     , packumentForbidden :: ResponseHeaders -> Refusal -> response
     , packumentNotFound :: ResponseHeaders -> Refusal -> response
     , packumentNotAcceptable :: ResponseHeaders -> Refusal -> response
@@ -249,14 +251,14 @@ serveAdmittedPackument serving clientToken = do
                     )
                     (readPublic serving)
             case private of
-                OriginAuthorisationFailure _ -> privateAccessRefused serving
+                OriginAuthorisationFailure code -> privateAccessRefused serving code
                 _ -> case checked of
                     Left _ -> mirrorUnavailable serving
                     Right record -> serveMergedPackument serving evalCtx record private public
         _ -> do
             (private, public) <- resolveOrigins serving clientToken
             case private of
-                OriginAuthorisationFailure _ -> privateAccessRefused serving
+                OriginAuthorisationFailure code -> privateAccessRefused serving code
                 _ -> serveMergedPackument serving evalCtx Nothing private public
   where
     deps = psvDeps serving
@@ -272,11 +274,10 @@ readPrivate serving clientToken = fetchPrivateOrigin (psvDeps serving) (psvRunti
 readPublic :: PackumentServing response -> Handler OriginResult
 readPublic serving = fetchPublicOrigin (psvDeps serving) (psvRuntime serving) (psvTicket serving) (psvPublicRead serving) (psvName serving)
 
--- An explicit private refusal stops the request: no public document may stand in for it.
-privateAccessRefused :: PackumentServing response -> Handler response
-privateAccessRefused serving = do
+privateAccessRefused :: PackumentServing response -> Int -> Handler response
+privateAccessRefused serving code = do
     liftIO (mpServeDecision (servingMetrics serving) Metric.Deny)
-    pure (packumentForbidden (psvReplies serving) [] (privateAuthorisationRefusal (pdHelp (psvDeps serving))))
+    pure (packumentPrivateRefused (psvReplies serving) code [] (privateAuthorisationRefusal (pdHelp (psvDeps serving))))
 
 serveMergedPackument ::
     PackumentServing response ->

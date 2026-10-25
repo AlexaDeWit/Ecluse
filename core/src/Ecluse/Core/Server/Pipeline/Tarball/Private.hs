@@ -14,7 +14,7 @@ module Ecluse.Core.Server.Pipeline.Tarball.Private (
 
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (ResponseHeaders, status403, status404, status503)
+import Network.HTTP.Types (ResponseHeaders, status404, status503, statusCode)
 import Network.Wai (ResponseReceived)
 
 import Ecluse.Core.Credential (ClientCredential)
@@ -105,7 +105,7 @@ streamPrivateArtifact ctx token = do
         PrivateShed headers -> PrivateHandled <$> liftIO (respond (tarballError replies shedStatus headers (mkRefusal Nothing shedMessage)))
         PrivateUnavailable -> PrivateAnswered Metric.Unavailable <$> liftIO unavailable
         PrivateIncomplete expected -> PrivateHandled <$> servePublicArtifactWithCoverage (covered expected) ctx
-        PrivateRefused -> PrivateAnswered Metric.Deny <$> liftIO refuse
+        PrivateRefused code -> PrivateAnswered Metric.Deny <$> liftIO (refuse code)
         PrivateMissing miss -> pure (PrivateMissed miss)
         PrivateRequest managed req ->
             liftIO $
@@ -121,14 +121,14 @@ streamPrivateArtifact ctx token = do
     covered expected = maybe False $ \details -> publicMirrorCoverage (Map.singleton (renderVersion (arVersion ctx)) expected) (PackageInfo (arPackage ctx) (Map.singleton (renderVersion (arVersion ctx)) details) Map.empty [])
     shaped = withValidators (arValidators ctx) . withMethod (arMode ctx)
     unavailable = respond (tarballError replies status503 [] (mkRefusal (pdHelp (arDeps ctx)) "managed mirror view is unavailable"))
-    refuse = respond (tarballError replies status403 [] (privateAuthorisationRefusal (pdHelp (arDeps ctx))))
+    refuse code = respond (tarballPrivateRefused replies code [] (privateAuthorisationRefusal (pdHelp (arDeps ctx))))
     privateResponder =
-        privateArtifactResponder ((Metric.Deny,) <$> refuse) (Metric.Admit,) $
+        privateArtifactResponder (\status -> (Metric.Deny,) <$> refuse (statusCode status)) (Metric.Admit,) $
             relayResponder replies respond
 
 data PrivateArtifact
     = PrivateRequest Bool HTTP.Request
-    | PrivateRefused
+    | PrivateRefused Int
     | PrivateMissing OriginMiss
     | PrivateUnavailable
     | PrivateShed ResponseHeaders
@@ -158,7 +158,7 @@ byIndexedLocation :: Maybe MemoryTicket -> ArtifactRequest response -> Maybe Cli
 byIndexedLocation ticket ctx token privateBase privateHostPort = do
     resolved <- tryAny (withPrivateMetadataClient (arRuntime ctx) deps privateBase token (\client -> fetchVersionMetadata client (arPackage ctx) (arVersion ctx)))
     case resolved of
-        Right (Left err) | isNothing (privateMetadataMiss err) -> pure PrivateRefused
+        Right (Left (MetadataAuthorisationFailure code)) -> pure (PrivateRefused code)
         _ -> case (pdMirrorState deps, ticket) of
             (Just mirror, Just admitted) ->
                 liftIO (validateMirrorProject mirror admitted (arPackage ctx)) >>= \case
@@ -176,14 +176,14 @@ byIndexedLocation ticket ctx token privateBase privateHostPort = do
 
     unmanaged resolved
         | pdReadSourceSelection deps == ManagedMirrorAndPublic = case resolved of
-            Right (Left err) -> maybe PrivateRefused PrivateMissing (privateMetadataMiss err)
+            Right (Left err) -> privateMetadataFailure err
             Left _ -> PrivateMissing MissUnresolved
             _ -> PrivateMissing MissAbsent
         | otherwise = ordinary resolved
 
     ordinary = \case
         Left _ -> PrivateMissing MissUnresolved
-        Right (Left err) -> maybe PrivateRefused PrivateMissing (privateMetadataMiss err)
+        Right (Left err) -> privateMetadataFailure err
         Right (Right versionRead) -> maybe (PrivateMissing MissAbsent) (PrivateRequest False) (vrVersion versionRead >>= requestForDetails . vdDetails)
 
     requestForDetails details = do
@@ -192,6 +192,11 @@ byIndexedLocation ticket ctx token privateBase privateHostPort = do
         guard (artifactAuthorityHonoured (thgEcosystemHosts (pdTarballHostGate deps)) privateHostPort target)
         let carried = if target == privateHostPort then token else Nothing
         rightToMaybe (artifactByUrl (pdArtifact deps) carried (artUrl artifact))
+
+privateMetadataFailure :: MetadataError -> PrivateArtifact
+privateMetadataFailure = \case
+    MetadataAuthorisationFailure code -> PrivateRefused code
+    err -> PrivateMissing (fromMaybe MissUnresolved (privateMetadataMiss err))
 
 -- | Classify metadata misses, with 'Nothing' for access refusal and absence for identity faults.
 privateMetadataMiss :: MetadataError -> Maybe OriginMiss

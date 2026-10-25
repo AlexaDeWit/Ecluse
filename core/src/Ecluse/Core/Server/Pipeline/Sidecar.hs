@@ -202,7 +202,7 @@ relay ctx private client accepts request =
     respond = arRespond ctx
     responder =
         if private
-            then privateArtifactResponder (respond (privateRefusal ctx)) id upstreamResponder
+            then privateArtifactResponder (const (respond (privateRefusal ctx))) id upstreamResponder
             else upstreamResponder
     upstreamResponder = relayResponder replies respond
 
