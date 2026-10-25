@@ -138,8 +138,8 @@ fetchDocument client ecosystem pkg = case liveRequest ecosystem pkg of
 liveRequest :: EcosystemBench -> PackageName -> Either Text Request
 liveRequest ecosystem name = do
     origin <- mkRegistryUrl (ebOrigin ecosystem)
-    reader <- first show (ebReader ecosystem)
-    first show (erRequest reader (mkBaseRequest origin) Nothing name)
+    nativeRead <- first show (ebReader ecosystem)
+    first show (erRequest nativeRead (mkBaseRequest origin) Nothing name)
 
 outcomeFrom :: Text -> Maybe Double -> Either Text (Int, [(Leg, Measurement)]) -> PackageOutcome
 outcomeFrom name upstreamMs = \case

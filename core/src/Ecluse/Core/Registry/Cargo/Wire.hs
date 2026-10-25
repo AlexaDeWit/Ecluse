@@ -53,9 +53,9 @@ validateCargoRecord = \case
             Just (Array dependencies) -> traverse_ dependency dependencies
             _ -> Left "invalid Cargo dependencies"
         required featureMap fields "features"
-        optional isBool fields "yanked"
-        optional featureMap fields "features2"
-        traverse_ (optional nullableText fields) ["links", "rust_version"]
+        optionalField isBool fields "yanked"
+        optionalField featureMap fields "features2"
+        traverse_ (optionalField nullableText fields) ["links", "rust_version"]
         case KeyMap.lookup "v" fields of
             Nothing -> Right ()
             Just (Number number) | Just schema <- toBoundedInteger @Int number, schema == 1 || schema == 2 -> Right ()
@@ -65,9 +65,9 @@ validateCargoRecord = \case
     dependency = \case
         Object fields -> do
             traverse_ (required isString fields) ["name", "req"]
-            optional stringArray fields "features"
-            traverse_ (optional isBool fields) ["optional", "default_features", "lib"]
-            traverse_ (optional nullableText fields) ["target", "kind", "registry", "package", "bindep_target"]
+            optionalField stringArray fields "features"
+            traverse_ (optionalField isBool fields) ["optional", "default_features", "lib"]
+            traverse_ (optionalField nullableText fields) ["target", "kind", "registry", "package", "bindep_target"]
         _ -> Left "invalid Cargo dependency"
 
 required :: (Value -> Bool) -> KeyMap.KeyMap Value -> Key.Key -> Either Text ()
@@ -75,8 +75,8 @@ required predicate fields key = case KeyMap.lookup key fields of
     Just value | predicate value -> Right ()
     _ -> Left ("invalid Cargo field: " <> Key.toText key)
 
-optional :: (Value -> Bool) -> KeyMap.KeyMap Value -> Key.Key -> Either Text ()
-optional predicate fields key = case KeyMap.lookup key fields of
+optionalField :: (Value -> Bool) -> KeyMap.KeyMap Value -> Key.Key -> Either Text ()
+optionalField predicate fields key = case KeyMap.lookup key fields of
     Nothing -> Right ()
     Just value -> unless (predicate value) (Left ("invalid Cargo field: " <> Key.toText key))
 

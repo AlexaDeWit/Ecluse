@@ -508,8 +508,8 @@ project package bytes = (\manifest -> (manifestInfo manifest, manifestRaw manife
 
 readCapture :: CorpusPackage -> ByteString -> IO Manifest
 readCapture package bytes = do
-    (reader, upstream) <- maybe noResidencyCorpus pure (captureSource (pkgEcosystem (cpPackage package)))
-    captureManifest reader upstream (cpPackage package) [bytes] >>= either (fail . show) pure
+    (nativeRead, upstream) <- maybe noResidencyCorpus pure (captureSource (pkgEcosystem (cpPackage package)))
+    captureManifest nativeRead upstream (cpPackage package) [bytes] >>= either (fail . show) pure
 
 captureSource :: Ecosystem -> Maybe (EcosystemRead, CaptureUpstream)
 captureSource = fmap (\record -> (residencyRead record, residencyUpstream record)) . residencyFor
@@ -610,14 +610,14 @@ readVersionList limits next = readJsonWalk (MetadataBodyLimit (maxMetadataBytes 
 readFull :: Limits -> PackageName -> Body -> IO (Either Text CacheEntry)
 readFull limits name body = case captureSource (pkgEcosystem name) of
     Nothing -> pure (Left "no metadata residency record")
-    Just (reader, upstream) -> bimap show manifestEntry <$> readManifest reader passthroughTracingPort (sourceTerms limits upstream) name body
+    Just (nativeRead, upstream) -> bimap show manifestEntry <$> readManifest nativeRead passthroughTracingPort (sourceTerms limits upstream) name body
 
 streamSelected :: Limits -> PackageName -> Version -> IO ByteString -> IO (Either Text (Held, Int, Maybe ContentDigest))
 streamSelected limits name version next = case captureSource (pkgEcosystem name) of
     Nothing -> pure (Left "no metadata residency record")
-    Just (reader, upstream) ->
+    Just (nativeRead, upstream) ->
         bimap show (\selected -> (HeldSelected selected, vrBodyBytes selected, Nothing))
-            <$> readVersion reader passthroughTracingPort (sourceTerms limits upstream) name version (sourceBody next)
+            <$> readVersion nativeRead passthroughTracingPort (sourceTerms limits upstream) name version (sourceBody next)
 
 -- A read from the capture's registry under the probe's own limits, outside the memory gate.
 sourceTerms :: Limits -> CaptureUpstream -> ReadTerms

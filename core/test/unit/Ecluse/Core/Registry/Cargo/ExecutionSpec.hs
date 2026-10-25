@@ -67,12 +67,12 @@ spec = describe "Cargo install evidence" $ do
         active <- fixture "1.2.3" [("build.rs", "unexecuted bytes")]
         count <- newIORef (0 :: Int)
         provider <- newCargoInstallEvidence defaultLimits
-        let reader _ artifact pay = do
+        let artifactRead _ artifact pay = do
                 modifyIORef' count (+ 1)
                 let bytes = if any ((== sha256Hex active) . hashValue) (artHashes artifact) then active else inert
                 pay (BS.length bytes)
                 pure (Right bytes)
-        reads <- newInstallEvidenceReads provider (context reader)
+        reads <- newInstallEvidenceReads provider (context artifactRead)
         resolved reads (details "1.2.3" inert) `shouldReturn` InstallDetermined NoCodeOnInstall
         resolved reads (details "1.2.3" active) >>= (`shouldSatisfy` runs)
         resolved reads (details "1.2.3" inert) `shouldReturn` InstallDetermined NoCodeOnInstall
@@ -158,11 +158,11 @@ spec = describe "Cargo install evidence" $ do
         readIORef count `shouldReturn` 1
 
 context :: InstallArtifactRead -> InstallEvidenceContext
-context reader =
+context artifactRead =
     InstallEvidenceContext
         { ieLimits = defaultLimits
         , ieRole = InstallPublicAdmission
-        , ieReadArtifact = reader
+        , ieReadArtifact = artifactRead
         , ieBudget = InstallEvidenceBudget (\action -> Just <$> action (const pass) (const pass))
         , ieFlightBudget = Nothing
         , ieDiagnostic = const pass

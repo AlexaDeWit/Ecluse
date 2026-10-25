@@ -315,8 +315,8 @@ admitEvaluation reads policy job evaluation = case evaluation of
         Nothing -> pure (Left (Dropped "the source inventory has no supported trigger artifact"))
         Just trigger -> do
             ctx <- liftIO (mkEvalContext (wpNow policy) (pure Nothing))
-            reader <- liftIO (reads (vdDetails doc))
-            (admission, decision) <- liftIO (admitArtifactWithInstallRead (installEvidenceMode (wpInstallEvidence policy)) reader ctx (wpRules policy) (wpMinIntegrity policy) trigger (vdDetails doc))
+            installRead <- liftIO (reads (vdDetails doc))
+            (admission, decision) <- liftIO (admitArtifactWithInstallRead (installEvidenceMode (wpInstallEvidence policy)) installRead ctx (wpRules policy) (wpMinIntegrity policy) trigger (vdDetails doc))
             case outcomeOfAdmission job admission of
                 Left outcome -> pure (Left outcome)
                 Right _ -> do

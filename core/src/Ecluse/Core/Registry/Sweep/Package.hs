@@ -150,8 +150,8 @@ selectPackage counting ports counters mount ctx name stored
                         }
         let decideSubject version = do
                 let (ev, details) = evidence version
-                reader <- maybe (pure Nothing) reads details
-                decide ev reader
+                installRead <- maybe (pure Nothing) reads details
+                decide ev installRead
         catMaybes <$> traverse (decideVersion counting ports counters decideSubject) served
 
 -- The listing establishes exact identity even when the manifest keys an equivalent spelling.

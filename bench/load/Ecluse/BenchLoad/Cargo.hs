@@ -268,12 +268,12 @@ rampScenario =
 selectWarmArtifacts :: [CorpusPackage] -> Map Text LByteString -> IO (Map Text SelectedArtifact)
 selectWarmArtifacts packages captures = do
     pins <- readCorpusPins (.: "cargoPins") >>= either (benchFail . toText) pure
-    reader <- either (benchFail . show) pure cargoCaptureDiscovery
+    discovery <- either (benchFail . show) pure cargoCaptureDiscovery
     fmap Map.fromList $ forM packages $ \package -> do
         let name = cpName package
         version <- maybe (benchFail ("missing Cargo workload pin: " <> name)) pure (Map.lookup name pins)
         bytes <- maybe (benchFail ("missing Cargo capture: " <> name)) pure (Map.lookup name captures)
-        manifest <- captureManifest (cargoRead reader) cargoCaptureUpstream (cpPackage package) [LBS.toStrict bytes] >>= either (benchFail . show) pure
+        manifest <- captureManifest (cargoRead discovery) cargoCaptureUpstream (cpPackage package) [LBS.toStrict bytes] >>= either (benchFail . show) pure
         unless (Map.member version (infoVersions (manifestInfo manifest))) (benchFail ("Cargo workload pin absent: " <> name <> "@" <> version))
         route <- maybe (benchFail "Cargo workload pin has no archive route") pure (cargoArtifactPath (cpPackage package) (mkVersion Cargo version))
         pure (name, SelectedArtifact route ("https://static.crates.io/crates/" <> name <> "/" <> name <> "-" <> version <> ".crate"))

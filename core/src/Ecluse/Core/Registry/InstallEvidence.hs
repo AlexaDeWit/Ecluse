@@ -53,7 +53,7 @@ newInstallEvidenceBudget :: Deadlines -> Limits -> IO InstallEvidenceBudget
 newInstallEvidenceBudget deadlines limits = do
     let capacity = max 1 (maxMetadataBytes limits)
     admission <- newWeightedAdmission deadlines capacity 8 admissionWaitMicros
-    pure . InstallEvidenceBudget $ \action -> do
+    pure $ InstallEvidenceBudget $ \action -> do
         fmap rightToMaybe . withWeightedAdmission observers admission capacity $ do
             regions <- MVar.newMVar (0, 0)
             let pay change = MVar.modifyMVar_ regions $ \previous -> do

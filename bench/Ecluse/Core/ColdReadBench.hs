@@ -59,8 +59,8 @@ withBenchmarks ecosystems action = do
 replayResponse :: (EcosystemBench, LoadedEntry) -> IO (ByteString, BL.ByteString)
 replayResponse (ecosystem, LoadedEntry{lePackage = package, leBytes = raw}) = do
     base <- expectRight (mkRegistryUrl (ebOrigin ecosystem))
-    reader <- expectRight (ebReader ecosystem)
-    request <- expectRight (erRequest reader (mkBaseRequest base) Nothing (cpPackage package))
+    nativeRead <- expectRight (ebReader ecosystem)
+    request <- expectRight (erRequest nativeRead (mkBaseRequest base) Nothing (cpPackage package))
     pure (HTTP.path request, BL.fromStrict raw)
 
 replayApplication :: Map ByteString BL.ByteString -> Application

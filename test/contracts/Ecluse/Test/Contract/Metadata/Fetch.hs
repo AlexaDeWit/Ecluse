@@ -169,7 +169,7 @@ requestSpec eco = describe "the request" $ do
         withRoutedStub redirectOnce $ \stub -> withSweeper $ \deadlines -> do
             origin <- stubConfig deadlines loopbackRegistryUrl stub
             let factory = PrepareRead $ \tracing selectedOrigin ->
-                    fmap (\reader -> reader{erRequest = unsealedRequest}) <$> prepareRead (rdPrepareRead eco) tracing selectedOrigin
+                    fmap (\nativeRead -> nativeRead{erRequest = unsealedRequest}) <$> prepareRead (rdPrepareRead eco) tracing selectedOrigin
             outcome <- prepareManifest factory passthroughTracingPort origin (thing eco)
             void outcome `shouldBe` Left (MetadataHttpFailure 302)
             map capPath <$> allCaptured stub `shouldReturn` (["/config.json" | isJust (rdDiscovery eco)] <> ["/"])

@@ -42,8 +42,8 @@ spec = describe "ordered install evidence" $ do
             readIORef count `shouldReturn` 0
     it "refuses a missing resolver or a resolver that returns unknown before a lower age allow" $ do
         rules <- executionThenAge
-        for_ [Nothing, Just (InstallEvidenceRead (pure (InstallDetermined CodeExecUnknown))), Just (InstallEvidenceRead (pure (InstallUndetermined InstallSignalUnread)))] $ \reader ->
-            evalRulesWithInstallRead RequireInstallResolution ctx rules unknown reader >>= (`shouldSatisfy` isUndecidable)
+        for_ [Nothing, Just (InstallEvidenceRead (pure (InstallDetermined CodeExecUnknown))), Just (InstallEvidenceRead (pure (InstallUndetermined InstallSignalUnread)))] $ \installRead ->
+            evalRulesWithInstallRead RequireInstallResolution ctx rules unknown installRead >>= (`shouldSatisfy` isUndecidable)
     it "retains read-fault transience instead of falling through to age" $ do
         rules <- executionThenAge
         for_ [WillResolve Nothing, WontResolve] $ \transience -> do

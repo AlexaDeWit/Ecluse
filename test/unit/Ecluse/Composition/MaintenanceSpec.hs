@@ -159,8 +159,8 @@ captureMetadataRequests eco build cleared credential = withSweeper $ \deadlines 
     adapter <- maybe (fail "missing adapter") pure (adapterFor eco)
     captured <- newIORef []
     let capture tracing origin name = do
-            reader <- prepareRead (metadataRead (adapterMetadata adapter)) tracing origin >>= either (fail . show) pure
-            request <- either (fail . show) pure (erRequest reader (ocBaseRequest origin) (ocToken origin) name)
+            nativeRead <- prepareRead (metadataRead (adapterMetadata adapter)) tracing origin >>= either (fail . show) pure
+            request <- either (fail . show) pure (erRequest nativeRead (ocBaseRequest origin) (ocToken origin) name)
             modifyIORef' captured (<> [request])
             pure (Left MetadataAbsent)
     readManifest <- build (anonymousPorts deadlines){spCredential = credential} defaultLimits cleared{cbFetchManifest = capture}

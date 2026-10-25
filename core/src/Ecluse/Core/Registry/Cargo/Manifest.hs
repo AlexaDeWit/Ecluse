@@ -260,10 +260,10 @@ dependencyGroups :: Maybe Text -> Table -> Either ParseError [Value]
 dependencyGroups target values =
     concat
         <$> traverse
-            group
+            dependencyGroup
             [("dependencies", "dependencies", "normal"), ("dev-dependencies", "dev_dependencies", "dev"), ("build-dependencies", "build_dependencies", "build")]
   where
-    group (key, legacy, kind) = do
+    dependencyGroup (key, legacy, kind) = do
         dependencies <- if key == legacy then optionalTable key values else aliased key legacy values >>= maybe (Right Map.empty) table
         traverse (uncurry (dependency target kind)) (Map.toList dependencies)
 
@@ -277,7 +277,7 @@ dependency target kind alias value = do
     when (T.null requirement) (bad "Cargo dependency has an empty version requirement")
     original <- fromMaybe alias <$> optionalString "package" details
     features <- optionalStrings "features" details
-    optional <- maybe (Right False) boolean (Map.lookup "optional" details)
+    isOptional <- maybe (Right False) boolean (Map.lookup "optional" details)
     defaultFeatures <- aliased "default-features" "default_features" details >>= maybe (Right True) boolean
     registry <- fromMaybe cratesIoIndex <$> optionalString "registry-index" details
     pure $
@@ -285,7 +285,7 @@ dependency target kind alias value = do
             [ "name" .= original
             , "version_req" .= requirement
             , "features" .= features
-            , "optional" .= optional
+            , "optional" .= isOptional
             , "default_features" .= defaultFeatures
             , "target" .= target
             , "kind" .= kind
@@ -305,7 +305,7 @@ indexDependency (Object fields) = do
     requirement <- requiredJson "req" fields >>= jsonString
     features <- requiredJson "features" fields >>= array
     traverse_ jsonString features
-    optional <- requiredJson "optional" fields >>= jsonBool
+    isOptional <- requiredJson "optional" fields >>= jsonBool
     defaults <- requiredJson "default_features" fields >>= jsonBool
     target <- nullableString "target" fields
     kind <- fromMaybe "normal" <$> nullableString "kind" fields
@@ -316,7 +316,7 @@ indexDependency (Object fields) = do
             [ "name" .= fromMaybe alias original
             , "version_req" .= requirement
             , "features" .= features
-            , "optional" .= optional
+            , "optional" .= isOptional
             , "default_features" .= defaults
             , "target" .= target
             , "kind" .= kind

@@ -356,17 +356,17 @@ newEvaluatorWithInstallRead mode ctx rules = do
                     _ -> False
                 )
                 rules
-    pure $ \ev reader ->
-        if not hasInstallRule || (mode == ProjectedInstallFacts && isNothing reader)
+    pure $ \ev installRead ->
+        if not hasInstallRule || (mode == ProjectedInstallFacts && isNothing installRead)
             then runBound ev projected
             else do
                 memo <- newMVar Nothing
                 let resolve = modifyMVar memo $ \case
                         Just result -> pure (Just result, result)
                         Nothing -> do
-                            result <- caught (resolveInstall reader)
+                            result <- caught (resolveInstall installRead)
                             pure (Just result, result)
-                    bound = map (second (\bind -> bind mode (isJust reader) resolve)) binders
+                    bound = map (second (\bind -> bind mode (isJust installRead) resolve)) binders
                 runBound ev bound
   where
     runBound ev bound =
@@ -381,7 +381,7 @@ evalRules ctx rules ev = newEvaluator ctx rules >>= ($ ev)
 
 -- | Decide one immutable version with its optional closed install-fact read.
 evalRulesWithInstallRead :: InstallEvidenceMode -> EvalContext -> [PreparedRule] -> RuleEvidence -> Maybe InstallEvidenceRead -> IO Decision
-evalRulesWithInstallRead mode ctx rules ev reader = newEvaluatorWithInstallRead mode ctx rules >>= (\decide -> decide ev reader)
+evalRulesWithInstallRead mode ctx rules ev installRead = newEvaluatorWithInstallRead mode ctx rules >>= (\decide -> decide ev installRead)
 
 -- How the fold runs one rule's evaluation. Each way forces it with 'forceEvaluation'.
 type RunEvaluation = IO RuleEvaluation -> IO RuleEvaluation

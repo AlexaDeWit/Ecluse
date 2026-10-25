@@ -72,8 +72,8 @@ admitArtifactWithDecision ctx rules minIntegrity file details =
 
 -- | Retain the selected version and the closed evidence read through the shared admission gate.
 admitArtifactWithInstallRead :: InstallEvidenceMode -> Maybe InstallEvidenceRead -> EvalContext -> [PreparedRule] -> MinIntegrity -> Filename -> PackageDetails -> IO (ArtifactAdmission, Decision)
-admitArtifactWithInstallRead mode reader ctx rules minIntegrity file details = do
-    decision <- evalRulesWithInstallRead mode ctx rules (completeEvidence details) reader
+admitArtifactWithInstallRead mode installRead ctx rules minIntegrity file details = do
+    decision <- evalRulesWithInstallRead mode ctx rules (completeEvidence details) installRead
     pure (admissionOf minIntegrity file details decision, decision)
 
 -- The filename and integrity steps over a settled rules decision.

@@ -209,8 +209,8 @@ cargoBench =
         , ebDecode = const Cargo.cargoVersionKeys
         , ebProject = \name bytes -> Cargo.cargoCaptureDiscovery >>= \discovery -> projectCargoIndex discovery defaultLimits name bytes
         , ebProjectServed = \name bytes -> Cargo.cargoServedDiscovery >>= \discovery -> projectCargoIndex discovery defaultLimits name bytes
-        , ebRead = \name chunks -> either (pure . Left) (\reader -> captureManifest reader cargoCaptureUpstream name chunks) capturedCargoRead
-        , ebSelective = \name version chunks -> either (pure . Left) (\reader -> fmap (fmap readDetails) (captureVersion reader cargoCaptureUpstream name version chunks)) capturedCargoRead
+        , ebRead = \name chunks -> either (pure . Left) (\nativeRead -> captureManifest nativeRead cargoCaptureUpstream name chunks) capturedCargoRead
+        , ebSelective = \name version chunks -> either (pure . Left) (\nativeRead -> fmap (fmap readDetails) (captureVersion nativeRead cargoCaptureUpstream name version chunks)) capturedCargoRead
         , ebReadDocument = fmap snd . first show . Cargo.projectCargoTree defaultLimits Cargo.benchCrate
         , ebNestingDepth = \document -> maybe (-1) (either (const (-1)) (const 1) . traverse (checkNestingDepth defaultLimits . snd) . cargoRecords) (snd cargoCached document)
         , ebMetadata = MetadataRendering assembleCargoDocument serialiseCargoDocument
@@ -261,7 +261,7 @@ benchCredential = Just (bareCredential (mkSecret "bench-token"))
 
 -- The whole-document request a metadata read seals before it sends.
 originRequest :: EcosystemRead -> BaseRequest -> PackageName -> Either UrlFormationError Request
-originRequest reader base name = sealRequest <$> erRequest reader base benchCredential name
+originRequest nativeRead base name = sealRequest <$> erRequest nativeRead base benchCredential name
 
 -- A wheel location as the index lists it, which the artifact read fetches by URL.
 wheelUrl :: PackageName -> Text

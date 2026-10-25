@@ -62,7 +62,7 @@ newTicketInstallEvidenceFlightBudget ticket = do
                 Just flight -> charge (servingFlight flight ticket) bytes
     bytes <- newChargeRegion pay
     inspection <- newChargeRegion pay
-    pure . InstallEvidenceFlightBudget $ \key action -> do
+    pure $ InstallEvidenceFlightBudget $ \key action -> do
         let flight = FlightKey VersionStore (toShort ("install-evidence:" <> key))
         awaitingFlight ticket flight . withMVar serial $ \() ->
             (atomicWriteIORef active (Just flight) >> action (InstallEvidenceBudget (\use -> Just <$> use bytes inspection)))

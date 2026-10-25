@@ -62,12 +62,12 @@ heldManifest eco limits base name chunks = readManifest eco passthroughTracingPo
 
 -- | 'heldManifest' of a capture, under the default limits and against the registry it came from.
 captureManifest :: EcosystemRead -> CaptureUpstream -> PackageName -> [ByteString] -> IO (Either MetadataError Manifest)
-captureManifest reader upstream = heldManifest reader defaultLimits (upstreamOrigin upstream)
+captureManifest nativeRead upstream = heldManifest nativeRead defaultLimits (upstreamOrigin upstream)
 
 -- | The production selected read of a capture's chunks, on the terms of 'captureManifest'.
 captureVersion :: EcosystemRead -> CaptureUpstream -> PackageName -> Version -> [ByteString] -> IO (Either MetadataError VersionRead)
-captureVersion reader upstream name version chunks =
-    readVersion reader passthroughTracingPort (heldTerms defaultLimits (upstreamOrigin upstream) chunks) name version (heldBody chunks)
+captureVersion nativeRead upstream name version chunks =
+    readVersion nativeRead passthroughTracingPort (heldTerms defaultLimits (upstreamOrigin upstream) chunks) name version (heldBody chunks)
 
 heldTerms :: Limits -> Text -> [ByteString] -> ReadTerms
 heldTerms limits base chunks =

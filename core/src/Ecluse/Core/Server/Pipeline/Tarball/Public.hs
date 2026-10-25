@@ -165,8 +165,8 @@ gatePublicVersion ticket covered ctx advisoryEtag prepared = do
         VersionMissing -> pure (Refused (if covered Nothing then versionAbsent else upstreamUnavailable))
         VersionPresent doc _ | not (covered (Just (vdDetails doc))) -> pure (Refused upstreamUnavailable)
         VersionPresent doc _ -> withRunInIO $ \run -> do
-            let evaluateWith reader = spanRuleEval (srTracing rt) (arPackage ctx) (arVersion ctx) $ do
-                    (gate, seconds) <- timedSeconds (gateVersion evalCtx deps reader (arFile ctx) (vdDetails doc))
+            let evaluateWith installRead = spanRuleEval (srTracing rt) (arPackage ctx) (arVersion ctx) $ do
+                    (gate, seconds) <- timedSeconds (gateVersion evalCtx deps installRead (arFile ctx) (vdDetails doc))
                     mpRuleEvalDuration (srMetrics rt) (evalTier (pdRules deps)) seconds
                     pure (gate, gateVerdict gate)
             case pdInstallEvidence deps of
@@ -187,8 +187,8 @@ gateVerdict = \case
     Refused decision -> decision
 
 gateVersion :: EvalContext -> PackumentDeps -> Maybe InstallEvidenceRead -> Filename -> PackageDetails -> IO PublicArtifactGate
-gateVersion ctx deps reader file details = do
-    (admission, decision) <- admitArtifactWithInstallRead (installEvidenceMode (pdInstallEvidence deps)) reader ctx (pdRules deps) (pdMinIntegrity deps) file details
+gateVersion ctx deps installRead file details = do
+    (admission, decision) <- admitArtifactWithInstallRead (installEvidenceMode (pdInstallEvidence deps)) installRead ctx (pdRules deps) (pdMinIntegrity deps) file details
     pure (publicArtifactGate details admission (skippedChecks decision))
 
 -- | Render the shared admission verdict on the serve surface.
