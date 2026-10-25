@@ -14,8 +14,8 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Foreign.StablePtr (deRefStablePtr, freeStablePtr, newStablePtr)
-import Network.HTTP.Types (methodGet, status200, statusCode)
-import Network.Wai (Application, defaultRequest, requestMethod, responseLBS, responseStatus)
+import Network.HTTP.Types (hContentType, methodGet, status200, statusCode)
+import Network.Wai (Application, defaultRequest, pathInfo, requestMethod, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 import UnliftIO.Exception (bracket, evaluate, throwIO)
@@ -42,7 +42,7 @@ import Ecluse.Test.Corpus (CaptureUpstream (upstreamOrigin), CorpusPackage (cpPa
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Port (noopMetricsPort)
-import Ecluse.Test.Registry.Cargo.Fixtures (cargoShard)
+import Ecluse.Test.Registry.Cargo.Fixtures (cargoDiscovery, cargoShard)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureResponse), deliverServe, testServeRuntime)
@@ -120,8 +120,8 @@ takeCensus package captured capture = withSweeper $ \deadlines -> do
     planned <- newIORef Nothing
     responded <- newIORef Nothing
     adapter <- maybe (fail "census ecosystem has no adapter") pure (adapterFor (pkgEcosystem name))
-    testWithApplication (servingCapture captured capture) $ \publicPort ->
-        testWithApplication (servingCapture captured capture) $ \privatePort -> do
+    testWithApplication (servingCapture (pkgEcosystem name) captured capture) $ \publicPort ->
+        testWithApplication (servingCapture (pkgEcosystem name) captured capture) $ \privatePort -> do
             -- Every version is old enough to pass, so the policy evaluates the whole document.
             let deps = serveDepsFor adapter (Just (origin privatePort)) (origin publicPort) NoMirrorWrite rules (pure (UTCTime (fromGregorian 2030 1 1) 0))
             binding <- maybe (fail "census ecosystem has no mount") pure (mountBindingFor (pkgEcosystem name) deps Nothing Nothing)
@@ -176,12 +176,15 @@ listingPath name = case pkgEcosystem name of
 
 {- Serve the capture with its locations on this origin's own authority, as projection keeps no other.
 The body is rebased once, so the origin holds the same bytes at every sample. -}
-servingCapture :: Text -> ByteString -> IO Application
-servingCapture captured capture = do
+servingCapture :: Ecosystem -> Text -> ByteString -> IO Application
+servingCapture ecosystem captured capture = do
     rebased <- newIORef Nothing
-    pure $ \request respond -> do
-        body <- readIORef rebased >>= maybe (rebase request >>= \fresh -> fresh <$ writeIORef rebased (Just fresh)) pure
-        respond (responseLBS status200 [] body)
+    pure $ \request respond ->
+        if ecosystem == Cargo && pathInfo request == ["config.json"]
+            then respond (responseLBS status200 [(hContentType, "application/json")] (LBS.fromStrict (cargoDiscovery (selfBaseUrl request) Nothing False)))
+            else do
+                body <- readIORef rebased >>= maybe (rebase request >>= \fresh -> fresh <$ writeIORef rebased (Just fresh)) pure
+                respond (responseLBS status200 [] body)
   where
     authority = T.intercalate "/" (take 3 (T.splitOn "/" captured))
     rebase request = evaluate (rebaseAuthority authority (selfBaseUrl request) (LBS.fromStrict capture))
