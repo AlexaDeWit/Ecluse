@@ -17,6 +17,7 @@ import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
+import Ecluse.E2E.Cargo.MirrorInstallE2ESpec (cargoMirrorComplete)
 import Ecluse.E2E.Fixtures.Advisories (maliciousAdvisoryId)
 import Ecluse.E2E.Fixtures.Cargo.Dredger
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
@@ -188,7 +189,7 @@ rolloutOps =
         , withWorkerRole = withObservedWorker
         , awaitPublished = \worker release -> do
             (name, version) <- workerRelease release
-            awaitContainerLog worker ("mirror version complete: " <> name <> "@" <> version) 240
+            awaitContainerLog worker (cargoMirrorComplete name version) 240
         , workerLogs = containerLogs
         , publicationCoordinate = \release -> do
             (name, version) <- workerRelease release
@@ -282,23 +283,23 @@ safetyCases :: PhaseRecorder -> Spec
 safetyCases recorder = aroundAll acquire $ do
     it (caseLabel "cargo/dredger-native-safety/deletion-cap" "stops physical native deletion at the configured logical version cap") $ \(plane, mirror, _) -> do
         publish (Native.directStore mirror) (packageName previewPackage) "2.0.0"
-        before <- Native.storeVersions mirror (packageName previewPackage)
-        before `shouldBe` ["1.0.0", "2.0.0"]
+        previousVersions <- Native.storeVersions mirror (packageName previewPackage)
+        previousVersions `shouldBe` ["1.0.0", "2.0.0"]
         requests <- codeArtifactDeleteRequests (Native.cspControl plane)
         run <- runNativeSweep plane [("ECLUSE_DREDGER__DELETION_CAP", "1")] Apply (IdentityPolicy [packageName previewPackage])
         sweepExit run `shouldNotBe` ExitSuccess
         sweepOutput run `shouldSatisfy` T.isInfixOf "reached its deletion cap of 1"
-        after <- Native.storeVersions mirror (packageName previewPackage)
-        length after `shouldBe` 1
+        remainingVersions <- Native.storeVersions mirror (packageName previewPackage)
+        length remainingVersions `shouldBe` 1
         made <- drop (length requests) <$> codeArtifactDeleteRequests (Native.cspControl plane)
         length made `shouldBe` 1
     it (caseLabel "cargo/dredger-native-safety/unsafe-upstream" "refuses a refillable mirror target before any native deletion") $ \(plane, mirror, cache) -> do
-        before <- (,) <$> Native.storeInventory mirror <*> Native.storeInventory cache
+        previousInventory <- (,) <$> Native.storeInventory mirror <*> Native.storeInventory cache
         requests <- codeArtifactDeleteRequests (Native.cspControl plane)
         run <- Native.withUnsafeMirror plane (runNativeSweep plane [] Apply (FullIdentity (packageName deniedPackage)))
         sweepExit run `shouldNotBe` ExitSuccess
         T.toLower (sweepOutput run) `shouldSatisfy` T.isInfixOf "upstream"
-        ((,) <$> Native.storeInventory mirror <*> Native.storeInventory cache) `shouldReturn` before
+        ((,) <$> Native.storeInventory mirror <*> Native.storeInventory cache) `shouldReturn` previousInventory
         codeArtifactDeleteRequests (Native.cspControl plane) `shouldReturn` requests
     it (caseLabel "cargo/dredger-native-safety/native-yank-not-deletion" "keeps yank separate from physical removal and observes CodeArtifact deleting the native archive") $ \(plane, mirror, _) -> do
         let name = packageName deniedPackage

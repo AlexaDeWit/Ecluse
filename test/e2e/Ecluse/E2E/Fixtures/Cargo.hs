@@ -22,7 +22,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.E2E.Harness.Docker (withDataPlane)
 import Ecluse.E2E.Harness.Proxy (proxyGet)
-import Ecluse.E2E.Harness.Types
+import Ecluse.E2E.Harness.Types (E2E, Topology (topologyAws), cargoTopology)
 import Ecluse.Test.Contract.Ecosystem (FamilyMetadata (..))
 import Ecluse.Test.Contract.Types
 import Ecluse.Test.Registry.Cargo.Fixtures
