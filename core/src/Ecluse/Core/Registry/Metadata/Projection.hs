@@ -7,6 +7,7 @@ Ecosystem callbacks own wire projection and package-name parsing.
 -}
 module Ecluse.Core.Registry.Metadata.Projection (
     validateReportedName,
+    validateNameAgreement,
     projectionResult,
     streamError,
 ) where
@@ -18,7 +19,7 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (ParseError)
 import Ecluse.Core.Registry.JsonStream (isNestingLimit)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable))
-import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
+import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected), checkNameAgreement)
 import Ecluse.Core.Security (
     LimitError (TooDeeplyNested),
     Limits,
@@ -32,6 +33,12 @@ validateReportedName parseName = \case
     Just nameValue -> case parseMaybe parseJSON nameValue of
         Nothing -> Left MetadataUndecodable
         Just raw -> first (const MetadataUndecodable) (parseName raw)
+
+-- | Validate the native name and preserve it when refusing a mismatched origin.
+validateNameAgreement :: (Text -> Either ParseError PackageName) -> PackageName -> Maybe Value -> Either MetadataError PackageName
+validateNameAgreement parseName requested value = do
+    reported <- validateReportedName parseName value
+    projectionResult (checkNameAgreement requested reported reported)
 
 -- | Preserve the reported name when refusing a mismatched origin.
 projectionResult :: Projection a -> Either MetadataError a

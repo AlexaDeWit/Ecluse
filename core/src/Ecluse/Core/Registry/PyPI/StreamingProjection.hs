@@ -25,14 +25,13 @@ import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, withoutHole)
 import Ecluse.Core.Registry.Json.Writer (Writer, decodeWhole, discard, sealValue)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataUndecodable))
-import Ecluse.Core.Registry.Metadata.Projection (projectionResult, validateReportedName)
+import Ecluse.Core.Registry.Metadata.Projection (validateNameAgreement)
 import Ecluse.Core.Registry.PyPI.Document (PackedSimple, SimpleDocument, packedSimple, simpleDocument, urlHole)
 import Ecluse.Core.Registry.PyPI.FileWriter (FileValue (..))
 import Ecluse.Core.Registry.PyPI.Project (FilenameMemo, ProjectedFile, fcVersionKey, filenameMemo, projectFile, projectName, projectSimpleIndex, projectedEntryKey, readCoordinate)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifEntryKey, ifFilename, ifUrl), checkApiVersion, decodeIndexFiles)
 import Ecluse.Core.Registry.ServedDocument (rebaseArtifactUrl)
-import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
 import Ecluse.Core.Security (LimitError, Limits, checkArtifactCount, checkVersionCountOf)
 
 -- | Pending files wait for the reported name so member order cannot change the package identity.
@@ -155,8 +154,7 @@ finishPackedProjection requested table acc = do
 finishPackage :: PackageName -> PyPIProjection -> Either MetadataError PackageInfo
 finishPackage requested acc = do
     first (const MetadataUndecodable) (parseEither checkApiVersion (projectedEnvelope acc))
-    reported <- validateReportedName projectName (KeyMap.lookup "name" (projectedEnvelope acc))
-    _ <- projectionResult (checkNameAgreement requested reported ())
+    reported <- validateNameAgreement projectName requested (KeyMap.lookup "name" (projectedEnvelope acc))
     unless (projectedShape acc) (Left MetadataUndecodable)
     traverse_ (Left . MetadataBoundExceeded) (projectedBound acc)
     let invalid = reverse (projectedFileDrops acc) <> reverse (projectedVersionDrops acc)
