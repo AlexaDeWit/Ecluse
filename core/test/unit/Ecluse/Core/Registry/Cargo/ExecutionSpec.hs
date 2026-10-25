@@ -14,19 +14,47 @@ import UnliftIO.Async (cancel, wait, withAsync)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package
+import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Registry.Cargo.Execution (newCargoInstallEvidence)
+import Ecluse.Core.Registry.Cargo.Project (projectName)
+import Ecluse.Core.Registry.Cargo.Projection (projectCargoRecord)
 import Ecluse.Core.Rules.Effectful (ReadFault (ReadFault))
 import Ecluse.Core.Rules.Install
 import Ecluse.Core.Rules.Types (Inability (EvaluationFailed, InstallSignalUnread), Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (Limits (..), defaultLimits, mkProgressFloor)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (sampleArtifact, sampleDetails, unsafeHash)
+import Ecluse.Test.Registry.Cargo.Fixtures qualified as Fixtures
+import Ecluse.Test.Registry.Cargo.Metadata (cargoTestDiscovery)
 import Ecluse.Test.Registry.PyPI.Archive (tarBytes)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = describe "Cargo install evidence" $ do
+    it "uses the published spelling after a lower-case sparse lookup" $ do
+        requested <- expectRight (projectName "mixed_crate")
+        for_ [([], False), ([("build.rs", "unexecuted bytes")], True)] $ \(extras, active) -> do
+            archive <- namedFixture "Mixed_Crate" "Mixed_Crate" "1.0.0" extras
+            subject <- projectedSubject requested "Mixed_Crate" "1.0.0" archive
+            renderPackageName (pkgName subject) `shouldBe` "Mixed_Crate"
+            pkgCanonical (pkgName subject) `shouldBe` pkgCanonical requested
+            map artFilename (toList (pkgArtifacts subject)) `shouldBe` ["Mixed_Crate-1.0.0.crate"]
+            provider <- newCargoInstallEvidence defaultLimits
+            reads <- newInstallEvidenceReads provider (context (\_ _ pay -> pay (BS.length archive) $> Right archive))
+            if active
+                then resolved reads subject >>= (`shouldSatisfy` runs)
+                else resolved reads subject `shouldReturn` InstallDetermined NoCodeOnInstall
+    it "refuses a checksum-verified archive whose root or manifest changes the published spelling" $ do
+        requested <- expectRight (projectName "mixed_crate")
+        for_ [("mixed_crate", "mixed_crate"), ("Mixed_Crate", "mixed_crate")] $ \(rootName, manifestName) -> do
+            archive <- namedFixture rootName manifestName "1.0.0" []
+            subject <- projectedSubject requested "Mixed_Crate" "1.0.0" archive
+            renderPackageName (pkgName subject) `shouldBe` "Mixed_Crate"
+            map (map hashValue . artHashes) (toList (pkgArtifacts subject)) `shouldBe` [[sha256Hex archive]]
+            provider <- newCargoInstallEvidence defaultLimits
+            reads <- newInstallEvidenceReads provider (context (\_ _ pay -> pay (BS.length archive) $> Right archive))
+            resolved reads subject >>= (`shouldSatisfy` permanentFailure)
     it "does not acquire bytes while it builds an immutable subject" $ do
         archive <- fixture "1.2.3" []
         count <- newIORef (0 :: Int)
@@ -163,7 +191,16 @@ details version archive =
         }
 
 fixture :: Text -> [(FilePath, ByteString)] -> IO ByteString
-fixture version extras = compress <$> tarBytes [("example-" <> toString version <> "/" <> path, body) | (path, body) <- ("Cargo.toml", "[package]\nname='example'\nversion='" <> encodeUtf8 version <> "'\n") : extras]
+fixture = namedFixture "example" "example"
+
+namedFixture :: Text -> Text -> Text -> [(FilePath, ByteString)] -> IO ByteString
+namedFixture rootName manifestName version extras = compress <$> tarBytes [(toString rootName <> "-" <> toString version <> "/" <> path, body) | (path, body) <- ("Cargo.toml", "[package]\nname='" <> encodeUtf8 manifestName <> "'\nversion='" <> encodeUtf8 version <> "'\n") : extras]
+
+projectedSubject :: PackageName -> Text -> Text -> ByteString -> IO PackageDetails
+projectedSubject requested name version archive = do
+    discovery <- expectRight cargoTestDiscovery
+    let release = (Fixtures.minimalCargoRelease name version){Fixtures.releaseArchive = archive, Fixtures.releaseChecksum = sha256Hex archive}
+    expectRight (projectCargoRecord requested (RecordEntry 11) discovery (Fixtures.cargoIndexRecord release))
 
 compress :: BSL.ByteString -> ByteString
 compress = BSL.toStrict . GZip.compress

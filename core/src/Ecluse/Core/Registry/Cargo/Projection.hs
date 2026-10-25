@@ -39,7 +39,7 @@ projectCargoRecord requested key discovery value = first invalid $ do
     let !artifact = Artifact{artEntryKey = key, artFilename = unFilename (coordinateFilename coordinate), artUrl = url, artHashes = [checksum], artCoreMetadata = Nothing, artSize = Nothing}
     pure
         PackageDetails
-            { pkgName = requested
+            { pkgName = name
             , pkgVersion = version
             , pkgPublishedAt = KeyMap.lookup "pubtime" fields >>= parseMaybe parsePublishTime
             , pkgInstallCode = CodeExecUnknown
