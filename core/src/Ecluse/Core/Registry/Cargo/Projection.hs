@@ -47,4 +47,4 @@ projectCargoRecord requested key discovery value = first invalid $ do
             , pkgArtifacts = artifact :| []
             }
   where
-    invalid reason = mkInvalidEntry InvalidVersionManifest (show key) Null reason
+    invalid = mkInvalidEntry InvalidVersionManifest (show key) Null

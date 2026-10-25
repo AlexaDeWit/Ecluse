@@ -1,6 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+{-# LANGUAGE TupleSections #-}
 
 -- | Native response contracts, sparse captures and archive identity validation.
 module Ecluse.Core.Registry.Cargo.Route.InternalSpec (spec) where
@@ -53,7 +54,7 @@ spec = do
     describe "takeIndexPath" $ do
         it "checks native prefixes for every name length" $
             for_ [["1", "a"], ["2", "ab"], ["3", "a", "abc"], ["ab", "cd", "abcde"]] $ \path ->
-                fmap (first renderPackageName) (takeIndexPath path) `shouldBe` ((\raw -> (raw, [])) <$> listToMaybe (reverse path))
+                fmap (first renderPackageName) (takeIndexPath path) `shouldBe` ((,[]) <$> listToMaybe (reverse path))
         it "rejects wrong prefixes, upper-case lookups and excess segments" $
             for_ [["ab", "xx", "abcde"], ["AB", "cd", "abcde"], ["ab", "cd", "Abcde"], ["3", "a", "abc", "extra"], [".."], []] $ \path ->
                 takeIndexPath path `shouldBe` Nothing

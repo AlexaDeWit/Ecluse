@@ -67,8 +67,7 @@ admitArtifactWithDecision ::
     Filename ->
     PackageDetails ->
     IO (ArtifactAdmission, Decision)
-admitArtifactWithDecision ctx rules minIntegrity file details =
-    admitArtifactWithInstallRead ProjectedInstallFacts Nothing ctx rules minIntegrity file details
+admitArtifactWithDecision = admitArtifactWithInstallRead ProjectedInstallFacts Nothing
 
 -- | Retain the selected version and the closed evidence read through the shared admission gate.
 admitArtifactWithInstallRead :: InstallEvidenceMode -> Maybe InstallEvidenceRead -> EvalContext -> [PreparedRule] -> MinIntegrity -> Filename -> PackageDetails -> IO (ArtifactAdmission, Decision)

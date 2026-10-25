@@ -33,7 +33,7 @@ extractTar limits charge package version withSource = do
   where
     select = metadataPath package version Sdist
     locate scan = do
-        selected <- filterM (\path -> checkPath path >>= select) (Map.keys (tarMembers scan))
+        selected <- filterM (checkPath >=> select) (Map.keys (tarMembers scan))
         path <- case selected of
             [] -> bad "archive has no Core Metadata"
             [path] -> Right path

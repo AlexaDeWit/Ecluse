@@ -16,7 +16,7 @@ import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Ecluse.Core.Registry.PyPI.Wire (SimpleIndex (..), simpleIndexMediaType)
-import Ecluse.Test.Corpus (cpName, pypiCorpusPackages)
+import Ecluse.Test.Corpus (cargoCorpusPackages, cpName, pypiCorpusPackages)
 import GHC.Clock (getMonotonicTime)
 import GHC.Conc (getNumCapabilities)
 import Network.HTTP.Client (Manager, newManager)
@@ -72,7 +72,6 @@ import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScen
 import Ecluse.BenchLoad.Selection (fixtureSection, measurementConditionVersion, scenarioKey)
 import Ecluse.BenchLoad.Verdict (RunEvidence, runVerdict)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
-import Ecluse.Test.Corpus (cargoCorpusPackages)
 import Ecluse.Test.Registry.Cargo.Fixtures (cargoShard)
 import Ecluse.Test.Registry.Cargo.Reference (IndexLine (indexValue), referenceIndex)
 import Ecluse.Test.RegistryCapture (catBenchPins, fetchPackumentBody, loadCatalogue)

@@ -35,6 +35,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (byteString, toLazyByteString, word32LE)
 import Data.ByteString.Lazy qualified as LBS
+import Data.Char (isAsciiUpper)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.Directory (createDirectoryIfMissing)
@@ -184,7 +185,7 @@ cratesIoLockSource = "registry+https://github.com/rust-lang/crates.io-index"
 -- | Independent native shard spelling uses ASCII case folding without punctuation changes.
 cargoShard :: Text -> Text
 cargoShard name =
-    let folded = T.map (\char -> if char >= 'A' && char <= 'Z' then toEnum (fromEnum char + 32) else char) name
+    let folded = T.map (\char -> if isAsciiUpper char then toEnum (fromEnum char + 32) else char) name
         prefix = case T.length folded of
             1 -> "1"
             2 -> "2"

@@ -175,7 +175,7 @@ gatePublicVersion ticket covered ctx advisoryEtag prepared = do
                     bytes <- newChargeRegion (charge ticket)
                     inspection <- newChargeRegion (charge ticket)
                     sharing <- newTicketInstallEvidenceFlightBudget ticket
-                    reads <- newPublicInstallEvidenceReads deps (srPublicClient rt) (srPublicControl rt) InstallPublicAdmission bytes inspection (Just sharing) (\fault -> run (logFM ErrorS (ls (renderInability (rfDetail fault)))))
+                    reads <- newPublicInstallEvidenceReads deps (srPublicClient rt) (srPublicControl rt) InstallPublicAdmission bytes inspection (Just sharing) (run . logFM ErrorS . ls . renderInability . rfDetail)
                     reads (vdDetails doc) >>= evaluateWith
   where
     rt = arRuntime ctx

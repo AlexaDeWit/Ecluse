@@ -292,5 +292,6 @@ cargoManagedView adapter origin targetUrl private public = do
         source <- maybe (fail "completed fixture has no native source records") pure (vdRaw doc >>= snd cargoCached)
         inventory <- expectRight (checkedMirrorInventory name version doc (CargoMirrorRead source))
         expected <- expectRight (extendProjectRecord defaultLimits target inventory previous)
-        verified <- expectRight (verifyMirrorBytes (head (inventoryFiles inventory)) (releaseBytes release))
+        let file :| _ = inventoryFiles inventory
+        verified <- expectRight (verifyMirrorBytes file (releaseBytes release))
         Just <$> expectRight (retainVerifiedIdentity version verified expected)

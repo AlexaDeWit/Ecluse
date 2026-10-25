@@ -45,7 +45,7 @@ withCopyState latency privatePort publicPort bucket use = do
     records <- withExchangeClient (newManager defaultManagerSettings) $ \client -> do
         config <- fetch client (MetadataBodyLimit 65536) (publicBase <> "/config.json")
         discovery <- either (benchFail . show) pure (parseCargoDiscovery (ecosystemArtifactAuthorities cargoArtifactHosts) publicBase (responseBody config))
-        fmap Map.fromList . fmap catMaybes $ forM cargoCorpusPackages $ \package -> do
+        fmap (Map.fromList . catMaybes) $ forM cargoCorpusPackages $ \package -> do
             let name = cpPackage package
                 path = "/" <> cargoShard (renderPackageName name)
             private <- fetch client (MetadataBodyLimit (maxMetadataBytes defaultLimits)) (privateBase <> path)

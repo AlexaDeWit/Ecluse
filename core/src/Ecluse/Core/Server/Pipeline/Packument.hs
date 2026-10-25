@@ -298,7 +298,7 @@ serveMergedPackument serving evalCtx record privResult pubResult =
             evidenceInspection <- liftIO (newChargeRegion (charge (psvTicket serving)))
             public <- withRunInIO $ \run -> do
                 sharing <- newTicketInstallEvidenceFlightBudget (psvTicket serving)
-                evidenceReads <- newPublicInstallEvidenceReads deps (srPublicClient rt) (srPublicControl rt) InstallPublicAdmission evidenceBytes evidenceInspection (Just sharing) (\fault -> run (logFM ErrorS (ls (renderInability (rfDetail fault)))))
+                evidenceReads <- newPublicInstallEvidenceReads deps (srPublicClient rt) (srPublicControl rt) InstallPublicAdmission evidenceBytes evidenceInspection (Just sharing) (run . logFM ErrorS . ls . renderInability . rfDetail)
                 gatePublic evidenceReads (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) (originManifest pubResult)
             let sources = privateSources <> maybeToList (paContribution public)
                 required = Map.withoutKeys pending (paBlockedPending public)

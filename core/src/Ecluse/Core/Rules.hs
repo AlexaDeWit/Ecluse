@@ -341,7 +341,7 @@ renderReach = \case
 newEvaluator :: EvalContext -> [PreparedRule] -> IO (RuleEvidence -> IO Decision)
 newEvaluator ctx rules = do
     decide <- newEvaluatorWithInstallRead ProjectedInstallFacts ctx rules
-    pure (\ev -> decide ev Nothing)
+    pure (`decide` Nothing)
 
 -- | Memoise one immutable subject across both evaluation passes. Advisory rows remain package-scoped.
 newEvaluatorWithInstallRead :: InstallEvidenceMode -> EvalContext -> [PreparedRule] -> IO (RuleEvidence -> Maybe InstallEvidenceRead -> IO Decision)

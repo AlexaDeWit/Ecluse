@@ -227,7 +227,7 @@ warmUnderColdScenario =
                 , wldListingUrl = indexUrl
                 , wldArtifactUrl = \port artifact -> localhost port <> "/cargo/" <> saProxyPath artifact
                 , wldSelect = selectWarmArtifacts
-                , wldPrivate = \_ -> crateStub
+                , wldPrivate = const crateStub
                 , wldPublic = changingIndexStub changes
                 }
             knobs

@@ -376,7 +376,8 @@ nativeState target version = do
         source = CargoMirrorRead (cargoDocument [(RecordEntry 0, Object (nativeRecord version))])
     inventory <- expectRight (restoreMirrorInventory details source)
     expected <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
-    verified <- expectRight (verifyMirrorBytes (head (inventoryFiles inventory)) archiveBytes)
+    let file :| _ = inventoryFiles inventory
+    verified <- expectRight (verifyMirrorBytes file archiveBytes)
     expectRight (retainVerifiedIdentity (mkVersion Cargo version) verified expected)
 
 discoveryBytes :: Text -> Bool -> ByteString

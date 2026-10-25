@@ -5,12 +5,12 @@
 -- | Managed reads validate fresh state and restore fields only after current private identity proof.
 module Ecluse.Core.Server.MirrorViewSpec (spec) where
 
-import Data.Aeson (Value (Object, String, Bool, Array), encode, eitherDecodeStrict)
+import Data.Aeson (Value (Array, Bool, Object, String), eitherDecodeStrict, encode)
 import Data.Aeson.Key (Key)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as LBS
 import Data.ByteString.Internal qualified as BSI
+import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
@@ -30,9 +30,9 @@ import Ecluse.Core.Server.Admission.Meter (MemoryTicket, MeterSettings (..), new
 import Ecluse.Core.Server.MirrorView
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Mirror.State
+import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.Cargo.Fixtures (cargoIndexRecord)
 import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoSourceVersion)
-import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRight)
 
@@ -47,7 +47,7 @@ spec = do
             current <- cargoTarget original
             restored <- expectRight (mirrorVersionView (pkgVersion (vdDetails original)) reopened (Just current))
             fmap vdDetails restored `shouldBe` Just (vdDetails original){pkgArtifacts = pkgArtifacts (vdDetails current)}
-            fmap (fmap cargoRecords . (>>= snd cargoCached) . vdRaw) restored `shouldBe` Just (fmap cargoRecords (vdRaw original >>= snd cargoCached))
+            fmap (fmap cargoRecords . (snd cargoCached <=< vdRaw)) restored `shouldBe` Just (fmap cargoRecords (vdRaw original >>= snd cargoCached))
             let revision = StateRevision target (pkgName (vdDetails original)) "reopened"
                 details = vdDetails current
                 manifest = Manifest (PackageInfo (pkgName details) (Map.singleton "1.0.0" details) mempty []) (fromMaybe (fst cargoCached (cargoDocument [])) (vdRaw current)) 0 (digestOf "target")

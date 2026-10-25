@@ -57,8 +57,8 @@ spec = do
             tar <- tarBytes [("example-1.2.3/Cargo.toml", manifest)]
             let valid = compress tar
                 badCrc = BS.take (BS.length valid - 8) valid <> BS.replicate 4 0 <> BS.drop (BS.length valid - 4) valid
-            for_ [compress (BSL.take 1024 tar), compress (tar <> "nonzero"), BS.take (BS.length valid - 3) valid, valid <> "junk", badCrc] $ \bytes ->
-                inspect defaultLimits bytes >>= (`shouldSatisfy` isLeft)
+            for_ [compress (BSL.take 1024 tar), compress (tar <> "nonzero"), BS.take (BS.length valid - 3) valid, valid <> "junk", badCrc] $
+                inspect defaultLimits >=> (`shouldSatisfy` isLeft)
         it "rejects a traversal hidden in a PAX path override" $ do
             header <- expectRight (Tar.toTarPath False "PaxHeaders/path")
             placeholder <- expectRight (Tar.toTarPath False "placeholder")

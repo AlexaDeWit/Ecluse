@@ -298,7 +298,7 @@ withWorkerInstallReads charge policy use = withRunInIO $ \run -> do
                         Right url -> readInstallArtifact ((wpArtifactLimits policy){maxMirrorArtifactBytes = min (maxMirrorArtifactBytes (wpArtifactLimits policy)) (maxMirrorArtifactBytes bounded)}) client (Controlled control WorkerArtifact) (artifactByUrl (wpArtifact policy) Nothing (registryUrlText url)) pay
                     , ieBudget = InstallEvidenceBudget (\action -> Just <$> action (wsbArtifacts charge) (wsbArchive charge))
                     , ieFlightBudget = wsbEvidenceFlight charge
-                    , ieDiagnostic = \fault -> run (logFM ErrorS (ls (renderInability (rfDetail fault))))
+                    , ieDiagnostic = run . logFM ErrorS . ls . renderInability . rfDetail
                     }
     run (use reads)
 
