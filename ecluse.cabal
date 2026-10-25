@@ -2056,6 +2056,10 @@ library ecluse-e2e-test-support
     , filepath       ^>=1.5
     , hspec          ^>=2.11
     , http-client    ^>=0.7
+    , http-client-tls >=0.3.6 && <0.5
+    , crypton-connection ^>=0.4
+    , crypton-x509-store ^>=1.10
+    , tls >=2.1 && <2.5
     , http-types     ^>=0.12
     , network        ^>=3.2
     , random         ^>=1.2

@@ -93,7 +93,7 @@ boot knobs use = do
                         policy =
                             WorkerPolicy
                                 { wpFirstParty = const False
-                                , wpResolveVersion = \pay name version -> versionEvaluation <$> prepareVersion prepareCargoRead passthroughTracingPort sourceOrigin{ocChargeFullRead = pay . scaleCharge (cfFullReadPermille factors)} name version
+                                , wpResolveVersion = \pay name version -> versionEvaluation <$> prepareVersion prepareCargoRead passthroughTracingPort sourceOrigin{ocChargeFullRead = pay . scaleCharge (cfFullReadPermille factors), ocChargeSelectedRead = pay} name version
                                 , wpInstallEvidence = Just evidence
                                 , wpRules = rules
                                 , wpMinIntegrity = defaultMinIntegrity
