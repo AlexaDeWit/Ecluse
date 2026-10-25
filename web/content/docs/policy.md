@@ -47,3 +47,17 @@ PyPI does not support the npm scope, deprecation, or install-execution rule type
 {{ task_link(path="@/docs/exceptions.md", title="Allow a specific version", description="Choose the override deliberately and inspect its effect.") }}
 
 {{ task_link(path="@/docs/revocation.md", title="Admission and revocation", description="See when a rule can remove an existing copy.") }}
+
+## When no npm version survives
+
+An npm metadata request returns `403` when every exclusion is a policy or integrity refusal.
+The JSON `error` string gives each deciding rule or integrity category once, with a short cause
+and a count of rejection entries. The configured operator help follows the summary.
+
+Counts describe rejection entries, not unique versions. Different source contributions can reject
+the same version. The response omits the mapping from each version to its full reason.
+Existing audit records do not preserve every removed detail.
+
+Partial listings, private-access refusals, artifact errors, PyPI responses and `500`/`502`/`503`
+responses keep their existing bodies. The summary does not change status selection, HEAD responses,
+denial logs or metrics.

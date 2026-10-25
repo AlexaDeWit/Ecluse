@@ -21,7 +21,6 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
-import Data.Text qualified as T
 import Katip (Severity (DebugS), logFM, ls)
 import Network.HTTP.Types (Method, ResponseHeaders, hContentLength)
 import Network.Wai (Request, ResponseReceived, requestHeaders)
@@ -109,14 +108,15 @@ import Ecluse.Core.Server.Response (
     PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
     Refusal,
     RejectReason (ByPolicy, Unavailable, UpstreamInvalid),
-    Rejection (Rejection, rejectionMessage),
+    Rejection (Rejection),
     RetryAfter,
-    ServeDecision (Admit, Reject),
+    ServeDecision (Reject),
     Transience (WillResolve),
     mkRefusal,
     packumentStatus,
     serveDecisionOf,
  )
+import Ecluse.Core.Server.Response.Summary (detailedRejections)
 import Ecluse.Core.Server.Route (isHead)
 import Ecluse.Core.Snapshot (Snapshot (..))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -125,7 +125,9 @@ import Ecluse.Core.Telemetry.Span (TracingPort, spanPackumentGate)
 
 -- | The route-owned ways the ecosystem-neutral packument pipeline may answer.
 data PackumentReplies response = PackumentReplies
-    { packumentOk :: ResponseHeaders -> LByteString -> response
+    { packumentForbiddenText :: [ServeDecision] -> Text
+    -- ^ Render only a no-survivor 403, after status selection.
+    , packumentOk :: ResponseHeaders -> LByteString -> response
     , packumentNotModified :: ResponseHeaders -> response
     , packumentUnauthorised :: ResponseHeaders -> Refusal -> response
     , packumentForbidden :: ResponseHeaders -> Refusal -> response
@@ -452,7 +454,6 @@ packumentResponse replies mode headers = \case
   where
     contentLength size = (hContentLength, show size)
 
--- The status folds the decision list once and both the metric and the response read that value.
 noServeableVersions ::
     PackumentServing response ->
     Maybe DbEtag ->
@@ -468,7 +469,7 @@ noServeableVersions serving etag verdicts decisions = do
     metrics = servingMetrics serving
     status = packumentStatus decisions
 
--- | Answer a listing no version survived. Evaluating the reply joins every rejection's text.
+-- | Answer an empty listing, finishing the selected refusal text before writing the reply.
 noSurvivors :: PackumentReplies response -> Maybe HelpMessage -> PackumentStatus -> [ServeDecision] -> response
 noSurvivors replies help status decisions = case status of
     PackumentOk -> packumentInternal replies [] body
@@ -477,18 +478,11 @@ noSurvivors replies help status decisions = case status of
     PackumentBadGateway -> packumentBadGateway replies [] body
     PackumentServerError -> packumentInternal replies [] body
   where
-    -- No versions still require a deny-by-default response.
-    message :: Text
-    message = case mapMaybe rejectionText decisions of
-        [] -> "no versions are available for this package"
-        reasons -> T.intercalate "; " reasons
+    message = case status of
+        PackumentForbidden -> packumentForbiddenText replies decisions
+        _ -> detailedRejections decisions
 
     !body = mkRefusal help message
-
-rejectionText :: ServeDecision -> Maybe Text
-rejectionText = \case
-    Admit -> Nothing
-    Reject rej -> Just (rejectionMessage rej)
 
 collectDecisions :: OriginResult -> OriginResult -> [ServeDecision] -> [ServeDecision]
 collectDecisions privResult pubResult publicExclusions =

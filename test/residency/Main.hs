@@ -23,6 +23,7 @@ import Ecluse.Core.Server.MetadataGzipResidencySpec qualified as MetadataGzipRes
 import Ecluse.Core.Server.MirrorViewResidencySpec qualified as MirrorViewResidencySpec
 import Ecluse.Core.Server.Pipeline.PackumentResidencySpec qualified as PackumentResidencySpec
 import Ecluse.Core.Server.Pipeline.TarballResidencySpec qualified as TarballResidencySpec
+import Ecluse.Core.Server.Response.SummaryResidencySpec qualified as SummaryResidencySpec
 import System.Environment qualified as Environment
 import Test.Hspec (hspec)
 
@@ -43,6 +44,7 @@ main =
             MirrorViewResidencySpec.spec
             LexerResidencySpec.spec
             JsonStreamResidencySpec.spec
+            SummaryResidencySpec.spec
             MetadataResidencySpec.spec
             NpmReaderResidencySpec.spec
             PyPIReaderResidencySpec.spec

@@ -3,11 +3,8 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE TupleSections #-}
 
-{- | The PyPI route table itself: the router, the table as data, the capture values, and the leaf
-parsers. "Ecluse.Core.Registry.PyPI.Route" curates what a caller outside needs of it.
-
-Importing this module opts out of the public surface's stability promises. It exists so a spec can
-match one route or one parser on its own.
+{- | PyPI routes, response contracts and capture parsers.
+Importing this internal module opts out of the public API's stability promise.
 -}
 module Ecluse.Core.Registry.PyPI.Route.Internal (
     -- * The mount's router
@@ -74,6 +71,7 @@ import Ecluse.Core.Server.Pipeline.Sidecar (sidecarAction)
 import Ecluse.Core.Server.Pipeline.Tarball (tarballAction)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (..))
 import Ecluse.Core.Server.Response (HelpMessage, Refusal, mkRefusal, refusalHelp)
+import Ecluse.Core.Server.Response.Summary (detailedRejections)
 import Ecluse.Core.Server.Route (
     Capture (Capture),
     MediaNegotiation (AcceptsAnything, AcceptsOnly),
@@ -235,7 +233,8 @@ refusalContract status description =
 pypiIndexReplies :: PackumentReplies PyPIIndexResponse
 pypiIndexReplies =
     PackumentReplies
-        { packumentOk = \headers body -> FirstResponse (responseValue headers body)
+        { packumentForbiddenText = detailedRejections
+        , packumentOk = \headers body -> FirstResponse (responseValue headers body)
         , packumentNotModified = \headers -> SecondResponse (FirstResponse (responseValue headers ()))
         , packumentUnauthorised = \headers refusal -> SecondResponse (SecondResponse (FirstResponse (helpBody headers refusal)))
         , packumentForbidden = \headers refusal -> SecondResponse (SecondResponse (SecondResponse (FirstResponse (helpBody headers refusal))))

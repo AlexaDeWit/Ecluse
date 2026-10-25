@@ -341,6 +341,7 @@ library ecluse-core
     Ecluse.Core.Server.Path
     Ecluse.Core.Server.Readiness
     Ecluse.Core.Server.Response
+    Ecluse.Core.Server.Response.Summary
     Ecluse.Core.Server.Route
     Ecluse.Core.Server.RouteDescription
     Ecluse.Core.Server.Stream
@@ -1270,6 +1271,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.PipelineSpec
     Ecluse.Core.Server.ReadinessSpec
     Ecluse.Core.Server.ResponseSpec
+    Ecluse.Core.Server.Response.SummarySpec
     Ecluse.Core.Server.RouteDescriptionSpec
     Ecluse.Core.Server.RouteSpec
     Ecluse.Core.Server.StreamSpec
@@ -1784,6 +1786,7 @@ test-suite ecluse-residency
     Ecluse.Core.NativeProbe
     Ecluse.Core.Registry.Json.WalkProbe
     Ecluse.Core.Registry.JsonStreamResidencySpec
+    Ecluse.Core.Server.Response.SummaryResidencySpec
     Ecluse.Core.Registry.MetadataResidencySpec
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec

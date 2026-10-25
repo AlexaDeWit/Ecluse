@@ -7,7 +7,7 @@ module Ecluse.Core.Server.Pipeline.PackumentSpec (spec) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Concurrent.MVar qualified as MVar
-import Data.Aeson (Value (String), encode, (.=))
+import Data.Aeson (Value (String), encode, object, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
@@ -28,6 +28,7 @@ import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
+import Ecluse.Core.Registry.Npm.Route.Internal (npmPackumentContract, npmPackumentReplies)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Route (pypiRouter)
 import Ecluse.Core.Registry.Request (CredentialMapping)
@@ -41,13 +42,14 @@ import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfKeptPermille, cfOutp
 import Ecluse.Core.Server.Context (
     MountBinding (..),
     MountRouter,
-    PackumentDeps (pdInboundToken, pdMetadata, pdMetadataCompression, pdMountBaseUrl, pdRules),
+    PackumentDeps (pdFirstParty, pdHelp, pdInboundToken, pdMetadata, pdMetadataCompression, pdMountBaseUrl, pdRules),
     RequestCtx (RequestCtx),
     ResponseAction (RunPipeline),
     RouteAction (RouteAction),
     ServeRuntime (srMemoryMeter),
     runHandler,
  )
+import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
 import Ecluse.Core.Server.MetadataGzip (gzipBufferChargeBytes, gzipWorkspaceBytes)
 import Ecluse.Core.Server.Pipeline.Internal (denialLabels, packumentServeDecision)
@@ -60,21 +62,24 @@ import Ecluse.Core.Server.Pipeline.Packument (
     servePackument,
  )
 import Ecluse.Core.Server.Response (
-    PackumentStatus (PackumentForbidden),
+    PackumentStatus (..),
     RejectReason (Unavailable, UpstreamInvalid),
     Rejection (Rejection),
     ServeDecision (Reject),
     Transience (WillResolve),
+    mkHelpMessage,
+    mkRefusal,
  )
+import Ecluse.Core.Server.Response.Summary (detailedRejections, summarisedRejections)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics (CacheResult (Hit, Miss))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpAssembledCacheRequest, mpRuleEvalDuration))
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Package (sriSha512Of, thingName)
+import Ecluse.Test.Package (sriSha512Of, thingName, validSha1)
 import Ecluse.Test.Port (noopMetricsPort)
-import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, versionSpec, versionValue)
+import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity, vsShasum), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureResponse), deliverServe, responseBytes, testServeRuntime, testServeRuntimeWith)
@@ -233,7 +238,6 @@ metadataGzipSpec = describe "native metadata gzip over the live listing path" $
                     readIORef atRespond `shouldReturn` Just (scaleCharge (cfOutputPermille factors) (foldl' max 0 sizes))
                     chargedOn meter `shouldReturn` 0
   where
-    statusOf = statusCode . responseStatus
     header name = lookup name . responseHeaders
     validator response = maybe (throwIO MissingFixtureResponse) pure (header hETag response)
     gzipOffer = [(hAcceptEncoding, "gzip")]
@@ -301,12 +305,61 @@ withOneSlot listing use = withSweeper $ \deadlines -> do
         deps <- listingDeps listing port
         use rt{srMemoryMeter = meter} deps (readIORef sourceBytes)
 
+statusOf :: Response -> Int
+statusOf = statusCode . responseStatus
+
 noSurvivorsSpec :: Spec
-noSurvivorsSpec =
-    describe "the refusal for a listing no version survived" $
-        it "joins the rejection texts as soon as its reply is evaluated" $
-            evaluate (noSurvivors namedReplies Nothing PackumentForbidden [Reject (Rejection UpstreamInvalid (impureThrow Evaluated))])
-                `shouldThrow` (== Evaluated)
+noSurvivorsSpec = describe "the refusal for a listing no version survived" $ do
+    it "joins detailed rejection texts as soon as its reply is evaluated" $
+        evaluate (noSurvivors namedReplies Nothing PackumentForbidden [Reject (Rejection UpstreamInvalid (impureThrow Evaluated))])
+            `shouldThrow` (== Evaluated)
+
+    it "finishes grouped rejection text before an ignoring reply constructor returns" $
+        evaluate (noSurvivors namedReplies{packumentForbiddenText = summarisedRejections} Nothing PackumentForbidden (Reject (Rejection UpstreamInvalid "detail") : impureThrow Evaluated))
+            `shouldThrow` (== Evaluated)
+
+    for_ [(PackumentOk, 500), (PackumentUnavailable Nothing, 503), (PackumentBadGateway, 502), (PackumentServerError, 500)] $ \(status, code) ->
+        it ("keeps the npm error contract under " <> show status) $ do
+            let response = responseToWai npmPackumentContract (noSurvivors npmPackumentReplies (Just (mkHelpMessage "Help.")) status [Reject (Rejection UpstreamInvalid "full upstream detail")])
+            statusOf response `shouldBe` code
+            responseBytes response `shouldReturn` encode (object ["error" .= ("full upstream detail Help." :: Text)])
+
+    it "keeps private-access refusal text outside the grouped metadata response" $ do
+        let response = responseToWai npmPackumentContract (packumentForbidden npmPackumentReplies [] (mkRefusal (Just (mkHelpMessage "Help.")) "private access was refused"))
+        statusOf response `shouldBe` 403
+        responseBytes response `shouldReturn` encode (object ["error" .= ("private access was refused Help." :: Text)])
+
+    for_ [(Nothing, "MissingIntegrity: artifacts lack an integrity digest"), (Just validSha1, "BelowIntegrityFloor: artifact digests fall below the configured integrity floor")] $ \(shasum, cause) ->
+        for_ (filter ((== "npm") . listingLabel) listings) $ \listing ->
+            it ("summarises a private-only integrity refusal without claiming a public source: " <> toString (cause :: Text)) $
+                withSweeper $ \deadlines -> do
+                    rt <- testServeRuntime deadlines noopMetricsPort
+                    let privateIntegrityOrigin = npmOriginWith (\version -> version{vsIntegrity = Nothing, vsShasum = shasum})
+                    testWithApplication (pure privateIntegrityOrigin) $ \privatePort -> do
+                        original <- listingDeps listing 1
+                        let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) original{pdFirstParty = const True, pdHelp = Just (mkHelpMessage "Contact the operator.")}
+                        denied <- captureListing rt listing deps methodGet []
+                        headed <- captureListing rt listing deps methodHead []
+                        map statusOf [denied, headed] `shouldBe` [403, 403]
+                        responseBytes headed `shouldReturn` ""
+                        responseBytes denied `shouldReturn` encode (object ["error" .= (cause <> " (rejection entries: 1) Contact the operator.")])
+
+    for_ listings $ \listing -> do
+        it ("preserves the " <> listingLabel listing <> " denial body and HEAD status through its route") $
+            withSweeper $ \deadlines -> do
+                rt <- testServeRuntime deadlines noopMetricsPort
+                prepared <- prepare inertRuleDeps []
+                testWithApplication (pure (listingOrigin listing)) $ \port -> do
+                    original <- listingDeps listing port
+                    let deps = original{pdRules = prepared, pdHelp = Just (mkHelpMessage "Contact the operator.")}
+                    denied <- captureListing rt listing deps methodGet []
+                    headed <- captureListing rt listing deps methodHead []
+                    map statusOf [denied, headed] `shouldBe` [403, 403]
+                    responseBytes headed `shouldReturn` ""
+                    bytes <- responseBytes denied
+                    if listingLabel listing == "npm"
+                        then bytes `shouldBe` encode (object ["error" .= ("BlockedByDefault: no allow rule matched (rejection entries: 1) Contact the operator." :: Text)])
+                        else bytes `shouldBe` "Contact the operator."
 
 -- Raised by a value a spec expects the pipeline to evaluate before it writes.
 data Evaluated = Evaluated
@@ -335,7 +388,8 @@ firstPartyMissSpec = describe "a first-party name whose private origin yielded n
 namedReplies :: PackumentReplies Text
 namedReplies =
     PackumentReplies
-        { packumentOk = \_ _ -> "ok"
+        { packumentForbiddenText = detailedRejections
+        , packumentOk = \_ _ -> "ok"
         , packumentNotModified = const "not-modified"
         , packumentUnauthorised = \_ _ -> "unauthorised"
         , packumentForbidden = \_ _ -> "forbidden"
@@ -378,12 +432,15 @@ listings =
         pure (serveDeps Nothing (loopbackRegistryUrl ("http://localhost:" <> show port)) NoMirrorWrite prepared (pure now)){pdMountBaseUrl = "http://proxy.test"}
 
 npmOrigin :: Application
-npmOrigin request respond
+npmOrigin = npmOriginWith id
+
+npmOriginWith :: (VersionSpec -> VersionSpec) -> Application
+npmOriginWith changeVersion request respond
     | rawPathInfo request == "/leftpad" = respond (responseLBS status200 [] (encode document))
     | otherwise = respond (responseLBS status404 [] "")
   where
     tarball = selfBaseUrl request <> "/leftpad/-/leftpad-1.0.0.tgz"
-    document = packumentValue "leftpad" "1.0.0" [("1.0.0", versionValue (versionSpec "leftpad" "1.0.0" tarball){vsIntegrity = Just (sriSha512Of "leftpad bytes")})] ["1.0.0" .= ("2019-01-01T00:00:00.000Z" :: Text)] []
+    document = packumentValue "leftpad" "1.0.0" [("1.0.0", versionValue (changeVersion (versionSpec "leftpad" "1.0.0" tarball){vsIntegrity = Just (sriSha512Of "leftpad bytes")}))] ["1.0.0" .= ("2019-01-01T00:00:00.000Z" :: Text)] []
 
 pypiOrigin :: Application
 pypiOrigin request respond
