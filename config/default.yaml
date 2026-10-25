@@ -523,6 +523,18 @@ mounts:
     #   deny-yanked:
     #     type: DenyIfYanked
     #     appliesTo: [admission]
+  # Cargo 1.74+ uses sparse HTTPS. Store index roots without the client's sparse+ marker.
+  cargo:
+    publicUpstream:
+      registry:
+        url: https://index.crates.io/
+    # enabled: true
+    # Ownership folds ASCII case and hyphen/underscore aliases, preserving separator runs.
+    # Exact names and prefixes use native Cargo grammar. acme-* covers acme-tools and
+    # acme_tools, but excludes acmeco. Cargo has no npm scope.
+    # firstParty: "acme-tools,acme-*"
+    # Execution denial requires an explicit rule and verified archive evidence.
+    # The shared age and advisory defaults do not inspect crate archives.
   # No adapter ships for rubygems yet, so activating it refuses the boot. The public
   # upstream is here so the key is settled before the ecosystem lands.
   rubygems:

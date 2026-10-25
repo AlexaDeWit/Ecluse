@@ -21,7 +21,7 @@ import Ecluse.Config (
     Config (..),
     ConfigError,
     EgressSettings (..),
-    FirstParty (FirstPartyNpmScopes, FirstPartyPyPI),
+    FirstParty (FirstPartyCargo, FirstPartyNpmScopes, FirstPartyPyPI),
     LimitsSettings (..),
     MountConfig (mntFirstParty),
     ObservabilitySettings (..),
@@ -43,6 +43,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Provenance (SourcePathRecording (FingerprintSourcePath, RecordSourcePath))
 import Ecluse.Core.Osv.Publication (renderPercent)
 import Ecluse.Core.Package (mkScope)
+import Ecluse.Core.Registry.Cargo.FirstParty (projectFirstPartyEntry)
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName, PyPIOwnedPrefix), mkPyPIPrefix)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
 import Ecluse.Runtime.Log (LogLevel (DebugLevel, ErrorLevel, InfoLevel, WarnLevel))
@@ -205,6 +206,23 @@ spec = describe "decodeDocument" $ do
                             )
                         )
 
+    describe "Cargo firstParty" $ do
+        it "reads names and native prefixes in their declared order" $
+            case traverse projectFirstPartyEntry ["Acme_Tools", "widgets-*"] of
+                Left err -> expectationFailure (show err)
+                Right [name, prefix] -> do
+                    config <- expectConfig (pubUrlEnv <> [("ECLUSE_MOUNTS__CARGO__FIRST_PARTY", "Acme_Tools, widgets-*")]) Nothing
+                    (mntFirstParty <$> Map.lookup Cargo (cfgMounts (configApp config)))
+                        `shouldBe` Just (Just (FirstPartyCargo (name :| [prefix])))
+                Right _ -> expectationFailure "expected two Cargo declarations"
+        for_ ["@acme", "acme*", "acme.*", "acme/tools", "acme,,widgets"] $ \entry ->
+            it ("refuses " <> show entry) $
+                loadConfig pubUrlEnv (Just (encodeUtf8 ("{\"mounts\":{\"cargo\":{\"firstParty\":\"" <> entry <> "\"}}}")))
+                    `shouldSatisfy` decodeErrorMentions "invalid Cargo entry in firstParty"
+        it "requires at least one crate or prefix" $
+            loadConfig pubUrlEnv (Just "{\"mounts\":{\"cargo\":{\"firstParty\":\"\"}}}")
+                `shouldSatisfy` decodeErrorMentions "firstParty must name at least one crate or prefix"
+
     describe "a PyPI firstParty entry reads through PEP 503's name grammar" $
         -- An entry no distribution name can equal privileges nothing, so it fails the load
         -- rather than binding at request time. A bare @*@ would privilege every name on PyPI.
@@ -363,8 +381,8 @@ spec = describe "decodeDocument" $ do
                 `shouldSatisfy` decodeErrorMentions "advisories.epssQuietTime"
 
         it "refuses an ecosystem this build does not serve, rather than configuring nothing" $
-            loadConfig [] (Just "{\"advisories\":{\"quietTime\":{\"cargo\":604800}}}")
-                `shouldSatisfy` decodeErrorMentions "Invalid ecosystem in advisories.quietTime: cargo"
+            loadConfig [] (Just "{\"advisories\":{\"quietTime\":{\"unknown\":604800}}}")
+                `shouldSatisfy` decodeErrorMentions "Invalid ecosystem in advisories.quietTime: unknown"
 
     describe "advisories.maxAgeSeconds" $ do
         it "is unset by default, so each mount derives its own maximum" $

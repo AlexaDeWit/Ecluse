@@ -185,6 +185,7 @@ library ecluse-core
     Ecluse.Core.Package.InvalidEntry
     Ecluse.Core.Package.Merge
     Ecluse.Core.Package.Pep503
+    Ecluse.Core.Package.Cargo
     Ecluse.Core.Queue
     Ecluse.Core.Queue.Buffer
     Ecluse.Core.Queue.Lease
@@ -268,6 +269,8 @@ library ecluse-core
     Ecluse.Core.Registry.PyPI.Metadata
     Ecluse.Core.Registry.PyPI.PendingSidecar
     Ecluse.Core.Registry.PyPI.Project
+    Ecluse.Core.Registry.Cargo.Project
+    Ecluse.Core.Registry.Cargo.FirstParty
     Ecluse.Core.Registry.PyPI.Reader
     Ecluse.Core.Registry.PyPI.Request
     Ecluse.Core.Registry.PyPI.Route
@@ -389,6 +392,7 @@ library ecluse-core
   -- can import them. VersionKey stays opaque, so neither lets a caller build a key.
   exposed-modules:
     Ecluse.Core.Version.Semver
+    Ecluse.Core.Version.Cargo
     Ecluse.Core.Version.Token
 
   other-modules:
@@ -1141,6 +1145,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Package.InvalidEntrySpec
     Ecluse.Core.Package.MergeSpec
     Ecluse.Core.Package.Pep503Spec
+    Ecluse.Core.Package.CargoSpec
     Ecluse.Core.PackageSpec
     Ecluse.Core.Queue.BufferSpec
     Ecluse.Core.Queue.LeaseSpec
@@ -1212,6 +1217,8 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.MetadataSpec
     Ecluse.Core.Registry.PyPI.PendingSidecarSpec
     Ecluse.Core.Registry.PyPI.ProjectSpec
+    Ecluse.Core.Registry.Cargo.ProjectSpec
+    Ecluse.Core.Registry.Cargo.FirstPartySpec
     Ecluse.Core.Registry.PyPI.RequestSpec
     Ecluse.Core.Registry.PyPI.RouteSpec
     Ecluse.Core.Registry.PyPI.ReaderSpec
@@ -1292,6 +1299,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Version.GemSpec
     Ecluse.Core.Version.Pep440Spec
     Ecluse.Core.Version.SemverSpec
+    Ecluse.Core.Version.CargoSpec
     Ecluse.Core.VersionSpec
     Ecluse.Core.WireSpec
     Ecluse.Core.Worker.FetchSpec

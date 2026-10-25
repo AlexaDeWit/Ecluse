@@ -29,7 +29,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (cveDbLookup), CveLookup (cveAdvisoriesFor, cveCoveredNames), packageAdvisories)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Osv.Advisory
 import Ecluse.Core.Osv.Compile (osvToRow)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor, osvExportDirectory)
@@ -185,19 +185,30 @@ spec = describe "one OSV advisory record" $ do
                 `shouldBe` [Nothing]
 
     describe "extractFromAdvisory (package identity)" $ do
-        for_ [("PyPI", "Flask_Thing", "flask-thing"), ("PyPI", "FLASK..__Thing", "flask-thing"), ("PyPI", "flask-thing", "flask-thing"), ("npm", "@Acme/Flask_Thing", "@Acme/Flask_Thing"), ("RubyGems", "Flask_Thing", "Flask_Thing"), ("other", "Flask_Thing", "Flask_Thing")] $ \(eco, raw, expected) ->
+        for_ [("PyPI", "Flask_Thing", "flask-thing"), ("PyPI", "FLASK..__Thing", "flask-thing"), ("PyPI", "flask-thing", "flask-thing"), ("npm", "@Acme/Flask_Thing", "@Acme/Flask_Thing"), ("RubyGems", "Flask_Thing", "Flask_Thing"), ("other", "Flask_Thing", "Flask_Thing"), ("crates.io", "Flask_Thing", "flask_thing")] $ \(eco, raw, expected) ->
             it (toString ("keys " <> eco <> " package " <> raw <> " as " <> expected)) $ do
                 let adv = OsvAdvisory "GHSA-name" Nothing (Just [OsvAffected (OsvPackage raw eco) Nothing (Just ["1.0", "2.0"])]) Nothing Nothing Nothing Nothing
                 extractFromAdvisory noScores adv
                     `shouldBe` [ExtractedOsv expected eco "GHSA-name" (Just version) (LastAffected version) Nothing Nothing | version <- if eco `elem` ["PyPI", "RubyGems"] then ["1", "2"] else ["1.0", "2.0"]]
 
+    it "keeps Cargo advisory names separate from ownership collision aliases" $ do
+        let affected name version = OsvAffected (OsvPackage name "crates.io") Nothing (Just [version])
+            nativeAdvisory = OsvAdvisory "GHSA-native" Nothing (Just [affected "Acme_Tools" "1.0.0", affected "acme-tools" "2.0.0"]) Nothing Nothing Nothing Nothing
+        map (\row -> (extPackage row, extIntroduced row)) (extractFromAdvisory noScores nativeAdvisory)
+            `shouldBe` [("acme_tools", Just "1.0.0"), ("acme-tools", Just "2.0.0")]
+
     describe "extractFromAdvisory (canonical version identity)" $ do
-        for_ [(Npm, "v1.2.0", "v2.0.0+build.7", "1.2.0", "2.0.0+build.7"), (PyPI, "1.2.0", "2.0.0", "1.2", "2"), (RubyGems, "1.2.0", "2.0.0", "1.2", "2")] $ \(eco, introduced, fixed, lower, upper) ->
+        for_ [(Cargo, "1.2.0", "2.0.0+build.7", "1.2.0", "2.0.0+build.7"), (Npm, "v1.2.0", "v2.0.0+build.7", "1.2.0", "2.0.0+build.7"), (PyPI, "1.2.0", "2.0.0", "1.2", "2"), (RubyGems, "1.2.0", "2.0.0", "1.2", "2")] $ \(eco, introduced, fixed, lower, upper) ->
             it ("canonicalises every emitted bound and point for " <> show eco) $ do
                 let extract bound = extractFromAdvisory noScores (rangedAdvisory eco (Just introduced) bound [fixed])
                 extract (FixedBefore fixed)
                     `shouldBe` [ExtractedOsv "pkg" (osvExportDirectory (osvEcosystemFor eco)) "CVE-test" (Just lower) (FixedBefore upper) Nothing Nothing, ExtractedOsv "pkg" (osvExportDirectory (osvEcosystemFor eco)) "CVE-test" (Just upper) (LastAffected upper) Nothing Nothing]
                 map extUpperBound (extract (LastAffected fixed)) `shouldBe` [LastAffected upper]
+        it "does not apply npm advisory prefixes to Cargo" $ do
+            let rows = extractFromAdvisory noScores (rangedAdvisory Cargo (Just "v1.2.0") (FixedBefore "v2.0.0") [])
+            map extIntroduced rows `shouldBe` [Just "v1.2.0"]
+            map (unorderableBounds Cargo) rows `shouldBe` [["v1.2.0", "v2.0.0"]]
+
         it "keeps introduced zero as a sentinel and enumerated zero as an exact version" $ do
             let rows = extractFromAdvisory noScores (rangedAdvisory PyPI Nothing (FixedBefore "0.0rc1") ["0"])
             map extIntroduced rows `shouldBe` [Nothing, Just "0"]

@@ -30,6 +30,19 @@ spec = do
         it "parses a valid version into a key" $
             versionKey (mkVersion Npm "1.2.3") `shouldSatisfy` isJust
 
+    describe "Cargo identity" $ do
+        it "keeps raw build spellings distinct while using native precedence" $ do
+            let firstBuild = mkVersion Cargo "1.2.3+first"
+                secondBuild = mkVersion Cargo "1.2.3+second"
+            firstBuild `shouldNotBe` secondBuild
+            compareVersions firstBuild secondBuild `shouldBe` Just EQ
+            renderVersion firstBuild `shouldBe` "1.2.3+first"
+        it "uses its own grammar and ecosystem key" $ do
+            parseVersionKey Cargo "1.2.3" `shouldNotBe` parseVersionKey Npm "1.2.3"
+            parseAdvisoryVersionKey Cargo "v1.2.3" `shouldSatisfy` isLeft
+            parseAdvisoryVersionKey Npm "v1.2.3" `shouldSatisfy` isRight
+            renderVersionKey <$> parseVersionKey Cargo "18446744073709551615.0.0" `shouldBe` Right "18446744073709551615.0.0"
+
     describe "versionKeyIn" $
         it "is the key mkVersion builds under that ecosystem, whichever ecosystem built the version" $
             hedgehog $ do
@@ -132,7 +145,7 @@ spec = do
         it "ignores only comments and blank lines" $
             parseFixture "  # comment\n\n npm|1|2|LT\npypi|1|2|LT\nrubygems|1|2|LT"
                 `shouldBe` Right [Row Npm "1" "2" LT, Row PyPI "1" "2" LT, Row RubyGems "1" "2" LT]
-        for_ ["npm|1|2", "cargo|1|2|LT", "npm||2|LT", "npm|1|2|BAD"] $ \bad ->
+        for_ ["npm|1|2", "unknown|1|2|LT", "npm||2|LT", "npm|1|2|BAD"] $ \bad ->
             it ("reports the malformed row's line: " <> toString bad) $
                 parseFixture ("# comment\n\n" <> bad) `shouldBe` Left (MalformedRow 3 bad)
         for_ [Npm, PyPI, RubyGems] $ \missing ->
@@ -260,6 +273,10 @@ spec = do
 
         it "spells a release without its trailing zeros" $
             spelling "1.0.0" `shouldBe` Just "1"
+
+        it "normalises the documented PEP 440 spellings" $
+            map spelling ["2!1.0", "1.0-RC.1", "1.0-1", "1.0dev", "1.0+Ubuntu-1", "not-a-version"]
+                `shouldBe` [Just "2!1", Just "1rc1", Just "1.post1", Just "1.dev0", Just "1+ubuntu.1", Nothing]
 
         it "gives two spellings of one release the same version" $
             canonicalPep440 "1.0" `shouldBe` canonicalPep440 "1.0.0"

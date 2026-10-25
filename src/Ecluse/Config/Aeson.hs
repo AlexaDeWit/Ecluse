@@ -32,6 +32,7 @@ import Ecluse.Core.Osv.Provenance (SourcePathRecording (FingerprintSourcePath, R
 import Ecluse.Core.Osv.Publication (Percent, mkPercent)
 import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrity)
+import Ecluse.Core.Registry.Cargo.FirstParty qualified as Cargo
 import Ecluse.Core.Registry.Maintenance.Budget (parseQuotaDimension, parseRequestKind)
 import Ecluse.Core.Registry.Npm.Project (projectScope)
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty, projectFirstPartyEntry)
@@ -300,7 +301,12 @@ parseFirstParty :: Ecosystem -> String -> Value -> Parser FirstParty
 parseFirstParty eco field v = case eco of
     Npm -> FirstPartyNpmScopes <$> parseNpmScopes field v
     PyPI -> FirstPartyPyPI <$> parsePyPIFirstParty field v
+    Cargo -> FirstPartyCargo <$> nonEmptyCommaSeparated field parseCargoEntry (field <> " must name at least one crate or prefix")
     RubyGems -> fail (field <> " is not supported for " <> toString (ecosystemName eco) <> " yet")
+
+parseCargoEntry :: Text -> Parser Cargo.CargoFirstParty
+parseCargoEntry entry =
+    either (const (fail ("invalid Cargo entry in firstParty: " <> show entry))) pure (Cargo.projectFirstPartyEntry entry)
 
 parseNpmScopes :: String -> Value -> Parser (NonEmpty Scope)
 parseNpmScopes field = nonEmptyCommaSeparated field parseScopeEntry (field <> " must name at least one scope")
