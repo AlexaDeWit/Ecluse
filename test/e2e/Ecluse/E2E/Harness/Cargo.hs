@@ -12,6 +12,8 @@ module Ecluse.E2E.Harness.Cargo (
     CargoProject (..),
     withCargoProject,
     cargoUseFixture,
+    cargoSelectDependency,
+    cargoSelectRequirement,
     runCargo,
     cargoVersions,
 
@@ -89,7 +91,7 @@ withCargoProject toolchain view index token use = withClientDir "cargo" $ \direc
     traverse_ (createDirectoryIfMissing True) [home, target, installation, directory </> "src"]
     writeFileText (home </> "config.toml") (configuration view index)
     forM_ token $ \value -> writeFileText (home </> "credentials.toml") ("[registries.ecluse-test]\ntoken = " <> tomlString value <> "\n")
-    writeFileText (directory </> "Cargo.toml") (consumerManifest view)
+    writeFileText (directory </> "Cargo.toml") (consumerManifest view cargoRoot ("=" <> cargoVersion))
     writeFileText (directory </> "src/main.rs") "fn main() { println!(\"{}\", ecluse_e2e_root::value()); }\n"
     environment <- getEnvironment
     let overrides =
@@ -151,8 +153,8 @@ configuration view index =
                     , "registry = " <> tomlString index
                     ]
 
-consumerManifest :: CargoView -> Text
-consumerManifest view =
+consumerManifest :: CargoView -> Text -> Text -> Text
+consumerManifest view name requirement =
     T.unlines
         [ "[package]"
         , "name = \"ecluse-e2e-consumer\""
@@ -160,7 +162,7 @@ consumerManifest view =
         , "edition = \"2021\""
         , "resolver = \"2\""
         , "[dependencies]"
-        , cargoRoot <> " = { version = \"=" <> cargoVersion <> "\"" <> registry <> " }"
+        , name <> " = { version = \"" <> requirement <> "\"" <> registry <> " }"
         ]
   where
     registry = case view of
@@ -182,6 +184,16 @@ cargoUseFixture project fixtureRoot spec = do
         let destination = cargoDirectory project </> path
         createDirectoryIfMissing True (takeDirectory destination)
         readFileBS (fixtureRoot </> crateDirectory spec </> path) >>= writeFileBS destination
+
+-- | Select one native dependency without inheriting the graph consumer's executable source.
+cargoSelectDependency :: CargoView -> Text -> Text -> CargoProject -> IO ()
+cargoSelectDependency view name version = cargoSelectRequirement view name ("=" <> version)
+
+-- | Select a complete native version requirement for fresh exact or unpinned client observations.
+cargoSelectRequirement :: CargoView -> Text -> Text -> CargoProject -> IO ()
+cargoSelectRequirement view name requirement project = do
+    writeFileText (cargoDirectory project </> "Cargo.toml") (consumerManifest view name requirement)
+    writeFileText (cargoDirectory project </> "src/main.rs") "fn main() {}\n"
 
 -- | All native commands use the shared E2E runner and return their exact exit status and output.
 runCargo :: CargoProject -> [String] -> IO ClientResult
