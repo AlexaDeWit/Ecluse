@@ -7,7 +7,6 @@
 module Ecluse.Core.Registry.PyPI.Archive (archiveMetadata) where
 
 import Conduit
-import Control.Concurrent.MVar qualified as MVar
 import Control.Monad (foldM)
 import Control.Monad.Except (throwError)
 import Data.Bits (shiftR, (.&.))
@@ -22,11 +21,13 @@ import UnliftIO.Exception (evaluate)
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry.Archive.Inflate (splitArchiveCharge)
+import Ecluse.Core.Registry.Archive.Tar (sourceReader)
 import Ecluse.Core.Registry.PyPI.Archive.BZip (withBzipChunks)
 import Ecluse.Core.Registry.PyPI.Archive.Inflate (InflateFormat (..), withInflatedChunks)
 import Ecluse.Core.Registry.PyPI.Archive.Lzma (LzmaFormat (..), withLzmaChunks)
 import Ecluse.Core.Registry.PyPI.Archive.Path (checkPath, metadataPath)
-import Ecluse.Core.Registry.PyPI.Archive.Tar (TarDecode, extractTar)
+import Ecluse.Core.Registry.PyPI.Archive.Tar (extractTar)
 import Ecluse.Core.Registry.PyPI.Project (DistributionKind (..), FileCoordinate (..), fileCoordinate)
 import Ecluse.Core.Security.Limits (Limits (..))
 import Ecluse.Core.Version (Version)
@@ -38,7 +39,7 @@ archiveMetadata limits charge package version filename bytes = case fileCoordina
         | fcVersion coordinate == version
         , BS.length bytes <= maxMirrorArtifactBytes limits
         , maxMirrorArtifactBytes limits > 0 -> do
-            (decoderCharge, contentCharge) <- splitCharge charge
+            (decoderCharge, contentCharge) <- splitArchiveCharge charge
             contentCharge archiveScratchBytes
             result <-
                 if any (`T.isSuffixOf` filename) [".whl", ".zip"]
@@ -58,22 +59,6 @@ archiveMetadata limits charge package version filename bytes = case fileCoordina
 
 archiveScratchBytes :: Int
 archiveScratchBytes = 65536
-
-splitCharge :: (Int -> IO ()) -> IO (Int -> IO (), Int -> IO ())
-splitCharge pay = do
-    portions <- MVar.newMVar (0, 0)
-    let reserve change = MVar.modifyMVar_ portions $ \previous -> do
-            let next@(decoder, retained) = change previous
-            pay (decoder + retained)
-            pure next
-    pure (\decoder -> reserve (\(_, retained) -> (decoder, retained)), \retained -> reserve (\(decoder, _) -> (decoder, retained)))
-
-sourceReader :: IO (Either ParseError ByteString) -> ConduitT () ByteString TarDecode ()
-sourceReader readChunk = do
-    result <- liftIO readChunk
-    case result of
-        Left fault -> lift (throwError fault)
-        Right bytes -> unless (BS.null bytes) (yield bytes >> sourceReader readChunk)
 
 data Scan = Scan
     { scanCount :: !Int

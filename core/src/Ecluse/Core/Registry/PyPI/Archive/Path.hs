@@ -9,16 +9,9 @@ module Ecluse.Core.Registry.PyPI.Archive.Path (checkPath, metadataPath) where
 import Data.Text qualified as T
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry.Archive.Path (checkPath)
 import Ecluse.Core.Registry.PyPI.Project (DistributionKind (..), FileCoordinate (..), fileCoordinate)
 import Ecluse.Core.Version (Version)
-
--- | Reject absolute, escaping, and platform-dependent member names.
-checkPath :: Text -> Either ParseError [Text]
-checkPath path = do
-    let parts = T.splitOn "/" (fromMaybe path (T.stripSuffix "/" path))
-    when (T.compareLength path 4096 == GT || T.any (\c -> c < ' ' || c == '\\' || c == ':' || c == '\DEL') path) (bad "unsafe archive path")
-    when (any (`elem` ["", ".", ".."]) parts) (bad "unsafe archive path")
-    pure parts
 
 -- | Select only the admitted distribution metadata directory.
 metadataPath :: PackageName -> Version -> DistributionKind -> [Text] -> Either ParseError Bool

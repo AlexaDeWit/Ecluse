@@ -142,6 +142,11 @@ library ecluse-core
     Ecluse.Core.Mirror.State.Codec
     Ecluse.Core.Mirror.State.Weight
     Ecluse.Core.Registry.PyPI.Archive
+    Ecluse.Core.Registry.Archive.Path
+    Ecluse.Core.Registry.Archive.Inflate
+    Ecluse.Core.Registry.Archive.Tar
+    Ecluse.Core.Registry.Cargo.Archive
+    Ecluse.Core.Registry.Cargo.Manifest
     Ecluse.Core.Registry.PyPI.Archive.Path
     Ecluse.Core.Registry.PyPI.Archive.BZip
     Ecluse.Core.Registry.PyPI.Archive.Inflate
@@ -415,6 +420,7 @@ library ecluse-core
 
   build-depends:
     , tar ^>=0.6.4
+    , toml-parser ==2.0.2.0
     , bzlib-conduit ^>=0.3.0.4
     , digest ^>=0.0.2
     , ecluse-lzma-managed ^>=0.0.1
@@ -1228,6 +1234,8 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.ProjectSpec
     Ecluse.Core.Registry.Cargo.ProjectSpec
     Ecluse.Core.Registry.Cargo.FirstPartySpec
+    Ecluse.Core.Registry.Cargo.ArchiveSpec
+    Ecluse.Core.Registry.Cargo.ManifestSpec
     Ecluse.Core.Registry.Cargo.RouteSpec
     Ecluse.Core.Registry.Cargo.Route.InternalSpec
     Ecluse.Core.Registry.PyPI.RequestSpec
