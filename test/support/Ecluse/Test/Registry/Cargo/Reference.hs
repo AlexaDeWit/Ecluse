@@ -136,9 +136,9 @@ referenceGraph bytes = do
     (packages, nodes, root) <- first toText (eitherDecodeStrict bytes >>= parseEither metadata)
     packageMap <- unique "package" packages
     nodeMap <- unique "node" nodes
-    forM_ (Map.toList nodeMap) $ \(identifier, node) -> do
+    forM_ (Map.toList nodeMap) $ \(identifier, resolvedNode) -> do
         require packageMap identifier
-        forM_ (cargoNodeDependencies node) $ \(_, dependency, _) -> require packageMap dependency
+        forM_ (cargoNodeDependencies resolvedNode) $ \(_, dependency, _) -> require packageMap dependency
     forM_ root (require packageMap)
     pure (CargoGraph packageMap nodeMap root)
   where
@@ -171,7 +171,7 @@ referenceLock :: Text -> Either Text [CargoLocked]
 referenceLock document = do
     packages <- traverse package (sections (T.lines document))
     let identities = map (\entry -> (cargoLockedName entry, cargoLockedVersion entry, cargoLockedSource entry)) packages
-    unless (length identities == Map.size (Map.fromList [(identity, ()) | identity <- identities])) (Left "Cargo.lock repeats a package identity")
+    unless (length identities == Map.size (Map.fromList [(packageIdentity, ()) | packageIdentity <- identities])) (Left "Cargo.lock repeats a package identity")
     pure packages
   where
     sections source = case dropWhile ((/= "[[package]]") . T.strip) source of

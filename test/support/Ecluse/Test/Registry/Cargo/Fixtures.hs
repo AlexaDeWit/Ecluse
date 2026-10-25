@@ -160,7 +160,7 @@ loadCargoGraph fixtureRoot = do
   where
     release generated spec = do
         files <- forM (crateFiles spec) $ \path -> (path,) <$> readFileBS (fixtureRoot </> crateDirectory spec </> path)
-        readme <- readFileText (fixtureRoot </> crateDirectory spec </> "README.md")
+        readme <- decodeUtf8 <$> readFileBS (fixtureRoot </> crateDirectory spec </> "README.md")
         packageCargoRelease spec (files <> generated) readme
 
 -- | Retain the owned leaf source while varying the native name and version for isolated policy cases.
@@ -176,7 +176,7 @@ cargoLeafReleaseWithManifest name version changeManifest = do
     files <- forM commonFiles $ \path -> do
         bytes <- readFileBS (source </> path)
         pure (path, if path == "Cargo.toml" then encodeUtf8 (changeManifest (T.replace "ecluse-e2e-leaf" name (T.replace "1.0.0" version (decodeUtf8 bytes)))) else bytes)
-    readme <- readFileText (source </> "README.md")
+    readme <- decodeUtf8 <$> readFileBS (source </> "README.md")
     packageCargoRelease spec files readme
 
 packageCargoRelease :: CargoCrate -> [(FilePath, ByteString)] -> Text -> IO CargoRelease
@@ -299,11 +299,11 @@ cargoFixtureLock source = fixtureLock source consumer
 
 fixtureLock :: Text -> CargoCrate -> [CargoRelease] -> Text
 fixtureLock source rootSpec releases =
-    "version = 3\n" <> foldMap package (sortOn (identity . fst) packages)
+    "version = 3\n" <> foldMap package (sortOn (packageIdentity . fst) packages)
   where
     -- The packaged root has no registry checksum, which avoids an archive checksum cycle.
     packages = (rootSpec, Nothing) : [(releaseCrate release, Just (releaseChecksum release)) | release <- releases]
-    identity spec = (crateName spec, crateVersion spec)
+    packageIdentity spec = (crateName spec, crateVersion spec)
     quoted text = decodeUtf8 (LBS.toStrict (encode text))
     package (spec, checksum) =
         let dependencies = Map.keys (Map.fromList [(name, ()) | name <- mapMaybe dependencyVersion (crateDependencies spec)])

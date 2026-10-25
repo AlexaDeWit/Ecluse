@@ -301,7 +301,7 @@ parseFirstParty :: Ecosystem -> String -> Value -> Parser FirstParty
 parseFirstParty eco field v = case eco of
     Npm -> FirstPartyNpmScopes <$> parseNpmScopes field v
     PyPI -> FirstPartyPyPI <$> parsePyPIFirstParty field v
-    Cargo -> FirstPartyCargo <$> nonEmptyCommaSeparated field parseCargoEntry (field <> " must name at least one crate or prefix")
+    Cargo -> FirstPartyCargo <$> nonEmptyCommaSeparated field parseCargoEntry (field <> " must name at least one crate or prefix") v
     RubyGems -> fail (field <> " is not supported for " <> toString (ecosystemName eco) <> " yet")
 
 parseCargoEntry :: Text -> Parser Cargo.CargoFirstParty
