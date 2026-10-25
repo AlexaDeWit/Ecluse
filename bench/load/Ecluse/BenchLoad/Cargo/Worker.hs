@@ -28,6 +28,7 @@ import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQue
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, adapterMetadata))
+import Ecluse.Core.Registry.Cargo.Execution (newCargoInstallEvidence)
 import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead)
 import Ecluse.Core.Registry.Cargo.Publish (cargoPublishCodec)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
@@ -81,6 +82,7 @@ boot knobs use = do
                     publicControl <- newPublicControl (\_ _ _ -> pass) (\_ _ -> pass)
                     meter <- testMemoryMeter
                     rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
+                    evidence <- newCargoInstallEvidence defaultLimits
                     successes <- newIORef (0 :: Int)
                     acknowledgements <- newIORef (0 :: Int)
                     queue <- newBoundedInMemoryQueue (defaultMemoryQueueConfig 16) (\n -> benchFail ("Cargo worker queue dropped a job: " <> show n))
@@ -92,6 +94,7 @@ boot knobs use = do
                             WorkerPolicy
                                 { wpFirstParty = const False
                                 , wpResolveVersion = \pay name version -> versionEvaluation <$> prepareVersion prepareCargoRead passthroughTracingPort sourceOrigin{ocChargeFullRead = pay . scaleCharge (cfFullReadPermille factors)} name version
+                                , wpInstallEvidence = Just evidence
                                 , wpRules = rules
                                 , wpMinIntegrity = defaultMinIntegrity
                                 , wpArtifactHostHonoured = const True
