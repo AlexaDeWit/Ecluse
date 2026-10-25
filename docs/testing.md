@@ -2302,6 +2302,13 @@ Two things are easy to get backwards:
   ordering is the template. The gate checks it offline against a committed fixture, and the smoke
   suite also regenerates that fixture from the live oracles as a differential check.
 
+Cargo version tests also compare grammar and precedence with the pinned Rust `semver` oracle in
+`test/oracles/cargo-semver/`. The dev and CI shells build its locked dependencies from registry checksums.
+`Cargo.lock` pins `semver` 1.0.28 with its crates.io checksum.
+The wrapper uses [`Version::cmp_precedence`](https://docs.rs/semver/1.0.28/semver/struct.Version.html#method.cmp_precedence), which ignores build metadata.
+Stable sorting preserves equal-precedence input order.
+Cargo unit checks fail if the tool is missing or fails. Live registry failures remain optional smoke observations.
+
 Beyond the test tiers, two static-analysis tools gate. **`weeder`** reports library code not reachable
 from the entry point (`Ecluse.run`). **`stan`** runs HIE-based partial-function and bug analysis at
 the floor in `.stan.toml`. The `analysis` job builds their `.hie` input once and runs each tool in its

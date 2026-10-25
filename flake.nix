@@ -426,6 +426,14 @@
           inherit (pkgs) nodejs;
         };
 
+        cargoSemverOracle = pkgs.rustPlatform.buildRustPackage {
+          pname = "cargo-semver-oracle";
+          version = "0.1.0";
+          src = ./test/oracles/cargo-semver;
+          cargoLock.lockFile = ./test/oracles/cargo-semver/Cargo.lock;
+          meta.license = pkgs.lib.licenses.mit;
+        };
+
         # Remove when the registry publishes semgrep/semgrep-rules#4042.
         semgrepActionPinningSource =
           "https://raw.githubusercontent.com/nopcorn/semgrep-rules/734df2ec594a19c83b0694b9cf70feb7af012258/yaml/github-actions/security/github-actions-mutable-action-tag";
@@ -508,12 +516,13 @@
           # Reference version-ordering oracles for the differential smoke suite
           # and `task gen-version-fixtures`. They are node-semver (npm, built by
           # oracleNodeModules and put on NODE_PATH above), Python packaging (PyPI),
-          # and Ruby Gem::Version (built into ruby).
+          # Ruby Gem::Version, and the locked Rust semver precedence oracle.
           pkgs.nodejs
           pkgs.cargo
           pkgs.rustc
           pkgs.stdenv.cc
           cargoFloor
+          cargoSemverOracle
           # pip rides along because the end-to-end tier drives it as a real client
           # against a pypi mount, the way it drives npm against an npm mount.
           (pkgs.python3.withPackages (ps: [ ps.packaging ps.pip ]))

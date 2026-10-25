@@ -2,9 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Live registry ordering checks share the pinned native tools with the offline Cargo unit gate.
 module Ecluse.Core.VersionSmokeSpec (spec) where
 
-import Control.Exception (IOException, try)
 import Data.Text qualified as T
 import Hedgehog (Gen)
 import Hedgehog qualified as H
@@ -22,17 +22,11 @@ import Ecluse.Core.Ecosystem (Ecosystem (..), ecosystemName)
 import Ecluse.Core.Version
 import Ecluse.Test.RegistryCapture (fetchVersions, loadCatalogue, smokeRegistryPackages)
 import Ecluse.Test.Version qualified as V
+import Ecluse.Test.Version.Oracle (oracleAvailable, oracleCompare, oracleSort)
 
-{- | Smoke tier: check 'Ecluse.Core.Version.compareVersions' against the live reference oracles
-(node-semver, Python @packaging@, Ruby @Gem::Version@) over the committed fixture, random inputs,
-and real registry versions. Every check pends rather than fails when a tool, the network, or a
-registry is unavailable, so a red here is a real disagreement.
--}
+-- | Network failures remain optional smoke observations. The pinned Cargo oracle must be present.
 spec :: Spec
 spec = do
-    -- The curated package names come from the shared catalogue
-    -- ("Ecluse.Test.RegistryCapture"), the one source the benchmark corpus capture
-    -- reads too.
     catalogue <- runIO loadCatalogue
     describe "version-ordering fixtures vs the live reference oracles" $
         it "regenerating from node-semver / packaging / Gem::Version reproduces the committed fixture" $ do
@@ -52,7 +46,7 @@ spec = do
     -- Modest iteration count: this tier shells out to a tool per comparison.
     describe "compareVersions agrees with the live oracle on random inputs" $
         modifyMaxSuccess (const 60) $
-            for_ [(Npm, npmish), (PyPI, pypiish), (RubyGems, gemish)] $ \(eco, gen) -> do
+            for_ [(Npm, npmish), (PyPI, pypiish), (Cargo, cargoish), (RubyGems, gemish)] $ \(eco, gen) -> do
                 let title = show eco <> " -- generative differential (both-accept only)"
                 withLiveOracle eco title $
                     it title $
@@ -69,9 +63,7 @@ spec = do
                                     o H.=== t
                                 _ -> H.success
 
-    -- Our 'compareVersions' must induce the reference oracle's order over the versions it
-    -- accepts, and must never abstain on one. One subprocess per package, so this scales to
-    -- thousands of versions. A registry, network, or tool failure pends rather than fails.
+    -- One oracle process sorts each registry's complete version list.
     describe "compareVersions agrees with the reference oracle on live registry versions" $
         for_ (smokeRegistryPackages catalogue) $ \(eco, pkgs) ->
             withLiveOracle eco (show eco <> " -- live registry ordering") $ do
@@ -109,164 +101,24 @@ spec = do
     generatorScript = "scripts/gen-version-fixtures.sh"
     committedFixture = "core/test/unit/fixtures/version-ordering.txt"
 
-{- | Build @body@ for an ecosystem whose live oracle answered the probe, and one pending case named
-@title@ for one that did not. Without the probe every iteration would skip and pass vacuously.
--}
+-- Probe optional tools before generating cases, so missing tools cannot pass vacuously.
 withLiveOracle :: Ecosystem -> String -> Spec -> Spec
 withLiveOracle eco title body = do
     available <- runIO (oracleAvailable eco)
     if available
         then body
-        else it title (pendingWith ("reference oracle for " <> show eco <> " unavailable; run via `nix develop`"))
+        else
+            it title $
+                if eco == Cargo
+                    then expectationFailure "the pinned Cargo oracle failed its precedence probe"
+                    else pendingWith ("reference oracle for " <> show eco <> " unavailable; run via `nix develop`")
 
-{- | Whether the live oracle for @eco@ is reachable, probed on @1.0.0 < 1.0.1@. 'False' means the
-interpreter or its library is missing, and the caller pends rather than running a vacuous property.
--}
-oracleAvailable :: Ecosystem -> IO Bool
-oracleAvailable eco = (== Just LT) <$> oracleCompare eco "1.0.0" "1.0.1"
-
-{- | Compare two version strings with the live reference tool for @eco@, using the same expressions
-as @scripts/gen-version-fixtures.sh@. 'Nothing' means the tool rejected an input or is unavailable.
--}
-oracleCompare :: Ecosystem -> Text -> Text -> IO (Maybe Ordering)
-oracleCompare eco a b = do
-    let (interp, prog) = oracleProgram eco
-    -- A missing interpreter makes readProcessWithExitCode throw. Treat that as
-    -- "unavailable" (Nothing), the same as a non-zero exit, so probing stays total.
-    result <-
-        try (readProcessWithExitCode interp ["-", toString a, toString b] (toString prog))
-    pure $ case result of
-        Left (_ :: IOException) -> Nothing
-        Right (ExitSuccess, out, _err) -> parseOrdInt (T.strip (T.pack out))
-        Right (ExitFailure _, _, _) -> Nothing
-
-{- | The interpreter and stdin program for an ecosystem's oracle. Each reads the
-two versions from @argv@ and prints @-1@\/@0@\/@1@, the sign of @a <=> b@. It exits
-non-zero if either input does not parse for that tool.
--}
-oracleProgram :: Ecosystem -> (String, Text)
-oracleProgram = \case
-    Npm ->
-        ( "node"
-        , unlines
-            [ "const semver = require('semver');"
-            , "const a = process.argv[2], b = process.argv[3];"
-            , "if (semver.valid(a) === null || semver.valid(b) === null) process.exit(1);"
-            , "console.log(String(semver.compare(a, b)));"
-            ]
-        )
-    PyPI ->
-        ( "python3"
-        , unlines
-            [ "import sys"
-            , "from packaging.version import Version, InvalidVersion"
-            , "try:"
-            , "    A, B = Version(sys.argv[1]), Version(sys.argv[2])"
-            , "except InvalidVersion:"
-            , "    sys.exit(1)"
-            , "print((A > B) - (A < B))"
-            ]
-        )
-    RubyGems ->
-        ( "ruby"
-        , unlines
-            [ "begin"
-            , "  a = Gem::Version.new(ARGV[0])"
-            , "  b = Gem::Version.new(ARGV[1])"
-            , "rescue ArgumentError"
-            , "  exit 1"
-            , "end"
-            , "puts(a <=> b)"
-            ]
-        )
-
--- | Parse the oracle's @-1@\/@0@\/@1@ sign output into an 'Ordering'.
-parseOrdInt :: Text -> Maybe Ordering
-parseOrdInt = \case
-    "-1" -> Just LT
-    "0" -> Just EQ
-    "1" -> Just GT
-    _ -> Nothing
-
-{- | Sort a version list with the live reference tool for @eco@, keeping only the versions that tool
-accepts. 'Nothing' if the tool is unavailable or errors, mirroring 'oracleCompare'.
--}
-oracleSort :: Ecosystem -> [Text] -> IO (Maybe [Text])
-oracleSort eco versions = do
-    let (interp, prog) = oracleSortProgram eco
-    result <-
-        try (readProcessWithExitCode interp ("-" : map toString versions) (toString prog))
-    pure $ case result of
-        Left (_ :: IOException) -> Nothing
-        Right (ExitSuccess, out, _err) ->
-            Just (filter (not . T.null) (map T.strip (T.lines (T.pack out))))
-        Right (ExitFailure _, _, _) -> Nothing
-
-{- | The interpreter and stdin program for an ecosystem's __sort__ oracle, the list counterpart to
-'oracleProgram'. Each prints the accepted versions in that tool's order, one per line.
--}
-oracleSortProgram :: Ecosystem -> (String, Text)
-oracleSortProgram = \case
-    Npm ->
-        ( "node"
-        , unlines
-            [ "const semver = require('semver');"
-            , "const vs = process.argv.slice(2);"
-            , "const valid = vs.filter((v) => semver.valid(v) !== null);"
-            , "valid.sort(semver.compare);"
-            , "process.stdout.write(valid.join('\\n'));"
-            ]
-        )
-    PyPI ->
-        ( "python3"
-        , unlines
-            [ "import sys"
-            , "from packaging.version import Version, InvalidVersion"
-            , "def ok(v):"
-            , "    try:"
-            , "        Version(v)"
-            , "        return True"
-            , "    except InvalidVersion:"
-            , "        return False"
-            , "vs = [v for v in sys.argv[1:] if ok(v)]"
-            , "vs.sort(key=Version)"
-            , "sys.stdout.write(\"\\n\".join(vs))"
-            ]
-        )
-    RubyGems ->
-        ( "ruby"
-        , unlines
-            [ "def ok(v)"
-            , "  Gem::Version.new(v)"
-            , "  true"
-            , "rescue ArgumentError"
-            , "  false"
-            , "end"
-            , "vs = ARGV.select { |v| ok(v) }"
-            , "vs = vs.sort_by { |v| Gem::Version.new(v) }"
-            , "STDOUT.write(vs.join(\"\\n\"))"
-            ]
-        )
-
-{- | A way our 'compareVersions' disagrees with the reference oracle's order over
-a real, reference-valid version list.
--}
 data Divergence
-    = {- | Our parser yields no ordering key for a version the reference accepts:
-      we cannot order what the reference can.
-      -}
-      Abstained Text
-    | {- | The reference orders the first version before the second, but our
-      comparator ranks the first strictly /after/ it.
-      -}
-      Misordered Text Text
+    = Abstained Text
+    | Misordered Text Text
     deriving stock (Eq, Show)
 
-{- | Every way our 'compareVersions' disagrees with @refSorted@, the reference-sorted valid subset:
-an abstention on an accepted version, or a consecutive pair we report 'GT' for. Consecutive
-pairs suffice because our key 'Ord' is total, and 'EQ' passes because the reference tie-breaks
-by input order.
--}
+-- Consecutive pairs suffice because native order is total and equal precedence preserves input order.
 findDivergences :: Ecosystem -> [Text] -> [Divergence]
 findDivergences eco refSorted = abstentions <> misorders
   where
@@ -277,9 +129,6 @@ findDivergences eco refSorted = abstentions <> misorders
         , compareVersions (mkVersion eco a) (mkVersion eco b) == Just GT
         ]
 
-{- | A human-readable report of the divergences found for a package, for the
-failing expectation's message.
--}
 renderDivergences :: Ecosystem -> Text -> [Text] -> [Divergence] -> String
 renderDivergences eco pkg refSorted ds =
     toString . T.unlines $ header : map render ds
@@ -298,21 +147,19 @@ renderDivergences eco pkg refSorted ds =
         Misordered a b ->
             "  misorder -- reference orders " <> a <> " before " <> b <> ", but compareVersions says GT"
 
--- | npm-flavoured strings: the shared valid 'V.genNpm' mixed with 'messy'.
 npmish :: Gen Text
 npmish = Gen.choice [V.genNpm, messy]
 
--- | PEP 440-flavoured strings: the shared valid 'V.genPyPI' mixed with 'messy'.
 pypiish :: Gen Text
 pypiish = Gen.choice [V.genPyPI, messy]
 
--- | @Gem::Version@-flavoured strings: the shared valid 'V.genGem' mixed with 'messy'.
 gemish :: Gen Text
 gemish = Gen.choice [V.genGem, messy]
 
-{- | Deliberately messy version-ish text. One or both sides reject most of these, so the property
-skips them, but they widen the input distribution beyond the strictly-valid generators.
--}
+cargoish :: Gen Text
+cargoish = Gen.choice [V.genNpm, messy, Gen.element ["18446744073709551615.0.0", "18446744073709551616.0.0", "1.2.3+build.1", "1.2.3+build.2"]]
+
+-- Near misses broaden smoke inputs without deciding parser-acceptance equivalence.
 messy :: Gen Text
 messy =
     Gen.text
