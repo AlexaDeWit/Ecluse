@@ -2283,6 +2283,7 @@ library ecluse-bench-load
     Ecluse.BenchLoad.Contract
     Ecluse.BenchLoad.BootLines
     Ecluse.BenchLoad.CpuUse
+    Ecluse.BenchLoad.CapturedArtifact
     Ecluse.BenchLoad.Evidence
     Ecluse.BenchLoad.Exposition
     Ecluse.BenchLoad.Floors

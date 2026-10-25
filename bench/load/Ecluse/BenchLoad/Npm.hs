@@ -14,10 +14,11 @@ module Ecluse.BenchLoad.Npm (
     preflightNpmListing,
 ) where
 
-import Data.Aeson (Value (..), encode, (.=))
+import Data.Aeson (Value (..), encode, (.:), (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Pair)
+import Data.ByteString.Lazy qualified as LBS
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -30,13 +31,14 @@ import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (Application, Request, pathInfo, rawPathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 
+import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact (saProxyPath))
 import Ecluse.BenchLoad.Contract.Driver (LoadReadDriver (..), readLoadContract)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, delayUpstream, fetchChecked, httpTarget, longCacheTtl, selfHosted, weightedMix, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (..), LoadKnobs (..), Scenario (..), Target (Target), UpstreamFixture, proxied, scenario, urlLoad)
 import Ecluse.BenchLoad.Listing (ListingSetup (..), cacheEvictsLoad, cacheFitsLoad, listingLoad, revalidateLoad, slowReaderScenario, withListingStubs)
-import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (saProxyPath))
-import Ecluse.BenchLoad.PatternScenario (loadPins, selectArtifacts)
+import Ecluse.BenchLoad.NpmArtifact (selectedNpmArtifact)
+import Ecluse.BenchLoad.PatternScenario (PatternProvider (..))
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
 import Ecluse.BenchLoad.Selection (evictionEntries)
@@ -80,7 +82,7 @@ import Ecluse.Core.Worker (
     processBatch,
     runWorkerM,
  )
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpWeight), corpusPackages, cpName)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpWeight), corpusPackages, cpName, readCorpusPins)
 import Ecluse.Test.Corpus.Subset (newestNpmShare)
 import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Log (newTestLogEnv)
@@ -114,6 +116,13 @@ npmReadDriver =
         , lrdHerd = herdScenario
         , lrdWarmUnderCold = warmUnderColdScenario
         , lrdRamp = rampScenario
+        , lrdPatternProvider =
+            PatternProvider
+                { ppCaptureAuthority = "https://registry.npmjs.org"
+                , ppSelectedArtifacts = \selected packages captures -> do
+                    pins <- loadPins
+                    either benchFail pure (selectArtifacts selected pins packages captures)
+                }
         , lrdPatternPrivate = lsPrivate npmListing
         , lrdPatternPublic = \knobs bodies artifacts -> do
             rewritten <- newIORef mempty
@@ -258,10 +267,26 @@ warmUnderCold =
             , wldArtifactUrl = \port -> packageUrl port . saProxyPath
             , wldSelect = \packages bodies -> do
                 pins <- loadPins
-                either benchFail pure (selectArtifacts Npm (Just "pinned") pins packages bodies)
+                either benchFail pure (selectArtifacts (Just "pinned") pins packages bodies)
             , wldPrivate = privateOverlayStubWith
             , wldPublic = corpusPublicStub
             }
+
+loadPins :: IO (Map Text Text)
+loadPins = readCorpusPins (.: "pins") >>= either (benchFail . toText) pure
+
+selectArtifacts :: Maybe String -> Map Text Text -> [CorpusPackage] -> Map Text LByteString -> Either Text (Map Text SelectedArtifact)
+selectArtifacts selected pins packages captures =
+    case selected of
+        Just choice -> Map.fromList <$> traverse (select choice) packages
+        _ -> Right Map.empty
+  where
+    select choice package = do
+        let name = cpName package
+        version <- if choice == "pinned" then maybe (Left ("missing captured pin: " <> name)) Right (Map.lookup name pins) else Right (toText choice)
+        bytes <- maybe (Left ("missing captured body: " <> name)) Right (Map.lookup name captures)
+        artifact <- selectedNpmArtifact (cpPackage package) version (LBS.toStrict bytes)
+        pure (name, artifact)
 
 rampScenario :: Scenario
 rampScenario =
