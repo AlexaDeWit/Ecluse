@@ -13,7 +13,7 @@ import Data.Text qualified as T
 import Network.HTTP.Client qualified as Http
 import Network.HTTP.Types (statusCode)
 import System.FilePath ((</>))
-import Test.Hspec
+import Test.Hspec (around, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Mirror.State (stateTarget)
@@ -32,6 +32,7 @@ import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Ecluse.Test.Contract.Serving (ServingResponse (..))
 import Ecluse.Test.Contract.Types
+import Ecluse.Test.Contract.Types qualified as Contract
 import Ecluse.Test.Registry.Cargo.Fixtures
 
 -- | Each fault owns fresh native stores, queue and durable state through the shared fixture lifecycle.
@@ -54,7 +55,7 @@ cargoMirrorProofContract = DeclaredGroup metadata $ \recorder ->
             "cargo/mirror-proof"
             "cargo/mirror-proof"
             "cargo/write"
-            E2E
+            Contract.E2E
             "cargo"
             [Case ("cargo/mirror-proof/" <> suffix) ["cargo/mirror-proof"] | suffix <- ["source-roundtrip", "pinned-yank", "yank-negative-control", "lost-reply", "missing-archive", "checksum-mutation", "missing-state", "corrupt-state", "private-auth"]]
             ["read", "mirror", "client-install"]

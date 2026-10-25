@@ -14,7 +14,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
-import Test.Hspec
+import Test.Hspec (around, it, shouldBe, shouldMatchList, shouldNotBe, shouldReturn, shouldSatisfy)
 
 import Ecluse.E2E.Cargo.InstallE2ESpec
 import Ecluse.E2E.Cargo.PublishE2ESpec

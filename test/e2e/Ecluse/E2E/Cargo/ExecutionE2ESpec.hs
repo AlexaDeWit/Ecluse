@@ -12,7 +12,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
-import Test.Hspec
+import Test.Hspec (around, it, shouldBe, shouldReturn, shouldSatisfy)
 
 import Ecluse.E2E.Cargo.InstallE2ESpec (assertCargoAssets, assertCargoRouting, cargoConsumer)
 import Ecluse.E2E.Fixtures.Cargo
@@ -30,6 +30,7 @@ import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Ecluse.Test.Contract.Serving (ServingResponse (..))
 import Ecluse.Test.Contract.Sweep.Types (ClientOps (clientPublish))
 import Ecluse.Test.Contract.Types
+import Ecluse.Test.Contract.Types qualified as Contract
 import Ecluse.Test.Registry.Cargo.Fixtures
 
 -- | Fixed cases require the image and both native clients in the normal Cargo subject.
@@ -55,7 +56,7 @@ executionGroup =
         { groupId = "cargo/execution"
         , groupContractId = "cargo/execution"
         , groupProfileId = "cargo/execution"
-        , groupTier = E2E
+        , groupTier = Contract.E2E
         , groupPartition = "cargo"
         , groupCases = [Case ("cargo/execution/" <> name) ["cargo/execution"] | name <- ["build-script", "proc-macro", "plain-source", "exact-override", "unavailable-evidence", "corrupt-evidence", "unsupported-evidence", "default-metadata", "worker-readmission", "dredger-revocation"]]
         , groupCapabilities = ["read", "mirror", "maintenance", "client-install"]
