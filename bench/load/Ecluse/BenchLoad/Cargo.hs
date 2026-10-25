@@ -12,7 +12,7 @@ module Ecluse.BenchLoad.Cargo (
     crateStubWith,
 ) where
 
-import Data.Aeson (Object, Value (Object), eitherDecodeStrict, encode, object, (.:), (.=))
+import Data.Aeson (Object, Value, eitherDecodeStrict, encode, object, (.:), (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Pair, Parser, parseEither)
 import Data.ByteString qualified as BS
