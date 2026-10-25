@@ -51,6 +51,7 @@ data CargoRegistry = CargoRegistry
     { registryPort :: Int
     , registryFiles :: TVar (Map (Text, Text, Text) CargoStored)
     , registryRequests :: TVar [CargoRequest]
+    , registryUploads :: TVar [ByteString]
     , registryTokens :: TVar [(Text, Maybe ByteString)]
     , registryFault :: TVar CargoRegistryFault
     }
@@ -64,9 +65,10 @@ withCargoRegistry :: (CargoRegistry -> IO a) -> IO a
 withCargoRegistry action = do
     files <- newTVarIO Map.empty
     requests <- newTVarIO []
+    uploads <- newTVarIO []
     tokens <- newTVarIO []
     fault <- newTVarIO CargoRegistryHealthy
-    let registry = CargoRegistry 0 files requests tokens fault
+    let registry = CargoRegistry 0 files requests uploads tokens fault
     withBridgeApplication (cargoRegistryApplication registry) (\port -> action registry{registryPort = port})
 
 -- | Observe the target's complete physical inventory without consulting product state.
@@ -99,7 +101,7 @@ cargoRegistryApplication registry request respond = do
     fault <- readTVarIO (registryFault registry)
     atomically (modifyTVar' (registryTokens registry) (<> [(host, lookup "Authorization" (requestHeaders request))]))
     let answer status headers body = do
-            atomically (modifyTVar' (registryRequests registry) (<> [CargoRequest host (decodeUtf8 (requestMethod request)) path (statusCode status)]))
+            atomically (modifyTVar' (registryRequests registry) (<> [CargoRequest "http" host (decodeUtf8 (requestMethod request)) path (statusCode status)]))
             respond (responseLBS status headers (if requestMethod request == "HEAD" then "" else body))
         unauthorised = answer status401 [("WWW-Authenticate", "Cargo login_url=\"https://cargo-private/login\"")] "credential required"
         authenticated = lookup "Authorization" (requestHeaders request) == Just (encodeUtf8 cargoRegistryToken)
@@ -135,28 +137,29 @@ upload :: CargoRegistry -> Request -> Text -> CargoRegistryFault -> (Status -> R
 upload registry request host fault answer respond =
     boundedRead (PublishRequestBodyLimit (16 * 1024 * 1024)) (getRequestBodyChunk request) >>= \case
         Left _ -> answer status413 [] "upload too large"
-        Right (_, bytes) -> case referenceUpload bytes of
-            Left reason -> answer status400 [] (LBS.fromStrict (encodeUtf8 reason))
-            Right framed -> case (KeyMap.lookup "name" (uploadMetadata framed), KeyMap.lookup "vers" (uploadMetadata framed)) of
-                (Just (String name), Just (String version)) -> do
-                    let key = (host, name, version)
-                        release = (minimalCargoRelease name version){releaseArchive = uploadArchive framed, releaseChecksum = hexSha256Of (uploadArchive framed)}
-                        -- Targets can reset source time and yank, so durable source proof must restore both.
-                        row = case cargoIndexRecord release of
-                            Object fields -> Object (KeyMap.delete "ecluse-fixture" (KeyMap.insert "pubtime" (String "2099-01-01T00:00:00Z") (KeyMap.insert "deps" (nativeDependencies (uploadMetadata framed)) (KeyMap.insert "features2" (fromMaybe (Object mempty) (KeyMap.lookup "features" (uploadMetadata framed))) fields))))
-                            other -> other
-                    exists <- atomically $ do
-                        files <- readTVar (registryFiles registry)
-                        if Map.member key files then pure True else writeTVar (registryFiles registry) (Map.insert key (CargoStored (uploadArchive framed) row) files) >> pure False
-                    if exists
-                        then answer status409 [] "already published"
-                        else
-                            if fault == CargoRegistryLoseReply
-                                then setCargoRegistryFault registry CargoRegistryHealthy >> respond (responseRaw (\_ _ -> pass) (responseLBS status503 [] "lost reply"))
-                                else answer status200 [("Content-Type", "application/json")] "{\"ok\":true}"
-                _ -> answer status400 [] "upload lacks native name or version"
+        Right (_, bytes) -> do
+            atomically (modifyTVar' (registryUploads registry) (<> [bytes]))
+            case referenceUpload bytes of
+                Left reason -> answer status400 [] (LBS.fromStrict (encodeUtf8 reason))
+                Right framed -> case (KeyMap.lookup "name" (uploadMetadata framed), KeyMap.lookup "vers" (uploadMetadata framed)) of
+                    (Just (String name), Just (String version)) -> do
+                        let key = (host, name, version)
+                            release = (minimalCargoRelease name version){releaseArchive = uploadArchive framed, releaseChecksum = hexSha256Of (uploadArchive framed)}
+                            -- Targets can reset source time and yank, so durable source proof must restore both.
+                            row = case cargoIndexRecord release of
+                                Object fields -> Object (KeyMap.delete "ecluse-fixture" (KeyMap.insert "pubtime" (String "2099-01-01T00:00:00Z") (KeyMap.insert "deps" (nativeDependencies (uploadMetadata framed)) (KeyMap.insert "features2" (fromMaybe (Object mempty) (KeyMap.lookup "features" (uploadMetadata framed))) fields))))
+                                other -> other
+                        exists <- atomically $ do
+                            files <- readTVar (registryFiles registry)
+                            if Map.member key files then pure True else writeTVar (registryFiles registry) (Map.insert key (CargoStored (uploadArchive framed) row) files) >> pure False
+                        if exists
+                            then answer status409 [] "already published"
+                            else
+                                if fault == CargoRegistryLoseReply
+                                    then setCargoRegistryFault registry CargoRegistryHealthy >> respond (responseRaw (\_ _ -> pass) (responseLBS status503 [] "lost reply"))
+                                    else answer status200 [("Content-Type", "application/json")] "{\"ok\":true}"
+                    _ -> answer status400 [] "upload lacks native name or version"
 
--- Native upload names use the published package and an optional explicit alias.
 nativeDependencies :: KeyMap.KeyMap Value -> Value
 nativeDependencies metadata = case KeyMap.lookup "deps" metadata of
     Just (Array dependencies) -> Array (fmap indexDependency dependencies)

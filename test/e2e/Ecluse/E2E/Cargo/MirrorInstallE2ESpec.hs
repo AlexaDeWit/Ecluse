@@ -21,7 +21,7 @@ import System.FilePath (joinPath, splitDirectories)
 import Test.Hspec (shouldBe, shouldReturn)
 import UnliftIO (finally)
 
-import Ecluse.E2E.Cargo.InstallE2ESpec (cargoConsumer)
+import Ecluse.E2E.Cargo.InstallE2ESpec (assertCargoAssets, cargoConsumer)
 import Ecluse.E2E.Fixtures.Cargo
 import Ecluse.E2E.Fixtures.Contracts (concreteFamily)
 import Ecluse.E2E.Harness
@@ -91,10 +91,14 @@ mirrorDriver plane registry releases config =
     MirrorDriver
         { mirrorPublicInstall = do
             before <- versions
-            (observed, target, reachable) <- withObservedCargoProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \proxy -> do
-                reachable <- cargoPublicReachable (observedProxy proxy)
-                (observed, target, _) <- cargoObservedGraph proxy
-                pure (observed, target, reachable)
+            (observed, target, reachable) <-
+                withObservedCargoProxy
+                    config{ecArgs = ["proxy", "--no-worker"]}
+                    plane
+                    ( \proxy -> do
+                        reachable <- cargoPublicReachable (observedProxy proxy)
+                        (\(observed, target, _) -> (observed, target, reachable)) <$> cargoObservedGraph proxy
+                    )
             cargoRegistryFiles registry `shouldReturn` Map.empty
             withObservedCargoProxy config plane $ \proxy -> do
                 awaitCargoRegistry registry releases `shouldReturn` True
@@ -134,6 +138,7 @@ mirrorDriver plane registry releases config =
 -- | Capture a real build, install, graph, executable and complete native package sources.
 cargoObservedGraph :: ObservedCargoProxy -> IO (Observed CargoCoordinates Text, TargetObservation CargoCoordinates, [Text])
 cargoObservedGraph observed = cargoConsumer proxy currentCargo $ \project -> do
+    before <- cargoTraffic observed
     built <- runCargo project ["build"] >>= shouldSucceed
     metadata <- cargoMetadata project [] >>= shouldSucceed
     graph <- either (fail . toString) pure (cargoGraph metadata)
@@ -142,6 +147,9 @@ cargoObservedGraph observed = cargoConsumer proxy currentCargo $ \project -> do
     void (cargoInstall project cargoRoot cargoVersion [] >>= shouldSucceed)
     executable <- cargoInstalledExecutable project cargoExecutable >>= shouldSucceed
     tree <- cargoPackageTree project
+    after <- cargoTraffic observed
+    interval <- cargoTrafficSince before after
+    assertCargoAssets project interval
     locked <- cargoLock project >>= either (fail . toString) pure
     let archives = sort [toText filename | (path, TreeFile _ _) <- Map.toList tree, let filename = fromMaybe path (listToMaybe (reverse (splitDirectories path))), ".crate" `T.isSuffixOf` toText filename]
         sources = ordNub [source | entry <- locked, Just source <- [cargoLockedSource entry]]

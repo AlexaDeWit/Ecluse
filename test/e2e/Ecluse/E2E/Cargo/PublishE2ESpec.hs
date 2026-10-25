@@ -16,7 +16,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.Exit (ExitCode (ExitSuccess))
 
-import Ecluse.E2E.Cargo.InstallE2ESpec (assertCargoViewRouting)
+import Ecluse.E2E.Cargo.InstallE2ESpec (assertCargoAssets, assertCargoViewRouting)
 import Ecluse.E2E.Fixtures.Cargo
 import Ecluse.E2E.Fixtures.Contracts (concreteFamily)
 import Ecluse.E2E.Harness
@@ -68,7 +68,9 @@ publicationDriver observed registry name =
         { publicationRun = cargoPublishFixture proxy currentCargo name
         , publicationInstall = cargoPrivateConsumer proxy currentCargo name cargoVersion $ \project -> do
             invocation <- observeCargo (cargoTraffic observed) project ["build"]
-            when (crExit (cargoInvocationClient invocation) == ExitSuccess) (assertCargoViewRouting "/cargo/private" "cargo-private" (cargoInvocationTraffic invocation))
+            when (crExit (cargoInvocationClient invocation) == ExitSuccess) $ do
+                assertCargoViewRouting "/cargo/private" "cargo-private" (cargoInvocationTraffic invocation)
+                assertCargoAssets project (cargoInvocationTraffic invocation)
             pure (cargoInvocationClient invocation)
         , publicationVersions = cargoRegistryVersions registry "cargo-private" name
         , publicationAwait = cargoRegistryVersions registry "cargo-private" name
@@ -96,13 +98,13 @@ yankDriver observed registry =
 cargoPublishFixture :: E2E -> CargoToolchain -> Text -> IO ClientResult
 cargoPublishFixture proxy toolchain name = do
     spec <- maybe (fail "owned Cargo publication fixture is absent") pure (find (\crate -> crateName crate == name && crateVersion crate == cargoVersion) cargoCrates)
-    withCargoProject toolchain CargoAlternate ("sparse+" <> e2eBaseUrl proxy <> "/cargo/private/") (Just cargoRegistryToken) $ \project -> do
+    withCargoProject toolchain CargoAlternate proxy ("sparse+" <> e2eBaseUrl proxy <> "/cargo/private/") (Just cargoRegistryToken) $ \project -> do
         cargoUseFixture project "test/fixtures/cargo/graph" spec
         cargoPublish project
 
 -- | Resolve an arbitrary private coordinate through the private-only view with a fresh native cache.
 cargoPrivateConsumer :: E2E -> CargoToolchain -> Text -> Text -> (CargoProject -> IO a) -> IO a
 cargoPrivateConsumer proxy toolchain name version action =
-    withCargoProject toolchain CargoAlternate ("sparse+" <> e2eBaseUrl proxy <> "/cargo/private/") (Just cargoRegistryToken) $ \project -> do
+    withCargoProject toolchain CargoAlternate proxy ("sparse+" <> e2eBaseUrl proxy <> "/cargo/private/") (Just cargoRegistryToken) $ \project -> do
         cargoSelectDependency CargoAlternate name version project
         action project

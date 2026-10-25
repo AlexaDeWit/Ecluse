@@ -33,7 +33,7 @@ cargoSweepClientOps =
         }
 
 withProject :: CargoSweepStore -> (CargoProject -> IO a) -> IO a
-withProject store = withCargoProject currentCargo CargoReplacement ("sparse+" <> cssReadUrl store) (Just cargoRegistryToken)
+withProject store = withCargoProject currentCargo CargoReplacement (observedProxy (cssObserved store)) ("sparse+" <> cssReadUrl store) (Just cargoRegistryToken)
 
 installIn :: CargoProject -> Text -> Maybe Text -> IO ClientResult
 installIn project name version = do

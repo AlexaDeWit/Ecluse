@@ -8,16 +8,18 @@ module Ecluse.E2E.Cargo.InstallE2ESpec (
     cargoInstallInto,
     cargoConsumer,
     assertCargoRouting,
+    assertCargoAssets,
     assertCargoViewRouting,
     cargoDeniedConfig,
 ) where
 
 import Data.Aeson (Value (String))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.Directory (doesFileExist)
 import System.Exit (ExitCode (ExitSuccess))
-import System.FilePath ((</>))
+import System.FilePath (splitDirectories, takeFileName, (</>))
 import Test.Hspec (shouldBe, shouldMatchList, shouldSatisfy)
 
 import Ecluse.E2E.Fixtures.Cargo
@@ -71,13 +73,15 @@ installation observed =
             _ -> fail "Cargo did not advertise one exact checksum"
     install = cargoConsumer proxy currentCargo $ \project -> do
         invocation <- observeCargo (cargoTraffic observed) project ["build"]
-        when (crExit (cargoInvocationClient invocation) == ExitSuccess) (assertCargoRouting (cargoInvocationTraffic invocation))
+        when (crExit (cargoInvocationClient invocation) == ExitSuccess) $ do
+            assertCargoRouting (cargoInvocationTraffic invocation)
+            assertCargoAssets project (cargoInvocationTraffic invocation)
         result <- cargoRun project []
         pure (cargoInvocationClient invocation, crExit result == ExitSuccess && T.strip (crStdout result) == cargoExpectedOutput False False)
 
 -- | Every client command uses the sparse public replacement and a fresh owned project.
 cargoConsumer :: E2E -> CargoToolchain -> (CargoProject -> IO a) -> IO a
-cargoConsumer proxy toolchain = withCargoProject toolchain CargoReplacement ("sparse+" <> e2eBaseUrl proxy <> "/cargo/") Nothing
+cargoConsumer proxy toolchain = withCargoProject toolchain CargoReplacement proxy ("sparse+" <> e2eBaseUrl proxy <> "/cargo/") Nothing
 
 -- | Compile the selected registry coordinate using a fresh consumer project.
 cargoInstallInto :: E2E -> CargoToolchain -> Text -> Text -> IO ClientResult
@@ -97,11 +101,36 @@ assertCargoViewRouting view origin traffic = do
         clients = throughView (cargoClientRequests traffic)
         forwards = throughView (cargoProxyRequests traffic)
         upstream = filter ((== origin) . cargoRequestHost) (archives (cargoUpstreamRequests traffic))
+    let discovery = filter ((== view <> "/config.json") . cargoRequestPath) (cargoClientRequests traffic)
+    discovery `shouldSatisfy` (not . null)
+    map cargoRequestScheme discovery `shouldSatisfy` all (== "https")
     clients `shouldSatisfy` (not . null)
+    map cargoRequestScheme clients `shouldSatisfy` all (== "https")
+    ordNub (map cargoRequestHost clients) `shouldBe` ordNub (map cargoRequestHost discovery)
     forwards `shouldSatisfy` (not . null)
     upstream `shouldSatisfy` (not . null)
-    map cargoRequestPath clients `shouldBe` map cargoRequestPath forwards
+    map cargoRequestPath clients `shouldMatchList` map cargoRequestPath forwards
     map (T.drop (T.length view) . cargoRequestPath) clients `shouldMatchList` map cargoRequestPath upstream
+
+-- | Every cached native archive needs a successful HTTPS request and a matching product exchange.
+assertCargoAssets :: CargoProject -> CargoTraffic -> IO ()
+assertCargoAssets project traffic = do
+    tree <- cargoTree project
+    let archives = filter (T.isSuffixOf ".crate" . cargoRequestPath)
+        clients = archives (cargoClientRequests traffic)
+        forwards = archives (cargoProxyRequests traffic)
+        cached = [toText (takeFileName path) | (path, TreeFile _ _) <- Map.toList tree, take 3 (splitDirectories path) == ["home", "registry", "cache"], ".crate" `T.isSuffixOf` toText path]
+        discovery = filter (T.isSuffixOf "/config.json" . cargoRequestPath) (cargoClientRequests traffic)
+        local path = any (`T.isPrefixOf` path) ["/cargo/crates/", "/cargo/private/crates/"]
+        exchange request = (cargoRequestMethod request, cargoRequestPath request, cargoRequestStatus request)
+    clients `shouldSatisfy` (not . null)
+    discovery `shouldSatisfy` (not . null)
+    map cargoRequestScheme (clients <> discovery) `shouldSatisfy` all (== "https")
+    map cargoRequestPath clients `shouldSatisfy` all local
+    map cargoRequestStatus clients `shouldSatisfy` all (== 200)
+    ordNub (map cargoRequestHost clients) `shouldBe` ordNub (map cargoRequestHost discovery)
+    map exchange clients `shouldMatchList` map exchange forwards
+    ordNub (map (T.takeWhileEnd (/= '/') . cargoRequestPath) clients) `shouldMatchList` ordNub cached
 
 -- | Disable all ordinary admission paths for the native denial control.
 cargoDeniedConfig :: E2EConfig

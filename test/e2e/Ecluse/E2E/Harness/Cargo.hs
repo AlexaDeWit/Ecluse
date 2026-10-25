@@ -34,6 +34,7 @@ module Ecluse.E2E.Harness.Cargo (
     CargoTraffic (..),
     CargoInvocation (..),
     observeCargo,
+    cargoTrafficSince,
 ) where
 
 import Data.Aeson qualified as Aeson
@@ -45,7 +46,7 @@ import System.FilePath (takeDirectory, (</>))
 import UnliftIO.Environment (getEnvironment)
 
 import Ecluse.E2E.Harness.Client (runClient, withClientDir)
-import Ecluse.E2E.Harness.Types (ClientResult (..))
+import Ecluse.E2E.Harness.Types (ClientResult (..), E2E (..), GlobalDataPlane (..))
 import Ecluse.Test.InstalledTree (InstalledTree, snapshotTree)
 import Ecluse.Test.Registry.Cargo.Fixtures (CargoCrate (..), cargoRoot, cargoVersion)
 import Ecluse.Test.Registry.Cargo.Reference (CargoGraph, CargoLocked, referenceGraph, referenceLock)
@@ -79,9 +80,9 @@ data CargoProject = CargoProject
     }
 
 -- | A required missing tool fails setup. The sparse endpoint and token belong to this fixture only.
-withCargoProject :: CargoToolchain -> CargoView -> Text -> Maybe Text -> (CargoProject -> IO a) -> IO a
-withCargoProject toolchain view index token use = withClientDir "cargo" $ \directory -> do
-    unless ("sparse+http://" `T.isPrefixOf` index || "sparse+https://" `T.isPrefixOf` index) (fail "Cargo fixture requires an explicit sparse HTTP endpoint")
+withCargoProject :: CargoToolchain -> CargoView -> E2E -> Text -> Maybe Text -> (CargoProject -> IO a) -> IO a
+withCargoProject toolchain view proxy index token use = withClientDir "cargo" $ \directory -> do
+    unless ("sparse+https://" `T.isPrefixOf` index) (fail "Cargo fixture requires an explicit sparse HTTPS endpoint")
     unless ("/" `T.isSuffixOf` index) (fail "Cargo fixture sparse endpoint lacks a trailing slash")
     compiler <- required (cargoCompiler toolchain)
     _ <- required (cargoCommand toolchain)
@@ -101,6 +102,7 @@ withCargoProject toolchain view index token use = withClientDir "cargo" $ \direc
             , ("CARGO_INSTALL_ROOT", installation)
             , ("RUSTC", compiler)
             , ("CARGO_HTTP_PROXY", "")
+            , ("CARGO_HTTP_CAINFO", gdpWorkDir (e2ePlane proxy) </> "certs/bundle.pem")
             , ("CARGO_NET_RETRY", "0")
             , ("CARGO_TERM_COLOR", "never")
             , ("GIT_CONFIG_NOSYSTEM", "1")
@@ -143,6 +145,7 @@ configuration view index =
         , "retry = 0"
         , "[http]"
         , "proxy = \"\""
+        , "ssl-verify = true"
         ]
             <> case view of
                 CargoAlternate -> []
@@ -251,9 +254,10 @@ cargoLock project = do
 cargoTree :: CargoProject -> IO InstalledTree
 cargoTree project = snapshotTree (cargoDirectory project) ["home/registry", "installed", "Cargo.lock"]
 
--- | A captured request keeps its authority, method, path and response status for bypass assertions.
+-- | A captured request keeps its scheme, authority, method, path and status for bypass assertions.
 data CargoRequest = CargoRequest
-    { cargoRequestHost :: Text
+    { cargoRequestScheme :: Text
+    , cargoRequestHost :: Text
     , cargoRequestMethod :: Text
     , cargoRequestPath :: Text
     , cargoRequestStatus :: Int
@@ -281,11 +285,17 @@ observeCargo observations project arguments = do
     before <- observations
     result <- runCargo project arguments
     after <- observations
+    traffic <- cargoTrafficSince before after
+    pure (CargoInvocation result traffic)
+
+-- | Keep the same append-only checks for one command or a complete native installation.
+cargoTrafficSince :: CargoTraffic -> CargoTraffic -> IO CargoTraffic
+cargoTrafficSince before after = do
     client <- delta (cargoClientRequests before) (cargoClientRequests after)
     proxy <- delta (cargoProxyRequests before) (cargoProxyRequests after)
     upstream <- delta (cargoUpstreamRequests before) (cargoUpstreamRequests after)
-    pure (CargoInvocation result (CargoTraffic client proxy upstream))
+    pure (CargoTraffic client proxy upstream)
   where
-    delta before after = do
-        unless (length after >= length before) (fail "Cargo request inventory reset during a command")
-        pure (drop (length before) after)
+    delta previous current = do
+        unless (length current >= length previous) (fail "Cargo request inventory reset during a command")
+        pure (drop (length previous) current)

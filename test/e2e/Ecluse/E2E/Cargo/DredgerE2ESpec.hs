@@ -162,7 +162,7 @@ storeOps =
         }
 
 sweepOps :: [(Text, Text)] -> SweepOps Native.CargoSweepPlane
-sweepOps extra = SweepOps{runSweep = \plane -> runNativeSweep plane extra, awaitWrites = awaitMirrorWindow}
+sweepOps extra = SweepOps{runSweep = (`runNativeSweep` extra), awaitWrites = awaitMirrorWindow}
 
 recoveryOps :: RecoveryOps Native.CargoSweepPlane Native.CargoSweepStore
 recoveryOps =
@@ -272,7 +272,7 @@ safetyGroup =
         , groupTier = E2E
         , groupPartition = "cargo"
         , groupCases = [Case ("cargo/dredger-native-safety/" <> suffix) ["cargo/dredger-native-safety"] | suffix <- ["deletion-cap", "unsafe-upstream", "native-yank-not-deletion"]]
-        , groupCapabilities = ["maintenance", "read"]
+        , groupCapabilities = ["read", "mirror", "maintenance", "advisories"]
         , groupPrerequisites = ["docker", "image", "openssl", "cargo", "rustc"]
         , groupResources = ["proxy", "nginx", "codeartifact-fixture", "ministack"]
         , groupIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]

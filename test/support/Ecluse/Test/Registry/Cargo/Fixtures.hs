@@ -23,6 +23,7 @@ module Ecluse.Test.Registry.Cargo.Fixtures (
     cargoIndex,
     cargoIndexRecord,
     cargoUpload,
+    cargoUploadWithMetadata,
     cargoUploadMetadata,
     cargoFixtureLock,
     writeCargoRegistry,
@@ -272,9 +273,13 @@ cargoUploadMetadata release =
 
 -- | A checked uint32 length prevents fixture framing from wrapping before negative controls mutate it.
 cargoUpload :: CargoRelease -> Either Text ByteString
-cargoUpload release = do
-    metadata <- frame (LBS.toStrict (encode (cargoUploadMetadata release)))
-    archive <- frame (releaseArchive release)
+cargoUpload release = cargoUploadWithMetadata (cargoUploadMetadata release) (releaseArchive release)
+
+-- | Reuse native length framing when malformed metadata must reach the product unchanged.
+cargoUploadWithMetadata :: Value -> ByteString -> Either Text ByteString
+cargoUploadWithMetadata value archiveBytes = do
+    metadata <- frame (LBS.toStrict (encode value))
+    archive <- frame archiveBytes
     pure (LBS.toStrict (toLazyByteString (metadata <> archive)))
   where
     frame bytes = do
