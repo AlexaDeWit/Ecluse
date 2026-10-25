@@ -118,10 +118,10 @@ boundReads deps runtime = newPublicInstallEvidenceReads deps (srPublicClient run
 
 -- The native parser has separate tests. This provider observes the real role-bound transport alone.
 transportProvider :: InstallEvidenceProvider
-transportProvider = InstallEvidenceProvider $ \context -> pure $ \details -> do
+transportProvider = InstallEvidenceProvider $ \evidenceContext -> pure $ \details -> do
     let artifact :| _ = pkgArtifacts details
     pure . Just . InstallEvidenceRead $ do
-        result <- withInstallEvidenceBudget (ieBudget context) $ \bytes _ -> ieReadArtifact context (ieLimits context) artifact bytes
+        result <- withInstallEvidenceBudget (ieBudget evidenceContext) $ \bytes _ -> ieReadArtifact evidenceContext (ieLimits evidenceContext) artifact bytes
         pure $ case result of
             Nothing -> InstallUndetermined InstallSignalUnread
             Just (Left fault) -> InstallReadFailed fault

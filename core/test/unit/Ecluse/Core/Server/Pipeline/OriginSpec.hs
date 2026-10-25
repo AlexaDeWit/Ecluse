@@ -154,11 +154,11 @@ retainedConsumerSpec = describe "successful selected consumers" $ do
             allowFollower <- newEmptyMVar
             followerHolding <- newEmptyMVar
             releaseFollower <- newEmptyMVar
-            reads <- newIORef (0 :: Int)
+            sourceReads <- newIORef (0 :: Int)
             let reply captured
                     | capPath captured == "/config.json" = pure (status200, [], "{\"dl\":\"https://static.crates.io/crates/{crate}/{crate}-{version}.crate\"}")
                     | otherwise = do
-                        modifyIORef' reads (+ 1)
+                        modifyIORef' sourceReads (+ 1)
                         putMVar started ()
                         takeMVar releaseSource
                         pure (status200, [], toLazy body)
@@ -213,7 +213,7 @@ retainedConsumerSpec = describe "successful selected consumers" $ do
                                     (leadResult,) <$> wait following
                 completed `shouldBe` Just (Right (Right required), Right (Right required))
                 assertObservedReleased observedRoots
-                readIORef reads `shouldReturn` 1
+                readIORef sourceReads `shouldReturn` 1
                 snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
 
 retainedCargoFixture :: IO (ByteString, VersionRead, VersionRead)
