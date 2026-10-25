@@ -23,6 +23,7 @@ module Ecluse.Core.Registry.ServedDocument (
 
     -- * Rebasing an artifact location
     rebaseArtifactUrl,
+    artifactUrlPacked,
 
     -- * Reading and editing a raw document
     documentObject,
@@ -45,6 +46,7 @@ import Data.Vector.Mutable qualified as MV
 import Ecluse.Core.Package.Entry (AdmittedEntry (..), EntryKey (..))
 import Ecluse.Core.Package.Merge (MergePlan (mpArtifacts, mpSurvivors), SourceId)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
+import Ecluse.Core.Registry.Json.Packed (Packed, withoutHole)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (..))
 import Ecluse.Core.Text (urlFilename)
 
@@ -208,6 +210,12 @@ rebaseArtifactUrl renderMountUrl url = do
     renderMountUrl filename
   where
     trimmed = T.strip url
+
+-- | Remove an unusable URL hole without changing the source payload or encoded length.
+artifactUrlPacked :: Maybe Text -> Packed -> Packed
+artifactUrlPacked url packed
+    | isJust (url >>= rebaseArtifactUrl Just) = packed
+    | otherwise = withoutHole packed
 
 -- | A raw document's own object, empty for a document that is not one.
 documentObject :: Value -> KeyMap Value

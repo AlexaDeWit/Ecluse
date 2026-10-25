@@ -22,7 +22,7 @@ import Data.Set qualified as Set
 
 import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (InvalidVersionListing), PackageInfo, PackageName, mkInvalidEntry)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
-import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, withoutHole)
+import Ecluse.Core.Registry.Json.Packed (DocTable, Packed)
 import Ecluse.Core.Registry.Json.Writer (Writer, decodeWhole, discard, sealValue)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataUndecodable))
 import Ecluse.Core.Registry.Metadata.Projection (validateNameAgreement)
@@ -31,7 +31,7 @@ import Ecluse.Core.Registry.PyPI.FileWriter (FileValue (..))
 import Ecluse.Core.Registry.PyPI.Project (FilenameMemo, ProjectedFile, fcVersionKey, filenameMemo, projectFile, projectName, projectSimpleIndex, projectedEntryKey, readCoordinate)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifEntryKey, ifFilename, ifUrl), checkApiVersion, decodeIndexFiles)
-import Ecluse.Core.Registry.ServedDocument (rebaseArtifactUrl)
+import Ecluse.Core.Registry.ServedDocument (artifactUrlPacked)
 import Ecluse.Core.Security (LimitError, Limits, checkArtifactCount, checkVersionCountOf)
 
 -- | Pending files wait for the reported name so member order cannot change the package identity.
@@ -130,7 +130,7 @@ packedFileStep writer limits acc position value next
         case value of
             FileValue (Just file) -> do
                 let !indexed = file{ifEntryKey = ArrayEntry position}
-                    !served = if isJust (rebaseArtifactUrl Just (ifUrl file)) then packed else withoutHole packed
+                    !served = artifactUrlPacked (Just (ifUrl file)) packed
                 next (Right $! retainFileFact limits FullRead (Just (PackedFile served)) acc indexed)
             _ -> do
                 diagnostic <- decodeWhole writer packed
