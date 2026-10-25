@@ -145,6 +145,33 @@ Neither the worker nor a completion mechanism gains Dredger's deletion authority
 Follow [Testing: onboarding an ecosystem](testing.md#onboarding-an-ecosystem) for the required paths, fixtures, and measurement providers.
 Use the normal PR CI tiers. Do not create a second ecosystem-completion framework.
 
+### Test infrastructure and E2E entry points
+
+Start from these entry points when adding the ecosystem's test providers.
+The [fixed E2E reference](test-contracts.md#fixed-e2e-entrypoints) owns the detailed coverage map.
+
+| Part | Existing entry points | What the new ecosystem supplies |
+|---|---|---|
+| Common assertions | [Shared contracts](../test/contracts/Ecluse/Test/Contract/) | Native operations and observations for existing business laws |
+| Native E2E drivers | [Drivers/Npm.hs](../test/e2e/Ecluse/E2E/Drivers/Npm.hs), [Drivers/PyPI.hs](../test/e2e/Ecluse/E2E/Drivers/PyPI.hs) | A concrete driver binding every required family to its native provider |
+| Fixed subjects | [Suites/Npm.hs](../test/e2e/Ecluse/E2E/Suites/Npm.hs), [Suites/PyPI.hs](../test/e2e/Ecluse/E2E/Suites/PyPI.hs), [Suites/SharedSystem.hs](../test/e2e/Ecluse/E2E/Suites/SharedSystem.hs) | Direct contract declarations, a Cabal subject, and applicable mixed-client coverage |
+| Fixture resources | [Fixtures/Contracts.hs](../test/e2e/Ecluse/E2E/Fixtures/Contracts.hs), [Harness.hs](../test/e2e/Ecluse/E2E/Harness.hs), [Harness/](../test/e2e/Ecluse/E2E/Harness/) | Native clients, upstreams, stores, resource acquisition, teardown, and declared isolation |
+| Independent requirements and scheduling | [Requirements.hs](../test/e2e/Ecluse/E2E/Requirements.hs), [Catalogue.hs](../test/e2e/Ecluse/E2E/Catalogue.hs) | Required families, stable case IDs, profiles, prerequisites, and lifecycle groups |
+| Plans, execution reports, and audits | [Reproduction procedure](test-contracts.md#reproduction), [Taskfile.yml](../Taskfile.yml), [CI](../.github/workflows/ci.yml) | Registration in the existing manifest, fixed subject tasks, and completion audits |
+| Lower tiers and measurements | [Onboarding checklist](testing.md#onboarding-an-ecosystem) | Native unit/integration counterparts, independent readers, corpus, allocation, and residency providers |
+
+The shared `ecluse-e2e-test-support` library holds fixture and provider modules.
+Each fixture owns acquisition and teardown for its lifecycle group.
+Preserve its declared service resources, serial cases, and Docker exclusivity when registering the new provider.
+Missing tools, images, clients, or required ownership fail setup. They do not turn required cases into pending passes.
+Real-client tests must observe installed contents and native effects through the prepared product image.
+Keep deterministic backend fixtures distinct from claims about a live service.
+
+Use the documented prepare, image-load, fixed-subject, and audit tasks in order, sharing one explicit `ECLTEST_ARTIFACT_DIR`.
+The prepared image and plan remain immutable across those tasks.
+For full completion, supply the matching unit and integration reports under the documented execution identity.
+The [reproduction procedure](test-contracts.md#reproduction) owns the commands, prerequisites, and report paths.
+
 Supply concrete operation records to the shared contracts in [test/contracts](../test/contracts/Ecluse/Test/Contract/).
 Contracts own common assertions and scenario order.
 Providers own clients, setup, teardown, native decoding, faults, and observations.
