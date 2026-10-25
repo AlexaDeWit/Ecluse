@@ -32,7 +32,7 @@ cargoMirrorTelemetryFamily = concreteFamily (cargoWriteFixture "telemetry-write"
     timedFixture recorder (withCargoMirrorFixture plane . curry) $ \(registry, _) -> do
         queue <- sharedMirrorQueue plane
         let config = cargoMirrorConfig{ecCollector = True, ecQueueUrl = Just queue, ecExtraEnv = ecExtraEnv cargoMirrorConfig <> otlpCollectorEnv}
-        withE2EWith
+        withClientProxyWith
             config
             ( \proxy ->
                 action

@@ -9,7 +9,6 @@ module Ecluse.E2E.Harness.CargoGateway (
     cargoTraffic,
 ) where
 
-import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.X509.CertificateStore (readCertificateStore)
 import Network.Connection (TLSSettings (TLSSettings))
@@ -21,7 +20,6 @@ import Network.Wai qualified as Wai
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Security.Limits (BodyLimit (PublishRequestBodyLimit), boundedRead)
 import Ecluse.E2E.Harness.Cargo
 import Ecluse.E2E.Harness.Container
@@ -55,7 +53,8 @@ withObservedCargoProxy config plane action = do
                 configured
                 ( \proxy -> do
                     atomically (writeTVar destination (Just (e2eBaseUrl proxy)))
-                    let clientProxy = proxy{e2eBaseUrl = base, e2eClientEndpoints = Map.insert Cargo (base <> "/cargo/") (e2eClientEndpoints proxy), e2eManager = trusted}
+                    endpoints <- traverse (\endpoint -> maybe (fail "the client endpoint does not belong to the product listener") (pure . (base <>)) (T.stripPrefix (e2eBaseUrl proxy) endpoint)) (e2eClientEndpoints proxy)
+                    let clientProxy = proxy{e2eBaseUrl = base, e2eClientEndpoints = endpoints, e2eManager = trusted}
                     action (ObservedCargoProxy clientProxy edge forwarded uploads)
                 )
                 plane

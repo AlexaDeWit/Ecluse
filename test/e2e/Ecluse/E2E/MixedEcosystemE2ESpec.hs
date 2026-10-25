@@ -26,7 +26,7 @@ mixedMountContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \recorder
 
 scenarios :: PhaseRecorder -> SpecWith GlobalDataPlane
 scenarios recorder =
-    aroundAllWith (timedFixtureWith recorder withE2E) $
+    aroundAllWith (timedFixtureWith recorder (withClientProxyWith defaultE2EConfig)) $
         describe "one proxy, three mounts" $
             it (caseLabel "mixed/alternating-clients" "serves npm, pip and Cargo installs before a second npm install") $ \e2e -> do
                 npmInstallsAllowed e2e

@@ -65,7 +65,9 @@ cargoMirrorProofContract = DeclaredGroup metadata $ \recorder ->
 
 complete :: GlobalDataPlane -> CargoRegistry -> [CargoRelease] -> E2EConfig -> IO ()
 complete plane registry releases config = withObservedCargoProxy config plane $ \observed -> do
-    cargoConsumer (observedProxy observed) currentCargo $ \project -> void (runCargo project ["build"] >>= shouldSucceed)
+    cargoConsumer (observedProxy observed) currentCargo $ \project -> do
+        void (runCargo project ["build"] >>= shouldSucceed)
+        void (cargoFetch project >>= shouldSucceed)
     awaitCargoRegistry registry releases `shouldReturn` True
     for_ releases $ \release -> awaitProxyLog (observedProxy observed) (cargoMirrorComplete (crateName (releaseCrate release)) (crateVersion (releaseCrate release))) 120 `shouldReturn` True
 
@@ -104,6 +106,7 @@ yankCase yanked plane = withCargoMirrorFixture plane $ \registry releases -> do
         cargoConsumer (observedProxy observed) currentCargo $ \project -> do
             writeFileText (cargoDirectory project </> "Cargo.lock") (cargoFixtureLock "registry+https://github.com/rust-lang/crates.io-index" releases)
             void (runCargo project ["build", "--locked"] >>= shouldSucceed)
+            void (cargoFetch project >>= shouldSucceed)
         awaitCargoRegistry registry releases `shouldReturn` True
         for_ releases $ \release -> awaitProxyLog (observedProxy observed) (cargoMirrorComplete (crateName (releaseCrate release)) (crateVersion (releaseCrate release))) 120 `shouldReturn` True
     withStubFault plane (CargoBackend (registryPort registry) True) $

@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Client state, product endpoints and the resources shared by each E2E group.
 module Ecluse.E2E.Harness.Types (
     E2E (..),
     E2EConfig (..),
@@ -14,6 +15,7 @@ module Ecluse.E2E.Harness.Types (
     dredgerTopology,
     mixedTopology,
     clientEndpoint,
+    clientCertificateBundle,
     packageStore,
     serviceUrl,
     ministackPort,
@@ -28,6 +30,7 @@ import Data.Map.Strict qualified as Map
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Test.Contract.Install (ClientResult (..))
 import Network.HTTP.Client (Manager)
+import System.FilePath ((</>))
 
 -- | Only the processes and endpoints acquired for this group.
 data E2E = E2E
@@ -95,6 +98,10 @@ clientEndpoint ecosystem environment =
         pure
         (Map.lookup ecosystem (e2eClientEndpoints environment))
 
+-- | Trust the CA generated for this group's local TLS listeners.
+clientCertificateBundle :: E2E -> FilePath
+clientCertificateBundle environment = gdpWorkDir (e2ePlane environment) </> "certs/bundle.pem"
+
 -- | Resolve the required package-store capability before observing it.
 packageStore :: E2E -> IO Service
 packageStore environment = maybe (fail "topology has no package store") pure (e2eStore environment)
@@ -135,6 +142,7 @@ state out and the proxy the only index.
 data PipProject = PipProject
     { ppDir :: FilePath
     , ppEnv :: [(String, String)]
+    , ppCertificateBundle :: Maybe FilePath
     , ppIndex :: Text
     -- ^ The Simple-index URL this project resolves through.
     }

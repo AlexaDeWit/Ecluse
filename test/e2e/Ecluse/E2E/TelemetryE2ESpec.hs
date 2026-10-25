@@ -58,7 +58,7 @@ readDriver recorder plane traffic primary secondary identityPackage =
         { withReadTelemetry = \mode action ->
             timedFixtureWith
                 recorder
-                (withE2EWith (telemetryConfig mode))
+                (withClientProxyWith (telemetryConfig mode))
                 (\e2e -> action (TelemetrySession (traffic e2e) (logDriver e2e) (collectorDriver e2e)))
                 plane
         , readTelemetryPackage = primary

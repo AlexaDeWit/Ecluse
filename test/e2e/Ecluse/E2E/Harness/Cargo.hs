@@ -19,6 +19,7 @@ module Ecluse.E2E.Harness.Cargo (
 
     -- * Native operations
     cargoResolve,
+    cargoFetch,
     cargoMetadata,
     cargoBuild,
     cargoRun,
@@ -46,7 +47,7 @@ import System.FilePath (takeDirectory, (</>))
 import UnliftIO.Environment (getEnvironment)
 
 import Ecluse.E2E.Harness.Client (runClient, withClientDir)
-import Ecluse.E2E.Harness.Types (ClientResult (..), E2E (..), GlobalDataPlane (..))
+import Ecluse.E2E.Harness.Types (ClientResult (..), E2E, clientCertificateBundle)
 import Ecluse.Test.InstalledTree (InstalledTree, snapshotTree)
 import Ecluse.Test.Registry.Cargo.Fixtures (CargoCrate (..), cargoRoot, cargoVersion)
 import Ecluse.Test.Registry.Cargo.Reference (CargoGraph, CargoLocked, referenceGraph, referenceLock)
@@ -102,7 +103,7 @@ withCargoProject toolchain view proxy index token use = withClientDir "cargo" $ 
             , ("CARGO_INSTALL_ROOT", installation)
             , ("RUSTC", compiler)
             , ("CARGO_HTTP_PROXY", "")
-            , ("CARGO_HTTP_CAINFO", gdpWorkDir (e2ePlane proxy) </> "certs/bundle.pem")
+            , ("CARGO_HTTP_CAINFO", clientCertificateBundle proxy)
             , ("CARGO_NET_RETRY", "0")
             , ("CARGO_TERM_COLOR", "never")
             , ("GIT_CONFIG_NOSYSTEM", "1")
@@ -210,6 +211,10 @@ cargoVersions project =
 -- | Resolve into an initially empty native cache and create the consumer lockfile.
 cargoResolve :: CargoProject -> [String] -> IO ClientResult
 cargoResolve project options = runCargo project (["generate-lockfile"] <> options)
+
+-- | Fetch every locked target archive without compiling foreign code.
+cargoFetch :: CargoProject -> IO ClientResult
+cargoFetch project = runCargo project ["fetch", "--locked"]
 
 -- | Metadata resolves from the existing lockfile and includes target and feature observations.
 cargoMetadata :: CargoProject -> [String] -> IO ClientResult

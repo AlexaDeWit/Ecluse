@@ -2,8 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Requests to the proxy's HTTP surface, and reads of the logs the proxy and the mirror store write.
+-- | Proxy lifecycle, requests and logs for native client scenarios.
 module Ecluse.E2E.Harness.Proxy (
+    withClientProxyWith,
     proxyStatus,
     proxyGet,
     proxyGetCoded,
@@ -39,11 +40,20 @@ import Network.HTTP.Types.Header (hAcceptEncoding)
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec (expectationFailure)
 
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
+import Ecluse.E2E.Harness.CargoGateway (cargoTraffic, observedProxy, withObservedCargoProxy)
 import Ecluse.E2E.Harness.Client (clientReport)
-import Ecluse.E2E.Harness.Docker (awaitContainerLog, containerLogs)
+import Ecluse.E2E.Harness.Docker (awaitContainerLog, containerLogs, withE2EWith)
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Contract.Serving qualified as Serving
 import Ecluse.Test.Contract.Telemetry (hasPopulatedTraceId)
+
+-- | Use the observed TLS edge whenever native Cargo clients share the proxy.
+withClientProxyWith :: E2EConfig -> (E2E -> IO a) -> GlobalDataPlane -> IO a
+withClientProxyWith config action plane
+    | Cargo `elem` topologyMounts (gdpTopology plane) =
+        withObservedCargoProxy config plane (\observed -> action (observedProxy observed) <* cargoTraffic observed)
+    | otherwise = withE2EWith config action plane
 
 -- | The HTTP status of a @GET@ to a proxy path (e.g. @\/npm\/e2e-allow@).
 proxyStatus :: E2E -> Text -> IO Int
