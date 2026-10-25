@@ -121,12 +121,12 @@ assertCargoAssets project traffic = do
         forwards = archives (cargoProxyRequests traffic)
         cached = [toText (takeFileName path) | (path, TreeFile _ _) <- Map.toList tree, take 3 (splitDirectories path) == ["home", "registry", "cache"], ".crate" `T.isSuffixOf` toText path]
         discovery = filter (T.isSuffixOf "/config.json" . cargoRequestPath) (cargoClientRequests traffic)
-        local path = any (`T.isPrefixOf` path) ["/cargo/crates/", "/cargo/private/crates/"]
+        throughCargoView path = any (`T.isPrefixOf` path) ["/cargo/crates/", "/cargo/private/crates/"]
         exchange request = (cargoRequestMethod request, cargoRequestPath request, cargoRequestStatus request)
     clients `shouldSatisfy` (not . null)
     discovery `shouldSatisfy` (not . null)
     map cargoRequestScheme (clients <> discovery) `shouldSatisfy` all (== "https")
-    map cargoRequestPath clients `shouldSatisfy` all local
+    map cargoRequestPath clients `shouldSatisfy` all throughCargoView
     map cargoRequestStatus clients `shouldSatisfy` all (== 200)
     ordNub (map cargoRequestHost clients) `shouldBe` ordNub (map cargoRequestHost discovery)
     map exchange clients `shouldMatchList` map exchange forwards
