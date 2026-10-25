@@ -10,7 +10,6 @@ module Ecluse.Core.Registry.Cargo.Discovery (
     discoveryDl,
     discoveryApi,
     discoveryAuthRequired,
-    discoveryDigest,
     discoveryIndex,
     renderCargoDiscovery,
     CargoArtifactCoordinate,
@@ -22,7 +21,6 @@ module Ecluse.Core.Registry.Cargo.Discovery (
     bindCargoDownload,
 ) where
 
-import Crypto.Hash (hashInit, hashUpdate)
 import Data.Aeson (Value (..), encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -43,7 +41,6 @@ import Ecluse.Core.Registry.Origin (OriginClient (..), originBaseUrl)
 import Ecluse.Core.Registry.Public (ReadControl (..))
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes, maxNestingDepth, progressFloor), ecosystemArtifactAuthorities)
 import Ecluse.Core.Server.Path (Filename, encodeComponent, mkFilename)
-import Ecluse.Core.Snapshot (ContentDigest, digestFromContext)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind (Listing))
 import Ecluse.Core.Text (httpPrefix, httpsPrefix, isPrefixOfLowered)
@@ -51,30 +48,26 @@ import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Core.Version.Cargo (parseCargo)
 
 -- | A checked response from one authorised index origin. Its URLs grant no new authority.
-data CargoDiscovery = CargoDiscovery !Text !(Maybe Text) !Bool !ContentDigest !Text !ArtifactOrigin
+data CargoDiscovery = CargoDiscovery !Text !(Maybe Text) !Bool !Text !ArtifactOrigin
 
 -- | The checked native template, with markers still unexpanded.
 discoveryDl :: CargoDiscovery -> Text
-discoveryDl (CargoDiscovery template _ _ _ _ _) = template
+discoveryDl (CargoDiscovery template _ _ _ _) = template
 
 -- | The advertised API remains a location hint, never an upload credential grant.
 discoveryApi :: CargoDiscovery -> Maybe Text
-discoveryApi (CargoDiscovery _ api _ _ _ _) = api
+discoveryApi (CargoDiscovery _ api _ _ _) = api
 
 -- | The registry's successful request-time declaration of its authentication requirement.
 discoveryAuthRequired :: CargoDiscovery -> Bool
-discoveryAuthRequired (CargoDiscovery _ _ required _ _ _) = required
-
--- | The exact bounded discovery response digest, separate from index source digests.
-discoveryDigest :: CargoDiscovery -> ContentDigest
-discoveryDigest (CargoDiscovery _ _ _ digest _ _) = digest
+discoveryAuthRequired (CargoDiscovery _ _ required _ _) = required
 
 -- | The complete selected index root, including any configured base path.
 discoveryIndex :: CargoDiscovery -> Text
-discoveryIndex (CargoDiscovery _ _ _ _ index _) = index
+discoveryIndex (CargoDiscovery _ _ _ index _) = index
 
 discoveryOrigin :: CargoDiscovery -> ArtifactOrigin
-discoveryOrigin (CargoDiscovery _ _ _ _ _ origin) = origin
+discoveryOrigin (CargoDiscovery _ _ _ _ origin) = origin
 
 -- | Read bounded discovery through the same transport and public control as index metadata.
 cargoDiscovery :: TracingPort -> OriginClient -> IO (Either MetadataError CargoDiscovery)
@@ -119,7 +112,7 @@ parseDiscoveryWithDepth depth hosts origin bytes = do
             Nothing -> Right False
             Just (Bool required) -> Right required
             _ -> Left "invalid Cargo authentication declaration"
-        pure (CargoDiscovery dl api auth (digestFromContext (hashUpdate hashInit bytes)) origin authority)
+        pure (CargoDiscovery dl api auth origin authority)
 
 -- | Local discovery uses only the supplied local routes and authentication requirement.
 renderCargoDiscovery :: Text -> Maybe Text -> Bool -> ByteString

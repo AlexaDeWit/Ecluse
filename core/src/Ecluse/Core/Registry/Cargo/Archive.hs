@@ -7,7 +7,6 @@
 module Ecluse.Core.Registry.Cargo.Archive (
     CargoArchiveMetadata,
     inspectCargoArchive,
-    cargoArchiveManifest,
     cargoArchiveInventory,
     cargoArchiveInflatedBytes,
     cargoArchiveExecution,
@@ -61,10 +60,6 @@ inspectCargoArchive limits charge name version checksum bytes = deadline $ do
                             parsed <- evaluate (decodeManifest limits name version manifestBytes)
                             pure $ (\manifest -> CargoArchiveMetadata manifest inventory bytes root (retained + manifestMemory manifestBytes) inflated) <$> parsed
 
--- | The effective normalised manifest carries exact native package spelling and version.
-cargoArchiveManifest :: CargoArchiveMetadata -> CargoManifest
-cargoArchiveManifest = caManifest
-
 -- | Only regular-file paths appear, relative to the admitted single archive root.
 cargoArchiveInventory :: CargoArchiveMetadata -> Set Text
 cargoArchiveInventory = caInventory
@@ -75,7 +70,7 @@ cargoArchiveInflatedBytes = caInflatedBytes
 
 -- | An unsupported declaration remains an error. Source declarations alone do not establish harmlessness.
 cargoArchiveExecution :: CargoArchiveMetadata -> Either ParseError Bool
-cargoArchiveExecution metadata = manifestExecution (caManifest metadata) (caInventory metadata)
+cargoArchiveExecution metadata = manifestExecution (caManifest metadata) (cargoArchiveInventory metadata)
 
 -- | Capture only the selected README and licence after the manifest pass, using the same verified compressed bytes.
 cargoPublicationMetadata :: Limits -> (Int -> IO ()) -> CargoArchiveMetadata -> IO (Either ParseError CargoPublishMetadata)
