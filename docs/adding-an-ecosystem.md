@@ -1,428 +1,182 @@
 # Adding an ecosystem
 
-Read this before you bring a new package ecosystem, such as Rust crates, into Écluse. Every
-ecosystem adopts the reader and measurement pattern that npm and PyPI follow. npm is the model,
-because it carries the most complete form of that pattern.
+Use this guide to take a package ecosystem from a protocol assessment to complete support in Écluse.
+npm and PyPI are the shipped examples. Their shared machinery covers more than metadata reads.
+The [Cargo readiness plan](cargo-readiness.md) applies this guide without adding Rust support.
 
-The rest of the pattern has its own homes. The adapter boundary is in
-[Registry model, Registry abstraction](architecture/registry-model.md#registry-abstraction). The
-testing side is in
-[Testing strategy, One pattern for every ecosystem](testing.md#one-pattern-for-every-ecosystem),
-and the checklist of tests, benchmarks and fixtures is in
-[Onboarding an ecosystem](testing.md#onboarding-an-ecosystem).
-
-## Full ecosystem completion
-
-A passing `fullEcosystemContract` with a concrete driver defines completion for an ecosystem.
-The full contract requires proxying, installation, policy, advisories, mirroring, publication, Dredger, and telemetry.
-Give the suite a direct call such as `fullEcosystemContract npmDriver`.
-The driver supplies clients, fixtures, native observations, and resource acquisition.
-The contract owns common business assertions and the required family list.
-
-Supply fixtures and operation records to the shared contracts in `test/contracts/Ecluse/Test/Contract/`.
-Keep protocol decoding, request construction, native observations, and raw-wire oracles in the ecosystem's provider.
-Do not copy a shared business assertion into a new spec.
-Keep native extensions for facts that have no common meaning, such as npm lifecycle and scope rules or PyPI yanks.
-Use equivalent native fixtures for a shared obligation, and keep each native assertion in its own test.
-
-Declare obligations independently of drivers, registrations, and current production capability flags.
-A missing required family must produce a named failed outcome while other contracts execute.
-Capability flags may describe availability, but must not remove a full-contract requirement.
-npm and PyPI run the full contract with concrete providers for every required family.
-PyPI completion includes durable whole-version state and declared metadata companions.
-Cross-target checks prove file selection and installed contents, not execution of foreign architecture code.
-An incomplete provider still fails missing required behaviours by name.
-Keep blocked rule types explicit in `adapterRuleBlocks` when the protocol cannot supply their meaning.
-
-Register stable case IDs, lifecycle groups, and concrete drivers for each supported family.
-Check the declared IDs against actual Hspec registration and execution reports.
-Add negative controls for omitted registrations and wrong observations.
-The [contract coverage map](test-contracts.md) identifies common laws, native extensions, and retained lower-tier evidence.
-Run `cabal run ecluse-e2e-manifest` to inspect the plan without services.
-Run the ecosystem's fixed E2E task after `task test-e2e-prepare` and `task test-e2e-load` with an explicit `ECLTEST_ARTIFACT_DIR`.
-Unit, integration, residency, allocation, load, and smoke duties remain in their proper tiers.
-
-Declare every rule type the adapter blocks in `adapterRuleBlocks`, each with its reason.
-Block a type when its meaning does not fit the ecosystem or the ecosystem can never determine its required fact.
-Boot refuses each blocked entry in an active mount's resolved policy.
-The [operator rule policy](https://ecluse-proxy.com/docs/configuration/#rule-policy) records the current blocks and remedies.
-
-Two constraints hold through every step:
-
-- A performance change never changes what Écluse serves or decides. Served bytes, ETags, verdicts
-  and refusals stay byte-identical, and a walk accepts and refuses the same input as its reference
-  reader. When you need different output, make it a separate change with its own review.
-- No technique moves the fail-closed boundary. An undetermined signal stays `CodeExecUnknown` or
-  `Nothing` ([the internal domain model](architecture/registry-model.md#the-internal-domain-model)),
-  and a broken release drops as an `InvalidEntry`
-  ([graceful degradation](architecture/registry-model.md#graceful-degradation-per-version-not-per-package)).
-
-## What the bar checks
-
-Each property below has a check that fails, or a report that shows the regression. Meet each one
-for the new ecosystem before you call its reads done.
-[Onboarding an ecosystem](testing.md#onboarding-an-ecosystem) names the file each check needs.
-
-| Property | Check |
+| Need | Authoritative reference |
 |---|---|
-| Served bytes, ETags, typed facts and selected reads stay the same across a performance change | The recorded corpus outputs |
-| The walk accepts and refuses the same input as its reference reader | The walk parity property ([The maintained JSON lexer](testing.md#the-maintained-json-lexer)) |
-| A walk holds nothing for the input it drops | The walk residency specs |
-| A full read hands back a fully evaluated result | [Read evaluation](testing.md#read-evaluation) |
-| Retained heap per source byte stays within its regression limit | The retained-heap gate of the [residency tier](testing.md#residency-gate-ecluse-residency-gating) |
-| A read's peak and a listing's render fit what the memory gate charges | [Listing peaks](testing.md#listing-peaks) |
-| Time and allocation per request show on every pull request | The work-per-request benchmarks ([Benchmarks](testing.md#benchmarks-non-gating)) |
-| Each capture's measured legs stay within their allocation budgets | The [allocation gate](testing.md#allocation-budgets-perf-allocation-gating) |
+| Domain signals and adapter boundary | [Registry model](architecture/registry-model.md#registry-abstraction) |
+| Reader techniques and their limits | [Metadata readers and performance](ecosystem-metadata.md) |
+| Test tiers, fixture paths, measurements, and CI duties | [Testing: onboarding an ecosystem](testing.md#onboarding-an-ecosystem) |
+| Common assertions and native extensions | [Contract coverage map](test-contracts.md) |
+| Configuration keys and defaults | [config/default.yaml](../config/default.yaml) |
+| Supported operator behaviour | [Operator manual](../web/content/docs/) |
 
-## The read, end to end
+## 1. Establish the native contract
 
-A full read streams the response body through a chain of small steps, and each step owns one
-concern. One read driver, `Ecluse.Core.Registry.Metadata.Fetch`, composes that chain for every
-ecosystem. Add a concern over the body's bytes, such as a charge or a digest, as its own step on
-the chunk source in the driver. Never add it as a flag inside a walk.
-[Incremental npm extraction](architecture/registry-model.md#incremental-npm-extraction) describes
-the chunking, the source digest and the body limit.
+Read the registry and client specifications before choosing an existing adapter to copy.
+Record the supported client versions, index protocol, registry operations, and backend capabilities in the implementation issue.
+Follow relevant predecessor decisions before raising a design question.
 
-```mermaid
-flowchart TD
-    body["Response body, read inside withResponse"] --> charge["chargedRead: pay the memory gate for each chunk"]
-    charge --> digest["digestingRead: update the source SHA-256"]
-    digest --> steps["readSteps: feed the walk within the body limit"]
-    steps --> walk["The ecosystem's walk over the lexer's tokens"]
-    walk --> shape["readShape: build each kept value once, through the read's intern table"]
-    shape --> collect["the read's step: decode typed values as each release or file completes"]
-    collect --> finish["finish: check the name and limits, keep the served document"]
-    finish --> enforce["enforceArtifactLocations"]
-    enforce --> manifest["Manifest, for the cache and the rules"]
-```
+Answer these questions with protocol evidence:
 
-The driver owns the exchange, both spans, the error mapping, the charge, the digest and the
-`Manifest`, so a new ecosystem writes none of them. The driver also computes the body limit and keys
-a table afresh for each read. It hands both to the ecosystem's walk, and the walk applies them. A new
-ecosystem supplies one `EcosystemRead`, as `npmRead` and `pypiRead` do, and its adapter holds that
-value in `metadataRead`.
+- How do names, namespaces, versions, and artifact filenames form identities?
+- What metadata does installation require, including dependency, feature, and target information?
+- Which facts support age, availability, install-time execution, and advisory rules?
+- How do clients discover metadata, download, and publication endpoints?
+- How do private credentials, caches, conditional requests, and lockfiles affect those requests?
+- What proves a complete version, and what survives interruption or public-source outage?
+- Which backend supplies inventory and deletion under the required authority and consent?
 
-| Step | Written by |
-|---|---|
-| The request for a package's document | The ecosystem: `erRequest`. The driver seals it, so no read follows a redirect |
-| The exchange and its progress floor, the fetch span, the error mapping | The driver |
-| The charge and the digest for each chunk of a full read | The driver |
-| The body limit, a table keyed afresh for the read, the decode span | The driver. It builds the table from the ecosystem's `erUniqueFields`, and hands the limit and the table to the walk |
-| The walk that keeps every entry, and the walk that keeps one version | The ecosystem: `erWalkFull`, `erWalkSelected`. Each applies the limit and the table it is handed, as `readJsonWalk` does |
-| The finish of each walk, which also enforces artifact locations | The ecosystem: `erFinishFull`, `erFinishSelected` |
-| The `Manifest`, with the source's size and digest | The driver |
+Keep protocol support separate from backend support. A store's missing operation does not invalidate unrelated uses of its ecosystem.
+Refuse incompatible roles at boot or their capability boundary, using the existing capability checks.
+The [cloud backend model](architecture/cloud-backends.md) owns that separation.
 
-The pipeline sets the charge for each chunk from the adapter's charge factors, and the driver pays
-it through `chargedRead`. A selected read runs through the same driver without `chargedRead` and
-`digestingRead`, so it pays no charge per byte.
+## 2. Define identity and registration
 
-`fetchManifest` and `fetchVersion` read from an origin. `readManifest` and `readVersion` are the
-same reads over any `Body`, so a harness that holds a document's bytes runs the production read
-with fixed chunks in place of a socket.
+Start with pure identity parsing. Preserve raw version text while deriving the ordering key from the native grammar.
+Do not assume two ecosystems with SemVer share all spelling, comparison, or advisory rules.
+An unavailable ordering key remains unavailable. It does not invent an order or silently discard the published version.
 
-## Apply the techniques in this order
+| Change | Existing home | Worked example |
+|---|---|---|
+| Ecosystem tag, config spelling, mount prefix | [Ecosystem.hs](../core/src/Ecluse/Core/Ecosystem.hs) | Explicit constructors and wire table |
+| Safe native package name | [Package.hs](../core/src/Ecluse/Core/Package.hs) and the adapter's `Project` module | npm scopes and PyPI normalisation |
+| Version grammar and advisory spelling | [Version.hs](../core/src/Ecluse/Core/Version.hs) | Ecosystem-specific keys over preserved text |
+| Adapter capabilities and typed rule blocks | [Adapter/Types.hs](../core/src/Ecluse/Core/Registry/Adapter/Types.hs) | [npm](../core/src/Ecluse/Core/Registry/Npm/Adapter.hs) and [PyPI](../core/src/Ecluse/Core/Registry/PyPI/Adapter.hs) |
+| Adapter registration | [Adapter.hs](../core/src/Ecluse/Core/Registry/Adapter.hs) | Explicit dispatch, including unsupported tags |
+| Configuration and role validation | [Composition/Validate.hs](../src/Ecluse/Composition/Validate.hs) | Refuse missing active capabilities and blocked policies |
 
-The corpus comes first, because every later claim of less memory with the same output needs fixed
-inputs to prove it.
+Register new modules in the owning Cabal package. A tag alone does not establish supported behaviour.
+Keep incomplete providers explicit in tests and documentation until their required behaviours pass.
+Extend the default configuration reference and operator manual when the supported surface changes.
 
-### 1. Capture a corpus and record its outputs
+## 3. Build native requests and routes over shared transport
 
-- Capture complete upstream documents under `bench/corpus/<ecosystem>/`, pin each one in
-  `bench/corpus/pins.json`, and list them in `Ecluse.Test.Corpus` with a `CaptureUpstream`
-  ([Benchmark captures](testing.md#benchmark-captures)).
-- Include several captures of at least one 1 MiB meter step, the unit the memory gate charges in.
-  Listings with at least one step of sources, merges included, set the read charges, and single
-  documents of at least one step set the read limits.
-- Record the captures' outputs in the golden set, as the recorded-outputs row of
-  [Onboarding an ecosystem](testing.md#onboarding-an-ecosystem) describes.
+Put native paths, media types, and credential presentation in the adapter's modules.
+[Registry.Request](../core/src/Ecluse/Core/Registry/Request.hs) owns URL failures, redirect refusal, and outbound request identity.
+Its `metadataGet` shares compressed metadata negotiation. Its `artifactGet` preserves artifact bytes without decompression.
+Use them where their HTTP contracts fit. A new protocol need not negotiate gzip merely because these adapters do.
 
-From then on, every performance change reproduces those lines byte for byte. A change that needs a
-new line is a change of behaviour, not of performance.
+The [credential mapping](../core/src/Ecluse/Core/Registry/Request.hs) names the header and native token encoding.
+The common pipeline does not impose npm's bearer scheme or PyPI's basic scheme on another ecosystem.
+Keep caller authorisation separate from service credentials used for mirror or maintenance operations.
+Never expand credential authority to satisfy a missing backend operation.
 
-### 2. Walk the lexer's tokens
+Declare native routes with [Server.Route](../core/src/Ecluse/Core/Server/Route.hs).
+Derive routing and the published route descriptions from the same table.
+Check metadata, artifacts, publication, discovery documents, errors, `GET`, and `HEAD` against the native client contract.
+Identify any response action the current pipeline cannot express before adding adapter code.
 
-A reader that builds the whole document tree allocates for fields that Écluse then drops.
-json-stream's parser combinators skip unknown fields too, but the combinator layer allocates on
-every value it reads. A walk over the lexer's tokens builds only what the read keeps, and builds it
-once.
+## 4. Supply reads, retained documents, and assembly
 
-- [`Ecluse.Core.Registry.Json.Walk`](../core/src/Ecluse/Core/Registry/Json/Walk.hs) holds the
-  primitives. `withElement` reads the next token, `eachMember` and `eachItem` visit containers,
-  and `skipFrom` passes a value unread. `readJsonWalk` drives a walk within the body limit.
-- Write the ecosystem's walk in `Ecluse.Core.Registry.<Ecosystem>.Reader`, and model it on
-  `npmWalk`, as `pypiWalk` does. The walk passes one field to the consumer's step function as each
-  release, file or top-level member completes.
-- Read one document per body. `npmWalk` and `pypiWalk` finish after the first top-level value, and
-  `readSteps` drains the rest of the body against the same limit.
-- Hold the walk to its reference reader, as
-  [One pattern for every ecosystem](testing.md#one-pattern-for-every-ecosystem) requires.
-  [Incremental npm extraction](architecture/registry-model.md#incremental-npm-extraction) states
-  the acceptance the walk keeps and how it skips unknown fields.
+Supply an `EcosystemRead` through `AdapterMetadata.metadataRead`.
+[Metadata.Fetch](../core/src/Ecluse/Core/Registry/Metadata/Fetch.hs) owns the response lifetime, transport errors, tracing, full-read charge, source digest, and manifest.
+The adapter supplies requests, full and selected walks, and their finishes.
+Use the same production reader with held chunks for deterministic fixtures.
 
-### 3. Declare what to keep as shapes
+Choose framing from the protocol. npm and PyPI consume a single top-level JSON value.
+A line-oriented index needs its own framing and reference acceptance, even if each record uses the shared JSON primitives.
+Bound the full response, including data after the selected entry. Keep cancellation and progress failures visible.
+The detailed implementation order is in [Metadata readers and performance](ecosystem-metadata.md#apply-the-techniques-in-this-order).
 
-The fields a read keeps are a contract with clients, such as npm's
-[operator field contract](https://ecluse-proxy.com/docs/protocol-support/#npm-metadata-fields). A
-depth budget at each level bounds hostile nesting. A `Shape` states both in one value, so the walk
-builds each kept value straight from its members.
+Keep installation fields in the native retained document.
+Project only the facts consumed by policy, merging, admission, serving, and mirroring into `PackageDetails`.
+Use [CachedDocument](../core/src/Ecluse/Core/Registry/CachedDocument.hs) for the pipeline's opaque document boundary.
+New native representations require explicit boundary cases and corresponding retention coverage.
 
-- [`Ecluse.Core.Registry.Json.Shape`](../core/src/Ecluse/Core/Registry/Json/Shape.hs) holds the
-  shapes and `readShape`, which reads one value under a shape. `releaseMembers` in
-  `Ecluse.Core.Registry.Npm.Reader` is the largest worked example.
-- Name the kept members of a fixed object with `namedMembers`. Use `everyMember` for a map whose
-  names vary, such as dependencies. Use `knownMembers` for a map that also has well-known names,
-  such as PyPI's hash algorithms.
-- Take each budget from `maxNestingDepth`, one level less for each level down. A kept value with no
-  budget left fails the read with the nesting limit.
-- Let the first member under a repeated key win, as json-stream does. The walk reads a repeat where
-  json-stream reads it, then drops it.
+The shared merge chooses admitted source entries.
+[ServedDocument](../core/src/Ecluse/Core/Registry/ServedDocument.hs) supplies exact entry selection, name checks, URL rebasing, and `serialiseDocument`.
+The latter shares packed-render refusal and native-encoding fallback.
+Adapters retain their object or array assembly, native envelope fields, ordering, and document projections.
+Never reconstruct installable metadata from policy facts alone.
 
-### 4. Intern keys and strings for each read
+Validate artifact locations through the existing [package filter](../core/src/Ecluse/Core/Package/Filter.hs).
+Preserve the distinction between source digest claims and verified bytes.
+Keep private-source authorisation, first-party precedence, and merge provenance under the existing registry contract.
 
-Releases repeat the same keys, dependency names and ranges thousands of times. A table that belongs
-to one read holds one copy of each, and every release that repeats one shares it.
-[Incremental npm extraction](architecture/registry-model.md#incremental-npm-extraction) describes
-the table and the key it draws for each read.
+## 5. Map policy and advisory evidence
 
-- [`Ecluse.Core.Registry.Json.Intern`](../core/src/Ecluse/Core/Registry/Json/Intern.hs) holds the
-  table. The read driver creates one for each read, under a key it draws for that read, and hands
-  it to the ecosystem's walk. The table goes when the read ends.
-- Read each kept release in `Share` mode. `readShape` then finds each key and string in the table
-  by the bytes the lexer read, before it builds any text. It takes every key from the table, so a
-  document with thousands of releases holds each field name once.
-- List the fields whose values differ in every release, such as artifact URLs and digests, as the
-  unique fields (`releaseUniqueFields`, `fileUniqueFields`). The table keeps their values as read,
-  so they never grow it.
-- Let only what the projection keeps enter the table. The walk asks the consumer's keep predicate
-  (`keepsRelease`, `keepsFile`), and reads a release it will drop in `Keep` mode.
+Map native observations into [PackageDetails](../core/src/Ecluse/Core/Package.hs), including explicit unavailable signals.
+An unknown value is not evidence that a package is harmless.
+Do not branch on ecosystem names inside the rule engine.
 
-Never share a table between reads. A table for the whole process would keep every string any
-upstream sent, so upstream content would set a permanent memory floor.
+Declare a typed `adapterRuleBlocks` entry when a rule has no suitable native meaning or its fact is inherently unavailable.
+Give the reason. Boot rejects that rule in an active mount's resolved policy.
+Keep temporary missing evidence distinct from a permanent rule block.
+The [rule policy](../web/content/docs/configuration.md#rule-policy) owns the operator remedies.
 
-### 5. Parse repeated values once per read
+Add the ecosystem's external advisory spelling in [Osv.Ecosystem](../core/src/Ecluse/Core/Osv/Ecosystem.hs).
+Check export naming, package identity, version ranges, affected versions, and exact fixes against native examples.
+Reuse Pilot acquisition, database publication, freshness, and rule evaluation.
+Supply pinned advisory fixtures through the [existing fixture contract](testing.md#osv-advisory-fixtures).
+Do not claim advisory coverage from a registered label alone.
 
-Some values cost work to parse, and many releases repeat them. Parse each distinct value once per
-read, and keep the results only for that read, for the same reason the intern table ends with it.
-PyPI's `FilenameMemo` in `Ecluse.Core.Registry.PyPI.Project` parses each distinct version text
-once, so the files of one release share one parse. It holds the parsed version, so the projection
-does not parse the canonical spelling again. A version requirement that many releases repeat is a
-candidate for the same treatment.
+## 6. Complete writes and maintenance
 
-A read that drops most of what it parses must not let the memo grow with what it drops. PyPI's
-selected read holds only the latest version text (`readLatestCoordinate`). PyPI lists the files of
-one release together, so that read still parses once for each release, and it holds nothing for
-the files it rejects.
+Use [PublishCodec](../core/src/Ecluse/Core/Registry/Publish/Internal.hs) for native mirror preparation, target reads, upload requests, and response classification.
+The shared worker owns orchestration over the complete version.
+[MirrorUpload](../core/src/Ecluse/Core/Registry/MirrorUpload.hs) carries checked membership and verified file facts, paired with required native metadata.
+Do not add a dormant codec or publish helper without an active caller.
 
-### 6. Derive per-document values once, and check each artifact once
+| Responsibility | Reuse | Native work |
+|---|---|---|
+| Mirror input | Complete version inventory and verified file identities | Retained read data and required upload metadata |
+| Copying and retries | Worker orchestration and existing authority limits | Native target reads and upload outcomes |
+| Completion | Expected membership and complete-view checks | Document which target facts prove every file exists |
+| Restart and outage | Existing [mirror state](../core/src/Ecluse/Core/Mirror/State.hs) where required | Preserve the source fields needed for later native reads |
+| First-party publish | [Publish pipeline](../core/src/Ecluse/Core/Server/Pipeline/Publish.hs), bounded body, identity guard | Body framing, identity claims, content type, allowed methods, reply semantics |
+| Dredger | [Store maintenance interface](../core/src/Ecluse/Core/Registry/Maintenance.hs), policy, consent, deletion cap | Supported inventory and deletion operations from protocol or backend |
+| Telemetry | Existing spans and observations around the shared paths | Native outcomes through the same observations |
 
-Some checks run for every artifact, but most of their inputs depend only on the document. Derive
-those inputs once per read, and do the per-artifact part only where it can change the answer. A new
-ecosystem's finishes get this for artifact locations by calling `enforceArtifactLocations` and
-`enforceArtifactLocationsOf` in `Ecluse.Core.Package.Filter`.
+A request for one file triggers the complete version, not that client's file subset.
+A target version name, successful upload, conflict response, or one present file does not prove completion.
+Preserve the complete authorised view during incremental uploads, or return explicit unavailability.
+Completion must survive restart and permit completed private reads during public-source outage.
+These settled requirements come from [#1133](https://github.com/AlexaDeWit/Ecluse/issues/1133) and [#1639](https://github.com/AlexaDeWit/Ecluse/issues/1639).
+They do not promise atomic visibility to consumers that bypass Écluse.
 
-- [`Ecluse.Core.Package.Filter.Internal`](../core/src/Ecluse/Core/Package/Filter/Internal.hs)
-  shows the pattern. `artifactOrigin` derives an `ArtifactOrigin` once per document: the declared
-  artifact hosts, the upstream's authority and its https host. `resolveArtifact` checks each
-  artifact against it.
-- Repeat a check only when an earlier step changed its input. `resolveArtifact` checks the filename
-  again only when the https normalisation changed the URL text. When the text did not change, it
-  keeps the original string.
-- Test a fixed prefix without lowering the whole text. `isPrefixOfLowered` in `Ecluse.Core.Text`
-  lowers only the prefix's length of the text and compares by equality. Each `LowerPrefix` carries
-  that length beside its text.
-- Never swap one URL parser for another to save work. The download gate and the read-time check
-  both decide an artifact's authority with `hostPortAddress`, so they cannot disagree about which
-  host a URL names.
+npm is the one-tarball instance. PyPI includes every wheel, sdist, and declared metadata companion required by its contract.
+Native archive extraction and publication formats stay separate when their meanings differ.
+Neither the worker nor a completion mechanism gains Dredger's deletion authority.
 
-Hold a faster check to the check it replaces, as
-[`InternalSpec`](../core/test/unit/Ecluse/Core/Package/Filter/InternalSpec.hs) does.
+## 7. Register evidence in the existing test system
 
-### 7. Read selected versions without decoding the rest
+Follow [Testing: onboarding an ecosystem](testing.md#onboarding-an-ecosystem) for the required paths, fixtures, and measurement providers.
+Use the normal PR CI tiers. Do not create a second ecosystem-completion framework.
 
-An artifact decision or a mirror write needs one release and its publish time. Decoding every other
-release would cost it a full read.
+Supply concrete operation records to the shared contracts in [test/contracts](../test/contracts/Ecluse/Test/Contract/).
+Contracts own common assertions and scenario order.
+Providers own clients, setup, teardown, native decoding, faults, and observations.
+Keep expected bytes and reference readers independent of production parsers and serialisers.
+Retain native tests for obligations with no common meaning.
 
-- Give the read type a case for one release, as npm's `OneRelease` and PyPI's `SelectedRead` do.
-- Skip a value unread where the reference reader skips it, so the walk keeps the reference's
-  acceptance. npm's reference skips each other release, and json-stream's `objectWithKey` skips the
-  rest of the `time` and `dist-tags` objects after the member it wants. So `npmWalk` skips them
-  too, and still counts each skipped release toward the version cap.
-- Where a read skips more than its reference, state the rule in one place and hold it with a
-  property of its own. A PyPI file names its release in its `filename` member, so `selectedFile`
-  reads a file up to its first name and skips the rest once that name rejects the file. A member
-  after that name is not decoded, so only the lexer can fail the read there, where PyPI's
-  reference decodes every member of every file.
-  [`ReaderSpec`](../core/test/unit/Ecluse/Core/Registry/PyPI/ReaderSpec.hs) holds the walk to the
-  reference's read of the same index with those members repaired. Each skipped file still counts
-  toward the version cap.
-- `selectedFile` reads the members it keeps in `Keep` mode, so no file enters the intern table.
-  `listedMember` gives each listed member the key its shape holds, so the files a selected read
-  keeps share their keys without the table.
+Declare obligations independently of drivers, capability flags, and actual registrations.
+Register stable case IDs and lifecycle groups in the applicable catalogue and suite entrypoint.
+Missing families, omitted registrations, duplicate IDs, and missing execution must fail by name.
+Use the existing omission and wrong-observation controls.
+The [contract coverage map](test-contracts.md) identifies the common laws and retained native evidence.
 
-### 8. Keep only what a reader uses in the typed view
+Add corpus captures and pins before recording expected outputs or calibration figures.
+Register the existing benchmark, allocation, and residency providers instead of editing each benchmark group.
+Use the existing load fixture contract for the ecosystem's future load coverage.
+Keep allocation, heap retention, native memory, complete-request throughput, and latency claims distinct.
+The [metadata reference](ecosystem-metadata.md#lessons-from-earlier-changes) records lessons from earlier work.
+The testing guide remains the authority for measurement duties and supported claims.
 
-The cache keeps a typed view, `PackageDetails`, for every version. So every cached version pays for
-every field of that view, including a field that nothing reads.
+## 8. Establish completion
 
-- Decode typed values in the consumer's step as each release or file completes, so the read never
-  holds the source document. npm's `packedStep` calls `projectRelease`, and PyPI's step is
-  `collectField`.
-- Add a field to `PackageDetails` only when a rule, the merge, admission, serving or the mirror
-  worker reads it.
-  [The internal domain model](architecture/registry-model.md#the-internal-domain-model) sets out
-  what the view holds and why. Removing a field never means defaulting a signal: a signal
-  the rules read stays explicitly unknown when the reader cannot determine it.
-- Take typed text from the kept value's own strings, not a fresh copy, so the typed view and a
-  served document that a read holds as aeson's tree share one text. A read that packs its served
-  releases (step 10) decodes the typed view's text from the packed bytes instead.
-- Keep that text as `Text`, although [the style guide, 6.5](style.md#6-naming-and-domain-types)
-  stores bulk identifiers as `ShortText`. A conversion copies the text, so the view would hold a
-  second copy of what the served document holds. On the corpus, `ShortText` made the cache entry no
-  smaller than sharing the text, and it raised merge allocation where versions collide.
+Call `fullEcosystemContract` with the concrete driver, as npm and PyPI do.
+Its required families include proxying, installation, policy, advisories, mirroring, publication, Dredger, and telemetry.
+A partial provider cannot reduce that requirement or describe missing work as a pass.
+An intermediate read-only implementation remains incomplete ecosystem support.
 
-### 9. Finish the read strictly
+Completion requires the lower-tier obligations and actual execution reports as well as the full contract.
+Use the fixed ecosystem E2E tasks, plans, and audits described in [Testing](testing.md#shared-behaviour-contracts).
+Cross-target installation checks prove file selection and installed contents, not execution of foreign architecture code.
 
-An unevaluated field in a read's result keeps decoder state alive. That state then lives through
-the rules phase. On a `304`, which never renders, it lives until the request ends.
-
-- Evaluate each typed value as the step stores it, as `Right $! details` does in npm's
-  `projectRelease`.
-- Evaluate the elements of each list the result keeps with `strictElements` from
-  `Ecluse.Core.Strict`.
-- Rebuild a list in source order with its keys evaluated, as PyPI's `servedFiles` does, instead of
-  leaving a lazy comprehension over the read's accumulator.
-
-[Read evaluation](testing.md#read-evaluation) checks that every capture's result is fully evaluated
-when its read finishes.
-
-### 10. Pack the served releases, and render listings by copying bytes
-
-A full read keeps every release it serves until a listing renders. As aeson's tree, each release is
-many small objects, and a render encodes each string again. A packed release is one array of bytes
-that a render copies.
-
-- `readNpmFull` in `Ecluse.Core.Registry.Npm.Metadata` walks the tokens with `npmWalk` and a
-  `Writer` from [`Ecluse.Core.Registry.Json.Writer`](../core/src/Ecluse/Core/Registry/Json/Writer.hs).
-  The writer writes each kept release into one scratch buffer for the read, as the walk reads it.
-  It then copies the finished release into an array of its exact size, and measures the length of
-  the release's encoding once. The packed release holds that length.
-- A packed release refers to the read's intern table for each key and shared string. It holds each
-  other string as the bytes aeson writes for it.
-  [`Ecluse.Core.Registry.Json.Packed`](../core/src/Ecluse/Core/Registry/Json/Packed.hs) holds the
-  format, and the table that the read seals when it finishes (`DocTable`).
-- Decode the typed facts from the packed release, and decode only the members they read
-  (`decodePicked`). The read decodes a release whole only to record why it dropped an invalid one.
-- A packed release holds at most one hole: the string that an assembly rebases for each request.
-  npm's hole is the tarball URL (`tarballHole`). The read keeps the hole only when the rebase rule
-  rewrites that URL.
-- Assemble a listing into a `RenderPlan`: the small top-level members as aeson's tree, and the
-  surviving releases, each over its own source's table. `renderPlan` writes the listing into one
-  buffer of its exact length, which it adds up from the lengths the releases hold. It copies the
-  bytes of each release, and writes each hole as the mount's prefix for the package followed by the
-  URL's file name. It refuses a listing whose bytes do not fill the buffer exactly.
-- `weighCachedDoc` charges a packed document the heap bytes it holds, in the compact units that a
-  cache expands.
-
-Hold the packed read to the tree read of the same bytes: the same typed view, a document that
-decodes to the same tree, and listings that render to the same bytes. The properties cover hostile
-input, chunk boundaries and listings merged from several sources
-([One pattern for every ecosystem](testing.md#one-pattern-for-every-ecosystem)). Hold each release's
-stored length to `walkedLength` in `Ecluse.Test.Registry.Packed`, which measures the release again,
-over generated values and every release of the captures. A wrong length makes a render refuse its
-listing. The recorded corpus outputs change only in their full-document charge lines, and the
-residency tier checks that each npm listing's held entry stays smaller than its source
-([Listing peaks](testing.md#listing-peaks)).
-
-### 11. Set the memory charges from measured peaks
-
-The memory gate admits work by what each request pays, not by what it holds. A charge below a
-read's real peak lets the heap overflow. A charge far above it holds budget that live data never
-fills, which costs throughput.
-[Runtime sizing](architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling) explains the
-gate and owns the rules that derive the full-read and output charges.
-
-The adapter's `metadataChargeFactors` holds a `ChargeFactors` with two fields, as
-`npmChargeFactors` shows:
-
-- `cfFullReadPermille` is what a full read pays per source byte as it reads. Derive it from the
-  listings' read peaks, merges included, by the rule in Runtime sizing.
-- `cfOutputPermille` is what a listing's response pays per byte of its output basis before it
-  renders. The serving path charges a merged listing on what it renders, by the larger of two
-  anchored estimates that Runtime sizing sets out beside the rule that derives this charge. The
-  merge probes in [Listing peaks](testing.md#listing-peaks) calibrate it over a single document and
-  the realistic merge shapes, from one meter step of basis up, and hold the heavy-base shapes
-  within it. It must cover the listing's peak above the documents it holds, and twice the served
-  body. The retained-heap gate checks every capture, whatever its size: twice the shared entry's
-  encoded size must fit within the output charge.
-
-To calibrate them:
-
-- Add the ecosystem to the residency tier as the metadata residency row of
-  [Onboarding an ecosystem](testing.md#onboarding-an-ecosystem) lists, with its own retained-heap,
-  read-peak and output limits. Supply an exact `Calibration` and the record's probe hooks.
-  The residency coverage check fails when a registered adapter lacks its provider.
-  Each provider needs non-empty authenticated captures and its own limits and envelopes.
-- Read each capture's `metadata-listing` line in the output of CI's arm64 Build job. It reports the
-  read peak, the held entry, the peak above the entry and the served body, each per source byte.
-- Read each capture's `metadata-merge` lines from the same job, one per merge shape. Each reports
-  the read peak per source byte, the basis and the output working set per basis byte. Give
-  `Ecluse.Test.Corpus.Subset` a cut for the ecosystem's document, as npm and PyPI have, so the
-  probes can shape its captures. Give `Ecluse.Test.Corpus.Merge` the ecosystem's heavy-base text,
-  and explicit arms in its `keepVersions` and `weighDown`.
-- Derive the read-peak and output limits by the rule in [Listing peaks](testing.md#listing-peaks),
-  and add the captures to that section's tables.
-
-The existing figures come from CI's arm64 Build job. Calibrate a new ecosystem there too, so its
-figures compare with theirs. From then on, the residency tier fails when a change to the
-representation outgrows a charge, so the charge moves only with new evidence.
-
-## Measure every change
-
-Allocation varies little between runs of one build on one input, for example through the table key
-each read draws. So allocation figures compare closely across a change. Wall-clock time
-varies with the runner, so take timing from CI's `bench.yml` run, and label a local timing as
-indicative only.
-
-[Benchmarks](testing.md#benchmarks-non-gating) lists the benchmark workflows and what each one
-measures, and the [residency gate](testing.md#residency-gate-ecluse-residency-gating) describes the
-memory probes. To look at one read in isolation, run the residency executable's
-[source probes](testing.md#streaming-source-probes), which report one read's allocation and live
-bytes for a capture. For counterparts in other ecosystems, see
-[One pattern for every ecosystem](testing.md#one-pattern-for-every-ecosystem).
-
-### The allocation gate
-
-The `allocation` CI job holds the measured legs of every committed capture to allocation budgets,
-and it gates the merge. [Allocation budgets](testing.md#allocation-budgets-perf-allocation-gating)
-describes the legs, the part of a read they cover, the margin, and what fails the job. A new
-ecosystem joins the gate through its registered `EcosystemBench` corpus, because the gate measures
-every capture there and fails on one with no calibrated figure. To calibrate the new ecosystem,
-open the pull request that adds its captures, and follow the recalibration steps in that section.
-Update the independent measurement obligation list as well as its concrete provider registration.
-The benchmark and allocation loaders reject a missing, duplicate, or unshipped provider before measuring work.
-Preserve corpus bytes, allocation and forcing boundaries, RTS flags, quotas, affinity, refusal rows, floors, and verdicts during contract extraction.
-
-Two of the gate's legs repeat the full read with the corpus advisories served: one under the
-shipped policy, and one under the shipped policy with both advisory denies.
-[Allocation budgets](testing.md#allocation-budgets-perf-allocation-gating) describes them and
-their setup checks, and [OSV advisory fixtures](testing.md#osv-advisory-fixtures) names the fixture
-and its readers. `Ecluse.Test.Corpus.Advisories` in `ecluse-test-support` holds the fixture's
-compile step, the two policies, and the served-rows check. `Ecluse.Test.OsvDb` serves the compiled
-artifact through a slot. Setup fails when the records name none of an ecosystem's captures, so a new
-ecosystem adds records for at least one of its captures and pins them with the rest.
-
-## Reuse before you write
-
-npm and PyPI already share many definitions that a new ecosystem needs. Before you write a helper,
-search for the npm and PyPI definition of the same job. Call, extend or hoist it
-([the style guide, 4.9](style.md#4-module-organisation-namespacing-and-exports)). The steps above
-name the walk, shape, intern and artifact-location modules. These shared modules serve the rest of
-a read:
-
-| Job | Shared definition |
-|---|---|
-| The exchange, spans, table key, charge, digest and `Manifest` of a read | `Ecluse.Core.Registry.Metadata.Fetch` |
-| Reported-name checks and stream error mapping | `Ecluse.Core.Registry.Metadata.Projection`, `Ecluse.Core.Registry.WireSupport` |
-| Decoding a publish time | `parsePublishTime` in `Ecluse.Core.Registry.WireSupport` |
-| Replaying a merge plan, rebasing artifact URLs, the name gate | `Ecluse.Core.Registry.ServedDocument` |
-| Caching, metrics and failure logs around the reads | `Ecluse.Core.Server.Metadata` |
+Before handoff, reconcile the supported capability matrix, default configuration, operator manual, threat model, and CI evidence.
+Document native limits and any backend combinations that refuse a role.
+Show the contributor which shared paths the new adapter inherits and which native work remains.
+Keep unmeasured performance effects explicit. Green CI proves its declared checks, not a separate throughput claim.
