@@ -162,6 +162,10 @@ The keys each tag admits depend on the endpoint, because the endpoints hold diff
 | `mirrorTarget` | `url`, `token` | `url`, optional `tokenDuration` | `url`, `token`, optional `permitDeletion` |
 | `publicationTarget` | `url`, optional `token` | `url`, optional `token` | `url`, optional `token` |
 
+Native upload fields extend this table as the configuration reference describes.
+Cargo mirror and publication targets require distinct sparse read and approved API coordinates.
+See [Cargo protocol support](@/docs/protocol-support.md#cargo) and [Cargo mirror setup](@/docs/mirror-setup.md#cargo).
+
 Proxy reads forward the caller's own credential to the private upstream, while public reads
 remain anonymous. The mirror write uses Écluse's credential: `codeArtifact` mints it and admits
 no `token`, while the two non-minting tags require one. Every publication tag admits an optional
@@ -243,6 +247,7 @@ The shape follows the ecosystem, and an empty or malformed list is refused at bo
 | --- | --- | --- |
 | npm | A scope | `@acme,@beta` |
 | PyPI | A distribution name, or a prefix written as a separator then `*` | `acme,acme-*` |
+| Cargo | A crate name, or a prefix ending in `-*` or `_*` | `acme-tools,acme-*` |
 
 A PyPI entry reads through PEP 503 normalisation, so `Acme_Tools` and `acme-tools` are one name. A
 prefix stops at the separator, so `acme-*` covers `acme-tools` and not `acmeco`, which is a name
@@ -255,6 +260,11 @@ characters, with a letter or digit at each end. Internal `.`, `_`, and `-` separ
 accepted and normalised. An exact declaration longer than 100 characters, or with a leading or
 trailing separator, fails configuration loading. Prefix declarations `acme-*`, `acme_*`, and `acme.*` remain
 equivalent and accepted.
+
+Cargo declarations use the name grammar in the configuration reference.
+Ownership folds ASCII case and hyphen/underscore aliases while preserving separator runs.
+It does not apply PyPI period folding. Published spelling and index lookup paths remain separate from ownership matching.
+The [private package guide](@/docs/private-packages.md#names) gives an example.
 
 Setting `firstParty` on an npm mount narrows what a scoped install reaches. A name under one of
 your scopes that the private upstream does not have answers `404`, and Écluse does not fall back to
@@ -270,12 +280,15 @@ missing.
 This is a privilege over names, not authentication. It says which names are yours, never who may
 use them, so the private upstream stays the authority on every caller.
 
-A private upstream's explicit `401` or `403` stops the read with a local `403`, for metadata and
-artifacts, including HEAD and conditional requests. Public content cannot replace the private
+For npm and PyPI, a private `401` or `403` stops the read with a local `403`.
+This applies to metadata and artifacts, including HEAD and conditional requests. Public content cannot replace the private
 copy, even if it has the same name and version or passes public admission and integrity checks.
 This protects a private patch from substitution when the caller's private credential fails.
 Écluse forwards no upstream error body or headers. npm receives a fixed explanation.
 PyPI keeps its local refusal format: an empty body, or the configured operator help message.
+
+Cargo preserves a native `401` challenge for credential-provider retry and treats a real `403` as refusal.
+The private alternate never substitutes a public copy, including after a private `404`.
 
 Check the caller's private credential and access when this refusal appears. Ordinary private
 `404` responses and other transient or transport failures keep their existing fallback policy.
@@ -343,8 +356,8 @@ one:
 |---|---|---|---|
 | `DenyByIdentity` | No | Denies a package or `package@version`. This is the revoke. | `identity` |
 | `DenyIfDeprecated` | No | Denies a version carrying the npm deprecation flag, including whole packages and release lines. | None |
-| `DenyIfYanked` | No | Denies a PyPI release only when every file is yanked. | None |
-| `DenyInstallTimeExecution` | npm only | `deny-scripts` denies npm install scripts at admission. Stored copies stay. | None |
+| `DenyIfYanked` | No | Denies a yanked Cargo version or a PyPI release whose every file is yanked. | None |
+| `DenyInstallTimeExecution` | npm only | `deny-scripts` denies npm install scripts at admission. Cargo requires explicit activation and verified archive evidence. Stored copies stay. | None |
 | `DenyIfKnownMalicious` | With `advisories.url` | Denies affected versions named by an active primary `MAL-` advisory. Named `deny-known-malicious`, precedence 300, both phases. | `onUnavailable` |
 | `AllowByIdentity` | No | Admits a package or `package@version`, and a bare name matches every version. It overrides scored advisory denies. Override MAL denial with precedence above 300. | `identity` |
 | `DenyIfCve` | No | Denies a version that a synced advisory marks as affected at or above a CVSS threshold. | `minCvss` (0-10), `onUnavailable` |
@@ -436,6 +449,8 @@ The following types are blocked:
 | npm | `DenyIfYanked` | npm reports no yank flag. Removed releases disappear from its metadata. |
 | pypi | `DenyIfDeprecated` | The PyPI adapter supplies no deprecation flag. |
 | pypi | `AllowScope` | A PyPI project name has no scope, so this rule can never match one. |
+| cargo | `AllowScope` | Cargo package names have no scope. |
+| cargo | `DenyIfDeprecated` | Cargo's sparse index supplies no deprecation flag. |
 
 Move `DenyInstallTimeExecution`, `AllowScope`, or `DenyIfDeprecated` from shared `rules` into `mounts.npm.rules`:
 
@@ -631,7 +646,7 @@ Publish a valid artifact for each ecosystem before configuring its source. Roll 
 writer roles forward before enabling Dredger revocation. Preview deletions and retain target-local
 consent, first-party protection, maintenance support, and deletion caps. When relaxing a rule,
 update Dredger first, then admission and writer roles. Trusted private copies keep serving until
-eligible deletion completes. The rule applies the same way to npm and PyPI admission, mirror
+eligible deletion completes. The rule applies the same way to npm, PyPI, and Cargo admission, mirror
 writes, and Dredger revocation.
 
 An absent generation or a faulted read follows `onUnavailable`, defaulting to `deny`.

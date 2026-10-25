@@ -33,9 +33,12 @@ Each operation has its own view, including public admission, private downloads, 
 
 Trusted private reads do not repeat public admission. Removing a stored version requires authorised cleanup, and does not recall client-cached or installed bytes.
 
-PyPI mirror completion applies to reads through Écluse. Direct registry reads can observe partial uploads.
+PyPI and Cargo mirror completion applies to reads through Écluse. Direct registry reads can observe incomplete copies or changed target metadata.
 
 Écluse hosts no package archives and does not inspect package code to detect malware.
+
+An explicit Cargo execution rule can inspect bounded archive and manifest evidence for build scripts and procedural macros.
+The server never runs the inspected code. A registry checksum proves agreement with that registry's assertion, not harmlessness.
 
 Écluse checks neither Certificate Transparency nor certificate revocation. It trusts any certificate
 that chains to a root in its CA bundle, so a compromised CA stays trusted until the bundle drops

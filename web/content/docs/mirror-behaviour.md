@@ -1,6 +1,6 @@
 +++
 title = "Mirror completion and recovery"
-description = "A request can start mirroring before the copy is complete. Completion, not the first successful upload, determines a managed PyPI version's visibility."
+description = "A request can start mirroring before the copy is complete. Completion determines a managed version's visibility through Écluse."
 
 weight = 33
 
@@ -40,3 +40,17 @@ Direct registry access is outside this visibility guarantee and can observe part
 The mirror retains supported installation and runtime metadata. It replaces artifact coordinates and verified hashes, and removes source-registry signatures and attestations.
 
 Existing copies are not rewritten automatically after a metadata improvement. Consult the [repair procedure](@/docs/how-it-works.md#npm-mirror-metadata) before deleting and recreating a copy.
+
+## Cargo retains original-source metadata {#cargo}
+
+Cargo completion pairs the retained admitted index row and source identity with a checksum-verified target archive.
+Target publication can reset time or yank and omit fields. The target's native metadata cannot replace those retained facts.
+Retained fields reflect first admission, without continuous yank synchronisation or target-yank mutation.
+
+The crates.io replacement excludes unrecorded target versions from listings and direct archives.
+Missing or corrupt state cannot provide an original-source managed read during public outage.
+Ordinary private reads remain available through the separate alternate registry.
+Current target authorisation and discovery supply archive addresses. Retained source records grant no new credential or host authority.
+
+Boot performs no remote discovery. A new client's discovery can still fail while its configured trusted registry is unavailable.
+Do not assume that a new client and an already configured client have identical outage behaviour.

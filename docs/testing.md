@@ -2114,23 +2114,72 @@ requires reads, writes, inventory, deletion, integrity, and recovery for every b
 An incomplete driver cannot reduce either required list. Discovery is pure, and missing families
 produce named failures without stopping unrelated contracts. A passing full composition defines
 completion only when its lower-tier obligations and execution reports also pass.
-npm and PyPI both register the full ecosystem composition. The separately named read-only foundation
-remains an API for incomplete providers, not either ecosystem's active completion claim.
+npm, PyPI, and Cargo register the full ecosystem composition. The separately named read-only foundation
+remains an API for incomplete providers and does not establish full ecosystem completion.
 CI uploads actual plan and report pairs from the instrumented core unit, runtime unit and
 integration legs. The `e2e` job downloads all three pairs and audits each ecosystem against its subject's E2E report.
 All four tiers share the workflow run and attempt identity and use `arm64` as the architecture name.
 The lower tiers have no product image, while E2E binds the prepared image digest.
 
 Measurement runners keep their existing process and sampling boundaries.
-`checkBenchmarkCoverage` compares reviewed npm/PyPI obligations, concrete providers, and production adapter registration before loading the corpus.
+`checkBenchmarkCoverage` compares reviewed native obligations, concrete providers, and production adapter registration before loading the corpus.
 Both the benchmark and allocation harness call that loader.
 The load harness composes 27 shared read and stress laws with `readLoadContract` for each ecosystem.
 `requiredLoadLaws` stays independent of each fixture's actual scenario names.
 `loadCoverageGaps` names a missing or duplicate law before measured work begins.
-`FullLoad` also requires worker mirroring, which both npm and PyPI fixtures provide.
+`FullLoad` also requires worker mirroring from each native fixture.
 Worker mirroring applies only to unlimited runs.
 Existing residency registration checks still require captures, positive limits, and every calibrated shape.
 The shared retention contract changes neither 2,000/16,000 repetition counts nor the strict live-byte allowance.
+
+### Cargo native provider
+
+Cargo uses the same `fullEcosystemContract` families and independent lower-tier obligations as npm and PyPI.
+Its fixed subject is `ecluse-e2e-cargo`, declared by `Ecluse.E2E.Suites.Cargo`.
+Run `task test-e2e-cargo` against the prepared product image and immutable execution plan.
+The `task test-e2e-cargo-completion` audit requires actual core-unit, runtime-unit, integration, and Cargo E2E reports.
+Registration, capability flags, or metadata-only success cannot replace executed laws.
+Independent obligations, catalogues, stable case IDs, lifecycle groups, and report identities must agree.
+Missing providers, tools, cases, reports, or required native observations fail explicitly.
+
+Real current and floor Cargo clients resolve, build, and install owned fixtures using sparse HTTPS.
+The supported floor is 1.74. A current client alone cannot establish floor compatibility.
+Fixtures cover dependency graphs, renamed dependencies, features, targets, Rust-version constraints, and lockfiles.
+Observe archive requests through Écluse and upstream controls that expose direct bypass.
+Checking only discovery or index bytes does not prove asset routing.
+The public replacement and private alternate are separate real registries in source-aware serving tests.
+They must not share a fabricated mixed index.
+
+Native reader tests cover published spelling, lookup paths, ownership collisions, raw versions, physical record keys, and independent wire oracles.
+They preserve record order, schema and additive fields, dependency source references, and omission versus null.
+Malformed and duplicate rows require quarantine evidence on full and selected reads.
+Whole-read transport and resource faults remain failures.
+The shared projection contract supports `RecordStream` quarantine while npm and PyPI retain exact `SingleDocument` error assertions.
+
+Authentication cases require native `401` challenge and provider retry, real `403` refusal, anonymous compatibility, and edge-authentication precedence.
+Discovery runs after caller or service credentials exist, never at boot, and private discovery remains uncached across callers.
+Authority negatives cover public, neighbouring, read, upload, and artifact coordinates without sending credentials to refused destinations.
+Publication cases bind native metadata, body lengths, manifest, archive root, digest, and first-party authority before writes.
+They preserve distinct read and upload roots and bound charged archive/TOML work.
+Policy cases prove no archive evidence request on the default path or after a higher-ranked decision.
+Explicit execution denial requires verified facts or structured inability. The server never runs inspected code.
+
+Mirror cases require exact source rows, SHA-256 archive proof, retry, lost replies, restart, and public outage.
+Yank and timestamp controls change target metadata and verify retained original-source facts with fresh client state.
+Missing, corrupt, and unrecorded state must not become completed managed reads during outage.
+Ordinary private reads remain independently valid through the alternate view.
+CodeArtifact maintenance fixtures prove physical deletion through deterministic control-plane boundaries, without claiming live AWS fidelity.
+
+Cargo corpus and OSV fixtures retain capture identity, hashes, acquisition records, and attribution beside their native data.
+Independent benchmark references can adapt NDJSON to arrays internally. Native served output remains line-framed.
+Benchmark-only `MetadataRendering` separates pure captured assembly and serialisation from runtime admission factors.
+Ordinary arm64 CI emits native resource observations before production factors can be calibrated.
+Missing native factors remain failures. Existing npm and PyPI factors and budgets do not supply Cargo values.
+
+Ready handoff requires the existing standard load workflows with the full profile and all applicable pod shapes.
+The delivery agent obtains at least three qualifying observations per shape and commits derived floors and latency policy with source and run provenance.
+Keep adverse and disqualified observations. A provider registration or unmeasured value cannot satisfy calibration.
+Fresh independent review, final-commit CI, and a fresh-context final adversarial review remain delivery requirements.
 
 ## Onboarding an ecosystem
 
@@ -2267,7 +2316,7 @@ runs the second after a failed first, so one failure cannot hide the other. `cod
 follows the coverage legs and releases the Codecov statuses.
 The core unit, runtime unit and integration suites upload their plan and execution reports.
 The `e2e` job waits for the subjects and the coverage legs. It audits every subject report
-against the plan, then runs the npm and PyPI completion audits over all four tiers' reports.
+against the plan, then runs the npm, PyPI, and Cargo completion audits over all four tiers' reports.
 
 CI's primary architecture is arm64: every job that builds or tests the code runs on the
 `ubuntu-26.04-arm` runner. amd64 is also supported: the release dry-run builds and starts the amd64

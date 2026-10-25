@@ -17,6 +17,10 @@ Set `mirrorTarget` to the repository receiving public copies. Set `privateUpstre
 
 Configure that read endpoint to include the mirror repository. Écluse does not create this relationship in your registry.
 
+Cargo's public replacement reads completed copies directly from `mirrorTarget`.
+Its `/cargo/private/` alternate view reads `privateUpstream` separately and never falls back to public.
+Keep private-only packages out of crates.io source replacement.
+
 **Example: npm with CodeArtifact**
 
 ```yaml
@@ -72,6 +76,21 @@ mounts:
 The proxy needs state reads and prefix listing. The worker also needs conditional writes. Both use the same bucket, prefix, and target identity.
 
 Do not expire state records or referenced metadata companions. The state proves which files form a complete version. Package archives remain in the registry.
+
+## For Cargo, retain original source records {#cargo}
+
+Configure the mirror's sparse index root and approved upload API base using the keys in the configuration reference.
+Add `mirrorState.url` and give the proxy state-read and prefix-list permissions.
+Give the worker conditional-write permissions too. Preserve the same state prefix and target identity across restarts.
+
+Cargo state retains the original admitted index row and source identity beside the archive's expected SHA-256.
+Target publication can reset time or yank and omit fields.
+A successful upload or a present archive therefore cannot replace retained source state.
+Do not expire or discard these records.
+Unrecorded, missing, or corrupt state cannot provide an original-source managed copy during an upstream outage.
+
+Separate public mirrors from first-party publication where possible.
+Collapsed storage remains supported subject to existing endpoint checks and role-specific cleanup restrictions.
 
 ## Verify a complete copy {#verify}
 

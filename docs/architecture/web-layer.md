@@ -20,26 +20,30 @@ path prefix on a shared base URL:
 ```
 https://registry.internal.example.com/npm    → npm mount
 https://registry.internal.example.com/pypi   → PyPI mount
+https://registry.internal.example.com/cargo  → Cargo mount
 ```
 
 Each ecosystem gets one mount, and Écluse derives that mount's prefix from the ecosystem
-(npm → `/npm`, PyPI → `/pypi`). Nobody configures a prefix, so no two prefixes can collide and
+(npm → `/npm`, PyPI → `/pypi`, Cargo → `/cargo`). Nobody configures a prefix, so no two prefixes can collide and
 nobody can mistype one. No mount sits at `/`, so adding an ecosystem never changes an existing
 consumer's URLs. Each mount also carries an optional per-ecosystem
 [rule refinement](configuration.md#rule-policy) merged over the shared policy. A single-npm setup is
 the single-mount case, under its own derived prefix.
 
-A mount also carries its ecosystem's credential presentation: the form its clients put a
-credential in (npm: `Authorization: Bearer`; PyPI: HTTP Basic under any username). Écluse uses the
-same form when it forwards the credential upstream, rendering the recovered pair verbatim. The web
-layer compares the secret half of what the mount recovered against the configured edge token in
-constant time and refuses anything else.
+A mount carries its ecosystem's credential presentation.
+npm uses `Authorization: Bearer`. PyPI uses HTTP Basic under any username. Cargo uses a raw `Authorization` token.
+Écluse forwards the recovered credential upstream in that same form.
+The web layer compares its secret against the configured edge token in constant time and refuses a mismatch.
 
 URL rewriting keeps artifact downloads on the proxy. Registry responses embed absolute artifact locations: npm's
 `dist.tarball`, and on public PyPI, file URLs on a separate host. Forwarded unchanged, those URLs let
 a client resolve metadata through the proxy and then download the bytes straight from upstream, past
 the gate. A mount therefore rewrites embedded artifact URLs under its own protocol-specific
 route and prefix before serving metadata.
+
+Cargo's sparse index contains no artifact URL. Local discovery supplies a checked proxy download template for each native view.
+The public view replaces crates.io. The private alternate keeps its own discovery, archives, and optional publication API under `/cargo/private/`.
+The [registry model](registry-model.md#cargo-integration) explains source selection and credential authority.
 
 Same-host artifacts have a second benefit. The npm client attaches credentials only to requests on
 the registry host. A same-host artifact URL keeps that auth on a tarball fetch. A separate host
@@ -64,7 +68,7 @@ body, while a `POST` over those paths takes the deny-by-default `404`.
 
 ## OpenAPI spec
 
-Écluse speaks npm and PyPI read and publication protocols rather than a bespoke HTTP API.
+Écluse speaks npm, PyPI, and Cargo read and publication protocols rather than a bespoke HTTP API.
 Package clients use those protocols rather than an API description, so the
 published OpenAPI spec is not a client-integration contract. It states which protocols this
 server speaks, and what each ecosystem does and does not support. That stops being self-evident as mounts multiply.

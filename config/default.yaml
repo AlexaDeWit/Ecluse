@@ -33,7 +33,7 @@ server:
   # helpMessage: Contact platform engineering for access
   # Seconds the graceful shutdown waits for in-flight requests and artifact streams.
   shutdownDrainTimeout: 30
-  # Gzip each admitted npm packument and PyPI Simple index for a client whose
+  # Gzip each admitted npm packument, PyPI Simple index, and Cargo sparse index for a client whose
   # Accept-Encoding prefers gzip, at level 1, compressed per response. Artifacts,
   # probes, refusals, and publish replies stay uncompressed, and the metadata cache
   # holds identity bytes. The compression costs CPU on every gzipped response, and
@@ -69,12 +69,14 @@ limits:
   # Structural policy limits stay independent of the memory and CPU controls.
   # maxVersionCount counts every source npm version. PyPI full reads count distinct
   # releases, while selected reads count all source file positions, including skips.
+  # Cargo full and selected reads count every nonblank source index record, including invalid records.
   maxVersionCount: 1000000
   # Valid retained npm artifacts and full-read PyPI distribution files. The selected
   # PyPI path uses maxVersionCount's source-file bound instead of a separate check.
+  # Cargo full and selected reads count every valid projected archive before version selection.
   # This counts files. maxArtifactBytes below bounds a mirror worker's artifact body.
   maxArtifactCount: 1000000
-  # Nesting in retained metadata fields. Skipped fields do not use this limit.
+  # Nesting in retained metadata fields and Cargo records. Skipped npm/PyPI fields do not use this limit.
   maxNestingDepth: 64
   # Refuse to download an advisory database larger than this many bytes (512 MiB). The
   # declared length fails fast and the streaming download enforces the cap. It bounds a
@@ -170,7 +172,7 @@ advisories:
   dataDir: "/var/lib/ecluse/advisories"
   # Base URL of the per-ecosystem OSV advisory exports Pilot compiles from
   # (<base>/<ecosystem>/all.zip, where <ecosystem> is osv.dev's own spelling rather than the
-  # mounts key: npm, PyPI). Override it if the upstream moves or you mirror it.
+  # mounts key: npm, PyPI, crates.io). Override it if the upstream moves or you mirror it.
   # A new URL must never require a new Écluse binary. Allowlist this host for Pilot's
   # egress, not osv.dev.
   osvExportBaseUrl: "https://osv-vulnerabilities.storage.googleapis.com"
@@ -529,12 +531,23 @@ mounts:
       registry:
         url: https://index.crates.io/
     # enabled: true
+    # /cargo/ replaces crates.io using the public source and completed managed mirrors.
+    # It excludes private-only versions and declared first-party names. It has no publish API.
+    # /cargo/private/ reads privateUpstream with each caller's credential, without public fallback.
+    # A configured publicationTarget enables first-party publication through that private view.
+    # For mirrorTarget and publicationTarget, url is the sparse index root. uploadUrl is
+    # the exact approved API base advertised by that index's config.json, without /api/v1/crates/new.
+    # Cargo mirroring requires mirrorState.url. Preserve its original source records across restarts.
+    # Discovery runs after caller or service authentication, never at boot. Private discovery is not cached.
     # Ownership folds ASCII case and hyphen/underscore aliases, preserving separator runs.
+    # Names use at most 64 ASCII letters, digits, hyphens, or underscores, starting with a letter.
     # Exact names and prefixes use native Cargo grammar. acme-* covers acme-tools and
     # acme_tools, but excludes acmeco. Cargo has no npm scope.
+    # Prefix declarations must end in -* or _*. Exact names preserve each separator run.
     # firstParty: "acme-tools,acme-*"
     # Execution denial requires an explicit rule and verified archive evidence.
     # The shared age and advisory defaults do not inspect crate archives.
+    # Cargo blocks AllowScope and DenyIfDeprecated at boot. Its index has no scope or deprecation flag.
   # No adapter ships for rubygems yet, so activating it refuses the boot. The public
   # upstream is here so the key is settled before the ecosystem lands.
   rubygems:

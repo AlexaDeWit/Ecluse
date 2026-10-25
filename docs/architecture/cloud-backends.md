@@ -22,7 +22,7 @@ For rollback, stop producers and drain or quarantine version 2 messages before r
 The worker checks the current first-party declaration before touching a public source. It reads
 the target inventory, then tests any durable expected inventory against current target identities.
 A complete managed version needs no public fetch or new admission. A filename or version alone
-cannot prove PyPI completion. npm can prove its atomic single-artifact version from validated
+cannot prove PyPI or Cargo completion. npm can prove its atomic single-artifact version from validated
 native package, version, filename and digest facts, so completed npm retries also avoid public reads.
 
 For new files, the worker resolves the supported source inventory and applies current policy,
@@ -257,8 +257,8 @@ The driver supplies production handles, deterministic service boundaries, fixtur
 The contract owns the common client-visible guarantees and the required family list.
 Different stores may use different completion mechanisms under those guarantees.
 
-Current full-contract profiles are Verdaccio npm, CodeArtifact npm and CodeArtifact PyPI.
-CodeArtifact runs both formats in one fixed backend job, with separate `codeartifact` and `codeartifact-pypi` case IDs.
+Current full-contract profiles are Verdaccio npm and CodeArtifact npm, PyPI, and Cargo.
+CodeArtifact runs the native formats in one fixed backend job with separate case identities.
 The generic `registry` tag lacks maintenance operations and does not claim full package-store completion.
 CodeArtifact uses the production adapter with deterministic control-plane doubles.
 Its conformance result does not claim that CI performed live AWS operations or minted a real AWS token.
@@ -283,10 +283,14 @@ Call `fullPackageStoreContract` with a named concrete provider in the subject's 
 Register obligations independently of the provider's current registrations and capability flags.
 Check the catalogue against actual Hspec registration and execution, including each required family.
 A missing ecosystem profile, family or failed operation must prevent a full completion verdict.
-CodeArtifact checks both explicit registrations against independently declared npm and PyPI obligations.
+CodeArtifact checks each explicit registration against independently declared native obligations.
 Use `task test-conformance-verdaccio` and `task test-conformance-codeartifact` as worked examples.
 The core and runtime unit specs also run the same laws under the existing coverage suites.
 Use the [contract coverage map](../test-contracts.md) to find existing laws and native extensions.
+
+Cargo maintenance uses CodeArtifact inventory and physical version deletion.
+A generic Cargo registry's yank API does not delete the bytes and cannot satisfy deletion obligations.
+Refuse that incompatible maintenance capability while preserving valid native reads and publication.
 
 A queue profile declares whether receipt removes the message or leases it for redelivery.
 Apply lease, delivery-count, and dead-letter laws only to durable providers.
@@ -317,6 +321,7 @@ tag the mirror target declares picks the mint, see
 The backend binds the secret to its protocol convention. npm renders Bearer credentials. PyPI
 retains an explicit Basic username, with `aws` supplied by the CodeArtifact backend and generic
 usernames supplied by configuration. The codec invents no username.
+Cargo renders the secret directly in `Authorization`, without a Bearer prefix or Basic username.
 
 Each credential provider serialises its mints and keeps its own breaker. During healthy minting,
 expired callers wait for the current mint. After cooldown, one mint owns recovery. Other expired

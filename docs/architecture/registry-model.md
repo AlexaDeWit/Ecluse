@@ -285,7 +285,7 @@ Adapters must establish these contracts before their metadata reaches assembly:
 
 Snapshot scope is transient and content-addressed. It changes no stored schema or epoch.
 Source positions distinguish identical content from different upstream contributions.
-`PackageInfo` equality remains independent of snapshot scope. npm and PyPI implement this contract.
+`PackageInfo` equality remains independent of snapshot scope. npm, PyPI, and Cargo implement this contract.
 Future adapters must supply equivalent keys and contract tests before activation.
 
 The metadata cache charges new entry keys, including text backing allocations. The merge plan
@@ -355,7 +355,7 @@ catalogued in the [threat model](https://ecluse-proxy.com/docs/threat-model/).
 is the ecosystem-agnostic per-version snapshot every adapter produces and the rules engine
 consumes. Adapters map their protocols into this shared model. Four principles govern it:
 
-- **The rules engine is ecosystem-blind.** It never branches on npm vs PyPI vs RubyGems.
+- **The rules engine is ecosystem-blind.** It evaluates the shared signals instead of branching on ecosystem names.
   Adapters project each wire format into normalised signals: a rule sees `CodeExecSignal`,
   `Availability`, never `hasInstallScript`, `packagetype`, or `extensions`.
 - **Adapters declare rule blocks.** Every rule applies unless the adapter blocks its typed identity
@@ -391,6 +391,75 @@ A served packument is the merge of several upstreams' `PackageInfo`. See
 [Registry model → Packument merge](registry-model.md#packument-merge-across-upstreams) for
 how trusted and gated provenances combine.
 
+## Cargo integration
+
+Cargo uses one primary mount with two native views because source replacement requires identical package contents.
+The public replacement selects `ManagedMirrorAndPublic`. The private alternate selects `PrivateOnly`.
+npm and PyPI retain `MergePrivateAndPublic`.
+The alternate view binds separate request dependencies without adding another worker policy.
+Only the primary view owns managed mirror state.
+The [operator protocol contract](https://ecluse-proxy.com/docs/protocol-support/#cargo) owns the routes and retained fields.
+
+### Discovery and transport authority
+
+`PrepareRead` captures checked discovery from the selected `OriginClient` before returning a pure `EcosystemRead`.
+Public preparation runs inside existing cache-miss work.
+Private preparation follows caller authorisation and stays uncached and uncoalesced.
+Worker and maintenance preparation follows service credential acquisition and the applicable charge.
+Boot constructs factories without a remote discovery request.
+There is no separate private discovery cache.
+
+Discovery describes download and optional API locations. It grants neither network nor credential authority.
+A checked coordinate binds published name, raw version, logical archive filename, and SHA-256 to an approved download template.
+Current source authorisation and discovery choose the address, including after durable-state restoration.
+Retained source rows cannot authorise a new host or restore an old credential destination.
+The publication path separately checks the exact configured API authority and base path.
+Read and upload coordinates participate in the existing endpoint checks.
+Those checks preserve accepted own-store collapse and the Dredger's role-specific refusals.
+
+### Native identity and retained records
+
+Published spelling identifies archive coordinates and native row claims.
+ASCII lowercase supplies index lookup identity. A separate key folds hyphen and underscore for ownership collisions.
+Keeping these keys separate prevents one alias lookup from poisoning another path's negative cache result.
+Cargo does not inherit PyPI period folding or separator collapsing.
+Raw SemVer spelling remains available, while native uniqueness excludes build metadata.
+
+The bounded reader frames one native row at a time and keeps its physical `RecordEntry` coordinate.
+Full and selected reads scan through EOF, so later duplicate identities can quarantine earlier records.
+Assembly emits each admitted winning-source record once, in source order, with a final LF.
+It preserves additive fields and absence versus null instead of rebuilding a reduced install document.
+Public mirror relocation translates source-local dependency references to the canonical crates.io source identity.
+The archive bytes stay unchanged. Private alternate rows retain their own native source meaning.
+
+### Why Cargo requires durable mirror state
+
+Cargo publication can reset the original time or yank and omit additive index fields.
+One checksum-verified archive proves physical presence but cannot prove faithful original-source metadata.
+`DurableVersionState`, `CargoMirrorRead`, and `pcNativeComplete=False` therefore bind target proof to retained source facts.
+The worker records the admitted original row, source identity, and expected archive before upload.
+Completion retains the existing conditional-write, retry, lost-response, and restart rules.
+
+The public replacement excludes unmanaged target rows from both listings and direct archives.
+Missing, corrupt, or unrecorded history cannot become an original-source managed read during outage.
+An available admitted public source can still supply a version.
+The private alternate separately permits ordinary caller-authorised private reads.
+Retained facts reflect first admission. There is no continuous yank synchronisation or target-yank mutation.
+
+### Bounded native evidence and publication
+
+The default Cargo age and advisory path performs no archive evidence read.
+Ordered execution denial resolves evidence lazily when that rule is reached.
+The subject binds immutable identity, checksum, approved address, role, deadline, and cumulative work bounds.
+Higher-ranked decisions perform no evidence request. Required unavailable facts produce structured inability.
+Private maintenance evidence uses the authenticated store reader and stays outside shared anonymous retention.
+
+Archive inspection verifies complete bounded compressed bytes and the effective TOML manifest without executing code.
+Publication can make one further local pass over those same bytes for selected text.
+Both passes charge their work.
+Native upload framing, manifest, archive root, name, version, and digest must agree before any write.
+The relay preserves validated upload bytes. Mirror publication derives required upload fields from the verified effective manifest.
+
 ## Registry abstraction
 
 The proxy core is registry-agnostic. A mount is where two axes meet: its ecosystem contributes the
@@ -401,7 +470,7 @@ supplies.
 The two sides share only the vocabulary above: `Ecosystem`, `PackageName`, and `Version`. Neither
 imports the other, and a store that needs an ecosystem fact reads it off the `Ecosystem` value, as
 the CodeArtifact format token does. A backend matrix therefore costs one adapter per ecosystem plus
-one backend per store, never a cell per pair. npm and PyPI ship read and native publication capabilities in this build. Their stores
+one backend per store, never a cell per pair. npm, PyPI, and Cargo ship read and native publication capabilities in this build. Their stores
 are CodeArtifact, any host that speaks the protocol, and Verdaccio for development.
 
 ### Incremental npm extraction

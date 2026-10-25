@@ -1,8 +1,8 @@
 # Adding an ecosystem
 
 Use this guide to take a package ecosystem from a protocol assessment to complete support in Écluse.
-npm and PyPI are the shipped examples. Their shared machinery covers more than metadata reads.
-The [Cargo readiness plan](cargo-readiness.md) applies this guide without adding Rust support.
+npm, PyPI, and Cargo are the shipped examples. Their shared machinery covers more than metadata reads.
+The [Cargo integration map](cargo-readiness.md) links its native contract and implementation responsibilities.
 
 | Need | Authoritative reference |
 |---|---|
@@ -73,7 +73,9 @@ Keep native refusal bodies, denial wording, media types, and route descriptions 
 
 ## 4. Supply reads, retained documents, and assembly
 
-Supply an `EcosystemRead` through `AdapterMetadata.metadataRead`.
+Supply a `PrepareRead` through `AdapterMetadata.metadataRead`.
+Static adapters use `staticRead`. Discovery-based adapters prepare the pure `EcosystemRead` under the selected origin's existing authority.
+Prepare private reads after caller authentication and service reads after credential minting. Do not perform discovery at boot.
 [Metadata.Fetch](../core/src/Ecluse/Core/Registry/Metadata/Fetch.hs) owns the response lifetime, transport errors, tracing, full-read charge, source digest, and manifest.
 The adapter supplies requests, full and selected walks, and their finishes.
 Use the same production reader with held chunks for deterministic fixtures.
@@ -90,7 +92,7 @@ New native representations require explicit boundary cases and corresponding ret
 
 The shared merge chooses admitted source entries.
 [ServedDocument](../core/src/Ecluse/Core/Registry/ServedDocument.hs) supplies exact entry selection, name checks, URL rebasing, and native encoding through `serialiseAcross`.
-Adapters retain packed-render refusal, object or array assembly, native envelope fields, ordering, and document projections.
+Adapters retain packed-render refusal, object, array, or record-stream assembly, native envelope fields, ordering, and document projections.
 Never reconstruct installable metadata from policy facts alone.
 
 Validate artifact locations through the existing [package filter](../core/src/Ecluse/Core/Package/Filter.hs).
@@ -148,6 +150,8 @@ These settled requirements come from [#1133](https://github.com/AlexaDeWit/Eclus
 They do not promise atomic visibility to consumers that bypass Écluse.
 
 npm is the one-tarball instance. PyPI includes every wheel, sdist, and declared metadata companion required by its contract.
+Cargo pairs one verified archive with its retained original index row and source identity.
+Native target publication cannot prove those source fields. See [Cargo integration](architecture/registry-model.md#cargo-integration).
 Native archive extraction and publication formats stay separate when their meanings differ.
 [MirrorUpload.mirrorReadDocument](../core/src/Ecluse/Core/Registry/MirrorUpload/Internal.hs) reconstructs retained native source documents without encoding or reparsing.
 The [state codec](../core/src/Ecluse/Core/Mirror/State/Codec.hs) still persists and restores native payloads.
@@ -167,8 +171,8 @@ The [fixed E2E reference](test-contracts.md#fixed-e2e-entrypoints) owns the deta
 | Part | Existing entry points | What the new ecosystem supplies |
 |---|---|---|
 | Common assertions | [Shared contracts](../test/contracts/Ecluse/Test/Contract/) | Native operations and observations for existing business laws |
-| Native E2E drivers | [Drivers/Npm.hs](../test/e2e/Ecluse/E2E/Drivers/Npm.hs), [Drivers/PyPI.hs](../test/e2e/Ecluse/E2E/Drivers/PyPI.hs) | A concrete driver binding every required family to its native provider |
-| Fixed subjects | [Suites/Npm.hs](../test/e2e/Ecluse/E2E/Suites/Npm.hs), [Suites/PyPI.hs](../test/e2e/Ecluse/E2E/Suites/PyPI.hs), [Suites/SharedSystem.hs](../test/e2e/Ecluse/E2E/Suites/SharedSystem.hs) | Direct contract declarations, a Cabal subject, and applicable mixed-client coverage |
+| Native E2E drivers | [Drivers/Npm.hs](../test/e2e/Ecluse/E2E/Drivers/Npm.hs), [Drivers/PyPI.hs](../test/e2e/Ecluse/E2E/Drivers/PyPI.hs), [Drivers/Cargo.hs](../test/e2e/Ecluse/E2E/Drivers/Cargo.hs) | A concrete driver binding every required family to its native provider |
+| Fixed subjects | [Suites/Npm.hs](../test/e2e/Ecluse/E2E/Suites/Npm.hs), [Suites/PyPI.hs](../test/e2e/Ecluse/E2E/Suites/PyPI.hs), [Suites/Cargo.hs](../test/e2e/Ecluse/E2E/Suites/Cargo.hs), [Suites/SharedSystem.hs](../test/e2e/Ecluse/E2E/Suites/SharedSystem.hs) | Direct contract declarations, a Cabal subject, and applicable mixed-client coverage |
 | Fixture resources | [Fixtures/Contracts.hs](../test/e2e/Ecluse/E2E/Fixtures/Contracts.hs), [Harness.hs](../test/e2e/Ecluse/E2E/Harness.hs), [Harness/](../test/e2e/Ecluse/E2E/Harness/) | Native clients, upstreams, stores, resource acquisition, teardown, and declared isolation |
 | Independent requirements and scheduling | [Requirements.hs](../test/e2e/Ecluse/E2E/Requirements.hs), [Catalogue.hs](../test/e2e/Ecluse/E2E/Catalogue.hs) | Required families, stable case IDs, profiles, prerequisites, and lifecycle groups |
 | Plans, execution reports, and audits | [Reproduction procedure](test-contracts.md#reproduction), [Taskfile.yml](../Taskfile.yml), [CI](../.github/workflows/ci.yml) | Registration in the existing manifest, fixed subject tasks, and completion audits |
@@ -197,6 +201,15 @@ Reuse these setup helpers where their contracts fit:
 
 Keep expected bytes and reference readers independent of production parsers and serialisers.
 Retain native tests for obligations with no common meaning.
+Record streams can quarantine malformed rows with explicit invalid-entry evidence.
+That native behaviour must not weaken single-document protocols' exact error assertions.
+Source-aware serving laws must exercise actual native views, including Cargo's separate replacement and alternate registries.
+Do not invent a merged Cargo index to reuse a fixture intended for npm or PyPI.
+
+Separate pure captured rendering from runtime admission configuration.
+The benchmark-only `MetadataRendering` record exposes assembly and serialisation without supplying fabricated charge factors.
+Native record-stream references can decode to an array internally while retaining native line-framed output.
+Production adapter registration still requires measured factors and independent provider coverage.
 
 Declare obligations independently of drivers, capability flags, and actual registrations.
 Register stable case IDs and lifecycle groups in the applicable catalogue and suite entrypoint.
@@ -220,7 +233,7 @@ The testing guide remains the authority for measurement duties and supported cla
 
 ## 8. Establish completion
 
-Call `fullEcosystemContract` with the concrete driver, as npm and PyPI do.
+Call `fullEcosystemContract` with the concrete driver, as npm, PyPI, and Cargo do.
 Its required families include proxying, installation, policy, advisories, mirroring, publication, Dredger, and telemetry.
 A partial provider cannot reduce that requirement or describe missing work as a pass.
 An intermediate read-only implementation remains incomplete ecosystem support.
