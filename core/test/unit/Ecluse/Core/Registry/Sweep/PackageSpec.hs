@@ -277,12 +277,12 @@ installEvidenceSpec = describe "stored install evidence" $ do
             original = sampleManifest leftPadName [version]
             manifest = original{manifestInfo = (manifestInfo original){infoVersions = Map.map (\details -> details{pkgInstallCode = CodeExecUnknown, pkgArtifacts = artifact :| []}) (infoVersions (manifestInfo original))}}
         store <- storeWith [version] (Just manifest)
-        reads <- newIORef []
+        artifactReads <- newIORef []
         subjects <- newIORef []
         rules <- prepare inertRuleDeps [atDefaultPrecedence DenyInstallTimeExecution]
         recorded <- recordingPorts generation
         let handle = fakeMaintenance store
-            tracked = store{fakeMaintenance = handle{storeReadArtifact = \_ selected _ -> modifyIORef' reads (selected :) $> Right "authenticated archive"}}
+            tracked = store{fakeMaintenance = handle{storeReadArtifact = \_ selected _ -> modifyIORef' artifactReads (selected :) $> Right "authenticated archive"}}
             provider = InstallEvidenceProvider $ \context -> do
                 ieRole context `shouldBe` InstallStoreRevocation
                 pure $ \details -> do
@@ -293,7 +293,7 @@ installEvidenceSpec = describe "stored install evidence" $ do
                         pure (either InstallReadFailed (const (InstallDetermined (RunsCodeOnInstall "stored declaration"))) result)
         runStep recorded testPacing (mount tracked rules){smInstallEvidence = Just provider} (served ["1.0.0"]) `shouldReturn` Nothing
         held store `shouldReturn` []
-        readIORef reads `shouldReturn` [artifact]
+        readIORef artifactReads `shouldReturn` [artifact]
         map pkgArtifacts <$> readIORef subjects `shouldReturn` [artifact :| []]
     it "keeps a stored version when required install evidence is unavailable" $ do
         let version = npmVersion "1.0.0"

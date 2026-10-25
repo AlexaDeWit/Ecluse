@@ -418,12 +418,12 @@ admissionSpec = describe "Cargo selected admission" $ do
 
     native "025" "keeps caller-authorised PrivateOnly selection independent of managed public state" $
         withCargoProxy defaultReply defaultReply $ \proxy -> do
-            reads <- newIORef (0 :: Int)
+            stateReads <- newIORef (0 :: Int)
             let target = stateTarget (privateBase proxy <> "/index")
-            mirror <- mirrorViewWith target (\_ _ -> modifyIORef' reads (+ 1) $> Right StateAbsent)
+            mirror <- mirrorViewWith target (\_ _ -> modifyIORef' stateReads (+ 1) $> Right StateAbsent)
             let app = proxyWith proxy id (\deps -> deps{pdMirrorState = Just mirror})
             response <- getPathWith [("Authorization", "caller-token")] privateArchive app
             simpleStatus response `shouldBe` status200
             toStrict (simpleBody response) `shouldBe` archiveBytes
-            readIORef reads `shouldReturn` 0
+            readIORef stateReads `shouldReturn` 0
             publicCalls proxy `shouldReturn` []
