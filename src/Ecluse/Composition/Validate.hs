@@ -58,7 +58,7 @@ import Ecluse.Config (
     Mount,
     MountConfig (mntFirstParty, mntMaxRequestBytes, mntMirrorTarget, mntPrivateUpstream, mntPublicationTarget),
     PrivateEndpoint (preTarget),
-    PublicationEndpoint (peTarget, peToken, peUsername, peUploadUrl),
+    PublicationEndpoint (peTarget, peToken, peUploadUrl, peUsername),
     QuotaOverride (qoQuotas, qoScope, qoWeights),
     ServerSettings (srvAuthToken),
     StoreBackend,

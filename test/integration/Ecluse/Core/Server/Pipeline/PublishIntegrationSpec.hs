@@ -8,12 +8,12 @@
 module Ecluse.Core.Server.Pipeline.PublishIntegrationSpec (spec) where
 
 import Data.Aeson (Value (Object, String), (.=))
-import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson qualified as Aeson
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Text qualified as T
-import Network.HTTP.Types (ResponseHeaders, Status, RequestHeaders, hAuthorization, hContentType, methodPost, methodPut, mkStatus)
+import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hAuthorization, hContentType, methodPost, methodPut, mkStatus)
 import Network.Wai (
     Application,
     Request (requestBodyLength, requestHeaders, requestMethod),
@@ -51,8 +51,8 @@ import Ecluse.Core.Registry.PyPI.Publish.Multipart (pypiFileUploadOnly)
 import Ecluse.Core.Security (defaultLimits, maxMetadataBytes, maxPublishRequestBytes)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission, newByteAdmissionTuned)
-import Ecluse.Core.Server.Context (PublishDeps (..))
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
+import Ecluse.Core.Server.Context (PublishDeps (..))
 import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Service (mountBindingFor)
@@ -62,7 +62,7 @@ import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive), cargo
 import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture)
 import Ecluse.Test.Registry.Npm.Publish (npmDeprecateDocument, npmMisfiledVersion, npmReleaseDocument, npmRepeatedAttachments, npmTaggedRelease)
 import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps)
-import Ecluse.Test.Stub (Captured (capBody, capMethod, capPath, capHeaders), Stub, allCaptured, headerValue, stubBaseUrl, stubPort, withRoutedStub, withStubHeaders)
+import Ecluse.Test.Stub (Captured (capBody, capHeaders, capMethod, capPath), Stub, allCaptured, headerValue, stubBaseUrl, stubPort, withRoutedStub, withStubHeaders)
 import Ecluse.Test.Support (expectRight)
 import Ecluse.Test.Wai (selfBaseUrlOf, status)
 

@@ -135,7 +135,8 @@ codeArtifactStore purpose eco key raw domain owner region = do
         RepositoryEndpoint -> CodeArtifactRepositoryMissing eco key format
         UploadEndpoint ->
             ParseError
-                ( key <> " must address /"
+                ( key
+                    <> " must address /"
                     <> format
                     <> "/{repository}/"
                     <> if format == "pypi" then " or /pypi/{repository}/legacy/" else ""

@@ -22,11 +22,11 @@ import Ecluse.Core.Registry (
     PublishBodyFault (PublishMalformed, PublishUnsupported),
     PublishRelayResponse (PublishRelayResponse),
  )
-import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishRelay, publishUploadClaims, publishCodec), PublishRequestBody (..))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishCodec, publishRelay, publishUploadClaims), PublishRequestBody (..))
 import Ecluse.Core.Registry.Exchange (withinServeCap)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
-import Ecluse.Core.Registry.Origin (OriginClient (ocClient, ocChargeFullRead, ocBaseRequest), originClient)
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
+import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocChargeFullRead, ocClient), originClient)
 import Ecluse.Core.Registry.Publish (PublishCodec (pcPrepareTarget, pcTargetReadPermille))
 import Ecluse.Core.Registry.Request (mkBaseRequest)
 import Ecluse.Core.Security (BodyLimit (PublishRequestBodyLimit), Limits (maxPublishRequestBytes, progressFloor), boundedRead)
@@ -91,7 +91,7 @@ publishWithDeps replies deps clientToken name request respond
         withMetadataAdmission
             rt
             (\headers -> liftIO (respond (publishError replies shedStatus headers shedMessage)))
-            (\ticket -> do
+            ( \ticket -> do
                 workspace <- liftIO (newChargeRegion (charge ticket))
                 withByteAdmission (srMetrics rt) (pubBodyBudget deps) bodyWeight $
                     liftIO (readAndRelay replies deps rt workspace (publicationTarget deps rt clientToken) name request)

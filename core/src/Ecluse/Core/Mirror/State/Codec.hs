@@ -29,9 +29,9 @@ import Ecluse.Core.Mirror.State.Internal
 import Ecluse.Core.Mirror.State.Weight (retainedRecordWeight)
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (..))
-import Ecluse.Core.Registry.Cargo.Manifest (cratesIoIndex)
-import Ecluse.Core.Registry.Cargo.Document (cargoDocument, cargoRecords)
 import Ecluse.Core.Registry.CachedDocument (estimateValueBytes)
+import Ecluse.Core.Registry.Cargo.Document (cargoDocument, cargoRecords)
+import Ecluse.Core.Registry.Cargo.Manifest (cratesIoIndex)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream, retainedValue)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.MirrorUpload (MirrorInventory, MirrorReadData (..), expectedArtifact, inventoryDetails, inventoryReadData, mirrorReadDocument)
@@ -402,7 +402,6 @@ sourceValue (NpmMirrorRead fields) = object ["kind" .= ("npm" :: Text), "fields"
 sourceValue (PyPIMirrorRead document) =
     object
         ["kind" .= ("pypi" :: Text), "envelope" .= simpleEnvelope document, "entries" .= [object ["key" .= keyValue key, "value" .= value] | (key, value) <- simpleFiles document]]
-
 sourceValue (CargoMirrorRead document) =
     object ["kind" .= ("cargo" :: Text), "sourceIndex" .= cratesIoIndex, "entries" .= [object ["key" .= keyValue key, "value" .= value] | (key, value) <- cargoRecords document]]
 

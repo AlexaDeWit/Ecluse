@@ -35,8 +35,8 @@ import Ecluse.Composition.Vet (
     rule,
  )
 import Ecluse.Config (
-    MountConfig (..),
     MirrorEndpoint (meUploadUrl),
+    MountConfig (..),
     PrivateEndpoint (preTarget),
     PublicationEndpoint (peTarget, peUploadUrl),
     StoreTag (TagRegistry),

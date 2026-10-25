@@ -15,14 +15,14 @@ import Ecluse.Composition.BootError (
 import Ecluse.Composition.Endpoints (
     PublicationTarget,
     VettedEndpoints (vePublicationTargets),
-    publicationTargetUrl,
     publicationReadUrl,
+    publicationTargetUrl,
     vetEndpoints,
  )
 import Ecluse.Composition.Support (expectConfig, overrideEnv, staticEnvVars)
 import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (runVet)
-import Ecluse.Config (AppConfig (cfgMounts), Config (configApp), MountConfig (..), MirrorEndpoint (meUploadUrl), PublicationEndpoint (peUploadUrl))
+import Ecluse.Config (AppConfig (cfgMounts), Config (configApp), MirrorEndpoint (meUploadUrl), MountConfig (..), PublicationEndpoint (peUploadUrl))
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Test.Package (unsafeRegistryUrl)
@@ -61,8 +61,8 @@ uploadCoordinateSpec = describe "configured Cargo read and upload coordinates" $
             changed = withPublicationUpload Cargo shared (withPublicationUpload PyPI shared mounts)
         refusalsIn MirrorWriter changed
             `shouldMatchList` [ PublicationTargetOnMountEndpoint Cargo PyPI "publicationTarget" shared
-                             , PublicationTargetOnMountEndpoint PyPI Cargo "publicationTarget" shared
-                             ]
+                              , PublicationTargetOnMountEndpoint PyPI Cargo "publicationTarget" shared
+                              ]
 
     it "compares a publication API with another mount's mirror API" $ do
         mounts <- cargoMounts

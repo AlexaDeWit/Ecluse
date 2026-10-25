@@ -103,8 +103,7 @@ mirrorDriver plane registry releases config =
             withObservedCargoProxy config plane $ \proxy -> do
                 awaitCargoRegistry registry releases `shouldReturn` True
                 for_ releases $ \release -> awaitProxyLog (observedProxy proxy) (cargoMirrorComplete (crateName (releaseCrate release)) (crateVersion (releaseCrate release))) 120 `shouldReturn` True
-            after <- versions
-            pure (PublicPhase observed target reachable before after)
+            PublicPhase observed target reachable before <$> versions
         , mirrorOfflineInstall = withStubFault plane (CargoBackend (registryPort registry) True) $
             withObservedCargoProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \proxy -> do
                 reachable <- cargoPublicReachable (observedProxy proxy)

@@ -279,7 +279,7 @@ instance FromJSON Floors where
             fail "the latency ceiling must record a highest latency for each pod shape the floors hold, and for no other"
         unless (all (`elem` map fst (concatMap Map.keys (Map.elems byShape))) (Map.keys (calRetainedConditions calibration))) $
             fail "retained measurement conditions name a scenario without floors"
-        when (any (T.isPrefixOf "cargo/" . fst) (concatMap Map.keys (Map.elems byShape)) && isNothing (calCargoLatency calibration)) $
+        when (any (any (T.isPrefixOf "cargo/" . fst) . Map.keys) (Map.elems byShape) && isNothing (calCargoLatency calibration)) $
             fail "Cargo floors require an independently measured native latency ceiling"
         pure (Floors calibration byShape)
       where
