@@ -15,12 +15,12 @@ import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (..), AdapterMai
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
 import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
 import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead)
+import Ecluse.Core.Registry.Cargo.Project (cargoNameChars, projectName)
 import Ecluse.Core.Registry.Cargo.Publish (cargoPublish)
-import Ecluse.Core.Registry.Cargo.Project (projectName)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts, cargoArtifactRequest)
 import Ecluse.Core.Registry.Cargo.Route (cargoRouteSpecs, cargoRouter)
 import Ecluse.Core.Registry.Cargo.Serving (assembleCargoDocument, serialiseCargoDocument)
-import Ecluse.Core.Registry.Maintenance.NameSpace (noNameAlphabet)
+import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType))
 import Ecluse.Core.Server.Admission.Types (ChargeFactors)
 
@@ -60,6 +60,6 @@ cargoAdapter factors =
             AdapterMaintenance
                 { maintenanceListing = Nothing
                 , maintenanceVersionDelete = Nothing
-                , maintenanceAlphabet = noNameAlphabet
+                , maintenanceAlphabet = mkNameAlphabet cargoNameChars
                 }
         }

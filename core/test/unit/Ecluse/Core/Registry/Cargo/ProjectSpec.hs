@@ -10,7 +10,7 @@ import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm))
 import Ecluse.Core.Package (mkPackageName, mkScope, renderPackageName)
-import Ecluse.Core.Registry.Cargo.Project (cargoCollisionKey, cargoNameKey, projectName)
+import Ecluse.Core.Registry.Cargo.Project (cargoCollisionKey, cargoNameChars, cargoNameKey, projectName)
 
 -- | Native Cargo name grammar and identity examples.
 spec :: Spec
@@ -26,6 +26,20 @@ spec = do
             projectName "Acme_Tools" `shouldBe` projectName "acme_tools"
             projectName "acme_tools" `shouldNotBe` projectName "acme-tools"
             cargoNameKey "Acme_Tools" `shouldBe` "acme_tools"
+    describe "cargoNameChars" $ do
+        it "contains ASCII letters in both cases, digits and both native separators" $
+            cargoNameChars `shouldMatchList` (['A' .. 'Z'] <> ['a' .. 'z'] <> ['0' .. '9'] <> "-_")
+        it "keeps first-character restrictions in the native parser" $
+            for_ ['\0' .. '\127'] $ \character ->
+                isRight (projectName (T.singleton character)) `shouldBe` (character `elem` (['A' .. 'Z'] <> ['a' .. 'z']))
+        it "covers exactly the ASCII continuations the native parser accepts" $
+            for_ ['\0' .. '\127'] $ \character ->
+                isRight (projectName ("A" <> T.singleton character)) `shouldBe` (character `elem` cargoNameChars)
+        it "retains every native character at the 64-character limit and refuses an extra character" $
+            for_ cargoNameChars $ \character -> do
+                let maximumName = "A" <> T.replicate 63 (T.singleton character)
+                fmap renderPackageName (projectName maximumName) `shouldBe` Right maximumName
+                projectName (maximumName <> "a") `shouldSatisfy` isLeft
     describe "cargoCollisionKey" $ do
         it "covers case and separator aliases while preserving separator counts" $
             map (cargoCollisionKey . mkPackageName Cargo Nothing) ["Acme_Tools", "acme-tools", "acme__tools", "acme.tools"]

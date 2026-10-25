@@ -6,6 +6,7 @@
 module Ecluse.Core.Registry.Cargo.Project (
     projectName,
     cargoNameKey,
+    cargoNameChars,
     cargoCollisionKey,
 ) where
 
@@ -31,7 +32,13 @@ usableName raw =
         && T.all nameChar raw
   where
     alphabetic c = isAsciiLower c || isAsciiUpper c
-    nameChar c = isAsciiAlphaNum c || c == '-' || c == '_'
+
+-- | Native name characters also cover every level of CodeArtifact prefix subdivision.
+cargoNameChars :: [Char]
+cargoNameChars = filter nameChar ['\0' .. '\127']
+
+nameChar :: Char -> Bool
+nameChar c = isAsciiAlphaNum c || c == '-' || c == '_'
 
 -- | Match ownership aliases only for an unscoped Cargo identity.
 cargoCollisionKey :: PackageName -> Maybe Text
