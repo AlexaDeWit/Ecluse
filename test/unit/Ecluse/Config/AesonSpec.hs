@@ -215,7 +215,7 @@ spec = describe "decodeDocument" $ do
                     (mntFirstParty <$> Map.lookup Cargo (cfgMounts (configApp config)))
                         `shouldBe` Just (Just (FirstPartyCargo (name :| [prefix])))
                 Right _ -> expectationFailure "expected two Cargo declarations"
-        for_ ["@acme", "acme*", "acme.*", "acme/tools", "acme,,widgets"] $ \entry ->
+        for_ (["@acme", "acme*", "acme.*", "acme/tools", "acme,,widgets"] :: [Text]) $ \entry ->
             it ("refuses " <> show entry) $
                 loadConfig pubUrlEnv (Just (encodeUtf8 ("{\"mounts\":{\"cargo\":{\"firstParty\":\"" <> entry <> "\"}}}")))
                     `shouldSatisfy` decodeErrorMentions "invalid Cargo entry in firstParty"
