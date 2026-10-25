@@ -53,7 +53,7 @@ withObservedCargoProxy config plane action = do
                 configured
                 ( \proxy -> do
                     atomically (writeTVar destination (Just (e2eBaseUrl proxy)))
-                    endpoints <- traverse (\endpoint -> maybe (fail "the client endpoint does not belong to the product listener") (pure . (base <>)) (T.stripPrefix (e2eBaseUrl proxy) endpoint)) (e2eClientEndpoints proxy)
+                    endpoints <- traverse (maybe (fail "the client endpoint does not belong to the product listener") (pure . (base <>)) . T.stripPrefix (e2eBaseUrl proxy)) (e2eClientEndpoints proxy)
                     let clientProxy = proxy{e2eBaseUrl = base, e2eClientEndpoints = endpoints, e2eManager = trusted}
                     action (ObservedCargoProxy clientProxy edge forwarded uploads)
                 )

@@ -231,7 +231,7 @@ workerReadmission global = withExecutionStores global $ \plane _ -> do
     queue <- sharedMirrorQueue global
     Native.withSweepProxy plane [("ECLUSE_RULES", permissiveRules)] (Just queue) ["proxy", "--no-worker"] $ \store ->
         for_ [cargoRoot, macroName, plainName] $ \name ->
-            responseStatus <$> proxyRequest "GET" [("Authorization", encodeUtf8 cargoRegistryToken)] "" (observedProxy (Native.cssObserved store)) (cargoArchiveRoute name cargoVersion) >>= (`shouldBe` 200)
+            proxyRequest "GET" [("Authorization", encodeUtf8 cargoRegistryToken)] "" (observedProxy (Native.cssObserved store)) (cargoArchiveRoute name cargoVersion) >>= (`shouldBe` 200) . responseStatus
     cargoRegistryFiles (Native.cspRegistry plane) `shouldReturn` Map.empty
     before <- stubReadsNow global
     let environment = Native.proxyRoleEnv <> [("ECLUSE_RULES", executionRules False), ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873"), ("ECLUSE_QUEUE__URL", queue), ("AWS_ENDPOINT_URL_SQS", "http://ministack:4566")]

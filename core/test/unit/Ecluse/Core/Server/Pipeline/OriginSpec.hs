@@ -121,7 +121,7 @@ retainedConsumerSpec = describe "successful selected consumers" $ do
                 unavailable <- withMemoryEntry metrics meter (\next -> runCargoConsumer runtime deps next pure)
                 unavailable `shouldBe` Right (Left MetadataAbsent)
                 readIORef resident >>= (`shouldSatisfy` (< required))
-                snChargedBytes <$> meterSnapshot meter >>= (`shouldSatisfy` (>= required))
+                meterSnapshot meter >>= (`shouldSatisfy` (>= required)) . snChargedBytes
                 assertCargoReleased roots
                 weighVersion received `shouldBe` required
         completed `shouldBe` Right (Right ())
@@ -188,7 +188,7 @@ retainedConsumerSpec = describe "successful selected consumers" $ do
                         takeMVar allowFollower
                         when holdsToken (charge ticket (4 * step))
                         runCargoConsumer runtime deps ticket $ \received -> do
-                            snChargedBytes <$> meterSnapshot meter >>= (`shouldSatisfy` (>= required))
+                            meterSnapshot meter >>= (`shouldSatisfy` (>= required)) . snChargedBytes
                             unless holdsToken $ do
                                 putMVar followerHolding ()
                                 takeMVar releaseFollower
@@ -207,7 +207,7 @@ retainedConsumerSpec = describe "successful selected consumers" $ do
                                 else do
                                     leadResult <- wait leading
                                     takeMVar followerHolding
-                                    snChargedBytes <$> meterSnapshot meter >>= (`shouldSatisfy` (>= required))
+                                    meterSnapshot meter >>= (`shouldSatisfy` (>= required)) . snChargedBytes
                                     cachedVersion metrics cache source cargoTestName (cargoTestVersion "1.0.0") `shouldReturn` Nothing
                                     assertObservedReleased observedRoots
                                     putMVar releaseFollower ()
