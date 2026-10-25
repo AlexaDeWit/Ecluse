@@ -26,6 +26,7 @@ module Ecluse.Config.Parser (
     -- * Value shapes
     expectString,
     commaSeparated,
+    nonEmptyCommaSeparated,
     valueKind,
     rejectSecretKeys,
 
@@ -213,6 +214,12 @@ expectString field parse = \case
 commaSeparated :: String -> (Text -> Parser a) -> Value -> Parser [a]
 commaSeparated field parseEntry =
     expectString field (maybe (pure []) (traverse (parseEntry . T.strip) . T.splitOn ",") . nonBlank)
+
+-- | Retain entry refusals before rejecting a configured list that names nothing.
+nonEmptyCommaSeparated :: String -> (Text -> Parser a) -> String -> Value -> Parser (NonEmpty a)
+nonEmptyCommaSeparated field parseEntry emptyRefusal value = do
+    entries <- commaSeparated field parseEntry value
+    maybe (fail emptyRefusal) pure (nonEmpty entries)
 
 -- | Refuse credentials before any URL refusal can quote the input.
 parseRegistryUrl :: String -> Value -> Parser RegistryUrl
