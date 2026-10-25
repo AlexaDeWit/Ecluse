@@ -21,7 +21,7 @@ import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (RetryAfter (RetryAfter))
 import Ecluse.Core.Mirror.State (MirrorState (..), stateTarget)
-import Ecluse.Core.Package (Artifact (artFilename), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName)
+import Ecluse.Core.Package (Artifact (artFilename, artUrl), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionDenied), admitArtifactWithEvidence)
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails, vdRaw), VersionEvaluation (VersionCooling, VersionPresent))
@@ -46,6 +46,7 @@ import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Package (pypiVersion, requestsName, sampleDetails, thingName, unsafeFilename, v1_0_0)
+import Ecluse.Test.Registry.Npm (packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Registry.Public (PublicFixture (..), newPublicFixture)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleIndexWith)
 import Ecluse.Test.Rules (blockedBy, inertRuleDeps)
@@ -60,6 +61,33 @@ spec = do
 
 policyInputsSpec :: Spec
 policyInputsSpec = describe "workerPoliciesWithState policy inputs" $ do
+    it "reuses npm's selected release cache anonymously across worker jobs" $ do
+        sourceBody <- newIORef "{}"
+        withRoutedStubIO (const ((status200,[],) <$> readIORef sourceBody)) $ \source -> withSweeper $ \deadlines -> do
+            fixture <- newPublicFixture
+            (original, bindings, targets) <- composedFixtures deadlines
+            let sourceUrl = loopbackRegistryUrl (stubBaseUrl source)
+                env = original{envPublicControl = pfControl fixture}
+                bind mount = mount{bindingPackumentDeps = deps{pdUpstreams = mountUpstreams [] Nothing sourceUrl (MirrorOnAdmit (loopbackRegistryUrl "http://mirror.test"))}}
+                  where
+                    deps = bindingPackumentDeps mount
+                initial = stubBaseUrl source <> "/thing/-/thing-1.0.0.tgz"
+                replacement = stubBaseUrl source <> "/changed/thing-1.0.0.tgz"
+                document location = encode (packumentValue "thing" "1.0.0" [("1.0.0", versionValue (versionSpec "thing" "1.0.0" location))] ["1.0.0" .= ("2020-01-01T00:00:00Z" :: Text)] [])
+            policy <- maybe (fail "missing composed npm policy") pure (Map.lookup Npm (workerPoliciesWithState env Map.empty (map bind bindings) targets testArtifactCap))
+            let resolve =
+                    wpResolveVersion policy (const pass) thingName v1_0_0 >>= \case
+                        VersionPresent doc _ -> map artUrl (toList (pkgArtifacts (vdDetails doc))) `shouldBe` [initial]
+                        other -> expectationFailure ("expected cached npm release, got " <> show other)
+            writeIORef sourceBody (document initial)
+            resolve
+            writeIORef sourceBody (document replacement)
+            resolve
+            requests <- allCaptured source
+            map capPath requests `shouldBe` ["/thing"]
+            map (headerValue "Authorization") requests `shouldBe` [Nothing]
+            pfRequests fixture `shouldReturn` [("127.0.0.1", PublicRead.WorkerMetadata, PublicRead.ResponseStatus 200)]
+
     it "builds one bundle per served mount, keyed by its ecosystem" $ withSweeper $ \deadlines -> do
         (env, bindings, targets) <- composedFixtures deadlines
         Map.keys (workerPoliciesWithState env Map.empty bindings targets testArtifactCap) `shouldBe` [Npm]

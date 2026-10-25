@@ -510,6 +510,7 @@ library
     Ecluse.Composition.MirrorQueue
     Ecluse.Composition.MirrorRole
     Ecluse.Composition.MirrorState
+    Ecluse.Composition.MirrorState.Internal
     Ecluse.Composition.Plan
     Ecluse.Composition.Sizing
     Ecluse.Composition.Types
@@ -1486,6 +1487,7 @@ test-suite ecluse-unit
     Ecluse.Composition.MemoryPlanSpec
     Ecluse.Composition.MirrorQueueSpec
     Ecluse.Composition.MirrorRoleSpec
+    Ecluse.Composition.MirrorState.InternalSpec
     Ecluse.Composition.PlanSpec
     Ecluse.Composition.SizingSpec
     Ecluse.Composition.Support
