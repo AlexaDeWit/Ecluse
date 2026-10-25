@@ -8,7 +8,7 @@ Ecosystem adapters own their wire shapes and reuse these name and location gates
 module Ecluse.Core.Registry.ServedDocument (
     -- * The cached-document boundary
     assembleAcross,
-    serialiseAcross,
+    serialiseDocument,
     RenderRefused (..),
 
     -- * Replaying a merge plan
@@ -45,6 +45,7 @@ import Data.Vector.Mutable qualified as MV
 import Ecluse.Core.Package.Entry (AdmittedEntry (..), EntryKey (..))
 import Ecluse.Core.Package.Merge (MergePlan (mpArtifacts, mpSurvivors), SourceId)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
+import Ecluse.Core.Registry.Json.Packed (RenderPlan, renderPlan)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (..))
 import Ecluse.Core.Text (urlFilename)
 
@@ -69,13 +70,17 @@ assembleAcross (inject, project) emptySource assemble mountBase bySource plan ba
             (fromMaybe emptySource (project =<< base))
         )
 
--- | Encode a served document to its compact wire bytes, an empty object for a foreign one.
-serialiseAcross :: (CachedDoc -> Maybe Encoding) -> CachedDoc -> LByteString
-serialiseAcross project = encodingToLazyByteString . fromMaybe emptyObject_ . project
+-- | Render a packed plan or encode its native fallback. Foreign documents encode as an empty object.
+serialiseDocument ::
+    (CachedDoc -> Maybe RenderPlan) ->
+    (CachedDoc -> Maybe Encoding) ->
+    CachedDoc ->
+    Either RenderRefused LByteString
+serialiseDocument packed native doc = case packed doc of
+    Just plan -> maybe (Left RenderRefused) (Right . fromStrict) (renderPlan plan)
+    Nothing -> Right (encodingToLazyByteString (fromMaybe emptyObject_ (native doc)))
 
-{- | A served document whose render refused its plan, because the plan names a table or string it
-lacks or the render does not fill its buffer exactly. The pipeline answers it as a render fault.
--}
+-- | A packed plan lacks data or cannot fill its exact output buffer. The pipeline refuses the render.
 data RenderRefused = RenderRefused
     deriving stock (Eq, Show)
 

@@ -26,12 +26,12 @@ import Data.Primitive.SmallArray (smallArrayFromList)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpTime), SourceId)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked, npmRendered)
-import Ecluse.Core.Registry.Json.Packed (Piece (..), Pieces (ObjectPieces), RenderPlan (..), renderPlan, urlPrefix)
+import Ecluse.Core.Registry.Json.Packed (Piece (..), Pieces (ObjectPieces), RenderPlan (..), urlPrefix)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballUrl, withTarball)
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Route (tarballPath)
 import Ecluse.Core.Registry.ServedDocument (
-    RenderRefused (RenderRefused),
+    RenderRefused,
     assembleAcross,
     documentObject,
     objectField,
@@ -39,7 +39,7 @@ import Ecluse.Core.Registry.ServedDocument (
     overlayObjectSurvivors,
     rebaseArtifactUrl,
     safeDocumentName,
-    serialiseAcross,
+    serialiseDocument,
  )
 import Ecluse.Core.Snapshot (Snapshot, snapshotValue)
 import Ecluse.Core.Text (joinUrlPath)
@@ -64,11 +64,9 @@ assembleMergedPackument mountBase bySource plan base =
     baseObject :: KeyMap Value
     baseObject = documentObject base
 
-    -- An unusable document name must never enter a rewritten URL.
     rewriteSurvivor :: Value -> Value
     rewriteSurvivor = maybe id (rewriteVersion . servedTarballUrl mountBase) (npmDocumentName baseObject)
 
-    -- A missing source object drops the survivor instead of inventing installation metadata.
     survivingVersions :: KeyMap Value
     survivingVersions =
         KeyMap.fromList
@@ -140,9 +138,7 @@ assembleMergedDocument mountBase bySource plan base =
 
 -- | npm's 'Ecluse.Core.Registry.Adapter.Capability.metadataSerialise'. Another ecosystem's document serialises as @{}@.
 serialiseMergedDocument :: CachedDoc -> Either RenderRefused LByteString
-serialiseMergedDocument doc = case snd npmRendered doc of
-    Just plan -> maybe (Left RenderRefused) (Right . fromStrict) (renderPlan plan)
-    Nothing -> Right (serialiseAcross (fmap toEncoding . snd npmCached) doc)
+serialiseMergedDocument = serialiseDocument (snd npmRendered) (fmap toEncoding . snd npmCached)
 
 versionEntries :: Value -> KeyMap Value
 versionEntries = fromMaybe mempty . objectField "versions" . documentObject
