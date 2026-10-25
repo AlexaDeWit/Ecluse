@@ -77,9 +77,9 @@ import Ecluse.Core.Server.Pipeline.Tarball.Relay (
     withMethod,
     withValidators,
  )
-import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..))
+import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..), relayResponder)
 import Ecluse.Core.Server.Response (mkRefusal)
-import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamResult (..))
+import Ecluse.Core.Server.Stream (UpstreamResult (..))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Version (renderVersion)
 import UnliftIO (tryAny)
@@ -125,9 +125,7 @@ streamPrivateArtifact ctx token = do
     refuse = respond (tarballError replies status403 [] (privateAuthorisationRefusal (pdHelp (arDeps ctx))))
     privateResponder =
         privateArtifactResponder ((Metric.Deny,) <$> refuse) (Metric.Admit,) $
-            RelayResponder
-                (\status headers body -> respond (tarballStream replies status headers body))
-                (\status headers -> respond (tarballEmpty replies status headers))
+            relayResponder replies respond
 
 data PrivateArtifact
     = PrivateRequest Bool HTTP.Request

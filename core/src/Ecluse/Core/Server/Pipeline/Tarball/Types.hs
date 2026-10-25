@@ -11,6 +11,7 @@ private leg, which takes it as its own argument, so the public leg cannot reach 
 module Ecluse.Core.Server.Pipeline.Tarball.Types (
     -- * The route's replies
     TarballReplies (..),
+    relayResponder,
 
     -- * One artifact request
     ArtifactRequest (..),
@@ -24,6 +25,7 @@ import Ecluse.Core.Server.Context (PackumentDeps, ServeRuntime)
 import Ecluse.Core.Server.Path (Filename)
 import Ecluse.Core.Server.Pipeline.Tarball.Relay (ArtifactServe)
 import Ecluse.Core.Server.Response (Refusal)
+import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder))
 import Ecluse.Core.Version (Version)
 
 -- | The route-owned ways the tarball pipeline may answer.
@@ -35,6 +37,13 @@ data TarballReplies response = TarballReplies
     , tarballEmpty :: Status -> ResponseHeaders -> response
     -- ^ A transparent bodiless upstream response (@304@ or @HEAD@).
     }
+
+-- | Keep the upstream connection open until the selected route response completes.
+relayResponder :: TarballReplies response -> (response -> IO received) -> RelayResponder received
+relayResponder replies respond =
+    RelayResponder
+        (\status headers body -> respond (tarballStream replies status headers body))
+        (\status headers -> respond (tarballEmpty replies status headers))
 
 -- | One artifact request, as every stage of both legs needs it.
 data ArtifactRequest response = ArtifactRequest

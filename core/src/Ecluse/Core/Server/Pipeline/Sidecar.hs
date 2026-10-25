@@ -40,10 +40,10 @@ import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Private (privateMetadataMiss)
 import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, firstPartyMissRefusal, upstreamUnavailable, versionAbsent)
 import Ecluse.Core.Server.Pipeline.Tarball.Relay (ArtifactServe (..), acceptPrivateArtifact, privateArtifactResponder, relayPublicResult, relayUnjudged, relayUpstreamResult, withMethod, withValidators)
-import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..))
+import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..), relayResponder)
 import Ecluse.Core.Server.Response (ServeDecision, mkRefusal)
 import Ecluse.Core.Server.Route (isHead)
-import Ecluse.Core.Server.Stream (RelayResponder (..), UpstreamResult (..))
+import Ecluse.Core.Server.Stream (UpstreamResult (..))
 import Ecluse.Core.Telemetry.Upstream qualified as PublicRead
 import Ecluse.Core.Version (Version, renderVersion)
 
@@ -204,10 +204,7 @@ relay ctx private client accepts request =
         if private
             then privateArtifactResponder (respond (privateRefusal ctx)) id upstreamResponder
             else upstreamResponder
-    upstreamResponder =
-        RelayResponder
-            (\status headers body -> respond (tarballStream replies status headers body))
-            (\status headers -> respond (tarballEmpty replies status headers))
+    upstreamResponder = relayResponder replies respond
 
 privateRefusal :: ArtifactRequest response -> response
 privateRefusal ctx = tarballError (arReplies ctx) status403 [] (privateAuthorisationRefusal (pdHelp (arDeps ctx)))
