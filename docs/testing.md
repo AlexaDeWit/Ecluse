@@ -1661,7 +1661,8 @@ their background counts. Then write the `calibration` record:
   latency by pod shape and its derived ceiling. Preserve the measured baseline and fallback identities
   when deciding whether an observation qualifies.
 
-Two cases have no ten scheduled runs to take:
+Two cases have no ten scheduled runs to take.
+Request `profile=full` and `pod-shape=all` for either case:
 
 | Case | Why | What to do |
 |---|---|---|
