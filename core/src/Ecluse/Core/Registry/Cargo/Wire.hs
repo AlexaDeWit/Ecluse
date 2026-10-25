@@ -52,7 +52,7 @@ validateCargoRecord = \case
         case KeyMap.lookup "deps" fields of
             Just (Array dependencies) -> traverse_ dependency dependencies
             _ -> Left "invalid Cargo dependencies"
-        required featureMap fields "features"
+        optionalField featureMap fields "features"
         optionalField isBool fields "yanked"
         optionalField featureMap fields "features2"
         traverse_ (optionalField nullableText fields) ["links", "rust_version"]

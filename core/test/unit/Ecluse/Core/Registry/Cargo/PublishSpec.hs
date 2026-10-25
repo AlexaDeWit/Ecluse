@@ -5,6 +5,7 @@
 -- | Native publication preserves archive bytes and checks configured API authority before writes.
 module Ecluse.Core.Registry.Cargo.PublishSpec (spec) where
 
+import Codec.Compression.GZip qualified as GZip
 import Data.Aeson (Value (..), encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
@@ -15,20 +16,24 @@ import Test.Hspec
 
 import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Package (PackageDetails (pkgName, pkgVersion), PackageInfo (..))
-import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishMirrorRequirements), MirrorRequirements (mirrorStateRequirement), MirrorStateRequirement (DurableVersionState), PublishRequestBody (PublishRequestBody))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishMirrorRequirements, publishRelay), MirrorRequirements (mirrorStateRequirement), MirrorStateRequirement (DurableVersionState), PublishRequestBody (PublishRequestBody))
 import Ecluse.Core.Registry.Cargo.Publish
 import Ecluse.Core.Registry.Cargo.Publish.Body qualified as Body
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails))
+import Ecluse.Core.Registry.Origin (originClient)
 import Ecluse.Core.Registry.Publish (MirrorTransport (..), PublishCodec (pcNativeComplete), PublishPlan (PublishPlan), newMirrorPublish)
-import Ecluse.Core.Security.Limits (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Core.Security.Limits (defaultLimits)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
 import Ecluse.Test.Deadline (withExchangeClient)
+import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Port (passthroughTracingPort)
-import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive), cargoIndexRecord, cargoUpload, cargoUploadMetadata)
+import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive, releaseChecksum), cargoIndexRecord, cargoUpload, cargoUploadMetadata)
+import Ecluse.Test.Registry.Cargo.Metadata (cargoTestName)
 import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoSourceVersion)
 import Ecluse.Test.Registry.Cargo.Reference (UploadFrame (..), referenceUpload)
 import Ecluse.Test.Registry.Publish (publishOnlyFile)
+import Ecluse.Test.Registry.PyPI.Archive (tarBytes)
 import Ecluse.Test.Stub (Captured (..), allCaptured, headerValue, stubBaseUrl, withRoutedStub)
 import Ecluse.Test.Support (expectRight)
 import Ecluse.Test.Wai (selfBaseUrlOf)
@@ -57,6 +62,27 @@ spec = do
                     KeyMap.lookup "readme" (uploadMetadata parsed) `shouldBe` Just (String "owned readme")
                     KeyMap.lookup "authors" (uploadMetadata parsed) `shouldBe` Just (Array (fromList [String "Ecluse contributors"]))
                     headerValue "Content-Type" written `shouldBe` Just "application/octet-stream"
+        it "publishes modern source omissions with interpreted dependency defaults" $
+            withRoutedStub (targetReply "/registry") $ \stub -> do
+                original <- cargoPublicationFixture
+                let manifest = "[package]\nname='fixture'\nversion='1.0.0'\nrust-version='1.74'\n[dependencies]\ndependency='1'\n"
+                archive <- LBS.toStrict . GZip.compress <$> tarBytes [("fixture-1.0.0/Cargo.toml", manifest), ("fixture-1.0.0/src/lib.rs", "pub fn owned() {}\n")]
+                let release = original{releaseArchive = archive, releaseChecksum = hexSha256Of archive}
+                source <- case cargoIndexRecord release of
+                    Object fields -> pure (Object (KeyMap.insert "deps" (Array (fromList [object ["name" .= ("dependency" :: Text), "req" .= ("^1" :: Text), "registry" .= Null]])) (KeyMap.delete "features" fields)))
+                    _ -> fail "source fixture is not an object"
+                doc <- cargoSourceVersion source
+                withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                    let transport = MirrorTransport exchanges (pure (Just (bareCredential (mkSecret "cargo-token")))) defaultLimits passthroughTracingPort
+                        writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub <> "/index")) (loopbackRegistryUrl (stubBaseUrl stub <> "/registry")) codec
+                    publishOnlyFile writer doc (PublishPlan (pkgVersion (vdDetails doc))) archive `shouldReturn` Right ()
+                    captures <- allCaptured stub
+                    map capPath captures `shouldBe` ["/index/config.json", "/registry/api/v1/crates/new"]
+                    written <- maybe (fail "missing upload capture") pure (find ((== "PUT") . capMethod) captures)
+                    parsed <- expectRight (referenceUpload (capBody written))
+                    uploadArchive parsed `shouldBe` archive
+                    KeyMap.lookup "features" (uploadMetadata parsed) `shouldBe` Just (object [])
+                    KeyMap.lookup "deps" (uploadMetadata parsed) `shouldBe` Just (Array (fromList [object ["name" .= ("dependency" :: Text), "version_req" .= ("^1" :: Text), "features" .= ([] :: [Text]), "optional" .= False, "default_features" .= True, "target" .= Null, "kind" .= ("normal" :: Text), "registry" .= ("https://github.com/rust-lang/crates.io-index" :: Text), "explicit_name_in_toml" .= Null]]))
         it "refuses discovery which changes the approved API base path before any upload" $
             withRoutedStub (targetReply "/unapproved") $ \stub -> do
                 release <- cargoPublicationFixture
@@ -79,6 +105,19 @@ spec = do
             release <- cargoPublicationFixture
             bytes <- expectRight (cargoUpload release)
             uploadClaims defaultLimits (const (pure ())) (PublishRequestBody bytes Nothing) `shouldReturn` Right ["fixture"]
+        it "rejects malformed members before either claims or relay can contact the destination" $
+            withRoutedStub (targetReply "/registry") $ \stub -> do
+                release <- cargoPublicationFixture
+                withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                    let origin = originClient defaultLimits exchanges (loopbackRegistryUrl (stubBaseUrl stub <> "/registry")) (Just (bareCredential (mkSecret "cargo-token")))
+                    case cargoUploadMetadata release of
+                        Object fields -> for_ [("deps", Array (fromList [Null])), ("authors", Array (fromList [Number 42]))] $ \(key, value) -> do
+                            bytes <- LBS.toStrict <$> expectRight (Body.encodeUpload (Object (KeyMap.insert key value fields)) (releaseArchive release))
+                            let body = PublishRequestBody bytes Nothing
+                            uploadClaims defaultLimits (const (pure ())) body >>= (`shouldSatisfy` isLeft)
+                            publishRelay (cargoPublish factors) origin cargoTestName body >>= (`shouldSatisfy` isLeft)
+                        _ -> expectationFailure "fixture upload metadata is not an object"
+                    allCaptured stub `shouldReturn` []
         it "rejects different archive name, version and build spelling before relay" $ do
             release <- cargoPublicationFixture
             case cargoUploadMetadata release of

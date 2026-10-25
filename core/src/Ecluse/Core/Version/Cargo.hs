@@ -13,6 +13,7 @@ module Ecluse.Core.Version.Cargo (
     cargoUniquenessKey,
 ) where
 
+import Data.Char (isDigit)
 import Data.Text qualified as T
 
 import Ecluse.Core.Strict (strictElements)
@@ -62,13 +63,13 @@ releaseNumber raw = do
 validNumber :: Text -> Bool
 validNumber raw =
     not (T.null raw)
-        && T.all asciiDigit raw
+        && T.all isDigit raw
         && (T.length raw == 1 || not (T.isPrefixOf "0" raw))
 
 identifier :: Text -> Maybe Identifier
 identifier raw = do
     guard (validIdentifier raw)
-    if T.all asciiDigit raw
+    if T.all isDigit raw
         then Numeric (T.copy raw) <$ guard (validNumber raw)
         else pure (Alphanumeric (T.copy raw))
 
@@ -77,9 +78,6 @@ buildIdentifiers raw = T.copy raw <$ guard (all validIdentifier (T.splitOn "." r
 
 validIdentifier :: Text -> Bool
 validIdentifier raw = not (T.null raw) && T.all (\c -> isAsciiAlphaNum c || c == '-') raw
-
-asciiDigit :: Char -> Bool
-asciiDigit c = c >= '0' && c <= '9'
 
 comparePrerelease :: [Identifier] -> [Identifier] -> Ordering
 comparePrerelease [] [] = EQ

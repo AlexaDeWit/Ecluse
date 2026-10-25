@@ -22,6 +22,7 @@ import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
+import Data.Char (isDigit)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -303,10 +304,10 @@ indexDependency (Object fields) = do
     alias <- requiredJson "name" fields >>= jsonString
     original <- nullableString "package" fields
     requirement <- requiredJson "req" fields >>= jsonString
-    features <- requiredJson "features" fields >>= array
+    features <- maybe (Right []) array (KeyMap.lookup "features" fields)
     traverse_ jsonString features
-    isOptional <- requiredJson "optional" fields >>= jsonBool
-    defaults <- requiredJson "default_features" fields >>= jsonBool
+    isOptional <- maybe (Right False) jsonBool (KeyMap.lookup "optional" fields)
+    defaults <- maybe (Right True) jsonBool (KeyMap.lookup "default_features" fields)
     target <- nullableString "target" fields
     kind <- fromMaybe "normal" <$> nullableString "kind" fields
     unless (kind `elem` ["normal", "dev", "build"]) (bad "unsupported Cargo dependency kind")
@@ -365,12 +366,12 @@ normalRequirement = T.intercalate "," . map comparator . T.splitOn "," . T.filte
         let (core, prerelease) = T.breakOn "-" value
             wildcards = T.intercalate "." (map (\part -> if part `elem` ["x", "X"] then "*" else part) (T.splitOn "." core)) <> prerelease
          in case T.uncons wildcards of
-                Just (firstChar, _) | firstChar >= '0' && firstChar <= '9' -> "^" <> wildcards
+                Just (firstChar, _) | isDigit firstChar -> "^" <> wildcards
                 _ -> wildcards
 
 indexFeatures :: KeyMap.KeyMap Value -> Either ParseError (KeyMap.KeyMap Value)
 indexFeatures index = do
-    primary <- requiredJson "features" index >>= jsonObject
+    primary <- maybe (Right KeyMap.empty) jsonObject (KeyMap.lookup "features" index)
     extra <- maybe (Right KeyMap.empty) jsonObject (KeyMap.lookup "features2" index)
     traverse_ (array >=> traverse_ jsonString) primary
     traverse_ (array >=> traverse_ jsonString) extra

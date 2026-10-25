@@ -115,6 +115,21 @@ spec = do
                 manifest <- expectRight (parse bytes)
                 metadata <- expectRight (publicationMetadata manifest Map.empty)
                 checkPublicationIndex metadata (renamedIndexWith indexed) `shouldSatisfy` isRight
+        it "translates omitted native defaults into complete upload metadata" $ do
+            manifest <- expectRight (parse (basic <> "[dependencies]\ndependency='1'\n"))
+            metadata <- expectRight (publicationMetadata manifest Map.empty)
+            let source = object ["name" .= ("example" :: Text), "vers" .= ("1.2.3" :: Text), "deps" .= [object ["name" .= ("dependency" :: Text), "req" .= ("^1" :: Text)]]]
+            checked <- expectRight (checkPublicationIndex metadata source)
+            field "features" checked `shouldBe` Just (object [])
+            field "deps" checked `shouldBe` Just (toJSON [object ["name" .= ("dependency" :: Text), "version_req" .= ("^1" :: Text), "features" .= ([] :: [Text]), "optional" .= False, "default_features" .= True, "target" .= Null, "kind" .= ("normal" :: Text), "registry" .= ("https://github.com/rust-lang/crates.io-index" :: Text), "explicit_name_in_toml" .= Null]])
+        it "refuses explicit null for native defaulted publication facts" $ do
+            manifest <- expectRight (parse (basic <> "[dependencies]\ndependency='1'\n"))
+            metadata <- expectRight (publicationMetadata manifest Map.empty)
+            let dep = KeyMap.fromList [("name", String "dependency"), ("req", String "^1")]
+                source = KeyMap.fromList [("name", String "example"), ("vers", String "1.2.3"), ("deps", toJSON [Object dep])]
+            checkPublicationIndex metadata (Object (KeyMap.insert "features" Null source)) `shouldSatisfy` isLeft
+            for_ ["features", "optional", "default_features"] $ \key ->
+                checkPublicationIndex metadata (Object (KeyMap.insert "deps" (toJSON [Object (KeyMap.insert key Null dep)]) source)) `shouldSatisfy` isLeft
         it "rejects a dependency mismatch rather than publish a reduced document" $ do
             manifest <- expectRight (parse renamedManifest)
             metadata <- expectRight (publicationMetadata manifest Map.empty)

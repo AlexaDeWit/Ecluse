@@ -14,12 +14,13 @@ module Ecluse.Core.Registry.Cargo.Publish.Body (
     encodeUpload,
 ) where
 
-import Data.Aeson (Value (..), encode)
-import Data.Aeson.KeyMap qualified as KeyMap
-import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as LBS
-import Data.ByteString.Builder (byteString, lazyByteString, toLazyByteString, word32LE)
+import Data.Aeson (Value, encode, withObject, (.:), (.:?))
+import Data.Aeson.Types (Parser, parseEither)
 import Data.Bits (shiftL, (.|.))
+import Data.ByteString qualified as BS
+import Data.ByteString.Builder (byteString, lazyByteString, toLazyByteString, word32LE)
+import Data.ByteString.Lazy qualified as LBS
+import Data.Text qualified as T
 
 import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.Cargo.Project (projectName)
@@ -83,29 +84,52 @@ section cap bytes = do
 decodeSections :: Limits -> ByteString -> ByteString -> Either ParseError CargoUploadBody
 decodeSections limits metadata archive = do
     value <- first (const (ParseError "Cargo upload metadata is malformed or exceeds its nesting bound")) (decodeCargoRecord (maxNestingDepth limits) metadata)
-    fields <- case value of
-        Object objectFields -> Right objectFields
-        _ -> bad "Cargo upload metadata is not an object"
-    name <- textField "name" fields
-    version <- textField "vers" fields
-    void (first (const (ParseError "Cargo upload name is invalid")) (projectName name))
-    void (maybe (bad "Cargo upload version is invalid") Right (parseCargo version))
-    for_ ["deps", "authors", "keywords", "categories"] $ \key -> case KeyMap.lookup key fields of
-        Just (Array _) -> Right ()
-        _ -> bad "Cargo upload lacks a required metadata array"
-    case KeyMap.lookup "features" fields of
-        Just (Object features) -> for_ features $ \case
-            Array entries | all isText entries -> Right ()
-            _ -> bad "Cargo upload has invalid feature declarations"
-        _ -> bad "Cargo upload lacks its feature map"
+    (name, version) <- first (ParseError . toText) (parseEither metadataIdentity value)
     pure (CargoUploadBody value name version archive)
-  where
-    textField key fields = case KeyMap.lookup key fields of
-        Just (String value) -> Right value
-        _ -> bad "Cargo upload lacks a native identity field"
-    isText = \case
-        String _ -> True
-        _ -> False
+
+metadataIdentity :: Value -> Parser (Text, Text)
+metadataIdentity = withObject "Cargo upload metadata" $ \fields -> do
+    name <- fields .: "name"
+    version <- fields .: "vers"
+    nativeName name
+    unless (isJust (parseCargo version)) (fail "Cargo upload version is invalid")
+    dependencies <- fields .: "deps"
+    traverse_ uploadDependency (dependencies :: [Value])
+    void (fields .: "features" :: Parser (Map Text [Text]))
+    for_ ["authors", "keywords", "categories"] $ \key ->
+        void (fields .: key :: Parser [Text])
+    for_ ["description", "documentation", "homepage", "readme", "readme_file", "license", "license_file", "repository", "links"] $ \key ->
+        void (fields .:? key :: Parser (Maybe Text))
+    void (fields .:? "badges" :: Parser (Maybe (Map Text (Map Text Text))))
+    rustVersion <- fields .:? "rust_version"
+    traverse_ rustRelease rustVersion
+    pure (name, version)
+
+uploadDependency :: Value -> Parser ()
+uploadDependency = withObject "Cargo upload dependency" $ \fields -> do
+    fields .: "name" >>= nativeName
+    void (fields .: "version_req" :: Parser Text)
+    void (fields .: "features" :: Parser [Text])
+    for_ ["optional", "default_features"] $ \key ->
+        void (fields .: key :: Parser Bool)
+    for_ ["target", "registry"] $ \key ->
+        void (fields .:? key :: Parser (Maybe Text))
+    alias <- fields .:? "explicit_name_in_toml"
+    traverse_ nativeName alias
+    kind <- fields .:? "kind"
+    for_ kind $ \value ->
+        unless (value `elem` ["normal", "dev", "build" :: Text]) (fail "Cargo upload dependency kind is invalid")
+
+nativeName :: Text -> Parser ()
+nativeName = either (const (fail "Cargo upload name is invalid")) (const (pure ())) . projectName
+
+rustRelease :: Text -> Parser ()
+rustRelease raw = do
+    let components = T.splitOn "." raw
+        complete = T.intercalate "." (components <> replicate (max 0 (3 - length components)) "0")
+    unless
+        (length components `elem` [1, 2, 3] && not (T.any (`elem` ['-', '+']) raw) && isJust (parseCargo complete))
+        (fail "Cargo upload Rust version is invalid")
 
 -- | Encode native uint32 framing without changing either the JSON value or verified archive bytes.
 encodeUpload :: Value -> ByteString -> Either ParseError LByteString
