@@ -944,6 +944,7 @@ library ecluse-test-support
     , http-types        ^>=0.12
     , exceptions        ^>=0.10
     , katip             ^>=0.8.8
+    , mtl               ^>=2.3
     , network           ^>=3.2
     , ram               ^>=0.22
     , resourcet         ^>=1.3

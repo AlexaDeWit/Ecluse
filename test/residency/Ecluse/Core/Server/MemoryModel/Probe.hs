@@ -55,7 +55,6 @@ import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, pkgEcosyste
 import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource), mergePackuments)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, estimateValueBytes, npmCached, weighCachedDoc)
-import Ecluse.Core.Registry.Cargo.Metadata (cargoRead)
 import Ecluse.Core.Registry.Cargo.Project qualified as CargoProject
 import Ecluse.Core.Registry.Cargo.Serving (assembleCargoDocument, serialiseCargoDocument)
 import Ecluse.Core.Registry.Json.Walk (readJsonWalk)
@@ -86,6 +85,7 @@ import Ecluse.Test.Corpus qualified as Corpus
 import Ecluse.Test.Corpus.Cargo qualified as Cargo
 import Ecluse.Test.Corpus.Merge (MergeDocument (Captured, Rewritten, RewrittenNative), MergeShape, captureDocuments)
 import Ecluse.Test.Port (passthroughTracingPort)
+import Ecluse.Test.Registry.Cargo.Metadata (cargoRead)
 import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, heldBody, sourceBody)
 import Ecluse.Test.Registry.Metadata.Projection (projectMetadata)
 import Ecluse.Test.Registry.Metadata.Rendering (MetadataRendering (..), renderingOf)

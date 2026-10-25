@@ -8,10 +8,10 @@ module Ecluse.Core.Registry.Cargo.Reader (
     CargoIndexResult (..),
     readCargoIndex,
     readCargoIndexCharged,
-    readCargoIndexChunks,
+    cargoIndexSteps,
+    finishCargoSteps,
 ) where
 
-import Control.Monad.State.Strict qualified as State
 import Data.Aeson (Value (Null, Object))
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
@@ -26,10 +26,10 @@ import Ecluse.Core.Registry.Cargo.Projection (projectCargoRecord)
 import Ecluse.Core.Registry.Cargo.Wire (CargoRecordError (..), decodeCargoRecord, recordIdentity)
 import Ecluse.Core.Registry.Json.Packed (Packed, docTable)
 import Ecluse.Core.Registry.Json.Writer (packTree)
-import Ecluse.Core.Registry.JsonStream (Steps (..), StreamResult, isJsonSpace, readStepsWithEnd)
+import Ecluse.Core.Registry.JsonStream (Steps (..), isJsonSpace, readStepsWithEnd)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk)
 import Ecluse.Core.Registry.ServedDocument (stringField)
-import Ecluse.Core.Security (BodyLimit, LimitError, Limits (maxNestingDepth), checkArtifactCount, checkVersionCountOf)
+import Ecluse.Core.Security (Limits (maxNestingDepth), checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -69,21 +69,13 @@ readCargoIndexCharged :: (Int -> IO ()) -> CargoDiscovery -> Limits -> PackageNa
 readCargoIndexCharged pay discovery limits name mode bound _ =
     readStepsWithEnd id finishCargoSteps bound (cargoIndexSteps pay discovery limits name mode)
 
--- | Run captured chunks through the production state machine without effects or another parser.
-readCargoIndexChunks :: CargoDiscovery -> Limits -> PackageName -> CargoRead -> BodyLimit -> [ByteString] -> Either LimitError (StreamResult CargoIndexResult)
-readCargoIndexChunks discovery limits name mode bound =
-    State.evalState (readStepsWithEnd (pure . runIdentity) (pure . runIdentity . finishCargoSteps) bound (cargoIndexSteps (const (pure ())) discovery limits name mode) nextChunk)
-  where
-    nextChunk =
-        State.get >>= \case
-            [] -> pure BS.empty
-            chunk : rest -> State.put rest $> chunk
-
+-- | Close an incomplete final record with the same empty-chunk signal as the streaming reader.
 finishCargoSteps :: (Monad m) => Steps m a -> m (Steps m a)
 finishCargoSteps = \case
     NeedData next -> next BS.empty
     step -> pure step
 
+-- | Frame and project native records while reserving current and retained selected-row workspace.
 cargoIndexSteps :: (Monad m) => (Int -> m ()) -> CargoDiscovery -> Limits -> PackageName -> CargoRead -> Steps m CargoIndexResult
 cargoIndexSteps pay discovery limits name mode = await initial [] 0
   where

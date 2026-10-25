@@ -9,22 +9,55 @@ module Ecluse.Test.Registry.Cargo.Metadata (
     cargoTestRecord,
     cargoTestDiscovery,
     readCargoChunks,
+    parseCargoDiscovery,
+    cargoRead,
+    projectCargoIndex,
+    readCargoIndexChunks,
 ) where
 
+import Control.Monad.State.Strict qualified as State
 import Data.Aeson (Value)
+import Data.ByteString qualified as BS
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
-import Ecluse.Core.Package (PackageName, mkPackageName)
-import Ecluse.Core.Registry.Cargo.Discovery (CargoDiscovery, parseCargoDiscovery)
-import Ecluse.Core.Registry.Cargo.Reader (CargoIndexResult, CargoRead, readCargoIndex)
+import Ecluse.Core.Package (PackageInfo, PackageName, mkPackageName)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc)
+import Ecluse.Core.Registry.Cargo.Discovery (CargoDiscovery, discoveryIndex, parseDiscoveryWithDepth)
+import Ecluse.Core.Registry.Cargo.Metadata (cargoReadWith, finishCargoFull)
+import Ecluse.Core.Registry.Cargo.Reader (CargoIndexResult, CargoRead (FullRead), cargoIndexSteps, finishCargoSteps, readCargoIndex)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts)
-import Ecluse.Core.Registry.JsonStream (StreamResult)
-import Ecluse.Core.Registry.Metadata (MetadataError)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError, Limits (maxMetadataBytes), ecosystemArtifactAuthorities)
+import Ecluse.Core.Registry.JsonStream (StreamResult, readStepsWithEnd)
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded))
+import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
+import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits (maxMetadataBytes), ecosystemArtifactAuthorities)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Registry.Cargo.Fixtures qualified as Fixtures
 import Ecluse.Test.Registry.JsonStream (heldChunks, testTable)
 import Ecluse.Test.Support (expectRight)
+
+-- | Fix the same discovery depth for held native fixtures, retaining production authority checks.
+parseCargoDiscovery :: AllowedHostPorts -> Text -> ByteString -> Either MetadataError CargoDiscovery
+parseCargoDiscovery = parseDiscoveryWithDepth 32
+
+-- | Held fixtures have no admission ticket. Runtime preparation supplies its own selected-row charge.
+cargoRead :: CargoDiscovery -> EcosystemRead
+cargoRead = cargoReadWith (const pass)
+
+-- | Project held bytes through the production framing and complete-index finisher.
+projectCargoIndex :: CargoDiscovery -> Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
+projectCargoIndex discovery limits name bytes = do
+    streamed <- first MetadataBoundExceeded (readCargoIndexChunks discovery limits name FullRead (MetadataBodyLimit (maxMetadataBytes limits)) [bytes])
+    finishCargoFull discovery limits (discoveryIndex discovery) streamed
+
+-- | Run captured chunks through production framing without another native parser.
+readCargoIndexChunks :: CargoDiscovery -> Limits -> PackageName -> CargoRead -> BodyLimit -> [ByteString] -> Either LimitError (StreamResult CargoIndexResult)
+readCargoIndexChunks discovery limits name mode bound =
+    State.evalState (readStepsWithEnd (pure . runIdentity) (pure . runIdentity . finishCargoSteps) bound (cargoIndexSteps (const (pure ())) discovery limits name mode) nextChunk)
+  where
+    nextChunk =
+        State.get >>= \case
+            [] -> pure BS.empty
+            chunk : rest -> State.put rest $> chunk
 
 -- | A native identity with no filesystem or network fixture dependency.
 cargoTestName :: PackageName

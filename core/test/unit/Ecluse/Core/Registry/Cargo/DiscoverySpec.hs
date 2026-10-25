@@ -10,11 +10,11 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Core.Package (HashAlg (SHA256), mkHash)
-import Ecluse.Core.Registry.Cargo.Discovery (bindCargoDownload, cargoArtifactCoordinate, coordinateFilename, discoveryAuthRequired, discoveryDl, parseCargoDiscovery, renderCargoDiscovery)
+import Ecluse.Core.Registry.Cargo.Discovery (bindCargoDownload, cargoArtifactCoordinate, coordinateFilename, discoveryAuthRequired, discoveryDl, renderCargoDiscovery)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts)
 import Ecluse.Core.Security (ecosystemArtifactAuthorities)
 import Ecluse.Core.Server.Path (unFilename)
-import Ecluse.Test.Registry.Cargo.Metadata (cargoTestVersion)
+import Ecluse.Test.Registry.Cargo.Metadata (cargoTestVersion, parseCargoDiscovery)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec

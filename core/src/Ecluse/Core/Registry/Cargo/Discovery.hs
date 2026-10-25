@@ -6,7 +6,7 @@
 module Ecluse.Core.Registry.Cargo.Discovery (
     CargoDiscovery,
     cargoDiscovery,
-    parseCargoDiscovery,
+    parseDiscoveryWithDepth,
     discoveryDl,
     discoveryApi,
     discoveryAuthRequired,
@@ -82,10 +82,7 @@ cargoDiscovery _ origin = do
     control = maybe Uncontrolled (\handle -> Controlled handle (fromMaybe Listing (ocReadKind origin))) (ocPublicControl origin)
     exchange = withSuccessBodyUsing control (ocClient origin) (progressFloor limits) (boundedChargedRead (ocChargeFullRead origin) bound)
 
--- | Validate discovery against predeclared authority, never authority extracted from its own URLs.
-parseCargoDiscovery :: AllowedHostPorts -> Text -> ByteString -> Either MetadataError CargoDiscovery
-parseCargoDiscovery = parseDiscoveryWithDepth 32
-
+-- | Validate bounded discovery against predeclared authority and the selected origin.
 parseDiscoveryWithDepth :: Int -> AllowedHostPorts -> Text -> ByteString -> Either MetadataError CargoDiscovery
 parseDiscoveryWithDepth depth hosts origin bytes = do
     unless (BS.length bytes <= 65536) (Left (MetadataBoundExceeded (BodyTooLarge (MetadataBodyLimit 65536))))
