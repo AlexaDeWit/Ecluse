@@ -20,7 +20,7 @@ import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageInfo, PackageName)
-import Ecluse.Core.Registry (BodyOutcome, FetchFault (FetchUrlUnformable, FetchBoundExceeded), ParseError, PublishFault (PublishFetch, PublishRejected), PublishError (PublishError), PublishRelayResponse, UrlFormationError)
+import Ecluse.Core.Registry (BodyOutcome, FetchFault (FetchBoundExceeded, FetchUrlUnformable), ParseError, PublishError (PublishError), PublishFault (PublishFetch, PublishRejected), PublishRelayResponse, UrlFormationError)
 import Ecluse.Core.Registry.Exchange (accumulatingCharge, boundedExchange, boundedRelay, formThen, withSuccessBody)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Json.Walk (Step, readJsonWalk)
@@ -135,10 +135,11 @@ publishUpload transport readTarget target charge prepare request outcome upload 
     prepared <- prepare (ptTracing transport) origin target
     case prepared of
         Left fault -> pure (Left (publishTargetFault fault))
-        Right approved -> either
-            (pure . Left)
-            (writeUpload transport outcome . sealRequest)
-            (request (registryUrlText approved) credential plan upload)
+        Right approved ->
+            either
+                (pure . Left)
+                (writeUpload transport outcome . sealRequest)
+                (request (registryUrlText approved) credential plan upload)
 
 publishTargetFault :: MetadataError -> PublishFault
 publishTargetFault = \case
@@ -150,6 +151,7 @@ publishTargetFault = \case
     MetadataUndecodable -> PublishRejected (PublishError "the target discovery is malformed or names an unapproved API root")
     MetadataNameMismatch _ -> PublishRejected (PublishError "the target discovery has an inconsistent identity")
   where
+    rejected :: Int -> PublishFault
     rejected status = PublishRejected (PublishError ("target discovery failed with HTTP status " <> show status))
 
 writeUpload :: MirrorTransport -> (Int -> ByteString -> Either PublishFault ()) -> Request -> IO (Either PublishFault ())

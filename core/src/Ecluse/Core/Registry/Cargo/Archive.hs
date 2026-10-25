@@ -40,7 +40,7 @@ data CargoArchiveMetadata = CargoArchiveMetadata
     }
 
 instance Show CargoArchiveMetadata where
-    show metadata = "CargoArchiveMetadata " <> show (caRoot metadata)
+    showsPrec _ metadata = showString "CargoArchiveMetadata " . shows (caRoot metadata)
 
 -- | Charge extra workspace as an absolute total. The caller separately owns the compressed-byte charge.
 inspectCargoArchive :: Limits -> (Int -> IO ()) -> Text -> Text -> Text -> ByteString -> IO (Either ParseError CargoArchiveMetadata)
