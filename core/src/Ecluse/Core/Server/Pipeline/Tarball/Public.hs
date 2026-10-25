@@ -51,7 +51,6 @@ import Ecluse.Core.Rules.Render (renderDecision, renderInability)
 import Ecluse.Core.Rules.Types (EvalContext, SkippedCheck, completeEvidence, mkEvalContext, skippedChecks)
 import Ecluse.Core.Security (Limits (progressFloor), Origin (UntrustedOrigin), hostPortAddress, thgPublicHostPort)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, charge, newChargeRegion)
-import Ecluse.Core.Server.Cache.Store (PreparedStore, executePrepared)
 import Ecluse.Core.Server.Context (
     Handler,
     PackumentDeps (..),
@@ -71,7 +70,7 @@ import Ecluse.Core.Server.Pipeline.Internal (
     recordDenials,
     serveDecisionClass,
  )
-import Ecluse.Core.Server.Pipeline.Origin (preparePublicMetadata)
+import Ecluse.Core.Server.Pipeline.Origin (withPublicMetadata)
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Refusal (
     artifactError,
@@ -119,11 +118,10 @@ servePublicArtifactWithCoverage covered ctx
 servePublicWithCoverage :: (Maybe PackageDetails -> Bool) -> ArtifactRequest response -> Handler ResponseReceived
 servePublicWithCoverage covered ctx = do
     advisoryEtag <- liftIO (pdAdvisoryEtag (arDeps ctx))
-    -- A selected read keeps one release, so its entry step is its whole charge.
     withMetadataAdmission
         (arRuntime ctx)
         (\headers -> liftIO (arRespond ctx (tarballError (arReplies ctx) shedStatus headers (mkRefusal Nothing shedMessage))))
-        (\ticket -> preparePublicMetadata (arRuntime ctx) (arDeps ctx) (arPackage ctx) (arVersion ctx) >>= gatePublicVersion ticket covered ctx advisoryEtag)
+        (\ticket -> withPublicMetadata (arRuntime ctx) (arDeps ctx) ticket (arPackage ctx) (arVersion ctx) (gatePublicVersion ticket covered ctx advisoryEtag))
         $ \case
             Admitted artifact skipped -> serveAdmitted ctx advisoryEtag artifact skipped
             Refused decision -> refusePublic ctx advisoryEtag decision
@@ -151,12 +149,12 @@ data PublicArtifactGate
     | -- | The gate refused the version: a policy denial, an upstream outage, or absence.
       Refused ServeDecision
 
-gatePublicVersion :: MemoryTicket -> (Maybe PackageDetails -> Bool) -> ArtifactRequest response -> Maybe DbEtag -> PreparedStore MetadataError VersionRead -> Handler PublicArtifactGate
-gatePublicVersion ticket covered ctx advisoryEtag prepared = do
+gatePublicVersion :: MemoryTicket -> (Maybe PackageDetails -> Bool) -> ArtifactRequest response -> Maybe DbEtag -> IO (Either MetadataError VersionRead) -> Handler PublicArtifactGate
+gatePublicVersion ticket covered ctx advisoryEtag readSelected = do
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pure advisoryEtag))
     eval <-
         liftIO $
-            executePrepared prepared <&> \case
+            readSelected <&> \case
                 Left MetadataAbsent -> VersionMissing
                 result -> versionEvaluation result
     case eval of

@@ -7,6 +7,7 @@ module Ecluse.Core.Registry.Cargo.Reader (
     CargoRead (..),
     CargoIndexResult (..),
     readCargoIndex,
+    readCargoIndexCharged,
     readCargoIndexChunks,
 ) where
 
@@ -18,16 +19,18 @@ import Data.Primitive.SmallArray (smallArrayFromList)
 
 import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (InvalidVersionManifest), PackageDetails, PackageInfo (..), PackageName, mkInvalidEntry)
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, cargoPacked)
 import Ecluse.Core.Registry.Cargo.Discovery (CargoDiscovery)
-import Ecluse.Core.Registry.Cargo.Document (PackedIndex (..))
+import Ecluse.Core.Registry.Cargo.Document (PackedIndex (..), cargoDocument)
 import Ecluse.Core.Registry.Cargo.Projection (projectCargoRecord)
 import Ecluse.Core.Registry.Cargo.Wire (CargoRecordError (..), decodeCargoRecord, recordIdentity)
 import Ecluse.Core.Registry.Json.Packed (Packed, docTable)
 import Ecluse.Core.Registry.Json.Writer (packTree)
-import Ecluse.Core.Registry.JsonStream (Step, Steps (..), StreamResult, isJsonSpace, readStepsWithEnd)
+import Ecluse.Core.Registry.JsonStream (Steps (..), StreamResult, isJsonSpace, readStepsWithEnd)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk)
 import Ecluse.Core.Registry.ServedDocument (stringField)
 import Ecluse.Core.Security (BodyLimit, LimitError, Limits (maxNestingDepth), checkArtifactCount, checkVersionCountOf)
+import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Core.Version.Cargo (cargoUniquenessKey, parseCargo)
@@ -39,11 +42,13 @@ data CargoRead = FullRead | SelectedRead Version
 -- | Typed facts and retained rows share the same original source coordinates.
 data CargoIndexResult = CargoIndexResult
     { cargoIndexInfo :: PackageInfo
-    , cargoIndexDocument :: PackedIndex
+    , cargoIndexDocument :: CachedDoc
     }
     deriving stock (Eq, Show)
 
-data NativeRow = NativeRow !Text !Text !EntryKey !PackageDetails !Packed
+data NativeRow = NativeRow !Text !Text !EntryKey !PackageDetails !NativeRecord
+
+data NativeRecord = PackedRecord !Packed | SelectedRecord !Value
 
 data Scan = Scan
     { scanOrdinal :: !Int
@@ -52,32 +57,37 @@ data Scan = Scan
     , scanSeen :: !(Map Text Int)
     , scanRows :: ![NativeRow]
     , scanInvalid :: ![InvalidEntry]
+    , scanKeptCharge :: !Int
     }
 
 -- | Hold at most one undecoded record and preserve body-limit failures as whole-read errors.
 readCargoIndex :: CargoDiscovery -> Limits -> PackageName -> CargoRead -> DocumentWalk CargoIndexResult
-readCargoIndex discovery limits name mode bound _ =
-    readStepsWithEnd (pure . runIdentity) (pure . finishCargoSteps) bound (cargoIndexSteps discovery limits name mode)
+readCargoIndex = readCargoIndexCharged (const pass)
+
+-- | Reserve the current row and retained selected row before buffering or decoding either.
+readCargoIndexCharged :: (Int -> IO ()) -> CargoDiscovery -> Limits -> PackageName -> CargoRead -> DocumentWalk CargoIndexResult
+readCargoIndexCharged pay discovery limits name mode bound _ =
+    readStepsWithEnd id finishCargoSteps bound (cargoIndexSteps pay discovery limits name mode)
 
 -- | Run captured chunks through the production state machine without effects or another parser.
 readCargoIndexChunks :: CargoDiscovery -> Limits -> PackageName -> CargoRead -> BodyLimit -> [ByteString] -> Either LimitError (StreamResult CargoIndexResult)
-readCargoIndexChunks discovery limits name mode bound chunks =
-    State.evalState (readStepsWithEnd (pure . runIdentity) (pure . finishCargoSteps) bound (cargoIndexSteps discovery limits name mode) nextChunk) chunks
+readCargoIndexChunks discovery limits name mode bound =
+    State.evalState (readStepsWithEnd (pure . runIdentity) (pure . runIdentity . finishCargoSteps) bound (cargoIndexSteps (const (pure ())) discovery limits name mode) nextChunk)
   where
     nextChunk =
         State.get >>= \case
             [] -> pure BS.empty
             chunk : rest -> State.put rest $> chunk
 
-finishCargoSteps :: Step a -> Step a
+finishCargoSteps :: (Monad m) => Steps m a -> m (Steps m a)
 finishCargoSteps = \case
-    NeedData next -> runIdentity (next BS.empty)
-    step -> step
+    NeedData next -> next BS.empty
+    step -> pure step
 
-cargoIndexSteps :: CargoDiscovery -> Limits -> PackageName -> CargoRead -> Step CargoIndexResult
-cargoIndexSteps discovery limits name mode = await initial []
+cargoIndexSteps :: (Monad m) => (Int -> m ()) -> CargoDiscovery -> Limits -> PackageName -> CargoRead -> Steps m CargoIndexResult
+cargoIndexSteps pay discovery limits name mode = await initial [] 0
   where
-    initial = Scan 0 0 0 Map.empty [] []
+    initial = Scan 0 0 0 Map.empty [] [] 0
     requestedIdentity = case mode of
         FullRead -> Nothing
         SelectedRead version -> cargoUniquenessKey <$> parseCargo (renderVersion version)
@@ -90,23 +100,32 @@ cargoIndexSteps discovery limits name mode = await initial []
     rememberInvalid invalid scan = case mode of
         FullRead -> scan{scanInvalid = invalid : scanInvalid scan}
         SelectedRead _ -> scan
-    await !scan pieces = NeedData (Identity . receive scan pieces)
-    receive scan pieces chunk
-        | BS.null chunk = case pieces of
+    await !scan pieces rowCharge = NeedData (receive scan pieces rowCharge)
+    receive scan pieces rowCharge chunk
+        | BS.null chunk = pure $ case pieces of
             [] -> Finished (complete scan)
-            _ -> either Refused (Finished . complete) (consume scan (BS.concat (reverse pieces)))
-        | otherwise = splitLines scan pieces chunk
-    splitLines !scan pieces chunk = case BS.elemIndex 10 chunk of
-        Nothing -> await scan (chunk : pieces)
-        Just at ->
+            _ -> either Refused (Finished . complete) (consume scan rowCharge (BS.concat (reverse pieces)))
+        | otherwise = splitLines scan pieces rowCharge chunk
+    splitLines !scan pieces rowCharge chunk = case BS.elemIndex 10 chunk of
+        Nothing -> do
+            nextCharge <- reserve scan rowCharge chunk
+            pure (await scan (chunk : pieces) nextCharge)
+        Just at -> do
             let (line, rest) = BS.splitAt at chunk
-                record = case pieces of [] -> line; _ -> BS.concat (reverse (line : pieces))
-             in case consume scan record of
-                    Left fault -> Refused fault
-                    Right next
-                        | BS.length rest == 1 -> await next []
-                        | otherwise -> splitLines next [] (BS.drop 1 rest)
-    consume !scan bytes
+            nextCharge <- reserve scan rowCharge line
+            let record = case pieces of [] -> line; _ -> BS.concat (reverse (line : pieces))
+            case consume scan nextCharge record of
+                Left fault -> pure (Refused fault)
+                Right next
+                    | BS.length rest == 1 -> pure (await next [] 0)
+                    | otherwise -> splitLines next [] 0 (BS.drop 1 rest)
+    reserve _ _ _ | mode == FullRead = pure 0
+    reserve scan previous fragment = do
+        let cost = saturated (toInteger previous + toInteger (decodedDocumentCharge fragment) + toInteger (bufferedChunkCharge (BS.length fragment)))
+        pay (saturated (toInteger (scanKeptCharge scan) + toInteger cost))
+        pure cost
+    saturated = fromInteger . min (toInteger (maxBound :: Int))
+    consume !scan rowCharge bytes
         | BS.all isJsonSpace bytes = Right scan{scanOrdinal = scanOrdinal scan + 1}
         | otherwise = do
             let count = scanCount scan + 1
@@ -117,8 +136,8 @@ cargoIndexSteps discovery limits name mode = await initial []
                 Left (CargoRecordBound fault) -> Left fault
                 Left (CargoRecordMalformed reason) -> Right (dropRecord key reason next)
                 Right value -> do
-                    let identity = recordIdentity value
-                        seen = case identity of
+                    let nativeIdentity = recordIdentity value
+                        seen = case nativeIdentity of
                             Just unique | trackIdentity unique -> Map.insertWith (+) unique 1 (scanSeen next)
                             _ -> scanSeen next
                         observed = next{scanSeen = seen}
@@ -131,20 +150,23 @@ cargoIndexSteps discovery limits name mode = await initial []
                                     Object fields -> fromMaybe "" (stringField "vers" fields)
                                     _ -> ""
                                 selected = case mode of FullRead -> True; SelectedRead version -> renderVersion version == raw
-                                rows = case identity of
+                                rows = case nativeIdentity of
                                     Just unique
                                         | selected && retainAnother observed ->
-                                            let !row = NativeRow unique raw key details (packTree [] value)
+                                            let retained = case mode of FullRead -> PackedRecord (packTree [] value); SelectedRead _ -> SelectedRecord value
+                                                !row = NativeRow unique raw key details retained
                                              in row : scanRows observed
                                     _ -> scanRows observed
-                            pure observed{scanArtifacts = artifacts, scanRows = rows}
+                            pure observed{scanArtifacts = artifacts, scanRows = rows, scanKeptCharge = case mode of SelectedRead _ | null (scanRows observed) && not (null rows) -> rowCharge; _ -> scanKeptCharge observed}
     dropRecord key reason = rememberInvalid (mkInvalidEntry InvalidVersionManifest (show key) Null reason)
     complete scan =
-        let (rows, duplicates) = foldl' (\acc row -> finishRow (scanSeen scan) row acc) ([], []) (scanRows scan)
+        let (rows, duplicates) = foldl' (finishRow (scanSeen scan)) ([], []) (scanRows scan)
          in CargoIndexResult
                 { cargoIndexInfo = PackageInfo name (Map.fromList [(raw, details) | NativeRow _ raw _ details _ <- rows]) Map.empty (strictElements (reverse (scanInvalid scan) <> duplicates))
-                , cargoIndexDocument = PackedIndex (docTable (smallArrayFromList [])) (strictElements [(key, packed) | NativeRow _ _ key _ packed <- rows])
+                , cargoIndexDocument = case mode of
+                    FullRead -> fst cargoPacked (PackedIndex (docTable (smallArrayFromList [])) (strictElements [(key, packed) | NativeRow _ _ key _ (PackedRecord packed) <- rows]))
+                    SelectedRead _ -> fst cargoCached (cargoDocument [(key, value) | NativeRow _ _ key _ (SelectedRecord value) <- rows])
                 }
-    finishRow seen row@(NativeRow unique _ key _ _) (rows, invalid)
+    finishRow seen (rows, invalid) row@(NativeRow unique _ key _ _)
         | Map.lookup unique seen == Just 1 = (row : rows, invalid)
         | otherwise = (rows, mkInvalidEntry InvalidVersionManifest (show key) Null "duplicate Cargo release identity" : invalid)

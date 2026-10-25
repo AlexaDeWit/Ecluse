@@ -17,11 +17,11 @@ import Ecluse.Composition.MirrorState (MirrorStateBinding (msbStore, msbTarget))
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), mintSecret)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead), AdapterPublish (publishCodec, publishMirrorRequirements), MirrorRequirements (mirrorWorkerRead), WorkerMetadataRead (..))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead), AdapterPublish (publishCodec, publishMirrorRequirements), MirrorRequirements (mirrorWorkerRead), WorkerMetadataRead (..))
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Metadata.Fetch (chargingSelectedReads)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (..))
-import Ecluse.Core.Registry.Origin (anonymousOrigin, controlPublicOrigin)
+import Ecluse.Core.Registry.Origin (anonymousOrigin, chargingFullReads, chargingSelectedMetadata, controlPublicOrigin)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish,
     MirrorTransport (MirrorTransport, ptClient, ptLimits, ptMintCredential, ptTracing),
@@ -29,7 +29,9 @@ import Ecluse.Core.Registry.Publish (
  )
 import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes), Origin (UntrustedOrigin), thgPublicHostPort)
 import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Meter (charge, newChargeRegion, withMemoryEntry)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Context (
     PackumentDeps,
@@ -133,11 +135,14 @@ workerPolicyFor env requirements deps publish artifactMaxBytes =
   where
     client pay = case mirrorWorkerRead requirements of
         ChargedWorkerRead nativeRead ->
-            uncachedPublicMetadataClient . readCapability $
+            uncachedPublicMetadataClient . readCapability publicOrigin $
                 PrepareRead $ \tracing origin ->
                     fmap (chargingSelectedReads decodedDocumentCharge pay) <$> prepareRead nativeRead tracing origin
-        CachedWorkerRead -> publicMetadataClient (envMetadataCache env) (Source (registryUrlText publicBaseUrl)) (readCapability (metadataRead (pdMetadata deps)))
-    readCapability ecosystemRead =
+        NativeChargedWorkerRead nativeRead ->
+            let origin = chargingSelectedMetadata pay (chargingFullReads (pay . scaleCharge (cfFullReadPermille (metadataChargeFactors (pdMetadata deps)))) publicOrigin)
+             in uncachedPublicMetadataClient (readCapability origin nativeRead)
+        CachedWorkerRead -> publicMetadataClient (envMetadataCache env) (Source (registryUrlText publicBaseUrl)) (readCapability publicOrigin (metadataRead (pdMetadata deps)))
+    readCapability origin ecosystemRead =
         ecosystemMetadataReads
             ecosystemRead
             (tracingPortOf (envTelemetry env))
@@ -145,7 +150,7 @@ workerPolicyFor env requirements deps publish artifactMaxBytes =
             (\_ _ -> pure ())
             (\_ _ -> pure ())
             (\_ -> pure ())
-            publicOrigin
+            origin
 
     publicBaseUrl = pdPublicBaseUrl deps
 

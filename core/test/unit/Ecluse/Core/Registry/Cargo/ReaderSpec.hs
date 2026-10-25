@@ -5,33 +5,41 @@
 -- | Native record framing, complete selected scans and source-wide resource refusals.
 module Ecluse.Core.Registry.Cargo.ReaderSpec (spec) where
 
-import Data.Aeson (Value (Number, Object), encode)
+import Data.Aeson (Value (..), encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Test.Hspec
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Package (PackageInfo (infoInvalidEntries, infoVersions))
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
-import Ecluse.Core.Registry.Cargo.Document (indexRecords)
-import Ecluse.Core.Registry.Cargo.Reader (CargoIndexResult (..), CargoRead (..), readCargoIndex)
+import Ecluse.Core.Registry.CachedDocument (cargoCached)
+import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
+import Ecluse.Core.Registry.Cargo.Reader (CargoIndexResult (..), CargoRead (..), readCargoIndex, readCargoIndexCharged, readCargoIndexChunks)
+import Ecluse.Core.Registry.Cargo.Serving (serialiseCargoDocument)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooManyArtifacts, TooManyVersions), Limits (maxArtifactCount, maxMetadataBytes, maxVersionCount), defaultLimits)
+import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoTestDiscovery, cargoTestName, cargoTestRecord, cargoTestVersion, readCargoChunks)
-import Ecluse.Test.Registry.JsonStream (testTable)
+import Ecluse.Test.Registry.Cargo.Reference (IndexLine (indexValue), referenceIndex)
+import Ecluse.Test.Registry.JsonStream (heldChunks, sliceChunks, testTable)
 import Ecluse.Test.Registry.Source (assertCancelledRead)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = describe "readCargoIndex" $ do
+    chargingSpec
+    defaultedRowsSpec
     it "accepts CRLF, blank lines and a final row without LF at every chunk boundary" $ do
         let body = "\n" <> row "2.0.0" <> "\r\n \t\r\n" <> row "1.0.0"
         expected <- readCargoChunks defaultLimits FullRead [body]
         for_ [1 .. BS.length body - 1] $ \cut -> do
             actual <- readCargoChunks defaultLimits FullRead [BS.take cut body, BS.drop cut body]
             actual `shouldBe` expected
-        parsed <- expectRight =<< (streamValue <$> expectRight expected)
-        map fst (indexRecords (cargoIndexDocument parsed)) `shouldBe` [RecordEntry 1, RecordEntry 3]
+        parsed <- expectRight . streamValue =<< expectRight expected
+        fmap (map fst . cargoRecords) (snd cargoCached (cargoIndexDocument parsed)) `shouldBe` Just [RecordEntry 1, RecordEntry 3]
     it "keeps healthy siblings beside malformed, truncated and unsupported schema rows" $ do
         let unsupported = case cargoTestRecord "3.0.0" of
                 Object fields -> Object (KeyMap.insert "v" (Number 3) fields)
@@ -47,7 +55,7 @@ spec = describe "readCargoIndex" $ do
         length (infoInvalidEntries (cargoIndexInfo full)) `shouldBe` 2
         selected <- readResult (SelectedRead (cargoTestVersion "1.0.0+first")) body
         Map.keys (infoVersions (cargoIndexInfo selected)) `shouldBe` []
-        indexRecords (cargoIndexDocument selected) `shouldBe` []
+        fmap cargoRecords (snd cargoCached (cargoIndexDocument selected)) `shouldBe` Just []
     it "lets an unsupported row's valid native version quarantine a selected sibling" $ do
         let unsupported = case cargoTestRecord "1.0.0+other" of
                 Object fields -> Object (KeyMap.insert "v" (Number 3) fields)
@@ -75,3 +83,87 @@ readResult :: CargoRead -> ByteString -> IO CargoIndexResult
 readResult mode body = do
     streamed <- expectRight =<< readCargoChunks defaultLimits mode [body]
     expectRight (streamValue streamed)
+
+chargingSpec :: Spec
+chargingSpec = describe "selected row reservations" $ do
+    for_ ["1.0.0", "2.0.0"] $ \version ->
+        it ("charges a growing " <> (if version == "1.0.0" then "selected" else "unrelated") <> " row before retaining each fragment") $ do
+            peaks <- forM [4096, 256 * 1024, 2 * 1024 * 1024] $ \size -> do
+                let large = featureRow version size
+                    selectedVersion = "1.0.0"
+                    input = if version == selectedVersion then row "2.0.0" <> "\n" <> large else row selectedVersion <> "\n" <> large
+                paid <- newIORef (0 :: Int)
+                parsed <- chargedResult (\cost -> modifyIORef' paid (max cost)) selectedVersion input
+                Map.keys (infoVersions (cargoIndexInfo parsed)) `shouldBe` [selectedVersion]
+                peak <- readIORef paid
+                peak `shouldSatisfy` (>= 12 * size)
+                pure peak
+            zipWith (<) peaks (drop 1 peaks) `shouldBe` [True, True]
+    it "adds the retained target row to a later unrelated row's workspace" $ do
+        let target = featureRow "1.0.0" 8192
+            other = featureRow "2.0.0" 8192
+        peak <- newIORef (0 :: Int)
+        _ <- chargedResult (\cost -> modifyIORef' peak (max cost)) "1.0.0" (target <> "\n" <> other)
+        readIORef peak `shouldReturn` rowCost target + rowCost other
+    it "does not charge the sum of discarded rows" $ do
+        let target = row "1.0.0"
+            other = featureRow "2.0.0" 8192
+        peak <- newIORef (0 :: Int)
+        _ <- chargedResult (\cost -> modifyIORef' peak (max cost)) "1.0.0" (BS.intercalate "\n" (target : replicate 100 other))
+        readIORef peak >>= (`shouldSatisfy` (< 3 * (rowCost target + rowCost other)))
+    for_ ["1.0.0", "2.0.0"] $ \version ->
+        it ("stops before reading the rest of a refused row " <> toString version) $ do
+            discovery <- expectRight cargoTestDiscovery
+            pulls <- newIORef (0 :: Int)
+            next <- heldChunks (sliceChunks 32768 (featureRow version (2 * 1024 * 1024)))
+            let source = modifyIORef' pulls (+ 1) >> next
+                pay cost = when (cost > 1024 * 1024) (throwIO SelectedChargeRefused)
+                readSelected = readCargoIndexCharged pay discovery defaultLimits cargoTestName (SelectedRead (cargoTestVersion "1.0.0")) (MetadataBodyLimit (maxMetadataBytes defaultLimits)) (testTable []) source
+            readSelected `shouldThrow` (== SelectedChargeRefused)
+            readIORef pulls >>= (`shouldSatisfy` (< 8))
+    it "keeps the pure held reader identical to the charged production parser" $ do
+        discovery <- expectRight cargoTestDiscovery
+        let input = ["\n" <> row "2.0.0", "\n" <> row "1.0.0" <> "\r\n"]
+            mode = SelectedRead (cargoTestVersion "1.0.0")
+            bound = MetadataBodyLimit (maxMetadataBytes defaultLimits)
+        next <- heldChunks input
+        actual <- readCargoIndexCharged (const pass) discovery defaultLimits cargoTestName mode bound (testTable []) next
+        actual `shouldBe` readCargoIndexChunks discovery defaultLimits cargoTestName mode bound input
+
+defaultedRowsSpec :: Spec
+defaultedRowsSpec = it "preserves omitted defaults and explicit nulls in full and selected native rows" $ do
+    let dependencies =
+            [ object ["name" .= ("omitted" :: Text), "req" .= ("^1" :: Text)]
+            , object ["name" .= ("nullable" :: Text), "req" .= ("^1" :: Text), "target" .= Null, "registry" .= Null, "package" .= Null]
+            ]
+        native = case cargoTestRecord "1.0.0" of
+            Object fields -> Object (KeyMap.insert "deps" (Array (fromList dependencies)) (KeyMap.delete "features" fields))
+            value -> value
+        body = toStrict (encode native)
+        reference bytes = map (fmap Object . indexValue) (referenceIndex bytes)
+    for_ [FullRead, SelectedRead (cargoTestVersion "1.0.0")] $ \mode -> do
+        parsed <- readResult mode body
+        Map.keys (infoVersions (cargoIndexInfo parsed)) `shouldBe` ["1.0.0"]
+        fmap cargoRecords (snd cargoCached (cargoIndexDocument parsed)) `shouldBe` Just [(RecordEntry 0, native)]
+        rendered <- expectRight (serialiseCargoDocument (cargoIndexDocument parsed))
+        reference (toStrict rendered) `shouldBe` reference body
+
+featureRow :: Text -> Int -> ByteString
+featureRow version size = toStrict . encode $ case cargoTestRecord version of
+    Object fields -> Object (KeyMap.insert "features" (object ["large" .= [T.replicate size "x"]]) fields)
+    value -> value
+
+rowCost :: ByteString -> Int
+rowCost bytes = sum [decodedDocumentCharge piece + bufferedChunkCharge (BS.length piece) | piece <- sliceChunks 32768 bytes]
+
+chargedResult :: (Int -> IO ()) -> Text -> ByteString -> IO CargoIndexResult
+chargedResult pay version input = do
+    discovery <- expectRight cargoTestDiscovery
+    next <- heldChunks (sliceChunks 32768 input)
+    streamed <- expectRight =<< readCargoIndexCharged pay discovery defaultLimits cargoTestName (SelectedRead (cargoTestVersion version)) (MetadataBodyLimit (maxMetadataBytes defaultLimits)) (testTable []) next
+    expectRight (streamValue streamed)
+
+data SelectedChargeRefused = SelectedChargeRefused
+    deriving stock (Eq, Show)
+
+instance Exception SelectedChargeRefused

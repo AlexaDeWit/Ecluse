@@ -95,12 +95,17 @@ streamPrivateArtifact ::
     Maybe ClientCredential ->
     Handler (PrivateLeg ResponseReceived)
 streamPrivateArtifact ctx token = do
-    selected <- case pdMirrorState (arDeps ctx) of
+    selected <- case artifactPrivateAddressing (pdArtifact (arDeps ctx)) of
+        IndexedArtifactLocation -> withMetadataAdmission (arRuntime ctx) (pure . PrivateShed) (\ticket -> privateArtifactRequest (Just ticket) ctx token) pure
+        ConventionalArtifactPath -> conventionalSelection
+    answer selected
+  where
+    conventionalSelection = case pdMirrorState (arDeps ctx) of
         Just _
             | pdReadSourceSelection (arDeps ctx) /= PrivateOnly && not (pdFirstParty (arDeps ctx) (arPackage ctx)) ->
                 withMetadataAdmission (arRuntime ctx) (pure . PrivateShed) (\ticket -> privateArtifactRequest (Just ticket) ctx token) pure
         _ -> privateArtifactRequest Nothing ctx token
-    case selected of
+    answer selected = case selected of
         -- The admission shed already counted its decision.
         PrivateShed headers -> PrivateHandled <$> liftIO (respond (tarballError replies shedStatus headers (mkRefusal Nothing shedMessage)))
         PrivateUnavailable -> PrivateAnswered Metric.Unavailable <$> liftIO unavailable
@@ -114,7 +119,6 @@ streamPrivateArtifact ctx token = do
                     UpstreamRejected status -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed (if status == status404 then MissAbsent else MissUnresolved))
                     UpstreamTransportFailure -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed MissUnresolved)
                     UpstreamCooling _ -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed MissUnresolved)
-  where
     replies = arReplies ctx
     respond = arRespond ctx
 
@@ -144,7 +148,7 @@ privateArtifactRequest ticket ctx token = case pdPrivateBase deps of
             ConventionalArtifactPath
                 | pdReadSourceSelection deps == ManagedMirrorAndPublic -> pure (PrivateMissing MissAbsent)
                 | otherwise -> pure (byConventionalPath privateBase)
-            IndexedArtifactLocation -> byIndexedLocation ticket ctx token privateBase privateHostPort
+            IndexedArtifactLocation -> maybe (pure PrivateUnavailable) (\admitted -> byIndexedLocation admitted ctx token privateBase privateHostPort) ticket
   where
     deps = arDeps ctx
 
@@ -154,22 +158,23 @@ privateArtifactRequest ticket ctx token = case pdPrivateBase deps of
         either (const (PrivateMissing MissAbsent)) (PrivateRequest False) $
             artifactByFile (pdArtifact deps) (mountOrigin deps (srPrivateClient (arRuntime ctx)) privateBase token) (arPackage ctx) (unFilename (arFile ctx))
 
-byIndexedLocation :: Maybe MemoryTicket -> ArtifactRequest response -> Maybe ClientCredential -> BaseRequest -> Maybe HostPort -> Handler PrivateArtifact
+byIndexedLocation :: MemoryTicket -> ArtifactRequest response -> Maybe ClientCredential -> BaseRequest -> Maybe HostPort -> Handler PrivateArtifact
 byIndexedLocation ticket ctx token privateBase privateHostPort = do
-    resolved <- tryAny (withPrivateMetadataClient (arRuntime ctx) deps privateBase token (\client -> fetchVersionMetadata client (arPackage ctx) (arVersion ctx)))
+    resolved <- tryAny (withPrivateMetadataClient (arRuntime ctx) deps ticket privateBase token (\client -> fetchVersionMetadata client (arPackage ctx) (arVersion ctx)))
     case resolved of
         Right (Left (MetadataAuthorisationFailure code)) -> pure (PrivateRefused code)
-        _ -> case (pdMirrorState deps, ticket) of
-            (Just mirror, Just admitted) ->
-                liftIO (validateMirrorProject mirror admitted (arPackage ctx)) >>= \case
-                    Left _ -> pure PrivateUnavailable
-                    Right Nothing -> pure (unmanaged resolved)
-                    Right (Just (_, record)) -> case recordVersion (arVersion ctx) record of
-                        Nothing -> pure (unmanaged resolved)
-                        Just expected -> case mirrorVersionView (arVersion ctx) record (either (const Nothing) (either (const Nothing) vrVersion) resolved) of
-                            Left _ -> pure (PrivateIncomplete expected)
-                            Right _ | Map.notMember (unFilename (arFile ctx)) (versionFiles expected) -> pure (PrivateMissing MissAbsent)
-                            Right restored -> pure (maybe PrivateUnavailable (PrivateRequest True) (restored >>= requestForDetails . vdDetails))
+        _ -> case pdMirrorState deps of
+            Just mirror
+                | pdReadSourceSelection deps /= PrivateOnly && not (pdFirstParty deps (arPackage ctx)) ->
+                    liftIO (validateMirrorProject mirror ticket (arPackage ctx)) >>= \case
+                        Left _ -> pure PrivateUnavailable
+                        Right Nothing -> pure (unmanaged resolved)
+                        Right (Just (_, record)) -> case recordVersion (arVersion ctx) record of
+                            Nothing -> pure (unmanaged resolved)
+                            Just expected -> case mirrorVersionView (arVersion ctx) record (either (const Nothing) (either (const Nothing) vrVersion) resolved) of
+                                Left _ -> pure (PrivateIncomplete expected)
+                                Right _ | Map.notMember (unFilename (arFile ctx)) (versionFiles expected) -> pure (PrivateMissing MissAbsent)
+                                Right restored -> pure (maybe PrivateUnavailable (PrivateRequest True) (restored >>= requestForDetails . vdDetails))
             _ -> pure (unmanaged resolved)
   where
     deps = arDeps ctx

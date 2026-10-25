@@ -9,6 +9,7 @@ import Data.Aeson (Value (..), encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.List (lookup)
+import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (ResponseHeaders, Status, methodGet, methodHead, methodPut, status200, status304, status401, status403, status404, status405, status503)
@@ -31,9 +32,12 @@ import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Core.Server.Admission.Meter (MemoryMeter, meterSnapshot, steerMeter, takeLargestCharge)
+import Ecluse.Core.Server.Admission.Types (BrakeLevel (Calm), MeterSnapshot (snChargedBytes))
 import Ecluse.Core.Server.Context (PackumentDeps (..), ReadSourceSelection (ManagedMirrorAndPublic, PrivateOnly))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Version (mkVersion)
+import Ecluse.Runtime.Env (Env (envMemoryMeter))
 import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Server.Pipeline.ServingDriver (cargoServingDriver)
 import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, newTestEnvWithQueue, requestAt)
@@ -59,6 +63,7 @@ spec = do
     discoverySpec
     servingSpec
     isolationSpec
+    admissionSpec
 
 native :: Text -> Text -> IO () -> Spec
 native number description = it (caseLabel ("integration/cargo/native-" <> number) description)
@@ -273,6 +278,7 @@ data CargoProxy = CargoProxy
     , publicCalls :: IO [Captured]
     , privateCalls :: IO [Captured]
     , privateBase :: Text
+    , proxyMemory :: MemoryMeter
     }
 
 type Reply = Captured -> (Status, ResponseHeaders, LByteString)
@@ -299,7 +305,7 @@ withCargoProxy privateReply publicReply action =
             trusted = withPrivateBaseUrl (Just (loopbackRegistryUrl (stubBaseUrl private <> "/index"))) privateDeps
             build configurePublic configurePrivate =
                 application (mkServerConfig (maybeToList (mountBindingFor Cargo (configurePublic publicDeps) (Just (configurePrivate trusted)) Nothing))) env
-        action (CargoProxy (build id id) build (allCaptured public) (allCaptured private) (stubBaseUrl private))
+        action (CargoProxy (build id id) build (allCaptured public) (allCaptured private) (stubBaseUrl private) (envMemoryMeter env))
   where
     now = UTCTime (fromGregorian 2026 6 20) 0
 
@@ -382,3 +388,42 @@ nativeState target version = do
 
 discoveryBytes :: Text -> Bool -> ByteString
 discoveryBytes dl authenticated = toStrict (encode (object ["dl" .= dl, "auth-required" .= authenticated]))
+
+admissionSpec :: Spec
+admissionSpec = describe "Cargo selected admission" $ do
+    native "023" "admits private archive selection before discovery or index allocation" $
+        withCargoProxy defaultReply defaultReply $ \proxy -> do
+            steerMeter (proxyMemory proxy) 0 Calm
+            response <- getPath privateArchive (proxyApp proxy)
+            simpleStatus response `shouldBe` status503
+            privateCalls proxy `shouldReturn` []
+            publicCalls proxy `shouldReturn` []
+    native "024" "charges growing selected and unrelated rows for public and caller-authorised archives" $
+        for_ [publicArchive, privateArchive] $ \path ->
+            for_ ["1.2.3", "2.0.0"] $ \version -> do
+                peaks <- forM [4096, 2 * 1024 * 1024] $ \size -> do
+                    let large = Object (KeyMap.insert "features" (object ["large" .= [T.replicate size "x"]]) (nativeRecord version))
+                        body = if version == "1.2.3" then toStrict (encode large) else row "1.2.3" <> "\n" <> toStrict (encode large)
+                    withCargoProxy (indexReply body) (indexReply body) $ \proxy -> do
+                        response <- getPathWith [("Authorization", "caller-token")] path (proxyApp proxy)
+                        simpleStatus response `shouldBe` status200
+                        toStrict (simpleBody response) `shouldBe` archiveBytes
+                        calls <- if path == privateArchive then privateCalls proxy else publicCalls proxy
+                        map (headerValue "Authorization") calls `shouldBe` replicate (length calls) (if path == privateArchive then Just "caller-token" else Nothing)
+                        snChargedBytes <$> meterSnapshot (proxyMemory proxy) `shouldReturn` 0
+                        peak <- takeLargestCharge (proxyMemory proxy)
+                        peak `shouldSatisfy` (>= 12 * size)
+                        pure peak
+                zipWith (<) peaks (drop 1 peaks) `shouldBe` [True]
+
+    native "025" "keeps caller-authorised PrivateOnly selection independent of managed public state" $
+        withCargoProxy defaultReply defaultReply $ \proxy -> do
+            reads <- newIORef (0 :: Int)
+            let target = stateTarget (privateBase proxy <> "/index")
+            mirror <- mirrorViewWith target (\_ _ -> modifyIORef' reads (+ 1) $> Right StateAbsent)
+            let app = proxyWith proxy id (\deps -> deps{pdMirrorState = Just mirror})
+            response <- getPathWith [("Authorization", "caller-token")] privateArchive app
+            simpleStatus response `shouldBe` status200
+            toStrict (simpleBody response) `shouldBe` archiveBytes
+            readIORef reads `shouldReturn` 0
+            publicCalls proxy `shouldReturn` []

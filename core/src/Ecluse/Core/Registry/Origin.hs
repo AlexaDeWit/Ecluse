@@ -18,6 +18,7 @@ module Ecluse.Core.Registry.Origin (
     perCallerOrigin,
     originClientOf,
     chargingFullReads,
+    chargingSelectedMetadata,
     controlPublicOrigin,
 ) where
 
@@ -41,6 +42,8 @@ data OriginClient = OriginClient
     -- ^ The bound every read through this origin is held to, fail-closed past the maximum.
     , ocPublicControl :: Maybe PublicControl
     , ocReadKind :: Maybe PublicReadKind
+    , ocChargeSelectedRead :: Int -> IO ()
+    -- ^ Reserve the native selected reader's absolute workspace before allocation.
     , ocChargeFullRead :: Int -> IO ()
     -- ^ Pays for each decompressed chunk of a full metadata read before the parser sees it.
     }
@@ -51,7 +54,7 @@ originClient limits client = originAt limits client . mkBaseRequest
 
 originAt :: Limits -> ExchangeClient -> BaseRequest -> Maybe ClientCredential -> OriginClient
 originAt limits client base token =
-    OriginClient{ocBaseRequest = base, ocClient = client, ocToken = token, ocLimits = limits, ocChargeFullRead = const pass, ocPublicControl = Nothing, ocReadKind = Nothing}
+    OriginClient{ocBaseRequest = base, ocClient = client, ocToken = token, ocLimits = limits, ocChargeFullRead = const pass, ocChargeSelectedRead = const pass, ocPublicControl = Nothing, ocReadKind = Nothing}
 
 -- | The origin's base URL, read from its one parse so the two cannot disagree.
 ocBaseUrl :: OriginClient -> RegistryUrl
@@ -87,6 +90,10 @@ originClientOf (OriginFor client) = client
 -- | The same origin, paying for what its full metadata reads hand on.
 chargingFullReads :: (Int -> IO ()) -> OriginFor posture -> OriginFor posture
 chargingFullReads charge (OriginFor client) = OriginFor client{ocChargeFullRead = charge}
+
+-- | Bind an absolute workspace reservation for native selected metadata reads.
+chargingSelectedMetadata :: (Int -> IO ()) -> OriginFor posture -> OriginFor posture
+chargingSelectedMetadata pay (OriginFor client) = OriginFor client{ocChargeSelectedRead = pay}
 
 -- | Control anonymous public reads, optionally assigning one kind to both metadata operations.
 controlPublicOrigin :: PublicControl -> Maybe PublicReadKind -> OriginFor Public -> OriginFor Public

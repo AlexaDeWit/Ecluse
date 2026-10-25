@@ -96,10 +96,11 @@ data PublishRequestBody = PublishRequestBody
     , publishBodyContentType :: Maybe ByteString
     }
 
--- | Worker reads reuse the cache or charge the selected native read directly.
+-- | Worker reads use cached facts, charged chunks, or native workspace reservations.
 data WorkerMetadataRead
     = CachedWorkerRead
     | ChargedWorkerRead PrepareRead
+    | NativeChargedWorkerRead PrepareRead
 
 -- | Completion uses native inventory or requires durable version state.
 data MirrorStateRequirement

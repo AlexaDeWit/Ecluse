@@ -30,12 +30,11 @@ import Ecluse.Core.Registry.Metadata (MetadataClient (fetchVersionMetadata), Met
 import Ecluse.Core.Registry.Request (sidecarUrl)
 import Ecluse.Core.Security (HostPort, Limits (progressFloor), Origin (..), hostPortAddress, thgPrivateHostPort, thgPublicHostPort)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket)
-import Ecluse.Core.Server.Cache.Store (executePrepared)
 import Ecluse.Core.Server.Conditional (Conditional (..), etagHeader, evaluateETag, forwardValidators, mkStrongETag)
 import Ecluse.Core.Server.Context (Handler, MountBinding (bindingPackumentDeps), PackumentDeps (..), ResponseAction (RunPipeline), ServeRuntime (..), ctxMount, ctxRuntime, pdPrivateBase, pdTarballHostGate, tarballHostHonoured)
 import Ecluse.Core.Server.MirrorView (mirrorVersionView, publicMirrorCoverage, readMirrorCompanion, validateMirrorProject)
 import Ecluse.Core.Server.Path (Filename, unFilename)
-import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (..), preparePublicMetadata, withPrivateMetadataClient)
+import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (..), withPrivateMetadataClient, withPublicMetadata)
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Private (privateMetadataMiss)
 import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactError, firstPartyMissRefusal, upstreamUnavailable, versionAbsent)
@@ -82,7 +81,7 @@ privateSelection :: ArtifactRequest response -> Maybe ClientCredential -> Memory
 privateSelection ctx token ticket = case pdPrivateBase deps of
     Nothing -> pure (Missing MissAbsent)
     Just base -> do
-        result <- tryAny (withPrivateMetadataClient (arRuntime ctx) deps base token (\client -> fetchVersionMetadata client (arPackage ctx) (arVersion ctx)))
+        result <- tryAny (withPrivateMetadataClient (arRuntime ctx) deps ticket base token (\client -> fetchVersionMetadata client (arPackage ctx) (arVersion ctx)))
         case result of
             Right (Left err) | isNothing (privateMetadataMiss err) -> pure Refused
             _ -> case pdMirrorState deps of
@@ -115,9 +114,9 @@ privateSelection ctx token ticket = case pdPrivateBase deps of
                     Missing _ -> CompanionAbsent
                     selected -> selected
 
-publicSelection :: ArtifactRequest response -> Handler Selection
-publicSelection ctx = do
-    result <- tryAny (preparePublicMetadata (arRuntime ctx) deps (arPackage ctx) (arVersion ctx) >>= liftIO . executePrepared)
+publicSelection :: ArtifactRequest response -> MemoryTicket -> Handler Selection
+publicSelection ctx ticket = do
+    result <- tryAny (withPublicMetadata (arRuntime ctx) deps ticket (arPackage ctx) (arVersion ctx) liftIO)
     pure $ case result of
         Left _ -> Missing MissUnresolved
         Right (Left (MetadataFetch (FetchCooldown retry))) -> Cooling retry
@@ -156,8 +155,8 @@ servePrivate ctx = \case
     Retained bytes -> serveRetained ctx bytes
     Unavailable -> answerError ctx upstreamUnavailable
     Cooling retry -> answerError ctx (upstreamCooling retry)
-    Incomplete expected -> admittedRead ctx (const (publicSelectionCovered ctx (Just expected))) (servePublic ctx)
-    NewPublicFile -> admittedRead ctx (const (publicSelectionCovered ctx Nothing)) (servePublic ctx)
+    Incomplete expected -> admittedRead ctx (publicSelectionCovered ctx (Just expected)) (servePublic ctx)
+    NewPublicFile -> admittedRead ctx (publicSelectionCovered ctx Nothing) (servePublic ctx)
     CompanionAbsent -> answerError ctx versionAbsent
     Refused -> refusePrivate ctx
     Missing miss -> fallback ctx miss
@@ -172,7 +171,7 @@ servePrivate ctx = \case
 fallback :: ArtifactRequest response -> OriginMiss -> Handler ResponseReceived
 fallback ctx miss
     | pdFirstParty (arDeps ctx) (arPackage ctx) = answerError ctx (firstPartyMissRefusal miss)
-    | otherwise = admittedRead ctx (const (publicSelection ctx)) (servePublic ctx)
+    | otherwise = admittedRead ctx (publicSelection ctx) (servePublic ctx)
 
 servePublic :: ArtifactRequest response -> Selection -> Handler ResponseReceived
 servePublic ctx = \case
@@ -226,9 +225,9 @@ serveRetained ctx bytes = liftIO $ arRespond ctx $ case evaluateETag (arValidato
     etag = mkStrongETag (hash bytes :: Digest SHA256)
     headers fresh = [etagHeader fresh, (hContentLength, show (BS.length bytes))]
 
-publicSelectionCovered :: ArtifactRequest response -> Maybe MirrorVersion -> Handler Selection
-publicSelectionCovered ctx expected = do
-    result <- tryAny (preparePublicMetadata (arRuntime ctx) deps (arPackage ctx) (arVersion ctx) >>= liftIO . executePrepared)
+publicSelectionCovered :: ArtifactRequest response -> Maybe MirrorVersion -> MemoryTicket -> Handler Selection
+publicSelectionCovered ctx expected ticket = do
+    result <- tryAny (withPublicMetadata (arRuntime ctx) deps ticket (arPackage ctx) (arVersion ctx) liftIO)
     case result of
         Right (Right readVersion) | Just doc <- vrVersion readVersion -> do
             let info = PackageInfo (arPackage ctx) (Map.singleton (renderVersion (arVersion ctx)) (vdDetails doc)) Map.empty []

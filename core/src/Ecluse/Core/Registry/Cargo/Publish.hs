@@ -16,16 +16,16 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
-import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyLBS, RequestBodyBS))
-import Network.HTTP.Types.Header (hContentType, hAccept)
+import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS, RequestBodyLBS))
+import Network.HTTP.Types.Header (hAccept, hContentType)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageName, hashValue)
 import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), ParseError (parseErrorMessage), PublishBodyFault (PublishMalformed), PublishError (PublishError), PublishFault (..), UrlFormationError (UnparseableUrl), isSuccessStatus)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (..), MirrorRequirements (..), MirrorStateRequirement (DurableVersionState), PublishRequestBody (..), UploadEndpointRequirement (ExplicitUploadEndpoint), UploadIdentityRequirement (TokenIdentity), WorkerMetadataRead (CachedWorkerRead))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (..), MirrorRequirements (..), MirrorStateRequirement (DurableVersionState), PublishRequestBody (..), UploadEndpointRequirement (ExplicitUploadEndpoint), UploadIdentityRequirement (TokenIdentity), WorkerMetadataRead (NativeChargedWorkerRead))
 import Ecluse.Core.Registry.CachedDocument (cargoCached)
-import Ecluse.Core.Registry.Cargo.Archive (inspectCargoArchive, cargoPublicationMetadata)
+import Ecluse.Core.Registry.Cargo.Archive (cargoPublicationMetadata, inspectCargoArchive)
 import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
 import Ecluse.Core.Registry.Cargo.Discovery (cargoDiscovery, discoveryApi)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
@@ -38,7 +38,7 @@ import Ecluse.Core.Registry.Cargo.Wire (decodeCargoRecord)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionDoc (vdRaw))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
-import Ecluse.Core.Registry.Origin (OriginClient (ocToken, ocLimits), originBaseUrl)
+import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (..), relayPublishRequest)
 import Ecluse.Core.Registry.Request (attachCredential, joinPath, metadataGet, parseRequestEither)
 import Ecluse.Core.Registry.ServedDocument (stringField)
@@ -55,7 +55,7 @@ cargoPublish factors =
         { publishRelay = \origin name body -> relayPublishRequest origin (relayRequest origin name body)
         , publishUploadClaims = uploadClaims
         , publishCodec = cargoPublishCodec factors
-        , publishMirrorRequirements = MirrorRequirements CachedWorkerRead DurableVersionState ExplicitUploadEndpoint
+        , publishMirrorRequirements = MirrorRequirements (NativeChargedWorkerRead prepareCargoRead) DurableVersionState ExplicitUploadEndpoint
         , publishIdentity = TokenIdentity
         }
 
@@ -148,7 +148,8 @@ classifyPublish :: Int -> ByteString -> Either PublishFault ()
 classifyPublish status body
     | isSuccessStatus status
     , Right (Object fields) <- decodeCargoRecord 32 body
-    , maybe True emptyErrors (KeyMap.lookup "errors" fields) = Right ()
+    , maybe True emptyErrors (KeyMap.lookup "errors" fields) =
+        Right ()
     | otherwise = Left (PublishRejected (PublishError ("Cargo publication failed with HTTP status " <> show status)))
   where
     emptyErrors = \case
