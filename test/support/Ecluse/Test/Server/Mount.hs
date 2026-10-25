@@ -26,7 +26,7 @@ import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Context (PackumentDeps (..), pdMirror, pdPrivateBaseUrl, pdPublicBaseUrl)
+import Ecluse.Core.Server.Context (PackumentDeps (..), ReadSourceSelection (MergePrivateAndPublic), pdMirror, pdPrivateBaseUrl, pdPublicBaseUrl)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit), mountUpstreams)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
@@ -35,12 +35,10 @@ import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 serveDepsFor :: RegistryAdapter -> Maybe RegistryUrl -> RegistryUrl -> MirrorServePlan -> [PreparedRule] -> IO UTCTime -> PackumentDeps
 serveDepsFor adapter privateBaseUrl publicBaseUrl mirror rules clock =
     PackumentDeps
-        { -- The adapter's own declared artifact hosts, so a fixture's gate honours exactly what
-          -- the composition root's would, which is the only pairing the projection agrees with.
-          pdUpstreams = mountUpstreams (artifactHosts (adapterArtifact adapter)) privateBaseUrl publicBaseUrl mirror
-        , -- Deny by default, matching a mount that declares no namespaces. A spec pinning the
-          -- privilege record-updates this field.
-          pdFirstParty = const False
+        { pdUpstreams = mountUpstreams (artifactHosts (adapterArtifact adapter)) privateBaseUrl publicBaseUrl mirror
+        , pdFirstParty = const False
+        , pdReadSourceSelection = MergePrivateAndPublic
+        , pdInstallEvidence = Nothing
         , pdMountBaseUrl = "https://proxy.test"
         , pdRules = rules
         , pdAdditionalBlockedRanges = []
@@ -48,8 +46,7 @@ serveDepsFor adapter privateBaseUrl publicBaseUrl mirror rules clock =
         , pdInboundToken = Nothing
         , pdNow = clock
         , pdAdvisoryEtag = pure Nothing
-        , -- No outage to remember an admission under, so every admission with evidence logs.
-          pdNoteAdmission = const (pure True)
+        , pdNoteAdmission = const (pure True)
         , pdHelp = Nothing
         , pdMinIntegrity = defaultMinIntegrity
         , pdMinTrustedIntegrity = defaultMinTrustedIntegrity

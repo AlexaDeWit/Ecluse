@@ -57,6 +57,8 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (UndecidabilityReason (NoMechanism), UpstreamSafety (Undecidable))
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError (MetadataUndecodable))
+import Ecluse.Core.Rules.Effectful (ReadFault (..))
+import Ecluse.Core.Rules.Types (Inability (EvaluationFailed, InstallSignalUnread), Transience (WontResolve))
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Package (sampleManifest)
 
@@ -151,6 +153,7 @@ newFakeStore config = do
                     , listPackagesIn = obListPackagesIn observed
                     , enumerateVersions = obEnumerateVersions observed
                     , readStoreManifest = obReadManifest observed
+                    , storeReadArtifact = obReadArtifact observed
                     , deleteVersions = \checks name versions ->
                         deleteAll
                             checks
@@ -179,6 +182,7 @@ fakeObserving config contents =
         , obEnumerateVersions = \name ->
             orFault config (Map.findWithDefault [] name <$> readIORef contents)
         , obReadManifest = pure . readSeededManifest config
+        , obReadArtifact = \_ _ _ -> pure (Left (ReadFault WontResolve EvaluationFailed InstallSignalUnread))
         , obVerifyConsent = orFault config (pure (fakeConsent config))
         , obClassifyStore = orFault config (pure (fakeClass config))
         , obProbeUpstream = pure (fakeUpstream config)

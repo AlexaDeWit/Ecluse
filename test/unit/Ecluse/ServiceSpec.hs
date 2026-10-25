@@ -109,13 +109,13 @@ spec = do
 
     describe "mountBindingFor, where the ecosystem drives the binding" $ do
         it "resolves npm to a binding whose prefix is derived from the ecosystem (/npm)" $
-            (bindingPrefix <$> mountBindingFor Npm inertPackumentDeps Nothing) `shouldBe` Just ("npm" :| [])
+            (bindingPrefix <$> mountBindingFor Npm inertPackumentDeps Nothing Nothing) `shouldBe` Just ("npm" :| [])
 
         it "resolves PyPI to a binding under its own derived prefix (/pypi)" $
-            (bindingPrefix <$> mountBindingFor PyPI inertPackumentDeps Nothing) `shouldBe` Just ("pypi" :| [])
+            (bindingPrefix <$> mountBindingFor PyPI inertPackumentDeps Nothing Nothing) `shouldBe` Just ("pypi" :| [])
 
         it "has no binding for an ecosystem with no adapter wired (loud Nothing, not a stub)" $
-            (bindingPrefix <$> mountBindingFor RubyGems inertPackumentDeps Nothing) `shouldBe` Nothing
+            (bindingPrefix <$> mountBindingFor RubyGems inertPackumentDeps Nothing Nothing) `shouldBe` Nothing
 
 dataPlaneSpec :: Spec
 dataPlaneSpec = describe "the data-plane clients" $ do

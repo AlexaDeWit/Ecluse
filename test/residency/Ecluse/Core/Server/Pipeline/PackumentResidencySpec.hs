@@ -122,7 +122,7 @@ takeCensus package captured capture = withSweeper $ \deadlines -> do
         testWithApplication (servingCapture captured capture) $ \privatePort -> do
             -- Every version is old enough to pass, so the policy evaluates the whole document.
             let deps = serveDepsFor adapter (Just (origin privatePort)) (origin publicPort) NoMirrorWrite rules (pure (UTCTime (fromGregorian 2030 1 1) 0))
-            binding <- maybe (fail "census ecosystem has no mount") pure (mountBindingFor (pkgEcosystem name) deps Nothing)
+            binding <- maybe (fail "census ecosystem has no mount") pure (mountBindingFor (pkgEcosystem name) deps Nothing Nothing)
             warmUp <- testServeRuntime deadlines noopMetricsPort
             listing logEnv warmUp binding (const pass)
             meter <- testMemoryMeter
