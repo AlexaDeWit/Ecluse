@@ -41,10 +41,10 @@ spec = describe "Cargo install evidence" $ do
             pkgCanonical (pkgName subject) `shouldBe` pkgCanonical requested
             map artFilename (toList (pkgArtifacts subject)) `shouldBe` ["Mixed_Crate-1.0.0.crate"]
             provider <- newCargoInstallEvidence defaultLimits
-            reads <- newInstallEvidenceReads provider (context (\_ _ pay -> pay (BS.length archive) $> Right archive))
+            evidenceReads <- newInstallEvidenceReads provider (context (\_ _ pay -> pay (BS.length archive) $> Right archive))
             if active
-                then resolved reads subject >>= (`shouldSatisfy` runs)
-                else resolved reads subject `shouldReturn` InstallDetermined NoCodeOnInstall
+                then resolved evidenceReads subject >>= (`shouldSatisfy` runs)
+                else resolved evidenceReads subject `shouldReturn` InstallDetermined NoCodeOnInstall
     it "refuses a checksum-verified archive whose root or manifest changes the published spelling" $ do
         requested <- expectRight (projectName "mixed_crate")
         for_ [("mixed_crate", "mixed_crate"), ("Mixed_Crate", "mixed_crate")] $ \(rootName, manifestName) -> do
@@ -53,14 +53,14 @@ spec = describe "Cargo install evidence" $ do
             renderPackageName (pkgName subject) `shouldBe` "Mixed_Crate"
             map (map hashValue . artHashes) (toList (pkgArtifacts subject)) `shouldBe` [[sha256Hex archive]]
             provider <- newCargoInstallEvidence defaultLimits
-            reads <- newInstallEvidenceReads provider (context (\_ _ pay -> pay (BS.length archive) $> Right archive))
-            resolved reads subject >>= (`shouldSatisfy` permanentFailure)
+            evidenceReads <- newInstallEvidenceReads provider (context (\_ _ pay -> pay (BS.length archive) $> Right archive))
+            resolved evidenceReads subject >>= (`shouldSatisfy` permanentFailure)
     it "does not acquire bytes while it builds an immutable subject" $ do
         archive <- fixture "1.2.3" []
         count <- newIORef (0 :: Int)
         provider <- newCargoInstallEvidence defaultLimits
-        reads <- newInstallEvidenceReads provider (context (counter count archive))
-        void (reads (details "1.2.3" archive))
+        evidenceReads <- newInstallEvidenceReads provider (context (counter count archive))
+        void (evidenceReads (details "1.2.3" archive))
         readIORef count `shouldReturn` 0
     it "retains compact verified signals and keeps different checksums separate" $ do
         inert <- fixture "1.2.3" []
@@ -72,18 +72,18 @@ spec = describe "Cargo install evidence" $ do
                 let bytes = if any ((== sha256Hex active) . hashValue) (artHashes artifact) then active else inert
                 pay (BS.length bytes)
                 pure (Right bytes)
-        reads <- newInstallEvidenceReads provider (context artifactRead)
-        resolved reads (details "1.2.3" inert) `shouldReturn` InstallDetermined NoCodeOnInstall
-        resolved reads (details "1.2.3" active) >>= (`shouldSatisfy` runs)
-        resolved reads (details "1.2.3" inert) `shouldReturn` InstallDetermined NoCodeOnInstall
+        evidenceReads <- newInstallEvidenceReads provider (context artifactRead)
+        resolved evidenceReads (details "1.2.3" inert) `shouldReturn` InstallDetermined NoCodeOnInstall
+        resolved evidenceReads (details "1.2.3" active) >>= (`shouldSatisfy` runs)
+        resolved evidenceReads (details "1.2.3" inert) `shouldReturn` InstallDetermined NoCodeOnInstall
         readIORef count `shouldReturn` 2
     it "binds different raw versions and refuses a checksum mismatch" $ do
         a <- fixture "1.2.3" []
         b <- fixture "1.2.4" []
         provider <- newCargoInstallEvidence defaultLimits
-        reads <- newInstallEvidenceReads provider (context (\_ artifact pay -> let bytes = if artFilename artifact == "example-1.2.3.crate" then a else b in pay (BS.length bytes) $> Right bytes))
-        resolved reads (details "1.2.3" a) `shouldReturn` InstallDetermined NoCodeOnInstall
-        resolved reads (details "1.2.4" b) `shouldReturn` InstallDetermined NoCodeOnInstall
+        evidenceReads <- newInstallEvidenceReads provider (context (\_ artifact pay -> let bytes = if artFilename artifact == "example-1.2.3.crate" then a else b in pay (BS.length bytes) $> Right bytes))
+        resolved evidenceReads (details "1.2.3" a) `shouldReturn` InstallDetermined NoCodeOnInstall
+        resolved evidenceReads (details "1.2.4" b) `shouldReturn` InstallDetermined NoCodeOnInstall
         mismatch <- newInstallEvidenceReads provider (context (\_ _ _ -> pure (Right b)))
         let wrong = (details "1.2.3" a){pkgArtifacts = sampleArtifact{artUrl = "https://registry.test/uncached", artHashes = [unsafeHash SHA256 (sha256Hex a)]} :| []}
         resolved mismatch wrong >>= (`shouldSatisfy` permanentFailure)
@@ -93,8 +93,8 @@ spec = describe "Cargo install evidence" $ do
         current <- newIORef (details "1.2.3" a)
         observed <- newIORef []
         provider <- newCargoInstallEvidence defaultLimits
-        reads <- newInstallEvidenceReads provider (context (\_ artifact _ -> modifyIORef' observed (artifact :) $> Right a))
-        subject <- readIORef current >>= reads
+        evidenceReads <- newInstallEvidenceReads provider (context (\_ artifact _ -> modifyIORef' observed (artifact :) $> Right a))
+        subject <- readIORef current >>= evidenceReads
         writeIORef current (details "1.2.3" b)
         runSubject subject `shouldReturn` InstallDetermined NoCodeOnInstall
         map (map hashValue . artHashes) <$> readIORef observed `shouldReturn` [[sha256Hex a]]
@@ -119,8 +119,8 @@ spec = describe "Cargo install evidence" $ do
     it "refuses unsupported effective manifests instead of asserting no execution" $ do
         archive <- compress <$> tarBytes [("example-1.2.3/Cargo.toml", "[package]\nname='example'\nversion='1.2.3'\nbuild=['one.rs']\n")]
         provider <- newCargoInstallEvidence defaultLimits
-        reads <- newInstallEvidenceReads provider (context (\_ _ _ -> pure (Right archive)))
-        resolved reads (details "1.2.3" archive) >>= (`shouldSatisfy` permanentFailure)
+        evidenceReads <- newInstallEvidenceReads provider (context (\_ _ _ -> pure (Right archive)))
+        resolved evidenceReads (details "1.2.3" archive) >>= (`shouldSatisfy` permanentFailure)
     it "releases the public flight after cancellation without publishing evidence" $ do
         archive <- fixture "1.2.3" []
         entered <- MVar.newEmptyMVar
@@ -139,9 +139,9 @@ spec = describe "Cargo install evidence" $ do
         blocked <- MVar.newEmptyMVar
         attempts <- newIORef (0 :: Int)
         let settings = (context (\_ _ _ -> modifyIORef' attempts (+ 1) >> MVar.takeMVar blocked)){ieLimits = defaultLimits{progressFloor = progress}}
-        reads <- newInstallEvidenceReads provider settings
-        resolved reads (details "1.2.3" archive) >>= (`shouldSatisfy` transientFailure)
-        resolved reads (details "1.2.4" archive) >>= (`shouldSatisfy` transientFailure)
+        evidenceReads <- newInstallEvidenceReads provider settings
+        resolved evidenceReads (details "1.2.3" archive) >>= (`shouldSatisfy` transientFailure)
+        resolved evidenceReads (details "1.2.4" archive) >>= (`shouldSatisfy` transientFailure)
         readIORef attempts `shouldReturn` 1
         count <- newIORef (0 :: Int)
         second <- newInstallEvidenceReads provider (context (counter count archive))
@@ -152,9 +152,9 @@ spec = describe "Cargo install evidence" $ do
         count <- newIORef (0 :: Int)
         provider <- newCargoInstallEvidence defaultLimits
         let limits = defaultLimits{maxVersionCount = 1}
-        reads <- newInstallEvidenceReads provider (context (counter count archive)){ieLimits = limits}
-        resolved reads (details "1.2.3" archive) `shouldReturn` InstallDetermined NoCodeOnInstall
-        resolved reads (details "1.2.4" archive) >>= (`shouldSatisfy` permanentFailure)
+        evidenceReads <- newInstallEvidenceReads provider (context (counter count archive)){ieLimits = limits}
+        resolved evidenceReads (details "1.2.3" archive) `shouldReturn` InstallDetermined NoCodeOnInstall
+        resolved evidenceReads (details "1.2.4" archive) >>= (`shouldSatisfy` permanentFailure)
         readIORef count `shouldReturn` 1
 
 context :: InstallArtifactRead -> InstallEvidenceContext
@@ -172,7 +172,7 @@ counter :: IORef Int -> ByteString -> InstallArtifactRead
 counter count bytes _ _ pay = modifyIORef' count (+ 1) >> pay (BS.length bytes) $> Right bytes
 
 resolved :: (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> PackageDetails -> IO InstallEvidenceResult
-resolved reads value = reads value >>= runSubject
+resolved evidenceReads value = evidenceReads value >>= runSubject
 
 runSubject :: Maybe InstallEvidenceRead -> IO InstallEvidenceResult
 runSubject = maybe (fail "native evidence provider omitted a subject") (\(InstallEvidenceRead readFact) -> readFact)

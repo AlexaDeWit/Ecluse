@@ -63,8 +63,8 @@ spec = describe "public install evidence boundary" $ do
         withSweeper $ \deadlines -> withStub status200 "evidence bytes" $ \stub -> do
             runtime <- testServeRuntime deadlines noopMetricsPort
             let deps = (dependencies stub){pdInboundToken = Just (mkSecret "edge-secret")}
-            reads <- boundReads deps runtime
-            runEvidence reads (subject stub) `shouldReturn` InstallDetermined NoCodeOnInstall
+            evidenceReads <- boundReads deps runtime
+            runEvidence evidenceReads (subject stub) `shouldReturn` InstallDetermined NoCodeOnInstall
             requests <- allCaptured stub
             map (headerValue "authorization") requests `shouldBe` [Nothing]
             map (headerValue "cookie") requests `shouldBe` [Nothing]
@@ -76,30 +76,30 @@ spec = describe "public install evidence boundary" $ do
             built <- newIORef (0 :: Int)
             let provider = InstallEvidenceProvider (\_ -> pure (\_ -> modifyIORef' built (+ 1) $> Nothing))
                 deps = (dependencies stub){pdFirstParty = const True, pdInstallEvidence = Just provider}
-            reads <- boundReads deps runtime
-            reads (subject stub) >>= (`shouldSatisfy` isNothing)
+            evidenceReads <- boundReads deps runtime
+            evidenceReads (subject stub) >>= (`shouldSatisfy` isNothing)
             readIORef built `shouldReturn` 0
             allCaptured stub `shouldReturn` []
     it "refuses a foreign artifact authority before HTTP" $
         withSweeper $ \deadlines -> withStub status200 "never read" $ \stub -> do
             runtime <- testServeRuntime deadlines noopMetricsPort
-            reads <- boundReads (dependencies stub) runtime
+            evidenceReads <- boundReads (dependencies stub) runtime
             let foreignSubject = (subject stub){pkgArtifacts = sampleArtifact{artUrl = "https://foreign.invalid/archive"} :| []}
-            runEvidence reads foreignSubject >>= (`shouldSatisfy` permanentFailure)
+            runEvidence evidenceReads foreignSubject >>= (`shouldSatisfy` permanentFailure)
             allCaptured stub `shouldReturn` []
     it "honours authority cooldown without another evidence GET" $
         withSweeper $ \deadlines -> withStubHeaders status503 [("Retry-After", "30")] "busy" $ \stub -> do
             runtime <- testServeRuntime deadlines noopMetricsPort
-            reads <- boundReads (dependencies stub) runtime
-            replicateM_ 2 (runEvidence reads (subject stub) >>= (`shouldSatisfy` transientFailure))
+            evidenceReads <- boundReads (dependencies stub) runtime
+            replicateM_ 2 (runEvidence evidenceReads (subject stub) >>= (`shouldSatisfy` transientFailure))
             length <$> allCaptured stub `shouldReturn` 1
     it "applies the reduced per-read byte ceiling" $
         withSweeper $ \deadlines -> withStub status200 "larger than four bytes" $ \stub -> do
             runtime <- testServeRuntime deadlines noopMetricsPort
             let deps = dependencies stub
                 bounded = deps{pdLimits = (pdLimits deps){maxMirrorArtifactBytes = 4}}
-            reads <- boundReads bounded runtime
-            runEvidence reads (subject stub) >>= (`shouldSatisfy` permanentFailure)
+            evidenceReads <- boundReads bounded runtime
+            runEvidence evidenceReads (subject stub) >>= (`shouldSatisfy` permanentFailure)
 
 dependencies :: Stub -> PackumentDeps
 dependencies stub =
@@ -128,7 +128,7 @@ transportProvider = InstallEvidenceProvider $ \context -> pure $ \details -> do
             Just (Right _) -> InstallDetermined NoCodeOnInstall
 
 runEvidence :: (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> PackageDetails -> IO InstallEvidenceResult
-runEvidence reads details = reads details >>= maybe (fail "expected a public evidence subject") (\(InstallEvidenceRead action) -> action)
+runEvidence evidenceReads details = evidenceReads details >>= maybe (fail "expected a public evidence subject") (\(InstallEvidenceRead action) -> action)
 
 permanentFailure, transientFailure :: InstallEvidenceResult -> Bool
 permanentFailure = \case
