@@ -38,6 +38,7 @@ import Ecluse.Core.Registry.Request (baseRequestUrl, mkBaseRequest)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooManyVersions), Limits (maxMetadataBytes, maxVersionCount), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge)
 import Ecluse.Core.Server.Metadata (ecosystemMetadataReads, privateMetadataClient)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (Version, mkVersion)
@@ -72,7 +73,7 @@ statusSpec eco = describe "upstream statuses" $ do
                 let origin = chargingFullReads (\n -> modifyIORef' charges (+ n)) (perCallerOrigin defaultLimits exchanges (mkBaseRequest (loopbackRegistryUrl (stubBaseUrl stub))) Nothing)
                     client = privateMetadataClient (ecosystemMetadataReads (rdPrepareRead eco) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
                 _ <- fetchVersionMetadata client (thing eco) (releaseOf eco)
-                let preparation = preparationBytes eco (stubBaseUrl stub)
+                let preparation = preparationCharge eco (stubBaseUrl stub)
                 readIORef charges `shouldReturn` preparation
                 _ <- fetchFullManifest client (thing eco)
                 readIORef charges `shouldReturn` (2 * preparation + BS.length document)
@@ -128,7 +129,7 @@ responseBoundSpec eco = describe "the body bound on a response" $ do
             charges <- newIORef []
             _ <- prepareManifest (rdPrepareRead eco) passthroughTracingPort origin{ocLimits = defaultLimits{maxMetadataBytes = BS.length padded}, ocChargeFullRead = \n -> modifyIORef' charges (n :)} (thing eco)
             recorded <- readIORef charges
-            sum recorded `shouldBe` (BS.length padded + preparationBytes eco (originBaseUrl origin))
+            sum recorded `shouldBe` (BS.length padded + preparationCharge eco (originBaseUrl origin))
 
     fetchCase eco "gzip-bound" "bounds decompressed size: a small gzip body that inflates past the cap is refused" $ do
         -- The compressed body is under the cap, so only the decompressed-size bound explains a refusal.
@@ -301,8 +302,8 @@ withReadStub eco status headers document = withRoutedStub $ \captured ->
 captureBase :: Captured -> Text
 captureBase captured = "http://" <> maybe "" decodeUtf8 (headerValue "Host" captured)
 
-preparationBytes :: ReadFixture -> Text -> Int
-preparationBytes eco base = maybe 0 (BS.length . ($ base)) (rdDiscovery eco)
+preparationCharge :: ReadFixture -> Text -> Int
+preparationCharge eco base = maybe 0 (bufferedChunkCharge . BS.length . ($ base)) (rdDiscovery eco)
 
 assertHeldFailure :: ReadFixture -> MetadataError -> Either MetadataError ManifestFields -> Either MetadataError VersionRead -> Expectation
 assertHeldFailure eco failure full selected = case rdFraming eco of
