@@ -32,7 +32,7 @@ spec = describe "independent conditions" $ do
             for_ ["loaded", "concurrencyOne"] $ \whichPass ->
                 poRows obligation `shouldSatisfy` elem ("pypi/" <> scenario <> "/" <> whichPass)
     it "requires every native Cargo capture and allocation leg independently" $ do
-        let conditions = Map.fromList [("compiler", "declared"), ("optimisation", "-O1"), ("profiling", "off")]
+        let conditions = Map.fromList [("compiler", "declared"), ("optimisation", "-O1"), ("profiling", "off"), ("mode", "captures"), ("passes", "5")]
         obligation <- expectRight (compileObligation "allocation" "ecosystem-cargo" conditions)
         poRows obligation
             `shouldMatchList` [ "cargo/" <> package <> "/" <> leg
