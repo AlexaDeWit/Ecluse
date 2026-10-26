@@ -226,8 +226,8 @@ cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
         for_ [(scopeRule, cargoScopeRefusal), (deprecatedRule, cargoDeprecationRefusal)] $ \(rules, refusal) ->
             it ("refuses the shared " <> show refusal) $
                 refusalsFor role (overrideEnv "ECLUSE_RULES" rules cargoGateEnv) `shouldReturn` [refusal]
-        it "refuses aliased Cargo blocks below a higher allow and at admission only" $ do
-            errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"alias-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"alias-deprecated\":{\"type\":\"DenyIfDeprecated\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"fixture@1.0.0\",\"precedence\":999}}" cargoGateEnv)
+        it "refuses aliased Cargo blocks below a higher allow with an admission-only deny" $ do
+            errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"alias-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\",\"precedence\":1},\"alias-deprecated\":{\"type\":\"DenyIfDeprecated\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"fixture@1.0.0\",\"precedence\":999}}" cargoGateEnv)
             errors `shouldMatchList` [cargoScopeRefusal, cargoDeprecationRefusal]
         it "accumulates duplicate Cargo blocks and an independent advisory refusal" $ do
             let shared = "{\"scope-a\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"scope-b\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
@@ -262,7 +262,8 @@ cargoMaintenanceCapabilitiesSpec = describe "Cargo maintenance capabilities" $ d
             errors <- refusalsFor role cargoMirrorEnv
             errors `shouldMatchList` [StoreMaintenanceUnavailable Cargo (NoControlPlane TagRegistry), StoreMaintenanceUnavailable Cargo (PrivateCacheUnavailable "registry has no inventory control plane")]
         it "refuses protocol maintenance without native physical deletion" $ do
-            config <- expectConfig cargoGateEnv (Just (mountDocFor "cargo" ["\"mirrorTarget\":{\"verdaccio\":{\"url\":\"https://target.example.test/\",\"token\":\"t\",\"permitDeletion\":true}}"]))
+            let document = mountDocFor "cargo" ["\"privateUpstream\":{\"codeArtifact\":{\"url\":\"" <> codeArtifactDomain <> "/cargo/internal/\"}}", "\"mirrorTarget\":{\"verdaccio\":{\"url\":\"https://target.example.test/\",\"token\":\"t\",\"permitDeletion\":true}}"]
+            config <- expectConfig cargoGateEnv (Just document)
             leftToMaybe (vetted role config) `shouldBe` Just [StoreMaintenanceUnavailable Cargo NoProtocolMaintenance]
         it "refuses an incompatible Cargo private cache while retaining a supported mirror" $ do
             let document = mountDocFor "cargo" ["\"privateUpstream\":{\"verdaccio\":{\"url\":\"https://private.example.test/\",\"token\":\"t\",\"permitDeletion\":true}}", "\"mirrorTarget\":{\"codeArtifact\":{\"url\":\"" <> codeArtifactDomain <> "/cargo/mirror/\"}}"]
