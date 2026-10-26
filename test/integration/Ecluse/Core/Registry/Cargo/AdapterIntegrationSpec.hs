@@ -240,6 +240,27 @@ isolationSpec = describe "native source isolation" $ do
             simpleStatus listing `shouldBe` status403
             archive <- getPath publicArchive app
             simpleStatus archive `shouldBe` status404
+    native "026" "refuses unavailable public evidence without exposing unrecorded private data" $ do
+        let unavailableIndex captured
+                | capPath captured == "/index/th/in/thing" = (status503, [], "public index unavailable")
+                | otherwise = defaultReply captured
+        for_ [methodGet, methodHead] $ \method ->
+            withCargoProxy defaultReply unavailableIndex $ \proxy -> do
+                let target = stateTarget (privateBase proxy <> "/index")
+                view <- mirrorViewWith target (\_ _ -> pure (Right StateAbsent))
+                let app = proxyWith proxy (\deps -> (withPrivateBaseUrl (Just (loopbackRegistryUrl (privateBase proxy <> "/index"))) deps){pdMirrorState = Just view}) id
+                for_ [publicIndex, publicArchive] $ \path -> do
+                    response <- requestAt method path Wai.defaultRequest app
+                    simpleStatus response `shouldBe` status503
+                    let body = toStrict (simpleBody response)
+                    BS.isInfixOf "\"vers\"" body `shouldBe` False
+                    BS.isInfixOf archiveBytes body `shouldBe` False
+                    when (method == methodHead) (simpleBody response `shouldBe` "")
+                for_ [privateCalls proxy, publicCalls proxy] $ \captured -> do
+                    requestPaths <- map capPath <$> captured
+                    requestPaths `shouldContain` ["/index/config.json"]
+                    requestPaths `shouldContain` ["/index/th/in/thing"]
+                    requestPaths `shouldNotContain` ["/archives/thing/1.2.3"]
     native "018" "serves only completed source versions and excludes an unrecorded target sibling" $
         withCargoProxy (indexReply (row "1.2.3" <> "\n" <> row "2.3.4")) (const (status404, [], "")) $ \proxy -> do
             let target = stateTarget (privateBase proxy <> "/index")

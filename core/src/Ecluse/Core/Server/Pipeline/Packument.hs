@@ -310,9 +310,13 @@ serveMergedPackument serving evalCtx record privResult pubResult =
                     Just miss | pdFirstParty deps name -> firstPartyMissed serving miss
                     _ -> case packumentPlan sources trustedVersions (paDeniedEvidence public) of
                         Just plan -> serveResolved serving sources plan
-                        Nothing ->
-                            noServeableVersions serving (ctxAdvisoryEtag evalCtx) (paVerdicts public) $
-                                collectDecisions privResult pubResult (privateExclusions <> managedExclusions <> paExclusions public)
+                        Nothing
+                            | pdReadSourceSelection deps == ManagedMirrorAndPublic
+                            , OriginUnresolved <- pubResult ->
+                                mirrorUnavailable serving
+                            | otherwise ->
+                                noServeableVersions serving (ctxAdvisoryEtag evalCtx) (paVerdicts public) $
+                                    collectDecisions privResult pubResult (privateExclusions <> managedExclusions <> paExclusions public)
   where
     deps = psvDeps serving
     name = psvName serving

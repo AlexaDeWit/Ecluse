@@ -133,6 +133,7 @@ integrationObligations =
         , "integration/cargo/native-023"
         , "integration/cargo/native-024"
         , "integration/cargo/native-025"
+        , "integration/cargo/native-026"
         , "integration.serving.cargo.default-denial"
         , "integration.serving.cargo.identity-precedence"
         , "integration.serving.cargo.authorised-union"
