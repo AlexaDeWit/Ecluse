@@ -77,7 +77,7 @@ withCargoTlsEdge plane port action = do
         ready <- awaitContainerLog name ((> 0) . startedWorkers) 40
         unless ready (fail "the Cargo TLS edge did not start within the timeout")
         published <- publishedPort name "443/tcp"
-        action name ("https://127.0.0.1:" <> show published)
+        action name ("https://localhost:" <> show published)
 
 cargoEdgeConfig :: Int -> Text
 cargoEdgeConfig port =
@@ -103,7 +103,7 @@ cargoEdgeConfig port =
 cargoTlsManager :: GlobalDataPlane -> IO Http.Manager
 cargoTlsManager plane = do
     store <- readCertificateStore (gdpWorkDir plane </> "certs/bundle.pem") >>= maybe (fail "the Cargo fixture CA bundle is unreadable") pure
-    let parameters = TLS.defaultParamsClient "127.0.0.1" ""
+    let parameters = TLS.defaultParamsClient "localhost" ""
         trusted = parameters{TLS.clientShared = (TLS.clientShared parameters){TLS.sharedCAStore = store}}
     Http.newManager (mkManagerSettings (TLSSettings trusted) Nothing)
 
