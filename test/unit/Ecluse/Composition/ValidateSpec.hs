@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Check native policies and endpoint capabilities for each boot role.
 module Ecluse.Composition.ValidateSpec (spec) where
 
 import Data.Map.Strict qualified as Map
@@ -26,16 +27,25 @@ import Ecluse.Composition.BootError (
         PublicationTargetWithoutPublish,
         PublishStaticCredentialNeedsEdge,
         RuleBlockedOnMount,
+        StoreMaintenanceUnavailable,
         StoreTagConflict,
         UploadConfigurationRequired
     ),
+    StoreMaintenanceReason (NoControlPlane, NoProtocolMaintenance, PrivateCacheUnavailable),
  )
 import Ecluse.Composition.Endpoints (publicationTargetUrl)
 import Ecluse.Composition.Support (
+    cargoCodeArtifactEnv,
+    cargoDeprecationRefusal,
+    cargoGateEnv,
+    cargoMirrorEnv,
+    cargoScopeRefusal,
     clearedUrl,
+    codeArtifactDomain,
     codeArtifactEnvVars,
     codeArtifactMirrorUrl,
     expectConfig,
+    mountDocFor,
     noMaintenanceBackend,
     overrideEnv,
     publicGateEnv,
@@ -47,7 +57,7 @@ import Ecluse.Composition.Support (
  )
 import Ecluse.Composition.Types (BootRole (..), MirrorRole (..), RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter), registryRoleOf)
 import Ecluse.Composition.Validate (
-    ValidatedPlan (vpMirrorStores, vpMounts, vpProgressFloor, vpPublications, vpSettings),
+    ValidatedPlan (vpMirrorStores, vpMounts, vpPrivateCaches, vpProgressFloor, vpPublications, vpSettings),
     VettedMount (vmEcosystem, vmMount),
     VettedPublication (vpubFirstParty, vpubStaticCredential, vpubTarget),
     vetBoot,
@@ -60,12 +70,13 @@ import Ecluse.Config (
     Config (configApp),
     FirstParty (FirstPartyNpmScopes),
     MirrorEndpoint (meUploadUrl, meUsername),
-    MountConfig (mntMirrorTarget),
+    MountConfig (mntMirrorTarget, mntPublicationTarget),
+    PublicationEndpoint (peUsername),
     StoreTag (TagRegistry),
     mountPolicy,
  )
 import Ecluse.Core.Credential (ClientCredential (credSecret), unSecret)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterPublish), adapterFor)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
@@ -78,7 +89,10 @@ spec :: Spec
 spec = do
     mirrorCapabilitiesSpec
     publicationCapabilitiesSpec
+    cargoPublicationCapabilitiesSpec
     ruleBlocksSpec
+    cargoRuleBlocksSpec
+    cargoMaintenanceCapabilitiesSpec
     clearedSpec
     refusalSpec
     advisoryStoreSpec
@@ -89,12 +103,12 @@ mirrorCapabilitiesSpec :: Spec
 mirrorCapabilitiesSpec = describe "role-specific mirror capabilities" $ do
     it "requires durable state on a producer without requiring a writer endpoint" $ do
         config <- expectConfig pypiMirrorEnv Nothing
-        let app = withoutWriteSettings (configApp config)
+        let app = withoutWriteSettings PyPI (configApp config)
         capabilityResult (BootMirrorPipeline ServeOnly) app `shouldBe` Right ()
         capabilityResult (BootMirrorPipeline ServeOnly) app{cfgMirrorState = Nothing} `shouldBe` Left [MirrorStateRequired PyPI]
     it "requires native write settings in embedded and standalone workers" $ do
         config <- expectConfig pypiMirrorEnv Nothing
-        let app = (withoutWriteSettings (configApp config)){cfgMirrorState = Nothing}
+        let app = (withoutWriteSettings PyPI (configApp config)){cfgMirrorState = Nothing}
         for_ [ServeAndMirror, MirrorOnly] $ \role ->
             capabilityResult (BootMirrorPipeline role) app
                 `shouldBe` Left
@@ -104,10 +118,36 @@ mirrorCapabilitiesSpec = describe "role-specific mirror capabilities" $ do
                     ]
     it "does not add mirror-state or writer dependencies to Dredger and Pilot" $ do
         config <- expectConfig pypiMirrorEnv Nothing
-        let app = (withoutWriteSettings (configApp config)){cfgMirrorState = Nothing}
+        let app = (withoutWriteSettings PyPI (configApp config)){cfgMirrorState = Nothing}
         for_ [BootStorePruner, BootStorePreview, BootWithoutPipeline] $ \role -> capabilityResult role app `shouldBe` Right ()
+    it "requires durable Cargo state in every mirror pipeline role" $ do
+        config <- expectConfig cargoMirrorEnv Nothing
+        let app = (configApp config){cfgMirrorState = Nothing}
+        for_ [ServeOnly, ServeAndMirror, MirrorOnly] $ \role ->
+            capabilityResult (BootMirrorPipeline role) app `shouldBe` Left [MirrorStateRequired Cargo]
+    it "requires only the native Cargo upload setting in both writer roles" $ do
+        config <- expectConfig cargoMirrorEnv Nothing
+        let app = withoutWriteSettings Cargo (configApp config)
+            upload = UploadConfigurationRequired Cargo "mirrorTarget.registry.uploadUrl"
+        for_ [ServeAndMirror, MirrorOnly] $ \role -> do
+            capabilityResult (BootMirrorPipeline role) app `shouldBe` Left [upload]
+            capabilityResult (BootMirrorPipeline role) app{cfgMirrorState = Nothing} `shouldBe` Left [MirrorStateRequired Cargo, upload]
+        capabilityResult (BootMirrorPipeline ServeOnly) app `shouldBe` Right ()
+    it "clears token-only Cargo mirror settings without a username" $ do
+        config <- expectConfig cargoMirrorEnv Nothing
+        (Map.lookup Cargo (cfgMounts (configApp config)) >>= mntMirrorTarget >>= meUsername) `shouldBe` Nothing
+        for_ [ServeOnly, ServeAndMirror, MirrorOnly] $ \role ->
+            capabilityResult (BootMirrorPipeline role) (configApp config) `shouldBe` Right ()
+    it "requires no native state for an unmirrored Cargo producer" $ do
+        config <- expectConfig cargoGateEnv Nothing
+        capabilityResult (BootMirrorPipeline ServeOnly) (configApp config) `shouldBe` Right ()
+    it "adds no Cargo mirror state or upload setting to maintenance and Pilot" $ do
+        config <- expectConfig cargoMirrorEnv Nothing
+        let app = (withoutWriteSettings Cargo (configApp config)){cfgMirrorState = Nothing}
+        for_ [BootStorePruner, BootStorePreview, BootWithoutPipeline] $ \role ->
+            capabilityResult role app `shouldBe` Right ()
   where
-    withoutWriteSettings app = app{cfgMounts = Map.adjust stripWriter PyPI (cfgMounts app)}
+    withoutWriteSettings eco app = app{cfgMounts = Map.adjust stripWriter eco (cfgMounts app)}
     stripWriter mount = mount{mntMirrorTarget = fmap (\endpoint -> endpoint{meUploadUrl = Nothing, meUsername = Nothing}) (mntMirrorTarget mount)}
     capabilityResult role = snd . runVet (registryRoleOf role) . vetMirrorCapabilities role
 
@@ -117,17 +157,17 @@ publicationCapabilitiesSpec = describe "PyPI publication credentials by boot rol
         describe (show role) $ do
             it "refuses a static token without an explicit username" $ do
                 config <- expectConfig tokenEnv Nothing
-                result role config `shouldBe` Left [UploadConfigurationRequired PyPI "publicationTarget.registry.username"]
+                publicationResult role config `shouldBe` Left [UploadConfigurationRequired PyPI "publicationTarget.registry.username"]
             it "accepts a static token with an explicit username" $ do
                 config <- expectConfig (overrideEnv (publicationKey <> "USERNAME") "publisher" tokenEnv) Nothing
-                result role config `shouldBe` Right [PyPI]
+                publicationResult role config `shouldBe` Right [PyPI]
             it "accepts anonymous publication without a token or username" $ do
                 config <- expectConfig publicationEnv Nothing
-                result role config `shouldBe` Right [PyPI]
+                publicationResult role config `shouldBe` Right [PyPI]
     for_ [BootMirrorPipeline MirrorOnly, BootStorePruner, BootStorePreview, BootWithoutPipeline] $ \role ->
         it ("does not require a publication username under " <> show role) $ do
             config <- expectConfig tokenEnv Nothing
-            result role config `shouldBe` Right [PyPI]
+            publicationResult role config `shouldBe` Right [PyPI]
   where
     publicationKey = "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__"
     publicationEnv =
@@ -139,9 +179,103 @@ publicationCapabilitiesSpec = describe "PyPI publication credentials by boot rol
         ]
             <> publicGateEnv
     tokenEnv = overrideEnv (publicationKey <> "TOKEN") "publish-write-token" publicationEnv
-    result role config =
-        fmap (Map.keys . vpPublications) . snd . runVet (registryRoleOf role) $
-            vetBoot config <* vetMirrorCapabilities role (configApp config)
+
+publicationResult :: BootRole -> Config -> Either [BootError] [Ecosystem]
+publicationResult role config =
+    fmap (Map.keys . vpPublications) . snd . runVet (registryRoleOf role) $
+        vetBoot config <* vetMirrorCapabilities role (configApp config)
+
+cargoPublicationCapabilitiesSpec :: Spec
+cargoPublicationCapabilitiesSpec = describe "Cargo publication API by boot role" $ do
+    for_ [BootMirrorPipeline ServeAndMirror, BootMirrorPipeline ServeOnly] $ \role -> do
+        it ("requires the native Cargo API root under " <> show role) $ do
+            config <- expectConfig publicationEnv Nothing
+            publicationResult role config `shouldBe` Left [UploadConfigurationRequired Cargo "publicationTarget.registry.uploadUrl"]
+        it ("clears a Cargo token without a username under " <> show role) $ do
+            config <- expectConfig (overrideEnv (publicationKey <> "TOKEN") "publisher-token" completeEnv) Nothing
+            (Map.lookup Cargo (cfgMounts (configApp config)) >>= mntPublicationTarget >>= peUsername) `shouldBe` Nothing
+            publicationResult role config `shouldBe` Right [Cargo]
+        it ("clears anonymous Cargo publication with an explicit API under " <> show role) $ do
+            config <- expectConfig completeEnv Nothing
+            publicationResult role config `shouldBe` Right [Cargo]
+    for_ [BootMirrorPipeline MirrorOnly, BootStorePruner, BootStorePreview, BootWithoutPipeline] $ \role ->
+        it ("adds no unused Cargo publication API requirement under " <> show role) $ do
+            config <- expectConfig (overrideEnv (publicationKey <> "TOKEN") "publisher-token" publicationEnv) Nothing
+            publicationResult role config `shouldBe` Right [Cargo]
+    it "keeps a Cargo publication endpoint colocated with private reads valid for writers" $ do
+        config <- expectConfig (overrideEnv (publicationKey <> "URL") "https://private.example.test/" (overrideEnv (publicationKey <> "UPLOAD_URL") "https://private.example.test/api/" completeEnv)) Nothing
+        publicationResult (BootMirrorPipeline ServeAndMirror) config `shouldBe` Right [Cargo]
+  where
+    publicationKey = "ECLUSE_MOUNTS__CARGO__PUBLICATION_TARGET__REGISTRY__"
+    publicationEnv =
+        cargoGateEnv
+            <> [ ("ECLUSE_SERVER__AUTH_TOKEN", "edge-token")
+               , ("ECLUSE_MOUNTS__CARGO__FIRST_PARTY", "acme-*")
+               , ("ECLUSE_MOUNTS__CARGO__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/")
+               , (publicationKey <> "URL", "https://publish.example.test/")
+               ]
+    completeEnv = overrideEnv (publicationKey <> "UPLOAD_URL") "https://publish.example.test/api/" publicationEnv
+
+cargoRuleBlocksSpec :: Spec
+cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
+    for_ [MirrorWriter, MirrorPruner, MirrorPreviewer] $ \role -> describe (show role) $ do
+        it "clears the shipped policy for the Cargo mount alone" $ do
+            plan <- expectVetted role cargoGateEnv
+            map vmEcosystem (vpMounts plan) `shouldBe` [Cargo]
+            map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldBe` ["AllowIfOlderThan"]
+        for_ [(scopeRule, cargoScopeRefusal), (deprecatedRule, cargoDeprecationRefusal)] $ \(rules, refusal) ->
+            it ("refuses the shared " <> show refusal) $
+                refusalsFor role (overrideEnv "ECLUSE_RULES" rules cargoGateEnv) `shouldReturn` [refusal]
+        it "refuses aliased Cargo blocks below a higher allow and at admission only" $ do
+            errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"alias-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"alias-deprecated\":{\"type\":\"DenyIfDeprecated\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"fixture@1.0.0\",\"precedence\":999}}" cargoGateEnv)
+            errors `shouldMatchList` [cargoScopeRefusal, cargoDeprecationRefusal]
+        it "accumulates duplicate Cargo blocks and an independent advisory refusal" $ do
+            let shared = "{\"scope-a\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"scope-b\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
+                cve = "{\"cve\":{\"type\":\"DenyIfCve\",\"minCvss\":8}}"
+            errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" cve (overrideEnv "ECLUSE_RULES" shared cargoGateEnv))
+            errors `shouldMatchList` [cargoScopeRefusal, cargoScopeRefusal, cargoDeprecationRefusal, AdvisoryDenyWithoutStore Cargo ("DenyIfCve" :| [])]
+        it "keeps a missing adapter independent of the Cargo block" $ do
+            errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" scopeRule cargoGateEnv))
+            errors `shouldMatchList` [MissingAdapter RubyGems, cargoScopeRefusal]
+        it "removes both blocked types through matching Cargo rule keys" $ do
+            let env = overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"scope\":{\"enabled\":false},\"deprecated\":{\"enabled\":false}}" (overrideEnv "ECLUSE_RULES" bothRules cargoGateEnv)
+            plan <- expectVetted role env
+            map (ruleName . prRule) (concatMap (mountPolicy . vmMount) (vpMounts plan)) `shouldBe` ["AllowIfOlderThan"]
+        it "keeps npm mount policy out of the Cargo policy" $ do
+            plan <- expectVetted role (overrideEnv "ECLUSE_MOUNTS__NPM__RULES" bothRules (overrideEnv "ECLUSE_MOUNTS__NPM__ENABLED" "true" cargoGateEnv))
+            map vmEcosystem (vpMounts plan) `shouldBe` [Npm, Cargo]
+            let cargoPolicies = [mountPolicy (vmMount mount) | mount <- vpMounts plan, vmEcosystem mount == Cargo]
+            map (map (ruleName . prRule)) cargoPolicies `shouldBe` [["AllowIfOlderThan"]]
+        it "ignores blocked declarations on a disabled Cargo mount" $ do
+            let env = overrideEnv "ECLUSE_MOUNTS__NPM__ENABLED" "true" (overrideEnv "ECLUSE_MOUNTS__CARGO__ENABLED" "false" (overrideEnv "ECLUSE_RULES" bothRules cargoGateEnv))
+            plan <- expectVetted role env
+            map vmEcosystem (vpMounts plan) `shouldBe` [Npm]
+  where
+    scopeRule = "{\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"}}"
+    deprecatedRule = "{\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
+    bothRules = "{\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}"
+
+cargoMaintenanceCapabilitiesSpec :: Spec
+cargoMaintenanceCapabilitiesSpec = describe "Cargo maintenance capabilities" $ do
+    for_ [MirrorPruner, MirrorPreviewer] $ \role -> describe (show role) $ do
+        it "refuses generic Cargo inventory for both mirror and private cache" $ do
+            errors <- refusalsFor role cargoMirrorEnv
+            errors `shouldMatchList` [StoreMaintenanceUnavailable Cargo (NoControlPlane TagRegistry), StoreMaintenanceUnavailable Cargo (PrivateCacheUnavailable "registry has no inventory control plane")]
+        it "refuses protocol maintenance without native physical deletion" $ do
+            config <- expectConfig cargoGateEnv (Just (mountDocFor "cargo" ["\"mirrorTarget\":{\"verdaccio\":{\"url\":\"https://target.example.test/\",\"token\":\"t\",\"permitDeletion\":true}}"]))
+            leftToMaybe (vetted role config) `shouldBe` Just [StoreMaintenanceUnavailable Cargo NoProtocolMaintenance]
+        it "refuses an incompatible Cargo private cache while retaining a supported mirror" $ do
+            let document = mountDocFor "cargo" ["\"privateUpstream\":{\"verdaccio\":{\"url\":\"https://private.example.test/\",\"token\":\"t\",\"permitDeletion\":true}}", "\"mirrorTarget\":{\"codeArtifact\":{\"url\":\"" <> codeArtifactDomain <> "/cargo/mirror/\"}}"]
+            config <- expectConfig cargoGateEnv (Just document)
+            leftToMaybe (vetted role config) `shouldBe` Just [StoreMaintenanceUnavailable Cargo NoProtocolMaintenance]
+        it "clears native CodeArtifact mirror and private-cache maintenance" $ do
+            plan <- expectVetted role cargoCodeArtifactEnv
+            Map.keys (vpMirrorStores plan) `shouldBe` [Cargo]
+            Map.keys (vpPrivateCaches plan) `shouldBe` [Cargo]
+    it "retains generic Cargo registry use in every pipeline role" $ do
+        config <- expectConfig cargoMirrorEnv Nothing
+        for_ [ServeOnly, ServeAndMirror, MirrorOnly] $ \role ->
+            publicationResult (BootMirrorPipeline role) config `shouldBe` Right []
 
 ruleBlocksSpec :: Spec
 ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do

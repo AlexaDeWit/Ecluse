@@ -26,7 +26,7 @@ import Ecluse.Composition.BootError (
     BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, PrivateUpstreamOnPublicUpstream, RuleBlockedOnMount, SplitRoleNeedsDurableQueue),
     renderBootError,
  )
-import Ecluse.Composition.Support (captureBoot, collapsedMirrorRefusal, collapsingMirrorTarget, expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, privateUpstreamUrl, publicGateEnv, reportLines, withoutMirrorTargetToken, withoutMirrorTargetUrl, withoutQueueUrl)
+import Ecluse.Composition.Support (captureBoot, cargoDeprecationRefusal, cargoGateEnv, cargoScopeRefusal, collapsedMirrorRefusal, collapsingMirrorTarget, expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, privateUpstreamUrl, publicGateEnv, reportLines, withoutMirrorTargetToken, withoutMirrorTargetUrl, withoutQueueUrl)
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
@@ -104,6 +104,38 @@ spec = sequential $ do
                         "ECLUSE_MOUNTS__PYPI__RULES"
                         "{\"custom\":{\"enabled\":false}}"
                         (overrideEnv "ECLUSE_RULES" "{\"custom\":{\"type\":\"DenyInstallTimeExecution\"}}" bothMounts)
+            checkConfig env `shouldReturn` Left ExitSuccess
+            serves ["proxy"] env
+
+        for_
+            [ ("AllowScope", ",\"scope\":\"acme\"", cargoScopeRefusal)
+            , ("DenyIfDeprecated", "", cargoDeprecationRefusal)
+            ]
+            $ \(name, parameters, refusal) ->
+                it ("refuses Cargo " <> name <> " at boot and check-config") $ do
+                    let rules = "{\"custom\":{\"type\":\"" <> name <> "\"" <> parameters <> "}}"
+                        env = overrideEnv "ECLUSE_RULES" rules cargoGateEnv
+                        expected = renderBootError refusal
+                    (bootOutcome, bootReport) <- bootRefusal ["proxy"] env
+                    (checkOutcome, checkReport) <- checkConfigRefusal env
+                    bootOutcome `shouldBe` Left (ExitFailure 2)
+                    checkOutcome `shouldBe` refusedCheck
+                    bootReport `shouldBe` [expected]
+                    checkReport `shouldBe` [expected, "configuration: refused"]
+        it "boots and checks the Cargo defaults without mirror state" $ do
+            checkConfig cargoGateEnv `shouldReturn` Left ExitSuccess
+            serves ["proxy"] cargoGateEnv
+        it "boots and checks Cargo after same-key suppression of both blocked types" $ do
+            let env =
+                    overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"scope\":{\"enabled\":false},\"deprecated\":{\"enabled\":false}}" $
+                        overrideEnv "ECLUSE_RULES" "{\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}" cargoGateEnv
+            checkConfig env `shouldReturn` Left ExitSuccess
+            serves ["proxy"] env
+        it "boots and checks npm when the Cargo mount carrying blocked rules is disabled" $ do
+            let env =
+                    overrideEnv "ECLUSE_MOUNTS__NPM__ENABLED" "true" $
+                        overrideEnv "ECLUSE_MOUNTS__CARGO__ENABLED" "false" $
+                            overrideEnv "ECLUSE_RULES" "{\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"},\"deprecated\":{\"type\":\"DenyIfDeprecated\"}}" cargoGateEnv
             checkConfig env `shouldReturn` Left ExitSuccess
             serves ["proxy"] env
 
@@ -431,6 +463,7 @@ caseKeys :: [String]
 caseKeys =
     ordNub $
         map fst awsRunEnv
+            <> map fst cargoGateEnv
             <> [ "ECLUSE_CONFIG"
                , "AWS_ENDPOINT_URL"
                , "AWS_ENDPOINT_URL_SQS"
@@ -447,6 +480,7 @@ caseKeys =
                , "ECLUSE_MOUNTS__PYPI__ENABLED"
                , "ECLUSE_MOUNTS__PYPI__RULES"
                , "ECLUSE_MOUNTS__NPM__RULES"
+               , "ECLUSE_MOUNTS__CARGO__RULES"
                , "ECLUSE_ADVISORIES__URL"
                , "ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL"
                , "ECLUSE_ADVISORIES__EPSS_FEED_URL"

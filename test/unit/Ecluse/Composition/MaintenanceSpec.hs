@@ -2,8 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Maintenance construction and credentials use each store's cleared authority.
 module Ecluse.Composition.MaintenanceSpec (spec) where
 
+import Data.Aeson (encode)
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -17,16 +19,16 @@ import Ecluse.Composition.Credential (noCredentialProviders)
 import Ecluse.Composition.Maintenance (BudgetPorts (BudgetPorts, bpGateFor, bpNominalPace, bpOverrides), StorePorts (..), buildStoreMaintenance, buildStoreObservation, buildUpstreamProbe, planStoreMaintenance, readUpstreamSafety, resolvedBudget, storeScope, upstreamFindings)
 import Ecluse.Composition.Maintenance.Plan (ClearedBackend (cbFetchManifest, cbUrl), vetStoreBackends)
 import Ecluse.Composition.Maintenance.Support (clearedBackendsFor, mountsFor, noAdapter, privateCaches, refusalsOf, unaddressablePrivateUpstream, verdaccioEnv, vetted, withoutPrivateAuthority)
-import Ecluse.Composition.Support (NoCredentials (NoCredentials), clearedUrl, codeArtifactEnvVars, expectConfig, staticEnvVars, twoStoreEnv, withObservablePrivate)
+import Ecluse.Composition.Support (NoCredentials (NoCredentials), cargoCodeArtifactEnv, clearedUrl, codeArtifactEnvVars, expectConfig, overrideEnv, staticEnvVars, twoStoreEnv, withObservablePrivate)
 import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner))
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig (cfgMounts), Config (configApp, configMounts), MountConfig (mntPrivateUpstream), PrivateEndpoint, QuotaOverride (QuotaOverride, qoQuotas, qoScope, qoWeights))
 import Ecluse.Core.BuildIdentity (parseOperatorContact, renderUserAgent, userAgent)
 import Ecluse.Core.Credential (AuthToken (AuthToken), CredentialProvider (CredentialProvider), mkSecret)
 import Ecluse.Core.Deadline (Deadlines)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
-import Ecluse.Core.Package (PackageName)
+import Ecluse.Core.Package (PackageInfo (infoName, infoVersions), PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
@@ -34,20 +36,23 @@ import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Maintenance (CompletionNotion (CompletesOnCall), ConsentVerdict (ConsentGranted, ConsentWithheld), DeleteCeiling (AtMost), RefillPosture (RefillPermitted), RetryAdvice (RetryWorthwhile), StoreFacts (..), StoreFault (faultRetry), StoreMaintenance (deleteVersions, readStoreManifest, storeFacts, verifyConsent), StoreManifestRead, StoreObservation (obFacts, obReadManifest, obVerifyConsent), VersionOutcome (VersionRemoved))
 import Ecluse.Core.Registry.Maintenance.Budget (QuotaDimension (StoreRequests), QuotaOrigin (QuotaDeclared, QuotaDerived), RequestGate (RequestGate, gateSpend), RequestKind (CursorWrite, DeleteBatch, ListingPage), StoreBudget (bgCosts, bgOrigin, bgQuotas, bgScope), mkQuotaScope, requestKinds, undeclaredBudget)
 import Ecluse.Core.Registry.Maintenance.Upstream (ExternalConnection (ExternalConnection), RepositoryName (RepositoryName), UndecidabilityReason (NetworkFailure, NoMechanism), UnsafeReason (ConfigurationEvidence), UpstreamSafety (Safe, Undecidable, Unsafe))
-import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent, MetadataFetch))
+import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError (MetadataAbsent, MetadataFetch))
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareRead)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocToken), originClient)
 import Ecluse.Core.Security (Limits, defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Text (joinUrlPath, registryPath)
+import Ecluse.Test.Corpus.Cargo (cargoCaptureDiscoveryBytes)
 import Ecluse.Test.Deadline (withExchangeClient, withSweeper)
 import Ecluse.Test.Env (withAmbientAws)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore, testDeleteGuard)
 import Ecluse.Test.Package (npmVersion, unsafeRegistryUrl, unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
-import Ecluse.Test.Stub (Captured (capMethod), allCaptured, headerValue, stubBaseUrl, withRoutedStub)
-import Network.HTTP.Types.Status (status200, status201)
+import Ecluse.Test.Registry.Cargo.Metadata (cargoTestName, cargoTestRecord)
+import Ecluse.Test.Stub (Captured (capMethod, capPath), allCaptured, headerValue, stubBaseUrl, withRoutedStub)
+import Ecluse.Test.Support (expectRight)
+import Network.HTTP.Types.Status (status200, status201, status404)
 
 spec :: Spec
 spec = do
@@ -110,15 +115,12 @@ buildSpec = describe "buildStoreMaintenance -- a store swept through the ecosyst
 
 metadataCredentialSpec :: Spec
 metadataCredentialSpec = describe "maintenance metadata credentials" $ do
-    for_ metadataBuilders $ \(role, build) ->
+    for_ metadataBuilders $ \(registryRole, role, build) ->
         for_ [Npm, PyPI] $ \eco ->
             it ("refreshes credentials on both " <> show eco <> " targets during " <> role) $ withAmbientAws $ do
                 config <- expectConfig twoStoreEnv Nothing
-                mirrors <- either (fail . show) pure (snd (vetted MirrorPruner (configMounts config)))
-                caches <- either (fail . show) pure (privateCaches adapterFor MirrorPruner config)
-                mirror <- maybe (fail "missing mirror") pure (Map.lookup eco mirrors)
-                (_, cache) <- maybe (fail "missing private cache") pure (Map.lookup eco caches)
-                for_ [mirror, cache] $ \cleared -> do
+                targets <- clearedMetadataTargets registryRole eco config
+                for_ targets $ \cleared -> do
                     counter <- newIORef (0 :: Int)
                     let provider = CredentialProvider $ do
                             modifyIORef' counter (+ 1)
@@ -128,6 +130,39 @@ metadataCredentialSpec = describe "maintenance metadata credentials" $ do
                     map (lookup hAuthorization . requestHeaders) requests `shouldBe` expectedHeaders eco
                     map path requests `shouldBe` replicate 2 (expectedPath eco (clearedUrl cleared))
                     readIORef counter `shouldReturn` 2
+    for_ metadataBuilders $ \(registryRole, role, build) ->
+        it ("refreshes raw Cargo credentials through discovery and index reads during " <> role) $
+            withAmbientAws $
+                withRoutedStub (const (status404, [], "public fallback forbidden")) $ \public -> do
+                    let publicUrl = T.replace "http://" "https://" (stubBaseUrl public)
+                    config <- expectConfig (overrideEnv "ECLUSE_MOUNTS__CARGO__PUBLIC_UPSTREAM__REGISTRY__URL" (toString publicUrl) cargoCodeArtifactEnv) Nothing
+                    targets <- clearedMetadataTargets registryRole Cargo config
+                    for_ targets $ \cleared -> do
+                        counter <- newIORef (0 :: Int)
+                        let storePath = registryPath (clearedUrl cleared)
+                            configPath = encodeUtf8 (joinUrlPath storePath "config.json")
+                            indexPath = encodeUtf8 (joinUrlPath storePath "fi/xt/fixture")
+                            answer captured
+                                | capPath captured == configPath = (status200, [], toLazy cargoCaptureDiscoveryBytes)
+                                | capPath captured == indexPath = (status200, [], encode (cargoTestRecord "1.0.0") <> "\n")
+                                | otherwise = (status404, [], "unexpected store request")
+                            provider = CredentialProvider $ do
+                                modifyIORef' counter (+ 1)
+                                count <- readIORef counter
+                                pure (AuthToken (mkSecret ("token-" <> show count)) Nothing)
+                        withRoutedStub answer $ \storeStub -> withSweeper $ \deadlines -> do
+                            let endpoint = loopbackRegistryUrl (stubBaseUrl storeStub <> storePath)
+                            readManifest <- build (anonymousPorts deadlines){spCredential = Just provider} defaultLimits cleared{cbUrl = endpoint}
+                            replicateM_ 2 $ do
+                                manifest <- expectRight =<< readManifest cargoTestName
+                                infoName (manifestInfo manifest) `shouldBe` cargoTestName
+                                Map.keys (infoVersions (manifestInfo manifest)) `shouldBe` ["1.0.0"]
+                            requests <- allCaptured storeStub
+                            map capMethod requests `shouldBe` replicate 4 "GET"
+                            map capPath requests `shouldBe` [configPath, indexPath, configPath, indexPath]
+                            map (headerValue "Authorization") requests `shouldBe` [Just "token-1", Just "token-1", Just "token-2", Just "token-2"]
+                            readIORef counter `shouldReturn` 2
+                    allCaptured public `shouldReturn` []
     it "keeps an anonymous private observation unauthenticated" $ do
         config <- expectConfig (withObservablePrivate (withoutPrivateAuthority codeArtifactEnvVars)) Nothing
         caches <- either (fail . show) pure (privateCaches adapterFor MirrorPreviewer config)
@@ -140,11 +175,19 @@ metadataCredentialSpec = describe "maintenance metadata credentials" $ do
     expectedPath PyPI url = encodeUtf8 (joinUrlPath (registryPath url) "simple/leftpad/")
     expectedPath _ url = encodeUtf8 (joinUrlPath (registryPath url) "leftpad")
 
-metadataBuilders :: [(String, StorePorts -> Limits -> ClearedBackend -> IO StoreManifestRead)]
+metadataBuilders :: [(RegistryRole, String, StorePorts -> Limits -> ClearedBackend -> IO StoreManifestRead)]
 metadataBuilders =
-    [ ("deletion", \ports limits cleared -> readStoreManifest <$> buildStoreMaintenance ports limits cleared)
-    , ("preview", observingMetadata)
+    [ (MirrorPruner, "deletion", \ports limits cleared -> readStoreManifest <$> buildStoreMaintenance ports limits cleared)
+    , (MirrorPreviewer, "preview", observingMetadata)
     ]
+
+clearedMetadataTargets :: RegistryRole -> Ecosystem -> Config -> IO [ClearedBackend]
+clearedMetadataTargets role eco config = do
+    mirrors <- expectRight (snd (vetted role (configMounts config)))
+    caches <- expectRight (privateCaches adapterFor role config)
+    mirror <- maybe (fail "missing mirror") pure (Map.lookup eco mirrors)
+    (_, cache) <- maybe (fail "missing private cache") pure (Map.lookup eco caches)
+    pure [mirror, cache]
 
 observingMetadata :: StorePorts -> Limits -> ClearedBackend -> IO StoreManifestRead
 observingMetadata ports limits cleared = obReadManifest <$> buildStoreObservation ports limits cleared
