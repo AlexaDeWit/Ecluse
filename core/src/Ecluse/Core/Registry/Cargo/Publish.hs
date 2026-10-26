@@ -25,11 +25,11 @@ import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), ParseError (..), PublishBodyFault (PublishMalformed), PublishError (PublishError), PublishFault (..), UrlFormationError (UnparseableUrl), isSuccessStatus)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (..), MirrorRequirements (..), MirrorStateRequirement (DurableVersionState), PublishRequestBody (..), UploadEndpointRequirement (ExplicitUploadEndpoint), UploadIdentityRequirement (TokenIdentity), WorkerMetadataRead (NativeChargedWorkerRead))
 import Ecluse.Core.Registry.CachedDocument (cargoCached)
-import Ecluse.Core.Registry.Cargo.Archive (cargoPublicationMetadata, cargoUploadAgreement, inspectCargoArchive)
+import Ecluse.Core.Registry.Cargo.Archive (cargoPublicationAgreement, cargoPublicationMetadata, cargoUploadAgreement, inspectCargoArchive)
 import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
 import Ecluse.Core.Registry.Cargo.Discovery (cargoDiscovery, discoveryApi)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
-import Ecluse.Core.Registry.Cargo.Manifest (CargoPublishMetadata, checkPublicationIndex, publishMetadataValue)
+import Ecluse.Core.Registry.Cargo.Manifest (CargoPublishMetadata, publishMetadataValue)
 import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead)
 import Ecluse.Core.Registry.Cargo.Project (projectName)
 import Ecluse.Core.Registry.Cargo.Publish.Body qualified as Body
@@ -84,20 +84,26 @@ cargoPublishCodec factors =
         }
 
 prepareUpload :: Limits -> (Int -> IO ()) -> MirrorInventory -> Value -> ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault (MirrorUploadData CargoPublishMetadata))
-prepareUpload limits charge inventory row file verified = case sourceName row of
-    Left fault -> pure (Left fault)
-    Right name -> do
-        inspected <- inspectCargoArchive limits charge name (renderVersion (inventoryVersion inventory)) (hashValue (verifiedTargetHash verified)) (verifiedBytes verified)
-        case inspected of
-            Left fault -> pure (Left (PublishSourceUnavailable (parseErrorMessage fault)))
-            Right archive -> do
-                metadata <- cargoPublicationMetadata limits charge archive
-                pure $ do
-                    extracted <- first (PublishSourceUnavailable . parseErrorMessage) metadata
-                    checked <- first (PublishSourceUnavailable . parseErrorMessage) (checkPublicationIndex extracted row)
-                    let metadataBytes = LBS.take (fromIntegral (maxMetadataBytes limits) + 1) (encode (publishMetadataValue checked))
-                    when (LBS.length metadataBytes > fromIntegral (maxMetadataBytes limits)) (Left (PublishSourceUnavailable "Cargo publication metadata exceeds its byte bound"))
-                    checkedMirrorUploadData inventory file verified checked
+prepareUpload limits charge inventory row file verified =
+    fromMaybe (Left (PublishSourceUnavailable "Cargo publication preparation exceeded its deadline")) <$> timeout (requestTimeoutSeconds * 1000000) prepare
+  where
+    prepare = case sourceName row of
+        Left fault -> pure (Left fault)
+        Right name -> do
+            inspected <- inspectCargoArchive limits charge name (renderVersion (inventoryVersion inventory)) (hashValue (verifiedTargetHash verified)) (verifiedBytes verified)
+            case inspected of
+                Left fault -> pure (Left (PublishSourceUnavailable (parseErrorMessage fault)))
+                Right archive -> do
+                    metadata <- cargoPublicationMetadata limits charge archive
+                    case metadata of
+                        Left fault -> pure (Left (PublishSourceUnavailable (parseErrorMessage fault)))
+                        Right extracted -> do
+                            agreement <- cargoPublicationAgreement limits charge archive row extracted
+                            pure $ do
+                                checked <- first (PublishSourceUnavailable . parseErrorMessage) agreement
+                                let metadataBytes = LBS.take (fromIntegral (maxMetadataBytes limits) + 1) (encode (publishMetadataValue checked))
+                                when (LBS.length metadataBytes > fromIntegral (maxMetadataBytes limits)) (Left (PublishSourceUnavailable "Cargo publication metadata exceeds its byte bound"))
+                                checkedMirrorUploadData inventory file verified checked
 
 sourceName :: Value -> Either PublishFault Text
 sourceName = \case
@@ -121,7 +127,7 @@ uploadClaims limits charge registry body =
                     Left fault -> pure (Left (PublishMalformed fault))
                     Right metadata -> do
                         let logicalRegistry = "sparse+" <> T.dropWhileEnd (== '/') registry <> "/"
-                        agreement <- cargoUploadAgreement withMetadata metadataCost logicalRegistry (Body.uploadMetadata upload) metadata
+                        agreement <- cargoUploadAgreement limits withMetadata metadataCost logicalRegistry (Body.uploadMetadata upload) metadata
                         pure $ first PublishMalformed agreement $> [Body.uploadName upload]
 
 -- | Discovery cannot grant an API root. The complete configured base path must agree before a token is attached.

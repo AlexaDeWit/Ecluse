@@ -24,7 +24,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.Cargo.Manifest (parseRustRelease)
 import Ecluse.Core.Registry.Cargo.Project (projectName)
-import Ecluse.Core.Registry.Cargo.Wire (decodeCargoRecord)
+import Ecluse.Core.Registry.Cargo.Wire (cargoTreeCharge, decodeCargoRecord)
 import Ecluse.Core.Security.Limits (Limits (..))
 import Ecluse.Core.Version.Cargo (parseCargo)
 
@@ -66,7 +66,7 @@ readUpload limits charge bytes = case splitUpload limits bytes of
             pure (upload, metadataCost)
 
 metadataCharge :: ByteString -> Int
-metadataCharge bytes = fromInteger (min (toInteger (maxBound :: Int)) (65536 + 64 * toInteger (BS.length bytes)))
+metadataCharge = cargoTreeCharge . toInteger . BS.length
 
 splitUpload :: Limits -> ByteString -> Either ParseError (ByteString, ByteString)
 splitUpload limits bytes = do

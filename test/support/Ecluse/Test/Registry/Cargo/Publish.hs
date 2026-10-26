@@ -8,6 +8,7 @@ module Ecluse.Test.Registry.Cargo.Publish (
     cargoResolverArchive,
     cargoResolverManifest,
     cargoResolverMetadata,
+    cargoResolverAgreements,
     cargoResolverContradictions,
     cargoSourceVersion,
     observeCargoRelay,
@@ -17,6 +18,7 @@ import Codec.Compression.GZip qualified as GZip
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
+import Data.Text qualified as T
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (status200)
 import Test.Hspec (shouldBe)
@@ -31,7 +33,7 @@ import Ecluse.Core.Registry.Cargo.Publish (cargoPublish)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.Origin (originClient)
 import Ecluse.Core.Registry.ServedDocument (stringField)
-import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security (defaultLimits, maxNestingDepth)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
 import Ecluse.Test.Deadline (withExchangeClient)
@@ -68,11 +70,11 @@ cargoPublicationFixture = do
 -- | Literal resolver declarations pair native normalisation controls with an independently authored upload.
 cargoResolverManifest :: ByteString
 cargoResolverManifest =
-    "[package]\nname='fixture'\nversion='1.0.0'\nrust-version='1.74'\n"
+    "[package]\nname='fixture'\nversion='1.0.0'\nrust-version='1.74'\nlinks='native_foo'\nbuild='build.rs'\n"
         <> "[dependencies]\nlocal={version='1.2',registry-index='sparse+https://proxy.test/cargo/private/',features=['beta','alpha'],default-features=false}\n"
         <> "foreign={package='original',version='1.X',registry-index='sparse+https://foreign.test/index/',optional=true}\nauto={version='0.3',optional=true}\n"
         <> "[dev-dependencies]\nhelper='1.0.0+build'\n"
-        <> "[target.'cfg(all(unix,target_os = \"linux\"))'.build-dependencies]\ntool={version='>=1.2.3-alpha, <2',features=['derive']}\n"
+        <> "[target.'cfg(all(unix,target_os = \"linux\",))'.build-dependencies]\ntool={version='>=1.2.3-alpha, <2',features=['derive']}\n"
         <> "[features]\ndefault=['full','auto']\nfull=['dep:foreign','foreign?/extra','local/alpha']\n"
 
 -- | The upload uses current-registry null, canonical requirements, and an explicit implicit optional feature.
@@ -90,6 +92,7 @@ cargoResolverMetadata =
                ]
         , "features" .= object ["default" .= ["auto", "full" :: Text], "full" .= ["local/alpha", "foreign?/extra", "dep:foreign" :: Text], "auto" .= ["dep:auto" :: Text]]
         , "rust_version" .= ("1.74.0" :: Text)
+        , "links" .= ("native_foo" :: Text)
         , "authors" .= ["Unrestricted author text" :: Text]
         , "keywords" .= ([] :: [Text])
         , "categories" .= ([] :: [Text])
@@ -105,7 +108,19 @@ cargoResolverMetadata =
 -- | The effective manifest remains independent of the literal upload claims.
 cargoResolverArchive :: IO ByteString
 cargoResolverArchive =
-    LBS.toStrict . GZip.compress <$> tarBytes [("fixture-1.0.0/README.md", "owned readme"), ("fixture-1.0.0/Cargo.toml", cargoResolverManifest), ("fixture-1.0.0/src/lib.rs", "pub fn owned() {}\n")]
+    LBS.toStrict . GZip.compress <$> tarBytes [("fixture-1.0.0/README.md", "owned readme"), ("fixture-1.0.0/Cargo.toml", cargoResolverManifest), ("fixture-1.0.0/build.rs", "fn main() {}\n"), ("fixture-1.0.0/src/lib.rs", "pub fn owned() {}\n")]
+
+-- | Native registry interning can retain a different equivalent spelling from the archived declaration.
+cargoResolverAgreements :: [Value]
+cargoResolverAgreements =
+    cargoResolverMetadata : case cargoResolverMetadata of
+        Object fields -> case KeyMap.lookup "deps" fields of
+            Just (Array dependencies) -> case toList dependencies of
+                Object dependency : rest ->
+                    [Object (KeyMap.insert "deps" (toJSON (Object (KeyMap.insert "registry" (String source) dependency) : rest)) fields) | source <- ["https://github.com/rust-lang/crates.io-index/", "https://GITHUB.com/RUST-LANG/CRATES.IO-INDEX.git/"]]
+                _ -> []
+            _ -> []
+        _ -> []
 
 -- | Each wire-valid mutation changes one resolver fact against the same literal agreeing control.
 cargoResolverContradictions :: [Value]
@@ -123,13 +138,16 @@ cargoResolverContradictions = case cargoResolverMetadata of
                 _ -> mempty
             extra = [Object (KeyMap.insert "name" (String "extra") fields') | Object fields' <- take 1 dependencies]
          in [changed "deps" (toJSON (drop 1 dependencies)), changed "deps" (toJSON (dependencies <> take 1 dependencies)), changed "deps" (toJSON (dependencies <> extra))]
-                <> [changeDependency key value | (key, value) <- [("name", String "another"), ("explicit_name_in_toml", String "another"), ("target", String "cfg(windows)"), ("kind", String "dev"), ("registry", Null), ("registry", String "git+https://github.com/rust-lang/crates.io-index"), ("registry", String "https://github.com/rust-lang/crates.io-index/"), ("version_req", String ">1.2.3-alpha, <2"), ("optional", Bool True), ("default_features", Bool False), ("features", toJSON ["other" :: Text])]]
+                <> [changeDependency key value | (key, value) <- [("name", String "another"), ("explicit_name_in_toml", String "another"), ("target", String "cfg(windows)"), ("target", String "cfg(any(unix,,windows))"), ("target", String ("cfg(" <> T.replicate (maxNestingDepth defaultLimits) "not(" <> "unix" <> T.replicate (maxNestingDepth defaultLimits) ")" <> ")")), ("kind", String "dev"), ("registry", Null), ("registry", String "git+https://github.com/rust-lang/crates.io-index"), ("registry", String "not a registry URL"), ("registry", String "sparse+https://index.crates.io/.git/"), ("version_req", String ">1.2.3-alpha, <2"), ("optional", Bool True), ("default_features", Bool False), ("features", toJSON ["other" :: Text])]]
                 <> [ changed "features" (Object (KeyMap.delete "full" features))
                    , changed "features" (Object (KeyMap.insert "extra" (toJSON ([] :: [Text])) features))
                    , changed "features" (Object (KeyMap.insert "full" (toJSON ["dep:foreign", "foreign/extra", "local/alpha" :: Text]) features))
                    , changed "features" (Object (KeyMap.insert "full" (toJSON ["local/alpha" :: Text]) features))
                    , changed "rust_version" (String "1.75")
                    , changed "rust_version" Null
+                   , changed "links" (String "native_bar")
+                   , changed "links" Null
+                   , Object (KeyMap.delete "links" fields)
                    ]
     _ -> []
 

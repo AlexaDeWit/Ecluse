@@ -147,7 +147,7 @@ upload registry request host fault answer respond =
                             release = (minimalCargoRelease name version){releaseArchive = uploadArchive framed, releaseChecksum = hexSha256Of (uploadArchive framed)}
                             -- Targets can reset source time and yank, so durable source proof must restore both.
                             row = case cargoIndexRecord release of
-                                Object fields -> Object (KeyMap.delete "ecluse-fixture" (KeyMap.insert "pubtime" (String "2099-01-01T00:00:00Z") (KeyMap.insert "deps" (nativeDependencies (uploadMetadata framed)) (KeyMap.insert "features2" (fromMaybe (Object mempty) (KeyMap.lookup "features" (uploadMetadata framed))) fields))))
+                                Object fields -> Object (KeyMap.delete "ecluse-fixture" (KeyMap.insert "links" (fromMaybe Null (KeyMap.lookup "links" (uploadMetadata framed))) (KeyMap.insert "pubtime" (String "2099-01-01T00:00:00Z") (KeyMap.insert "deps" (nativeDependencies (uploadMetadata framed)) (KeyMap.insert "features2" (fromMaybe (Object mempty) (KeyMap.lookup "features" (uploadMetadata framed))) fields)))))
                                 other -> other
                         exists <- atomically $ do
                             files <- readTVar (registryFiles registry)

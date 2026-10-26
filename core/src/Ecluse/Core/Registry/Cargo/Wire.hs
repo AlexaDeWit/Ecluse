@@ -8,6 +8,7 @@ module Ecluse.Core.Registry.Cargo.Wire (
     decodeCargoRecord,
     validateCargoRecord,
     recordIdentity,
+    cargoTreeCharge,
 ) where
 
 import Data.Aeson (Value (..))
@@ -36,6 +37,10 @@ decodeCargoRecord depth bytes = do
     case value of
         Object _ -> Right value
         _ -> Left (CargoRecordMalformed "Cargo index record is not an object")
+
+-- | Reserve bounded native parser trees and comparison structures before retaining them.
+cargoTreeCharge :: Integer -> Int
+cargoTreeCharge bytes = fromInteger (min (toInteger (maxBound :: Int)) (65536 + 64 * max 0 bytes))
 
 -- | A syntactically native version claims uniqueness even when another record field is invalid.
 recordIdentity :: Value -> Maybe Text

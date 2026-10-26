@@ -18,7 +18,7 @@ import Test.Hspec
 import Ecluse.Core.Registry (ParseError)
 import Ecluse.Core.Registry.Cargo.Manifest
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
-import Ecluse.Test.Registry.Cargo.Publish (cargoResolverContradictions, cargoResolverManifest, cargoResolverMetadata)
+import Ecluse.Test.Registry.Cargo.Publish (cargoResolverAgreements, cargoResolverContradictions, cargoResolverManifest, cargoResolverMetadata)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -92,7 +92,7 @@ spec = do
         it "preserves renamed targeted dependencies and crates.io source identity on relocation" $ do
             manifest <- expectRight (parse renamedManifest)
             metadata <- expectRight (publicationMetadata manifest Map.empty)
-            checked <- expectRight (checkPublicationIndex metadata renamedIndex)
+            checked <- expectRight (checkPublicationIndex defaultLimits metadata renamedIndex)
             field "deps" checked
                 `shouldBe` Just
                     ( toJSON
@@ -115,65 +115,88 @@ spec = do
                 let bytes = encodeUtf8 (T.replace "version='1.2'" ("version='" <> authored <> "'") (decodeUtf8 renamedManifest))
                 manifest <- expectRight (parse bytes)
                 metadata <- expectRight (publicationMetadata manifest Map.empty)
-                checkPublicationIndex metadata (renamedIndexWith indexed) `shouldSatisfy` isRight
+                checkPublicationIndex defaultLimits metadata (renamedIndexWith indexed) `shouldSatisfy` isRight
         it "translates omitted native defaults into complete upload metadata" $ do
             manifest <- expectRight (parse (basic <> "[dependencies]\ndependency='1'\n"))
             metadata <- expectRight (publicationMetadata manifest Map.empty)
             let source = object ["name" .= ("example" :: Text), "vers" .= ("1.2.3" :: Text), "deps" .= [object ["name" .= ("dependency" :: Text), "req" .= ("^1" :: Text)]]]
-            checked <- expectRight (checkPublicationIndex metadata source)
+            checked <- expectRight (checkPublicationIndex defaultLimits metadata source)
             field "features" checked `shouldBe` Just (object [])
             field "deps" checked `shouldBe` Just (toJSON [object ["name" .= ("dependency" :: Text), "version_req" .= ("^1" :: Text), "features" .= ([] :: [Text]), "optional" .= False, "default_features" .= True, "target" .= Null, "kind" .= ("normal" :: Text), "registry" .= ("https://github.com/rust-lang/crates.io-index" :: Text), "explicit_name_in_toml" .= Null]])
         it "keeps mirror feature metadata unchanged when an optional dependency has an implicit feature" $ do
             manifest <- expectRight (parse (basic <> "[dependencies]\ndependency={version='1',optional=true}\n"))
             metadata <- expectRight (publicationMetadata manifest Map.empty)
             let source = object ["name" .= ("example" :: Text), "vers" .= ("1.2.3" :: Text), "deps" .= [object ["name" .= ("dependency" :: Text), "req" .= ("^1" :: Text), "optional" .= True]], "features" .= object []]
-            checked <- expectRight (checkPublicationIndex metadata source)
+            checked <- expectRight (checkPublicationIndex defaultLimits metadata source)
             field "features" checked `shouldBe` Just (object [])
         it "refuses explicit null for native defaulted publication facts" $ do
             manifest <- expectRight (parse (basic <> "[dependencies]\ndependency='1'\n"))
             metadata <- expectRight (publicationMetadata manifest Map.empty)
             let dep = KeyMap.fromList [("name", String "dependency"), ("req", String "^1")]
                 source = KeyMap.fromList [("name", String "example"), ("vers", String "1.2.3"), ("deps", toJSON [Object dep])]
-            checkPublicationIndex metadata (Object (KeyMap.insert "features" Null source)) `shouldSatisfy` isLeft
+            checkPublicationIndex defaultLimits metadata (Object (KeyMap.insert "features" Null source)) `shouldSatisfy` isLeft
             for_ ["features", "optional", "default_features"] $ \key ->
-                checkPublicationIndex metadata (Object (KeyMap.insert "deps" (toJSON [Object (KeyMap.insert key Null dep)]) source)) `shouldSatisfy` isLeft
+                checkPublicationIndex defaultLimits metadata (Object (KeyMap.insert "deps" (toJSON [Object (KeyMap.insert key Null dep)]) source)) `shouldSatisfy` isLeft
+        it "compares parsed mirror targets while preserving source target spelling" $ do
+            manifest <- expectRight (parse (encodeUtf8 (T.replace "cfg(unix)" "cfg(any(unix,windows,))" (decodeUtf8 renamedManifest))))
+            metadata <- expectRight (publicationMetadata manifest Map.empty)
+            let changeDependency (Object dependency) = Object (KeyMap.insert "target" (String "cfg(any(unix, windows))") dependency)
+                changeDependency other = other
+                source = case renamedIndex of
+                    Object fields -> case KeyMap.lookup "deps" fields of
+                        Just (Array values) -> Object (KeyMap.insert "deps" (Array (fmap changeDependency values)) fields)
+                        _ -> Null
+                    other -> other
+            checked <- expectRight (checkPublicationIndex defaultLimits metadata source)
+            let targets = case field "deps" checked of
+                    Just (Array values) -> [KeyMap.lookup "target" dependency | Object dependency <- toList values]
+                    _ -> []
+            targets `shouldBe` [Just (String "cfg(any(unix, windows))")]
+        it "compares an available source links claim and keeps an absent claim unknown" $ do
+            manifest <- expectRight (parse (basic <> "links='native_foo'\nbuild='build.rs'\n"))
+            metadata <- expectRight (publicationMetadata manifest Map.empty)
+            let source = KeyMap.fromList [("name", String "example"), ("vers", String "1.2.3"), ("deps", toJSON ([] :: [Value]))]
+            checkPublicationIndex defaultLimits metadata (Object source) `shouldSatisfy` isRight
+            checkPublicationIndex defaultLimits metadata (Object (KeyMap.insert "links" (String "native_foo") source)) `shouldSatisfy` isRight
+            for_ [Null, String "native_bar"] $ \links ->
+                checkPublicationIndex defaultLimits metadata (Object (KeyMap.insert "links" links source)) `shouldSatisfy` isLeft
         it "rejects a dependency mismatch rather than publish a reduced document" $ do
             manifest <- expectRight (parse renamedManifest)
             metadata <- expectRight (publicationMetadata manifest Map.empty)
             let changed = case renamedIndex of
                     Object fields -> Object (KeyMap.insert "deps" (toJSON ([] :: [Value])) fields)
                     value -> value
-            checkPublicationIndex metadata changed `shouldSatisfy` isLeft
+            checkPublicationIndex defaultLimits metadata changed `shouldSatisfy` isLeft
 
     describe "checkUploadAgreement" $ do
         it "accepts literal native source, rename, kind, target, feature and Rust-version normalisations" $ do
             manifest <- expectRight (decodeManifest defaultLimits "fixture" "1.0.0" cargoResolverManifest)
-            checkUploadAgreement selectedRegistry manifest cargoResolverMetadata `shouldBe` Right ()
+            for_ cargoResolverAgreements $ \metadata -> checkUploadAgreement defaultLimits selectedRegistry manifest metadata `shouldBe` Right ()
         it "refuses each wire-valid resolver contradiction against the same effective manifest" $ do
             manifest <- expectRight (decodeManifest defaultLimits "fixture" "1.0.0" cargoResolverManifest)
             for_ cargoResolverContradictions $ \metadata ->
-                checkUploadAgreement selectedRegistry manifest metadata `shouldSatisfy` isLeft
+                checkUploadAgreement defaultLimits selectedRegistry manifest metadata `shouldSatisfy` isLeft
         it "keeps current publication registry identity distinct from transport and foreign sources" $ do
             manifest <- expectRight (decodeManifest defaultLimits "fixture" "1.0.0" cargoResolverManifest)
             for_ ["sparse+https://target.test/registry/", "sparse+https://proxy.test/other/", "sparse+https://foreign.test/index/"] $ \registry ->
-                checkUploadAgreement registry manifest cargoResolverMetadata `shouldSatisfy` isLeft
+                checkUploadAgreement defaultLimits registry manifest cargoResolverMetadata `shouldSatisfy` isLeft
         it "accepts omitted default kind and alias, implicit optional features, and null or absent minimum Rust version" $ do
             manifest <- expectRight (parse (basic <> "[dependencies]\ndependency={version='1.X',optional=true}\n"))
             let dependency = object ["name" .= ("dependency" :: Text), "version_req" .= ("1.*" :: Text), "features" .= ([] :: [Text]), "optional" .= True, "default_features" .= True, "registry" .= cratesIoIndex]
                 metadata = object ["deps" .= [dependency], "features" .= object []]
-            checkUploadAgreement selectedRegistry manifest metadata `shouldBe` Right ()
+            checkUploadAgreement defaultLimits selectedRegistry manifest metadata `shouldBe` Right ()
             case metadata of
-                Object fields -> checkUploadAgreement selectedRegistry manifest (Object (KeyMap.insert "rust_version" Null fields)) `shouldBe` Right ()
+                Object fields -> checkUploadAgreement defaultLimits selectedRegistry manifest (Object (KeyMap.insert "rust_version" Null fields)) `shouldBe` Right ()
                 _ -> expectationFailure "literal metadata is not an object"
         it "preserves prerelease constraints, comparator precision and quoted target values" $ do
             for_ [("1.2.3-alpha", "^1.2.3"), (">1.2", ">=1.2"), ("=1.2", "=1.2.0"), ("1 .2", "^1.2"), ("1.2.3-a b", "^1.2.3-ab"), ("1.*.2", "1.*")] $ \(authored, uploaded) -> do
                 manifest <- expectRight (parse (basic <> "[dependencies]\ndependency='" <> encodeUtf8 authored <> "'\n"))
                 let dependency = object ["name" .= ("dependency" :: Text), "version_req" .= uploaded, "features" .= ([] :: [Text]), "optional" .= False, "default_features" .= True, "registry" .= cratesIoIndex]
-                checkUploadAgreement selectedRegistry manifest (object ["deps" .= [dependency], "features" .= object []]) `shouldSatisfy` isLeft
+                checkUploadAgreement defaultLimits selectedRegistry manifest (object ["deps" .= [dependency], "features" .= object []]) `shouldSatisfy` isLeft
             for_ ["cfg(all(unix,target_os = \"lin ux\"))", "cfg(all(unix,target_os = \"windows\"))", "cfg(all(un ix,target_os = \"linux\"))"] $ \target -> do
-                let bytes = encodeUtf8 (T.replace "cfg(all(unix,target_os = \"linux\"))" target (decodeUtf8 cargoResolverManifest))
+                let bytes = encodeUtf8 (T.replace "cfg(all(unix,target_os = \"linux\",))" target (decodeUtf8 cargoResolverManifest))
                 manifest <- expectRight (decodeManifest defaultLimits "fixture" "1.0.0" bytes)
-                checkUploadAgreement selectedRegistry manifest cargoResolverMetadata `shouldSatisfy` isLeft
+                checkUploadAgreement defaultLimits selectedRegistry manifest cargoResolverMetadata `shouldSatisfy` isLeft
 
 selectedRegistry :: Text
 selectedRegistry = "sparse+https://proxy.test/cargo/private/"

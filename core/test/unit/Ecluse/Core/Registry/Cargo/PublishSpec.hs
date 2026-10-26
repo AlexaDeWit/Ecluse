@@ -30,7 +30,7 @@ import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive, releaseChecksum), cargoIndexRecord, cargoUpload, cargoUploadMetadata, cargoUploadWithMetadata)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoTestName)
-import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoResolverArchive, cargoResolverContradictions, cargoResolverMetadata, cargoSourceVersion)
+import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions, cargoResolverMetadata, cargoSourceVersion)
 import Ecluse.Test.Registry.Cargo.Reference (UploadFrame (..), referenceUpload)
 import Ecluse.Test.Registry.Publish (publishOnlyFile)
 import Ecluse.Test.Registry.PyPI.Archive (tarBytes)
@@ -107,8 +107,9 @@ spec = do
             uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" (PublishRequestBody bytes Nothing) `shouldReturn` Right ["fixture"]
         it "compares complete resolver facts against the retained effective manifest" $ do
             archive <- cargoResolverArchive
-            valid <- expectRight (cargoUploadWithMetadata cargoResolverMetadata archive)
-            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" (PublishRequestBody valid Nothing) `shouldReturn` Right ["fixture"]
+            for_ cargoResolverAgreements $ \metadata -> do
+                valid <- expectRight (cargoUploadWithMetadata metadata archive)
+                uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" (PublishRequestBody valid Nothing) `shouldReturn` Right ["fixture"]
             for_ cargoResolverContradictions $ \metadata -> do
                 bytes <- expectRight (cargoUploadWithMetadata metadata archive)
                 Body.decodeUpload defaultLimits bytes `shouldSatisfy` isRight

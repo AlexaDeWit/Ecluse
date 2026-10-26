@@ -18,7 +18,7 @@ ecluse-e2e-macro = "^1.0"
 [build-dependencies]
 ecluse-e2e-build = "^1.0"
 
-[target.'cfg(unix)'.dependencies]
+[target.'cfg(all(unix,any(unix,windows,)))'.dependencies]
 ecluse-e2e-unix = "^1.0"
 
 [target.'cfg(windows)'.dependencies]

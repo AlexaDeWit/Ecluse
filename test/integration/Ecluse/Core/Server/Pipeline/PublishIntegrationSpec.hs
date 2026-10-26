@@ -59,7 +59,7 @@ import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive), cargoUpload, cargoUploadMetadata, cargoUploadWithMetadata)
-import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoResolverArchive, cargoResolverContradictions, cargoResolverMetadata)
+import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions)
 import Ecluse.Test.Registry.Npm.Publish (npmDeprecateDocument, npmMisfiledVersion, npmReleaseDocument, npmRepeatedAttachments, npmTaggedRelease)
 import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps)
 import Ecluse.Test.Stub (Captured (capBody, capHeaders, capMethod, capPath), Stub, allCaptured, headerValue, stubBaseUrl, stubPort, withRoutedStub, withStubHeaders)
@@ -565,16 +565,17 @@ cargoPublishSpec :: Spec
 cargoPublishSpec = describe "first-party Cargo publication relay" $ do
     it (caseLabel "integration/publication/cargo-001" "relays exact native bytes after credential-scoped discovery") $ do
         archive <- cargoResolverArchive
-        bytes <- expectRight (cargoUploadWithMetadata cargoResolverMetadata archive)
-        withRoutedStub cargoTargetReply $ \stub -> withSweeper $ \deadlines -> do
-            app <- cargoProxy deadlines stub
-            reply <- cargoPut (fromStrict bytes) app
-            status reply `shouldBe` 200
-            simpleBody reply `shouldBe` "{\"warnings\":{\"other\":[\"owned warning\"]}}"
-            captures <- allCaptured stub
-            map capPath captures `shouldBe` ["/index/config.json", "/registry/api/v1/crates/new"]
-            map (headerValue "Authorization") captures `shouldBe` [Just "cargo-client", Just "cargo-client"]
-            map capBody (filter ((== "PUT") . capMethod) captures) `shouldBe` [bytes]
+        for_ cargoResolverAgreements $ \metadata -> do
+            bytes <- expectRight (cargoUploadWithMetadata metadata archive)
+            withRoutedStub cargoTargetReply $ \stub -> withSweeper $ \deadlines -> do
+                app <- cargoProxy deadlines stub
+                reply <- cargoPut (fromStrict bytes) app
+                status reply `shouldBe` 200
+                simpleBody reply `shouldBe` "{\"warnings\":{\"other\":[\"owned warning\"]}}"
+                captures <- allCaptured stub
+                map capPath captures `shouldBe` ["/index/config.json", "/registry/api/v1/crates/new"]
+                map (headerValue "Authorization") captures `shouldBe` [Just "cargo-client", Just "cargo-client"]
+                map capBody (filter ((== "PUT") . capMethod) captures) `shouldBe` [bytes]
     it (caseLabel "integration/publication/cargo-002" "refuses identity and resolver contradictions before any upstream request") $ do
         release <- cargoPublicationFixture
         withRoutedStub cargoTargetReply $ \stub -> withSweeper $ \deadlines -> do

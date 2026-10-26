@@ -34,6 +34,8 @@ import Toml.Syntax qualified as Syntax
 
 import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.Archive.Path (resolveArchivePath)
+import Ecluse.Core.Registry.Cargo.Source (CargoSource, parseSource, sourceComparisonKey)
+import Ecluse.Core.Registry.Cargo.Target (CargoTarget, parseTarget)
 import Ecluse.Core.Security.Limits (Limits (..))
 import Ecluse.Core.Version.Cargo (CargoKey, parseCargo)
 
@@ -109,7 +111,7 @@ manifestTextPaths manifest inventory = do
 publicationMetadata :: CargoManifest -> Map Text ByteString -> Either ParseError CargoPublishMetadata
 publicationMetadata manifest content = do
     let package = cmPackage manifest
-    (dependencies, features, rustVersion) <- resolverMetadata manifest
+    (dependencies, features, rustVersion, links) <- resolverMetadata manifest
     authors <- optionalStrings "authors" package
     keywords <- optionalStrings "keywords" package
     categories <- optionalStrings "categories" package
@@ -121,7 +123,7 @@ publicationMetadata manifest content = do
     fields <-
         traverse
             (\(source, target) -> (target,) <$> optionalString source package)
-            [("description", "description"), ("documentation", "documentation"), ("homepage", "homepage"), ("license", "license"), ("repository", "repository"), ("links", "links")]
+            [("description", "description"), ("documentation", "documentation"), ("homepage", "homepage"), ("license", "license"), ("repository", "repository")]
     pure . CargoPublishMetadata . object $
         [ "name" .= cmName manifest
         , "vers" .= cmVersion manifest
@@ -135,24 +137,26 @@ publicationMetadata manifest content = do
         , "readme_file" .= readmeFile
         , "license_file" .= licenceFile
         , "rust_version" .= rustVersion
+        , "links" .= links
         ]
             <> [Key.fromText key .= value | (key, value) <- fields]
 
-resolverMetadata :: CargoManifest -> Either ParseError ([Value], Map Text [Text], Maybe Text)
+resolverMetadata :: CargoManifest -> Either ParseError ([Value], Map Text [Text], Maybe Text, Maybe Text)
 resolverMetadata manifest =
-    (,,)
+    (,,,)
         <$> manifestDependencies (cmRoot manifest)
         <*> (optionalTable "features" (cmRoot manifest) >>= traverse strings)
         <*> optionalStringAlias "rust-version" "rust_version" (cmPackage manifest)
+        <*> optionalString "links" (cmPackage manifest)
 
 -- | Compare resolver meaning against the effective archive manifest, relative to the selected logical registry.
-checkUploadAgreement :: Text -> CargoManifest -> Value -> Either ParseError ()
-checkUploadAgreement registry manifest (Object metadata) = do
-    (dependencies, features, rustVersion) <- resolverMetadata manifest
-    let currentRegistry = sourceIdentity registry
-    expected <- traverse (uploadDependency currentRegistry) dependencies >>= foldM insertDependency Map.empty
+checkUploadAgreement :: Limits -> Text -> CargoManifest -> Value -> Either ParseError ()
+checkUploadAgreement limits registry manifest (Object metadata) = do
+    (dependencies, features, rustVersion, links) <- resolverMetadata manifest
+    currentRegistry <- parseSource registry
+    expected <- traverse (uploadDependency currentRegistry) dependencies >>= foldM (insertDependency limits) Map.empty
     uploaded <- requiredJson "deps" metadata >>= array >>= traverse (uploadDependency currentRegistry)
-    actual <- foldM insertDependency Map.empty uploaded
+    actual <- foldM (insertDependency limits) Map.empty uploaded
     unless (Map.keysSet expected == Map.keysSet actual) (bad "Cargo upload and manifest dependency inventories disagree")
     for_ (Map.toList expected) $ \(key, value) -> do
         agreed <- maybe (bad "Cargo upload omits a manifest dependency") Right (Map.lookup key actual)
@@ -161,44 +165,25 @@ checkUploadAgreement registry manifest (Object metadata) = do
     expectedFeatures <- effectiveFeatures dependencies features
     actualFeatures <- effectiveFeatures uploaded (Map.fromList [(Key.toText key, values) | (key, values) <- KeyMap.toList uploadedFeatures])
     unless (expectedFeatures == actualFeatures) (bad "Cargo upload and manifest feature graphs disagree")
+    actualLinks <- nullableString "links" metadata
+    unless (links == actualLinks) (bad "Cargo upload and manifest links declarations disagree")
     expectedRust <- traverse parseRustRelease rustVersion
     actualRust <- nullableString "rust_version" metadata >>= traverse parseRustRelease
     unless (expectedRust == actualRust) (bad "Cargo upload and manifest Rust versions disagree")
-checkUploadAgreement _ _ _ = bad "Cargo upload metadata is not an object"
+checkUploadAgreement _ _ _ _ = bad "Cargo upload metadata is not an object"
 
-uploadDependency :: Text -> Value -> Either ParseError Value
+uploadDependency :: CargoSource -> Value -> Either ParseError Value
 uploadDependency registry (Object fields) = do
     name <- requiredJson "name" fields >>= jsonString
     alias <- nullableString "explicit_name_in_toml" fields
-    target <- nullableString "target" fields
     kind <- fromMaybe "normal" <$> nullableString "kind" fields
-    source <- maybe registry sourceIdentity <$> nullableString "registry" fields
+    source <- maybe (Right registry) parseSource =<< nullableString "registry" fields
     pure . Object
         $ KeyMap.insert "explicit_name_in_toml" (toJSON (alias >>= \value -> value <$ guard (value /= name)))
-            . KeyMap.insert "target" (toJSON (normalTarget <$> target))
             . KeyMap.insert "kind" (String kind)
-            . KeyMap.insert "registry" (String source)
+            . KeyMap.insert "registry" (String (sourceComparisonKey source))
         $ fields
 uploadDependency _ _ = bad "Cargo upload dependency is not an object"
-
-sourceIdentity :: Text -> Text
-sourceIdentity source
-    | source `elem` [cratesIoIndex, "sparse+https://index.crates.io/"] = cratesIoIndex
-    | otherwise = source
-
-normalTarget :: Text -> Text
-normalTarget target
-    | "cfg(" `T.isPrefixOf` target = T.pack . reverse . output $ T.foldl' step (False, False, False, []) target
-    | otherwise = target
-  where
-    output (_, _, _, value) = value
-    token char = char `notElem` ['(', ')', ',', '=']
-    step (quoted, escaped, space, held) char
-        | quoted = (if escaped then True else char /= '"', not escaped && char == '\\', False, char : held)
-        | char `elem` [' ', '\t', '\r', '\n'] = (False, False, True, held)
-        | otherwise =
-            let boundary = space && token char && maybe False token (listToMaybe held)
-             in (char == '"', False, False, char : [' ' | boundary] <> held)
 
 effectiveFeatures :: [Value] -> Map Text [Text] -> Either ParseError (Map Text (Set Text))
 effectiveFeatures dependencies features = do
@@ -223,17 +208,20 @@ parseRustRelease raw = do
     maybe (bad "Cargo Rust version is invalid") Right (parseCargo complete)
 
 -- | Cross-check source index facts and preserve its dependency requirements and merged feature representation.
-checkPublicationIndex :: CargoPublishMetadata -> Value -> Either ParseError CargoPublishMetadata
-checkPublicationIndex (CargoPublishMetadata (Object metadata)) (Object index) = do
+checkPublicationIndex :: Limits -> CargoPublishMetadata -> Value -> Either ParseError CargoPublishMetadata
+checkPublicationIndex limits (CargoPublishMetadata (Object metadata)) (Object index) = do
     for_ ["name", "vers"] $ \key ->
         unless (KeyMap.lookup key metadata == KeyMap.lookup key index) (bad "Cargo publication and source index identities disagree")
     nativeDeps <- requiredJson "deps" index >>= array
     expectedDeps <- requiredJson "deps" metadata >>= array
     projected <- traverse indexDependency nativeDeps
     unless (length expectedDeps == length projected) (bad "Cargo manifest and index dependency counts disagree")
-    byIdentity <- foldM insertDependency Map.empty projected
-    for_ expectedDeps $ \expected -> do
-        key <- dependencyKey expected
+    registry <- parseSource cratesIoIndex
+    compared <- traverse (uploadDependency registry) projected
+    byIdentity <- foldM (insertDependency limits) Map.empty compared
+    for_ expectedDeps $ \declaration -> do
+        expected <- uploadDependency registry declaration
+        key <- dependencyKey limits expected
         actual <- maybe (bad "Cargo manifest and index dependency identities disagree") Right (Map.lookup key byIdentity)
         checkDependency expected actual
     sourceFeatures <- indexFeatures index
@@ -241,10 +229,12 @@ checkPublicationIndex (CargoPublishMetadata (Object metadata)) (Object index) = 
     for_ (KeyMap.toList authoredFeatures) $ \(key, value) -> do
         source <- maybe (bad "Cargo index omits a manifest feature") Right (KeyMap.lookup key sourceFeatures)
         checkFeatureValues value source
+    for_ (KeyMap.lookup "links" index) $ \value ->
+        unless (KeyMap.lookup "links" metadata == Just value) (bad "Cargo manifest and index links declarations disagree")
     for_ (KeyMap.lookup "rust_version" index) $ \value ->
         unless (KeyMap.lookup "rust_version" metadata == Just value) (bad "Cargo manifest and index Rust versions disagree")
     pure (CargoPublishMetadata (Object (KeyMap.insert "deps" (toJSON projected) (KeyMap.insert "features" (Object sourceFeatures) metadata))))
-checkPublicationIndex _ _ = bad "Cargo source index entry is not an object"
+checkPublicationIndex _ _ _ = bad "Cargo source index entry is not an object"
 
 -- | The native JSON body excludes the archive length framing and archive bytes.
 publishMetadataValue :: CargoPublishMetadata -> Value
@@ -411,18 +401,20 @@ indexDependency (Object fields) = do
             ]
 indexDependency _ = bad "Cargo index dependency is not an object"
 
-dependencyKey :: Value -> Either ParseError (Text, Maybe Text, Maybe Text, Text)
-dependencyKey (Object fields) =
+type DependencyKey = (Text, Maybe Text, Maybe CargoTarget, Text)
+
+dependencyKey :: Limits -> Value -> Either ParseError DependencyKey
+dependencyKey limits (Object fields) =
     (,,,)
         <$> (requiredJson "name" fields >>= jsonString)
         <*> nullableString "explicit_name_in_toml" fields
-        <*> nullableString "target" fields
+        <*> (nullableString "target" fields >>= traverse (parseTarget limits))
         <*> (requiredJson "kind" fields >>= jsonString)
-dependencyKey _ = bad "Cargo publication dependency is not an object"
+dependencyKey _ _ = bad "Cargo publication dependency is not an object"
 
-insertDependency :: Map (Text, Maybe Text, Maybe Text, Text) Value -> Value -> Either ParseError (Map (Text, Maybe Text, Maybe Text, Text) Value)
-insertDependency values dependencyValue = do
-    key <- dependencyKey dependencyValue
+insertDependency :: Limits -> Map DependencyKey Value -> Value -> Either ParseError (Map DependencyKey Value)
+insertDependency limits values dependencyValue = do
+    key <- dependencyKey limits dependencyValue
     when (Map.member key values) (bad "Cargo index repeats a dependency identity")
     pure (Map.insert key dependencyValue values)
 

@@ -11,6 +11,7 @@ module Ecluse.Core.Registry.Cargo.Archive (
     cargoArchiveInflatedBytes,
     cargoArchiveExecution,
     cargoPublicationMetadata,
+    cargoPublicationAgreement,
     cargoUploadAgreement,
 ) where
 
@@ -28,7 +29,9 @@ import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), splitArchiveCharge, withInflatedChunks)
 import Ecluse.Core.Registry.Archive.Tar (TarMember (..), TarScan, scanTar, sourceReader, tarContents, tarMembers)
-import Ecluse.Core.Registry.Cargo.Manifest (CargoManifest, CargoPublishMetadata, checkUploadAgreement, decodeManifest, manifestExecution, manifestTextPaths, publicationMetadata)
+import Ecluse.Core.Registry.CachedDocument (estimateValueBytes)
+import Ecluse.Core.Registry.Cargo.Manifest (CargoManifest, CargoPublishMetadata, checkPublicationIndex, checkUploadAgreement, decodeManifest, manifestExecution, manifestTextPaths, publicationMetadata, publishMetadataValue)
+import Ecluse.Core.Registry.Cargo.Wire (cargoTreeCharge)
 import Ecluse.Core.Security.Limits (Limits (..), requestTimeoutSeconds)
 
 -- | The private source bytes are the same bytes checked against the admitted SHA-256.
@@ -91,11 +94,20 @@ cargoPublicationMetadata limits charge metadata = deadline $
                     charge (retained + 65536 + 8 * textBytes + 512 * Map.size content)
                     evaluate (publicationMetadata (caManifest metadata) content)
 
+-- | Compare mirror source claims under the archive deadline after reserving both resolver inputs.
+cargoPublicationAgreement :: Limits -> (Int -> IO ()) -> CargoArchiveMetadata -> Value -> CargoPublishMetadata -> IO (Either ParseError CargoPublishMetadata)
+cargoPublicationAgreement limits charge archive source metadata = deadline $ do
+    let inputs = [source, publishMetadataValue metadata]
+        workspace = sum (map (toInteger . cargoTreeCharge . toInteger . estimateValueBytes) inputs)
+        retained = toInteger (caRetainedBytes archive) + toInteger (caManifestWorkspace archive)
+    charge (fromInteger (min (toInteger (maxBound :: Int)) (retained + workspace)))
+    evaluate (checkPublicationIndex limits metadata source)
+
 -- | Reuse the retained effective manifest without a text extraction or another archive pass.
-cargoUploadAgreement :: (Int -> IO ()) -> Int -> Text -> Value -> CargoArchiveMetadata -> IO (Either ParseError ())
-cargoUploadAgreement charge uploadWorkspace registry upload metadata = do
+cargoUploadAgreement :: Limits -> (Int -> IO ()) -> Int -> Text -> Value -> CargoArchiveMetadata -> IO (Either ParseError ())
+cargoUploadAgreement limits charge uploadWorkspace registry upload metadata = do
     charge (fromInteger (min (toInteger (maxBound :: Int)) (sum (map toInteger [caRetainedBytes metadata, caManifestWorkspace metadata, uploadWorkspace]))))
-    evaluate (checkUploadAgreement registry (caManifest metadata) upload)
+    evaluate (checkUploadAgreement limits registry (caManifest metadata) upload)
 
 archiveFacts :: Text -> TarScan -> Either ParseError (ByteString, Set Text, Int)
 archiveFacts root scan = do
@@ -136,7 +148,7 @@ archivePass limits charge root selected bytes = do
         _ -> bad "Cargo archive member disagrees with its admitted package root"
 
 manifestMemory :: ByteString -> Int
-manifestMemory bytes = 65536 + 64 * BS.length bytes
+manifestMemory = cargoTreeCharge . toInteger . BS.length
 
 deadline :: IO (Either ParseError a) -> IO (Either ParseError a)
 deadline action = fromMaybe (bad "Cargo archive inspection exceeded its deadline") <$> timeout (requestTimeoutSeconds * 1000000) action

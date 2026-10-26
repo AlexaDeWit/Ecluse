@@ -76,7 +76,7 @@ cargoNativeContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \recorde
                 unix <- readGraph project ["--filter-platform", "x86_64-unknown-linux-gnu"]
                 windows <- readGraph project ["--filter-platform", "x86_64-pc-windows-gnu"]
                 root <- nativePackage cargoRoot unix
-                cargoPackageDependencies root `shouldSatisfy` any (\dependency -> cargoDependencyName dependency == "ecluse-e2e-unix" && cargoDependencyTarget dependency == Just "cfg(unix)")
+                cargoPackageDependencies root `shouldSatisfy` any (\dependency -> cargoDependencyName dependency == "ecluse-e2e-unix" && cargoDependencyTarget dependency == Just "cfg(all(unix, any(unix, windows)))")
                 cargoPackageDependencies root `shouldSatisfy` any (\dependency -> cargoDependencyName dependency == "ecluse-e2e-windows" && cargoDependencyTarget dependency == Just "cfg(windows)")
                 activeDependencies cargoRoot unix `shouldSatisfy` elem "ecluse_e2e_unix"
                 activeDependencies cargoRoot unix `shouldSatisfy` notElem "ecluse_e2e_windows"
@@ -288,7 +288,7 @@ foreignRegistry plane = for_ [currentCargo, floorCargo] $ \toolchain ->
                 let proxy = observedProxy observed
                     source = "sparse+" <> e2eBaseUrl proxy <> (if sameRegistry then "/cargo/private/" else "/cargo/")
                     registryClaim = if sameRegistry then Null else String source
-                    spec = CargoCrate name cargoVersion "../foreign" [] (Object mempty) (Object mempty) ["Cargo.toml", "README.md", "src/lib.rs"]
+                    spec = CargoCrate name cargoVersion "../foreign" [] (Object mempty) (Object mempty) ["Cargo.toml", "README.md", "src/lib.rs", "build.rs"]
                 withCargoProject toolchain CargoAlternate proxy ("sparse+" <> e2eBaseUrl proxy <> "/cargo/private/") (Just cargoRegistryToken) $ \project -> do
                     cargoUseFixture project "test/fixtures/cargo/graph" spec
                     if sameRegistry
@@ -312,6 +312,11 @@ foreignRegistry plane = for_ [currentCargo, floorCargo] $ \toolchain ->
                         Just (Array dependencies) -> [KeyMap.lookup "explicit_name_in_toml" dependency | Object dependency <- toList dependencies]
                         _ -> []
                 aliases `shouldBe` [Just (String "renamed_leaf")]
+                KeyMap.lookup "links" (uploadMetadata frame) `shouldBe` Just (String "native_foreign")
+                let targets = case KeyMap.lookup "deps" (uploadMetadata frame) of
+                        Just (Array dependencies) -> [KeyMap.lookup "target" dependency | Object dependency <- toList dependencies]
+                        _ -> []
+                targets `shouldBe` [Just (String "cfg(any(unix, windows))")]
                 index <- proxyRequest "GET" [("Authorization", encodeUtf8 cargoRegistryToken), ("Accept-Encoding", "identity")] "" proxy ("/cargo/private/" <> cargoShard name)
                 responseStatus index `shouldBe` 200
                 rows <- traverse (either (fail . toString) pure . indexValue) (referenceIndex (LBS.toStrict (responseBody index)))

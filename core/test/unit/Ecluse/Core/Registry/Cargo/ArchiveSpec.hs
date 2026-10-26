@@ -9,7 +9,7 @@ module Ecluse.Core.Registry.Cargo.ArchiveSpec (spec) where
 import Codec.Archive.Tar qualified as Tar
 import Codec.Archive.Tar.Entry qualified as Tar
 import Codec.Compression.GZip qualified as GZip
-import Data.Aeson (Value (..))
+import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
@@ -105,6 +105,19 @@ spec = do
             bytes <- fixture [("Cargo.toml", manifest <> "readme='missing.md'\n")]
             metadata <- inspect defaultLimits bytes >>= expectRight
             cargoPublicationMetadata defaultLimits (const (pure ())) metadata >>= (`shouldSatisfy` isLeft)
+
+    describe "cargoPublicationAgreement" $ do
+        it "reserves comparison workspace before accepting an available source claim" $ do
+            bytes <- fixture [("Cargo.toml", manifest)]
+            archive <- inspect defaultLimits bytes >>= expectRight
+            metadata <- cargoPublicationMetadata defaultLimits (const (pure ())) archive >>= expectRight
+            payments <- newIORef ([] :: [Int])
+            let source = object ["name" .= ("example" :: Text), "vers" .= ("1.2.3" :: Text), "deps" .= ([] :: [Value])]
+            checked <- cargoPublicationAgreement defaultLimits (\cost -> modifyIORef' payments (cost :)) archive source metadata >>= expectRight
+            publishMetadataValue checked `shouldBe` publishMetadataValue metadata
+            paid <- readIORef payments
+            paid `shouldSatisfy` (\costs -> length costs == 1 && all (> 0) costs)
+            cargoPublicationAgreement defaultLimits (const (throwIO ChargeRefused)) archive source metadata `shouldThrow` (== ChargeRefused)
 
 manifest :: ByteString
 manifest = "[package]\nname='example'\nversion='1.2.3'\n"

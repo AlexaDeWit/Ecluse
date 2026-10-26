@@ -5,7 +5,7 @@
 -- | Fresh native clients test retained original source facts and failure of incomplete mirror proofs.
 module Ecluse.E2E.Cargo.MirrorProofE2ESpec (cargoMirrorProofContract) where
 
-import Data.Aeson (Value (Bool, Object, String), encode)
+import Data.Aeson (Value (Array, Bool, Object, String), encode)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
@@ -84,6 +84,13 @@ sourceRoundtrip plane = withCargoMirrorFixture plane $ \registry releases -> do
     queue <- sharedMirrorQueue plane
     let config = cargoMirrorConfig{ecQueueUrl = Just queue}
     complete plane registry releases config
+    sourceRoot <- cargoRelease releases cargoRoot cargoVersion
+    let sourceTargets = case cargoIndexRecord sourceRoot of
+            Object fields -> case KeyMap.lookup "deps" fields of
+                Just (Array dependencies) -> [KeyMap.lookup "target" dependency | Object dependency <- toList dependencies]
+                _ -> []
+            _ -> []
+    sourceTargets `shouldSatisfy` elem (Just (String "cfg(all(unix, any(unix, windows)))"))
     files <- cargoRegistryFiles registry
     root <- maybe (fail "native mirror omitted root archive") pure (Map.lookup ("cargo-mirror", cargoRoot, cargoVersion) files)
     case storedRow root of
@@ -100,7 +107,7 @@ sourceRoundtrip plane = withCargoMirrorFixture plane $ \registry releases -> do
                 (status, bytes) <- proxyGet (observedProxy observed) (cargoArchiveRoute (crateName (releaseCrate release)) (crateVersion (releaseCrate release)))
                 status `shouldBe` 200
                 LBS.toStrict bytes `shouldBe` releaseArchive release
-            cargoConsumer (observedProxy observed) floorCargo $ \project -> do
+            for_ [currentCargo, floorCargo] $ \toolchain -> cargoConsumer (observedProxy observed) toolchain $ \project -> do
                 writeFileText (cargoDirectory project </> "Cargo.lock") (cargoFixtureLock "registry+https://github.com/rust-lang/crates.io-index" releases)
                 void (runCargo project ["build", "--locked"] >>= shouldSucceed)
 

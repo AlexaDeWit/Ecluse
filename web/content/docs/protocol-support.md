@@ -184,7 +184,9 @@ Retained fields reflect first admission. Écluse does not continuously synchroni
 
 Native publication checks length framing, archive root, manifest identity, version, and digest before discovery or writes.
 Dependency inventories, aliases, kinds, targets, registry sources, version requirements, and dependency features must agree with the effective archived manifest.
-Package feature graphs and the optional minimum Rust version must also agree, allowing native normalisation.
+Package feature graphs, native-library `links` declarations, and the optional minimum Rust version must also agree, allowing native normalisation.
+Target comparison parses native cfg expressions under the configured nesting limit, including final commas in `all` and `any` lists.
+Registry comparison uses native logical identities, preserving source kinds and sparse registry paths.
 A null upload dependency registry identifies the selected private view. An absent manifest registry identifies crates.io.
 Descriptive and additive metadata need not match the manifest. Accepted uploads retain their original bytes.
 The sparse read root and approved upload API root remain distinct.

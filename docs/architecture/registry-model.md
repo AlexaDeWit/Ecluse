@@ -458,7 +458,8 @@ Archive inspection verifies complete bounded compressed bytes and the effective 
 Publication can make one further local pass over those same bytes for selected text.
 Both passes charge their work.
 Resolver disagreement can change the package description used for resolution without changing archive bytes.
-First-party validation therefore compares upload claims with the retained effective manifest before target discovery.
+First-party validation therefore compares upload claims, including native-library uniqueness constraints, with the retained effective manifest before target discovery.
+Shared bounded target parsing and logical source identities account for native formatting without changing source rows or upload bytes.
 The relay preserves validated upload bytes. Mirror publication derives required upload fields from the verified effective manifest.
 
 ## Registry abstraction

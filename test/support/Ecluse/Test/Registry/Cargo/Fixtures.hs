@@ -117,7 +117,7 @@ cargoCrates =
         , setFields [("optional", Bool True), ("default_features", Bool False)] (dependency "ecluse-e2e-extra" "^1.0")
         , dependency "ecluse-e2e-macro" "^1.0"
         , setFields [("kind", String "build")] (dependency "ecluse-e2e-build" "^1.0")
-        , setFields [("target", String "cfg(unix)")] (dependency "ecluse-e2e-unix" "^1.0")
+        , setFields [("target", String "cfg(all(unix, any(unix, windows)))")] (dependency "ecluse-e2e-unix" "^1.0")
         , setFields [("target", String "cfg(windows)")] (dependency "ecluse-e2e-windows" "^1.0")
         ]
 
