@@ -25,7 +25,7 @@ Original: core/test/unit/Ecluse/Core/Registry/Metadata/FetchSpec.hs.
 Replacement: test/contracts/Ecluse/Test/Contract/Metadata/Fetch.hs.
 Both npm and PyPI run the same body with their original raw documents and builders.
 The original adapter-completeness example and native fixture registration remain in FetchSpec.
-Each prefix below expands to core.metadata.fetch.npm and core.metadata.fetch.pypi.
+Each prefix below expands under core.metadata.fetch for npm, PyPI and Cargo.
 
 | Case suffix | Preserved assertions |
 | --- | --- |
@@ -47,19 +47,20 @@ Each prefix below expands to core.metadata.fetch.npm and core.metadata.fetch.pyp
 | held-version-bound | Full TooManyVersions 2 1 |
 
 The full and selected held-read versus response assertions remain inside the contract's bothWays helper for every held case. These were not moved into a provider callback.
-There are 32 cases per ecosystem, 64 total.
+The fetch obligations define the required cases for each ecosystem, including Cargo record framing.
 
 ### Metadata projection
 
 The projection contract distinguishes `SingleDocument` and `RecordStream` input.
 npm and PyPI retain their exact whole-document errors for malformed, absent, and conflicting identities.
-Cargo quarantines unusable native rows and requires explicit invalid-entry evidence on full and selected reads.
+Cargo full reads report invalid entries for unusable native rows.
+Selected reads exclude unusable rows from matching versions without retaining invalid-entry diagnostics.
 Quarantine cannot turn a transport or resource fault into success.
 The native Cargo tests keep duplicate-version and EOF scanning controls beside their independent wire reader.
 
 Originals: core/test/unit/Ecluse/Core/Registry/Npm/MetadataSpec.hs and PyPI/MetadataSpec.hs.
 Replacement: test/contracts/Ecluse/Test/Contract/Metadata/Projection.hs.
-Each suffix expands to core.metadata.projection.npm and core.metadata.projection.pypi.
+Each suffix expands under core.metadata.projection for npm, PyPI and Cargo.
 
 | Case suffix | Original examples and assertions |
 | --- | --- |
