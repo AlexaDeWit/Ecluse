@@ -378,17 +378,20 @@ cargoRoots :: VersionRead -> IO CargoRoots
 cargoRoots selected = do
     source <- maybe (fail "selected Cargo source is absent") pure (vrVersion selected >>= vdRaw >>= snd cargoCached)
     value <- maybe (fail "selected Cargo row is absent") (pure . snd) (listToMaybe (cargoRecords source))
-    payload <- case value of
-        Object fields -> case KeyMap.lookup "features" fields of
-            Just (Object features) -> case KeyMap.lookup "large" features of
-                Just (Array values) -> case toList values of
-                    [feature@(String _)] -> pure feature
-                    _ -> fail "large feature payload is absent"
-                _ -> fail "large feature array is absent"
-            _ -> fail "native features are absent"
+    row <- case value of
+        Object fields -> pure fields
         _ -> fail "native Cargo row is not an object"
-    CargoRoots <$> track value <*> track payload
+    payload <- case KeyMap.lookup "features" row of
+        Just (Object features) -> case KeyMap.lookup "large" features of
+            Just (Array values) -> case toList values of
+                [String feature] -> pure feature
+                _ -> fail "large feature payload is absent"
+            _ -> fail "large feature array is absent"
+        _ -> fail "native features are absent"
+    -- Value constructor wrappers can be rebuilt without retaining the original wrapper.
+    CargoRoots <$> track row <*> track payload
   where
+    track :: a -> IO (Weak ())
     track key = evaluate key >>= \evaluated -> mkWeak evaluated () Nothing
 
 assertCargoRetained :: CargoRoots -> Expectation
