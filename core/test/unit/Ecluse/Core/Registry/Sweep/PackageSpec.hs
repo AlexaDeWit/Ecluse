@@ -26,7 +26,7 @@ import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, Unbounded))
 import Ecluse.Core.Package (
     Artifact (artUrl),
     Availability (Deprecated, Yanked),
-    CodeExecSignal (CodeExecUnknown, RunsCodeOnInstall),
+    CodeExecSignal (CodeExecUnknown, NoCodeOnInstall, RunsCodeOnInstall),
     PackageDetails (pkgArtifacts, pkgAvailability, pkgInstallCode, pkgPublishedAt),
     PackageInfo (infoVersions),
     PackageName,
@@ -271,30 +271,36 @@ identityOnlySpec = describe "a manifest the store did not serve" $ do
 
 installEvidenceSpec :: Spec
 installEvidenceSpec = describe "stored install evidence" $ do
-    it "retains exact selected artifact metadata and uses the authenticated store reader" $ do
-        let version = npmVersion "1.0.0"
-            artifact = sampleArtifact{artUrl = "https://private.test/exact-source"}
-            original = sampleManifest leftPadName [version]
-            manifest = original{manifestInfo = (manifestInfo original){infoVersions = Map.map (\details -> details{pkgInstallCode = CodeExecUnknown, pkgArtifacts = artifact :| []}) (infoVersions (manifestInfo original))}}
-        store <- storeWith [version] (Just manifest)
-        artifactReads <- newIORef []
-        subjects <- newIORef []
-        rules <- prepare inertRuleDeps [atDefaultPrecedence DenyInstallTimeExecution]
-        recorded <- recordingPorts generation
-        let handle = fakeMaintenance store
-            tracked = store{fakeMaintenance = handle{storeReadArtifact = \_ selected _ -> modifyIORef' artifactReads (selected :) $> Right "authenticated archive"}}
-            provider = InstallEvidenceProvider $ \evidenceContext -> do
-                ieRole evidenceContext `shouldBe` InstallStoreRevocation
-                pure $ \details -> do
-                    let selected :| _ = pkgArtifacts details
-                    pure . Just . InstallEvidenceRead $ do
-                        modifyIORef' subjects (details :)
-                        result <- ieReadArtifact evidenceContext defaultLimits selected (const (pure ()))
-                        pure (either InstallReadFailed (const (InstallDetermined (RunsCodeOnInstall "stored declaration"))) result)
-        runStep recorded testPacing (mount tracked rules){smInstallEvidence = Just provider} (served ["1.0.0"]) `shouldReturn` Nothing
-        held store `shouldReturn` []
-        readIORef artifactReads `shouldReturn` [artifact]
-        map pkgArtifacts <$> readIORef subjects `shouldReturn` [artifact :| []]
+    for_
+        [ ("retains exact selected artifact metadata and uses the authenticated store reader", RunsCodeOnInstall "stored declaration", False)
+        , ("keeps a stored version when fresh authenticated evidence no longer condemns it", NoCodeOnInstall, True)
+        ]
+        $ \(label, reassessed, keepVersion) -> it label $ do
+            let version = npmVersion "1.0.0"
+                artifact = sampleArtifact{artUrl = "https://private.test/exact-source"}
+                original = sampleManifest leftPadName [version]
+                manifest = original{manifestInfo = (manifestInfo original){infoVersions = Map.map (\details -> details{pkgInstallCode = CodeExecUnknown, pkgArtifacts = artifact :| []}) (infoVersions (manifestInfo original))}}
+            store <- storeWith [version] (Just manifest)
+            artifactReads <- newIORef []
+            subjects <- newIORef []
+            signals <- newIORef [RunsCodeOnInstall "stored declaration", reassessed]
+            rules <- prepare inertRuleDeps [atDefaultPrecedence DenyInstallTimeExecution]
+            recorded <- recordingPorts generation
+            let handle = fakeMaintenance store
+                tracked = store{fakeMaintenance = handle{storeReadArtifact = \_ selected _ -> modifyIORef' artifactReads (selected :) $> Right "authenticated archive"}}
+                provider = InstallEvidenceProvider $ \evidenceContext -> do
+                    ieRole evidenceContext `shouldBe` InstallStoreRevocation
+                    pure $ \details -> do
+                        let selected :| _ = pkgArtifacts details
+                        pure . Just . InstallEvidenceRead $ do
+                            modifyIORef' subjects (details :)
+                            result <- ieReadArtifact evidenceContext defaultLimits selected (const (pure ()))
+                            signal <- nextReading reassessed signals
+                            pure (either InstallReadFailed (const (InstallDetermined signal)) result)
+            runStep recorded testPacing (mount tracked rules){smInstallEvidence = Just provider} (served ["1.0.0"]) `shouldReturn` Nothing
+            held store `shouldReturn` [version | keepVersion]
+            readIORef artifactReads `shouldReturn` [artifact, artifact]
+            map pkgArtifacts <$> readIORef subjects `shouldReturn` [artifact :| [], artifact :| []]
     it "keeps a stored version when required install evidence is unavailable" $ do
         let version = npmVersion "1.0.0"
             original = sampleManifest leftPadName [version]
@@ -619,7 +625,7 @@ denyCveRule :: Rule
 denyCveRule = DenyIfCve (DenyIfCveParams 8.0 FailDeny)
 
 -- Take the next queued reading, then hold the last, so a case drives one crossing and no more.
-nextReading :: AdvisoryFreshness -> IORef [AdvisoryFreshness] -> IO AdvisoryFreshness
+nextReading :: a -> IORef [a] -> IO a
 nextReading afterwards queued = atomicModifyIORef' queued $ \case
     [] -> ([], afterwards)
     (next : rest) -> (rest, next)
