@@ -15,10 +15,12 @@ import Network.HTTP.Types (statusCode)
 import System.FilePath ((</>))
 import Test.Hspec (around, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
 
+import Ecluse.Core.Clock (secondsToMicros)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Mirror.State (stateTarget)
 import Ecluse.Core.Mirror.State.Internal (projectKey)
 import Ecluse.Core.Package (mkPackageName)
+import Ecluse.Core.Queue (Seconds (Seconds))
 import Ecluse.E2E.Cargo.InstallE2ESpec (cargoConsumer)
 import Ecluse.E2E.Cargo.MirrorInstallE2ESpec
 import Ecluse.E2E.Fixtures.Cargo
@@ -27,6 +29,8 @@ import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Cargo
 import Ecluse.E2E.Harness.CargoGateway
 import Ecluse.E2E.Harness.CargoRegistry
+import Ecluse.E2E.Harness.Container (containerLogPollMicros)
+import Ecluse.Runtime.Queue.Sqs.Internal (SqsConfig (sqsVisibilityTimeout, sqsWaitSeconds), defaultSqsConfig)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
@@ -65,12 +69,15 @@ cargoMirrorProofContract = DeclaredGroup metadata $ \recorder ->
     label name = caseLabel ("cargo/mirror-proof/" <> name)
 
 complete :: GlobalDataPlane -> CargoRegistry -> [CargoRelease] -> E2EConfig -> IO ()
-complete plane registry releases config = withObservedCargoProxy config plane $ \observed -> do
+complete = completeWithin 120
+
+completeWithin :: Int -> GlobalDataPlane -> CargoRegistry -> [CargoRelease] -> E2EConfig -> IO ()
+completeWithin attempts plane registry releases config = withObservedCargoProxy config plane $ \observed -> do
     cargoConsumer (observedProxy observed) currentCargo $ \project -> do
         void (runCargo project ["build"] >>= shouldSucceed)
         void (cargoFetch project >>= shouldSucceed)
     awaitCargoRegistry registry releases `shouldReturn` True
-    for_ releases $ \release -> awaitProxyLog (observedProxy observed) (cargoMirrorComplete (crateName (releaseCrate release)) (crateVersion (releaseCrate release))) 120 `shouldReturn` True
+    for_ releases $ \release -> awaitProxyLog (observedProxy observed) (cargoMirrorComplete (crateName (releaseCrate release)) (crateVersion (releaseCrate release))) attempts `shouldReturn` True
 
 sourceRoundtrip :: GlobalDataPlane -> IO ()
 sourceRoundtrip plane = withCargoMirrorFixture plane $ \registry releases -> do
@@ -126,8 +133,12 @@ lostReply :: GlobalDataPlane -> IO ()
 lostReply plane = withCargoMirrorFixture plane $ \registry releases -> do
     queue <- sharedMirrorQueue plane
     let config = cargoMirrorConfig{ecQueueUrl = Just queue}
+        queueConfig = defaultSqsConfig queue "us-east-1"
+        Seconds visibilitySeconds = sqsVisibilityTimeout queueConfig
+        -- The failed upload remains hidden until its lease expires, then a receive can use another long poll.
+        retryAttempts = 120 + secondsToMicros (fromIntegral (visibilitySeconds + sqsWaitSeconds queueConfig)) `div` containerLogPollMicros
     setCargoRegistryFault registry CargoRegistryLoseReply
-    complete plane registry releases config
+    completeWithin retryAttempts plane registry releases config
     withStubFault plane (CargoBackend (registryPort registry) True) $
         withObservedCargoProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed ->
             cargoConsumer (observedProxy observed) currentCargo $ \project -> void (runCargo project ["build"] >>= shouldSucceed)

@@ -18,6 +18,7 @@ module Ecluse.E2E.Harness.Container (
     withBridgeApplication,
     uniqueSuffix,
     awaitContainerLog,
+    containerLogPollMicros,
     containerLogs,
 ) where
 
@@ -224,7 +225,11 @@ uniqueSuffix = show <$> (randomIO :: IO Word64)
 -- | Poll logs at 250 ms intervals, returning False when the attempt budget expires.
 awaitContainerLog :: String -> (Text -> Bool) -> Int -> IO Bool
 awaitContainerLog cname matches attempts =
-    pollUntil attempts 250000 id (matches <$> containerLogs cname)
+    pollUntil attempts containerLogPollMicros id (matches <$> containerLogs cname)
+
+-- | The interval between container log observations, in microseconds.
+containerLogPollMicros :: Int
+containerLogPollMicros = 250000
 
 -- | Read combined container output. Missing resources produce empty diagnostic evidence.
 containerLogs :: String -> IO Text

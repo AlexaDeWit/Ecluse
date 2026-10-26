@@ -238,7 +238,7 @@ workerReadmission global = withExecutionStores global $ \plane _ -> do
     let environment = Native.proxyRoleEnv <> [("ECLUSE_RULES", executionRules False), ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873"), ("ECLUSE_QUEUE__URL", queue), ("AWS_ENDPOINT_URL_SQS", "http://ministack:4566")]
     withMirrorRole global environment $ \worker -> do
         for_ [cargoRoot, macroName] $ \name ->
-            awaitContainerLog worker (T.isInfixOf ("current policy denies " <> name <> "@" <> cargoVersion <> ": blocked by execution")) 120 `shouldReturn` True
+            awaitContainerLog worker (T.isInfixOf ("current policy denies " <> name <> "@" <> cargoVersion <> ": blocked by DenyInstallTimeExecution")) 120 `shouldReturn` True
         awaitContainerLog worker (T.isInfixOf ("mirror version complete: " <> plainName <> "@" <> cargoVersion)) 120 `shouldReturn` True
         logs <- containerLogs worker
         logs `shouldSatisfy` T.isInfixOf "runs code on install"
@@ -252,8 +252,9 @@ workerReadmission global = withExecutionStores global $ \plane _ -> do
             workerRequests `shouldSatisfy` any (\request -> srRoute request == CargoPublic && srMethod request == "GET" && srPath request == archivePath name && srStatus request == 200)
 
 dredgerRevocation :: GlobalDataPlane -> IO ()
-dredgerRevocation global = withExecutionStores global $ \plane releases ->
-    Native.withSweepProxy plane [("ECLUSE_RULES", permissiveRules)] Nothing ["proxy", "--no-worker"] $ \store -> do
+dredgerRevocation global = withExecutionStores global $ \plane releases -> do
+    queue <- sharedMirrorQueue global
+    Native.withSweepProxy plane [("ECLUSE_RULES", permissiveRules)] (Just queue) ["proxy", "--no-worker"] $ \store -> do
         for_ [Native.directStore store, Native.cacheStore store] $ \target ->
             for_ releases $ \release ->
                 void (clientPublish cargoSweepClientOps target (crateName (releaseCrate release)) (crateVersion (releaseCrate release)) >>= shouldSucceed)
