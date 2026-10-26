@@ -373,8 +373,11 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
   where
     inherited key = key /= "GHCRTS" && not (any (`isPrefixOf` key) ["ECLUSE_", "OTEL_", "AWS_", "__ECLUSE"])
     mount = T.toUpper (ecosystemName (psEcosystem settings))
+    upstream :: Text -> Int -> (Text, Text)
     upstream leg p = ("ECLUSE_MOUNTS__" <> mount <> "__" <> leg <> "__REGISTRY__URL", upstreamUrl leg p)
+    upstreamUrl :: Text -> Int -> Text
     upstreamUrl leg p = "https://" <> upstreamHost leg <> ":" <> show p
+    upstreamHost :: Text -> Text
     upstreamHost leg
         | leg == "PUBLIC_UPSTREAM", Just host <- psPublicHost settings = host
         | psEcosystem settings == Cargo = if leg == "PUBLIC_UPSTREAM" then "localhost" else "127.0.0.1"
