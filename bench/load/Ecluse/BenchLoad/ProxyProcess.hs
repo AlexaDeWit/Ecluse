@@ -120,7 +120,7 @@ import Ecluse.BenchLoad.Pod (
 import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
 import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection), RtsSnapshot, collectionName)
 import Ecluse.BenchLoad.Verdict (ProxyEnding, classifyEnding)
-import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo), ecosystemName)
 import Ecluse.Core.Server.Encoding (MetadataCompression (IdentityOnly))
 import Ecluse.Rts.Cgroup (parseMemoryMax, readIfExists)
 import Ecluse.Runtime.Server (listeningPrefix, proxyListener)
@@ -375,9 +375,11 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
   where
     inherited key = key /= "GHCRTS" && not (any (`isPrefixOf` key) ["ECLUSE_", "OTEL_", "AWS_", "__ECLUSE"])
     mount = T.toUpper (ecosystemName (psEcosystem settings))
-    upstream leg p = ("ECLUSE_MOUNTS__" <> mount <> "__" <> leg <> "__REGISTRY__URL", "https://" <> upstreamHost leg <> ":" <> show p)
+    upstream leg p = ("ECLUSE_MOUNTS__" <> mount <> "__" <> leg <> "__REGISTRY__URL", upstreamUrl leg p)
+    upstreamUrl leg p = "https://" <> upstreamHost leg <> ":" <> show p
     upstreamHost leg
         | leg == "PUBLIC_UPSTREAM", Just host <- psPublicHost settings = host
+        | psEcosystem settings == Cargo = if leg == "PUBLIC_UPSTREAM" then "localhost" else "127.0.0.1"
         | leg == "PUBLIC_UPSTREAM", isJust (psMirrorStatePort settings) = "127.0.0.1"
         | otherwise = "localhost"
     fixed =
@@ -412,7 +414,7 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
         , ("ECLUSE_MOUNTS__" <> mount <> "__MIRROR_TARGET__REGISTRY__USERNAME", "fixture-user")
         ]
             <> map (bimap toText toText) ambientAwsEntries
-            <> foldMap (\p -> [upstream "MIRROR_TARGET" p, ("ECLUSE_MOUNTS__" <> mount <> "__MIRROR_TARGET__REGISTRY__UPLOAD_URL", "https://localhost:" <> show p <> "/upload")]) privatePort
+            <> foldMap (\p -> [upstream "MIRROR_TARGET" p, ("ECLUSE_MOUNTS__" <> mount <> "__MIRROR_TARGET__REGISTRY__UPLOAD_URL", upstreamUrl "MIRROR_TARGET" p <> "/upload")]) privatePort
     pinned =
         catMaybes
             [ upstream "PRIVATE_UPSTREAM" <$> privatePort

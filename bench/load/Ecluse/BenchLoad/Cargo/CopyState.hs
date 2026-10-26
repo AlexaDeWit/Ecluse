@@ -69,8 +69,8 @@ withCopyState latency privatePort publicPort bucket use = do
     testWithApplication (pure (stateApp latency records)) use
   where
     publicBase = "http://localhost:" <> show publicPort
-    privateBase = "http://localhost:" <> show privatePort
-    target = stateTarget ("https://localhost:" <> show privatePort)
+    privateBase = "http://127.0.0.1:" <> show privatePort
+    target = stateTarget ("https://127.0.0.1:" <> show privatePort)
     fetch client bound url = do
         request <- parseRequest (toString url)
         fetchTestBody client (progressFloor defaultLimits) bound request >>= either (benchFail . show) pure
