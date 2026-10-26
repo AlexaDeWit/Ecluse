@@ -417,8 +417,8 @@ withCargoRoots selected consume =
 
 -- Lifted wrappers can be reconstructed while their primitive storage stays reachable.
 track :: forall (key :: UnliftedType). key -> IO (Weak ())
-track key = IO $ \state ->
-    case mkWeakNoFinalizer# key () state of
+track key = IO $ \world0 ->
+    case mkWeakNoFinalizer# key () world0 of
         (# next, weak #) -> (# next, Weak weak #)
 
 cargoSnapshot :: VersionRead -> Either Text CargoSnapshot
