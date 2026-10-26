@@ -46,8 +46,14 @@ uploadCoordinateSpec = describe "configured Cargo read and upload coordinates" $
         it ("refuses a publication API on another mount's " <> toString key) $ do
             mounts <- cargoMounts
             let changed = withPublicationUpload Cargo url mounts
+                expected = case key of
+                    "publicationTarget" ->
+                        [ PublicationTargetOnMountEndpoint PyPI Cargo "publicationTarget" url
+                        , PublicationTargetOnMountEndpoint Cargo PyPI "publicationTarget" url
+                        ]
+                    _ -> [PublicationTargetOnMountEndpoint Cargo PyPI key url]
             for_ endpointRoles $ \role ->
-                refusalsIn role changed `shouldBe` [PublicationTargetOnMountEndpoint Cargo PyPI key url]
+                refusalsIn role changed `shouldBe` expected
 
     it "checks an upload coordinate loaded through the generic registry configuration" $
         refusalsFor
@@ -110,6 +116,9 @@ uploadCoordinateSpec = describe "configured Cargo read and upload coordinates" $
             changed = withPublicationUpload Cargo url (withMirrorUpload Cargo url mounts)
         refusalsIn MirrorWriter changed `shouldBe` []
         advisoriesIn MirrorWriter changed `shouldBe` [MirrorTargetOnOwnPublicationTarget Cargo (unsafeRegistryUrl url)]
+        vetted <- either (fail . show) pure (clearedTargets changed)
+        fmap (registryUrlText . publicationTargetUrl) (Map.lookup Cargo vetted) `shouldBe` Just url
+        fmap (registryUrlText . publicationReadUrl) (Map.lookup Cargo vetted) `shouldBe` Just "https://publish.example.test"
         for_ [MirrorPruner, MirrorPreviewer] $ \role ->
             refusalsIn role changed `shouldBe` [MirrorTargetOnMountEndpoint Cargo Cargo "publicationTarget" url]
 
