@@ -23,6 +23,7 @@ import UnliftIO.Async (async, cancel, poll, withAsync)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.BenchLoad.Advisories (advisoryDenyRules)
+import Ecluse.BenchLoad.AdvisoryStore (AdvisoryObject (AdvisoryObject))
 import Ecluse.BenchLoad.Pod (PodShape (Limited, MemoryOnly, Unlimited), ProxyTuning (..), noTuning)
 import Ecluse.BenchLoad.ProxyProcess (
     AdvisoryFeed (AdvisoryFeed),
@@ -176,6 +177,7 @@ acquisitionSpec = describe "partial acquisition" $ do
 environmentSpec :: Spec
 environmentSpec = describe "proxyEnvironment" $ do
     let settings = (proxySettings Npm 0){psCacheMaxEntries = Just 3, psServeMaxInFlight = Just 12}
+        advisoryObject = AdvisoryObject Npm (UTCTime (fromGregorian 2026 9 27) 0) "compiled advisory bytes"
         base =
             [ ("PATH", "/bin")
             , ("GHCRTS", "-N3")
@@ -272,14 +274,14 @@ environmentSpec = describe "proxyEnvironment" $ do
                         , psPublicConnections = Just 32
                         , psPrivateConnections = Just 64
                         , psClock = Just (UTCTime (fromGregorian 2026 9 22) 0)
-                        , psAdvisories = Just (AdvisoryFeed 9003 advisoryDenyRules)
+                        , psAdvisories = Just (AdvisoryFeed 9003 advisoryDenyRules advisoryObject)
                         }
                 environment = proxyEnvironment everyPin shape 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
             case loadConfig environment Nothing of
                 Left errs -> expectationFailure (toString (unlines (map renderConfigError errs)))
                 Right config -> void (expectPlanFor (BootMirrorPipeline ServeAndMirror) environment Nothing config noCeiling)
     it "points an advisory feed's proxy at the loopback store under a stand-in identity, never the harness's own" $ do
-        let advised rules = proxyEnvironment settings{psAdvisories = Just (AdvisoryFeed 9003 rules)} Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) awsBase
+        let advised rules = proxyEnvironment settings{psAdvisories = Just (AdvisoryFeed 9003 rules advisoryObject)} Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) awsBase
             awsBase = [("AWS_PROFILE", "harness"), ("AWS_ACCESS_KEY_ID", "harness-key")]
             shipped = advised []
         lookup "ECLUSE_ADVISORIES__URL" shipped `shouldBe` Just "s3://ecluse-bench-advisories"
@@ -288,8 +290,16 @@ environmentSpec = describe "proxyEnvironment" $ do
         lookup "AWS_PROFILE" shipped `shouldBe` Nothing
         let noDatabase = proxyEnvironment settings Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) awsBase
         filter (("AWS_" `isPrefixOf`) . fst) noDatabase `shouldBe` []
+    it "selects one endpoint and one identity when Cargo uses advisory and native state buckets" $ do
+        let feed = AdvisoryFeed 9003 advisoryDenyRules (AdvisoryObject Cargo (UTCTime (fromGregorian 2026 9 27) 0) "compiled advisory bytes")
+            combined = (proxySettings Cargo 0){psAdvisories = Just feed, psMirrorStatePort = Just 9004}
+            environment = proxyEnvironment combined Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
+        filter ((== "AWS_ENDPOINT_URL") . fst) environment `shouldBe` [("AWS_ENDPOINT_URL", "http://127.0.0.1:9004")]
+        filter ((== "AWS_ACCESS_KEY_ID") . fst) environment `shouldBe` [("AWS_ACCESS_KEY_ID", "test")]
+        lookup "ECLUSE_ADVISORIES__URL" environment `shouldBe` Just "s3://ecluse-bench-advisories"
+        lookup "ECLUSE_MIRROR_STATE__URL" environment `shouldBe` Just "s3://ecluse-bench-mirror-state"
     it "adds an advisory feed's rules to the shipped policy, and leaves the policy alone without any" $ do
-        let rulesFor rules = lookup "ECLUSE_RULES" (proxyEnvironment settings{psAdvisories = Just (AdvisoryFeed 9003 rules)} Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 Nothing [])
+        let rulesFor rules = lookup "ECLUSE_RULES" (proxyEnvironment settings{psAdvisories = Just (AdvisoryFeed 9003 rules advisoryObject)} Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 Nothing [])
             ruleNames = \case
                 Just (Object entries) -> sort (map Key.toText (KeyMap.keys entries))
                 _ -> []

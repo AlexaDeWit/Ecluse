@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Native private-copy fixtures retain only checked source rows present in the actual target index.
-module Ecluse.BenchLoad.Cargo.CopyState (withCopyState) where
+module Ecluse.BenchLoad.Cargo.CopyState (withCopyState, copyStateApplication) where
 
 import Control.Concurrent (threadDelay)
 import Control.Monad (foldM)
@@ -18,6 +18,7 @@ import Network.HTTP.Types.Header (hETag, hIfNoneMatch)
 import Network.Wai (Application, rawPathInfo, requestHeaders, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 
+import Ecluse.BenchLoad.AdvisoryStore (AdvisoryObject, advisoryStoreApplication)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Mirror.State (encodeProjectRecord, extendProjectRecord, stateTarget)
@@ -41,8 +42,8 @@ import Ecluse.Test.Registry.Cargo.Reference (IndexLine (indexValue), referenceIn
 import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, fetchTestBody)
 
 -- | Prepare records before proxy boot. Unmatched private records never acquire managed status.
-withCopyState :: Int -> Int -> Int -> Text -> (Int -> IO a) -> IO a
-withCopyState latency privatePort publicPort bucket use = do
+withCopyState :: Int -> Int -> Int -> Text -> Maybe AdvisoryObject -> (Int -> IO a) -> IO a
+withCopyState latency privatePort publicPort bucket advisory use = do
     records <- withExchangeClient (newManager defaultManagerSettings) $ \client -> do
         config <- fetch client (MetadataBodyLimit 65536) (publicBase <> "/config.json")
         discovery <- either (benchFail . show) pure (parseCargoDiscovery (ecosystemArtifactAuthorities cargoArtifactHosts) publicBase (responseBody config))
@@ -66,7 +67,9 @@ withCopyState latency privatePort publicPort bucket use = do
                         )
                         record
                 statuses -> benchFail ("Cargo copy-state preparation received HTTP " <> show statuses)
-    testWithApplication (pure (stateApp latency records)) use
+    let native = copyStateApplication latency records
+        application = maybe native (`advisoryStoreApplication` native) advisory
+    testWithApplication (pure application) use
   where
     publicBase = "http://localhost:" <> show publicPort
     privateBase = "http://127.0.0.1:" <> show privatePort
@@ -101,8 +104,9 @@ nativeRows bytes = Map.fromListWith (<>) <$> traverse row (referenceIndex bytes)
             _ -> Left "Cargo private index has no raw version"
         pure (version, [fields])
 
-stateApp :: Int -> Map ByteString ByteString -> Application
-stateApp latency records request respond = do
+-- | Serve native record bytes with opaque revisions and conditional reads.
+copyStateApplication :: Int -> Map ByteString ByteString -> Application
+copyStateApplication latency records request respond = do
     when (latency > 0) (threadDelay latency)
     respond $ case Map.lookup (rawPathInfo request) records of
         Nothing -> responseLBS status404 [(hContentType, "application/xml")] "<Error><Code>NoSuchKey</Code></Error>"

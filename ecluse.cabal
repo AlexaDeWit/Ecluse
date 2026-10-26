@@ -1482,10 +1482,12 @@ test-suite ecluse-unit
     Ecluse.AcceptanceSpec
     Ecluse.Acceptance.EvidenceSpec
     Ecluse.BenchLoad.Advisories
+    Ecluse.BenchLoad.AdvisoryStore
     Ecluse.BenchLoad.Contract.Driver
     Ecluse.BenchLoad.Contract.DriverSpec
     Ecluse.BenchLoad.Stress
     Ecluse.BenchLoad.AdvisoriesSpec
+    Ecluse.BenchLoad.AdvisoryStoreSpec
     Ecluse.BenchLoad.ContractSpec
     Ecluse.BenchLoad.BootLinesSpec
     Ecluse.BenchLoad.CpuUseSpec
@@ -2358,6 +2360,7 @@ executable bench-load
     buildable: False
   other-modules:
     Ecluse.BenchLoad.Advisories
+    Ecluse.BenchLoad.AdvisoryStore
     Ecluse.BenchLoad.Contract.Driver
     Ecluse.BenchLoad.Stress
     Ecluse.BenchLoad.Error

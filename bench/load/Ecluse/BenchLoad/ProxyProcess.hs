@@ -100,6 +100,7 @@ import UnliftIO (bracket, bracketOnError, finally, mask, onException, try, tryAn
 import UnliftIO.Async (Async, async, cancel, link, poll)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
+import Ecluse.BenchLoad.AdvisoryStore (AdvisoryObject, advisoryBucket)
 import Ecluse.BenchLoad.BootLines (bootMessages, logMessages, metadataCompression, renderMetadataCompression, ruleMessages)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Exposition (Sample, advisoryDatabaseInstalled, parseExposition)
@@ -160,12 +161,9 @@ proxySettings ecosystem ttl = ProxySettings ecosystem ttl Nothing Nothing Nothin
 data AdvisoryFeed = AdvisoryFeed
     { afStorePort :: Int
     , afRules :: [Pair]
+    , afObject :: AdvisoryObject
     }
     deriving stock (Eq, Show)
-
--- | The bucket the proxy syncs its advisory database from.
-advisoryBucket :: Text
-advisoryBucket = "ecluse-bench-advisories"
 
 -- | The bucket holding the managed-read fixture's project record.
 mirrorStateBucket :: Text
@@ -403,17 +401,13 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
     tuning = psTuning settings
     advisories feed =
         [ ("ECLUSE_ADVISORIES__URL", "s3://" <> advisoryBucket)
-        , ("AWS_ENDPOINT_URL", "http://127.0.0.1:" <> show (afStorePort feed))
         ]
-            <> map (bimap toText toText) ambientAwsEntries
             <> [("ECLUSE_RULES", decodeUtf8 (encode (object (afRules feed)))) | not (null (afRules feed))]
-    mirrorState endpoint =
+    mirrorState =
         [ ("ECLUSE_MIRROR_STATE__URL", "s3://" <> mirrorStateBucket)
-        , ("AWS_ENDPOINT_URL", "http://127.0.0.1:" <> show endpoint)
         , ("ECLUSE_MOUNTS__" <> mount <> "__MIRROR_TARGET__REGISTRY__TOKEN", "fixture-token")
         , ("ECLUSE_MOUNTS__" <> mount <> "__MIRROR_TARGET__REGISTRY__USERNAME", "fixture-user")
         ]
-            <> map (bimap toText toText) ambientAwsEntries
             <> foldMap (\p -> [upstream "MIRROR_TARGET" p, ("ECLUSE_MOUNTS__" <> mount <> "__MIRROR_TARGET__REGISTRY__UPLOAD_URL", upstreamUrl "MIRROR_TARGET" p <> "/upload")]) privatePort
     pinned =
         catMaybes
@@ -430,7 +424,10 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
             , ("ECLUSE_RUNTIME__MAX_HEAP_BYTES",) . show <$> ptMaxHeapBytes tuning
             ]
             <> foldMap advisories (psAdvisories settings)
-            <> foldMap mirrorState (psMirrorStatePort settings)
+            <> foldMap (const mirrorState) (psMirrorStatePort settings)
+            <> foldMap storeEnvironment (psMirrorStatePort settings <|> (afStorePort <$> psAdvisories settings))
+    storeEnvironment endpoint =
+        ("AWS_ENDPOINT_URL", "http://127.0.0.1:" <> show endpoint) : map (bimap toText toText) ambientAwsEntries
 
 -- | RTS counters from the proxy after the given collection. 'Nothing' once it has gone.
 proxySnapshot :: ProxyProcess -> Collection -> IO (Maybe RtsSnapshot)

@@ -41,7 +41,7 @@ import Ecluse.BenchLoad.Cargo.CopyState (withCopyState)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttp), LoadKnobs (..), Target, proxied, urlLoad)
 import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
-import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, ProxySettings (..), mirrorStateBucket, proxyPort, proxySettings, withProxyProcess)
+import Ecluse.BenchLoad.ProxyProcess (AdvisoryFeed (afObject), ProxyProcess, ProxySettings (..), mirrorStateBucket, proxyPort, proxySettings, withProxyProcess)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (PackageName, pkgEcosystem)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName)
@@ -63,14 +63,14 @@ withProxyPortsConfigured :: Ecosystem -> LoadKnobs -> (Int -> Int -> IO (ProxySe
 withProxyPortsConfigured ecosystem knobs configure privateApp publicApp mkMix body =
     testWithApplication (pure privateApp) $ \privatePort ->
         testWithApplication (pure publicApp) $ \publicPort -> do
-            withNativeState privatePort publicPort $ \nativeState -> do
-                adjust <- configure privatePort publicPort
-                let settings = adjust knobSettings
+            adjust <- configure privatePort publicPort
+            let settings = adjust knobSettings
+            withNativeState (afObject <$> psAdvisories settings) privatePort publicPort $ \nativeState ->
                 withProxyProcess settings{psMirrorStatePort = psMirrorStatePort settings <|> nativeState} publicPort (Just privatePort) $ \proxy ->
                     body proxy (mkMix (proxyPort proxy))
   where
-    withNativeState privatePort publicPort use
-        | ecosystem == Cargo = withCopyState (lkUpstreamLatencyMicros knobs) privatePort publicPort mirrorStateBucket (use . Just)
+    withNativeState advisory privatePort publicPort use
+        | ecosystem == Cargo = withCopyState (lkUpstreamLatencyMicros knobs) privatePort publicPort mirrorStateBucket advisory (use . Just)
         | otherwise = use Nothing
     knobSettings =
         (proxySettings ecosystem 60)

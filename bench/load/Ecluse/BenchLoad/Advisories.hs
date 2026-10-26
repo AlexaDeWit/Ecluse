@@ -22,18 +22,17 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
-import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time (getCurrentTime)
 import Network.HTTP.Client (responseBody)
-import Network.HTTP.Types (Header, Status, hContentType, status200, status404)
-import Network.HTTP.Types.Header (hETag, hLastModified)
+import Network.HTTP.Types (status200)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
+import Ecluse.BenchLoad.AdvisoryStore (AdvisoryObject (AdvisoryObject), advisoryStoreReply)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (fetchChecked)
 import Ecluse.BenchLoad.Harness (LoadKnobs (lkAdvisories), Scenario (..), Target (targetProxy))
-import Ecluse.BenchLoad.ProxyProcess (AdvisoryFeed (AdvisoryFeed), advisoryBucket, proxyPort)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
-import Ecluse.Core.Osv.Schema (osvDbFileName)
+import Ecluse.BenchLoad.ProxyProcess (AdvisoryFeed (AdvisoryFeed), proxyPort)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (PackageInfo (infoVersions), mkPackageName)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Decision (Blocked), DenyIfCveParams (..), DenyIfEpssParams (..), EvalContext (EvalContext), FailureAlignment (FailDeny, FailNoDecision), Reason (KnownMalicious), identityEvidence)
@@ -45,7 +44,7 @@ import Ecluse.Test.Package (hexSha1OfLazy, hexSha256Of)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Rules (evalRules)
-import Ecluse.Test.Stub (Captured (capPath), Stub (stubPort), withRoutedStub)
+import Ecluse.Test.Stub (Stub (stubPort), withRoutedStub)
 
 -- | The scenario under the shipped policy, with its proxy syncing the corpus advisories.
 shippedAdvisories :: Ecosystem -> Scenario -> Scenario
@@ -131,7 +130,7 @@ advisoryVariantWith compile ecosystem suffix note rules s =
         , scenarioBoot = \knobs k ->
             if scenarioInProcess s
                 then benchFail (name <> ": an in-process scenario boots no proxy to sync an advisory database")
-                else withAdvisoryStore compile ecosystem (\port -> scenarioBoot s knobs{lkAdvisories = Just (AdvisoryFeed port rules)} k)
+                else withAdvisoryStore compile ecosystem (\(port, artifact) -> scenarioBoot s knobs{lkAdvisories = Just (AdvisoryFeed port rules artifact)} k)
         }
   where
     name = scenarioName s <> "-" <> suffix
@@ -156,22 +155,9 @@ threshold d = maybe (show d) show (wholeNumber d)
     wholeNumber x = let n = truncate x :: Int in if fromIntegral n == x then Just n else Nothing
 
 -- Compile the ecosystem's corpus advisories and serve the artifact on a loopback port for the action.
-withAdvisoryStore :: (Ecosystem -> FilePath -> IO FilePath) -> Ecosystem -> (Int -> IO a) -> IO a
+withAdvisoryStore :: (Ecosystem -> FilePath -> IO FilePath) -> Ecosystem -> ((Int, AdvisoryObject) -> IO a) -> IO a
 withAdvisoryStore compile ecosystem use =
     withSystemTempDirectory "ecluse-bench-advisories" $ \dir -> do
         artifact <- readFileLBS =<< compile ecosystem dir
         publishedAt <- getCurrentTime
-        withRoutedStub (advisoryStoreReply ecosystem publishedAt artifact) (use . stubPort)
-
--- | Answer the artifact's HEAD or GET with its ETag and publication time, and other paths with 404.
-advisoryStoreReply :: Ecosystem -> UTCTime -> LByteString -> Captured -> (Status, [Header], LByteString)
-advisoryStoreReply ecosystem publishedAt artifact request
-    | capPath request == artifactPath = (status200, headers, artifact)
-    | otherwise = (status404, [], "")
-  where
-    artifactPath = encodeUtf8 ("/" <> advisoryBucket <> "/" <> toText (osvDbFileName (ecosystemName ecosystem)))
-    headers =
-        [ (hETag, encodeUtf8 ("\"" <> hexSha1OfLazy artifact <> "\""))
-        , (hLastModified, encodeUtf8 (formatTime defaultTimeLocale "%a, %d %b %Y %H:%M:%S GMT" publishedAt))
-        , (hContentType, "application/octet-stream")
-        ]
+        withRoutedStub (advisoryStoreReply ecosystem publishedAt artifact) (\stub -> use (stubPort stub, AdvisoryObject ecosystem publishedAt artifact))

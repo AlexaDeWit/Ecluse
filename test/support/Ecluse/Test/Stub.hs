@@ -14,6 +14,7 @@ module Ecluse.Test.Stub (
     withStubHeaders,
     withRoutedStub,
     withRoutedStubIO,
+    routedApplication,
     stubConfig,
     headerValue,
 
@@ -115,21 +116,25 @@ withRoutedStub reply = withRoutedStubIO (pure . reply)
 withRoutedStubIO :: (Captured -> IO (Status, [Header], LBS.ByteString)) -> (Stub -> IO a) -> IO a
 withRoutedStubIO reply action = do
     captured <- newIORef []
-    let app :: Application
-        app waiReq respond = do
-            bodyBytes <- strictRequestBody waiReq
-            let cap =
-                    Captured
-                        { capMethod = requestMethod waiReq
-                        , capPath = rawPathInfo waiReq
-                        , capHeaders = requestHeaders waiReq
-                        , capBody = LBS.toStrict bodyBytes
-                        }
+    let recorded cap = do
             atomicModifyIORef' captured (\seen -> (cap : seen, ()))
-            (status, extraHeaders, body) <- reply cap
-            respond (responseLBS status extraHeaders body)
-    testWithApplication (pure app) $ \port ->
+            reply cap
+    testWithApplication (pure (routedApplication recorded)) $ \port ->
         action Stub{stubPort = port, stubCaptured = captured}
+
+-- | Build an application from the same complete request fields recorded by the loopback stubs.
+routedApplication :: (Captured -> IO (Status, [Header], LBS.ByteString)) -> Application
+routedApplication reply waiReq respond = do
+    bodyBytes <- strictRequestBody waiReq
+    let cap =
+            Captured
+                { capMethod = requestMethod waiReq
+                , capPath = rawPathInfo waiReq
+                , capHeaders = requestHeaders waiReq
+                , capBody = LBS.toStrict bodyBytes
+                }
+    (status, extraHeaders, body) <- reply cap
+    respond (responseLBS status extraHeaders body)
 
 -- | Build an anonymous origin using the caller's development HTTP egress witness and swept deadlines.
 stubConfig :: Deadlines -> (Text -> RegistryUrl) -> Stub -> IO OriginClient
