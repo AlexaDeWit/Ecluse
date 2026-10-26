@@ -10,6 +10,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Test.Hspec
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (PackageInfo (..))
