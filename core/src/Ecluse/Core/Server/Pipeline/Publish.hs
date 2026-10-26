@@ -36,7 +36,7 @@ import Ecluse.Core.Server.Admission.Meter (charge, newChargeRegion)
 import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps, bindingPublishDeps),
-    PackumentDeps (pdHelp),
+    PackumentDeps (pdHelp, pdMountBaseUrl),
     PublishDeps (..),
     ServeRuntime (..),
     ctxMount,
@@ -68,17 +68,18 @@ servePublish replies name request respond = do
     mount <- asks ctxMount
     case bindingPublishDeps mount of
         Nothing -> liftIO (respond (publishDisabledReply replies [("Allow", publishAllowedMethods replies)] (pdHelp (bindingPackumentDeps mount))))
-        Just deps -> publishWithDeps replies deps (forwardedCredential mount request) name request respond
+        Just deps -> publishWithDeps replies deps (pdMountBaseUrl (bindingPackumentDeps mount)) (forwardedCredential mount request) name request respond
 
 publishWithDeps ::
     PublishReplies response ->
     PublishDeps ->
+    Text ->
     Maybe ClientCredential ->
     Maybe PackageName ->
     Request ->
     (response -> IO ResponseReceived) ->
     Handler ResponseReceived
-publishWithDeps replies deps clientToken name request respond
+publishWithDeps replies deps registry clientToken name request respond
     | not (edgeTokenMatches (pubInboundToken deps) clientToken) =
         liftIO (respond (publishError replies status401 [] unauthorisedMessage))
     | Just pathName <- name
@@ -94,7 +95,7 @@ publishWithDeps replies deps clientToken name request respond
             ( \ticket -> do
                 workspace <- liftIO (newChargeRegion (charge ticket))
                 withByteAdmission (srMetrics rt) (pubBodyBudget deps) bodyWeight $
-                    liftIO (readAndRelay replies deps rt workspace (publicationTarget deps rt clientToken) name request)
+                    liftIO (readAndRelay replies deps registry rt workspace (publicationTarget deps rt clientToken) name request)
             )
             (liftIO . respond . fromMaybe (bodyBudgetShed replies deps))
   where
@@ -110,18 +111,19 @@ publishWithDeps replies deps clientToken name request respond
 readAndRelay ::
     PublishReplies response ->
     PublishDeps ->
+    Text ->
     ServeRuntime ->
     (Int -> IO ()) ->
     OriginClient ->
     Maybe PackageName ->
     Request ->
     IO response
-readAndRelay replies deps rt workspace target name request =
+readAndRelay replies deps registry rt workspace target name request =
     boundedRead (PublishRequestBodyLimit (pubMaxRequestBytes deps)) (getRequestBodyChunk request) >>= \case
         Left _ -> pure (publishTooLarge replies deps)
         Right (_, bytes) -> do
             let body = PublishRequestBody bytes (lookup hContentType (requestHeaders request))
-            claims <- publishUploadClaims (pubAdapter deps) ((pubLimits deps){maxPublishRequestBytes = pubMaxRequestBytes deps}) workspace body
+            claims <- publishUploadClaims (pubAdapter deps) ((pubLimits deps){maxPublishRequestBytes = pubMaxRequestBytes deps}) workspace registry body
             case claims of
                 Left fault -> pure (bodyRefusal replies deps fault)
                 Right declared -> case resolveName declared of

@@ -52,14 +52,14 @@ import Ecluse.Core.Security (defaultLimits, maxMetadataBytes, maxPublishRequestB
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission, newByteAdmissionTuned)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
-import Ecluse.Core.Server.Context (PublishDeps (..))
+import Ecluse.Core.Server.Context (PackumentDeps (pdMountBaseUrl), PublishDeps (..))
 import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Deadline (withSweeper)
-import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive), cargoUpload, cargoUploadMetadata)
-import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture)
+import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive), cargoUpload, cargoUploadMetadata, cargoUploadWithMetadata)
+import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoResolverArchive, cargoResolverContradictions, cargoResolverMetadata)
 import Ecluse.Test.Registry.Npm.Publish (npmDeprecateDocument, npmMisfiledVersion, npmReleaseDocument, npmRepeatedAttachments, npmTaggedRelease)
 import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps)
 import Ecluse.Test.Stub (Captured (capBody, capHeaders, capMethod, capPath), Stub, allCaptured, headerValue, stubBaseUrl, stubPort, withRoutedStub, withStubHeaders)
@@ -564,8 +564,8 @@ pypiPublishSpec = describe "first-party PyPI publication relay" $ do
 cargoPublishSpec :: Spec
 cargoPublishSpec = describe "first-party Cargo publication relay" $ do
     it (caseLabel "integration/publication/cargo-001" "relays exact native bytes after credential-scoped discovery") $ do
-        release <- cargoPublicationFixture
-        bytes <- expectRight (cargoUpload release)
+        archive <- cargoResolverArchive
+        bytes <- expectRight (cargoUploadWithMetadata cargoResolverMetadata archive)
         withRoutedStub cargoTargetReply $ \stub -> withSweeper $ \deadlines -> do
             app <- cargoProxy deadlines stub
             reply <- cargoPut (fromStrict bytes) app
@@ -575,7 +575,7 @@ cargoPublishSpec = describe "first-party Cargo publication relay" $ do
             map capPath captures `shouldBe` ["/index/config.json", "/registry/api/v1/crates/new"]
             map (headerValue "Authorization") captures `shouldBe` [Just "cargo-client", Just "cargo-client"]
             map capBody (filter ((== "PUT") . capMethod) captures) `shouldBe` [bytes]
-    it (caseLabel "integration/publication/cargo-002" "refuses body and archive identity disagreement before any upstream request") $ do
+    it (caseLabel "integration/publication/cargo-002" "refuses identity and resolver contradictions before any upstream request") $ do
         release <- cargoPublicationFixture
         withRoutedStub cargoTargetReply $ \stub -> withSweeper $ \deadlines -> do
             app <- cargoProxy deadlines stub
@@ -585,6 +585,12 @@ cargoPublishSpec = describe "first-party Cargo publication relay" $ do
                     reply <- cargoPut bytes app
                     status reply `shouldBe` 400
                 _ -> expectationFailure "fixture upload metadata is not an object"
+            archive <- cargoResolverArchive
+            for_ cargoResolverContradictions $ \metadata -> do
+                bytes <- expectRight (cargoUploadWithMetadata metadata archive)
+                CargoBody.decodeUpload defaultLimits bytes `shouldSatisfy` isRight
+                reply <- cargoPut (fromStrict bytes) app
+                status reply `shouldBe` 400
             allCaptured stub `shouldReturn` []
     it (caseLabel "integration/publication/cargo-003" "preserves native authentication challenge when target discovery refuses access") $
         withStubHeaders (mkStatus 401 "Unauthorized") [] "denied" $ \stub -> withSweeper $ \deadlines -> do
@@ -618,7 +624,7 @@ cargoProxy deadlines stub = do
     budget <- newByteAdmission deadlines (128 * 1024 * 1024)
     let factors = ChargeFactors 1000 1000 1000
         adapter = cargoAdapter factors
-        deps = inertDepsFor adapter
+        deps = (inertDepsFor adapter){pdMountBaseUrl = "https://proxy.test/cargo/private"}
         publication =
             (publishDepsAt (stubPort stub) Nothing budget)
                 { pubReadUrl = loopbackRegistryUrl (stubBaseUrl stub <> "/index")

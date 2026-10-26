@@ -29,6 +29,7 @@ spec = describe "Cargo upload framing" $ do
         uploadName decoded `shouldBe` "fixture"
         uploadVersion decoded `shouldBe` "1.0.0"
         uploadArchive decoded `shouldBe` releaseArchive release
+        uploadMetadata decoded `shouldBe` cargoUploadMetadata release
         observed <- relayMetadata decoded bytes
         observed `shouldBe` cargoUploadMetadata release
         encoded <- LBS.toStrict <$> expectRight (encodeUpload observed (uploadArchive decoded))

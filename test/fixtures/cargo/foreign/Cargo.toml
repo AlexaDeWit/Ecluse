@@ -8,4 +8,8 @@ description = "Owned Cargo foreign-registry fixture"
 readme = "README.md"
 
 [dependencies]
-ecluse-e2e-leaf = { version = "=1.0.0", registry = "foreign" }
+renamed_leaf = { package = "ecluse-e2e-leaf", version = "=1.0.0", registry = "foreign", optional = true }
+
+[features]
+default = ["renamed_leaf"]
+forwarded = ["renamed_leaf?/extra"]

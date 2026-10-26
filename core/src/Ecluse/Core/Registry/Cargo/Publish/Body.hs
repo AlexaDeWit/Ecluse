@@ -10,6 +10,7 @@ module Ecluse.Core.Registry.Cargo.Publish.Body (
     uploadName,
     uploadVersion,
     uploadArchive,
+    uploadMetadata,
     encodeUpload,
 ) where
 
@@ -19,29 +20,33 @@ import Data.Bits (shiftL, (.|.))
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (byteString, lazyByteString, toLazyByteString, word32LE)
 import Data.ByteString.Lazy qualified as LBS
-import Data.Text qualified as T
 
 import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry.Cargo.Manifest (parseRustRelease)
 import Ecluse.Core.Registry.Cargo.Project (projectName)
 import Ecluse.Core.Registry.Cargo.Wire (decodeCargoRecord)
 import Ecluse.Core.Security.Limits (Limits (..))
 import Ecluse.Core.Version.Cargo (parseCargo)
 
 -- | The decoded claims and archive remain paired with one fully consumed native body.
-data CargoUploadBody = CargoUploadBody Text Text ByteString
+data CargoUploadBody = CargoUploadBody Text Text ByteString Value
     deriving stock (Eq, Show)
 
 -- | Preserve the declared published spelling for archive agreement.
 uploadName :: CargoUploadBody -> Text
-uploadName (CargoUploadBody name _ _) = name
+uploadName (CargoUploadBody name _ _ _) = name
 
 -- | Preserve the declared raw native version, including build metadata.
 uploadVersion :: CargoUploadBody -> Text
-uploadVersion (CargoUploadBody _ version _) = version
+uploadVersion (CargoUploadBody _ version _ _) = version
 
 -- | These bytes are a slice of the validated original body.
 uploadArchive :: CargoUploadBody -> ByteString
-uploadArchive (CargoUploadBody _ _ bytes) = bytes
+uploadArchive (CargoUploadBody _ _ bytes _) = bytes
+
+-- | Resolver claims retain the reservation acquired before JSON decoding.
+uploadMetadata :: CargoUploadBody -> Value
+uploadMetadata (CargoUploadBody _ _ _ value) = value
 
 -- | Decode strict native framing and JSON under the configured request and metadata bounds.
 decodeUpload :: Limits -> ByteString -> Either ParseError CargoUploadBody
@@ -85,7 +90,7 @@ decodeSections :: Limits -> ByteString -> ByteString -> Either ParseError CargoU
 decodeSections limits metadata archive = do
     value <- first (const (ParseError "Cargo upload metadata is malformed or exceeds its nesting bound")) (decodeCargoRecord (maxNestingDepth limits) metadata)
     (name, version) <- first (ParseError . toText) (parseEither metadataIdentity value)
-    pure (CargoUploadBody name version archive)
+    pure (CargoUploadBody name version archive value)
 
 metadataIdentity :: Value -> Parser (Text, Text)
 metadataIdentity = withObject "Cargo upload metadata" $ \fields -> do
@@ -102,7 +107,7 @@ metadataIdentity = withObject "Cargo upload metadata" $ \fields -> do
         void (fields .:? key :: Parser (Maybe Text))
     void (fields .:? "badges" :: Parser (Maybe (Map Text (Map Text Text))))
     rustVersion <- fields .:? "rust_version"
-    traverse_ rustRelease rustVersion
+    traverse_ (either (fail . toString . parseErrorMessage) (const (pure ())) . parseRustRelease) rustVersion
     pure (name, version)
 
 uploadDependency :: Value -> Parser ()
@@ -122,14 +127,6 @@ uploadDependency = withObject "Cargo upload dependency" $ \fields -> do
 
 nativeName :: Text -> Parser ()
 nativeName = either (const (fail "Cargo upload name is invalid")) (const (pure ())) . projectName
-
-rustRelease :: Text -> Parser ()
-rustRelease raw = do
-    let components = T.splitOn "." raw
-        complete = T.intercalate "." (components <> replicate (max 0 (3 - length components)) "0")
-    unless
-        (length components `elem` [1, 2, 3] && not (T.any (`elem` ['-', '+']) raw) && isJust (parseCargo complete))
-        (fail "Cargo upload Rust version is invalid")
 
 -- | Encode native uint32 framing without changing either the JSON value or verified archive bytes.
 encodeUpload :: Value -> ByteString -> Either ParseError LByteString

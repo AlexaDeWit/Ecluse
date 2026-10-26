@@ -136,8 +136,8 @@ data MirrorRequirements = MirrorRequirements
 data AdapterPublish = AdapterPublish
     { publishRelay :: OriginClient -> PackageName -> PublishRequestBody -> IO (Either FetchFault PublishRelayResponse)
     -- ^ Relay a client's publish document to the target named as the origin, and return its answer.
-    , publishUploadClaims :: Limits -> (Int -> IO ()) -> PublishRequestBody -> IO (Either PublishBodyFault [Text])
-    -- ^ Validate new-release identities before target IO. Charge extra workspace as an absolute total.
+    , publishUploadClaims :: Limits -> (Int -> IO ()) -> Text -> PublishRequestBody -> IO (Either PublishBodyFault [Text])
+    -- ^ Check claims before target IO using the selected logical view base. Charge extra workspace as an absolute total.
     , publishCodec :: PublishCodec
     -- ^ The mirror write's document, requests, probe, and status semantics. The transport owns the manager, mint, and fault classification.
     , publishMirrorRequirements :: MirrorRequirements

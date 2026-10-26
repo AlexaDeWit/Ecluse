@@ -28,9 +28,9 @@ import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
 import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Port (passthroughTracingPort)
-import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive, releaseChecksum), cargoIndexRecord, cargoUpload, cargoUploadMetadata)
+import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive, releaseChecksum), cargoIndexRecord, cargoUpload, cargoUploadMetadata, cargoUploadWithMetadata)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoTestName)
-import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoSourceVersion)
+import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoResolverArchive, cargoResolverContradictions, cargoResolverMetadata, cargoSourceVersion)
 import Ecluse.Test.Registry.Cargo.Reference (UploadFrame (..), referenceUpload)
 import Ecluse.Test.Registry.Publish (publishOnlyFile)
 import Ecluse.Test.Registry.PyPI.Archive (tarBytes)
@@ -104,7 +104,24 @@ spec = do
         it "accepts matching complete upload metadata and archive identity" $ do
             release <- cargoPublicationFixture
             bytes <- expectRight (cargoUpload release)
-            uploadClaims defaultLimits (const (pure ())) (PublishRequestBody bytes Nothing) `shouldReturn` Right ["fixture"]
+            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" (PublishRequestBody bytes Nothing) `shouldReturn` Right ["fixture"]
+        it "compares complete resolver facts against the retained effective manifest" $ do
+            archive <- cargoResolverArchive
+            valid <- expectRight (cargoUploadWithMetadata cargoResolverMetadata archive)
+            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" (PublishRequestBody valid Nothing) `shouldReturn` Right ["fixture"]
+            for_ cargoResolverContradictions $ \metadata -> do
+                bytes <- expectRight (cargoUploadWithMetadata metadata archive)
+                Body.decodeUpload defaultLimits bytes `shouldSatisfy` isRight
+                uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" (PublishRequestBody bytes Nothing) >>= (`shouldSatisfy` isLeft)
+        it "reserves comparison workspace after archive inspection and before accepting resolver claims" $ do
+            archive <- cargoResolverArchive
+            bytes <- expectRight (cargoUploadWithMetadata cargoResolverMetadata archive)
+            paid <- newIORef ([] :: [Int])
+            uploadClaims defaultLimits (\cost -> modifyIORef' paid (<> [cost])) "https://proxy.test/cargo/private" (PublishRequestBody bytes Nothing) `shouldReturn` Right ["fixture"]
+            payments <- readIORef paid
+            case reverse payments of
+                comparison : archiveCharge : _ -> comparison `shouldSatisfy` (> archiveCharge)
+                _ -> expectationFailure "Cargo upload omitted its archive or comparison reservation"
         it "rejects malformed members before either claims or relay can contact the destination" $
             withRoutedStub (targetReply "/registry") $ \stub -> do
                 release <- cargoPublicationFixture
@@ -114,7 +131,7 @@ spec = do
                         Object fields -> for_ [("deps", Array (fromList [Null])), ("authors", Array (fromList [Number 42]))] $ \(key, value) -> do
                             bytes <- LBS.toStrict <$> expectRight (Body.encodeUpload (Object (KeyMap.insert key value fields)) (releaseArchive release))
                             let body = PublishRequestBody bytes Nothing
-                            uploadClaims defaultLimits (const (pure ())) body >>= (`shouldSatisfy` isLeft)
+                            uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" body >>= (`shouldSatisfy` isLeft)
                             publishRelay (cargoPublish factors) origin cargoTestName body >>= (`shouldSatisfy` isLeft)
                         _ -> expectationFailure "fixture upload metadata is not an object"
                     allCaptured stub `shouldReturn` []
@@ -123,7 +140,7 @@ spec = do
             case cargoUploadMetadata release of
                 Object fields -> for_ [("name", "another"), ("vers", "2.0.0"), ("vers", "1.0.0+other")] $ \(key, value) -> do
                     bytes <- LBS.toStrict <$> expectRight (Body.encodeUpload (Object (KeyMap.insert key (String value) fields)) (releaseArchive release))
-                    uploadClaims defaultLimits (const (pure ())) (PublishRequestBody bytes Nothing) >>= (`shouldSatisfy` isLeft)
+                    uploadClaims defaultLimits (const (pure ())) "https://proxy.test/cargo/private" (PublishRequestBody bytes Nothing) >>= (`shouldSatisfy` isLeft)
                 _ -> expectationFailure "fixture upload metadata is not an object"
     describe "Cargo native response classification" $ do
         it "accepts native success objects and rejects errors even with a success status" $ do

@@ -17,14 +17,15 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS, RequestBodyLBS))
 import Network.HTTP.Types.Header (hAccept, hContentType)
+import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageName, hashValue)
 import Ecluse.Core.Package.Hash (sha256Hex)
-import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), ParseError (parseErrorMessage), PublishBodyFault (PublishMalformed), PublishError (PublishError), PublishFault (..), UrlFormationError (UnparseableUrl), isSuccessStatus)
+import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), ParseError (..), PublishBodyFault (PublishMalformed), PublishError (PublishError), PublishFault (..), UrlFormationError (UnparseableUrl), isSuccessStatus)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (..), MirrorRequirements (..), MirrorStateRequirement (DurableVersionState), PublishRequestBody (..), UploadEndpointRequirement (ExplicitUploadEndpoint), UploadIdentityRequirement (TokenIdentity), WorkerMetadataRead (NativeChargedWorkerRead))
 import Ecluse.Core.Registry.CachedDocument (cargoCached)
-import Ecluse.Core.Registry.Cargo.Archive (cargoPublicationMetadata, inspectCargoArchive)
+import Ecluse.Core.Registry.Cargo.Archive (cargoPublicationMetadata, cargoUploadAgreement, inspectCargoArchive)
 import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
 import Ecluse.Core.Registry.Cargo.Discovery (cargoDiscovery, discoveryApi)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
@@ -42,7 +43,7 @@ import Ecluse.Core.Registry.Publish (PublishCodec (..), relayPublishRequest)
 import Ecluse.Core.Registry.Request (attachCredential, joinPath, metadataGet, parseRequestEither)
 import Ecluse.Core.Registry.ServedDocument (stringField)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
-import Ecluse.Core.Security.Limits (Limits (maxMetadataBytes))
+import Ecluse.Core.Security.Limits (Limits (maxMetadataBytes), requestTimeoutSeconds)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (renderVersion)
@@ -103,16 +104,25 @@ sourceName = \case
     Object fields -> maybeToRight (PublishSourceUnavailable "Cargo source row has no published name") (stringField "name" fields)
     _ -> Left (PublishSourceUnavailable "Cargo source row is not an object")
 
--- | Validate body and archive identities before any publication discovery or upstream write.
-uploadClaims :: Limits -> (Int -> IO ()) -> PublishRequestBody -> IO (Either PublishBodyFault [Text])
-uploadClaims limits charge body = do
-    decoded <- Body.readUpload limits charge (publishBodyBytes body)
-    case decoded of
-        Left fault -> pure (Left (PublishMalformed fault))
-        Right (upload, metadataCost) -> do
-            let archive = Body.uploadArchive upload
-            inspected <- inspectCargoArchive limits (charge . (+ metadataCost)) (Body.uploadName upload) (Body.uploadVersion upload) (sha256Hex archive) archive
-            pure $ first PublishMalformed inspected $> [Body.uploadName upload]
+-- | Bind resolver claims to the verified archive before any publication discovery or upstream write.
+uploadClaims :: Limits -> (Int -> IO ()) -> Text -> PublishRequestBody -> IO (Either PublishBodyFault [Text])
+uploadClaims limits charge registry body =
+    fromMaybe (Left (PublishMalformed (ParseError "Cargo upload inspection exceeded its deadline"))) <$> timeout (requestTimeoutSeconds * 1000000) inspect
+  where
+    inspect = do
+        decoded <- Body.readUpload limits charge (publishBodyBytes body)
+        case decoded of
+            Left fault -> pure (Left (PublishMalformed fault))
+            Right (upload, metadataCost) -> do
+                let archive = Body.uploadArchive upload
+                    withMetadata cost = charge (fromInteger (min (toInteger (maxBound :: Int)) (toInteger metadataCost + toInteger cost)))
+                inspected <- inspectCargoArchive limits withMetadata (Body.uploadName upload) (Body.uploadVersion upload) (sha256Hex archive) archive
+                case inspected of
+                    Left fault -> pure (Left (PublishMalformed fault))
+                    Right metadata -> do
+                        let logicalRegistry = "sparse+" <> T.dropWhileEnd (== '/') registry <> "/"
+                        agreement <- cargoUploadAgreement withMetadata metadataCost logicalRegistry (Body.uploadMetadata upload) metadata
+                        pure $ first PublishMalformed agreement $> [Body.uploadName upload]
 
 -- | Discovery cannot grant an API root. The complete configured base path must agree before a token is attached.
 preparePublishTarget :: TracingPort -> OriginClient -> RegistryUrl -> IO (Either MetadataError RegistryUrl)

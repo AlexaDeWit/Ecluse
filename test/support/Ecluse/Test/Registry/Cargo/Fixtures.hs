@@ -278,7 +278,10 @@ cargoUploadMetadata release =
             alias = case KeyMap.lookup "package" fields of
                 Just (String _) -> fromMaybe Null (KeyMap.lookup "name" fields)
                 _ -> Null
-         in Object $ KeyMap.insert "explicit_name_in_toml" alias $ KeyMap.insert "name" named $ KeyMap.insert "version_req" (fromMaybe Null (KeyMap.lookup "req" fields)) $ KeyMap.delete "package" $ KeyMap.delete "req" fields
+            registry = case KeyMap.lookup "registry" fields of
+                Just (String source) -> String source
+                _ -> String "https://github.com/rust-lang/crates.io-index"
+         in Object $ KeyMap.insert "registry" registry $ KeyMap.insert "explicit_name_in_toml" alias $ KeyMap.insert "name" named $ KeyMap.insert "version_req" (fromMaybe Null (KeyMap.lookup "req" fields)) $ KeyMap.delete "package" $ KeyMap.delete "req" fields
     uploadDependency other = other
 
 -- | A checked uint32 length prevents fixture framing from wrapping before negative controls mutate it.

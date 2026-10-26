@@ -457,7 +457,8 @@ Private maintenance evidence uses the authenticated store reader and stays outsi
 Archive inspection verifies complete bounded compressed bytes and the effective TOML manifest without executing code.
 Publication can make one further local pass over those same bytes for selected text.
 Both passes charge their work.
-Native upload framing, manifest, archive root, name, version, and digest must agree before any write.
+Resolver disagreement can change the package description used for resolution without changing archive bytes.
+First-party validation therefore compares upload claims with the retained effective manifest before target discovery.
 The relay preserves validated upload bytes. Mirror publication derives required upload fields from the verified effective manifest.
 
 ## Registry abstraction

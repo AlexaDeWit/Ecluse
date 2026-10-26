@@ -74,7 +74,7 @@ npmPublish :: AdapterPublish
 npmPublish =
     AdapterPublish
         { publishRelay = \origin name -> relayPublishDocument origin name . publishBodyBytes
-        , publishUploadClaims = \_ _ -> pure . uploadClaims . publishBodyBytes
+        , publishUploadClaims = \_ _ _ -> pure . uploadClaims . publishBodyBytes
         , publishCodec = npmPublishCodec
         , publishMirrorRequirements = MirrorRequirements CachedWorkerRead NativeVersionState ReadRootUpload
         , publishIdentity = TokenIdentity

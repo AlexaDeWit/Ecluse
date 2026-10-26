@@ -182,7 +182,11 @@ Missing, corrupt, or unrecorded state cannot supply a managed original-source co
 Ordinary compatible private reads remain available through the alternate view.
 Retained fields reflect first admission. Écluse does not continuously synchronise later yanks or mutate the target's yank state.
 
-Native publication validates length framing and agreement between upload metadata, archive root, manifest identity, version, and digest before writes.
+Native publication checks length framing, archive root, manifest identity, version, and digest before discovery or writes.
+Dependency inventories, aliases, kinds, targets, registry sources, version requirements, and dependency features must agree with the effective archived manifest.
+Package feature graphs and the optional minimum Rust version must also agree, allowing native normalisation.
+A null upload dependency registry identifies the selected private view. An absent manifest registry identifies crates.io.
+Descriptive and additive metadata need not match the manifest. Accepted uploads retain their original bytes.
 The sparse read root and approved upload API root remain distinct.
 Discovery must advertise the exact approved API authority and base path before Écluse attaches the publication credential.
 CodeArtifact supplies Cargo inventory and physical deletion through the existing maintenance interface.

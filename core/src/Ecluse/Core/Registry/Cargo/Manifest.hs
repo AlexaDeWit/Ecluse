@@ -13,6 +13,8 @@ module Ecluse.Core.Registry.Cargo.Manifest (
     manifestTextPaths,
     publicationMetadata,
     checkPublicationIndex,
+    checkUploadAgreement,
+    parseRustRelease,
     publishMetadataValue,
     cratesIoIndex,
 ) where
@@ -33,6 +35,7 @@ import Toml.Syntax qualified as Syntax
 import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.Archive.Path (resolveArchivePath)
 import Ecluse.Core.Security.Limits (Limits (..))
+import Ecluse.Core.Version.Cargo (CargoKey, parseCargo)
 
 -- | Identity is the exact spelling from the effective normalised Cargo.toml.
 data CargoManifest = CargoManifest
@@ -106,8 +109,7 @@ manifestTextPaths manifest inventory = do
 publicationMetadata :: CargoManifest -> Map Text ByteString -> Either ParseError CargoPublishMetadata
 publicationMetadata manifest content = do
     let package = cmPackage manifest
-    dependencies <- manifestDependencies (cmRoot manifest)
-    features <- optionalTable "features" (cmRoot manifest) >>= traverse strings
+    (dependencies, features, rustVersion) <- resolverMetadata manifest
     authors <- optionalStrings "authors" package
     keywords <- optionalStrings "keywords" package
     categories <- optionalStrings "categories" package
@@ -120,7 +122,6 @@ publicationMetadata manifest content = do
         traverse
             (\(source, target) -> (target,) <$> optionalString source package)
             [("description", "description"), ("documentation", "documentation"), ("homepage", "homepage"), ("license", "license"), ("repository", "repository"), ("links", "links")]
-    rustVersion <- optionalStringAlias "rust-version" "rust_version" package
     pure . CargoPublishMetadata . object $
         [ "name" .= cmName manifest
         , "vers" .= cmVersion manifest
@@ -136,6 +137,90 @@ publicationMetadata manifest content = do
         , "rust_version" .= rustVersion
         ]
             <> [Key.fromText key .= value | (key, value) <- fields]
+
+resolverMetadata :: CargoManifest -> Either ParseError ([Value], Map Text [Text], Maybe Text)
+resolverMetadata manifest =
+    (,,)
+        <$> manifestDependencies (cmRoot manifest)
+        <*> (optionalTable "features" (cmRoot manifest) >>= traverse strings)
+        <*> optionalStringAlias "rust-version" "rust_version" (cmPackage manifest)
+
+-- | Compare resolver meaning against the effective archive manifest, relative to the selected logical registry.
+checkUploadAgreement :: Text -> CargoManifest -> Value -> Either ParseError ()
+checkUploadAgreement registry manifest (Object metadata) = do
+    (dependencies, features, rustVersion) <- resolverMetadata manifest
+    let currentRegistry = sourceIdentity registry
+    expected <- traverse (uploadDependency currentRegistry) dependencies >>= foldM insertDependency Map.empty
+    uploaded <- requiredJson "deps" metadata >>= array >>= traverse (uploadDependency currentRegistry)
+    actual <- foldM insertDependency Map.empty uploaded
+    unless (Map.keysSet expected == Map.keysSet actual) (bad "Cargo upload and manifest dependency inventories disagree")
+    for_ (Map.toList expected) $ \(key, value) -> do
+        agreed <- maybe (bad "Cargo upload omits a manifest dependency") Right (Map.lookup key actual)
+        checkDependency value agreed
+    uploadedFeatures <- requiredJson "features" metadata >>= jsonObject >>= traverse (array >=> traverse jsonString)
+    expectedFeatures <- effectiveFeatures dependencies features
+    actualFeatures <- effectiveFeatures uploaded (Map.fromList [(Key.toText key, values) | (key, values) <- KeyMap.toList uploadedFeatures])
+    unless (expectedFeatures == actualFeatures) (bad "Cargo upload and manifest feature graphs disagree")
+    expectedRust <- traverse parseRustRelease rustVersion
+    actualRust <- nullableString "rust_version" metadata >>= traverse parseRustRelease
+    unless (expectedRust == actualRust) (bad "Cargo upload and manifest Rust versions disagree")
+checkUploadAgreement _ _ _ = bad "Cargo upload metadata is not an object"
+
+uploadDependency :: Text -> Value -> Either ParseError Value
+uploadDependency registry (Object fields) = do
+    name <- requiredJson "name" fields >>= jsonString
+    alias <- nullableString "explicit_name_in_toml" fields
+    target <- nullableString "target" fields
+    kind <- fromMaybe "normal" <$> nullableString "kind" fields
+    source <- maybe registry sourceIdentity <$> nullableString "registry" fields
+    pure . Object
+        $ KeyMap.insert "explicit_name_in_toml" (toJSON (alias >>= \value -> value <$ guard (value /= name)))
+            . KeyMap.insert "target" (toJSON (normalTarget <$> target))
+            . KeyMap.insert "kind" (String kind)
+            . KeyMap.insert "registry" (String source)
+        $ fields
+uploadDependency _ _ = bad "Cargo upload dependency is not an object"
+
+sourceIdentity :: Text -> Text
+sourceIdentity source
+    | source `elem` [cratesIoIndex, "sparse+https://index.crates.io/"] = cratesIoIndex
+    | otherwise = source
+
+normalTarget :: Text -> Text
+normalTarget target
+    | "cfg(" `T.isPrefixOf` target = T.pack . reverse . output $ T.foldl' step (False, False, False, []) target
+    | otherwise = target
+  where
+    output (_, _, _, value) = value
+    token char = char `notElem` ['(', ')', ',', '=']
+    step (quoted, escaped, space, held) char
+        | quoted = (if escaped then True else char /= '"', not escaped && char == '\\', False, char : held)
+        | char `elem` [' ', '\t', '\r', '\n'] = (False, False, True, held)
+        | otherwise =
+            let boundary = space && token char && maybe False token (listToMaybe held)
+             in (char == '"', False, False, char : [' ' | boundary] <> held)
+
+effectiveFeatures :: [Value] -> Map Text [Text] -> Either ParseError (Map Text (Set Text))
+effectiveFeatures dependencies features = do
+    optional <- fmap catMaybes . forM dependencies $ \case
+        Object fields -> do
+            enabled <- requiredJson "optional" fields >>= jsonBool
+            name <- requiredJson "name" fields >>= jsonString
+            alias <- fromMaybe name <$> nullableString "explicit_name_in_toml" fields
+            pure (alias <$ guard enabled)
+        _ -> bad "Cargo publication dependency is not an object"
+    let declared = Set.fromList <$> features
+        suppressed = Set.fromList [alias | values <- Map.elems features, value <- values, Just alias <- [T.stripPrefix "dep:" value]]
+        implicit = Map.fromList [(alias, Set.singleton ("dep:" <> alias)) | alias <- optional, Map.notMember alias features, Set.notMember alias suppressed]
+    pure (Map.union declared implicit)
+
+-- | Numeric minimum Rust releases permit one to three components, with trailing zeroes implied.
+parseRustRelease :: Text -> Either ParseError CargoKey
+parseRustRelease raw = do
+    let components = T.splitOn "." raw
+        complete = T.intercalate "." (components <> replicate (max 0 (3 - length components)) "0")
+    unless (length components `elem` [1, 2, 3] && not (T.any (`elem` ['-', '+']) raw)) (bad "Cargo Rust version is invalid")
+    maybe (bad "Cargo Rust version is invalid") Right (parseCargo complete)
 
 -- | Cross-check source index facts and preserve its dependency requirements and merged feature representation.
 checkPublicationIndex :: CargoPublishMetadata -> Value -> Either ParseError CargoPublishMetadata
@@ -359,15 +444,26 @@ checkFeatureValues expected actual = do
     actualValues <- array actual >>= traverse jsonString
     unless (Set.fromList expectedValues == Set.fromList actualValues) (bad "Cargo manifest and index feature declarations disagree")
 
-normalRequirement :: Text -> Text
-normalRequirement = T.intercalate "," . map comparator . T.splitOn "," . T.filter (not . (`elem` [' ', '\t', '\r', '\n']))
+normalRequirement :: Text -> Set Text
+normalRequirement = Set.fromList . map comparator . T.splitOn ","
   where
     comparator value =
-        let (core, prerelease) = T.breakOn "-" value
-            wildcards = T.intercalate "." (map (\part -> if part `elem` ["x", "X"] then "*" else part) (T.splitOn "." core)) <> prerelease
-         in case T.uncons wildcards of
-                Just (firstChar, _) | isDigit firstChar -> "^" <> wildcards
-                _ -> wildcards
+        let withoutBuild = fst (T.breakOn "+" (T.strip value))
+            (operator, release) = T.span (`elem` ['=', '>', '<', '~', '^']) withoutBuild
+            (core, prerelease) = T.breakOn "-" (T.stripStart release)
+            parts = T.splitOn "." core
+            wildcard part = part `elem` ["*", "x", "X"]
+            (numbers, suffix) = break wildcard parts
+            nativeWildcard = not (null numbers) && not (null suffix) && all wildcard suffix && length parts <= 3
+            effectiveOperator
+                | not (T.null operator) = operator
+                | null suffix, Just (firstChar, _) <- T.uncons core, isDigit firstChar = "^"
+                | otherwise = ""
+            nativeCore
+                | wildcard core = "*"
+                | nativeWildcard = T.intercalate "." (numbers <> ["*" | T.null operator])
+                | otherwise = core
+         in effectiveOperator <> nativeCore <> prerelease
 
 indexFeatures :: KeyMap.KeyMap Value -> Either ParseError (KeyMap.KeyMap Value)
 indexFeatures index = do

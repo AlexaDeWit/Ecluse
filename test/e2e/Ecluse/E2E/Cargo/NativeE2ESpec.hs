@@ -108,7 +108,7 @@ cargoNativeContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \recorde
         it (label "public-token-control" "requires the native edge token while keeping every public exchange anonymous") publicTokenControl
         it (label "private-anonymous" "preserves anonymous native reads when trusted discovery allows them") anonymousPrivate
         it (label "publication-framing" "refuses malformed frames and identity conflicts before any native destination write") publicationFraming
-        it (label "foreign-registry" "publishes and builds a private crate with an explicit foreign registry dependency") foreignRegistry
+        it (label "foreign-registry" "publishes and builds current and foreign registry dependencies with current and minimum native clients") foreignRegistry
   where
     label name = caseLabel ("cargo/native/" <> name)
 
@@ -278,32 +278,60 @@ publicationFraming plane = withCargoRegistry $ \registry -> withStubFault plane 
         readTVarIO (registryRequests registry) `shouldReturn` before
 
 foreignRegistry :: GlobalDataPlane -> IO ()
-foreignRegistry plane = withCargoRegistry $ \registry -> withStubFault plane (CargoBackend (registryPort registry) False) $
-    withObservedCargoProxy config plane $ \observed -> do
-        let proxy = observedProxy observed
-            source = "sparse+" <> e2eBaseUrl proxy <> "/cargo/"
-            spec = CargoCrate name cargoVersion "../foreign" [] (Object mempty) (Object mempty) ["Cargo.toml", "README.md", "src/lib.rs"]
-        withCargoProject currentCargo CargoAlternate proxy ("sparse+" <> e2eBaseUrl proxy <> "/cargo/private/") (Just cargoRegistryToken) $ \project -> do
-            cargoUseFixture project "test/fixtures/cargo/graph" spec
-            addForeign project source
-            void (cargoPublish project >>= shouldSucceed)
-        index <- proxyRequest "GET" [("Authorization", encodeUtf8 cargoRegistryToken), ("Accept-Encoding", "identity")] "" proxy ("/cargo/private/" <> cargoShard name)
-        responseStatus index `shouldBe` 200
-        rows <- traverse (either (fail . toString) pure . indexValue) (referenceIndex (LBS.toStrict (responseBody index)))
-        let registries = [KeyMap.lookup "registry" dependency | row <- rows, Just (Array dependencies) <- [KeyMap.lookup "deps" row], Object dependency <- toList dependencies]
-        registries `shouldBe` [Just (String source)]
-        cargoPrivateConsumer proxy currentCargo name cargoVersion $ \project -> do
-            addForeign project source
-            invocation <- observeCargo (cargoTraffic observed) project ["build"]
-            void (shouldSucceed (cargoInvocationClient invocation))
-            assertCargoViewRouting "/cargo/private" "cargo-private" (cargoInvocationTraffic invocation)
-            assertCargoViewRouting "/cargo" "cargo-upstream" (cargoInvocationTraffic invocation)
-            assertCargoAssets project (cargoInvocationTraffic invocation)
-            graph <- readGraph project []
-            package <- nativePackage name graph
-            map cargoDependencyRegistry (cargoPackageDependencies package) `shouldBe` [Just source]
-        files <- cargoRegistryFiles registry
-        Map.member ("cargo-private", name, cargoVersion) files `shouldBe` True
+foreignRegistry plane = for_ [currentCargo, floorCargo] $ \toolchain ->
+    for_ [False, True] $ \sameRegistry -> withCargoRegistry $ \registry -> do
+        when sameRegistry $ do
+            leaf <- cargoLeafRelease "ecluse-e2e-leaf" cargoVersion
+            seedCargoRegistry registry "cargo-private" [leaf]
+        withStubFault plane (CargoBackend (registryPort registry) False) $
+            withObservedCargoProxy config plane $ \observed -> do
+                let proxy = observedProxy observed
+                    source = "sparse+" <> e2eBaseUrl proxy <> (if sameRegistry then "/cargo/private/" else "/cargo/")
+                    registryClaim = if sameRegistry then Null else String source
+                    spec = CargoCrate name cargoVersion "../foreign" [] (Object mempty) (Object mempty) ["Cargo.toml", "README.md", "src/lib.rs"]
+                withCargoProject toolchain CargoAlternate proxy ("sparse+" <> e2eBaseUrl proxy <> "/cargo/private/") (Just cargoRegistryToken) $ \project -> do
+                    cargoUseFixture project "test/fixtures/cargo/graph" spec
+                    if sameRegistry
+                        then do
+                            let path = cargoDirectory project </> "Cargo.toml"
+                            manifest <- decodeUtf8 <$> readFileBS path
+                            writeFileText path (T.replace "registry = \"foreign\"" "registry = \"ecluse-test\"" manifest)
+                        else addForeign project source
+                    void (cargoPublish project >>= shouldSucceed)
+                received <- readTVarIO (observedUploads observed)
+                relayed <- readTVarIO (registryUploads registry)
+                length received `shouldBe` 1
+                relayed `shouldBe` received
+                bytes <- maybe (fail "the native client produced no dependency upload") pure (listToMaybe received)
+                frame <- either (fail . toString) pure (referenceUpload bytes)
+                let uploadRegistries = case KeyMap.lookup "deps" (uploadMetadata frame) of
+                        Just (Array dependencies) -> [KeyMap.lookup "registry" dependency | Object dependency <- toList dependencies]
+                        _ -> []
+                uploadRegistries `shouldBe` [Just registryClaim]
+                let aliases = case KeyMap.lookup "deps" (uploadMetadata frame) of
+                        Just (Array dependencies) -> [KeyMap.lookup "explicit_name_in_toml" dependency | Object dependency <- toList dependencies]
+                        _ -> []
+                aliases `shouldBe` [Just (String "renamed_leaf")]
+                index <- proxyRequest "GET" [("Authorization", encodeUtf8 cargoRegistryToken), ("Accept-Encoding", "identity")] "" proxy ("/cargo/private/" <> cargoShard name)
+                responseStatus index `shouldBe` 200
+                rows <- traverse (either (fail . toString) pure . indexValue) (referenceIndex (LBS.toStrict (responseBody index)))
+                let registries = [KeyMap.lookup "registry" dependency | row <- rows, Just (Array dependencies) <- [KeyMap.lookup "deps" row], Object dependency <- toList dependencies]
+                registries `shouldBe` [Just registryClaim]
+                cargoPrivateConsumer proxy toolchain name cargoVersion $ \project -> do
+                    unless sameRegistry (addForeign project source)
+                    invocation <- observeCargo (cargoTraffic observed) project ["build"]
+                    void (shouldSucceed (cargoInvocationClient invocation))
+                    assertCargoViewRouting "/cargo/private" "cargo-private" (cargoInvocationTraffic invocation)
+                    unless sameRegistry (assertCargoViewRouting "/cargo" "cargo-upstream" (cargoInvocationTraffic invocation))
+                    assertCargoAssets project (cargoInvocationTraffic invocation)
+                    graph <- readGraph project []
+                    package <- nativePackage name graph
+                    map cargoDependencyRegistry (cargoPackageDependencies package) `shouldBe` [Just source]
+                    map cargoDependencyRename (cargoPackageDependencies package) `shouldBe` [Just "renamed_leaf"]
+                    void (runCargo project ["build", "--features", toString (name <> "/forwarded")] >>= shouldSucceed)
+                files <- cargoRegistryFiles registry
+                stored <- maybe (fail "the target omitted the native dependency publication") pure (Map.lookup ("cargo-private", name, cargoVersion) files)
+                storedArchive stored `shouldBe` uploadArchive frame
   where
     name = "ecluse-e2e-private-foreign"
     config = cargoPublicationConfig{ecExtraEnv = [(key, if key == "ECLUSE_MOUNTS__CARGO__FIRST_PARTY" then name else value) | (key, value) <- ecExtraEnv cargoPublicationConfig]}

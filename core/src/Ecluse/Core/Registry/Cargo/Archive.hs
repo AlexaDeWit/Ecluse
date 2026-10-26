@@ -11,8 +11,10 @@ module Ecluse.Core.Registry.Cargo.Archive (
     cargoArchiveInflatedBytes,
     cargoArchiveExecution,
     cargoPublicationMetadata,
+    cargoUploadAgreement,
 ) where
 
+import Data.Aeson (Value)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -26,7 +28,7 @@ import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), splitArchiveCharge, withInflatedChunks)
 import Ecluse.Core.Registry.Archive.Tar (TarMember (..), TarScan, scanTar, sourceReader, tarContents, tarMembers)
-import Ecluse.Core.Registry.Cargo.Manifest (CargoManifest, CargoPublishMetadata, decodeManifest, manifestExecution, manifestTextPaths, publicationMetadata)
+import Ecluse.Core.Registry.Cargo.Manifest (CargoManifest, CargoPublishMetadata, checkUploadAgreement, decodeManifest, manifestExecution, manifestTextPaths, publicationMetadata)
 import Ecluse.Core.Security.Limits (Limits (..), requestTimeoutSeconds)
 
 -- | The private source bytes are the same bytes checked against the admitted SHA-256.
@@ -36,6 +38,7 @@ data CargoArchiveMetadata = CargoArchiveMetadata
     , caSource :: ByteString
     , caRoot :: Text
     , caRetainedBytes :: Int
+    , caManifestWorkspace :: Int
     , caInflatedBytes :: Int
     }
 
@@ -58,7 +61,7 @@ inspectCargoArchive limits charge name version checksum bytes = deadline $ do
                         Right ((manifestBytes, inventory, retained), inflated) -> do
                             charge (retained + manifestMemory manifestBytes)
                             parsed <- evaluate (decodeManifest limits name version manifestBytes)
-                            pure $ (\manifest -> CargoArchiveMetadata manifest inventory bytes root (retained + manifestMemory manifestBytes) inflated) <$> parsed
+                            pure $ (\manifest -> CargoArchiveMetadata manifest inventory bytes root (retained + manifestMemory manifestBytes) (manifestMemory manifestBytes) inflated) <$> parsed
 
 -- | Only regular-file paths appear, relative to the admitted single archive root.
 cargoArchiveInventory :: CargoArchiveMetadata -> Set Text
@@ -87,6 +90,12 @@ cargoPublicationMetadata limits charge metadata = deadline $
                         textBytes = sum (map BS.length (Map.elems content))
                     charge (retained + 65536 + 8 * textBytes + 512 * Map.size content)
                     evaluate (publicationMetadata (caManifest metadata) content)
+
+-- | Reuse the retained effective manifest without a text extraction or another archive pass.
+cargoUploadAgreement :: (Int -> IO ()) -> Int -> Text -> Value -> CargoArchiveMetadata -> IO (Either ParseError ())
+cargoUploadAgreement charge uploadWorkspace registry upload metadata = do
+    charge (fromInteger (min (toInteger (maxBound :: Int)) (sum (map toInteger [caRetainedBytes metadata, caManifestWorkspace metadata, uploadWorkspace]))))
+    evaluate (checkUploadAgreement registry (caManifest metadata) upload)
 
 archiveFacts :: Text -> TarScan -> Either ParseError (ByteString, Set Text, Int)
 archiveFacts root scan = do
