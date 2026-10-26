@@ -45,7 +45,7 @@ genCargoIndex inputs = do
     middle <- concat <$> Gen.list (Range.linear 0 4) record
     duplicate <- Gen.bool
     late <- validRow =<< Gen.element [("1.0.0+first", "1.0.0"), ("1.0.0+second", "1.0.0")]
-    linesWithBlanks <- concat <$> traverse withBlanks (primaryRow : middle <> if duplicate then [late] else [])
+    linesWithBlanks <- concat <$> traverse withBlanks (primaryRow : middle <> [late | duplicate])
     emptySource <- Gen.frequency [(1, pure True), (15, pure False)]
     let rows = if emptySource then [] else linesWithBlanks
     ending <- Gen.element ["\n", "\r\n"]
@@ -74,7 +74,7 @@ validRow (version, claim) = do
     let base = case cargoTestRecord version of Object original -> original; _ -> mempty
         fields = foldr KeyMap.delete (KeyMap.insert "cksum" (String validSha256) (KeyMap.insert "yanked" (Bool yanked) base)) omitted
         value = Object (KeyMap.insert "native-extra" (nested extra) fields)
-    pure (NativeRow (toStrict (encode value)) (Just (value, version, yanked && not (elem "yanked" omitted), not (elem "pubtime" omitted))) (Just claim) False)
+    pure (NativeRow (toStrict (encode value)) (Just (value, version, yanked && "yanked" `notElem` omitted, "pubtime" `notElem` omitted)) (Just claim) False)
   where
     nested level
         | level <= 0 = object ["nullable" .= Null, "text" .= ("owned \x1f600 \"value\"" :: Text)]

@@ -185,7 +185,7 @@ differentialSpec = modifyMaxSuccess (const 2000) $
     it "matches declared native meanings and exact limits across generated full and selected reads" $
         hedgehog $ do
             boundary <- forAll (Gen.element [BodyAt, BodyBelow, VersionsAt, VersionsBelow, ArtifactsAt, ArtifactsBelow, DepthAt, DepthBelow])
-            generated <- forAll (genCargoIndex (if elem boundary [DepthAt, DepthBelow] then SoundRows else MixedRows))
+            generated <- forAll (genCargoIndex (if boundary `elem` [DepthAt, DepthBelow] then SoundRows else MixedRows))
             chunks <- forAll (JsonBytes.genChunks (generatedBody generated))
             cover 20 "multiple nonempty chunks" (length (filter (not . BS.null) chunks) > 1)
             discovery <- evalEither cargoTestDiscovery
@@ -261,7 +261,7 @@ semanticRows generated mode = (kept, dropped)
     retained = if mode == FullRead then candidates else take 1 candidates
     unique nativeRow = maybe False (\claim -> Map.lookup claim seen == Just 1) (nativeClaim nativeRow)
     kept = [(position, meaning) | (position, nativeRow, meaning) <- retained, unique nativeRow]
-    dropped = [(position, False) | (position, nativeRow) <- rows, mode == FullRead, isNothing (nativeExpected nativeRow)] <> [(position, True) | (position, nativeRow, _) <- retained, not (unique nativeRow)]
+    dropped = [(position, False) | mode == FullRead, (position, nativeRow) <- rows, isNothing (nativeExpected nativeRow)] <> [(position, True) | (position, nativeRow, _) <- retained, not (unique nativeRow)]
 
 matchesGenerated :: (MonadTest m) => GeneratedIndex -> CargoRead -> CargoIndexResult -> m ()
 matchesGenerated generated mode result = do
