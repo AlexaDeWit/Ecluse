@@ -11,9 +11,12 @@ module Ecluse.Test.Collector (
     spanCarries,
     spanFor,
     privateArtifactAnswers,
+    privateLookupAnswers,
 ) where
 
+import Data.Char (isHexDigit)
 import Data.List (lookup)
+import Data.Set qualified as Set
 import Data.Text qualified as T
 
 -- | Flow-style YAML for the @env:@ provider, which needs no file or shell in the collector image.
@@ -45,13 +48,26 @@ data AttributeValue
 
 -- | Every span in the collector's output, in the order the collector printed them.
 exportedSpans :: Text -> [ExportedSpan]
-exportedSpans = spansIn . lines
+exportedSpans = map psSpan . printedSpans
+
+data PrintedSpan = PrintedSpan
+    { psSpan :: ExportedSpan
+    , psTraceId :: Maybe Text
+    , psParentId :: Maybe Text
+    , psKind :: Maybe Text
+    }
+
+printedSpans :: Text -> [PrintedSpan]
+printedSpans = spansIn . lines
   where
     spansIn printed = case dropWhile (not . T.isPrefixOf "Span #") printed of
         [] -> []
         _ : rest ->
             let (own, later) = span ownLine rest
-             in [ExportedSpan name (mapMaybe attribute own) | Just name <- [fieldNamed "Name" own]] <> spansIn later
+             in [ PrintedSpan (ExportedSpan name (mapMaybe attribute own)) (printedTraceId own) (uniqueField "Parent ID" own) (uniqueField "Kind" own)
+                | Just name <- [fieldNamed "Name" own]
+                ]
+                    <> spansIn later
 
     -- The exporter indents a span's fields and attributes under an unindented @Attributes:@ label.
     -- Any other line starts the span's events or links, the next span, or another signal.
@@ -59,6 +75,15 @@ exportedSpans = spansIn . lines
 
     fieldNamed field own =
         listToMaybe [T.strip (T.drop 1 value) | (key, value) <- map (T.breakOn ":") own, T.strip key == field]
+
+    uniqueField field own = case [T.strip (T.drop 1 value) | (key, value) <- map (T.breakOn ":") own, T.strip key == field] of
+        [value] -> Just value
+        _ -> Nothing
+
+    printedTraceId own = do
+        value <- uniqueField "Trace ID" own
+        guard (T.length value == 32 && T.all isHexDigit value && T.any (/= '0') value)
+        pure value
 
     attribute line = do
         entry <- T.stripPrefix "-> " (T.strip line)
@@ -93,3 +118,12 @@ privateArtifactAnswers host target =
         , ("http.host", TextValue host)
         , ("http.target", TextValue target)
         ]
+
+-- | Statuses of native index GETs in serving traces, excluding consumer work and missing trace context.
+privateLookupAnswers :: Text -> Text -> Text -> [AttributeValue]
+privateLookupAnswers host target output = privateArtifactAnswers host target [psSpan item | item <- observed, servingClient item]
+  where
+    observed = printedSpans output
+    serving = Set.fromList [identity | item <- observed, psKind item == Just "Server", psParentId item `elem` [Just "", Just "0000000000000000"], Just identity <- [psTraceId item]]
+    workers = Set.fromList [identity | item <- observed, psKind item == Just "Consumer", Just identity <- [psTraceId item]]
+    servingClient item = psKind item == Just "Client" && maybe False (\identity -> Set.member identity serving && Set.notMember identity workers) (psTraceId item)

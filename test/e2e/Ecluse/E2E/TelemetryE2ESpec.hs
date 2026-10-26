@@ -43,6 +43,7 @@ npmMirrorTelemetryFamily fixture = concreteFamily fixture $ \recorder action ->
                 , mirrorTelemetryPrivateVersion = psVersion telemetryPrivatePkg
                 , mirrorTelemetryHost = mirrorHost
                 , mirrorTelemetryTarget = T.drop (T.length "/npm") (npmTarballPath (psName telemetryPrivatePkg) (psVersion telemetryPrivatePkg))
+                , mirrorTelemetryPrivateFetch = ConventionalArtifact
                 }
 
 npmReadDriver :: PhaseRecorder -> GlobalDataPlane -> ReadTelemetryDriver

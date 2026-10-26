@@ -5,8 +5,6 @@
 -- | Cargo's native clients supply the common read and mirror telemetry observations.
 module Ecluse.E2E.Cargo.TelemetryE2ESpec (cargoReadTelemetryFamily, cargoMirrorTelemetryFamily) where
 
-import Data.Text qualified as T
-
 import Ecluse.E2E.Cargo.InstallE2ESpec (cargoInstallInto)
 import Ecluse.E2E.Cargo.MirrorInstallE2ESpec (cargoMirrorConfig, withCargoMirrorFixture)
 import Ecluse.E2E.Fixtures.Cargo
@@ -19,7 +17,7 @@ import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
 import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Telemetry
 import Ecluse.Test.Poll (pollUntil)
-import Ecluse.Test.Registry.Cargo.Fixtures (cargoVersion)
+import Ecluse.Test.Registry.Cargo.Fixtures (cargoShard, cargoVersion)
 
 -- | Read telemetry retains enabled, disabled, failed-exporter and identity configurations.
 cargoReadTelemetryFamily :: FamilyFixture ReadTelemetryDriver
@@ -48,7 +46,8 @@ cargoMirrorTelemetryFamily = concreteFamily (cargoWriteFixture "telemetry-write"
                         , mirrorTelemetryPrivatePackage = "ecluse-e2e-macro"
                         , mirrorTelemetryPrivateVersion = cargoVersion
                         , mirrorTelemetryHost = "cargo-mirror"
-                        , mirrorTelemetryTarget = T.drop (T.length "/cargo") (cargoArchiveRoute "ecluse-e2e-macro" cargoVersion)
+                        , mirrorTelemetryTarget = "/" <> cargoShard "ecluse-e2e-macro"
+                        , mirrorTelemetryPrivateFetch = IndexedLookup
                         }
             )
             plane

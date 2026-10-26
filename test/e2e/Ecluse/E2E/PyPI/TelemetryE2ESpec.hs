@@ -38,6 +38,7 @@ pypiMirrorTelemetryFamily fixture = concreteFamily fixture $ \recorder action pl
                     , mirrorTelemetryPrivateVersion = version
                     , mirrorTelemetryHost = "pypi-mirror"
                     , mirrorTelemetryTarget = "/simple/" <> privateProject <> "/" <> filename
+                    , mirrorTelemetryPrivateFetch = ConventionalArtifact
                     }
 
 nativeTelemetryStore :: E2E -> NativeTarget -> [Distribution] -> MirrorTelemetryDriver
