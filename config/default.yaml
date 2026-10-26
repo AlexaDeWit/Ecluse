@@ -547,7 +547,9 @@ mounts:
     # firstParty: "acme-tools,acme-*"
     # Execution denial requires an explicit rule and verified archive evidence.
     # The shared age and advisory defaults do not inspect crate archives.
-    # Cargo blocks AllowScope and DenyIfDeprecated at boot. Its index has no scope or deprecation flag.
+    # Cargo blocks AllowScope and DenyIfDeprecated at boot.
+    # AllowScope: Cargo package names have no scope.
+    # DenyIfDeprecated: Cargo's sparse index supplies no deprecation flag.
   # No adapter ships for rubygems yet, so activating it refuses the boot. The public
   # upstream is here so the key is settled before the ecosystem lands.
   rubygems:

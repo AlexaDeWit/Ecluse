@@ -14,6 +14,8 @@ module Ecluse.Core.Registry.Adapter (
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
+import Ecluse.Core.Registry.Cargo.Adapter (cargoAdapter)
+import Ecluse.Core.Registry.Cargo.Metadata (cargoChargeFactors)
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 
@@ -22,5 +24,5 @@ adapterFor :: Ecosystem -> Maybe RegistryAdapter
 adapterFor = \case
     Npm -> Just npmAdapter
     PyPI -> Just pypiAdapter
-    Cargo -> Nothing
+    Cargo -> Just (cargoAdapter cargoChargeFactors)
     RubyGems -> Nothing
