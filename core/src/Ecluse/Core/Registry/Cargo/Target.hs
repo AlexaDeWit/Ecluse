@@ -1,6 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+{-# LANGUAGE TupleSections #-}
 
 -- | Bounded native Cargo platform declarations used only for resolver comparison.
 module Ecluse.Core.Registry.Cargo.Target (
@@ -64,7 +65,7 @@ parseTarget limits target = case T.stripPrefix "cfg(" target >>= T.stripSuffix "
 identifier :: Text -> Either ParseError (Text, Bool, Text)
 identifier input = do
     let start = spaces input
-        (raw, content) = maybe (False, start) (\value -> (True, value)) (T.stripPrefix "r#" start)
+        (raw, content) = maybe (False, start) (True,) (T.stripPrefix "r#" start)
         (name, rest) = T.span (\char -> identStart char || isDigit char) content
     case T.uncons name of
         Just (char, _) | identStart char -> pure (name, raw, rest)

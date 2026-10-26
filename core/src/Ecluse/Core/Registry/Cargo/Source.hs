@@ -9,7 +9,7 @@ module Ecluse.Core.Registry.Cargo.Source (
     sourceComparisonKey,
 ) where
 
-import Data.Char (isControl, isSpace)
+import Data.Char (isControl, isDigit, isSpace)
 import Data.IP (IPv6)
 import Data.Text qualified as T
 import Network.URI qualified as URI
@@ -84,7 +84,7 @@ specialHost :: Text -> Either ParseError Text
 specialHost host =
     let withoutDot = fromMaybe host (T.stripSuffix "." host)
         lastPart = T.takeWhileEnd (/= '.') withoutDot
-        numeric = (not (T.null lastPart) && T.all asciiDigit lastPart) || isJust (ipv4Digits lastPart)
+        numeric = (not (T.null lastPart) && T.all isDigit lastPart) || isJust (ipv4Digits lastPart)
      in if numeric then ipv4Host (T.splitOn "." withoutDot) else Right host
 
 -- The SSRF recogniser requires four octets. Cargo also accepts shorter native URL forms.
@@ -127,14 +127,11 @@ ipv4Digits part = do
             | T.compareLength part 2 /= LT, Just rest <- T.stripPrefix "0" part = (8, rest)
             | otherwise = (10, part)
         digit char = case base of
-            16 -> asciiDigit char || char `elem` ['a' .. 'f'] || char `elem` ['A' .. 'F']
+            16 -> isDigit char || char `elem` ['a' .. 'f'] || char `elem` ['A' .. 'F']
             8 -> char `elem` ['0' .. '7']
-            _ -> asciiDigit char
+            _ -> isDigit char
     guard (T.all digit digits)
     pure (base, T.dropWhile (== '0') digits)
-
-asciiDigit :: Char -> Bool
-asciiDigit char = char >= '0' && char <= '9'
 
 parsePort :: Text -> Either ParseError (Maybe Int)
 parsePort "" = Right Nothing

@@ -102,8 +102,8 @@ cargoResolverMetadata =
   where
     cratesIo = "https://github.com/rust-lang/crates.io-index"
     dep :: Text -> Text -> [Text] -> Bool -> Bool -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Value
-    dep name requirement features optional defaults target kind registry alias =
-        object ["name" .= name, "version_req" .= requirement, "features" .= features, "optional" .= optional, "default_features" .= defaults, "target" .= target, "kind" .= kind, "registry" .= registry, "explicit_name_in_toml" .= alias]
+    dep name requirement features isOptional defaults target kind registry alias =
+        object ["name" .= name, "version_req" .= requirement, "features" .= features, "optional" .= isOptional, "default_features" .= defaults, "target" .= target, "kind" .= kind, "registry" .= registry, "explicit_name_in_toml" .= alias]
 
 -- | The effective manifest remains independent of the literal upload claims.
 cargoResolverArchive :: IO ByteString

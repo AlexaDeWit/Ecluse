@@ -187,7 +187,7 @@ uploadDependency _ _ = bad "Cargo upload dependency is not an object"
 
 effectiveFeatures :: [Value] -> Map Text [Text] -> Either ParseError (Map Text (Set Text))
 effectiveFeatures dependencies features = do
-    optional <- fmap catMaybes . forM dependencies $ \case
+    optionalDependencyAliases <- fmap catMaybes . forM dependencies $ \case
         Object fields -> do
             enabled <- requiredJson "optional" fields >>= jsonBool
             name <- requiredJson "name" fields >>= jsonString
@@ -196,7 +196,7 @@ effectiveFeatures dependencies features = do
         _ -> bad "Cargo publication dependency is not an object"
     let declared = Set.fromList <$> features
         suppressed = Set.fromList [alias | values <- Map.elems features, value <- values, Just alias <- [T.stripPrefix "dep:" value]]
-        implicit = Map.fromList [(alias, Set.singleton ("dep:" <> alias)) | alias <- optional, Map.notMember alias features, Set.notMember alias suppressed]
+        implicit = Map.fromList [(alias, Set.singleton ("dep:" <> alias)) | alias <- optionalDependencyAliases, Map.notMember alias features, Set.notMember alias suppressed]
     pure (Map.union declared implicit)
 
 -- | Numeric minimum Rust releases permit one to three components, with trailing zeroes implied.
