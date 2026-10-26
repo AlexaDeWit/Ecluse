@@ -28,12 +28,13 @@ import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError (..), VersionDoc)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead, prepareManifest)
 import Ecluse.Core.Registry.MirrorUpload (ExpectedMirrorFile, MirrorInventory, MirrorUploadData, VerifiedArtifactBytes)
-import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocClient, ocLimits), originClient)
+import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocChargeFullReadWorkspace, ocClient, ocLimits), originClient)
 import Ecluse.Core.Registry.Request (sealRequest)
 import Ecluse.Core.Registry.VersionList (VersionListState, finishVersionList)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
+import Ecluse.Core.Server.Admission.Meter (newChargeRegion)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version)
 
@@ -108,9 +109,10 @@ newMirrorPublish transport readTarget uploadTarget PublishCodec{pcPrepareSource,
 probeInventory :: MirrorTransport -> RegistryUrl -> PrepareRead -> Int -> (Int -> IO ()) -> PackageName -> IO (Either MetadataError PackageInfo)
 probeInventory transport target targetRead factor charge name = do
     pay <- accumulatingCharge charge
+    workspace <- newChargeRegion pay
     credential <- ptMintCredential transport
     -- The initial and final target snapshots can overlap during completion.
-    let origin = (originClient (ptLimits transport) (ptClient transport) target credential){ocChargeFullRead = pay . scaleCharge (2 * factor)}
+    let origin = (originClient (ptLimits transport) (ptClient transport) target credential){ocChargeFullRead = pay . scaleCharge (2 * factor), ocChargeFullReadWorkspace = workspace}
     fmap manifestInfo <$> prepareManifest targetRead (ptTracing transport) origin name
 
 -- | Preserve the native publication response under the origin's metadata and progress limits.

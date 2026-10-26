@@ -16,17 +16,17 @@ import Ecluse.Core.Package (PackageInfo (..))
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Registry.CachedDocument (cargoCached)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
-import Ecluse.Core.Registry.Cargo.Metadata (selectCargoVersionDoc)
+import Ecluse.Core.Registry.Cargo.Metadata (cargoReadWith, selectCargoVersionDoc)
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (MetadataUndecodable), VersionDoc (..), VersionRead (..))
-import Ecluse.Core.Registry.Metadata.Fetch (readVersion)
+import Ecluse.Core.Registry.Metadata.Fetch (readManifest, readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (ReadTerms (..))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Metadata.Projection (MetadataFraming (RecordStream), ProjectionDriver (..), metadataProjectionContract, projectionFailureLaw)
 import Ecluse.Test.Port (passthroughTracingPort)
-import Ecluse.Test.Registry.Cargo.Metadata (cargoRead, cargoTestDiscovery, cargoTestName, cargoTestRecord, cargoTestVersion)
-import Ecluse.Test.Registry.Metadata.Fetch (heldBody, heldManifest)
+import Ecluse.Test.Registry.Cargo.Metadata (cargoFeatureRecord, cargoRead, cargoTestDiscovery, cargoTestName, cargoTestRecord, cargoTestVersion)
+import Ecluse.Test.Registry.Metadata.Fetch (heldBody, heldManifest, sourceBody)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRight)
 
@@ -39,6 +39,7 @@ spec = do
         let permissive = projectionDriver{projectFull = \_ _ -> pure (Right (PackageInfo cargoTestName Map.empty Map.empty []))}
         projectionFailureLaw permissive MetadataUndecodable "{broken" `shouldThrow` anyException
     nativeSpec
+    workspaceSpec
 
 nativeSpec :: Spec
 nativeSpec = describe "prepared Cargo metadata" $ do
@@ -67,6 +68,58 @@ nativeSpec = describe "prepared Cargo metadata" $ do
         fmap manifestBodyBytes result `shouldBe` Left MetadataUndecodable
   where
     origin = "https://index.crates.io"
+
+workspaceSpec :: Spec
+workspaceSpec = describe "full Cargo row workspace" $ do
+    it "pays for short feature references before accepting each fragment and preserves the source" $ do
+        discovery <- expectRight cargoTestDiscovery
+        let references = 16384
+            large = cargoFeatureRecord "2.0.0" references
+            largeBytes = toStrict (encode large)
+            (prefix, suffix) = BS.splitAt (BS.length largeBytes `div` 2) largeBytes
+            firstRow = row "1.0.0" <> "\n"
+            chunks = [firstRow, prefix, suffix, "\n", row "3.0.0"]
+            body = BS.concat chunks
+        payments <- newIORef ([] :: [Int])
+        sourceBytes <- newIORef (0 :: Int)
+        received <- newIORef (0 :: Int)
+        remaining <- newIORef chunks
+        let pay amount = modifyIORef' payments (amount :)
+            next = do
+                at <- readIORef received
+                when (at == 2) $ readIORef payments >>= (`shouldSatisfy` any (> BS.length prefix * 4))
+                when (at == 3) $ readIORef payments >>= (`shouldSatisfy` any (> references * 24))
+                modifyIORef' received (+ 1)
+                atomicModifyIORef' remaining $ \pendingChunks -> case pendingChunks of
+                    [] -> ([], BS.empty)
+                    chunk : rest -> (rest, chunk)
+            native = cargoReadWith pay (\_ -> expectationFailure "a full read used the selected workspace") discovery
+            terms = ReadTerms defaultLimits "https://index.crates.io" (modifyIORef' sourceBytes . (+))
+        manifest <- expectRight =<< readManifest native passthroughTracingPort terms cargoTestName (sourceBody next)
+        manifestBodyBytes manifest `shouldBe` BS.length body
+        manifestDigest manifest `shouldBe` digestOf body
+        Map.keys (infoVersions (manifestInfo manifest)) `shouldBe` ["1.0.0", "2.0.0", "3.0.0"]
+        fmap cargoRecords (snd cargoCached (manifestRaw manifest))
+            `shouldBe` Just [(RecordEntry 0, cargoTestRecord "1.0.0"), (RecordEntry 1, large), (RecordEntry 2, cargoTestRecord "3.0.0")]
+        readIORef sourceBytes `shouldReturn` BS.length body
+        paid <- readIORef payments
+        foldl' max 0 paid `shouldSatisfy` (> references * 24)
+        lastPaid <- maybe (fail "the full reader made no row payment") pure (listToMaybe paid)
+        lastPaid `shouldSatisfy` (< foldl' max 0 paid)
+    it "stops before fetching another fragment when the full workspace payment fails" $ do
+        discovery <- expectRight cargoTestDiscovery
+        readsTaken <- newIORef (0 :: Int)
+        let body = toStrict (encode (cargoFeatureRecord "1.0.0" 16384))
+            next = modifyIORef' readsTaken (+ 1) $> BS.take (BS.length body `div` 2) body
+            native = cargoReadWith (const (throwIO FullWorkspaceRefused)) (const pass) discovery
+            terms = ReadTerms defaultLimits "https://index.crates.io" (const pass)
+        readManifest native passthroughTracingPort terms cargoTestName (sourceBody next) `shouldThrow` (== FullWorkspaceRefused)
+        readIORef readsTaken `shouldReturn` 1
+
+data FullWorkspaceRefused = FullWorkspaceRefused
+    deriving stock (Eq, Show)
+
+instance Exception FullWorkspaceRefused
 
 row :: Text -> ByteString
 row = toStrict . encode . cargoTestRecord

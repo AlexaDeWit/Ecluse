@@ -7,6 +7,8 @@ module Ecluse.Core.Server.Pipeline.OriginSpec (spec) where
 
 import Data.Aeson (Value (Array, Object, String), encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Network.HTTP.Types (status200)
 import System.Mem (performGC)
@@ -16,21 +18,24 @@ import UnliftIO (timeout, wait, withAsync)
 import UnliftIO.Exception (evaluate)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
+import Ecluse.Core.Package (PackageInfo (infoVersions))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
-import Ecluse.Core.Registry.CachedDocument (cargoCached)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead))
+import Ecluse.Core.Registry.CachedDocument (cargoCached, cargoPacked)
 import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.Cargo.Route (cargoRouter)
-import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (..))
+import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch (readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (PrepareRead))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (ReadTerms (ReadTerms))
-import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocChargeFullReadWorkspace))
+import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Admission.Meter (MemoryTicket, MeterSettings (..), charge, meterSnapshot, newMemoryMeter, withMemoryEntry)
-import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
+import Ecluse.Core.Server.Admission.Budget (scaleCharge)
+import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MemoryTicket, MeterSettings (..), charge, meterSnapshot, newChargePart, newMemoryMeter, withMemoryEntry)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfKeptPermille), MeterSnapshot (snChargedBytes))
 import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxEntries), MetadataCache, Source (Source), newMetadataCacheWithProvider, resolveVersion)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (LocalStorage), RetentionOperations (roInsert))
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
@@ -46,18 +51,20 @@ import Ecluse.Core.Server.Pipeline.Origin (
         OriginResolved,
         OriginUnresolved
     ),
+    fetchPrivateOrigin,
+    fetchPublicOrigin,
     originManifest,
     originMiss,
     withPublicMetadata,
  )
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Telemetry.Record (MetricsPort (mpVersionCacheRequest, mpVersionCacheResidentBytes))
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpVersionCacheRequest, mpVersionCacheResidentBytes))
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (sampleManifest, thingName)
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
-import Ecluse.Test.Registry.Cargo.Metadata (cargoRead, cargoTestDiscovery, cargoTestName, cargoTestRecord, cargoTestVersion)
+import Ecluse.Test.Registry.Cargo.Metadata (cargoFeatureRecord, cargoRead, cargoTestDiscovery, cargoTestName, cargoTestRecord, cargoTestVersion)
 import Ecluse.Test.Registry.Metadata.Fetch (heldBody)
 import Ecluse.Test.Server.Cache (cachedVersion, defaultCacheConfig, newLocalRetention, newMetadataCache)
 import Ecluse.Test.Server.Handler (testServeRuntime)
@@ -68,6 +75,7 @@ import Ecluse.Test.Support (expectRight)
 spec :: Spec
 spec = describe "originMiss -- the outcomes that leave nothing to serve" $ do
     retainedConsumerSpec
+    fullReadSpec
     it "reports no miss for a document, an access refusal, or an identity refusal" $
         map
             originMiss
@@ -88,6 +96,118 @@ spec = describe "originMiss -- the outcomes that leave nothing to serve" $ do
     it "contributes no manifest from any miss" $
         map (isNothing . originManifest) [OriginNotFound, OriginUnresolved, OriginAbsent]
             `shouldBe` [True, True, True]
+
+fullReadSpec :: Spec
+fullReadSpec = describe "full Cargo read payments" $ do
+    for_ [False, True] $ \public ->
+        for_ [False, True] $ \refused ->
+            it ((if public then "public" else "private") <> (if refused then " releases source and workspace after a refused read" else " retains only packed source after a full read")) $ withSweeper $ \deadlines -> do
+                adapter <- requiredCargoAdapter
+                let body = toStrict (encode (cargoFeatureRecord "1.0.0" 16384)) <> "\n" <> toStrict (encode (cargoTestRecord "2.0.0"))
+                    reply captured
+                        | capPath captured == "/config.json" = pure (status200, [], "{\"dl\":\"https://static.crates.io/crates/{crate}/{crate}-{version}.crate\"}")
+                        | otherwise = pure (status200, [], toLazy body)
+                withRoutedStubIO reply $ \stub -> do
+                    original <- testServeRuntime deadlines noopMetricsPort
+                    meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = maxBound `div` 2, msStepBytes = 1, msEntryRoom = 0, msEntryWaitMicros = 0}
+                    sourcePaid <- newIORef (0 :: Int)
+                    peak <- newIORef (0 :: Int)
+                    balances <- newIORef ([] :: [Int])
+                    let url = loopbackRegistryUrl (stubBaseUrl stub)
+                        base = serveDepsFor adapter (Just url) url NoMirrorWrite [] (pdNow inertPackumentDeps)
+                        factors = metadataChargeFactors (pdMetadata base)
+                        observe = observingFullRead meter (cfFullReadPermille factors) sourcePaid peak balances
+                        deps = base{pdMetadata = (pdMetadata base){metadataRead = observe (metadataRead (pdMetadata base))}, pdLimits = if refused then defaultLimits{maxVersionCount = 1} else defaultLimits}
+                        runtime = original{srMemoryMeter = meter}
+                    completed <- withMemoryEntry noopMetricsPort meter $ \ticket -> do
+                        result <- runCargoFull runtime deps ticket public
+                        if refused
+                            then do
+                                originMiss result `shouldBe` Just MissUnresolved
+                                snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
+                            else do
+                                manifest <- maybe (fail "full Cargo read returned no manifest") pure (originManifest result)
+                                manifestBodyBytes manifest `shouldBe` BS.length body
+                                Map.keys (infoVersions (manifestInfo manifest)) `shouldBe` ["1.0.0", "2.0.0"]
+                                isJust (snd cargoPacked (manifestRaw manifest)) `shouldBe` True
+                                snChargedBytes <$> meterSnapshot meter `shouldReturn` scaleCharge (cfKeptPermille factors) (BS.length body)
+                        readIORef sourcePaid >>= (`shouldSatisfy` (> 0))
+                        readIORef peak >>= (`shouldSatisfy` (> 16384 * 24))
+                        readIORef balances >>= (`shouldSatisfy` (\observed -> not (null observed) && all (== 0) observed))
+                    completed `shouldBe` Right ()
+                    snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
+    it "charges a collapsed full flight with the overdraw owner's priority" $ withSweeper $ \deadlines -> do
+        adapter <- requiredCargoAdapter
+        started <- newEmptyMVar
+        releaseSource <- newEmptyMVar
+        followerEntered <- newEmptyMVar
+        allowFollower <- newEmptyMVar
+        followerJoined <- newEmptyMVar
+        sourceReads <- newIORef (0 :: Int)
+        let body = toStrict (encode (cargoFeatureRecord "1.0.0" 16384))
+            reply captured
+                | capPath captured == "/config.json" = pure (status200, [], "{\"dl\":\"https://static.crates.io/crates/{crate}/{crate}-{version}.crate\"}")
+                | otherwise = do
+                    modifyIORef' sourceReads (+ 1)
+                    putMVar started ()
+                    takeMVar releaseSource
+                    pure (status200, [], toLazy body)
+            metrics = noopMetricsPort{mpCacheRequest = \result -> when (result == Metric.Collapsed) (putMVar followerJoined ())}
+        withRoutedStubIO reply $ \stub -> do
+            original <- testServeRuntime deadlines metrics
+            let step = 1024 * 1024
+            meter <- newMemoryMeter deadlines MeterSettings{msBudgetBytes = 3 * step, msStepBytes = step, msEntryRoom = 0, msEntryWaitMicros = 0}
+            sourcePaid <- newIORef (0 :: Int)
+            peak <- newIORef (0 :: Int)
+            balances <- newIORef ([] :: [Int])
+            let base = serveDepsFor adapter Nothing (loopbackRegistryUrl (stubBaseUrl stub)) NoMirrorWrite [] (pdNow inertPackumentDeps)
+                observe = observingFullRead meter (cfFullReadPermille (metadataChargeFactors (pdMetadata base))) sourcePaid peak balances
+                deps = base{pdMetadata = (pdMetadata base){metadataRead = observe (metadataRead (pdMetadata base))}}
+                runtime = original{srMemoryMeter = meter}
+                consume ticket = isJust . originManifest <$> runCargoFull runtime deps ticket True
+                leader = withMemoryEntry metrics meter consume
+                follower = withMemoryEntry metrics meter $ \ticket -> do
+                    putMVar followerEntered ()
+                    takeMVar allowFollower
+                    charge ticket (4 * step)
+                    consume ticket
+            completed <- timeout 5_000_000 $ withAsync follower $ \following -> do
+                takeMVar followerEntered
+                withAsync leader $ \leading -> do
+                    takeMVar started
+                    putMVar allowFollower ()
+                    takeMVar followerJoined
+                    putMVar releaseSource ()
+                    (,) <$> wait leading <*> wait following
+            completed `shouldBe` Just (Right True, Right True)
+            readIORef peak >>= (`shouldSatisfy` (> 16384 * 24))
+            readIORef sourceReads `shouldReturn` 1
+            readIORef balances >>= (`shouldSatisfy` (\observed -> not (null observed) && all (>= 0) observed))
+            snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
+
+observingFullRead :: MemoryMeter -> Int -> IORef Int -> IORef Int -> IORef [Int] -> PrepareRead -> PrepareRead
+observingFullRead meter factor sourcePaid peak balances (PrepareRead prepare) = PrepareRead $ \tracing origin ->
+    let source amount = do
+            ocChargeFullRead origin amount
+            modifyIORef' sourcePaid (+ scaleCharge factor amount)
+        workspace amount = do
+            ocChargeFullReadWorkspace origin amount
+            modifyIORef' peak (max amount)
+            sourceHeld <- readIORef sourcePaid
+            rowHeld <- readIORef peak
+            held <- snChargedBytes <$> meterSnapshot meter
+            modifyIORef' balances ((held - sourceHeld - rowHeld) :)
+     in prepare tracing origin{ocChargeFullRead = source, ocChargeFullReadWorkspace = workspace}
+
+runCargoFull :: ServeRuntime -> PackumentDeps -> MemoryTicket -> Bool -> IO OriginResult
+runCargoFull runtime deps ticket public = do
+    part <- newChargePart ticket
+    logEnv <- newTestLogEnv
+    let binding = MountBinding ("cargo" :| []) (cargoRouter Nothing) cargoCredential deps Nothing
+    runHandler logEnv mempty (RequestCtx runtime binding) $
+        if public
+            then fetchPublicOrigin deps runtime ticket part cargoTestName
+            else fetchPrivateOrigin deps runtime part Nothing cargoTestName
 
 retainedConsumerSpec :: Spec
 retainedConsumerSpec = describe "successful selected consumers" $ do

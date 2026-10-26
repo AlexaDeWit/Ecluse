@@ -47,7 +47,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionDoc (..),
     VersionRead (..),
  )
-import Ecluse.Core.Registry.Origin (OriginClient (ocClient), OriginFor, Private, Public, anonymousOrigin, chargingFullReads, chargingSelectedMetadata, controlPublicOrigin, originBaseUrl, originClientOf, perCallerOrigin)
+import Ecluse.Core.Registry.Origin (OriginClient (ocClient), OriginFor, Private, Public, anonymousOrigin, chargingFullReadWorkspace, chargingFullReads, chargingSelectedMetadata, controlPublicOrigin, originBaseUrl, originClientOf, perCallerOrigin)
 import Ecluse.Core.Registry.Request (BaseRequest)
 import Ecluse.Core.Security (Limits (progressFloor))
 import Ecluse.Core.Security.Egress (registryUrlText)
@@ -136,7 +136,8 @@ fetchPrivateOrigin deps rt part token name = case pdPrivateBase deps of
     Nothing -> pure OriginAbsent
     Just privateBase -> do
         logFM DebugS (ls ("fetching private origin for " <> renderPackageName name))
-        let origin = chargingFullReads (fullReadCharge deps part) (privateOrigin rt deps privateBase token)
+        workspace <- liftIO (newChargeRegion (chargePart part))
+        let origin = chargingFullReadWorkspace workspace (chargingFullReads (fullReadCharge deps part) (privateOrigin rt deps privateBase token))
         keepingRead deps part . originResultOf =<< tryAny (withMetadataClient rt deps privateMetadataClient origin (`fetchFullManifest` name))
 
 -- | Cache anonymous public metadata under the origin's base URL.
@@ -145,7 +146,9 @@ fetchPublicOrigin deps rt ticket part name = do
     logFM DebugS (ls ("fetching public origin for " <> renderPackageName name))
     -- Every request that shares this read waits on it, so whichever request leads it pays with their priority.
     let flight = flightOf (fullKey (publicSource deps) name)
-        origin = chargingFullReads (fullReadCharge deps (servingPart flight part)) (publicOrigin rt deps)
+        sharedPart = servingPart flight part
+    workspace <- liftIO (newChargeRegion (chargePart sharedPart))
+    let origin = chargingFullReadWorkspace workspace (chargingFullReads (fullReadCharge deps sharedPart) (publicOrigin rt deps))
     keepingRead deps part . originResultOf =<< tryAny (awaitingFlight ticket flight (withMetadataClient rt deps (publicMetadataClient (srMetadataCache rt) (publicSource deps)) origin (`fetchFullManifest` name)))
 
 -- Once its result is evaluated a read holds only its manifest, so its part steps down to the kept charge.

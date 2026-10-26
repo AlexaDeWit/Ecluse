@@ -19,14 +19,14 @@ import Ecluse.Core.Registry (UrlFormationError (UnparseableUrl))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached)
 import Ecluse.Core.Registry.Cargo.Discovery (CargoDiscovery, cargoDiscovery, discoveryIndex)
 import Ecluse.Core.Registry.Cargo.Document (cargoDocument, cargoRecords)
-import Ecluse.Core.Registry.Cargo.Reader (CargoIndexResult (..), CargoRead (..), readCargoIndex, readCargoIndexCharged)
+import Ecluse.Core.Registry.Cargo.Reader (CargoIndexResult (..), CargoRead (..), readCargoIndexCharged)
 import Ecluse.Core.Registry.Cargo.Request (cargoIndexRequest)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (..))
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
-import Ecluse.Core.Registry.Origin (OriginClient (ocChargeSelectedRead))
+import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullReadWorkspace, ocChargeSelectedRead))
 import Ecluse.Core.Registry.Request (baseRequestUrl)
 import Ecluse.Core.Registry.ServedDocument (stringField)
 import Ecluse.Core.Security (Limits)
@@ -40,19 +40,19 @@ cargoChargeFactors = ChargeFactors{cfFullReadPermille = 1700, cfKeptPermille = 1
 
 -- | Prepare after the selected origin receives its caller or service credential. Boot performs no discovery.
 prepareCargoRead :: PrepareRead
-prepareCargoRead = PrepareRead (\tracing origin -> fmap (cargoReadWith (ocChargeSelectedRead origin)) <$> cargoDiscovery tracing origin)
+prepareCargoRead = PrepareRead (\tracing origin -> fmap (cargoReadWith (ocChargeFullReadWorkspace origin) (ocChargeSelectedRead origin)) <$> cargoDiscovery tracing origin)
 
--- | Full and selected reads scan through EOF, reserving selected-row workspace through the supplied charge.
-cargoReadWith :: (Int -> IO ()) -> CargoDiscovery -> EcosystemRead
-cargoReadWith pay discovery =
+-- | Full and selected reads reserve row workspace through separate absolute callbacks.
+cargoReadWith :: (Int -> IO ()) -> (Int -> IO ()) -> CargoDiscovery -> EcosystemRead
+cargoReadWith fullPay selectedPay discovery =
     EcosystemRead
         { erRequest = \base token name -> do
             unless (registryUrlText (baseRequestUrl base) == discoveryIndex discovery) (Left (UnparseableUrl "Cargo discovery belongs to another index root"))
             cargoIndexRequest base token name
         , erUniqueFields = ["vers", "cksum"]
-        , erWalkFull = \limits name _ -> readCargoIndex discovery limits name FullRead
+        , erWalkFull = \limits name _ -> readCargoIndexCharged fullPay discovery limits name FullRead
         , erFinishFull = \limits _ base -> finishCargoFull discovery limits base
-        , erWalkSelected = \limits name version -> readCargoIndexCharged pay discovery limits name (SelectedRead version)
+        , erWalkSelected = \limits name version -> readCargoIndexCharged selectedPay discovery limits name (SelectedRead version)
         , erFinishSelected = \limits name base version streamed -> do
             unless (base == discoveryIndex discovery) (Left MetadataUndecodable)
             finishSelected limits name base version streamed

@@ -18,6 +18,7 @@ module Ecluse.Core.Registry.Origin (
     perCallerOrigin,
     originClientOf,
     chargingFullReads,
+    chargingFullReadWorkspace,
     chargingSelectedMetadata,
     controlPublicOrigin,
 ) where
@@ -44,6 +45,8 @@ data OriginClient = OriginClient
     , ocReadKind :: Maybe PublicReadKind
     , ocChargeSelectedRead :: Int -> IO ()
     -- ^ Reserve the native selected reader's absolute workspace before allocation.
+    , ocChargeFullReadWorkspace :: Int -> IO ()
+    -- ^ Reserve the full reader's absolute row workspace separately from retained source bytes.
     , ocChargeFullRead :: Int -> IO ()
     -- ^ Pays for each decompressed chunk of a full metadata read before the parser sees it.
     }
@@ -54,7 +57,7 @@ originClient limits client = originAt limits client . mkBaseRequest
 
 originAt :: Limits -> ExchangeClient -> BaseRequest -> Maybe ClientCredential -> OriginClient
 originAt limits client base token =
-    OriginClient{ocBaseRequest = base, ocClient = client, ocToken = token, ocLimits = limits, ocChargeFullRead = const pass, ocChargeSelectedRead = const pass, ocPublicControl = Nothing, ocReadKind = Nothing}
+    OriginClient{ocBaseRequest = base, ocClient = client, ocToken = token, ocLimits = limits, ocChargeFullRead = const pass, ocChargeFullReadWorkspace = const pass, ocChargeSelectedRead = const pass, ocPublicControl = Nothing, ocReadKind = Nothing}
 
 -- | The origin's base URL, read from its one parse so the two cannot disagree.
 ocBaseUrl :: OriginClient -> RegistryUrl
@@ -90,6 +93,10 @@ originClientOf (OriginFor client) = client
 -- | The same origin, paying for what its full metadata reads hand on.
 chargingFullReads :: (Int -> IO ()) -> OriginFor posture -> OriginFor posture
 chargingFullReads charge (OriginFor client) = OriginFor client{ocChargeFullRead = charge}
+
+-- | Bind a full reader's absolute workspace without replacing its incremental source charge.
+chargingFullReadWorkspace :: (Int -> IO ()) -> OriginFor posture -> OriginFor posture
+chargingFullReadWorkspace pay (OriginFor client) = OriginFor client{ocChargeFullReadWorkspace = pay}
 
 -- | Bind an absolute workspace reservation for native selected metadata reads.
 chargingSelectedMetadata :: (Int -> IO ()) -> OriginFor posture -> OriginFor posture

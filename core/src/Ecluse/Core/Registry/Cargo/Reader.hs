@@ -64,7 +64,7 @@ data Scan = Scan
 readCargoIndex :: CargoDiscovery -> Limits -> PackageName -> CargoRead -> DocumentWalk CargoIndexResult
 readCargoIndex = readCargoIndexCharged (const pass)
 
--- | Reserve the current row and retained selected row before buffering or decoding either.
+-- | Reserve current-row workspace and any retained selected row before buffering or decoding.
 readCargoIndexCharged :: (Int -> IO ()) -> CargoDiscovery -> Limits -> PackageName -> CargoRead -> DocumentWalk CargoIndexResult
 readCargoIndexCharged pay discovery limits name mode bound _ =
     readStepsWithEnd id finishCargoSteps bound (cargoIndexSteps pay discovery limits name mode)
@@ -111,7 +111,6 @@ cargoIndexSteps pay discovery limits name mode = await initial [] 0
                 Right next
                     | BS.length rest == 1 -> pure (await next [] 0)
                     | otherwise -> splitLines next [] 0 (BS.drop 1 rest)
-    reserve _ _ _ | mode == FullRead = pure 0
     reserve scan previous fragment = do
         let cost = saturated (toInteger previous + toInteger (decodedDocumentCharge fragment) + toInteger (bufferedChunkCharge (BS.length fragment)))
         pay (saturated (toInteger (scanKeptCharge scan) + toInteger cost))

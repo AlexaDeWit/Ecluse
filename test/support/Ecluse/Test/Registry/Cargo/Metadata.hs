@@ -7,6 +7,7 @@ module Ecluse.Test.Registry.Cargo.Metadata (
     cargoTestName,
     cargoTestVersion,
     cargoTestRecord,
+    cargoFeatureRecord,
     cargoTestDiscovery,
     readCargoChunks,
     parseCargoDiscovery,
@@ -17,7 +18,8 @@ module Ecluse.Test.Registry.Cargo.Metadata (
 ) where
 
 import Control.Monad.State.Strict qualified as State
-import Data.Aeson (Value)
+import Data.Aeson (Value (Object), object, toJSON, (.=))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
@@ -48,9 +50,9 @@ cargoArtifactPath name version = do
 parseCargoDiscovery :: AllowedHostPorts -> Text -> ByteString -> Either MetadataError CargoDiscovery
 parseCargoDiscovery = parseDiscoveryWithDepth 32
 
--- | Held fixtures have no admission ticket. Runtime preparation supplies its own selected-row charge.
+-- | Held fixtures have no admission ticket. Runtime preparation supplies its own row workspace charges.
 cargoRead :: CargoDiscovery -> EcosystemRead
-cargoRead = cargoReadWith (const pass)
+cargoRead = cargoReadWith (const pass) (const pass)
 
 -- | Project held bytes through the production framing and complete-index finisher.
 projectCargoIndex :: CargoDiscovery -> Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
@@ -79,6 +81,15 @@ cargoTestVersion = mkVersion Cargo
 -- | Reuse the independent fixture's complete supported installation record.
 cargoTestRecord :: Text -> Value
 cargoTestRecord version = Fixtures.cargoIndexRecord (Fixtures.minimalCargoRelease "fixture" version)
+
+-- | A valid optional dependency gives each short feature reference a native target.
+cargoFeatureRecord :: Text -> Int -> Value
+cargoFeatureRecord version references = case cargoTestRecord version of
+    Object fields -> Object (KeyMap.insert "deps" dependencies (KeyMap.insert "features" features fields))
+    value -> value
+  where
+    dependencies = toJSON [object ["name" .= ("d" :: Text), "req" .= ("^1" :: Text), "optional" .= True]]
+    features = object ["bulk" .= replicate references ("dep:d" :: Text)]
 
 -- | A fixed anonymous source with an independently declared download authority.
 cargoTestDiscovery :: Either MetadataError CargoDiscovery
