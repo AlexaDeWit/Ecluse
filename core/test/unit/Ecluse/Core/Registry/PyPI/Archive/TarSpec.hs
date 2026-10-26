@@ -65,9 +65,13 @@ spec = describe "extractTar" $ do
         a <- link True "example-1/a" "b"
         b <- link True "example-1/b" "a"
         extract defaultLimits [info, a, b] >>= (`shouldSatisfy` isLeft)
+        let limits = defaultLimits{maxNestingDepth = 2}
         alias <- link True "example-1/PKG-INFO" "metadata.txt"
         target <- regular "example-1/metadata.txt" metadata
-        extract defaultLimits{maxNestingDepth = 1} [alias, target] >>= (`shouldSatisfy` isLeft)
+        extract limits [alias, target] `shouldReturn` Right metadata
+        indirect <- link True "example-1/PKG-INFO" "next.txt"
+        intermediate <- link True "example-1/next.txt" "metadata.txt"
+        extract limits [indirect, intermediate, target] `shouldReturn` Left (ParseError "tar link chain exceeds its bound")
     it "uses PAX size for framing when the legacy header reports zero" $ do
         extended <- pax 'x' (paxRecord ("size=" <> encodeUtf8 (show (BS.length metadata) :: Text) <> "\n") <> paxRecord "SCHILY.xattr.user.note=ignored\n")
         info <- regular "example-1/PKG-INFO" metadata

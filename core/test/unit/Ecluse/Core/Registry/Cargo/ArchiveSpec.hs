@@ -18,7 +18,7 @@ import Test.Hspec
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Package.Hash (sha256Hex)
-import Ecluse.Core.Registry (ParseError)
+import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.Cargo.Archive
 import Ecluse.Core.Registry.Cargo.Manifest (publishMetadataValue)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
@@ -73,10 +73,24 @@ spec = do
             inspect defaultLimits (compress tar) >>= (`shouldSatisfy` isLeft)
             bytes <- fixture [("Cargo.toml", manifest), ("parent", "x"), ("parent/child", "x")]
             inspect defaultLimits bytes >>= (`shouldSatisfy` isLeft)
-        it "bounds compressed bytes, inflated bytes, entries and manifest retention" $ do
+        it "bounds compressed bytes, inflated bytes and entries" $ do
             bytes <- fixture [("Cargo.toml", manifest), ("padding", BS.replicate 65536 65)]
-            for_ [defaultLimits{maxMirrorArtifactBytes = 10}, defaultLimits{maxMirrorArtifactBytes = 8192}, defaultLimits{maxArtifactCount = 1}, defaultLimits{maxMetadataBytes = 32}] $ \limits ->
-                inspect limits bytes >>= (`shouldSatisfy` isLeft)
+            for_
+                [ (defaultLimits{maxMirrorArtifactBytes = 10}, ParseError "Cargo compressed archive exceeds its byte bound")
+                , (defaultLimits{maxMirrorArtifactBytes = 8192}, ParseError "archive inflated bytes exceed their bound")
+                , (defaultLimits{maxArtifactCount = 1}, ParseError "archive entry count exceeds its bound")
+                ]
+                $ \(limits, fault) -> do
+                    result <- inspect limits bytes
+                    void result `shouldBe` Left fault
+        it "bounds retained manifest bytes at the exact ceiling" $ do
+            let limits = defaultLimits{maxMetadataBytes = 512}
+                padded size = manifest <> "#" <> BS.replicate (size - BS.length manifest - 2) 120 <> "\n"
+            atLimit <- fixture [("Cargo.toml", padded 512)]
+            inspect limits atLimit >>= (`shouldSatisfy` isRight)
+            overLimit <- fixture [("Cargo.toml", padded 513)]
+            result <- inspect limits overLimit
+            void result `shouldBe` Left (ParseError "tar metadata or extended header exceeds its bound")
         it "does not retain README payloads during the execution evidence pass" $ do
             small <- fixture [("Cargo.toml", manifest), ("README.md", BS.replicate 65536 65)]
             large <- fixture [("Cargo.toml", manifest), ("README.md", BS.replicate (1024 * 1024) 65)]
