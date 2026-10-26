@@ -90,14 +90,14 @@ servingTrace = T.replicate 32 "a"
 workerTrace = T.replicate 32 "b"
 
 rootSpan :: Text -> Text -> Text
-rootSpan kind traceId = "Span #0\n     Name: request\n     Kind: " <> kind <> "\n     Trace ID: " <> traceId <> "\n     Parent ID: \n"
+rootSpan kind traceKey = "Span #0\n     Name: request\n     Kind: " <> kind <> "\n     Trace ID: " <> traceKey <> "\n     Parent ID: \n"
 
 httpSpan :: Text -> Text -> Text -> Text -> Text
-httpSpan target traceId kind status =
+httpSpan target traceKey kind status =
     "Span #0\n     Name: GET\n     Kind: "
         <> kind
         <> "\n     Trace ID: "
-        <> traceId
+        <> traceKey
         <> "\n     Parent ID: 1111111111111111\nAttributes:\n"
         <> "     -> http.host: Str(mirror)\n     -> http.method: Str(GET)\n     -> http.target: Str("
         <> target

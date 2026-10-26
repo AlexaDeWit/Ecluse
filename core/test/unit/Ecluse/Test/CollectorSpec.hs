@@ -114,10 +114,10 @@ spec = do
             for_ ["", contextualSpan "request" "Server" workerTrace "" [], contextualSpan "request" "Server" servingTrace "1111111111111111" []] $ \root ->
                 lookupAnswers (root <> contextualSpan "HTTP GET" "Client" servingTrace "1111111111111111" (lookupFetch <> [("http.status_code", "Int(200)")])) `shouldBe` []
         it "rejects missing, malformed and zero trace IDs" $
-            for_ ["", "abc", T.replicate 32 "z", T.replicate 32 "0"] $ \traceId ->
+            for_ ["", "abc", T.replicate 32 "z", T.replicate 32 "0"] $ \traceKey ->
                 lookupAnswers
-                    ( contextualSpan "request" "Server" traceId "" []
-                        <> contextualSpan "HTTP GET" "Client" traceId "1111111111111111" (lookupFetch <> [("http.status_code", "Int(200)")])
+                    ( contextualSpan "request" "Server" traceKey "" []
+                        <> contextualSpan "HTTP GET" "Client" traceKey "1111111111111111" (lookupFetch <> [("http.status_code", "Int(200)")])
                     )
                     `shouldBe` []
         it "does not treat a server or consumer span as the outbound request" $
@@ -189,8 +189,8 @@ servingTrace = T.replicate 32 "a"
 workerTrace = T.replicate 32 "b"
 
 contextualSpan :: Text -> Text -> Text -> Text -> [(Text, Text)] -> Text
-contextualSpan name kind traceId parent attributes =
-    "Span #0\n     Trace ID: " <> traceId <> "\n     Parent ID: " <> parent <> "\n     Kind: " <> kind <> "\n" <> spanBody name attributes
+contextualSpan name kind traceKey parent attributes =
+    "Span #0\n     Trace ID: " <> traceKey <> "\n     Parent ID: " <> parent <> "\n     Kind: " <> kind <> "\n" <> spanBody name attributes
 
 lookupAnswers :: Text -> [AttributeValue]
 lookupAnswers = privateLookupAnswers "mirror" "/ec/lu/ecluse-e2e-macro"

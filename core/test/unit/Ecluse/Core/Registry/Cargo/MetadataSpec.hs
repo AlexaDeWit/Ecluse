@@ -90,7 +90,7 @@ workspaceSpec = describe "full Cargo row workspace" $ do
                 when (at == 2) $ readIORef payments >>= (`shouldSatisfy` any (> BS.length prefix * 4))
                 when (at == 3) $ readIORef payments >>= (`shouldSatisfy` any (> references * 24))
                 modifyIORef' received (+ 1)
-                atomicModifyIORef' remaining $ \pendingChunks -> case pendingChunks of
+                atomicModifyIORef' remaining $ \case
                     [] -> ([], BS.empty)
                     chunk : rest -> (rest, chunk)
             native = cargoReadWith pay (\_ -> expectationFailure "a full read used the selected workspace") discovery

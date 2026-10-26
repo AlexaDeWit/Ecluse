@@ -124,6 +124,6 @@ privateLookupAnswers :: Text -> Text -> Text -> [AttributeValue]
 privateLookupAnswers host target output = privateArtifactAnswers host target [psSpan item | item <- observed, servingClient item]
   where
     observed = printedSpans output
-    serving = Set.fromList [traceId | item <- observed, psKind item == Just "Server", psParentId item `elem` [Just "", Just "0000000000000000"], Just traceId <- [psTraceId item]]
-    workers = Set.fromList [traceId | item <- observed, psKind item == Just "Consumer", Just traceId <- [psTraceId item]]
-    servingClient item = psKind item == Just "Client" && maybe False (\traceId -> Set.member traceId serving && Set.notMember traceId workers) (psTraceId item)
+    serving = Set.fromList [traceKey | item <- observed, psKind item == Just "Server", psParentId item `elem` [Just "", Just "0000000000000000"], Just traceKey <- [psTraceId item]]
+    workers = Set.fromList [traceKey | item <- observed, psKind item == Just "Consumer", Just traceKey <- [psTraceId item]]
+    servingClient item = psKind item == Just "Client" && maybe False (\traceKey -> Set.member traceKey serving && Set.notMember traceKey workers) (psTraceId item)
