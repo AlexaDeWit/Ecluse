@@ -10,6 +10,7 @@ module Ecluse.Core.Server.Cache.Backend.Local (
 
 import Data.Cache (Cache)
 import Data.Cache qualified as Cache
+import Data.Cache.Internal qualified as CacheInternal
 import Data.HashSet qualified as HashSet
 import Data.Map.Strict qualified as Map
 import Data.Time (NominalDiffTime)
@@ -74,6 +75,7 @@ insertStored storeState now key value weight = do
     let expires = now + lsTTL storeState
         weighted = Weighted value weight stamp expires
     Cache.insertSTM key weighted (lsStore storeState) Nothing
+    forceCacheContainer (lsStore storeState)
     modifyTVar' (lsExpiry storeState) (Map.insertWith HashSet.union expires (HashSet.singleton key))
     modifyTVar' (lsRecency storeState) (Map.insert stamp key)
     adjustOccupancy storeState 1 weight
@@ -105,6 +107,7 @@ deleteStored storeState key = do
     held <- Cache.lookupSTM False key (lsStore storeState) (fromNanoSecs 0)
     for_ held $ \weighted -> do
         Cache.deleteSTM key (lsStore storeState)
+        forceCacheContainer (lsStore storeState)
         modifyTVar' (lsExpiry storeState) (Map.update dropKey (wExpires weighted))
         modifyTVar' (lsRecency storeState) (Map.delete (wStamp weighted))
         adjustOccupancy storeState (-1) (negate (wWeight weighted))
@@ -144,7 +147,12 @@ lookupStore storeState record recency key = readPool (lsPool storeState) $ \now 
             stamp <- nextStamp storeState
             modifyTVar' (lsRecency storeState) (Map.insert stamp key . Map.delete (wStamp weighted))
             Cache.insertSTM key weighted{wStamp = stamp} (lsStore storeState) Nothing
+            forceCacheContainer (lsStore storeState)
     pure (wValue <$> held)
+
+-- Data.Cache leaves map updates lazy, so removed values can outlive their occupancy.
+forceCacheContainer :: Cache k v -> STM ()
+forceCacheContainer cache = modifyTVar' (CacheInternal.container cache) id
 
 toTimeSpec :: NominalDiffTime -> TimeSpec
 toTimeSpec ttl = fromNanoSecs (max 0 (round (realToFrac ttl * 1e9 :: Double) :: Integer))
