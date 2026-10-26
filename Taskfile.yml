@@ -376,7 +376,15 @@ tasks:
       - flake.lock
     cmds:
       - |
-        out=$(cabal check 2>&1); printf "%s\n" "$out"; case "$out" in *Warning:*|*Error:*) exit 1 ;; esac
+        cabal_check_status=0
+        cabal_check_output=$(cabal check 2>&1) || cabal_check_status=$?
+        printf '%s\n' "$cabal_check_output"
+        if [ "$cabal_check_status" -ne 0 ]; then
+          exit "$cabal_check_status"
+        fi
+        case "$cabal_check_output" in
+          *Warning:*|*Error:*) exit 1 ;;
+        esac
   lint-workflows:
     desc: Lint GitHub Actions workflows and check their runners
     sources:
