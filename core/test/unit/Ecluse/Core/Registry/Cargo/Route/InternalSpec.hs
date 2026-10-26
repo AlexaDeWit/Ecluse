@@ -7,19 +7,19 @@
 module Ecluse.Core.Registry.Cargo.Route.InternalSpec (spec) where
 
 import Data.List (lookup)
-import Network.HTTP.Types (Method, methodGet, methodHead, methodPut, status401, status403)
+import Network.HTTP.Types (Method, methodGet, methodHead, methodPut, status401, status403, status404, status500)
 import Network.Wai (responseHeaders, responseStatus)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm))
 import Ecluse.Core.Package (mkPackageName, renderPackageName)
-import Ecluse.Core.Registry.Cargo.Route.Internal (artifactContract, artifactCoordinate, artifactReplies, cargoRoutes, indexContract, indexReplies, takeIndexPath)
+import Ecluse.Core.Registry.Cargo.Route.Internal (CargoView (..), artifactContract, artifactCoordinate, artifactReplies, cargoRoutes, indexContract, indexReplies, takeIndexPath)
 import Ecluse.Core.Registry.Npm.Route.Internal (npmPackumentContract, npmPackumentReplies, npmTarballContract, npmTarballReplies)
 import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Path (unFilename)
-import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (packumentPrivateRefused))
-import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (tarballPrivateRefused))
-import Ecluse.Core.Server.Response (mkRefusal)
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (packumentForbidden, packumentForbiddenText, packumentInternal, packumentNotFound, packumentPrivateRefused, packumentUnauthorised))
+import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (tarballError, tarballPrivateRefused))
+import Ecluse.Core.Server.Response (RejectReason (Unavailable), Rejection (Rejection), ServeDecision (Reject), Transience (WontResolve), mkHelpMessage, mkRefusal)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Server.Handler (responseBytes)
@@ -28,16 +28,62 @@ spec :: Spec
 spec = do
     describe "native private refusals" $
         for_ [(401, status401, Just "Cargo"), (403, status403, Nothing)] $ \(code, status, challenge) ->
-            it ("retains private HTTP " <> show code <> " in sparse and archive responses") $ do
+            it ("retains private HTTP " <> show code <> " in sparse and archive responses") $ for_ [PublicReplacement, PrivateRegistry] $ \view -> do
                 let headers = [("Cache-Control", "no-store")]
                     refusal = mkRefusal Nothing "private access was refused"
-                    metadata = responseToWai indexContract (packumentPrivateRefused indexReplies code headers refusal)
-                    archive = responseToWai artifactContract (tarballPrivateRefused artifactReplies code headers refusal)
+                    metadata = responseToWai indexContract (packumentPrivateRefused (indexReplies view) code headers refusal)
+                    archive = responseToWai artifactContract (tarballPrivateRefused (artifactReplies view) code headers refusal)
                 for_ [metadata, archive] $ \response -> do
                     responseStatus response `shouldBe` status
                     lookup "WWW-Authenticate" (responseHeaders response) `shouldBe` challenge
                     lookup "Cache-Control" (responseHeaders response) `shouldBe` Just "no-store"
                     responseBytes response `shouldReturn` ""
+
+    describe "native public refusal diagnostics" $ do
+        it "renders the exact policy reason and appends configured help once" $
+            for_ [(Nothing, "example@1.0.0 was denied by execution: runs code on install"), (Just (mkHelpMessage "Contact the platform team."), "example@1.0.0 was denied by execution: runs code on install Contact the platform team.")] $ \(help, expected) -> do
+                let refusal = mkRefusal help "example@1.0.0 was denied by execution: runs code on install"
+                    responses =
+                        [ responseToWai indexContract (packumentForbidden (indexReplies PublicReplacement) [] refusal)
+                        , responseToWai artifactContract (tarballError (artifactReplies PublicReplacement) status403 [] refusal)
+                        ]
+                for_ responses $ \response -> do
+                    responseStatus response `shouldBe` status403
+                    responseBytes response `shouldReturn` expected
+        it "keeps detailed public rejection messages in their existing order" $ do
+            let decisions = [Reject (Rejection (Unavailable WontResolve) reason) | reason <- ["example@1.0.0 could not be evaluated", "example@2.0.0 could not be evaluated"]]
+            packumentForbiddenText (indexReplies PublicReplacement) decisions
+                `shouldBe` "example@1.0.0 could not be evaluated; example@2.0.0 could not be evaluated"
+        it "renders the exact public evaluation failure without operator-only evidence details" $ do
+            let refusal = mkRefusal Nothing "example@1.0.0 could not be evaluated: the rule could not be evaluated"
+                responses =
+                    [ responseToWai indexContract (packumentInternal (indexReplies PublicReplacement) [] refusal)
+                    , responseToWai artifactContract (tarballError (artifactReplies PublicReplacement) status500 [] refusal)
+                    ]
+            for_ responses $ \response -> do
+                responseStatus response `shouldBe` status500
+                responseBytes response `shouldReturn` "example@1.0.0 could not be evaluated: the rule could not be evaluated"
+        it "keeps inbound authentication and first-party exclusion quiet in both views" $
+            for_ [PublicReplacement, PrivateRegistry] $ \view -> do
+                let refusal = mkRefusal Nothing "request-specific private information"
+                    responses =
+                        [ responseToWai indexContract (packumentUnauthorised (indexReplies view) [] refusal)
+                        , responseToWai artifactContract (tarballError (artifactReplies view) status401 [] refusal)
+                        , responseToWai indexContract (packumentNotFound (indexReplies view) [] refusal)
+                        , responseToWai artifactContract (tarballError (artifactReplies view) status404 [] refusal)
+                        , responseToWai indexContract (packumentForbidden (indexReplies PrivateRegistry) [] refusal)
+                        , responseToWai artifactContract (tarballError (artifactReplies PrivateRegistry) status403 [] refusal)
+                        ]
+                for_ responses $ \response -> responseBytes response `shouldReturn` ""
+        it "keeps private credential failures limited to configured operator help in both views" $
+            for_ [PublicReplacement, PrivateRegistry] $ \view ->
+                for_ [401, 403] $ \code -> do
+                    let refusal = mkRefusal (Just (mkHelpMessage "Contact the platform team.")) "request-specific private information"
+                        responses =
+                            [ responseToWai indexContract (packumentPrivateRefused (indexReplies view) code [] refusal)
+                            , responseToWai artifactContract (tarballPrivateRefused (artifactReplies view) code [] refusal)
+                            ]
+                    for_ responses $ \response -> responseBytes response `shouldReturn` "Contact the platform team."
 
     describe "legacy private refusals" $
         for_ [401, 403] $ \code ->

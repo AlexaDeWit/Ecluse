@@ -7,6 +7,7 @@ module Ecluse.Core.Registry.Cargo.Route.Internal (
     cargoRouter,
     cargoRoutes,
     cargoRouteSpecs,
+    CargoView (..),
     takeIndexPath,
     artifactCoordinate,
     indexContract,
@@ -67,7 +68,7 @@ import Ecluse.Core.Server.Pipeline.Publish (PublishReplies (..), servePublish)
 import Ecluse.Core.Server.Pipeline.Shared (edgeTokenMatches, forwardedCredential, shedMessage, withMetadataAdmission)
 import Ecluse.Core.Server.Pipeline.Tarball (tarballAction)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (..))
-import Ecluse.Core.Server.Response (Refusal, refusalHelp)
+import Ecluse.Core.Server.Response (Refusal, refusalHelp, renderRefusal)
 import Ecluse.Core.Server.Response.Summary (detailedRejections)
 import Ecluse.Core.Server.Route (Capture (..), MediaNegotiation (AcceptsAnything), MethodMatch (MethodPut, MethodRead), PatternSeg (SegCap, SegLit), Route (Route), RouteName (RouteName), routerOf, safeSegment)
 import Ecluse.Core.Server.RouteDescription (RouteSpec, catchAllSpecs, specsOf, unsupportedPathParam)
@@ -88,6 +89,7 @@ bindView deps (RouteAction contract action) = RouteAction contract $ case action
   where
     bind ctx = ctx{ctxMount = (ctxMount ctx){bindingPackumentDeps = deps}}
 
+-- | The route's view selects whether local refusals include diagnostic reasons.
 data CargoView = PublicReplacement | PrivateRegistry
     deriving stock (Eq)
 
@@ -128,7 +130,7 @@ viewRoutes view =
                 MethodRead
                 AcceptsAnything
                 (prefix view <> [SegCap indexCapture])
-                (\method -> \case [CargoProject name] -> Just (packumentAction indexReplies method name); _ -> Nothing)
+                (\method -> \case [CargoProject name] -> Just (packumentAction (indexReplies view) method name); _ -> Nothing)
                 "Read a crate's sparse index"
                 "Returns admitted native records. The public replacement excludes first-party names and unmanaged target records. The private alternate reads only the caller-authorised private origin."
                 Nothing
@@ -150,7 +152,7 @@ artifactRoute view =
         AcceptsAnything
         (prefix view <> [SegLit "crates", SegCap projectCapture, SegCap versionCapture, SegCap fileCapture])
         ( \method -> \case
-            [CargoProject name, CargoVersion version, CargoFile file] -> tarballAction artifactReplies method name version <$> artifactCoordinate name version file
+            [CargoProject name, CargoVersion version, CargoFile file] -> tarballAction (artifactReplies view) method name version <$> artifactCoordinate name version file
             _ -> Nothing
         )
         "Fetch a crate archive"
@@ -214,18 +216,24 @@ indexContract =
 refusalContract :: Status -> Text -> ResponseContract (ResponseValue (Maybe LByteString))
 refusalContract status description = optionalBodyContract status description (SchemaText "text/plain")
 
--- | Private 401 replies retain the Cargo credential-provider challenge.
-indexReplies :: PackumentReplies IndexResponse
-indexReplies =
+-- | Render public policy and evaluation diagnostics, keeping access refusals quiet.
+indexReplies :: CargoView -> PackumentReplies IndexResponse
+indexReplies view =
     base
-        { packumentUnauthorised = \headers -> packumentUnauthorised base (challenge <> headers)
+        { packumentUnauthorised = \headers -> packumentUnauthorised quiet (challenge <> headers)
         , packumentPrivateRefused = \code ->
             if code == 401
-                then packumentUnauthorised indexReplies
-                else packumentForbidden base
+                then packumentUnauthorised (indexReplies PrivateRegistry)
+                else packumentForbidden quiet
+        , packumentNotFound = packumentNotFound quiet
         }
   where
-    base = metadataReplies detailedRejections helpBytes
+    base = metadataReplies detailedRejections (refusalBytes view)
+    quiet = metadataReplies detailedRejections helpBytes
+
+refusalBytes :: CargoView -> Refusal -> Maybe LByteString
+refusalBytes PublicReplacement = Just . fromStrict . encodeUtf8 . renderRefusal
+refusalBytes PrivateRegistry = helpBytes
 
 helpBytes :: Refusal -> Maybe LByteString
 helpBytes = fmap (fromStrict . encodeUtf8) . refusalHelp
@@ -234,12 +242,14 @@ helpBytes = fmap (fromStrict . encodeUtf8) . refusalHelp
 artifactContract :: ResponseContract PassthroughResponse
 artifactContract = passthroughContract "Relays the selected archive. Authentication, admission, integrity and availability failures return a local refusal."
 
--- | Private archive refusals retain native 401 and 403 status codes.
-artifactReplies :: TarballReplies PassthroughResponse
-artifactReplies =
+-- | Render public archive diagnostics while access refusals and missing archives retain quiet bodies.
+artifactReplies :: CargoView -> TarballReplies PassthroughResponse
+artifactReplies view =
     TarballReplies
-        { tarballError = \status headers refusal -> passthroughResponse status (if status == status401 then challenge <> headers else headers) (maybe PassthroughEmpty PassthroughBytes (helpBytes refusal))
-        , tarballPrivateRefused = \code -> tarballError artifactReplies (if code == 401 then status401 else status403)
+        { tarballError = \status headers refusal ->
+            let bodyView = if status == status401 || status == status404 then PrivateRegistry else view
+             in passthroughResponse status (if status == status401 then challenge <> headers else headers) (maybe PassthroughEmpty PassthroughBytes (refusalBytes bodyView refusal))
+        , tarballPrivateRefused = \code -> tarballError (artifactReplies PrivateRegistry) (if code == 401 then status401 else status403)
         , tarballStream = \status headers body -> passthroughResponse status headers (PassthroughStream body)
         , tarballEmpty = \status headers -> passthroughResponse status headers PassthroughEmpty
         }
