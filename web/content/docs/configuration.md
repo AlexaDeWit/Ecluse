@@ -290,6 +290,10 @@ PyPI keeps its local refusal format: an empty body, or the configured operator h
 Cargo preserves a native `401` challenge for credential-provider retry and treats a real `403` as refusal.
 The private alternate never substitutes a public copy, including after a private `404`.
 
+For sparse index and archive requests, Cargo's public policy and evaluation refusals include Écluse's reason plus configured `server.helpMessage`.
+Private refusals, access refusals on either view, and missing or excluded package replies keep only configured operator help.
+Without configured help, those replies have no body.
+
 Check the caller's private credential and access when this refusal appears. Ordinary private
 `404` responses and other transient or transport failures keep their existing fallback policy.
 First-party names remain private-only. A backend that masks an access refusal as `404` supplies
