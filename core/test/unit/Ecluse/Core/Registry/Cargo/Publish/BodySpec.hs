@@ -113,8 +113,10 @@ spec = describe "Cargo upload framing" $ do
         paid <- newIORef ([] :: [Int])
         result <- readUpload defaultLimits (\cost -> modifyIORef' paid (cost :)) bytes
         result `shouldSatisfy` isRight
+        (_, metadataCost) <- expectRight result
         payments <- readIORef paid
         payments `shouldSatisfy` (\costs -> length costs == 1 && all (> 65536) costs)
+        payments `shouldBe` [metadataCost]
 
 relayMetadata :: CargoUploadBody -> ByteString -> IO Value
 relayMetadata decoded bytes = do

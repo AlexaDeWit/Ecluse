@@ -47,13 +47,18 @@ uploadArchive (CargoUploadBody _ _ bytes) = bytes
 decodeUpload :: Limits -> ByteString -> Either ParseError CargoUploadBody
 decodeUpload limits bytes = splitUpload limits bytes >>= uncurry (decodeSections limits)
 
--- | Charge the JSON tree before decoding. The caller separately reserves the original body.
-readUpload :: Limits -> (Int -> IO ()) -> ByteString -> IO (Either ParseError CargoUploadBody)
+{- | Charge the JSON tree before decoding and return that reservation for archive work.
+The caller separately reserves the original body.
+-}
+readUpload :: Limits -> (Int -> IO ()) -> ByteString -> IO (Either ParseError (CargoUploadBody, Int))
 readUpload limits charge bytes = case splitUpload limits bytes of
     Left fault -> pure (Left fault)
     Right (metadata, archive) -> do
-        charge (metadataCharge metadata)
-        pure (decodeSections limits metadata archive)
+        let metadataCost = metadataCharge metadata
+        charge metadataCost
+        pure $ do
+            upload <- decodeSections limits metadata archive
+            pure (upload, metadataCost)
 
 metadataCharge :: ByteString -> Int
 metadataCharge bytes = fromInteger (min (toInteger (maxBound :: Int)) (65536 + 64 * toInteger (BS.length bytes)))

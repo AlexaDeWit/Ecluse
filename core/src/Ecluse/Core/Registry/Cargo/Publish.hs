@@ -13,7 +13,6 @@ module Ecluse.Core.Registry.Cargo.Publish (
 
 import Data.Aeson (Value (..), encode)
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS, RequestBodyLBS))
@@ -110,9 +109,8 @@ uploadClaims limits charge body = do
     decoded <- Body.readUpload limits charge (publishBodyBytes body)
     case decoded of
         Left fault -> pure (Left (PublishMalformed fault))
-        Right upload -> do
+        Right (upload, metadataCost) -> do
             let archive = Body.uploadArchive upload
-                metadataCost = fromInteger (min (toInteger (maxBound :: Int)) (65536 + 64 * toInteger (BS.length (publishBodyBytes body) - BS.length archive - 8)))
             inspected <- inspectCargoArchive limits (charge . (+ metadataCost)) (Body.uploadName upload) (Body.uploadVersion upload) (sha256Hex archive) archive
             pure $ first PublishMalformed inspected $> [Body.uploadName upload]
 
