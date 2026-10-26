@@ -12,7 +12,7 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (ResponseHeaders, Status, methodGet, methodHead, methodPut, status200, status304, status401, status403, status404, status405, status503)
+import Network.HTTP.Types (ResponseHeaders, Status, methodGet, methodHead, methodPut, status200, status304, status401, status403, status404, status503)
 import Network.Wai (Application)
 import Network.Wai qualified as Wai
 import Network.Wai.Test (SResponse (..))
@@ -52,7 +52,7 @@ import Ecluse.Test.Registry.Cargo.Fixtures qualified as Fixture
 import Ecluse.Test.Registry.Cargo.Reference qualified as Reference
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (serveDepsFor, withPrivateBaseUrl)
-import Ecluse.Test.Stub (Captured (..), allCaptured, headerValue, stubBaseUrl, withRoutedStub)
+import Ecluse.Test.Stub (Captured (..), allCaptured, headerValue, stubLocalhostUrl, withRoutedStub)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -195,7 +195,7 @@ servingSpec = describe "native sparse serving" $ do
     native "022" "refuses unsupported methods and conflicting archive coordinates before upstream reads" $
         withCargoProxy defaultReply defaultReply $ \proxy -> do
             response <- requestAt methodPut publicIndex Wai.defaultRequest (proxyApp proxy)
-            simpleStatus response `shouldBe` status405
+            simpleStatus response `shouldBe` status404
             for_ ["/cargo/crates/thing/1.2.3/other-1.2.3.crate", "/cargo/crates/thing/1.2.3/thing-2.3.4.crate"] $ \path -> do
                 refused <- getPath path (proxyApp proxy)
                 simpleStatus refused `shouldBe` status404
@@ -292,7 +292,7 @@ withCargoProxy privateReply publicReply action =
         env <- newTestEnvWithQueue deadlines queue manager
         rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
         let publicDeps =
-                (serveDepsFor adapter Nothing (loopbackRegistryUrl (stubBaseUrl public <> "/index")) NoMirrorWrite rules (pure now))
+                (serveDepsFor adapter Nothing (loopbackRegistryUrl (stubLocalhostUrl public <> "/index")) NoMirrorWrite rules (pure now))
                     { pdReadSourceSelection = ManagedMirrorAndPublic
                     , pdMountBaseUrl = "http://ecluse.test/cargo"
                     , pdEgressUrl = Right . loopbackRegistryUrl
@@ -302,10 +302,10 @@ withCargoProxy privateReply publicReply action =
                     { pdReadSourceSelection = PrivateOnly
                     , pdMountBaseUrl = "http://ecluse.test/cargo/private"
                     }
-            trusted = withPrivateBaseUrl (Just (loopbackRegistryUrl (stubBaseUrl private <> "/index"))) privateDeps
+            trusted = withPrivateBaseUrl (Just (loopbackRegistryUrl (stubLocalhostUrl private <> "/index"))) privateDeps
             build configurePublic configurePrivate =
                 application (mkServerConfig (maybeToList (mountBindingFor Cargo (configurePublic publicDeps) (Just (configurePrivate trusted)) Nothing))) env
-        action (CargoProxy (build id id) build (allCaptured public) (allCaptured private) (stubBaseUrl private) (envMemoryMeter env))
+        action (CargoProxy (build id id) build (allCaptured public) (allCaptured private) (stubLocalhostUrl private) (envMemoryMeter env))
   where
     now = UTCTime (fromGregorian 2026 6 20) 0
 

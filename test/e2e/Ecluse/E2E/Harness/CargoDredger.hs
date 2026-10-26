@@ -191,9 +191,9 @@ proxyRoleEnv =
     filter ((/= "ECLUSE_SERVER__PUBLIC_URL") . fst) sweepRoleEnv
         <> [ ("ECLUSE_MIRROR_STATE__URL", "s3://" <> advisoryBucket <> "/cargo-dredger")
            , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL", repositoryUrl "mirror")
-           , ("ECLUSE_MOUNTS__CARGO__PUBLICATION_TARGET__REGISTRY__URL", repositoryUrl "mirror")
-           , ("ECLUSE_MOUNTS__CARGO__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL", repositoryUrl "mirror")
-           , ("ECLUSE_MOUNTS__CARGO__PUBLICATION_TARGET__REGISTRY__TOKEN", cargoRegistryToken)
+           , ("ECLUSE_MOUNTS__CARGO__PUBLICATION_TARGET__CODE_ARTIFACT__URL", repositoryUrl "mirror")
+           , ("ECLUSE_MOUNTS__CARGO__PUBLICATION_TARGET__CODE_ARTIFACT__UPLOAD_URL", repositoryUrl "mirror")
+           , ("ECLUSE_MOUNTS__CARGO__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN", cargoRegistryToken)
            , ("ECLUSE_MOUNTS__CARGO__FIRST_PARTY", firstPartyName)
            , ("ECLUSE_SERVER__AUTH_TOKEN", cargoRegistryToken)
            , ("ECLUSE_CACHE__TTL", "1")
