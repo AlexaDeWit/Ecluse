@@ -199,8 +199,8 @@ withBridgeApplication application action =
         let reportFault _ fault = when (Warp.defaultShouldDisplayException fault) $ do
                 let detail = boundedDetail (displayFaultT fault)
                     failure = TestContractEscape ("bridge fixture failed: " <> detail)
-                first <- tryPutMVar firstFault failure
-                when first $ do
+                recordedFirstFault <- tryPutMVar firstFault failure
+                when recordedFirstFault $ do
                     putTextLn ("E2E bridge failed: " <> detail)
                     throwTo owner failure
         let settings =
