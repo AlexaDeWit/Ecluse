@@ -108,20 +108,32 @@ spec = do
                             else do
                                 result `shouldBe` Left (PublishSourceUnavailable "Cargo manifest and index links declarations disagree")
                                 allCaptured stub `shouldReturn` []
-        it "completes the final metadata-size decision before any destination request" $
-            withRoutedStub (targetReply "/registry") $ \stub -> do
-                original <- cargoPublicationFixture
-                let manifest = "[package]\nname='fixture'\nversion='1.0.0'\nrust-version='1.74'\n"
-                    limits = defaultLimits{maxMetadataBytes = 512}
-                archive <- LBS.toStrict . GZip.compress <$> tarBytes [("fixture-1.0.0/Cargo.toml", manifest), ("fixture-1.0.0/README.md", BS.replicate 450 65), ("fixture-1.0.0/src/lib.rs", "pub fn owned() {}\n")]
-                let release = original{releaseArchive = archive, releaseChecksum = hexSha256Of archive}
-                doc <- cargoSourceVersion (cargoIndexRecord release)
-                withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
-                    let transport = MirrorTransport exchanges (pure (Just (bareCredential (mkSecret "cargo-token")))) limits passthroughTracingPort
-                        writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub <> "/index")) (loopbackRegistryUrl (stubBaseUrl stub <> "/registry")) codec
-                    result <- publishOnlyFile writer doc (PublishPlan (pkgVersion (vdDetails doc))) archive
-                    result `shouldBe` Left (PublishSourceUnavailable "Cargo publication metadata exceeds its byte bound")
-                    allCaptured stub `shouldReturn` []
+        it "completes the final metadata-size decision before any destination request" $ do
+            original <- cargoPublicationFixture
+            let manifest = "[package]\nname='fixture'\nversion='1.0.0'\nrust-version='1.74'\n"
+                limits = defaultLimits{maxMetadataBytes = 2048}
+            -- Keep raw archive data within the shared cap, then exceed it through JSON escaping.
+            for_ [(BS.replicate 1024 65, True), (BS.replicate 1024 34, False)] $ \(readme, shouldPublish) ->
+                withRoutedStub (targetReply "/registry") $ \stub -> do
+                    archive <- LBS.toStrict . GZip.compress <$> tarBytes [("fixture-1.0.0/Cargo.toml", manifest), ("fixture-1.0.0/README.md", readme), ("fixture-1.0.0/src/lib.rs", "pub fn owned() {}\n")]
+                    let release = original{releaseArchive = archive, releaseChecksum = hexSha256Of archive}
+                    doc <- cargoSourceVersion (cargoIndexRecord release)
+                    withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                        let transport = MirrorTransport exchanges (pure (Just (bareCredential (mkSecret "cargo-token")))) limits passthroughTracingPort
+                            writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub <> "/index")) (loopbackRegistryUrl (stubBaseUrl stub <> "/registry")) codec
+                        result <- publishOnlyFile writer doc (PublishPlan (pkgVersion (vdDetails doc))) archive
+                        if shouldPublish
+                            then do
+                                result `shouldBe` Right ()
+                                captures <- allCaptured stub
+                                map capPath captures `shouldBe` ["/index/config.json", "/registry/api/v1/crates/new"]
+                                written <- maybe (fail "missing upload capture") pure (find ((== "PUT") . capMethod) captures)
+                                parsed <- expectRight (referenceUpload (capBody written))
+                                KeyMap.lookup "readme" (uploadMetadata parsed) `shouldBe` Just (String (decodeUtf8 readme))
+                                uploadArchive parsed `shouldBe` archive
+                            else do
+                                result `shouldBe` Left (PublishSourceUnavailable "Cargo publication metadata exceeds its byte bound")
+                                allCaptured stub `shouldReturn` []
         it "refuses discovery which changes the approved API base path before any upload" $
             withRoutedStub (targetReply "/unapproved") $ \stub -> do
                 release <- cargoPublicationFixture
