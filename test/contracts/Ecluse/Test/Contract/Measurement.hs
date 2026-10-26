@@ -21,6 +21,7 @@ measurementCatalogue registrations =
         , catalogueProfiles =
             [ Profile "measurement/npm" ["npm"] [] ["full-read", "selected-read"]
             , Profile "measurement/pypi" ["pypi"] [] ["full-read", "selected-read"]
+            , Profile "measurement/cargo" ["cargo"] [] ["full-read", "selected-read"]
             ]
         , catalogueObligations =
             [ required
@@ -44,6 +45,13 @@ measurementCatalogue registrations =
                 , "retention/pypi/selected/other-releases"
                 , "retention/pypi/full/members"
                 , "retention/pypi/full/past-limit"
+                ]
+            , required
+                "retention/cargo"
+                "measurement/cargo"
+                "retention"
+                [ "retention/cargo/selected/other-releases"
+                , "retention/cargo/full/past-limit"
                 ]
             , required
                 "live/npm"
