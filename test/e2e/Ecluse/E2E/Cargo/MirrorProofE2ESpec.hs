@@ -132,10 +132,10 @@ yankCase yanked plane = withCargoMirrorFixture plane $ \registry releases -> do
 lostReply :: GlobalDataPlane -> IO ()
 lostReply plane = withCargoMirrorFixture plane $ \registry releases -> do
     queue <- sharedMirrorQueue plane
-    let config = cargoMirrorConfig{ecQueueUrl = Just queue}
+    let config = cargoMirrorConfig{ecQueueUrl = Just queue, ecExtraEnv = ecExtraEnv cargoMirrorConfig <> [("ECLUSE_OBSERVABILITY__LOG_LEVEL", "debug")]}
         queueConfig = defaultSqsConfig queue "us-east-1"
         Seconds visibilitySeconds = sqsVisibilityTimeout queueConfig
-        -- The failed upload remains hidden until its lease expires, then a receive can use another long poll.
+        -- A failed visibility reset leaves the job hidden until its lease expires.
         retryAttempts = 120 + secondsToMicros (fromIntegral (visibilitySeconds + sqsWaitSeconds queueConfig)) `div` containerLogPollMicros
     setCargoRegistryFault registry CargoRegistryLoseReply
     completeWithin retryAttempts plane registry releases config
