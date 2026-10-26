@@ -1138,6 +1138,7 @@ test-suite ecluse-core-unit
     Ecluse.Test.Contract.QueueSpec
     Ecluse.Test.Registry.Npm.StoredVersionsSpec
     Ecluse.Test.Registry.Cargo.FixturesSpec
+    Ecluse.Test.Registry.Cargo.MetadataSpec
     Ecluse.Test.Contract.RunnerSpec
     Ecluse.Test.Contract.MeasurementSpec
     Ecluse.Test.Contract.RetentionSpec

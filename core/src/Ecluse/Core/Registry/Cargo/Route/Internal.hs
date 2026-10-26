@@ -7,7 +7,6 @@ module Ecluse.Core.Registry.Cargo.Route.Internal (
     cargoRouter,
     cargoRoutes,
     cargoRouteSpecs,
-    cargoArtifactPath,
     takeIndexPath,
     artifactCoordinate,
     indexContract,
@@ -70,7 +69,7 @@ import Ecluse.Core.Server.Pipeline.Tarball (tarballAction)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (..))
 import Ecluse.Core.Server.Response (Refusal, refusalHelp)
 import Ecluse.Core.Server.Response.Summary (detailedRejections)
-import Ecluse.Core.Server.Route (Capture (..), MediaNegotiation (AcceptsAnything), MethodMatch (MethodPut, MethodRead), PatternSeg (SegCap, SegLit), Route (Route), RouteName (RouteName), renderRoute, routerOf, safeSegment)
+import Ecluse.Core.Server.Route (Capture (..), MediaNegotiation (AcceptsAnything), MethodMatch (MethodPut, MethodRead), PatternSeg (SegCap, SegLit), Route (Route), RouteName (RouteName), routerOf, safeSegment)
 import Ecluse.Core.Server.RouteDescription (RouteSpec, catchAllSpecs, specsOf, unsupportedPathParam)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion, versionKey, versionKeyIn)
 
@@ -158,13 +157,6 @@ artifactRoute view =
         "The explicit crate, version and logical filename must agree. Private reads never fall back to a public source."
         Nothing
         artifactContract
-
--- | Render the archive route used by local discovery, with all identity captures checked.
-cargoArtifactPath :: PackageName -> Version -> Maybe Text
-cargoArtifactPath name version = do
-    let file = renderPackageName name <> "-" <> renderVersion version <> ".crate"
-    _ <- artifactCoordinate name version file
-    T.intercalate "/" <$> renderRoute (artifactRoute PublicReplacement) [CargoProject name, CargoVersion version, CargoFile file]
 
 -- | Require the native logical filename without inferring a version from hyphenated text.
 artifactCoordinate :: PackageName -> Version -> Text -> Maybe Filename

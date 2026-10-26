@@ -20,6 +20,7 @@ module Ecluse.Test.Registry.Cargo.Fixtures (
     -- * Registry and publication bytes
     cargoShard,
     cargoArchivePath,
+    cargoArchivePathFor,
     cargoViewDiscovery,
     cargoIndex,
     cargoIndexRecord,
@@ -201,7 +202,11 @@ cargoShard name =
 
 -- | The explicit captures avoid inferring identity from a hyphenated filename.
 cargoArchivePath :: CargoCrate -> Text
-cargoArchivePath spec = "crates/" <> crateName spec <> "/" <> crateVersion spec <> "/" <> crateName spec <> "-" <> crateVersion spec <> ".crate"
+cargoArchivePath spec = cargoArchivePathFor (crateName spec) (crateVersion spec)
+
+-- | Render mount-relative fixture captures without changing native name or version spelling.
+cargoArchivePathFor :: Text -> Text -> Text
+cargoArchivePathFor name version = "crates/" <> name <> "/" <> version <> "/" <> name <> "-" <> version <> ".crate"
 
 -- | Supply the proxy view's base so every advertised asset location traverses that view.
 cargoViewDiscovery :: Text -> Maybe Text -> Bool -> ByteString

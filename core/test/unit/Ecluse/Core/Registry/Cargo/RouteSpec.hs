@@ -2,27 +2,18 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Cargo archive renderings and documented native view paths.
+-- | Documented native Cargo view paths preserve the private publication boundary.
 module Ecluse.Core.Registry.Cargo.RouteSpec (spec) where
 
 import Network.HTTP.Types.Method (StdMethod (PUT))
 import Test.Hspec
 
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
-import Ecluse.Core.Package (mkPackageName)
-import Ecluse.Core.Registry.Cargo.Route (cargoArtifactPath, cargoRouteSpecs)
+import Ecluse.Core.Registry.Cargo.Route (cargoRouteSpecs)
 import Ecluse.Core.Server.RouteDescription (PathSeg (Lit), RouteSpec (rsMethod, rsPattern))
-import Ecluse.Core.Version (mkVersion)
 
+-- | Publication remains restricted to the private API view.
 spec :: Spec
-spec = do
-    describe "cargoArtifactPath" $ do
-        it "keeps all native archive claims in explicit captures" $
-            cargoArtifactPath (mkPackageName Cargo Nothing "My-crate") (mkVersion Cargo "1.2.3-rc.1+build.4")
-                `shouldBe` Just "crates/My-crate/1.2.3-rc.1+build.4/My-crate-1.2.3-rc.1+build.4.crate"
-        it "refuses an invalid native version" $
-            cargoArtifactPath (mkPackageName Cargo Nothing "crate") (mkVersion Cargo "1.2") `shouldBe` Nothing
-
+spec =
     describe "cargoRouteSpecs" $
         it "exposes publication only below the private API base" $
             [rsPattern route | route <- toList cargoRouteSpecs, rsMethod route == PUT]

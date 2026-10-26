@@ -6,7 +6,6 @@
 module Ecluse.Core.Registry.Cargo.Route (
     cargoRouter,
     cargoRouteSpecs,
-    cargoArtifactPath,
 ) where
 
-import Ecluse.Core.Registry.Cargo.Route.Internal (cargoArtifactPath, cargoRouteSpecs, cargoRouter)
+import Ecluse.Core.Registry.Cargo.Route.Internal (cargoRouteSpecs, cargoRouter)
