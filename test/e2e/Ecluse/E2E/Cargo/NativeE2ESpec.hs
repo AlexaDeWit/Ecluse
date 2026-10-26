@@ -287,7 +287,9 @@ foreignRegistry plane = withCargoRegistry $ \registry -> withStubFault plane (Ca
             cargoUseFixture project "test/fixtures/cargo/graph" spec
             addForeign project source
             void (cargoPublish project >>= shouldSucceed)
-        rows <- cargoReadIndex proxy "/cargo/private/" name
+        index <- proxyRequest "GET" [("Authorization", encodeUtf8 cargoRegistryToken), ("Accept-Encoding", "identity")] "" proxy ("/cargo/private/" <> cargoShard name)
+        responseStatus index `shouldBe` 200
+        rows <- traverse (either (fail . toString) pure . indexValue) (referenceIndex (LBS.toStrict (responseBody index)))
         let registries = [KeyMap.lookup "registry" dependency | row <- rows, Just (Array dependencies) <- [KeyMap.lookup "deps" row], Object dependency <- toList dependencies]
         registries `shouldBe` [Just (String source)]
         cargoPrivateConsumer proxy currentCargo name cargoVersion $ \project -> do
@@ -304,11 +306,14 @@ foreignRegistry plane = withCargoRegistry $ \registry -> withStubFault plane (Ca
         Map.member ("cargo-private", name, cargoVersion) files `shouldBe` True
   where
     name = "ecluse-e2e-private-foreign"
-    config = cargoPublicationConfig{ecExtraEnv = [(key, if key == "ECLUSE_MOUNTS__CARGO__FIRST_PARTY" then name else value) | (key, value) <- ecExtraEnv cargoPublicationConfig, key /= "ECLUSE_SERVER__AUTH_TOKEN"]}
+    config = cargoPublicationConfig{ecExtraEnv = [(key, if key == "ECLUSE_MOUNTS__CARGO__FIRST_PARTY" then name else value) | (key, value) <- ecExtraEnv cargoPublicationConfig]}
     addForeign project source = do
         let path = cargoDirectory project </> "home/config.toml"
         existing <- decodeUtf8 <$> readFileBS path
         writeFileText path (existing <> "\n[registries.foreign]\nindex = " <> quoted source <> "\n")
+        let credentials = cargoDirectory project </> "home/credentials.toml"
+        existingCredentials <- decodeUtf8 <$> readFileBS credentials
+        writeFileText credentials (existingCredentials <> "\n[registries.foreign]\ntoken = " <> quoted cargoRegistryToken <> "\n")
     quoted = decodeUtf8 . LBS.toStrict . encode
 
 msrvReleases :: GlobalDataPlane -> IO [CargoRelease]

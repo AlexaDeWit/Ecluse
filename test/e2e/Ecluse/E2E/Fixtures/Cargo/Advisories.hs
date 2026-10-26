@@ -7,7 +7,7 @@ module Ecluse.E2E.Fixtures.Cargo.Advisories (buildCargoAdvisoryReleases) where
 
 import Data.Aeson (Value (Object, String), encode)
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Time (getCurrentTime)
+import Data.Time (UTCTime (UTCTime), getCurrentTime, secondsToDiffTime)
 import System.FilePath ((</>))
 
 import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
@@ -19,8 +19,10 @@ buildCargoAdvisoryReleases root upstream = do
     affected <- cargoLeafRelease "ecluse-e2e-advisory" "1.18.0"
     fixed <- cargoLeafRelease "ecluse-e2e-advisory" "1.19.0"
     writeCargoRegistry root upstream Nothing False [affected, fixed]
-    now <- renderIso8601Utc <$> getCurrentTime
-    let recent = case cargoIndexRecord fixed of
+    UTCTime day dayTime <- getCurrentTime
+    -- Cargo's pubtime excludes fractional seconds.
+    let now = renderIso8601Utc (UTCTime day (secondsToDiffTime (floor dayTime)))
+        recent = case cargoIndexRecord fixed of
             Object fields -> Object (KeyMap.insert "pubtime" (String now) fields)
             other -> other
     writeFileLBS (root </> toString (cargoShard "ecluse-e2e-advisory")) (encode (cargoIndexRecord affected) <> "\n" <> encode recent <> "\n")

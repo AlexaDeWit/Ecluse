@@ -99,9 +99,10 @@ sourceRoundtrip plane = withCargoMirrorFixture plane $ \registry releases -> do
 
 yankCase :: Bool -> GlobalDataPlane -> IO ()
 yankCase yanked plane = withCargoMirrorFixture plane $ \registry releases -> do
+    queue <- sharedMirrorQueue plane
     root <- cargoRelease releases cargoRoot cargoVersion
     let sourceRow = case cargoIndexRecord root of Object row -> Object (KeyMap.insert "yanked" (Bool yanked) row); other -> other
-        config = cargoMirrorConfig
+        config = cargoMirrorConfig{ecQueueUrl = Just queue}
     writeFileLBS (gdpWorkDir plane </> "cargo" </> toString (cargoShard cargoRoot)) (encode sourceRow <> "\n")
     withObservedCargoProxy config plane $ \observed -> do
         cargoConsumer (observedProxy observed) currentCargo $ \project -> do
@@ -123,17 +124,21 @@ yankCase yanked plane = withCargoMirrorFixture plane $ \registry releases -> do
 
 lostReply :: GlobalDataPlane -> IO ()
 lostReply plane = withCargoMirrorFixture plane $ \registry releases -> do
+    queue <- sharedMirrorQueue plane
+    let config = cargoMirrorConfig{ecQueueUrl = Just queue}
     setCargoRegistryFault registry CargoRegistryLoseReply
-    complete plane registry releases cargoMirrorConfig
+    complete plane registry releases config
     withStubFault plane (CargoBackend (registryPort registry) True) $
-        withObservedCargoProxy cargoMirrorConfig{ecArgs = ["proxy", "--no-worker"]} plane $ \observed ->
+        withObservedCargoProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed ->
             cargoConsumer (observedProxy observed) currentCargo $ \project -> void (runCargo project ["build"] >>= shouldSucceed)
 
 data MirrorFault = MissingArchive | ChangedChecksum | MissingState | CorruptState | PrivateAuthorisation
 
 faultCase :: MirrorFault -> GlobalDataPlane -> IO ()
 faultCase fault plane = withCargoMirrorFixture plane $ \registry releases -> do
-    complete plane registry releases cargoMirrorConfig
+    queue <- sharedMirrorQueue plane
+    let config = cargoMirrorConfig{ecQueueUrl = Just queue}
+    complete plane registry releases config
     case fault of
         MissingArchive -> setCargoRegistryFault registry (CargoRegistryMissingArchive cargoRoot cargoVersion)
         ChangedChecksum -> atomically (modifyTVar' (registryFiles registry) (Map.adjust changed ("cargo-mirror", cargoRoot, cargoVersion)))
@@ -141,7 +146,7 @@ faultCase fault plane = withCargoMirrorFixture plane $ \registry releases -> do
         CorruptState -> mutateState plane "PUT" "{invalid retained Cargo state"
         PrivateAuthorisation -> setCargoRegistryFault registry (CargoRegistryRequireToken True)
     withStubFault plane (CargoBackend (registryPort registry) True) $
-        withObservedCargoProxy cargoMirrorConfig{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
+        withObservedCargoProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
             response <- proxyRequest "GET" [] "" (observedProxy observed) ("/cargo/" <> cargoShard cargoRoot)
             case fault of
                 MissingArchive -> proxyStatus (observedProxy observed) (cargoArchiveRoute cargoRoot cargoVersion) `shouldReturn` 503
