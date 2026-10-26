@@ -24,11 +24,14 @@ import Ecluse.Core.Server.Context (PackumentDeps (..), pdTarballHostGate, tarbal
 import Ecluse.Core.Telemetry.Metrics (CacheStore (VersionStore))
 import Ecluse.Core.Telemetry.Upstream qualified as PublicRead
 
--- | One factory holds the operation deadline and aggregate allowance for every selected subject.
-newPublicInstallEvidenceReads :: PackumentDeps -> ExchangeClient -> PublicControl -> InstallEvidenceRole -> (Int -> IO ()) -> (Int -> IO ()) -> Maybe InstallEvidenceFlightBudget -> (ReadFault -> IO ()) -> IO (PackageDetails -> IO (Maybe InstallEvidenceRead))
-newPublicInstallEvidenceReads deps client control role bytes inspection sharing diagnose = case pdInstallEvidence deps of
+-- | Keep the ticket live while these readers share one operation deadline and cumulative allowance.
+newPublicInstallEvidenceReads :: PackumentDeps -> ExchangeClient -> PublicControl -> InstallEvidenceRole -> MemoryTicket -> (ReadFault -> IO ()) -> IO (PackageDetails -> IO (Maybe InstallEvidenceRead))
+newPublicInstallEvidenceReads deps client control role ticket diagnose = case pdInstallEvidence deps of
     Nothing -> pure (const (pure Nothing))
     Just provider -> do
+        bytes <- newChargeRegion (charge ticket)
+        inspection <- newChargeRegion (charge ticket)
+        sharing <- newTicketInstallEvidenceFlightBudget ticket
         evidenceReads <-
             newInstallEvidenceReads
                 provider
@@ -37,7 +40,7 @@ newPublicInstallEvidenceReads deps client control role bytes inspection sharing 
                     , ieRole = role
                     , ieReadArtifact = readArtifact
                     , ieBudget = InstallEvidenceBudget (\action -> Just <$> action bytes inspection)
-                    , ieFlightBudget = sharing
+                    , ieFlightBudget = Just sharing
                     , ieDiagnostic = diagnose
                     }
         pure (\details -> if pdFirstParty deps (pkgName details) then pure Nothing else evidenceReads details)

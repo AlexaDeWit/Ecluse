@@ -58,7 +58,7 @@ import Ecluse.Core.Rules.Render (renderInability)
 import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext (ctxAdvisoryEtag), completeEvidence, mkEvalContext)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
-import Ecluse.Core.Server.Admission.Meter (ChargePart, MemoryTicket, awaitingFlight, charge, newChargePart, newChargeRegion, servingFlight, stepDown)
+import Ecluse.Core.Server.Admission.Meter (ChargePart, MemoryTicket, awaitingFlight, charge, newChargePart, servingFlight, stepDown)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfOutputPermille))
 import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Cache.Types (assembledKey)
@@ -84,7 +84,7 @@ import Ecluse.Core.Server.Encoding (
     varyAcceptEncoding,
  )
 import Ecluse.Core.Server.Fault (RenderEscape (RenderEscape))
-import Ecluse.Core.Server.InstallEvidence (newPublicInstallEvidenceReads, newTicketInstallEvidenceFlightBudget)
+import Ecluse.Core.Server.InstallEvidence (newPublicInstallEvidenceReads)
 import Ecluse.Core.Server.MetadataGzip (GzipBody (gzipLength), gzipLazyBody, gzipMetadata)
 import Ecluse.Core.Server.MirrorView (mirrorProjectViews, publicMirrorCoverage, validateMirrorProject)
 import Ecluse.Core.Server.Pipeline.Diagnostics (warnDivergences)
@@ -294,11 +294,8 @@ serveMergedPackument serving evalCtx record privResult pubResult =
                 (managed, managedExclusions) = admitTrusted (pdMinTrustedIntegrity deps) managedManifest
                 privateSources = catMaybes [unmanaged, managed]
                 trustedVersions = Map.unions (map (infoVersions . srcInfo) privateSources)
-            evidenceBytes <- liftIO (newChargeRegion (charge (psvTicket serving)))
-            evidenceInspection <- liftIO (newChargeRegion (charge (psvTicket serving)))
             public <- withRunInIO $ \run -> do
-                sharing <- newTicketInstallEvidenceFlightBudget (psvTicket serving)
-                evidenceReads <- newPublicInstallEvidenceReads deps (srPublicClient rt) (srPublicControl rt) InstallPublicAdmission evidenceBytes evidenceInspection (Just sharing) (run . logFM ErrorS . ls . renderInability . rfDetail)
+                evidenceReads <- newPublicInstallEvidenceReads deps (srPublicClient rt) (srPublicControl rt) InstallPublicAdmission (psvTicket serving) (run . logFM ErrorS . ls . renderInability . rfDetail)
                 gatePublic evidenceReads (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) (originManifest pubResult)
             let sources = privateSources <> maybeToList (paContribution public)
                 required = Map.withoutKeys pending (paBlockedPending public)

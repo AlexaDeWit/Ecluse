@@ -89,8 +89,8 @@ workerPoliciesWithState env states bindings targets artifactMaxBytes =
                         archiveCharge <- newChargeRegion (charge ticket)
                         sourceCharge <- newChargeRegion (charge ticket)
                         targetCharge <- newChargeRegion (charge ticket)
-                        evidenceFlight <- newTicketInstallEvidenceFlightBudget ticket
-                        action WorkerStateBudget{wsbState = stateCharge, wsbRecords = recordCharge, wsbCompanions = companionCharge, wsbArtifacts = artifactCharge, wsbArchive = archiveCharge, wsbSource = sourceCharge, wsbTargets = targetCharge, wsbEvidenceFlight = Just evidenceFlight}
+                        evidenceFlight <- traverse (const (newTicketInstallEvidenceFlightBudget ticket)) (pdInstallEvidence deps)
+                        action WorkerStateBudget{wsbState = stateCharge, wsbRecords = recordCharge, wsbCompanions = companionCharge, wsbArtifacts = artifactCharge, wsbArchive = archiveCharge, wsbSource = sourceCharge, wsbTargets = targetCharge, wsbEvidenceFlight = evidenceFlight}
                 }
     targetsByEcosystem = Map.fromList [(ptEcosystem target, target) | target <- targets]
 

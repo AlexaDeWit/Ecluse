@@ -20,7 +20,7 @@ import Ecluse.Core.Rules.Types (Inability (InstallSignalUnread), Transience (Wil
 import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Meter (MeterSettings (..), charge, newMemoryMeter, withMemoryEntry)
-import Ecluse.Core.Server.Context (PackumentDeps (..), ServeRuntime (srPublicClient, srPublicControl))
+import Ecluse.Core.Server.Context (PackumentDeps (..), ServeRuntime (srMemoryMeter, srPublicClient, srPublicControl))
 import Ecluse.Core.Server.InstallEvidence (newPublicInstallEvidenceReads, newTicketInstallEvidenceFlightBudget)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Rules.Support (now)
@@ -63,8 +63,8 @@ spec = describe "public install evidence boundary" $ do
         withSweeper $ \deadlines -> withStub status200 "evidence bytes" $ \stub -> do
             runtime <- testServeRuntime deadlines noopMetricsPort
             let deps = (dependencies stub){pdInboundToken = Just (mkSecret "edge-secret")}
-            evidenceReads <- boundReads deps runtime
-            runEvidence evidenceReads (subject stub) `shouldReturn` InstallDetermined NoCodeOnInstall
+            withBoundReads deps runtime $ \evidenceReads ->
+                runEvidence evidenceReads (subject stub) `shouldReturn` InstallDetermined NoCodeOnInstall
             requests <- allCaptured stub
             map (headerValue "authorization") requests `shouldBe` [Nothing]
             map (headerValue "cookie") requests `shouldBe` [Nothing]
@@ -76,30 +76,30 @@ spec = describe "public install evidence boundary" $ do
             built <- newIORef (0 :: Int)
             let provider = InstallEvidenceProvider (\_ -> pure (\_ -> modifyIORef' built (+ 1) $> Nothing))
                 deps = (dependencies stub){pdFirstParty = const True, pdInstallEvidence = Just provider}
-            evidenceReads <- boundReads deps runtime
-            isNothing <$> evidenceReads (subject stub) `shouldReturn` True
+            withBoundReads deps runtime $ \evidenceReads ->
+                isNothing <$> evidenceReads (subject stub) `shouldReturn` True
             readIORef built `shouldReturn` 0
             allCaptured stub `shouldReturn` []
     it "refuses a foreign artifact authority before HTTP" $
         withSweeper $ \deadlines -> withStub status200 "never read" $ \stub -> do
             runtime <- testServeRuntime deadlines noopMetricsPort
-            evidenceReads <- boundReads (dependencies stub) runtime
             let foreignSubject = (subject stub){pkgArtifacts = sampleArtifact{artUrl = "https://foreign.invalid/archive"} :| []}
-            runEvidence evidenceReads foreignSubject >>= (`shouldSatisfy` permanentFailure)
+            withBoundReads (dependencies stub) runtime $ \evidenceReads ->
+                runEvidence evidenceReads foreignSubject >>= (`shouldSatisfy` permanentFailure)
             allCaptured stub `shouldReturn` []
     it "honours authority cooldown without another evidence GET" $
         withSweeper $ \deadlines -> withStubHeaders status503 [("Retry-After", "30")] "busy" $ \stub -> do
             runtime <- testServeRuntime deadlines noopMetricsPort
-            evidenceReads <- boundReads (dependencies stub) runtime
-            replicateM_ 2 (runEvidence evidenceReads (subject stub) >>= (`shouldSatisfy` transientFailure))
+            withBoundReads (dependencies stub) runtime $ \evidenceReads ->
+                replicateM_ 2 (runEvidence evidenceReads (subject stub) >>= (`shouldSatisfy` transientFailure))
             length <$> allCaptured stub `shouldReturn` 1
     it "applies the reduced per-read byte ceiling" $
         withSweeper $ \deadlines -> withStub status200 "larger than four bytes" $ \stub -> do
             runtime <- testServeRuntime deadlines noopMetricsPort
             let deps = dependencies stub
                 bounded = deps{pdLimits = (pdLimits deps){maxMirrorArtifactBytes = 4}}
-            evidenceReads <- boundReads bounded runtime
-            runEvidence evidenceReads (subject stub) >>= (`shouldSatisfy` permanentFailure)
+            withBoundReads bounded runtime $ \evidenceReads ->
+                runEvidence evidenceReads (subject stub) >>= (`shouldSatisfy` permanentFailure)
 
 dependencies :: Stub -> PackumentDeps
 dependencies stub =
@@ -113,8 +113,11 @@ dependencies stub =
 subject :: Stub -> PackageDetails
 subject stub = (sampleDetails thingName v1_0_0){pkgArtifacts = sampleArtifact{artUrl = stubLocalhostUrl stub <> "/archive"} :| []}
 
-boundReads :: PackumentDeps -> ServeRuntime -> IO (PackageDetails -> IO (Maybe InstallEvidenceRead))
-boundReads deps runtime = newPublicInstallEvidenceReads deps (srPublicClient runtime) (srPublicControl runtime) InstallPublicAdmission (const pass) (const pass) Nothing (const pass)
+withBoundReads :: PackumentDeps -> ServeRuntime -> ((PackageDetails -> IO (Maybe InstallEvidenceRead)) -> IO ()) -> IO ()
+withBoundReads deps runtime use = do
+    completed <- withMemoryEntry noopMetricsPort (srMemoryMeter runtime) $ \ticket ->
+        newPublicInstallEvidenceReads deps (srPublicClient runtime) (srPublicControl runtime) InstallPublicAdmission ticket (const pass) >>= use
+    completed `shouldBe` Right ()
 
 -- The native parser has separate tests. This provider observes the real role-bound transport alone.
 transportProvider :: InstallEvidenceProvider
