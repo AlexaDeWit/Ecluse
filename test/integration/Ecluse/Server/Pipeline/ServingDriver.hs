@@ -17,7 +17,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (Method, RequestHeaders, hContentLength, methodHead, status200, status404, statusCode)
+import Network.HTTP.Types (Method, RequestHeaders, hContentLength, methodHead, status200, status204, status205, status304, status404, statusCode, statusIsInformational)
 import Network.Wai (rawPathInfo, responseLBS)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -223,8 +223,9 @@ cargoObservation method response = responseEvidence response versions digests
     values = [fields | row <- Reference.referenceIndex bytes, Right fields <- [Reference.indexValue row]]
     versions = sort [version | fields <- values, Just (String version) <- [KeyMap.lookup "vers" fields]]
     digests = Map.fromList [(version, [digest]) | fields <- values, Just (String version) <- [KeyMap.lookup "vers" fields], Just (String digest) <- [KeyMap.lookup "cksum" fields]]
+    status = simpleStatus response
     bytes
-        | method == methodHead || simpleStatus response /= status200 = ""
+        | method == methodHead || statusIsInformational status || status `elem` [status204, status205, status304] = ""
         | lookup "Content-Encoding" (simpleHeaders response) == Just "gzip" = toStrict (GZip.decompress (simpleBody response))
         | otherwise = toStrict (simpleBody response)
 
