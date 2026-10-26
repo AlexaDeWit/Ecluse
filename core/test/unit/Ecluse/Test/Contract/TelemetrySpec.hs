@@ -67,7 +67,7 @@ fetchEvidence kind initial subsequent = do
     let success = ClientResult "native client" ExitSuccess "" ""
         traffic = TrafficDriver (\package -> modifyIORef' requests (<> [package]) $> success) (pure 200)
         mirror = MirrorTelemetryDriver (const (pure [])) (\_ version -> pure [version])
-        collector = CollectorDriver $ \_ _ -> atomicModifyIORef' observations $ \remaining -> case remaining of
+        collector = CollectorDriver $ \_ _ -> atomicModifyIORef' observations $ \case
             firstOutput : rest -> (rest, firstOutput)
             [] -> ([], subsequent)
         target = case kind of
@@ -90,14 +90,14 @@ servingTrace = T.replicate 32 "a"
 workerTrace = T.replicate 32 "b"
 
 rootSpan :: Text -> Text -> Text
-rootSpan kind identity = "Span #0\n     Name: request\n     Kind: " <> kind <> "\n     Trace ID: " <> identity <> "\n     Parent ID: \n"
+rootSpan kind traceId = "Span #0\n     Name: request\n     Kind: " <> kind <> "\n     Trace ID: " <> traceId <> "\n     Parent ID: \n"
 
 httpSpan :: Text -> Text -> Text -> Text -> Text
-httpSpan target identity kind status =
+httpSpan target traceId kind status =
     "Span #0\n     Name: GET\n     Kind: "
         <> kind
         <> "\n     Trace ID: "
-        <> identity
+        <> traceId
         <> "\n     Parent ID: 1111111111111111\nAttributes:\n"
         <> "     -> http.host: Str(mirror)\n     -> http.method: Str(GET)\n     -> http.target: Str("
         <> target
