@@ -194,7 +194,9 @@ spec = do
                 Object fields -> checkUploadAgreement defaultLimits selectedRegistry manifest (Object (KeyMap.insert "rust_version" Null fields)) `shouldBe` Right ()
                 _ -> expectationFailure "literal metadata is not an object"
         it "preserves prerelease constraints, comparator precision and quoted target values" $ do
-            for_ [("1.2.3-alpha", "^1.2.3"), (">1.2", ">=1.2"), ("=1.2", "=1.2.0"), ("1 .2", "^1.2"), ("1.2.3-a b", "^1.2.3-ab"), ("1.*.2", "1.*")] $ \(authored, uploaded) -> do
+            let requirementPairs :: [(Text, Text)]
+                requirementPairs = [("1.2.3-alpha", "^1.2.3"), (">1.2", ">=1.2"), ("=1.2", "=1.2.0"), ("1 .2", "^1.2"), ("1.2.3-a b", "^1.2.3-ab"), ("1.*.2", "1.*")]
+            for_ requirementPairs $ \(authored, uploaded) -> do
                 manifest <- expectRight (parse (basic <> "[dependencies]\ndependency='" <> encodeUtf8 authored <> "'\n"))
                 let dependency = object ["name" .= ("dependency" :: Text), "version_req" .= uploaded, "features" .= ([] :: [Text]), "optional" .= False, "default_features" .= True, "registry" .= cratesIoIndex]
                 checkUploadAgreement defaultLimits selectedRegistry manifest (object ["deps" .= [dependency], "features" .= object []]) `shouldSatisfy` isLeft
