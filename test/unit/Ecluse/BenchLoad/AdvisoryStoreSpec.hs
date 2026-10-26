@@ -10,7 +10,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (status200, status304, status404)
+import Network.HTTP.Types (Header, status200, status304, status404)
 import Network.HTTP.Types.Header (hETag, hIfNoneMatch)
 import Network.Wai.Handler.Warp (testWithApplication)
 import System.FilePath ((</>))
@@ -73,7 +73,8 @@ spec = do
                     (Just . foEtag <$> downloaded) `shouldBe` (fmap foEtag <$> headed)
                     readFileLBS (dir </> "artifact") `shouldReturn` artifact
                 manager <- HTTP.newManager HTTP.defaultManagerSettings
-                let fetchObject path headers = do
+                let fetchObject :: ByteString -> [Header] -> IO (HTTP.Response LByteString)
+                    fetchObject path headers = do
                         request <- HTTP.parseRequest ("http://127.0.0.1:" <> show port <> toString (decodeUtf8 path :: Text))
                         HTTP.httpLbs request{HTTP.requestHeaders = headers, HTTP.checkResponse = \_ _ -> pass} manager
                 stored <- fetchObject nativePath []
