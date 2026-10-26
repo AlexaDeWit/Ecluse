@@ -442,9 +442,9 @@ assertCargoRetained roots readOwner = do
 cargoRetainedEvidence :: CargoRoots -> Bool -> Bool -> IO (Maybe VersionRead) -> IO ByteString
 cargoRetainedEvidence roots rowAlive payloadAlive readOwner = do
     owner <- readOwner
-    details <- for owner $ \selected -> do
+    details <- forM owner $ \selected -> do
         readName <- makeStableName =<< evaluate selected
-        rawEvidence <- for (vrVersion selected >>= vdRaw) $ \raw -> do
+        rawEvidence <- forM (vrVersion selected >>= vdRaw) $ \raw -> do
             rawName <- makeStableName =<< evaluate raw
             let representation
                     | isJust (snd cargoPacked raw) = "packed" :: Text
