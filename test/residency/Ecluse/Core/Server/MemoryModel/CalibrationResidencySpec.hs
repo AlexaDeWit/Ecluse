@@ -8,7 +8,7 @@ module Ecluse.Core.Server.MemoryModel.CalibrationResidencySpec (spec) where
 import Data.Ratio ((%))
 import Test.Hspec
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
@@ -38,7 +38,10 @@ spec = do
         it "pins PyPI charges" $ do
             fullReadCharge pypiCalibration `shouldBe` 3500
             marginCharge (outputMaximum pypiCalibration) `shouldBe` 1900
-        for_ [(Npm, npmCalibration), (PyPI, pypiCalibration)] $ \(ecosystem, calibration) ->
+        it "pins Cargo charges" $ do
+            fullReadCharge cargoCalibration `shouldBe` 1700
+            marginCharge (outputMaximum cargoCalibration) `shouldBe` 2600
+        for_ [(Npm, npmCalibration), (PyPI, pypiCalibration), (Cargo, cargoCalibration)] $ \(ecosystem, calibration) ->
             it (show ecosystem <> " matches its adapter") $ do
                 adapter <- maybe (fail "missing registered adapter") pure (adapterFor ecosystem)
                 let factors = metadataChargeFactors (adapterMetadata adapter)
@@ -47,7 +50,8 @@ spec = do
         it "pins the kept charges" $ do
             keptCharge npmFigures `shouldBe` 900
             keptCharge pypiFigures `shouldBe` 3300
-        for_ [Npm, PyPI] $ \ecosystem ->
+            keptCharge cargoFigures `shouldBe` 1500
+        for_ [Npm, PyPI, Cargo] $ \ecosystem ->
             it (show ecosystem <> " keeps its adapter's kept charge") $ do
                 record <- requireResidency ecosystem
                 adapter <- maybe (fail "missing registered adapter") pure (adapterFor ecosystem)

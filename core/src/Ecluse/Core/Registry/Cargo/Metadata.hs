@@ -5,6 +5,7 @@
 -- | Prepared sparse metadata reads capture checked discovery and keep all finishing operations pure.
 module Ecluse.Core.Registry.Cargo.Metadata (
     cargoReadWith,
+    cargoChargeFactors,
     prepareCargoRead,
     finishCargoFull,
     selectCargoVersionDoc,
@@ -30,7 +31,12 @@ import Ecluse.Core.Registry.Request (baseRequestUrl)
 import Ecluse.Core.Registry.ServedDocument (stringField)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Version (Version, renderVersion)
+
+-- | Per-byte charges from native corpus read, retained-entry and output measurements.
+cargoChargeFactors :: ChargeFactors
+cargoChargeFactors = ChargeFactors{cfFullReadPermille = 1700, cfKeptPermille = 1500, cfOutputPermille = 2600}
 
 -- | Prepare after the selected origin receives its caller or service credential. Boot performs no discovery.
 prepareCargoRead :: PrepareRead
