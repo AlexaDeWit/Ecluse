@@ -17,6 +17,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS, RequestBodyLBS))
 import Network.HTTP.Types.Header (hAccept, hContentType)
+import UnliftIO.Exception (evaluate)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Credential (ClientCredential)
@@ -99,7 +100,8 @@ prepareUpload limits charge inventory row file verified =
                         Left fault -> pure (Left (PublishSourceUnavailable (parseErrorMessage fault)))
                         Right extracted -> do
                             agreement <- cargoPublicationAgreement limits charge archive row extracted
-                            pure $ do
+                            -- Final decisions must run while the preparation timer remains active.
+                            evaluate $ do
                                 checked <- first (PublishSourceUnavailable . parseErrorMessage) agreement
                                 let metadataBytes = LBS.take (fromIntegral (maxMetadataBytes limits) + 1) (encode (publishMetadataValue checked))
                                 when (LBS.length metadataBytes > fromIntegral (maxMetadataBytes limits)) (Left (PublishSourceUnavailable "Cargo publication metadata exceeds its byte bound"))

@@ -18,6 +18,17 @@ spec = describe "native Cargo source identity" $ do
             , ("https://github.com/rust-lang/crates.io-index", "http://github.com/rust-lang/crates.io-index")
             , ("https://github.com/rust-lang/crates.io-index", "sparse+https://index.crates.io/")
             , ("https://registry.test/index", "https://registry.test:443/index.git/")
+            , ("https://registry.test/a%2Fb.git", "https://registry.test/a%252Fb")
+            , ("https://registry.test/prefix/a%2Fb.git", "https://registry.test/prefix/a%252Fb")
+            , ("https://registry.test/..git", "https://registry.test/")
+            , ("https://registry.test/prefix/..git", "https://registry.test/prefix")
+            , ("https://198.51.100.1/index", "https://198.51.100.1./index")
+            , ("https://198.51.100.1/index", "https://3325256705/index")
+            , ("https://198.51.100.1/index", "https://198.51.25601/index")
+            , ("https://198.51.100.1/index", "https://198.3367937/index")
+            , ("https://198.51.100.1/index", "https://0xc6336401/index")
+            , ("https://198.51.100.1/index", "https://0306.063.0144.01/index")
+            , ("https://0.0.0.0/index", "https://0x/index")
             , ("sparse+https://registry.test/index", "sparse+https://registry.test/index/")
             , ("https://registry.test/index", "https://registry.test/a/%2e%2e/index/")
             , ("https://github.com/rust-lang/crates.io-index", "https://%67ithub.com/rust-lang/crates.io-index")
@@ -41,6 +52,12 @@ spec = describe "native Cargo source identity" $ do
             , ("https://registry.test/index?x=1", "https://registry.test/index?x=2")
             , ("https://registry.test/index#one", "https://registry.test/index#two")
             , ("https://registry.test/a%2Fb", "https://registry.test/a/b")
+            , ("https://registry.test/a%2Fb.git", "https://registry.test/a%2Fb")
+            , ("https://registry.test/prefix/a%2Fb.git", "https://registry.test/prefix%252Fa%252Fb")
+            , ("https://198.51.100.1/index", "https://198.51.100.2/index")
+            , ("sparse+https://198.51.100.1/index", "sparse+https://198.51.100.1./index")
+            , ("sparse+https://198.51.100.1/index", "sparse+https://3325256705/index")
+            , ("sparse+https://registry.test/a%2Fb.git", "sparse+https://registry.test/a%252Fb")
             , ("https://registry.test/a%2fb", "https://registry.test/a%2Fb")
             , ("https://registry.test/index", "https://registry.test:444/index")
             ]
@@ -48,6 +65,12 @@ spec = describe "native Cargo source identity" $ do
             firstIdentity <- expectRight (parseSource firstSource)
             secondIdentity <- expectRight (parseSource secondSource)
             firstIdentity `shouldNotBe` secondIdentity
+    it "preserves opaque numeric-looking sparse hosts" $
+        for_ ["sparse+https://198.51.100.999/index", "sparse+https://09/index"] $ \source ->
+            parseSource source `shouldSatisfy` isRight
+    it "refuses native-invalid numeric hosts without falling back to domain identity" $
+        for_ ["https://198.51.100.999/index", "https://256.1/index", "https://1.2.3.4.5/index", "https://09/index", "https://0x100000000/index", "https://4294967296/index", "https://1..2/index"] $ \source ->
+            parseSource source `shouldSatisfy` isLeft
     it "refuses malformed and non-registry source declarations" $
         for_ ["relative/index", "https://", "https://registry.test:70000/index", "https://registry.test/%zz", "https://exa%2Fmple/index", "git+https://github.com/rust-lang/crates.io-index"] $ \source ->
             parseSource source `shouldSatisfy` isLeft

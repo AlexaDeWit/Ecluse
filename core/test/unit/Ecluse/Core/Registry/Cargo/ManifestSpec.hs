@@ -152,14 +152,19 @@ spec = do
                     Just (Array values) -> [KeyMap.lookup "target" dependency | Object dependency <- toList values]
                     _ -> []
             targets `shouldBe` [Just (String "cfg(any(unix, windows))")]
-        it "compares an available source links claim and keeps an absent claim unknown" $ do
-            manifest <- expectRight (parse (basic <> "links='native_foo'\nbuild='build.rs'\n"))
-            metadata <- expectRight (publicationMetadata manifest Map.empty)
+        it "compares omitted and null source links as the native default" $ do
+            linked <- expectRight (parse (basic <> "links='native_foo'\nbuild='build.rs'\n"))
+            linkedMetadata <- expectRight (publicationMetadata linked Map.empty)
+            plain <- expectRight (parse basic)
+            plainMetadata <- expectRight (publicationMetadata plain Map.empty)
             let source = KeyMap.fromList [("name", String "example"), ("vers", String "1.2.3"), ("deps", toJSON ([] :: [Value]))]
-            checkPublicationIndex defaultLimits metadata (Object source) `shouldSatisfy` isRight
-            checkPublicationIndex defaultLimits metadata (Object (KeyMap.insert "links" (String "native_foo") source)) `shouldSatisfy` isRight
-            for_ [Null, String "native_bar"] $ \links ->
-                checkPublicationIndex defaultLimits metadata (Object (KeyMap.insert "links" links source)) `shouldSatisfy` isLeft
+                omitted = Object source
+                explicitNull = Object (KeyMap.insert "links" Null source)
+            for_ [omitted, explicitNull, Object (KeyMap.insert "links" (String "native_bar") source)] $ \row ->
+                checkPublicationIndex defaultLimits linkedMetadata row `shouldSatisfy` isLeft
+            checkPublicationIndex defaultLimits linkedMetadata (Object (KeyMap.insert "links" (String "native_foo") source)) `shouldSatisfy` isRight
+            for_ [omitted, explicitNull] $ \row ->
+                checkPublicationIndex defaultLimits plainMetadata row `shouldSatisfy` isRight
         it "rejects a dependency mismatch rather than publish a reduced document" $ do
             manifest <- expectRight (parse renamedManifest)
             metadata <- expectRight (publicationMetadata manifest Map.empty)

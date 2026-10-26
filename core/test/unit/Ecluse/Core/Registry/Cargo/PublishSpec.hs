@@ -8,6 +8,7 @@ module Ecluse.Core.Registry.Cargo.PublishSpec (spec) where
 import Codec.Compression.GZip qualified as GZip
 import Data.Aeson (Value (..), encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (ResponseHeaders)
@@ -16,6 +17,7 @@ import Test.Hspec
 
 import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Package (PackageDetails (pkgName, pkgVersion), PackageInfo (..))
+import Ecluse.Core.Registry (PublishFault (PublishSourceUnavailable))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishMirrorRequirements, publishRelay), MirrorRequirements (mirrorStateRequirement), MirrorStateRequirement (DurableVersionState), PublishRequestBody (PublishRequestBody))
 import Ecluse.Core.Registry.Cargo.Publish
 import Ecluse.Core.Registry.Cargo.Publish.Body qualified as Body
@@ -23,7 +25,7 @@ import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails))
 import Ecluse.Core.Registry.Origin (originClient)
 import Ecluse.Core.Registry.Publish (MirrorTransport (..), PublishCodec (pcNativeComplete), PublishPlan (PublishPlan), newMirrorPublish)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Security.Limits (defaultLimits)
+import Ecluse.Core.Security.Limits (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
 import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Package (hexSha256Of)
@@ -83,6 +85,43 @@ spec = do
                     uploadArchive parsed `shouldBe` archive
                     KeyMap.lookup "features" (uploadMetadata parsed) `shouldBe` Just (object [])
                     KeyMap.lookup "deps" (uploadMetadata parsed) `shouldBe` Just (Array (fromList [object ["name" .= ("dependency" :: Text), "version_req" .= ("^1" :: Text), "features" .= ([] :: [Text]), "optional" .= False, "default_features" .= True, "target" .= Null, "kind" .= ("normal" :: Text), "registry" .= ("https://github.com/rust-lang/crates.io-index" :: Text), "explicit_name_in_toml" .= Null]]))
+        it "refuses defaulted mirror links contradictions before destination discovery or upload" $ do
+            original <- cargoPublicationFixture
+            let manifest = "[package]\nname='fixture'\nversion='1.0.0'\nrust-version='1.74'\nlinks='native_foo'\nbuild='build.rs'\n"
+            archive <- LBS.toStrict . GZip.compress <$> tarBytes [("fixture-1.0.0/Cargo.toml", manifest), ("fixture-1.0.0/build.rs", "fn main() {}\n"), ("fixture-1.0.0/src/lib.rs", "pub fn owned() {}\n")]
+            let release = original{releaseArchive = archive, releaseChecksum = hexSha256Of archive}
+            for_ [(Nothing, False), (Just Null, False), (Just (String "native_bar"), False), (Just (String "native_foo"), True)] $ \(links, agrees) ->
+                withRoutedStub (targetReply "/registry") $ \stub -> do
+                    source <- case cargoIndexRecord release of
+                        Object fields -> pure (Object (maybe (KeyMap.delete "links" fields) (\value -> KeyMap.insert "links" value fields) links))
+                        _ -> fail "source fixture is not an object"
+                    doc <- cargoSourceVersion source
+                    withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                        let transport = MirrorTransport exchanges (pure (Just (bareCredential (mkSecret "cargo-token")))) defaultLimits passthroughTracingPort
+                            writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub <> "/index")) (loopbackRegistryUrl (stubBaseUrl stub <> "/registry")) codec
+                        result <- publishOnlyFile writer doc (PublishPlan (pkgVersion (vdDetails doc))) archive
+                        if agrees
+                            then do
+                                result `shouldBe` Right ()
+                                captures <- allCaptured stub
+                                map capPath captures `shouldBe` ["/index/config.json", "/registry/api/v1/crates/new"]
+                            else do
+                                result `shouldBe` Left (PublishSourceUnavailable "Cargo manifest and index links declarations disagree")
+                                allCaptured stub `shouldReturn` []
+        it "completes the final metadata-size decision before any destination request" $
+            withRoutedStub (targetReply "/registry") $ \stub -> do
+                original <- cargoPublicationFixture
+                let manifest = "[package]\nname='fixture'\nversion='1.0.0'\nrust-version='1.74'\n"
+                    limits = defaultLimits{maxMetadataBytes = 512}
+                archive <- LBS.toStrict . GZip.compress <$> tarBytes [("fixture-1.0.0/Cargo.toml", manifest), ("fixture-1.0.0/README.md", BS.replicate 450 65), ("fixture-1.0.0/src/lib.rs", "pub fn owned() {}\n")]
+                let release = original{releaseArchive = archive, releaseChecksum = hexSha256Of archive}
+                doc <- cargoSourceVersion (cargoIndexRecord release)
+                withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                    let transport = MirrorTransport exchanges (pure (Just (bareCredential (mkSecret "cargo-token")))) limits passthroughTracingPort
+                        writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub <> "/index")) (loopbackRegistryUrl (stubBaseUrl stub <> "/registry")) codec
+                    result <- publishOnlyFile writer doc (PublishPlan (pkgVersion (vdDetails doc))) archive
+                    result `shouldBe` Left (PublishSourceUnavailable "Cargo publication metadata exceeds its byte bound")
+                    allCaptured stub `shouldReturn` []
         it "refuses discovery which changes the approved API base path before any upload" $
             withRoutedStub (targetReply "/unapproved") $ \stub -> do
                 release <- cargoPublicationFixture

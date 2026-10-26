@@ -83,6 +83,11 @@ sourceRoundtrip :: GlobalDataPlane -> IO ()
 sourceRoundtrip plane = withCargoMirrorFixture plane $ \registry releases -> do
     queue <- sharedMirrorQueue plane
     let config = cargoMirrorConfig{ecQueueUrl = Just queue}
+        sourceRow release = case cargoIndexRecord release of
+            Object fields -> Object (KeyMap.delete "links" fields)
+            other -> other
+    for_ (ordNub (map (crateName . releaseCrate) releases)) $ \name ->
+        writeFileLBS (gdpWorkDir plane </> "cargo" </> toString (cargoShard name)) (foldMap (\release -> encode (sourceRow release) <> "\n") [release | release <- releases, crateName (releaseCrate release) == name])
     complete plane registry releases config
     sourceRoot <- cargoRelease releases cargoRoot cargoVersion
     let sourceTargets = case cargoIndexRecord sourceRoot of
@@ -102,7 +107,7 @@ sourceRoundtrip plane = withCargoMirrorFixture plane $ \registry releases -> do
         withObservedCargoProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
             for_ (ordNub (map (crateName . releaseCrate) releases)) $ \name -> do
                 actual <- cargoReadIndex (observedProxy observed) "/cargo/" name
-                map Object actual `shouldBe` [cargoIndexRecord release | release <- releases, crateName (releaseCrate release) == name]
+                map Object actual `shouldBe` [sourceRow release | release <- releases, crateName (releaseCrate release) == name]
             for_ releases $ \release -> do
                 (status, bytes) <- proxyGet (observedProxy observed) (cargoArchiveRoute (crateName (releaseCrate release)) (crateVersion (releaseCrate release)))
                 status `shouldBe` 200

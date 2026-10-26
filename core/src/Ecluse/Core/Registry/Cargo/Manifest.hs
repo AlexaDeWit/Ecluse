@@ -229,8 +229,9 @@ checkPublicationIndex limits (CargoPublishMetadata (Object metadata)) (Object in
     for_ (KeyMap.toList authoredFeatures) $ \(key, value) -> do
         source <- maybe (bad "Cargo index omits a manifest feature") Right (KeyMap.lookup key sourceFeatures)
         checkFeatureValues value source
-    for_ (KeyMap.lookup "links" index) $ \value ->
-        unless (KeyMap.lookup "links" metadata == Just value) (bad "Cargo manifest and index links declarations disagree")
+    authoredLinks <- nullableString "links" metadata
+    indexedLinks <- nullableString "links" index
+    unless (authoredLinks == indexedLinks) (bad "Cargo manifest and index links declarations disagree")
     for_ (KeyMap.lookup "rust_version" index) $ \value ->
         unless (KeyMap.lookup "rust_version" metadata == Just value) (bad "Cargo manifest and index Rust versions disagree")
     pure (CargoPublishMetadata (Object (KeyMap.insert "deps" (toJSON projected) (KeyMap.insert "features" (Object sourceFeatures) metadata))))

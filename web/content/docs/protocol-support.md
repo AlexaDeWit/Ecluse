@@ -177,6 +177,7 @@ Higher-ranked decisions and first-party treatment retain their precedence.
 Required unavailable evidence produces structured inability. Écluse never runs the inspected code.
 
 Cargo mirrors retain the original admitted index row, source identity, and checksum-verified archive using durable version state.
+Native-library `links` declarations must agree. Cargo defines omitted index `links` as null.
 Target publication can reset time or yank and omit fields, so an archive alone cannot prove faithful source reads.
 Missing, corrupt, or unrecorded state cannot supply a managed original-source copy during public outage.
 Ordinary compatible private reads remain available through the alternate view.
