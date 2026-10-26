@@ -8,28 +8,40 @@ module Ecluse.Core.Registry.Cargo.ReaderSpec (spec) where
 import Data.Aeson (Value (..), encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
+import Data.JsonStream.Parser qualified as J
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime (UTCTime), fromGregorian)
+import Hedgehog (MonadTest, cover, evalEither, evalMaybe, forAll, (===))
+import Hedgehog.Gen qualified as Gen
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 import UnliftIO.Exception (throwIO)
 
-import Ecluse.Core.Package (PackageInfo (infoInvalidEntries, infoVersions))
+import Ecluse.Core.Package (Artifact (..), Availability (Available, Yanked), CodeExecSignal (CodeExecUnknown), CoreMetadata, HashAlg (SHA256), PackageDetails (..), PackageInfo (..), hashAlg, hashValue, renderPackageName)
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
+import Ecluse.Core.Package.InvalidEntry (InvalidEntryKind (InvalidVersionManifest), invalidKey, invalidKind, invalidReason, invalidValue)
 import Ecluse.Core.Registry.CachedDocument (cargoCached)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.Cargo.Reader (CargoIndexResult (..), CargoRead (..), readCargoIndexCharged)
 import Ecluse.Core.Registry.Cargo.Serving (serialiseCargoDocument)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooManyArtifacts, TooManyVersions), Limits (maxArtifactCount, maxMetadataBytes, maxVersionCount), defaultLimits)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooDeeplyNested, TooManyArtifacts, TooManyVersions), Limits (maxArtifactCount, maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
+import Ecluse.Core.Version (renderVersion)
+import Ecluse.Test.Package (validSha256)
+import Ecluse.Test.Registry.Cargo.Generated (CargoInputs (..), GeneratedIndex (..), NativeRow (..), genCargoIndex)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoTestDiscovery, cargoTestName, cargoTestRecord, cargoTestVersion, readCargoChunks, readCargoIndex, readCargoIndexChunks)
-import Ecluse.Test.Registry.Cargo.Reference (IndexLine (indexValue), referenceIndex)
-import Ecluse.Test.Registry.JsonStream (heldChunks, sliceChunks, testTable)
+import Ecluse.Test.Registry.Cargo.Reference (IndexLine (indexPosition, indexValue), referenceIndex)
+import Ecluse.Test.Registry.JsonBytes qualified as JsonBytes
+import Ecluse.Test.Registry.JsonStream (heldChunks, parseJsonChunks, sliceChunks, testTable)
 import Ecluse.Test.Registry.Source (assertCancelledRead)
+import Ecluse.Test.Security.Limits (checkNestingDepth)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = describe "readCargoIndex" $ do
+    differentialSpec
     chargingSpec
     defaultedRowsSpec
     it "accepts CRLF, blank lines and a final row without LF at every chunk boundary" $ do
@@ -167,3 +179,106 @@ data SelectedChargeRefused = SelectedChargeRefused
     deriving stock (Eq, Show)
 
 instance Exception SelectedChargeRefused
+
+differentialSpec :: Spec
+differentialSpec = modifyMaxSuccess (const 2000) $
+    it "matches declared native meanings and exact limits across generated full and selected reads" $
+        hedgehog $ do
+            boundary <- forAll (Gen.element [BodyAt, BodyBelow, VersionsAt, VersionsBelow, ArtifactsAt, ArtifactsBelow, DepthAt, DepthBelow])
+            generated <- forAll (genCargoIndex (if elem boundary [DepthAt, DepthBelow] then SoundRows else MixedRows))
+            chunks <- forAll (JsonBytes.genChunks (generatedBody generated))
+            cover 20 "multiple nonempty chunks" (length (filter (not . BS.null) chunks) > 1)
+            discovery <- evalEither cargoTestDiscovery
+            let rows = physicalRows generated
+                selected = SelectedRead (cargoTestVersion (generatedSelection generated))
+                claims = Map.fromListWith (+) [(claim, 1 :: Int) | (_, nativeRow) <- rows, Just claim <- [nativeClaim nativeRow]]
+                values = [value | (_, nativeRow) <- rows, Just (value, _, _, _) <- [nativeExpected nativeRow]]
+            map fst rows === map indexPosition (referenceIndex (generatedBody generated))
+            depth <- evalMaybe (find (\budget -> all (isRight . checkNestingDepth defaultLimits{maxNestingDepth = budget}) values) [0 .. maxNestingDepth defaultLimits])
+            let (limits, refusal) = generatedLimits depth boundary generated
+            cover 5 "malformed native records" (any (nativeMalformed . snd) rows)
+            cover 5 "duplicate native identities" (any (> 1) (Map.elems claims) && isNothing refusal)
+            cover 3 "a selected release survives" (not (null (fst (semanticRows generated selected))) && isNothing refusal)
+            cover 1 "an empty native source" (null rows)
+            cover 20 "a final row without LF" (not (BS.null (generatedBody generated)) && not (BS.isSuffixOf "\n" (generatedBody generated)))
+            cover 20 "CRLF rows" (generatedEnding generated == "\r\n")
+            cover 10 "omitted optional fields" (any (\case Object fields -> not (KeyMap.member "features" fields); _ -> False) values)
+            cover 10 "explicit null fields" (any (\case Object fields -> KeyMap.lookup "links" fields == Just Null; _ -> False) values)
+            cover 10 "nested additive fields" (any (\case Object fields -> KeyMap.member "native-extra" fields; _ -> False) values)
+            cover 3 "body refusal" (boundary == BodyBelow && isJust refusal)
+            cover 3 "version refusal" (boundary == VersionsBelow && isJust refusal)
+            cover 3 "artifact refusal" (boundary == ArtifactsBelow && isJust refusal)
+            cover 3 "nesting refusal" (boundary == DepthBelow && isJust refusal)
+            for_ rows $ \(_, nativeRow) -> for_ (nativeExpected nativeRow) $ \(value, _, _, _) -> do
+                parsed <- evalEither (parseJsonChunks (MetadataBodyLimit (BS.length (nativeBytes nativeRow))) (J.value :: J.Parser Value) (\held item -> Right (item : held)) [] [nativeBytes nativeRow])
+                streamValue parsed === Right [value]
+            for_ [FullRead, selected] $ \mode -> do
+                let actual = readCargoIndexChunks discovery limits cargoTestName mode (MetadataBodyLimit (maxMetadataBytes limits)) chunks
+                case refusal of
+                    Just fault -> void actual === Left fault
+                    Nothing -> do
+                        streamed <- evalEither actual
+                        streamBytes streamed === BS.length (generatedBody generated)
+                        result <- evalEither (streamValue streamed)
+                        matchesGenerated generated mode result
+
+data NativeBoundary = BodyAt | BodyBelow | VersionsAt | VersionsBelow | ArtifactsAt | ArtifactsBelow | DepthAt | DepthBelow
+    deriving stock (Eq, Show)
+
+generatedLimits :: Int -> NativeBoundary -> GeneratedIndex -> (Limits, Maybe LimitError)
+generatedLimits depth boundary generated = case boundary of
+    BodyAt -> (base{maxMetadataBytes = bytes}, Nothing)
+    BodyBelow -> (base{maxMetadataBytes = short bytes}, BodyTooLarge (MetadataBodyLimit (short bytes)) <$ guard (bytes > 0))
+    VersionsAt -> (base{maxVersionCount = length rows}, Nothing)
+    VersionsBelow -> (base{maxVersionCount = short (length rows)}, TooManyVersions (length rows) (short (length rows)) <$ guard (not (null rows)))
+    ArtifactsAt -> (base{maxArtifactCount = artifacts}, Nothing)
+    ArtifactsBelow -> (base{maxArtifactCount = short artifacts}, TooManyArtifacts artifacts (short artifacts) <$ guard (artifacts > 0))
+    DepthAt -> (base{maxNestingDepth = depth}, Nothing)
+    DepthBelow -> (base{maxNestingDepth = short depth}, TooDeeplyNested (short depth) <$ guard (depth > 0))
+  where
+    rows = physicalRows generated
+    bytes = BS.length (generatedBody generated)
+    artifacts = length [() | (_, nativeRow) <- rows, isJust (nativeExpected nativeRow)]
+    short count = max 0 (count - 1)
+    base = defaultLimits{maxMetadataBytes = bytes + 1}
+
+physicalRows :: GeneratedIndex -> [(Int, NativeRow)]
+physicalRows generated =
+    [ (position, nativeRow)
+    | framed <- referenceIndex (generatedBody generated)
+    , let position = indexPosition framed
+    , Just nativeRow <- [Map.lookup position declared]
+    ]
+  where
+    declared = Map.fromList (zip [0 ..] (generatedLines generated))
+
+semanticRows :: GeneratedIndex -> CargoRead -> ([(Int, (Value, Text, Bool, Bool))], [(Int, Bool)])
+semanticRows generated mode = (kept, dropped)
+  where
+    rows = physicalRows generated
+    seen = Map.fromListWith (+) [(claim, 1 :: Int) | (_, nativeRow) <- rows, Just claim <- [nativeClaim nativeRow]]
+    candidates = [(position, nativeRow, meaning) | (position, nativeRow) <- rows, Just meaning@(_, version, _, _) <- [nativeExpected nativeRow], mode == FullRead || version == generatedSelection generated]
+    retained = if mode == FullRead then candidates else take 1 candidates
+    unique nativeRow = maybe False (\claim -> Map.lookup claim seen == Just 1) (nativeClaim nativeRow)
+    kept = [(position, meaning) | (position, nativeRow, meaning) <- retained, unique nativeRow]
+    dropped = [(position, False) | (position, nativeRow) <- rows, mode == FullRead, isNothing (nativeExpected nativeRow)] <> [(position, True) | (position, nativeRow, _) <- retained, not (unique nativeRow)]
+
+matchesGenerated :: (MonadTest m) => GeneratedIndex -> CargoRead -> CargoIndexResult -> m ()
+matchesGenerated generated mode result = do
+    let info = cargoIndexInfo result
+        (kept, dropped) = semanticRows generated mode
+    infoName info === cargoTestName
+    infoDistTags info === Map.empty
+    Map.keys (infoVersions info) === sort [version | (_, (_, version, _, _)) <- kept]
+    fmap cargoRecords (snd cargoCached (cargoIndexDocument result)) === Just [(RecordEntry position, value) | (position, (value, _, _, _)) <- kept]
+    [(invalidKind invalid, invalidKey invalid, invalidValue invalid, invalidReason invalid == "duplicate Cargo release identity") | invalid <- infoInvalidEntries info]
+        === [(InvalidVersionManifest, show (RecordEntry position), Null, duplicate) | (position, duplicate) <- dropped]
+    for_ kept $ \(position, (_, version, yanked, published)) -> do
+        details <- evalMaybe (Map.lookup version (infoVersions info))
+        (renderPackageName (pkgName details), renderVersion (pkgVersion details), pkgPublishedAt details, pkgInstallCode details, pkgAvailability details)
+            === ("fixture", version, if published then Just (UTCTime (fromGregorian 2020 1 1) 0) else Nothing, CodeExecUnknown, if yanked then Yanked else Available)
+        map artifactFacts (toList (pkgArtifacts details))
+            === [(RecordEntry position, "fixture-" <> version <> ".crate", "https://static.crates.io/crates/fixture/fixture-" <> T.replace "+" "%2B" version <> ".crate", [(SHA256, validSha256)], Nothing, Nothing)]
+
+artifactFacts :: Artifact -> (EntryKey, Text, Text, [(HashAlg, Text)], Maybe CoreMetadata, Maybe Int)
+artifactFacts artifact = (artEntryKey artifact, artFilename artifact, artUrl artifact, [(hashAlg digest, hashValue digest) | digest <- artHashes artifact], artCoreMetadata artifact, artSize artifact)

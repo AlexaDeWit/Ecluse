@@ -870,6 +870,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.Npm
     Ecluse.Test.Registry.Cargo.Reference
     Ecluse.Test.Registry.Cargo.Fixtures
+    Ecluse.Test.Registry.Cargo.Generated
     Ecluse.Test.Registry.Cargo.Metadata
     Ecluse.Test.Registry.Cargo.Publish
     Ecluse.Test.Registry.Npm.Metadata
