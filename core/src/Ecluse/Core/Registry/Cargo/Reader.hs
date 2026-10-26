@@ -6,7 +6,6 @@
 module Ecluse.Core.Registry.Cargo.Reader (
     CargoRead (..),
     CargoIndexResult (..),
-    readCargoIndex,
     readCargoIndexCharged,
     cargoIndexSteps,
     finishCargoSteps,
@@ -59,10 +58,6 @@ data Scan = Scan
     , scanInvalid :: ![InvalidEntry]
     , scanKeptCharge :: !Int
     }
-
--- | Hold at most one undecoded record and preserve body-limit failures as whole-read errors.
-readCargoIndex :: CargoDiscovery -> Limits -> PackageName -> CargoRead -> DocumentWalk CargoIndexResult
-readCargoIndex = readCargoIndexCharged (const pass)
 
 -- | Reserve current-row workspace and any retained selected row before buffering or decoding.
 readCargoIndexCharged :: (Int -> IO ()) -> CargoDiscovery -> Limits -> PackageName -> CargoRead -> DocumentWalk CargoIndexResult
