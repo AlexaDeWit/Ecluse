@@ -84,6 +84,8 @@ Keep native refusal bodies, denial wording, media types, and route descriptions 
 Supply a `PrepareRead` through `AdapterMetadata.metadataRead`.
 Static adapters use `staticRead`. Discovery-based adapters prepare the pure `EcosystemRead` under the selected origin's existing authority.
 Prepare private reads after caller authentication and service reads after credential minting. Do not perform discovery at boot.
+Declare `AdmittedIndexedArtifactLocation` when private artifact selection requires discovery or a native workspace reservation.
+It requires metadata admission before the lookup. `IndexedArtifactLocation` retains static private lookups outside admission unless managed mirror state requires it.
 [Metadata.Fetch](../core/src/Ecluse/Core/Registry/Metadata/Fetch.hs) owns the response lifetime, transport errors, tracing, full-read charge, source digest, and manifest.
 The adapter supplies requests, full and selected walks, and their finishes.
 Use the same production reader with held chunks for deterministic fixtures.

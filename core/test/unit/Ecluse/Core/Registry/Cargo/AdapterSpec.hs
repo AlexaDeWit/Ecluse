@@ -2,24 +2,27 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Native maintenance buckets preserve published spelling through recursive subdivision.
+-- | Cargo's artifact admission and native maintenance capabilities.
 module Ecluse.Core.Registry.Cargo.AdapterSpec (spec) where
 
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMaintenance (maintenanceAlphabet))
-import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMaintenance))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactPrivateAddressing), AdapterMaintenance (maintenanceAlphabet), PrivateArtifactAddressing (AdmittedIndexedArtifactLocation))
+import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, adapterMaintenance))
 import Ecluse.Core.Registry.Cargo.Adapter (cargoAdapter)
 import Ecluse.Core.Registry.Cargo.Project (projectName)
 import Ecluse.Core.Registry.Maintenance.NameSpace (extendBucket, inBucket, initialBuckets, parseNamePrefix, renderNamePrefix)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
 import Ecluse.Test.Support (expectRight)
 
--- | Every valid native name belongs to one bucket at each subdivision level.
+-- | Pin artifact admission and the native name partitions.
 spec :: Spec
-spec = describe "Cargo maintenance alphabet" $ do
-    let alphabet = maintenanceAlphabet (adapterMaintenance (cargoAdapter (ChargeFactors 1000 1000 1000)))
+spec = describe "Cargo adapter" $ do
+    let adapter = cargoAdapter (ChargeFactors 1000 1000 1000)
+        alphabet = maintenanceAlphabet (adapterMaintenance adapter)
+    it "requires metadata admission before private artifact selection" $
+        artifactPrivateAddressing (adapterArtifact adapter) `shouldBe` AdmittedIndexedArtifactLocation
     it "partitions native names instead of using one whole-store bucket" $ do
         let buckets = toList (initialBuckets alphabet)
         map renderNamePrefix buckets `shouldMatchList` map T.singleton (['A' .. 'Z'] <> ['a' .. 'z'] <> ['0' .. '9'] <> "-_")

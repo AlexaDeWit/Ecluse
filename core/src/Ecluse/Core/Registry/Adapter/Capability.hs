@@ -76,6 +76,8 @@ data AdapterMetadata = AdapterMetadata
 data PrivateArtifactAddressing
     = ConventionalArtifactPath
     | IndexedArtifactLocation
+    | -- | Requires metadata admission before discovery or index workspace allocation.
+      AdmittedIndexedArtifactLocation
     deriving stock (Eq, Show)
 
 -- | Artifact request formation by filename or authoritative URL, shared by serve and worker ('Ecluse.Core.Server.Context.pdArtifact').

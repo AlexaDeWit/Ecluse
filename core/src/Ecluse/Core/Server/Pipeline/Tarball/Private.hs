@@ -95,16 +95,12 @@ streamPrivateArtifact ::
     Maybe ClientCredential ->
     Handler (PrivateLeg ResponseReceived)
 streamPrivateArtifact ctx token = do
-    selected <- case artifactPrivateAddressing (pdArtifact (arDeps ctx)) of
-        IndexedArtifactLocation -> withMetadataAdmission (arRuntime ctx) (pure . PrivateShed) (\ticket -> privateArtifactRequest (Just ticket) ctx token) pure
-        ConventionalArtifactPath -> conventionalSelection
+    selected <-
+        if privateMetadataAdmissionRequired ctx
+            then withMetadataAdmission (arRuntime ctx) (pure . PrivateShed) (\ticket -> privateArtifactRequest (Just ticket) ctx token) pure
+            else privateArtifactRequest Nothing ctx token
     answer selected
   where
-    conventionalSelection = case pdMirrorState (arDeps ctx) of
-        Just _
-            | pdReadSourceSelection (arDeps ctx) /= PrivateOnly && not (pdFirstParty (arDeps ctx) (arPackage ctx)) ->
-                withMetadataAdmission (arRuntime ctx) (pure . PrivateShed) (\ticket -> privateArtifactRequest (Just ticket) ctx token) pure
-        _ -> privateArtifactRequest Nothing ctx token
     answer selected = case selected of
         -- The admission shed already counted its decision.
         PrivateShed headers -> PrivateHandled <$> liftIO (respond (tarballError replies shedStatus headers (mkRefusal Nothing shedMessage)))
@@ -130,6 +126,13 @@ streamPrivateArtifact ctx token = do
         privateArtifactResponder (\status -> (Metric.Deny,) <$> refuse (statusCode status)) (Metric.Admit,) $
             relayResponder replies respond
 
+privateMetadataAdmissionRequired :: ArtifactRequest response -> Bool
+privateMetadataAdmissionRequired ctx =
+    artifactPrivateAddressing (pdArtifact deps) == AdmittedIndexedArtifactLocation
+        || (isJust (pdMirrorState deps) && pdReadSourceSelection deps /= PrivateOnly && not (pdFirstParty deps (arPackage ctx)))
+  where
+    deps = arDeps ctx
+
 data PrivateArtifact
     = PrivateRequest Bool HTTP.Request
     | PrivateRefused Int
@@ -139,34 +142,37 @@ data PrivateArtifact
     | PrivateIncomplete MirrorVersion
 
 privateArtifactRequest :: Maybe MemoryTicket -> ArtifactRequest response -> Maybe ClientCredential -> Handler PrivateArtifact
-privateArtifactRequest ticket ctx token = case pdPrivateBase deps of
-    -- An unconfigured leg and a refused host settle the request here: neither changes on a retry.
-    Nothing -> pure (PrivateMissing MissAbsent)
-    Just privateBase
-        | not (tarballHostHonoured TrustedOrigin deps privateHostPort privateHostPort) -> pure (PrivateMissing MissAbsent)
-        | otherwise -> case artifactPrivateAddressing (pdArtifact deps) of
-            ConventionalArtifactPath
-                | pdReadSourceSelection deps == ManagedMirrorAndPublic -> pure (PrivateMissing MissAbsent)
-                | otherwise -> pure (byConventionalPath privateBase)
-            IndexedArtifactLocation -> maybe (pure PrivateUnavailable) (\admitted -> byIndexedLocation admitted ctx token privateBase privateHostPort) ticket
+privateArtifactRequest ticket ctx token
+    | privateMetadataAdmissionRequired ctx && isNothing ticket = pure PrivateUnavailable
+    | otherwise = case pdPrivateBase deps of
+        Nothing -> pure (PrivateMissing MissAbsent)
+        Just privateBase
+            | not (tarballHostHonoured TrustedOrigin deps privateHostPort privateHostPort) -> pure (PrivateMissing MissAbsent)
+            | otherwise -> case artifactPrivateAddressing (pdArtifact deps) of
+                ConventionalArtifactPath
+                    | pdReadSourceSelection deps == ManagedMirrorAndPublic -> pure (PrivateMissing MissAbsent)
+                    | otherwise -> pure (byConventionalPath privateBase)
+                IndexedArtifactLocation -> indexed privateBase
+                AdmittedIndexedArtifactLocation -> indexed privateBase
   where
     deps = arDeps ctx
 
     privateHostPort = thgPrivateHostPort (pdTarballHostGate deps)
+    indexed privateBase = byIndexedLocation ticket ctx token privateBase privateHostPort
 
     byConventionalPath privateBase =
         either (const (PrivateMissing MissAbsent)) (PrivateRequest False) $
             artifactByFile (pdArtifact deps) (mountOrigin deps (srPrivateClient (arRuntime ctx)) privateBase token) (arPackage ctx) (unFilename (arFile ctx))
 
-byIndexedLocation :: MemoryTicket -> ArtifactRequest response -> Maybe ClientCredential -> BaseRequest -> Maybe HostPort -> Handler PrivateArtifact
+byIndexedLocation :: Maybe MemoryTicket -> ArtifactRequest response -> Maybe ClientCredential -> BaseRequest -> Maybe HostPort -> Handler PrivateArtifact
 byIndexedLocation ticket ctx token privateBase privateHostPort = do
     resolved <- tryAny (withPrivateMetadataClient (arRuntime ctx) deps ticket privateBase token (\client -> fetchVersionMetadata client (arPackage ctx) (arVersion ctx)))
     case resolved of
         Right (Left (MetadataAuthorisationFailure code)) -> pure (PrivateRefused code)
-        _ -> case pdMirrorState deps of
-            Just mirror
+        _ -> case (pdMirrorState deps, ticket) of
+            (Just mirror, Just admitted)
                 | pdReadSourceSelection deps /= PrivateOnly && not (pdFirstParty deps (arPackage ctx)) ->
-                    liftIO (validateMirrorProject mirror ticket (arPackage ctx)) >>= \case
+                    liftIO (validateMirrorProject mirror admitted (arPackage ctx)) >>= \case
                         Left _ -> pure PrivateUnavailable
                         Right Nothing -> pure (unmanaged resolved)
                         Right (Just (_, record)) -> case recordVersion (arVersion ctx) record of

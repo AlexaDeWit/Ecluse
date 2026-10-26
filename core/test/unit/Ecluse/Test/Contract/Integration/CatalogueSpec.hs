@@ -35,8 +35,8 @@ spec = do
         map groupPartition (catalogueGroups integrationCatalogue) `shouldSatisfy` all (== "integration")
     it "retains every unique integration case" $ do
         let cases = concatMap groupCases (catalogueGroups integrationCatalogue)
-        length cases `shouldBe` 438
-        length (ordNub (map caseId cases)) `shouldBe` 438
+        length cases `shouldBe` 441
+        length (ordNub (map caseId cases)) `shouldBe` 441
         map caseId cases `shouldContain` ["integration/origin/native-018"]
 
 removeCase :: Group -> Case -> Group -> Group

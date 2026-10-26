@@ -81,7 +81,7 @@ privateSelection :: ArtifactRequest response -> Maybe ClientCredential -> Memory
 privateSelection ctx token ticket = case pdPrivateBase deps of
     Nothing -> pure (Missing MissAbsent)
     Just base -> do
-        result <- tryAny (withPrivateMetadataClient (arRuntime ctx) deps ticket base token (\client -> fetchVersionMetadata client (arPackage ctx) (arVersion ctx)))
+        result <- tryAny (withPrivateMetadataClient (arRuntime ctx) deps (Just ticket) base token (\client -> fetchVersionMetadata client (arPackage ctx) (arVersion ctx)))
         case result of
             Right (Left err) | isNothing (privateMetadataMiss err) -> pure Refused
             _ -> case pdMirrorState deps of

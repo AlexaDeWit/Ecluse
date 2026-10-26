@@ -191,11 +191,16 @@ fullReadCharge deps part = chargePart part . scaleCharge (cfFullReadPermille (ch
 chargeFactors :: PackumentDeps -> ChargeFactors
 chargeFactors = metadataChargeFactors . pdMetadata
 
--- | Bypass shared caching so the private upstream authorises each caller's credential.
-withPrivateMetadataClient :: ServeRuntime -> PackumentDeps -> MemoryTicket -> BaseRequest -> Maybe ClientCredential -> (MetadataClient -> IO a) -> Handler a
+{- | Bypass shared caching so the private upstream authorises each caller's credential.
+Static lookups can omit the ticket. Native workspace admission requires one.
+-}
+withPrivateMetadataClient :: ServeRuntime -> PackumentDeps -> Maybe MemoryTicket -> BaseRequest -> Maybe ClientCredential -> (MetadataClient -> IO a) -> Handler a
 withPrivateMetadataClient rt deps ticket base token action = do
-    workspace <- liftIO (newChargeRegion (charge ticket))
-    let origin = chargingSelectedMetadata workspace (chargingFullReads (workspace . scaleCharge (cfFullReadPermille (chargeFactors deps))) (privateOrigin rt deps base token))
+    workspace <- liftIO (traverse (newChargeRegion . charge) ticket)
+    let selected = privateOrigin rt deps base token
+        origin = case workspace of
+            Nothing -> selected
+            Just pay -> chargingSelectedMetadata pay (chargingFullReads (pay . scaleCharge (cfFullReadPermille (chargeFactors deps))) selected)
     withMetadataClient rt deps privateMetadataClient origin action
 
 -- | Reserve each consumer's selected facts. Serving consumers never retain the cached source row.
