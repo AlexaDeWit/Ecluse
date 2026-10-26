@@ -10,12 +10,13 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Foreign.StablePtr (deRefStablePtr, freeStablePtr, newStablePtr)
 import Network.HTTP.Types (status200)
 import System.Mem (performGC)
 import System.Mem.Weak (Weak, deRefWeak, mkWeak)
 import Test.Hspec
 import UnliftIO (timeout, wait, withAsync)
-import UnliftIO.Exception (evaluate)
+import UnliftIO.Exception (bracket, evaluate)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (PackageInfo (infoVersions))
@@ -298,11 +299,10 @@ retainedConsumerSpec = describe "successful selected consumers" $ do
                 original <- testServeRuntime deadlines metrics
                 observedRoots <- newIORef Nothing
                 operations <- newLocalRetention 60 1 1 weighVersion
-                let observe record refused key value = do
-                        roots <- cargoRoots value
+                let observe record refused key value = withCargoRoots value $ \rooted roots -> do
                         writeIORef observedRoots (Just roots)
                         assertCargoRetained roots
-                        roInsert operations record refused key value
+                        roInsert operations record refused key rooted
                     provider = cacheProvider LocalStorage Nothing (Just operations{roInsert = observe}) Nothing
                 cache <- newMetadataCacheWithProvider provider
                 let step = 1024 * 1024
@@ -356,6 +356,7 @@ retainedCargoFixture = do
     discovery <- expectRight cargoTestDiscovery
     selected <- expectRight =<< readVersion (cargoRead discovery) passthroughTracingPort (ReadTerms defaultLimits "https://index.crates.io" (const pass)) cargoTestName (cargoTestVersion "1.0.0") (heldBody [body])
     let served = selected{vrVersion = fmap (\document -> document{vdRaw = Nothing}) (vrVersion selected)}
+    void (evaluate (weighVersion served))
     pure (body, selected, served)
 
 requiredCargoAdapter :: IO RegistryAdapter
@@ -374,22 +375,25 @@ runCargoRead runtime deps ticket consume = do
 
 data CargoRoots = CargoRoots !(Weak ()) !(Weak ())
 
-cargoRoots :: VersionRead -> IO CargoRoots
-cargoRoots selected = do
-    source <- maybe (fail "selected Cargo source is absent") pure (vrVersion selected >>= vdRaw >>= snd cargoCached)
-    value <- maybe (fail "selected Cargo row is absent") (pure . snd) (listToMaybe (cargoRecords source))
-    row <- case value of
-        Object fields -> pure fields
-        _ -> fail "native Cargo row is not an object"
-    payload <- case KeyMap.lookup "features" row of
-        Just (Object features) -> case KeyMap.lookup "large" features of
-            Just (Array values) -> case toList values of
-                [String feature] -> pure feature
-                _ -> fail "large feature payload is absent"
-            _ -> fail "large feature array is absent"
-        _ -> fail "native features are absent"
-    -- Value constructor wrappers can be rebuilt without retaining the original wrapper.
-    CargoRoots <$> track row <*> track payload
+withCargoRoots :: VersionRead -> (VersionRead -> CargoRoots -> IO a) -> IO a
+withCargoRoots selected consume =
+    -- Key extraction and insertion must use the same rooted graph.
+    bracket (evaluate selected >>= newStablePtr) freeStablePtr $ \root -> do
+        rooted <- deRefStablePtr root
+        source <- maybe (fail "selected Cargo source is absent") pure (vrVersion rooted >>= vdRaw >>= snd cargoCached)
+        value <- maybe (fail "selected Cargo row is absent") (pure . snd) (listToMaybe (cargoRecords source))
+        row <- case value of
+            Object fields -> pure fields
+            _ -> fail "native Cargo row is not an object"
+        payload <- case KeyMap.lookup "features" row of
+            Just (Object features) -> case KeyMap.lookup "large" features of
+                Just (Array values) -> case toList values of
+                    [String feature] -> pure feature
+                    _ -> fail "large feature payload is absent"
+                _ -> fail "large feature array is absent"
+            _ -> fail "native features are absent"
+        roots <- CargoRoots <$> track row <*> track payload
+        consume rooted roots
   where
     track :: a -> IO (Weak ())
     track key = evaluate key >>= \evaluated -> mkWeak evaluated () Nothing
@@ -414,7 +418,8 @@ seedRetainedCargo :: MetricsPort -> MetadataCache -> Source -> IO (VersionRead, 
 seedRetainedCargo metrics cache source = do
     (_, selected, served) <- retainedCargoFixture
     weighVersion selected `shouldSatisfy` (> 1024 * 1024)
-    roots <- cargoRoots selected
-    resolveVersion metrics cache source cargoTestName (cargoTestVersion "1.0.0") (pure (Right selected)) `shouldReturn` Right selected
+    roots <- withCargoRoots selected $ \rooted roots -> do
+        resolveVersion metrics cache source cargoTestName (cargoTestVersion "1.0.0") (pure (Right rooted)) `shouldReturn` Right rooted
+        pure roots
     assertCargoRetained roots
     pure (served, roots)
