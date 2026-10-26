@@ -26,6 +26,7 @@ import Ecluse.Core.Package (HashAlg (SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactHosts))
 import Ecluse.Core.Registry.Maintenance (ConsentVerdict (ConsentWithheld), StoreClass (StorePreserved), StoreFacts (factBackend))
+import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw), VersionRead (vrVersion))
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.Npm.Route.Internal (
@@ -51,6 +52,7 @@ import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), mete
 import Ecluse.Core.Server.Admission.Overflow (newOverflowTuned)
 import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
 import Ecluse.Core.Server.Cache (Source (Source))
+import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Server.Context (
     MountBinding (..),
     PackumentDeps (..),
@@ -69,7 +71,7 @@ import Ecluse.Core.Server.Pipeline.Shared (hRetryAfter)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Deny, Unavailable), SweepResult (SweepDeleted), SweepTarget (SweepPrivate))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpMemoryAdmissionOverdraw))
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpMemoryAdmissionOverdraw, mpRuleEvalDuration))
 import Ecluse.Core.Telemetry.Upstream qualified as PublicRead
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Cve (fakeCveLookup)
@@ -92,7 +94,7 @@ import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, 
 import Ecluse.Test.Registry.Public (PublicFixture (..), newPublicFixture)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, atPrecedence, blockedBy, evalRules, inertRuleDeps, isUndecidable, servingRuleDeps)
-import Ecluse.Test.Server.Cache (cachedMetadata)
+import Ecluse.Test.Server.Cache (cachedMetadata, cachedVersion)
 import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureResponse), captureServe, captureServeWithLog, responseBytes, testServeRuntime, testServeRuntimeWith)
 import Ecluse.Test.Server.Mount (npmServeDeps, pypiServeDeps, withPrivateBaseUrl)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recTargetResults), recordingPorts, testMount, testPacing, withPrivateCache)
@@ -494,20 +496,28 @@ memoryAdmissionSpec = describe "memory admission on live request paths" $ do
             (statusCode . responseStatus <$> held) `shouldBe` Right 503
             readIORef lookups `shouldReturn` 0
 
-    it "charges a public artifact decision its entry step alone" $
+    it "charges a public artifact decision for its retained selected facts before evaluation" $
         testWithApplication (pure upstreamApp) $ \port -> withSweeper $ \deadlines -> do
             overdraws <- newIORef (0 :: Int)
+            atGate <- newIORef Nothing
             let port' = noopMetricsPort{mpMemoryAdmissionOverdraw = atomicModifyIORef' overdraws (\n -> (n + 1, ()))}
             (rt, meter) <- fullDoorRuntime deadlines port'
             deps <- depsFor port
+            let metrics = port'{mpRuleEvalDuration = \_ _ -> meterSnapshot meter >>= writeIORef atGate . Just . snChargedBytes}
+                runtime = rt{srMetrics = metrics}
             response <-
                 captureServe
                     npmTarballContract
-                    rt
+                    runtime
                     (mountWith deps)
                     (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
             statusCode (responseStatus response) `shouldBe` 200
-            readIORef overdraws `shouldReturn` 0
+            selected <- cachedVersion noopMetricsPort (srMetadataCache runtime) (Source (registryUrlText (pdPublicBaseUrl deps))) leftpadName (npmVersion "1.0.0") >>= maybe (fail "public artifact metadata was not retained") pure
+            let served = selected{vrVersion = fmap (\document -> document{vdRaw = Nothing}) (vrVersion selected)}
+                required = weighVersion served
+            required `shouldSatisfy` (> 1)
+            readIORef atGate `shouldReturn` Just required
+            readIORef overdraws `shouldReturn` 1
             snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
 
     it "lets a listing larger than the whole budget finish by overdrawing, then returns its charge" $

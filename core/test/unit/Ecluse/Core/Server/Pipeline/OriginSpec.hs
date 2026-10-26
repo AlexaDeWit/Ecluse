@@ -10,9 +10,10 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
 import Network.HTTP.Types (status200)
 import System.Mem (performGC)
-import System.Mem.Weak (Weak, deRefWeak, mkWeakPtr)
+import System.Mem.Weak (Weak, deRefWeak, mkWeak)
 import Test.Hspec
 import UnliftIO (timeout, wait, withAsync)
+import UnliftIO.Exception (evaluate)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor)
@@ -241,7 +242,7 @@ runCargoRead runtime deps ticket consume = do
     runHandler logEnv mempty (RequestCtx runtime binding) $
         withPublicMetadata runtime deps ticket cargoTestName (cargoTestVersion "1.0.0") (liftIO . consume)
 
-data CargoRoots = CargoRoots !(Weak Value) !(Weak Value)
+data CargoRoots = CargoRoots !(Weak ()) !(Weak ())
 
 cargoRoots :: VersionRead -> IO CargoRoots
 cargoRoots selected = do
@@ -256,7 +257,9 @@ cargoRoots selected = do
                 _ -> fail "large feature array is absent"
             _ -> fail "native features are absent"
         _ -> fail "native Cargo row is not an object"
-    CargoRoots <$> mkWeakPtr value Nothing <*> mkWeakPtr payload Nothing
+    CargoRoots <$> track value <*> track payload
+  where
+    track key = evaluate key >>= \evaluated -> mkWeak evaluated () Nothing
 
 assertCargoRetained :: CargoRoots -> Expectation
 assertCargoRetained (CargoRoots row payload) = do
