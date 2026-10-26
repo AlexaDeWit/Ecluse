@@ -834,6 +834,7 @@ library ecluse-test-support
     Ecluse.Test.Mirror.State
     Ecluse.Test.Mirror.Read
     Ecluse.Test.Registry.PyPI.Multipart
+    Ecluse.Test.Registry.Archive
     Ecluse.Test.Registry.PyPI.Archive
     Ecluse.Test.Collector
     Ecluse.Test.Container.Image
@@ -1156,7 +1157,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.ArchiveSpec
     Ecluse.Core.Registry.PyPI.Archive.PathSpec
     Ecluse.Core.Registry.PyPI.Archive.BZipSpec
-    Ecluse.Core.Registry.PyPI.Archive.InflateSpec
+    Ecluse.Core.Registry.Archive.InflateSpec
     Ecluse.Core.Registry.PyPI.Archive.LzmaSpec
     Ecluse.Core.Registry.PyPI.Archive.TarSpec
     Ecluse.Core.Registry.PyPI.UploadMetadataSpec

@@ -35,7 +35,8 @@ import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.PyPI.Wire (simpleIndexMediaType)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (hexSha256Of)
-import Ecluse.Test.Registry.PyPI.Archive (metadata, tarBytes, zipBytes)
+import Ecluse.Test.Registry.Archive (tarBytes)
+import Ecluse.Test.Registry.PyPI.Archive (metadata, zipBytes)
 import Ecluse.Test.Wai (selfBaseUrl)
 
 -- | Each reset removes both target files and durable objects before another complete copy.

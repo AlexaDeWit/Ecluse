@@ -30,9 +30,9 @@ import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Cargo.Discovery (renderCargoDiscovery)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (hexSha256Of)
+import Ecluse.Test.Registry.Archive (tarBytes)
 import Ecluse.Test.Registry.Cargo.Fixtures (CargoCrate (..), CargoRelease (..), cargoIndex, cargoShard, cargoUploadMetadata)
 import Ecluse.Test.Registry.Cargo.Reference (UploadFrame (..), referenceUpload)
-import Ecluse.Test.Registry.PyPI.Archive (tarBytes)
 import Ecluse.Test.Wai (selfBaseUrl)
 
 -- | Each run owns its complete target copy and conditional durable object state.

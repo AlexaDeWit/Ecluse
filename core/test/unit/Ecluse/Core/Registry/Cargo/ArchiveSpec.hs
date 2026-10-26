@@ -22,7 +22,7 @@ import Ecluse.Core.Registry (ParseError)
 import Ecluse.Core.Registry.Cargo.Archive
 import Ecluse.Core.Registry.Cargo.Manifest (publishMetadataValue)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
-import Ecluse.Test.Registry.PyPI.Archive (paxRecord, tarBytes)
+import Ecluse.Test.Registry.Archive (paxRecord, tarBytes)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec

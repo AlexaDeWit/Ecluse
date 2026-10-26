@@ -4,7 +4,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Scoped zlib decoding checks framing and closes its pull action on every callback exit.
-module Ecluse.Core.Registry.PyPI.Archive.InflateSpec (spec) where
+module Ecluse.Core.Registry.Archive.InflateSpec (spec) where
 
 import Codec.Compression.GZip qualified as GZip
 import Codec.Compression.Zlib.Raw qualified as Raw
@@ -16,7 +16,7 @@ import UnliftIO.Async (cancel, race_, wait, withAsync)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Registry (ParseError)
-import Ecluse.Core.Registry.PyPI.Archive.Inflate
+import Ecluse.Core.Registry.Archive.Inflate
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec

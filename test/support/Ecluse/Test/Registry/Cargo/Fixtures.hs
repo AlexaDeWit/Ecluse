@@ -45,7 +45,7 @@ import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
 
 import Ecluse.Test.Package (hexSha256Of)
-import Ecluse.Test.Registry.PyPI.Archive (tarBytes)
+import Ecluse.Test.Registry.Archive (tarBytes)
 
 -- | Each directory contains source owned by this repository, never a downloaded package.
 data CargoCrate = CargoCrate

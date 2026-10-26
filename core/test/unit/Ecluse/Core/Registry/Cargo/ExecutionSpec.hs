@@ -25,9 +25,9 @@ import Ecluse.Core.Rules.Types (Inability (EvaluationFailed, InstallSignalUnread
 import Ecluse.Core.Security (Limits (..), defaultLimits, mkProgressFloor)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (sampleArtifact, sampleDetails, unsafeHash)
+import Ecluse.Test.Registry.Archive (tarBytes)
 import Ecluse.Test.Registry.Cargo.Fixtures qualified as Fixtures
 import Ecluse.Test.Registry.Cargo.Metadata (cargoTestDiscovery)
-import Ecluse.Test.Registry.PyPI.Archive (tarBytes)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec

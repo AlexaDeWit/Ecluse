@@ -20,8 +20,9 @@ import UnliftIO.Exception (throwIO)
 import Ecluse.Core.Registry.PyPI.Archive.Tar (extractTar)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Test.Package (pypiVersion, unscopedPyPI)
+import Ecluse.Test.Registry.Archive (paxRecord, tarBytes)
 import Ecluse.Test.Registry.JsonStream (byteChunks)
-import Ecluse.Test.Registry.PyPI.Archive (metadata, paxRecord, tarBytes)
+import Ecluse.Test.Registry.PyPI.Archive (metadata)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
