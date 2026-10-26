@@ -25,10 +25,11 @@ import Ecluse.Core.Registry.CachedDocument (cargoCached, cargoPacked)
 import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.Cargo.Route (cargoRouter)
+import Ecluse.Core.Registry.Exchange (chargedRead)
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch (readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (PrepareRead))
-import Ecluse.Core.Registry.Metadata.Fetch.Types (ReadTerms (ReadTerms))
+import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (..), ReadTerms (ReadTerms))
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocChargeFullReadWorkspace))
 import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
@@ -187,9 +188,18 @@ fullReadSpec = describe "full Cargo read payments" $ do
 
 observingFullRead :: MemoryMeter -> Int -> IORef Int -> IORef Int -> IORef [Int] -> PrepareRead -> PrepareRead
 observingFullRead meter factor sourcePaid peak balances (PrepareRead prepare) = PrepareRead $ \tracing origin ->
-    let source amount = do
-            ocChargeFullRead origin amount
-            modifyIORef' sourcePaid (+ scaleCharge factor amount)
+    let recordSource amount = modifyIORef' sourcePaid (+ scaleCharge factor amount)
+        source amount = ocChargeFullRead origin amount >> recordSource amount
+        -- The fetch retains the original origin, so body payments bypass the preparation wrapper.
+        observeBody EcosystemRead{erRequest, erUniqueFields, erWalkFull, erFinishFull, erWalkSelected, erFinishSelected} =
+            EcosystemRead
+                { erRequest
+                , erUniqueFields
+                , erWalkFull = \limits name base bound table next -> erWalkFull limits name base bound table (chargedRead recordSource next)
+                , erFinishFull
+                , erWalkSelected
+                , erFinishSelected
+                }
         workspace amount = do
             ocChargeFullReadWorkspace origin amount
             modifyIORef' peak (max amount)
@@ -197,7 +207,7 @@ observingFullRead meter factor sourcePaid peak balances (PrepareRead prepare) = 
             rowHeld <- readIORef peak
             held <- snChargedBytes <$> meterSnapshot meter
             modifyIORef' balances ((held - sourceHeld - rowHeld) :)
-     in prepare tracing origin{ocChargeFullRead = source, ocChargeFullReadWorkspace = workspace}
+     in fmap observeBody <$> prepare tracing origin{ocChargeFullRead = source, ocChargeFullReadWorkspace = workspace}
 
 runCargoFull :: ServeRuntime -> PackumentDeps -> MemoryTicket -> Bool -> IO OriginResult
 runCargoFull runtime deps ticket public = do
