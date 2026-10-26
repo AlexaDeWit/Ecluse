@@ -287,7 +287,6 @@ foreignRegistry plane = for_ [currentCargo, floorCargo] $ \toolchain ->
             withObservedCargoProxy config plane $ \observed -> do
                 let proxy = observedProxy observed
                     source = "sparse+" <> e2eBaseUrl proxy <> (if sameRegistry then "/cargo/private/" else "/cargo/")
-                    registryClaim = if sameRegistry then Null else String source
                     spec = CargoCrate name cargoVersion "../foreign" [] (Object mempty) (Object mempty) ["Cargo.toml", "README.md", "src/lib.rs", "build.rs"]
                 withCargoProject toolchain CargoAlternate proxy ("sparse+" <> e2eBaseUrl proxy <> "/cargo/private/") (Just cargoRegistryToken) $ \project -> do
                     cargoUseFixture project "test/fixtures/cargo/graph" spec
@@ -307,7 +306,7 @@ foreignRegistry plane = for_ [currentCargo, floorCargo] $ \toolchain ->
                 let uploadRegistries = case KeyMap.lookup "deps" (uploadMetadata frame) of
                         Just (Array dependencies) -> [KeyMap.lookup "registry" dependency | Object dependency <- toList dependencies]
                         _ -> []
-                uploadRegistries `shouldBe` [Just registryClaim]
+                uploadRegistries `shouldBe` [if sameRegistry then Nothing else Just (String source)]
                 let aliases = case KeyMap.lookup "deps" (uploadMetadata frame) of
                         Just (Array dependencies) -> [KeyMap.lookup "explicit_name_in_toml" dependency | Object dependency <- toList dependencies]
                         _ -> []
@@ -321,7 +320,7 @@ foreignRegistry plane = for_ [currentCargo, floorCargo] $ \toolchain ->
                 responseStatus index `shouldBe` 200
                 rows <- traverse (either (fail . toString) pure . indexValue) (referenceIndex (LBS.toStrict (responseBody index)))
                 let registries = [KeyMap.lookup "registry" dependency | row <- rows, Just (Array dependencies) <- [KeyMap.lookup "deps" row], Object dependency <- toList dependencies]
-                registries `shouldBe` [Just registryClaim]
+                registries `shouldBe` [if sameRegistry then Nothing else Just (String source)]
                 cargoPrivateConsumer proxy toolchain name cargoVersion $ \project -> do
                     unless sameRegistry (addForeign project source)
                     invocation <- observeCargo (cargoTraffic observed) project ["build"]
