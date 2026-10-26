@@ -42,7 +42,7 @@ import Ecluse.Test.Corpus (CaptureUpstream (upstreamOrigin), CorpusPackage (cpPa
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Port (noopMetricsPort)
-import Ecluse.Test.Registry.Cargo.Fixtures (cargoDiscovery, cargoShard)
+import Ecluse.Test.Registry.Cargo.Fixtures (cargoShard, cargoViewDiscovery)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureResponse), deliverServe, testServeRuntime)
@@ -181,7 +181,7 @@ servingCapture ecosystem captured capture = do
     rebased <- newIORef Nothing
     pure $ \request respond ->
         if ecosystem == Cargo && pathInfo request == ["config.json"]
-            then respond (responseLBS status200 [(hContentType, "application/json")] (LBS.fromStrict (cargoDiscovery (selfBaseUrl request) Nothing False)))
+            then respond (responseLBS status200 [(hContentType, "application/json")] (LBS.fromStrict (cargoViewDiscovery (selfBaseUrl request) Nothing False)))
             else do
                 body <- readIORef rebased >>= maybe (rebase request >>= \fresh -> fresh <$ writeIORef rebased (Just fresh)) pure
                 respond (responseLBS status200 [] body)

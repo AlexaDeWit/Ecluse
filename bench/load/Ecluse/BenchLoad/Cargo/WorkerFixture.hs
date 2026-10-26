@@ -27,9 +27,10 @@ import Ecluse.BenchLoad.Fixture (artifactBytes, delayUpstream)
 import Ecluse.BenchLoad.WorkerState (stateAppFor)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Registry.Cargo.Discovery (renderCargoDiscovery)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (hexSha256Of)
-import Ecluse.Test.Registry.Cargo.Fixtures (CargoCrate (..), CargoRelease (..), cargoDiscovery, cargoIndex, cargoShard, cargoUploadMetadata)
+import Ecluse.Test.Registry.Cargo.Fixtures (CargoCrate (..), CargoRelease (..), cargoIndex, cargoShard, cargoUploadMetadata)
 import Ecluse.Test.Registry.Cargo.Reference (UploadFrame (..), referenceUpload)
 import Ecluse.Test.Registry.PyPI.Archive (tarBytes)
 import Ecluse.Test.Wai (selfBaseUrl)
@@ -99,7 +100,7 @@ sourceApp latency fixture request respond = do
     case filter (not . T.null) (pathInfo request) of
         ["config.json"] -> do
             count fixture "source-discovery"
-            respond (responseLBS status200 [(hContentType, "application/json")] (fromStrict (cargoDiscovery (selfBaseUrl request <> "/crates/{crate}/{crate}-{version}.crate") Nothing False)))
+            respond (responseLBS status200 [(hContentType, "application/json")] (fromStrict (renderCargoDiscovery (selfBaseUrl request <> "/crates/{crate}/{crate}-{version}.crate") Nothing False)))
         segments | segments == T.splitOn "/" (cargoShard "example") -> do
             count fixture "source-index"
             respond (responseLBS status200 [(hContentType, "text/plain")] (fromStrict (cargoIndex [wfRelease fixture])))
@@ -115,7 +116,7 @@ targetApp latency fixture request respond = do
     case (requestMethod request, filter (not . T.null) (pathInfo request)) of
         ("GET", ["config.json"]) -> do
             count fixture "target-discovery"
-            respond (responseLBS status200 [(hContentType, "application/json")] (fromStrict (cargoDiscovery (selfBaseUrl request <> "/crates/{crate}/{crate}-{version}.crate") (Just (selfBaseUrl request)) False)))
+            respond (responseLBS status200 [(hContentType, "application/json")] (fromStrict (renderCargoDiscovery (selfBaseUrl request <> "/crates/{crate}/{crate}-{version}.crate") (Just (selfBaseUrl request)) False)))
         ("GET", segments) | segments == T.splitOn "/" (cargoShard "example") -> do
             count fixture "target-index"
             files <- readIORef (wfTarget fixture)

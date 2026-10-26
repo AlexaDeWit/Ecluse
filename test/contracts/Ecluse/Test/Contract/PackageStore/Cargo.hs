@@ -159,7 +159,7 @@ readReply :: Captured -> Text -> Maybe Text -> Bool -> [CargoRelease] -> (Status
 readReply captured root api authenticated releases
     | capMethod captured /= "GET" = (status404, [], "missing")
     | capPath captured == indexRoot <> "/config.json" =
-        (status200, [("Content-Type", "application/json")], LBS.fromStrict (cargoDiscovery (base <> root) ((base <>) <$> api) authenticated))
+        (status200, [("Content-Type", "application/json")], LBS.fromStrict (cargoViewDiscovery (base <> root) ((base <>) <$> api) authenticated))
     | capPath captured == indexRoot <> "/" <> encodeUtf8 (cargoShard packageText) =
         if null releases then (status404, [], "missing") else (status200, [("Content-Type", "text/plain")], LBS.fromStrict (cargoIndex releases))
     | otherwise = case find (\release -> capPath captured == encodeUtf8 (root <> "/" <> cargoArchivePath (releaseCrate release))) releases of

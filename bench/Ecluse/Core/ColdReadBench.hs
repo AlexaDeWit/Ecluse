@@ -34,10 +34,10 @@ import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Metadata (ecosystemMetadataReads, privateMetadataClient)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Corpus (cpPackage)
+import Ecluse.Test.Corpus.Cargo (cargoCaptureDiscoveryBytes)
 import Ecluse.Test.Deadline (untracedClient)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
-import Ecluse.Test.Registry.Cargo.Fixtures (cargoDiscovery)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRight)
 
@@ -53,7 +53,7 @@ withBenchmarks ecosystems action = do
     -- Every request stays on loopback, including requests for an unexpected origin.
     redirect port request = request{HTTP.host = "127.0.0.1", HTTP.port = port, HTTP.secure = False, HTTP.proxy = Nothing}
     withDiscovery responses
-        | any ((== Cargo) . ebEcosystem) ecosystems = Map.insert "/config.json" (fromStrict (cargoDiscovery "https://static.crates.io/crates/{crate}/{crate}-{version}.crate" Nothing False)) responses
+        | any ((== Cargo) . ebEcosystem) ecosystems = Map.insert "/config.json" (fromStrict cargoCaptureDiscoveryBytes) responses
         | otherwise = responses
 
 replayResponse :: (EcosystemBench, LoadedEntry) -> IO (ByteString, BL.ByteString)

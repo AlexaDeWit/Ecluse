@@ -1137,10 +1137,12 @@ test-suite ecluse-core-unit
     Ecluse.Test.Contract.PublicationSpec
     Ecluse.Test.Contract.QueueSpec
     Ecluse.Test.Registry.Npm.StoredVersionsSpec
+    Ecluse.Test.Registry.Cargo.FixturesSpec
     Ecluse.Test.Contract.RunnerSpec
     Ecluse.Test.Contract.MeasurementSpec
     Ecluse.Test.Contract.RetentionSpec
     Ecluse.Test.CorpusSpec
+    Ecluse.Test.Corpus.CargoSpec
     Ecluse.Test.EcosystemBenchSpec
     Ecluse.Test.EnvSpec
     Ecluse.Test.PollSpec

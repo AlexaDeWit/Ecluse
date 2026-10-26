@@ -37,6 +37,7 @@ import Ecluse.BenchLoad.Selection (evictionEntries)
 import Ecluse.BenchLoad.Stress (WarmLoadDriver (..), herdSize, pairedLoad, rampSteps)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (PackageInfo (infoVersions))
+import Ecluse.Core.Registry.Cargo.Discovery (renderCargoDiscovery)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts)
 import Ecluse.Core.Registry.Cargo.Route (cargoArtifactPath)
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
@@ -47,7 +48,7 @@ import Ecluse.Test.Corpus.Cargo (cargoCaptureDiscovery, cargoVersionKeys)
 import Ecluse.Test.Corpus.Subset (newestCargoShare)
 import Ecluse.Test.Json (withKeys)
 import Ecluse.Test.Package (hexSha256Of)
-import Ecluse.Test.Registry.Cargo.Fixtures (cargoDiscovery, cargoShard)
+import Ecluse.Test.Registry.Cargo.Fixtures (cargoShard)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoRead, parseCargoDiscovery)
 import Ecluse.Test.Registry.Cargo.Reference (IndexLine (indexValue), referenceDiscovery, referenceIndex)
 import Ecluse.Test.Registry.Metadata.Fetch (captureManifest)
@@ -78,7 +79,7 @@ cargoReadDriver =
                 { ppCaptureAuthority = "https://static.crates.io"
                 , ppListingSuffix = cargoShard
                 , ppDiscoveryPath = Just "config.json"
-                , ppCapturedRead = \base -> cargoRead <$> parseCargoDiscovery (ecosystemArtifactAuthorities cargoArtifactHosts) base (cargoDiscovery (base <> "/crates/{crate}/{crate}-{version}.crate") Nothing False)
+                , ppCapturedRead = \base -> cargoRead <$> parseCargoDiscovery (ecosystemArtifactAuthorities cargoArtifactHosts) base (renderCargoDiscovery (base <> "/crates/{crate}/{crate}-{version}.crate") Nothing False)
                 , ppSelectedArtifacts = \selected packages bodies -> case selected of
                     Nothing -> pure Map.empty
                     Just "pinned" -> selectWarmArtifacts packages bodies
@@ -371,7 +372,7 @@ missingStub latency request respond = do
         _ -> responseLBS status404 [] ""
 
 discoveryResponse :: Request -> Response
-discoveryResponse request = responseLBS status200 [(hContentType, "application/json")] (LBS.fromStrict (cargoDiscovery (selfBaseUrl request <> "/crates/{crate}/{crate}-{version}.crate") Nothing False))
+discoveryResponse request = responseLBS status200 [(hContentType, "application/json")] (LBS.fromStrict (renderCargoDiscovery (selfBaseUrl request <> "/crates/{crate}/{crate}-{version}.crate") Nothing False))
 
 knownName :: Text -> Bool
 knownName name = name `elem` map cpName cargoCorpusPackages

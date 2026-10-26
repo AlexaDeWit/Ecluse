@@ -7,6 +7,7 @@ module Ecluse.Test.Corpus.Cargo (
     benchCrate,
     syntheticIndexBytes,
     cargoCaptureDiscovery,
+    cargoCaptureDiscoveryBytes,
     cargoServedDiscovery,
     cargoVersionKeys,
     decodeCargoValues,
@@ -30,7 +31,6 @@ import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, Meta
 import Ecluse.Core.Security (Limits, checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Corpus (CaptureUpstream (..), cargoCaptureUpstream, syntheticProxyBase)
-import Ecluse.Test.Registry.Cargo.Fixtures (cargoDiscovery)
 import Ecluse.Test.Registry.Cargo.Metadata (parseCargoDiscovery)
 import Ecluse.Test.Registry.Cargo.Reference (IndexLine (..), referenceIndex)
 import Ecluse.Test.Security.Limits (checkNestingDepth)
@@ -41,7 +41,11 @@ benchCrate = mkPackageName Cargo Nothing "bench-crate"
 
 -- | Bind the public capture's native download template without performing discovery I/O.
 cargoCaptureDiscovery :: Either MetadataError CargoDiscovery
-cargoCaptureDiscovery = parseCargoDiscovery (upstreamAuthorities cargoCaptureUpstream) (upstreamOrigin cargoCaptureUpstream) (cargoDiscovery "https://static.crates.io/crates/{crate}/{crate}-{version}.crate" Nothing False)
+cargoCaptureDiscovery = parseCargoDiscovery (upstreamAuthorities cargoCaptureUpstream) (upstreamOrigin cargoCaptureUpstream) cargoCaptureDiscoveryBytes
+
+-- | The public capture advertises its complete upstream download template.
+cargoCaptureDiscoveryBytes :: ByteString
+cargoCaptureDiscoveryBytes = renderCargoDiscovery "https://static.crates.io/crates/{crate}/{crate}-{version}.crate" Nothing False
 
 -- | Use the local discovery response shape shared with the actual sparse route.
 cargoServedDiscovery :: Either MetadataError CargoDiscovery

@@ -101,7 +101,7 @@ nativeApplication registry repository request respond
     | lookup "Authorization" (requestHeaders request) /= Just (encodeUtf8 cargoRegistryToken) =
         respond (responseLBS status401 [("WWW-Authenticate", "Cargo login_url=\"https://cargo-private/login\"")] "fixture credential required")
     | pathInfo request == ["config.json"] =
-        respond (responseLBS status200 [("Content-Type", "application/json")] (LBS.fromStrict (cargoDiscovery (repositoryUrl repository) (Just (T.dropWhileEnd (== '/') (repositoryUrl repository))) True)))
+        respond (responseLBS status200 [("Content-Type", "application/json")] (LBS.fromStrict (cargoViewDiscovery (repositoryUrl repository) (Just (T.dropWhileEnd (== '/') (repositoryUrl repository))) True)))
     | otherwise = do
         selected <- if repository == "cache" then cacheReader registry request else pure registry
         cargoRegistryApplication selected request{requestHeaderHost = Just (encodeUtf8 (nativeHost repository))} respond

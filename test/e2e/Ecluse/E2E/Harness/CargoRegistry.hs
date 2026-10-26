@@ -120,7 +120,7 @@ cargoRegistryApplication registry request respond = do
                         _ -> stubUrl CargoMirror
                     rows = [(name, version, stored) | ((origin, name, version), stored) <- Map.toList files, origin == host]
                 case pathInfo request of
-                    ["config.json"] -> answer status200 [("Content-Type", "application/json")] (LBS.fromStrict (cargoDiscovery nativeBase (if host == "cargo-upstream" then Nothing else Just (T.dropWhileEnd (== '/') nativeBase)) (case fault of CargoRegistryRequireToken _ -> True; _ -> False)))
+                    ["config.json"] -> answer status200 [("Content-Type", "application/json")] (LBS.fromStrict (cargoViewDiscovery nativeBase (if host == "cargo-upstream" then Nothing else Just (T.dropWhileEnd (== '/') nativeBase)) (case fault of CargoRegistryRequireToken _ -> True; _ -> False)))
                     ["crates", name, version, filename]
                         | filename == name <> "-" <> version <> ".crate"
                         , Just stored <- Map.lookup (host, name, version) files ->

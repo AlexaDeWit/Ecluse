@@ -270,7 +270,7 @@ cargoDriver =
 cargoUpstream :: [ServingRelease] -> Wai.Application
 cargoUpstream releases request respond
     | rawPathInfo request == "/config.json" =
-        respond (responseLBS status200 [] (toLazy (Cargo.cargoDiscovery (selfBaseUrl request) Nothing False)))
+        respond (responseLBS status200 [] (toLazy (Cargo.cargoViewDiscovery (selfBaseUrl request) Nothing False)))
     | rawPathInfo request == "/th/in/thing" =
         respond (responseLBS status200 [] (toLazy (cargoDocument (selfBaseUrl request) releases)))
     | Just release <- find ((== rawPathInfo request) . cargoArtifact . releaseVersion) releases =

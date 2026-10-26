@@ -20,7 +20,7 @@ module Ecluse.Test.Registry.Cargo.Fixtures (
     -- * Registry and publication bytes
     cargoShard,
     cargoArchivePath,
-    cargoDiscovery,
+    cargoViewDiscovery,
     cargoIndex,
     cargoIndexRecord,
     cargoUpload,
@@ -204,8 +204,8 @@ cargoArchivePath :: CargoCrate -> Text
 cargoArchivePath spec = "crates/" <> crateName spec <> "/" <> crateVersion spec <> "/" <> crateName spec <> "-" <> crateVersion spec <> ".crate"
 
 -- | Supply the proxy view's base so every advertised asset location traverses that view.
-cargoDiscovery :: Text -> Maybe Text -> Bool -> ByteString
-cargoDiscovery proxyBase api authenticated =
+cargoViewDiscovery :: Text -> Maybe Text -> Bool -> ByteString
+cargoViewDiscovery proxyBase api authenticated =
     LBS.toStrict $
         encode $
             object $
@@ -325,7 +325,7 @@ fixtureLock source rootSpec releases =
 -- | Write files under the shared registry fixture mount. The caller owns its Stub route and lifetime.
 writeCargoRegistry :: FilePath -> Text -> Maybe Text -> Bool -> [CargoRelease] -> IO ()
 writeCargoRegistry root proxyBase api authenticated releases = do
-    write "config.json" (cargoDiscovery proxyBase api authenticated)
+    write "config.json" (cargoViewDiscovery proxyBase api authenticated)
     forM_ (Map.toList grouped) $ \(name, versions) -> write (toString (cargoShard name)) (cargoIndex versions)
     forM_ releases $ \release -> write (toString (cargoArchivePath (releaseCrate release))) (releaseArchive release)
   where
