@@ -10,9 +10,11 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Text.Unsafe (lengthWord8)
 import Foreign.StablePtr (deRefStablePtr, freeStablePtr, newStablePtr)
 import Network.HTTP.Types (status200)
 import System.Mem (performGC)
+import System.Mem.StableName (StableName, makeStableName)
 import System.Mem.Weak (Weak, deRefWeak, mkWeak)
 import Test.Hspec
 import UnliftIO (timeout, wait, withAsync)
@@ -20,9 +22,10 @@ import UnliftIO.Exception (bracket, evaluate)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (PackageInfo (infoVersions))
+import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead))
-import Ecluse.Core.Registry.CachedDocument (cargoCached, cargoPacked)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, cargoPacked, cargoRendered)
 import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.Cargo.Route (cargoRouter)
@@ -32,6 +35,7 @@ import Ecluse.Core.Registry.Metadata.Fetch (readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (PrepareRead))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (..), ReadTerms (ReadTerms))
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocChargeFullReadWorkspace))
+import Ecluse.Core.Registry.ServedDocument (stringField)
 import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -299,9 +303,9 @@ retainedConsumerSpec = describe "successful selected consumers" $ do
                 original <- testServeRuntime deadlines metrics
                 observedRoots <- newIORef Nothing
                 operations <- newLocalRetention 60 1 1 weighVersion
-                let observe record refused key value = withCargoRoots value $ \rooted roots -> do
+                let observe record refused key value = withCargoRoots value $ \rooted roots readOwner -> do
                         writeIORef observedRoots (Just roots)
-                        assertCargoRetained roots
+                        assertCargoRetained roots readOwner
                         roInsert operations record refused key rooted
                     provider = cacheProvider LocalStorage Nothing (Just operations{roInsert = observe}) Nothing
                 cache <- newMetadataCacheWithProvider provider
@@ -373,42 +377,103 @@ runCargoRead runtime deps ticket consume = do
     runHandler logEnv mempty (RequestCtx runtime binding) $
         withPublicMetadata runtime deps ticket cargoTestName (cargoTestVersion "1.0.0") (liftIO . consume)
 
-data CargoRoots = CargoRoots !(Weak ()) !(Weak ())
+data CargoRoots = CargoRoots
+    { crReadName :: StableName VersionRead
+    , crRawName :: StableName CachedDoc
+    , crRowName :: StableName (KeyMap.KeyMap Value)
+    , crPayloadName :: StableName Text
+    , crRowWeak :: Weak ()
+    , crPayloadWeak :: Weak ()
+    }
 
-withCargoRoots :: VersionRead -> (VersionRead -> CargoRoots -> IO a) -> IO a
+data CargoSnapshot = CargoSnapshot
+    { csRaw :: CachedDoc
+    , csRow :: KeyMap.KeyMap Value
+    , csPayload :: Text
+    , csRecordCount :: Int
+    , csEntry :: EntryKey
+    }
+
+withCargoRoots :: VersionRead -> (VersionRead -> CargoRoots -> IO (Maybe VersionRead) -> IO a) -> IO a
 withCargoRoots selected consume =
     -- Key extraction and insertion must use the same rooted graph.
     bracket (evaluate selected >>= newStablePtr) freeStablePtr $ \root -> do
         rooted <- deRefStablePtr root
-        source <- maybe (fail "selected Cargo source is absent") pure (vrVersion rooted >>= vdRaw >>= snd cargoCached)
-        value <- maybe (fail "selected Cargo row is absent") (pure . snd) (listToMaybe (cargoRecords source))
-        row <- case value of
-            Object fields -> pure fields
-            _ -> fail "native Cargo row is not an object"
-        payload <- case KeyMap.lookup "features" row of
-            Just (Object features) -> case KeyMap.lookup "large" features of
-                Just (Array values) -> case toList values of
-                    [String feature] -> pure feature
-                    _ -> fail "large feature payload is absent"
-                _ -> fail "large feature array is absent"
-            _ -> fail "native features are absent"
-        roots <- CargoRoots <$> track row <*> track payload
-        consume rooted roots
+        snapshot <- either (fail . toString) pure (cargoSnapshot rooted)
+        readName <- makeStableName =<< evaluate rooted
+        rawName <- makeStableName =<< evaluate (csRaw snapshot)
+        (rowWeak, rowName) <- track (csRow snapshot)
+        (payloadWeak, payloadName) <- track (csPayload snapshot)
+        let roots = CargoRoots readName rawName rowName payloadName rowWeak payloadWeak
+        consume rooted roots (Just <$> deRefStablePtr root)
   where
-    track :: a -> IO (Weak ())
-    track key = evaluate key >>= \evaluated -> mkWeak evaluated () Nothing
+    track :: a -> IO (Weak (), StableName a)
+    track key = do
+        evaluated <- evaluate key
+        (,) <$> mkWeak evaluated () Nothing <*> makeStableName evaluated
 
-assertCargoRetained :: CargoRoots -> Expectation
-assertCargoRetained (CargoRoots row payload) = do
+cargoSnapshot :: VersionRead -> Either Text CargoSnapshot
+cargoSnapshot selected = do
+    raw <- maybeToRight "selected Cargo source is absent" (vrVersion selected >>= vdRaw)
+    source <- maybeToRight "selected Cargo source is absent" (snd cargoCached raw)
+    (entry, value) <- maybeToRight "selected Cargo row is absent" (listToMaybe (cargoRecords source))
+    row <- case value of
+        Object fields -> Right fields
+        _ -> Left "native Cargo row is not an object"
+    payload <- case KeyMap.lookup "features" row of
+        Just (Object features) -> case KeyMap.lookup "large" features of
+            Just (Array values) -> case toList values of
+                [String feature] -> Right feature
+                _ -> Left "large feature payload is absent"
+            _ -> Left "large feature array is absent"
+        _ -> Left "native features are absent"
+    pure (CargoSnapshot raw row payload (length (cargoRecords source)) entry)
+
+assertCargoRetained :: CargoRoots -> IO (Maybe VersionRead) -> Expectation
+assertCargoRetained roots readOwner = do
     performGC
-    isJust <$> deRefWeak row `shouldReturn` True
-    isJust <$> deRefWeak payload `shouldReturn` True
+    rowAlive <- isJust <$> deRefWeak (crRowWeak roots)
+    payloadAlive <- isJust <$> deRefWeak (crPayloadWeak roots)
+    evidence <- cargoRetainedEvidence roots rowAlive payloadAlive readOwner
+    putStrLn ("cargo-retained-control " <> decodeUtf8 evidence)
+    rowAlive `shouldBe` True
+    payloadAlive `shouldBe` True
+
+cargoRetainedEvidence :: CargoRoots -> Bool -> Bool -> IO (Maybe VersionRead) -> IO ByteString
+cargoRetainedEvidence roots rowAlive payloadAlive readOwner = do
+    owner <- readOwner
+    details <- for owner $ \selected -> do
+        readName <- makeStableName =<< evaluate selected
+        rawEvidence <- for (vrVersion selected >>= vdRaw) $ \raw -> do
+            rawName <- makeStableName =<< evaluate raw
+            let representation
+                    | isJust (snd cargoPacked raw) = "packed" :: Text
+                    | isJust (snd cargoRendered raw) = "rendered"
+                    | isJust (snd cargoCached raw) = "tree"
+                    | otherwise = "other"
+            fields <- case cargoSnapshot selected of
+                Left failure -> pure ["shape_error" .= failure]
+                Right snapshot -> do
+                    rowName <- makeStableName =<< evaluate (csRow snapshot)
+                    payloadName <- makeStableName =<< evaluate (csPayload snapshot)
+                    pure
+                        [ "row_count" .= csRecordCount snapshot
+                        , "physical_key_matches" .= (csEntry snapshot == RecordEntry 0)
+                        , "version_matches" .= (stringField "vers" (csRow snapshot) == Just "1.0.0")
+                        , "payload_bytes" .= lengthWord8 (csPayload snapshot)
+                        , "payload_all_x" .= T.all (== 'x') (csPayload snapshot)
+                        , "same_row" .= (rowName == crRowName roots)
+                        , "same_payload" .= (payloadName == crPayloadName roots)
+                        ]
+            pure (object (["representation" .= representation, "same_raw" .= (rawName == crRawName roots)] <> fields))
+        pure (object ["same_read" .= (readName == crReadName roots), "body_bytes" .= vrBodyBytes selected, "raw" .= rawEvidence])
+    evaluate (toStrict (encode (object ["row_alive" .= rowAlive, "payload_alive" .= payloadAlive, "owner" .= details])))
 
 assertCargoReleased :: CargoRoots -> Expectation
-assertCargoReleased (CargoRoots row payload) = do
+assertCargoReleased roots = do
     performGC
-    isNothing <$> deRefWeak row `shouldReturn` True
-    isNothing <$> deRefWeak payload `shouldReturn` True
+    isNothing <$> deRefWeak (crRowWeak roots) `shouldReturn` True
+    isNothing <$> deRefWeak (crPayloadWeak roots) `shouldReturn` True
 
 assertObservedReleased :: IORef (Maybe CargoRoots) -> Expectation
 assertObservedReleased observed =
@@ -418,8 +483,8 @@ seedRetainedCargo :: MetricsPort -> MetadataCache -> Source -> IO (VersionRead, 
 seedRetainedCargo metrics cache source = do
     (_, selected, served) <- retainedCargoFixture
     weighVersion selected `shouldSatisfy` (> 1024 * 1024)
-    roots <- withCargoRoots selected $ \rooted roots -> do
+    roots <- withCargoRoots selected $ \rooted roots _ -> do
         resolveVersion metrics cache source cargoTestName (cargoTestVersion "1.0.0") (pure (Right rooted)) `shouldReturn` Right rooted
         pure roots
-    assertCargoRetained roots
+    assertCargoRetained roots (cachedVersion noopMetricsPort cache source cargoTestName (cargoTestVersion "1.0.0"))
     pure (served, roots)
