@@ -230,7 +230,8 @@ heldSpec eco = describe "held chunks, against the response" $ do
             let own = mkBaseRequest (loopbackRegistryUrl base)
                 foreignRequest = mkBaseRequest (loopbackRegistryUrl foreignBase)
             request <- expectRight (erRequest nativeRead own Nothing (thing eco))
-            path request `shouldBe` "/info/thing"
+            expectedPath <- maybe (fail "caller-bound fixture has no expected native request path") pure (rdCallerBoundPath eco)
+            path request `shouldBe` expectedPath
             case erRequest nativeRead foreignRequest Nothing (thing eco) of
                 Left (UnparseableUrl _) -> pass
                 _ -> expectationFailure "caller-bound reader accepted another request origin"
@@ -285,6 +286,8 @@ data ReadFixture = ReadFixture
     , rdRead :: Text -> Either MetadataError EcosystemRead
     -- ^ The explicit reader used only for held bodies.
     , rdFraming :: MetadataFraming
+    , rdCallerBoundPath :: Maybe ByteString
+    -- ^ The native checked-name route is required for a caller-bound provider.
     , rdDiscovery :: Maybe (Text -> ByteString)
     -- ^ Native preparation bytes served only from the selected origin's config route.
     , rdDocument :: ByteString -> Int -> ByteString

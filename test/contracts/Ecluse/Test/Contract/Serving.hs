@@ -45,6 +45,7 @@ data ServingResponse = ServingResponse
     , responseHeaders :: [Header]
     , responseVersions :: [Text]
     , responseDigests :: Map Text [Text]
+    -- ^ Native checksums, or hashes of gated artifact responses addressed by emitted coordinates.
     }
     deriving stock (Eq, Show)
 

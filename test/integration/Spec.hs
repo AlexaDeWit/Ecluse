@@ -8,6 +8,7 @@ module Main (main) where
 import Ecluse.AwsEndToEndIntegrationSpec qualified as AwsComposition
 import Ecluse.Core.Registry.Cargo.AdapterIntegrationSpec qualified as Cargo
 import Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec qualified as PyPI
+import Ecluse.Core.Registry.RubyGems.AdapterIntegrationSpec qualified as RubyGems
 import Ecluse.Core.Security.EgressIntegrationSpec qualified as Egress
 import Ecluse.Core.Server.MirrorViewIntegrationSpec qualified as MirrorView
 import Ecluse.Core.Server.Pipeline.OriginIntegrationSpec qualified as Origin
@@ -41,6 +42,7 @@ main = withMinistackPool $ \pool -> do
             [ discover Coverage.awsComposition (AwsComposition.spec pool)
             , discover Coverage.pypiHttp PyPI.spec
             , discover Coverage.cargoHttp Cargo.spec
+            , discover Coverage.rubyGemsHttp RubyGems.spec
             , discover Coverage.mirrorViewHttp MirrorView.spec
             , discover Coverage.egressHttp Egress.spec
             , discover Coverage.originHttp Origin.spec

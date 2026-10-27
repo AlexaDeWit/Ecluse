@@ -31,13 +31,13 @@ spec = do
     it "rejects a newly registered ecosystem without coverage" $
         validateCatalogue integrationCatalogue{catalogueProductionEcosystems = "new-ecosystem" : catalogueProductionEcosystems integrationCatalogue} `shouldSatisfy` isLeft
     it "declares all integration groups in the fixed integration component" $ do
-        length (catalogueGroups integrationCatalogue) `shouldBe` 21
+        length (catalogueGroups integrationCatalogue) `shouldBe` 22
         map groupPartition (catalogueGroups integrationCatalogue) `shouldSatisfy` all (== "integration")
     it "retains every unique integration case" $ do
         let cases = concatMap groupCases (catalogueGroups integrationCatalogue)
-        length cases `shouldBe` 441
-        length (ordNub (map caseId cases)) `shouldBe` 441
-        map caseId cases `shouldContain` ["integration/origin/native-018"]
+        length cases `shouldBe` 458
+        length (ordNub (map caseId cases)) `shouldBe` 458
+        map caseId cases `shouldContain` ["integration/origin/native-018", "integration/rubygems/source-layout", "integration.serving.rubygems.artifact-integrity"]
 
 removeCase :: Group -> Case -> Group -> Group
 removeCase selected item candidate

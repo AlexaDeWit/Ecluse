@@ -3,7 +3,15 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Native documents and independent response readers for the shared serving laws.
-module Ecluse.Server.Pipeline.ServingDriver (npmServingDriver, pypiServingDriver, cargoServingDriver) where
+module Ecluse.Server.Pipeline.ServingDriver (
+    npmServingDriver,
+    pypiServingDriver,
+    cargoServingDriver,
+    NativeObservation (..),
+    nativeByteDriver,
+    responseEvidence,
+    responseBytes,
+) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Monad (foldM)
@@ -79,9 +87,21 @@ requiredCargoAdapter :: IO RegistryAdapter
 requiredCargoAdapter = maybe (fail "Cargo has no production adapter registration") pure (adapterFor Cargo)
 
 nativeDriver :: Ecosystem -> RegistryAdapter -> ByteString -> ByteString -> (Text -> ByteString) -> (Text -> [ServingRelease] -> Value) -> (SResponse -> ServingResponse) -> (ByteString -> Text) -> ServingDriver
-nativeDriver ecosystem adapter mount metadataPath artifactPath document observe digest =
+nativeDriver ecosystem adapter mount metadataPath artifactPath document observe =
+    nativeByteDriver ecosystem (pure adapter) mount metadataPath metadataPath artifactPath (\base -> toStrict . encode . document base) (NativeObservation (\_ _ -> pure . observe) (\_ -> pure . observe))
+
+-- | Metadata may address native artifacts while artifact observations remain independent wire responses.
+data NativeObservation = NativeObservation
+    { observeNativeMetadata :: (Method -> RequestHeaders -> Text -> IO SResponse) -> Method -> SResponse -> IO ServingResponse
+    , observeNativeArtifact :: Method -> SResponse -> IO ServingResponse
+    }
+
+-- | Native formats reuse the same upstream ownership while supplying independent wire observations.
+nativeByteDriver :: Ecosystem -> IO RegistryAdapter -> ByteString -> ByteString -> ByteString -> (Text -> ByteString) -> (Text -> [ServingRelease] -> ByteString) -> NativeObservation -> (ByteString -> Text) -> ServingDriver
+nativeByteDriver ecosystem acquireAdapter mount clientMetadataPath upstreamMetadataPath artifactPath document observe digest =
     ServingDriver
-        { withServing = \compression rules privateReleases publicReleases action ->
+        { withServing = \compression rules privateReleases publicReleases action -> do
+            adapter <- acquireAdapter
             testWithApplication (pure (upstream privateReleases)) $ \privatePort ->
                 testWithApplication (pure (upstream publicReleases)) $ \publicPort -> withSweeper $ \deadlines -> do
                     queue <- newTestMemoryQueue
@@ -95,13 +115,16 @@ nativeDriver ecosystem adapter mount metadataPath artifactPath document observe 
                                 , pdMetadataCompression = compression
                                 }
                         app = proxyApplication ecosystem env deps
-                        request method path headers = observe <$> requestAt method (mount <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
+                        raw method path headers = requestAt method (mount <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app
+                        artifact method headers version = raw method (artifactPath version) headers
+                        metadata method headers = raw method clientMetadataPath headers >>= observeNativeMetadata observe artifact method
+                        artifactRequest method headers version = artifact method headers version >>= observeNativeArtifact observe method
                     action
                         ServingSession
-                            { requestMetadata = (`request` metadataPath)
-                            , requestArtifact = \method headers version -> request method (artifactPath version) headers
-                            , requestPrivateMetadata = (`request` metadataPath)
-                            , requestPrivateArtifact = \method headers version -> request method (artifactPath version) headers
+                            { requestMetadata = metadata
+                            , requestArtifact = artifactRequest
+                            , requestPrivateMetadata = metadata
+                            , requestPrivateArtifact = artifactRequest
                             , publicSourceIdentity = decodeUtf8 mount
                             , privateSourceIdentity = decodeUtf8 mount
                             }
@@ -112,15 +135,13 @@ nativeDriver ecosystem adapter mount metadataPath artifactPath document observe 
   where
     now = UTCTime (fromGregorian 2026 6 20) 0
     upstream releases request respond
-        | BS.dropWhileEnd (== 47) (rawPathInfo request) == metadataPath =
-            respond (responseLBS status200 [] (encode (document (selfBaseUrl request) releases)))
+        | BS.dropWhileEnd (== 47) (rawPathInfo request) == upstreamMetadataPath =
+            respond (responseLBS status200 [] (toLazy (document (selfBaseUrl request) releases)))
         | Just release <- find ((== rawPathInfo request) . artifactPath . releaseVersion) releases =
             respond (artifactResponse (Wai.requestHeaders request) (releaseBytes release))
         | otherwise = respond (responseLBS status404 [] "")
 
-{- Answer as a CDN does: gzip the artifact for a request that permits it. A proxy that relays those
-bytes breaks the advertised digest. Warp does not infer a builder response's length for HEAD.
--}
+-- A CDN can gzip archive responses. HEAD needs an explicit length because Warp cannot infer it.
 artifactResponse :: RequestHeaders -> ByteString -> Wai.Response
 artifactResponse headers bytes = case chooseCoding GzipWhenAccepted headers of
     ServeCoding GzipCoding -> sized (GZip.compress (toLazy bytes)) [gzipEncodingHeader]
@@ -194,6 +215,7 @@ pypiObservation response = responseEvidence response versions digests
             , Just digest <- [textAtPath ["hashes", "sha256"] file]
             ]
 
+-- | Preserve actual wire status, bytes and headers beside independently decoded native facts.
 responseEvidence :: SResponse -> [Text] -> Map Text [Text] -> ServingResponse
 responseEvidence response versions digests =
     ServingResponse
@@ -223,11 +245,16 @@ cargoObservation method response = responseEvidence response versions digests
     values = [fields | row <- Reference.referenceIndex bytes, Right fields <- [Reference.indexValue row]]
     versions = sort [version | fields <- values, Just (String version) <- [KeyMap.lookup "vers" fields]]
     digests = Map.fromList [(version, [digest]) | fields <- values, Just (String version) <- [KeyMap.lookup "vers" fields], Just (String digest) <- [KeyMap.lookup "cksum" fields]]
+    bytes = responseBytes method response
+
+-- | Decode only representations that carry a body, preserving HEAD and conditional-response emptiness.
+responseBytes :: Method -> SResponse -> ByteString
+responseBytes method response
+    | method == methodHead || statusIsInformational status || status `elem` [status204, status205, status304] = ""
+    | lookup "Content-Encoding" (simpleHeaders response) == Just "gzip" = toStrict (GZip.decompress (simpleBody response))
+    | otherwise = toStrict (simpleBody response)
+  where
     status = simpleStatus response
-    bytes
-        | method == methodHead || statusIsInformational status || status `elem` [status204, status205, status304] = ""
-        | lookup "Content-Encoding" (simpleHeaders response) == Just "gzip" = toStrict (GZip.decompress (simpleBody response))
-        | otherwise = toStrict (simpleBody response)
 
 cargoDriver :: ServingDriver
 cargoDriver =
