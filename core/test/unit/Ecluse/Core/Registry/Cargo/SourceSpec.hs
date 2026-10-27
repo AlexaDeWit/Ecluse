@@ -7,6 +7,7 @@ module Ecluse.Core.Registry.Cargo.SourceSpec (spec) where
 
 import Test.Hspec
 
+import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.Cargo.Source
 import Ecluse.Test.Support (expectRight)
 
@@ -31,6 +32,17 @@ spec = describe "native Cargo source identity" $ do
             , ("https://0.0.0.0/index", "https://0x/index")
             , ("sparse+https://registry.test/index", "sparse+https://registry.test/index/")
             , ("https://registry.test/index", "https://registry.test/a/%2e%2e/index/")
+            , ("https://registry.test/a/index", "https://registry.test/a/%2e/index")
+            , ("https://registry.test/index", "https://registry.test/a/.%2e/index")
+            , ("https://registry.test/index", "https://registry.test/a/%2e./index")
+            , ("https://registry.test/index", "https://registry.test:/index")
+            , ("http://registry.test/index", "http://registry.test:80/index")
+            , ("ws://registry.test/index", "ws://registry.test:80/index")
+            , ("wss://registry.test/index", "wss://registry.test:443/index")
+            , ("ftp://registry.test/index", "ftp://registry.test:21/index")
+            , ("https://198.51.100.161/index", "https://0Xc63364A1/index")
+            , ("https://198.51.100.1/index", "https://0x0000000000c6336401/index")
+            , ("https://198.51.100.1/index", "https://000000000306.063.0144.01/index")
             , ("https://github.com/rust-lang/crates.io-index", "https://%67ithub.com/rust-lang/crates.io-index")
             , ("https://[2001:db8::1]/index", "https://[2001:0db8:0:0:0:0:0:1]/index/")
             , ("https://alice:one@registry.test/index?x=1#rev", "https://alice:one@registry.test:443/index/?x=1#rev")
@@ -69,8 +81,8 @@ spec = describe "native Cargo source identity" $ do
         for_ ["sparse+https://198.51.100.999/index", "sparse+https://09/index"] $ \source ->
             parseSource source `shouldSatisfy` isRight
     it "refuses native-invalid numeric hosts without falling back to domain identity" $
-        for_ ["https://198.51.100.999/index", "https://256.1/index", "https://1.2.3.4.5/index", "https://09/index", "https://0x100000000/index", "https://4294967296/index", "https://1..2/index"] $ \source ->
-            parseSource source `shouldSatisfy` isLeft
+        for_ ["https://198.51.100.999/index", "https://256.1/index", "https://1.2.3.4.5/index", "https://09/index", "https://0x100000000/index", "https://4294967296/index", "https://1..2/index", "https://10000000000/index", "https://01000000000000/index"] $ \source ->
+            parseSource source `shouldBe` Left (ParseError "Cargo registry source URL is malformed")
     it "refuses malformed and non-registry source declarations" $
-        for_ ["relative/index", "https://", "https://registry.test:70000/index", "https://registry.test/%zz", "https://exa%2Fmple/index", "git+https://github.com/rust-lang/crates.io-index"] $ \source ->
-            parseSource source `shouldSatisfy` isLeft
+        for_ ["relative/index", "https://", "https:/index", "https://registry.test:70000/index", "https://registry.test/%zz", "https://exa%2Fmple/index", "git+https://github.com/rust-lang/crates.io-index"] $ \source ->
+            parseSource source `shouldBe` Left (ParseError "Cargo registry source URL is malformed")

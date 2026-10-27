@@ -37,8 +37,11 @@ spec = do
             let large = T.replicate 900 "9"
             liftA2 compare (parseCargo ("1.2.3-" <> large)) (parseCargo ("1.2.3-1" <> large)) `shouldBe` Just LT
             liftA2 compare (parseCargo ("1.2.3-" <> large)) (parseCargo "1.2.3-alpha") `shouldBe` Just LT
+            liftA2 compare (parseCargo "1.2.3-alpha") (parseCargo ("1.2.3-" <> large)) `shouldBe` Just GT
             oracleCompare Cargo ("1.2.3-" <> large) ("1.2.3-1" <> large) `shouldReturn` Just LT
             oracleCompare Cargo ("1.2.3-" <> large) "1.2.3-alpha" `shouldReturn` Just LT
+        it "places stable versions after prereleases in the reverse comparison" $
+            liftA2 compare (parseCargo "1.2.3") (parseCargo "1.2.3-rc.1") `shouldBe` Just GT
         it "distinguishes raw build spelling from uniqueness and precedence" $ do
             let raw = "1.2.3-rc.1+build.000"
             renderCargo <$> parseCargo raw `shouldBe` Just raw

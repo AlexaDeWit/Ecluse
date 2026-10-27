@@ -36,7 +36,7 @@ spec = do
             bytes <- fixture [("Cargo.toml", manifest)]
             requests <- newIORef ([] :: [Int])
             result <- inspectCargoArchive defaultLimits (\wanted -> modifyIORef' requests (wanted :)) "example" "1.2.3" (BS.replicate 64 48 & decodeUtf8) bytes
-            result `shouldSatisfy` isLeft
+            void result `shouldBe` Left (ParseError "Cargo compressed archive disagrees with its admitted SHA-256")
             readIORef requests `shouldReturn` []
         it "uses only the effective manifest and enumerates later build scripts" $ do
             bytes <- fixture [("Cargo.toml", manifest), ("Cargo.toml.orig", "unparsed original"), ("build.rs", "never execute")]
@@ -46,33 +46,49 @@ spec = do
         it "requires exact manifest identity and the one admitted archive root" $ do
             for_ ["[package]\nname='Example'\nversion='1.2.3'", "[package]\nname='example'\nversion='1.2.3+other'"] $ \other -> do
                 bytes <- fixture [("Cargo.toml", other)]
-                inspect defaultLimits bytes >>= (`shouldSatisfy` isLeft)
+                result <- inspect defaultLimits bytes
+                void result `shouldBe` Left (ParseError "Cargo manifest disagrees with the admitted native identity")
             tar <- tarBytes [("other-1.2.3/Cargo.toml", manifest)]
-            inspect defaultLimits (compress tar) >>= (`shouldSatisfy` isLeft)
+            result <- inspect defaultLimits (compress tar)
+            void result `shouldBe` Left (ParseError "Cargo archive member disagrees with its admitted package root")
+        it "accepts an explicit root directory and refuses a regular file at that root" $ do
+            root <- expectRight (Tar.toTarPath True "example-1.2.3/")
+            rootFile <- expectRight (Tar.toTarPath False "example-1.2.3")
+            path <- expectRight (Tar.toTarPath False "example-1.2.3/Cargo.toml")
+            let info = Tar.fileEntry path (BSL.fromStrict manifest)
+            metadata <- inspect defaultLimits (compress (Tar.write [Tar.simpleEntry root Tar.Directory, info])) >>= expectRight
+            cargoArchiveInventory metadata `shouldBe` Set.singleton "Cargo.toml"
+            result <- inspect defaultLimits (compress (Tar.write [Tar.fileEntry rootFile BSL.empty, info]))
+            void result `shouldBe` Left (ParseError "Cargo archive root is not a directory")
         it "rejects duplicates and a missing effective root manifest" $ do
-            for_ [[("Cargo.toml", manifest), ("Cargo.toml", manifest)], [("nested/Cargo.toml", manifest)], [("Cargo.toml.orig", manifest)]] $ \entries -> do
+            for_ [([("Cargo.toml", manifest), ("Cargo.toml", manifest)], "duplicate archive entry"), ([("nested/Cargo.toml", manifest)], "Cargo archive lacks its effective Cargo.toml"), ([("Cargo.toml.orig", manifest)], "Cargo archive lacks its effective Cargo.toml")] $ \(entries, reason) -> do
                 bytes <- fixture entries
-                inspect defaultLimits bytes >>= (`shouldSatisfy` isLeft)
+                result <- inspect defaultLimits bytes
+                void result `shouldBe` Left (ParseError reason)
         it "checks the complete tar trailer and the gzip checksum" $ do
             tar <- tarBytes [("example-1.2.3/Cargo.toml", manifest)]
             let valid = compress tar
                 badCrc = BS.take (BS.length valid - 8) valid <> BS.replicate 4 0 <> BS.drop (BS.length valid - 4) valid
-            for_ [compress (BSL.take 1024 tar), compress (tar <> "nonzero"), BS.take (BS.length valid - 3) valid, valid <> "junk", badCrc] $
-                inspect defaultLimits >=> (`shouldSatisfy` isLeft)
+            for_ [(compress (BSL.take 1024 tar), "tar archive has no complete trailer"), (compress (tar <> "nonzero"), "tar archive has trailing nonzero bytes"), (BS.take (BS.length valid - 3) valid, "malformed or truncated compressed stream"), (valid <> "junk", "malformed or truncated compressed stream"), (badCrc, "malformed or truncated compressed stream")] $ \(bytes, reason) -> do
+                result <- inspect defaultLimits bytes
+                void result `shouldBe` Left (ParseError reason)
         it "rejects a traversal hidden in a PAX path override" $ do
             header <- expectRight (Tar.toTarPath False "PaxHeaders/path")
             placeholder <- expectRight (Tar.toTarPath False "placeholder")
             let record = paxRecord "path=../Cargo.toml\n"
                 tar = Tar.write [Tar.simpleEntry header (Tar.OtherEntryType 'x' record (BSL.length record)), Tar.fileEntry placeholder (BSL.fromStrict manifest)]
-            inspect defaultLimits (compress tar) >>= (`shouldSatisfy` isLeft)
+            result <- inspect defaultLimits (compress tar)
+            void result `shouldBe` Left (ParseError "unsafe archive path")
         it "rejects unflattened links and files beneath regular-file ancestors" $ do
             path <- expectRight (Tar.toTarPath False "example-1.2.3/linked")
             manifestPath <- expectRight (Tar.toTarPath False "example-1.2.3/Cargo.toml")
             target <- maybe (fail "invalid fixture link target") pure (Tar.toLinkTarget "Cargo.toml")
             let tar = Tar.write [Tar.simpleEntry path (Tar.SymbolicLink target), Tar.fileEntry manifestPath (BSL.fromStrict manifest)]
-            inspect defaultLimits (compress tar) >>= (`shouldSatisfy` isLeft)
+            result <- inspect defaultLimits (compress tar)
+            void result `shouldBe` Left (ParseError "Cargo packaged archive contains an unflattened link")
             bytes <- fixture [("Cargo.toml", manifest), ("parent", "x"), ("parent/child", "x")]
-            inspect defaultLimits bytes >>= (`shouldSatisfy` isLeft)
+            nested <- inspect defaultLimits bytes
+            void nested `shouldBe` Left (ParseError "Cargo archive file traverses another regular file")
         it "bounds compressed bytes, inflated bytes and entries" $ do
             bytes <- fixture [("Cargo.toml", manifest), ("padding", BS.replicate 65536 65)]
             for_
@@ -137,11 +153,24 @@ spec = do
             bytes <- fixture [("Cargo.toml", manifest), ("README.md", BS.singleton 255)]
             metadata <- inspect defaultLimits bytes >>= expectRight
             cargoArchiveExecution metadata `shouldBe` Right False
-            cargoPublicationMetadata defaultLimits (const (pure ())) metadata >>= (`shouldSatisfy` isLeft)
+            cargoPublicationMetadata defaultLimits (const (pure ())) metadata `shouldReturn` Left (ParseError "Cargo publication text is not UTF-8")
         it "does not substitute empty text for an absent explicitly declared file" $ do
             bytes <- fixture [("Cargo.toml", manifest <> "readme='missing.md'\n")]
             metadata <- inspect defaultLimits bytes >>= expectRight
-            cargoPublicationMetadata defaultLimits (const (pure ())) metadata >>= (`shouldSatisfy` isLeft)
+            cargoPublicationMetadata defaultLimits (const (pure ())) metadata `shouldReturn` Left (ParseError "Cargo manifest declares an absent text file")
+        it "bounds the selected-text pass after a valid archive inspection" $ do
+            let limits = defaultLimits{maxMetadataBytes = 512}
+            for_ [(512, True), (513, False)] $ \(size, accepted) -> do
+                bytes <- fixture [("Cargo.toml", manifest), ("README.md", BS.replicate size 65)]
+                archive <- inspect defaultLimits bytes >>= expectRight
+                result <- cargoPublicationMetadata limits (const (pure ())) archive
+                if accepted
+                    then do
+                        metadata <- expectRight result
+                        case publishMetadataValue metadata of
+                            Object fields -> KeyMap.lookup "readme" fields `shouldBe` Just (String (decodeUtf8 (BS.replicate size 65)))
+                            _ -> expectationFailure "Cargo publication is not an object"
+                    else result `shouldBe` Left (ParseError "tar metadata or extended header exceeds its bound")
 
     describe "cargoPublicationAgreement" $ do
         it "reserves comparison workspace before accepting an available source claim" $ do
@@ -155,6 +184,12 @@ spec = do
             paid <- readIORef payments
             paid `shouldSatisfy` (\costs -> length costs == 1 && all (> 0) costs)
             cargoPublicationAgreement defaultLimits (const (throwIO ChargeRefused)) archive source metadata `shouldThrow` (== ChargeRefused)
+        it "refuses a source identity disagreement after archive and publication preparation" $ do
+            bytes <- fixture [("Cargo.toml", manifest)]
+            archive <- inspect defaultLimits bytes >>= expectRight
+            metadata <- cargoPublicationMetadata defaultLimits (const (pure ())) archive >>= expectRight
+            let source = object ["name" .= ("another" :: Text), "vers" .= ("1.2.3" :: Text), "deps" .= ([] :: [Value])]
+            cargoPublicationAgreement defaultLimits (const (pure ())) archive source metadata `shouldReturn` Left (ParseError "Cargo publication and source index identities disagree")
 
 manifest :: ByteString
 manifest = "[package]\nname='example'\nversion='1.2.3'\n"

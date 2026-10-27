@@ -33,6 +33,16 @@ spec = describe "extractTar" $ do
         symbolic <- link True "example-1/symbolic.py" "module.py"
         hard <- link False "example-1/hard.py" "example-1/module.py"
         extract defaultLimits [info, target, symbolic, hard] `shouldReturn` Right metadata
+    it "refuses a valid archive without Core Metadata" $ do
+        source <- regular "example-1/module.py" "source"
+        extract defaultLimits [source] `shouldReturn` Left (ParseError "archive has no Core Metadata")
+    it "reads a long USTAR prefix when resolving a metadata link" $ do
+        let directory = "example-1/" <> replicate 110 'a'
+            path = directory <> "/metadata.txt"
+        target <- regular path metadata
+        alias <- link True "example-1/PKG-INFO" "placeholder"
+        let longLink = Tar.longSymLinkEntry (replicate 110 'a' <> "/metadata.txt")
+        extract defaultLimits [longLink, alias, target] `shouldReturn` Right metadata
     for_ [True, False] $ \symbolic ->
         it ("resolves linked PKG-INFO before or after its target: " <> show symbolic) $ do
             target <- regular "example-1/metadata.txt" metadata
@@ -64,7 +74,7 @@ spec = describe "extractTar" $ do
                 readChunks defaultLimits [header <> BS.drop 512 bytes] `shouldReturn` Left (ParseError reason)
         a <- link True "example-1/a" "b"
         b <- link True "example-1/b" "a"
-        extract defaultLimits [info, a, b] >>= (`shouldSatisfy` isLeft)
+        extract defaultLimits [info, a, b] `shouldReturn` Left (ParseError "cyclic tar link")
         let limits = defaultLimits{maxNestingDepth = 2}
         alias <- link True "example-1/PKG-INFO" "metadata.txt"
         target <- regular "example-1/metadata.txt" metadata
@@ -173,10 +183,41 @@ spec = describe "extractTar" $ do
         readChunks limits{maxArtifactCount = 0} [bytes] `shouldReturn` Left (ParseError "archive entry count exceeds its bound")
         readChunks limits{maxNestingDepth = 1} [bytes] `shouldReturn` Left (ParseError "tar path depth exceeds its bound")
         readChunks limits{maxMirrorArtifactBytes = BS.length bytes - 1} [bytes] `shouldReturn` Left (ParseError "archive inflated bytes exceed their bound")
+    it "refuses an oversized entry before reading its payload" $ do
+        info <- regular "example-1/PKG-INFO" metadata
+        let bytes = BSL.toStrict (Tar.write [info])
+            limits = defaultLimits{maxMirrorArtifactBytes = BS.length bytes}
+            digits = toText (showOct (BS.length bytes + 1) "")
+            size = encodeUtf8 (T.replicate (11 - T.length digits) "0" <> digits) <> "\NUL"
+            oversized = checksumHeader (BS.take 124 bytes <> size <> BS.drop 136 (BS.take 512 bytes))
+        readChunks limits [BS.take 512 bytes, BS.drop 512 bytes] `shouldReturn` Right metadata
+        readChunks limits [oversized, BS.drop 512 bytes] `shouldReturn` Left (ParseError "tar entry size exceeds its bound")
+    it "bounds the path inventory independently of selected content and payload bytes" $ do
+        info <- regular "example-1/PKG-INFO" metadata
+        extra <- regular "example-1/extra" "x"
+        let limits = defaultLimits{maxMetadataBytes = 300}
+        extract limits [info] `shouldReturn` Right metadata
+        extract limits [info, extra] `shouldReturn` Left (ParseError "archive path inventory exceeds its bound")
+    it "refuses payload size on a directory header and accepts a zero-size directory" $ do
+        info <- regular "example-1/PKG-INFO" metadata
+        path <- expectRight (Tar.toTarPath True "example-1/data")
+        let directory = Tar.simpleEntry path Tar.Directory
+            bytes = BSL.toStrict (Tar.write [directory, info])
+            header = BS.take 512 bytes
+            sized = checksumHeader (BS.take 124 header <> "00000000001\NUL" <> BS.drop 136 header)
+        readChunks defaultLimits [bytes] `shouldReturn` Right metadata
+        readChunks defaultLimits [sized <> BS.drop 512 bytes] `shouldReturn` Left (ParseError "non-file tar entry carries a payload")
     it "rejects a partial trailer and a truncated selected payload" $ do
         bytes <- BSL.toStrict <$> tarBytes [("example-1/PKG-INFO", metadata)]
+        readChunks defaultLimits [bytes] `shouldReturn` Right metadata
         readChunks defaultLimits [BS.take 512 bytes <> BS.take 1 metadata] `shouldReturn` Left (ParseError "truncated tar payload")
         readChunks defaultLimits [BS.take 1536 bytes <> BS.replicate 511 0] `shouldReturn` Left (ParseError "invalid tar trailer")
+        readChunks defaultLimits [BS.take 1024 bytes <> BS.replicate 511 0] `shouldReturn` Left (ParseError "tar archive has no complete trailer")
+        readChunks defaultLimits [bytes <> "nonzero"] `shouldReturn` Left (ParseError "tar archive has trailing nonzero bytes")
+    it "refuses a header checksum mismatch after a valid framing control" $ do
+        bytes <- BSL.toStrict <$> tarBytes [("example-1/PKG-INFO", metadata)]
+        readChunks defaultLimits [bytes] `shouldReturn` Right metadata
+        readChunks defaultLimits ["X" <> BS.drop 1 bytes] `shouldReturn` Left (ParseError "malformed tar header")
     it "pays for an indexed path before reading its metadata payload" $ do
         tar <- BSL.toStrict <$> tarBytes [("example-1/PKG-INFO", metadata)]
         readPayload <- newIORef False
@@ -186,9 +227,9 @@ spec = describe "extractTar" $ do
         readIORef readPayload `shouldReturn` False
     it "rejects duplicate framing keys, invalid size, and sparse framing extensions" $ do
         info <- regular "example-1/PKG-INFO" metadata
-        for_ [paxRecord "size=10\n" <> paxRecord "size=11\n", paxRecord "size=-1\n", paxRecord "GNU.sparse.size=10\n"] $ \attributes -> do
+        for_ [(paxRecord "size=10\n" <> paxRecord "size=11\n", "duplicate pax framing attribute"), (paxRecord "size=-1\n", "malformed pax decimal"), (paxRecord "GNU.sparse.size=10\n", "unsupported pax framing extension")] $ \(attributes, reason) -> do
             extended <- pax 'x' attributes
-            extract defaultLimits [extended, info] >>= (`shouldSatisfy` isLeft)
+            extract defaultLimits [extended, info] `shouldReturn` Left (ParseError reason)
   where
     extract limits = readChunks limits . BSL.toChunks . Tar.write
 
