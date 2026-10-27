@@ -2198,6 +2198,31 @@ The delivery agent obtains at least three qualifying observations per shape and 
 Keep adverse and disqualified observations. A provider registration or unmeasured value cannot satisfy calibration.
 Fresh independent review, final-commit CI, and a fresh-context final adversarial review remain delivery requirements.
 
+## RubyGems native coverage and evidence limits
+
+RubyGems uses the shared contracts with native independent oracles and providers.
+The baseline clients are Bundler 2.6.9 and 4.0.23 with compatible Ruby runtimes recorded in each execution receipt.
+Required client operations include lock, install, update, frozen lockfiles, checksums, prereleases, dependency constraints, Ruby requirements, and platform selection.
+The `/versions` probe must return `404`, followed by named Dependencies API requests, compact specifications, and local archive paths.
+Historical full-index clients, `--full-index`, Git dependencies, and local-path dependencies remain outside registry conformance claims.
+
+Native coverage must exercise these boundaries:
+
+- Basic caller reads, raw publication keys, optional OTP, and declared CodeArtifact service credential presentation.
+- Admission, advisory decisions, direct denied downloads, and boot rejection of unsupported rules.
+- Exact raw archive publication, identity mismatches, bounded Marshal and archive decoding, and independent reference fixtures.
+- Complete platform mirroring, retained original source facts, restart, public outage, and incomplete or corrupt inventory refusal.
+- Physical maintenance deletion, first-party protection, role authority, consent, caps, and native telemetry.
+- Multi-gem batches, selected compact specifications, long histories, platform multiplicity, and whole-version worker costs.
+
+The two-gem protocol experiment establishes only the named request flow for the two client versions.
+It does not establish production performance, policy coverage, platform coverage, or full conformance.
+Source registration alone supplies no runtime evidence. Backend fixtures supply no live AWS or IAM evidence.
+A delivery claim requires the actual native providers, independent obligations, final-commit CI receipts, and measured resource factors.
+Missing providers, observations, factors, or calibration remain failures.
+Native load qualification requires the standard full profile and three qualifying observations per applicable shape, with source and run provenance.
+Retain adverse and excluded observations. Existing ecosystems' factors, budgets, and floors do not supply RubyGems values.
+
 ## Onboarding an ecosystem
 
 An ecosystem counts as onboarded when it supplies each item below for its supported operations.

@@ -567,9 +567,9 @@ a separate metrics listener only when that exporter is selected.
 
 | Role | Registry or feed egress | Configured queue and advisory egress |
 |---|---|---|
-| `ecluse proxy` with embedded worker | Public/private discovery, metadata and artifact hosts, mirror repository, optional publication target | Queue send/receive/ack/visibility and redrive probe, advisory S3 read, PyPI/Cargo state read/list/conditional write when configured |
-| `ecluse proxy --no-worker` | Public/private discovery, metadata and artifact hosts, optional publication target | Queue send and redrive probe, advisory S3 read, PyPI/Cargo state read/list when configured |
-| `ecluse mirror` | Public discovery, metadata/artifact hosts and mirror repository | Queue receive/ack/visibility and redrive probe, advisory S3 read, PyPI/Cargo state read/list/conditional write when configured |
+| `ecluse proxy` with embedded worker | Public/private discovery, metadata and artifact hosts, mirror repository, optional publication target | Queue send/receive/ack/visibility and redrive probe, advisory S3 read, PyPI/Cargo/RubyGems state read/list/conditional write when configured |
+| `ecluse proxy --no-worker` | Public/private discovery, metadata and artifact hosts, optional publication target | Queue send and redrive probe, advisory S3 read, PyPI/Cargo/RubyGems state read/list when configured |
+| `ecluse mirror` | Public discovery, metadata/artifact hosts and mirror repository | Queue receive/ack/visibility and redrive probe, advisory S3 read, PyPI/Cargo/RubyGems state read/list/conditional write when configured |
 | `ecluse pilot` | OSV export host and EPSS feed host | Advisory S3 upload, no mirror queue |
 | `ecluse dredger` | Mirror target and private cache metadata, and each one's maintenance API | Advisory S3 read, no mirror queue |
 
@@ -579,7 +579,7 @@ network access.
 
 The default public endpoints are `registry.npmjs.org` for npm metadata and artifacts, `pypi.org` for
 PyPI metadata, `files.pythonhosted.org` for PyPI distributions, `index.crates.io` for Cargo discovery and indexes,
-and `static.crates.io` for Cargo archives. Private artifact hosts depend on
+`static.crates.io` for Cargo archives, and `rubygems.org` for RubyGems metadata and artifacts. Private artifact hosts depend on
 the selected backend. Pilot uses `osv-vulnerabilities.storage.googleapis.com` and
 `epss.empiricalsecurity.com` by default. It attempts the EPSS feed on every compile, even when no
 EPSS rule is enabled, so allow that egress whatever your rules. `ecluse check-config` prints the

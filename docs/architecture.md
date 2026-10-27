@@ -9,7 +9,7 @@ These documents explain the design choices and interface contracts behind that b
 [CONTRIBUTING.md](../CONTRIBUTING.md) covers development practices, and
 [MOTIVATION.md](../MOTIVATION.md) explains the operating problem.
 
-Écluse delegates package storage to configured registries. npm, PyPI, and Cargo support reads, mirroring,
+Écluse delegates package storage to configured registries. npm, PyPI, Cargo, and RubyGems support reads, mirroring,
 and first-party publication. Nix pins the Haskell toolchain, with `ecluse.cabal` and `flake.lock`
 as the dependency authorities.
 

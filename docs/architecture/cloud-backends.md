@@ -22,7 +22,7 @@ For rollback, stop producers and drain or quarantine version 2 messages before r
 The worker checks the current first-party declaration before touching a public source. It reads
 the target inventory, then tests any durable expected inventory against current target identities.
 A complete managed version needs no public fetch or new admission. A filename or version alone
-cannot prove PyPI or Cargo completion. npm can prove its atomic single-artifact version from validated
+cannot prove PyPI, Cargo, or RubyGems completion. npm can prove its atomic single-artifact version from validated
 native package, version, filename and digest facts, so completed npm retries also avoid public reads.
 
 For new files, the worker resolves the supported source inventory and applies current policy,
@@ -37,6 +37,20 @@ read precedes validation of the latest durable record and every declared retaine
 Only full filename, identity and companion proof acknowledges completion. Duplicate-file replies
 are write outcomes, not completion evidence. Conflicting target bytes refuse rather than trigger
 repeated publication. Existing receipt, retry and terminal-fault rules still govern failures.
+
+### RubyGems managed source data
+
+RubyGems mirrors the complete supported platform inventory for each admitted raw version.
+Durable state binds original dependency rows, publication times, platform identities, and validated compact specifications to verified archive digests.
+The worker captures compact specifications during mirroring, not policy evaluation.
+It retains no `.gem` bodies in mirror state. Current target proof and all required companions precede completion.
+A target timestamp or duplicate upload response cannot establish an original-source copy.
+Missing or corrupt state cannot prove faithful mirror reads during a public outage.
+
+CodeArtifact maps RubyGems maintenance to format `ruby`, without a namespace.
+Physical deletion uses the existing independent role grants, first-party protection, consent, and caps.
+A client yank request is neither a publication operation nor proof of physical deletion.
+Backend response fixtures do not establish live AWS service or IAM behaviour.
 
 ### Durable PyPI read data
 
@@ -322,6 +336,9 @@ The backend binds the secret to its protocol convention. npm renders Bearer cred
 retains an explicit Basic username, with `aws` supplied by the CodeArtifact backend and generic
 usernames supplied by configuration. The codec invents no username.
 Cargo renders the secret directly in `Authorization`, without a Bearer prefix or Basic username.
+RubyGems separates Basic read credentials from raw publication API keys and optional typed OTP.
+A declared CodeArtifact service role supplies Basic username `aws` for reads and Bearer for writes.
+Caller credentials retain their native presentation. Hostname guessing cannot select a service credential scheme.
 
 Each credential provider serialises its mints and keeps its own breaker. During healthy minting,
 expired callers wait for the current mint. After cooldown, one mint owns recovery. Other expired
