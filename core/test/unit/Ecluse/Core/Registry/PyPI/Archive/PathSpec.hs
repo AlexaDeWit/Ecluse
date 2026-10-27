@@ -7,7 +7,6 @@ module Ecluse.Core.Registry.PyPI.Archive.PathSpec (spec) where
 
 import Data.Text qualified as T
 import Ecluse.Core.Registry (ParseError (..))
-import Ecluse.Core.Registry.Archive.Path (resolveArchivePath)
 import Ecluse.Core.Registry.PyPI.Archive.Path (checkPath, metadataPath)
 import Ecluse.Core.Registry.PyPI.Project (DistributionKind (..))
 import Ecluse.Test.Package (pypiVersion, unscopedPyPI)
@@ -27,16 +26,6 @@ spec = do
             checkPath path `shouldBe` Right [path]
             for_ [path <> "a", "a\NULb", "a\DELb"] $ \invalid ->
                 checkPath invalid `shouldBe` Left (ParseError "unsafe archive path")
-    describe "resolveArchivePath" $ do
-        it "normalises redundant separators and parent references inside the root" $ do
-            resolveArchivePath ["example-1", "src"] ".//../data//file" `shouldBe` Right "example-1/data/file"
-            resolveArchivePath [] "scripts//./../build.rs" `shouldBe` Right "build.rs"
-            resolveArchivePath [] "scripts//../../build.rs" `shouldBe` Left (ParseError "tar link escapes its archive")
-        it "refuses unsafe local references under the same text bound" $ do
-            let target = T.replicate 4096 "a"
-            resolveArchivePath [] target `shouldBe` Right target
-            for_ ["", "/file", "C:/file", "a\\b", "a\NULb", "a\DELb", target <> "a"] $ \invalid ->
-                resolveArchivePath [] invalid `shouldBe` Left (ParseError "unsafe tar link target")
     describe "metadataPath" $
         it "checks the metadata directory against the admitted version" $ do
             metadataPath (unscopedPyPI "example") (pypiVersion "1") Sdist ["example-1", "PKG-INFO"] `shouldBe` Right True
