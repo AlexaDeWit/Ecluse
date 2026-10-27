@@ -11,8 +11,8 @@ import UnliftIO.Exception (evaluate, impureThrow)
 
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
 import Ecluse.Core.Version (parseVersionKey, renderVersionKey)
-import Ecluse.Core.Version.Gem (GemKey (..), parseGem)
 import Ecluse.Core.Version.Token (VToken (VNum))
+import Ecluse.Test.Support (expectRight)
 
 -- | Check canonical spelling and detect unevaluated native token construction without forcing it.
 spec :: Spec
@@ -25,21 +25,19 @@ spec = do
     describe "parseGem token construction" $ do
         it "detects a deliberately deferred token tail without evaluating it" $ do
             let !token = VNum 1
-                key = GemKey (token : impureThrow DeferredTokenTail)
-            GemKey tokens <- evaluate key
+            tokens <- evaluate (token : impureThrow DeferredTokenTail)
             settledPart 64 TokenList (Heap.asBox tokens) `shouldReturn` False
         for_ ["12.34.56", "1.2.0.rc.3", "2.0.a.0", "0.0.0", "1.0.0-1"] $ \raw ->
             it ("constructs the complete canonical token spine and scalar values for " <> toString raw) $ do
-                key <- maybe (fail "valid Gem version was rejected") pure (parseGem raw) >>= evaluate
-                let GemKey tokens = key
-                settledPart 64 TokenList (Heap.asBox tokens) `shouldReturn` True
+                key <- expectRight (parseVersionKey RubyGems raw) >>= evaluate
+                settledPart 64 NativeKey (Heap.asBox key) `shouldReturn` True
 
 data DeferredTokenTail = DeferredTokenTail
     deriving stock (Eq, Show)
 
 instance Exception DeferredTokenTail
 
-data KeyPart = TokenList | TokenValue
+data KeyPart = NativeKey | TokenList | TokenValue
 
 -- Inspect only constructors and indirections, leaving unevaluated token work untouched.
 settledPart :: Int -> KeyPart -> Heap.Box -> IO Bool
@@ -50,6 +48,7 @@ settledPart remaining part box
             Heap.IndClosure{Heap.indirectee = target} -> settledPart (remaining - 1) part target
             Heap.BlackholeClosure{Heap.indirectee = target} -> settledPart (remaining - 1) part target
             Heap.ConstrClosure{Heap.ptrArgs = pointers} -> case (part, pointers) of
+                (NativeKey, [tokens]) -> settledPart (remaining - 1) TokenList tokens
                 (TokenList, []) -> pure True
                 (TokenList, [token, rest]) -> (&&) <$> settledPart (remaining - 1) TokenValue token <*> settledPart (remaining - 1) TokenList rest
                 (TokenValue, _) -> pure True
