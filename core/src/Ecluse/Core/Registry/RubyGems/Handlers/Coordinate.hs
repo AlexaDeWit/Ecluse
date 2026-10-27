@@ -113,7 +113,8 @@ resolveCoordinate ticket observe request file = do
             [] -> Left (packumentNotFound rubyReplies [] (mkRefusal Nothing "the native coordinate is absent"))
             _ -> Left (rubyBadRequest "the native coordinate names more than one admitted artifact")
         name : names -> do
-            result <- withAdmittedDocument (mapPackumentReplies Left rubyReplies) ticket observer name request (Right Nothing) $ \cached sourceBytes origins -> do
+            let replies = (mapPackumentReplies Left rubyReplies){packumentNotFound = \_ _ -> Right Nothing}
+            result <- withAdmittedDocument replies ticket observer name request (Right Nothing) $ \cached sourceBytes origins -> do
                 liftIO (charge ticket (scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) sourceBytes))
                 pure (Right (Just (cached, sourceBytes, origins)))
             case result of

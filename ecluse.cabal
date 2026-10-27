@@ -53,6 +53,11 @@ extra-source-files:
   test/fixtures/rubygems/*.yaml
   test/fixtures/rubygems/legacy/*.gemspec.rz
   test/fixtures/rubygems/*.marshal
+  test/fixtures/rubygems/coordinate-ambiguity/*.json
+  test/fixtures/rubygems/coordinate-ambiguity/*.marshal
+  test/fixtures/rubygems/coordinate-ambiguity/info/acme-1
+  test/fixtures/rubygems/coordinate-ambiguity/gems/*.gem
+  test/fixtures/rubygems/coordinate-ambiguity/quick/Marshal.4.8/*.gemspec.rz
   test/fixtures/rubygems/info/ecluse-fixture-advisory
   test/fixtures/rubygems/info/ecluse-fixture-firstparty
   test/fixtures/rubygems/info/ecluse-fixture-future

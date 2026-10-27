@@ -11,6 +11,7 @@ require 'date'
 ENV['SOURCE_DATE_EPOCH'] = '1577836800'
 options = {output: File.expand_path(__dir__), payload_bytes: nil, state_versions: nil, metadata_bytes: 0}
 OptionParser.new do |parser|
+  parser.on('--coordinate NAME,VERSION,PLATFORM', Array) { |value| options[:coordinate] = value }
   parser.on('--output DIRECTORY') { |value| options[:output] = File.expand_path(value) }
   parser.on('--payload-bytes INTEGER', Integer) { |value| options[:payload_bytes] = value }
   parser.on('--state-versions INTEGER', Integer) { |value| options[:state_versions] = value }
@@ -18,6 +19,10 @@ OptionParser.new do |parser|
 end.parse!
 abort 'payload bytes must be positive' if options[:payload_bytes] && options[:payload_bytes] <= 0
 stress = !options[:state_versions].nil?
+selected = options[:coordinate]
+abort 'coordinate requires exactly a name, version and platform' if selected && (selected.length != 3 || selected.any?(&:empty?))
+abort 'coordinate selection cannot combine with state stress' if selected && stress
+abort 'coordinate selection requires a separate output directory' if selected && options[:output] == File.expand_path(__dir__)
 abort 'state versions must be between 1 and 256' if stress && !(1..256).cover?(options[:state_versions])
 abort 'metadata bytes must be between 0 and 2097152' unless (0..2_097_152).cover?(options[:metadata_bytes])
 abort 'metadata bytes require state versions' if options[:metadata_bytes] > 0 && !stress
@@ -45,6 +50,7 @@ if stress
     %w[ruby java x86_64-linux-musl arm64-darwin].map { |platform| ['ecluse-fixture-platform', "1.0.#{index}", platform] }
   end
 end
+coordinates = [selected] if selected
 coordinates.each do |name, version, platform|
   Dir.mktmpdir('ecluse-gem-fixture') do |directory|
     Dir.chdir(directory) do
@@ -100,12 +106,13 @@ coordinates.each do |name, version, platform|
       File.binwrite(File.join(root, compact_path), Zlib::Deflate.deflate(compact))
       File.binwrite(File.join(root, 'gems', archive), bytes)
       decoded = Marshal.load(compact)
-      if stress
+      if stress || selected
         package = Gem::Package.new(File.join(root, 'gems', archive))
         abort 'native archive verification failed' unless package.verify
         abort 'native compact description mismatch' unless decoded.description == spec.description
         abort 'native archive description mismatch' unless package.spec.description == spec.description
         abort 'native compact identity mismatch' unless [decoded.name, decoded.version, decoded.platform] == [spec.name, spec.version, spec.platform]
+        abort 'native archive identity mismatch' unless [package.spec.name, package.spec.version, package.spec.platform] == [spec.name, spec.version, spec.platform]
       end
       releases << {
         name: spec.name, version: spec.version.to_s, platform: spec.platform.to_s,
@@ -138,6 +145,11 @@ dependencies = releases.map do |row|
   {name: row[:name], number: row[:version], platform: row[:platform], dependencies: row[:dependencies].select { |d| d[:type] == :runtime }.map { |d| [d[:name], d[:requirements].map { |op, v| "#{op} #{v}" }.join(', ')] }}
 end
 File.binwrite(File.join(root, 'dependencies.marshal'), Marshal.dump(dependencies))
+
+if selected
+  File.write(File.join(root, 'manifest.json'), JSON.pretty_generate({ruby: RUBY_VERSION, rubygems: Gem::VERSION, source_date_epoch: ENV['SOURCE_DATE_EPOCH'], selected_coordinate: selected, releases: releases}) + "\n")
+  exit
+end
 
 if stress
   File.write(File.join(root, 'manifest.json'), JSON.pretty_generate({ruby: RUBY_VERSION, rubygems: Gem::VERSION, source_date_epoch: ENV['SOURCE_DATE_EPOCH'], synthetic_stress: {kind: 'owned-generated-state-stress', versions: options[:state_versions], platforms: 4, description_bytes: options[:metadata_bytes], encoding: 'deterministic-pseudorandom-hex'}, releases: releases}) + "\n")

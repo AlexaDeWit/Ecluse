@@ -1,0 +1,39 @@
+{
+  "ruby": "3.4.9",
+  "rubygems": "3.7.2",
+  "source_date_epoch": "1577836800",
+  "selected_coordinate": [
+    "acme-1",
+    "1.0",
+    "ruby"
+  ],
+  "releases": [
+    {
+      "name": "acme-1",
+      "version": "1.0",
+      "platform": "ruby",
+      "filename": "acme-1-1.0.gem",
+      "sha256": "1d3dd60cbeb2fe7c1f974d125e9afdebc4a9a7fafb9de03460004160b305fb9d",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/acme-1-1.0.gemspec.rz",
+      "compact_sha256": "594ff3e1a2315e23571576e51bc5a0f52a567fcf5946051a06cd21e8f78cc6d9",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "acme-1",
+        "version": "1.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": []
+      }
+    }
+  ]
+}

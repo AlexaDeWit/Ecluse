@@ -38,3 +38,8 @@ The description uses deterministic pseudorandom hexadecimal text. RubyGems metad
 The description limit is 2097152 bytes per artifact and 16777216 bytes across all generated artifacts.
 The generator verifies each native archive and compares its decoded specification and compact description.
 Generate before timing, then authenticate all selected bytes against the generated manifest.
+
+`coordinate-ambiguity/` contains the genuine `acme-1` version `1.0` source gem and compact specification.
+Regenerate it with `nix develop --command ruby test/fixtures/rubygems/generate.rb --output test/fixtures/rubygems/coordinate-ambiguity --coordinate acme-1,1.0,ruby`.
+Its separate manifest records the selected coordinate and the native decoder observations.
+The filename also admits an `acme` candidate, so routed tests check first-party absence without public fallback.

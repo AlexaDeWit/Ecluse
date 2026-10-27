@@ -13,7 +13,7 @@ import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
-import Network.HTTP.Types (Header, Method, status200, status304, status400, status401, status404, status406, status502)
+import Network.HTTP.Types (Header, Method, Status, status200, status304, status400, status401, status403, status404, status406, status502, status503)
 import Network.Wai (Request (..), defaultRequest, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SRequest (SRequest), SResponse (..), runSession, setPath, srequest)
@@ -22,20 +22,26 @@ import Test.Hspec
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Registry.RubyGems.Adapter (rubyGemsAdapter)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyReadCredential)
+import Ecluse.Core.Registry.RubyGems.FirstParty (projectFirstPartyEntry, rubyGemsFirstPartyName)
 import Ecluse.Core.Registry.RubyGems.Handlers (parseBatchQuery)
 import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRouter)
+import Ecluse.Core.Rules (prepare)
+import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
 import Ecluse.Core.Security (Limits (..), defaultLimits)
+import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned)
 import Ecluse.Core.Server.Admission.Artifact (newVerifiedArtifactBudget)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
-import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), ReadSourceSelection (PrivateOnly), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime, runHandler)
+import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), ReadSourceSelection (MergePrivateAndPublic, PrivateOnly), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime, runHandler)
 import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Port (noopMetricsPort)
+import Ecluse.Test.Registry.RubyGems.Fixtures (RubyRelease (..), loadRubyReleasesFrom, rubyRelease)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Handler (testServeRuntimeWith)
 import Ecluse.Test.Server.Mount (serveDepsFor)
 import Ecluse.Test.Support (expectRight)
@@ -125,6 +131,36 @@ spec = do
                 probe <- capture runtime binding "HEAD" "/versions" []
                 simpleStatus probe `shouldBe` status404
 
+    describe "first-party coordinate candidates" $ do
+        for_ ["GET", "HEAD"] $ \method ->
+            for_ ["/gems/acme-1-1.0.gem", "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz"] $ \path ->
+                it ("continues after an absent owned candidate for " <> show method <> " " <> show path) $
+                    withAmbiguousNative status404 $ \runtime binding hits release -> do
+                        response <- capture runtime binding method path []
+                        simpleStatus response `shouldBe` status200
+                        let body = if path == "/gems/acme-1-1.0.gem" then releaseArchive release else releaseCompact release
+                        simpleBody response `shouldBe` if method == "HEAD" then "" else fromStrict body
+                        lookup "Content-Length" (simpleHeaders response) `shouldBe` Just (show (BS.length body))
+                        observed <- readIORef hits
+                        observed `shouldSatisfy` elem ["private", "info", "acme"]
+                        observed `shouldSatisfy` elem ["public", "info", "acme-1"]
+                        observed `shouldSatisfy` notElem ["public", "info", "acme"]
+        for_ ["GET", "HEAD"] $ \method ->
+            for_ ["/gems/acme-1.0.gem", "/quick/Marshal.4.8/acme-1.0.gemspec.rz"] $ \path ->
+                it ("keeps actual owned absence as a 404 for " <> show method <> " " <> show path) $
+                    withAmbiguousNative status404 $ \runtime binding hits _ -> do
+                        response <- capture runtime binding method path []
+                        simpleStatus response `shouldBe` status404
+                        readIORef hits `shouldReturn` [["private", "info", "acme"]]
+        for_ [(status401, status401), (status403, status403), (status502, status503), (status503, status503)] $ \(upstream, expected) ->
+            for_ ["GET", "HEAD"] $ \method ->
+                for_ ["/gems/acme-1-1.0.gem", "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz"] $ \path ->
+                    it ("preserves an owned candidate refusal " <> show upstream <> " for " <> show method <> " " <> show path) $
+                        withAmbiguousNative upstream $ \runtime binding hits _ -> do
+                            response <- capture runtime binding method path []
+                            simpleStatus response `shouldBe` expected
+                            readIORef hits `shouldReturn` [["private", "info", "acme"]]
+
     describe "native metadata representations" $ do
         for_ metadataPaths $ \path ->
             it ("shares coding, HEAD and conditional responses for " <> toString (decodeUtf8 path :: Text)) $
@@ -205,7 +241,7 @@ responseTag :: SResponse -> IO ByteString
 responseTag response = maybe (expectationFailure "the admitted metadata response omitted its ETag" >> pure "") pure (lookup "ETag" (simpleHeaders response))
 
 withNative :: (ServeRuntime -> MountBinding -> IORef [([Text], [Header])] -> IO a) -> IO a
-withNative use = withSweeper $ \deadlines -> do
+withNative use = do
     root <- BS.readFile "test/fixtures/rubygems/info/ecluse-fixture-root"
     leaf <- BS.readFile "test/fixtures/rubygems/info/ecluse-fixture-leaf"
     compact <- BS.readFile "test/fixtures/rubygems/quick/Marshal.4.8/ecluse-fixture-root-1.0.0.gemspec.rz"
@@ -220,14 +256,41 @@ withNative use = withSweeper $ \deadlines -> do
                 ["gems", "ecluse-fixture-root-1.0.0.gem"] -> respond (responseLBS status200 [] (fromStrict archive))
                 _ -> respond (responseLBS status404 [] "")
     testWithApplication (pure upstream) $ \port -> do
-        admission <- newServeAdmissionTuned deadlines 1 0 0
-        runtime <- testServeRuntimeWith deadlines admission noopMetricsPort
-        verified <- expectRight =<< newVerifiedArtifactBudget deadlines (BS.length archive) (BS.length archive)
         let origin = loopbackRegistryUrl ("http://localhost:" <> show port)
-            adapter = rubyGemsAdapter (ChargeFactors 1000 1000 1000)
-            deps = (serveDepsFor adapter (Just origin) origin NoMirrorWrite [] (pure (UTCTime (fromGregorian 2030 1 1) 0))){pdReadSourceSelection = PrivateOnly, pdVerifiedArtifacts = Just verified}
-            binding = MountBinding ("rubygems" :| []) rubyGemsRouter rubyReadCredential deps Nothing
-        use runtime binding hits
+        withNativeOrigins origin origin (BS.length archive) $ \runtime binding -> use runtime binding hits
+
+withNativeOrigins :: RegistryUrl -> RegistryUrl -> Int -> (ServeRuntime -> MountBinding -> IO a) -> IO a
+withNativeOrigins private public cap use = withSweeper $ \deadlines -> do
+    admission <- newServeAdmissionTuned deadlines 1 0 0
+    runtime <- testServeRuntimeWith deadlines admission noopMetricsPort
+    verified <- expectRight =<< newVerifiedArtifactBudget deadlines cap cap
+    let adapter = rubyGemsAdapter (ChargeFactors 1000 1000 1000)
+        deps = (serveDepsFor adapter (Just private) public NoMirrorWrite [] (pure (UTCTime (fromGregorian 2030 1 1) 0))){pdReadSourceSelection = PrivateOnly, pdVerifiedArtifacts = Just verified}
+        binding = MountBinding ("rubygems" :| []) rubyGemsRouter rubyReadCredential deps Nothing
+    use runtime binding
+
+withAmbiguousNative :: Status -> (ServeRuntime -> MountBinding -> IORef [[Text]] -> RubyRelease -> IO a) -> IO a
+withAmbiguousNative privateStatus use = do
+    releases <- loadRubyReleasesFrom "test/fixtures/rubygems/coordinate-ambiguity"
+    release <- rubyRelease releases "acme-1" "1.0" "ruby"
+    hits <- newIORef []
+    owned <- expectRight (projectFirstPartyEntry "acme")
+    rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan 0)]
+    let upstream request respond = do
+            modifyIORef' hits (<> [pathInfo request])
+            let answer status bytes = respond (responseLBS status [] (fromStrict bytes))
+            case pathInfo request of
+                ["private", "info", "acme"] -> answer privateStatus ""
+                ["public", "info", "acme-1"] -> answer status200 (encodeUtf8 ("---\n" <> releaseInfoRow release <> "\n"))
+                ["public", "gems", "acme-1-1.0.gem"] -> answer status200 (releaseArchive release)
+                ["public", "quick", "Marshal.4.8", "acme-1-1.0.gemspec.rz"] -> answer status200 (releaseCompact release)
+                _ -> answer status404 ""
+    testWithApplication (pure upstream) $ \port -> do
+        let base = "http://localhost:" <> show port
+        withNativeOrigins (loopbackRegistryUrl (base <> "/private/")) (loopbackRegistryUrl (base <> "/public/")) (BS.length (releaseArchive release)) $ \runtime binding -> do
+            let deps = bindingPackumentDeps binding
+                selected = binding{bindingPackumentDeps = deps{pdReadSourceSelection = MergePrivateAndPublic, pdFirstParty = rubyGemsFirstPartyName (owned :| []), pdRules = rules}}
+            use runtime selected hits release
 
 capture :: ServeRuntime -> MountBinding -> Method -> ByteString -> [Header] -> IO SResponse
 capture runtime binding method path headers = do
