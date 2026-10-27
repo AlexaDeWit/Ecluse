@@ -16,7 +16,7 @@ import GHC.Conc (getAllocationCounter)
 import System.FilePath ((</>))
 import Test.Hspec
 import UnliftIO.Async (cancel, waitCatch, waitEither, withAsync)
-import UnliftIO.Exception (bracket, evaluate)
+import UnliftIO.Exception (evaluate)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.Core.NativeProbe (probeChild, processMemory)
@@ -144,8 +144,8 @@ measure mode input = do
     _ <- evaluate (length (show checksum :: String))
     let artifact = (artifactWith [checksum]){artSize = if inputKnownSize input then Just (inputBytes input) else Nothing}
     (_, beforeRss) <- processMemory
-    before <- Heap.sample
-    prepared <- prepare mode input artifact before
+    baseline <- Heap.sample
+    prepared <- prepare mode input artifact baseline
     (held, heldRss) <- case preparedRoot prepared of
         Nothing -> (,) <$> Heap.sample <*> (snd <$> processMemory)
         Just pointer -> do
@@ -168,17 +168,17 @@ measure mode input = do
             , consumedChunks = preparedChunks prepared
             , outputBytes = if preparedOutcome prepared == "verified" then inputBytes input else 0
             , requestedChargeBytes = preparedCharge prepared
-            , baselineLiveBytes = Heap.live before
+            , baselineLiveBytes = Heap.live baseline
             , heldLiveBytes = Heap.live held
             , releasedLiveBytes = Heap.live released
             , baselineRssBytes = beforeRss
             , heldRssBytes = heldRss
             , releasedRssBytes = releasedRss
             , producerAllocatedBytes = preparedProducerAllocated prepared
-            , allocatedBytes = toInteger (Heap.sampleAllocated held) - toInteger (Heap.sampleAllocated before)
-            , peakHeapBytes = max (preparedPeak prepared) (toInteger (Heap.live held) - toInteger (Heap.live before))
-            , retainedHeapBytes = toInteger (Heap.live held) - toInteger (Heap.live before)
-            , releasedHeapBytes = max 0 (toInteger (Heap.live released) - toInteger (Heap.live before))
+            , allocatedBytes = toInteger (Heap.sampleAllocated held) - toInteger (Heap.sampleAllocated baseline)
+            , peakHeapBytes = max (preparedPeak prepared) (toInteger (Heap.live held) - toInteger (Heap.live baseline))
+            , retainedHeapBytes = toInteger (Heap.live held) - toInteger (Heap.live baseline)
+            , releasedHeapBytes = max 0 (toInteger (Heap.live released) - toInteger (Heap.live baseline))
             , hashStarted = preparedHashStarted prepared
             , hashCompleted = preparedHashCompleted prepared
             , digestVerified = preparedDigestVerified prepared
@@ -214,10 +214,10 @@ prepare mode input artifact baseline = do
                     let width = min (inputChunkBytes input) (inputBytes input - position)
                     modifyIORef' consumed (+ width)
                     modifyIORef' chunks (+ 1)
-                    before <- getAllocationCounter
+                    allocationBefore <- getAllocationCounter
                     bytes <- evaluate (BS.replicate width (if mode == "mismatch" then 98 else 97))
-                    after <- getAllocationCounter
-                    modifyIORef' producerAllocated (+ max 0 (toInteger before - toInteger after))
+                    allocationAfter <- getAllocationCounter
+                    modifyIORef' producerAllocated (+ max 0 (toInteger allocationBefore - toInteger allocationAfter))
                     pure bytes
         pay cost = do
             modifyIORef' charged (max cost)

@@ -65,7 +65,7 @@ spec = describe "native gem validation" $ do
         bytes <- readFileBS fixture
         members <- nativeMembers bytes
         for_ [members <> take 1 members, drop 1 members, members <> [("unexpected", "data")]] $ \entries -> do
-            changed <- BSL.toStrict <$> tarBytes entries
+            changed <- BSL.toStrict <$> tarBytes (map (first toString) entries)
             inspect defaultLimits changed >>= (`shouldSatisfy` isLeft)
         inspect defaultLimits (bytes <> "junk") >>= (`shouldSatisfy` isLeft)
     it "checks member checksums and traverses the complete nested compressed stream" $ do
@@ -73,7 +73,7 @@ spec = describe "native gem validation" $ do
         members <- nativeMembers bytes
         let mutate key f = map (\(name, body) -> (name, if name == key then f body else body)) members
         for_ [mutate "metadata.gz" (<> "junk"), mutate "data.tar.gz" (<> "junk"), mutate "checksums.yaml.gz" (<> "junk"), mutate "data.tar.gz" (\raw -> BS.take (BS.length raw - 1) raw)] $ \entries -> do
-            changed <- BSL.toStrict <$> tarBytes entries
+            changed <- BSL.toStrict <$> tarBytes (map (first toString) entries)
             inspect defaultLimits changed >>= (`shouldSatisfy` isLeft)
     it "reaches nested tar validation after accepting recomputed member checksums" $ do
         bytes <- readFileBS fixture
@@ -92,7 +92,7 @@ spec = describe "native gem validation" $ do
         bytes <- readFileBS fixture
         members <- nativeMembers bytes
         let malicious = BSL.toStrict (GZip.compress "--- !ruby/object:Kernel {}")
-        changed <- BSL.toStrict <$> tarBytes (map (\(name, body) -> (name, if name == "metadata.gz" then malicious else body)) members)
+        changed <- BSL.toStrict <$> tarBytes (map (\(name, body) -> (toString name, if name == "metadata.gz" then malicious else body)) members)
         inspect defaultLimits changed >>= (`shouldSatisfy` isLeft)
     it "reaches artifact and metadata byte bounds" $ do
         bytes <- readFileBS fixture

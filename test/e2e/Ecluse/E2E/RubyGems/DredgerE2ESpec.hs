@@ -257,8 +257,8 @@ safetyCases :: PhaseRecorder -> Spec
 safetyCases recorder = aroundAll acquire $ do
     it (caseLabel "rubygems/dredger-native-safety/deletion-cap" "stops native physical deletion at the configured whole-version cap") $ \(plane, mirror, _) -> do
         publish (Native.directStore mirror) (packageName previewPackage) "2.0.0"
-        before <- Native.storeVersions mirror (packageName previewPackage)
-        before `shouldBe` ["1.0.0", "2.0.0"]
+        initialState <- Native.storeVersions mirror (packageName previewPackage)
+        initialState `shouldBe` ["1.0.0", "2.0.0"]
         requests <- codeArtifactDeleteRequests (Native.rspControl plane)
         run <- runNativeSweep plane [("ECLUSE_DREDGER__DELETION_CAP", "1")] Apply (IdentityPolicy [packageName previewPackage])
         sweepExit run `shouldNotBe` ExitSuccess
@@ -268,20 +268,20 @@ safetyCases recorder = aroundAll acquire $ do
         made <- drop (length requests) <$> codeArtifactDeleteRequests (Native.rspControl plane)
         made `shouldBe` [("POST", "v1/package/versions/delete")]
     it (caseLabel "rubygems/dredger-native-safety/unsafe-upstream" "refuses a refillable native mirror before any physical deletion") $ \(plane, mirror, cache) -> do
-        before <- (,) <$> Native.storeInventory mirror <*> Native.storeInventory cache
+        initialState <- (,) <$> Native.storeInventory mirror <*> Native.storeInventory cache
         requests <- codeArtifactDeleteRequests (Native.rspControl plane)
         run <- Native.withUnsafeMirror plane (runNativeSweep plane [] Apply (FullIdentity (packageName deniedPackage)))
         sweepExit run `shouldNotBe` ExitSuccess
         T.toLower (sweepOutput run) `shouldSatisfy` T.isInfixOf "upstream"
-        ((,) <$> Native.storeInventory mirror <*> Native.storeInventory cache) `shouldReturn` before
+        ((,) <$> Native.storeInventory mirror <*> Native.storeInventory cache) `shouldReturn` initialState
         codeArtifactDeleteRequests (Native.rspControl plane) `shouldReturn` requests
     it (caseLabel "rubygems/dredger-native-safety/native-yank-not-deletion" "distinguishes a native yank refusal from actual CodeArtifact archive removal") $ \(plane, mirror, _) -> do
         let name = packageName deniedPackage
             version = packageVersion deniedPackage
-        before <- Native.storeArtifactBytes mirror name version
-        second LBS.length before `shouldSatisfy` servedBytes
+        initialState <- Native.storeArtifactBytes mirror name version
+        second LBS.length initialState `shouldSatisfy` servedBytes
         fst <$> Native.storeRequest (Native.directStore mirror) ("api/v1/gems/yank?gem_name=" <> name <> "&version=" <> version) "DELETE" Nothing `shouldReturn` 405
-        Native.storeArtifactBytes mirror name version `shouldReturn` before
+        Native.storeArtifactBytes mirror name version `shouldReturn` initialState
         Native.storeVersions mirror name `shouldReturn` [version]
         requests <- codeArtifactDeleteRequests (Native.rspControl plane)
         run <- runNativeSweep plane [] Apply (IdentityPolicy [name])
@@ -291,14 +291,14 @@ safetyCases recorder = aroundAll acquire $ do
         made <- drop (length requests) <$> codeArtifactDeleteRequests (Native.rspControl plane)
         made `shouldBe` [("POST", "v1/package/versions/delete")]
     it (caseLabel "rubygems/dredger-native-safety/authorisation" "refuses unsigned control requests and incorrect native service credentials without mutation") $ \(plane, mirror, cache) -> do
-        before <- (,) <$> Native.storeInventory mirror <*> Native.storeInventory cache
+        initialState <- (,) <$> Native.storeInventory mirror <*> Native.storeInventory cache
         release <- rubyRelease (Native.rspReleases plane) (packageName keptPackage) "1.0.0" "ruby"
         let base = "http://127.0.0.1:" <> show (cafPort (Native.rspControl plane))
             manager = e2eManager (rubyProxy (Native.rssObserved mirror))
         unauthorised manager (base <> "/ruby/mirror/info/" <> packageName keptPackage) "GET" "" `shouldReturn` 401
         unauthorised manager (base <> "/ruby/mirror/api/v1/gems") "POST" (releaseArchive release) `shouldReturn` 401
         unauthorised manager (base <> "/v1/package/versions/delete") "POST" "{}" `shouldReturn` 403
-        ((,) <$> Native.storeInventory mirror <*> Native.storeInventory cache) `shouldReturn` before
+        ((,) <$> Native.storeInventory mirror <*> Native.storeInventory cache) `shouldReturn` initialState
     it (caseLabel "rubygems/dredger-native-safety/multi-platform-deletion" "physically removes every platform artifact in one denied native version") $ \(plane, mirror, _) -> do
         let name = packageName keptPackage
             version = packageVersion keptPackage

@@ -9,7 +9,8 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List (isInfixOf, lookup)
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (hContentLength, hTransferEncoding, status200, status404)
+import Network.HTTP.Types (hContentLength, status200, status404)
+import Network.HTTP.Types.Header (hTransferEncoding)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 

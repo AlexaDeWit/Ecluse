@@ -39,8 +39,8 @@ spec = do
         projectionFraming (callerProjection projectionDriver) `shouldBe` CallerBoundRecords
     it (caseLabel "core.metadata.projection.rubygems.invalid-evidence-control" "detects a reader that discards a malformed sibling without evidence") $ do
         let bytes = "---\nbroken\n" <> fixtureRow "1.0.0" <> "\n" <> fixtureRow "2.0.0"
-        let evidenceLaw reader = do
-                info <- expectRight =<< reader bytes
+        let evidenceLaw readInfo = do
+                info <- expectRight =<< readInfo bytes
                 Map.keys (infoVersions info) `shouldBe` ["1.0.0", "2.0.0"]
                 infoInvalidEntries info `shouldSatisfy` (not . null)
             permissive input = fmap (\info -> info{infoInvalidEntries = []}) <$> fullAt origin defaultLimits input

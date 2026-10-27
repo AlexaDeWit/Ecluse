@@ -6,7 +6,6 @@
 module Ecluse.Core.Registry.RubyGems.ProjectSpec (spec) where
 
 import Data.Text qualified as T
-import Ecluse.Core.Security (defaultLimits)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, RubyGems))

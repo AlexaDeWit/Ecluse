@@ -38,10 +38,10 @@ spec = describe "RubyGems corpus transforms" $ do
     it "adds heavy metadata without changing native installation fields" $ do
         document <- expectRight (decodeRubyGemsValues platformHistory)
         enlarged <- expectRight (encodeRubyGemsValues (heavyRubyGemsBase 4096 document))
-        before <- expectRight (referenceInfo platformHistory)
-        after <- expectRight (referenceInfo enlarged)
-        map installationFields after `shouldBe` map installationFields before
-        all (any ((== "ecluse_benchmark") . fst) . rowFields) after `shouldBe` True
+        originalRows <- expectRight (referenceInfo platformHistory)
+        enlargedRows <- expectRight (referenceInfo enlarged)
+        map installationFields enlargedRows `shouldBe` map installationFields originalRows
+        all (any ((== "ecluse_benchmark") . fst) . rowFields) enlargedRows `shouldBe` True
     it "generates the requested distinct native releases" $
         for_ [1, 8, 64] $ \count -> do
             versions <- expectRight (rubyGemsVersionKeys (syntheticInfoBytes count))

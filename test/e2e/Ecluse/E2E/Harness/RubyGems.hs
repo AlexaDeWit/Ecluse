@@ -133,7 +133,7 @@ rubyLockfile :: RubyProject -> IO (Maybe Text)
 rubyLockfile project = do
     let path = rubyDirectory project </> "Gemfile.lock"
     exists <- doesFileExist path
-    if exists then Just <$> readFileText path else pure Nothing
+    if exists then Just . decodeUtf8 <$> readFileBS path else pure Nothing
 
 -- | RubyGems sends the native API key through its documented isolated environment variable.
 rubyGemCommand :: RubyProject -> Text -> [String] -> IO ClientResult

@@ -40,8 +40,8 @@ spec = describe "Ruby native winning-source assembly" $ do
         map (unGemPlatform . coordinatePlatform . grCoordinate) (gemRows document) `shouldBe` ["ruby", "java", "x86_64-linux-musl", "arm64-darwin"]
         map (renderVersion . coordinateVersion . grCoordinate) (gemRows document) `shouldBe` replicate 4 "1.0.0"
         let mismatched = Map.insert 0 (Snapshot (digestOf "different snapshot") (manifestRaw trusted)) sources
-        empty <- expectRight (maybeToRight ("missing Ruby document" :: Text) (snd rubyGemsCached (assembleRubyGemsDocument "https://proxy.test" mismatched plan Nothing)))
-        gemRows empty `shouldBe` []
+        emptyDocument <- expectRight (maybeToRight ("missing Ruby document" :: Text) (snd rubyGemsCached (assembleRubyGemsDocument "https://proxy.test" mismatched plan Nothing)))
+        gemRows emptyDocument `shouldBe` []
     it "serialises nonempty admitted rows accepted by Ruby's native Marshal decoder" $ do
         name <- expectRight (projectName "ecluse-fixture-root")
         bytes <- BS.readFile "test/fixtures/rubygems/info/ecluse-fixture-root"

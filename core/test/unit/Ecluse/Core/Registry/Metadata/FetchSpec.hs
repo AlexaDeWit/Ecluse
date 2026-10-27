@@ -111,6 +111,7 @@ registered =
         }
     ]
   where
+    rubyRows :: [Text] -> Int -> ByteString
     rubyRows versions padding = "---\n" <> BS.intercalate "\n" [encodeUtf8 version <> " |checksum:" <> BS.replicate 64 0x30 <> ",created_at:2020-01-01T00:00:00Z,padding:" <> BS.replicate padding 0x78 | version <- versions]
     discovery base = toStrict (encode (object ["dl" .= base]))
     cargoRow name version padding = toStrict . encode $ case Cargo.cargoIndexRecord (Cargo.minimalCargoRelease name version) of

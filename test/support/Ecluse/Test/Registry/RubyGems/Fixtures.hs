@@ -37,7 +37,7 @@ data RubyRelease = RubyRelease
     , releaseManifest :: Value
     , releaseInfoRow :: Text
     }
-    deriving stock (Eq, Show)
+    deriving stock (Eq, Ord, Show)
 
 -- | The graph root supplies an executable and a requireable module.
 rubyRoot :: Text
