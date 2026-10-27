@@ -5,6 +5,7 @@
 -- | Merge authorised private metadata with admitted public versions. First-party names use only private metadata.
 module Ecluse.Core.Server.Pipeline.Packument (
     PackumentReplies (..),
+    DocumentRejectionObserver (..),
     packumentAction,
     servePackument,
     headPackument,
@@ -38,7 +39,7 @@ import Ecluse.Core.Mirror.State (ProjectMirrorRecord, StateRevision)
 import Ecluse.Core.Package (
     Artifact (artHashes),
     PackageDetails (pkgArtifacts),
-    PackageInfo (infoVersions),
+    PackageInfo (infoInvalidEntries, infoVersions),
     PackageName,
     renderPackageName,
  )
@@ -154,6 +155,14 @@ data PackumentReplies response = PackumentReplies
     , packumentUnavailable :: ResponseHeaders -> Refusal -> response
     }
 
+-- | Observe checked version and file rejections for native coordinate resolution.
+data DocumentRejectionObserver response = DocumentRejectionObserver
+    { observeVersionRejection :: EvalContext -> PackageDetails -> Rejection -> IO ()
+    -- ^ Keep the original gate context with each checked version or file exclusion.
+    , onCheckedNoSurvivorAdmission :: IO response
+    -- ^ Resolve a checked public inventory after settled private absence and no surviving contribution.
+    }
+
 -- | Change only response construction while retaining shared admission and refusal decisions.
 mapPackumentReplies :: (a -> b) -> PackumentReplies a -> PackumentReplies b
 mapPackumentReplies convert replies =
@@ -217,7 +226,7 @@ data PackumentServing response = PackumentServing
     -- ^ What the private read paid. It steps down to what the read keeps, and goes once the body exists.
     , psvInputBytes :: Int -> IO ()
     , psvDocumentBytes :: Int -> IO (Either response ())
-    , psvRejectedVersion :: Maybe (EvalContext -> PackageDetails -> Rejection -> IO ())
+    , psvRejectionObserver :: Maybe (DocumentRejectionObserver response)
     , psvAbsent :: Maybe response
     , psvResolved :: PackumentServing response -> [Contribution] -> MergePlan -> Handler response
     , psvPublicRead :: ChargePart
@@ -262,13 +271,13 @@ withAdmittedDocument ::
     Handler response
 withAdmittedDocument replies ticket observe = withObservedAdmittedDocument replies ticket observe (const (pure (Right ()))) Nothing
 
--- | Observe source sizes before admission and checked rejections hidden by a surviving contribution.
+-- | Observe source sizes and checked rejections, including admission with no surviving contribution.
 withObservedAdmittedDocument ::
     PackumentReplies response ->
     MemoryTicket ->
     (Int -> IO ()) ->
     (Int -> IO (Either response ())) ->
-    Maybe (EvalContext -> PackageDetails -> Rejection -> IO ()) ->
+    Maybe (DocumentRejectionObserver response) ->
     PackageName ->
     Request ->
     response ->
@@ -286,7 +295,7 @@ withObservedAdmittedDocument replies ticket observe checkDocument rejected name 
                 then refuse packumentNotFound "first-party packages require the private registry view"
                 else do
                     serving <- newServing PackumentFull replies name request ticket admitted
-                    serveAdmittedPackument serving{psvAbsent = Just absent, psvInputBytes = observe, psvDocumentBytes = checkDocument, psvRejectedVersion = rejected} clientToken
+                    serveAdmittedPackument serving{psvAbsent = Just absent, psvInputBytes = observe, psvDocumentBytes = checkDocument, psvRejectionObserver = rejected} clientToken
   where
     admitted serving sources plan = do
         let basis = outputBasisBytes plan sources
@@ -324,7 +333,7 @@ newServing mode replies name request ticket resolved = do
             , psvPublicRead = publicRead
             , psvInputBytes = const pass
             , psvDocumentBytes = const (pure (Right ()))
-            , psvRejectedVersion = Nothing
+            , psvRejectionObserver = Nothing
             , psvAbsent = Nothing
             , psvResolved = resolved
             }
@@ -399,7 +408,7 @@ serveMergedPackument serving evalCtx record privResult pubResult
                 trustedVersions = Map.unions (map (infoVersions . srcInfo) privateSources)
             public <- withRunInIO $ \run -> do
                 evidenceReads <- newPublicInstallEvidenceReads deps (srPublicClient rt) (srPublicControl rt) InstallPublicAdmission (psvTicket serving) (run . logFM ErrorS . ls . renderInability . rfDetail)
-                gatePublic (psvRejectedVersion serving) evidenceReads (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) (originManifest pubResult)
+                gatePublic (observeVersionRejection <$> psvRejectionObserver serving) evidenceReads (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) (originManifest pubResult)
             let sources = privateSources <> maybeToList (paContribution public)
                 required = Map.withoutKeys pending (paBlockedPending public)
                 covered = Map.null required || maybe False (publicMirrorCoverage required . srcInfo) (paContribution public)
@@ -412,11 +421,16 @@ serveMergedPackument serving evalCtx record privResult pubResult
                         Just plan -> do
                             liftIO $ do
                                 paReportRejections public
-                                for_ (psvRejectedVersion serving) $ \report ->
+                                for_ (psvRejectionObserver serving) $ \observer ->
                                     for_ (catMaybes [unmanagedManifest, managedManifest]) $ \manifest ->
-                                        reportIntegrityRejections report evalCtx (pdMinTrustedIntegrity deps) trustedIntegrityBelowFloor trustedIntegrityMissing (manifestInfo manifest)
+                                        reportIntegrityRejections (observeVersionRejection observer) evalCtx (pdMinTrustedIntegrity deps) trustedIntegrityBelowFloor trustedIntegrityMissing (manifestInfo manifest)
                             serveResolved serving sources plan
                         Nothing
+                            | Just observer <- psvRejectionObserver serving
+                            , settledAbsence privResult
+                            , Just manifest <- originManifest pubResult
+                            , null (infoInvalidEntries (manifestInfo manifest)) ->
+                                liftIO (paReportRejections public >> onCheckedNoSurvivorAdmission observer)
                             | pdReadSourceSelection deps == ManagedMirrorAndPublic
                             , OriginUnresolved <- pubResult ->
                                 mirrorUnavailable serving

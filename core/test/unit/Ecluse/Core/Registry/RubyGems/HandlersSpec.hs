@@ -223,16 +223,19 @@ spec = do
                         observed `shouldSatisfy` all (\parts -> take 2 parts == ["public", "info"])
 
         let loggedCases =
-                [("public", PublicMixedCandidateSource, "GET", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz", status403, 1), ("public", PublicMixedCandidateSource, "GET", "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz", status200, 0)]
-                    <> [("private sibling", MixedPolicyCandidateSource, method, path, status403, 1) | method <- ["GET", "HEAD"], path <- ["/gems/acme-1-2.0.gem", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz"]]
-        for_ loggedCases $ \(label, sources, method, path, expected, count) ->
+                [("public", PublicMixedCandidateSource, "GET", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz", status403, 1, False), ("public", PublicMixedCandidateSource, "GET", "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz", status200, 0, False)]
+                    <> [(label, sources, method, path, status403, 1, False) | (label, sources) <- [("private sibling", MixedPolicyCandidateSource), ("settled private absence", PublicDeniedPrivateCandidateSource status404)], method <- ["GET", "HEAD"], path <- ["/gems/acme-1-2.0.gem", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz"]]
+                    <> [("absent raw coordinate", PublicDeniedPrivateCandidateSource status404, method, path, status404, 0, False) | method <- ["GET", "HEAD"], path <- ["/gems/acme-1-3.0.gem", "/quick/Marshal.4.8/acme-1-3.0.gemspec.rz", "/gems/acme-1-2.0-java.gem", "/quick/Marshal.4.8/acme-1-2.0-java.gemspec.rz"]]
+                    <> [("checked zero-version inventory", CheckedEmptyCandidateSource, method, path, status404, 0, False) | method <- ["GET", "HEAD"], path <- ["/gems/acme-1-2.0.gem", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz"]]
+                    <> [("matching transient inability", PublicDeniedPrivateCandidateSource status404, method, path, status503, 1, True) | method <- ["GET", "HEAD"], path <- ["/gems/acme-1-2.0.gem", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz"]]
+        for_ loggedCases $ \(label, sources, method, path, expected, count, missingDatabase) ->
             it ("logs only the final matching rejected coordinate with its gate tag for " <> toString (label :: Text) <> " " <> show (method, path)) $
                 withCoordinateSources sources $ \originalRuntime original hits _ -> do
                     tags <- newIORef (0 :: Int)
                     denials <- newIORef []
                     let deps = bindingPackumentDeps original
                         tag = atomicModifyIORef' tags (\previous -> let next = previous + 1 in (next, Just (DbEtag ("gate-" <> show next))))
-                        binding = original{bindingPackumentDeps = deps{pdAdvisoryEtag = tag}}
+                        binding = original{bindingPackumentDeps = deps{pdAdvisoryEtag = tag, pdRules = if missingDatabase then map (missingDatabaseForVersion "2.0") (pdRules deps) else pdRules deps}}
                         metrics = (srMetrics originalRuntime){mpRuleDenial = \rule reason -> atomicModifyIORef' denials (\seen -> (seen <> [(rule, reason)], ()))}
                         runtime = originalRuntime{srMetrics = metrics}
                     (response, logged) <- captureJsonLog (\logEnv -> captureWithLog logEnv runtime binding method path [])
@@ -240,29 +243,56 @@ spec = do
                     let rejected = filter ((== Just "denied") . lineMessage) (T.lines logged)
                     length rejected `shouldBe` count
                     readIORef tags `shouldReturn` 2
-                    readIORef denials `shouldReturn` replicate count (Just "BlockedByDefault", Metric.ReasonPolicy)
+                    readIORef denials `shouldReturn` replicate count (if missingDatabase then (Nothing, Metric.ReasonUnavailable) else (Just "BlockedByDefault", Metric.ReasonPolicy))
                     for_ rejected $ \line -> do
                         line `shouldSatisfy` T.isInfixOf "\"package\":\"acme-1\""
                         line `shouldSatisfy` T.isInfixOf "\"version\":\"2.0\""
                         line `shouldSatisfy` T.isInfixOf "\"active_advisory_db_etag\":\"gate-2\""
                     observed <- readIORef hits
                     case sources of
-                        MixedPolicyCandidateSource -> sort observed `shouldBe` [["private", "info", "acme"], ["private", "info", "acme-1"], ["public", "info", "acme"], ["public", "info", "acme-1"]]
+                        MixedPolicyCandidateSource -> sort observed `shouldBe` coordinatePrivateMetadataReads
+                        PublicDeniedPrivateCandidateSource _ -> sort observed `shouldBe` coordinatePrivateMetadataReads
+                        CheckedEmptyCandidateSource -> sort observed `shouldBe` coordinatePrivateMetadataReads
                         _ -> observed `shouldSatisfy` notElem ["public", "gems", "acme-1-2.0.gem"]
         for_ ["GET", "HEAD"] $ \method ->
             for_ ["/gems/acme-1-2.0.gem", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz"] $ \path ->
                 it ("preserves a transient missing-database inability beside an admitted sibling for " <> show (method, path)) $
                     withCoordinateSources PublicMixedCandidateSource $ \runtime original hits _ -> do
                         let deps = bindingPackumentDeps original
-                            unknown rule = case prepEval rule of
-                                PerVersion evaluate -> rule{prepEval = PerVersion (\ctx evidence -> if renderVersion (evVersion evidence) == "2.0" then pure (CannotVet FailDeny NoDatabaseLoaded) else evaluate ctx evidence)}
-                                PerPackage _ -> rule
-                                PerInstallEvidence _ -> rule
-                            binding = original{bindingPackumentDeps = deps{pdRules = map unknown (pdRules deps)}}
+                            binding = original{bindingPackumentDeps = deps{pdRules = map (missingDatabaseForVersion "2.0") (pdRules deps)}}
                         response <- capture runtime binding method path []
                         simpleStatus response `shouldBe` status503
                         when (method == "GET") (simpleBody response `shouldSatisfy` BS.isInfixOf "no advisory database loaded" . LBS.toStrict)
                         readIORef hits `shouldReturn` [["public", "info", "acme"], ["public", "info", "acme-1"]]
+
+    describe "checked no-survivor native admission" $ do
+        it "preserves the ordinary listing refusal after settled private absence" $
+            withCoordinateSources (PublicDeniedPrivateCandidateSource status404) $ \runtime binding hits _ -> do
+                response <- capture runtime binding "GET" "/api/v1/dependencies?gems=acme-1" []
+                simpleStatus response `shouldBe` status503
+                sort <$> readIORef hits `shouldReturn` [["private", "info", "acme-1"], ["public", "info", "acme-1"]]
+        for_ ["GET", "HEAD"] $ \method ->
+            for_ ["/gems/acme-1-2.0.gem", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz"] $ \path -> do
+                it ("keeps invalid inventory on its existing failure path for " <> show (method, path)) $
+                    withCoordinateSources InvalidInventoryCandidateSource $ \runtime binding hits _ -> do
+                        response <- capture runtime binding method path []
+                        simpleStatus response `shouldBe` status503
+                        sort <$> readIORef hits `shouldReturn` coordinatePrivateMetadataReads
+                for_ [(status401, status401), (status403, status403), (status502, status503), (status503, status503)] $ \(upstream, expected) ->
+                    it ("preserves the actual private refusal beside an all-denied public source for " <> show (upstream, method, path)) $
+                        withCoordinateSources (PublicDeniedPrivateCandidateSource upstream) $ \runtime binding hits _ -> do
+                            response <- capture runtime binding method path []
+                            simpleStatus response `shouldBe` expected
+                            sort <$> readIORef hits `shouldReturn` coordinatePrivateMetadataReads
+                for_ [False, True] $ \privateOnly ->
+                    it ("keeps owned private absence without public fallback for " <> show (privateOnly, method, path)) $
+                        withCoordinateSources (PublicDeniedPrivateCandidateSource status404) $ \runtime original hits _ -> do
+                            owned <- expectRight (projectFirstPartyEntry "acme-1")
+                            let deps = bindingPackumentDeps original
+                                binding = original{bindingPackumentDeps = deps{pdFirstParty = rubyGemsFirstPartyName (owned :| []), pdReadSourceSelection = if privateOnly then PrivateOnly else MergePrivateAndPublic}}
+                            response <- capture runtime binding method path []
+                            simpleStatus response `shouldBe` status404
+                            sort <$> readIORef hits `shouldReturn` ([["private", "info", "acme"], ["private", "info", "acme-1"]] <> [["public", "info", "acme"] | not privateOnly])
 
     describe "partial coordinate integrity exclusions" $ do
         for_ [False, True] $ \trusted ->
@@ -278,7 +308,7 @@ spec = do
                             response <- capture runtime binding method path []
                             simpleStatus response `shouldBe` status403
                             observed <- readIORef hits
-                            sort observed `shouldBe` [["private", "info", "acme"], ["private", "info", "acme-1"], ["public", "info", "acme"], ["public", "info", "acme-1"]]
+                            sort observed `shouldBe` coordinatePrivateMetadataReads
 
     describe "coordinate source document limits" $ do
         for_ ["GET", "HEAD"] $ \method ->
@@ -453,6 +483,9 @@ data CoordinateSources
     | PublicCandidateSource
     | PublicMixedCandidateSource
     | MixedPolicyCandidateSource
+    | PublicDeniedPrivateCandidateSource Status
+    | CheckedEmptyCandidateSource
+    | InvalidInventoryCandidateSource
     | MixedPublicIntegrityCandidateSource
     | MixedTrustedIntegrityCandidateSource
 
@@ -479,6 +512,7 @@ withCoordinateSourceHeader header sources use = do
                 ["private", "info", "acme"] -> answer (case sources of OwnedCandidateSource status -> status; _ -> status404) ""
                 ["private", "info", "acme-1"] -> case sources of
                     MixedPolicyCandidateSource -> answer status200 admitted
+                    PublicDeniedPrivateCandidateSource status -> answer status ""
                     MixedPublicIntegrityCandidateSource -> answer status200 admitted
                     MixedTrustedIntegrityCandidateSource -> answer status200 recent
                     _ -> answer status404 ""
@@ -486,7 +520,7 @@ withCoordinateSourceHeader header sources use = do
                     OwnedCandidateSource _ -> answer status200 recent
                     PublicCandidateSource -> answer status200 recent
                     _ -> answer status404 ""
-                ["public", "info", "acme-1"] -> answer status200 (case sources of PublicMixedCandidateSource -> mixed; MixedPolicyCandidateSource -> recent; MixedPublicIntegrityCandidateSource -> mixed; _ -> admitted)
+                ["public", "info", "acme-1"] -> answer status200 (case sources of PublicMixedCandidateSource -> mixed; MixedPolicyCandidateSource -> recent; PublicDeniedPrivateCandidateSource _ -> recent; CheckedEmptyCandidateSource -> "---\n"; InvalidInventoryCandidateSource -> "---\n2.0 |checksum:invalid\n"; MixedPublicIntegrityCandidateSource -> mixed; _ -> admitted)
                 ["public", "gems", "acme-1-1.0.gem"] -> respond (responseLBS status200 [("Content-Length", show (BS.length (releaseArchive release)))] (fromStrict (releaseArchive release)))
                 ["public", "quick", "Marshal.4.8", "acme-1-1.0.gemspec.rz"] -> answer status200 (releaseCompact release)
                 _ -> answer status404 ""
@@ -495,6 +529,9 @@ withCoordinateSourceHeader header sources use = do
             private = case sources of
                 OwnedCandidateSource _ -> Just privateBase
                 MixedPolicyCandidateSource -> Just privateBase
+                PublicDeniedPrivateCandidateSource _ -> Just privateBase
+                CheckedEmptyCandidateSource -> Just privateBase
+                InvalidInventoryCandidateSource -> Just privateBase
                 MixedPublicIntegrityCandidateSource -> Just privateBase
                 MixedTrustedIntegrityCandidateSource -> Just privateBase
                 _ -> Nothing
@@ -524,6 +561,15 @@ coordinateListings header release =
 -- The native header is opaque. Its padding lets the source cap also fit an inflated compact specification.
 coordinateBudgetHeader :: ByteString
 coordinateBudgetHeader = "created_at: 2020-01-01T00:00:00Z\nx-test-padding: " <> BS.replicate 256 120 <> "\n"
+
+coordinatePrivateMetadataReads :: [[Text]]
+coordinatePrivateMetadataReads = [["private", "info", "acme"], ["private", "info", "acme-1"], ["public", "info", "acme"], ["public", "info", "acme-1"]]
+
+missingDatabaseForVersion :: Text -> PreparedRule -> PreparedRule
+missingDatabaseForVersion version rule = case prepEval rule of
+    PerVersion evaluate -> rule{prepEval = PerVersion (\ctx evidence -> if renderVersion (evVersion evidence) == version then pure (CannotVet FailDeny NoDatabaseLoaded) else evaluate ctx evidence)}
+    PerPackage _ -> rule
+    PerInstallEvidence _ -> rule
 
 coordinateByteCap :: Int -> MountBinding -> MountBinding
 coordinateByteCap cap binding =

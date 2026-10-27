@@ -45,7 +45,7 @@ import Ecluse.Core.Server.MirrorView (readMirrorCompanion, validateMirrorProject
 import Ecluse.Core.Server.Path (Filename, unFilename)
 import Ecluse.Core.Server.Pipeline.Internal (VersionVerdict (VersionVerdict), logDenials, recordDenials, statusServeDecision)
 import Ecluse.Core.Server.Pipeline.Origin (ObservedReadBoundExceeded (ObservedReadBoundExceeded))
-import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerMetadataBytes, mapPackumentReplies, noSurvivors, withObservedAdmittedDocument)
+import Ecluse.Core.Server.Pipeline.Packument (DocumentRejectionObserver (..), PackumentReplies (..), answerMetadataBytes, mapPackumentReplies, noSurvivors, withObservedAdmittedDocument)
 import Ecluse.Core.Server.Pipeline.Shared (edgeTokenMatches, forwardedCredential, shedMessage, unauthorisedMessage, withListingAdmission, withMetadataAdmission)
 import Ecluse.Core.Server.Pipeline.Tarball (headTarball, serveTarball)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies)
@@ -106,6 +106,7 @@ data CandidateRead a
     = CandidateAbsent
     | CandidateDenied RubyResponse
     | CandidateRefused RubyResponse
+    | CandidateRejected CoordinateRejection
     | CandidateAdmitted a
 
 data CoordinateRejection = CoordinateRejection PackageName Text (Maybe DbEtag) Rejection
@@ -142,13 +143,22 @@ resolveCoordinate ticket observe request file = do
                         atomicModifyIORef' rejected $ \previous ->
                             let current = CoordinateRejection (pkgName details) (renderVersion (pkgVersion details)) (ctxAdvisoryEtag ctx) rejection
                              in (if terminalRejection rejection then Just current else previous <|> Just current, ())
-            result <- withObservedAdmittedDocument replies ticket observer checkDocument (Just recordRejected) name request CandidateAbsent $ \cached sourceBytes origins -> do
+                rejectionObserver =
+                    DocumentRejectionObserver
+                        { observeVersionRejection = recordRejected
+                        , onCheckedNoSurvivorAdmission = maybe CandidateAbsent CandidateRejected <$> readIORef rejected
+                        }
+                continueRejected current@(CoordinateRejection _ _ _ rejection) next
+                    | terminalRejection rejection = Left <$> coordinateRefusal deps current
+                    | otherwise = next (denied <|> Just (Right current)) names
+            result <- withObservedAdmittedDocument replies ticket observer checkDocument (Just rejectionObserver) name request CandidateAbsent $ \cached sourceBytes origins -> do
                 liftIO (charge ticket (scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) sourceBytes))
                 pure (CandidateAdmitted (cached, sourceBytes, origins))
             case result of
                 CandidateRefused refusal -> pure (Left refusal)
                 CandidateAbsent -> collect deps observer checkDocument candidates spent matches denied names
                 CandidateDenied refusal -> collect deps observer checkDocument candidates spent matches (denied <|> Just (Left refusal)) names
+                CandidateRejected current -> continueRejected current (collect deps observer checkDocument candidates spent matches)
                 CandidateAdmitted (cached, sourceBytes, origins)
                     | spent + toInteger sourceBytes > toInteger (maxMetadataBytes (pdLimits deps)) -> pure (Left (rubyBadRequest "the coordinate lookup exceeds its cumulative metadata bound"))
                     | otherwise -> case snd rubyGemsCached cached of
@@ -158,9 +168,7 @@ resolveCoordinate ticket observe request file = do
                                 next = collect deps observer checkDocument candidates (spent + toInteger sourceBytes) (matches <> found)
                             refusal <- if null found then liftIO (readIORef rejected) else pure Nothing
                             case refusal of
-                                Just current@(CoordinateRejection _ _ _ rejection)
-                                    | terminalRejection rejection -> Left <$> coordinateRefusal deps current
-                                    | otherwise -> next (denied <|> Just (Right current)) names
+                                Just current -> continueRejected current next
                                 Nothing -> next denied names
 
 terminalRejection :: Rejection -> Bool
