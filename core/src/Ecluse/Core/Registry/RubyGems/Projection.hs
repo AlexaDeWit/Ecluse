@@ -17,6 +17,7 @@ import Ecluse.Core.Registry.RubyGems.Project (coordinateFilename, coordinateName
 import Ecluse.Core.Registry.WireSupport (newestUpload)
 import Ecluse.Core.Security (Limits, checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Server.Path (encodeComponent, unFilename)
+import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (renderVersion)
 
 -- | Group exact raw versions and preserve unknown age whenever any platform time is missing.
@@ -26,14 +27,20 @@ projectGemRows limits name base rows = do
     unless (Set.size (Set.fromList (map (unFilename . coordinateFilename . grCoordinate) rows)) == length rows && Set.size (Set.fromList (map grEntryKey rows)) == length rows) (Left MetadataUndecodable)
     versions <- foldM insert Map.empty rows
     first MetadataBoundExceeded (checkVersionCountOf limits (Map.size versions))
-    pure (PackageInfo name versions Map.empty [])
+    let !settled = Map.map settle versions
+    pure (PackageInfo name settled Map.empty [])
   where
     insert versions row = do
         let coordinate = grCoordinate row
             version = coordinateVersion coordinate
         unless (coordinateName coordinate == name) (Left (MetadataNameMismatch (renderPackageName (coordinateName coordinate))))
         url <- first (const MetadataUndecodable) (joinPath base ("gems/" <> encodeComponent (unFilename (coordinateFilename coordinate))))
-        let artifact = Artifact{artEntryKey = grEntryKey row, artFilename = unFilename (coordinateFilename coordinate), artUrl = url, artHashes = [grChecksum row], artCoreMetadata = Nothing, artSize = Nothing}
+        let !artifact = Artifact{artEntryKey = grEntryKey row, artFilename = unFilename (coordinateFilename coordinate), artUrl = url, artHashes = strictElements [grChecksum row], artCoreMetadata = Nothing, artSize = Nothing}
             fresh = PackageDetails{pkgName = name, pkgVersion = version, pkgPublishedAt = grPublishedAt row, pkgInstallCode = CodeExecUnknown, pkgAvailability = Available, pkgArtifacts = artifact :| []}
             merge previous = previous{pkgPublishedAt = newestUpload (grPublishedAt row) (pkgPublishedAt previous), pkgArtifacts = artifact :| toList (pkgArtifacts previous)}
         pure (Map.alter (Just . maybe fresh merge) (renderVersion version) versions)
+
+    settle details =
+        let !artifacts = strictElements (pkgArtifacts details)
+            !published = force (pkgPublishedAt details)
+         in details{pkgArtifacts = artifacts, pkgPublishedAt = published}

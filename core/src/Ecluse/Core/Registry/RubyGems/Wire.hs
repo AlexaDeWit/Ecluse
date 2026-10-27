@@ -25,6 +25,7 @@ import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Registry.RubyGems.Document (GemDependency (..), GemRequirement, GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Project (GemCoordinate, mkCoordinate, mkGemPlatform, projectName, projectVersion)
+import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Text.Iso8601 (readIso8601Utc)
 import Ecluse.Core.Version (Version, mkVersion)
 
@@ -68,8 +69,8 @@ decodeInfoRow name key bytes = do
     when (Set.size (Set.fromList (map gdName dependencies)) /= length dependencies) (malformed "duplicate RubyGems dependency")
     requiredRuby <- maybe (Right (">= 0" :| [])) parseGemRequirement (Map.lookup "ruby" extras)
     requiredRubyGems <- maybe (Right (">= 0" :| [])) parseGemRequirement (Map.lookup "rubygems" extras)
-    let published = Map.lookup "created_at" extras >>= readIso8601Utc
-    pure GemRow{grEntryKey = key, grCoordinate = coordinate, grDependencies = dependencies, grRequiredRuby = requiredRuby, grRequiredRubyGems = requiredRubyGems, grChecksum = checksum, grPublishedAt = published, grExtras = extras, grSource = BS.copy bytes}
+    let !published = force (Map.lookup "created_at" extras >>= readIso8601Utc)
+    pure GemRow{grEntryKey = key, grCoordinate = coordinate, grDependencies = strictElements dependencies, grRequiredRuby = requiredRuby, grRequiredRubyGems = requiredRubyGems, grChecksum = checksum, grPublishedAt = published, grExtras = extras, grSource = BS.copy bytes}
   where
     parseDependency raw = do
         let (dependencyName, requirement) = T.breakOn ":" raw
@@ -81,7 +82,7 @@ decodeInfoRow name key bytes = do
 parseGemRequirement :: Text -> Either GemRowError GemRequirement
 parseGemRequirement raw = do
     clauses <- maybeToRight (GemRowMalformed "empty RubyGems requirement") (nonEmpty (T.splitOn "&" raw))
-    traverse parseClause clauses
+    strictElements <$> traverse parseClause clauses
   where
     parseClause clause = do
         let stripped = T.strip clause

@@ -26,6 +26,7 @@ import Ecluse.Core.Registry.RubyGems.Projection (projectGemRows)
 import Ecluse.Core.Registry.RubyGems.Wire (GemRowError (..), decodeInfoRow, infoRowIdentity, infoRowVersion)
 import Ecluse.Core.Security (Limits, checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
+import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, renderVersion)
 
 -- | Selected reads retain all platforms and scan later rows for identity conflicts.
@@ -110,5 +111,5 @@ gemInfoSteps pay limits name base mode = recordSteps reserve consume complete in
                 conflicts = [mkInvalidEntry InvalidVersionManifest raw Null "conflicting or malformed RubyGems version artifacts" | raw <- Set.toList bad]
              in case projectGemRows limits name base rows of
                     Left _ -> Failed "RubyGems info projection failed"
-                    Right info -> Finished (GemReadResult info{infoInvalidEntries = reverse (scanInvalid scan) <> conflicts} (GemDocument name (BS.intercalate "\n" (reverse (scanHeader scan)) <> "\n") rows))
+                    Right info -> Finished (GemReadResult info{infoInvalidEntries = strictElements (reverse (scanInvalid scan) <> conflicts)} (GemDocument name (BS.intercalate "\n" (reverse (scanHeader scan)) <> "\n") rows))
     saturate = fromInteger . min (toInteger (maxBound :: Int))
