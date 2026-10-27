@@ -322,6 +322,7 @@ library ecluse-core
     Ecluse.Core.Registry.Cargo.Reader
     Ecluse.Core.Registry.Cargo.Projection
     Ecluse.Core.Registry.Cargo.Document
+    Ecluse.Core.Registry.RubyGems.FirstParty
     Ecluse.Core.Registry.RubyGems.Project
     Ecluse.Core.Registry.RubyGems.Document
     Ecluse.Core.Registry.RubyGems.Credential
@@ -1336,6 +1337,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.PendingSidecarSpec
     Ecluse.Core.Registry.PyPI.ProjectSpec
     Ecluse.Core.Registry.Cargo.ProjectSpec
+    Ecluse.Core.Registry.RubyGems.FirstPartySpec
     Ecluse.Core.Registry.RubyGems.ProjectSpec
     Ecluse.Core.Registry.RubyGems.CredentialSpec
     Ecluse.Core.Server.Admission.ArtifactSpec

@@ -21,7 +21,7 @@ import Ecluse.Config (
     Config (..),
     ConfigError,
     EgressSettings (..),
-    FirstParty (FirstPartyCargo, FirstPartyNpmScopes, FirstPartyPyPI),
+    FirstParty (FirstPartyCargo, FirstPartyNpmScopes, FirstPartyPyPI, FirstPartyRubyGems),
     LimitsSettings (..),
     MountConfig (mntFirstParty),
     ObservabilitySettings (..),
@@ -45,6 +45,7 @@ import Ecluse.Core.Osv.Publication (renderPercent)
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Cargo.FirstParty (projectFirstPartyEntry)
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName, PyPIOwnedPrefix), mkPyPIPrefix)
+import Ecluse.Core.Registry.RubyGems.FirstParty qualified as RubyGems
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
 import Ecluse.Runtime.Log (LogLevel (DebugLevel, ErrorLevel, InfoLevel, WarnLevel))
 
@@ -181,11 +182,22 @@ spec = describe "decodeDocument" $ do
         loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{\"firstParty\":\"\"}}}")
             `shouldSatisfy` decodeErrorMentions "firstParty must name at least one scope"
 
-    it "rejects firstParty on a mount whose ecosystem has no namespace shape yet" $
-        -- Without the per-ecosystem arm the entries would parse as another ecosystem's, so the
-        -- key refuses at load and names the ecosystem it is unsupported for.
-        loadConfig pubUrlEnv (Just "{\"mounts\":{\"rubygems\":{\"firstParty\":\"acme\"}}}")
-            `shouldSatisfy` decodeErrorMentions "firstParty is not supported for rubygems yet"
+    it "reads RubyGems names and explicit prefixes in their declared order" $
+        case traverse RubyGems.projectFirstPartyEntry ["Acme_Tools", "acme-*"] of
+            Left err -> expectationFailure (show err)
+            Right [name, prefix] -> do
+                config <- expectConfig (pubUrlEnv <> [("ECLUSE_MOUNTS__RUBYGEMS__FIRST_PARTY", "Acme_Tools, acme-*")]) Nothing
+                (mntFirstParty <$> Map.lookup RubyGems (cfgMounts (configApp config)))
+                    `shouldBe` Just (Just (FirstPartyRubyGems (name :| [prefix])))
+            Right _ -> expectationFailure "expected two RubyGems declarations"
+
+    it "rejects an empty RubyGems ownership declaration" $
+        loadConfig pubUrlEnv (Just "{\"mounts\":{\"rubygems\":{\"firstParty\":\"\"}}}")
+            `shouldSatisfy` decodeErrorMentions "firstParty must name at least one gem or prefix"
+
+    it "rejects a RubyGems prefix without a terminal separator" $
+        loadConfig pubUrlEnv (Just "{\"mounts\":{\"rubygems\":{\"firstParty\":\"acme*\"}}}")
+            `shouldSatisfy` decodeErrorMentions "invalid RubyGems entry in firstParty"
 
     it "rejects an empty PyPI firstParty at load, naming firstParty" $
         loadConfig pubUrlEnv (Just "{\"mounts\":{\"pypi\":{\"firstParty\":\"\"}}}")

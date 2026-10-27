@@ -40,7 +40,7 @@ import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     Config (configMounts),
     ConfigError (..),
-    FirstParty (FirstPartyNpmScopes, FirstPartyPyPI),
+    FirstParty (FirstPartyNpmScopes, FirstPartyPyPI, FirstPartyRubyGems),
     Mount (mountPolicy),
     PolicyError (UnknownRuleType),
     StoreTag (TagRegistry),
@@ -50,12 +50,13 @@ import Ecluse.Config (
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Deadline (newDeadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Package (HashAlg (SHA1, SHA512), mkScope)
+import Ecluse.Core.Package (HashAlg (SHA1, SHA512), mkPackageName, mkScope)
 import Ecluse.Core.Package.Integrity (
     mkMinIntegrity,
     mkMinTrustedIntegrity,
  )
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName))
+import Ecluse.Core.Registry.RubyGems.FirstParty (RubyGemsFirstParty (RubyGemsOwnedName))
 import Ecluse.Core.Rules (PreparedRule (prepName), bootOrder, renderBootOrder)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), identityEvidence)
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
@@ -479,6 +480,13 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
         -- proves the root hands the declaration to it rather than deciding anything itself.
         map (firstPartyName (pypiFirstParty ("Acme_Tools" :| [])) . unscopedPyPI) ["acme-tools", "beta"]
             `shouldBe` [True, False]
+
+    it "dispatches RubyGems ownership without changing native identity" $
+        let owned = mkPackageName RubyGems Nothing "Acme_Tools"
+         in map
+                (firstPartyName (FirstPartyRubyGems (RubyGemsOwnedName owned :| [])))
+                [owned, mkPackageName RubyGems Nothing "acme-tools", mkPackageName Npm Nothing "Acme_Tools"]
+                `shouldBe` [True, False, False]
 
     it "wires the same predicate onto the mount's serve deps, deny by default" $ do
         let testEnv = [("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")] <> staticEnvVars

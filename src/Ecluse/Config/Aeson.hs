@@ -27,7 +27,7 @@ import Ecluse.Config.Types
 
 import Ecluse.Core.BuildIdentity (parseOperatorContact)
 import Ecluse.Core.Credential (Secret, mkSecret)
-import Ecluse.Core.Ecosystem (Ecosystem (..), ecosystemName, parseEcosystem)
+import Ecluse.Core.Ecosystem (Ecosystem (..), parseEcosystem)
 import Ecluse.Core.Osv.Provenance (SourcePathRecording (FingerprintSourcePath, RecordSourcePath))
 import Ecluse.Core.Osv.Publication (Percent, mkPercent)
 import Ecluse.Core.Package (Scope)
@@ -36,6 +36,7 @@ import Ecluse.Core.Registry.Cargo.FirstParty qualified as Cargo
 import Ecluse.Core.Registry.Maintenance.Budget (parseQuotaDimension, parseRequestKind)
 import Ecluse.Core.Registry.Npm.Project (projectScope)
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty, projectFirstPartyEntry)
+import Ecluse.Core.Registry.RubyGems.FirstParty qualified as RubyGems
 import Ecluse.Core.Security (parseBlockedRange)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted, IdentityOnly))
@@ -295,14 +296,16 @@ ecosystemKey location k = maybe (fail refusal) pure (parseEcosystem (Key.toText 
 parseSecret :: String -> Value -> Parser Secret
 parseSecret field = expectString field (pure . mkSecret)
 
--- Every arm is explicit, so an added 'Ecosystem' surfaces here as a compiler error. One with no
--- namespace shape yet refuses the key rather than parsing it as another ecosystem's.
 parseFirstParty :: Ecosystem -> String -> Value -> Parser FirstParty
 parseFirstParty eco field v = case eco of
     Npm -> FirstPartyNpmScopes <$> parseNpmScopes field v
     PyPI -> FirstPartyPyPI <$> parsePyPIFirstParty field v
     Cargo -> FirstPartyCargo <$> nonEmptyCommaSeparated field parseCargoEntry (field <> " must name at least one crate or prefix") v
-    RubyGems -> fail (field <> " is not supported for " <> toString (ecosystemName eco) <> " yet")
+    RubyGems -> FirstPartyRubyGems <$> nonEmptyCommaSeparated field parseRubyGemsEntry (field <> " must name at least one gem or prefix") v
+
+parseRubyGemsEntry :: Text -> Parser RubyGems.RubyGemsFirstParty
+parseRubyGemsEntry entry =
+    either (const (fail ("invalid RubyGems entry in firstParty: " <> show entry))) pure (RubyGems.projectFirstPartyEntry entry)
 
 parseCargoEntry :: Text -> Parser Cargo.CargoFirstParty
 parseCargoEntry entry =

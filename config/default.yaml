@@ -571,6 +571,9 @@ mounts:
   # Disable an incompatible entry under mounts.rubygems.rules or restrict it to another mount.
   # No client yank relay is supported. Dredger needs physical deletion capability.
   rubygems:
+    # Exact names preserve case, dots, hyphens and underscores. A prefix ends
+    # with ., - or _ followed by *. Declaring ownership requires privateUpstream.
+    # firstParty: "acme-tools,acme-*"
     publicUpstream:
       registry:
         url: https://rubygems.org

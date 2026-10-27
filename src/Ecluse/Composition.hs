@@ -80,6 +80,7 @@ import Ecluse.Core.Registry.Cargo.Execution (newCargoInstallEvidence)
 import Ecluse.Core.Registry.Cargo.FirstParty (cargoFirstPartyName)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
 import Ecluse.Core.Registry.PyPI.FirstParty (pypiFirstPartyName)
+import Ecluse.Core.Registry.RubyGems.FirstParty (rubyGemsFirstPartyName)
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag, rdSourceReporter)
 import Ecluse.Core.Rules.Outage (SourceReporter (noteAdmission))
 import Ecluse.Core.Security (Limits, maxPublishRequestBytes)
@@ -331,6 +332,7 @@ firstPartyName = \case
     FirstPartyNpmScopes scopes -> npmPublishAllowed (toList scopes)
     FirstPartyPyPI entries -> pypiFirstPartyName entries
     FirstPartyCargo entries -> cargoFirstPartyName entries
+    FirstPartyRubyGems entries -> rubyGemsFirstPartyName entries
 
 -- | One ecosystem's publish target, resolved once: the worker's write endpoint and its token provider.
 data PublishTarget = PublishTarget
