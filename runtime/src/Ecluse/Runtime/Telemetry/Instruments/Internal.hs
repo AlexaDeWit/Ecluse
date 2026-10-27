@@ -196,6 +196,9 @@ newMetrics telemetry = do
     artifactReadBytes <- counter meter ArtifactReadBytes "By" "identity bytes consumed by verified artifact reads"
     artifactHashBytes <- counter meter ArtifactHashBytes "By" "bytes in completed artifact digest computations"
     artifactVerified <- counter meter ArtifactVerified "{artifact}" "complete artifacts matching their admitted digest"
+    -- Record known initial states before any transfer, without seeding other instruments.
+    addDelta artifactBodyInFlightBytes 0 []
+    traverse_ (\instrument -> addCount instrument 0 []) [artifactBodyQueued, artifactBodyShed, artifactReadBytes, artifactHashBytes, artifactVerified]
     publishBodyInFlightBytes <- upDownCounter meter PublishBodyInFlightBytes "By" "bytes reserved for buffered publish bodies"
     publishBodyShed <- counter meter PublishBodyShed "{request}" "publishes shed at the body-byte budget"
     mergeDivergence <- counter meter MergeDivergence "{divergence}" "cross-upstream integrity divergences detected in the packument merge"
