@@ -2,9 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Bind complete mirror upload data to bounded registry reads and writes.
-Every request disables redirects, and credentials are minted for each exchange.
--}
+-- | Bound mirror reads and writes to the selected role credential. Every request disables redirects.
 module Ecluse.Core.Registry.Publish.Internal (
     PublishPlan (..),
     PreparedMirrorVersion (..),
@@ -22,21 +20,21 @@ import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageInfo, PackageName)
-import Ecluse.Core.Registry (BodyOutcome, FetchFault (FetchUrlUnformable), ParseError, PublishFault (PublishFetch), PublishRelayResponse, UrlFormationError)
+import Ecluse.Core.Registry (BodyOutcome, FetchFault (FetchBoundExceeded, FetchUrlUnformable), ParseError, PublishError (PublishError), PublishFault (PublishFetch, PublishRejected), PublishRelayResponse, UrlFormationError)
 import Ecluse.Core.Registry.Exchange (accumulatingCharge, boundedExchange, boundedRelay, formThen, withSuccessBody)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Json.Walk (Step, readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
-import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError, VersionDoc)
-import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
-import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
+import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError (..), VersionDoc)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead, prepareManifest)
 import Ecluse.Core.Registry.MirrorUpload (ExpectedMirrorFile, MirrorInventory, MirrorUploadData, VerifiedArtifactBytes)
-import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocClient, ocLimits), originClient)
+import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocChargeFullReadWorkspace, ocClient, ocLimits), originClient)
 import Ecluse.Core.Registry.Request (sealRequest)
 import Ecluse.Core.Registry.VersionList (VersionListState, finishVersionList)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
+import Ecluse.Core.Server.Admission.Meter (newChargeRegion)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version)
 
@@ -61,12 +59,14 @@ data PublishCodec = forall source metadata. PublishCodec
     , pcPrepareUpload :: Limits -> (Int -> IO ()) -> MirrorInventory -> source -> ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault (MirrorUploadData metadata))
     , pcNativeComplete :: PackageName -> Version -> PackageInfo -> Bool
     -- ^ Atomic native inventories may prove completion without retained external source state.
-    , pcTargetRead :: EcosystemRead
+    , pcTargetRead :: PrepareRead
     , pcTargetReadPermille :: Int
     -- ^ The adapter's existing full-read heap charge per thousand source bytes.
     , pcProbeRequest :: Text -> Maybe ClientCredential -> PackageName -> Either UrlFormationError Request
     , pcVersionListWalk :: Maybe (Limits -> Cursor -> Step VersionListState)
     -- ^ The protocol maintenance caller uses this cheaper inventory where the adapter supplies one.
+    , pcPrepareTarget :: TracingPort -> OriginClient -> RegistryUrl -> IO (Either MetadataError RegistryUrl)
+    -- ^ Prepare only after the role credential exists. Discovery cannot widen the approved upload root.
     , pcPublishRequest :: Text -> Maybe ClientCredential -> PublishPlan -> MirrorUploadData metadata -> Either PublishFault Request
     , pcPublishOutcome :: Int -> ByteString -> Either PublishFault ()
     }
@@ -88,7 +88,7 @@ data MirrorPublish = MirrorPublish
 
 -- | The read and upload endpoints are explicit because native upload routes need not share the read root.
 newMirrorPublish :: MirrorTransport -> RegistryUrl -> RegistryUrl -> PublishCodec -> MirrorPublish
-newMirrorPublish transport readTarget uploadTarget PublishCodec{pcPrepareSource, pcPrepareUpload, pcNativeComplete, pcTargetRead, pcTargetReadPermille, pcPublishRequest, pcPublishOutcome} =
+newMirrorPublish transport readTarget uploadTarget PublishCodec{pcPrepareSource, pcPrepareUpload, pcNativeComplete, pcTargetRead, pcTargetReadPermille, pcPrepareTarget, pcPublishRequest, pcPublishOutcome} =
     MirrorPublish
         { mpProbeInventory = probeInventory transport readTarget pcTargetRead pcTargetReadPermille
         , mpNativeComplete = pcNativeComplete
@@ -97,19 +97,23 @@ newMirrorPublish transport readTarget uploadTarget PublishCodec{pcPrepareSource,
             pure
                 PreparedMirrorVersion
                     { pmvInventoryValue = inventory
-                    , pmvPrepareUploadAction = \charge file bytes ->
-                        fmap (PreparedMirrorUpload . publishUpload transport uploadTarget pcPublishRequest pcPublishOutcome)
-                            <$> pcPrepareUpload (ptLimits transport) charge inventory source file bytes
+                    , pmvPrepareUploadAction = \charge file bytes -> do
+                        peak <- newIORef 0
+                        let pay amount = modifyIORef' peak (max amount) >> charge amount
+                        prepared <- pcPrepareUpload (ptLimits transport) pay inventory source file bytes
+                        retained <- readIORef peak
+                        pure (PreparedMirrorUpload . publishUpload transport readTarget uploadTarget (charge . (+ retained) . scaleCharge pcTargetReadPermille) pcPrepareTarget pcPublishRequest pcPublishOutcome <$> prepared)
                     }
         }
 
-probeInventory :: MirrorTransport -> RegistryUrl -> EcosystemRead -> Int -> (Int -> IO ()) -> PackageName -> IO (Either MetadataError PackageInfo)
+probeInventory :: MirrorTransport -> RegistryUrl -> PrepareRead -> Int -> (Int -> IO ()) -> PackageName -> IO (Either MetadataError PackageInfo)
 probeInventory transport target targetRead factor charge name = do
     pay <- accumulatingCharge charge
+    workspace <- newChargeRegion pay
     credential <- ptMintCredential transport
     -- The initial and final target snapshots can overlap during completion.
-    let origin = (originClient (ptLimits transport) (ptClient transport) target credential){ocChargeFullRead = pay . scaleCharge (2 * factor)}
-    fmap manifestInfo <$> fetchManifest targetRead (ptTracing transport) origin name
+    let origin = (originClient (ptLimits transport) (ptClient transport) target credential){ocChargeFullRead = pay . scaleCharge (2 * factor), ocChargeFullReadWorkspace = workspace}
+    fmap manifestInfo <$> prepareManifest targetRead (ptTracing transport) origin name
 
 -- | Preserve the native publication response under the origin's metadata and progress limits.
 relayPublishRequest :: OriginClient -> Either UrlFormationError Request -> IO (Either FetchFault PublishRelayResponse)
@@ -125,13 +129,32 @@ fetchVersionList client limits walk request =
   where
     versions streamed = streamValue streamed >>= finishVersionList
 
-publishUpload :: MirrorTransport -> RegistryUrl -> (Text -> Maybe ClientCredential -> PublishPlan -> MirrorUploadData metadata -> Either PublishFault Request) -> (Int -> ByteString -> Either PublishFault ()) -> MirrorUploadData metadata -> PublishPlan -> IO (Either PublishFault ())
-publishUpload transport target request outcome upload plan = do
+publishUpload :: MirrorTransport -> RegistryUrl -> RegistryUrl -> (Int -> IO ()) -> (TracingPort -> OriginClient -> RegistryUrl -> IO (Either MetadataError RegistryUrl)) -> (Text -> Maybe ClientCredential -> PublishPlan -> MirrorUploadData metadata -> Either PublishFault Request) -> (Int -> ByteString -> Either PublishFault ()) -> MirrorUploadData metadata -> PublishPlan -> IO (Either PublishFault ())
+publishUpload transport readTarget target charge prepare request outcome upload plan = do
     credential <- ptMintCredential transport
-    either
-        (pure . Left)
-        (writeUpload transport outcome . sealRequest)
-        (request (registryUrlText target) credential plan upload)
+    pay <- accumulatingCharge charge
+    let origin = (originClient (ptLimits transport) (ptClient transport) readTarget credential){ocChargeFullRead = pay}
+    prepared <- prepare (ptTracing transport) origin target
+    case prepared of
+        Left fault -> pure (Left (publishTargetFault fault))
+        Right approved ->
+            either
+                (pure . Left)
+                (writeUpload transport outcome . sealRequest)
+                (request (registryUrlText approved) credential plan upload)
+
+publishTargetFault :: MetadataError -> PublishFault
+publishTargetFault = \case
+    MetadataFetch fault -> PublishFetch fault
+    MetadataBoundExceeded fault -> PublishFetch (FetchBoundExceeded fault)
+    MetadataAuthorisationFailure status -> rejected status
+    MetadataHttpFailure status -> rejected status
+    MetadataAbsent -> rejected 404
+    MetadataUndecodable -> PublishRejected (PublishError "the target discovery is malformed or names an unapproved API root")
+    MetadataNameMismatch _ -> PublishRejected (PublishError "the target discovery has an inconsistent identity")
+  where
+    rejected :: Int -> PublishFault
+    rejected status = PublishRejected (PublishError ("target discovery failed with HTTP status " <> show status))
 
 writeUpload :: MirrorTransport -> (Int -> ByteString -> Either PublishFault ()) -> Request -> IO (Either PublishFault ())
 writeUpload transport outcome request =

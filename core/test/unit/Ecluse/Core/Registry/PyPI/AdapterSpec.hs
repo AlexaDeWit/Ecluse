@@ -72,3 +72,4 @@ spec = describe "the PyPI adapter" $ do
   where
     charged CachedWorkerRead = False
     charged (ChargedWorkerRead _) = True
+    charged (NativeChargedWorkerRead _) = True

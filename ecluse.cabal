@@ -23,8 +23,10 @@ extra-source-files:
   bench/corpus/advisories/epss.csv
   bench/corpus/advisories/npm/*.json
   bench/corpus/advisories/pypi/*.json
+  bench/corpus/advisories/cargo/*.json
   bench/corpus/npm/*.json
   bench/corpus/pypi/*.json
+  bench/corpus/cargo/*.index.ndjson
   bench/corpus/pins.json
   bench/load/floors.json
   core/test/unit/fixtures/npm/*.json
@@ -32,6 +34,17 @@ extra-source-files:
   core/test/unit/fixtures/json-stream/README.md
   core/test/unit/fixtures/version-ordering.txt
   test/fixtures/package-store/pypi/README.md
+  test/fixtures/cargo/graph/**/*.toml
+  test/fixtures/cargo/graph/**/*.md
+  test/fixtures/cargo/graph/**/*.rs
+  test/fixtures/cargo/foreign/Cargo.toml
+  test/fixtures/cargo/foreign/README.md
+  test/fixtures/cargo/foreign/build.rs
+  test/fixtures/cargo/foreign/src/*.rs
+  test/oracles/cargo-semver/Cargo.toml
+  test/oracles/cargo-semver/Cargo.lock
+  test/oracles/cargo-semver/src/main.rs
+  bench/corpus/cargo/README.md
   test/fixtures/osv/v1/*.json
   test/fixtures/osv/v2/*.json
   test/fixtures/osv/withdrawal/*.json
@@ -138,6 +151,15 @@ library ecluse-core
     Ecluse.Core.Mirror.State.Codec
     Ecluse.Core.Mirror.State.Weight
     Ecluse.Core.Registry.PyPI.Archive
+    Ecluse.Core.Registry.Archive.Path
+    Ecluse.Core.Registry.Archive.Inflate
+    Ecluse.Core.Registry.Archive.Tar
+    Ecluse.Core.Registry.Cargo.Archive
+    Ecluse.Core.Registry.Cargo.Manifest
+    Ecluse.Core.Registry.Cargo.Source
+    Ecluse.Core.Registry.Cargo.Target
+    Ecluse.Core.Registry.Cargo.Publish
+    Ecluse.Core.Registry.Cargo.Publish.Body
     Ecluse.Core.Registry.PyPI.Archive.Path
     Ecluse.Core.Registry.PyPI.Archive.BZip
     Ecluse.Core.Registry.PyPI.Archive.Inflate
@@ -185,6 +207,7 @@ library ecluse-core
     Ecluse.Core.Package.InvalidEntry
     Ecluse.Core.Package.Merge
     Ecluse.Core.Package.Pep503
+    Ecluse.Core.Package.Cargo
     Ecluse.Core.Queue
     Ecluse.Core.Queue.Buffer
     Ecluse.Core.Queue.Lease
@@ -217,6 +240,7 @@ library ecluse-core
     Ecluse.Core.Registry.Maintenance.Upstream
     Ecluse.Core.Registry.Metadata
     Ecluse.Core.Registry.Metadata.Fetch
+    Ecluse.Core.Registry.Metadata.Fetch.Preparation
     Ecluse.Core.Registry.Metadata.Fetch.Types
     Ecluse.Core.Registry.Metadata.Projection
     Ecluse.Core.Registry.Npm
@@ -267,6 +291,22 @@ library ecluse-core
     Ecluse.Core.Registry.PyPI.Metadata
     Ecluse.Core.Registry.PyPI.PendingSidecar
     Ecluse.Core.Registry.PyPI.Project
+    Ecluse.Core.Registry.Cargo.Project
+    Ecluse.Core.Registry.Cargo.FirstParty
+    Ecluse.Core.Registry.Cargo.Credential
+    Ecluse.Core.Registry.Cargo.Request
+    Ecluse.Core.Registry.Cargo.Discovery
+    Ecluse.Core.Registry.Cargo.Wire
+    Ecluse.Core.Registry.Cargo.Reader
+    Ecluse.Core.Registry.Cargo.Projection
+    Ecluse.Core.Registry.Cargo.Document
+    Ecluse.Core.Registry.Cargo.Metadata
+    Ecluse.Core.Registry.Cargo.Serving
+    Ecluse.Core.Registry.Cargo.Execution
+    Ecluse.Core.Registry.InstallEvidence
+    Ecluse.Core.Registry.Cargo.Adapter
+    Ecluse.Core.Registry.Cargo.Route
+    Ecluse.Core.Registry.Cargo.Route.Internal
     Ecluse.Core.Registry.PyPI.Reader
     Ecluse.Core.Registry.PyPI.Request
     Ecluse.Core.Registry.PyPI.Route
@@ -278,6 +318,7 @@ library ecluse-core
     Ecluse.Core.Registry.ServedDocument
     Ecluse.Core.Registry.WireSupport
     Ecluse.Core.Rules
+    Ecluse.Core.Rules.Install
     Ecluse.Core.Rules.Effectful
     Ecluse.Core.Rules.Freshness
     Ecluse.Core.Rules.Outage
@@ -314,6 +355,7 @@ library ecluse-core
     Ecluse.Core.Server.Admission.Weighted
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
+    Ecluse.Core.Server.InstallEvidence
     Ecluse.Core.Server.Contract
     Ecluse.Core.Server.Encoding
     Ecluse.Core.Server.Fault
@@ -388,6 +430,7 @@ library ecluse-core
   -- can import them. VersionKey stays opaque, so neither lets a caller build a key.
   exposed-modules:
     Ecluse.Core.Version.Semver
+    Ecluse.Core.Version.Cargo
     Ecluse.Core.Version.Token
 
   other-modules:
@@ -403,6 +446,7 @@ library ecluse-core
 
   build-depends:
     , tar ^>=0.6.4
+    , toml-parser ==2.0.2.0
     , bzlib-conduit ^>=0.3.0.4
     , digest ^>=0.0.2
     , ecluse-lzma-managed ^>=0.0.1
@@ -445,6 +489,7 @@ library ecluse-core
     , microlens-aeson       ^>=2.5
     , mtl                   ^>=2.3
     , network               ^>=3.2
+    , network-uri           ^>=2.6.4
     , resourcet             ^>=1.3
     , retry                 ^>=0.9
     , stm                   ^>=2.5
@@ -793,6 +838,7 @@ library ecluse-test-support
     Ecluse.Test.Mirror.State
     Ecluse.Test.Mirror.Read
     Ecluse.Test.Registry.PyPI.Multipart
+    Ecluse.Test.Registry.Archive
     Ecluse.Test.Registry.PyPI.Archive
     Ecluse.Test.Collector
     Ecluse.Test.Container.Image
@@ -803,6 +849,7 @@ library ecluse-test-support
     Ecluse.Test.Corpus.Npm
     Ecluse.Test.Corpus.Outputs
     Ecluse.Test.Corpus.PyPI
+    Ecluse.Test.Corpus.Cargo
     Ecluse.Test.Corpus.Subset
     Ecluse.Test.Credential
     Ecluse.Test.Cve
@@ -821,6 +868,7 @@ library ecluse-test-support
     Ecluse.Test.Osv.Withdrawal
     Ecluse.Test.OsvDb
     Ecluse.Test.Package
+    Ecluse.Test.Package.Admission
     Ecluse.Test.Poll
     Ecluse.Test.Port
     Ecluse.Test.Queue
@@ -828,6 +876,11 @@ library ecluse-test-support
     Ecluse.Test.Registry.Publish
     Ecluse.Test.Registry.Public
     Ecluse.Test.Registry.Npm
+    Ecluse.Test.Registry.Cargo.Reference
+    Ecluse.Test.Registry.Cargo.Fixtures
+    Ecluse.Test.Registry.Cargo.Generated
+    Ecluse.Test.Registry.Cargo.Metadata
+    Ecluse.Test.Registry.Cargo.Publish
     Ecluse.Test.Registry.Npm.Metadata
     Ecluse.Test.Registry.Npm.StoredVersions
     Ecluse.Test.Registry.Npm.Maintenance
@@ -840,6 +893,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.Packed
     Ecluse.Test.Registry.Shape
     Ecluse.Test.Registry.Metadata.Fetch
+    Ecluse.Test.Registry.Metadata.Rendering
     Ecluse.Test.Registry.Metadata.Projection
     Ecluse.Test.Registry.WireSupport
     Ecluse.Test.Registry.PyPI
@@ -864,6 +918,7 @@ library ecluse-test-support
     Ecluse.Test.Support
     Ecluse.Test.Snapshot
     Ecluse.Test.Version
+    Ecluse.Test.Version.Oracle
     Ecluse.Test.Wai
     Ecluse.Test.WireVocab
 
@@ -898,7 +953,9 @@ library ecluse-test-support
     , http-types        ^>=0.12
     , exceptions        ^>=0.10
     , katip             ^>=0.8.8
+    , mtl               ^>=2.3
     , network           ^>=3.2
+    , process           ^>=1.6
     , ram               ^>=0.22
     , resourcet         ^>=1.3
     , retry             ^>=0.9
@@ -973,7 +1030,10 @@ library ecluse-test-contracts
       Ecluse.Test.Contract.PackageStore.Protocol
       Ecluse.Test.Contract.PackageStore.Provider
       Ecluse.Test.Contract.PackageStore.PyPI
-    other-modules: Ecluse.Test.Contract.PackageStore.PyPI.Fixtures
+      Ecluse.Test.Contract.PackageStore.Cargo
+    other-modules:
+      Ecluse.Test.Contract.PackageStore.PyPI.Fixtures
+      Ecluse.Test.Contract.PackageStore.Cargo.Fixtures
 
   build-depends:
     , ecluse:ecluse-core
@@ -1058,6 +1118,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPISmokeSpec
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
+    Ecluse.Core.Registry.Cargo.ReaderResidencySpec
     Ecluse.Core.Registry.Json.WalkProbe
     Ecluse.Core.Server.MemoryModel.HeapSample
     Ecluse.Core.StreamBench.Sink
@@ -1084,10 +1145,13 @@ test-suite ecluse-core-unit
     Ecluse.Test.Contract.PublicationSpec
     Ecluse.Test.Contract.QueueSpec
     Ecluse.Test.Registry.Npm.StoredVersionsSpec
+    Ecluse.Test.Registry.Cargo.FixturesSpec
+    Ecluse.Test.Registry.Cargo.MetadataSpec
     Ecluse.Test.Contract.RunnerSpec
     Ecluse.Test.Contract.MeasurementSpec
     Ecluse.Test.Contract.RetentionSpec
     Ecluse.Test.CorpusSpec
+    Ecluse.Test.Corpus.CargoSpec
     Ecluse.Test.EcosystemBenchSpec
     Ecluse.Test.EnvSpec
     Ecluse.Test.PollSpec
@@ -1097,7 +1161,8 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.ArchiveSpec
     Ecluse.Core.Registry.PyPI.Archive.PathSpec
     Ecluse.Core.Registry.PyPI.Archive.BZipSpec
-    Ecluse.Core.Registry.PyPI.Archive.InflateSpec
+    Ecluse.Core.Registry.Archive.InflateSpec
+    Ecluse.Core.Registry.Archive.PathSpec
     Ecluse.Core.Registry.PyPI.Archive.LzmaSpec
     Ecluse.Core.Registry.PyPI.Archive.TarSpec
     Ecluse.Core.Registry.PyPI.UploadMetadataSpec
@@ -1140,6 +1205,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Package.InvalidEntrySpec
     Ecluse.Core.Package.MergeSpec
     Ecluse.Core.Package.Pep503Spec
+    Ecluse.Core.Package.CargoSpec
     Ecluse.Core.PackageSpec
     Ecluse.Core.Queue.BufferSpec
     Ecluse.Core.Queue.LeaseSpec
@@ -1152,6 +1218,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.BackoffSpec
     Ecluse.Core.Registry.Exchange.ObserveSpec
     Ecluse.Core.Registry.ExchangeSpec
+    Ecluse.Core.Registry.InstallEvidenceSpec
     Ecluse.Core.Registry.Json.InternSpec
     Ecluse.Core.Registry.Json.PackedSpec
     Ecluse.Core.Registry.Json.ScratchSpec
@@ -1211,6 +1278,28 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.MetadataSpec
     Ecluse.Core.Registry.PyPI.PendingSidecarSpec
     Ecluse.Core.Registry.PyPI.ProjectSpec
+    Ecluse.Core.Registry.Cargo.ProjectSpec
+    Ecluse.Core.Registry.Cargo.FirstPartySpec
+    Ecluse.Core.Registry.Cargo.AdapterSpec
+    Ecluse.Core.Registry.Cargo.CredentialSpec
+    Ecluse.Core.Registry.Cargo.RequestSpec
+    Ecluse.Core.Registry.Cargo.DiscoverySpec
+    Ecluse.Core.Registry.Cargo.WireSpec
+    Ecluse.Core.Registry.Cargo.ReaderSpec
+    Ecluse.Core.Registry.Cargo.ProjectionSpec
+    Ecluse.Core.Registry.Cargo.DocumentSpec
+    Ecluse.Core.Registry.Cargo.MetadataSpec
+    Ecluse.Core.Registry.Cargo.StreamingSpec
+    Ecluse.Core.Registry.Cargo.ServingSpec
+    Ecluse.Core.Registry.Cargo.ExecutionSpec
+    Ecluse.Core.Registry.Cargo.ArchiveSpec
+    Ecluse.Core.Registry.Cargo.ManifestSpec
+    Ecluse.Core.Registry.Cargo.SourceSpec
+    Ecluse.Core.Registry.Cargo.TargetSpec
+    Ecluse.Core.Registry.Cargo.PublishSpec
+    Ecluse.Core.Registry.Cargo.Publish.BodySpec
+    Ecluse.Core.Registry.Cargo.RouteSpec
+    Ecluse.Core.Registry.Cargo.Route.InternalSpec
     Ecluse.Core.Registry.PyPI.RequestSpec
     Ecluse.Core.Registry.PyPI.RouteSpec
     Ecluse.Core.Registry.PyPI.ReaderSpec
@@ -1228,6 +1317,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Rules.RenderSpec
     Ecluse.Core.Rules.TypesSpec
     Ecluse.Core.RulesSpec
+    Ecluse.Core.Rules.InstallSpec
     Ecluse.Core.Security.AuthoritySpec
     Ecluse.Core.Security.EgressSpec
     Ecluse.Core.Security.HostSpec
@@ -1257,6 +1347,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.MemoryModelSpec
     Ecluse.Core.Server.MetadataGzipSpec
     Ecluse.Core.Server.MetadataSpec
+    Ecluse.Core.Server.InstallEvidenceSpec
     Ecluse.Core.Server.MirrorViewSpec
     Ecluse.Core.Server.PathSpec
     Ecluse.Core.Server.Pipeline.DiagnosticsSpec
@@ -1291,6 +1382,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Version.GemSpec
     Ecluse.Core.Version.Pep440Spec
     Ecluse.Core.Version.SemverSpec
+    Ecluse.Core.Version.CargoSpec
     Ecluse.Core.VersionSpec
     Ecluse.Core.WireSpec
     Ecluse.Core.Worker.FetchSpec
@@ -1403,10 +1495,12 @@ test-suite ecluse-unit
     Ecluse.AcceptanceSpec
     Ecluse.Acceptance.EvidenceSpec
     Ecluse.BenchLoad.Advisories
+    Ecluse.BenchLoad.AdvisoryStore
     Ecluse.BenchLoad.Contract.Driver
     Ecluse.BenchLoad.Contract.DriverSpec
     Ecluse.BenchLoad.Stress
     Ecluse.BenchLoad.AdvisoriesSpec
+    Ecluse.BenchLoad.AdvisoryStoreSpec
     Ecluse.BenchLoad.ContractSpec
     Ecluse.BenchLoad.BootLinesSpec
     Ecluse.BenchLoad.CpuUseSpec
@@ -1423,6 +1517,11 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.Npm
     Ecluse.BenchLoad.Worker
     Ecluse.BenchLoad.PyPI.Worker
+    Ecluse.BenchLoad.Cargo
+    Ecluse.BenchLoad.Cargo.CopyState
+    Ecluse.BenchLoad.Cargo.Worker
+    Ecluse.BenchLoad.Cargo.WorkerFixture
+    Ecluse.BenchLoad.WorkerState
     Ecluse.BenchLoad.PyPI.WorkerFixture
     Ecluse.BenchLoad.PatternScenario
     Ecluse.BenchLoad.PrivateCopy
@@ -1719,6 +1818,7 @@ test-suite ecluse-integration
     Ecluse.Core.Security.EgressIntegrationSpec
     Ecluse.Core.Server.Pipeline.OriginIntegrationSpec
     Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec
+    Ecluse.Core.Registry.Cargo.AdapterIntegrationSpec
     Ecluse.Core.Server.MirrorViewIntegrationSpec
     Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec
     Ecluse.Core.Server.Pipeline.PublishIntegrationSpec
@@ -1794,6 +1894,7 @@ test-suite ecluse-residency
     Ecluse.Core.Registry.MetadataResidencySpec
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
+    Ecluse.Core.Registry.Cargo.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ArchiveResidencySpec
     Ecluse.Core.Server.MemoryModel.Calibration
     Ecluse.Core.Server.MemoryModel.CalibrationResidencySpec
@@ -1895,6 +1996,24 @@ library ecluse-e2e-test-support
   hs-source-dirs:     test/e2e
   exposed-modules:
     Ecluse.E2E.Fixtures.PyPI.Mirror
+    Ecluse.E2E.Fixtures.Cargo
+    Ecluse.E2E.Fixtures.Cargo.Advisories
+    Ecluse.E2E.Fixtures.Cargo.Dredger
+    Ecluse.E2E.Harness.CargoGateway
+    Ecluse.E2E.Harness.CargoRegistry
+    Ecluse.E2E.Harness.CargoDredger
+    Ecluse.E2E.Harness.CargoDredger.Client
+    Ecluse.E2E.Cargo.InstallE2ESpec
+    Ecluse.E2E.Cargo.MirrorInstallE2ESpec
+    Ecluse.E2E.Cargo.MirrorProofE2ESpec
+    Ecluse.E2E.Cargo.PublishE2ESpec
+    Ecluse.E2E.Cargo.AdvisoriesE2ESpec
+    Ecluse.E2E.Cargo.DredgerE2ESpec
+    Ecluse.E2E.Cargo.TelemetryE2ESpec
+    Ecluse.E2E.Cargo.NativeE2ESpec
+    Ecluse.E2E.Cargo.ExecutionE2ESpec
+    Ecluse.E2E.Drivers.Cargo
+    Ecluse.E2E.Suites.Cargo
     Ecluse.E2E.Fixtures.PyPI.Dredger
     Ecluse.E2E.Harness.PyPIMirror
     Ecluse.E2E.Harness.CodeArtifact
@@ -1923,6 +2042,7 @@ library ecluse-e2e-test-support
     Ecluse.E2E.Harness.Advisories
     Ecluse.E2E.Harness.Availability
     Ecluse.E2E.Harness.Client
+    Ecluse.E2E.Harness.Cargo
     Ecluse.E2E.Harness.Container
     Ecluse.E2E.Harness.Lifecycle
     Ecluse.E2E.Harness.Collector
@@ -1958,6 +2078,10 @@ library ecluse-e2e-test-support
     , filepath       ^>=1.5
     , hspec          ^>=2.11
     , http-client    ^>=0.7
+    , http-client-tls >=0.3.6 && <0.5
+    , crypton-connection ^>=0.4
+    , crypton-x509-store ^>=1.10
+    , tls >=2.1 && <2.5
     , http-types     ^>=0.12
     , network        ^>=3.2
     , random         ^>=1.2
@@ -1992,8 +2116,21 @@ test-suite ecluse-e2e-pypi
     , ecluse:ecluse-e2e-test-support
     , ecluse:ecluse-test-contracts
 
+test-suite ecluse-e2e-cargo
+  import:          shared
+  ghc-options:     -threaded
+  if !flag(dev-http-egress)
+    buildable: False
+  type:            exitcode-stdio-1.0
+  main-is:         Main.hs
+  hs-source-dirs:   test/e2e-cargo
+  build-depends:
+    , ecluse:ecluse-e2e-test-support
+    , ecluse:ecluse-test-contracts
+
 test-suite ecluse-e2e-shared-system
   import:          shared
+  ghc-options:     -threaded
   if !flag(dev-http-egress)
     buildable: False
   type:            exitcode-stdio-1.0
@@ -2098,6 +2235,19 @@ executable ecluse-completion-pypi-audit
     buildable: False
   main-is:         Main.hs
   hs-source-dirs:   test/tools/completion-pypi-audit test/tools/completion-support
+  other-modules:   Ecluse.Test.Contract.CompletionAudit
+  build-depends:
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-runtime-test-support
+    , ecluse:ecluse-e2e-test-support
+    , text           ^>=2.1
+
+executable ecluse-completion-cargo-audit
+  import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
+  main-is:         Main.hs
+  hs-source-dirs:   test/tools/completion-cargo-audit test/tools/completion-support
   other-modules:   Ecluse.Test.Contract.CompletionAudit
   build-depends:
     , ecluse:ecluse-test-contracts
@@ -2224,6 +2374,7 @@ executable bench-load
     buildable: False
   other-modules:
     Ecluse.BenchLoad.Advisories
+    Ecluse.BenchLoad.AdvisoryStore
     Ecluse.BenchLoad.Contract.Driver
     Ecluse.BenchLoad.Stress
     Ecluse.BenchLoad.Error
@@ -2233,6 +2384,11 @@ executable bench-load
     Ecluse.BenchLoad.Npm
     Ecluse.BenchLoad.Worker
     Ecluse.BenchLoad.PyPI.Worker
+    Ecluse.BenchLoad.Cargo
+    Ecluse.BenchLoad.Cargo.CopyState
+    Ecluse.BenchLoad.Cargo.Worker
+    Ecluse.BenchLoad.Cargo.WorkerFixture
+    Ecluse.BenchLoad.WorkerState
     Ecluse.BenchLoad.PyPI.WorkerFixture
     Ecluse.BenchLoad.Oha
     Ecluse.BenchLoad.Placement

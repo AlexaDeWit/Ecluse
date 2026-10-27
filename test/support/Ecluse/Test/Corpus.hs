@@ -10,11 +10,13 @@ module Ecluse.Test.Corpus (
     CorpusPackage (..),
     corpusPackages,
     pypiCorpusPackages,
+    cargoCorpusPackages,
     cpName,
     corpusLabel,
     CaptureUpstream (..),
     npmCaptureUpstream,
     pypiCaptureUpstream,
+    cargoCaptureUpstream,
     readCorpusPins,
     FilePin (..),
     readPinned,
@@ -35,8 +37,9 @@ import Data.Time (UTCTime, nominalDay)
 import System.FilePath ((</>))
 import Test.Hspec (shouldBe, shouldSatisfy)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI), ecosystemName)
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, pkgEcosystem, renderPackageName)
+import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Npm.Request (npmArtifactHosts)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
@@ -94,6 +97,16 @@ pypiCorpusPackages =
   where
     entry tier weight name = CorpusPackage (mkPackageName PyPI Nothing name) ("bench/corpus/pypi/" <> toString name <> ".simple.json") tier weight
 
+-- | Complete crates.io sparse files, ordered from the heaviest workload to the medium tier.
+cargoCorpusPackages :: [CorpusPackage]
+cargoCorpusPackages =
+    [ entry Heavy 8 "aws-sdk-ec2"
+    , entry Large 4 "windows"
+    , entry Medium 2 "tokio"
+    ]
+  where
+    entry tier weight name = CorpusPackage (mkPackageName Cargo Nothing name) ("bench/corpus/cargo/" <> toString name <> ".index.ndjson") tier weight
+
 -- | A corpus package's wire name, both the request path and the body's self-reported name.
 cpName :: CorpusPackage -> Text
 cpName = renderPackageName . cpPackage
@@ -121,6 +134,10 @@ npmCaptureUpstream = CaptureUpstream "https://registry.npmjs.org" (ecosystemArti
 -- | The PyPI Simple index the PyPI captures came from.
 pypiCaptureUpstream :: CaptureUpstream
 pypiCaptureUpstream = CaptureUpstream "https://pypi.org/simple" (ecosystemArtifactAuthorities pypiArtifactHosts)
+
+-- | The public sparse root and its predeclared archive authorities.
+cargoCaptureUpstream :: CaptureUpstream
+cargoCaptureUpstream = CaptureUpstream "https://index.crates.io" (ecosystemArtifactAuthorities cargoArtifactHosts)
 
 -- | Parse @bench/corpus/pins.json@ with the given parser, or return why it did not parse.
 readCorpusPins :: (Object -> Parser a) -> IO (Either String a)

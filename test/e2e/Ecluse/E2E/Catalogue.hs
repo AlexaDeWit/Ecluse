@@ -11,9 +11,11 @@ import Data.Universe.Class (universe)
 
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Registry.Adapter (adapterFor)
+import Ecluse.E2E.Cargo.DredgerE2ESpec (cargoDredgerProfile)
 import Ecluse.E2E.Harness.Availability (e2ePrerequisites)
 import Ecluse.E2E.PyPI.DredgerE2ESpec (pypiDredgerProfile)
 import Ecluse.E2E.Requirements (obligations)
+import Ecluse.E2E.Suites.Cargo qualified as Cargo
 import Ecluse.E2E.Suites.Npm qualified as Npm
 import Ecluse.E2E.Suites.PyPI qualified as PyPI
 import Ecluse.E2E.Suites.SharedSystem qualified as SharedSystem
@@ -26,7 +28,7 @@ catalogue :: Catalogue
 catalogue =
     Catalogue
         { catalogueProductionEcosystems = map ecosystemName $ filter (isJust . adapterFor) universe
-        , catalogueProfiles = profiles <> missingCapabilityProfiles "npm" Npm.declarations <> missingCapabilityProfiles "pypi" PyPI.declarations
+        , catalogueProfiles = profiles <> missingCapabilityProfiles "npm" Npm.declarations <> missingCapabilityProfiles "pypi" PyPI.declarations <> missingCapabilityProfiles "cargo" Cargo.declarations
         , catalogueObligations = obligations <> missingCapabilityObligations declarations
         , catalogueGroups = map declaredGroup declarations
         }
@@ -40,16 +42,20 @@ profiles =
     , Profile "pypi/write" ["pypi"] ["http", "sqs", "s3"] ["read", "mirror", "client-install", "telemetry"]
     , Profile "pypi/publication" ["pypi"] ["http"] ["read", "publication", "client-install"]
     , Profile "pypi/write-telemetry" ["pypi"] ["http", "sqs", "s3", "collector"] ["read", "mirror", "client-install", "telemetry"]
+    , Profile "cargo/read" ["cargo"] ["http"] ["read", "client-install", "telemetry"]
+    , Profile "cargo/write" ["cargo"] ["http", "sqs", "s3", "collector"] ["read", "mirror", "publication", "client-install", "telemetry", "advisories"]
+    , Profile "cargo/execution" ["cargo"] ["http", "codeartifact-fixture", "sqs", "s3"] ["read", "mirror", "maintenance", "client-install"]
+    , cargoDredgerProfile
     , pypiDredgerProfile
     , Profile "pypi/read" ["pypi"] ["http"] ["read", "client-install"]
     , Profile "pypi/advisories" ["pypi"] ["http", "s3"] ["read", "advisories", "client-install"]
-    , Profile "mixed/registry" ["npm", "pypi"] ["verdaccio", "memory"] ["read", "mirror", "client-install"]
+    , Profile "mixed/registry" ["npm", "pypi", "cargo"] ["verdaccio", "memory"] ["read", "mirror", "client-install"]
     , Profile "npm/telemetry" ["npm"] ["verdaccio", "memory", "collector"] ["read", "mirror", "telemetry", "client-install"]
     , Profile "pypi/telemetry" ["pypi"] ["http", "collector"] ["read", "telemetry", "client-install"]
     ]
 
 declarations :: [DeclaredGroup]
-declarations = Npm.declarations <> PyPI.declarations <> SharedSystem.declarations
+declarations = Npm.declarations <> PyPI.declarations <> Cargo.declarations <> SharedSystem.declarations
 
 -- | Missing tools fail setup without replacing declared examples with pending placeholders.
 prerequisites :: Group -> IO (Maybe Text)

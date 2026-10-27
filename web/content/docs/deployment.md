@@ -483,7 +483,7 @@ responses, and Istio compresses only through a resource your cluster may not all
 
 | Response | Compressed by Écluse |
 |---|---|
-| An admitted npm packument or PyPI Simple index, to a client whose `Accept-Encoding` prefers gzip | Yes, gzip at level 1 |
+| An admitted npm packument, PyPI Simple index, or Cargo sparse index, when `Accept-Encoding` prefers gzip | Yes, gzip at level 1 |
 | Artifacts, Core Metadata sidecars, probes, `/-/ping`, refusals, publish replies | No |
 
 With compression on, a listing and its `304` carry `Vary: Accept-Encoding`. A gzip listing carries
@@ -567,9 +567,9 @@ a separate metrics listener only when that exporter is selected.
 
 | Role | Registry or feed egress | Configured queue and advisory egress |
 |---|---|---|
-| `ecluse proxy` with embedded worker | Public/private metadata and artifact hosts, mirror repository, optional publication target | Queue send/receive/ack/visibility and redrive probe, advisory S3 read, PyPI state read/list/conditional write when configured |
-| `ecluse proxy --no-worker` | Public/private metadata and artifact hosts, optional publication target | Queue send and redrive probe, advisory S3 read, PyPI state read/list when configured |
-| `ecluse mirror` | Public metadata/artifact hosts and mirror repository | Queue receive/ack/visibility and redrive probe, advisory S3 read, PyPI state read/list/conditional write when configured |
+| `ecluse proxy` with embedded worker | Public/private discovery, metadata and artifact hosts, mirror repository, optional publication target | Queue send/receive/ack/visibility and redrive probe, advisory S3 read, PyPI/Cargo state read/list/conditional write when configured |
+| `ecluse proxy --no-worker` | Public/private discovery, metadata and artifact hosts, optional publication target | Queue send and redrive probe, advisory S3 read, PyPI/Cargo state read/list when configured |
+| `ecluse mirror` | Public discovery, metadata/artifact hosts and mirror repository | Queue receive/ack/visibility and redrive probe, advisory S3 read, PyPI/Cargo state read/list/conditional write when configured |
 | `ecluse pilot` | OSV export host and EPSS feed host | Advisory S3 upload, no mirror queue |
 | `ecluse dredger` | Mirror target and private cache metadata, and each one's maintenance API | Advisory S3 read, no mirror queue |
 
@@ -578,7 +578,8 @@ Omit destinations for features a role does not have configured. An in-memory que
 network access.
 
 The default public endpoints are `registry.npmjs.org` for npm metadata and artifacts, `pypi.org` for
-PyPI metadata, and `files.pythonhosted.org` for PyPI distributions. Private artifact hosts depend on
+PyPI metadata, `files.pythonhosted.org` for PyPI distributions, `index.crates.io` for Cargo discovery and indexes,
+and `static.crates.io` for Cargo archives. Private artifact hosts depend on
 the selected backend. Pilot uses `osv-vulnerabilities.storage.googleapis.com` and
 `epss.empiricalsecurity.com` by default. It attempts the EPSS feed on every compile, even when no
 EPSS rule is enabled, so allow that egress whatever your rules. `ecluse check-config` prints the

@@ -2,11 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The tuning fields, the message lifting and the dead-letter probe behind
-"Ecluse.Runtime.Queue.Sqs", which documents the backend and re-exports the curated surface.
-Importing this module opts out of that stability promise, the convention @text@ and @bytestring@
-use, so production code imports the public one.
--}
+-- | SQS queue operations with checked native identities and bounded receipt leases.
 module Ecluse.Runtime.Queue.Sqs.Internal (
     -- * Configuration
     SqsConfig (..),
@@ -41,7 +37,7 @@ import Data.Aeson.Types (parseMaybe)
 import Katip (LogEnv, Severity (DebugS), sl)
 import Lens.Micro ((?~), (^.))
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Queue (
@@ -59,6 +55,7 @@ import Ecluse.Core.Queue (
  )
 import Ecluse.Core.Queue.Lease (ReceiptLease, monotonicNow, receiptLease)
 import Ecluse.Core.Registry (parseErrorMessage)
+import Ecluse.Core.Registry.Cargo.Project qualified as Cargo
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Text (nonBlank, readDecimalText)
@@ -105,7 +102,7 @@ defaultSqsConfig queueUrl region =
 newSqsQueue :: LogEnv -> (Text -> Either Text RegistryUrl) -> SqsConfig -> IO MirrorQueue
 newSqsQueue logEnv egressUrl cfg = mkEnv cfg >>= \env -> sqsQueueOver logEnv egressUrl env cfg
 
--- | 'newSqsQueue' over a caller's @amazonka@ env, so a test can drive the handle against a stub endpoint.
+-- | Use an explicit AWS environment, including an endpoint supplied by a test.
 sqsQueueOver :: LogEnv -> (Text -> Either Text RegistryUrl) -> AWS.Env -> SqsConfig -> IO MirrorQueue
 sqsQueueOver logEnv egressUrl env cfg = do
     -- Every operation reports its failure as the handle's 'TransportFault' value, never
@@ -184,7 +181,7 @@ terminusOfResponse response =
 soleValue :: (Foldable t) => t Text -> Maybe Text
 soleValue = listToMaybe . toList
 
--- | Classify a queue's raw @RedrivePolicy@. A blank or missing one is absent, and any other is attached, with @maxReceiveCount@ when it reads.
+-- | Classify redrive attachment and retain its readable delivery budget.
 deadLetterTerminusOf :: Maybe Text -> DeadLetterTerminus
 deadLetterTerminusOf raw =
     maybe TerminusAbsent (TerminusAttached . captureCountOf) (nonBlank =<< raw)
@@ -204,7 +201,7 @@ countOf = \case
         Aeson.Success count -> Just count
         Aeson.Error _ -> Nothing
 
--- | The fields of a received SQS message the backend reads, so the 'QueueMessage' mapping stays free of the AWS type.
+-- | Received fields preserve SQS receipt authority separately from the untrusted body.
 data ReceivedMessage = ReceivedMessage
     { rmBody :: Maybe Text
     -- ^ The message body carrying the encoded job (SQS always supplies one).
@@ -257,7 +254,7 @@ toQueueMessage egressUrl lease received = do
 receiveCountOf :: Maybe Text -> Int
 receiveCountOf raw = max 1 (fromMaybe 1 (readDecimalText =<< raw))
 
--- | Lift a received batch under one poll's lease. A drop is logged and left un-'ack'ed, so redelivery and dead-lettering are unchanged.
+-- | Apply the poll's lease. Unusable messages remain unacknowledged for redelivery.
 liftReceivedMessages :: LogEnv -> (Text -> Either Text RegistryUrl) -> ReceiptLease -> [ReceivedMessage] -> IO [QueueMessage]
 liftReceivedMessages logEnv egressUrl lease =
     fmap catMaybes . traverse (liftReceivedMessage logEnv egressUrl lease)
@@ -288,10 +285,13 @@ dropReasonLabel = \case
     MissingReceipt -> "missing receipt"
     UndecodableBody -> "undecodable body"
 
--- | Read a payload's package identity through its ecosystem's grammar, the gate 'Ecluse.Core.Queue.decodeJob' applies. Only npm has one.
+-- | Parse queued native identities before the worker accepts their coordinates.
 mirrorJobPackage :: Ecosystem -> Maybe Text -> Text -> Either Text PackageName
 mirrorJobPackage eco namespace rawName = case eco of
     Npm -> first parseErrorMessage (projectName npmWireName)
+    Cargo -> do
+        unless (maybe True (== "") namespace) (Left "Cargo packages cannot have a namespace")
+        first parseErrorMessage (Cargo.projectName rawName)
     PyPI -> Right asGiven
     RubyGems -> Right asGiven
   where

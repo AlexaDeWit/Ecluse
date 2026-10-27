@@ -8,8 +8,10 @@ module Ecluse.Core.Registry.AdapterSpec (spec) where
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
-import Ecluse.Core.Registry.Adapter (adapterEcosystem, adapterFor, adapterRuleBlocks)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
+import Ecluse.Core.Registry.Adapter (adapterEcosystem, adapterFor, adapterMetadata, adapterRuleBlocks)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
+import Ecluse.Core.Registry.Cargo.Metadata (cargoChargeFactors)
 
 import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyIfYankedType, DenyInstallTimeExecutionType))
 
@@ -21,6 +23,19 @@ spec = describe "adapterFor (the ecosystem adapter registry)" $ do
 
     it "resolves PyPI to the adapter registered under its own ecosystem tag" $
         (adapterEcosystem <$> adapterFor PyPI) `shouldBe` Just PyPI
+
+    it "resolves Cargo with its measured native charge factors" $ do
+        (adapterEcosystem <$> adapterFor Cargo) `shouldBe` Just Cargo
+        (metadataChargeFactors . adapterMetadata <$> adapterFor Cargo) `shouldBe` Just cargoChargeFactors
+
+    it "blocks exactly Cargo's absent scope and deprecation capabilities" $
+        (adapterRuleBlocks <$> adapterFor Cargo)
+            `shouldBe` Just
+                ( Map.fromList
+                    [ (AllowScopeType, "Cargo package names have no scope.")
+                    , (DenyIfDeprecatedType, "Cargo's sparse index supplies no deprecation flag.")
+                    ]
+                )
 
     it "blocks the unsupported yank signal on npm" $
         (adapterRuleBlocks <$> adapterFor Npm) `shouldBe` Just (Map.singleton DenyIfYankedType "npm reports no yank flag. Removed releases disappear from its metadata.")

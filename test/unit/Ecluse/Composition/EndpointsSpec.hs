@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Declared coordinates preserve endpoint refusals and each role's store-sharing contract.
 module Ecluse.Composition.EndpointsSpec (spec) where
 
 import Data.Map.Strict qualified as Map
@@ -14,19 +15,22 @@ import Ecluse.Composition.BootError (
 import Ecluse.Composition.Endpoints (
     PublicationTarget,
     VettedEndpoints (vePublicationTargets),
+    publicationReadUrl,
     publicationTargetUrl,
     vetEndpoints,
  )
 import Ecluse.Composition.Support (expectConfig, overrideEnv, staticEnvVars)
 import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (runVet)
-import Ecluse.Config (AppConfig (cfgMounts), Config (configApp), MountConfig)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Config (AppConfig (cfgMounts), Config (configApp), MirrorEndpoint (meUploadUrl), MountConfig (..), PublicationEndpoint (peUploadUrl))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Test.Package (unsafeRegistryUrl)
 
+-- | Check endpoint collisions independently of native transport and discovery.
 spec :: Spec
 spec = do
+    uploadCoordinateSpec
     publicUpstreamSpec
     otherMountSpec
     ownPrivatePublicationSpec
@@ -35,6 +39,122 @@ spec = do
     privateUpstreamSpec
     advisorySpec
     aggregationSpec
+
+uploadCoordinateSpec :: Spec
+uploadCoordinateSpec = describe "configured Cargo read and upload coordinates" $ do
+    for_ [("privateUpstream", "https://pypi-private.example.test"), ("mirrorTarget", "https://pypi-mirror.example.test"), ("publicationTarget", "https://pypi-publish.example.test")] $ \(key, url) ->
+        it ("refuses a publication API on another mount's " <> toString key) $ do
+            mounts <- cargoMounts
+            let changed = withPublicationUpload Cargo url mounts
+                expected = case key of
+                    "publicationTarget" ->
+                        [ PublicationTargetOnMountEndpoint PyPI Cargo "publicationTarget" url
+                        , PublicationTargetOnMountEndpoint Cargo PyPI "publicationTarget" url
+                        ]
+                    _ -> [PublicationTargetOnMountEndpoint Cargo PyPI key url]
+            for_ endpointRoles $ \role ->
+                refusalsIn role changed `shouldBe` expected
+
+    it "checks an upload coordinate loaded through the generic registry configuration" $
+        refusalsFor
+            MirrorWriter
+            (overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__UPLOAD_URL" "https://pypi-private.example.test" (withPyPI publishingEnv))
+            `shouldReturn` [PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://pypi-private.example.test"]
+
+    it "compares publication APIs when both mounts have distinct read roots" $ do
+        mounts <- cargoMounts
+        let shared = "https://shared-api.example.test/registry"
+            changed = withPublicationUpload Cargo shared (withPublicationUpload PyPI shared mounts)
+        refusalsIn MirrorWriter changed
+            `shouldMatchList` [ PublicationTargetOnMountEndpoint Cargo PyPI "publicationTarget" shared
+                              , PublicationTargetOnMountEndpoint PyPI Cargo "publicationTarget" shared
+                              ]
+
+    it "compares a publication API with another mount's mirror API" $ do
+        mounts <- cargoMounts
+        let shared = "https://shared-api.example.test/registry"
+            changed = withPublicationUpload Cargo shared (withMirrorUpload PyPI shared mounts)
+        for_ endpointRoles $ \role ->
+            refusalsIn role changed `shouldBe` [PublicationTargetOnMountEndpoint Cargo PyPI "mirrorTarget" shared]
+
+    it "refuses publication and mirror APIs on public hosts across mounts" $ do
+        mounts <- cargoMounts
+        let url = "https://pypi-public.example.test/api"
+        for_ endpointRoles $ \role -> do
+            refusalsIn role (withPublicationUpload Cargo url mounts) `shouldBe` [PublicationTargetOnPublicUpstream Cargo PyPI url]
+            refusalsIn role (withMirrorUpload Cargo url mounts) `shouldBe` [MirrorTargetOnPublicUpstream Cargo PyPI url]
+
+    it "keeps the mirror API's private-store collapse advisory specific to the writing role" $ do
+        mounts <- cargoMounts
+        let url = "https://pypi-private.example.test"
+            changed = withMirrorUpload Cargo url mounts
+        refusalsIn MirrorWriter changed `shouldBe` []
+        advisoriesIn MirrorWriter changed `shouldBe` [MirrorTargetOnPrivateUpstream Cargo PyPI (unsafeRegistryUrl url)]
+        for_ [MirrorPruner, MirrorPreviewer] $ \role -> do
+            refusalsIn role changed `shouldBe` [MirrorTargetOnMountEndpoint Cargo PyPI "privateUpstream" url]
+            advisoriesIn role changed `shouldBe` []
+
+    it "refuses a mirror API on another mount's publication target" $ do
+        mounts <- cargoMounts
+        let url = "https://pypi-publish.example.test"
+            changed = withMirrorUpload Cargo url mounts
+        for_ endpointRoles $ \role ->
+            refusalsIn role changed `shouldBe` [PublicationTargetOnMountEndpoint PyPI Cargo "mirrorTarget" url]
+
+    it "preserves publication API sharing with its own private store for writing roles" $ do
+        mounts <- cargoMounts
+        let url = "https://private.example.test"
+            changed = withPublicationUpload Cargo url mounts
+        refusalsIn MirrorWriter changed `shouldBe` []
+        advisoriesIn MirrorWriter changed `shouldBe` []
+        for_ [MirrorPruner, MirrorPreviewer] $ \role ->
+            refusalsIn role changed `shouldBe` [PublicationTargetOnMountEndpoint Cargo Cargo "privateUpstream" url]
+
+    it "preserves own mirror and publication API collapse without a blanket refusal" $ do
+        mounts <- cargoMounts
+        let url = "https://shared-api.example.test/registry"
+            changed = withPublicationUpload Cargo url (withMirrorUpload Cargo url mounts)
+        refusalsIn MirrorWriter changed `shouldBe` []
+        advisoriesIn MirrorWriter changed `shouldBe` [MirrorTargetOnOwnPublicationTarget Cargo (unsafeRegistryUrl url)]
+        vetted <- either (fail . show) pure (clearedTargets changed)
+        fmap (registryUrlText . publicationTargetUrl) (Map.lookup Cargo vetted) `shouldBe` Just url
+        fmap (registryUrlText . publicationReadUrl) (Map.lookup Cargo vetted) `shouldBe` Just "https://publish.example.test"
+        for_ [MirrorPruner, MirrorPreviewer] $ \role ->
+            refusalsIn role changed `shouldBe` [MirrorTargetOnMountEndpoint Cargo Cargo "publicationTarget" url]
+
+    it "clears distinct read and API paths on their configured hosts" $ do
+        mounts <- cargoMounts
+        let api = "https://publish.example.test/api"
+            changed = withPublicationUpload Cargo api (withMirrorUpload Cargo "https://mirror.example.test/api" mounts)
+        for_ endpointRoles $ \role -> do
+            refusalsIn role changed `shouldBe` []
+            advisoriesIn role changed `shouldBe` []
+        vetted <- either (fail . show) pure (clearedTargets changed)
+        fmap (registryUrlText . publicationTargetUrl) (Map.lookup Cargo vetted) `shouldBe` Just api
+        fmap (registryUrlText . publicationReadUrl) (Map.lookup Cargo vetted) `shouldBe` Just "https://publish.example.test"
+
+    it "reports an equivalent read and API coordinate once" $ do
+        mounts <- cargoMounts
+        let url = "https://publish.example.test"
+            changed = withPublicationUpload Cargo "https://PUBLISH.example.test:443/" (withMirrorUpload Cargo url mounts)
+        refusalsIn MirrorWriter changed `shouldBe` []
+        advisoriesIn MirrorWriter changed `shouldBe` [MirrorTargetOnOwnPublicationTarget Cargo (unsafeRegistryUrl url)]
+
+endpointRoles :: [RegistryRole]
+endpointRoles = [MirrorWriter, MirrorPruner, MirrorPreviewer]
+
+-- Endpoint rules use declared roles without interpreting first-party package names.
+cargoMounts :: IO (Map Ecosystem MountConfig)
+cargoMounts = do
+    mounts <- mountsFor (pypiPublishingTo "https://pypi-publish.example.test" publishingEnv)
+    cargo <- maybe (fail "missing registry fixture") pure (Map.lookup Npm mounts)
+    pure (Map.insert Cargo cargo (Map.delete Npm mounts))
+
+withPublicationUpload :: Ecosystem -> Text -> Map Ecosystem MountConfig -> Map Ecosystem MountConfig
+withPublicationUpload eco url = Map.adjust (\mount -> mount{mntPublicationTarget = fmap (\endpoint -> endpoint{peUploadUrl = Just (unsafeRegistryUrl url)}) (mntPublicationTarget mount)}) eco
+
+withMirrorUpload :: Ecosystem -> Text -> Map Ecosystem MountConfig -> Map Ecosystem MountConfig
+withMirrorUpload eco url = Map.adjust (\mount -> mount{mntMirrorTarget = fmap (\endpoint -> endpoint{meUploadUrl = Just (unsafeRegistryUrl url)}) (mntMirrorTarget mount)}) eco
 
 publicUpstreamSpec :: Spec
 publicUpstreamSpec = describe "publicationTarget against a public upstream" $ do
@@ -303,7 +423,10 @@ mountsFor env = cfgMounts . configApp <$> expectConfig env Nothing
 
 -- Every refusal a role earns from an environment layer.
 refusalsFor :: RegistryRole -> [(String, String)] -> IO [BootError]
-refusalsFor role env = fromLeft [] . snd . runVet role . vetEndpoints <$> mountsFor env
+refusalsFor role env = refusalsIn role <$> mountsFor env
+
+refusalsIn :: RegistryRole -> Map Ecosystem MountConfig -> [BootError]
+refusalsIn role = fromLeft [] . snd . runVet role . vetEndpoints
 
 -- Every advisory a writing role (@ecluse proxy@ and @ecluse mirror@ alike) logs.
 advisoriesFor :: [(String, String)] -> IO [Advisory]
@@ -311,13 +434,15 @@ advisoriesFor = advisoriesForRole MirrorWriter
 
 -- Every advisory one role logs, whatever that role's pass decided.
 advisoriesForRole :: RegistryRole -> [(String, String)] -> IO [Advisory]
-advisoriesForRole role env = fst . runVet role . vetEndpoints <$> mountsFor env
+advisoriesForRole role env = advisoriesIn role <$> mountsFor env
+
+advisoriesIn :: RegistryRole -> Map Ecosystem MountConfig -> [Advisory]
+advisoriesIn role = fst . runVet role . vetEndpoints
 
 -- The publish endpoints a writing role's pass clears, or every refusal at once.
 clearedTargets :: Map Ecosystem MountConfig -> Either [BootError] (Map Ecosystem PublicationTarget)
 clearedTargets mounts = vePublicationTargets <$> snd (runVet MirrorWriter (vetEndpoints mounts))
 
--- | The npm mount mirroring to a path on its own public-upstream host: the host rule's subject.
 mirrorOnPublicUrl :: (IsString s) => s
 mirrorOnPublicUrl = "https://public.example.test/npm/"
 
@@ -343,30 +468,22 @@ withPyPI env =
             overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__URL" "https://pypi-mirror.example.test" $
                 overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__TOKEN" "pypi-write-token" env
 
-{- | The npm mount mirroring to one URL against a PyPI neighbour reading its private upstream
-from another: the pair the store comparison decides.
--}
 mirrorAgainstPypiPrivate :: String -> String -> [(String, String)]
 mirrorAgainstPypiPrivate mirror private =
     overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL" private (withPyPI (mirroringTo mirror staticEnvVars))
 
-{- | One registry held by the npm mount's publicationTarget and mirrorTarget and by both of the
-PyPI neighbour's upstreams, exercising collisions across mounts.
--}
 everyEndpointCollapseEnv :: [(String, String)]
 everyEndpointCollapseEnv =
     overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL" sharedRegistry $
         overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL" sharedRegistry $
             withPyPI (mirroringTo sharedRegistry (publishingTo sharedRegistry))
 
--- | The registry every key in 'everyEndpointCollapseEnv' collapses onto.
 sharedRegistry :: String
 sharedRegistry = "https://shared.example.test"
 
 sharedRegistryText :: Text
 sharedRegistryText = toText sharedRegistry
 
--- | 'sharedRegistry' as the egress value an advisory carries.
 sharedRegistryUrl :: RegistryUrl
 sharedRegistryUrl = unsafeRegistryUrl sharedRegistryText
 

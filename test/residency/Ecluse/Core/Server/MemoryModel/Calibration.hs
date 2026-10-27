@@ -11,6 +11,7 @@ module Ecluse.Core.Server.MemoryModel.Calibration (
     keptCharge,
     npmCalibration,
     pypiCalibration,
+    cargoCalibration,
 
     -- * Regression limits
     Figures (..),
@@ -18,6 +19,7 @@ module Ecluse.Core.Server.MemoryModel.Calibration (
     readPeakLimit,
     npmFigures,
     pypiFigures,
+    cargoFigures,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -62,6 +64,16 @@ pypiCalibration =
         { realisticReadMaximum = 513112 % 183837
         , allReadMaximum = 513112 % 183837
         , outputMaximum = 816606 % 553037
+        }
+
+-- | Cargo's native listing maxima.
+cargoCalibration :: Calibration
+cargoCalibration =
+    -- https://github.com/AlexaDeWit/Ecluse/actions/runs/40249393996/job/121337825625
+    Calibration
+        { realisticReadMaximum = 1493744 % 1166746
+        , allReadMaximum = 1493744 % 1166746
+        , outputMaximum = 2806578 % 1373462
         }
 
 -- | One capture's live bytes per source byte, and per basis byte for an output working set.
@@ -236,6 +248,49 @@ pypiFigures =
                 , retainedRaw = 494440 % 123104
                 , retainedTyped = 213320 % 123104
                 , retainedShared = 320272 % 123104
+                , readPeak = Nothing
+                , singleOutput = Nothing
+                , mergedOutputs = mempty
+                }
+            )
+        ]
+
+-- | Cargo figures from the native arm64 corpus measurements.
+cargoFigures :: Map Text Figures
+cargoFigures =
+    -- https://github.com/AlexaDeWit/Ecluse/actions/runs/40249393996/job/121337825625
+    Map.fromList
+        [
+            ( "aws-sdk-ec2"
+            , Figures
+                { retainedWire = 1410144 % 1427352
+                , retainedRaw = 11740848 % 1427352
+                , retainedTyped = 282496 % 1427352
+                , retainedShared = 1648392 % 1427352
+                , readPeak = Just (1778064 % 1427352)
+                , singleOutput = Just (2854704 % 1427352)
+                , mergedOutputs = Map.fromList [(Identical, 2854704 % 1427352), (Overlapping, 2854704 % 1426377), (Disjoint, 2854704 % 1427352), (PublishOrder, 2854704 % 1471794)]
+                }
+            )
+        ,
+            ( "windows"
+            , Figures
+                { retainedWire = 1386192 % 1403289
+                , retainedRaw = 9259592 % 1403289
+                , retainedTyped = 51008 % 1403289
+                , retainedShared = 1487152 % 1403289
+                , readPeak = Just (1792456 % 1403289)
+                , singleOutput = Just (2806578 % 1403289)
+                , mergedOutputs = Map.fromList [(Identical, 2806578 % 1403289), (Overlapping, 2806578 % 1373462), (Disjoint, 2806578 % 1403289), (PublishOrder, 2806578 % 1690498)]
+                }
+            )
+        ,
+            ( "tokio"
+            , Figures
+                { retainedWire = 853616 % 870666
+                , retainedRaw = 7347792 % 870666
+                , retainedTyped = 159424 % 870666
+                , retainedShared = 1018880 % 870666
                 , readPeak = Nothing
                 , singleOutput = Nothing
                 , mergedOutputs = mempty

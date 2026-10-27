@@ -30,6 +30,8 @@ import Ecluse.Core.Mirror.State.Weight (retainedRecordWeight)
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Registry.CachedDocument (estimateValueBytes)
+import Ecluse.Core.Registry.Cargo.Document (cargoDocument, cargoRecords)
+import Ecluse.Core.Registry.Cargo.Manifest (cratesIoIndex)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream, retainedValue)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.MirrorUpload (MirrorInventory, MirrorReadData (..), expectedArtifact, inventoryDetails, inventoryReadData, mirrorReadDocument)
@@ -181,8 +183,10 @@ forceRecordSources record = force (recordEnvelope record) `seq` foldl' forceVers
     forceFragment () (StoredMirrorFragment _ source _) = case source of
         NpmMirrorRead fields -> force fields `seq` ()
         PyPIMirrorRead document -> force (simpleEnvelope document) `seq` foldl' forceEntry () (simpleFiles document)
+        CargoMirrorRead document -> foldl' forceEntry () (cargoRecords document)
     forceEntry () (key, value) = forceKey key `seq` force value `seq` ()
     forceKey (ArrayEntry position) = force position `seq` ()
+    forceKey (RecordEntry position) = force position `seq` ()
     forceKey (ObjectEntry name) = force name `seq` ()
     forceKey SingletonEntry = ()
 
@@ -232,6 +236,7 @@ parseRecord = withObject "project mirror state" $ \value -> do
         case source of
             PyPIMirrorRead document -> void (either (const (fail "invalid project envelope identity")) pure (restoreMirrorFragment details (PyPIMirrorRead (simpleDocument envelope (simpleFiles document)))))
             NpmMirrorRead _ -> unless (KeyMap.null envelope) (fail "npm record has an unexpected project envelope")
+            CargoMirrorRead _ -> unless (KeyMap.null envelope) (fail "Cargo record has an unexpected project envelope")
     pure (ProjectMirrorRecord target name envelope (Map.fromList versions))
 
 parseVersion :: PackageName -> Value -> Parser (Text, MirrorVersion)
@@ -368,6 +373,7 @@ parseMetadata value = withObject "companion declaration" (fmap MetadataDigests .
 
 keyValue :: EntryKey -> Value
 keyValue (ArrayEntry position) = object ["array" .= position]
+keyValue (RecordEntry position) = object ["record" .= position]
 keyValue (ObjectEntry text) = object ["object" .= text]
 keyValue SingletonEntry = Null
 
@@ -382,6 +388,11 @@ parseKey value =
                 when (position < 0) (fail "negative source coordinate")
                 pure (ArrayEntry position)
             )
+                <|> ( do
+                        position <- fields .: "record"
+                        when (position < 0) (fail "negative source coordinate")
+                        pure (RecordEntry position)
+                    )
                 <|> (ObjectEntry <$> fields .: "object")
         )
         value
@@ -391,6 +402,8 @@ sourceValue (NpmMirrorRead fields) = object ["kind" .= ("npm" :: Text), "fields"
 sourceValue (PyPIMirrorRead document) =
     object
         ["kind" .= ("pypi" :: Text), "envelope" .= simpleEnvelope document, "entries" .= [object ["key" .= keyValue key, "value" .= value] | (key, value) <- simpleFiles document]]
+sourceValue (CargoMirrorRead document) =
+    object ["kind" .= ("cargo" :: Text), "sourceIndex" .= cratesIoIndex, "entries" .= [object ["key" .= keyValue key, "value" .= value] | (key, value) <- cargoRecords document]]
 
 parseSource :: Value -> Parser MirrorReadData
 parseSource = withObject "read source" $ \value ->
@@ -401,6 +414,12 @@ parseSource = withObject "read source" $ \value ->
             files <- value .: "entries" >>= traverse (withObject "file entry" (\entry -> (,) <$> (entry .: "key" >>= parseKey) <*> entry .: "value"))
             ensureDistinct (map fst files)
             pure (PyPIMirrorRead (simpleDocument envelope files))
+        "cargo" -> do
+            sourceIndex <- value .: "sourceIndex"
+            unless (sourceIndex == cratesIoIndex) (fail "Cargo mirror source is not crates.io")
+            entries <- value .: "entries" >>= traverse (withObject "Cargo entry" (\entry -> (,) <$> (entry .: "key" >>= parseKey) <*> entry .: "value"))
+            ensureDistinct (map fst entries)
+            pure (CargoMirrorRead (cargoDocument entries))
         (_ :: Text) -> fail "unknown source shape"
 
 companionValue :: (Text, CompanionState) -> Value

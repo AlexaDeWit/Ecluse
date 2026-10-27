@@ -11,10 +11,10 @@ import Data.Map.Strict qualified as Map
 import Ecluse.Bench.Corpus (benchEvalContext, benchRules, entryInfo, entryName, syntheticPackageInfo)
 import Ecluse.Bench.Fit (notWorseThanLinearIO)
 import Ecluse.Core.Package (PackageInfo, infoVersions)
-import Ecluse.Core.Rules (newEvaluator, prepare)
+import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Decision (Admitted, Blocked, BlockedByDefault, Undecidable), completeEvidence)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
-import Ecluse.Test.Rules (inertRuleDeps)
+import Ecluse.Test.Rules (inertRuleDeps, newEvaluator)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO)
 
 -- | Measure captured rule sweeps and their growth across synthetic release counts.

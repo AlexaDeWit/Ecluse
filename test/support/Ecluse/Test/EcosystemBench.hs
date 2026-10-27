@@ -23,19 +23,26 @@ import Network.HTTP.Client (Request)
 import Network.HTTP.Types (Method, methodGet, methodPut)
 
 import Ecluse.Core.Credential (ClientCredential, bareCredential, mkSecret)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageName, infoVersions, renderPackageName, unscopedName)
 import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl), AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, adapterMetadata))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
+import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead)
+import Ecluse.Core.Registry.Cargo.Request (cargoArtifactRequest, cargoConfigRequest, cargoIndexRequest)
+import Ecluse.Core.Registry.Cargo.Route.Internal (cargoRoutes)
+import Ecluse.Core.Registry.Cargo.Serving (assembleCargoDocument, serialiseCargoDocument)
 import Ecluse.Core.Registry.Metadata (Manifest (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
+import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Registry.Npm.Route.Internal (npmRoutes)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
+import Ecluse.Core.Registry.PyPI.Metadata (pypiRead)
 import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, filenameMemo, readCoordinate)
 import Ecluse.Core.Registry.PyPI.Route.Internal (pypiRoutes)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifFilename), SimpleIndex (siFiles))
@@ -44,13 +51,16 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (renderVersion)
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpTier), corpusPackages, cpName, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, readCapture)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpTier), cargoCaptureUpstream, cargoCorpusPackages, corpusPackages, cpName, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, readCapture)
+import Ecluse.Test.Corpus.Cargo qualified as Cargo
 import Ecluse.Test.Corpus.Npm (benchPackageName, syntheticPackumentBytes)
 import Ecluse.Test.Corpus.PyPI (benchProject, syntheticIndexBytes)
-import Ecluse.Test.Corpus.Subset (heavyNpmBase, heavyPyPIBase, keepNpmVersions, keepPyPIVersions)
+import Ecluse.Test.Corpus.Subset (heavyCargoBase, heavyNpmBase, heavyPyPIBase, keepCargoVersions, keepNpmVersions, keepPyPIVersions)
 import Ecluse.Test.EcosystemBench.Types
 import Ecluse.Test.Package (unsafeRegistryUrl)
+import Ecluse.Test.Registry.Cargo.Metadata (cargoRead, projectCargoIndex)
 import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, captureManifest, captureVersion)
+import Ecluse.Test.Registry.Metadata.Rendering (MetadataRendering (..), renderingOf)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmFull, projectNpmManifest)
 import Ecluse.Test.Registry.Npm.Project (parseVersionBytes)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist)
@@ -71,23 +81,28 @@ benchmarkEcosystems = map (ebEcosystem . fst) benchmarkRegistrations
 
 -- | Compare providers with both reviewed obligations and the production adapter registry.
 checkBenchmarkCoverage :: [Ecosystem] -> Either Text ()
-checkBenchmarkCoverage actual
-    | sort actual /= sort required = Left ("measurement providers differ from required ecosystems: " <> show actual)
-    | sort actual /= sort production = Left ("measurement providers differ from production adapters: " <> show production)
-    | otherwise = Right ()
+checkBenchmarkCoverage actual = do
+    checkProviderCoverage actual
+    unless (sort actual == sort production) (Left ("measurement providers differ from production adapters: " <> show production))
   where
-    required = [Npm, PyPI]
     production = filter (isJust . adapterFor) universe
+
+checkProviderCoverage :: [Ecosystem] -> Either Text ()
+checkProviderCoverage actual =
+    unless (sort actual == sort required) (Left ("measurement providers differ from required ecosystems: " <> show actual))
+  where
+    required = [Cargo, Npm, PyPI]
 
 -- | The explicit provider registry, without loading captures or running measured operations.
 ecosystemBenchFor :: Ecosystem -> Maybe EcosystemBench
 ecosystemBenchFor = \case
     Npm -> Just npmBench
     PyPI -> Just pypiBench
+    Cargo -> Just cargoBench
     RubyGems -> Nothing
 
 benchmarkRegistrations :: [(EcosystemBench, [CorpusPackage])]
-benchmarkRegistrations = [(npmBench, corpusPackages), (pypiBench, pypiCorpusPackages)]
+benchmarkRegistrations = [(npmBench, corpusPackages), (pypiBench, pypiCorpusPackages), (cargoBench, cargoCorpusPackages)]
 
 loadEcosystem :: EcosystemBench -> [CorpusPackage] -> IO EcosystemBench
 loadEcosystem ecosystem packages = do
@@ -119,11 +134,14 @@ npmBench =
         , ebSyntheticName = benchPackageName
         , ebDecode = \_ -> first show . fmap (map renderVersion) . parseVersionBytes
         , ebProject = projectNpmFull defaultLimits
-        , ebRead = captureManifest (adapterMetadata npmAdapter) npmCaptureUpstream
-        , ebSelective = \name version -> fmap (fmap readDetails) . captureVersion (adapterMetadata npmAdapter) npmCaptureUpstream name version
+        , ebProjectServed = projectNpmFull defaultLimits
+        , ebRead = captureManifest npmRead npmCaptureUpstream
+        , ebSelective = \name version -> fmap (fmap readDetails) . captureVersion npmRead npmCaptureUpstream name version
         , ebReadDocument = readDocument (fst npmCached)
         , ebNestingDepth = nestingDepth (snd npmCached)
-        , ebMetadata = adapterMetadata npmAdapter
+        , ebMetadata = renderingOf (adapterMetadata npmAdapter)
+        , ebReader = Right npmRead
+        , ebReadFactory = metadataRead (adapterMetadata npmAdapter)
         , ebRoutes = [RouteCase "mixed requests" (concat (replicate 1000 npmRequests))]
         , ebClassify = \(method, segments) -> routeDepth (matchRoute npmRoutes method [] segments)
         , ebActionRoutes = [RouteCase "tarball action" (replicate 1000 (methodGet, ["express", "-", "express-4.18.2.tgz"]))]
@@ -131,7 +149,7 @@ npmBench =
         , ebRouteScaling = []
         , ebRequestBuilds =
             [ RequestBuild "artifact request" (\name -> NpmRequest.artifactRequestByFile npmBase benchCredential name (unscopedName name <> "-1.0.0.tgz"))
-            , RequestBuild "metadata request" (originRequest (adapterMetadata npmAdapter) npmBase)
+            , RequestBuild "metadata request" (originRequest npmRead npmBase)
             ]
         }
 
@@ -150,11 +168,14 @@ pypiBench =
         , ebSyntheticName = benchProject
         , ebDecode = \name raw -> pypiReleaseKeys name . siFiles <$> first toText (eitherDecodeStrict raw)
         , ebProject = \name -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits name
-        , ebRead = captureManifest (adapterMetadata pypiAdapter) pypiCaptureUpstream
-        , ebSelective = \name version -> fmap (fmap readDetails) . captureVersion (adapterMetadata pypiAdapter) pypiCaptureUpstream name version
+        , ebProjectServed = \name -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits name
+        , ebRead = captureManifest pypiRead pypiCaptureUpstream
+        , ebSelective = \name version -> fmap (fmap readDetails) . captureVersion pypiRead pypiCaptureUpstream name version
         , ebReadDocument = readDocument (fst pypiSimpleCached . documentFromValue)
         , ebNestingDepth = nestingDepth (fmap simpleValue . snd pypiSimpleCached)
-        , ebMetadata = adapterMetadata pypiAdapter
+        , ebMetadata = renderingOf (adapterMetadata pypiAdapter)
+        , ebReader = Right pypiRead
+        , ebReadFactory = metadataRead (adapterMetadata pypiAdapter)
         , ebRoutes =
             [ RouteCase "mixed requests" (concat (replicate 1000 pypiRequests))
             , RouteCase "normal sdist" [distribution "requests-2.34.2.tar.gz"]
@@ -168,10 +189,59 @@ pypiBench =
             , RouteScaling "valid filename separators" (\count -> distribution ("requests" <> T.replicate (fromIntegral count) "_" <> "1.tar.gz"))
             ]
         , ebRequestBuilds =
-            [ RequestBuild "index request" (originRequest (adapterMetadata pypiAdapter) pypiBase)
+            [ RequestBuild "index request" (originRequest pypiRead pypiBase)
             , RequestBuild "artifact request" (artifactByUrl (adapterArtifact pypiAdapter) benchCredential . wheelUrl)
             ]
         }
+
+cargoBench :: EcosystemBench
+cargoBench =
+    EcosystemBench
+        { ebEcosystem = Cargo
+        , ebCorpus = []
+        , ebUpstream = cargoCaptureUpstream
+        , ebOrigin = "https://index.crates.io"
+        , ebTreeRead = Cargo.projectCargoTree defaultLimits
+        , ebTreeDocument = (fst cargoCached <$>) . snd cargoCached
+        , ebKeepVersions = const keepCargoVersions
+        , ebHeavyBase = heavyCargoBase
+        , ebSynthetic = Cargo.syntheticIndexBytes
+        , ebSyntheticName = Cargo.benchCrate
+        , ebDecode = const Cargo.cargoVersionKeys
+        , ebProject = \name bytes -> Cargo.cargoCaptureDiscovery >>= \discovery -> projectCargoIndex discovery defaultLimits name bytes
+        , ebProjectServed = \name bytes -> Cargo.cargoServedDiscovery >>= \discovery -> projectCargoIndex discovery defaultLimits name bytes
+        , ebRead = \name chunks -> either (pure . Left) (\nativeRead -> captureManifest nativeRead cargoCaptureUpstream name chunks) capturedCargoRead
+        , ebSelective = \name version chunks -> either (pure . Left) (\nativeRead -> fmap (fmap readDetails) (captureVersion nativeRead cargoCaptureUpstream name version chunks)) capturedCargoRead
+        , ebReadDocument = fmap snd . first show . Cargo.projectCargoTree defaultLimits Cargo.benchCrate
+        , ebNestingDepth = maybe (-1) (either (const (-1)) (const 1) . traverse (checkNestingDepth defaultLimits . snd) . cargoRecords) . snd cargoCached
+        , ebMetadata = MetadataRendering assembleCargoDocument serialiseCargoDocument
+        , ebReader = capturedCargoRead
+        , ebReadFactory = prepareCargoRead
+        , ebRoutes = [RouteCase "mixed requests" (concat (replicate 1000 cargoRequests))]
+        , ebClassify = \(method, segments) -> routeDepth (matchRoute cargoRoutes method [] segments)
+        , ebActionRoutes = [RouteCase "crate action" (replicate 1000 (methodGet, ["crates", "bench-crate", "1.0.0", "bench-crate-1.0.0.crate"]))]
+        , ebAction = \(method, segments) -> snd <$> matchRoute cargoRoutes method [] segments
+        , ebRouteScaling = [RouteScaling "malformed index name" (\count -> (methodGet, ["be", "nc", "bench" <> T.replicate (fromIntegral count) "-"]))]
+        , ebRequestBuilds =
+            [ RequestBuild "discovery request" (const (cargoConfigRequest cargoBase benchCredential))
+            , RequestBuild "index request" (cargoIndexRequest cargoBase benchCredential)
+            , RequestBuild "archive request" (cargoArtifactRequest benchCredential . (\name -> "https://static.crates.io/crates/" <> renderPackageName name <> "/" <> renderPackageName name <> "-1.0.0.crate"))
+            ]
+        }
+  where
+    capturedCargoRead = cargoRead <$> Cargo.cargoCaptureDiscovery
+    cargoBase = mkBaseRequest (unsafeRegistryUrl "https://index.crates.io")
+
+cargoRequests :: [(Method, [Text])]
+cargoRequests =
+    [ (methodGet, ["config.json"])
+    , (methodGet, ["to", "ki", "tokio"])
+    , (methodGet, ["wi", "nd", "windows"])
+    , (methodGet, ["crates", "tokio", "1.0.0", "tokio-1.0.0.crate"])
+    , (methodPut, ["api", "v1", "crates", "new"])
+    , (methodGet, ["bad", "prefix", "tokio"])
+    , (methodGet, [])
+    ]
 
 npmOrigin :: Text
 npmOrigin = "https://registry.npmjs.org"
@@ -191,8 +261,8 @@ benchCredential :: Maybe ClientCredential
 benchCredential = Just (bareCredential (mkSecret "bench-token"))
 
 -- The whole-document request a metadata read seals before it sends.
-originRequest :: AdapterMetadata -> BaseRequest -> PackageName -> Either UrlFormationError Request
-originRequest metadata base name = sealRequest <$> erRequest (metadataRead metadata) base benchCredential name
+originRequest :: EcosystemRead -> BaseRequest -> PackageName -> Either UrlFormationError Request
+originRequest nativeRead base name = sealRequest <$> erRequest nativeRead base benchCredential name
 
 -- A wheel location as the index lists it, which the artifact read fetches by URL.
 wheelUrl :: PackageName -> Text

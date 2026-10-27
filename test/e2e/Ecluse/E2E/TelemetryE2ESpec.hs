@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Native traffic for the shared read telemetry and npm mirror telemetry contracts.
-module Ecluse.E2E.TelemetryE2ESpec (npmReadTelemetryFamily, pypiReadTelemetryFamily, npmMirrorTelemetryFamily, collectorDriver) where
+module Ecluse.E2E.TelemetryE2ESpec (npmReadTelemetryFamily, pypiReadTelemetryFamily, npmMirrorTelemetryFamily, collectorDriver, readDriver) where
 
 import Data.List (lookup)
 import Data.Text qualified as T
@@ -43,6 +43,7 @@ npmMirrorTelemetryFamily fixture = concreteFamily fixture $ \recorder action ->
                 , mirrorTelemetryPrivateVersion = psVersion telemetryPrivatePkg
                 , mirrorTelemetryHost = mirrorHost
                 , mirrorTelemetryTarget = T.drop (T.length "/npm") (npmTarballPath (psName telemetryPrivatePkg) (psVersion telemetryPrivatePkg))
+                , mirrorTelemetryPrivateFetch = ConventionalArtifact
                 }
 
 npmReadDriver :: PhaseRecorder -> GlobalDataPlane -> ReadTelemetryDriver
@@ -58,7 +59,7 @@ readDriver recorder plane traffic primary secondary identityPackage =
         { withReadTelemetry = \mode action ->
             timedFixtureWith
                 recorder
-                (withE2EWith (telemetryConfig mode))
+                (withClientProxyWith (telemetryConfig mode))
                 (\e2e -> action (TelemetrySession (traffic e2e) (logDriver e2e) (collectorDriver e2e)))
                 plane
         , readTelemetryPackage = primary

@@ -38,10 +38,10 @@ import Ecluse.Config (
  )
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.Resolve (deepMerge)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), defaultDeliveryBudget)
-import Ecluse.Core.Rules (evalRules, prepare)
+import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (
     AllowIfRemediatesCveParams (..),
     Decision,
@@ -62,7 +62,7 @@ import Ecluse.Core.Rules.Types (
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Readiness (DatabaseRequirement (DatabaseOptional, DatabaseRequired))
 import Ecluse.Test.Package (pypiVersion, thingName, unscopedPyPI, v1_0_0)
-import Ecluse.Test.Rules (admittedBy, blockedBy, inertRuleDeps, withInstallScripts)
+import Ecluse.Test.Rules (admittedBy, blockedBy, evalRules, inertRuleDeps, withInstallScripts)
 import Ecluse.Test.Support (expectRight)
 
 -- | Configuration loading and operator diagnostics.
@@ -73,6 +73,13 @@ spec = do
     describe "the embedded default configuration" $ do
         it "loads as a valid, self-contained backbone with no operator overlay" $
             loadConfig [] Nothing `shouldSatisfy` isRight
+
+        it "leaves the Cargo template dormant and adds no archive-evidence default" $ do
+            defaultConfig <- expectConfig [] Nothing
+            Map.member Cargo (configMounts defaultConfig) `shouldBe` False
+            enabled <- configFor "{\"mounts\":{\"cargo\":{\"enabled\":true}}}"
+            fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup Cargo (configMounts enabled))
+                `shouldBe` Just ["AllowIfOlderThan"]
 
         it "ships exactly the expected shared baseline rules under their default names" $ do
             (_, catalogue) <- expectRight (decodeDefaultConfig defaultConfigBytes)

@@ -24,9 +24,10 @@ import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, Unbounded))
 import Ecluse.Core.Package (
+    Artifact (artUrl),
     Availability (Deprecated, Yanked),
-    CodeExecSignal (RunsCodeOnInstall),
-    PackageDetails (pkgAvailability, pkgInstallCode, pkgPublishedAt),
+    CodeExecSignal (CodeExecUnknown, NoCodeOnInstall, RunsCodeOnInstall),
+    PackageDetails (pkgArtifacts, pkgAvailability, pkgInstallCode, pkgPublishedAt),
     PackageInfo (infoVersions),
     PackageName,
     mkPackageName,
@@ -35,7 +36,7 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Maintenance (
     StoreFacts (factDeleteCeiling),
-    StoreMaintenance (deleteVersions, readStoreManifest, storeFacts),
+    StoreMaintenance (deleteVersions, readStoreManifest, storeFacts, storeReadArtifact),
     StoredVersion (StoredVersion),
     VersionOutcome (VersionRefused, VersionRemoved, VersionUnreached),
     VersionPresence (VersionWithdrawn),
@@ -53,7 +54,7 @@ import Ecluse.Core.Registry.Sweep.Outcome (
 import Ecluse.Core.Registry.Sweep.Package (previewPackageGroup, sweepPackageGroup)
 import Ecluse.Core.Registry.Sweep.Types (
     SweepExecution (SweepCounts, SweepRemoves),
-    SweepMount (smConfigured, smEcosystem, smFirstParty, smRuleDeps, smStore),
+    SweepMount (smConfigured, smEcosystem, smFirstParty, smInstallEvidence, smRuleDeps, smStore),
     SweepPacing (swpDeletionCap),
     SweepPorts (sweepAdvisoryEtag, sweepNow),
     SweepState (stEvidence, stIssued),
@@ -61,21 +62,25 @@ import Ecluse.Core.Registry.Sweep.Types (
     newSweepState,
  )
 import Ecluse.Core.Rules (PreparedRule (prepEval), RuleDeps, RuleEval (PerVersion), prepare)
+import Ecluse.Core.Rules.Effectful (ReadFault (ReadFault))
 import Ecluse.Core.Rules.Freshness (
     AdvisoryFreshness (AdvisoryFresh, AdvisoryStale, AdvisoryUndated),
     AdvisoryPublication (PublishedAt),
     assessAdvisoryAge,
     maxAdvisoryAgeFor,
  )
+import Ecluse.Core.Rules.Install
 import Ecluse.Core.Rules.Types (
     AdvisoryAge (AdvisoryAge),
     DenyIfCveParams (DenyIfCveParams),
     FailureAlignment (FailDeny),
+    Inability (EvaluationFailed, InstallSignalUnread),
     PrecededRule (PrecededRule, prRule),
     Rule (AllowByIdentity, AllowIfOlderThan, DenyByIdentity, DenyIfCve, DenyIfDeprecated, DenyIfKnownMalicious, DenyIfYanked, DenyInstallTimeExecution),
     RuleEvidence (evVersion),
     RuleReach (AdmissionAndRevocation, AdmissionOnly),
     RuleVerdict (Deny),
+    Transience (WontResolve),
     defaultPrecedence,
     mkEvalContext,
     revocationRules,
@@ -87,7 +92,7 @@ import Ecluse.Rules.Remediation.Support (genRemediation)
 import Ecluse.Rules.Support (SourceState (..), sourceStateDeps)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation), FakeStoreConfig (..), heldVersions, newFakeStore, seededStoreConfig, servedVersions)
-import Ecluse.Test.Package (leftPadName, npmVersion, pypiVersion, requestsName, sampleManifest)
+import Ecluse.Test.Package (leftPadName, npmVersion, pypiVersion, requestsName, sampleArtifact, sampleManifest)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Rules (admitRule, atDefaultPrecedence, cannotVetRule, denyRule, exposure, inertRuleDeps, servingRuleDeps, shippedRemediation, withAdvisoryFreshness)
@@ -112,6 +117,7 @@ spec = do
     revocationSpec
     canonicalMetadataSpec
     nativeIdentitySpec
+    installEvidenceSpec
     remediationSpec
 
 -- Only a named decisive deny deletes. Deny by default and a rule that could not vet both keep,
@@ -262,6 +268,60 @@ identityOnlySpec = describe "a manifest the store did not serve" $ do
             Just (HaltDeletionCap cap issued _) -> (cap, issued) `shouldBe` (1, 1)
             other -> expectationFailure ("expected the cap halt, got: " <> show other)
         held store `shouldReturn` [npmVersion "2.0.0"]
+
+installEvidenceSpec :: Spec
+installEvidenceSpec = describe "stored install evidence" $ do
+    for_
+        [ ("retains exact selected artifact metadata and uses the authenticated store reader", RunsCodeOnInstall "stored declaration", False)
+        , ("keeps a stored version when fresh authenticated evidence no longer condemns it", NoCodeOnInstall, True)
+        ]
+        $ \(label, reassessed, keepVersion) -> it label $ do
+            let version = npmVersion "1.0.0"
+                artifact = sampleArtifact{artUrl = "https://private.test/exact-source"}
+                original = sampleManifest leftPadName [version]
+                manifest = original{manifestInfo = (manifestInfo original){infoVersions = Map.map (\details -> details{pkgInstallCode = CodeExecUnknown, pkgArtifacts = artifact :| []}) (infoVersions (manifestInfo original))}}
+            store <- storeWith [version] (Just manifest)
+            artifactReads <- newIORef []
+            subjects <- newIORef []
+            signals <- newIORef [RunsCodeOnInstall "stored declaration", reassessed]
+            rules <- prepare inertRuleDeps [atDefaultPrecedence DenyInstallTimeExecution]
+            recorded <- recordingPorts generation
+            let handle = fakeMaintenance store
+                tracked = store{fakeMaintenance = handle{storeReadArtifact = \_ selected _ -> modifyIORef' artifactReads (selected :) $> Right "authenticated archive"}}
+                provider = InstallEvidenceProvider $ \evidenceContext -> do
+                    ieRole evidenceContext `shouldBe` InstallStoreRevocation
+                    pure $ \details -> do
+                        let selected :| _ = pkgArtifacts details
+                        pure . Just . InstallEvidenceRead $ do
+                            modifyIORef' subjects (details :)
+                            result <- ieReadArtifact evidenceContext defaultLimits selected (const (pure ()))
+                            signal <- nextReading reassessed signals
+                            pure (either InstallReadFailed (const (InstallDetermined signal)) result)
+            runStep recorded testPacing (mount tracked rules){smInstallEvidence = Just provider} (served ["1.0.0"]) `shouldReturn` Nothing
+            held store `shouldReturn` [version | keepVersion]
+            readIORef artifactReads `shouldReturn` [artifact, artifact]
+            map pkgArtifacts <$> readIORef subjects `shouldReturn` [artifact :| [], artifact :| []]
+    it "keeps a stored version when required install evidence is unavailable" $ do
+        let version = npmVersion "1.0.0"
+            original = sampleManifest leftPadName [version]
+            manifest = original{manifestInfo = (manifestInfo original){infoVersions = Map.map (\details -> details{pkgInstallCode = CodeExecUnknown}) (infoVersions (manifestInfo original))}}
+        store <- storeWith [version] (Just manifest)
+        rules <- prepare inertRuleDeps [atDefaultPrecedence DenyInstallTimeExecution]
+        recorded <- recordingPorts generation
+        let provider = InstallEvidenceProvider (\_ -> pure (\_ -> pure (Just (InstallEvidenceRead (pure (InstallReadFailed (ReadFault WontResolve EvaluationFailed InstallSignalUnread)))))))
+        runStep recorded testPacing (mount store rules){smInstallEvidence = Just provider} (served ["1.0.0"]) `shouldReturn` Nothing
+        held store `shouldReturn` [version]
+    it "does not build evidence for a first-party stored version" $ do
+        let version = npmVersion "1.0.0"
+        store <- storeWith [version] (Just (sampleManifest leftPadName [version]))
+        rules <- identityDeny
+        recorded <- recordingPorts generation
+        calls <- newIORef (0 :: Int)
+        let provider = InstallEvidenceProvider (\_ -> modifyIORef' calls (+ 1) $> const (pure Nothing))
+            ownedMount = (mount store rules){smFirstParty = const True, smInstallEvidence = Just provider}
+        runStep recorded testPacing ownedMount (served ["1.0.0"]) `shouldReturn` Nothing
+        readIORef calls `shouldReturn` 0
+        held store `shouldReturn` [version]
 
 beltSpec :: Spec
 beltSpec = describe "the first-party belt" $
@@ -565,7 +625,7 @@ denyCveRule :: Rule
 denyCveRule = DenyIfCve (DenyIfCveParams 8.0 FailDeny)
 
 -- Take the next queued reading, then hold the last, so a case drives one crossing and no more.
-nextReading :: AdvisoryFreshness -> IORef [AdvisoryFreshness] -> IO AdvisoryFreshness
+nextReading :: a -> IORef [a] -> IO a
 nextReading afterwards queued = atomicModifyIORef' queued $ \case
     [] -> ([], afterwards)
     (next : rest) -> (rest, next)

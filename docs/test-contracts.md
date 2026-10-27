@@ -14,7 +14,7 @@ inventory, deletion, integrity, and recovery. These lists are normative for each
 Driver capability flags cannot shrink them. Independent obligations detect a family omitted
 from registration, while actual Hspec execution proves the registered laws ran.
 Each missing required family must fail by name, and unrelated families continue.
-npm and PyPI both run the full composition. The separate read-only foundation API remains partial
+npm, PyPI, and Cargo run the full composition. The separate read-only foundation API remains partial
 and does not satisfy the full ecosystem contract.
 
 ## Metadata and serving
@@ -25,7 +25,7 @@ Original: core/test/unit/Ecluse/Core/Registry/Metadata/FetchSpec.hs.
 Replacement: test/contracts/Ecluse/Test/Contract/Metadata/Fetch.hs.
 Both npm and PyPI run the same body with their original raw documents and builders.
 The original adapter-completeness example and native fixture registration remain in FetchSpec.
-Each prefix below expands to core.metadata.fetch.npm and core.metadata.fetch.pypi.
+Each prefix below expands under core.metadata.fetch for npm, PyPI and Cargo.
 
 | Case suffix | Preserved assertions |
 | --- | --- |
@@ -47,13 +47,20 @@ Each prefix below expands to core.metadata.fetch.npm and core.metadata.fetch.pyp
 | held-version-bound | Full TooManyVersions 2 1 |
 
 The full and selected held-read versus response assertions remain inside the contract's bothWays helper for every held case. These were not moved into a provider callback.
-There are 32 cases per ecosystem, 64 total.
+The fetch obligations define the required cases for each ecosystem, including Cargo record framing.
 
 ### Metadata projection
 
+The projection contract distinguishes `SingleDocument` and `RecordStream` input.
+npm and PyPI retain their exact whole-document errors for malformed, absent, and conflicting identities.
+Cargo full reads report invalid entries for unusable native rows.
+Selected reads exclude unusable rows from matching versions without retaining invalid-entry diagnostics.
+Quarantine cannot turn a transport or resource fault into success.
+The native Cargo tests keep duplicate-version and EOF scanning controls beside their independent wire reader.
+
 Originals: core/test/unit/Ecluse/Core/Registry/Npm/MetadataSpec.hs and PyPI/MetadataSpec.hs.
 Replacement: test/contracts/Ecluse/Test/Contract/Metadata/Projection.hs.
-Each suffix expands to core.metadata.projection.npm and core.metadata.projection.pypi.
+Each suffix expands under core.metadata.projection for npm, PyPI and Cargo.
 
 | Case suffix | Original examples and assertions |
 | --- | --- |
@@ -83,7 +90,7 @@ Each suffix expands to integration.serving.npm and integration.serving.pypi.
 | --- | --- |
 | default-denial | Listing and artifact denial without allow rules, added paired coverage |
 | identity-precedence | Explicit identity permits a young release, explicit deny defeats allow on listing and artifact, added paired coverage |
-| authorised-union | npm "serves the union of trusted-private and gated-public versions" moves here, with PyPI counterpart |
+| authorised-union | npm and PyPI combine trusted-private and gated-public versions. Cargo tests managed mirrors in the public replacement and no public fallback in the private alternate. |
 | quarantine-private-authority | Shared private young-release authority with old public survivor and rejected young public version. npm native latest-tag assertion remains in its existing gate case |
 | private-divergence | Shared private digest and exact bytes on same-version divergence. npm native latest-tag/divergence cases remain |
 | public-integrity | npm "filters a hashless public version out of the served listing" moves here, with PyPI counterpart |
@@ -199,7 +206,7 @@ Each mutation must fail validation. Genuine unlabelled native smoke examples rem
 | PyPI live index identity and wheel evidence | `live/pypi/sampleproject` through `Contract.RegistrySmoke`, followed by its native wheel checks | `sampleproject` 4.0.0, exact filename, package/version identity, SHA-256 presence, status 200, non-empty bytes, integrity verification, 65,536-byte wheel bound. |
 | npm repeated release keys, members, dependencies, and selected containers | `retention/npm/{selected,full}/{keys,members,dependencies}` and `retention/npm/selected/containers` through `Contract.Retention` | Original generators, 2,000 and 16,000 repeats, original read operations, chunking, GC sampling, and strict 256 KiB growth allowance. |
 | PyPI repeated containers/members, unselected releases, and past-limit files | `retention/pypi/selected/{containers,members,other-releases}`, `retention/pypi/full/{members,past-limit}` through `Contract.Retention` | Original generators and read modes. Each selected input still proves exactly one kept file before sampling. The past-limit case still uses `maxArtifactCount = 2`. |
-| Benchmark and allocation provider registration | `Ecluse.Test.EcosystemBench.checkBenchmarkCoverage`, enforced by `ecosystemBenches` | Reviewed npm/PyPI obligations and concrete providers must match the production adapter registry. Missing, duplicate, and unshipped providers fail before corpus loading. Empty corpora fail. |
+| Benchmark and allocation provider registration | `Ecluse.Test.EcosystemBench.checkBenchmarkCoverage`, enforced by `ecosystemBenches` | Reviewed native obligations and concrete providers must match the production adapter registry. Missing, duplicate, and unshipped providers fail before corpus loading. Empty corpora fail. |
 | Load read and stress registration | `readLoadContract` with `LoadReadDriver`, checked by `Ecluse.BenchLoad.Scenarios.checkFixtureCoverage` before `runDriver` | Each ecosystem owes the shared routine read and stress laws. `requiredLoadLaws` supplies independent requirements, and `loadCoverageGaps` names omitted scenarios. Existing native extensions, floor checks, and verdicts remain. |
 
 These measurement paths retain their native sampling and verdict logic:
@@ -216,10 +223,10 @@ These measurement paths retain their native sampling and verdict logic:
 Existing corpus bytes, expected outputs, remaining floor values, and RTS settings stay fixed.
 Provider coverage runs outside measured operations. New PyPI stress rows add samples without changing that boundary.
 
-The `ReadLoadFoundation` scope requires the shared routine read and stress laws for npm and PyPI.
+The `ReadLoadFoundation` scope requires the shared routine read and stress laws for npm, PyPI, and Cargo.
 The 5% private-copy and default restart variants remain available through explicit selection.
 `FullLoad` adds `MirrorWorker` as a separate requirement.
-Active npm and PyPI fixtures and receipts use `FullLoad`, including their native worker rows.
+Active npm, PyPI, and Cargo fixtures and receipts use `FullLoad`, including their native worker rows.
 PyPI also requires its three managed-read comparisons.
 The new PyPI ceiling, herd, warm-under-cold and ramp rows use the shared law bodies.
 Their pass floors use three branch observations per pod shape, recorded in `bench/load/floors.json`.
@@ -246,6 +253,9 @@ An unheld or missing status produces diagnostic-only evidence and keeps the nati
 | Memory queue with an in-process worker | Supported with destructive receive. Split roles over the memory queue remain boot refusals. |
 | SQS queue and S3 advisory transport | Supported with native lease, redelivery, and advisory transport checks. S3 advisory storage grants no package-store capability. |
 | PyPI publication and mirroring | Supported. Keep native multipart publication, every supported wheel and source distribution, retained companions, and durable complete-version evidence. |
+| Cargo sparse reads, mirroring, and publication | Cargo 1.74+ through sparse HTTPS. Keep native discovery, records, dependencies, source identity, checksums, and original-source durable state. Prove archive requests traverse Écluse with real clients. |
+| Cargo source views and authentication | Keep crates.io replacement separate from the private alternate. Preserve native credential-provider retry, private authorisation, no public fallback from private, and read/upload authority checks. |
+| Cargo CodeArtifact maintenance | Physical deletion through deterministic native fixtures. A generic registry's yank API does not provide deletion. No live AWS fidelity claim. |
 | Hosted incremental PyPI copying | Supported under [#1639](https://github.com/AlexaDeWit/Ecluse/issues/1639). Contracts require a complete authorised served view or explicit unavailability, retry/restart, and offline completion. |
 | Filesystem or S3 package storage | Planned under [#1239](https://github.com/AlexaDeWit/Ecluse/issues/1239). Future contracts require committed completion visibility, interrupted writes, failed markers, restart, concurrent publication, and direct-read/listing invisibility. |
 | PyPI scope allow and install-time execution denial | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
@@ -285,6 +295,7 @@ task test-e2e-prepare
 task test-e2e-load
 task test-e2e-npm
 task test-e2e-pypi
+task test-e2e-cargo
 task test-e2e-shared-system
 task test-e2e-audit
 ```
@@ -305,7 +316,7 @@ Then run the staged E2E commands above.
 Set `ECLTEST_CORE_UNIT_ARTIFACT_DIR` to `scratchpad/unit/core`.
 Set `ECLTEST_RUNTIME_UNIT_ARTIFACT_DIR` to `scratchpad/unit/runtime`.
 Set `ECLTEST_INTEGRATION_ARTIFACT_DIR` to `scratchpad/integration/$ECLTEST_RUN_ID`.
-Run `task test-e2e-npm-completion` or `task test-e2e-pypi-completion`.
+Run `task test-e2e-npm-completion`, `task test-e2e-pypi-completion`, or `task test-e2e-cargo-completion` for the subject.
 The completion audit reads the actual reports from all four tiers.
 It checks required laws and execution identities against their compiled plans.
 
@@ -323,19 +334,20 @@ Its result does not claim live AWS service coverage.
 ## Fixed E2E entrypoints
 
 Read each suite's declaration list to see the contracts and concrete fixtures it runs.
-The three Cabal components are `ecluse-e2e-npm`, `ecluse-e2e-pypi`, and `ecluse-e2e-shared-system`.
+The Cabal components are `ecluse-e2e-npm`, `ecluse-e2e-pypi`, `ecluse-e2e-cargo`, and `ecluse-e2e-shared-system`.
 
 | Subject entrypoint | Composition | Concrete coverage |
 |---|---|---|
 | [Npm.hs](../test/e2e/Ecluse/E2E/Suites/Npm.hs) | `fullEcosystemContract npmDriver` | Serving, installation, advisory, mirroring, publication, Dredger and telemetry laws. |
 | [PyPI.hs](../test/e2e/Ecluse/E2E/Suites/PyPI.hs) | `fullEcosystemContract pypiDriver` | The same required families, with native wheel, sdist, multipart and CodeArtifact fixtures. |
+| [Cargo.hs](../test/e2e/Ecluse/E2E/Suites/Cargo.hs) | `fullEcosystemContract cargoDriver` | The same required families, with real sparse clients, native discovery, records, archives, publication, durable state, and compatible maintenance. |
 | [SharedSystem.hs](../test/e2e/Ecluse/E2E/Suites/SharedSystem.hs) | Cross-ecosystem and core capability cases | The mixed-client case. |
 
-Both ecosystem drivers bind concrete providers for every required family.
+Each ecosystem driver binds concrete providers for every required family.
 PyPI mirror evidence includes whole-version copies, restart recovery, cross-target file selection and retained metadata.
 Cross-target checks prove selected files and installed contents. They do not execute foreign architecture code.
 
-The final functional declarations require 57 PyPI cases, 54 npm cases and one shared-system case.
+The fixed declarations and independent requirements own each subject's required cases.
 Unit, integration, residency, allocation, load and smoke evidence remain independent requirements.
 
 Backend completion also requires the PyPI CodeArtifact full-store instance in the existing backend subject.
@@ -345,8 +357,14 @@ Native cases also cover partial copies, public outages and exact installed files
 Publication maps the required `authorisation-refusal` law to `pypi/publish/scope-refusal`.
 Its `non-upload-refusal` law sends a raw `remove_pkg`, because no PyPI client sends one.
 The write telemetry group supplies `pypi/telemetry/domain-spans` and `pypi/telemetry/private-fetch`.
-Both completion audits use `FullEcosystem` and require actual execution reports.
+All ecosystem completion audits use `FullEcosystem` and require actual execution reports.
 An absent or unbound driver still produces a named failure under the shared contract.
+
+Cargo's shared installation cases use the `cargo/installation` prefix.
+Its [native provider obligations](testing.md#cargo-native-provider) retain graph, rename, feature, target, MSRV, lockfile, and asset-routing observations.
+Native mirror cases require retained source yank and time despite target changes, plus restart and outage controls.
+Missing or corrupt durable state cannot pass by proving only target archive presence.
+Authentication and publication negatives preserve caller authority and distinct approved read and upload roots.
 
 [Fixtures/Contracts.hs](../test/e2e/Ecluse/E2E/Fixtures/Contracts.hs) owns concrete resource acquisition and declaration metadata.
 The shared `ecluse-e2e-test-support` library holds the fixture and provider modules.

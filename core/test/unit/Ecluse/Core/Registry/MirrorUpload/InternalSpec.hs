@@ -5,25 +5,86 @@
 -- | Whole-version membership, retained source coordinates, and verified publication bytes.
 module Ecluse.Core.Registry.MirrorUpload.InternalSpec (spec) where
 
-import Data.Aeson (Value (Bool, Object), object, (.=))
+import Data.Aeson (Value (Bool, Null, Object, String), object, (.=))
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Test.Hspec
 
-import Ecluse.Core.Package (Artifact (..), Hash, HashAlg (SHA1, SHA256, SHA512, SRI), PackageDetails (..), hashAlg, hashValue, renderHashAlg)
-import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
+import Ecluse.Core.Package (Artifact (..), CoreMetadata (MetadataAvailable), Hash, HashAlg (SHA1, SHA256, SHA512, SRI), PackageDetails (..), hashAlg, hashValue, renderHashAlg)
+import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry, RecordEntry))
 import Ecluse.Core.Registry (PublishFault (PublishSourceUnavailable))
-import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (cargoCached, pypiSimpleCached)
+import Ecluse.Core.Registry.Cargo.Document (cargoDocument, cargoRecords)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload.Internal
 import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Test.Package (hexSha256Of, hexSha512Of, pypiVersion, sampleArtifact, sampleDetails, sriSha256Of, unsafeHash, unscopedPyPI, validSha1)
+import Ecluse.Test.Registry.Cargo.Metadata (cargoTestRecord)
+import Ecluse.Test.Registry.Cargo.Publish (cargoSourceVersion)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = do
+    describe "Cargo durable source facts" $ do
+        it "preserves the exact row, coordinate, filename and checksum in a selected fragment" $ do
+            let row = cargoTestRecord "1.0.0"
+                document = cargoDocument [(RecordEntry 7, row)]
+            doc <- cargoSourceVersion row
+            let admitted = vdDetails doc
+            inventory <- expectRight (checkedMirrorInventory (pkgName admitted) (pkgVersion admitted) doc (CargoMirrorRead document))
+            let artifact :| _ = pkgArtifacts admitted
+                file :| _ = inventoryFiles inventory
+            inventoryDetails inventory `shouldBe` admitted
+            length (inventoryFiles inventory) `shouldBe` 1
+            expectedArtifact file `shouldBe` artifact
+            artEntryKey artifact `shouldBe` RecordEntry 7
+            artFilename artifact `shouldBe` "fixture-1.0.0.crate"
+            artHashes artifact `shouldBe` [unsafeHash SHA256 (hexSha256Of "Owned Cargo metadata fixture bytes")]
+            case inventoryReadData inventory of
+                CargoMirrorRead kept -> cargoRecords kept `shouldBe` [(RecordEntry 7, row)]
+                _ -> expectationFailure "expected Cargo source fields"
+            fragment <- maybe (fail "missing Cargo fragment") pure (splitMirrorInventory (Set.singleton "fixture-1.0.0.crate") inventory)
+            uncurry restoreMirrorFragment fragment `shouldBe` Right (inventoryFiles inventory)
+            snd cargoCached (mirrorReadDocument (snd fragment)) `shouldBe` Just document
+        it "refuses foreign ecosystems, mismatched coordinates and multiple source claims" $ do
+            let row = cargoTestRecord "1.0.0"
+                pairedSource = CargoMirrorRead (cargoDocument [(RecordEntry 7, row)])
+            doc <- cargoSourceVersion row
+            let admitted = vdDetails doc
+                artifact :| _ = pkgArtifacts admitted
+            restoreMirrorFragment admitted{pkgName = unscopedPyPI "fixture"} pairedSource
+                `shouldBe` Left (PublishSourceUnavailable "the source fields belong to another ecosystem")
+            for_ [RecordEntry (-1), RecordEntry 8, ArrayEntry 7] $ \key ->
+                restoreMirrorFragment admitted (CargoMirrorRead (cargoDocument [(key, row)]))
+                    `shouldBe` Left (PublishSourceUnavailable "Cargo source coordinate disagrees with its artifact")
+            for_ [CargoMirrorRead (cargoDocument []), CargoMirrorRead (cargoDocument [(RecordEntry 7, row), (RecordEntry 8, row)]), CargoMirrorRead (cargoDocument [(RecordEntry 7, Null)])] $ \source ->
+                restoreMirrorFragment admitted source `shouldBe` Left (PublishSourceUnavailable "Cargo requires exactly one paired source row and archive")
+            restoreMirrorFragment admitted{pkgArtifacts = artifact :| [artifact]} pairedSource
+                `shouldBe` Left (PublishSourceUnavailable "Cargo requires exactly one paired source row and archive")
+        it "refuses changed native identity, digest and policy facts against the original admission" $ do
+            let row = cargoTestRecord "1.0.0"
+            doc <- cargoSourceVersion row
+            let admitted = vdDetails doc
+                artifact :| _ = pkgArtifacts admitted
+                source = CargoMirrorRead (cargoDocument [(RecordEntry 7, row)])
+            case row of
+                Object fields -> do
+                    for_ [("name", String "another", "Cargo source identity disagrees with the admitted version"), ("vers", String "1.0.1", "Cargo source identity disagrees with the admitted version"), ("cksum", String (hexSha256Of "different"), "Cargo source archive identity disagrees with its artifact"), ("pubtime", String "2026-01-01T00:00:00Z", "Cargo source policy facts disagree with the admitted version"), ("yanked", Bool True, "Cargo source policy facts disagree with the admitted version")] $ \(key, value, reason) ->
+                        restoreMirrorFragment admitted (CargoMirrorRead (cargoDocument [(RecordEntry 7, Object (KeyMap.insert key value fields))]))
+                            `shouldBe` Left (PublishSourceUnavailable reason)
+                    for_ ["name", "vers", "cksum"] $ \key ->
+                        restoreMirrorFragment admitted (CargoMirrorRead (cargoDocument [(RecordEntry 7, Object (KeyMap.delete key fields))]))
+                            `shouldBe` Left (PublishSourceUnavailable ("invalid Cargo field: " <> Key.toText key))
+                _ -> expectationFailure "expected a Cargo row object"
+            restoreMirrorFragment admitted{pkgArtifacts = artifact{artFilename = "another-1.0.0.crate"} :| []} source
+                `shouldBe` Left (PublishSourceUnavailable "Cargo source archive identity disagrees with its artifact")
+            for_ [artifact{artCoreMetadata = Just (MetadataAvailable True)}, artifact{artSize = Just 1}] $ \changed ->
+                restoreMirrorFragment admitted{pkgArtifacts = changed :| []} source
+                    `shouldBe` Left (PublishSourceUnavailable "Cargo source policy facts disagree with the admitted version")
+
     it "retains every wheel and sdist in the paired version" $ do
         inventory <- expectRight (sourceInventory (wheel :| [sdist]))
         map (artFilename . expectedArtifact) (toList (inventoryFiles inventory)) `shouldBe` [wheelName, sdistName]

@@ -35,13 +35,14 @@ import Ecluse.Core.NativeProbe (
     probeChild,
     sampleWithoutGC,
  )
+import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), withInflatedChunks)
 import Ecluse.Core.Registry.PyPI.Archive (archiveMetadata)
 import Ecluse.Core.Registry.PyPI.Archive.BZip (withBzipChunks)
-import Ecluse.Core.Registry.PyPI.Archive.Inflate (InflateFormat (GzipMembers), withInflatedChunks)
 import Ecluse.Core.Registry.PyPI.Archive.Lzma (LzmaFormat (XzArchive), withLzmaChunks)
 import Ecluse.Core.Security.Limits (defaultLimits)
 import Ecluse.Test.Package (pypiVersion, unscopedPyPI)
-import Ecluse.Test.Registry.PyPI.Archive (metadata, tarBytes, zipBytes)
+import Ecluse.Test.Registry.Archive (tarBytes)
+import Ecluse.Test.Registry.PyPI.Archive (metadata, zipBytes)
 import Ecluse.Test.Support (expectRight)
 
 -- Heap measurements include the source retained for publication.

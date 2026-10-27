@@ -78,6 +78,11 @@ Ordinary selected reads omit that charge and the source digest.
 The PyPI worker retains publication fields through `pypiMirrorRead`, wrapped with `chargingSelectedReads` to pay for those retained bytes.
 Keep that worker charge when reusing the selected reader.
 
+A reader that builds complete native rows must also reserve decoding and packing workspace before allocation.
+Bind `ocChargeFullReadWorkspace` through a separate region that retains its maximum charge.
+Keep source payments for previous retained rows until the serving read returns surplus after decoding.
+Selected row readers reserve their workspace through `ocChargeSelectedRead`.
+
 `fetchManifest` and `fetchVersion` read from an origin. `readManifest` and `readVersion` are the
 same reads over any `Body`, so a harness that holds a document's bytes runs the production read
 with fixed chunks in place of a socket.

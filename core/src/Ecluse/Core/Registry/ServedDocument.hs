@@ -191,6 +191,7 @@ uniqueEntries = Map.mapMaybe id . Map.fromListWith (\_ _ -> Nothing) . map (seco
 validEntryKey :: EntryKey -> Bool
 validEntryKey = \case
     ArrayEntry position -> position >= 0
+    RecordEntry position -> position >= 0
     ObjectEntry _ -> True
     SingletonEntry -> True
 

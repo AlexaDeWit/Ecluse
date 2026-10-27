@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Canonical capability manifests include every shipped native route and its response boundaries.
 module Ecluse.ManifestSpec (spec) where
 
 import Prelude hiding (universe)
@@ -33,7 +34,7 @@ import Network.HTTP.Types.Method (StdMethod (DELETE, GET, HEAD, POST, PUT), rend
 import Test.Hspec
 
 import Ecluse.Core.BuildIdentity (productVersion)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, prefixFor)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI), ecosystemName, prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
 import Ecluse.Core.Registry.Npm.Route.Internal (npmRoutes)
@@ -52,7 +53,10 @@ import Ecluse.Manifest (
 
 spec :: Spec
 spec = do
-    describe "buildOpenApi (canonical npm mount)" $ do
+    describe "buildOpenApi (canonical ecosystem mounts)" $ do
+        it "includes exactly the shipped ecosystems in canonical order" $
+            manifestEcosystems canonicalManifestSource `shouldBe` Npm :| [PyPI, Cargo]
+
         it "renders required OpenAPI fields and the product release identity" $
             case decode (renderManifest doc) :: Maybe Value of
                 Just (Object o) -> do
@@ -126,6 +130,18 @@ spec = do
             (statusCodes <$> getOp "/pypi/simple/{project}") `shouldBe` Just [200, 304, 401, 403, 404, 406, 500, 502, 503]
             (mediaTypesAt 200 <$> getOp "/pypi/simple/{project}")
                 `shouldBe` Just ["application/vnd.pypi.simple.v1+json"]
+
+        it "documents both Cargo sparse views and their native media types" $
+            for_ ["/cargo", "/cargo/private"] $ \prefix -> do
+                (mediaTypesAt 200 <$> getOp (prefix <> "/config.json")) `shouldBe` Just ["application/json"]
+                (mediaTypesAt 200 <$> getOp (prefix <> "/{indexPath}")) `shouldBe` Just ["text/plain"]
+                (statusCodes <$> getOp (prefix <> "/{indexPath}")) `shouldBe` Just [200, 304, 401, 403, 404, 406, 500, 502, 503]
+                (defaultMediaTypes <$> getOp (prefix <> "/crates/{crate}/{version}/{file}")) `shouldBe` Just ["*/*"]
+
+        it "documents Cargo publication only on the private view" $ do
+            putOp "/cargo/private/api/v1/crates/new" `shouldSatisfy` isJust
+            putOp "/cargo/api/v1/crates/new" `shouldSatisfy` isNothing
+            (InsOrdSet.member "cargo" . _operationTags <$> getOp "/cargo/{indexPath}") `shouldBe` Just True
   where
     doc :: OpenApi
     doc = buildOpenApi canonicalManifestSource

@@ -33,7 +33,7 @@ import Ecluse.BenchLoad.Pod (PodShape, ProxyTuning (..), mib, parsePodShape)
 data Sweep = Sweep
     { swName :: Text
     , swUpstreamLatencyMs :: Int
-    -- ^ The fixed latency both ecosystems inject, with the round-trip probe off.
+    -- ^ The fixed latency each selected ecosystem injects, with the round-trip probe off.
     , swPasses :: PassSelection
     , swScenarios :: NonEmpty Text
     , swScored :: [Text]

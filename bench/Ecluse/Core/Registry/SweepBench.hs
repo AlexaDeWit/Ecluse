@@ -2,12 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Complete Dredger cycles over CodeArtifact stores of 1,000 and 10,000 names. Each cycle drives
-the production maintenance handles over a fixed-page fixture, with real advisory catalogues and the
-shipped quota model. A paced cycle waits 20 ms per native call and serves its quota waits and chunk
-pauses. An unpaced cycle asks for the same waits and serves none, so it counts a full walk's native
-calls in seconds. Each cycle is checked against counts derived from the inventory alone, then
-written as one JSON line.
+{- | Measure complete Dredger cycles over fixed-page CodeArtifact inventories.
+Paced and unpaced rows retain the same native calls and independently checked inventory counts.
 -}
 module Ecluse.Core.Registry.SweepBench (withBenchmarks) where
 
@@ -32,11 +28,12 @@ import UnliftIO.Async (withAsync)
 import Ecluse.Core.Clock (monoSecondsBetween, monotonicNow, waitSeconds)
 import Ecluse.Core.Cve (CveDb (cveDbLookup), CveLookup (cveCoveredNames))
 import Ecluse.Core.Cve.Types (DbEtag)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Package (infoVersions, mkPackageName, renderPackageName)
 import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMaintenance, adapterProjectName), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMaintenance (maintenanceAlphabet))
+import Ecluse.Core.Registry.Cargo.Project (cargoNameChars)
 import Ecluse.Core.Registry.Maintenance (StoreFacts (factBackend, factBudget), StoreMaintenance (storeFacts), StoreManifestRead, meteredMaintenance, storeFaultOfMetadata)
 import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort (budgetClose), CycleCost (ccRequests), QuotaScope, RequestGate, RequestKind (..), StoreBudget (bgScope), newBudgetMeter, tallyCounts)
 import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet, noNameAlphabet)
@@ -47,7 +44,8 @@ import Ecluse.Core.Registry.Sweep (paceAtCeiling, sweepCycle)
 import Ecluse.Core.Registry.Sweep.Outcome (CycleOutcome (outcomeTally), SweepTally (..), outcomeComplete)
 import Ecluse.Core.Registry.Sweep.Pacing (defaultCycleWindow)
 import Ecluse.Core.Registry.Sweep.Types (SweepMount (..), SweepPacing (..), SweepPorts (..), SweepShape (SweepCandidates, SweepEverything), deletingCache, pairedStore)
-import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase, NoAdvisoryDatabase), AdvisoryGeneration (agLookup), PreparedRule (prepEval, prepName), RuleDeps (rdAdvisoryDatabase, rdCurrentAdvisoryEtag), RuleEval (PerVersion), prepare)
+import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase, NoAdvisoryDatabase), AdvisoryGeneration (agLookup), PreparedRule (prepEval, prepName), RuleDeps (rdAdvisoryDatabase, rdCurrentAdvisoryEtag), RuleEval (PerInstallEvidence, PerPackage, PerVersion), prepare)
+import Ecluse.Core.Rules.Install (InstallEvidenceBudget (InstallEvidenceBudget))
 import Ecluse.Core.Rules.Types (Rule (DenyByIdentity, DenyIfCve), RuleEvidence (evName, evVersion), ruleName)
 import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
 import Ecluse.Core.Server.Metadata (selectVersion)
@@ -57,7 +55,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), c
 import Ecluse.Runtime.Test.PackageStore.FixedPages (FixedPlane (..), FixedRepository (..), NativeCall (..), fixedCache, fixedMirror, fixedVersion, newFixedPlane)
 import Ecluse.Test.Corpus.Advisories (SyntheticTarget (..), compileAdvisoryInputs, fillerTargets, suggestedDenyIfCve, syntheticAdvisories)
 import Ecluse.Test.Cve (countingCoveredNames)
-import Ecluse.Test.EcosystemBench (EcosystemBench (ebEcosystem, ebRead, ebSynthetic))
+import Ecluse.Test.EcosystemBench (EcosystemBench (ebEcosystem, ebRead, ebSynthetic, ebSyntheticName))
 import Ecluse.Test.OsvDb (withServedArtifact)
 import Ecluse.Test.Registry.Metadata.Fetch (captureChunks)
 import Ecluse.Test.Rules (atDefaultPrecedence)
@@ -88,6 +86,7 @@ scaleOf bench = (bench,,) <$> adapterFor eco <*> leads
     leads = case eco of
         Npm -> Just npmNameLeadChars
         PyPI -> Just pypiNameLeadChars
+        Cargo -> Just cargoNameChars
         RubyGems -> Nothing
 
 withScales :: FilePath -> [(EcosystemBench, RegistryAdapter, [Char])] -> ([Scale] -> IO a) -> IO a
@@ -303,7 +302,10 @@ checkDocuments bench = for_ [2, 10, 100, 1000] $ \count -> do
 -- The generator's document for one version count, under another package's name.
 documentOf :: EcosystemBench -> Text -> Int -> [ByteString]
 documentOf bench name count =
-    captureChunks (encodeUtf8 (T.replace "bench-pkg" name (T.replace "bench_pkg" name (decodeUtf8 (ebSynthetic bench count)))))
+    captureChunks (encodeUtf8 (T.replace originalName name (T.replace filenameName name (decodeUtf8 (ebSynthetic bench count)))))
+  where
+    originalName = renderPackageName (ebSyntheticName bench)
+    filenameName = T.replace "-" "_" originalName
 
 -- What the instrumented catalogue and rules saw during one cycle.
 data Probe = Probe
@@ -350,7 +352,9 @@ tracedRules probe = map traced
         PerVersion verdict
             | prepName rule == ruleName identityDeny ->
                 rule{prepEval = PerVersion (\ctx evidence -> note evidence >> verdict ctx evidence)}
-        _ -> rule
+            | otherwise -> rule
+        PerInstallEvidence _ -> rule
+        PerPackage _ -> rule
     note evidence = modifyIORef' (prIdentities probe) (noted (renderPackageName (evName evidence)) (renderVersion (evVersion evidence)))
 
 -- Waits a cycle served: how many, the seconds asked for, and the seconds they took.
@@ -436,6 +440,9 @@ scaleMount row gateFor mirror cache =
     SweepMount
         { smEcosystem = ebEcosystem bench
         , smStore = pairedStore limit (deletingCache (metered "mirror" fixedMirror mirror)) (deletingCache (metered "cache" fixedCache cache))
+        , smInstallEvidence = Nothing
+        , smInstallBudget = InstallEvidenceBudget (\action -> Just <$> action (const pass) (const pass))
+        , smInstallLimits = defaultLimits
         , smRules = []
         , smConfigured = configuredRules
         , smRuleDeps = rowCatalogue row

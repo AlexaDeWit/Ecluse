@@ -226,6 +226,7 @@ pypiArtifactReplies :: TarballReplies PassthroughResponse
 pypiArtifactReplies =
     TarballReplies
         { tarballError = \status headers refusal -> passthroughResponse status headers (artifactRefusalBody refusal)
+        , tarballPrivateRefused = \_ -> tarballError pypiArtifactReplies status403
         , tarballStream = \status headers body -> passthroughResponse status headers (PassthroughStream body)
         , tarballEmpty = \status headers -> passthroughResponse status headers PassthroughEmpty
         }

@@ -28,12 +28,14 @@ import Data.Time (NominalDiffTime)
 import Data.Traversable (for)
 import UnliftIO (evaluate, tryAny)
 
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Codec (saturatingStateCharge)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..), targetKey)
-import Ecluse.Core.Package (Artifact (..), PackageDetails (..), PackageInfo (..), PackageName)
-import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
-import Ecluse.Core.Registry.CachedDocument (pypiPacked, pypiSimpleCached, weighCachedDoc)
+import Ecluse.Core.Package (Artifact (..), PackageDetails (..), PackageInfo (..), PackageName, pkgEcosystem)
+import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry, RecordEntry))
+import Ecluse.Core.Registry.CachedDocument (cargoCached, cargoPacked, pypiPacked, pypiSimpleCached, weighCachedDoc)
+import Ecluse.Core.Registry.Cargo.Document (cargoDocument, cargoRecords, packCargoDocument)
 import Ecluse.Core.Registry.Json.Packed (docTable)
 import Ecluse.Core.Registry.Json.Writer (packTree)
 import Ecluse.Core.Registry.Metadata (Manifest (..), VersionDoc (..))
@@ -112,24 +114,33 @@ mirrorProjectViews revision record private = do
         let files = maybe [] (toList . pkgArtifacts) (Map.lookup version current)
         doc <- maybeToRight (StateInvalid "cannot restore paired mirror source") (restoreVersion mirror files)
         pure (version, doc)
-    let (_, rebased) = mapAccumL rekeyVersion 0 restored
+    let ordered = if pkgEcosystem (recordPackage record) == Cargo then sortOn ((\(artifact :| _) -> artEntryKey artifact) . pkgArtifacts . vdDetails . snd) restored else restored
+        (_, rebased) = mapAccumL rekeyVersion 0 ordered
         details = Map.fromList [(key, vdDetails doc) | (key, doc) <- rebased]
         files = concat [simpleFiles document | (_, doc) <- rebased, Just raw <- [vdRaw doc], Just document <- [snd pypiSimpleCached raw]]
         packed = packedSimple (recordEnvelope record) (docTable (smallArrayFromList [])) [(key, packTree urlHole value) | (key, value) <- files]
+        cargo = packCargoDocument (cargoDocument (concat [cargoRecords document | (_, doc) <- rebased, Just raw <- [vdRaw doc], Just document <- [snd cargoCached raw]]))
+        managedRaw = if pkgEcosystem (recordPackage record) == Cargo then fst cargoPacked cargo else fst pypiPacked packed
         fingerprint = TE.encodeUtf8 (show revision) <> maybe mempty (digestBytes . manifestDigest) private
-        managed = Manifest (PackageInfo (recordPackage record) details Map.empty []) (fst pypiPacked packed) (fromIntegral (weighCachedDoc (fst pypiPacked packed))) (digestFromContext (hashUpdate hashInit fingerprint))
+        managed = Manifest (PackageInfo (recordPackage record) details Map.empty []) managedRaw (fromIntegral (weighCachedDoc managedRaw)) (digestFromContext (hashUpdate hashInit fingerprint))
     pure (unmanaged, managed <$ guard (not (Map.null details)), pending)
 
 rekeyVersion :: Int -> (Text, VersionDoc) -> (Int, (Text, VersionDoc))
 rekeyVersion start (version, doc) =
-    let artifacts = pkgArtifacts (vdDetails doc)
-        indexed = zip (map ArrayEntry [start ..]) (toList artifacts)
+    let details = vdDetails doc
+        constructor = if pkgEcosystem (pkgName details) == Cargo then RecordEntry else ArrayEntry
+        artifacts = pkgArtifacts details
+        indexed = zip (map constructor [start ..]) (toList artifacts)
         keys = Map.fromList [(artEntryKey artifact, key) | (key, artifact) <- indexed]
-        changed = fmap (\artifact -> artifact{artEntryKey = Map.findWithDefault (artEntryKey artifact) (artEntryKey artifact) keys}) artifacts
-        raw = do
-            old <- vdRaw doc >>= snd pypiSimpleCached
-            pure (fst pypiSimpleCached (simpleDocument (simpleEnvelope old) [(Map.findWithDefault key key keys, value) | (key, value) <- simpleFiles old]))
-     in (start + length artifacts, (version, doc{vdDetails = (vdDetails doc){pkgArtifacts = changed}, vdRaw = raw}))
+        rekey key = Map.findWithDefault key key keys
+        changed = fmap (\artifact -> artifact{artEntryKey = rekey (artEntryKey artifact)}) artifacts
+        raw =
+            vdRaw doc >>= \old ->
+                case (snd cargoCached old, snd pypiSimpleCached old) of
+                    (Just native, _) -> Just (fst cargoCached (cargoDocument [(rekey key, value) | (key, value) <- cargoRecords native]))
+                    (_, Just simple) -> Just (fst pypiSimpleCached (simpleDocument (simpleEnvelope simple) [(rekey key, value) | (key, value) <- simpleFiles simple]))
+                    _ -> Nothing
+     in (start + length artifacts, (version, doc{vdDetails = details{pkgArtifacts = changed}, vdRaw = raw}))
 
 -- | An unmanaged version keeps its existing path. A managed version requires the shared complete proof.
 mirrorVersionView :: Version -> ProjectMirrorRecord -> Maybe VersionDoc -> Either MirrorStateFault (Maybe VersionDoc)
@@ -141,7 +152,24 @@ mirrorVersionView version record current = case recordVersion version record of
         Just <$> maybeToRight (StateInvalid "cannot restore paired mirror source") (restoreVersion mirror files)
 
 restoreVersion :: MirrorVersion -> [Artifact] -> Maybe VersionDoc
-restoreVersion mirror current = do
+restoreVersion mirror current
+    | CargoMirrorRead _ <- fragmentReadData firstFragment = restoreCargoVersion mirror current
+    | otherwise = restoreSimpleVersion mirror current
+  where
+    firstFragment :| _ = versionFragments mirror
+
+restoreCargoVersion :: MirrorVersion -> [Artifact] -> Maybe VersionDoc
+restoreCargoVersion mirror current = do
+    fragment :| [] <- pure (versionFragments mirror)
+    CargoMirrorRead source <- pure (fragmentReadData fragment)
+    artifact :| [] <- pure (pkgArtifacts (fragmentDetails fragment))
+    [(key, _)] <- pure (cargoRecords source)
+    native <- find ((== artFilename artifact) . artFilename) current
+    guard (key == artEntryKey artifact)
+    pure (VersionDoc (fragmentDetails fragment){pkgArtifacts = artifact{artUrl = artUrl native} :| []} (Just (fst cargoCached source)))
+
+restoreSimpleVersion :: MirrorVersion -> [Artifact] -> Maybe VersionDoc
+restoreSimpleVersion mirror current = do
     let target = Map.fromList [(artFilename artifact, artifact) | artifact <- current]
     let (_, tasks) = mapAccumL (\start fragment -> (start + length (pkgArtifacts (fragmentDetails fragment)), restoreFragment target start fragment)) 0 (toList (versionFragments mirror))
     fragments <- traverse (fmap snd) tasks
@@ -155,6 +183,7 @@ restoreFragment current start fragment = do
     source <- case fragmentReadData fragment of
         PyPIMirrorRead document -> Just document
         NpmMirrorRead _ -> Nothing
+        CargoMirrorRead _ -> Nothing
     let original = fragmentDetails fragment
         fields = Map.fromList (simpleFiles source)
     restored <- for (zip [start ..] (toList (pkgArtifacts original))) $ \(position, artifact) -> do

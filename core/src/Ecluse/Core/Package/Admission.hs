@@ -8,8 +8,7 @@ The serve path and worker share rules, filename selection, and integrity-floor c
 module Ecluse.Core.Package.Admission (
     ArtifactAdmission (..),
     admissionTransience,
-    admitArtifactWithEvidence,
-    admitArtifactWithDecision,
+    admitArtifactWithInstallRead,
 ) where
 
 import Ecluse.Core.Package (Artifact, Hash, PackageDetails, artFilename, artHashes, pkgArtifacts)
@@ -18,69 +17,36 @@ import Ecluse.Core.Package.Integrity (
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
     classifyDigests,
  )
-import Ecluse.Core.Rules (PreparedRule, evalRules)
+import Ecluse.Core.Rules (PreparedRule, evalRulesWithInstallRead)
+import Ecluse.Core.Rules.Install (InstallEvidenceMode, InstallEvidenceRead)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     EvalContext,
-    SkippedCheck,
     Transience (WontResolve),
     completeEvidence,
-    skippedChecks,
  )
 import Ecluse.Core.Server.Path (Filename, unFilename)
 
-{- | The admission verdict for one requested artifact. An inability to decide is no refusal: serve
-renders @503@\/@500@, and the worker redelivers or drops per 'admissionTransience'.
--}
+-- | A public artifact verdict. Inability retains the shared serve and worker retry classification.
 data ArtifactAdmission
-    = {- | Admitted, with digests clearing the integrity floor. Carries the 'Filename' the gate
-      matched against current metadata, and the floor-checked digest set.
-      -}
+    = -- | The matched filename and artifact, with digests that meet the integrity floor.
       AdmissionAdmit Filename Artifact (NonEmpty Hash)
-    | {- | A rule, or deny-by-default, blocked the version. Carries the 'Decision' so each consumer
-      renders the deciding rule and reason on its own surface.
-      -}
+    | -- | A decisive rule or deny-by-default refusal.
       AdmissionDenied Decision
-    | {- | A fail-closed rule could not vet the version. Carries the 'Undecidable' 'Decision', whose
-      transience 'admissionTransience' reads out for both consumers.
-      -}
+    | -- | A fail-closed inability whose decision carries retry advice.
       AdmissionUndecidable Decision
-    | {- | Admitted, but no artifact carries the requested filename: a forwarded miss on serve, a
-      withdrawn-file drop at the worker, never a fabricated location.
-      -}
+    | -- | Current metadata contains no artifact with the requested filename.
       AdmissionFileAbsent
-    | {- | The selected artifact carries no digest at all, so nothing ties its bytes to a
-      fingerprint. Kept apart from 'AdmissionBelowFloor' so the refusal can say which.
-      -}
+    | -- | The selected artifact has no digest.
       AdmissionIntegrityMissing
-    | {- | The selected artifact carries digests, but none meets the configured public-integrity
-      floor (a legacy SHA-1 shasum only, under a SHA-256 floor).
-      -}
+    | -- | The selected artifact has digests, but none meets the public floor.
       AdmissionBelowFloor
     deriving stock (Show)
 
--- | Decide one public artifact and retain the rule evidence beside its verdict.
-admitArtifactWithEvidence ::
-    EvalContext ->
-    [PreparedRule] ->
-    MinIntegrity ->
-    Filename ->
-    PackageDetails ->
-    IO (ArtifactAdmission, [SkippedCheck])
-admitArtifactWithEvidence ctx rules minIntegrity file details = do
-    (admission, decision) <- admitArtifactWithDecision ctx rules minIntegrity file details
-    pure (admission, skippedChecks decision)
-
--- | Retain the evaluated decision for a mirror publication audit without running the rules again.
-admitArtifactWithDecision ::
-    EvalContext ->
-    [PreparedRule] ->
-    MinIntegrity ->
-    Filename ->
-    PackageDetails ->
-    IO (ArtifactAdmission, Decision)
-admitArtifactWithDecision ctx rules minIntegrity file details = do
-    decision <- evalRules ctx rules (completeEvidence details)
+-- | Retain the selected version and the closed evidence read through the shared admission gate.
+admitArtifactWithInstallRead :: InstallEvidenceMode -> Maybe InstallEvidenceRead -> EvalContext -> [PreparedRule] -> MinIntegrity -> Filename -> PackageDetails -> IO (ArtifactAdmission, Decision)
+admitArtifactWithInstallRead mode installRead ctx rules minIntegrity file details = do
+    decision <- evalRulesWithInstallRead mode ctx rules (completeEvidence details) installRead
     pure (admissionOf minIntegrity file details decision, decision)
 
 -- The filename and integrity steps over a settled rules decision.
@@ -104,9 +70,7 @@ admitFile minIntegrity file details = case artifactFor file details of
         BelowFloor -> AdmissionBelowFloor
         NoIntegrity -> AdmissionIntegrityMissing
 
-{- | The transience of a verdict no rule could decide, and 'Nothing' for a settled one. The
-serve gate renders it as a @503@ or a @500@, and the mirror worker redelivers or drops on it.
--}
+-- | Retry advice for an inability, shared by the serve and worker paths.
 admissionTransience :: ArtifactAdmission -> Maybe Transience
 admissionTransience = \case
     AdmissionUndecidable (Undecidable transience _) -> Just transience

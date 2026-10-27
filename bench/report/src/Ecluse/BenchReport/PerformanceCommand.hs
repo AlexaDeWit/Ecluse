@@ -24,11 +24,11 @@ import Ecluse.BenchLoad.Contract (LoadScope (FullLoad, ReadLoadFoundation), requ
 import Ecluse.BenchLoad.Floors (passKey)
 import Ecluse.BenchLoad.Pod (parsePodShape)
 import Ecluse.BenchReport.Performance
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI), ecosystemName)
 import Ecluse.Test.Contract.Manifest (digest, digestFile, failRunner, jsonLine, readJsonFile, readPlanIdentity, writeJsonFile)
 import Ecluse.Test.Contract.Performance
 import Ecluse.Test.Contract.Result (ExecutionIdentity (identityPlanDigest))
-import Ecluse.Test.Corpus (corpusLabel, corpusPackages, cpName, pypiCorpusPackages)
+import Ecluse.Test.Corpus (cargoCorpusPackages, corpusLabel, corpusPackages, cpName, pypiCorpusPackages)
 
 -- | Compile requirements from canonical laws and declared corpus identities, without executing tests.
 writeObligation :: Text -> Text -> FilePath -> IO ()
@@ -51,6 +51,7 @@ compileObligation kind subject conditions = do
     (ecosystem, packages) <- case subject of
         "ecosystem-npm" -> Right (Npm, corpusPackages)
         "ecosystem-pypi" -> Right (PyPI, pypiCorpusPackages)
+        "ecosystem-cargo" -> Right (Cargo, cargoCorpusPackages)
         _ -> Left ("unknown performance subject: " <> subject)
     rows <- case kind of
         "allocation" -> Right (allocationRequiredRows (ecosystemName ecosystem) (map cpName packages))

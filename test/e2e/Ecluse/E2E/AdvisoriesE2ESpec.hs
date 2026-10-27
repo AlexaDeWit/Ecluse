@@ -10,6 +10,8 @@ module Ecluse.E2E.AdvisoriesE2ESpec (
     withPolicy,
     pypiReleaseDriver,
     refusesPyPIRelease,
+    scenarioFamily,
+    awaitDenials,
 ) where
 
 import Data.Aeson (encode, object, (.=))
@@ -145,7 +147,7 @@ policyFields = \case
 withPolicy :: Ecosystem -> [Pair] -> GlobalDataPlane -> (E2E -> IO ()) -> IO ()
 withPolicy ecosystem extra plane action =
     -- The shared contract inspects per-request denial details.
-    withE2EWith defaultE2EConfig{ecExtraEnv = advisoryStoreEnv <> [("ECLUSE_OBSERVABILITY__LOG_LEVEL", "debug"), ("ECLUSE_MOUNTS__" <> T.toUpper (ecosystemName ecosystem) <> "__RULES", policy)]} ready plane
+    withClientProxyWith defaultE2EConfig{ecExtraEnv = advisoryStoreEnv <> [("ECLUSE_OBSERVABILITY__LOG_LEVEL", "debug"), ("ECLUSE_MOUNTS__" <> T.toUpper (ecosystemName ecosystem) <> "__RULES", policy)]} ready plane
   where
     policy = decodeUtf8 . LBS.toStrict . encode . object $ ["min-age" .= object ["ageSeconds" .= (604800 :: Int)]] <> extra
     ready e2e = do

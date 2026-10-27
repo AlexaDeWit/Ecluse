@@ -35,6 +35,7 @@ import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Version.Cargo (CargoKey, isCargoStable, parseCargo, renderCargo)
 import Ecluse.Core.Version.Gem (GemKey, isGemStable, parseGem, renderGem)
 import Ecluse.Core.Version.Pep440 (Pep440Key, isPep440Stable, parsePep440, renderPep440)
 import Ecluse.Core.Version.Semver (SemverKey, isSemverStable, parseSemver, renderSemver)
@@ -42,10 +43,8 @@ import Ecluse.Core.Version.Token (withinVersionLength)
 
 -- | The raw text as published, plus its ordering key when it parses. No 'Ord': compare with 'compareVersions'.
 data Version = Version
-    { -- The version as published: for rendering and round-tripping, never for ordering.
-      versionRaw :: Text
-    , -- Private, so the key a version carries is always the one 'mkVersion' builds from its text.
-      versionKeyField :: Maybe VersionKey
+    { versionRaw :: Text
+    , versionKeyField :: Maybe VersionKey
     }
     deriving stock (Eq, Show)
 
@@ -78,6 +77,7 @@ data VersionKey
     = NpmKey SemverKey
     | PyPIKey Pep440Key
     | RubyGemsKey GemKey
+    | CargoKey CargoKey
     deriving stock (Eq, Ord, Show)
 
 -- | Parse version text under its ecosystem's grammar. The key's 'Ord' is meaningful only within one ecosystem.
@@ -86,6 +86,7 @@ parseVersionKey eco raw = case eco of
     Npm -> note (NpmKey <$> parseSemver raw)
     PyPI -> note (PyPIKey <$> parsePep440 raw)
     RubyGems -> note (RubyGemsKey <$> parseGem raw)
+    Cargo -> note (CargoKey <$> parseCargo raw)
   where
     note = maybe (Left (VersionError ("unparseable version: " <> raw))) Right
 
@@ -101,13 +102,14 @@ renderVersionKey = \case
     NpmKey key -> renderSemver key
     PyPIKey key -> renderPep440 key
     RubyGemsKey key -> renderGem key
+    CargoKey key -> renderCargo key
 
--- 'parseVersionKey' builds each ecosystem's key with its own constructor.
 keyEcosystem :: VersionKey -> Ecosystem
 keyEcosystem = \case
     NpmKey _ -> Npm
     PyPIKey _ -> PyPI
     RubyGemsKey _ -> RubyGems
+    CargoKey _ -> Cargo
 
 -- | Why a version string failed to parse.
 newtype VersionError = VersionError
@@ -121,16 +123,9 @@ isStable = \case
     NpmKey k -> isSemverStable k
     PyPIKey k -> isPep440Stable k
     RubyGemsKey k -> isGemStable k
+    CargoKey k -> isCargoStable k
 
-{- | Build the canonical PEP 440 spelling used to merge equivalent PyPI releases.
-
->>> renderVersion <$> canonicalPep440 "1.0.0"
-Just "1"
->>> map (fmap renderVersion . canonicalPep440) ["2!1.0", "1.0-RC.1", "1.0-1", "1.0dev", "1.0+Ubuntu-1"]
-[Just "2!1",Just "1rc1",Just "1.post1",Just "1.dev0",Just "1+ubuntu.1"]
->>> renderVersion <$> canonicalPep440 "not-a-version"
-Nothing
--}
+-- | Build the canonical PEP 440 spelling used to merge equivalent PyPI releases.
 canonicalPep440 :: Text -> Maybe Version
 -- Inlined so a caller that wraps the version leaves one unevaluated closure, not two.
 {-# INLINE canonicalPep440 #-}

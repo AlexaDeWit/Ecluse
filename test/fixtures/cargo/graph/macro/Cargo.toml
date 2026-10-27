@@ -1,0 +1,12 @@
+[package]
+name = "ecluse-e2e-macro"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT"
+description = "Owned Cargo registry contract fixture"
+readme = "README.md"
+authors = ["Ecluse contributors"]
+
+[lib]
+proc-macro = true

@@ -96,7 +96,7 @@ ecosystemSpec = describe "the ecosystem component" $
                 `shouldBe` ("17:https://a.example" <> frame <> "-5:thing")
 
 ecosystemFrames :: [(Ecosystem, ShortByteString)]
-ecosystemFrames = [(Npm, "3:npm"), (PyPI, "4:pypi"), (RubyGems, "8:rubygems")]
+ecosystemFrames = [(Npm, "3:npm"), (PyPI, "4:pypi"), (RubyGems, "8:rubygems"), (Cargo, "5:cargo")]
 
 identitySpec :: Spec
 identitySpec = describe "the identity" $ do

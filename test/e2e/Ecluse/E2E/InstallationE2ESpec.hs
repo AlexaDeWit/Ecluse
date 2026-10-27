@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Native clients and wire readers for the shared installation scenarios.
-module Ecluse.E2E.InstallationE2ESpec (installationFamily, npmInstallationDriver, pypiInstallationDriver) where
+module Ecluse.E2E.InstallationE2ESpec (installationFamily, npmInstallationDriver, pypiInstallationDriver, codedArtifact) where
 
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key

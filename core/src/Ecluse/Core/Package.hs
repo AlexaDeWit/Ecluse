@@ -74,6 +74,7 @@ import Data.Text.Short qualified as TS
 import Data.Time (UTCTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Package.Cargo (cargoNameKey)
 import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Package.Hash (
     Hash,
@@ -125,9 +126,9 @@ data PackageName = PackageName
     { pkgEcosystem :: Ecosystem
     -- ^ The ecosystem this name belongs to.
     , pkgNamespace :: Maybe Scope
-    -- ^ The scope, if scoped (npm @\@scope\/name@). 'Nothing' for PyPI/RubyGems.
+    -- ^ The npm scope. Unscoped ecosystems use 'Nothing'.
     , pkgCanonical :: ShortText
-    -- ^ The normalised matching key: PEP 503 for PyPI, verbatim for npm and RubyGems.
+    -- ^ The lookup key under the ecosystem's name grammar.
     , pkgDisplay :: ShortText
     , pkgBaseName :: ShortText
     {- ^ The base name with any @\@scope\/@ prefix dropped. It is not part of identity. Read it
@@ -136,7 +137,6 @@ data PackageName = PackageName
     }
     deriving stock (Show)
 
--- The fields that constitute identity: the display form is not one of them.
 nameKey :: PackageName -> (Ecosystem, Maybe Scope, ShortText)
 nameKey n = (pkgEcosystem n, pkgNamespace n, pkgCanonical n)
 
@@ -146,9 +146,7 @@ instance Eq PackageName where
 instance Ord PackageName where
     compare a b = compare (nameKey a) (nameKey b)
 
-{- | Build a 'PackageName', normalising the canonical key for the ecosystem: PEP 503 for
-PyPI, verbatim for npm and RubyGems.
--}
+-- | Build a name with its ecosystem lookup key, retaining the published spelling.
 mkPackageName :: Ecosystem -> Maybe Scope -> Text -> PackageName
 mkPackageName eco ns raw =
     PackageName
@@ -171,6 +169,7 @@ canonicalise = \case
     Npm -> id
     RubyGems -> id
     PyPI -> normalisePyPI
+    Cargo -> cargoNameKey
 
 -- | Render a package name in its native wire form (the display name).
 renderPackageName :: PackageName -> Text
@@ -186,9 +185,7 @@ every ecosystem's grammar rests on, because an invisible codepoint renders two n
 isAsciiNameComponent :: Text -> Bool
 isAsciiNameComponent = T.all (\ch -> isAscii ch && not (isControl ch))
 
-{- | Whether installing a version executes code (the cross-ecosystem unification
-of npm install scripts, PyPI sdist builds, and RubyGems native extensions).
--}
+-- | Whether installation executes package-supplied code, including builds and native extensions.
 data CodeExecSignal
     = -- | Determined: installation runs no code.
       NoCodeOnInstall
@@ -254,7 +251,7 @@ data PackageDetails = PackageDetails
     , pkgAvailability :: Availability
     -- ^ Whether the version is offered, deprecated, or withdrawn.
     , pkgArtifacts :: NonEmpty Artifact
-    -- ^ The version's distribution files (one for npm, many for PyPI/RubyGems).
+    -- ^ The non-empty distribution set for this version.
     }
     deriving stock (Eq, Show)
 

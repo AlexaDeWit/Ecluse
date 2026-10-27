@@ -10,7 +10,7 @@ import Prelude hiding (universe)
 import Data.Universe.Class (Universe (universe))
 import Test.Hspec
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Osv.Ecosystem (
     OsvEcosystem (OsvEcosystem, osvEcosystemTag, osvExportDirectory, osvMaxAdvisoryFanOut, osvWireName),
     osvEcosystemFor,
@@ -30,6 +30,9 @@ spec = do
 
         it "splits RubyGems the same way" $
             osvEcosystemFor RubyGems `shouldBe` OsvEcosystem{osvExportDirectory = "RubyGems", osvWireName = "rubygems", osvEcosystemTag = Just RubyGems, osvMaxAdvisoryFanOut = 256}
+
+        it "reads Cargo from crates.io under its native internal tag" $
+            osvEcosystemFor Cargo `shouldBe` OsvEcosystem{osvExportDirectory = "crates.io", osvWireName = "cargo", osvEcosystemTag = Just Cargo, osvMaxAdvisoryFanOut = 256}
 
         it "keeps every ecosystem's wire half equal to the tag's own name, so the two cannot drift" $
             map (osvWireName . osvEcosystemFor) universe `shouldBe` map ecosystemName (universe :: [Ecosystem])

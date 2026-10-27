@@ -18,9 +18,11 @@ module Ecluse.E2E.Harness.Container (
     withBridgeApplication,
     uniqueSuffix,
     awaitContainerLog,
+    containerLogPollMicros,
     containerLogs,
 ) where
 
+import Control.Exception qualified as Exception
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Network.Socket (Family (AF_INET), HostAddress, SockAddr (SockAddrInet), Socket, SocketType (Stream), bind, close, defaultProtocol, listen, maxListenQueue, socket, socketPort, tupleToHostAddress)
@@ -34,6 +36,8 @@ import System.Random (randomIO)
 import UnliftIO (bracket, finally, handleAny, onException, race, throwIO, withException)
 import UnliftIO.Concurrent (myThreadId, throwTo)
 
+import Ecluse.Core.Fault (boundedDetail)
+import Ecluse.Core.Fault.Http (displayFaultT)
 import Ecluse.Test.Container.Image (ImageRef (PinnedExternal), PinnedImageRef, renderImageRef)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
@@ -192,14 +196,27 @@ withBridgeApplication application action =
         listen sock maxListenQueue
         owner <- myThreadId
         ready <- newEmptyMVar
+        firstFault <- newEmptyMVar
+        let reportFault _ fault = when (Warp.defaultShouldDisplayException fault) $ do
+                let detail = boundedDetail (displayFaultT fault)
+                    failure = TestContractEscape ("bridge fixture failed: " <> detail)
+                recordedFirstFault <- tryPutMVar firstFault failure
+                when recordedFirstFault $ do
+                    putTextLn ("E2E bridge failed: " <> detail)
+                    throwTo owner failure
         let settings =
                 Warp.setBeforeMainLoop (putMVar ready ())
-                    . Warp.setOnException (\_ fault -> when (Warp.defaultShouldDisplayException fault) (throwTo owner fault))
+                    . Warp.setOnException reportFault
                     $ Warp.defaultSettings
         -- Warp's test helpers always bind loopback, even when setHost names another address.
-        race (Warp.runSettingsSocket settings sock application) (readMVar ready >> action port) >>= \case
-            Right result -> pure result
-            Left () -> throwIO (TestContractEscape "bridge fixture server stopped before its action finished")
+        outcome <- Exception.try (race (Warp.runSettingsSocket settings sock application) (readMVar ready >> action port))
+        -- Keep the initiating fault if cancellation or container cleanup raises another exception.
+        tryReadMVar firstFault >>= \case
+            Just failure -> throwIO failure
+            Nothing -> case outcome of
+                Left (fault :: SomeException) -> Exception.throwIO fault
+                Right (Right result) -> pure result
+                Right (Left ()) -> throwIO (TestContractEscape "bridge fixture server stopped before its action finished")
 
 -- | A random identifier for concurrently acquired resources across processes.
 uniqueSuffix :: IO String
@@ -208,7 +225,11 @@ uniqueSuffix = show <$> (randomIO :: IO Word64)
 -- | Poll logs at 250 ms intervals, returning False when the attempt budget expires.
 awaitContainerLog :: String -> (Text -> Bool) -> Int -> IO Bool
 awaitContainerLog cname matches attempts =
-    pollUntil attempts 250000 id (matches <$> containerLogs cname)
+    pollUntil attempts containerLogPollMicros id (matches <$> containerLogs cname)
+
+-- | The interval between container log observations, in microseconds.
+containerLogPollMicros :: Int
+containerLogPollMicros = 250000
 
 -- | Read combined container output. Missing resources produce empty diagnostic evidence.
 containerLogs :: String -> IO Text

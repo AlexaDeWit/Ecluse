@@ -68,8 +68,8 @@ spec = do
             invalid <- changeField "artifactUrl" Nothing legacyBody
             assertFieldError "artifactUrl" invalid
         it "rejects an unknown ecosystem at its field" $ do
-            invalid <- changeField "ecosystem" (Just (String "cargo")) legacyBody
-            assertFieldError "cargo" invalid
+            invalid <- changeField "ecosystem" (Just (String "unknown")) legacyBody
+            assertFieldError "unknown" invalid
     describe "deliveryBudgetSpent -- the shared redelivery verdict" $ do
         it "grants every delivery below the budget" $
             map (deliveryBudgetSpent (DeliveryBudget 5) . deliveredTimes) [1, 2, 3, 4]

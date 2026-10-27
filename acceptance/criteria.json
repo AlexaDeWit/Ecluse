@@ -3,87 +3,107 @@
   "calibration": {
     "arch": "aarch64",
     "runner": "ubuntu-26.04-arm",
-    "commit": "a233b3e8a0e2141e3addb2b35d883dbc220edf70",
+    "commit": "47f527179338f1b51f68a272684f3eef32aec43d",
     "runs": [
-      "https://github.com/AlexaDeWit/Ecluse/actions/runs/39992911669/job/120549040365"
+      "https://github.com/AlexaDeWit/Ecluse/actions/runs/40235400884/job/121295869291"
     ],
     "marginPercent": 1
   },
   "allocatedBytes": {
     "npm": {
       "lodash": {
-        "full": 4402256,
-        "singleVersion": 368832,
-        "fullShippedAdvisories": 4606336,
-        "fullAllAdvisoryRules": 3952136
+        "full": 4398200,
+        "singleVersion": 369336,
+        "fullShippedAdvisories": 4602904,
+        "fullAllAdvisoryRules": 3952872
       },
       "request": {
-        "full": 6261416,
-        "singleVersion": 349344,
-        "fullShippedAdvisories": 6344336,
-        "fullAllAdvisoryRules": 6389368
+        "full": 6258256,
+        "singleVersion": 349768,
+        "fullShippedAdvisories": 6341680,
+        "fullAllAdvisoryRules": 6386208
       },
       "react": {
-        "full": 136413096,
-        "singleVersion": 5498320,
-        "fullShippedAdvisories": 137374752,
-        "fullAllAdvisoryRules": 138194192
+        "full": 136352752,
+        "singleVersion": 5501968,
+        "fullShippedAdvisories": 137315592,
+        "fullAllAdvisoryRules": 138136352
       },
       "@babel/core": {
-        "full": 13641560,
-        "singleVersion": 665744,
-        "fullShippedAdvisories": 13774376,
-        "fullAllAdvisoryRules": 13850184
+        "full": 13635560,
+        "singleVersion": 666832,
+        "fullShippedAdvisories": 13768208,
+        "fullAllAdvisoryRules": 13844632
       },
       "typescript": {
-        "full": 319270296,
-        "singleVersion": 8498288,
-        "fullShippedAdvisories": 320413984,
-        "fullAllAdvisoryRules": 321585392
+        "full": 319189672,
+        "singleVersion": 8506864,
+        "fullShippedAdvisories": 320330752,
+        "fullAllAdvisoryRules": 321503896
       },
       "express": {
-        "full": 16849512,
-        "singleVersion": 831744,
-        "fullShippedAdvisories": 17065184,
-        "fullAllAdvisoryRules": 17160896
+        "full": 16841240,
+        "singleVersion": 832360,
+        "fullShippedAdvisories": 17058656,
+        "fullAllAdvisoryRules": 17152704
       },
       "@aws-sdk/client-s3": {
-        "full": 69750432,
-        "singleVersion": 1725680,
-        "fullShippedAdvisories": 70101880,
-        "fullAllAdvisoryRules": 70345352
+        "full": 69761992,
+        "singleVersion": 1727928,
+        "fullShippedAdvisories": 70115640,
+        "fullAllAdvisoryRules": 70356416
       },
       "webpack": {
-        "full": 82366496,
-        "singleVersion": 1990760,
-        "fullShippedAdvisories": 82813896,
-        "fullAllAdvisoryRules": 81439672
+        "full": 82344712,
+        "singleVersion": 1993504,
+        "fullShippedAdvisories": 82788344,
+        "fullAllAdvisoryRules": 81450496
       },
       "@types/node": {
-        "full": 93374536,
-        "singleVersion": 3351288,
-        "fullShippedAdvisories": 94388656,
-        "fullAllAdvisoryRules": 95118016
+        "full": 93305568,
+        "singleVersion": 3357096,
+        "fullShippedAdvisories": 94326944,
+        "fullAllAdvisoryRules": 95053864
       }
     },
     "pypi": {
       "requests": {
-        "full": 4358808,
-        "singleVersion": 1323560,
-        "fullShippedAdvisories": 4819568,
-        "fullAllAdvisoryRules": 4407904
+        "full": 4345712,
+        "singleVersion": 1323912,
+        "fullShippedAdvisories": 4806944,
+        "fullAllAdvisoryRules": 4407760
       },
       "numpy": {
-        "full": 63011864,
-        "singleVersion": 19248008,
-        "fullShippedAdvisories": 63297344,
-        "fullAllAdvisoryRules": 61562072
+        "full": 62778648,
+        "singleVersion": 19249648,
+        "fullShippedAdvisories": 63064728,
+        "fullAllAdvisoryRules": 61392456
       },
       "boto3": {
-        "full": 73869216,
-        "singleVersion": 21284448,
-        "fullShippedAdvisories": 74508464,
-        "fullAllAdvisoryRules": 75158680
+        "full": 73633304,
+        "singleVersion": 21285816,
+        "fullShippedAdvisories": 74273504,
+        "fullAllAdvisoryRules": 74924264
+      }
+    },
+    "cargo": {
+      "tokio": {
+        "full": 149612424,
+        "singleVersion": 137147216,
+        "fullShippedAdvisories": 149691984,
+        "fullAllAdvisoryRules": 149161624
+      },
+      "windows": {
+        "full": 161940712,
+        "singleVersion": 150264104,
+        "fullShippedAdvisories": 161978800,
+        "fullAllAdvisoryRules": 162009376
+      },
+      "aws-sdk-ec2": {
+        "full": 246519216,
+        "singleVersion": 225497408,
+        "fullShippedAdvisories": 246606080,
+        "fullAllAdvisoryRules": 246713872
       }
     }
   }

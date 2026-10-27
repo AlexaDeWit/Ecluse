@@ -54,7 +54,7 @@ import Ecluse.Core.Package.Integrity (
     mkMinTrustedIntegrity,
  )
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName))
-import Ecluse.Core.Rules (PreparedRule (prepName), bootOrder, evalRules, renderBootOrder)
+import Ecluse.Core.Rules (PreparedRule (prepName), bootOrder, renderBootOrder)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), identityEvidence)
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
@@ -77,7 +77,7 @@ import Ecluse.Core.Server.Upstream (
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Credential (noCredentialReporters)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, pypiVersion, thingName, unscopedPyPI, v1_0_0)
-import Ecluse.Test.Rules (blockedBy, inertRuleDeps)
+import Ecluse.Test.Rules (blockedBy, evalRules, inertRuleDeps)
 
 -- | The composition root's boot wiring: every problem is an aggregated boot error, with no IO beyond the injected clock and resolver.
 spec :: Spec

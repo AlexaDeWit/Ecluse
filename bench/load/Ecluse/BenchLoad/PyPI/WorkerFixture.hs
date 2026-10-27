@@ -23,18 +23,20 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Network.HTTP.Types (hContentType, status200, status304, status400, status404, status412, status503)
-import Network.Wai (Application, Request, pathInfo, rawPathInfo, requestHeaders, requestMethod, responseLBS, strictRequestBody)
+import Network.HTTP.Types (hContentType, status200, status400, status404, status503)
+import Network.Wai (Application, Request, pathInfo, requestHeaders, requestMethod, responseLBS, strictRequestBody)
 import Network.Wai.Parse (FileInfo (..), RequestBodyType (Multipart), lbsBackEnd, parseContentType, sinkRequestBody)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes, delayUpstream)
+import Ecluse.BenchLoad.WorkerState (stateAppFor)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.PyPI.Wire (simpleIndexMediaType)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (hexSha256Of)
-import Ecluse.Test.Registry.PyPI.Archive (metadata, tarBytes, zipBytes)
+import Ecluse.Test.Registry.Archive (tarBytes)
+import Ecluse.Test.Registry.PyPI.Archive (metadata, zipBytes)
 import Ecluse.Test.Wai (selfBaseUrl)
 
 -- | Each reset removes both target files and durable objects before another complete copy.
@@ -168,32 +170,9 @@ expectedUploadFields filename bytes =
   where
     wheel = ".whl" `T.isSuffixOf` filename
 
--- | Opaque revisions and conditional writes retain S3's compare-and-swap behaviour.
+-- | Reuse conditional object semantics with this fixture's owned stores and counters.
 stateApp :: Int -> WorkerFixture -> Application
-stateApp latency fixture request respond = do
-    delayUpstream latency
-    count fixture "state"
-    let key = rawPathInfo request
-        headers = requestHeaders request
-    objects <- readIORef (wfObjects fixture)
-    case (requestMethod request, Map.lookup key objects) of
-        ("GET", Nothing) -> respond (responseLBS status404 [(hContentType, "application/xml")] "<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>")
-        ("GET", Just (revision, bytes))
-            | lookup "If-None-Match" headers == Just revision -> respond (responseLBS status304 [("ETag", revision)] "")
-            | otherwise -> respond (responseLBS status200 [("ETag", revision)] (LBS.fromStrict bytes))
-        ("PUT", previous) -> do
-            bytes <- LBS.toStrict <$> strictRequestBody request
-            let condition = case previous of
-                    Nothing -> lookup "If-None-Match" headers == Just "*"
-                    Just (storedRevision, _) -> lookup "If-Match" headers == Just storedRevision
-                nextRevision = "\"" <> encodeUtf8 (hexSha256Of bytes) <> "\""
-            if condition
-                then do
-                    modifyIORef' (wfObjects fixture) (Map.insert key (nextRevision, bytes))
-                    count fixture "state-write"
-                    respond (responseLBS status200 [("ETag", nextRevision)] "")
-                else respond (responseLBS status412 [(hContentType, "application/xml")] "<Error><Code>PreconditionFailed</Code></Error>")
-        _ -> respond (responseLBS status400 [] "unexpected object request")
+stateApp latency fixture = stateAppFor (wfObjects fixture) (wfCounts fixture) latency
 
 indexValue :: Text -> Map Text ByteString -> Value
 indexValue base files =

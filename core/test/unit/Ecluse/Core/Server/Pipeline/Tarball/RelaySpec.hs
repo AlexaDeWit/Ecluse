@@ -25,15 +25,16 @@ privateResponderSpec = describe "private artifact relay" $ do
 
     for_ [status401, status403] $ \status ->
         it ("replaces " <> show status <> " without touching upstream responders or body") $ do
-            let upstream = RelayResponder (\_ _ _ -> fail "stream responder called") (\_ _ -> fail "empty responder called")
-                responder = privateArtifactResponder (pure ("refused" :: Text)) id upstream
-            relayStreamResponse responder status [] (\_ _ -> fail "body read") `shouldReturn` "refused"
-            relayEmptyResponse responder status [] `shouldReturn` "refused"
+            let upstream :: RelayResponder Text
+                upstream = RelayResponder (\_ _ _ -> fail "stream responder called") (\_ _ -> fail "empty responder called")
+                responder = privateArtifactResponder (pure . Left) Right upstream
+            relayStreamResponse responder status [] (\_ _ -> fail "body read") `shouldReturn` Left status
+            relayEmptyResponse responder status [] `shouldReturn` Left status
 
     it "retains admitted status and validators for stream and empty responses" $ do
         let headers = [("ETag", "version-one")]
             upstream = RelayResponder (\status hs _ -> pure (status, hs)) (curry pure)
-            responder = privateArtifactResponder (fail "refusal called") id upstream
+            responder = privateArtifactResponder (\_ -> fail "refusal called") id upstream
         relayStreamResponse responder status200 headers (\_ _ -> pure ()) `shouldReturn` (status200, headers)
         relayEmptyResponse responder status304 headers `shouldReturn` (status304, headers)
 

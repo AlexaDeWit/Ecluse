@@ -25,7 +25,8 @@ import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.PyPI.Archive (archiveMetadata)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Registry.PyPI.Archive (metadata, paxRecord, tarBytes, zip64Bytes, zipBytes, zipBzipBytes, zipLzmaBytes, zipTruncatedBytes)
+import Ecluse.Test.Registry.Archive (paxRecord, tarBytes)
+import Ecluse.Test.Registry.PyPI.Archive (metadata, zip64Bytes, zipBytes, zipBzipBytes, zipLzmaBytes, zipTruncatedBytes)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec

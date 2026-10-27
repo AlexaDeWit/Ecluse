@@ -83,6 +83,7 @@ import Ecluse.Core.Osv.Provenance (SourcePathRecording)
 import Ecluse.Core.Osv.Publication (Percent)
 import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
+import Ecluse.Core.Registry.Cargo.FirstParty (CargoFirstParty)
 import Ecluse.Core.Registry.Maintenance.Budget (QuotaDimension, RequestKind)
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty)
 import Ecluse.Core.Rules.Types (PrecededRule)
@@ -205,6 +206,8 @@ meTarget endpoint = Target (writeTag (meWrite endpoint)) (meUrl endpoint)
 -- | A publication endpoint and the credential that replaces an authenticated edge token.
 data PublicationEndpoint = PublicationEndpoint
     { peTarget :: Target
+    , peUploadUrl :: Maybe RegistryUrl
+    -- ^ Approved API base, separate from the read/index root.
     , peToken :: Maybe Secret
     , peUsername :: Maybe Text
     -- ^ Username paired with the configured publication token.
@@ -270,6 +273,8 @@ data FirstParty
       FirstPartyNpmScopes (NonEmpty Scope)
     | -- | The PyPI distributions and name prefixes the deployment owns, at least one.
       FirstPartyPyPI (NonEmpty PyPIFirstParty)
+    | -- | The Cargo names and separator-delimited prefixes the deployment owns.
+      FirstPartyCargo (NonEmpty CargoFirstParty)
     deriving stock (Eq, Show)
 
 -- | A mount's refinements of the global @integrity@ group, under its own @integrity@ key. Each is 'Nothing' at the global setting.

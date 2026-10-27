@@ -78,6 +78,7 @@ import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
 import Ecluse.Core.Registry.Origin (OriginClient (ocClient, ocLimits, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (pcProbeRequest, pcVersionListWalk), fetchVersionList)
 import Ecluse.Core.Registry.VersionList (VersionListState)
+import Ecluse.Core.Rules.Install (unavailableInstallArtifactRead)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes)
 import Ecluse.Core.Version (Version)
 
@@ -113,6 +114,7 @@ newProtocolObservation store =
         { obFacts = protocolFacts (prBackendName store)
         , obListPackagesIn = listBucket store
         , obEnumerateVersions = listVersions store
+        , obReadArtifact = unavailableInstallArtifactRead
         , obReadManifest = prReadManifest store
         , obVerifyConsent = pure (Right (consentVerdict store))
         , obClassifyStore = pure (Right (storeClass store))

@@ -7,12 +7,13 @@
 -- | Publish routing and credentials through the application and a captured target.
 module Ecluse.Core.Server.Pipeline.PublishIntegrationSpec (spec) where
 
-import Data.Aeson ((.=))
+import Data.Aeson (Value (Object, String), (.=))
 import Data.Aeson qualified as Aeson
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Text qualified as T
-import Network.HTTP.Types (RequestHeaders, hAuthorization, hContentType, methodPost, methodPut, mkStatus)
+import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hAuthorization, hContentType, methodPost, methodPut, mkStatus)
 import Network.Wai (
     Application,
     Request (requestBodyLength, requestHeaders, requestMethod),
@@ -35,9 +36,13 @@ import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Credential (ClientCredential (ClientCredential), Secret, bareCredential, mkSecret)
 import Ecluse.Core.Deadline (Deadlines)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterProjectName))
+import Ecluse.Core.Registry.Cargo.Adapter (cargoAdapter)
+import Ecluse.Core.Registry.Cargo.Project (projectName)
+import Ecluse.Core.Registry.Cargo.Publish (cargoPublish)
+import Ecluse.Core.Registry.Cargo.Publish.Body qualified as CargoBody
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter, npmPublish)
 import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter, pypiPublish)
@@ -46,16 +51,20 @@ import Ecluse.Core.Registry.PyPI.Publish.Multipart (pypiFileUploadOnly)
 import Ecluse.Core.Security (defaultLimits, maxMetadataBytes, maxPublishRequestBytes)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission, newByteAdmissionTuned)
-import Ecluse.Core.Server.Context (PublishDeps (..))
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
+import Ecluse.Core.Server.Context (PackumentDeps (pdMountBaseUrl), PublishDeps (..))
 import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Deadline (withSweeper)
+import Ecluse.Test.Registry.Cargo.Fixtures (CargoRelease (releaseArchive), cargoUpload, cargoUploadMetadata, cargoUploadWithMetadata)
+import Ecluse.Test.Registry.Cargo.Publish (cargoPublicationFixture, cargoResolverAgreements, cargoResolverArchive, cargoResolverContradictions)
 import Ecluse.Test.Registry.Npm.Publish (npmDeprecateDocument, npmMisfiledVersion, npmReleaseDocument, npmRepeatedAttachments, npmTaggedRelease)
 import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps)
-import Ecluse.Test.Stub (Captured (capBody, capMethod, capPath), Stub, allCaptured, headerValue, stubPort, withStubHeaders)
-import Ecluse.Test.Wai (status)
+import Ecluse.Test.Stub (Captured (capBody, capHeaders, capMethod, capPath), Stub, allCaptured, headerValue, stubBaseUrl, stubPort, withRoutedStub, withStubHeaders)
+import Ecluse.Test.Support (expectRight)
+import Ecluse.Test.Wai (selfBaseUrlOf, status)
 
 withTarget :: Int -> LByteString -> (Int -> Stub -> IO a) -> IO a
 withTarget code body k =
@@ -68,7 +77,8 @@ targetSaw stub = map (\cap -> (headerValue "Authorization" cap, capBody cap)) <$
 publishDepsAt :: Int -> Maybe Secret -> ByteAdmission -> PublishDeps
 publishDepsAt targetPort staticToken bodyBudget =
     PublishDeps
-        { pubTargetUrl = loopbackRegistryUrl ("http://127.0.0.1:" <> show targetPort)
+        { pubReadUrl = loopbackRegistryUrl ("http://127.0.0.1:" <> show targetPort)
+        , pubTargetUrl = loopbackRegistryUrl ("http://127.0.0.1:" <> show targetPort)
         , pubAllowed = NpmPublish.npmPublishAllowed [mkScope "acme"]
         , pubStaticCredential = bareCredential <$> staticToken
         , pubMaxRequestBytes = 26214400
@@ -83,7 +93,7 @@ publishDepsAt targetPort staticToken bodyBudget =
 proxyOver :: Deadlines -> Maybe PublishDeps -> IO Application
 proxyOver deadlines publishDeps = do
     env <- newTestEnv deadlines
-    let cfg = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps publishDeps))
+    let cfg = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing publishDeps))
     pure (application cfg env)
 
 proxyWith :: Deadlines -> Maybe (ByteAdmission -> PublishDeps) -> IO Application
@@ -133,6 +143,7 @@ widget = "@acme/widget"
 -- | Publish guards and the target-visible request and response contract.
 spec :: Spec
 spec = do
+    cargoPublishSpec
     pypiPublishSpec
     npmPublishSpec
 
@@ -349,7 +360,7 @@ pypiProxy :: Deadlines -> Maybe (ByteAdmission -> PublishDeps) -> IO Application
 pypiProxy deadlines build = do
     env <- newTestEnv deadlines
     deps <- traverse (\mk -> mk <$> newByteAdmission deadlines (128 * 1024 * 1024)) build
-    pure (application (mkServerConfig (maybeToList (mountBindingFor PyPI (inertDepsFor pypiAdapter) deps))) env)
+    pure (application (mkServerConfig (maybeToList (mountBindingFor PyPI (inertDepsFor pypiAdapter) Nothing deps))) env)
 
 pypiDeps :: Int -> ByteAdmission -> PublishDeps
 pypiDeps port budget =
@@ -549,3 +560,89 @@ pypiPublishSpec = describe "first-party PyPI publication relay" $ do
             response <- postUpload ChunkedBody [("Content-Type", multipartType)] body app
             status response `shouldBe` 400
             targetSaw target `shouldReturn` []
+
+cargoPublishSpec :: Spec
+cargoPublishSpec = describe "first-party Cargo publication relay" $ do
+    it (caseLabel "integration/publication/cargo-001" "relays exact native bytes after credential-scoped discovery") $ do
+        archive <- cargoResolverArchive
+        for_ cargoResolverAgreements $ \metadata -> do
+            bytes <- expectRight (cargoUploadWithMetadata metadata archive)
+            withRoutedStub cargoTargetReply $ \stub -> withSweeper $ \deadlines -> do
+                app <- cargoProxy deadlines stub
+                reply <- cargoPut (fromStrict bytes) app
+                status reply `shouldBe` 200
+                simpleBody reply `shouldBe` "{\"warnings\":{\"other\":[\"owned warning\"]}}"
+                captures <- allCaptured stub
+                map capPath captures `shouldBe` ["/index/config.json", "/registry/api/v1/crates/new"]
+                map (headerValue "Authorization") captures `shouldBe` [Just "cargo-client", Just "cargo-client"]
+                map capBody (filter ((== "PUT") . capMethod) captures) `shouldBe` [bytes]
+    it (caseLabel "integration/publication/cargo-002" "refuses identity and resolver contradictions before any upstream request") $ do
+        release <- cargoPublicationFixture
+        withRoutedStub cargoTargetReply $ \stub -> withSweeper $ \deadlines -> do
+            app <- cargoProxy deadlines stub
+            case cargoUploadMetadata release of
+                Object fields -> for_ [("name", "victim"), ("vers", "1.0.0+changed")] $ \(key, value) -> do
+                    bytes <- expectRight (CargoBody.encodeUpload (Object (KeyMap.insert key (String value) fields)) (releaseArchive release))
+                    reply <- cargoPut bytes app
+                    status reply `shouldBe` 400
+                _ -> expectationFailure "fixture upload metadata is not an object"
+            archive <- cargoResolverArchive
+            for_ cargoResolverContradictions $ \metadata -> do
+                bytes <- expectRight (cargoUploadWithMetadata metadata archive)
+                CargoBody.decodeUpload defaultLimits bytes `shouldSatisfy` isRight
+                reply <- cargoPut (fromStrict bytes) app
+                status reply `shouldBe` 400
+            allCaptured stub `shouldReturn` []
+    it (caseLabel "integration/publication/cargo-003" "preserves native authentication challenge when target discovery refuses access") $
+        withStubHeaders (mkStatus 401 "Unauthorized") [] "denied" $ \stub -> withSweeper $ \deadlines -> do
+            release <- cargoPublicationFixture
+            bytes <- expectRight (cargoUpload release)
+            app <- cargoProxy deadlines stub
+            reply <- cargoPut (fromStrict bytes) app
+            status reply `shouldBe` 401
+            lookup "WWW-Authenticate" (simpleHeaders reply) `shouldBe` Just "Cargo"
+            captures <- allCaptured stub
+            map capPath captures `shouldBe` ["/index/config.json"]
+    it (caseLabel "integration/publication/cargo-004" "preserves native authentication challenge and body when the upload refuses access") $
+        withRoutedStub uploadRefusal $ \stub -> withSweeper $ \deadlines -> do
+            release <- cargoPublicationFixture
+            bytes <- expectRight (cargoUpload release)
+            app <- cargoProxy deadlines stub
+            reply <- cargoPut (fromStrict bytes) app
+            status reply `shouldBe` 401
+            simpleBody reply `shouldBe` "native upload denied"
+            lookup "WWW-Authenticate" (simpleHeaders reply) `shouldBe` Just "Cargo"
+            captures <- allCaptured stub
+            map capPath captures `shouldBe` ["/index/config.json", "/registry/api/v1/crates/new"]
+  where
+    uploadRefusal captured
+        | capMethod captured == "PUT" = (mkStatus 401 "Unauthorized", [], "native upload denied")
+        | otherwise = cargoTargetReply captured
+
+cargoProxy :: Deadlines -> Stub -> IO Application
+cargoProxy deadlines stub = do
+    env <- newTestEnv deadlines
+    budget <- newByteAdmission deadlines (128 * 1024 * 1024)
+    let factors = ChargeFactors 1000 1000 1000
+        adapter = cargoAdapter factors
+        deps = (inertDepsFor adapter){pdMountBaseUrl = "https://proxy.test/cargo/private"}
+        publication =
+            (publishDepsAt (stubPort stub) Nothing budget)
+                { pubReadUrl = loopbackRegistryUrl (stubBaseUrl stub <> "/index")
+                , pubTargetUrl = loopbackRegistryUrl (stubBaseUrl stub <> "/registry")
+                , pubProjectName = rightToMaybe . projectName
+                , pubAllowed = \name -> projectName "fixture" == Right name
+                , pubAdapter = cargoPublish factors
+                }
+    pure (application (mkServerConfig (maybeToList (mountBindingFor Cargo deps (Just deps) (Just publication)))) env)
+
+cargoPut :: LByteString -> Application -> IO SResponse
+cargoPut bytes = runSession (srequest (SRequest request bytes))
+  where
+    request = setPath defaultRequest{requestMethod = methodPut, requestHeaders = [(hAuthorization, "cargo-client"), (hContentType, "application/octet-stream")]} "/cargo/private/api/v1/crates/new"
+
+cargoTargetReply :: Captured -> (Status, ResponseHeaders, LByteString)
+cargoTargetReply captured =
+    let root = selfBaseUrlOf (capHeaders captured)
+        discovery = Aeson.object ["dl" .= (root <> "/files/{crate}/{version}/download"), "api" .= (root <> "/registry"), "auth-required" .= True]
+     in (mkStatus 200 "OK", [(hContentType, "application/json")], if capMethod captured == "PUT" then "{\"warnings\":{\"other\":[\"owned warning\"]}}" else Aeson.encode discovery)

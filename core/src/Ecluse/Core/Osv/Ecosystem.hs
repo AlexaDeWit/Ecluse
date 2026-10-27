@@ -2,39 +2,25 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | What one OSV compile pass needs to know about the ecosystem it compiles.
-
-osv.dev and Écluse do not always agree on the spelling, so a pass that carried one name would
-either fetch a directory that does not exist or write an artifact the proxy's sync refuses. The
-pass also needs the version grammar that orders the advisory bounds it ingests, and the fan-out
-an ordinary advisory of the feed stays under.
--}
+-- | OSV export names and native version grammars for each advisory compile pass.
 module Ecluse.Core.Osv.Ecosystem (
     OsvEcosystem (..),
     osvEcosystemFor,
     osvEcosystemNamed,
 ) where
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName, parseEcosystem)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName, parseEcosystem)
 
 -- | The two spellings, the version grammar, and the fan-out bound one compile pass needs.
 data OsvEcosystem = OsvEcosystem
     { osvExportDirectory :: Text
-    {- ^ osv.dev's own spelling: the directory its export archive sits under, and the value an
-    advisory's affected package carries, which is what the row filter matches.
-    -}
+    -- ^ The export directory and affected-package ecosystem spelling at osv.dev.
     , osvWireName :: Text
-    {- ^ Écluse's spelling ('ecosystemName'): it names the published artifact and stamps the
-    @meta@ row the proxy's sync checks.
-    -}
+    -- ^ The internal name on the compiled artifact and its checked metadata row.
     , osvEcosystemTag :: Maybe Ecosystem
-    {- ^ The ecosystem whose version grammar orders this pass's advisory bounds. 'Nothing' for a
-    name this build does not serve, and then the pass tallies nothing.
-    -}
+    -- ^ The native version grammar, absent for an unknown export.
     , osvMaxAdvisoryFanOut :: Int
-    {- ^ Ranges one advisory of this feed may expand into before the ingest flags it as
-    anomalous. The ingest keeps the advisory either way, so the number only sizes the alarm.
-    -}
+    -- ^ The per-advisory fan-out alarm threshold. It never discards evidence.
     }
     deriving stock (Eq, Show)
 
@@ -47,11 +33,7 @@ npmAdvisoryFanOut = 256
 pypiAdvisoryFanOut :: Int
 pypiAdvisoryFanOut = 4096
 
-{- | An ecosystem's pair of spellings. npm agrees with osv.dev, PyPI and RubyGems do not.
-
->>> osvEcosystemFor PyPI
-OsvEcosystem {osvExportDirectory = "PyPI", osvWireName = "pypi", osvEcosystemTag = Just PyPI, osvMaxAdvisoryFanOut = 4096}
--}
+-- | Pair the OSV export directory with the internal ecosystem name and version grammar.
 osvEcosystemFor :: Ecosystem -> OsvEcosystem
 osvEcosystemFor eco =
     OsvEcosystem
@@ -65,18 +47,15 @@ osvEcosystemFor eco =
         Npm -> "npm"
         PyPI -> "PyPI"
         RubyGems -> "RubyGems"
+        Cargo -> "crates.io"
 
     fanOut = case eco of
         Npm -> npmAdvisoryFanOut
         PyPI -> pypiAdvisoryFanOut
         RubyGems -> npmAdvisoryFanOut
+        Cargo -> npmAdvisoryFanOut
 
-{- | The pair for a name a one-shot compile was given: a name this build serves resolves through
-'osvEcosystemFor', and any other spells itself on both halves.
-
->>> osvEcosystemNamed "pypi"
-OsvEcosystem {osvExportDirectory = "PyPI", osvWireName = "pypi", osvEcosystemTag = Just PyPI, osvMaxAdvisoryFanOut = 4096}
--}
+-- | Resolve an internal ecosystem name, retaining unknown export names without a version grammar.
 osvEcosystemNamed :: Text -> OsvEcosystem
 osvEcosystemNamed name = maybe unserved osvEcosystemFor (parseEcosystem name)
   where

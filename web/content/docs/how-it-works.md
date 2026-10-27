@@ -7,7 +7,7 @@ weight = 1
 Use this reference to follow metadata discovery, downloads, mirroring, and publication.
 For the operating purpose and deployment choices, start with
 [Understand Écluse](@/docs/understand.md) or [Set up Écluse](@/docs/setup.md).
-npm and PyPI support reads, mirroring, and first-party publication.
+npm, PyPI, and Cargo support reads, mirroring, and first-party publication.
 [Complete PyPI setup](@/docs/pypi-setup.md) connects those roles and their required stores.
 [Protocol support](@/docs/protocol-support.md) describes each protocol and its configuration requirements.
 
@@ -44,11 +44,11 @@ you supply. Package archives remain in your registries.
 ### The registry roles
 
 Écluse sees registries by role, and each role is a URL on a mount. Each ecosystem gets its own
-path prefix: `/npm/` or `/pypi/`.
+path prefix: `/npm/`, `/pypi/`, or `/cargo/`.
 
 | Role | What it does | Trust | Required? |
 |------|--------------|-------|-----------|
-| Public upstream | The registry Écluse gates | Subject to admission | Defaults to `registry.npmjs.org` for npm and `pypi.org` for PyPI |
+| Public upstream | The registry Écluse gates | Subject to admission | Defaults to `registry.npmjs.org` for npm, `pypi.org` for PyPI, and `index.crates.io` for Cargo |
 | Private upstream | Supplies trusted package versions | Trusted | No. Without it, a pure public gate |
 | Mirror target | Receives admitted package files and supplies completion proof | Operator-controlled | No. Declaring it enables mirroring for the mount |
 | Publication target | Receives your `publish` requests | Trusted | Opt-in |
@@ -60,11 +60,13 @@ and explains what you lose when two share one.
 ### A request, step by step
 
 For npm, a client requests a version listing and then a tarball. PyPI clients request project indexes
-and distribution files. Both protocols support background mirroring and first-party publication.
+and distribution files. Cargo clients read sparse discovery, native index records, and crate archives.
+Cargo separates crates.io source replacement from private alternate-registry access.
+The [Cargo protocol contract](@/docs/protocol-support.md#cargo) defines those views and their source rules.
 
 {{ diagram(name="metadata-admission", alt="The proxy combines caller-authorised private metadata with admitted anonymous public metadata. First-party names stay private, and response reuse follows fresh private authorisation.", caption="Version discovery and admission. Advisory polling runs independently of each request.") }}
 
-1. **The listing.** For non-first-party names, Écluse fetches private and public metadata in parallel.
+1. **The listing.** For npm and PyPI non-first-party names, Écluse fetches private and public metadata in parallel.
    Private versions must meet the trusted integrity floor, and managed mirror versions must also prove completion.
    The policy filters public versions before the listing is merged. For npm, `dist-tags.latest` follows an admitted
    public tag, otherwise the highest admitted version, with stable versions before prereleases.
@@ -94,7 +96,8 @@ Divergence alone never authorises Dredger to delete a version. Removing an allow
 version unless a named deny that applies at revocation becomes decisive. See
 [Revoking a mirrored version](@/docs/operations.md#revoking-a-mirrored-version-internal-yank).
 
-Listings omit files whose URLs lack a filename, name `.` or `..`, or have a backslash or control character in the filename.
+npm and PyPI listings require a usable filename in each artifact URL.
+They omit `.` and `..` names and filenames with a backslash or control character.
 The check also applies after one percent decode and refuses encoded separators or invalid UTF-8.
 A release disappears when no file survives.
 

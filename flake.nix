@@ -2,8 +2,8 @@
   description = "ecluse: supply-chain resilience proxy for package registries";
 
   inputs = {
-    # Single pinned nixpkgs: every tool comes from this one set. See
-    # docs/architecture/release-supply-chain.md.
+    # Packages share one pinned nixpkgs. External source and binary pins stay explicit.
+    # See docs/architecture/release-supply-chain.md.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     flake-utils.url = "github:numtide/flake-utils";
     # The v0.10.0 packaging commit, one after the tag. A release tag's Nix
@@ -426,6 +426,14 @@
           inherit (pkgs) nodejs;
         };
 
+        cargoSemverOracle = pkgs.rustPlatform.buildRustPackage {
+          pname = "cargo-semver-oracle";
+          version = "0.1.0";
+          src = ./test/oracles/cargo-semver;
+          cargoLock.lockFile = ./test/oracles/cargo-semver/Cargo.lock;
+          meta.license = pkgs.lib.licenses.mit;
+        };
+
         # Remove when the registry publishes semgrep/semgrep-rules#4042.
         semgrepActionPinningSource =
           "https://raw.githubusercontent.com/nopcorn/semgrep-rules/734df2ec594a19c83b0694b9cf70feb7af012258/yaml/github-actions/security/github-actions-mutable-action-tag";
@@ -451,9 +459,52 @@
         # CI shares one closure: toolchain, gate, ops, and bench.
         # The default shell adds IDE tools. Keep each tool in one tier.
 
-        # Compiling and testing: what every build path needs before any gate
-        # tooling. `go-task` lives here and here only, because every job and every
-        # dev loop runs through it.
+        # Official 2023-11-16 release manifest pins the minimum Cargo client.
+        # The current pinned rustc compiles owned fixtures for both clients.
+        cargoFloorTarget = {
+          x86_64-linux = {
+            target = "x86_64-unknown-linux-gnu";
+            sha256 = "f219386d4569c40b660518e99267afff428c13bf980bda7a614c8d4038d013f6";
+          };
+          aarch64-linux = {
+            target = "aarch64-unknown-linux-gnu";
+            sha256 = "a18dc9132cf76ccba90bcbb53b56a4d37ebfb34845f61e79f7b5d4710a269647";
+          };
+          x86_64-darwin = {
+            target = "x86_64-apple-darwin";
+            sha256 = "5c1c4f5985a48ad02bcff881c5a9c983218bc1eefc083403579147a3292ba073";
+          };
+          aarch64-darwin = {
+            target = "aarch64-apple-darwin";
+            sha256 = "5c14e9b3a458d728d89e02f4e024b710d5b0eb8c45249066fe666d2094fbf233";
+          };
+        }.${system};
+        cargoFloor = pkgs.stdenv.mkDerivation {
+          pname = "cargo-client-floor";
+          version = "1.74.0";
+          src = pkgs.fetchurl {
+            url = "https://static.rust-lang.org/dist/2023-11-16/cargo-1.74.0-${cargoFloorTarget.target}.tar.xz";
+            inherit (cargoFloorTarget) sha256;
+          };
+          nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.autoPatchelfHook ];
+          buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [
+            pkgs.stdenv.cc.cc.lib
+            pkgs.curl
+            pkgs.openssl
+            pkgs.zlib
+          ];
+          dontConfigure = true;
+          dontBuild = true;
+          dontStrip = true;
+          installPhase = ''
+            runHook preInstall
+            install -Dm755 cargo/bin/cargo "$out/bin/cargo-1.74"
+            runHook postInstall
+          '';
+          meta.license = [ pkgs.lib.licenses.mit pkgs.lib.licenses.asl20 ];
+        };
+
+        # Compiling and testing share this toolchain in development and CI.
         toolchainInputs = [
           pkgs.bashInteractive
           toolHpkgs.ghc
@@ -465,8 +516,13 @@
           # Reference version-ordering oracles for the differential smoke suite
           # and `task gen-version-fixtures`. They are node-semver (npm, built by
           # oracleNodeModules and put on NODE_PATH above), Python packaging (PyPI),
-          # and Ruby Gem::Version (built into ruby).
+          # Ruby Gem::Version, and the locked Rust semver precedence oracle.
           pkgs.nodejs
+          pkgs.cargo
+          pkgs.rustc
+          pkgs.stdenv.cc
+          cargoFloor
+          cargoSemverOracle
           # pip rides along because the end-to-end tier drives it as a real client
           # against a pypi mount, the way it drives npm against an npm mount.
           (pkgs.python3.withPackages (ps: [ ps.packaging ps.pip ]))

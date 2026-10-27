@@ -398,7 +398,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        subject: [npm, pypi, shared-system]
+        subject: [npm, pypi, cargo, shared-system]
     permissions:
       contents: read
     env:
@@ -555,6 +555,10 @@ jobs:
       - name: Audit PyPI completion across tiers
         if: ${{ !cancelled() }}
         run: nix develop .#ci --command task test-e2e-pypi-completion
+
+      - name: Audit Cargo completion across tiers
+        if: ${{ !cancelled() }}
+        run: nix develop .#ci --command task test-e2e-cargo-completion
 
   backend-conformance:
     name: Conformance (package stores verdaccio, codeartifact)

@@ -20,13 +20,15 @@ import Network.HTTP.Types (Method)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
 import Ecluse.Core.Registry (UrlFormationError)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead)
+import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
 import Ecluse.Core.Server.Context (RouteAction)
 import Ecluse.Core.Snapshot (Snapshot)
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Corpus (CaptureUpstream, CorpusPackage)
+import Ecluse.Test.Registry.Metadata.Rendering (MetadataRendering)
 
 -- | One ecosystem's measured operations and eagerly loaded, validated corpus.
 data EcosystemBench = EcosystemBench
@@ -47,6 +49,8 @@ data EcosystemBench = EcosystemBench
     -- ^ Decode release keys through the adapter's wire parser.
     , ebProject :: PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
     -- ^ The pure projection of a synthetic body, under the fixed test key and with no location check.
+    , ebProjectServed :: PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
+    -- ^ Reproject with the served discovery binding when native metadata has no artifact URLs.
     , ebRead :: PackageName -> [ByteString] -> IO (Either MetadataError Manifest)
     -- ^ The production full read of a capture's chunks, as a fetch from the capture's registry runs it.
     , ebSelective :: PackageName -> Version -> [ByteString] -> IO (Either MetadataError (Maybe PackageDetails))
@@ -54,7 +58,9 @@ data EcosystemBench = EcosystemBench
     , ebReadDocument :: ByteString -> Either Text CachedDoc
     -- ^ Prepare a wire guard's native input outside its measured operation.
     , ebNestingDepth :: CachedDoc -> Int
-    , ebMetadata :: AdapterMetadata
+    , ebMetadata :: MetadataRendering
+    , ebReader :: Either MetadataError EcosystemRead
+    , ebReadFactory :: PrepareRead
     , ebRoutes :: [RouteCase]
     , ebClassify :: (Method, [Text]) -> Int
     , ebActionRoutes :: [RouteCase]

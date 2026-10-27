@@ -19,7 +19,7 @@ import Data.Map.Strict qualified as Map
 import Ecluse.BenchLoad.Floors (FloorKey, Pass (ConcurrencyOne, Loaded))
 import Ecluse.BenchLoad.Pod (PodShape (Unlimited))
 import Ecluse.BenchLoad.Selection (scenarioKey)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 
 -- | The read foundation includes admission stress but does not claim worker coverage.
 data LoadScope = ReadLoadFoundation | FullLoad
@@ -109,6 +109,7 @@ loadScenarioName :: Ecosystem -> LoadLaw -> Maybe Text
 loadScenarioName ecosystem law = case ecosystem of
     Npm -> Just (name "merge-cold" "tarball")
     PyPI -> Just (name "index-cold" "wheel")
+    Cargo -> Just (name "index-cold" "crate")
     RubyGems -> Nothing
   where
     name cold artifact = case law of

@@ -13,7 +13,8 @@ reference = "/docs/deployment/"
 
 ## Start with the proxy {#minimum}
 
-Run `ecluse proxy` behind an HTTPS endpoint that only your intended clients can reach. Enable an npm mount, a PyPI mount, or both.
+Run `ecluse proxy` behind an HTTPS endpoint that only your intended clients can reach.
+Enable the npm, PyPI, or Cargo mounts your teams need.
 
 A public-only deployment needs no package store, queue, or advisory database. It applies the minimum age and any other rules that do not need advisories.
 
@@ -23,7 +24,7 @@ A public-only deployment needs no package store, queue, or advisory database. It
 | --- | --- | --- |
 | Check advisories | An advisory store and a writable local data directory. | `pilot` to publish databases. Other roles read them. |
 | Serve private packages | A private registry read endpoint and caller credentials. | The proxy. |
-| Mirror public packages | A mirror registry, a private read endpoint that includes it, and a queue. PyPI also needs durable completion state. | The proxy with its embedded worker, or separate `proxy --no-worker` and `mirror` processes. |
+| Mirror public packages | A mirror registry, private reads, and a queue. PyPI and Cargo also need durable completion state. | The proxy with its embedded worker, or separate `proxy --no-worker` and `mirror` processes. |
 | Publish your packages | A publication target and the first-party names you own. | The proxy. |
 | Remove denied stored versions | A supported maintenance backend, separate credentials, and consent for each deletion target. | `dredger`. Start with a preview. |
 
@@ -38,6 +39,10 @@ For a deployment with private packages and mirroring, use three repository roles
 In CodeArtifact, the private read repository uses the other two repositories as upstreams. Do not attach a public registry to it, directly or through another upstream.
 
 Écluse treats private reads as trusted. A public connection there would bypass admission.
+
+Cargo uses separate client views for crates.io replacement and private alternate-registry access.
+Its public view reads completed managed copies from the mirror target, excluding private-only and declared first-party packages.
+The [Cargo protocol contract](@/docs/protocol-support.md#cargo) explains that source boundary.
 
 [Configure the mirror](@/docs/mirror-setup.md) when you are ready to add these stores.
 

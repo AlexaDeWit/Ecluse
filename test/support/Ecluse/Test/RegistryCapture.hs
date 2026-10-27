@@ -36,6 +36,8 @@ import UnliftIO.Exception (tryAny)
 import Ecluse.Core.Ecosystem (Ecosystem (..), parseEcosystem)
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Corpus (readCorpusPins)
+import Ecluse.Test.Corpus.Cargo (cargoVersionKeys)
+import Ecluse.Test.Registry.Cargo.Fixtures (cargoShard)
 import Ecluse.Test.Registry.Npm.Project (parseVersionBytes)
 import Ecluse.Test.Registry.PyPI.Wire qualified as PyPI
 import Ecluse.Test.Registry.RubyGems.Wire qualified as RubyGems
@@ -81,6 +83,7 @@ registryUrl :: Ecosystem -> Text -> Text
 registryUrl eco pkg = case eco of
     Npm -> "https://registry.npmjs.org/" <> T.replace "/" "%2F" pkg
     PyPI -> "https://pypi.org/pypi/" <> pkg <> "/json"
+    Cargo -> "https://index.crates.io/" <> cargoShard pkg
     RubyGems -> "https://rubygems.org/api/v1/versions/" <> pkg <> ".json"
 
 -- The User-Agent every capture fetch identifies itself with.
@@ -112,6 +115,7 @@ parseRegistryVersions :: Ecosystem -> LByteString -> Maybe [Text]
 parseRegistryVersions eco body = case eco of
     Npm -> rightToMaybe (map renderVersion <$> parseVersionBytes (BSL.toStrict body))
     PyPI -> PyPI.projectVersions <$> decode' body
+    Cargo -> rightToMaybe (cargoVersionKeys (BSL.toStrict body))
     RubyGems -> RubyGems.listingVersions <$> decode' body
   where
     decode' :: (FromJSON a) => LByteString -> Maybe a

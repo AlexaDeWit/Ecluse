@@ -43,6 +43,15 @@ spec = do
             pkgCanonical (mkPackageName PyPI Nothing "Flask_Thing.X")
                 `shouldBe` "flask-thing-x"
 
+    describe "Cargo package identity" $ do
+        it "folds ASCII case while retaining native published spelling" $ do
+            let published = mkPackageName Cargo Nothing "Acme_Tools"
+            published `shouldBe` mkPackageName Cargo Nothing "acme_tools"
+            renderPackageName published `shouldBe` "Acme_Tools"
+            pkgCanonical published `shouldBe` "acme_tools"
+        it "keeps hyphen and underscore lookup names distinct" $
+            mkPackageName Cargo Nothing "acme-tools" `shouldNotBe` mkPackageName Cargo Nothing "acme_tools"
+
     describe "isAsciiNameComponent" $ do
         it "accepts an ordinary ASCII component" $
             isAsciiNameComponent "left-pad" `shouldBe` True

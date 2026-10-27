@@ -71,7 +71,7 @@ withPipClient e2e use =
         let cleanEnv =
                 filter ((`notElem` ["HOME", "PIP_CONFIG_FILE"]) . fst) baseEnv
                     <> [("HOME", projectDir), ("PIP_CONFIG_FILE", "/dev/null")]
-        use PipProject{ppDir = projectDir, ppEnv = cleanEnv, ppIndex = index}
+        use PipProject{ppDir = projectDir, ppEnv = cleanEnv, ppIndex = index, ppCertificateBundle = if "https://" `T.isPrefixOf` e2eBaseUrl e2e then Just (clientCertificateBundle e2e) else Nothing}
 
 -- | Install into the project target with @--require-hashes@ checking the advertised digest.
 pipInstallIn :: PipProject -> IO ClientResult
@@ -80,24 +80,28 @@ pipInstallIn proj =
         (ppDir proj)
         (ppEnv proj)
         "python3"
-        [ "-m"
-        , "pip"
-        , "--isolated"
-        , "install"
-        , "--no-cache-dir"
-        , "--disable-pip-version-check"
-        , "--no-input"
-        , "--require-hashes"
-        , -- An sdist runs its own build backend on install, so a wheel is the only
-          -- admissible form here, as npm_config_ignore_scripts is on the npm side.
-          "--only-binary=:all:"
-        , "--index-url"
-        , toString (ppIndex proj)
-        , "--target"
-        , ppDir proj </> targetDir
-        , "--requirement"
-        , ppDir proj </> requirementsFile
-        ]
+        ( [ "-m"
+          , "pip"
+          , "--isolated"
+          , "install"
+          , "--no-cache-dir"
+          , "--disable-pip-version-check"
+          , "--no-input"
+          , "--require-hashes"
+          , -- An sdist executes its build backend. This fixture permits only wheels.
+            "--only-binary=:all:"
+          , "--index-url"
+          , toString (ppIndex proj)
+          , "--target"
+          , ppDir proj </> targetDir
+          , "--requirement"
+          , ppDir proj </> requirementsFile
+          ]
+            <> pipCertificateArguments proj
+        )
+
+pipCertificateArguments :: PipProject -> [String]
+pipCertificateArguments project = maybe [] (\path -> ["--cert", path]) (ppCertificateBundle project)
 
 -- | Install the fixture wheel with its advertised digest and assert its installed metadata exists.
 pipInstallsWheel :: E2E -> [(Text, Text)] -> Expectation
@@ -249,23 +253,25 @@ withInstalledRequirement proxy requirementText use = withPipClient proxy $ \clie
             (ppDir client)
             (ppEnv client)
             "python3"
-            [ "-m"
-            , "pip"
-            , "--isolated"
-            , "--python"
-            , python
-            , "install"
-            , "--no-cache-dir"
-            , "--no-compile"
-            , "--disable-pip-version-check"
-            , "--no-input"
-            , "--only-binary=:all:"
-            , "--index-url"
-            , toString (ppIndex client)
-            , "--report"
-            , report
-            , toString requirementText
-            ]
+            ( [ "-m"
+              , "pip"
+              , "--isolated"
+              , "--python"
+              , python
+              , "install"
+              , "--no-cache-dir"
+              , "--no-compile"
+              , "--disable-pip-version-check"
+              , "--no-input"
+              , "--only-binary=:all:"
+              , "--index-url"
+              , toString (ppIndex client)
+              , "--report"
+              , report
+              , toString requirementText
+              ]
+                <> pipCertificateArguments client
+            )
     scriptNames <- listDirectory (site </> scriptDirectory)
     let scriptRoots = [scriptDirectory </> name | name <- scriptNames, name `notElem` bootstrapScripts]
     reported <- doesFileExist report
@@ -354,6 +360,7 @@ platformInstall attempts proxy project version platform = withPipClient proxy $ 
                    , report
                    , toString (pinned project version)
                    ]
+                <> pipCertificateArguments client
             )
     exists <- doesDirectoryExist destination
     roots <- if exists then listDirectory destination else pure []

@@ -16,6 +16,7 @@ import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS))
 import Network.HTTP.Types (hContentType)
 
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (staticRead)
 import Ecluse.Core.Registry.Request (attachCredential, parseRequestEither)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
@@ -60,13 +61,13 @@ pypiAdapter =
                 ]
         , adapterServe =
             AdapterServe
-                { serveRouter = PyPIRoute.pypiRouter
+                { serveRouter = const PyPIRoute.pypiRouter
                 , serveRoutes = PyPIRoute.pypiRouteSpecs
                 , serveCredential = pypiCredential
                 }
         , adapterMetadata =
             AdapterMetadata
-                { metadataRead = pypiRead
+                { metadataRead = staticRead pypiRead
                 , metadataAssemble = assembleSimpleDocument
                 , metadataSerialise = serialiseSimpleDocument
                 , metadataChargeFactors = pypiChargeFactors
@@ -104,8 +105,8 @@ pypiPublish =
                             , requestBody = RequestBodyBS (publishBodyBytes body)
                             }
                 )
-        , publishUploadClaims = \limits body -> Multipart.uploadClaims limits (publishBodyContentType body) (publishBodyBytes body)
+        , publishUploadClaims = \limits _ _ body -> Multipart.uploadClaims limits (publishBodyContentType body) (publishBodyBytes body)
         , publishCodec = pypiPublishCodec
-        , publishMirrorRequirements = MirrorRequirements (ChargedWorkerRead pypiMirrorRead) DurableVersionState ExplicitUploadEndpoint
+        , publishMirrorRequirements = MirrorRequirements (ChargedWorkerRead (staticRead pypiMirrorRead)) DurableVersionState ExplicitUploadEndpoint
         , publishIdentity = NamedIdentity
         }

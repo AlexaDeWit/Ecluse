@@ -42,6 +42,47 @@ python -m pip install \
 
 Do not configure a public `extra-index-url` as a fallback. It gives the client a route around the policy.
 
+## Cargo clients {#cargo}
+
+Use Cargo 1.74+ and sparse HTTPS. Replace crates.io with the public view in `.cargo/config.toml`:
+
+```toml
+[source.crates-io]
+replace-with = "ecluse"
+
+[source.ecluse]
+registry = "sparse+https://packages.example.com/cargo/"
+```
+
+If the replacement requires authentication, also name that index for Cargo's credential provider:
+
+```toml
+[registries.ecluse]
+index = "sparse+https://packages.example.com/cargo/"
+credential-provider = "cargo:token"
+```
+
+For private dependencies and publication, configure the alternate registry separately:
+
+```toml
+[registries.ecluse-private]
+index = "sparse+https://packages.example.com/cargo/private/"
+credential-provider = "cargo:token"
+```
+
+Set `registry = "ecluse-private"` on private dependencies.
+Publish declared first-party crates with `cargo publish --registry ecluse-private`.
+Keep the trailing slash on sparse index URLs.
+Configure a credential provider for each named authenticated registry, including a replacement source when it requires authentication.
+Use your approved provider or Cargo's token store. Keep tokens out of committed files.
+Cargo sends the token directly in `Authorization`, without a Bearer prefix.
+
+The public view contains only crates.io packages and completed managed mirrors.
+It cannot supply private-only packages or declared first-party names.
+The private view never falls back to crates.io.
+Cargo can keep the historical crates.io GitHub registry URL in its lockfile while fetching through sparse source replacement.
+Verify actual archive requests with fresh client state. A lockfile identity alone does not establish the network path.
+
 ## Where credentials come from {#credentials}
 
 Use the same registry credential the caller would use for the private repository. For CodeArtifact, the caller obtains a short-lived token through their AWS identity.

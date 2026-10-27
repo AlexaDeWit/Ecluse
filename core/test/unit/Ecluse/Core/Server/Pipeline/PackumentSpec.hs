@@ -392,6 +392,7 @@ namedReplies =
         , packumentOk = \_ _ -> "ok"
         , packumentNotModified = const "not-modified"
         , packumentUnauthorised = \_ _ -> "unauthorised"
+        , packumentPrivateRefused = \_ _ _ -> "private-refused"
         , packumentForbidden = \_ _ -> "forbidden"
         , packumentNotFound = \_ _ -> "not-found"
         , packumentNotAcceptable = \_ _ -> "not-acceptable"

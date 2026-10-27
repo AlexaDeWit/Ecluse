@@ -79,7 +79,7 @@ companionValue (MetadataDigests values) = toJSON values
 withMirrorEnvelope :: Object -> MirrorInventory -> IO MirrorInventory
 withMirrorEnvelope envelope inventory = case inventoryReadData inventory of
     PyPIMirrorRead document -> expectRight (restoreMirrorInventory (inventoryDetails inventory) (PyPIMirrorRead (simpleDocument envelope (simpleFiles document))))
-    NpmMirrorRead _ -> fail "expected PyPI inventory"
+    _ -> fail "expected PyPI inventory"
 
 -- | A bounded managed view with a supplied reader and no write or companion capabilities.
 mirrorViewWith :: StateTarget -> (PackageName -> Maybe StateRevision -> IO (Either MirrorStateFault StateRead)) -> IO MirrorView

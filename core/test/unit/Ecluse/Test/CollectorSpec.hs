@@ -98,6 +98,61 @@ spec = do
             answers (printedSpan "HTTP GET" fetch) `shouldBe` []
             answers "" `shouldBe` []
 
+    describe "privateLookupAnswers" $ do
+        it "keeps serving misses and successes while excluding worker verification" $
+            lookupAnswers
+                ( contextualSpan "serving-request" "Server" servingTrace "" []
+                    <> contextualSpan "HTTP GET" "Client" servingTrace "1111111111111111" (lookupFetch <> [("http.status_code", "Int(404)")])
+                    <> contextualSpan "HTTP GET" "Client" servingTrace "1111111111111111" (lookupFetch <> [("http.status_code", "Int(404)")])
+                    <> contextualSpan "mirror-job" "Consumer" workerTrace "" []
+                    <> contextualSpan "HTTP GET" "Client" workerTrace "2222222222222222" (lookupFetch <> [("http.status_code", "Int(404)")])
+                    <> contextualSpan "HTTP GET" "Client" workerTrace "2222222222222222" (lookupFetch <> [("http.status_code", "Int(200)")])
+                    <> contextualSpan "HTTP GET" "Client" servingTrace "1111111111111111" (lookupFetch <> [("http.status_code", "Int(200)")])
+                )
+                `shouldBe` [IntValue 404, IntValue 404, IntValue 200]
+        it "requires a server root with the same valid trace ID" $
+            for_ ["", contextualSpan "request" "Server" workerTrace "" [], contextualSpan "request" "Server" servingTrace "1111111111111111" []] $ \root ->
+                lookupAnswers (root <> contextualSpan "HTTP GET" "Client" servingTrace "1111111111111111" (lookupFetch <> [("http.status_code", "Int(200)")])) `shouldBe` []
+        it "rejects missing, malformed and zero trace IDs" $
+            for_ ["", "abc", T.replicate 32 "z", T.replicate 32 "0"] $ \traceKey ->
+                lookupAnswers
+                    ( contextualSpan "request" "Server" traceKey "" []
+                        <> contextualSpan "HTTP GET" "Client" traceKey "1111111111111111" (lookupFetch <> [("http.status_code", "Int(200)")])
+                    )
+                    `shouldBe` []
+        it "does not treat a server or consumer span as the outbound request" $
+            for_ ["Server", "Consumer", "Internal", ""] $ \kind ->
+                lookupAnswers
+                    ( contextualSpan "request" "Server" servingTrace "" []
+                        <> contextualSpan "HTTP GET" kind servingTrace "1111111111111111" (lookupFetch <> [("http.status_code", "Int(200)")])
+                    )
+                    `shouldBe` []
+        it "excludes traces that also contain consumer work" $
+            lookupAnswers
+                ( contextualSpan "request" "Server" servingTrace "" []
+                    <> contextualSpan "mirror-job" "Consumer" servingTrace "" []
+                    <> contextualSpan "HTTP GET" "Client" servingTrace "1111111111111111" (lookupFetch <> [("http.status_code", "Int(200)")])
+                )
+                `shouldBe` []
+        for_ [("http.host", "Str(public)"), ("http.method", "Str(POST)"), ("http.target", "Str(/ec/lu/another-crate)")] $ \wrong ->
+            it ("rejects lookup evidence with wrong " <> toString (fst wrong)) $
+                lookupAnswers
+                    ( contextualSpan "request" "Server" servingTrace "" []
+                        <> contextualSpan "HTTP GET" "Client" servingTrace "1111111111111111" (wrong : filter ((/= fst wrong) . fst) lookupFetch <> [("http.status_code", "Int(200)")])
+                    )
+                    `shouldBe` []
+        it "does not borrow trace context from events or links" $
+            for_ ["Events:", "Links:"] $ \boundary ->
+                lookupAnswers
+                    ( contextualSpan "request" "Server" servingTrace "" []
+                        <> printedSpan "HTTP GET" (lookupFetch <> [("http.status_code", "Int(200)")])
+                        <> boundary
+                        <> "\n     Trace ID: "
+                        <> servingTrace
+                        <> "\n     Kind: Client\n"
+                    )
+                    `shouldBe` []
+
 coordinate :: [(Text, Text)]
 coordinate = [("ecluse.package", "Str(pkg)"), ("ecluse.version", "Str(1.0.0)")]
 
@@ -108,8 +163,11 @@ fetch :: [(Text, Text)]
 fetch = [("http.host", "Str(mirror)"), ("http.method", "Str(GET)"), ("http.target", "Str(/pkg/-/pkg-1.0.0.tgz)")]
 
 printedSpan :: Text -> [(Text, Text)] -> Text
-printedSpan name attributes =
-    "Span #0\n     Name: "
+printedSpan name attributes = "Span #0\n" <> spanBody name attributes
+
+spanBody :: Text -> [(Text, Text)] -> Text
+spanBody name attributes =
+    "     Name: "
         <> name
         <> "\nAttributes:\n"
         <> T.concat ["     -> " <> key <> ": " <> value <> "\n" | (key, value) <- attributes]
@@ -122,3 +180,17 @@ matches = any (spanFor "pkg" "1.0.0" "wanted") . exportedSpans
 
 answers :: Text -> [AttributeValue]
 answers = privateArtifactAnswers "mirror" "/pkg/-/pkg-1.0.0.tgz" . exportedSpans
+
+lookupFetch :: [(Text, Text)]
+lookupFetch = [("http.host", "Str(mirror)"), ("http.method", "Str(GET)"), ("http.target", "Str(/ec/lu/ecluse-e2e-macro)")]
+
+servingTrace, workerTrace :: Text
+servingTrace = T.replicate 32 "a"
+workerTrace = T.replicate 32 "b"
+
+contextualSpan :: Text -> Text -> Text -> Text -> [(Text, Text)] -> Text
+contextualSpan name kind traceKey parent attributes =
+    "Span #0\n     Trace ID: " <> traceKey <> "\n     Parent ID: " <> parent <> "\n     Kind: " <> kind <> "\n" <> spanBody name attributes
+
+lookupAnswers :: Text -> [AttributeValue]
+lookupAnswers = privateLookupAnswers "mirror" "/ec/lu/ecluse-e2e-macro"

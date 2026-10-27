@@ -13,6 +13,7 @@ module Ecluse.Test.Contract.Telemetry (
     CollectorDriver (..),
     MirrorTelemetryDriver (..),
     MirrorTelemetryFixture (..),
+    PrivateFetchKind (..),
     mirrorTelemetryContract,
     TelemetryIdentity (..),
     exportsSignals,
@@ -93,6 +94,9 @@ data MirrorTelemetryDriver = MirrorTelemetryDriver
     , telemetryAwaitVersion :: Text -> Text -> IO [Text]
     }
 
+-- | A native private miss occurs at an archive or at the index needed to locate it.
+data PrivateFetchKind = ConventionalArtifact | IndexedLookup
+
 -- | Independent coordinates for worker spans and private miss-to-hit observations.
 data MirrorTelemetryFixture = MirrorTelemetryFixture
     { mirrorTelemetryTraffic :: TrafficDriver
@@ -104,6 +108,7 @@ data MirrorTelemetryFixture = MirrorTelemetryFixture
     , mirrorTelemetryPrivateVersion :: Text
     , mirrorTelemetryHost :: Text
     , mirrorTelemetryTarget :: Text
+    , mirrorTelemetryPrivateFetch :: PrivateFetchKind
     }
 
 -- | Write-capable ecosystems must correlate worker activity and subsequent private fetches.
@@ -118,6 +123,7 @@ mirrorTelemetryContract prefix = do
             (mirrorTelemetryCollector fixture)
     it (caseLabel (prefix <> "/private-fetch") "records the private miss and subsequent success") $ \fixture ->
         exportsPrivateFetch
+            (mirrorTelemetryPrivateFetch fixture)
             (mirrorTelemetryPrivatePackage fixture)
             (mirrorTelemetryPrivateVersion fixture)
             (mirrorTelemetryHost fixture)
@@ -157,8 +163,8 @@ exportsDomainSpans package version traffic mirror collector = do
             ["ecluse.rule.eval", "ecluse.mirror.enqueue", "ecluse.mirror.job"]
 
 -- | A fresh second install records a successful private fetch after the initial miss.
-exportsPrivateFetch :: Text -> Text -> Text -> Text -> TrafficDriver -> MirrorTelemetryDriver -> CollectorDriver -> Expectation
-exportsPrivateFetch package version host target traffic mirror collector = do
+exportsPrivateFetch :: PrivateFetchKind -> Text -> Text -> Text -> Text -> TrafficDriver -> MirrorTelemetryDriver -> CollectorDriver -> Expectation
+exportsPrivateFetch kind package version host target traffic mirror collector = do
     versions <- telemetryVersions mirror package
     (version `elem` versions) `shouldBe` False
     void (telemetryInstall traffic package >>= shouldSucceed)
@@ -170,7 +176,9 @@ exportsPrivateFetch package version host target traffic mirror collector = do
     answered <- telemetryCollected collector (elem (IntValue 200) . answers) 80
     ordNub (answers answered) `shouldBe` [IntValue 404, IntValue 200]
   where
-    answers = privateArtifactAnswers host target . exportedSpans
+    answers = case kind of
+        ConventionalArtifact -> privateArtifactAnswers host target . exportedSpans
+        IndexedLookup -> privateLookupAnswers host target
 
 -- | Logging and client service remain available without a collector.
 logsWithoutCollector :: Text -> TrafficDriver -> LogDriver -> Expectation

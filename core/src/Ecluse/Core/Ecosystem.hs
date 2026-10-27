@@ -2,14 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The ecosystem tag, the shared vocabulary the rest of the system dispatches on. The
-package vocabulary keys a @PackageName@ by it, the version engine selects a per-ecosystem
-parser by it, the registry adapters dispatch on it, and configuration keys a mount by it.
-
-It sits in its own module to break the import cycle between "Ecluse.Core.Package" (whose
-@PackageDetails@ holds a @Version@) and "Ecluse.Core.Version" (whose parsers dispatch on
-the ecosystem).
--}
+-- | Ecosystem tags shared by package identity, version parsing and mount configuration.
 module Ecluse.Core.Ecosystem (
     Ecosystem (..),
     ecosystemName,
@@ -27,6 +20,7 @@ data Ecosystem
     = Npm
     | PyPI
     | RubyGems
+    | Cargo
     deriving stock (Eq, Generic, Ord, Show)
 
 instance Universe Ecosystem where universe = universeGeneric
@@ -37,35 +31,17 @@ instance WireVocab Ecosystem where
         (Npm, "npm")
             :| [ (PyPI, "pypi")
                , (RubyGems, "rubygems")
+               , (Cargo, "cargo")
                ]
 
-{- | The canonical wire\/config name of an ecosystem: the key an operator writes a
-@mounts@ object under, and the inverse of 'parseEcosystem'.
-
->>> ecosystemName Npm
-"npm"
--}
+-- | The canonical wire and configuration name of an ecosystem.
 ecosystemName :: Ecosystem -> Text
 ecosystemName = renderWire
 
-{- | Parse an 'Ecosystem' from its wire name, 'Nothing' for one the build does not
-serve. The config decoder reads the document's @mounts@ keys with it, and rejects an
-unknown key loudly rather than skipping it (see "Ecluse.Config").
-
->>> parseEcosystem "npm"
-Just Npm
-
->>> parseEcosystem "cargo"
-Nothing
--}
+-- | Parse the canonical wire name, refusing an unknown ecosystem.
 parseEcosystem :: Text -> Maybe Ecosystem
 parseEcosystem = lookupWire
 
-{- | The path prefix a mount serves under, derived from its ecosystem and never
-operator-configured, so it can neither collide nor be mistyped. A root mount is unrepresentable.
-
->>> prefixFor Npm
-"npm" :| []
--}
+-- | Derive the single mount segment from the ecosystem name.
 prefixFor :: Ecosystem -> NonEmpty Text
 prefixFor eco = ecosystemName eco :| []

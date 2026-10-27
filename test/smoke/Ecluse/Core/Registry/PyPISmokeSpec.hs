@@ -17,7 +17,7 @@ import Ecluse.Core.Registry (FetchFault (FetchTransport), RegistryResponse (resp
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl), AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, adapterMetadata))
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
-import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareManifest)
 import Ecluse.Core.Registry.Origin (originClient)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), Limits (progressFloor), defaultLimits)
@@ -41,7 +41,7 @@ spec = describe "live PyPI registry protocol" $
             let versionKey = renderVersion expectedVersion
                 name = mkPackageName PyPI Nothing "sampleproject"
                 origin = originClient defaultLimits client base Nothing
-            info <- liveMetadata "sampleproject" (fetchManifest (metadataRead (adapterMetadata pypiAdapter)) passthroughTracingPort origin name)
+            info <- liveMetadata "sampleproject" (prepareManifest (metadataRead (adapterMetadata pypiAdapter)) passthroughTracingPort origin name)
             version <- maybe (fail "live index omitted sampleproject 4.0.0") pure (Map.lookup versionKey (infoVersions info))
             pkgName version `shouldBe` name
             renderVersion (pkgVersion version) `shouldBe` versionKey

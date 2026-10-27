@@ -1,0 +1,30 @@
+[package]
+name = "ecluse-e2e-root"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT"
+description = "Owned Cargo registry contract fixture"
+readme = "README.md"
+authors = ["Ecluse contributors"]
+
+[dependencies]
+renamed_leaf = { package = "ecluse-e2e-leaf", version = "^1.0", default-features = false, features = ["base"] }
+ecluse-e2e-left = "^1.0"
+ecluse-e2e-right = "^1.0"
+ecluse-e2e-extra = { version = "^1.0", optional = true, default-features = false }
+ecluse-e2e-macro = "^1.0"
+
+[build-dependencies]
+ecluse-e2e-build = "^1.0"
+
+[target.'cfg(all(unix,any(unix,windows,)))'.dependencies]
+ecluse-e2e-unix = "^1.0"
+
+[target.'cfg(windows)'.dependencies]
+ecluse-e2e-windows = "^1.0"
+
+[features]
+default = ["optional"]
+optional = ["dep:ecluse-e2e-extra", "ecluse-e2e-extra?/extra"]
+forwarded = ["renamed_leaf/extra"]

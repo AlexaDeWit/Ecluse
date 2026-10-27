@@ -13,6 +13,7 @@ module Ecluse.Core.Server.Context (
 
     -- * Packument-serve dependencies
     PackumentDeps (..),
+    ReadSourceSelection (..),
     pdPrivateBaseUrl,
     pdPublicBaseUrl,
     pdPrivateBase,
@@ -60,6 +61,7 @@ import Ecluse.Core.Registry.Exchange.Types (ExchangeClient)
 import Ecluse.Core.Registry.Public (PublicControl)
 import Ecluse.Core.Registry.Request (BaseRequest, CredentialMapping)
 import Ecluse.Core.Rules (PreparedRule)
+import Ecluse.Core.Rules.Install (InstallEvidenceProvider)
 import Ecluse.Core.Rules.Outage (AdmissionIdentity)
 import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, tarballHostAllowed, thgAllowlist, thgEcosystemHosts)
 import Ecluse.Core.Security.Egress (RegistryUrl)
@@ -106,16 +108,27 @@ data ServeRuntime = ServeRuntime
     -- ^ The tracing port the serve path opens its hand-added domain spans through.
     }
 
+-- | Which origins may contribute to one served view.
+data ReadSourceSelection
+    = MergePrivateAndPublic
+    | ManagedMirrorAndPublic
+    | PrivateOnly
+    deriving stock (Eq, Show)
+
 -- | Mount inputs shared by packument and tarball handlers, resolved at boot.
 data PackumentDeps = PackumentDeps
     { pdUpstreams :: MountUpstreams
     -- ^ Upstreams bound to their derived host gate, so their authorities cannot diverge.
+    , pdReadSourceSelection :: ReadSourceSelection
+    -- ^ Restrict origin reads and managed mirror contributions for this view.
     , pdMirrorState :: Maybe MirrorView
     -- ^ Source-only state, validated after each caller authorises the private read.
     , pdFirstParty :: PackageName -> Bool
     -- ^ Whether this deployment owns the name, derived once at the composition root and deny by default. Only the private upstream serves it, and a private miss is @404@.
     , pdMountBaseUrl :: Text
     -- ^ The mount's external base URL, under which served artifact URLs route back through the gate.
+    , pdInstallEvidence :: Maybe InstallEvidenceProvider
+    -- ^ The native provider resolves unknown facts only at a reached execution rule.
     , pdRules :: [PreparedRule]
     -- ^ Rules prepared at boot and evaluated against every public version.
     , pdAdditionalBlockedRanges :: [IPRange]
@@ -181,7 +194,9 @@ tarballHostHonoured origin deps =
 
 -- | First-party publish inputs. Their presence enables the mount's publish route.
 data PublishDeps = PublishDeps
-    { pubTargetUrl :: RegistryUrl
+    { pubReadUrl :: RegistryUrl
+    -- ^ The origin for credential-scoped native publication discovery.
+    , pubTargetUrl :: RegistryUrl
     -- ^ The https-only publication target a publish is relayed to, with the package path appended.
     , pubAllowed :: PackageName -> Bool
     -- ^ Whether this package may publish here, checked before any upstream write. It is 'pdFirstParty'.

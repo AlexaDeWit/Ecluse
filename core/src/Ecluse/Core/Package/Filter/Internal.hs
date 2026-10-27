@@ -19,6 +19,7 @@ module Ecluse.Core.Package.Filter.Internal (
     AuthorityVerdict,
     noAuthorityVerdict,
     locateArtifact,
+    checkArtifactAddress,
 
     -- * Checking an artifact
     ArtifactRefusal (..),
@@ -120,13 +121,24 @@ locateArtifact origin previous url = case beforeAuthority of
 
     namedFile candidate = maybeToRight (LocationRefusal "artifact URL has no safe filename" candidate) (urlFilename candidate)
 
-    normaliseScheme = case originHttpsHost origin of
-        Nothing -> Right url
-        Just upstreamHost -> bimap (`LocationRefusal` url) registryUrlText (resolveTarballUrl upstreamHost url)
+    normaliseScheme = normaliseAddress origin url
 
     -- Trimming that changes nothing leaves the name already checked.
     trimmedNamesFile = trimmed == url || isJust (urlFilename trimmed)
     trimmed = T.strip url
+
+-- | Check scheme and authority after a native protocol binds its own typed artifact coordinate.
+checkArtifactAddress :: ArtifactOrigin -> Text -> Either LocationRefusal Text
+checkArtifactAddress origin url = do
+    normalised <- normaliseAddress origin url
+    case authorityVerdict origin noAuthorityVerdict (authorityText normalised) of
+        AuthorityVerdict _ True -> Right normalised
+        _ -> Left (LocationRefusal "artifact authority is neither the serving upstream nor a declared artifact host" normalised)
+
+normaliseAddress :: ArtifactOrigin -> Text -> Either LocationRefusal Text
+normaliseAddress origin url = case originHttpsHost origin of
+    Nothing -> Right url
+    Just upstreamHost -> bimap (`LocationRefusal` url) registryUrlText (resolveTarballUrl upstreamHost url)
 
 -- The previous verdict when it decided the same authority text, otherwise the verdict for this one.
 authorityVerdict :: ArtifactOrigin -> AuthorityVerdict -> AuthorityText -> AuthorityVerdict

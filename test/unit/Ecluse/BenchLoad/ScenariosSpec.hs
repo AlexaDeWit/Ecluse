@@ -11,7 +11,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.BenchLoad.Floors (Calibration (calNpmLatency, calOperatingPoint, calPypiLatency, calRuns), Enforcement (Enforced), Floors (floorsByShape, floorsCalibration), LatencyCeiling (lcCeilingMs), Pass (ConcurrencyOne, Loaded), RunFacts (..), RunnerReading (RunnerReading), Trigger (Scheduled), enforce, loadFloors, unheldViolations)
+import Ecluse.BenchLoad.Floors (Calibration (calCargoLatency, calNpmLatency, calOperatingPoint, calPypiLatency, calRuns), Enforcement (Enforced), Floors (floorsByShape, floorsCalibration), LatencyCeiling (lcCeilingMs), Pass (ConcurrencyOne, Loaded), RunFacts (..), RunnerReading (RunnerReading), Trigger (Scheduled), enforce, loadFloors, unheldViolations)
 import Ecluse.BenchLoad.Harness (Scenario (scenarioName), UpstreamFixture (fixtureEcosystem, fixtureScenarios), defaultLoadKnobs, operatingPoint)
 import Ecluse.BenchLoad.Pod (PodShape (Unlimited), renderPodShape, scheduledPodShapes)
 import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScenario, fixtures, scenariosForSelection)
@@ -48,7 +48,7 @@ spec = do
                     map scenarioName (scenariosForSelection Nothing fixture) `shouldSatisfy` notElem name
                     map scenarioName (scenariosForSelection (Just [key]) fixture) `shouldSatisfy` elem name
         it "removes only the approved pass observations from the full grid" $
-            sum (map (Set.size . checkedCounts) scheduledPodShapes) `shouldBe` 332
+            sum (map (Set.size . checkedCounts) scheduledPodShapes) `shouldBe` 486
 
     describe "checkedCounts" $ do
         it "checks in-process work only under the unlimited shape, the one shape that runs it" $ do
@@ -84,12 +84,16 @@ spec = do
                                         , rfRunner = RunnerReading (Just "true") (Just "Linux") (Just "ARM64")
                                         , rfShape = shape
                                         , rfNpmLatencyMs = lcCeilingMs (calNpmLatency (floorsCalibration floors))
+                                        , rfCargoLatencyMs = lcCeilingMs <$> calCargoLatency (floorsCalibration floors)
                                         , rfPypiLatencyMs = lcCeilingMs pypiBound
                                         , rfConditions = measurementConditionVersion
                                         }
                                 enforcement = enforce floors facts
                             enforcement `shouldBe` Enforced shape (Map.findWithDefault Map.empty shape (floorsByShape floors))
                             unheldViolations Scheduled enforcement `shouldBe` []
+        it "records an independent native Cargo latency ceiling" $
+            withCommitted $
+                \floors -> calCargoLatency (floorsCalibration floors) `shouldSatisfy` isJust
         it "record at least the ten runs they were calibrated from" $
             withCommitted $ \floors ->
                 length (calRuns (floorsCalibration floors)) `shouldSatisfy` (>= 10)

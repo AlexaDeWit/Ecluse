@@ -16,7 +16,7 @@ import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Ecluse.Core.Registry.PyPI.Wire (SimpleIndex (..), simpleIndexMediaType)
-import Ecluse.Test.Corpus (cpName, pypiCorpusPackages)
+import Ecluse.Test.Corpus (cargoCorpusPackages, cpName, pypiCorpusPackages)
 import GHC.Clock (getMonotonicTime)
 import GHC.Conc (getNumCapabilities)
 import Network.HTTP.Client (Manager, newManager)
@@ -28,6 +28,7 @@ import System.Process.Typed (ExitCode (ExitFailure, ExitSuccess), proc, readProc
 import UnliftIO (bracket_)
 import UnliftIO.Exception (tryAny)
 
+import Ecluse.BenchLoad.Cargo (cargoLoadNotes)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Evidence (loadEvidence)
 import Ecluse.BenchLoad.Fixture (probeBaseline)
@@ -70,7 +71,9 @@ import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
 import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScenario, fixtures, runsUnder, scenariosForSelection)
 import Ecluse.BenchLoad.Selection (fixtureSection, measurementConditionVersion, scenarioKey)
 import Ecluse.BenchLoad.Verdict (RunEvidence, runVerdict)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Test.Registry.Cargo.Fixtures (cargoShard)
+import Ecluse.Test.Registry.Cargo.Reference (IndexLine (indexValue), referenceIndex)
 import Ecluse.Test.RegistryCapture (catBenchPins, fetchPackumentBody, loadCatalogue)
 
 -- | Run the passes, serve as a scenario's proxy, or run one ecosystem-qualified child scenario.
@@ -129,16 +132,21 @@ runPasses environment knobs processors shape profile selected = do
     floors <- either benchFail pure =<< loadFloors
     npmBaseline <- probePublicRtt Npm knobs
     pypiBaseline <- probePublicRtt PyPI knobs
+    cargoBaseline <- probePublicRtt Cargo knobs
     self <- getExecutablePath
     capabilities <- getNumCapabilities
     -- One source for what each fixture injects, so the latency compared is the latency injected.
-    let baselineOf eco = if eco == PyPI then pypiBaseline else npmBaseline
+    let baselineOf eco = case eco of
+            PyPI -> pypiBaseline
+            Cargo -> cargoBaseline
+            _ -> npmBaseline
         facts =
             RunFacts
                 { rfSettings = operatingPoint knobs selected (patternOverridesIn environment)
                 , rfRunner = runnerIn environment
                 , rfShape = shape
                 , rfNpmLatencyMs = baselineInjectedMs (baselineOf Npm)
+                , rfCargoLatencyMs = Just (baselineInjectedMs (baselineOf Cargo))
                 , rfPypiLatencyMs = baselineInjectedMs (baselineOf PyPI)
                 , rfConditions = measurementConditionVersion
                 }
@@ -161,12 +169,14 @@ measurementConditions setup facts =
     Map.fromList
         [ ("measurementConditions", measurementConditionVersion)
         , ("npmBaseline", show (setupBaselineOf setup Npm))
+        , ("cargoBaseline", show (setupBaselineOf setup Cargo))
         , ("pypiBaseline", show (setupBaselineOf setup PyPI))
         , ("podShape", renderPodShape (setupShape setup))
         , ("operatingPoint", show (rfSettings facts))
         , ("capabilities", show (setupCapabilities setup))
         , ("processors", show (setupProcessors setup))
         , ("npmLatencyMs", show (baselineInjectedMs (setupBaselineOf setup Npm)))
+        , ("cargoLatencyMs", show (baselineInjectedMs (setupBaselineOf setup Cargo)))
         , ("pypiLatencyMs", show (baselineInjectedMs (setupBaselineOf setup PyPI)))
         , ("durationSeconds", show (lkDurationSeconds knobs))
         , ("concurrency", show (lkConcurrency knobs))
@@ -207,6 +217,7 @@ fixturePasses setup fixture
             body =
                 fixtureSection eco $
                     [pypiLoadNotes knobs | eco == PyPI]
+                        <> [cargoLoadNotes knobs | eco == Cargo]
                         <> [renderReports section]
                         <> [renderServiceTime baseline (sectionConcurrencyOne section) | everyPass]
                         <> [renderLoadSaturation (sectionConcurrencyOne section) (filter ((`elem` map keyOf serviceTime) . srName) (sectionLoaded section)) | everyPass]
@@ -316,6 +327,7 @@ probePublicRtt ecosystem knobs = do
             names <- case ecosystem of
                 Npm -> Map.keys . catBenchPins <$> loadCatalogue
                 PyPI -> pure (map cpName pypiCorpusPackages)
+                Cargo -> pure (map cpName cargoCorpusPackages)
                 _ -> pure []
             manager <- newManager tlsManagerSettings
             probeBaseline configured True names (timeFetch manager)
@@ -326,6 +338,7 @@ probePublicRtt ecosystem knobs = do
         t0 <- getMonotonicTime
         body <- case ecosystem of
             PyPI -> fetchPublicIndex manager name
+            Cargo -> fetchCargoIndex manager name
             _ -> fetchPackumentBody manager ecosystem name
         t1 <- getMonotonicTime
         pure (if isJust body then Just ((t1 - t0) * 1_000) else Nothing)
@@ -340,6 +353,17 @@ fetchPublicIndex manager name = do
                 Right index -> siName index == name && not (null (siFiles index)) && null (siInvalidEntries index)
                 Left _ -> False
         pure [bytes | HTTP.responseStatus response == status200, List.lookup hContentType (HTTP.responseHeaders response) == Just simpleIndexMediaType, native]
+    pure (either (const Nothing) listToMaybe result)
+
+fetchCargoIndex :: Manager -> Text -> IO (Maybe LByteString)
+fetchCargoIndex manager name = do
+    result <- tryAny $ do
+        request <- HTTP.parseRequest (toString ("https://index.crates.io/" <> cargoShard name))
+        response <- HTTP.httpLbs request{HTTP.requestHeaders = [("Accept", "text/plain")], HTTP.responseTimeout = HTTP.responseTimeoutMicro (30 * 1_000 * 1_000)} manager
+        let bytes = HTTP.responseBody response
+            rows = referenceIndex (toStrict bytes)
+            native = not (null rows) && all (isRight . indexValue) rows
+        pure [bytes | HTTP.responseStatus response == status200, native]
     pure (either (const Nothing) listToMaybe result)
 
 probeEnabled :: IO Bool

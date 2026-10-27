@@ -56,7 +56,7 @@ import Data.Universe.Generic (universeGeneric)
 
 import Ecluse.BenchLoad.Pod (PodShape, ProxyTuning (..), noTuning, parsePodShape, renderPodShape)
 import Ecluse.BenchLoad.Selection (measurementConditionVersion)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI), ecosystemName)
 
 -- | Which of a scenario's runs a count of successes comes from.
 data Pass
@@ -230,6 +230,7 @@ data Calibration = Calibration
     , calRuns :: NonEmpty CalibrationRun
     , calOperatingPoint :: OperatingPoint
     , calNpmLatency :: LatencyCeiling
+    , calCargoLatency :: Maybe LatencyCeiling
     , calPypiLatency :: Maybe LatencyCeiling
     -- ^ Legacy calibration predates the native PyPI probe.
     , calConditions :: Text
@@ -248,6 +249,7 @@ instance FromJSON Calibration where
                 <*> o .: "runs"
                 <*> o .: "operatingPoint"
                 <*> o .: "npmInjectedLatency"
+                <*> o .:? "cargoInjectedLatency"
                 <*> o .:? "pypiInjectedLatency"
                 <*> o .:? "measurementConditions" .!= "legacy-v1"
                 <*> o .:? "retainedFloorConditions" .!= mempty
@@ -273,10 +275,12 @@ instance FromJSON Floors where
         calibration <- o .: "calibration"
         shapes <- o .: "floors"
         byShape <- Map.fromList <$> traverse parseShape (Map.toList shapes)
-        when (any ((/= Map.keysSet byShape) . Map.keysSet . lcHighestMs) (calNpmLatency calibration : maybeToList (calPypiLatency calibration))) $
+        when (any ((/= Map.keysSet byShape) . Map.keysSet . lcHighestMs) (calNpmLatency calibration : maybeToList (calPypiLatency calibration) <> maybeToList (calCargoLatency calibration))) $
             fail "the latency ceiling must record a highest latency for each pod shape the floors hold, and for no other"
         unless (all (`elem` map fst (concatMap Map.keys (Map.elems byShape))) (Map.keys (calRetainedConditions calibration))) $
             fail "retained measurement conditions name a scenario without floors"
+        when (any (any (T.isPrefixOf "cargo/" . fst) . Map.keys) (Map.elems byShape) && isNothing (calCargoLatency calibration)) $
+            fail "Cargo floors require an independently measured native latency ceiling"
         pure (Floors calibration byShape)
       where
         parseShape :: (Text, Map Text (Map Text Int)) -> Parser (PodShape, Map FloorKey Int)
@@ -331,6 +335,7 @@ data RunFacts = RunFacts
     , rfShape :: PodShape
     , rfNpmLatencyMs :: Int
     -- ^ The native measured round trip or declared configured fallback.
+    , rfCargoLatencyMs :: Maybe Int
     , rfPypiLatencyMs :: Int
     , rfConditions :: Text
     }
@@ -350,6 +355,10 @@ data Unheld
       LatencyAboveCeiling Ecosystem Int Int
     | -- | The run uses different measurement conditions from the retained floors.
       ConditionsDiffer Text Text
+    | -- | Calibration supplies no ceiling for a measured native fixture.
+      MissingNativeLatency Ecosystem
+    | -- | A calibrated native fixture supplies no latency observation.
+      MissingNativeObservation Ecosystem
     deriving stock (Eq, Show)
 
 -- | Whether a run is held to the floors.
@@ -369,9 +378,11 @@ enforce floors facts = case (Map.lookup shape (floorsByShape floors), reasons) o
   where
     shape = rfShape facts
     calibration = floorsCalibration floors
-    ceilings = [(Npm, rfNpmLatencyMs facts, calNpmLatency calibration)] <> [(PyPI, rfPypiLatencyMs facts, latencyBound) | latencyBound <- maybeToList (calPypiLatency calibration)]
+    ceilings = [(Npm, rfNpmLatencyMs facts, calNpmLatency calibration)] <> [(PyPI, rfPypiLatencyMs facts, latencyBound) | latencyBound <- maybeToList (calPypiLatency calibration)] <> [(Cargo, injected, latencyBound) | injected <- maybeToList (rfCargoLatencyMs facts), latencyBound <- maybeToList (calCargoLatency calibration)]
     reasons =
-        [SettingsDiffer settings | Just settings <- [nonEmpty (differingSettings (calOperatingPoint calibration) (rfSettings facts))]]
+        [MissingNativeLatency Cargo | isJust (rfCargoLatencyMs facts), isNothing (calCargoLatency calibration)]
+            <> [MissingNativeObservation Cargo | isNothing (rfCargoLatencyMs facts), isJust (calCargoLatency calibration)]
+            <> [SettingsDiffer settings | Just settings <- [nonEmpty (differingSettings (calOperatingPoint calibration) (rfSettings facts))]]
             <> [OtherRunner (calRunner calibration) (calRunnerKind calibration) (rfRunner facts) | rfRunner facts /= readingOn (calRunnerKind calibration)]
             <> [ConditionsDiffer (calConditions calibration) (rfConditions facts) | calConditions calibration /= rfConditions facts]
             <> [LatencyAboveCeiling ecosystem injected most | (ecosystem, injected, latencyBound) <- ceilings, let most = lcCeilingMs latencyBound, injected > most]
@@ -404,10 +415,16 @@ staleFloorViolations enforcement checked = case enforcement of
 -- | Fail a scheduled configuration mismatch. A network latency breach keeps it unheld without failing it.
 unheldViolations :: Trigger -> Enforcement -> [Text]
 unheldViolations trigger enforcement = case (trigger, enforcement) of
+    (_, NotHeld reasons) | missing@(_ : _) <- mapMaybe missingNative (toList reasons) -> missing
     (Scheduled, NotHeld reasons)
         | faults@(_ : _) <- mapMaybe configurationFault (toList reasons) ->
             ["a scheduled run must be held to the success floors, and this one is not: " <> T.intercalate ", and " faults]
     _ -> []
+  where
+    missingNative reason = case reason of
+        MissingNativeLatency _ -> Just (describeUnheld reason)
+        MissingNativeObservation _ -> Just (describeUnheld reason)
+        _ -> Nothing
 
 -- A reason as a fault of the run's configuration, which latency above the ceiling is not.
 configurationFault :: Unheld -> Maybe Text
@@ -418,6 +435,8 @@ configurationFault reason = case reason of
     ThrashProbe -> Just (describeUnheld reason)
     LatencyAboveCeiling{} -> Nothing
     ConditionsDiffer _ _ -> Just (describeUnheld reason)
+    MissingNativeLatency _ -> Just (describeUnheld reason)
+    MissingNativeObservation _ -> Just (describeUnheld reason)
 
 describeUnheld :: Unheld -> Text
 describeUnheld = \case
@@ -433,6 +452,8 @@ describeUnheld = \case
             <> T.intercalate ", " [readAs "GITHUB_ACTIONS" (rrGithubActions reading), readAs "RUNNER_OS" (rrOs reading), readAs "RUNNER_ARCH" (rrArch reading)]
     ShapeNotCalibrated shape -> "the floors hold no entry for the pod shape " <> renderPodShape shape
     ThrashProbe -> "it runs the GC-thrash probe in place of the passes"
+    MissingNativeObservation ecosystem -> "no native latency observation for " <> ecosystemName ecosystem
+    MissingNativeLatency ecosystem -> "no independently measured native latency ceiling for " <> ecosystemName ecosystem
     ConditionsDiffer calibrated ran -> "its measurement conditions are " <> ran <> ", but the floors retain " <> calibrated
     LatencyAboveCeiling ecosystem injected most -> "its " <> ecosystemName ecosystem <> " fixture injects " <> show injected <> " ms of upstream latency, above the ceiling of " <> show most <> " ms"
   where
@@ -455,7 +476,7 @@ describeEnforcement calibration = \case
             <> " Measurement conditions: "
             <> calConditions calibration
             <> ". "
-            <> T.intercalate " " [ecosystemName ecosystem <> " latency ceiling: " <> show (lcCeilingMs latencyBound) <> " ms." | (ecosystem, latencyBound) <- [(Npm, calNpmLatency calibration)] <> [(PyPI, pypiBound) | pypiBound <- maybeToList (calPypiLatency calibration)]]
+            <> T.intercalate " " [ecosystemName ecosystem <> " latency ceiling: " <> show (lcCeilingMs latencyBound) <> " ms." | (ecosystem, latencyBound) <- [(Npm, calNpmLatency calibration)] <> [(PyPI, pypiBound) | pypiBound <- maybeToList (calPypiLatency calibration)] <> [(Cargo, cargoBound) | cargoBound <- maybeToList (calCargoLatency calibration)]]
             <> describeRetainedConditions calibration
     NotHeld reasons ->
         "This run is not held to the success floors in `"

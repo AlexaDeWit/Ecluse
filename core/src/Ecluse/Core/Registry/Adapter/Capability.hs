@@ -48,7 +48,7 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Json.Walk (Step)
 import Ecluse.Core.Registry.Maintenance (StoreRefusal)
 import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet)
-import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead)
 import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Registry.ServedDocument (RenderRefused)
@@ -62,8 +62,8 @@ type ProjectName = Text -> Maybe PackageName
 
 -- | The ecosystem's metadata read, served-document assembly, and encoding ('Ecluse.Core.Server.Context.pdMetadata').
 data AdapterMetadata = AdapterMetadata
-    { metadataRead :: EcosystemRead
-    -- ^ The ecosystem's part of a metadata read, which "Ecluse.Core.Registry.Metadata.Fetch" runs for every caller.
+    { metadataRead :: PrepareRead
+    -- ^ Prepare under the selected origin before reading its metadata.
     , metadataAssemble :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
     -- ^ Select exact admitted entries from the supplied snapshots before rendering their wire shape.
     , metadataSerialise :: CachedDoc -> Either RenderRefused LByteString
@@ -76,6 +76,8 @@ data AdapterMetadata = AdapterMetadata
 data PrivateArtifactAddressing
     = ConventionalArtifactPath
     | IndexedArtifactLocation
+    | -- | Requires metadata admission before discovery or index workspace allocation.
+      AdmittedIndexedArtifactLocation
     deriving stock (Eq, Show)
 
 -- | Artifact request formation by filename or authoritative URL, shared by serve and worker ('Ecluse.Core.Server.Context.pdArtifact').
@@ -96,10 +98,11 @@ data PublishRequestBody = PublishRequestBody
     , publishBodyContentType :: Maybe ByteString
     }
 
--- | Worker reads reuse the cache or charge the selected native read directly.
+-- | Worker reads use cached facts, charged chunks, or native workspace reservations.
 data WorkerMetadataRead
     = CachedWorkerRead
-    | ChargedWorkerRead EcosystemRead
+    | ChargedWorkerRead PrepareRead
+    | NativeChargedWorkerRead PrepareRead
 
 -- | Completion uses native inventory or requires durable version state.
 data MirrorStateRequirement
@@ -133,8 +136,8 @@ data MirrorRequirements = MirrorRequirements
 data AdapterPublish = AdapterPublish
     { publishRelay :: OriginClient -> PackageName -> PublishRequestBody -> IO (Either FetchFault PublishRelayResponse)
     -- ^ Relay a client's publish document to the target named as the origin, and return its answer.
-    , publishUploadClaims :: Limits -> PublishRequestBody -> IO (Either PublishBodyFault [Text])
-    -- ^ Every identity claim of a body shaped as a new-release upload, or why the body is not relayed.
+    , publishUploadClaims :: Limits -> (Int -> IO ()) -> Text -> PublishRequestBody -> IO (Either PublishBodyFault [Text])
+    -- ^ Check claims before target IO using the selected logical view base. Charge extra workspace as an absolute total.
     , publishCodec :: PublishCodec
     -- ^ The mirror write's document, requests, probe, and status semantics. The transport owns the manager, mint, and fault classification.
     , publishMirrorRequirements :: MirrorRequirements

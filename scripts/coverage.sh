@@ -41,7 +41,9 @@ case "$suite" in
     unscoped=(
       # Re-exports declare no expressions. HPC covers their implementation modules.
       ./core/src/Ecluse/Core/Credential/Refresh.hs
+      ./core/src/Ecluse/Core/Registry/Cargo/Route.hs
       ./core/src/Ecluse/Core/Registry/Npm/Route.hs
+      ./core/src/Ecluse/Core/Registry/PyPI/Archive/Inflate.hs
       ./core/src/Ecluse/Core/Registry/PyPI/Route.hs
       ./core/src/Ecluse/Core/Security.hs
       ./core/src/Ecluse/Core/Server/Admission.hs

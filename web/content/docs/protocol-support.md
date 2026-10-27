@@ -13,6 +13,7 @@ The route tables render from the same OpenAPI document Écluse publishes as JSON
 | --- | --- |
 | npm | Served, mirrored, and published |
 | PyPI | Served, mirrored, and published |
+| Cargo | Sparse HTTPS reads, mirroring, and first-party publication, Cargo 1.74+ |
 | RubyGems | Planned |
 
 A **served** registry answers reads: the metadata a client resolves against and the artifact
@@ -127,3 +128,69 @@ Adding support for another field requires an explicit compatibility change.
 The [registry metadata specification](https://github.com/npm/registry/blob/main/docs/responses/package-metadata.md#abbreviated-version-object)
 identifies `acceptDependencies` and `_hasShrinkwrap` as installation inputs. Mirroring preserves the
 shrinkwrap marker while removing other source-registry bookkeeping.
+
+## Cargo sparse registries {#cargo}
+
+Cargo uses two views under one mount. [Connect Cargo](@/docs/connect.md#cargo) gives the client configuration.
+
+| View | Source and operations |
+|---|---|
+| `/cargo/` | crates.io source replacement. Reads crates.io and valid completed managed mirrors. Excludes private-only additions and declared first-party names. No publication API. |
+| `/cargo/private/` | Alternate registry. Reads arbitrary caller-authorised private packages and accepts configured first-party publication. No public fallback. |
+
+Both views serve `config.json`, native sparse index paths, and local crate archive routes.
+Every emitted download location points through Écluse.
+Git index serving is unsupported. Cargo can retain its canonical crates.io registry identity in lockfiles, including the historical GitHub URL.
+That identity does not select Git transport when source replacement uses a sparse HTTPS index.
+
+The private discovery response advertises `api` only when publication is configured.
+Its API base is `https://packages.example.com/cargo/private`.
+Cargo appends `/api/v1/crates/new`, producing `PUT /cargo/private/api/v1/crates/new`.
+Do not append another `/api` to the configured client registry.
+The proxy supports publication, not registry management operations such as yank or unyank.
+
+Discovery runs against the selected origin after the operation obtains its caller or service credential.
+Boot performs no registry discovery. Private discovery stays local to the request.
+Local `auth-required` combines the edge requirement and the selected trusted origin's declaration.
+Without a trusted origin, public discovery answers locally.
+It never contacts crates.io merely to construct that local response.
+An anonymous native `401` returns a Cargo challenge so the credential provider can retry.
+A trusted origin's `403` remains a refusal.
+Discovery failure stays explicit. A new client can fail to bootstrap while its configured trusted registry is unavailable.
+
+The index reader retains admitted native records, their order, raw versions, checksums, and additive fields.
+It preserves dependencies, renames, features, targets, source identities, schema, Rust-version constraints, yank, and publication time.
+Omission and explicit null remain distinct.
+It skips blank lines and processes a final record without LF.
+It quarantines malformed rows and every occurrence of a duplicate native version identity.
+Transport and resource failures fail the whole read.
+
+Published spelling, lowercase lookup identity, and case-insensitive hyphen/underscore ownership matching have separate uses.
+Hyphen and underscore aliases do not merge distinct index lookup paths.
+Cargo versions use native SemVer identity and ordering. Build metadata does not create a second publishable version identity.
+
+The age rule uses native `pubtime`. Missing or invalid time stays unknown.
+OSV `crates.io` advisories use the existing freshness, malicious-package, and exact-fix rules.
+The default age and advisory path makes no archive evidence request.
+An explicit `DenyInstallTimeExecution` rule inspects bounded, checksum-verified archive and TOML evidence only when ordered evaluation reaches it.
+Higher-ranked decisions and first-party treatment retain their precedence.
+Required unavailable evidence produces structured inability. Écluse never runs the inspected code.
+
+Cargo mirrors retain the original admitted index row, source identity, and checksum-verified archive using durable version state.
+Native-library `links` declarations must agree. Cargo defines omitted index `links` as null.
+Target publication can reset time or yank and omit fields, so an archive alone cannot prove faithful source reads.
+Missing, corrupt, or unrecorded state cannot supply a managed original-source copy during public outage.
+Ordinary compatible private reads remain available through the alternate view.
+Retained fields reflect first admission. Écluse does not continuously synchronise later yanks or mutate the target's yank state.
+
+Native publication checks length framing, archive root, manifest identity, version, and digest before discovery or writes.
+Dependency inventories, aliases, kinds, targets, registry sources, version requirements, and dependency features must agree with the effective archived manifest.
+Package feature graphs, native-library `links` declarations, and the optional minimum Rust version must also agree, allowing native normalisation.
+Target comparison parses native cfg expressions under the configured nesting limit, including final commas in `all` and `any` lists.
+Registry comparison uses native logical identities, preserving source kinds and sparse registry paths.
+A null upload dependency registry identifies the selected private view. An absent manifest registry identifies crates.io.
+Descriptive and additive metadata need not match the manifest. Accepted uploads retain their original bytes.
+The sparse read root and approved upload API root remain distinct.
+Discovery must advertise the exact approved API authority and base path before Écluse attaches the publication credential.
+CodeArtifact supplies Cargo inventory and physical deletion through the existing maintenance interface.
+A generic Cargo API yank is not physical deletion. Maintenance support depends on the store's capabilities.

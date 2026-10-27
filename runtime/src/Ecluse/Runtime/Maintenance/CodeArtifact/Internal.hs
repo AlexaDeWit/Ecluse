@@ -2,11 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The control-plane record and the handle bodies behind
-"Ecluse.Runtime.Maintenance.CodeArtifact", which documents the leaf and re-exports the curated
-surface. Importing this module opts out of that stability promise, the convention @text@ and
-@bytestring@ use, so production code imports the public one.
--}
+-- | CodeArtifact control-plane handles with authenticated data-plane readers bound by composition.
 module Ecluse.Runtime.Maintenance.CodeArtifact.Internal (
     newCodeArtifactMaintenance,
     newCodeArtifactObservation,
@@ -63,6 +59,7 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UpstreamSafety (Undecidable, Unsafe),
     walkUpstreamChain,
  )
+import Ecluse.Core.Rules.Install (unavailableInstallArtifactRead)
 import Ecluse.Core.Version (Version)
 import Ecluse.Runtime.Aws.Env (newAwsEnv, singleAttemptEnv)
 import Ecluse.Runtime.Aws.Fault (sendClassified)
@@ -99,7 +96,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Read (
     versionsOfPage,
  )
 
--- | The control-plane calls this leaf makes, so the sequencing around them is drivable from response values of @amazonka@'s own types. The reads are held apart from the writes.
+-- | Separate read and write calls allow observation without granting deletion authority.
 data ControlPlane = ControlPlane
     { cpRead :: ReadPlane
     , cpDeleteVersions :: CA.DeletePackageVersions -> IO (Either StoreFault CA.DeletePackageVersionsResponse)
@@ -107,22 +104,20 @@ data ControlPlane = ControlPlane
     , cpUntagResource :: CA.UntagResource -> IO (Either StoreFault CA.UntagResourceResponse)
     }
 
--- | Build the maintenance handle for one CodeArtifact repository, over an environment whose AWS credentials are discovered the standard way.
+-- | Build repository maintenance with ambient AWS credentials and single-attempt destructive transport.
 newCodeArtifactMaintenance :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreMaintenance
 newCodeArtifactMaintenance limit alphabet readManifest store = do
     env <- newMaintenanceEnv store
     boundedMaintenance limit alphabet readManifest store <$> controlPlaneFor env
 
--- | Build the observing calls alone for one repository, over an environment discovered the same way. No deletion, no tag write, and no publication is built, so the caller holds none.
+-- | Build repository observation with ambient credentials and no write calls.
 newCodeArtifactObservation :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreObservation
 newCodeArtifactObservation limit alphabet readManifest store =
     boundedObservationFor limit alphabet readManifest store . readPlaneFor <$> newMaintenanceEnv store
 
--- | Probe one repository's chain over an environment discovered the standard way, for a role that holds no maintenance handle for the repository it serves private content from.
+-- | Probe upstream refill without constructing maintenance writes.
 newCodeArtifactUpstreamProbe :: CodeArtifactStore -> IO UpstreamSafety
 newCodeArtifactUpstreamProbe store = withReadableIdentity $ do
-    -- This wrap covers the environment build. The walk below carries its own, for a caller
-    -- holding a plane this never built.
     env <- newMaintenanceEnv store
     probeUpstreamSafety (readPlaneFor env) store
 
@@ -185,7 +180,7 @@ readPlaneFor env =
         , rpListTags = sendStore env
         }
 
--- | Build the handle over a caller-supplied 'ControlPlane' and the manifest read the root assembled, which together are every effect it has.
+-- | Supplied control-plane calls and the role-specific manifest reader provide every effect.
 maintenanceFor :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ControlPlane -> StoreMaintenance
 maintenanceFor alphabet readManifest store plane =
     maintenanceOf
@@ -195,20 +190,21 @@ maintenanceFor alphabet readManifest store plane =
             , dlCursor = Just (walkCursor alphabet plane store)
             }
 
--- | The observing calls over one 'ReadPlane', which is every effect they have.
+-- | Bind observations to the supplied metadata reader. Composition binds artifact evidence separately.
 observationFor :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ReadPlane -> StoreObservation
 observationFor alphabet readManifest store observer =
     StoreObservation
         { obFacts = codeArtifactFacts alphabet store
         , obListPackagesIn = pageSource . packagePage observer store
         , obEnumerateVersions = pageAll . versionPage observer store
+        , obReadArtifact = unavailableInstallArtifactRead
         , obReadManifest = readManifest
         , obVerifyConsent = readConsent observer store
         , obClassifyStore = fmap (fmap classifyRepository) (describeStore observer store)
         , obProbeUpstream = probeUpstreamSafety observer store
         }
 
--- | Walk the repository's upstream chain, under the bounds the walk itself holds. The reads are the ambient role's own, so no caller's credential reaches this call.
+-- | Walk upstreams under the existing bounds, using only this role's credentials.
 probeUpstreamSafety :: ReadPlane -> CodeArtifactStore -> IO UpstreamSafety
 probeUpstreamSafety observer store =
     withReadableIdentity (walkUpstreamChain linksOf (repositoryOfStore store))
@@ -240,14 +236,14 @@ sendStore = sendClassified classifyStoreFault
 
 packagePage :: ReadPlane -> CodeArtifactStore -> NamePrefix -> Maybe Text -> IO (Either StoreFault (Maybe Text, [PackageName]))
 packagePage observer store prefix token =
-    fmap page <$> rpListPackages observer (listPackagesRequest store prefix token)
+    (>>= page) <$> rpListPackages observer (listPackagesRequest store prefix token)
   where
-    page response =
-        ( response ^. CAL.listPackagesResponse_nextToken
-        , packagesOfPage
-            (formatEcosystem (casFormat store))
-            (fromMaybe [] (response ^. CAL.listPackagesResponse_packages))
-        )
+    page response = do
+        names <-
+            packagesOfPage
+                (formatEcosystem (casFormat store))
+                (fromMaybe [] (response ^. CAL.listPackagesResponse_packages))
+        pure (response ^. CAL.listPackagesResponse_nextToken, names)
 
 versionPage ::
     ReadPlane ->

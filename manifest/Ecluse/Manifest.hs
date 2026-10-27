@@ -73,7 +73,7 @@ import Network.HTTP.Types.Method (StdMethod (..))
 import Network.HTTP.Types.Status (statusCode)
 
 import Ecluse.Core.BuildIdentity (productVersion)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName, prefixFor)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName, prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
 import Ecluse.Core.Server.Contract (
@@ -107,7 +107,7 @@ canonicalManifestSource :: ManifestSource
 canonicalManifestSource =
     ManifestSource
         { manifestBaseUrl = "https://registry.ecluse.example"
-        , manifestEcosystems = Npm :| [PyPI]
+        , manifestEcosystems = Npm :| [PyPI, Cargo]
         }
 
 -- | Assemble the OpenAPI 3 document, a __pure__ function of the source.
@@ -154,6 +154,7 @@ ownedSchemas = \case
         , (publishDocumentSchemaName, publishDocumentSchema)
         ]
     PyPI -> [(simpleIndexSchemaName, simpleIndexSchema)]
+    Cargo -> []
     RubyGems -> []
 
 -- | The tag for an ecosystem (the manifest groups operations by mount).

@@ -2,11 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The values both legs of the artifact path hold: the route's reply constructors, and the
-coordinates of the artifact being served.
-
-The caller's credential is deliberately absent from 'ArtifactRequest'. It is confined to the
-private leg, which takes it as its own argument, so the public leg cannot reach one.
+{- | Artifact requests and route replies.
+Only the private leg receives the caller's credential.
 -}
 module Ecluse.Core.Server.Pipeline.Tarball.Types (
     -- * The route's replies
@@ -32,6 +29,8 @@ import Ecluse.Core.Version (Version)
 data TarballReplies response = TarballReplies
     { tarballError :: Status -> ResponseHeaders -> Refusal -> response
     -- ^ An ecosystem-shaped local error.
+    , tarballPrivateRefused :: Int -> ResponseHeaders -> Refusal -> response
+    -- ^ The native protocol selects the status and authentication challenge.
     , tarballStream :: Status -> ResponseHeaders -> StreamingBody -> response
     -- ^ A transparent streamed upstream response.
     , tarballEmpty :: Status -> ResponseHeaders -> response

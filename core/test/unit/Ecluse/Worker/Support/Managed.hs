@@ -26,7 +26,7 @@ import Ecluse.Core.Mirror.State.Internal (StateRevision (..), VerifiedCompanionB
 import Ecluse.Core.Package
 import Ecluse.Core.Queue (MirrorJob (..))
 import Ecluse.Core.Registry (PublishError (PublishError), PublishFault (PublishRejected, PublishSourceUnavailable))
-import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (cargoCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..), VersionEvaluation (VersionPresent))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
@@ -65,7 +65,7 @@ data ManagedFixture = ManagedFixture
 
 -- | Unit fixtures keep production region boundaries without claiming process memory admission.
 unmeteredStateBudget :: WorkerStateBudget
-unmeteredStateBudget = WorkerStateBudget ignore ignore ignore ignore ignore ignore ignore
+unmeteredStateBudget = WorkerStateBudget ignore ignore ignore ignore ignore ignore ignore Nothing
   where
     ignore = const (pure ())
 
@@ -111,6 +111,7 @@ sourceDocument inventory = VersionDoc (inventoryDetails inventory) raw
     raw = case inventoryReadData inventory of
         PyPIMirrorRead document -> Just (fst pypiSimpleCached document)
         NpmMirrorRead _ -> Nothing
+        CargoMirrorRead document -> Just (fst cargoCached document)
 
 fixtureStore :: StateTarget -> IORef (Maybe ProjectMirrorRecord) -> IORef Int -> IORef (Maybe MirrorStateFault) -> IORef (Map Text ByteString) -> MirrorState
 fixtureStore target record revision fault companions =

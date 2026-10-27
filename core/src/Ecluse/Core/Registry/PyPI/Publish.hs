@@ -21,6 +21,7 @@ import Ecluse.Core.Package (Artifact (artFilename), hashValue)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), ParseError (parseErrorMessage), PublishError (..), PublishFault (..), isSuccessStatus)
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw))
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (staticRead)
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
 import Ecluse.Core.Registry.Publish (PublishCodec (..))
@@ -53,10 +54,11 @@ pypiPublishCodec =
                             metadata <- first (PublishSourceUnavailable . parseErrorMessage) (parseUploadMetadata (maxMetadataBytes limits) (inventoryPackage inventory) (inventoryVersion inventory) raw)
                             checkedMirrorUploadData inventory file bytes metadata
         , pcNativeComplete = \_ _ _ -> False
-        , pcTargetRead = pypiRead
+        , pcTargetRead = staticRead pypiRead
         , pcTargetReadPermille = cfFullReadPermille pypiChargeFactors
         , pcProbeRequest = simpleIndexRequest
         , pcVersionListWalk = Nothing
+        , pcPrepareTarget = \_ _ target -> pure (Right target)
         , pcPublishRequest = \target credential _ -> publishRequest target credential
         , pcPublishOutcome = classifyPublish
         }

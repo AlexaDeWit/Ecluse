@@ -51,6 +51,7 @@ import Ecluse.Test.Rules (
     constRule,
     differentialRemediation,
     evalRule,
+    evalRules,
     inertRuleDeps,
     isAllow,
     isBlockedByDefault,
@@ -60,6 +61,7 @@ import Ecluse.Test.Rules (
     isUndecidable,
     mapPackageRead,
     mapResilience,
+    newEvaluator,
     packageRule,
     remediationWith,
     sentences,
@@ -818,6 +820,7 @@ poisonAt eco poison rules = case poison of
 poisonRule :: Version -> RuleVerdict -> PreparedRule -> PreparedRule
 poisonRule version verdict rule = case prepEval rule of
     PerVersion eval -> rule{prepEval = PerVersion (\c ev -> if evVersion ev == version then pure verdict else eval c ev)}
+    PerInstallEvidence eval -> rule{prepEval = PerInstallEvidence (\c ev -> if evVersion ev == version then verdict else eval c ev)}
     PerPackage packageRead -> rule{prepEval = PerPackage packageRead{prVerdict = \rows ev -> if evVersion ev == version then verdict else prVerdict packageRead rows ev}}
 
 -- | A per-version rule at a precedence that returns one of 'poisonedVerdicts' for a release and abstains on every other.
@@ -914,6 +917,7 @@ policyKeys = map (\r -> ((Down (rulePrecedence r), ruleName (prRule r)), readsPa
     readsPackage rule = case verdictSource rule of
         FromAdvisories{} -> True
         FromEvidence _ -> False
+        FromInstallEvidence _ -> False
 
 bombKeys :: Maybe Bomb -> [RuleKey]
 bombKeys = maybe [] (\(Bomb prec _ _) -> [((Down prec, "PureBomb"), False)])

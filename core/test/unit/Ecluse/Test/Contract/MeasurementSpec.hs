@@ -8,6 +8,7 @@ module Ecluse.Test.Contract.MeasurementSpec (spec) where
 import Test.Hspec
 import Test.Hspec.Core.Spec (Item (itemRequirement), filterForest, mapSpecForest, mapSpecItem_)
 
+import Ecluse.Core.Registry.Cargo.ReaderResidencySpec qualified as CargoRetention
 import Ecluse.Core.Registry.Npm.ReaderResidencySpec qualified as NpmRetention
 import Ecluse.Core.Registry.NpmSmokeSpec qualified as NpmSmoke
 import Ecluse.Core.Registry.PyPI.ReaderResidencySpec qualified as PyPIRetention
@@ -49,6 +50,7 @@ registrations :: [(Group, Spec)]
 registrations =
     [ (measurementRegistration "retention/npm" "retention" "measurement/npm" Residency [] ["rts-stats", "serial-heap"] [], NpmRetention.spec)
     , (measurementRegistration "retention/pypi" "retention" "measurement/pypi" Residency [] ["rts-stats", "serial-heap"] [], PyPIRetention.spec)
+    , (measurementRegistration "retention/cargo" "retention" "measurement/cargo" Residency [] ["rts-stats", "serial-heap"] [], CargoRetention.spec)
     , (measurementRegistration "live/npm" "live-metadata" "measurement/npm" Smoke ["public-network"] [] [], NpmSmoke.spec)
     , (measurementRegistration "live/pypi" "live-metadata" "measurement/pypi" Smoke ["public-network"] [] [], PyPISmoke.spec)
     ]

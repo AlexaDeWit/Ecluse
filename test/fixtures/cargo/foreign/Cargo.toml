@@ -1,0 +1,16 @@
+[package]
+name = "ecluse-e2e-private-foreign"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.74"
+links = "native_foreign"
+license = "MIT"
+description = "Owned Cargo foreign-registry fixture"
+readme = "README.md"
+
+[target.'cfg(any(unix, windows,))'.dependencies]
+renamed_leaf = { package = "ecluse-e2e-leaf", version = "=1.0.0", registry = "foreign", optional = true }
+
+[features]
+default = ["renamed_leaf"]
+forwarded = ["renamed_leaf?/extra"]

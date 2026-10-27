@@ -32,6 +32,9 @@ data StubRoute
       NpmPublic
     | -- | The PyPI public upstream, served from the fixture tree.
       PyPIPublic
+    | CargoPublic
+    | CargoPrivate
+    | CargoMirror
     | -- | A private upstream that holds nothing: it answers every read with a 404.
       EmptyPrivate
     | -- | The front of the second Verdaccio a Dredger case runs as a private cache.
@@ -59,6 +62,9 @@ stubHost :: StubRoute -> Text
 stubHost = \case
     NpmPublic -> "upstream"
     PyPIPublic -> "pypi-upstream"
+    CargoPublic -> "cargo-upstream"
+    CargoPrivate -> "cargo-private"
+    CargoMirror -> "cargo-mirror"
     EmptyPrivate -> "private-upstream"
     PrivateCache -> "private-cache"
     Mirror -> "mirror"
@@ -76,6 +82,11 @@ data StubFault
       PyPIMirrorBackend Int Bool
     | -- | Route native PyPI stores and the AWS API to one host fixture.
       PyPICodeArtifactBackend Int
+    | CargoBackend Int Bool
+    | -- | Route Cargo repositories and the native AWS control plane to one host fixture.
+      CargoCodeArtifactBackend Int
+    | -- | Observe anonymous public-native reads at a host fixture.
+      CargoPublicBackend Int
     deriving stock (Eq, Show)
 
 -- | The stub's configuration: every route in declaration order, under the fault if there is one.
@@ -107,6 +118,11 @@ serverBlock fault route =
         <> maybe [] (`faultLines` route) fault
         <> [line | isPublic route, line <- publicCoding]
         <> ( case (fault, route) of
+                (Just (CargoPublicBackend port), CargoPublic) -> forwarded 16777216 port
+                (Just (CargoCodeArtifactBackend port), selected)
+                    | selected `elem` [PyPICodeArtifactData, PyPICodeArtifactControl, CargoPrivate, CargoMirror] -> forwarded 16777216 port
+                (Just (CargoBackend port _), CargoPrivate) -> forwarded 16777216 port
+                (Just (CargoBackend port _), CargoMirror) -> forwarded 16777216 port
                 (Just (PyPIMirrorBackend port _), PyPIMirror) -> forwarded nativeUploadLimit port
                 (Just (PyPICodeArtifactBackend port), PyPICodeArtifactData) -> forwarded 16777216 port
                 (Just (PyPICodeArtifactBackend port), PyPICodeArtifactControl) -> forwarded 16777216 port
@@ -117,7 +133,7 @@ serverBlock fault route =
 forwarded :: Int -> Int -> [Text]
 forwarded limit port =
     [ "    client_max_body_size " <> show limit <> ";"
-    , "    location / { proxy_pass http://203.0.113.1:" <> show port <> "; }"
+    , "    location / { proxy_set_header Host $host; proxy_pass http://203.0.113.1:" <> show port <> "; }"
     ]
 
 -- Gzip any response a request permits: more than a registry CDN, which gzips JSON and companions.
@@ -131,6 +147,9 @@ faultLines = \case
     PrivateCacheWritesRefused -> \route -> [refuseWrites | route == PrivateCache]
     PyPIMirrorBackend _ down -> \route -> [closeUnanswered | down && isPublic route]
     PyPICodeArtifactBackend _ -> const []
+    CargoBackend _ down -> \route -> [closeUnanswered | down && isPublic route]
+    CargoCodeArtifactBackend _ -> const []
+    CargoPublicBackend _ -> const []
   where
     closeUnanswered = "    return " <> show unansweredStatus <> ";"
     refuseWrites = "    if ($request_method !~ ^(GET|HEAD)$) { return 503; }"
@@ -144,6 +163,9 @@ isPublic :: StubRoute -> Bool
 isPublic = \case
     NpmPublic -> True
     PyPIPublic -> True
+    CargoPublic -> True
+    CargoPrivate -> False
+    CargoMirror -> False
     EmptyPrivate -> False
     PrivateCache -> False
     Mirror -> False
@@ -178,6 +200,13 @@ routeLines = \case
           "        try_files $uri/index.json $uri =404;"
         , "    }"
         ]
+    CargoPublic ->
+        [ "    root /usr/share/nginx/cargo;"
+        , "    default_type application/octet-stream;"
+        , "    location / { try_files $uri =404; }"
+        ]
+    CargoPrivate -> ["    location / { return 404; }"]
+    CargoMirror -> ["    location / { return 404; }"]
     PyPIMirror -> ["    location / { return 404; }"]
     EmptyPrivate ->
         [ "    location / {"

@@ -16,9 +16,9 @@ import Amazonka qualified as AWS
 import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm))
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
-import Ecluse.Core.Package (PackageName, renderPackageName)
+import Ecluse.Core.Package (PackageName, mkPackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
@@ -80,6 +80,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Support (
     detailOf,
     routedTo,
     serviceError,
+    withCargoStore,
     withNpmStore,
  )
 import Ecluse.Runtime.Test.Aws (loopbackAwsEnv)
@@ -93,7 +94,35 @@ import Ecluse.Test.Sweep (RecordedSweep (recPorts, recResults), recordingPorts, 
 
 -- | The CodeArtifact handle's facts and call sequencing, over 'ControlPlane' answers in @amazonka@'s own types. "Ecluse.Runtime.Maintenance.CodeArtifact.DecideSpec" covers each decision.
 spec :: Spec
-spec = withNpmStore handleCases
+spec = do
+    withNpmStore handleCases
+    withCargoStore cargoCases
+
+cargoCases :: CodeArtifactStore -> Spec
+cargoCases store = describe "Cargo inventory and deletion" $ do
+    it "stops inventory pagination when the API returns a namespaced native package" $ do
+        tokens <- newIORef []
+        let invalid = CA.newPackageSummary & CAL.packageSummary_package ?~ "crate" & CAL.packageSummary_namespace ?~ "scope"
+            response = CA.newListPackagesResponse 200 & CAL.listPackagesResponse_packages ?~ [invalid] & CAL.listPackagesResponse_nextToken ?~ "page-2"
+            plane = reading inertReader{rpListPackages = \request -> record tokens (request ^. CAL.listPackages_nextToken) >> pure (Right response)}
+        listBucket store plane "" >>= (`shouldSatisfy` isLeft)
+        readIORef tokens `shouldReturn` [Nothing]
+    it "preserves native package spelling and raw versions through the handle" $ do
+        let name = mkPackageName Cargo Nothing "Published_Name"
+            raw = "1.0.0-rc.1+build"
+            plane = reading inertReader{rpListVersions = const (pure (Right (versionsPage Nothing [raw])))}
+        result <- enumerateVersions (handleOver store plane) name
+        fmap (map (renderVersion . storedVersion)) result `shouldBe` Right [raw]
+    it "sends physical deletion without changing the native package or version spelling" $ do
+        requests <- newIORef []
+        let name = mkPackageName Cargo Nothing "Published_Name"
+            version = mkVersion Cargo "1.0.0-rc.1+build"
+            plane = inertPlane{cpDeleteVersions = \request -> record requests request >> pure (Right (allRemoved (request ^. CAL.deletePackageVersions_versions)))}
+        deleteVersions (handleOver store plane) testDeleteGuard name [version] `shouldReturn` [(version, VersionRemoved)]
+        sent <- readIORef requests
+        map (^. CAL.deletePackageVersions_package) sent `shouldBe` ["Published_Name"]
+        map (^. CAL.deletePackageVersions_format) sent `shouldBe` [CA.PackageFormat' "cargo"]
+        map (^. CAL.deletePackageVersions_namespace) sent `shouldBe` [Nothing]
 
 handleCases :: CodeArtifactStore -> Spec
 handleCases store = do

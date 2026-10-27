@@ -2,17 +2,21 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Operator references cover accepted configuration keys and every registered adapter rule block.
 module Ecluse.Config.DocCoverageSpec (spec) where
+
+import Prelude hiding (universe)
 
 import Data.Char (isAsciiLower)
 import Data.Text qualified as T
+import Data.Universe.Class (universe)
 import System.Directory (listDirectory)
 import System.FilePath (takeExtension, (</>))
 import Test.Hspec
 
 import Data.Map.Strict qualified as Map
 import Ecluse.Config (loadConfig, renderConfigError)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
+import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Registry.Adapter (adapterFor, adapterRuleBlocks)
 import Ecluse.Core.Wire (renderWire)
 
@@ -194,7 +198,7 @@ spec = describe "the configuration reference covers the accepted variables" $ do
         yaml <- decodeUtf8 <$> readFileBS "config/default.yaml"
         let blocks =
                 [ (ecosystemName eco, renderWire ty, reason)
-                | eco <- [Npm, PyPI]
+                | eco <- universe
                 , Just adapter <- [adapterFor eco]
                 , (ty, reason) <- Map.toList (adapterRuleBlocks adapter)
                 ]

@@ -25,9 +25,7 @@ import Ecluse.BenchLoad.Patterns
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, ProxySettings (..), proxyBootLines, proxyScrape)
 import Ecluse.BenchLoad.Replay (Replay (..))
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
-import Ecluse.Core.Registry.Metadata (Manifest (..))
+import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Cache (CacheEntry (..))
@@ -41,6 +39,9 @@ import Ecluse.Test.Wai (localhost, rebaseAuthority)
 -- | Native replay inputs keep capture rewriting and artifact selection with the provider.
 data PatternProvider = PatternProvider
     { ppCaptureAuthority :: Text
+    , ppListingSuffix :: Text -> Text
+    , ppDiscoveryPath :: Maybe Text
+    , ppCapturedRead :: Text -> Either MetadataError EcosystemRead
     , ppSelectedArtifacts :: Maybe String -> [CorpusPackage] -> Map Text LByteString -> IO (Map Text SelectedArtifact)
     }
 
@@ -64,7 +65,6 @@ patternScenarios provider ecosystem packages privateApp publicApp urlFor =
 
     boot :: Pattern -> Bool -> LoadKnobs -> (Target -> IO a) -> IO a
     boot patternKind defaultCap knobs use = do
-        eco <- maybe (benchFail "pattern scenarios need an ecosystem with a metadata adapter") (pure . metadataRead . adapterMetadata) (adapterFor ecosystem)
         captures <- loadCorpusBodies packages
         evaluationTime <- captureClock ecosystem >>= patternClock
         patternKnobs <- knobsFromEnv patternKind (length packages)
@@ -86,6 +86,7 @@ patternScenarios provider ecosystem packages privateApp publicApp urlFor =
                     servedLargest = foldl' max 0 (Map.elems servedSizes)
                     bodyCap = if defaultCap then maxMetadataBytes defaultLimits else max (maxMetadataBytes defaultLimits) servedLargest
                 servedWorking <- either benchFail pure (workingBytes servedSizes requestTrace)
+                eco <- either (benchFail . show) pure (ppCapturedRead provider (localhost publicPort))
                 fullWeights <-
                     traverse
                         ( \package ->
@@ -107,17 +108,25 @@ patternScenarios provider ecosystem packages privateApp publicApp urlFor =
         selectedArtifacts <- ppSelectedArtifacts provider selected [package | package <- packages, cpName package `elem` rtNames requestTrace] captures
         artifactRequests <- traverse (HTTP.parseRequest . toString . saUpstreamUrl) (Map.elems selectedArtifacts)
         let artifactBodies = Map.fromList [(HTTP.path request, artifactBytes (lkPayloadBytes knobs)) | request <- artifactRequests]
-        upstreamCount <- newIORef (0 :: Int, 0 :: Int)
+        upstreamCount <- newIORef (0 :: Int, 0 :: Int, 0 :: Int)
         public <- publicApp knobs captures artifactBodies
         let counted request respond = do
                 atomicModifyIORef'
                     upstreamCount
-                    ( \(metadataCount, artifactCount) ->
-                        (if Map.member (rawPathInfo request) artifactBodies then (metadataCount, artifactCount + 1) else (metadataCount + 1, artifactCount), ())
+                    ( \(metadataCount, artifactCount, discoveryCount) ->
+                        ( if maybe False ((== rawPathInfo request) . encodeUtf8 . ("/" <>)) (ppDiscoveryPath provider)
+                            then (metadataCount, artifactCount, discoveryCount + 1)
+                            else
+                                if Map.member (rawPathInfo request) artifactBodies
+                                    then (metadataCount, artifactCount + 1, discoveryCount)
+                                    else (metadataCount + 1, artifactCount, discoveryCount)
+                        , ()
+                        )
                     )
                 public request respond
         withProxyConfigured ecosystem knobs configure (privateApp knobs) counted (\port -> [urlFor port ""]) $ \proxy -> \case
-            [root] ->
+            [root] -> do
+                writeIORef upstreamCount (0, 0, 0)
                 use
                     ( proxied
                         proxy
@@ -125,7 +134,7 @@ patternScenarios provider ecosystem packages privateApp publicApp urlFor =
                             Replay
                                 { replayTrace = requestTrace
                                 , replayDeadlineMicros = deadlineMicros
-                                , replayUrls = \name -> (root <> name) : [root <> saProxyPath artifact | artifact <- maybeToList (Map.lookup name selectedArtifacts)]
+                                , replayUrls = \name -> [root <> path | path <- maybeToList (ppDiscoveryPath provider)] <> [root <> ppListingSuffix provider name] <> [root <> saProxyPath artifact | artifact <- maybeToList (Map.lookup name selectedArtifacts)]
                                 , replayEvidence = (<> ("\nReplay deadline: " <> show deadlineMicros <> " microseconds.\n")) <$> evidence proxy upstreamCount capacity wireBytes measuredBodies patternKnobs requestTrace selected evaluationTime
                                 }
                         )
@@ -157,11 +166,11 @@ captureClock ecosystem = do
     records <- readCaptureRecords ecosystem >>= either (benchFail . toText) pure
     pure (addUTCTime (2 * nominalDay) (foldl' max benchNow (map crCapturedAt (Map.elems records))))
 
-evidence :: ProxyProcess -> IORef (Int, Int) -> Maybe Int -> Int -> IORef (Int, Int, Int, Int) -> PatternKnobs -> RequestTrace -> Maybe String -> UTCTime -> IO Text
+evidence :: ProxyProcess -> IORef (Int, Int, Int) -> Maybe Int -> Int -> IORef (Int, Int, Int, Int) -> PatternKnobs -> RequestTrace -> Maybe String -> UTCTime -> IO Text
 evidence proxy upstreamCount capacity rawBytes measuredBodies knobs requestTrace selected evaluationTime = do
     (bodyCap, wireBytes, largest, fullWorkingBytes) <- readIORef measuredBodies
     scraped <- fromMaybe [] <$> proxyScrape proxy
-    (metadataRequests, artifactRequests) <- readIORef upstreamCount
+    (metadataRequests, artifactRequests, discoveryRequests) <- readIORef upstreamCount
     let limits = bootLimits (proxyBootLines proxy)
         shared = capacity <|> blCacheBytes limits
         stores =
@@ -179,9 +188,9 @@ evidence proxy upstreamCount capacity rawBytes measuredBodies knobs requestTrace
             , "Raw captured working bytes: " <> show rawBytes <> " B. Served stub working bytes: " <> show wireBytes <> " B. Selected-version mode: " <> maybe "none" toText selected <> "."
             , "Body cap: " <> show bodyCap <> " B. Default cap: " <> show (maxMetadataBytes defaultLimits) <> " B. Largest served stub body: " <> show largest <> " B. Default would refuse largest: " <> show (largest > maxMetadataBytes defaultLimits) <> "."
             , "Wire working set / full-store wire-equivalent budget: " <> show wireBytes <> " / 0 B. Full retention is ineligible."
-            , "Public upstream requests (metadata / artifact): " <> show metadataRequests <> " / " <> show artifactRequests <> ". Selected lookups use only the selected provider capability."
+            , "Public upstream requests (metadata / artifact): " <> show metadataRequests <> " / " <> show artifactRequests <> ". Discovery requests: " <> show discoveryRequests <> ". Selected lookups use only the selected provider capability."
             , renderStoreEvidence stores
-            , "Selected npm replay follows listings with captured public tarball coordinates after private misses. Artifact bytes are synthetic relay payloads. This measures the HTTP metadata gate, not a complete npm install or client integrity validation."
+            , "Selected replay follows native discovery and listings with captured public artifact coordinates after private misses. Artifact bytes are synthetic relay payloads. This measures the HTTP metadata gate, not a complete npm install or client integrity validation."
             , "RTS figures describe the proxy process alone. The replay client and the stub upstreams run in the harness process."
             , "Occupancy is the final reported gauge, not peak heap. Full working bytes use production projection and historical weighCacheEntry over each distinct rewritten body before measurement. Version and assembled working sets are unavailable. Their representations differ from listing wire bytes."
             , "Full candidate charges above are diagnostic preparation only. The local request path never weighs full candidates. Compare equal successful work and the shared eligible-store budget."

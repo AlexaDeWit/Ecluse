@@ -101,6 +101,7 @@ import Ecluse.Core.Registry.Metadata (
     Manifest,
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
  )
+import Ecluse.Core.Rules.Install (InstallArtifactRead)
 import Ecluse.Core.Version (Version)
 
 -- | Backend operations for one store, independent of the application's runtime.
@@ -111,6 +112,8 @@ data StoreMaintenance = StoreMaintenance
     -- ^ Stream a bucket's pages, ending with its failure or 'Nothing' on completion.
     , enumerateVersions :: PackageName -> IO (Either StoreFault [StoredVersion])
     -- ^ Every version the store holds for one package, paged to exhaustion.
+    , storeReadArtifact :: InstallArtifactRead
+    -- ^ Read one exact admitted artifact through the authenticated store boundary.
     , readStoreManifest :: StoreManifestRead
     -- ^ Read through the store's credential and ecosystem codec, including every stored version.
     , deleteVersions :: DeleteGuard -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
@@ -133,6 +136,8 @@ data StoreObservation = StoreObservation
     -- ^ Stream a bucket's pages, ending with its failure or 'Nothing' on completion.
     , obEnumerateVersions :: PackageName -> IO (Either StoreFault [StoredVersion])
     -- ^ Every version the store holds for one package, paged to exhaustion.
+    , obReadArtifact :: InstallArtifactRead
+    -- ^ The authenticated bounded reader, without deletion authority.
     , obReadManifest :: StoreManifestRead
     -- ^ Read through the store's credential and ecosystem codec, including every stored version.
     , obVerifyConsent :: IO (Either StoreFault ConsentVerdict)
@@ -172,6 +177,7 @@ observationOf store =
         { obFacts = storeFacts store
         , obListPackagesIn = listPackagesIn store
         , obEnumerateVersions = enumerateVersions store
+        , obReadArtifact = storeReadArtifact store
         , obReadManifest = readStoreManifest store
         , obVerifyConsent = verifyConsent store
         , obClassifyStore = classifyStore store
@@ -189,6 +195,7 @@ maintenanceOf observed deletion =
         { storeFacts = obFacts observed
         , listPackagesIn = obListPackagesIn observed
         , enumerateVersions = obEnumerateVersions observed
+        , storeReadArtifact = obReadArtifact observed
         , readStoreManifest = obReadManifest observed
         , deleteVersions = dlDeleteVersions deletion
         , verifyConsent = obVerifyConsent observed
@@ -204,6 +211,7 @@ meteredObservation gate observed =
         { obListPackagesIn = \prefix -> obListPackagesIn observed prefix `fuseUpstream` CL.mapM counted
         , obEnumerateVersions = \name -> spend VersionPage >> obEnumerateVersions observed name
         , obReadManifest = \name -> spend ManifestRead >> obReadManifest observed name
+        , obReadArtifact = \limits artifact charge -> spend ManifestRead >> obReadArtifact observed limits artifact charge
         , obVerifyConsent = spend PermissionRead >> obVerifyConsent observed
         , obClassifyStore = spend PermissionRead >> obClassifyStore observed
         }
@@ -218,6 +226,7 @@ meteredMaintenance gate handle =
     handle
         { listPackagesIn = obListPackagesIn observed
         , enumerateVersions = obEnumerateVersions observed
+        , storeReadArtifact = obReadArtifact observed
         , readStoreManifest = obReadManifest observed
         , verifyConsent = obVerifyConsent observed
         , classifyStore = obClassifyStore observed

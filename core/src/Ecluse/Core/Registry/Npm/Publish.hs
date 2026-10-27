@@ -50,7 +50,9 @@ import Ecluse.Core.Registry (
     isSuccessStatus,
  )
 import Ecluse.Core.Registry.CachedDocument (npmCached)
+import Ecluse.Core.Registry.JsonStream (isJsonSpace)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw))
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (staticRead)
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
 import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, npmRead)
@@ -96,10 +98,11 @@ npmPublishCodec =
         { pcPrepareSource = prepareNpmSource
         , pcPrepareUpload = \_ _ inventory metadata file bytes -> pure (prepareNpmUpload inventory metadata file bytes)
         , pcNativeComplete = nativeNpmComplete
-        , pcTargetRead = npmRead
+        , pcTargetRead = staticRead npmRead
         , pcTargetReadPermille = cfFullReadPermille npmChargeFactors
         , pcProbeRequest = \targetUrl credential -> metadataRequest targetUrl credential Abbreviated
         , pcVersionListWalk = Just (\limits -> npmVersionListWalk limits (collectVersionList limits) emptyVersionList)
+        , pcPrepareTarget = \_ _ target -> pure (Right target)
         , pcPublishRequest = npmPublishRequestFor
         , pcPublishOutcome = \status _ -> classifyPublish status
         }
@@ -239,9 +242,6 @@ tagsOnly version = \case
     Nothing -> True
     Just (Object tags) -> all (== String (Key.toText version)) tags
     Just _ -> False
-
-isJsonSpace :: Word8 -> Bool
-isJsonSpace byte = byte == 32 || byte == 10 || byte == 13 || byte == 9
 
 -- @_id@, @name@ and each version's name, which the anti-shadowing guard compares with the path name.
 declaredNames :: Value -> [Text]

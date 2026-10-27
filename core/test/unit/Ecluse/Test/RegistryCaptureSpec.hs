@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Live capture helpers retain native version spelling and propagate cancellation.
 module Ecluse.Test.RegistryCaptureSpec (spec) where
 
 import Control.Exception (AsyncException (ThreadKilled))
@@ -12,7 +13,7 @@ import Network.HTTP.Types.Status (status200)
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Test.RegistryCapture (
     Catalogue (catBenchPins, catSmokeNames),
     decodeCatalogue,
@@ -63,6 +64,8 @@ spec = do
             registryUrl Npm "lodash" `shouldBe` "https://registry.npmjs.org/lodash"
         it "builds the PyPI project-JSON endpoint" $
             registryUrl PyPI "requests" `shouldBe` "https://pypi.org/pypi/requests/json"
+        it "builds the lower-case Cargo sparse shard" $
+            registryUrl Cargo "Mixed_Crate" `shouldBe` "https://index.crates.io/mi/xe/mixed_crate"
         it "builds the RubyGems versions endpoint" $
             registryUrl RubyGems "rails" `shouldBe` "https://rubygems.org/api/v1/versions/rails.json"
 
@@ -71,13 +74,16 @@ spec = do
             parseRegistryVersions Npm npmBody `shouldBe` Just ["1.0.0", "2.0.0"]
         it "reads the PyPI release keys" $
             parseRegistryVersions PyPI pypiBody `shouldBe` Just ["1.0", "2.0"]
+        it "retains Cargo raw versions in physical record order" $
+            parseRegistryVersions Cargo "{\"vers\":\"1.0.0+source.2\"}\n{\"vers\":\"1.0.0-alpha.1\"}"
+                `shouldBe` Just ["1.0.0+source.2", "1.0.0-alpha.1"]
+        it "refuses a malformed Cargo record beside a healthy version" $
+            parseRegistryVersions Cargo "{\"vers\":\"1.0.0\"}\nnot-json" `shouldBe` Nothing
         it "reads the RubyGems version numbers in listing order" $
             parseRegistryVersions RubyGems gemBody `shouldBe` Just ["3.1.0", "3.0.0"]
         it "returns Nothing on an undecodable body" $
             parseRegistryVersions Npm "{ not json" `shouldBe` Nothing
 
-    -- Guards the committed catalogue itself: a careless edit that drops an
-    -- ecosystem, empties a list, or malforms the JSON fails here, in the gating tier.
     describe "the committed catalogue" $
         it "loads with non-empty curated names for every ecosystem and non-empty bench pins" $ do
             cat <- loadCatalogue
@@ -85,31 +91,25 @@ spec = do
             Map.lookup Npm names `shouldSatisfy` maybe False (not . null)
             Map.lookup PyPI names `shouldSatisfy` maybe False (not . null)
             Map.lookup RubyGems names `shouldSatisfy` maybe False (not . null)
-            -- Anchors that catch a careless catalogue edit.
             (elem "typescript" <$> Map.lookup Npm names) `shouldBe` Just True
             Map.member "lodash" (catBenchPins cat) `shouldBe` True
 
--- A well-formed catalogue with one pin and one curated name list per ecosystem.
 sampleCatalogue :: LByteString
 sampleCatalogue =
     "{\"pins\":{\"lodash\":\"4.18.1\"},\
     \\"smokeNames\":{\"npm\":[\"a\",\"b\"],\"pypi\":[\"c\"],\"rubygems\":[\"d\"]}}"
 
--- A catalogue whose smokeNames names an ecosystem the build does not serve.
 unknownEcoCatalogue :: LByteString
-unknownEcoCatalogue = "{\"pins\":{},\"smokeNames\":{\"cargo\":[\"x\"]}}"
+unknownEcoCatalogue = "{\"pins\":{},\"smokeNames\":{\"unknown\":[\"x\"]}}"
 
--- A minimal npm packument: two versions, each a manifest the wire decoder keeps.
 npmBody :: LByteString
 npmBody =
     "{\"name\":\"demo\",\"versions\":{\
     \\"1.0.0\":{\"name\":\"demo\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://r/demo-1.0.0.tgz\"}},\
     \\"2.0.0\":{\"name\":\"demo\",\"version\":\"2.0.0\",\"dist\":{\"tarball\":\"https://r/demo-2.0.0.tgz\"}}}}"
 
--- A minimal PyPI project JSON: two releases with opaque file lists.
 pypiBody :: LByteString
 pypiBody = "{\"releases\":{\"1.0\":[],\"2.0\":[]}}"
 
--- A minimal RubyGems versions array, newest first, to pin order preservation.
 gemBody :: LByteString
 gemBody = "[{\"number\":\"3.1.0\"},{\"number\":\"3.0.0\"}]"

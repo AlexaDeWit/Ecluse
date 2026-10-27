@@ -31,7 +31,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), mkPackageName)
-import Ecluse.Core.Rules (PackageRead (prRead), RuleDeps (rdAdvisoryFreshness), evalRules, newEvaluator, prepResilience, prepare, withCveLookup)
+import Ecluse.Core.Rules (PackageRead (prRead), RuleDeps (rdAdvisoryFreshness), prepResilience, prepare, withCveLookup)
 import Ecluse.Core.Rules.Freshness (
     AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated),
     MaxAdvisoryAge,
@@ -55,7 +55,7 @@ import Ecluse.Test.Osv (mkMinimalValidDbWithMeta)
 import Ecluse.Test.Package (sampleDetails, v1_0_0)
 import Ecluse.Test.Poll (awaitUntil)
 import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, recordingAdvisorySyncTracingPort)
-import Ecluse.Test.Rules (isUndecidable, mapPackageRead, shippedRemediation)
+import Ecluse.Test.Rules (evalRules, isUndecidable, mapPackageRead, newEvaluator, shippedRemediation)
 
 import Ecluse.Core.Rules.Types qualified as Rules
 

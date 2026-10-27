@@ -26,6 +26,7 @@ import UnliftIO (tryAny)
 
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
+import Ecluse.Core.Mirror.State (StateRead (StateAbsent), stateTarget)
 import Ecluse.Core.Package (HashAlg (SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Queue (MirrorQueue (enqueue))
@@ -34,9 +35,12 @@ import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, DenyIfYanked))
 import Ecluse.Core.Security (Limits (progressFloor), mkProgressFloor)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Core.Server.Admission.Meter (MemoryMeter, steerMeter)
+import Ecluse.Core.Server.Admission.Types (BrakeLevel (Calm))
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Response (mkHelpMessage)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite))
+import Ecluse.Runtime.Env (Env (envMemoryMeter))
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.ServingDriver (pypiServingDriver)
@@ -44,6 +48,7 @@ import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, postPath, proxy
 import Ecluse.Test.Contract.Serving (servingContract)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Json (asObject, fieldAt, textAtPath, withKeys)
+import Ecluse.Test.Mirror.State (mirrorViewWith)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (admissionOnly, atDefaultPrecedence, inertRuleDeps)
@@ -62,6 +67,7 @@ spec = do
     negotiationSpec
     refusalBodySpec
     privateLegSpec
+    privateAdmissionSpec
 
 indexSpec :: Spec
 indexSpec = describe "the served Simple index" $ do
@@ -494,6 +500,40 @@ privateLegSpec = describe "the private artifact leg, addressed by the index's ow
             hits <- privateHits proxy
             map fst hits `shouldNotContain` [sdistPath]
 
+privateAdmissionSpec :: Spec
+privateAdmissionSpec = describe "private index admission scope" $ do
+    it (caseLabel "integration/pypi/native-043" "serves an ordinary private artifact while metadata admission is closed") $
+        withPrivatePyPIProxy privateIndexOnItself $ \proxy -> do
+            steerMeter (proxyMemory proxy) 0 Calm
+            response <- getPathWith [clientCredential] sdistPath (proxyApp proxy)
+            simpleStatus response `shouldBe` status200
+            simpleBody response `shouldBe` artifactBytes
+            privateHits proxy
+                `shouldReturn` [("/pypi/simple/requests", Just basicCredential), (sdistPath, Just basicCredential)]
+
+    it (caseLabel "integration/pypi/native-044" "reads an ordinary private miss before refusing public admission") $ do
+        privateCredentials <- newIORef []
+        let privateApp request respond = do
+                modifyIORef' privateCredentials (<> [lookupAuth (Wai.requestHeaders request)])
+                respond (responseLBS status404 [] "")
+        testWithApplication (pure privateApp) $ \privatePort ->
+            withPyPIProxyOver publicIndex (pypiDeps (Just (loopbackRegistryUrl (localhost privatePort))) . loopbackRegistryUrl . localhost) $ \proxy -> do
+                steerMeter (proxyMemory proxy) 0 Calm
+                response <- getPathWith [clientCredential] sdistPath (proxyApp proxy)
+                simpleStatus response `shouldBe` status503
+                readIORef privateCredentials `shouldReturn` [Just basicCredential]
+                privateHits proxy `shouldReturn` []
+
+    it (caseLabel "integration/pypi/native-045" "refuses managed selection before reading the private index or mirror state") $
+        withPrivatePyPIProxy privateIndexOnItself $ \proxy -> do
+            stateReads <- newIORef (0 :: Int)
+            mirror <- mirrorViewWith (stateTarget "https://private.example.test") (\_ _ -> modifyIORef' stateReads (+ 1) $> Right StateAbsent)
+            steerMeter (proxyMemory proxy) 0 Calm
+            response <- getPathWith [clientCredential] sdistPath (proxyWithDeps proxy (\deps -> deps{pdMirrorState = Just mirror}))
+            simpleStatus response `shouldBe` status503
+            privateHits proxy `shouldReturn` []
+            readIORef stateReads `shouldReturn` 0
+
 getIndex :: Application -> IO SResponse
 getIndex = getPath "/pypi/simple/requests"
 
@@ -519,6 +559,8 @@ data PyPIProxy = PyPIProxy
     -- ^ A separately configured application sharing the upstream and runtime.
     , privateHits :: IO [(ByteString, Maybe ByteString)]
     -- ^ Each upstream request as its mount-relative path and its @Authorization@ value.
+    , proxyMemory :: MemoryMeter
+    -- ^ Admission control for the shared runtime.
     }
 
 withPyPIProxyOver :: (Text -> Value) -> (Int -> IO PackumentDeps) -> (PyPIProxy -> IO a) -> IO a
@@ -533,7 +575,7 @@ withPyPIProxyResponding transform indexFor depsFor k = withSweeper $ \deadlines 
         env <- newTestEnvWith deadlines queue{enqueue = \_ -> fail "unexpected mirror enqueue"} (manager, manager) telemetryDisabled
         deps <- depsFor upstreamPort
         let configured change = proxyApplication PyPI env (change deps)
-        k (PyPIProxy (configured id) configured (readIORef recorded))
+        k (PyPIProxy (configured id) configured (readIORef recorded) (envMemoryMeter env))
   where
     record ref request =
         atomicModifyIORef' ref (\hits -> (hits <> [(mountPathOf request, lookupAuth (Wai.requestHeaders request))], ()))

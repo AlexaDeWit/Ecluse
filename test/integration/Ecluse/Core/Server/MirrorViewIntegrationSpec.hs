@@ -349,7 +349,7 @@ projectVersions envelope versions request respond = case dropWhileEnd T.null (pa
         inventory <- mirrorSample [1, 2] False (selfBaseUrl request <> "/files/") "native"
         let files = case inventoryReadData inventory of
                 PyPIMirrorRead document -> map snd (simpleFiles document)
-                NpmMirrorRead _ -> []
+                _ -> []
             versioned = [Object (KeyMap.mapWithKey (versionField version) fields) | version <- versions, Object fields <- files]
             body = Object (KeyMap.insert "files" (fromListValue versioned) envelope)
         respond (responseLBS status200 [("Content-Type", "application/vnd.pypi.simple.v1+json")] (encode body))
@@ -370,6 +370,7 @@ nativeWith companion bytes status numbers request respond = case dropWhileEnd T.
         let body = case inventoryReadData inventory of
                 PyPIMirrorRead document -> encode (Object (KeyMap.insert "files" (fromListValue (map snd (simpleFiles document))) (simpleEnvelope document)))
                 NpmMirrorRead fields -> encode (Object fields)
+                CargoMirrorRead _ -> "unsupported fixture source"
         respond (responseLBS status [("Content-Type", "application/vnd.pypi.simple.v1+json")] body)
     _ -> respond (responseLBS status [] bytes)
 
@@ -412,4 +413,4 @@ withManagedProxyOver (queue, configure) view firstParty private public action = 
                         , pdFirstParty = const firstParty
                         , pdMountBaseUrl = "http://ecluse.test/pypi"
                         }
-            action (application (mkServerConfig (maybeToList (mountBindingFor PyPI (configure deps) Nothing))) env)
+            action (application (mkServerConfig (maybeToList (mountBindingFor PyPI (configure deps) Nothing Nothing))) env)

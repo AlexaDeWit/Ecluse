@@ -8,12 +8,17 @@ module Ecluse.E2E.Harness.CodeArtifact (
     RepositoryBoundary (..),
     CodeArtifactFixture (..),
     withCodeArtifactFixture,
+    withCodeArtifactFixtureFor,
     codeArtifactDomain,
     codeArtifactOwner,
     codeArtifactToken,
     repositoryArn,
     codeArtifactNamesUnder,
     codeArtifactVersions,
+    withFixtureValue,
+    codeArtifactDeleteRequests,
+    creditCodeArtifactDeletes,
+    withCodeArtifactDeleteAudit,
 ) where
 
 import Amazonka qualified as AWS
@@ -29,8 +34,11 @@ import Data.Text qualified as T
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Network.HTTP.Types (Status, status200, status400, status403, status404)
 import Network.Wai (Application, Request, Response, getRequestBodyChunk, pathInfo, queryString, requestHeaders, requestMethod, responseLBS)
+import Test.Hspec (shouldReturn)
+import UnliftIO (bracket)
+import UnliftIO.STM (swapTVar)
 
-import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, PyPI), ecosystemName)
 import Ecluse.Core.Package (mkPackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (StoreObservation (..), StoredVersion (storedVersion), collectPages)
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
@@ -40,6 +48,7 @@ import Ecluse.Core.Version (renderVersion)
 import Ecluse.E2E.Harness.Container (withBridgeApplication)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), codeArtifactFormat)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Internal (ControlPlane (cpRead), controlPlaneFor, observationFor)
+import Ecluse.Test.Contract.Sweep.Types (SweepRun)
 import Ecluse.Test.Maintenance (withBucket)
 import Ecluse.Test.Support (expectRightText)
 
@@ -54,7 +63,10 @@ data RepositoryBoundary = RepositoryBoundary
 
 -- | Faults and observations survive product restarts within one contract resource lifetime.
 data CodeArtifactFixture = CodeArtifactFixture
-    { cafPort :: Int
+    { cafEcosystem :: Ecosystem
+    , cafCredential :: Text
+    , cafPort :: Int
+    , cafUpstreams :: TVar (Map Text [Text])
     , cafTags :: TVar (Map Text (Map Text Text))
     , cafRefusedDeletes :: TVar [Text]
     , cafRequests :: TVar [(Text, Text)]
@@ -78,11 +90,16 @@ repositoryArn name = "arn:aws:codeartifact:us-east-1:" <> codeArtifactOwner <> "
 
 -- | Expose the documented REST paths to the running product's ordinary AWS adapters.
 withCodeArtifactFixture :: [RepositoryBoundary] -> (CodeArtifactFixture -> IO a) -> IO a
-withCodeArtifactFixture repositories action = do
+withCodeArtifactFixture = withCodeArtifactFixtureFor PyPI codeArtifactToken
+
+-- | Reuse the same control plane with a native ecosystem and its minted test token.
+withCodeArtifactFixtureFor :: Ecosystem -> Text -> [RepositoryBoundary] -> (CodeArtifactFixture -> IO a) -> IO a
+withCodeArtifactFixtureFor ecosystem token repositories action = do
     tags <- newTVarIO (Map.fromList [(repositoryName repository, Map.singleton "ecluse-dredger-consent" "true") | repository <- repositories])
+    upstreams <- newTVarIO (Map.fromList [(repositoryName repository, repositoryUpstreams repository) | repository <- repositories])
     refused <- newTVarIO []
     requests <- newTVarIO []
-    let fixture = CodeArtifactFixture 0 tags refused requests
+    let fixture = CodeArtifactFixture ecosystem token 0 upstreams tags refused requests
     withBridgeApplication (codeArtifactApplication repositories fixture) $ \port ->
         action fixture{cafPort = port}
 
@@ -97,7 +114,7 @@ codeArtifactNamesUnder fixture repository prefix = do
 codeArtifactVersions :: CodeArtifactFixture -> Text -> Text -> IO [Text]
 codeArtifactVersions fixture repository name = do
     observer <- fixtureObservation fixture repository
-    result <- obEnumerateVersions observer (mkPackageName PyPI Nothing name)
+    result <- obEnumerateVersions observer (mkPackageName (cafEcosystem fixture) Nothing name)
     sort . map (renderVersion . storedVersion) <$> expectRightText (first show result)
 
 fixtureObservation :: CodeArtifactFixture -> Text -> IO StoreObservation
@@ -105,13 +122,16 @@ fixtureObservation fixture repository = do
     base <- AWS.newEnv (pure . fromKeys (AWS.AccessKey "test") (AWS.SecretKey "test"))
     let env = AWS.overrideService (AWS.setEndpoint False "127.0.0.1" (cafPort fixture)) base{AWS.region = AWS.Region' "us-east-1"}
     plane <- cpRead <$> controlPlaneFor env
-    format <- maybe (fail "PyPI has no CodeArtifact format") pure (codeArtifactFormat PyPI)
+    format <- maybe (fail "fixture ecosystem has no CodeArtifact format") pure (codeArtifactFormat (cafEcosystem fixture))
     let store = CodeArtifactStore codeArtifactDomain codeArtifactOwner "us-east-1" repository format
-    pure (observationFor (mkNameAlphabet pypiNameLeadChars) (\_ -> fail "direct inventory must not read package metadata") store plane)
+        alphabet = case cafEcosystem fixture of
+            Cargo -> "-0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+            _ -> pypiNameLeadChars
+    pure (observationFor (mkNameAlphabet alphabet) (\_ -> fail "direct inventory must not read package metadata") store plane)
 
 codeArtifactApplication :: [RepositoryBoundary] -> CodeArtifactFixture -> Application
 codeArtifactApplication repositories fixture request respond = case pathInfo request of
-    "pypi" : name : rest -> case find ((== name) . repositoryName) repositories of
+    format : name : rest | format == ecosystemName (cafEcosystem fixture) -> case find ((== name) . repositoryName) repositories of
         Just repository -> repositoryApplication repository request{pathInfo = rest} respond
         Nothing -> respond missingRepository
     _ -> do
@@ -131,7 +151,7 @@ controlRequest repositories fixture request
         if validDomain request
             then do
                 expires <- (+ 3600) <$> getPOSIXTime
-                pure (json (object ["authorizationToken" .= codeArtifactToken, "expiration" .= (realToFrac expires :: Double)]))
+                pure (json (object ["authorizationToken" .= cafCredential fixture, "expiration" .= (realToFrac expires :: Double)]))
             else pure invalidCoordinates
     | pathInfo request `elem` [["v1", "tags"], ["v1", "tag"], ["v1", "untag"]] =
         case find (\repository -> parameter "resourceArn" request == Just (repositoryArn (repositoryName repository))) repositories of
@@ -144,18 +164,20 @@ controlRequest repositories fixture request
 
 repositoryRequest :: CodeArtifactFixture -> RepositoryBoundary -> Request -> IO Response
 repositoryRequest fixture repository request = case (requestMethod request, pathInfo request) of
-    ("GET", ["v1", "repository"]) -> pure (json (repositoryDescription repository))
-    ("POST", ["v1", "packages"]) | validFormat request -> do
+    ("GET", ["v1", "repository"]) -> do
+        upstreams <- Map.findWithDefault [] (repositoryName repository) <$> readTVarIO (cafUpstreams fixture)
+        pure (json (repositoryDescription repository{repositoryUpstreams = upstreams}))
+    ("POST", ["v1", "packages"]) | validFormat fixture request -> do
         names <- Map.keys <$> repositoryInventory repository
         let prefix = fromMaybe "" (parameter "package-prefix" request)
-        pure (json (object ["packages" .= [object ["format" .= ("pypi" :: Text), "package" .= name] | name <- names, prefix `T.isPrefixOf` name]]))
+        pure (json (object ["packages" .= [object ["format" .= ecosystemName (cafEcosystem fixture), "package" .= name] | name <- names, prefix `T.isPrefixOf` name]]))
     ("POST", ["v1", "package", "versions"])
-        | validFormat request
+        | validFormat fixture request
         , Just name <- parameter "package" request -> do
             versions <- Map.findWithDefault [] name <$> repositoryInventory repository
-            pure (json (object ["format" .= ("pypi" :: Text), "package" .= name, "versions" .= [object ["version" .= version, "status" .= ("Published" :: Text)] | version <- versions]]))
+            pure (json (object ["format" .= ecosystemName (cafEcosystem fixture), "package" .= name, "versions" .= [object ["version" .= version, "status" .= ("Published" :: Text)] | version <- versions]]))
     ("POST", ["v1", "package", "versions", "delete"])
-        | validFormat request
+        | validFormat fixture request
         , Just name <- parameter "package" request ->
             deleteVersions fixture repository name request
     _ -> pure invalidCoordinates
@@ -179,6 +201,7 @@ deleteVersions fixture repository name request =
     requestObject request >>= \case
         Just body
             | Just versions <- parseMaybe (.: "versions") body
+            , parseMaybe (.: "expectedStatus") body == Just ("Published" :: Text)
             , not (null versions)
             , length versions <= 100 -> do
                 refused <- elem (repositoryName repository) <$> readTVarIO (cafRefusedDeletes fixture)
@@ -228,8 +251,8 @@ parameter name request = decodeUtf8 <$> join (lookup name (queryString request))
 validDomain :: Request -> Bool
 validDomain request = parameter "domain" request == Just codeArtifactDomain && parameter "domain-owner" request == Just codeArtifactOwner
 
-validFormat :: Request -> Bool
-validFormat request = parameter "format" request == Just "pypi" && isNothing (parameter "namespace" request) && isNothing (parameter "next-token" request)
+validFormat :: CodeArtifactFixture -> Request -> Bool
+validFormat fixture request = parameter "format" request == Just (ecosystemName (cafEcosystem fixture)) && isNothing (parameter "namespace" request) && isNothing (parameter "next-token" request)
 
 json :: Value -> Response
 json = responseLBS status200 [("Content-Type", "application/json")] . Aeson.encode
@@ -242,3 +265,30 @@ invalidCoordinates = fault status400 "ValidationException" "unexpected CodeArtif
 
 missingRepository :: Response
 missingRepository = fault status404 "ResourceNotFoundException" "unknown fixture repository"
+
+-- | Restore fixture state even when a product role or assertion fails.
+withFixtureValue :: TVar a -> a -> IO b -> IO b
+withFixtureValue variable value action = bracket (atomically (swapTVar variable value)) (atomically . writeTVar variable) (const action)
+
+-- | Physical version-delete requests exclude native yank and metadata changes.
+codeArtifactDeleteRequests :: CodeArtifactFixture -> IO [(Text, Text)]
+codeArtifactDeleteRequests fixture = filter ((== "v1/package/versions/delete") . snd) <$> readTVarIO (cafRequests fixture)
+
+-- | Attribute physical deletion requests to the Dredger process that issued them.
+creditCodeArtifactDeletes :: CodeArtifactFixture -> TVar [(Text, Text)] -> IO SweepRun -> IO SweepRun
+creditCodeArtifactDeletes fixture credited run = do
+    prior <- length <$> codeArtifactDeleteRequests fixture
+    swept <- run
+    made <- drop prior <$> codeArtifactDeleteRequests fixture
+    atomically (modifyTVar' credited (<> made))
+    pure swept
+
+-- | A worker may issue no physical deletion beyond the concurrent Dredger's credited calls.
+withCodeArtifactDeleteAudit :: CodeArtifactFixture -> TVar [(Text, Text)] -> IO a -> IO a
+withCodeArtifactDeleteAudit fixture credited action = do
+    prior <- codeArtifactDeleteRequests fixture
+    count <- length <$> readTVarIO credited
+    result <- action
+    made <- drop count <$> readTVarIO credited
+    codeArtifactDeleteRequests fixture `shouldReturn` prior <> made
+    pure result

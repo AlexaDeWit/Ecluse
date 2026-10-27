@@ -16,7 +16,7 @@ import Network.HTTP.Types.Status (status200)
 import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 
 import Ecluse.Core.BuildIdentity (parseOperatorContact, renderUserAgent, userAgent)
-import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, PyPI))
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Compile (newFeedManagerWithIdentity)
 import Ecluse.Core.Osv.Ecosystem (
@@ -182,7 +182,7 @@ spec = describe "the OSV ingest stream" $ do
 
         -- Each bound is measured against its own export, so a fan-out that is ordinary on
         -- PyPI is still anomalous on npm.
-        forM_ [npmFeed, osvEcosystemFor PyPI] $ \feed ->
+        forM_ [npmFeed, osvEcosystemFor PyPI, osvEcosystemFor Cargo] $ \feed ->
             describe (toString (osvWireName feed)) $ do
                 it "flags an advisory one range past the ecosystem's threshold" $ do
                     logged <- fanOutLog feed (osvMaxAdvisoryFanOut feed + 1)
@@ -215,6 +215,14 @@ spec = describe "the OSV ingest stream" $ do
                     [("mixed.json", "{\"id\":\"GHSA-mixed\",\"affected\":[{\"package\":{\"name\":\"mixed\",\"ecosystem\":\"npm\"},\"versions\":[\"1.0.0\",\"2026.05.1\"]}]}")]
             (results, stats) <- ingestedRows npmFeed zipData
             map extIntroduced results `shouldBe` [Just "1.0.0", Just "2026.05.1"]
+            statAccepted stats `shouldBe` 1
+            statUnorderable stats `shouldBe` 1
+
+        it "ingests crates.io names and native Cargo bounds without npm aliases" $ do
+            zipData <- osvZipOf [("cargo.json", "{\"id\":\"GHSA-cargo\",\"affected\":[{\"package\":{\"name\":\"Acme_Tools\",\"ecosystem\":\"crates.io\"},\"versions\":[\"18446744073709551615.0.0\",\"v1.2.3\"]}]}")]
+            (results, stats) <- ingestedRows (osvEcosystemFor Cargo) zipData
+            map extPackage results `shouldBe` ["acme_tools", "acme_tools"]
+            map extIntroduced results `shouldBe` [Just "18446744073709551615.0.0", Just "v1.2.3"]
             statAccepted stats `shouldBe` 1
             statUnorderable stats `shouldBe` 1
 

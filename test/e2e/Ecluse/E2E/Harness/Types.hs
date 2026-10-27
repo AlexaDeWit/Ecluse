@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Client state, product endpoints and the resources shared by each E2E group.
 module Ecluse.E2E.Harness.Types (
     E2E (..),
     E2EConfig (..),
@@ -9,10 +10,12 @@ module Ecluse.E2E.Harness.Types (
     Topology (..),
     npmTopology,
     pypiTopology,
+    cargoTopology,
     pypiAdvisoryTopology,
     dredgerTopology,
     mixedTopology,
     clientEndpoint,
+    clientCertificateBundle,
     packageStore,
     serviceUrl,
     ministackPort,
@@ -24,9 +27,10 @@ module Ecluse.E2E.Harness.Types (
 ) where
 
 import Data.Map.Strict qualified as Map
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Test.Contract.Install (ClientResult (..))
 import Network.HTTP.Client (Manager)
+import System.FilePath ((</>))
 
 -- | Only the processes and endpoints acquired for this group.
 data E2E = E2E
@@ -70,6 +74,10 @@ npmTopology = Topology [Npm] True False
 pypiTopology :: Topology
 pypiTopology = Topology [PyPI] False False
 
+-- | Native Cargo reads use the shared TLS registry fixture.
+cargoTopology :: Topology
+cargoTopology = Topology [Cargo] False False
+
 -- | Advisory compilation and reads share the S3 emulator.
 pypiAdvisoryTopology :: Topology
 pypiAdvisoryTopology = pypiTopology{topologyAws = True}
@@ -78,9 +86,9 @@ pypiAdvisoryTopology = pypiTopology{topologyAws = True}
 dredgerTopology :: Topology
 dredgerTopology = npmTopology{topologyAws = True}
 
--- | The supported shared-proxy configuration enables both ecosystems.
+-- | The shared proxy serves every supported ecosystem in one process.
 mixedTopology :: Topology
-mixedTopology = npmTopology{topologyMounts = [Npm, PyPI]}
+mixedTopology = npmTopology{topologyMounts = [Npm, PyPI, Cargo]}
 
 -- | Resolve a required client capability before constructing a project.
 clientEndpoint :: Ecosystem -> E2E -> IO Text
@@ -89,6 +97,10 @@ clientEndpoint ecosystem environment =
         (fail ("topology has no client endpoint for " <> show ecosystem))
         pure
         (Map.lookup ecosystem (e2eClientEndpoints environment))
+
+-- | Trust the CA generated for this group's local TLS listeners.
+clientCertificateBundle :: E2E -> FilePath
+clientCertificateBundle environment = gdpWorkDir (e2ePlane environment) </> "certs/bundle.pem"
 
 -- | Resolve the required package-store capability before observing it.
 packageStore :: E2E -> IO Service
@@ -130,6 +142,7 @@ state out and the proxy the only index.
 data PipProject = PipProject
     { ppDir :: FilePath
     , ppEnv :: [(String, String)]
+    , ppCertificateBundle :: Maybe FilePath
     , ppIndex :: Text
     -- ^ The Simple-index URL this project resolves through.
     }

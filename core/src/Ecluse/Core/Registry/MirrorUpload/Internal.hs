@@ -35,24 +35,29 @@ module Ecluse.Core.Registry.MirrorUpload.Internal (
 ) where
 
 import Control.Monad (foldM)
-import Data.Aeson (FromJSON (parseJSON), Object, Value (Object, String))
+import Data.Aeson (FromJSON (parseJSON), Object, Value (Bool, Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Aeson.Types (parseEither)
+import Data.Aeson.Types (parseEither, parseMaybe)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Package (Artifact (..), Hash, HashAlg (SHA256), PackageDetails (..), PackageInfo (infoVersions), PackageName, mkHash, pkgEcosystem)
-import Ecluse.Core.Package.Entry (EntryKey)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Core.Package (Artifact (..), Availability (Available, Yanked), Hash, HashAlg (SHA256), PackageDetails (..), PackageInfo (infoVersions), PackageName, mkHash, pkgEcosystem)
+import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Package.Hash (canonicalHashValue, computeDigest, hexDigestText)
 import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest)
 import Ecluse.Core.Registry (MirrorArtifact (..), PublishFault (PublishIntegrityMismatch, PublishSourceUnavailable))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.Cargo.Discovery (cargoArtifactCoordinate, coordinateFilename)
+import Ecluse.Core.Registry.Cargo.Document (CargoDocument, cargoDocument, cargoRecords)
+import Ecluse.Core.Registry.Cargo.Project qualified as Cargo
+import Ecluse.Core.Registry.Cargo.Wire (validateCargoRecord)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, restrictSimpleFiles, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Project (fileCoordinate, projectFile, projectName, projectSimpleIndex)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifEntryKey, ifFilename))
-import Ecluse.Core.Registry.ServedDocument (uniqueEntries, validEntryKey)
+import Ecluse.Core.Registry.ServedDocument (stringField, uniqueEntries, validEntryKey)
+import Ecluse.Core.Registry.WireSupport (parsePublishTime)
 import Ecluse.Core.Server.Path (mkFilename, unFilename)
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (..), verifyIntegrity)
@@ -61,6 +66,8 @@ import Ecluse.Core.Worker.Integrity (IntegrityResult (..), verifyIntegrity)
 data MirrorReadData
     = NpmMirrorRead Object
     | PyPIMirrorRead SimpleDocument
+    | -- | Original crates.io rows. Their stored source identity never grants target transport authority.
+      CargoMirrorRead CargoDocument
     deriving stock (Eq, Show)
 
 -- | Restore retained source fields without encoding or reparsing them.
@@ -68,6 +75,7 @@ mirrorReadDocument :: MirrorReadData -> CachedDoc
 mirrorReadDocument = \case
     NpmMirrorRead fields -> fst npmCached (Object fields)
     PyPIMirrorRead document -> fst pypiSimpleCached document
+    CargoMirrorRead document -> fst cargoCached document
 
 -- | Membership comes from the complete paired version snapshot, never a requested-file subset.
 data MirrorInventory = MirrorInventory
@@ -155,6 +163,7 @@ checkedMirrorInventory name version doc readData = do
         ( case readData of
             NpmMirrorRead fields -> snd npmCached raw == Just (Object fields)
             PyPIMirrorRead document -> snd pypiSimpleCached raw == Just document
+            CargoMirrorRead document -> snd cargoCached raw == Just document
         )
         $ refused "the read metadata is not paired with the admitted snapshot"
     restoreMirrorInventory details (restrictReadData (Set.fromList (map artEntryKey (toList (pkgArtifacts details)))) readData)
@@ -187,6 +196,7 @@ restrictReadData :: Set EntryKey -> MirrorReadData -> MirrorReadData
 restrictReadData keys = \case
     NpmMirrorRead fields -> NpmMirrorRead fields
     PyPIMirrorRead document -> PyPIMirrorRead (restrictSimpleFiles keys document)
+    CargoMirrorRead document -> CargoMirrorRead (cargoDocument (filter ((`Set.member` keys) . fst) (cargoRecords document)))
 
 validateReadData :: PackageDetails -> MirrorReadData -> Either PublishFault ()
 validateReadData details = \case
@@ -202,6 +212,25 @@ validateReadData details = \case
             Just (String name) | projectName name == Right (pkgName details) -> Right ()
             _ -> refused "the source envelope belongs to another package"
         traverse_ (validatePyPIEntry details entries) (pkgArtifacts details)
+    CargoMirrorRead document -> do
+        unless (pkgEcosystem (pkgName details) == Cargo) (refused "the source fields belong to another ecosystem")
+        case (cargoRecords document, toList (pkgArtifacts details)) of
+            ([(key, raw@(Object fields))], [artifact]) -> do
+                first PublishSourceUnavailable (validateCargoRecord raw)
+                case key of
+                    RecordEntry position | position >= 0 && key == artEntryKey artifact -> pure ()
+                    _ -> refused "Cargo source coordinate disagrees with its artifact"
+                name <- maybeToRight (PublishSourceUnavailable "Cargo source name is missing") (stringField "name" fields)
+                version <- maybeToRight (PublishSourceUnavailable "Cargo source version is missing") (stringField "vers" fields)
+                checksum <- maybeToRight (PublishSourceUnavailable "Cargo source checksum is missing") (stringField "cksum" fields)
+                unless (Cargo.projectName name == Right (pkgName details) && version == renderVersion (pkgVersion details)) (refused "Cargo source identity disagrees with the admitted version")
+                hash <- first PublishSourceUnavailable (mkHash SHA256 checksum)
+                coordinate <- first PublishSourceUnavailable (cargoArtifactCoordinate name (pkgVersion details) hash)
+                unless (unFilename (coordinateFilename coordinate) == artFilename artifact && artHashes artifact == [hash]) (refused "Cargo source archive identity disagrees with its artifact")
+                let published = KeyMap.lookup "pubtime" fields >>= parseMaybe parsePublishTime
+                    availability = if KeyMap.lookup "yanked" fields == Just (Bool True) then Yanked else Available
+                unless (published == pkgPublishedAt details && availability == pkgAvailability details && isNothing (artCoreMetadata artifact) && isNothing (artSize artifact)) (refused "Cargo source policy facts disagree with the admitted version")
+            _ -> refused "Cargo requires exactly one paired source row and archive"
 
 validatePyPIEntry :: PackageDetails -> Map EntryKey Value -> Artifact -> Either PublishFault ()
 validatePyPIEntry details entries artifact = do

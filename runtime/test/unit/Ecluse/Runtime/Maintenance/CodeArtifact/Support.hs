@@ -10,6 +10,7 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Support (
     npmStore,
     withNpmStore,
     withPyPIStore,
+    withCargoStore,
 
     -- * Describe answers
     describing,
@@ -32,7 +33,7 @@ import Amazonka qualified as AWS
 import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI), ecosystemName)
 import Ecluse.Core.Fault (tfDetail)
 import Ecluse.Core.Registry.Maintenance (StoreFault (..))
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
@@ -58,23 +59,24 @@ storeFor eco = coordinates <$> codeArtifactFormat eco
             , casFormat = format
             }
 
-{- | Run the cases over 'npmStore'. The store's coordinates carry a parsed format, so a spec that
-finds none has found a regression rather than an arm to skip.
--}
+-- | Require the native npm format before constructing the cases.
 withNpmStore :: (CodeArtifactStore -> Spec) -> Spec
-withNpmStore cases = maybe noNpmFormat cases npmStore
-  where
-    noNpmFormat =
-        it "has a CodeArtifact format for npm" $
-            expectationFailure "npm resolved to no CodeArtifact format"
+withNpmStore = withStore Npm
 
--- | Run the cases over the PyPI repository at the coordinates 'npmStore' uses, failing as 'withNpmStore' does.
+-- | Require the native PyPI format at the shared repository coordinates.
 withPyPIStore :: (CodeArtifactStore -> Spec) -> Spec
-withPyPIStore cases = maybe noPyPIFormat cases (storeFor PyPI)
+withPyPIStore = withStore PyPI
+
+-- | Require the native Cargo format at the shared repository coordinates.
+withCargoStore :: (CodeArtifactStore -> Spec) -> Spec
+withCargoStore = withStore Cargo
+
+withStore :: Ecosystem -> (CodeArtifactStore -> Spec) -> Spec
+withStore eco cases = maybe missingFormat cases (storeFor eco)
   where
-    noPyPIFormat =
-        it "has a CodeArtifact format for pypi" $
-            expectationFailure "pypi resolved to no CodeArtifact format"
+    missingFormat =
+        it ("has a CodeArtifact format for " <> toString (ecosystemName eco)) $
+            expectationFailure (toString (ecosystemName eco) <> " resolved to no CodeArtifact format")
 
 -- | A repository whose own external connection reaches the named registry.
 connectedTo :: Text -> CA.RepositoryDescription

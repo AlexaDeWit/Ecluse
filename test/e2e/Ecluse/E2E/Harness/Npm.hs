@@ -2,9 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | npm clients for end-to-end scenarios. Each project isolates npm state and disables package
-lifecycle scripts.
--}
+-- | Isolated npm clients disable package lifecycle scripts.
 module Ecluse.E2E.Harness.Npm (
     npmInstall,
     npmInstallIn,
@@ -77,6 +75,7 @@ withProjectContents e2e packageJson npmrcContents use =
         baseEnv <- getEnvironment
         let overrides =
                 [ ("npm_config_registry", toString registry)
+                , ("npm_config_strict_ssl", "true")
                 , ("npm_config_cache", cacheDir)
                 , ("npm_config_userconfig", npmrc)
                 , ("npm_config_prefix", prefixDir)
@@ -93,11 +92,13 @@ withProjectContents e2e packageJson npmrcContents use =
                 , ("npm_config_fetch_retry_maxtimeout", "1000")
                 , ("HOME", projectDir)
                 ]
+            trust = [("npm_config_cafile", clientCertificateBundle e2e) | "https://" `T.isPrefixOf` e2eBaseUrl e2e]
             cleanEnv =
                 filter
                     (\(k, _) -> k `notElem` map fst overrides && not ("npm_config_" `isPrefixOf` k))
                     baseEnv
                     <> overrides
+                    <> trust
         use NpmProject{npDir = projectDir, npEnv = cleanEnv}
 
 -- | Prepare an isolated publisher with the token npm requires before contacting the proxy.

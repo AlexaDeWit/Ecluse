@@ -2,9 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Registry documents cut to part of their versions, as a private registry that holds only the
-versions a deployment consumed serves them. A cut document keeps its other fields as captured.
--}
+-- | Private-copy cuts preserve captured fields outside the selected native releases.
 module Ecluse.Test.Corpus.Subset (
     -- * Choosing versions
     byPublishTime,
@@ -12,12 +10,15 @@ module Ecluse.Test.Corpus.Subset (
     oldestVersions,
 
     -- * Cutting documents
+    keepCargoVersions,
     keepNpmVersions,
     keepPyPIVersions,
+    heavyCargoBase,
     heavyNpmBase,
     heavyPyPIBase,
 
     -- * The newest share of a capture
+    newestCargoShare,
     newestNpmShare,
     newestPyPIShare,
 ) where
@@ -32,6 +33,7 @@ import Data.Text qualified as T
 import Ecluse.Core.Package (Artifact (artFilename), PackageDetails (pkgArtifacts, pkgPublishedAt), PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Version (canonicalPep440, renderVersion)
+import Ecluse.Test.Corpus.Cargo (decodeCargoValues, projectCargoTree)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 
@@ -122,3 +124,29 @@ heavyPyPIBase size = \case
 
 padded :: Text -> Int -> Text
 padded label width = label <> " " <> T.replicate (max 0 (width - T.length label - 1)) "x"
+
+-- | Keep native release rows in source order without altering their fields.
+keepCargoVersions :: Set Text -> Value -> Value
+keepCargoVersions kept = \case
+    Array entries -> toJSON [value | value@(Object fields) <- toList entries, Just (String version) <- [KeyMap.lookup "vers" fields], version `Set.member` kept]
+    other -> other
+
+-- | Add feature text to retained records to stress a feature-heavy native private source.
+heavyCargoBase :: Int -> Value -> Value
+heavyCargoBase size = \case
+    Array entries -> toJSON (map addFeature (toList entries))
+      where
+        width = max 1 (size `div` max 1 (length entries))
+        addFeature (Object fields) = Object (KeyMap.insert "features" (Object (KeyMap.insert (Key.fromText ("ecluse_" <> T.replicate width "x")) (toJSON ([] :: [Text])) features)) fields)
+          where
+            features = case KeyMap.lookup "features" fields of
+                Just (Object original) -> original
+                _ -> mempty
+        addFeature value = value
+    other -> other
+
+-- | Cut native captures by their recorded publication times and keep a native array internally.
+newestCargoShare :: Rational -> PackageName -> ByteString -> Either String Value
+newestCargoShare share name bytes = do
+    (info, _) <- first show (projectCargoTree defaultLimits name bytes)
+    keepCargoVersions (newestVersions share info) <$> first toString (decodeCargoValues bytes)

@@ -15,7 +15,7 @@ module Ecluse.Core.Server.Pipeline.Origin (
     -- * Fetching the two origins
     fetchPrivateOrigin,
     fetchPublicOrigin,
-    preparePublicMetadata,
+    withPublicMetadata,
     withPrivateMetadataClient,
 
     -- * One origin's coordinates
@@ -44,17 +44,20 @@ import Ecluse.Core.Registry.Metadata (
         MetadataNameMismatch,
         MetadataUndecodable
     ),
-    VersionRead,
+    VersionDoc (..),
+    VersionRead (..),
  )
-import Ecluse.Core.Registry.Origin (OriginClient (ocClient), OriginFor, Private, Public, anonymousOrigin, chargingFullReads, controlPublicOrigin, originBaseUrl, originClientOf, perCallerOrigin)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (canChargeFullReadWorkspace)
+import Ecluse.Core.Registry.Origin (OriginClient (ocClient), OriginFor, Private, Public, anonymousOrigin, chargingFullReadWorkspace, chargingFullReads, chargingSelectedMetadata, controlPublicOrigin, originBaseUrl, originClientOf, perCallerOrigin)
 import Ecluse.Core.Registry.Request (BaseRequest)
 import Ecluse.Core.Security (Limits (progressFloor))
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
-import Ecluse.Core.Server.Admission.Meter (ChargePart, MemoryTicket, awaitingFlight, chargePart, servingPart, stepDown)
+import Ecluse.Core.Server.Admission.Meter (ChargePart, MemoryTicket, awaitingFlight, charge, chargePart, newChargeRegion, servingFlight, servingPart, stepDown)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfKeptPermille))
-import Ecluse.Core.Server.Cache.Store (PreparedStore)
-import Ecluse.Core.Server.Cache.Types (Source (Source), fullKey)
+import Ecluse.Core.Server.Cache.Store (executePrepared)
+import Ecluse.Core.Server.Cache.Types (Source (Source), fullKey, versionKey)
+import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Server.Context (
     Handler,
     PackumentDeps (..),
@@ -134,7 +137,7 @@ fetchPrivateOrigin deps rt part token name = case pdPrivateBase deps of
     Nothing -> pure OriginAbsent
     Just privateBase -> do
         logFM DebugS (ls ("fetching private origin for " <> renderPackageName name))
-        let origin = chargingFullReads (fullReadCharge deps part) (privateOrigin rt deps privateBase token)
+        origin <- liftIO (fullReadOrigin deps part (privateOrigin rt deps privateBase token))
         keepingRead deps part . originResultOf =<< tryAny (withMetadataClient rt deps privateMetadataClient origin (`fetchFullManifest` name))
 
 -- | Cache anonymous public metadata under the origin's base URL.
@@ -143,7 +146,8 @@ fetchPublicOrigin deps rt ticket part name = do
     logFM DebugS (ls ("fetching public origin for " <> renderPackageName name))
     -- Every request that shares this read waits on it, so whichever request leads it pays with their priority.
     let flight = flightOf (fullKey (publicSource deps) name)
-        origin = chargingFullReads (fullReadCharge deps (servingPart flight part)) (publicOrigin rt deps)
+        sharedPart = servingPart flight part
+    origin <- liftIO (fullReadOrigin deps sharedPart (publicOrigin rt deps))
     keepingRead deps part . originResultOf =<< tryAny (awaitingFlight ticket flight (withMetadataClient rt deps (publicMetadataClient (srMetadataCache rt) (publicSource deps)) origin (`fetchFullManifest` name)))
 
 -- Once its result is evaluated a read holds only its manifest, so its part steps down to the kept charge.
@@ -158,8 +162,7 @@ keptCharge deps = \case
     OriginResolved manifest -> scaleCharge (cfKeptPermille (chargeFactors deps)) (manifestBodyBytes manifest)
     _ -> 0
 
-{- Run an action over a per-request read handle for one origin. 'withRunInIO' captures the request's
-@katip@ context into the failure logs, and each read holds to the mount's 'Limits' and the serve cap. -}
+-- Origin logs use the request's logging context and its selected upstream.
 withMetadataClient ::
     ServeRuntime ->
     PackumentDeps ->
@@ -181,21 +184,58 @@ withMetadataClient rt deps settle origin k =
   where
     baseUrl = originBaseUrl (originClientOf origin)
 
+fullReadOrigin :: PackumentDeps -> ChargePart -> OriginFor posture -> IO (OriginFor posture)
+fullReadOrigin deps part origin
+    | canChargeFullReadWorkspace (metadataRead (pdMetadata deps)) = do
+        workspace <- newChargeRegion (chargePart part)
+        pure (chargingFullReadWorkspace workspace charged)
+    | otherwise = pure charged
+  where
+    charged = chargingFullReads (fullReadCharge deps part) origin
+
 fullReadCharge :: PackumentDeps -> ChargePart -> Int -> IO ()
 fullReadCharge deps part = chargePart part . scaleCharge (cfFullReadPermille (chargeFactors deps))
 
 chargeFactors :: PackumentDeps -> ChargeFactors
 chargeFactors = metadataChargeFactors . pdMetadata
 
--- | Bypass shared caching so the private upstream authorises each caller's credential.
-withPrivateMetadataClient :: ServeRuntime -> PackumentDeps -> BaseRequest -> Maybe ClientCredential -> (MetadataClient -> IO a) -> Handler a
-withPrivateMetadataClient rt deps base token =
-    withMetadataClient rt deps privateMetadataClient (privateOrigin rt deps base token)
+{- | Bypass shared caching so the private upstream authorises each caller's credential.
+Static lookups can omit the ticket. Native workspace admission requires one.
+-}
+withPrivateMetadataClient :: ServeRuntime -> PackumentDeps -> Maybe MemoryTicket -> BaseRequest -> Maybe ClientCredential -> (MetadataClient -> IO a) -> Handler a
+withPrivateMetadataClient rt deps ticket base token action = do
+    workspace <- liftIO (traverse (newChargeRegion . charge) ticket)
+    let selected = privateOrigin rt deps base token
+        origin = case workspace of
+            Nothing -> selected
+            Just pay -> chargingSelectedMetadata pay (chargingFullReads (pay . scaleCharge (cfFullReadPermille (chargeFactors deps))) selected)
+    withMetadataClient rt deps privateMetadataClient origin action
 
--- | Pin a public local value without starting remote work.
-preparePublicMetadata :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Handler (PreparedStore MetadataError VersionRead)
-preparePublicMetadata rt deps name version =
-    withMetadataClient rt deps (preparePublicVersion (srMetadataCache rt) (publicSource deps)) (publicOrigin rt deps) (\prepare -> prepare name version)
+-- | Reserve each consumer's selected facts. Serving consumers never retain the cached source row.
+withPublicMetadata :: ServeRuntime -> PackumentDeps -> MemoryTicket -> PackageName -> Version -> (IO (Either MetadataError VersionRead) -> Handler a) -> Handler a
+withPublicMetadata rt deps ticket name version action = do
+    let flight = flightOf (versionKey (publicSource deps) name version)
+    workspace <- liftIO (newChargeRegion (charge (servingFlight flight ticket)))
+    let origin = chargingSelectedMetadata workspace (chargingFullReads (workspace . scaleCharge (cfFullReadPermille (chargeFactors deps))) (publicOrigin rt deps))
+    retained <- liftIO (newChargeRegion (charge ticket))
+    readSelected <- withMetadataClient rt deps (preparePublicVersion (srMetadataCache rt) (publicSource deps)) origin $ \prepare ->
+        pure (awaitingFlight ticket flight (prepare name version >>= executePrepared))
+    action $
+        readSelected
+            >>= traverse
+                ( \result -> do
+                    let !served = servingVersion result
+                    retained (weighVersion served)
+                    pure served
+                )
+
+servingVersion :: VersionRead -> VersionRead
+servingVersion result = case vrVersion result of
+    Nothing -> result
+    Just document ->
+        let !details = vdDetails document
+            !selected = VersionDoc details Nothing
+         in VersionRead (Just selected) (vrBodyBytes result) (vrUpstreamLatest result)
 
 privateOrigin :: ServeRuntime -> PackumentDeps -> BaseRequest -> Maybe ClientCredential -> OriginFor Private
 privateOrigin rt deps = perCallerOrigin (pdLimits deps) (srPrivateClient rt)

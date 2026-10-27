@@ -2,13 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Requests to the proxy's HTTP surface, and reads of the logs the proxy and the mirror store write.
+-- | Proxy lifecycle, requests and logs for native client scenarios.
 module Ecluse.E2E.Harness.Proxy (
+    withClientProxyWith,
     proxyStatus,
     proxyGet,
     proxyGetCoded,
     proxyHead,
     proxyPut,
+    proxyRequest,
     shouldSucceedThroughProxy,
 
     -- * Logs
@@ -23,7 +25,8 @@ module Ecluse.E2E.Harness.Proxy (
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Network.HTTP.Client (
-    Request (decompress, method, requestHeaders),
+    Request (decompress, method, requestBody, requestHeaders),
+    RequestBody (RequestBodyBS),
     brConsume,
     httpLbs,
     parseRequest,
@@ -32,16 +35,25 @@ import Network.HTTP.Client (
     responseStatus,
     withResponse,
  )
-import Network.HTTP.Types (Method, statusCode)
+import Network.HTTP.Types (Method, RequestHeaders, statusCode)
 import Network.HTTP.Types.Header (hAcceptEncoding)
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec (expectationFailure)
 
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
+import Ecluse.E2E.Harness.CargoGateway (cargoTraffic, observedProxy, withObservedCargoProxy)
 import Ecluse.E2E.Harness.Client (clientReport)
-import Ecluse.E2E.Harness.Docker (awaitContainerLog, containerLogs)
+import Ecluse.E2E.Harness.Docker (awaitContainerLog, containerLogs, withE2EWith)
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Contract.Serving qualified as Serving
 import Ecluse.Test.Contract.Telemetry (hasPopulatedTraceId)
+
+-- | Use the observed TLS edge whenever native Cargo clients share the proxy.
+withClientProxyWith :: E2EConfig -> (E2E -> IO a) -> GlobalDataPlane -> IO a
+withClientProxyWith config action plane
+    | Cargo `elem` topologyMounts (gdpTopology plane) =
+        withObservedCargoProxy config plane (\observed -> action (observedProxy observed) <* cargoTraffic observed)
+    | otherwise = withE2EWith config action plane
 
 -- | The HTTP status of a @GET@ to a proxy path (e.g. @\/npm\/e2e-allow@).
 proxyStatus :: E2E -> Text -> IO Int
@@ -63,9 +75,13 @@ proxyGetCoded :: E2E -> Text -> IO Serving.ServingResponse
 proxyGetCoded = proxyRaw "GET"
 
 proxyRaw :: Method -> E2E -> Text -> IO Serving.ServingResponse
-proxyRaw verb e2e path = do
+proxyRaw verb = proxyRequest verb [(hAcceptEncoding, "gzip")] ""
+
+-- | Send one explicit native request and retain its exact response bytes and headers.
+proxyRequest :: Method -> RequestHeaders -> ByteString -> E2E -> Text -> IO Serving.ServingResponse
+proxyRequest verb headers body e2e path = do
     base <- parseRequest (toString (e2eBaseUrl e2e <> path))
-    let request = base{method = verb, decompress = const False, requestHeaders = [(hAcceptEncoding, "gzip")]}
+    let request = base{method = verb, decompress = const False, requestHeaders = headers, requestBody = RequestBodyBS body}
     withResponse request (e2eManager e2e) $ \resp -> do
         chunks <- brConsume (responseBody resp)
         pure

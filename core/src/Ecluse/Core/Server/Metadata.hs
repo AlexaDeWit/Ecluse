@@ -3,12 +3,8 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE RoleAnnotations #-}
 
-{- | Caching, metrics, and failure logs around registry metadata reads.
-The caching policy is not exported, and an origin carries its credential posture in its type.
-'publicMetadataClient' takes reads over a 'Public' origin, which only
-'Ecluse.Core.Registry.Origin.anonymousOrigin' builds and which presents no credential, so reads
-that carry a caller's credential cannot reach the shared cache. 'privateMetadataClient' takes no
-cache at all. Anonymous public reads use the selected provider's typed retention capabilities.
+{- | Metadata observations and caching with credential posture enforced by the origin type.
+Private reads bypass shared retention and coalescing. Preparation runs only within raw reads.
 -}
 module Ecluse.Core.Server.Metadata (
     -- * Constructing a per-request read handle
@@ -38,8 +34,8 @@ import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
     VersionRead,
  )
-import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest, fetchVersion)
-import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead, prepareManifest)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation qualified as Preparation
 import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, Private, Public, originClientOf)
 import Ecluse.Core.Security (ProgressFloor)
 
@@ -95,9 +91,9 @@ newMetadataReads metrics logFailure logInvalid logFetch rawFetch rawFetchVersion
   where
     client = originClientOf origin
 
--- | 'newMetadataReads' over the read driver's two fetches for one ecosystem.
+-- | Bind origin preparation to raw reads, inside cache leaders and request deadlines.
 ecosystemMetadataReads ::
-    EcosystemRead ->
+    PrepareRead ->
     TracingPort ->
     MetricsPort ->
     (PackageName -> MetadataError -> IO ()) ->
@@ -105,8 +101,8 @@ ecosystemMetadataReads ::
     (PackageName -> IO ()) ->
     OriginFor posture ->
     MetadataReads posture
-ecosystemMetadataReads eco tracing metrics logFailure logInvalid logFetch =
-    newMetadataReads metrics logFailure logInvalid logFetch (fetchManifest eco tracing) (fetchVersion eco tracing)
+ecosystemMetadataReads factory tracing metrics logFailure logInvalid logFetch =
+    newMetadataReads metrics logFailure logInvalid logFetch (prepareManifest factory tracing) (Preparation.prepareVersion factory tracing)
 
 -- | Cap each raw read so its single-flight leader fails before the request timeout.
 withinRequestCap :: Deadlines -> ProgressFloor -> MetadataReads posture -> MetadataReads posture

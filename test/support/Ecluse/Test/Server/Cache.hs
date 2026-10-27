@@ -22,12 +22,13 @@ module Ecluse.Test.Server.Cache (
 ) where
 
 import Crypto.Hash (SHA256 (SHA256), hashWith)
-import Data.Aeson (Value (Null), encode)
+import Data.Aeson (Value (Null), encode, toJSON)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Time (NominalDiffTime)
 
 import Ecluse.Core.Package (PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, artEntryKey)
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionRead)
 import Ecluse.Core.Server.Cache (CacheConfig (..), CacheEntry (..), MetadataCache, Source, StoreBudget (..), newMetadataCacheWithProvider, resolveMetadata, resolveVersion)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage, LocalStorage), Recency, RetentionBackend, RetentionOperations (..), retentionBackend)
@@ -112,4 +113,4 @@ cachedVersion metrics cache source name version = rightToMaybe <$> resolveVersio
 
 -- | Reconstruct retained JSON only for diagnostic serialisation outside timed source reads.
 diagnosticDocumentValue :: CachedDoc -> Value
-diagnosticDocumentValue document = fromMaybe Null (snd npmCached document <|> (simpleValue <$> snd pypiSimpleCached document))
+diagnosticDocumentValue document = fromMaybe Null (snd npmCached document <|> (simpleValue <$> snd pypiSimpleCached document) <|> (toJSON . map snd . cargoRecords <$> snd cargoCached document))

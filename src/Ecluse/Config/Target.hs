@@ -10,6 +10,7 @@ module Ecluse.Config.Target (
     resolvePrivateBackend,
     vetTargetTag,
     vetPrivateRepository,
+    vetPublicationRepository,
     parseCodeArtifactHost,
     isAccountId,
 ) where
@@ -21,11 +22,12 @@ import Ecluse.Config.Types (
     ConfigError (..),
     MirrorEndpoint (..),
     MirrorWrite (..),
+    PublicationEndpoint (..),
     StoreBackend (..),
     StoreTag (..),
     Target (..),
  )
-import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Security (hostAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (nonBlank, registryPath)
@@ -80,6 +82,21 @@ vetPrivateRepository eco target = case tgtTag target of
     TagCodeArtifact | isRight (codeArtifactHost eco privateUpstreamKey (tgtUrl target)) -> void (resolvePrivateBackend eco target)
     _ -> Right ()
 
+-- | CodeArtifact publication uses one repository for read discovery and the approved upload root.
+vetPublicationRepository :: Ecosystem -> PublicationEndpoint -> Either ConfigError ()
+vetPublicationRepository eco endpoint = case tgtTag (peTarget endpoint) of
+    TagCodeArtifact | eco == Cargo || isJust (peUploadUrl endpoint) -> do
+        let readRoot = tgtUrl (peTarget endpoint)
+        original <- store RepositoryEndpoint "publicationTarget.codeArtifact.url" readRoot
+        for_ (peUploadUrl endpoint) $ \upload -> do
+            uploaded <- store UploadEndpoint "publicationTarget.codeArtifact.uploadUrl" upload
+            unless (original == uploaded) (Left (ParseError "CodeArtifact publication uploadUrl must address the same read repository"))
+    _ -> Right ()
+  where
+    store purpose key root = do
+        (domain, owner, region) <- codeArtifactHost eco key root
+        codeArtifactStore purpose eco key (registryUrlText root) domain owner region
+
 privateUpstreamKey :: Text
 privateUpstreamKey = "privateUpstream.codeArtifact.url"
 
@@ -118,7 +135,8 @@ codeArtifactStore purpose eco key raw domain owner region = do
         RepositoryEndpoint -> CodeArtifactRepositoryMissing eco key format
         UploadEndpoint ->
             ParseError
-                ( "mirrorTarget.codeArtifact.uploadUrl must address /"
+                ( key
+                    <> " must address /"
                     <> format
                     <> "/{repository}/"
                     <> if format == "pypi" then " or /pypi/{repository}/legacy/" else ""

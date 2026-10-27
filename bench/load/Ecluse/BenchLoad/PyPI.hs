@@ -37,6 +37,7 @@ import Ecluse.BenchLoad.PyPI.Worker (pypiWorkerScenario)
 import Ecluse.BenchLoad.Selection (evictionEntries)
 import Ecluse.BenchLoad.Stress (WarmLoadDriver (..), herdSize, pairedLoad, rampSteps)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
+import Ecluse.Core.Registry.PyPI.Metadata (pypiRead)
 import Ecluse.Core.Registry.PyPI.Route (distributionPath)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (..), SimpleIndex (..), simpleIndexMediaType)
 import Ecluse.Core.Security (defaultLimits)
@@ -72,6 +73,9 @@ pypiReadDriver =
         , lrdPatternProvider =
             PatternProvider
                 { ppCaptureAuthority = "https://files.pythonhosted.org"
+                , ppListingSuffix = id
+                , ppDiscoveryPath = Nothing
+                , ppCapturedRead = const (Right pypiRead)
                 , -- Selected replay remains unsupported. Warm reads use native pins separately.
                   ppSelectedArtifacts = \_ _ _ -> pure Map.empty
                 }

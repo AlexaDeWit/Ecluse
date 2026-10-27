@@ -2,9 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | npm's entry in the ecosystem adapter registry. Every field names a function the
-@Ecluse.Core.Registry.Npm.*@ modules export, so no protocol decision is made here.
--}
+-- | npm capabilities for serving, publication, and store maintenance.
 module Ecluse.Core.Registry.Npm.Adapter (
     npmAdapter,
     npmPublish,
@@ -28,6 +26,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     WorkerMetadataRead (..),
  )
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (staticRead)
 import Ecluse.Core.Registry.Npm (relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
@@ -47,13 +46,13 @@ npmAdapter =
         , adapterRuleBlocks = Map.singleton DenyIfYankedType "npm reports no yank flag. Removed releases disappear from its metadata."
         , adapterServe =
             AdapterServe
-                { serveRouter = NpmRoute.npmRouter
+                { serveRouter = const NpmRoute.npmRouter
                 , serveRoutes = NpmRoute.npmRouteSpecs
                 , serveCredential = npmCredential
                 }
         , adapterMetadata =
             AdapterMetadata
-                { metadataRead = npmRead
+                { metadataRead = staticRead npmRead
                 , metadataAssemble = assembleMergedDocument
                 , metadataSerialise = serialiseMergedDocument
                 , metadataChargeFactors = npmChargeFactors
@@ -75,7 +74,7 @@ npmPublish :: AdapterPublish
 npmPublish =
     AdapterPublish
         { publishRelay = \origin name -> relayPublishDocument origin name . publishBodyBytes
-        , publishUploadClaims = \_ -> pure . uploadClaims . publishBodyBytes
+        , publishUploadClaims = \_ _ _ -> pure . uploadClaims . publishBodyBytes
         , publishCodec = npmPublishCodec
         , publishMirrorRequirements = MirrorRequirements CachedWorkerRead NativeVersionState ReadRootUpload
         , publishIdentity = TokenIdentity

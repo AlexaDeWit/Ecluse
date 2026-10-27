@@ -15,13 +15,22 @@ import Test.Hspec
 import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Registry.JsonStream
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
-import Ecluse.Test.Registry.JsonStream (namedMembers, parseJsonChunks, sharesKey, sliceChunks)
+import Ecluse.Test.Registry.JsonStream (heldChunks, namedMembers, parseJsonChunks, sharesKey, sliceChunks)
 import Ecluse.Test.Registry.Source (assertCancelledRead)
 import Ecluse.Test.Support (expectRight)
 
 -- | Verify retained-depth boundaries, source size and response cancellation.
 spec :: Spec
 spec = do
+    describe "readStepsWithEnd" $
+        it "finishes an unterminated framed value at EOF without adding source bytes" $ do
+            source <- heldChunks ["native", " record"]
+            let collect pieces = NeedData $ \piece ->
+                    Identity $
+                        if BS.null piece then Finished (BS.concat (reverse pieces)) else collect (piece : pieces)
+                end = \case NeedData next -> pure (runIdentity (next BS.empty)); step -> pure step
+            result <- readStepsWithEnd (pure . runIdentity) end (MetadataBodyLimit 1024) (collect []) source
+            result `shouldBe` Right (StreamResult (Right "native record") 13)
     describe "isNestingLimit" $ do
         it "recognises the retained-depth failure" $
             isNestingLimit (ParseError "retained JSON nesting limit") `shouldBe` True

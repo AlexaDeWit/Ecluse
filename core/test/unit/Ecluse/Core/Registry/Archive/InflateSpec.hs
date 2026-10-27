@@ -4,7 +4,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Scoped zlib decoding checks framing and closes its pull action on every callback exit.
-module Ecluse.Core.Registry.PyPI.Archive.InflateSpec (spec) where
+module Ecluse.Core.Registry.Archive.InflateSpec (spec) where
 
 import Codec.Compression.GZip qualified as GZip
 import Codec.Compression.Zlib.Raw qualified as Raw
@@ -15,8 +15,8 @@ import Test.Hspec
 import UnliftIO.Async (cancel, race_, wait, withAsync)
 import UnliftIO.Exception (throwIO)
 
-import Ecluse.Core.Registry (ParseError)
-import Ecluse.Core.Registry.PyPI.Archive.Inflate
+import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry.Archive.Inflate
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -29,8 +29,23 @@ spec = describe "withInflatedChunks" $ do
     it "checks every gzip member and rejects trailing junk or an exceeded count" $ do
         let member = BSL.toStrict (GZip.compress "one")
         withInflatedChunks (GzipMembers 2) (const (pure ())) (member <> member) collect `shouldReturn` Right ["one", "one"]
-        for_ [(GzipMembers 1, member <> member), (GzipMembers 2, member <> "junk"), (GzipMembers 1, BS.take (BS.length member - 1) member)] $ \(format, bytes) ->
-            withInflatedChunks format (const (pure ())) bytes collect >>= (`shouldSatisfy` isLeft)
+        for_ [(GzipMembers 1, member <> member, "compressed member count exceeds its bound"), (GzipMembers 2, member <> "junk", "malformed or truncated compressed stream"), (GzipMembers 1, BS.take (BS.length member - 1) member, "malformed or truncated compressed stream")] $ \(format, bytes, reason) ->
+            withInflatedChunks format (const (pure ())) bytes collect `shouldReturn` Left (ParseError reason)
+    it "refuses trailing raw-deflate bytes and a zero-member allowance" $ do
+        let raw = BSL.toStrict (Raw.compress "one")
+            gzip = BSL.toStrict (GZip.compress "one")
+        withInflatedChunks RawDeflate (const (pure ())) raw collect `shouldReturn` Right ["one"]
+        withInflatedChunks RawDeflate (const (pure ())) (raw <> "junk") collect `shouldReturn` Left (ParseError "deflate member has trailing compressed bytes")
+        withInflatedChunks (GzipMembers 1) (const (pure ())) gzip collect `shouldReturn` Right ["one"]
+        withInflatedChunks (GzipMembers 0) (const (pure ())) gzip collect `shouldReturn` Left (ParseError "compressed member count exceeds its bound")
+    it "retains a typed failure inside the callback and closes the saved pull afterwards" $ do
+        let raw = BSL.toStrict (Raw.compress "one") <> "junk"
+            fault = ParseError "deflate member has trailing compressed bytes"
+        saved <- withInflatedChunks RawDeflate (const (pure ())) raw $ \pull -> do
+            collect pull `shouldReturn` Left fault
+            pull `shouldReturn` Left fault
+            pure pull
+        saved `shouldReturn` Right BS.empty
     it "closes an active inflater when its consumer returns early" $ do
         let bytes = BSL.toStrict (Raw.compress (BSL.replicate 100000 97))
         pull <- withInflatedChunks RawDeflate (const (pure ())) bytes $ \readChunk -> do

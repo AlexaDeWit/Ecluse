@@ -4,7 +4,7 @@
 
 -- | Pure role-specific store vetting. Only a successful pass constructs a cleared backend.
 module Ecluse.Composition.Maintenance.Plan (
-    ClearedBackend (cbUrl, cbAlphabet, cbFetchManifest, cbUsername, cbControl),
+    ClearedBackend (cbUrl, cbAlphabet, cbFetchManifest, cbArtifact, cbUsername, cbControl),
     ClearedControl (..),
     ClearedProtocolStore (..),
     ResolveMaintenanceAdapter,
@@ -44,8 +44,9 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
-import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterMaintenance, adapterMetadata, adapterPublish)
+import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterArtifact, adapterMaintenance, adapterMetadata, adapterPublish)
 import Ecluse.Core.Registry.Adapter.Capability (
+    AdapterArtifact,
     AdapterMaintenance (maintenanceAlphabet, maintenanceListing, maintenanceVersionDelete),
     AdapterMetadata (metadataRead),
     AdapterPublish (publishCodec),
@@ -54,7 +55,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
  )
 import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet, noNameAlphabet)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
-import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareManifest)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (ManifestFetch)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Security.Egress (RegistryUrl)
@@ -66,6 +67,8 @@ data ClearedBackend = ClearedBackend
     -- ^ Where the store answers, which is both what a sweep reads and what it deletes from.
     , cbAlphabet :: NameAlphabet
     -- ^ The characters a full walk partitions this store's names by.
+    , cbArtifact :: Maybe AdapterArtifact
+    -- ^ The native artifact request builder for the exact authenticated target.
     , cbFetchManifest :: ManifestFetch
     -- ^ The ecosystem's metadata read, directed at this store.
     , cbUsername :: Maybe Text
@@ -185,7 +188,8 @@ clearedBackend url username adapter control =
     ClearedBackend
         { cbUrl = url
         , cbAlphabet = maybe noNameAlphabet (maintenanceAlphabet . adapterMaintenance) adapter
-        , cbFetchManifest = maybe absentManifestRead (fetchManifest . metadataRead . adapterMetadata) adapter
+        , cbArtifact = adapterArtifact <$> adapter
+        , cbFetchManifest = maybe absentManifestRead (prepareManifest . metadataRead . adapterMetadata) adapter
         , cbUsername = username
         , cbControl = control
         }

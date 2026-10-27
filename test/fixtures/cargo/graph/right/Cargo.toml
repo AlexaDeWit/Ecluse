@@ -1,0 +1,13 @@
+[package]
+name = "ecluse-e2e-right"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT"
+description = "Owned Cargo registry contract fixture"
+readme = "README.md"
+authors = ["Ecluse contributors"]
+
+[dependencies]
+ecluse-e2e-leaf = "^1.0"
+leaf_v2 = { package = "ecluse-e2e-leaf", version = "^2.0" }

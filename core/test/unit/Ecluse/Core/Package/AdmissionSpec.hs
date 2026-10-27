@@ -33,8 +33,6 @@ import Ecluse.Core.Package.Admission (
         AdmissionUndecidable
     ),
     admissionTransience,
-    admitArtifactWithDecision,
-    admitArtifactWithEvidence,
  )
 import Ecluse.Core.Package.Integrity (
     VersionIntegrity (MeetsFloor),
@@ -67,6 +65,7 @@ import Ecluse.Test.Package (
     v1_0_0,
  )
 import Ecluse.Test.Package qualified as Package
+import Ecluse.Test.Package.Admission (admitArtifactWithDecision, admitArtifactWithEvidence)
 import Ecluse.Test.Rules (admitRule, cannotVetRule, constRule, denyRule, packageRule, remediation, revocation)
 
 -- The sanctioned splitter, as the plain list the artifact fixtures take.

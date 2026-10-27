@@ -20,9 +20,9 @@ import Amazonka qualified as AWS
 import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Fault (RetryAfter (RetryAfter), TransportCause (TransportProtocol, TransportTimeout), renderTransportCause, tfCause)
-import Ecluse.Core.Package (renderPackageName)
+import Ecluse.Core.Package (mkPackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
@@ -48,7 +48,7 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UpstreamSafety (Undecidable, Unsafe),
  )
 import Ecluse.Core.Registry.Sweep.Outcome (renderStoreFault)
-import Ecluse.Core.Version (renderVersion)
+import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal (
     CodeArtifactStore (..),
     arnOfDescription,
@@ -90,6 +90,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Support (
     npmStore,
     routedTo,
     serviceError,
+    withCargoStore,
     withNpmStore,
     withPyPIStore,
  )
@@ -104,6 +105,7 @@ spec = do
     presenceSpec
     requestSpec
     pypiRequestSpec
+    cargoRequestSpec
     ceilingSpec
     deleteFoldSpec
     faultSpec
@@ -116,6 +118,7 @@ formatSpec = describe "codeArtifactFormat" $ do
     it "names npm and pypi by CodeArtifact's own format tokens" $ do
         fmap formatToken (codeArtifactFormat Npm) `shouldBe` Just "npm"
         fmap formatToken (codeArtifactFormat PyPI) `shouldBe` Just "pypi"
+        fmap formatToken (codeArtifactFormat Cargo) `shouldBe` Just "cargo"
 
     it "keeps the ecosystem a format was built from" $
         fmap formatEcosystem (codeArtifactFormat PyPI) `shouldBe` Just PyPI
@@ -132,18 +135,18 @@ codecSpec = describe "the npm codec" $ do
         packageCoordinates lodashName `shouldBe` (Nothing, "lodash")
 
     it "rebuilds the name a listing returned" $ do
-        renderPackageName (packageNameFrom Npm (Just "babel") "core") `shouldBe` "@babel/core"
-        renderPackageName (packageNameFrom Npm Nothing "lodash") `shouldBe` "lodash"
+        fmap renderPackageName (packageNameFrom Npm (Just "babel") "core") `shouldBe` Right "@babel/core"
+        fmap renderPackageName (packageNameFrom Npm Nothing "lodash") `shouldBe` Right "lodash"
 
     it "reads a blank namespace as no namespace, never as an empty scope" $
-        packageNameFrom Npm (Just "") "lodash" `shouldBe` lodashName
+        packageNameFrom Npm (Just "") "lodash" `shouldBe` Right lodashName
 
     it "drops a listing entry CodeArtifact returned with no package name" $ do
         let named = CA.newPackageSummary & CAL.packageSummary_package ?~ "lodash"
-        packagesOfPage Npm [named, CA.newPackageSummary] `shouldBe` [lodashName]
+        packagesOfPage Npm [named, CA.newPackageSummary] `shouldBe` Right [lodashName]
 
     it "reads a blank listing package name as absent, dropping the entry" $
-        packagesOfPage Npm [CA.newPackageSummary & CAL.packageSummary_package ?~ ""] `shouldBe` []
+        packagesOfPage Npm [CA.newPackageSummary & CAL.packageSummary_package ?~ ""] `shouldBe` Right []
 
     it "reads a scoped listing entry back into a scoped name" $ do
         let scoped =
@@ -152,7 +155,23 @@ codecSpec = describe "the npm codec" $ do
                     ?~ "core"
                         & CAL.packageSummary_namespace
                     ?~ "babel"
-        packagesOfPage Npm [scoped] `shouldBe` [babelCore]
+        packagesOfPage Npm [scoped] `shouldBe` Right [babelCore]
+
+    it "retains Cargo's published case and separators without a namespace" $ do
+        fmap renderPackageName (packageNameFrom Cargo Nothing "Published_Name") `shouldBe` Right "Published_Name"
+        fmap renderPackageName (packageNameFrom Cargo (Just "") "Published_Name") `shouldBe` Right "Published_Name"
+
+    it "refuses Cargo namespaces and invalid native names returned by the API" $ do
+        for_ [Just "scope", Just " "] $ \namespace ->
+            packageNameFrom Cargo namespace "valid-name" `shouldSatisfy` isLeft
+        for_ ["", "1crate", "bad/name", "bad.name", "bad name"] $ \raw ->
+            packageNameFrom Cargo Nothing raw `shouldSatisfy` isLeft
+
+    it "refuses a whole Cargo page containing malformed or missing native coordinates" $ do
+        let named = CA.newPackageSummary & CAL.packageSummary_package ?~ "Published_Name"
+        fmap (map renderPackageName) (packagesOfPage Cargo [named]) `shouldBe` Right ["Published_Name"]
+        for_ [CA.newPackageSummary, named & CAL.packageSummary_namespace ?~ "scope", named & CAL.packageSummary_package ?~ "bad/name"] $ \invalid ->
+            packagesOfPage Cargo [named, invalid] `shouldSatisfy` isLeft
 
 presenceSpec :: Spec
 presenceSpec = describe "presenceOf" $ do
@@ -275,6 +294,30 @@ pypiRequestCases store = do
                             & (CAL.listPackageVersions_domainOwner ?~ "111122223333")
                             & (CAL.listPackageVersions_nextToken ?~ "page-2")
                        )
+
+cargoRequestSpec :: Spec
+cargoRequestSpec = describe "native Cargo control-plane requests" $ withCargoStore $ \store -> do
+    let name = mkPackageName Cargo Nothing "Published_Name"
+        nativeFormat = CA.PackageFormat' "cargo"
+    it "lists native packages and preserves the pagination token" $
+        withBucket "p" $ \prefix -> do
+            let request = listPackagesRequest store prefix (Just "page-2")
+            request ^. CAL.listPackages_format `shouldBe` Just nativeFormat
+            request ^. CAL.listPackages_namespace `shouldBe` Nothing
+            request ^. CAL.listPackages_nextToken `shouldBe` Just "page-2"
+    it "preserves the published package identifier when listing versions" $ do
+        let request = listVersionsRequest store name (Just "versions-2")
+        request ^. CAL.listPackageVersions_format `shouldBe` nativeFormat
+        request ^. CAL.listPackageVersions_package `shouldBe` "Published_Name"
+        request ^. CAL.listPackageVersions_namespace `shouldBe` Nothing
+        request ^. CAL.listPackageVersions_nextToken `shouldBe` Just "versions-2"
+    it "physically deletes exact raw versions under the native format" $ do
+        let request = deleteRequest store name [mkVersion Cargo "1.0.0-rc.1+build"]
+        request ^. CAL.deletePackageVersions_format `shouldBe` nativeFormat
+        request ^. CAL.deletePackageVersions_package `shouldBe` "Published_Name"
+        request ^. CAL.deletePackageVersions_namespace `shouldBe` Nothing
+        request ^. CAL.deletePackageVersions_versions `shouldBe` ["1.0.0-rc.1+build"]
+        request ^. CAL.deletePackageVersions_expectedStatus `shouldBe` Just CA.PackageVersionStatus_Published
 
 ceilingSpec :: Spec
 ceilingSpec =

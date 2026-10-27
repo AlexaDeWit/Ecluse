@@ -39,7 +39,7 @@ import Ecluse.Acceptance (
     renderCapturesReport,
     renderLiveReport,
  )
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportTimeout, TransportTls, TransportUnreachable), transportFault)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable), RegistryResponse (RegistryResponse), UrlFormationError (EmptyBaseUrl))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
@@ -50,18 +50,19 @@ spec = do
         it "decodes the calibration and each package's figure per leg" $
             decodeCriteria (document (calibrationJson "abc123" ["https://example.test/runs/1"] 10) [("npm", lodashFigures)])
                 `shouldBe` Right (Criteria calibration (Map.fromList [(Npm, Map.fromList [("lodash", Map.fromList [(FullDocument, 1000), (SingleVersion, 100)])])]))
-        it "decodes the advisory legs' keys for npm and PyPI" $
-            (critAllocatedBytes <$> decodeCriteria (document validCalibration [("npm", advisoryFigures "react"), ("pypi", advisoryFigures "numpy")]))
+        it "decodes the advisory legs' keys for each measured ecosystem" $
+            (critAllocatedBytes <$> decodeCriteria (document validCalibration [("npm", advisoryFigures "react"), ("pypi", advisoryFigures "numpy"), ("cargo", advisoryFigures "tokio")]))
                 `shouldBe` Right
                     ( Map.fromList
                         [ (Npm, Map.fromList [("react", Map.fromList [(FullShippedAdvisories, 3), (FullAllAdvisoryRules, 4)])])
                         , (PyPI, Map.fromList [("numpy", Map.fromList [(FullShippedAdvisories, 3), (FullAllAdvisoryRules, 4)])])
+                        , (Cargo, Map.fromList [("tokio", Map.fromList [(FullShippedAdvisories, 3), (FullAllAdvisoryRules, 4)])])
                         ]
                     )
         it "rejects an unknown leg" $
             decodeCriteria (document validCalibration [("npm", object ["lodash" .= object ["partial" .= (1 :: Int)]])]) `shouldSatisfy` isLeft
         it "rejects an unknown ecosystem" $
-            decodeCriteria (document validCalibration [("cargo", object [])]) `shouldSatisfy` isLeft
+            decodeCriteria (document validCalibration [("unknown", object [])]) `shouldSatisfy` isLeft
         it "rejects a figure that is not positive" $
             decodeCriteria (document validCalibration [("npm", object ["lodash" .= object ["full" .= (0 :: Int)]])]) `shouldSatisfy` isLeft
         it "rejects a calibration without a commit" $
@@ -72,7 +73,7 @@ spec = do
             decodeCriteria (document (calibrationJson "abc123" ["https://example.test/runs/1"] (-1)) []) `shouldSatisfy` isLeft
         it "loads the committed criteria, with a section per ecosystem" $ do
             criteria <- loadCriteria
-            Map.keys (critAllocatedBytes criteria) `shouldBe` [Npm, PyPI]
+            Map.keys (critAllocatedBytes criteria) `shouldBe` [Npm, PyPI, Cargo]
 
     describe "budgetBytes" $ do
         it "adds the margin and rounds up to a whole byte" $
@@ -88,9 +89,10 @@ spec = do
                            , ("react", FullDocument, Within)
                            , ("react", SingleVersion, NoBudget)
                            ]
-        it "keeps each ecosystem's figures apart" $
-            verdicts (assessCaptures criteriaFixture [(PyPI, [measured "lodash" 10 10])])
-                `shouldBe` [("lodash", FullDocument, NoBudget), ("lodash", SingleVersion, NoBudget)]
+        for_ [PyPI, Cargo] $ \ecosystem ->
+            it ("keeps " <> show ecosystem <> " figures apart") $
+                verdicts (assessCaptures criteriaFixture [(ecosystem, [measured "lodash" 10 10])])
+                    `shouldBe` [("lodash", FullDocument, NoBudget), ("lodash", SingleVersion, NoBudget)]
         it "reports a failed and an unavailable package as failed rows" $
             concatMap sectionRows (reportSections (assessCaptures criteriaFixture [(Npm, [Failed "lodash" "refused", Unavailable "react" "HTTP 503"])]))
                 `shouldBe` [FailedPackage "lodash" "refused", FailedPackage "react" "unavailable: HTTP 503"]

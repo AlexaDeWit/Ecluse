@@ -15,6 +15,7 @@ module Ecluse.BenchLoad.Scenarios (
 import Data.Set qualified as Set
 
 import Ecluse.BenchLoad.Advisories (MaliciousSource (MaliciousHit, MaliciousMixedHeavy), maliciousQualification)
+import Ecluse.BenchLoad.Cargo (cargoFixture)
 import Ecluse.BenchLoad.Contract (LoadScope (FullLoad), loadCoverageGaps, loadScenarioName, onRequestLoadLaws)
 import Ecluse.BenchLoad.Floors (FloorKey, Pass (ConcurrencyOne, Loaded))
 import Ecluse.BenchLoad.Harness (Scenario (scenarioInProcess, scenarioName, scenarioServiceTime), UpstreamFixture (fixtureEcosystem, fixtureScenarios))
@@ -26,7 +27,7 @@ import Ecluse.Test.EcosystemBench (checkBenchmarkCoverage)
 
 -- | Each ecosystem's fixture, in report order.
 fixtures :: [UpstreamFixture]
-fixtures = [npmFixture, pypiFixture]
+fixtures = [npmFixture, pypiFixture, cargoFixture]
 
 -- | Reject omitted load laws and ambiguous scenario identities before loading work.
 checkFixtureCoverage :: [UpstreamFixture] -> Either Text ()

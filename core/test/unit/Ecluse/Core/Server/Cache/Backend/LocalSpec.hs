@@ -5,9 +5,14 @@
 module Ecluse.Core.Server.Cache.Backend.LocalSpec (spec) where
 
 import Control.Exception (throw)
+import Data.IORef (mkWeakIORef)
+import Foreign.StablePtr (freeStablePtr, newStablePtr)
 import System.Clock (fromNanoSecs)
+import System.Mem (performGC)
+import System.Mem.Weak (Weak, deRefWeak)
 import Test.Hspec
 import UnliftIO (cancel, mapConcurrently_, timeout, withAsync)
+import UnliftIO.Exception (bracket)
 
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (LocalStorage), CacheOccupancy (..), Recency (..), RetentionOperations (..), supportsFullRetention)
 import Ecluse.Core.Server.Cache.Backend.Local
@@ -43,6 +48,18 @@ spec = do
             roInsert assembled (const pass) (modifyIORef' refused (+ 1)) 1 "body"
             readIORef refused `shouldReturn` 1
             roLookup assembled (const pass) PreserveRecency 1 `shouldReturn` Nothing
+
+        for_ [(1, "replacement"), (2, "capacity eviction")] $ \(nextKey, operation) ->
+            it ("releases a removed value after " <> operation <> " without a later lookup") $ do
+                pool <- newLocalPool 1 1
+                store <- newPooledRetention pool 60 (StoreBudget 0 0) (const 1) :: IO (RetentionOperations Int (IORef Int))
+                bracket (newStablePtr store) freeStablePtr $ \_ -> do
+                    removed <- seedStoredRef store
+                    assertStoredRefHeld removed
+                    replacement <- newIORef 2
+                    roInsert store (const pass) pass nextKey replacement
+                    performGC
+                    isNothing <$> deRefWeak removed `shouldReturn` True
 
         it "evicts the minimum recency only until aggregate bytes fit" $ do
             pool <- newLocalPool 10 30
@@ -182,3 +199,19 @@ putWeight store = roInsert store (const pass) pass
 
 getWeight :: RetentionOperations Int Int -> Int -> IO (Maybe Int)
 getWeight store = roLookup store (const pass) PreserveRecency
+
+-- Keep the stored reference out of the collection phases.
+{-# NOINLINE seedStoredRef #-}
+seedStoredRef :: RetentionOperations Int (IORef Int) -> IO (Weak (IORef Int))
+seedStoredRef store = do
+    stored <- newIORef 1
+    tracked <- mkWeakIORef stored pass
+    roInsert store (const pass) pass 1 stored
+    pure tracked
+
+-- Keep dereferenced values out of the removal phase.
+{-# NOINLINE assertStoredRefHeld #-}
+assertStoredRefHeld :: Weak (IORef Int) -> Expectation
+assertStoredRefHeld tracked = do
+    performGC
+    isJust <$> deRefWeak tracked `shouldReturn` True

@@ -60,6 +60,7 @@ import Ecluse.Core.Queue (
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent))
 import Ecluse.Core.Registry.MirrorUpload (inventoryDetails)
+import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Publish (prepareNpmSource)
 import Ecluse.Core.Registry.Public (newPublicControl)
@@ -119,6 +120,9 @@ npmReadDriver =
         , lrdPatternProvider =
             PatternProvider
                 { ppCaptureAuthority = "https://registry.npmjs.org"
+                , ppListingSuffix = id
+                , ppDiscoveryPath = Nothing
+                , ppCapturedRead = const (Right npmRead)
                 , ppSelectedArtifacts = \selected packages captures -> do
                     pins <- loadPins
                     either benchFail pure (selectArtifacts selected pins packages captures)

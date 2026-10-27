@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Alexandra de Wit
+# SPDX-License-Identifier: MIT
+
+[package]
+name = "cargo-semver-oracle"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.68"
+license = "MIT"
+publish = false
+
+[dependencies]
+semver = { version = "=1.0.28", default-features = false, features = ["std"] }

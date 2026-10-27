@@ -15,6 +15,11 @@ module Ecluse.Composition.Support (
     pubUrlEnv,
     pypiMirrorEnv,
     publicGateEnv,
+    cargoGateEnv,
+    cargoMirrorEnv,
+    cargoCodeArtifactEnv,
+    cargoScopeRefusal,
+    cargoDeprecationRefusal,
     privateUpstreamUrl,
     collapsingMirrorTarget,
     collapsedMirrorRefusal,
@@ -56,7 +61,7 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 import System.Exit (ExitCode)
 import UnliftIO (timeout, try)
 
-import Ecluse.Composition.BootError (BootError (MirrorTargetOnMountEndpoint, StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane, PrivateCacheUnavailable))
+import Ecluse.Composition.BootError (BootError (MirrorTargetOnMountEndpoint, RuleBlockedOnMount, StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane, PrivateCacheUnavailable))
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders, initTargetCredentialProviders)
 import Ecluse.Composition.Maintenance.Plan (ClearedBackend (cbUrl))
 import Ecluse.Composition.Plan (
@@ -69,8 +74,9 @@ import Ecluse.Composition.Types (BootRole (BootWithoutPipeline), RegistryRole (M
 import Ecluse.Composition.Validate (ValidatedPlan (vpMounts), VettedMount (vmMount), vetBoot)
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig, Config (configApp), StoreTag (TagRegistry), loadConfig, renderConfigError)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
+import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType))
 import Ecluse.Core.Security (Limits, defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
@@ -131,6 +137,18 @@ pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
 -- | The npm public gate alone: the smallest environment that boots and serves.
 publicGateEnv :: [(String, String)]
 publicGateEnv = ("ECLUSE_MOUNTS__NPM__ENABLED", "true") : pubUrlEnv <> [("ECLUSE_SERVER__PORT", "0")]
+
+-- | The native public gate alone, with npm explicitly disabled.
+cargoGateEnv :: [(String, String)]
+cargoGateEnv = overrideEnv "ECLUSE_MOUNTS__NPM__ENABLED" "false" (("ECLUSE_MOUNTS__CARGO__ENABLED", "true") : publicGateEnv)
+
+-- | The native scope refusal shared by boot and pure validation observations.
+cargoScopeRefusal :: BootError
+cargoScopeRefusal = RuleBlockedOnMount Cargo AllowScopeType "Cargo package names have no scope."
+
+-- | The native deprecation refusal shared by boot and pure validation observations.
+cargoDeprecationRefusal :: BootError
+cargoDeprecationRefusal = RuleBlockedOnMount Cargo DenyIfDeprecatedType "Cargo's sparse index supplies no deprecation flag."
 
 -- | The private upstream the composition fixtures declare.
 privateUpstreamUrl :: (IsString s) => s
@@ -316,4 +334,23 @@ pypiMirrorEnv =
            , ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__UPLOAD_URL", "https://target.example.test/legacy/")
            , ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__USERNAME", "publisher")
            , ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__TOKEN", "fixture-token")
+           ]
+
+-- | A native mirror with durable source state and token-only upload credentials.
+cargoMirrorEnv :: [(String, String)]
+cargoMirrorEnv =
+    cargoGateEnv
+        <> [ ("ECLUSE_MIRROR_STATE__URL", "s3://mirror-state/records")
+           , ("ECLUSE_MOUNTS__CARGO__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/")
+           , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__REGISTRY__URL", "https://target.example.test/")
+           , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__REGISTRY__UPLOAD_URL", "https://target.example.test/api/")
+           , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__REGISTRY__TOKEN", "fixture-token")
+           ]
+
+-- | Separate native CodeArtifact stores with inventory and physical deletion capabilities.
+cargoCodeArtifactEnv :: [(String, String)]
+cargoCodeArtifactEnv =
+    cargoGateEnv
+        <> [ ("ECLUSE_MOUNTS__CARGO__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", codeArtifactDomain <> "/cargo/internal/")
+           , ("ECLUSE_MOUNTS__CARGO__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactDomain <> "/cargo/mirror/")
            ]

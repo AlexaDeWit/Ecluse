@@ -1,8 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
--- TupleSections: local convenience for pairing a parsed name with its trailing
--- segments in 'takePackage' and 'takeScoped' ((,rest) / (,more)). See docs/style.md §2.
 {-# LANGUAGE TupleSections #-}
 
 {- | npm routes, response contracts and capture parsers.
@@ -336,6 +334,7 @@ npmTarballReplies =
                 status
                 ((hContentType, "application/json") : headers)
                 (PassthroughBytes (encodeBody npmErrorCodec (NpmError (renderRefusal message))))
+        , tarballPrivateRefused = \_ -> tarballError npmTarballReplies status403
         , tarballStream = \status headers body -> passthroughResponse status headers (PassthroughStream body)
         , tarballEmpty = \status headers -> passthroughResponse status headers PassthroughEmpty
         }

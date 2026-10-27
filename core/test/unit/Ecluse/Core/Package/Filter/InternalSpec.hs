@@ -22,6 +22,7 @@ import Ecluse.Core.Package.Filter.Internal (
     ArtifactRefusal (refusedReason, refusedUrl),
     LocationRefusal (..),
     artifactOrigin,
+    checkArtifactAddress,
     locateArtifact,
     noAuthorityVerdict,
     partitionArtifacts,
@@ -45,6 +46,13 @@ import Ecluse.Test.Package (sampleArtifact)
 -- | The check returns what the per-artifact reference returns, and records what the reference records.
 spec :: Spec
 spec = do
+    describe "checkArtifactAddress" $ do
+        it "checks a bound native address without changing the original filename gate" $ do
+            let url = "https://registry.npmjs.org/?crate=fixture&version=1.0.0"
+            checkArtifactAddress npmOrigin url `shouldBe` Right url
+            locateAlone npmOrigin url `shouldBe` Left (LocationRefusal "artifact URL has no safe filename" url)
+        it "still refuses an address on an undeclared authority" $
+            checkArtifactAddress npmOrigin "https://foreign.test/?crate=fixture" `shouldSatisfy` isLeft
     resolveArtifactSpec
     locateArtifactSpec
     carriedVerdictSpec

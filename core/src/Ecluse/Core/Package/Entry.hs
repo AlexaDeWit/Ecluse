@@ -16,6 +16,8 @@ import Ecluse.Core.Snapshot (ContentDigest)
 data EntryKey
     = -- | A zero-based position in the original array, before any entry drops.
       ArrayEntry Int
+    | -- | A zero-based physical record ordinal, including skipped blank records.
+      RecordEntry Int
     | -- | The exact key in the original object, before normalisation.
       ObjectEntry Text
     | -- | A snapshot that contains only one artifact entry.
