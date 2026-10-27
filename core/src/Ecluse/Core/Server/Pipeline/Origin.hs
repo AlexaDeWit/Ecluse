@@ -25,7 +25,6 @@ module Ecluse.Core.Server.Pipeline.Origin (
     mountOrigin,
 ) where
 
-import Control.Exception (fromException)
 import Katip (Severity (DebugS), logFM, ls)
 import UnliftIO (withRunInIO)
 import UnliftIO.Exception (tryAny)

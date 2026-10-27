@@ -228,7 +228,7 @@ artifactValidator artifact = do
     digest <- case filter ((== Just SHA256) . assertedAlg) (toList hashes) of
         [selected] -> canonicalHashValue selected
         _ -> Nothing
-    bytes <- rightToMaybe (convertFromBase Base16 (encodeUtf8 digest) :: Either String ByteString)
+    bytes <- rightToMaybe (convertFromBase Base16 (encodeUtf8 digest :: ByteString) :: Either String ByteString)
     mkStrongETag <$> (Crypto.digestFromByteString bytes :: Maybe (Crypto.Digest Crypto.SHA256))
 
 -- | Authorise and check availability upstream before evaluating a local HEAD validator.
