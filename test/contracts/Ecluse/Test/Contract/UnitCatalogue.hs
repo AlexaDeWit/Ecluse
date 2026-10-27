@@ -41,10 +41,10 @@ coreUnitCatalogue groups =
                 "metadata-fetch"
                 "unit/metadata"
                 ["metadata-read"]
-                (["core.metadata.fetch." <> ecosystem <> "." <> suffix | ecosystem <- ["npm", "pypi", "cargo", "rubygems"], suffix <- metadataFetchLawsFor ecosystem] <> ["core.metadata.fetch.cargo.record-framing"])
+                (["core.metadata.fetch." <> ecosystem <> "." <> suffix | ecosystem <- ["npm", "pypi", "cargo", "rubygems"], suffix <- metadataFetchLawsFor ecosystem] <> ["core.metadata.fetch.cargo.record-framing", "core.metadata.fetch.rubygems.record-framing"])
             , unitObligation "core/metadata/projection/npm" "metadata-projection" "unit/metadata" ["metadata-projection"] (projectionCases "npm")
             , unitObligation "core/metadata/projection/cargo" "metadata-projection" "unit/metadata" ["metadata-projection"] (projectionCases "cargo" <> map ("core.metadata.projection.cargo." <>) ["record-framing", "invalid-evidence-control", "record-siblings"])
-            , unitObligation "core/metadata/projection/rubygems" "metadata-projection" "unit/metadata" ["metadata-projection"] (projectionCases "rubygems")
+            , unitObligation "core/metadata/projection/rubygems" "metadata-projection" "unit/metadata" ["metadata-projection"] (projectionCases "rubygems" <> map ("core.metadata.projection.rubygems." <>) ["record-framing", "invalid-evidence-control"])
             , unitObligation "core/metadata/projection/pypi" "metadata-projection" "unit/metadata" ["metadata-projection"] (projectionCases "pypi")
             , unitObligation
                 "core/queue/memory"
