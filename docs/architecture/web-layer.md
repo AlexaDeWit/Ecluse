@@ -105,8 +105,8 @@ version collision before assembly.
 
 ## Streaming and resource lifetime
 
-The proxy pulls from upstream only as fast as the client drains: constant memory regardless of
-artifact size, with backpressure for free. Only the time spent waiting on upstream counts toward the
+For npm, PyPI, and Cargo, the proxy pulls from upstream only as fast as the client drains.
+These streamed bodies use constant memory regardless of artifact size. Only the time spent waiting on upstream counts toward the
 progress floor (`limits.progressWindow`, `limits.minProgressBytes`), so a slow client never trips it.
 An upstream that falls below it aborts the stream, and the client sees an incomplete download.
 
@@ -120,7 +120,7 @@ plus the sweep and scheduling. Arming a deadline adds it to a list for the armin
 request threads never wait on each other to arm one, as they would on GHC's process-wide timer
 queue. Amazonka's S3 calls and the OSV and EPSS fetches keep their own clients' timers.
 
-The proxy streams artifact responses without hashing their bodies. Integrity on this path depends
+The npm, PyPI, and Cargo adapters stream artifact responses without hashing their bodies. Integrity on this path depends
 on the client checking the preserved metadata hashes. The proxy therefore asks the upstream for
 every artifact and Core Metadata companion in identity coding. A registry CDN gzips a companion
 when the request permits it, and gzip bytes miss the advertised digest. npm documents integrity
@@ -136,6 +136,36 @@ A `HEAD` must never run the full-`GET` streaming pump. A bodiless `HEAD` that op
 connection and pumped a whole body for warp to discard is a DoS-amplification lever. Cheap `HEAD`s
 would force arbitrary full-artifact upstream fetches. So dispatch handles `HEAD` explicitly, not the
 `Autohead` middleware.
+
+## Verified RubyGems artifact replies
+
+Bundler's named Dependencies API does not carry the source archive checksum.
+RubyGems therefore declares `VerifyBeforeReply`, while npm, PyPI, and Cargo retain `ClientVerifiedStream`.
+This applies to public and caller-authorised private `.gem` GETs, including public-only mounts without mirroring.
+It neither inspects install scripts nor changes admission policy.
+
+The proxy requests an unconditional identity-coded representation, without origin validators or range headers.
+It buffers the complete bounded body and verifies its advertised SHA-256 before committing `200` or a local `304`.
+Known metadata and response lengths must agree with the actual complete body. Unknown lengths reserve the full resolved cap.
+Unsolicited origin `206` or `304`, partial framing, nonidentity coding, or a digest mismatch returns `502` without artifact bytes.
+Private `401` or `403` and private digest mismatches cannot trigger public substitution.
+A genuine private `404` retains the existing public fallback, except for declared first-party names.
+
+The reply uses a strong local validator for the verified representation and evaluates the client's `If-None-Match` condition.
+A matching GET can return `304` only after fetching and verifying the complete body.
+An arbitrary origin validator cannot bypass verification. Conditional GETs retain the body fetch and hash costs.
+The upstream connection closes before delivery. Byte and memory reservations remain held through client delivery.
+Only a delivered successful verified GET can enqueue mirroring.
+
+`HEAD` makes a real upstream `HEAD` after coordinate admission and caller authorisation.
+It checks available length and coding facts, then evaluates the local digest validator after source authorisation and availability succeed.
+It reads no archive body, computes no archive hash, and enqueues no mirror work.
+A successful HEAD or its local `304` proves no observation of verified body bytes.
+
+The dedicated verified-read plan derives its per-body and aggregate byte bounds from existing transient capacity and conservative buffer/copy charges.
+It adds no persistent artifact cache or configuration key.
+Unlike streamed delivery, verified replies hold memory proportional to the bounded body and delay the first byte until verification ends.
+The [memory plan](configuration.md#runtime-sizing-cores-and-heap-ceiling) owns the resolved capacity and override rules.
 
 ## Metadata cache
 

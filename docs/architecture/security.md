@@ -100,7 +100,7 @@ release whose file set is a singleton, npm's, either survives entire or drops en
   `sha1`/`md5`, for a legacy private mirror. There, trust in the operator's own vetted source
   substitutes for cryptographic strength. That's the only way Écluse serves a sub-SHA-256
   digest, and only on the trusted private origin. On the serve path the trusted floor filters
-  the private listing. The private tarball leg is a
+  the private listing. The conventional npm private tarball leg is a
   [conventional stable read](registry-model.md#serving-a-tarball) with no serve-time floor,
   so Écluse still serves a below-floor private artifact. The client and the mirror worker
   verify its bytes.
@@ -110,6 +110,14 @@ The types enforce this distinction. No code can
 construct `MinIntegrity` (public) below SHA-256, while `MinTrustedIntegrity` (trusted) can go
 lower, so no config or constructor path lowers the public floor. The floor admits by
 algorithm strength, and the digest is computable for every algorithm it admits. The mirror worker verifies the admitted digest before publication.
+
+RubyGems artifact GETs additionally verify the advertised SHA-256 before a successful reply, including caller-authorised private reads.
+The named Dependencies API supplies no archive checksum to the client, so client verification cannot replace this check.
+Missing SHA-256 evidence or corrupt bytes cannot yield an artifact success, even if the trusted metadata floor permits a weaker digest.
+The proxy buffers bounded transient bytes without a persistent artifact cache.
+This proves agreement with the selected source assertion, not that the source or archive is harmless.
+HEAD checks authorisation and availability without reading or hashing archive bytes.
+The [verified reply contract](web-layer.md#verified-rubygems-artifact-replies) defines conditional responses and resource ownership.
 
 For PyPI metadata companions, the parent distribution must clear its origin's integrity floor.
 Companion digest declarations remain separate and impose no new proxy hash floor.

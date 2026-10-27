@@ -2223,6 +2223,23 @@ Missing providers, observations, factors, or calibration remain failures.
 Native load qualification requires the standard full profile and three qualifying observations per applicable shape, with source and run provenance.
 Retain adverse and excluded observations. Existing ecosystems' factors, budgets, and floors do not supply RubyGems values.
 
+### Verified RubyGems relay evidence
+
+RubyGems verified replies require independent no-response-commit controls for corrupt bodies on public-only serve-only mounts and caller-authorised private paths.
+Required refusal cases include missing SHA-256, private access refusals, partial or nonidentity responses, origin `304`, framing conflicts, and digest mismatches.
+Check exact-cap and cap-plus-one bodies, unknown lengths, truncation, and false declared lengths.
+Conditional GET must fetch and verify before a local `304`. HEAD must read zero archive body bytes and enqueue no mirror.
+Cancellation controls must cover admission, fetching, hashing, and slow client delivery, with every reservation returned.
+Only a delivered verified successful GET may enqueue work.
+Existing npm, PyPI, and Cargo streaming controls and constant-memory residency assertions remain required.
+
+Measure allocation, peak live heap, retained heap, requested charges, first-byte latency, throughput, p95/p99, and queue pressure separately.
+Vary archive sizes, concurrency, origin chunk sizes, slow origins, and slow clients.
+RubyGems verified replies hold bounded body-proportional memory, so streaming constant-memory claims do not apply to this path.
+Source charges and metric registration alone prove no measured memory envelope or performance result.
+The native verified-relay load shape needs genuine observations and standard all-shapes calibration before delivery claims.
+Missing observations and calibration remain failures.
+
 ## Onboarding an ecosystem
 
 An ecosystem counts as onboarded when it supplies each item below for its supported operations.

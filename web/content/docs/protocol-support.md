@@ -208,6 +208,16 @@ Git and local-path dependencies do not acquire registry admission guarantees.
 | `POST /api/v1/gems` | Validates and relays an unchanged first-party `.gem` archive. Returns `405` without configured publication. |
 
 Read routes also accept `HEAD` under their response contracts.
+A `.gem` GET buffers bounded transient bytes and verifies the advertised SHA-256 before returning artifact success.
+This covers public-only mounts and caller-authorised private reads, without requiring mirroring or a persistent artifact cache.
+A local strong ETag can produce `304` only after the GET fetches and verifies the complete body.
+Origin `304`, partial responses, nonidentity coding, and corrupt bytes cannot bypass verification.
+Private access refusal or a private digest mismatch does not substitute public bytes.
+HEAD checks the selected origin's authorisation and availability before local conditional evaluation.
+It fetches no archive body, computes no archive hash, and enqueues no mirroring.
+Its success does not prove body verification.
+`limits.maxArtifactBytes` also controls this verified-read cap, under the resolved transient capacity.
+Verified downloads delay the first byte until verification ends and use memory proportional to the bounded archive.
 There is no registry-wide catalogue, full specification index, unfiltered fallback, or client yank relay.
 Public acquisition uses per-gem `/info/<gem>` metadata and selected native requests.
 Compact specification and archive locations point through Écluse.
