@@ -1,0 +1,92 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
+-- | Genuine RubyGems files retain independent coordinates, advertised digests and original bytes.
+module Ecluse.Test.Registry.RubyGems.Fixtures (
+    RubyRelease (..),
+    rubyRoot,
+    rubyLeaf,
+    rubyVersion,
+    loadRubyReleases,
+    rubyRelease,
+    writeRubyRegistry,
+) where
+
+import Data.Aeson (Value, eitherDecodeStrict, withObject, (.:))
+import Data.Aeson.Types (Parser, parseEither)
+import Data.ByteString qualified as BS
+import System.Directory (copyFile, createDirectoryIfMissing)
+import System.FilePath (takeDirectory, (</>))
+
+import Ecluse.Test.Package (hexSha256Of)
+
+-- | The manifest comes from Ruby's native tools rather than the production parsers.
+data RubyRelease = RubyRelease
+    { releaseName :: Text
+    , releaseVersion :: Text
+    , releasePlatform :: Text
+    , releaseFilename :: Text
+    , releaseChecksum :: Text
+    , releaseArchive :: ByteString
+    , releaseCompactPath :: FilePath
+    , releaseCompact :: ByteString
+    , releaseManifest :: Value
+    }
+    deriving stock (Eq, Show)
+
+-- | The graph root supplies an executable and a requireable module.
+rubyRoot :: Text
+rubyRoot = "ecluse-fixture-root"
+
+-- | Both root versions resolve the shared transitive leaf under different constraints.
+rubyLeaf :: Text
+rubyLeaf = "ecluse-fixture-leaf"
+
+-- | The baseline has an old publication timestamp and a stable native identity.
+rubyVersion :: Text
+rubyVersion = "1.0.0"
+
+-- | A corrupted committed archive or compact specification fails fixture acquisition.
+loadRubyReleases :: IO [RubyRelease]
+loadRubyReleases = do
+    raw <- BS.readFile (fixtureDirectory </> "manifest.json")
+    value <- either fail pure (eitherDecodeStrict raw)
+    rows <- either fail pure (parseEither (withObject "fixture manifest" (.: "releases")) value)
+    traverse load rows
+  where
+    load row = do
+        (name, version, platform, filename, checksum, compactPath, compactChecksum) <- either fail pure (parseEither coordinate row)
+        archive <- BS.readFile (fixtureDirectory </> "gems" </> toString filename)
+        compact <- BS.readFile (fixtureDirectory </> compactPath)
+        unless (hexSha256Of archive == checksum) (fail "Ruby fixture archive differs from its native digest")
+        unless (hexSha256Of compact == compactChecksum) (fail "Ruby fixture compact specification differs from its native digest")
+        pure (RubyRelease name version platform filename checksum archive compactPath compact row)
+    coordinate :: Value -> Parser (Text, Text, Text, Text, Text, FilePath, Text)
+    coordinate = withObject "fixture release" $ \row ->
+        (,,,,,,) <$> row .: "name" <*> row .: "version" <*> row .: "platform" <*> row .: "filename" <*> row .: "sha256" <*> row .: "compact" <*> row .: "compact_sha256"
+
+-- | Ambiguous coordinates cannot provide a passing expected observation.
+rubyRelease :: [RubyRelease] -> Text -> Text -> Text -> IO RubyRelease
+rubyRelease releases name version platform = case filter matches releases of
+    [release] -> pure release
+    _ -> fail "Ruby fixture coordinate is absent or ambiguous"
+  where
+    matches release = releaseName release == name && releaseVersion release == version && releasePlatform release == platform
+
+-- | The public fixture exposes named files only. It supplies no global catalogue.
+writeRubyRegistry :: FilePath -> IO ()
+writeRubyRegistry destination = do
+    releases <- loadRubyReleases
+    forM_ releases $ \release -> do
+        let archive = destination </> "gems" </> toString (releaseFilename release)
+            compact = destination </> releaseCompactPath release
+        traverse_ (createDirectoryIfMissing True . takeDirectory) [archive, compact]
+        BS.writeFile archive (releaseArchive release)
+        BS.writeFile compact (releaseCompact release)
+    createDirectoryIfMissing True (destination </> "info")
+    forM_ (ordNub (map releaseName releases)) $ \name ->
+        copyFile (fixtureDirectory </> "info" </> toString name) (destination </> "info" </> toString name)
+
+fixtureDirectory :: FilePath
+fixtureDirectory = "test/fixtures/rubygems"

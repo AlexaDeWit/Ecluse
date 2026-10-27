@@ -6,8 +6,15 @@ require 'fileutils'
 require 'json'
 require 'tmpdir'
 require 'zlib'
+require 'optparse'
 ENV['SOURCE_DATE_EPOCH'] = '1577836800'
-root = File.expand_path(__dir__)
+options = {output: File.expand_path(__dir__), payload_bytes: nil}
+OptionParser.new do |parser|
+  parser.on('--output DIRECTORY') { |value| options[:output] = File.expand_path(value) }
+  parser.on('--payload-bytes INTEGER', Integer) { |value| options[:payload_bytes] = value }
+end.parse!
+abort 'payload bytes must be positive' if options[:payload_bytes] && options[:payload_bytes] <= 0
+root = options[:output]
 %w[gems quick/Marshal.4.8 info].each { |path| FileUtils.mkdir_p(File.join(root, path)) }
 releases = []
 coordinates = [
@@ -37,6 +44,10 @@ coordinates.each do |name, version, platform|
         s.date = Time.utc(2020, 1, 1)
         s.files = ["lib/#{feature}.rb"]
         s.require_paths = ['lib']
+        if options[:payload_bytes] && name == 'ecluse-fixture-platform'
+          File.binwrite('lib/payload.bin', Random.new(1886).bytes(options[:payload_bytes]))
+          s.files << 'lib/payload.bin'
+        end
         s.metadata = {'fixture-kind' => 'owned', 'source_code_uri' => 'https://example.invalid/source'}
         s.required_ruby_version = name == 'ecluse-fixture-future' ? '>= 99.0' : '>= 3.2'
         s.required_rubygems_version = '>= 3.4'
@@ -74,10 +85,11 @@ coordinates.each do |name, version, platform|
         required_ruby_version: spec.required_ruby_version.to_s,
         required_rubygems_version: spec.required_rubygems_version.to_s,
         extensions: spec.extensions, metadata: spec.metadata,
+        payload_bytes: options[:payload_bytes] && name == 'ecluse-fixture-platform' ? options[:payload_bytes] : nil,
         decoded_compact: {class: decoded.class.name, name: decoded.name, version: decoded.version.to_s,
                           platform: decoded.platform.to_s, extensions: decoded.extensions,
                           dependencies: decoded.dependencies.map { |d| [d.name, d.requirement.to_s, d.type.to_s] }}
-      }
+      }.reject { |key, value| key == :payload_bytes && value.nil? }
     end
   end
 end
@@ -95,4 +107,38 @@ dependencies = releases.map do |row|
   {name: row[:name], number: row[:version], platform: row[:platform], dependencies: row[:dependencies].select { |d| d[:type] == :runtime }.map { |d| [d[:name], d[:requirements].map { |op, v| "#{op} #{v}" }.join(', ')] }}
 end
 File.binwrite(File.join(root, 'dependencies.marshal'), Marshal.dump(dependencies))
+
+legacy_directory = File.join(root, 'legacy')
+FileUtils.mkdir_p(legacy_directory)
+original = Marshal.load(Zlib::Inflate.inflate(File.binread(File.join(root, 'quick/Marshal.4.8/ecluse-fixture-root-1.0.0.gemspec.rz'))))
+fields = Marshal.load(original._dump(-1))
+original_dump = Gem::Specification.instance_method(:_dump)
+legacy = []
+(Gem::Specification::MARSHAL_FIELDS.to_a + [[4, 19]]).each do |version, count|
+  native_fields = fields.first(count)
+  native_fields[1] = version
+  nested = Marshal.dump(native_fields)
+  begin
+    Gem::Specification.define_method(:_dump) { |_level| nested }
+    bytes = Marshal.dump(original)
+  ensure
+    Gem::Specification.define_method(:_dump, original_dump)
+  end
+  decoded = Marshal.load(bytes)
+  path = "legacy/spec-v#{version}-fields#{count}.gemspec.rz"
+  compressed = Zlib::Deflate.deflate(bytes)
+  File.binwrite(File.join(root, path), compressed)
+  legacy << {path: path, specification_version: version, field_count: count,
+             sha256: Digest::SHA256.hexdigest(compressed), decoded_name: decoded.name,
+             decoded_version: decoded.version.to_s, decoded_platform: decoded.platform.to_s,
+             decoded_licenses: decoded.licenses, decoded_metadata: decoded.metadata,
+             dependencies: decoded.dependencies.map { |dependency| [dependency.name, dependency.type.to_s, dependency.requirement.to_s] }}
+end
+File.write(File.join(root, 'legacy.json'), JSON.pretty_generate({ruby: RUBY_VERSION, rubygems: Gem::VERSION, layouts: legacy}) + "\n")
+require 'psych'
+shared = ['owned', 'native']
+alias_yaml = Psych.dump({'first' => shared, 'second' => shared})
+File.write(File.join(root, 'aliases.yaml'), alias_yaml)
+File.write(File.join(root, 'aliases.json'), JSON.pretty_generate(Psych.safe_load(alias_yaml, aliases: true)) + "\n")
+
 File.write(File.join(root, 'manifest.json'), JSON.pretty_generate({ruby: RUBY_VERSION, rubygems: Gem::VERSION, source_date_epoch: ENV['SOURCE_DATE_EPOCH'], releases: releases}) + "\n")

@@ -15,7 +15,7 @@ def specification(spec)
    executables: spec.executables, require_paths: spec.require_paths}
 end
 
-bytes = STDIN.binmode.read
+bytes = ARGV[1] ? File.binread(ARGV[1]) : STDIN.binmode.read
 result = case ARGV.fetch(0)
 when 'dependencies'
   Marshal.load(bytes)

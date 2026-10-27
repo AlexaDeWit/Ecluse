@@ -6,10 +6,18 @@
 module Ecluse.Test.Registry.RubyGems.Reference (
     RubyInfoRow (..),
     referenceInfo,
+    runRubyReference,
 ) where
 
+import Data.Aeson (Value, eitherDecodeStrict)
+import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as Text
+import System.Directory (findExecutable)
+import System.Exit (ExitCode (ExitSuccess))
+import System.IO (hClose)
+import System.Process (readProcessWithExitCode)
+import UnliftIO.Temporary (withSystemTempFile)
 
 -- | Raw versions and platforms remain distinct from comparison keys.
 data RubyInfoRow = RubyInfoRow
@@ -49,3 +57,15 @@ referenceInfo bytes = do
             | not (T.null key), not (T.null remainder) -> Right (key, T.drop (T.length delimiter) remainder)
         _ -> Left "Compact Index field is incomplete"
     nonemptyParts delimiter = filter (not . T.null) . T.splitOn delimiter
+
+-- | Ruby's native decoder observes exact bytes and fails when the required tool or decoding is unavailable.
+runRubyReference :: Text -> ByteString -> IO Value
+runRubyReference mode bytes = do
+    declared <- fromMaybe "ruby" <$> lookupEnv "ECLTEST_RUBY"
+    command <- findExecutable declared >>= maybe (fail "required Ruby reference executable is absent") pure
+    withSystemTempFile "ecluse-ruby-reference" $ \path handle -> do
+        BS.hPut handle bytes
+        hClose handle
+        (status, output, diagnostic) <- readProcessWithExitCode command ["test/fixtures/rubygems/reference.rb", toString mode, path] ""
+        unless (status == ExitSuccess) (fail ("Ruby reference failed: " <> diagnostic))
+        either fail pure (eitherDecodeStrict (encodeUtf8 (toText output)))

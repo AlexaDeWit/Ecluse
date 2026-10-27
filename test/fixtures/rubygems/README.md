@@ -16,3 +16,12 @@ Compact specifications omit extension declarations even when the archive declare
 `reference.rb` uses RubyGems, Marshal and zlib to observe controlled fixture or product-response bytes in tests.
 It is an independent test oracle, never a production decoder.
 Modes are `dependencies`, `compact`, `archive` and `info`. Each mode reads standard input and emits JSON.
+
+For load setup, `--output DIRECTORY --payload-bytes N` writes a separate native registry.
+Each platform artifact then contains `lib/payload.bin` with exactly N deterministic bytes.
+Generate these archives before timing. Authenticate them against that output's manifest.
+The default invocation leaves the committed archive bytes unchanged.
+
+`legacy/` contains compact specifications with RubyGems' declared historical field counts.
+`legacy.json` records the current Ruby decoder's observations for each layout.
+`aliases.yaml` and `aliases.json` record a Psych-generated alias and its independent decoded value.
