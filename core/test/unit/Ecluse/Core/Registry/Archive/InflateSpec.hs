@@ -7,6 +7,7 @@
 module Ecluse.Core.Registry.Archive.InflateSpec (spec) where
 
 import Codec.Compression.GZip qualified as GZip
+import Codec.Compression.Zlib qualified as Zlib
 import Codec.Compression.Zlib.Raw qualified as Raw
 import Control.Concurrent.MVar qualified as MVar
 import Data.ByteString qualified as BS
@@ -23,9 +24,14 @@ spec :: Spec
 spec = describe "withInflatedChunks" $ do
     it "decodes raw deflate and gzip with bounded output chunks" $ do
         let body = BS.replicate 100000 97
-        for_ [(RawDeflate, Raw.compress), (GzipMembers 1, GZip.compress)] $ \(format, compress) -> do
+        for_ [(RawDeflate, Raw.compress), (ZlibStream, Zlib.compress), (GzipMembers 1, GZip.compress)] $ \(format, compress) -> do
             result <- withInflatedChunks format (const (pure ())) (BSL.toStrict (compress (BSL.fromStrict body))) collect
             BS.concat <$> expectRight result `shouldReturn` body
+    it "checks zlib checksum, truncation, framing and exact consumption" $ do
+        let bytes = BSL.toStrict (Zlib.compress "one")
+        for_ [bytes <> "junk", bytes <> bytes, BS.take (BS.length bytes - 1) bytes, BS.init bytes <> "x", BSL.toStrict (Raw.compress "one"), BSL.toStrict (GZip.compress "one")] $ \malformed -> do
+            result <- withInflatedChunks ZlibStream (const (pure ())) malformed collect
+            result `shouldSatisfy` isLeft
     it "checks every gzip member and rejects trailing junk or an exceeded count" $ do
         let member = BSL.toStrict (GZip.compress "one")
         withInflatedChunks (GzipMembers 2) (const (pure ())) (member <> member) collect `shouldReturn` Right ["one", "one"]
