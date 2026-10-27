@@ -1043,8 +1043,12 @@ it read from the running RTS.
 bytes. A leg's budget is that figure plus the file's `marginPercent`, rounded up to a whole byte.
 The margin is 1%. Over six main runs a leg's median moved by at most 0.051%, so 1% is about twenty
 times the noise and fails a regression of 1% on any leg.
-The file's calibration record names the architecture, runner, commit, and run URLs the figures came
-from. The job fails closed. It fails when:
+The calibration record names the default architecture, runner, commit, and run URLs.
+Optional `calibration.sourcesByEcosystem` overrides those source fields for a named ecosystem.
+Each override contains only `arch`, `runner`, `commit`, and non-empty `runs`.
+All ecosystems use the sole global `marginPercent`. Unchanged ecosystems keep their recorded
+figures and source records. Reports and architecture warnings select each ecosystem's source.
+The job fails closed. It fails when:
 
 - a leg allocates more than its budget,
 - a measured leg has no calibrated figure,
@@ -1055,10 +1059,13 @@ from. The job fails closed. It fails when:
 
 A red result needs a human decision: fix the regression, or recalibrate. A leg that allocates more
 than the margin below its figure passes, and the job raises a warning on it that asks for a
-recalibration, because the budget no longer holds the gain. To recalibrate, take every figure from
-the report of one arm64 CI run, and record that run's runner, URL, and the commit it checked out in
-the calibration. A pull request run checks out the merge of its head into the base, and the log of
-its checkout step names that commit. The job writes its report to the run summary and uploads it as
+recalibration, because the budget no longer holds the gain.
+To recalibrate an ecosystem, take all its figures from one arm64 CI report.
+Record the runner, URL, and executed commit in its source override.
+Keep other ecosystems' values and source records unchanged. A full recalibration can instead
+replace every figure and the default source together, removing obsolete overrides.
+A pull request run checks out the merge of its head into the base.
+The checkout log names that commit. The job writes its report to the run summary and uploads it as
 `perf-allocation-report.md`.
 
 Arm64 CI is the calibration source, and you can also run `task perf-allocation` on x86_64. On an

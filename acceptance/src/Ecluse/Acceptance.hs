@@ -11,6 +11,8 @@ module Ecluse.Acceptance (
     Leg (..),
     legKey,
     Calibration (..),
+    CalibrationSource (..),
+    calibrationSourceFor,
     Criteria (..),
     criteriaPath,
     loadCriteria,
@@ -47,7 +49,8 @@ module Ecluse.Acceptance (
 -- relude's prelude exports a Bounded/Enum-based `universe`. The Generic-derived one is used here.
 import Prelude hiding (universe)
 
-import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.:))
+import Data.Aeson (FromJSON (parseJSON), Object, eitherDecode, withObject, (.:))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -86,6 +89,28 @@ legKey = \case
 parseLeg :: Text -> Maybe Leg
 parseLeg key = find ((== key) . legKey) universe
 
+-- | An identified run that supplies allocation figures, without a separate margin.
+data CalibrationSource = CalibrationSource
+    { sourceArch :: Text
+    , sourceRunner :: Text
+    , sourceCommit :: Text
+    , sourceRuns :: NonEmpty Text
+    }
+    deriving stock (Eq, Show)
+
+instance FromJSON CalibrationSource where
+    parseJSON = withObject "CalibrationSource" $ \o -> do
+        when (any (`notElem` ["arch", "runner", "commit", "runs"]) (KeyMap.keys o)) $
+            fail "a calibration source accepts only arch, runner, commit, and runs"
+        parseCalibrationSource o
+
+parseCalibrationSource :: Object -> Parser CalibrationSource
+parseCalibrationSource o = do
+    source <- CalibrationSource <$> o .: "arch" <*> o .: "runner" <*> o .: "commit" <*> o .: "runs"
+    when (any (T.null . T.strip) ([sourceArch source, sourceRunner source, sourceCommit source] <> toList (sourceRuns source))) $
+        fail "a calibration source must name its architecture, runner, commit, and runs"
+    pure source
+
 -- | Where the calibrated figures were measured, and the margin a budget adds to them.
 data Calibration = Calibration
     { calArch :: Text
@@ -95,17 +120,33 @@ data Calibration = Calibration
     , calRuns :: NonEmpty Text
     , calMarginPercent :: Int64
     -- ^ How far past its calibrated figure a leg may allocate, in percent.
+    , calSourcesByEcosystem :: Map Ecosystem CalibrationSource
     }
     deriving stock (Eq, Show)
 
 instance FromJSON Calibration where
     parseJSON = withObject "Calibration" $ \o -> do
-        calibration <- Calibration <$> o .: "arch" <*> o .: "runner" <*> o .: "commit" <*> o .: "runs" <*> o .: "marginPercent"
-        when (any T.null [calArch calibration, calRunner calibration, calCommit calibration]) $
-            fail "the calibration must name its architecture, runner, and commit"
-        when (calMarginPercent calibration < 0) $
+        source <- parseCalibrationSource o
+        margin <- o .: "marginPercent"
+        sources <- maybe (pure Map.empty) parseJSON (KeyMap.lookup "sourcesByEcosystem" o)
+        when (margin < 0) $
             fail "the calibration margin must not be negative"
-        pure calibration
+        overrides <- Map.fromList <$> traverse parseSource (Map.toList sources)
+        pure (Calibration (sourceArch source) (sourceRunner source) (sourceCommit source) (sourceRuns source) margin overrides)
+      where
+        parseSource :: (Text, CalibrationSource) -> Parser (Ecosystem, CalibrationSource)
+        parseSource (name, source) = case parseEcosystem name of
+            Nothing -> fail ("unknown ecosystem in calibration sources: " <> toString name)
+            Just ecosystem -> pure (ecosystem, source)
+
+-- | Select an ecosystem's recorded source, falling back to the original global source.
+calibrationSourceFor :: Calibration -> Ecosystem -> CalibrationSource
+calibrationSourceFor calibration ecosystem =
+    Map.findWithDefault (defaultCalibrationSource calibration) ecosystem (calSourcesByEcosystem calibration)
+
+defaultCalibrationSource :: Calibration -> CalibrationSource
+defaultCalibrationSource calibration =
+    CalibrationSource (calArch calibration) (calRunner calibration) (calCommit calibration) (calRuns calibration)
 
 -- | The calibration, and each package's calibrated allocation in bytes per leg, by ecosystem.
 data Criteria = Criteria
@@ -287,17 +328,17 @@ capturesProblems report =
 belowMargin :: Calibration -> Int64 -> Int64 -> Bool
 belowMargin calibration calibrated bytes = bytes * 100 < calibrated * (100 - calMarginPercent calibration)
 
-{- | GitHub warnings for a run on another architecture than the calibration's, and for each leg that
-allocates more than the margin below its calibrated figure. Neither fails the run.
--}
+-- | Warn about source architecture differences and allocation below the calibrated margin.
 capturesAnnotations :: CapturesReport -> [Text]
 capturesAnnotations report =
     [ "::warning title=Allocation budgets calibrated elsewhere::The budgets were calibrated on "
-        <> calArch (reportCalibration report)
+        <> label
+        <> sourceArch source
         <> " and this run is on "
         <> hostArch
         <> ", so a leg close to its budget can read differently."
-    | calArch (reportCalibration report) /= hostArch
+    | (label, source) <- reportSources report
+    , sourceArch source /= hostArch
     ]
         <> [ "::warning title=Allocation below its calibration::"
                 <> ecosystemName (sectionEcosystem section)
@@ -371,23 +412,27 @@ renderCapturesReport op report =
         , ""
         ]
             <> operatingLines op
-            <> [ "- Architecture: the budgets were calibrated on " <> calArch calibration <> " and this run is on " <> hostArch <> ". Allocation can differ between architectures, so a leg close to its budget can read differently here."
-               | calArch calibration /= hostArch
+            <> [ "- Architecture: the budgets were calibrated on " <> label <> sourceArch source <> " and this run is on " <> hostArch <> ". Allocation can differ between architectures, so a leg close to its budget can read differently here."
+               | (label, source) <- reportSources report
+               , sourceArch source /= hostArch
                ]
-            <> [ "- Captures: bench/corpus, each evaluated at its capture time in bench/corpus/pins.json."
-               , "- Budgets: acceptance/criteria.json. Each budget is the figure measured on "
-                    <> calRunner calibration
+            <> ["- Captures: bench/corpus, each evaluated at its capture time in bench/corpus/pins.json."]
+            <> [ "- Budgets: acceptance/criteria.json. Each "
+                    <> label
+                    <> "budget is the figure measured on "
+                    <> sourceRunner source
                     <> " ("
-                    <> calArch calibration
+                    <> sourceArch source
                     <> ") at "
-                    <> calCommit calibration
+                    <> sourceCommit source
                     <> ", plus "
                     <> show (calMarginPercent calibration)
                     <> "%. Runs: "
-                    <> T.intercalate ", " (toList (calRuns calibration))
+                    <> T.intercalate ", " (toList (sourceRuns source))
                     <> "."
-               , ""
+               | (label, source) <- reportSources report
                ]
+            <> [""]
             <> concatMap (capturesSection calibration) (reportSections report)
             <> unmeasuredLines
   where
@@ -398,6 +443,17 @@ renderCapturesReport op report =
     unmeasuredLines = case reportUnmeasured report of
         [] -> []
         unmeasured -> ["Calibrated packages this run did not measure: " <> T.intercalate ", " [ecosystemName eco <> " " <> name | (eco, name) <- unmeasured] <> ".", ""]
+
+reportSources :: CapturesReport -> [(Text, CalibrationSource)]
+reportSources report
+    | Map.null (calSourcesByEcosystem calibration) = [("", defaultCalibrationSource calibration)]
+    | otherwise =
+        [ (ecosystemName ecosystem <> " ", calibrationSourceFor calibration ecosystem)
+        | section <- reportSections report
+        , let ecosystem = sectionEcosystem section
+        ]
+  where
+    calibration = reportCalibration report
 
 capturesSection :: Calibration -> CapturesSection -> [Text]
 capturesSection calibration section =
