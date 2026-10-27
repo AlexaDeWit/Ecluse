@@ -952,6 +952,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.PyPI.Wire
     Ecluse.Test.Registry.RubyGems.Wire
     Ecluse.Test.Registry.RubyGems.Reference
+    Ecluse.Test.Mirror.RubyGems
     Ecluse.Test.Corpus.RubyGems
     Ecluse.Test.Registry.RubyGems.Fixtures
     Ecluse.Test.RegistryCapture
@@ -1603,6 +1604,7 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.RubyGems.WorkerFixture
     Ecluse.BenchLoad.RubyGems.WorkerFixtureSpec
     Ecluse.BenchLoad.RubyGemsSpec
+    Ecluse.BenchLoad.OhaSpec
     Ecluse.BenchLoad.Cargo.CopyState
     Ecluse.BenchLoad.Cargo.Worker
     Ecluse.BenchLoad.Cargo.WorkerFixture
