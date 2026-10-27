@@ -25,12 +25,12 @@ spec = do
     describe "parseGem token construction" $ do
         it "detects a deliberately deferred token tail without evaluating it" $ do
             let !token = VNum 1
-            tokens <- evaluate (token : impureThrow DeferredTokenTail)
-            settledPart 64 TokenList (Heap.asBox tokens) `shouldReturn` False
+            tokensBox <- Heap.asBox <$> evaluate (token : impureThrow DeferredTokenTail)
+            settledPart 64 TokenList tokensBox `shouldReturn` False
         for_ ["12.34.56", "1.2.0.rc.3", "2.0.a.0", "0.0.0", "1.0.0-1"] $ \raw ->
             it ("constructs the complete canonical token spine and scalar values for " <> toString raw) $ do
-                key <- expectRight (parseVersionKey RubyGems raw) >>= evaluate
-                settledPart 64 NativeKey (Heap.asBox key) `shouldReturn` True
+                keyBox <- Heap.asBox <$> (expectRight (parseVersionKey RubyGems raw) >>= evaluate)
+                settledPart 64 NativeKey keyBox `shouldReturn` True
 
 data DeferredTokenTail = DeferredTokenTail
     deriving stock (Eq, Show)

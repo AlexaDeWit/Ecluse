@@ -58,8 +58,10 @@ spec = describe "native gem validation" $ do
     it "returns an evaluated successful archive without forcing it in the caller" $ do
         hasConstructor 32 (Heap.asBox (throw DeferredArchive :: GemArchive)) `shouldReturn` False
         bytes <- readFileBS fixture
-        archive <- inspect defaultLimits bytes >>= expectRight
-        hasConstructor 32 (Heap.asBox archive) `shouldReturn` True
+        result <- inspect defaultLimits bytes
+        archiveBox <- Heap.asBox <$> expectRight result
+        hasConstructor 32 archiveBox `shouldReturn` True
+        archive <- expectRight result
         gemArchiveSha256 archive `shouldBe` sha256Hex bytes
     it "refuses duplicate, missing and unknown envelope members and nonzero trailing data" $ do
         bytes <- readFileBS fixture

@@ -84,8 +84,7 @@ inspectGemArchive limits charge bytes = do
                                                 then pure (bad "gem data inventory disagrees with metadata files")
                                                 else do
                                                     digest <- evaluate (sha256Hex bytes)
-                                                    archive <- evaluate (GemArchive bytes metadata inventory digest)
-                                                    pure (Right archive)
+                                                    Right <$> evaluate (GemArchive bytes metadata inventory digest)
                                 (Left fault, _) -> pure (Left fault)
                                 (_, Left fault) -> pure (Left fault)
                         (Left fault, _) -> pure (Left fault)
