@@ -102,6 +102,29 @@ spec = do
             let refuse _ = throwIO ChargeRefused
             inspectCargoArchive defaultLimits refuse "example" "1.2.3" (sha256Hex bytes) bytes `shouldThrow` (== ChargeRefused)
     describe "cargoPublicationMetadata" $ do
+        it "preserves publication claims and their reservation when README capture is disabled" $ do
+            bytes <- fixture [("Cargo.toml", manifest <> "readme=false\nlicense='MIT'\n"), ("README.md", BS.singleton 255)]
+            retained <- newIORef 0
+            archive <- inspectCargoArchive defaultLimits (writeIORef retained) "example" "1.2.3" (sha256Hex bytes) bytes >>= expectRight
+            held <- readIORef retained
+            held `shouldSatisfy` (> 0)
+            payments <- newIORef ([] :: [Int])
+            upload <- cargoPublicationMetadata defaultLimits (\cost -> modifyIORef' payments (cost :)) archive >>= expectRight
+            case publishMetadataValue upload of
+                Object fields ->
+                    for_
+                        [ ("name", String "example")
+                        , ("vers", String "1.2.3")
+                        , ("license", String "MIT")
+                        , ("readme", Null)
+                        , ("readme_file", Null)
+                        , ("license_file", Null)
+                        ]
+                        $ \(key, value) -> KeyMap.lookup key fields `shouldBe` Just value
+                _ -> expectationFailure "Cargo publication is not an object"
+            paid <- readIORef payments
+            paid `shouldSatisfy` (\costs -> not (null costs) && all (>= held) costs)
+            cargoPublicationMetadata defaultLimits (const (throwIO ChargeRefused)) archive `shouldThrow` (== ChargeRefused)
         it "reads a selected README both before and after Cargo.toml" $
             for_ [[("README.md", "readme first"), ("Cargo.toml", manifest)], [("Cargo.toml", manifest), ("README.md", "readme first")]] $ \entries -> do
                 bytes <- fixture entries

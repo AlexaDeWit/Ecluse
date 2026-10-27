@@ -83,16 +83,18 @@ cargoPublicationMetadata :: Limits -> (Int -> IO ()) -> CargoArchiveMetadata -> 
 cargoPublicationMetadata limits charge metadata = deadline $
     case manifestTextPaths (caManifest metadata) (caInventory metadata) of
         Left fault -> pure (Left fault)
+        Right [] -> finish Map.empty
         Right paths -> do
-            let retained = caRetainedBytes metadata
             result <- archivePass limits (charge . (+ retained)) (caRoot metadata) (Set.fromList paths) (caSource metadata)
             case result of
                 Left fault -> pure (Left fault)
-                Right (scan, _) -> do
-                    let content = Map.mapKeys dropArchiveRoot (tarContents scan)
-                        textBytes = sum (map BS.length (Map.elems content))
-                    charge (retained + 65536 + 8 * textBytes + 512 * Map.size content)
-                    evaluate (publicationMetadata (caManifest metadata) content)
+                Right (scan, _) -> finish (Map.mapKeys dropArchiveRoot (tarContents scan))
+  where
+    retained = caRetainedBytes metadata
+    finish content = do
+        let textBytes = sum (map BS.length (Map.elems content))
+        charge (retained + 65536 + 8 * textBytes + 512 * Map.size content)
+        evaluate (publicationMetadata (caManifest metadata) content)
 
 -- | Compare mirror source claims under the archive deadline after reserving both resolver inputs.
 cargoPublicationAgreement :: Limits -> (Int -> IO ()) -> CargoArchiveMetadata -> Value -> CargoPublishMetadata -> IO (Either ParseError CargoPublishMetadata)

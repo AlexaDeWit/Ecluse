@@ -72,7 +72,7 @@ import Ecluse.Test.Snapshot (readDetails)
 -- | Load every registered corpus, failing on missing, malformed, or empty metadata.
 ecosystemBenches :: IO [EcosystemBench]
 ecosystemBenches = do
-    either (fail . toString) pure (checkProviderCoverage benchmarkEcosystems)
+    either (fail . toString) pure (checkBenchmarkCoverage benchmarkEcosystems)
     traverse (uncurry loadEcosystem) benchmarkRegistrations
 
 -- | Provider identities without loading corpus files or running measured operations.

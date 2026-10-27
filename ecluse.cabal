@@ -39,7 +39,11 @@ extra-source-files:
   test/fixtures/cargo/graph/**/*.rs
   test/fixtures/cargo/foreign/Cargo.toml
   test/fixtures/cargo/foreign/README.md
+  test/fixtures/cargo/foreign/build.rs
   test/fixtures/cargo/foreign/src/*.rs
+  test/oracles/cargo-semver/Cargo.toml
+  test/oracles/cargo-semver/Cargo.lock
+  test/oracles/cargo-semver/src/main.rs
   bench/corpus/cargo/README.md
   test/fixtures/osv/v1/*.json
   test/fixtures/osv/v2/*.json
