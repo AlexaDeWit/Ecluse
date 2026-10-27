@@ -33,7 +33,6 @@ import Ecluse.Test.Contract.Install (TargetExpectation (..), TargetObservation (
 import Ecluse.Test.Contract.Mirror
 import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Serving (ServingResponse (responseStatus))
-import Ecluse.Test.Log (lineMessage)
 import Ecluse.Test.Registry.Cargo.Fixtures
 import Ecluse.Test.Registry.Cargo.Reference
 
@@ -170,7 +169,7 @@ cargoPackageTree project = Map.fromList . mapMaybe nativePath . Map.toList <$> s
 
 -- | Read the worker's structured completion message for one exact native identity.
 cargoMirrorComplete :: Text -> Text -> Text -> Bool
-cargoMirrorComplete name version = elem ("mirror version complete: " <> name <> "@" <> version) . mapMaybe lineMessage . T.lines
+cargoMirrorComplete = mirrorVersionComplete
 
 cargoPublicReachable :: E2E -> IO Bool
 cargoPublicReachable proxy = (== 200) . responseStatus <$> proxyHead proxy ("/cargo/" <> cargoShard "ecluse-e2e-advisory")
