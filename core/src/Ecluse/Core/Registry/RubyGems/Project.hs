@@ -49,7 +49,7 @@ mkGemPlatform raw = do
     let (_, separated) = T.breakOn "-" checked
         os = if T.null separated then checked else T.drop 1 separated
     unless (checked == "ruby" || knownOs checked || knownOs os) (Left (ParseError "unsupported RubyGems platform"))
-    pure (GemPlatform checked)
+    pure (GemPlatform (T.copy checked))
   where
     platformChar c = isAsciiAlphaNum c || c `elem` ['.', '-', '_']
     knownOs value = any (family value) ["aix", "cygwin", "darwin", "macruby", "freebsd", "java", "jruby", "dalvik", "dotnet", "linux", "mingw32", "mingw", "mswin32", "mswin64", "netbsdelf", "openbsd", "solaris", "wasi"]
@@ -80,7 +80,7 @@ mkCoordinate name version platform = do
     let suffix = if unGemPlatform platform == "ruby" then "" else "-" <> unGemPlatform platform
         filename = renderPackageName checkedName <> "-" <> raw <> suffix <> ".gem"
     file <- maybeToRight (ParseError "invalid RubyGems artifact filename") (mkFilename filename)
-    pure (GemCoordinate checkedName version platform file)
+    pure (GemCoordinate checkedName (mkVersion RubyGems (T.copy raw)) platform file)
 
 -- | Return the native filename without its @.gem@ extension for quick specifications.
 coordinateStem :: GemCoordinate -> Text

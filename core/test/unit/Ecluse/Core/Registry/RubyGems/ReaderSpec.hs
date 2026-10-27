@@ -7,6 +7,8 @@ module Ecluse.Core.Registry.RubyGems.ReaderSpec (spec) where
 
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Ecluse.Test.Registry.Source (assertCancelledRead)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
@@ -47,6 +49,17 @@ spec = describe "RubyGems complete named reads" $ do
         parse defaultLimits{maxArtifactCount = 1} (SelectedRead (mkVersion RubyGems "1.0")) [bytes] `shouldReturn` Left (TooManyArtifacts 2 1)
         parse defaultLimits{maxVersionCount = 1} FullRead [bytes] `shouldReturn` Left (TooManyVersions 2 1)
         parse defaultLimits{maxMetadataBytes = BS.length bytes - 1} FullRead [bytes] `shouldReturn` Left (BodyTooLarge (MetadataBodyLimit (BS.length bytes - 1)))
+    it "keeps selected workspace independent of eightfold distinct dropped history" $ do
+        let target = row "1.0" "2026-01-01T00:00:00Z"
+            body count = "---\n" <> target <> BS.concat ["\n" <> row (encodeUtf8 ("2." <> T.justifyRight 6 '0' (show at))) "2026-01-01T00:00:00Z" | at <- [1 .. count :: Int]]
+            selected = SelectedRead (mkVersion RubyGems "1.0")
+        (small, smallPeak) <- charged selected (body 250)
+        (large, largePeak) <- charged selected (body 2000)
+        gemReadDocument large `shouldBe` gemReadDocument small
+        largePeak `shouldSatisfy` (< 2 * smallPeak)
+    it "propagates asynchronous cancellation from a blocked source" $ do
+        name <- expectRight (projectName "native-gem")
+        assertCancelledRead (readGemInfoCharged (const pass) defaultLimits name "https://rubygems.org" FullRead (MetadataBodyLimit (maxMetadataBytes defaultLimits)) (testTable []))
     it "requires an actual header delimiter" $ do
         parsed <- expectRight =<< parse defaultLimits FullRead [row "1.0" "2026-01-01T00:00:00Z"]
         streamValue parsed `shouldSatisfy` isLeft
@@ -58,3 +71,11 @@ spec = describe "RubyGems complete named reads" $ do
         next <- heldChunks chunks
         readGemInfoCharged (const pass) limits name "https://rubygems.org" mode (MetadataBodyLimit (maxMetadataBytes limits)) (testTable []) next
     readResult mode bytes = expectRight . streamValue =<< expectRight =<< parse defaultLimits mode [bytes]
+
+    charged mode body = do
+        name <- expectRight (projectName "native-gem")
+        peak <- newIORef (0 :: Int)
+        next <- heldChunks [body]
+        streamed <- expectRight =<< readGemInfoCharged (modifyIORef' peak . max) defaultLimits name "https://rubygems.org" mode (MetadataBodyLimit (maxMetadataBytes defaultLimits)) (testTable []) next
+        result <- expectRight (streamValue streamed)
+        (result,) <$> readIORef peak

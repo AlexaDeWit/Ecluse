@@ -60,7 +60,7 @@ data Scan = Scan
 readGemInfoCharged :: (Int -> IO ()) -> Limits -> PackageName -> Text -> GemRead -> DocumentWalk GemReadResult
 readGemInfoCharged pay limits name base mode bound _ = readStepsWithEnd id finishRecordSteps bound (gemInfoSteps pay limits name base mode)
 
--- | Frame native rows through EOF under cumulative artifact, version and retained-state limits.
+-- | Selected scans count source positions, while full scans count distinct versions before grouping.
 gemInfoSteps :: (Monad m) => (Int -> m ()) -> Limits -> PackageName -> Text -> GemRead -> Steps m GemReadResult
 gemInfoSteps pay limits name base mode = recordSteps reserve consume complete initial
   where
@@ -79,18 +79,22 @@ gemInfoSteps pay limits name base mode = recordSteps reserve consume complete in
                 key = RecordEntry (scanOrdinal scan)
                 claimed = infoRowIdentity name bytes
                 identity = fmap (\coordinate -> (renderVersion (coordinateVersion coordinate), unGemPlatform (coordinatePlatform coordinate))) claimed
-                versions = maybe (scanVersions scan) (\(raw, _) -> Set.insert raw (scanVersions scan)) identity
+                versions = case mode of
+                    FullRead -> maybe (scanVersions scan) (\(raw, _) -> Set.insert raw (scanVersions scan)) identity
+                    SelectedRead _ -> Set.empty
                 seen = case identity of
                     Just native@(raw, _) | selected raw -> Map.insertWith (+) native 1 (scanSeen scan)
                     _ -> scanSeen scan
                 next = scan{scanOrdinal = scanOrdinal scan + 1, scanCount = count, scanVersions = versions, scanSeen = seen}
             checkArtifactCount limits count
-            checkVersionCountOf limits (Set.size versions)
+            checkVersionCountOf limits (case mode of FullRead -> Set.size versions; SelectedRead _ -> count)
             case decodeInfoRow name key bytes of
                 Left fault ->
                     let reason = case fault of GemRowMalformed detail -> detail; GemRowUnsupported detail -> detail
                         bad = case identity of Just (raw, _) | selected raw -> Set.insert raw (scanBad next); _ -> scanBad next
-                     in Right next{scanBad = bad, scanInvalid = mkInvalidEntry InvalidVersionManifest (show key) Null reason : scanInvalid next, scanKeptCharge = addCharge next charge}
+                        retain = case mode of FullRead -> True; SelectedRead _ -> null (scanInvalid next)
+                        invalid = if retain then mkInvalidEntry InvalidVersionManifest (show key) Null reason : scanInvalid next else scanInvalid next
+                     in Right next{scanBad = bad, scanInvalid = invalid, scanKeptCharge = if retain then addCharge next 256 else scanKeptCharge next}
                 Right row
                     | selected (renderVersion (coordinateVersion (grCoordinate row))) -> Right next{scanRows = row : scanRows next, scanKeptCharge = addCharge next charge}
                     | otherwise -> Right next

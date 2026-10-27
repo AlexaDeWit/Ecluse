@@ -78,7 +78,7 @@ parseGemRequirement raw = do
             (operator, rest) = T.span (`elem` ['=', '!', '<', '>', '~']) stripped
             version = T.strip rest
         unless (operator `elem` ["=", "!=", ">", "<", ">=", "<=", "~>"] && not (T.null version) && isJust (parseGem version)) (malformed "invalid RubyGems requirement")
-        pure stripped
+        pure (T.copy stripped)
 
 parseIdentity :: PackageName -> Text -> Either ParseError GemCoordinate
 parseIdentity name identity = do
@@ -92,7 +92,7 @@ parseFields raw = foldM insert Map.empty (T.splitOn "," raw)
     insert fields field = do
         let (key, separated) = T.breakOn ":" field
         unless (not (T.null key) && T.all asciiField key && not (T.null separated) && not (Map.member key fields)) (malformed "invalid or duplicate RubyGems metadata field")
-        pure (Map.insert key (T.drop 1 separated) fields)
+        pure (Map.insert (T.copy key) (T.copy (T.drop 1 separated)) fields)
     asciiField c = isAsciiLower c || isAsciiUpper c || isDigit c || c == '_'
 
 parseFailure :: ParseError -> GemRowError

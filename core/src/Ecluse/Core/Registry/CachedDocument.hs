@@ -44,6 +44,7 @@ import Ecluse.Core.Registry.RubyGems.Document (GemDependency (..), GemDocument (
 import Ecluse.Core.Registry.RubyGems.Project (coordinateFilename, coordinateName, coordinatePlatform, coordinateVersion, unGemPlatform)
 import Ecluse.Core.Server.MemoryModel (chargeForResident)
 import Ecluse.Core.Server.Path (unFilename)
+import Ecluse.Core.Text (textStorageBytes)
 import Ecluse.Core.Version (renderVersion)
 
 -- | Serving documents held by the pipeline and permitted caches. Derived 'Show' and 'Eq' support debugging and tests, not wire projection.
@@ -180,16 +181,19 @@ rubyGemsCached :: (GemDocument -> CachedDoc, CachedDoc -> Maybe GemDocument)
 rubyGemsCached = (\document -> CachedRubyGems document (gemBytes document), \case CachedRubyGems document _ -> Just document; _ -> Nothing)
 
 gemBytes :: GemDocument -> Int64
-gemBytes document = 64 + textBytes (renderPackageName (gemName document)) + fromIntegral (BS.length (gemHeader document)) + sum (map rowBytes (gemRows document))
+gemBytes document = 64 + nativeTextBytes (renderPackageName (gemName document)) + fromIntegral (BS.length (gemHeader document)) + sum (map rowBytes (gemRows document))
   where
     rowBytes row =
         let coordinate = grCoordinate row
             strings = [renderPackageName (coordinateName coordinate), renderVersion (coordinateVersion coordinate), unGemPlatform (coordinatePlatform coordinate), unFilename (coordinateFilename coordinate), hashValue (grChecksum row)]
-            requirementBytes values = sum [32 + textBytes clause | clause <- toList values]
+            requirementBytes values = sum [32 + nativeTextBytes clause | clause <- toList values]
          in 256
-                + sum (map textBytes strings)
+                + sum (map nativeTextBytes strings)
                 + fromIntegral (BS.length (grSource row))
                 + requirementBytes (grRequiredRuby row)
                 + requirementBytes (grRequiredRubyGems row)
-                + sum [64 + textBytes (renderPackageName (gdName dependency)) + requirementBytes (gdRequirement dependency) | dependency <- grDependencies row]
-                + sum [64 + textBytes key + textBytes value | (key, value) <- Map.toList (grExtras row)]
+                + sum [64 + nativeTextBytes (renderPackageName (gdName dependency)) + requirementBytes (gdRequirement dependency) | dependency <- grDependencies row]
+                + sum [64 + nativeTextBytes key + nativeTextBytes value | (key, value) <- Map.toList (grExtras row)]
+
+nativeTextBytes :: Text -> Int64
+nativeTextBytes = fromIntegral . textStorageBytes
