@@ -55,15 +55,15 @@ nativeRow version platform = do
     names <- take <$> Gen.element [0, 1, 2, 3] <*> Gen.shuffle ["child-one", "child_two", "Child.Three"]
     dependencies <- traverse (\name -> (name,) <$> clauses) names
     checksum <- Gen.text (Range.singleton 64) (Gen.element (['0' .. '9'] <> ['a' .. 'f']))
-    ruby <- optional "ruby" (T.intercalate "&" <$> clauses)
-    gems <- optional "rubygems" (T.intercalate "&" <$> clauses)
-    published <- optional "created_at" (Gen.element ["2020-01-01T00:00:00Z", "2026-01-02T03:04:05Z", "2026-10-27T12:34:56.125Z"])
-    extra1 <- optional "extra1" (Gen.element ["opaque", "caf\xe9", "owned \x1f600"])
-    extra2 <- optional "extra2" (Gen.element ["retained", "v2.0", ""])
+    ruby <- optionalField "ruby" (T.intercalate "&" <$> clauses)
+    gems <- optionalField "rubygems" (T.intercalate "&" <$> clauses)
+    published <- optionalField "created_at" (Gen.element ["2020-01-01T00:00:00Z", "2026-01-02T03:04:05Z", "2026-10-27T12:34:56.125Z"])
+    extra1 <- optionalField "extra1" (Gen.element ["opaque", "caf\xe9", "owned \x1f600"])
+    extra2 <- optionalField "extra2" (Gen.element ["retained", "v2.0", ""])
     fields <- Gen.shuffle (("checksum", checksum) : ruby <> gems <> published <> extra1 <> extra2)
     pure (RubyInfoRow 0 version platform dependencies fields)
   where
-    optional key values = do
+    optionalField key values = do
         present <- Gen.bool
         value <- values
         pure [(key, value) | present]
