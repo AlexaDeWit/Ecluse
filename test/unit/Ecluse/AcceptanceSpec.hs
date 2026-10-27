@@ -39,7 +39,7 @@ import Ecluse.Acceptance (
     renderCapturesReport,
     renderLiveReport,
  )
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportTimeout, TransportTls, TransportUnreachable), transportFault)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable), RegistryResponse (RegistryResponse), UrlFormationError (EmptyBaseUrl))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
@@ -73,7 +73,7 @@ spec = do
             decodeCriteria (document (calibrationJson "abc123" ["https://example.test/runs/1"] (-1)) []) `shouldSatisfy` isLeft
         it "loads the committed criteria, with a section per ecosystem" $ do
             criteria <- loadCriteria
-            Map.keys (critAllocatedBytes criteria) `shouldBe` [Npm, PyPI, Cargo]
+            Map.keys (critAllocatedBytes criteria) `shouldBe` [Npm, PyPI, RubyGems, Cargo]
 
     describe "budgetBytes" $ do
         it "adds the margin and rounds up to a whole byte" $

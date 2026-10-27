@@ -34,7 +34,17 @@ spec = describe "load profiles" $ do
                 keys `shouldSatisfy` elem (ecosystem <> "/" <> name)
         keys `shouldContain` ["pypi/mirror-native-baseline", "pypi/mirror-managed-warm", "pypi/mirror-managed-revision"]
         length (filter (not . T.isPrefixOf "rubygems/") keys) `shouldBe` 24
-        keys `shouldContain` ["rubygems/dependencies-cold", "rubygems/batch-dependencies", "rubygems/quick-gemspec"]
+        filter (T.isPrefixOf "rubygems/") keys
+            `shouldBe` [ "rubygems/dependencies-cold"
+                       , "rubygems/dependencies-cold-advisories"
+                       , "rubygems/heavy-private"
+                       , "rubygems/assembled-response-hit"
+                       , "rubygems/revalidate-not-modified"
+                       , "rubygems/cache-fits-large"
+                       , "rubygems/cache-evicts-large"
+                       , "rubygems/batch-dependencies"
+                       , "rubygems/quick-gemspec"
+                       ]
         length keys `shouldBe` 33
     it "keeps slow clients, bursts under private load and the full admission ramp" $
         for_ ["npm", "pypi", "cargo", "rubygems"] $ \ecosystem ->

@@ -36,7 +36,7 @@ import Ecluse.Config (
  )
 import Ecluse.Config.Target (parseCodeArtifactHost, resolvePrivateBackend)
 import Ecluse.Core.Credential (mkSecret)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, RubyGems))
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (..))
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), formatToken)
 
@@ -219,10 +219,16 @@ hostValidationSpec = describe "the URL a tag admits" $ do
         outcome `shouldSatisfy` refusalMentions "mounts.npm.privateUpstream.codeArtifact.url"
         outcome `shouldNotSatisfy` refusalMentions "mirrorTarget"
 
-    it "refuses a codeArtifact mirror target on an ecosystem CodeArtifact has no format for" $ do
-        let outcome = loadConfig pubUrlEnv (Just rubygemsDoc)
-        outcome `shouldSatisfy` refusalMentions "CodeArtifact carries no package format for the rubygems ecosystem"
-        outcome `shouldSatisfy` refusalMentions "mounts.rubygems.mirrorTarget.codeArtifact.url"
+    it "resolves a Ruby CodeArtifact mirror endpoint" $ do
+        config <- expectConfig pubUrlEnv (Just (rubygemsDoc (codeArtifactDomain <> "/ruby/mirror/")))
+        let target = regMirrorTarget . mountRegistries =<< Map.lookup RubyGems (configMounts config)
+        (sbTag . mtBackend <$> target) `shouldBe` Just TagCodeArtifact
+
+    for_ [("missing repository", "/ruby/"), ("wrong format", "/npm/mirror/")] $ \(description, path) ->
+        it ("refuses a Ruby CodeArtifact mirror endpoint with " <> description) $ do
+            let outcome = loadConfig pubUrlEnv (Just (rubygemsDoc (codeArtifactDomain <> path)))
+            outcome `shouldSatisfy` refusalMentions "its path must be /ruby/{repository}/"
+            outcome `shouldSatisfy` refusalMentions "mounts.rubygems.mirrorTarget.codeArtifact.url"
 
 -- The tag the operator declared is the backend every role reads, with no host shape consulted.
 backendSpec :: Spec
@@ -365,15 +371,14 @@ twoTagged =
     decl' "mirrorTarget" $
         "{\"codeArtifact\":{" <> url codeArtifactMirror <> "},\"verdaccio\":{" <> url verdaccioUrl <> "}}"
 
--- A rubygems mount mirroring into CodeArtifact, which carries no format for that ecosystem.
-rubygemsDoc :: ByteString
-rubygemsDoc =
+rubygemsDoc :: Text -> ByteString
+rubygemsDoc targetUrl =
     encodeUtf8 $
         "{\"mounts\":{\"rubygems\":{"
             <> T.intercalate
                 ","
                 [ decl "privateUpstream" "registry" [url privateUrl]
-                , decl "mirrorTarget" "codeArtifact" [url codeArtifactMirror]
+                , decl "mirrorTarget" "codeArtifact" [url targetUrl]
                 ]
             <> "}}}"
 
