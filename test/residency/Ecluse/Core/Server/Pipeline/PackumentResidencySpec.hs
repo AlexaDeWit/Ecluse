@@ -24,8 +24,9 @@ import UnliftIO.Exception (bracket, evaluate, throwIO)
 
 import Ecluse.Composition.MemoryPlan.Transient (meterStepBytes)
 import Ecluse.Core.Deadline (Deadlines, sweepTick)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Package (PackageName, pkgEcosystem, renderPackageName)
+import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
@@ -40,7 +41,7 @@ import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpRuleEvalDuration, mpServeDecision))
 import Ecluse.Service (mountBindingFor)
-import Ecluse.Test.Corpus (CaptureUpstream (upstreamOrigin), CorpusPackage (cpPackage), cpName, readCapture)
+import Ecluse.Test.Corpus (CaptureUpstream (upstreamOrigin), CorpusPackage (cpPackage, cpPath), cpName, readCapture)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Port (noopMetricsPort)
@@ -52,13 +53,13 @@ import Ecluse.Test.Server.Mount (serveDepsFor)
 import Ecluse.Test.Support (expectRight, testMemoryMeter)
 import Ecluse.Test.Wai (rebaseAuthority, selfBaseUrl)
 
--- | Each capture of at least one meter step, read from a private and a public origin that both serve it.
+-- | Censuses use each capture with a recorded listing peak, from private and public origins.
 spec :: Spec
 spec = describe "listing heap census" $
     for_ censused $ \(package, figures) -> it (toString (cpName package)) $ do
         capture <- readCapture package
         census <- measureInChild Mode.ListingCensus package >>= expectRight
-        report package census
+        report package capture census
         censusStatus census `shouldBe` statusCode status200
         -- The control: the census sees a document while the request holds it.
         held census (censusGate census) `shouldSatisfy` (>= ceiling (retainedShared figures * toRational (BS.length capture)))
@@ -206,11 +207,14 @@ servingCapture ecosystem captured capture = do
     authority = T.intercalate "/" (take 3 (T.splitOn "/" captured))
     rebase request = evaluate (rebaseAuthority authority (selfBaseUrl request) (LBS.fromStrict capture))
 
-report :: CorpusPackage -> Census -> IO ()
-report package census =
+report :: CorpusPackage -> ByteString -> Census -> IO ()
+report package capture census =
     putStrLn . ("listing-census " <>) . decodeUtf8 . LBS.toStrict . encode $
         object
             [ "package" .= cpName package
+            , "ecosystem" .= ecosystemName (pkgEcosystem (cpPackage package))
+            , "path" .= cpPath package
+            , "sha256" .= sha256Hex capture
             , "held_at_gate" .= held census (censusGate census)
             , "charged_at_gate" .= pointCharged (censusGate census)
             , "held_when_planned" .= held census (censusPlanned census)
