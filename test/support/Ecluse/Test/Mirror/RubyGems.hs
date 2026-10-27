@@ -81,6 +81,9 @@ retainVersion target name source releases (previous, objects) details = do
     unless (checkMirrorCompletion version (toList (pkgArtifacts details)) == MirrorComplete) (fail "native state fixture is incomplete")
     pure (Just retained, addedObjects)
 
+-- Profiled GHC 9.10 exhausts simplifier ticks while expanding native fixture construction.
+-- Keep this per-file action separate from the nested folds.
+{-# NOINLINE retainFile #-}
 retainFile :: MirrorInventory -> [RubyRelease] -> (ProjectMirrorRecord, Map Text ByteString) -> ExpectedMirrorFile -> IO (ProjectMirrorRecord, Map Text ByteString)
 retainFile inventory releases (record, objects) file = do
     (verified, checked@(VerifiedCompanionBytes _ reference _)) <- checkedFixtureFile inventory releases file
