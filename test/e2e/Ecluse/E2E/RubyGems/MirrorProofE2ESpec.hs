@@ -137,7 +137,8 @@ interrupted plane = withPlatform plane $ \registry releases config -> do
         withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed ->
             proxyStatus (rubyProxy observed) dependencyPath `shouldReturn` 503
     setRubyRegistryFault registry "rubygems-mirror" RubyRegistryHealthy
-    drain plane registry releases config
+    withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) False) $
+        drain plane registry releases config
     withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
         withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $
             \observed -> platformClient observed releases
