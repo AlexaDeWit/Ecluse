@@ -11,12 +11,14 @@ module Ecluse.Test.Corpus (
     corpusPackages,
     pypiCorpusPackages,
     cargoCorpusPackages,
+    rubyGemsCorpusPackages,
     cpName,
     corpusLabel,
     CaptureUpstream (..),
     npmCaptureUpstream,
     pypiCaptureUpstream,
     cargoCaptureUpstream,
+    rubyGemsCaptureUpstream,
     readCorpusPins,
     FilePin (..),
     readPinned,
@@ -37,7 +39,7 @@ import Data.Time (UTCTime, nominalDay)
 import System.FilePath ((</>))
 import Test.Hspec (shouldBe, shouldSatisfy)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, pkgEcosystem, renderPackageName)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactHosts)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
@@ -107,6 +109,16 @@ cargoCorpusPackages =
   where
     entry tier weight name = CorpusPackage (mkPackageName Cargo Nothing name) ("bench/corpus/cargo/" <> toString name <> ".index.ndjson") tier weight
 
+-- | Complete named-gem histories include dependency-heavy and many-platform releases.
+rubyGemsCorpusPackages :: [CorpusPackage]
+rubyGemsCorpusPackages =
+    [ entry Heavy 8 "rails"
+    , entry Large 4 "nokogiri"
+    , entry Medium 2 "aws-sdk-ec2"
+    ]
+  where
+    entry tier weight name = CorpusPackage (mkPackageName RubyGems Nothing name) ("bench/corpus/rubygems/" <> toString name <> ".info") tier weight
+
 -- | A corpus package's wire name, both the request path and the body's self-reported name.
 cpName :: CorpusPackage -> Text
 cpName = renderPackageName . cpPackage
@@ -138,6 +150,10 @@ pypiCaptureUpstream = CaptureUpstream "https://pypi.org/simple" (ecosystemArtifa
 -- | The public sparse root and its predeclared archive authorities.
 cargoCaptureUpstream :: CaptureUpstream
 cargoCaptureUpstream = CaptureUpstream "https://index.crates.io" (ecosystemArtifactAuthorities cargoArtifactHosts)
+
+-- | Native per-gem source metadata binds archive URLs to the same registry authority.
+rubyGemsCaptureUpstream :: CaptureUpstream
+rubyGemsCaptureUpstream = CaptureUpstream "https://rubygems.org" (ecosystemArtifactAuthorities [])
 
 -- | Parse @bench/corpus/pins.json@ with the given parser, or return why it did not parse.
 readCorpusPins :: (Object -> Parser a) -> IO (Either String a)

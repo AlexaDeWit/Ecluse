@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Pure chunk inputs for the production registry stream drivers, and checks for shared keys and texts.
-module Ecluse.Test.Registry.JsonStream (parseJsonChunks, walkJsonChunks, walkWritingChunks, heldChunks, sliceChunks, byteChunks, testTable, readOutcome, sharesKey, sharesString, sameTexts, namedMembers, retainedObjectOr) where
+module Ecluse.Test.Registry.JsonStream (parseJsonChunks, walkJsonChunks, walkWritingChunks, readStepsChunks, heldChunks, sliceChunks, byteChunks, testTable, readOutcome, sharesKey, sharesString, sameTexts, namedMembers, retainedObjectOr) where
 
 import Control.Monad.ST (ST, runST)
 import Data.Aeson (Value (Object, String))
@@ -18,7 +18,7 @@ import UnliftIO.Exception (evaluate)
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, SipKey (SipKey), newInternTable)
 import Ecluse.Core.Registry.Json.Walk (Step, Steps, readJsonWalk, readJsonWalkST)
-import Ecluse.Core.Registry.JsonStream (StreamResult (..), isNestingLimit, readJsonStream, retainedObjectWith)
+import Ecluse.Core.Registry.JsonStream (StreamResult (..), isNestingLimit, readJsonStream, readStepsWithEnd, retainedObjectWith)
 import Ecluse.Core.Registry.JsonStream.Internal (Members (NamedMembers))
 import Ecluse.Core.Security (BodyLimit, LimitError)
 
@@ -35,6 +35,10 @@ walkWritingChunks :: BodyLimit -> (forall st. ST st (Cursor -> ST st (Steps (ST 
 walkWritingChunks bound setup chunks = runST $ do
     walk <- setup
     evalStateT (readJsonWalkST lift bound walk nextChunk) chunks
+
+-- | Run native steps and their own end-of-input hook against explicit pure chunks.
+readStepsChunks :: (Step s -> Identity (Step s)) -> BodyLimit -> Step s -> [ByteString] -> Either LimitError (StreamResult s)
+readStepsChunks finish bound steps = evalState (readStepsWithEnd (pure . runIdentity) (pure . runIdentity . finish) bound steps nextChunk)
 
 -- | A chunk source for a reader that runs in IO: the chunks in order, then the empty chunk that ends the body.
 heldChunks :: [ByteString] -> IO (IO ByteString)

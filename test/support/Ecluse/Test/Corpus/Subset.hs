@@ -19,6 +19,7 @@ module Ecluse.Test.Corpus.Subset (
 
     -- * The newest share of a capture
     newestCargoShare,
+    newestRubyGemsShare,
     newestNpmShare,
     newestPyPIShare,
 ) where
@@ -34,6 +35,7 @@ import Ecluse.Core.Package (Artifact (artFilename), PackageDetails (pkgArtifacts
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Version (canonicalPep440, renderVersion)
 import Ecluse.Test.Corpus.Cargo (decodeCargoValues, projectCargoTree)
+import Ecluse.Test.Corpus.RubyGems (decodeRubyGemsValues, keepRubyGemsVersions, projectRubyGemsTree)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 
@@ -150,3 +152,9 @@ newestCargoShare :: Rational -> PackageName -> ByteString -> Either String Value
 newestCargoShare share name bytes = do
     (info, _) <- first show (projectCargoTree defaultLimits name bytes)
     keepCargoVersions (newestVersions share info) <$> first toString (decodeCargoValues bytes)
+
+-- | Cut complete native platform groups by their captured registry publication times.
+newestRubyGemsShare :: Rational -> PackageName -> ByteString -> Either String Value
+newestRubyGemsShare share name bytes = do
+    (info, _) <- first show (projectRubyGemsTree defaultLimits name bytes)
+    keepRubyGemsVersions (newestVersions share info) <$> first toString (decodeRubyGemsValues bytes)
