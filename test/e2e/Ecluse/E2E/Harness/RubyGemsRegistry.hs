@@ -42,6 +42,9 @@ data RubyRegistryFault
     | RubyRegistryLoseReply
     | RubyRegistryRequireRead
     | RubyRegistryMissingArchive Text
+    | RubyRegistryCompactBytes FilePath ByteString
+    | RubyRegistryRejectUpload Text
+    | RubyRegistryStopAfterOne
     deriving stock (Eq, Show)
 
 -- | Hostnames identify separate public, private and mirror inventories behind one fixture listener.
@@ -50,7 +53,9 @@ data RubyRegistry = RubyRegistry
     , rubyRegistryInventory :: TVar (Map (Text, Text) RubyRelease)
     , rubyRegistryRequests :: TVar [RubyRequest]
     , rubyRegistryUploads :: TVar [(Text, ByteString)]
+    , rubyRegistryLostReplies :: TVar [(Text, Text)]
     , rubyRegistryFaults :: TVar (Map Text RubyRegistryFault)
+    , rubyRegistryCredentials :: TVar [(Text, ByteString, Maybe ByteString)]
     , rubyRegistryReleases :: TVar [RubyRelease]
     }
 
@@ -65,9 +70,11 @@ withRubyRegistry action = do
     inventory <- newTVarIO Map.empty
     requests <- newTVarIO []
     uploads <- newTVarIO []
+    lostReplies <- newTVarIO []
     faults <- newTVarIO Map.empty
     known <- newTVarIO releases
-    let registry = RubyRegistry 0 inventory requests uploads faults known
+    credentials <- newTVarIO []
+    let registry = RubyRegistry 0 inventory requests uploads lostReplies faults credentials known
     seedRubyRegistry registry "rubygems-upstream" releases
     withBridgeApplication (rubyRegistryApplication registry) $ \port -> action registry{rubyRegistryPort = port}
 
@@ -115,6 +122,7 @@ rubyRegistryApplication registry request respond = do
         send status headers body = do
             atomically (modifyTVar' (rubyRegistryRequests registry) (<> [RubyRequest "https" host (decodeUtf8 method) path (statusCode status)]))
             respond (Wai.responseLBS status headers (if method == "HEAD" then "" else body))
+    atomically (modifyTVar' (rubyRegistryCredentials registry) (<> [(host, method, lookup "Authorization" (Wai.requestHeaders request))]))
     fault <- Map.findWithDefault RubyRegistryHealthy host <$> readTVarIO (rubyRegistryFaults registry)
     stored <- rubyRegistryFiles registry host
     if fault == RubyRegistryUnavailable
@@ -145,7 +153,11 @@ rubyRegistryApplication registry request respond = do
                             _ -> send status404 [] ""
                     (readMethod, ["quick", "Marshal.4.8", filename]) | readMethod `elem` ["GET", "HEAD"] ->
                         case find ((== "quick/Marshal.4.8/" <> toString filename) . releaseCompactPath) stored of
-                            Just release -> send status200 [] (LBS.fromStrict (releaseCompact release))
+                            Just release ->
+                                let bytes = case fault of
+                                        RubyRegistryCompactBytes selected changed | selected == releaseCompactPath release -> changed
+                                        _ -> releaseCompact release
+                                 in send status200 [] (LBS.fromStrict bytes)
                             _ -> send status404 [] ""
                     ("DELETE", _) -> send status405 [] "native yank is not physical deletion"
                     _ -> send status404 [] ""
@@ -161,12 +173,20 @@ publish registry host fault request send respond =
                 then send status401 [] "native API key required"
                 else case find ((== bytes) . releaseArchive) known of
                     Nothing -> send status400 [] "archive is not an owned native fixture"
+                    Just release | fault == RubyRegistryRejectUpload (releaseFilename release) -> send status503 [] "native upload refused"
                     Just release -> do
                         inventory <- readTVarIO (rubyRegistryInventory registry)
                         if Map.member (host, releaseFilename release) inventory
                             then send status409 [] "native coordinate already exists"
-                            else do
-                                seedRubyRegistry registry host [release]
-                                if fault == RubyRegistryLoseReply
-                                    then respond (Wai.responseRaw (\_ _ -> pure ()) (Wai.responseLBS status503 [] "upload reply lost"))
-                                    else send status201 [] "native archive retained"
+                            else
+                                if fault == RubyRegistryStopAfterOne && any ((== host) . fst . fst) (Map.toList inventory)
+                                    then send status503 [] "native writes interrupted after one physical artifact"
+                                    else do
+                                        seedRubyRegistry registry host [release]
+                                        if fault == RubyRegistryLoseReply
+                                            then do
+                                                atomically $ do
+                                                    modifyTVar' (rubyRegistryLostReplies registry) (<> [(host, releaseFilename release)])
+                                                    modifyTVar' (rubyRegistryFaults registry) (Map.insert host RubyRegistryHealthy)
+                                                respond (Wai.responseRaw (\_ _ -> pure ()) (Wai.responseLBS status503 [] "upload reply lost"))
+                                            else send status201 [] "native archive retained"

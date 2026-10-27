@@ -227,5 +227,82 @@ obligations =
         Supported
         ["read", "mirror", "maintenance", "advisories"]
         (map ("cargo/dredger-native-safety/" <>) ["deletion-cap", "unsafe-upstream", "native-yank-not-deletion"])
+    , Obligation
+        "rubygems/installation"
+        "rubygems/read"
+        "rubygems/installation"
+        Supported
+        ["read", "client-install"]
+        (map ("rubygems/installation/" <>) ["accepted-install", "default-denial", "artifact-integrity", "artifact-head", "artifact-identity-coding"])
+    , Obligation
+        "rubygems/mirror"
+        "rubygems/write"
+        "rubygems/mirror"
+        Supported
+        ["read", "mirror", "client-install"]
+        (map ("rubygems/mirror/" <>) ["cross-target-install", "dependency-graph", "module-exports", "linked-executable", "origin-evidence", "installed-tree", "empty-store-control"])
+    , Obligation
+        "rubygems/publish"
+        "rubygems/publication"
+        "rubygems/publish"
+        Supported
+        ["read", "publication", "client-install"]
+        (map ("rubygems/publish/" <>) ["publish-install", "scope-refusal", "non-upload-refusal"])
+    , Obligation
+        "rubygems/advisories"
+        "rubygems/write"
+        "rubygems/advisories"
+        Supported
+        ["read", "advisories", "client-install"]
+        (map ("rubygems/advisories/" <>) ["deny-cve", "deny-epss", "mal-denial", "exact-fix", "partial-fix"])
+    , Obligation
+        "rubygems/dredger"
+        "rubygems/maintenance"
+        "rubygems/dredger"
+        Supported
+        ["read", "mirror", "maintenance", "advisories"]
+        (map ("rubygems/dredger/" <>) ["inventory", "admission-only", "denied-versions", "dry-run", "consent-refusal", "first-party", "two-stores", "advisory-revocation", "mal-revocation", "denied-install", "delete-recovery", "refill", "missing-source", "late-copy", "old-worker", "old-dredger-refill", "old-dredger-loss"])
+    , Obligation
+        "rubygems/telemetry"
+        "rubygems/read"
+        "rubygems/telemetry"
+        Supported
+        ["read", "telemetry", "client-install"]
+        (map ("rubygems/telemetry/" <>) ["signals", "disabled", "export-failure", "datadog"])
+    , Obligation
+        "rubygems/telemetry-write"
+        "rubygems/write"
+        "rubygems/telemetry-write"
+        Supported
+        ["read", "mirror", "client-install", "telemetry"]
+        (map ("rubygems/telemetry/" <>) ["domain-spans", "private-fetch"])
+    , Obligation
+        "rubygems/native"
+        "rubygems/read"
+        "rubygems/native"
+        Supported
+        ["read", "client-install"]
+        (map ("rubygems/native/" <>) ["minimum-client", "current-client", "platforms", "checksum-failure", "prerelease", "ruby-requirement", "direct-denial", "batch-limits", "metadata-no-archives", "private-authority"])
+    , Obligation
+        "rubygems/mirror-proof"
+        "rubygems/write"
+        "rubygems/mirror-proof"
+        Supported
+        ["read", "mirror", "client-install"]
+        (map ("rubygems/mirror-proof/" <>) ["source-roundtrip", "lost-reply", "interruption", "upstream-removal", "missing-archive", "checksum-mutation", "missing-state", "corrupt-state", "private-auth"])
+    , Obligation
+        "rubygems/dredger-native-safety"
+        "rubygems/maintenance"
+        "rubygems/native-safety"
+        Supported
+        ["read", "mirror", "maintenance", "advisories"]
+        (map ("rubygems/dredger-native-safety/" <>) ["deletion-cap", "unsafe-upstream", "native-yank-not-deletion", "authorisation", "multi-platform-deletion"])
+    , Obligation
+        "rubygems/registration"
+        "rubygems/contracts"
+        "rubygems/registration"
+        Supported
+        ["contract-registration"]
+        (map ("rubygems/registration/" <>) ["provider-omission", "case-omission", "capability-omission"])
     , Obligation "s3/packages" "s3/packages" "publication" (Planned "https://github.com/AlexaDeWit/Ecluse/issues/1239") ["publication"] []
     ]

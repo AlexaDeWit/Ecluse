@@ -15,6 +15,7 @@ import Ecluse.E2E.Fixtures.RubyGems
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.RubyGems
 import Ecluse.E2E.Harness.RubyGemsGateway
+import Ecluse.E2E.Harness.RubyGemsRegistry
 import Ecluse.E2E.RubyGems.InstallE2ESpec
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Phase (timedFixture)
@@ -79,6 +80,40 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
                 proxyStatus (rubyProxy observed) (rubyArchiveRoute release) `shouldReturn` 403
                 after <- rubyTraffic observed
                 filter (T.isSuffixOf ".gem" . rubyRequestPath) (rubyUpstreamRequests (rubyTrafficSince before after)) `shouldBe` []
+        it (label "metadata-no-archives" "reads only named metadata without policy-only archive or compact-spec requests") $ \plane ->
+            withObservedRubyProxy defaultE2EConfig plane $ \observed -> do
+                before <- rubyTraffic observed
+                proxyStatus (rubyProxy observed) "/rubygems/api/v1/dependencies?gems=ecluse-fixture-root,ecluse-fixture-leaf" `shouldReturn` 200
+                after <- rubyTraffic observed
+                let requests = rubyUpstreamRequests (rubyTrafficSince before after)
+                requests `shouldSatisfy` (not . null)
+                map rubyRequestPath requests `shouldSatisfy` all (T.isPrefixOf "/info/")
+        it (label "private-authority" "keeps authorised private names available while refusing anonymous and wrong callers") $ \plane ->
+            withRubyRegistry $ \registry -> do
+                releases <- loadRubyReleases
+                selected <- traverse (\name -> rubyRelease releases name rubyVersion "ruby") [rubyRoot, rubyLeaf]
+                seedRubyRegistry registry "rubygems-private" selected
+                setRubyRegistryFault registry "rubygems-private" RubyRegistryRequireRead
+                let config = rubyDeniedConfig{ecExtraEnv = ecExtraEnv rubyDeniedConfig <> [("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", stubUrl RubyGemsPrivate)]}
+                withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) False) $
+                    withObservedRubyProxy config plane $ \observed -> do
+                        let proxy = rubyProxy observed
+                        withRubyProject currentBundler proxy (e2eBaseUrl proxy <> "/rubygems/") (Just "ruby:read") $ \project -> do
+                            void (rubyInstall project False >>= shouldSucceed)
+                            assertRubyContents project "ecluse-fixture-leaf-1.0.0-ruby|root-1.0.0"
+                        before <- rubyTraffic observed
+                        forM_ [Nothing, Just "ruby:wrong"] $ \credentials ->
+                            withRubyProject currentBundler proxy (e2eBaseUrl proxy <> "/rubygems/") credentials $ \project -> do
+                                void (rubyInstall project False >>= shouldFail)
+                                rubyInstalledTree project `shouldReturn` mempty
+                        after <- rubyTraffic observed
+                        filter (T.isSuffixOf ".gem" . rubyRequestPath) (rubyUpstreamRequests (rubyTrafficSince before after)) `shouldBe` []
+                        observedCredentials <- readTVarIO (rubyRegistryCredentials registry)
+                        let public = [credential | (host, _, credential) <- observedCredentials, host == "rubygems-upstream"]
+                            private = [credential | (host, _, credential) <- observedCredentials, host == "rubygems-private"]
+                        public `shouldSatisfy` (not . null)
+                        public `shouldSatisfy` all isNothing
+                        private `shouldSatisfy` elem (Just "Basic cnVieTpyZWFk")
         it (label "batch-limits" "rejects malformed and excessive batches before native reads") $ \plane ->
             withObservedRubyProxy defaultE2EConfig plane $ \observed -> do
                 let proxy = rubyProxy observed

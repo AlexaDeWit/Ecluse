@@ -7,6 +7,7 @@ module Ecluse.E2E.Fixtures.RubyGems (
     rubyFamilyMetadata,
     rubyReadFixture,
     rubyWriteFixture,
+    rubyPublicationFixture,
     rubyNativeFixture,
     rubyArchiveRoute,
 ) where
@@ -26,7 +27,7 @@ rubyFamilyMetadata family profile capabilities =
         ("rubygems/" <> profile)
         capabilities
         ["docker", "image", "openssl", "ruby", "bundler-2.6.9", "bundler-4.0.23"]
-        ["proxy", "nginx", "rubygems-registry"]
+        (["proxy", "nginx", "rubygems-registry"] <> ["collector" | "telemetry" `elem` capabilities])
         ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
 
 -- | A whole canonical family owns its product and native fixture resources.
@@ -35,7 +36,13 @@ rubyReadFixture family capabilities = ConcreteFixture (rubyFamilyMetadata family
 
 -- | Durable mirroring and advisory generations use the shared S3 and queue emulator.
 rubyWriteFixture :: Text -> [Text] -> ConcreteFixture FamilyMetadata
-rubyWriteFixture family capabilities = ConcreteFixture (rubyFamilyMetadata family "write" capabilities) (withDataPlane rubyGemsTopology{topologyAws = True})
+rubyWriteFixture family capabilities = ConcreteFixture metadata{familyResources = familyResources metadata <> ["ministack"]} (withDataPlane rubyGemsTopology{topologyAws = True})
+  where
+    metadata = rubyFamilyMetadata family "write" capabilities
+
+-- | Native publication needs its target and client tools without an unused AWS emulator.
+rubyPublicationFixture :: ConcreteFixture FamilyMetadata
+rubyPublicationFixture = ConcreteFixture (rubyFamilyMetadata "publish" "publication" ["read", "publication", "client-install"]) (withDataPlane rubyGemsTopology)
 
 -- | Native client dimensions use fixed IDs that descriptions cannot change.
 rubyNativeFixture :: ConcreteFixture Group
@@ -47,7 +54,7 @@ rubyNativeFixture =
             , groupProfileId = "rubygems/read"
             , groupTier = E2E
             , groupPartition = "rubygems"
-            , groupCases = [Case ("rubygems/native/" <> name) ["rubygems/native"] | name <- ["minimum-client", "current-client", "platforms", "checksum-failure", "prerelease", "ruby-requirement", "direct-denial", "batch-limits"]]
+            , groupCases = [Case ("rubygems/native/" <> name) ["rubygems/native"] | name <- ["minimum-client", "current-client", "platforms", "checksum-failure", "prerelease", "ruby-requirement", "direct-denial", "batch-limits", "metadata-no-archives", "private-authority"]]
             , groupCapabilities = ["read", "client-install"]
             , groupPrerequisites = familyPrerequisites metadata
             , groupResources = familyResources metadata

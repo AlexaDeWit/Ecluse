@@ -43,7 +43,7 @@ rubyPublicationConfig =
 
 -- | The native command, fresh Bundler install and physical target inventory supply every shared law.
 rubyPublicationFamily :: FamilyFixture PublicationFixture
-rubyPublicationFamily = concreteFamily (rubyReadFixture "publish" ["read", "publication", "client-install"]) $ \recorder action plane ->
+rubyPublicationFamily = concreteFamily rubyPublicationFixture $ \recorder action plane ->
     timedFixture recorder withRubyRegistry $ \registry ->
         withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) False) $
             withObservedRubyProxy rubyPublicationConfig plane $ \observed -> do
