@@ -22,13 +22,13 @@ import Ecluse.Core.Registry (
     PublishBodyFault (PublishMalformed, PublishUnsupported),
     PublishRelayResponse (PublishRelayResponse),
  )
-import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishCodec, publishRelay, publishUploadClaims), PublishRequestBody (..))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishCodec, publishCredential, publishRelay, publishRequestExtras, publishUploadClaims), PublishRequestBody (..))
 import Ecluse.Core.Registry.Exchange (withinServeCap)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocChargeFullRead, ocClient), originClient)
 import Ecluse.Core.Registry.Publish (PublishCodec (pcPrepareTarget, pcTargetReadPermille))
-import Ecluse.Core.Registry.Request (mkBaseRequest)
+import Ecluse.Core.Registry.Request (credentialRecover, mkBaseRequest)
 import Ecluse.Core.Security (BodyLimit (PublishRequestBodyLimit), Limits (maxPublishRequestBytes, progressFloor), boundedRead)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Bytes (withByteAdmission)
@@ -68,7 +68,7 @@ servePublish replies name request respond = do
     mount <- asks ctxMount
     case bindingPublishDeps mount of
         Nothing -> liftIO (respond (publishDisabledReply replies [("Allow", publishAllowedMethods replies)] (pdHelp (bindingPackumentDeps mount))))
-        Just deps -> publishWithDeps replies deps (pdMountBaseUrl (bindingPackumentDeps mount)) (forwardedCredential mount request) name request respond
+        Just deps -> publishWithDeps replies deps (pdMountBaseUrl (bindingPackumentDeps mount)) (credentialRecover (publishCredential (pubAdapter deps)) (requestHeaders request)) name request respond
 
 publishWithDeps ::
     PublishReplies response ->
@@ -85,6 +85,8 @@ publishWithDeps replies deps registry clientToken name request respond
     | Just pathName <- name
     , not (pubAllowed deps pathName) =
         liftIO (respond (outOfScope replies deps pathName))
+    | Left fault <- extras =
+        liftIO (respond (bodyRefusal replies deps fault))
     | overDeclaredCap =
         liftIO (respond (publishTooLarge replies deps))
     | otherwise = do
@@ -99,6 +101,8 @@ publishWithDeps replies deps registry clientToken name request respond
             )
             (liftIO . respond . fromMaybe (bodyBudgetShed replies deps))
   where
+    extras = publishRequestExtras (pubAdapter deps) (requestHeaders request)
+
     overDeclaredCap = case requestBodyLength request of
         KnownLength n -> n > fromIntegral (pubMaxRequestBytes deps)
         ChunkedBody -> False
@@ -121,20 +125,22 @@ readAndRelay ::
 readAndRelay replies deps registry rt workspace target name request =
     boundedRead (PublishRequestBodyLimit (pubMaxRequestBytes deps)) (getRequestBodyChunk request) >>= \case
         Left _ -> pure (publishTooLarge replies deps)
-        Right (_, bytes) -> do
-            let body = PublishRequestBody bytes (lookup hContentType (requestHeaders request))
-            claims <- publishUploadClaims (pubAdapter deps) ((pubLimits deps){maxPublishRequestBytes = pubMaxRequestBytes deps}) workspace registry body
-            case claims of
-                Left fault -> pure (bodyRefusal replies deps fault)
-                Right declared -> case resolveName declared of
-                    Left refusal -> pure refusal
-                    Right agreed -> do
-                        outcome <- withinServeCap (ecDeadlines (ocClient target)) (progressFloor (pubLimits deps)) MetadataFetch $ do
-                            prepared <- pcPrepareTarget (publishCodec (pubAdapter deps)) (srTracing rt) target{ocChargeFullRead = workspace . scaleCharge (pcTargetReadPermille (publishCodec (pubAdapter deps)))} (pubTargetUrl deps)
-                            case prepared of
-                                Left fault -> pure (Left fault)
-                                Right approved -> first MetadataFetch <$> publishRelay (pubAdapter deps) target{ocBaseRequest = mkBaseRequest approved} agreed body
-                        pure (either (targetRefusal replies deps) (renderRelay replies deps . Right) outcome)
+        Right (_, bytes) -> case publishRequestExtras (pubAdapter deps) (requestHeaders request) of
+            Left fault -> pure (bodyRefusal replies deps fault)
+            Right extras -> do
+                let body = PublishRequestBody bytes (lookup hContentType (requestHeaders request)) extras
+                claims <- publishUploadClaims (pubAdapter deps) ((pubLimits deps){maxPublishRequestBytes = pubMaxRequestBytes deps}) workspace registry body
+                case claims of
+                    Left fault -> pure (bodyRefusal replies deps fault)
+                    Right declared -> case resolveName declared of
+                        Left refusal -> pure refusal
+                        Right agreed -> do
+                            outcome <- withinServeCap (ecDeadlines (ocClient target)) (progressFloor (pubLimits deps)) MetadataFetch $ do
+                                prepared <- pcPrepareTarget (publishCodec (pubAdapter deps)) (srTracing rt) target{ocChargeFullRead = workspace . scaleCharge (pcTargetReadPermille (publishCodec (pubAdapter deps)))} (pubTargetUrl deps)
+                                case prepared of
+                                    Left fault -> pure (Left fault)
+                                    Right approved -> first MetadataFetch <$> publishRelay (pubAdapter deps) target{ocBaseRequest = mkBaseRequest approved} agreed body
+                            pure (either (targetRefusal replies deps) (renderRelay replies deps . Right) outcome)
   where
     resolveName claims = case name of
         Just pathName -> case bodyNameDisagreement (pubProjectName deps) pathName claims of
@@ -158,8 +164,7 @@ publicationTarget deps rt clientToken =
         (pubReadUrl deps)
         (publicationCredential deps clientToken)
 
--- A configured static token replaces the caller's own, but only on an authenticated edge, so
--- an open edge never mints it.
+-- Static publication credentials require an authenticated edge.
 publicationCredential :: PublishDeps -> Maybe ClientCredential -> Maybe ClientCredential
 publicationCredential deps clientToken = case (pubInboundToken deps, pubStaticCredential deps) of
     (Just _, Just staticToken) -> Just staticToken
@@ -183,8 +188,7 @@ renderRelay ::
 renderRelay replies deps = \case
     Right (PublishRelayResponse code relayed) ->
         publishRelayed replies (mkStatus code "") [] relayed
-    -- An unformable target URL is this proxy's own misconfiguration, so it answers 500. The
-    -- other two are the target's failure to answer, so they answer 502.
+    -- An invalid target is local configuration. Transport failures belong to the target.
     Left (FetchUrlUnformable _urlErr) ->
         publishError replies status500 [] (appendHelp (pubHelp deps) "the publication target URL is misconfigured")
     Left (FetchTransport _fault) ->
@@ -199,8 +203,7 @@ bodyRefusal replies deps = \case
     PublishMalformed fault -> publishError replies status400 [] (appendHelp (pubHelp deps) (parseErrorMessage fault))
     PublishUnsupported reason -> publishError replies status501 [] (appendHelp (pubHelp deps) reason)
 
--- A @503@ for a publish shed at the aggregate body-byte budget: server capacity, not client
--- rate, so not a @429@. Same wait-then-shed timing and @Retry-After@ hint as the read path.
+-- Body capacity uses the read path's 503 status and retry hint.
 bodyBudgetShed :: PublishReplies response -> PublishDeps -> response
 bodyBudgetShed replies deps =
     publishError replies shedStatus [shedRetryAfter] (appendHelp (pubHelp deps) "the server is at its publish-body capacity; retry shortly")

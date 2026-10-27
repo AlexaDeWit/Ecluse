@@ -16,6 +16,7 @@ module Ecluse.Core.Registry.Adapter.Capability (
     -- * Publish
     AdapterPublish (..),
     PublishRequestBody (..),
+    PublishExtras (..),
     MirrorRequirements (..),
     WorkerMetadataRead (..),
     MirrorStateRequirement (..),
@@ -33,8 +34,9 @@ module Ecluse.Core.Registry.Adapter.Capability (
 
 import Data.JsonStream.Lexer (Cursor)
 import Network.HTTP.Client (Request)
+import Network.HTTP.Types.Header (RequestHeaders)
 
-import Ecluse.Core.Credential (ClientCredential)
+import Ecluse.Core.Credential (ClientCredential, Secret)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Merge (MergePlan, SourceId)
 import Ecluse.Core.Registry (
@@ -51,6 +53,7 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead)
 import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
+import Ecluse.Core.Registry.Request (CredentialMapping)
 import Ecluse.Core.Registry.ServedDocument (RenderRefused)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors)
@@ -96,7 +99,12 @@ data AdapterArtifact = AdapterArtifact
 data PublishRequestBody = PublishRequestBody
     { publishBodyBytes :: ByteString
     , publishBodyContentType :: Maybe ByteString
+    , publishBodyExtras :: PublishExtras
     }
+
+-- | Checked native publication headers. Secrets never enter durable mirror state.
+data PublishExtras = NoPublishExtras | RubyPublishOtp Secret
+    deriving stock (Eq, Show)
 
 -- | Worker reads use cached facts, charged chunks, or native workspace reservations.
 data WorkerMetadataRead
@@ -134,7 +142,11 @@ data MirrorRequirements = MirrorRequirements
 
 -- | Native relay, identity validation, and mirror publication for one ecosystem.
 data AdapterPublish = AdapterPublish
-    { publishRelay :: OriginClient -> PackageName -> PublishRequestBody -> IO (Either FetchFault PublishRelayResponse)
+    { publishCredential :: CredentialMapping
+    -- ^ Recover publication credentials independently from read credentials.
+    , publishRequestExtras :: RequestHeaders -> Either PublishBodyFault PublishExtras
+    -- ^ Admit only native publication headers before buffering the body.
+    , publishRelay :: OriginClient -> PackageName -> PublishRequestBody -> IO (Either FetchFault PublishRelayResponse)
     -- ^ Relay a client's publish document to the target named as the origin, and return its answer.
     , publishUploadClaims :: Limits -> (Int -> IO ()) -> Text -> PublishRequestBody -> IO (Either PublishBodyFault [Text])
     -- ^ Check claims before target IO using the selected logical view base. Charge extra workspace as an absolute total.

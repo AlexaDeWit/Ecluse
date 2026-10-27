@@ -24,7 +24,7 @@ import Network.HTTP.Types.Status (status200)
 import Test.Hspec (shouldBe)
 
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
-import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishRelay), PublishRequestBody (PublishRequestBody))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishRelay), PublishExtras (NoPublishExtras), PublishRequestBody (PublishRequestBody))
 import Ecluse.Core.Registry.CachedDocument (cargoCached)
 import Ecluse.Core.Registry.Cargo.Document (cargoDocument)
 import Ecluse.Core.Registry.Cargo.Project (projectName)
@@ -51,7 +51,7 @@ observeCargoRelay registryAt bytes =
     withRoutedStub (const (status200, [], "{}")) $ \target ->
         withExchangeClient (newManager defaultManagerSettings) $ \client -> do
             let origin = originClient defaultLimits client (registryAt (stubBaseUrl target)) Nothing
-            void (publishRelay (cargoPublish (ChargeFactors 1000 1000 1000)) origin cargoTestName (PublishRequestBody bytes Nothing) >>= expectRight)
+            void (publishRelay (cargoPublish (ChargeFactors 1000 1000 1000)) origin cargoTestName (PublishRequestBody bytes Nothing NoPublishExtras) >>= expectRight)
             captured <-
                 allCaptured target >>= \case
                     [written] -> pure written
