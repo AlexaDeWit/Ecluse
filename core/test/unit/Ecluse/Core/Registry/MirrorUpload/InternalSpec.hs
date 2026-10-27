@@ -47,22 +47,22 @@ spec = do
                 CargoMirrorRead kept -> cargoRecords kept `shouldBe` [(RecordEntry 7, row)]
                 _ -> expectationFailure "expected Cargo source fields"
             fragment <- maybe (fail "missing Cargo fragment") pure (splitMirrorInventory (Set.singleton "fixture-1.0.0.crate") inventory)
-            restoreMirrorFragment (fst fragment) (snd fragment) `shouldBe` Right (inventoryFiles inventory)
+            uncurry restoreMirrorFragment fragment `shouldBe` Right (inventoryFiles inventory)
             snd cargoCached (mirrorReadDocument (snd fragment)) `shouldBe` Just document
         it "refuses foreign ecosystems, mismatched coordinates and multiple source claims" $ do
             let row = cargoTestRecord "1.0.0"
-                one = CargoMirrorRead (cargoDocument [(RecordEntry 7, row)])
+                pairedSource = CargoMirrorRead (cargoDocument [(RecordEntry 7, row)])
             doc <- cargoSourceVersion row
             let admitted = vdDetails doc
                 artifact :| _ = pkgArtifacts admitted
-            restoreMirrorFragment admitted{pkgName = unscopedPyPI "fixture"} one
+            restoreMirrorFragment admitted{pkgName = unscopedPyPI "fixture"} pairedSource
                 `shouldBe` Left (PublishSourceUnavailable "the source fields belong to another ecosystem")
             for_ [RecordEntry (-1), RecordEntry 8, ArrayEntry 7] $ \key ->
                 restoreMirrorFragment admitted (CargoMirrorRead (cargoDocument [(key, row)]))
                     `shouldBe` Left (PublishSourceUnavailable "Cargo source coordinate disagrees with its artifact")
             for_ [CargoMirrorRead (cargoDocument []), CargoMirrorRead (cargoDocument [(RecordEntry 7, row), (RecordEntry 8, row)]), CargoMirrorRead (cargoDocument [(RecordEntry 7, Null)])] $ \source ->
                 restoreMirrorFragment admitted source `shouldBe` Left (PublishSourceUnavailable "Cargo requires exactly one paired source row and archive")
-            restoreMirrorFragment admitted{pkgArtifacts = artifact :| [artifact]} one
+            restoreMirrorFragment admitted{pkgArtifacts = artifact :| [artifact]} pairedSource
                 `shouldBe` Left (PublishSourceUnavailable "Cargo requires exactly one paired source row and archive")
         it "refuses changed native identity, digest and policy facts against the original admission" $ do
             let row = cargoTestRecord "1.0.0"

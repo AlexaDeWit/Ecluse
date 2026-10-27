@@ -78,8 +78,8 @@ spec = describe "Cargo install evidence" $ do
             readIORef acquisitions `shouldReturn` 1
             entered <- MVar.newEmptyMVar
             blocked <- MVar.newEmptyMVar
-            pending <- newInstallEvidenceReads provider (evidenceContext (\_ _ pay -> pay (BS.length archive) >> MVar.putMVar entered () >> MVar.takeMVar blocked)){ieLimits = limits, ieBudget = budget}
-            withAsync (resolved pending (details "1.2.3" archive)) $ \owner ->
+            pendingReads <- newInstallEvidenceReads provider (evidenceContext (\_ _ pay -> pay (BS.length archive) >> MVar.putMVar entered () >> MVar.takeMVar blocked)){ieLimits = limits, ieBudget = budget}
+            withAsync (resolved pendingReads (details "1.2.3" archive)) $ \owner ->
                 race (MVar.takeMVar entered) (wait owner) >>= \case
                     Left () -> cancel owner
                     Right result -> expectationFailure ("evidence read ended before acquisition readiness: " <> show result)

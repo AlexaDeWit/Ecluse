@@ -92,9 +92,9 @@ spec = describe "public install evidence boundary" $ do
             doc <- cargoSourceVersion (cargoIndexRecord release)
             entered <- MVar.newEmptyMVar
             go <- MVar.newEmptyMVar
-            first <- newIORef True
+            firstResponse <- newIORef True
             let reply _ = do
-                    block <- atomicModifyIORef' first (\prior -> (False, prior))
+                    block <- atomicModifyIORef' firstResponse (False,)
                     when block (MVar.putMVar entered () >> MVar.takeMVar go)
                     pure (status200, [], fromStrict (releaseArchive release))
             withRoutedStubIO reply $ \stub -> do
