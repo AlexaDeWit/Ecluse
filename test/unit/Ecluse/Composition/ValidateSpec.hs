@@ -78,7 +78,7 @@ import Ecluse.Config (
     mountPolicy,
  )
 import Ecluse.Core.Credential (ClientCredential (credSecret), unSecret)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterPublish), adapterFor)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)

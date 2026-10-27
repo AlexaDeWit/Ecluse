@@ -165,8 +165,8 @@ spec = do
                         , "/api/v1/dependencies?gems=ecluse-fixture-root,ecluse-fixture-leaf"
                         , "/api/v1/dependencies?gems=ecluse-fixture-leaf,ecluse-fixture-root"
                         ]
-                first <- capture runtime binding "GET" firstPath []
-                tag <- responseTag first
+                initial <- capture runtime binding "GET" firstPath []
+                tag <- responseTag initial
                 responses <- traverse (\path -> capture runtime binding "GET" path [("If-None-Match", tag)]) paths
                 map simpleStatus responses `shouldBe` [status304, status200, status200]
                 tags <- traverse responseTag responses
