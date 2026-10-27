@@ -24,7 +24,7 @@ import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeF
 import Ecluse.Core.Server.MemoryModel.Calibration (SyntheticListingFigures (..), rubyGemsSyntheticFigures)
 import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), SingleListing (..), measurePathInChild, writeNamedMergeDocuments)
 import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
-import Ecluse.Core.Server.MemoryModelResidencySpec (checkOutputCharge, checkOutputLimit, checkPaid, checkPhases, checkReadPeak)
+import Ecluse.Core.Server.MemoryModelResidencySpec (checkOutputCharge, checkOutputLimit, checkPaid, checkPhases, checkReadPeak, checkRegressionLimits)
 import Ecluse.Test.Corpus.Merge (MergeShape (..), realisticShape)
 import Ecluse.Test.Corpus.RubyGems (benchGem, syntheticInfoBytes)
 import Ecluse.Test.Package (hexSha256Of)
@@ -115,6 +115,8 @@ runChargeGuards peaks = do
     checkPaid factors peaks
     checkPhases factors peaks
     checkOutputCharge factors peaks
+    for_ rubyGemsSyntheticFigures $ \figures ->
+        checkRegressionLimits factors [syntheticReadPeak figures] (syntheticSingleOutput figures : Map.elems (syntheticMergedOutputs figures))
 
 -- Raw results precede every basis, charge and committed-figure assertion.
 report :: (ToJSON a) => GeneratedSource -> Text -> Mode.ProbeMode -> FilePath -> [FilePath] -> Either String a -> IO ()
@@ -126,7 +128,7 @@ report input shape mode path paths measured = do
     attempt <- lookupEnv "GITHUB_RUN_ATTEMPT"
     job <- lookupEnv "GITHUB_JOB"
     let outcome = either (const ("failed" :: Text)) (const "measured") measured
-    putStrLn . toString . ("metadata-synthetic-listing " <>) . decodeUtf8 . LBS.toStrict . encode $
+    putTextLn . ("metadata-synthetic-listing " <>) . decodeUtf8 . LBS.toStrict . encode $
         object
             [ "input_kind" .= ("synthetic" :: Text)
             , "fixture" .= ("rubygems/long-history-v1" :: Text)

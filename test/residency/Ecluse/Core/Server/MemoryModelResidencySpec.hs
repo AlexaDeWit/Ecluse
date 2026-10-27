@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Corpus-authenticated metadata measurements in one child process per retained shape or listing.
-module Ecluse.Core.Server.MemoryModelResidencySpec (spec, sourceMain, selectedMain, probeIdentity, probeLimits, checkPaid, checkPhases, checkReadPeak, checkOutputCharge, checkOutputLimit) where
+module Ecluse.Core.Server.MemoryModelResidencySpec (spec, sourceMain, selectedMain, probeIdentity, probeLimits, checkRegressionLimits, checkPaid, checkPhases, checkReadPeak, checkOutputCharge, checkOutputLimit) where
 
 import Prelude hiding (universe)
 
@@ -70,8 +70,7 @@ spec = do
                     record <- requireResidency ecosystem
                     let factors = metadataChargeFactors (adapterMetadata adapter)
                     for_ (residencyFigures record) $ \figures -> do
-                        map readPeakLimit (maybeToList (readPeak figures)) `shouldSatisfy` all (< toInteger (cfFullReadPermille factors))
-                        map heldLimit (maybeToList (singleOutput figures) <> Map.elems (mergedOutputs figures)) `shouldSatisfy` all (< toInteger (cfOutputPermille factors))
+                        checkRegressionLimits factors (maybeToList (readPeak figures)) (maybeToList (singleOutput figures) <> Map.elems (mergedOutputs figures))
         it "keeps each shared entry's regression limit below the kept charge" $
             for_ universe $ \ecosystem ->
                 for_ (adapterFor ecosystem) $ \adapter -> do
@@ -146,6 +145,12 @@ measureMerges = do
     measureMerge package shape = withSystemTempDirectory "ecluse-merge" $ \directory -> do
         (private, public) <- writeMergeDocuments shape directory package
         measureInChild (Mode.Merge private public) package
+
+-- | Keep fixed regression limits below the admission charges that bound them.
+checkRegressionLimits :: ChargeFactors -> [Rational] -> [Rational] -> Expectation
+checkRegressionLimits factors readFigures outputFigures = do
+    map readPeakLimit readFigures `shouldSatisfy` all (< toInteger (cfFullReadPermille factors))
+    map heldLimit outputFigures `shouldSatisfy` all (< toInteger (cfOutputPermille factors))
 
 checkMeasurement :: CorpusPackage -> Shape -> Int -> Measurement -> Expectation
 checkMeasurement package shape size result = do
