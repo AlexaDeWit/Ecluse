@@ -97,6 +97,12 @@ serveCompactSpec file request respond = withNativeReadEdge request (liftIO . res
         )
         reply
 
+data CandidateRead a
+    = CandidateAbsent
+    | CandidateDenied RubyResponse
+    | CandidateRefused RubyResponse
+    | CandidateAdmitted a
+
 resolveCoordinate :: MemoryTicket -> (Int -> IO ()) -> Request -> Filename -> Handler (Either RubyResponse (GemRow, Provenance))
 resolveCoordinate ticket observe request file = do
     mount <- asks ctxMount
@@ -105,28 +111,33 @@ resolveCoordinate ticket observe request file = do
         then pure (Left (packumentUnauthorised rubyReplies [] (mkRefusal Nothing unauthorisedMessage)))
         else case candidateCoordinates (maxMetadataBytes (pdLimits deps)) file of
             Left _ -> pure (Left (rubyBadRequest "the native coordinate is invalid or ambiguous"))
-            Right candidates -> collect deps observe candidates 0 [] (Set.toAscList (Set.fromList (map coordinateName candidates)))
+            Right candidates -> collect deps observe candidates 0 [] Nothing (Set.toAscList (Set.fromList (map coordinateName candidates)))
   where
-    collect deps observer candidates spent matches = \case
+    collect deps observer candidates spent matches denied = \case
         [] -> pure $ case matches of
             [selected] -> Right selected
-            [] -> Left (packumentNotFound rubyReplies [] (mkRefusal Nothing "the native coordinate is absent"))
+            [] -> Left (fromMaybe (packumentNotFound rubyReplies [] (mkRefusal Nothing "the native coordinate is absent")) denied)
             _ -> Left (rubyBadRequest "the native coordinate names more than one admitted artifact")
         name : names -> do
-            let replies = (mapPackumentReplies Left rubyReplies){packumentNotFound = \_ _ -> Right Nothing}
-            result <- withAdmittedDocument replies ticket observer name request (Right Nothing) $ \cached sourceBytes origins -> do
+            let replies =
+                    (mapPackumentReplies CandidateRefused rubyReplies)
+                        { packumentNotFound = \_ _ -> CandidateAbsent
+                        , packumentForbidden = \headers refusal -> CandidateDenied (packumentForbidden rubyReplies headers refusal)
+                        }
+            result <- withAdmittedDocument replies ticket observer name request CandidateAbsent $ \cached sourceBytes origins -> do
                 liftIO (charge ticket (scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) sourceBytes))
-                pure (Right (Just (cached, sourceBytes, origins)))
+                pure (CandidateAdmitted (cached, sourceBytes, origins))
             case result of
-                Left refusal -> pure (Left refusal)
-                Right Nothing -> collect deps observer candidates spent matches names
-                Right (Just (cached, sourceBytes, origins))
+                CandidateRefused refusal -> pure (Left refusal)
+                CandidateAbsent -> collect deps observer candidates spent matches denied names
+                CandidateDenied refusal -> collect deps observer candidates spent matches (denied <|> Just refusal) names
+                CandidateAdmitted (cached, sourceBytes, origins)
                     | spent + toInteger sourceBytes > toInteger (maxMetadataBytes (pdLimits deps)) -> pure (Left (rubyBadRequest "the coordinate lookup exceeds its cumulative metadata bound"))
                     | otherwise -> case snd rubyGemsCached cached of
                         Nothing -> pure (Left (packumentInternal rubyReplies [] (mkRefusal Nothing "the admitted coordinate source is not RubyGems metadata")))
                         Just document -> do
                             let found = [(row, origin) | row <- gemRows document, grCoordinate row `elem` candidates, coordinateFilename (grCoordinate row) == file, Just origin <- [Map.lookup (renderVersion (coordinateVersion (grCoordinate row))) origins]]
-                            collect deps observer candidates (spent + toInteger sourceBytes) (matches <> found) names
+                            collect deps observer candidates (spent + toInteger sourceBytes) (matches <> found) denied names
 
 fetchCompact :: MemoryTicket -> (Int -> IO ()) -> Request -> (GemRow, Provenance) -> Handler RubyResponse
 fetchCompact ticket observe request (row, provenance) = do

@@ -161,6 +161,30 @@ spec = do
                             simpleStatus response `shouldBe` expected
                             readIORef hits `shouldReturn` [["private", "info", "acme"]]
 
+    describe "policy-denied coordinate candidates" $ do
+        for_ ["GET", "HEAD"] $ \method ->
+            for_ ["/gems/acme-1-1.0.gem", "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz"] $ \path ->
+                it ("admits the longer gem beside an unrelated denied candidate for " <> show method <> " " <> show path) $
+                    withCoordinateSources PublicCandidateSource $ \runtime binding hits release -> do
+                        response <- capture runtime binding method path []
+                        simpleStatus response `shouldBe` status200
+                        let body = if path == "/gems/acme-1-1.0.gem" then releaseArchive release else releaseCompact release
+                        simpleBody response `shouldBe` if method == "HEAD" then "" else fromStrict body
+                        lookup "Content-Length" (simpleHeaders response) `shouldBe` Just (show (BS.length body))
+                        observed <- readIORef hits
+                        observed `shouldSatisfy` elem ["public", "info", "acme"]
+                        observed `shouldSatisfy` elem ["public", "info", "acme-1"]
+                        observed `shouldSatisfy` all (\parts -> take 1 parts == ["public"])
+                        observed `shouldSatisfy` notElem ["public", "gems", "acme-2.0.gem"]
+                        observed `shouldSatisfy` notElem ["public", "quick", "Marshal.4.8", "acme-2.0.gemspec.rz"]
+        for_ ["GET", "HEAD"] $ \method ->
+            for_ ["/gems/acme-2.0.gem", "/quick/Marshal.4.8/acme-2.0.gemspec.rz"] $ \path ->
+                it ("retains denial for the actual recent coordinate for " <> show method <> " " <> show path) $
+                    withCoordinateSources PublicCandidateSource $ \runtime binding hits _ -> do
+                        response <- capture runtime binding method path []
+                        simpleStatus response `shouldBe` status403
+                        readIORef hits `shouldReturn` [["public", "info", "acme"]]
+
     describe "native metadata representations" $ do
         for_ metadataPaths $ \path ->
             it ("shares coding, HEAD and conditional responses for " <> toString (decodeUtf8 path :: Text)) $
@@ -257,39 +281,49 @@ withNative use = do
                 _ -> respond (responseLBS status404 [] "")
     testWithApplication (pure upstream) $ \port -> do
         let origin = loopbackRegistryUrl ("http://localhost:" <> show port)
-        withNativeOrigins origin origin (BS.length archive) $ \runtime binding -> use runtime binding hits
+        withNativeOrigins (Just origin) origin (BS.length archive) $ \runtime binding -> use runtime binding hits
 
-withNativeOrigins :: RegistryUrl -> RegistryUrl -> Int -> (ServeRuntime -> MountBinding -> IO a) -> IO a
+withNativeOrigins :: Maybe RegistryUrl -> RegistryUrl -> Int -> (ServeRuntime -> MountBinding -> IO a) -> IO a
 withNativeOrigins private public cap use = withSweeper $ \deadlines -> do
     admission <- newServeAdmissionTuned deadlines 1 0 0
     runtime <- testServeRuntimeWith deadlines admission noopMetricsPort
     verified <- expectRight =<< newVerifiedArtifactBudget deadlines cap cap
     let adapter = rubyGemsAdapter (ChargeFactors 1000 1000 1000)
-        deps = (serveDepsFor adapter (Just private) public NoMirrorWrite [] (pure (UTCTime (fromGregorian 2030 1 1) 0))){pdReadSourceSelection = PrivateOnly, pdVerifiedArtifacts = Just verified}
+        deps = (serveDepsFor adapter private public NoMirrorWrite [] (pure (UTCTime (fromGregorian 2030 1 1) 0))){pdReadSourceSelection = PrivateOnly, pdVerifiedArtifacts = Just verified}
         binding = MountBinding ("rubygems" :| []) rubyGemsRouter rubyReadCredential deps Nothing
     use runtime binding
 
+data CoordinateSources = OwnedCandidateSource Status | PublicCandidateSource
+
 withAmbiguousNative :: Status -> (ServeRuntime -> MountBinding -> IORef [[Text]] -> RubyRelease -> IO a) -> IO a
-withAmbiguousNative privateStatus use = do
+withAmbiguousNative = withCoordinateSources . OwnedCandidateSource
+
+withCoordinateSources :: CoordinateSources -> (ServeRuntime -> MountBinding -> IORef [[Text]] -> RubyRelease -> IO a) -> IO a
+withCoordinateSources sources use = do
     releases <- loadRubyReleasesFrom "test/fixtures/rubygems/coordinate-ambiguity"
     release <- rubyRelease releases "acme-1" "1.0" "ruby"
     hits <- newIORef []
     owned <- expectRight (projectFirstPartyEntry "acme")
-    rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan 0)]
-    let upstream request respond = do
+    let age = case sources of OwnedCandidateSource _ -> 0; PublicCandidateSource -> 604800
+    rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan age)]
+    let recent = encodeUtf8 ("---\n2.0 |checksum:" <> releaseChecksum release <> ",ruby:>= 3.2,rubygems:>= 3.4,created_at:2029-12-31T00:00:00Z\n")
+        upstream request respond = do
             atomicModifyIORef' hits (\events -> (events <> [pathInfo request], ()))
             let answer status bytes = respond (responseLBS status [] (fromStrict bytes))
             case pathInfo request of
-                ["private", "info", "acme"] -> answer privateStatus ""
+                ["private", "info", "acme"] -> answer (case sources of OwnedCandidateSource status -> status; PublicCandidateSource -> status404) ""
+                ["public", "info", "acme"] -> answer status200 recent
                 ["public", "info", "acme-1"] -> answer status200 (encodeUtf8 ("---\n" <> releaseInfoRow release <> "\n"))
                 ["public", "gems", "acme-1-1.0.gem"] -> answer status200 (releaseArchive release)
                 ["public", "quick", "Marshal.4.8", "acme-1-1.0.gemspec.rz"] -> answer status200 (releaseCompact release)
                 _ -> answer status404 ""
     testWithApplication (pure upstream) $ \port -> do
         let base = "http://localhost:" <> show port
-        withNativeOrigins (loopbackRegistryUrl (base <> "/private/")) (loopbackRegistryUrl (base <> "/public/")) (BS.length (releaseArchive release)) $ \runtime binding -> do
+            private = case sources of OwnedCandidateSource _ -> Just (loopbackRegistryUrl (base <> "/private/")); PublicCandidateSource -> Nothing
+            firstParty = case sources of OwnedCandidateSource _ -> rubyGemsFirstPartyName (owned :| []); PublicCandidateSource -> const False
+        withNativeOrigins private (loopbackRegistryUrl (base <> "/public/")) (BS.length (releaseArchive release)) $ \runtime binding -> do
             let deps = bindingPackumentDeps binding
-                selected = binding{bindingPackumentDeps = deps{pdReadSourceSelection = MergePrivateAndPublic, pdFirstParty = rubyGemsFirstPartyName (owned :| []), pdRules = rules}}
+                selected = binding{bindingPackumentDeps = deps{pdReadSourceSelection = MergePrivateAndPublic, pdFirstParty = firstParty, pdRules = rules}}
             use runtime selected hits release
 
 capture :: ServeRuntime -> MountBinding -> Method -> ByteString -> [Header] -> IO SResponse
