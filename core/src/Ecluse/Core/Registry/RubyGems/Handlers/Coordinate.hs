@@ -52,7 +52,7 @@ import Ecluse.Core.Version (renderVersion)
 
 -- | Resolve the exact native filename before entering the shared artifact relay.
 serveGemArtifact :: TarballReplies response -> Method -> Filename -> Request -> (response -> IO ResponseReceived) -> (RubyResponse -> IO ResponseReceived) -> Handler ResponseReceived
-serveGemArtifact replies method file request respond refuse = do
+serveGemArtifact replies method file request respond refuse = withNativeReadEdge request (liftIO . refuse) $ do
     rt <- asks ctxRuntime
     deps <- asks (bindingPackumentDeps . ctxMount)
     let expired = Left (packumentUnavailable rubyReplies [] (mkRefusal Nothing "the coordinate lookup exceeded its deadline"))
@@ -78,7 +78,7 @@ serveGemArtifact replies method file request respond refuse = do
 
 -- | Validate original compact bytes after current coordinate admission, including retained mirror source data.
 serveCompactSpec :: Filename -> Request -> (RubyResponse -> IO ResponseReceived) -> Handler ResponseReceived
-serveCompactSpec file request respond = do
+serveCompactSpec file request respond = withNativeReadEdge request (liftIO . respond) $ do
     rt <- asks ctxRuntime
     deps <- asks (bindingPackumentDeps . ctxMount)
     let reply = liftIO . respond
@@ -187,3 +187,10 @@ fetchCompact ticket observe request (row, provenance) = do
 sourceLocation :: PackumentDeps -> Provenance -> Maybe RegistryUrl
 sourceLocation deps TrustedSource = pdPrivateBaseUrl deps
 sourceLocation deps GatedSource = Just (pdPublicBaseUrl deps)
+
+withNativeReadEdge :: Request -> (RubyResponse -> Handler ResponseReceived) -> Handler ResponseReceived -> Handler ResponseReceived
+withNativeReadEdge request refuse action = do
+    mount <- asks ctxMount
+    if edgeTokenMatches (pdInboundToken (bindingPackumentDeps mount)) (forwardedCredential mount request)
+        then action
+        else refuse (packumentUnauthorised rubyReplies [] (mkRefusal Nothing unauthorisedMessage))

@@ -77,6 +77,10 @@ spec = do
         it "keeps protected Basic reads and caller presentation" $
             withNative $ \runtime binding hits -> do
                 let secured = binding{bindingPackumentDeps = (bindingPackumentDeps binding){pdInboundToken = Just (mkSecret "secret")}}
+                for_ ["/quick/Marshal.4.8/ecluse-fixture-root-1.0.0.gemspec.rz", "/gems/ecluse-fixture-root-1.0.0.gem"] $ \path -> do
+                    unauthorised <- capture runtime secured "GET" path []
+                    simpleStatus unauthorised `shouldBe` status401
+                readIORef hits `shouldReturn` []
                 denied <- capture runtime secured "GET" "/api/v1/dependencies?gems=ecluse-fixture-root" [("Authorization", "secret")]
                 simpleStatus denied `shouldBe` status401
                 allowed <- capture runtime secured "GET" "/api/v1/dependencies?gems=ecluse-fixture-root" [("Authorization", "Basic YWxpY2U6c2VjcmV0")]
