@@ -108,25 +108,25 @@ resolveCoordinate ticket observe request file = do
             Left _ -> pure (Left (rubyBadRequest "the native coordinate is invalid or ambiguous"))
             Right candidates -> collect deps observe candidates 0 [] (Set.toAscList (Set.fromList (map coordinateName candidates)))
   where
-    collect deps observe candidates spent matches = \case
+    collect deps observer candidates spent matches = \case
         [] -> pure $ case matches of
             [selected] -> Right selected
             [] -> Left (packumentNotFound rubyReplies [] (mkRefusal Nothing "the native coordinate is absent"))
             _ -> Left (rubyBadRequest "the native coordinate names more than one admitted artifact")
         name : names -> do
-            result <- withAdmittedDocument (mapPackumentReplies Left rubyReplies) ticket observe name request (Right Nothing) $ \cached sourceBytes origins -> do
+            result <- withAdmittedDocument (mapPackumentReplies Left rubyReplies) ticket observer name request (Right Nothing) $ \cached sourceBytes origins -> do
                 liftIO (charge ticket (scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) sourceBytes))
                 pure (Right (Just (cached, sourceBytes, origins)))
             case result of
                 Left refusal -> pure (Left refusal)
-                Right Nothing -> collect deps observe candidates spent matches names
+                Right Nothing -> collect deps observer candidates spent matches names
                 Right (Just (cached, sourceBytes, origins))
                     | spent + toInteger sourceBytes > toInteger (maxMetadataBytes (pdLimits deps)) -> pure (Left (rubyBadRequest "the coordinate lookup exceeds its cumulative metadata bound"))
                     | otherwise -> case snd rubyGemsCached cached of
                         Nothing -> pure (Left (packumentInternal rubyReplies [] (mkRefusal Nothing "the admitted coordinate source is not RubyGems metadata")))
                         Just document -> do
                             let found = [(row, origin) | row <- gemRows document, grCoordinate row `elem` candidates, coordinateFilename (grCoordinate row) == file, Just origin <- [Map.lookup (renderVersion (coordinateVersion (grCoordinate row))) origins]]
-                            collect deps observe candidates (spent + toInteger sourceBytes) (matches <> found) names
+                            collect deps observer candidates (spent + toInteger sourceBytes) (matches <> found) names
 
 fetchCompact :: MemoryTicket -> (Int -> IO ()) -> Request -> (GemRow, Provenance) -> Handler RubyResponse
 fetchCompact ticket observe request (row, provenance) = do
