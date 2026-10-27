@@ -1207,6 +1207,7 @@ test-suite ecluse-core-unit
     Ecluse.Test.Contract.MeasurementSpec
     Ecluse.Test.Contract.RetentionSpec
     Ecluse.Test.CorpusSpec
+    Ecluse.Test.Corpus.OutputsSpec
     Ecluse.Test.Corpus.CargoSpec
     Ecluse.Test.EcosystemBenchSpec
     Ecluse.Test.EnvSpec
