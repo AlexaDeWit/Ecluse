@@ -72,11 +72,29 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
         it (label "direct-denial" "refuses pinned and direct archives without a public artifact fetch") $ \plane -> do
             releases <- loadRubyReleases
             release <- rubyRelease releases rubyRoot rubyVersion "ruby"
-            withObservedRubyProxy defaultE2EConfig plane $ \control ->
+            (source, lock) <- withObservedRubyProxy defaultE2EConfig plane $ \control -> do
                 proxyStatus (rubyProxy control) (rubyArchiveRoute release) `shouldReturn` 200
+                rubyConsumer (rubyProxy control) currentBundler $ \project -> do
+                    void (rubyLock project >>= shouldSucceed)
+                    admitted <- rubyLockfile project >>= maybe (fail "admitted control did not create a lockfile") pure
+                    void (rubyInstall project True >>= shouldSucceed)
+                    pure (rubySource project, admitted)
             withObservedRubyProxy rubyDeniedConfig plane $ \observed -> do
+                withRubyProject currentBundler (rubyProxy observed) source Nothing $ \project -> do
+                    rubyInstalledTree project `shouldReturn` mempty
+                    writeFileText (rubyDirectory project </> "Gemfile.lock") lock
+                    void (runBundler project ["config", "set", "--local", toString ("mirror." <> source), toString (e2eBaseUrl (rubyProxy observed) <> "/rubygems/")] >>= shouldSucceed)
+                    before <- rubyTraffic observed
+                    void (rubyInstall project True >>= shouldFail)
+                    rubyLockfile project `shouldReturn` Just lock
+                    tree <- rubyInstalledTree project
+                    Map.keys tree `shouldSatisfy` (not . any (T.isSuffixOf ".rb" . toText))
+                    Map.keys tree `shouldSatisfy` (not . any (T.isSuffixOf ".gem" . toText))
+                    after <- rubyTraffic observed
+                    let interval = rubyTrafficSince before after
+                    rubyClientRequests interval `shouldSatisfy` any (\request -> rubyRequestPath request == rubyArchiveRoute release && rubyRequestStatus request == 403)
+                    filter (T.isSuffixOf ".gem" . rubyRequestPath) (rubyUpstreamRequests interval) `shouldBe` []
                 before <- rubyTraffic observed
-                rubyConsumer (rubyProxy observed) currentBundler $ \project -> void (rubyInstall project False >>= shouldFail)
                 proxyStatus (rubyProxy observed) (rubyArchiveRoute release) `shouldReturn` 403
                 after <- rubyTraffic observed
                 filter (T.isSuffixOf ".gem" . rubyRequestPath) (rubyUpstreamRequests (rubyTrafficSince before after)) `shouldBe` []
