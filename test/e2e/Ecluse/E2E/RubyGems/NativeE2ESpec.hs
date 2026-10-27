@@ -34,7 +34,10 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
                 void (runBundler project ["lock", "--add-platform", "java", "x86_64-linux-musl", "arm64-darwin", "--add-checksums"] >>= shouldSucceed)
                 lock <- rubyLockfile project >>= maybe (fail "platform resolution did not create a lockfile") pure
                 forM_ ["1.0.0-java", "1.0.0-x86_64-linux-musl", "1.0.0-arm64-darwin"] $ \coordinate -> lock `shouldSatisfy` T.isInfixOf coordinate
+                void (rubyInstall project False >>= shouldSucceed)
+                installedLock <- rubyLockfile project >>= maybe (fail "platform installation did not retain its lockfile") pure
                 void (rubyInstall project True >>= shouldSucceed)
+                rubyLockfile project `shouldReturn` Just installedLock
                 installed <- rubyEvaluate project "require 'ecluse_fixture_platform'; puts EcluseFixturePlatform::VALUE" >>= shouldSucceed
                 T.strip (crStdout installed) `shouldSatisfy` T.isPrefixOf "ecluse-fixture-platform-1.0.0-"
         it (label "checksum-failure" "refuses a wrong lockfile digest after fetching the admitted native archive") $ \plane ->
@@ -43,6 +46,7 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
                 release <- rubyRelease releases rubyRoot rubyVersion "ruby"
                 lock <- rubyConsumer (rubyProxy observed) currentBundler $ \control -> do
                     void (rubyLock control >>= shouldSucceed)
+                    void (rubyInstall control False >>= shouldSucceed)
                     rubyLockfile control >>= maybe (fail "checksum control did not create a lockfile") pure
                 lock `shouldSatisfy` T.isInfixOf (releaseChecksum release)
                 rubyConsumer (rubyProxy observed) currentBundler $ \project -> do
@@ -76,8 +80,12 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
                 proxyStatus (rubyProxy control) (rubyArchiveRoute release) `shouldReturn` 200
                 rubyConsumer (rubyProxy control) currentBundler $ \project -> do
                     void (rubyLock project >>= shouldSucceed)
-                    admitted <- rubyLockfile project >>= maybe (fail "admitted control did not create a lockfile") pure
+                    resolved <- rubyLockfile project >>= maybe (fail "admitted control did not create a lockfile") pure
+                    resolved `shouldSatisfy` T.isInfixOf "CHECKSUMS"
+                    void (rubyInstall project False >>= shouldSucceed)
+                    admitted <- rubyLockfile project >>= maybe (fail "admitted installation did not retain its lockfile") pure
                     void (rubyInstall project True >>= shouldSucceed)
+                    rubyLockfile project `shouldReturn` Just admitted
                     pure (rubySource project, admitted)
             withObservedRubyProxy rubyDeniedConfig plane $ \observed -> do
                 withRubyProject currentBundler (rubyProxy observed) source Nothing $ \project -> do
@@ -163,13 +171,14 @@ clientCase :: BundlerClient -> GlobalDataPlane -> IO ()
 clientCase client plane = withObservedRubyProxy defaultE2EConfig plane $ \observed -> rubyConsumer (rubyProxy observed) client $ \project -> do
     before <- rubyTraffic observed
     void (rubyLock project >>= shouldSucceed)
-    lock <- rubyLockfile project >>= maybe (fail "Bundler lock did not create its lockfile") pure
-    lock `shouldSatisfy` T.isInfixOf "CHECKSUMS"
+    resolved <- rubyLockfile project >>= maybe (fail "Bundler lock did not create its lockfile") pure
+    resolved `shouldSatisfy` T.isInfixOf "CHECKSUMS"
+    void (rubyInstall project False >>= shouldSucceed)
+    lock <- rubyLockfile project >>= maybe (fail "Bundler installation did not retain its lockfile") pure
     releases <- loadRubyReleases
     forM_ [rubyRoot, rubyLeaf] $ \name -> do
         release <- rubyRelease releases name rubyVersion "ruby"
         lock `shouldSatisfy` T.isInfixOf (releaseChecksum release)
-    void (rubyInstall project False >>= shouldSucceed)
     assertRubyContents project "ecluse-fixture-leaf-1.0.0-ruby|root-1.0.0"
     void (rubyInstall project True >>= shouldSucceed)
     rubyLockfile project `shouldReturn` Just lock

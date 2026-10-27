@@ -79,7 +79,10 @@ withRubyProject client proxy source credentials action = withClientDir "rubygems
         project = RubyProject directory (retained <> overrides) bundler interpreter source
     traverse_ (createDirectoryIfMissing True) [home, directory </> ".bundle"]
     version <- runBundler project ["--version"]
-    unless (crExit version == ExitSuccess && T.strip (crStdout version) == "Bundler version " <> bundlerVersion client) (fail "the Bundler wrapper does not supply its declared version")
+    let output = T.strip (crStdout version)
+        reported = fromMaybe output (T.stripPrefix "Bundler version " output)
+    unless (crExit version == ExitSuccess && reported == bundlerVersion client) $
+        fail ("expected Bundler " <> toString (bundlerVersion client) <> ", got " <> show version)
     forM_ credentials $ \value -> do
         configured <- runBundler project ["config", "set", "--local", toString source, toString value]
         unless (crExit configured == ExitSuccess) (fail (toString (crStderr configured)))
@@ -103,7 +106,7 @@ rubyLiteral value = "'" <> T.replace "'" "\\'" (T.replace "\\" "\\\\" value) <> 
 runBundler :: RubyProject -> [String] -> IO ClientResult
 runBundler project = runClient (rubyDirectory project) (rubyEnvironment project) (rubyBundler project)
 
--- | Lock resolution records checksums for the supported clients.
+-- | Enable lockfile checksums. Named dependency records need installation to populate archive digests.
 rubyLock :: RubyProject -> IO ClientResult
 rubyLock project = runBundler project ["lock", "--add-checksums"]
 

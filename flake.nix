@@ -527,6 +527,7 @@
             mkdir -p "$out/bin"
             makeWrapper ${pkgs.ruby}/bin/ruby "$out/bin/bundle-${version}" \
               --set GEM_PATH "$out/gems" \
+              --set BUNDLE_VERSION "${version}" \
               --add-flags "-I$out/gems/gems/bundler-${version}/lib" \
               --add-flags "$out/gems/gems/bundler-${version}/exe/bundle"
             ln -s "bundle-${version}" "$out/bin/bundler-${version}"
