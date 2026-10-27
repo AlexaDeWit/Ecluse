@@ -19,7 +19,6 @@ import Ecluse.Composition.BootError (
         MirrorStateRequired,
         MirrorTargetOnMountEndpoint,
         MirrorTargetWithoutPublish,
-        MissingAdapter,
         ProgressWindowNotBelowServeCap,
         ProgressWindowNotPositive,
         PublicationTargetOnMountEndpoint,
@@ -50,9 +49,12 @@ import Ecluse.Composition.Support (
     overrideEnv,
     publicGateEnv,
     pypiMirrorEnv,
+    rubyInstallRefusal,
+    rubyScopeRefusal,
     staticEnvVars,
     withDredgeablePrivate,
     withObservablePrivate,
+    withRubyInstallBlock,
     withoutPrivateUpstreamUrl,
  )
 import Ecluse.Composition.Types (BootRole (..), MirrorRole (..), RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter), registryRoleOf)
@@ -234,9 +236,9 @@ cargoRuleBlocksSpec = describe "resolved Cargo rule blocks" $
                 cve = "{\"cve\":{\"type\":\"DenyIfCve\",\"minCvss\":8}}"
             errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" cve (overrideEnv "ECLUSE_RULES" shared cargoGateEnv))
             errors `shouldMatchList` [cargoScopeRefusal, cargoScopeRefusal, cargoDeprecationRefusal, AdvisoryDenyWithoutStore Cargo ("DenyIfCve" :| [])]
-        it "keeps a missing adapter independent of the Cargo block" $ do
+        it "reports independent Ruby and Cargo scope blocks" $ do
             errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" scopeRule cargoGateEnv))
-            errors `shouldMatchList` [MissingAdapter RubyGems, cargoScopeRefusal]
+            errors `shouldMatchList` [rubyScopeRefusal, cargoScopeRefusal]
         it "removes both blocked types through matching Cargo rule keys" $ do
             let env = overrideEnv "ECLUSE_MOUNTS__CARGO__RULES" "{\"scope\":{\"enabled\":false},\"deprecated\":{\"enabled\":false}}" (overrideEnv "ECLUSE_RULES" bothRules cargoGateEnv)
             plan <- expectVetted role env
@@ -309,9 +311,9 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
                 npmDeny = "{\"cve\":{\"type\":\"DenyIfCve\",\"minCvss\":8}}"
             errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__NPM__RULES" npmDeny (overrideEnv "ECLUSE_RULES" shared bothMounts))
             errors `shouldMatchList` [AdvisoryDenyWithoutStore Npm ("DenyIfCve" :| []), installBlock, installBlock, scopeBlock]
-        it "keeps a missing adapter independent of PyPI blocks" $ do
+        it "reports independent Ruby and PyPI installation blocks" $ do
             errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" installRule bothMounts))
-            errors `shouldMatchList` [MissingAdapter RubyGems, installBlock]
+            errors `shouldMatchList` [rubyInstallRefusal, installBlock]
         it "clears the same-key suppression in the PyPI patch" $
             refusalsFor
                 role
@@ -495,9 +497,9 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
 
 refusalSpec :: Spec
 refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
-    it "refuses a mount whose ecosystem this build ships no adapter for" $
-        refusalsFor MirrorWriter (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" staticEnvVars)
-            `shouldReturn` [MissingAdapter RubyGems]
+    it "refuses an active Ruby installation rule the adapter cannot support" $
+        refusalsFor MirrorWriter (withRubyInstallBlock staticEnvVars)
+            `shouldReturn` [rubyInstallRefusal]
 
     forM_
         [ ("mirror", MirrorTargetWithoutPublish PyPI, pypiMirrorEnv)
@@ -556,17 +558,17 @@ refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
         refusalsFor MirrorWriter (beneathThePauseFloor codeArtifactEnvVars) `shouldReturn` []
 
     it "reports the mount refusal beside the maintenance refusal from one deleting-role run" $
-        refusalsFor MirrorPruner (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (withDredgeablePrivate staticEnvVars))
-            `shouldReturn` [MissingAdapter RubyGems, noMaintenanceBackend]
+        refusalsFor MirrorPruner (withRubyInstallBlock (withDredgeablePrivate staticEnvVars))
+            `shouldReturn` [noMaintenanceBackend, rubyInstallRefusal]
 
     it "reports a refusal from each of the writing groups in one run" $ do
         let envVars =
-                overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" $
+                withRubyInstallBlock $
                     withoutFirstParty (overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL" "https://public.example.test/npm/" staticEnvVars)
         refusalsFor MirrorWriter envVars
-            `shouldReturn` [ MissingAdapter RubyGems
-                           , FirstPartyMissing Npm
+            `shouldReturn` [ FirstPartyMissing Npm
                            , PublicationTargetOnPublicUpstream Npm Npm "https://public.example.test/npm/"
+                           , rubyInstallRefusal
                            ]
 
 publishingEnv :: [(String, String)]

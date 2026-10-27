@@ -564,8 +564,10 @@ mounts:
   # Declared CodeArtifact service roles use Basic aws reads and Bearer publication.
   # Mirroring requires mirrorState.url and retains every supported platform artifact,
   # original compact specifications and source facts. Preserve that state across restarts.
-  # Native builds are allowed. Active DenyInstallTimeExecution, DenyIfDeprecated and
-  # AllowScope rules refuse boot, including rules inherited from the shared policy.
+  # DenyInstallTimeExecution: RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem.
+  # DenyIfDeprecated: RubyGems metadata supplies no supported deprecation flag.
+  # AllowScope: RubyGems package names have no scope.
+  # Active entries refuse boot, including rules inherited from the shared policy.
   # Disable an incompatible entry under mounts.rubygems.rules or restrict it to another mount.
   # No client yank relay is supported. Dredger needs physical deletion capability.
   rubygems:

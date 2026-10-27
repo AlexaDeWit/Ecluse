@@ -26,7 +26,7 @@ import Ecluse.Composition.BootError (
     BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, PrivateUpstreamOnPublicUpstream, RuleBlockedOnMount, SplitRoleNeedsDurableQueue),
     renderBootError,
  )
-import Ecluse.Composition.Support (captureBoot, cargoDeprecationRefusal, cargoGateEnv, cargoScopeRefusal, collapsedMirrorRefusal, collapsingMirrorTarget, expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, privateUpstreamUrl, publicGateEnv, reportLines, withoutMirrorTargetToken, withoutMirrorTargetUrl, withoutQueueUrl)
+import Ecluse.Composition.Support (captureBoot, cargoDeprecationRefusal, cargoGateEnv, cargoScopeRefusal, collapsedMirrorRefusal, collapsingMirrorTarget, expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, privateUpstreamUrl, publicGateEnv, reportLines, withRubyInstallBlock, withoutMirrorTargetToken, withoutMirrorTargetUrl, withoutQueueUrl)
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
@@ -378,8 +378,8 @@ spec = sequential $ do
                 )
                 `shouldReturn` refusedCheck
 
-        it "refuses an enabled ecosystem with no adapter with exit 2" $
-            checkConfig (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" runEnv) `shouldReturn` refusedCheck
+        it "refuses an active Ruby installation rule block with exit 2" $
+            checkConfig (withRubyInstallBlock runEnv) `shouldReturn` refusedCheck
 
         forM_
             [ ("CodeArtifact", [("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactRepository)], True)

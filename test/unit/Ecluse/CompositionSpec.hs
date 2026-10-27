@@ -27,9 +27,11 @@ import Ecluse.Composition.Support (
     expectValidated,
     fixedNow,
     overrideEnv,
+    rubyInstallRefusal,
     scopedName,
     staticEnvVars,
     testLimits,
+    withRubyInstallBlock,
     withoutMirrorTargetUrl,
  )
 import Ecluse.Composition.Types (RegistryRole (MirrorWriter))
@@ -319,18 +321,17 @@ bootErrorSpec = describe "resolveBootWiringWithVerified (fail fast at boot)" $ d
             Left errs -> errs `shouldBe` [PolicyBootError (UnknownRuleType "oops" "Nope")]
             Right _ -> expectationFailure "expected a policy boot error"
 
-    it "fails on a configured mount whose ecosystem has no adapter" $ do
-        -- Touching any pypi key activates the mount, so the env fixture must carry
-        -- the private upstream the activation contract requires.
-        let unservedEnv =
-                ("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", "https://priv.example.test")
-                    : ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__URL", "https://mir.example.test")
-                    : ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__TOKEN", "t")
-                    : staticEnvVars
-        _ <- expectEnv unservedEnv
+    it "fails on an active Ruby installation rule the adapter cannot support" $ do
+        let blockedEnv =
+                withRubyInstallBlock $
+                    ("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", "https://priv.example.test")
+                        : ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__URL", "https://mir.example.test")
+                        : ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__TOKEN", "t")
+                        : staticEnvVars
+        _ <- expectEnv blockedEnv
         _ <- expectDoc (completeMountDoc "rubygems")
-        planFrom unservedEnv (Just (completeMountDoc "rubygems")) >>= \case
-            Left errs -> errs `shouldBe` [MissingAdapter RubyGems]
+        planFrom blockedEnv (Just (completeMountDoc "rubygems")) >>= \case
+            Left errs -> errs `shouldBe` [rubyInstallRefusal]
             Right _ -> expectationFailure "expected boot failure"
 
     it "refuses a leftover write token on a mount that declares no mirror-target url" $ do

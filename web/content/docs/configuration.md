@@ -455,6 +455,9 @@ The following types are blocked:
 | pypi | `AllowScope` | A PyPI project name has no scope, so this rule can never match one. |
 | cargo | `AllowScope` | Cargo package names have no scope. |
 | cargo | `DenyIfDeprecated` | Cargo's sparse index supplies no deprecation flag. |
+| rubygems | `DenyInstallTimeExecution` | RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem. |
+| rubygems | `DenyIfDeprecated` | RubyGems metadata supplies no supported deprecation flag. |
+| rubygems | `AllowScope` | RubyGems package names have no scope. |
 
 Move `DenyInstallTimeExecution`, `AllowScope`, or `DenyIfDeprecated` from shared `rules` into `mounts.npm.rules`:
 
