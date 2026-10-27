@@ -26,7 +26,7 @@ spec = describe "complete verified artifact bodies" $ do
         for_ [[bytes], map BS.singleton (BS.unpack bytes)] $ \chunks -> do
             next <- heldChunks chunks
             paid <- newIORef []
-            checked <- expectRight =<< readVerifiedArtifact (BS.length bytes) (\amount -> modifyIORef' paid (<> [amount])) artifact next
+            checked <- expectRight =<< readVerifiedArtifactWith (const pass) (BS.length bytes) (\amount -> modifyIORef' paid (<> [amount])) artifact next
             verifiedBodyBytes checked `shouldBe` bytes
             charges <- readIORef paid
             charges `shouldSatisfy` (not . null)
@@ -36,17 +36,17 @@ spec = describe "complete verified artifact bodies" $ do
         paid <- newIORef []
         next <- heldChunks [bytes]
         let cap = 2 * BS.length bytes
-        checked <- expectRight =<< readVerifiedArtifact cap (\amount -> modifyIORef' paid (<> [amount])) artifact{artSize = Nothing} next
+        checked <- expectRight =<< readVerifiedArtifactWith (const pass) cap (\amount -> modifyIORef' paid (<> [amount])) artifact{artSize = Nothing} next
         verifiedBodyBytes checked `shouldBe` bytes
         readIORef paid `shouldReturn` replicate 3 (verifiedArtifactCharge cap)
     it "refuses a known cap before reading and rejects one byte past an unknown cap" $ do
         (artifact, bytes) <- fixture
         calls <- newIORef (0 :: Int)
-        known <- readVerifiedArtifact (BS.length bytes - 1) (const pass) artifact (modifyIORef' calls (+ 1) $> bytes)
+        known <- readVerifiedArtifactWith (const pass) (BS.length bytes - 1) (const pass) artifact (modifyIORef' calls (+ 1) $> bytes)
         isLeft known `shouldBe` True
         readIORef calls `shouldReturn` 0
         next <- heldChunks [bytes, "x"]
-        unknown <- readVerifiedArtifact (BS.length bytes) (const pass) artifact{artSize = Nothing} next
+        unknown <- readVerifiedArtifactWith (const pass) (BS.length bytes) (const pass) artifact{artSize = Nothing} next
         case unknown of
             Left (VerifiedArtifactBound bound) -> bound `shouldBe` BodyTooLarge (VerifiedArtifactBodyLimit (BS.length bytes))
             _ -> expectationFailure "an over-cap body did not return its typed bound"
@@ -54,7 +54,7 @@ spec = describe "complete verified artifact bodies" $ do
         (artifact, bytes) <- fixture
         for_ [BS.take (BS.length bytes - 1) bytes, "x" <> BS.drop 1 bytes] $ \changed -> do
             next <- heldChunks [changed]
-            result <- readVerifiedArtifact (BS.length bytes) (const pass) artifact next
+            result <- readVerifiedArtifactWith (const pass) (BS.length bytes) (const pass) artifact next
             isLeft result `shouldBe` True
     it "observes completed mismatch hashing separately from hash entry and verified success" $ do
         (artifact, bytes) <- fixture
@@ -67,12 +67,12 @@ spec = describe "complete verified artifact bodies" $ do
         (artifact, _) <- fixture
         paid <- newIORef []
         next <- heldChunks []
-        result <- readVerifiedArtifact 0 (\amount -> modifyIORef' paid (<> [amount])) artifact{artSize = Nothing} next
+        result <- readVerifiedArtifactWith (const pass) 0 (\amount -> modifyIORef' paid (<> [amount])) artifact{artSize = Nothing} next
         isLeft result `shouldBe` True
         charges <- readIORef paid
         all (> 0) charges `shouldBe` True
         calls <- newIORef (0 :: Int)
-        missing <- readVerifiedArtifact 0 (const pass) artifact{artHashes = [], artSize = Nothing} (modifyIORef' calls (+ 1) $> "")
+        missing <- readVerifiedArtifactWith (const pass) 0 (const pass) artifact{artHashes = [], artSize = Nothing} (modifyIORef' calls (+ 1) $> "")
         isLeft missing `shouldBe` True
         readIORef calls `shouldReturn` 0
     it "strips conditional and range bypasses while retaining identity bytes" $ do

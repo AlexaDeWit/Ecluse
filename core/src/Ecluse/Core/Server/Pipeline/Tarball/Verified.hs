@@ -9,7 +9,6 @@ module Ecluse.Core.Server.Pipeline.Tarball.Verified (
     VerifiedArtifactFault (..),
     VerifiedArtifactStage (..),
     VerifiedRelayResult (..),
-    readVerifiedArtifact,
     readVerifiedArtifactWith,
     verifiedBodyBytes,
     relayVerifiedArtifact,
@@ -77,11 +76,9 @@ newtype VerifiedReadFailure = VerifiedReadFailure VerifiedArtifactFault
 
 instance Exception VerifiedReadFailure
 
--- | Unknown lengths reserve their full cap. Known lengths are enforced through exact EOF.
-readVerifiedArtifact :: Int -> (Int -> IO ()) -> Artifact -> IO ByteString -> IO (Either VerifiedArtifactFault VerifiedArtifactBody)
-readVerifiedArtifact = readVerifiedArtifactWith (const pass)
-
--- | A single bounded destination avoids retaining one allocation per upstream chunk.
+{- | Unknown lengths reserve their full cap. Known lengths require exact EOF.
+One bounded destination avoids retaining an allocation per upstream chunk.
+-}
 readVerifiedArtifactWith :: (VerifiedArtifactStage -> IO ()) -> Int -> (Int -> IO ()) -> Artifact -> IO ByteString -> IO (Either VerifiedArtifactFault VerifiedArtifactBody)
 readVerifiedArtifactWith observe cap pay artifact next = case checkedLimit cap artifact of
     Left fault -> pure (Left fault)

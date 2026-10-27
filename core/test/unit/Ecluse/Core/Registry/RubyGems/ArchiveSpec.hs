@@ -24,7 +24,7 @@ import Ecluse.Core.Package (renderPackageName)
 import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.RubyGems.Archive
-import Ecluse.Core.Registry.RubyGems.CompactSpec (specificationCoordinate)
+import Ecluse.Core.Registry.RubyGems.CompactSpec (GemSpecification (specificationPlatform, specificationVersion), specificationCoordinate)
 import Ecluse.Core.Registry.RubyGems.Project (mkCoordinate, projectName, unGemPlatform)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Core.Version (renderVersion)
@@ -45,7 +45,7 @@ spec = describe "native gem validation" $ do
                 archive <- inspect defaultLimits bytes >>= expectRight
                 reference <- runRubyReference "archive" bytes
                 gemArchiveBytes archive `shouldBe` bytes
-                let observed = object ["name" .= renderPackageName (gemArchiveName archive), "version" .= renderVersion (gemArchiveVersion archive), "platform" .= unGemPlatform (gemArchivePlatform archive), "sha256" .= gemArchiveSha256 archive]
+                let observed = object ["name" .= renderPackageName (gemArchiveName archive), "version" .= renderVersion (specificationVersion (gemArchiveSpecification archive)), "platform" .= unGemPlatform (specificationPlatform (gemArchiveSpecification archive)), "sha256" .= gemArchiveSha256 archive]
                     expected = Object (KeyMap.filterWithKey (\key _ -> key `elem` ["name", "version", "platform", "sha256"]) fields)
                 observed `shouldBe` expected
                 case reference of
@@ -131,7 +131,7 @@ spec = describe "native gem validation" $ do
         checkGemArchive coordinate (gemArchiveSha256 archive) archive `shouldBe` Right archive
         checkGemArchive coordinate wrongDigest archive `shouldSatisfy` isLeft
         otherName <- expectRight (projectName "other-owned")
-        otherCoordinate <- expectRight (mkCoordinate otherName (gemArchiveVersion archive) (gemArchivePlatform archive))
+        otherCoordinate <- expectRight (mkCoordinate otherName (specificationVersion (gemArchiveSpecification archive)) (specificationPlatform (gemArchiveSpecification archive)))
         checkGemArchive otherCoordinate (gemArchiveSha256 archive) archive `shouldSatisfy` isLeft
 
 fixture :: FilePath

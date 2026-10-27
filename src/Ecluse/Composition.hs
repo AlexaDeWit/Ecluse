@@ -10,11 +10,9 @@ module Ecluse.Composition (
     ResolveAdapter,
     WiringPorts (..),
     BootWiring (..),
-    resolveBootWiring,
     resolveBootWiringWithVerified,
 
     -- * Boot-time wiring
-    planMounts,
     planMountsWithVerified,
 
     -- * The first-party privilege
@@ -118,10 +116,6 @@ data BootWiring = BootWiring
     -- ^ One target per mirrored mount, with the provider that mints its write token. A role that writes nothing plans none.
     }
 
--- | Build the boot wiring from the cleared plan, or the refusals only a live environment can settle. The credential providers stay internal.
-resolveBootWiring :: WiringPorts -> MirrorMintPlan -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] BootWiring)
-resolveBootWiring = resolveBootWiringWithVerified Nothing
-
 -- | Supply a verified-read budget independently from publication configuration.
 resolveBootWiringWithVerified :: Maybe VerifiedArtifactBudget -> WiringPorts -> MirrorMintPlan -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] BootWiring)
 resolveBootWiringWithVerified verified ports mintPlan limits publishBudget plan = do
@@ -149,19 +143,6 @@ data PublishBudget = PublishBudget
     { pbBodyBudget :: ByteAdmission
     , pbMaxRequestBytes :: Int
     }
-
--- | The cleared plan's served 'MountBinding's, or every remaining boot error at once. It opens no socket.
-planMounts ::
-    ResolveAdapter ->
-    IO UTCTime ->
-    (Ecosystem -> RuleDeps) ->
-    MirrorMintPlan ->
-    CredentialProviders ->
-    Limits ->
-    Maybe PublishBudget ->
-    ValidatedPlan ->
-    IO (Either [BootError] [MountBinding])
-planMounts = planMountsWithVerified Nothing
 
 -- | Every verified native mount shares the process-wide bounded artifact budget.
 planMountsWithVerified :: Maybe VerifiedArtifactBudget -> ResolveAdapter -> IO UTCTime -> (Ecosystem -> RuleDeps) -> MirrorMintPlan -> CredentialProviders -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] [MountBinding])

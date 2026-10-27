@@ -8,8 +8,6 @@ module Ecluse.Core.Registry.RubyGems.Archive (
     inspectGemArchive,
     gemArchiveBytes,
     gemArchiveName,
-    gemArchiveVersion,
-    gemArchivePlatform,
     gemArchiveSpecification,
     gemArchiveMetadata,
     gemArchiveInventory,
@@ -38,7 +36,6 @@ import Ecluse.Core.Registry.RubyGems.Archive.Yaml
 import Ecluse.Core.Registry.RubyGems.CompactSpec (GemSpecification (..), specificationCoordinate)
 import Ecluse.Core.Registry.RubyGems.Project
 import Ecluse.Core.Security.Limits (Limits (..), requestTimeoutSeconds)
-import Ecluse.Core.Version (Version)
 
 -- | Private construction preserves the complete checked artifact and native metadata.
 data GemArchive = GemArchive
@@ -141,14 +138,6 @@ gemArchiveSpecification = metadataSpecification . gemArchiveMetadata
 -- | Return the exact package name inside the checked archive.
 gemArchiveName :: GemArchive -> PackageName
 gemArchiveName = specificationName . gemArchiveSpecification
-
--- | Return the exact version spelling inside the checked archive.
-gemArchiveVersion :: GemArchive -> Version
-gemArchiveVersion = specificationVersion . gemArchiveSpecification
-
--- | Return the native platform inside the checked archive.
-gemArchivePlatform :: GemArchive -> GemPlatform
-gemArchivePlatform = specificationPlatform . gemArchiveSpecification
 
 -- | Bind the checked native archive identity and SHA-256 to an admitted coordinate.
 checkGemArchive :: GemCoordinate -> Text -> GemArchive -> Either ParseError GemArchive
