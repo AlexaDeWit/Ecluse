@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Capture complete registry bodies. Set BENCH_CORPUS_VERIFY=1 for offline verification.
-# Set BENCH_CORPUS_ECOSYSTEM=npm or pypi to select one catalogue section.
+# Set BENCH_CORPUS_ECOSYSTEM=npm, pypi or rubygems to select one catalogue section.
 set -euo pipefail
 
 pins_file="${1:-bench/corpus/pins.json}"
@@ -15,7 +15,7 @@ const crypto = require("crypto");
 const [pinsPath, outDir, ecosystem] = process.argv.slice(2);
 const catalogue = JSON.parse(fs.readFileSync(pinsPath, "utf8"));
 const verify = process.env.BENCH_CORPUS_VERIFY === "1";
-if (!["all", "npm", "pypi"].includes(ecosystem)) throw new Error("unknown corpus ecosystem: " + ecosystem);
+if (!["all", "npm", "pypi", "rubygems"].includes(ecosystem)) throw new Error("unknown corpus ecosystem: " + ecosystem);
 catalogue.captures ||= {};
 
 function stem(name) {
@@ -64,6 +64,17 @@ function validate(body, mediaType, expectedType, name, eco) {
   if (typeof mediaType !== "string" || mediaType.split(";")[0].trim() !== expectedType) {
     throw new Error(`${name}: unexpected media type ${mediaType}`);
   }
+  if (eco === "rubygems") {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+    const rows = text.split("\n");
+    const separator = rows.indexOf("---");
+    if (separator < 0 || !text.endsWith("\n")) throw new Error(`${name}: incomplete Compact Index body`);
+    const records = rows.slice(separator + 1, -1);
+    if (!records.length || records.some(row => !/^[0-9][^ ]* [^|]*\|.+$/.test(row))) {
+      throw new Error(`${name}: malformed or empty Compact Index records`);
+    }
+    return records.length;
+  }
   const document = JSON.parse(body.toString("utf8"));
   if (document.name !== name) throw new Error(`${name}: response names ${document.name}`);
   const entries = eco === "npm" ? document.versions : document.files;
@@ -76,10 +87,13 @@ function validate(body, mediaType, expectedType, name, eco) {
 
 async function capture(eco, name) {
   const npm = eco === "npm";
+  const ruby = eco === "rubygems";
   const source = npm ? "https://registry.npmjs.org/" + name.replace("/", "%2f")
+    : ruby ? "https://rubygems.org/info/" + encodeURIComponent(name)
     : "https://pypi.org/simple/" + encodeURIComponent(name) + "/";
-  const expectedType = npm ? "application/json" : "application/vnd.pypi.simple.v1+json";
+  const expectedType = npm ? "application/json" : ruby ? "text/plain" : "application/vnd.pypi.simple.v1+json";
   const file = npm ? path.join(outDir, stem(name) + ".full.json")
+    : ruby ? path.join(path.dirname(outDir), "rubygems", name + ".info")
     : path.join(path.dirname(outDir), "pypi", name + ".simple.json");
   const existing = catalogue.captures[eco]?.[name];
   if (verify && !existing) throw new Error(`${name}: missing capture record`);
@@ -104,11 +118,11 @@ async function capture(eco, name) {
     catalogue.captures[eco][name] = record;
     fs.writeFileSync(pinsPath, JSON.stringify(catalogue, null, 2) + "\n");
   }
-  console.log(`${eco}/${name}: ${record.bytes} bytes, ${count} ${npm ? "versions" : "files"}, sha256 ${sha256}`);
+  console.log(`${eco}/${name}: ${record.bytes} bytes, ${count} ${npm ? "versions" : ruby ? "records" : "files"}, sha256 ${sha256}`);
 }
 
 (async () => {
-  for (const [eco, pins] of [["npm", catalogue.pins], ["pypi", catalogue.pypiPins]]) {
+  for (const [eco, pins] of [["npm", catalogue.pins], ["pypi", catalogue.pypiPins], ["rubygems", catalogue.rubygemsPins]]) {
     if (ecosystem === "all" || ecosystem === eco) {
       for (const name of Object.keys(pins || {})) await capture(eco, name);
     }
