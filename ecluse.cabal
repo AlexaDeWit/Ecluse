@@ -325,6 +325,8 @@ library ecluse-core
     Ecluse.Core.Registry.RubyGems.Project
     Ecluse.Core.Registry.RubyGems.Document
     Ecluse.Core.Registry.RubyGems.Credential
+    Ecluse.Core.Server.Admission.Artifact
+    Ecluse.Core.Server.Pipeline.Tarball.Verified
     Ecluse.Core.Registry.RubyGems.Adapter
     Ecluse.Core.Registry.RubyGems.Handlers
     Ecluse.Core.Registry.RubyGems.Handlers.Budget
@@ -1331,6 +1333,8 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Cargo.ProjectSpec
     Ecluse.Core.Registry.RubyGems.ProjectSpec
     Ecluse.Core.Registry.RubyGems.CredentialSpec
+    Ecluse.Core.Server.Admission.ArtifactSpec
+    Ecluse.Core.Server.Pipeline.Tarball.VerifiedSpec
     Ecluse.Core.Registry.RubyGems.StreamingSpec
     Ecluse.Test.Server.CacheSpec
     Ecluse.Core.Registry.RubyGems.Handlers.BudgetSpec
@@ -1899,6 +1903,7 @@ test-suite ecluse-integration
     Ecluse.Core.Security.EgressIntegrationSpec
     Ecluse.Core.Server.Pipeline.OriginIntegrationSpec
     Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec
+    Ecluse.Core.Registry.RubyGems.AdapterIntegrationSpec
     Ecluse.Core.Registry.Cargo.AdapterIntegrationSpec
     Ecluse.Core.Server.MirrorViewIntegrationSpec
     Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec
@@ -1976,6 +1981,8 @@ test-suite ecluse-residency
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
     Ecluse.Core.Registry.Cargo.ReaderResidencySpec
+    Ecluse.Core.Server.Admission.ArtifactResidencySpec
+    Ecluse.Core.Server.Pipeline.Tarball.VerifiedResidencySpec
     Ecluse.Core.Registry.RubyGems.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ArchiveResidencySpec
     Ecluse.Core.Server.MemoryModel.Calibration
@@ -2041,6 +2048,7 @@ test-suite ecluse-smoke
   other-modules:
     Ecluse.Core.Registry.NpmSmokeSpec
     Ecluse.Core.Registry.PyPISmokeSpec
+    Ecluse.Core.Registry.RubyGemsSmokeSpec
     Ecluse.Core.Security.HostSmokeSpec
     Ecluse.Core.VersionSmokeSpec
     Ecluse.PilotSmokeSpec
@@ -2091,6 +2099,15 @@ library ecluse-e2e-test-support
     Ecluse.E2E.Harness.RubyGemsGateway
     Ecluse.E2E.Harness.RubyGemsRegistry
     Ecluse.E2E.RubyGems.InstallE2ESpec
+    Ecluse.E2E.Drivers.RubyGems
+    Ecluse.E2E.Harness.MirrorState
+    Ecluse.E2E.RubyGems.MirrorInstallE2ESpec
+    Ecluse.E2E.RubyGems.MirrorProofE2ESpec
+    Ecluse.E2E.RubyGems.Profiles
+    Ecluse.E2E.RubyGems.RegistrationE2ESpec
+    Ecluse.E2E.RubyGems.RelayE2ESpec
+    Ecluse.E2E.RubyGems.TelemetryE2ESpec
+    Ecluse.E2E.Suites.RubyGems
     Ecluse.E2E.Harness.RubyGemsCodeArtifact
     Ecluse.E2E.Harness.RubyGemsCodeArtifact.Client
     Ecluse.E2E.Harness.RubyGemsCodeArtifact.Fixtures
@@ -2222,6 +2239,19 @@ test-suite ecluse-e2e-cargo
     , ecluse:ecluse-e2e-test-support
     , ecluse:ecluse-test-contracts
 
+
+test-suite ecluse-e2e-rubygems
+  import:          shared
+  ghc-options:     -threaded
+  if !flag(dev-http-egress)
+    buildable: False
+  type:            exitcode-stdio-1.0
+  main-is:         Main.hs
+  hs-source-dirs:   test/e2e-rubygems
+  build-depends:
+    , ecluse:ecluse-e2e-test-support
+    , ecluse:ecluse-test-contracts
+
 test-suite ecluse-e2e-shared-system
   import:          shared
   ghc-options:     -threaded
@@ -2342,6 +2372,20 @@ executable ecluse-completion-cargo-audit
     buildable: False
   main-is:         Main.hs
   hs-source-dirs:   test/tools/completion-cargo-audit test/tools/completion-support
+  other-modules:   Ecluse.Test.Contract.CompletionAudit
+  build-depends:
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-runtime-test-support
+    , ecluse:ecluse-e2e-test-support
+    , text           ^>=2.1
+
+
+executable ecluse-completion-rubygems-audit
+  import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
+  main-is:         Main.hs
+  hs-source-dirs:   test/tools/completion-rubygems-audit test/tools/completion-support
   other-modules:   Ecluse.Test.Contract.CompletionAudit
   build-depends:
     , ecluse:ecluse-test-contracts

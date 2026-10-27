@@ -157,7 +157,7 @@ case "$component" in
     ;;
   ecluse-e2e-audit)
     printf 'audit\n' >> "$TEST_TRACE"
-    [ "$#" = 5 ]
+    [ "$#" = 6 ]
     shift
     for report in "$@"; do test -s "$report"; done
     for report in "$@"; do [ "$(cat "$report")" = passed ]; done
@@ -206,8 +206,8 @@ case "$component" in
   *) exit 2 ;;
 esac
 STUB
-for name in ecluse-e2e-manifest ecluse-e2e-audit ecluse-e2e-npm ecluse-e2e-pypi ecluse-e2e-cargo ecluse-e2e-shared-system \
-  ecluse-completion-npm-audit ecluse-completion-pypi-audit ecluse-completion-cargo-audit ecluse-integration-manifest ecluse-integration-audit \
+for name in ecluse-e2e-manifest ecluse-e2e-audit ecluse-e2e-npm ecluse-e2e-pypi ecluse-e2e-cargo ecluse-e2e-rubygems ecluse-e2e-shared-system \
+  ecluse-completion-npm-audit ecluse-completion-pypi-audit ecluse-completion-cargo-audit ecluse-completion-rubygems-audit ecluse-integration-manifest ecluse-integration-audit \
   ecluse-conformance-verdaccio ecluse-conformance-verdaccio-manifest ecluse-conformance-verdaccio-audit \
   ecluse-conformance-codeartifact ecluse-conformance-codeartifact-manifest ecluse-conformance-codeartifact-audit; do
   cp bin/runner "bin/$name"
@@ -240,8 +240,10 @@ case "$1" in
   receipt-*)
     printf 'receipt\n' >> "$TEST_TRACE"
     test -s "$3"
-    mkdir -p "$2/ecosystem-npm" "$2/ecosystem-pypi"
-    printf '%s\n' "$PERF_NATIVE_OUTCOME" | tee "$2/ecosystem-npm/receipt.json" > "$2/ecosystem-pypi/receipt.json"
+    for ecosystem in npm pypi cargo rubygems; do
+      mkdir -p "$2/ecosystem-$ecosystem"
+      printf '%s\n' "$PERF_NATIVE_OUTCOME" > "$2/ecosystem-$ecosystem/receipt.json"
+    done
     [ "$PERF_NATIVE_OUTCOME" = success ]
     ;;
   *) exit 2 ;;
@@ -324,10 +326,10 @@ ECLTEST_ARTIFACT_DIR="$work/plan-failure" TEST_FAIL_BUILD=ecluse-e2e-manifest TE
 grep -Fxq 'image build failed' "$work/task.log"
 : > "$TEST_TRACE"
 ECLTEST_ARTIFACT_DIR="$work/full-failed" TEST_FAILED_SUBJECT=pypi reject run_task test-e2e
-for subject in npm pypi cargo shared-system; do test -s "$work/full-failed/reports/$subject.json"; done
+for subject in npm pypi cargo rubygems shared-system; do test -s "$work/full-failed/reports/$subject.json"; done
 [ "$(cat "$work/full-failed/reports/pypi.json")" = failed ]
 [ "$(cat "$work/full-failed/pypi.status")" = 1 ]
-[ "$(grep -E '^(run:|audit$)' "$TEST_TRACE")" = "$(printf 'run:npm\nrun:pypi\nrun:cargo\nrun:shared-system\naudit')" ]
+[ "$(grep -E '^(run:|audit$)' "$TEST_TRACE")" = "$(printf 'run:npm\nrun:pypi\nrun:cargo\nrun:rubygems\nrun:shared-system\naudit')" ]
 for reason in setup cancel missing cleanup; do
   : > "$TEST_TRACE"
   case "$reason" in
@@ -336,7 +338,7 @@ for reason in setup cancel missing cleanup; do
     missing) ECLTEST_ARTIFACT_DIR="$work/full-$reason" TEST_MISSING_REPORT=pypi reject run_task test-e2e ;;
     cleanup) ECLTEST_ARTIFACT_DIR="$work/full-$reason" TEST_CLEANUP_FAIL=1 TEST_FAILED_SUBJECT=npm reject run_task test-e2e ;;
   esac
-  ! grep -q '^run:cargo\|^run:shared-system\|^audit$' "$TEST_TRACE"
+  ! grep -q '^run:cargo\|^run:rubygems\|^run:shared-system\|^audit$' "$TEST_TRACE"
 done
 
 TEST_BLOCK_SUBJECT=pypi run_task test-e2e-pypi &
@@ -399,13 +401,13 @@ for tier in core runtime; do
   printf 'passed\n' > "$work/$tier/unit-report.json"
 done
 run_task test-integration
-for subject in npm pypi cargo shared-system; do
+for subject in npm pypi cargo rubygems shared-system; do
   : > "$TEST_TRACE"
   ECLTEST_COMPONENT=ambient-component ECLTEST_SHARD=ambient-shard run_task "test-e2e-$subject"
   [ "$(grep '^run:' "$TEST_TRACE")" = "run:$subject" ]
   [ "$(cat "$work/prepared/reports/$subject.json")" = passed ]
 done
-for subject in npm pypi cargo; do
+for subject in npm pypi cargo rubygems; do
   run_task "test-e2e-$subject-completion"
   for path in "$work/core/unit-report.json" "$work/runtime/unit-report.json" "$work/integration/report.json" "$work/prepared/reports/$subject.json"; do
     mv "$path" "$path.saved"
@@ -418,8 +420,8 @@ for target in test-e2e-prepare test-e2e; do
   ECLTEST_ARTIFACT_DIR="$work/rejected-$target" reject run_task "$target" -- --group forbidden
   [ ! -e "$work/rejected-$target/.bootstrap" ]
 done
-for target in test-e2e-load test-e2e-npm test-e2e-pypi test-e2e-cargo test-e2e-shared-system \
-  test-e2e-audit test-e2e-npm-completion test-e2e-pypi-completion test-e2e-cargo-completion \
+for target in test-e2e-load test-e2e-npm test-e2e-pypi test-e2e-cargo test-e2e-rubygems test-e2e-shared-system \
+  test-e2e-audit test-e2e-npm-completion test-e2e-pypi-completion test-e2e-cargo-completion test-e2e-rubygems-completion \
   test-conformance-verdaccio test-conformance-codeartifact test-integration; do
   reject run_task "$target" -- --group forbidden
 done
@@ -441,8 +443,10 @@ run_task performance:load-cgroup
 [ "$(cat "$(dirname "$BENCH_LOAD_CGROUP")/cgroup.subtree_control")" = '+cpuset' ]
 [ "$(cat "$BENCH_LOAD_CGROUP/cgroup.subtree_control")" = '+cpuset +cpu +memory +pids' ]
 for kind in allocation live-allocation benchmark load; do
-  mkdir -p "$PERF_ARTIFACT_DIR/ecosystem-npm" "$PERF_ARTIFACT_DIR/ecosystem-pypi"
-  touch "$PERF_ARTIFACT_DIR/ecosystem-npm/receipt.json" "$PERF_ARTIFACT_DIR/ecosystem-pypi/receipt.json"
+  for ecosystem in npm pypi cargo rubygems; do
+    mkdir -p "$PERF_ARTIFACT_DIR/ecosystem-$ecosystem"
+    touch "$PERF_ARTIFACT_DIR/ecosystem-$ecosystem/receipt.json"
+  done
   : > "$TEST_TRACE"
   status=0
   TEST_MEASURE_STATUS=7 run_task "performance:$kind-measure" || status=$?
@@ -450,14 +454,16 @@ for kind in allocation live-allocation benchmark load; do
   [ "$(cat "$PERF_ARTIFACT_DIR/native-status")" = 7 ]
   [ "$(grep -E '^(conditions|measure)$' "$TEST_TRACE")" = "$(printf 'conditions\nmeasure')" ]
   PERF_NATIVE_OUTCOME=failure reject run_task "performance:$kind-receipt"
-  [ "$(cat "$PERF_ARTIFACT_DIR/ecosystem-npm/receipt.json")" = failure ]
-  [ "$(cat "$PERF_ARTIFACT_DIR/ecosystem-pypi/receipt.json")" = failure ]
+  for ecosystem in npm pypi cargo rubygems; do
+    [ "$(cat "$PERF_ARTIFACT_DIR/ecosystem-$ecosystem/receipt.json")" = failure ]
+  done
 done
 test -s "$BENCH_LOAD_CGROUP/harness/cgroup.procs"
 grep -Fxq 'affinity=taskset -c 0 oha' "$PERF_ARTIFACT_DIR/conditions.json"
 grep -Fxq 'loadPasses=every' "$PERF_ARTIFACT_DIR/conditions.json"
 grep -Fxq 'proxyCpus=' "$PERF_ARTIFACT_DIR/conditions.json"
 TEST_FAIL_BUILD=exe:bench-report PERF_NATIVE_OUTCOME=failure reject run_task performance:load-receipt
-[ ! -e "$PERF_ARTIFACT_DIR/ecosystem-npm/receipt.json" ]
-[ ! -e "$PERF_ARTIFACT_DIR/ecosystem-pypi/receipt.json" ]
+for ecosystem in npm pypi cargo rubygems; do
+  [ ! -e "$PERF_ARTIFACT_DIR/ecosystem-$ecosystem/receipt.json" ]
+done
 printf 'ok - Task sequence, image build overlap, current failures, aggregate evidence, locks, cancellation, coverage and fixed backend contracts\n'
