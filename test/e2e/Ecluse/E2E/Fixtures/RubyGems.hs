@@ -6,13 +6,14 @@
 module Ecluse.E2E.Fixtures.RubyGems (
     rubyFamilyMetadata,
     rubyReadFixture,
+    rubyWriteFixture,
     rubyNativeFixture,
     rubyArchiveRoute,
 ) where
 
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.E2E.Harness.Docker (withDataPlane)
-import Ecluse.E2E.Harness.Types (rubyGemsTopology)
+import Ecluse.E2E.Harness.Types (Topology (topologyAws), rubyGemsTopology)
 import Ecluse.Test.Contract.Ecosystem (FamilyMetadata (..))
 import Ecluse.Test.Contract.Types
 import Ecluse.Test.Registry.RubyGems.Fixtures (RubyRelease (releaseFilename))
@@ -31,6 +32,10 @@ rubyFamilyMetadata family profile capabilities =
 -- | A whole canonical family owns its product and native fixture resources.
 rubyReadFixture :: Text -> [Text] -> ConcreteFixture FamilyMetadata
 rubyReadFixture family capabilities = ConcreteFixture (rubyFamilyMetadata family "read" capabilities) (withDataPlane rubyGemsTopology)
+
+-- | Durable mirroring and advisory generations use the shared S3 and queue emulator.
+rubyWriteFixture :: Text -> [Text] -> ConcreteFixture FamilyMetadata
+rubyWriteFixture family capabilities = ConcreteFixture (rubyFamilyMetadata family "write" capabilities) (withDataPlane rubyGemsTopology{topologyAws = True})
 
 -- | Native client dimensions use fixed IDs that descriptions cannot change.
 rubyNativeFixture :: ConcreteFixture Group

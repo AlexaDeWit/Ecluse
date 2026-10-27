@@ -112,5 +112,6 @@ clientCase client plane = withObservedRubyProxy defaultE2EConfig plane $ \observ
     after <- rubyTraffic observed
     let traffic = rubyTrafficSince before after
     assertRubyRouting traffic
+    assertRubyAssets project traffic
     rubyClientRequests traffic `shouldSatisfy` any (\request -> rubyRequestPath request == "/rubygems/versions" && rubyRequestStatus request == 404)
     rubyClientRequests traffic `shouldSatisfy` any (T.isPrefixOf "/rubygems/api/v1/dependencies?" . rubyRequestPath)

@@ -9,10 +9,14 @@ module Ecluse.E2E.RubyGems.InstallE2ESpec (
     rubyDeniedConfig,
     assertRubyRouting,
     assertRubyContents,
+    assertRubyAssets,
+    assertRubyClientAssets,
 ) where
 
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.Exit (ExitCode (ExitSuccess))
+import System.FilePath (takeFileName)
 import Test.Hspec (shouldBe, shouldMatchList, shouldSatisfy)
 
 import Ecluse.E2E.Fixtures.Contracts (concreteFamily)
@@ -56,6 +60,7 @@ installation observed release =
             assertRubyContents project "ecluse-fixture-leaf-1.0.0-ruby|root-1.0.0"
             after <- rubyTraffic observed
             assertRubyRouting (rubyTrafficSince before after)
+            assertRubyAssets project (rubyTrafficSince before after)
         pure (result, crExit result == ExitSuccess)
     denied = withObservedRubyProxy rubyDeniedConfig (e2ePlane proxy) $ \refused ->
         rubyConsumer (rubyProxy refused) currentBundler $ \project -> do
@@ -78,10 +83,21 @@ assertRubyContents project expected = do
 -- | The proxy and TLS edge must observe each native artifact and compact-spec exchange.
 assertRubyRouting :: RubyTraffic -> IO ()
 assertRubyRouting traffic = do
+    assertRubyClientAssets traffic
+    let native request = any (`T.isSuffixOf` rubyRequestPath request) [".gem", ".gemspec.rz"]
+        clients = filter native (rubyClientRequests traffic)
+        origins = filter ((== "rubygems-upstream") . rubyRequestHost) (rubyUpstreamRequests traffic)
+        exchange request = (rubyRequestMethod request, rubyRequestPath request, rubyRequestStatus request)
+    origins `shouldSatisfy` any (T.isPrefixOf "/info/" . rubyRequestPath)
+    map (\request -> (rubyRequestMethod request, T.drop (T.length "/rubygems") (rubyRequestPath request), rubyRequestStatus request)) clients
+        `shouldMatchList` map exchange (filter native origins)
+
+-- | Retained compact specifications can satisfy an image exchange without another origin request.
+assertRubyClientAssets :: RubyTraffic -> IO ()
+assertRubyClientAssets traffic = do
     let native request = any (`T.isSuffixOf` rubyRequestPath request) [".gem", ".gemspec.rz"]
         clients = filter native (rubyClientRequests traffic)
         forwarded = filter native (rubyProxyRequests traffic)
-        origins = filter ((== "rubygems-upstream") . rubyRequestHost) (rubyUpstreamRequests traffic)
         exchange request = (rubyRequestMethod request, rubyRequestPath request, rubyRequestStatus request)
         successful suffix = any (\request -> suffix `T.isSuffixOf` rubyRequestPath request && rubyRequestStatus request == 200)
     clients `shouldSatisfy` successful ".gem"
@@ -89,10 +105,15 @@ assertRubyRouting traffic = do
     map rubyRequestScheme clients `shouldSatisfy` all (== "https")
     map rubyRequestPath clients `shouldSatisfy` all (T.isPrefixOf "/rubygems/")
     map exchange clients `shouldMatchList` map exchange forwarded
-    origins `shouldSatisfy` any (T.isPrefixOf "/info/" . rubyRequestPath)
-    let upstreamAssets = filter native origins
-    map (\request -> (rubyRequestMethod request, T.drop (T.length "/rubygems") (rubyRequestPath request), rubyRequestStatus request)) clients
-        `shouldMatchList` map exchange upstreamAssets
+
+-- | Every archive retained by Bundler needs a successful exchange at the product listener.
+assertRubyAssets :: RubyProject -> RubyTraffic -> IO ()
+assertRubyAssets project traffic = do
+    tree <- rubyInstalledTree project
+    let archives = ordNub [toText (takeFileName path) | path <- Map.keys tree, ".gem" `T.isSuffixOf` toText path]
+        received = ordNub [T.takeWhileEnd (/= '/') (rubyRequestPath request) | request <- rubyClientRequests traffic, ".gem" `T.isSuffixOf` rubyRequestPath request, rubyRequestStatus request == 200]
+    archives `shouldSatisfy` (not . null)
+    archives `shouldMatchList` received
 
 -- | Removing both admission paths proves that artifact checks do not rely on dependency filtering.
 rubyDeniedConfig :: E2EConfig

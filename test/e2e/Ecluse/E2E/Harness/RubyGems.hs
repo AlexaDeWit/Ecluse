@@ -17,6 +17,7 @@ module Ecluse.E2E.Harness.RubyGems (
     rubyEvaluate,
     rubyInstalledTree,
     rubyLockfile,
+    rubyGemCommand,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -80,8 +81,7 @@ withRubyProject client proxy source credentials action = withClientDir "rubygems
     version <- runBundler project ["--version"]
     unless (crExit version == ExitSuccess && T.strip (crStdout version) == "Bundler version " <> bundlerVersion client) (fail "the Bundler wrapper does not supply its declared version")
     forM_ credentials $ \value -> do
-        let host = T.takeWhile (/= '/') (fromMaybe source (T.stripPrefix "https://" source <|> T.stripPrefix "http://" source))
-        configured <- runBundler project ["config", "set", "--local", toString host, toString value]
+        configured <- runBundler project ["config", "set", "--local", toString source, toString value]
         unless (crExit configured == ExitSuccess) (fail (toString (crStderr configured)))
     rubyDependency project "ecluse-fixture-root" "= 1.0.0"
     action project
@@ -134,3 +134,8 @@ rubyLockfile project = do
     let path = rubyDirectory project </> "Gemfile.lock"
     exists <- doesFileExist path
     if exists then Just <$> readFileText path else pure Nothing
+
+-- | RubyGems sends the native API key through its documented isolated environment variable.
+rubyGemCommand :: RubyProject -> Text -> [String] -> IO ClientResult
+rubyGemCommand project token arguments =
+    runClient (rubyDirectory project) (rubyEnvironment project <> [("GEM_HOST_API_KEY", toString token)]) (rubyInterpreter project) (["-S", "gem"] <> arguments)
