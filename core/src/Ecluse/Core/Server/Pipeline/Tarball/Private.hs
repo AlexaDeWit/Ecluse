@@ -105,7 +105,7 @@ streamPrivateArtifact ctx token = do
             else privateArtifactRequest Nothing ctx token
     answer selected
   where
-    answer selected = case selected of
+    answer prepared = case prepared of
         -- The admission shed already counted its decision.
         PrivateShed headers -> PrivateHandled <$> liftIO (respond (tarballError replies shedStatus headers (mkRefusal Nothing shedMessage)))
         PrivateUnavailable -> PrivateAnswered Metric.Unavailable <$> liftIO unavailable
