@@ -14,7 +14,7 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
-import Test.Hspec (shouldBe)
+import Test.Hspec (shouldBe, shouldReturn)
 
 import Ecluse.E2E.Fixtures.Contracts (concreteFamily)
 import Ecluse.E2E.Fixtures.RubyGems
@@ -104,7 +104,7 @@ publishObserved observed registry release = do
             `shouldBe` [("rubygems-private", "POST", "/api/v1/gems", Just (encodeUtf8 rubyRegistryToken), Nothing)]
         drop uploadsBefore
             <$> readTVarIO (rubyRegistryUploads registry)
-                `shouldReturn` [("rubygems-private", releaseArchive release)]
+            `shouldReturn` [("rubygems-private", releaseArchive release)]
     pure result
 
 -- | The RubyGems client uploads the exact independent archive without rebuilding its metadata.
