@@ -16,6 +16,8 @@ module Ecluse.E2E.Harness.RubyGemsRegistry (
     rubyRegistryVersions,
     rubyRegistryFiles,
     awaitRubyRegistry,
+    awaitBlockedRubyUpload,
+    releaseBlockedRubyUpload,
     setRubyRegistryFault,
     rubyRegistryToken,
 ) where
@@ -30,6 +32,8 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, mkStatus, status200, status201, status400, status401, status404, status405, status409, status413, status503, statusCode)
 import Network.Wai qualified as Wai
+import UnliftIO (timeout)
+import UnliftIO.STM (checkSTM)
 
 import Ecluse.Core.Security.Limits (BodyLimit (PublishRequestBodyLimit), boundedRead)
 import Ecluse.E2E.Harness.Container (withBridgeApplication)
@@ -70,6 +74,8 @@ data RubyRegistry = RubyRegistry
     , rubyRegistryCredentials :: TVar [(Text, ByteString, Maybe ByteString)]
     , rubyRegistryReleases :: TVar [RubyRelease]
     , rubyRegistryArtifactReplies :: TVar (Map (Text, Text) RubyArtifactResponse)
+    , rubyRegistryBlockedUpload :: TVar (Maybe Text)
+    , rubyRegistryUploadReleased :: TVar Bool
     , rubyRegistryHeaders :: TVar [(Text, ByteString, Text, RequestHeaders)]
     }
 
@@ -90,7 +96,9 @@ withRubyRegistry action = do
     credentials <- newTVarIO []
     replies <- newTVarIO Map.empty
     headers <- newTVarIO []
-    let registry = RubyRegistry 0 inventory requests uploads lostReplies faults credentials known replies headers
+    blocked <- newTVarIO Nothing
+    released <- newTVarIO False
+    let registry = RubyRegistry 0 inventory requests uploads lostReplies faults credentials known replies blocked released headers
     seedRubyRegistry registry "rubygems-upstream" releases
     withBridgeApplication (rubyRegistryApplication registry) $ \port -> action registry{rubyRegistryPort = port}
 
@@ -124,6 +132,16 @@ awaitRubyRegistry :: RubyRegistry -> Text -> [RubyRelease] -> IO Bool
 awaitRubyRegistry registry host expected = pollUntil 120 500000 complete (rubyRegistryFiles registry host) <&> complete
   where
     complete actual = all (\release -> any (\stored -> releaseFilename stored == releaseFilename release && releaseArchive stored == releaseArchive release) actual) expected
+
+-- | Wait for a validated upload that cannot commit before the product stops.
+awaitBlockedRubyUpload :: RubyRegistry -> IO Text
+awaitBlockedRubyUpload registry =
+    pollUntil 120 500000 isJust (readTVarIO (rubyRegistryBlockedUpload registry))
+        >>= maybe (fail "no RubyGems upload reached the interruption barrier") pure
+
+-- | Release the held connection without committing its archive.
+releaseBlockedRubyUpload :: RubyRegistry -> IO ()
+releaseBlockedRubyUpload registry = atomically (writeTVar (rubyRegistryUploadReleased registry) True)
 
 -- | A fault belongs to one authority and cannot affect another source implicitly.
 setRubyRegistryFault :: RubyRegistry -> Text -> RubyRegistryFault -> IO ()
@@ -224,7 +242,10 @@ publish registry host fault request send respond =
                             then send status409 [] "native coordinate already exists"
                             else
                                 if fault == RubyRegistryStopAfterOne && any ((== host) . fst . fst) (Map.toList inventory)
-                                    then send status503 [] "native writes interrupted after one physical artifact"
+                                    then do
+                                        atomically (modifyTVar' (rubyRegistryBlockedUpload registry) (<|> Just (releaseFilename release)))
+                                        released <- timeout 120000000 (atomically (readTVar (rubyRegistryUploadReleased registry) >>= checkSTM))
+                                        send status503 [] (if isJust released then "interrupted native upload released" else "native upload barrier timed out")
                                     else do
                                         seedRubyRegistry registry host [release]
                                         if fault == RubyRegistryLoseReply

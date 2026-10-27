@@ -11,7 +11,9 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import System.FilePath ((</>))
+import System.Process.Typed (proc, runProcess_)
 import Test.Hspec (around, it, shouldBe, shouldReturn, shouldSatisfy)
+import UnliftIO (finally)
 
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
 import Ecluse.Core.Mirror.State (stateTarget)
@@ -32,7 +34,6 @@ import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Ecluse.Test.Contract.Types
 import Ecluse.Test.Contract.Types qualified as Contract
-import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Registry.RubyGems.Fixtures
 import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
 
@@ -121,11 +122,17 @@ lostReply plane = withPlatform plane $ \registry releases config -> do
 interrupted :: GlobalDataPlane -> IO ()
 interrupted plane = withPlatform plane $ \registry releases config -> do
     setRubyRegistryFault registry "rubygems-mirror" RubyRegistryStopAfterOne
-    withObservedRubyProxy config plane $ \observed -> do
-        trigger (rubyProxy observed) releases
-        stored <- pollUntil 120 500000 (not . null) (rubyRegistryFiles registry "rubygems-mirror")
-        length stored `shouldBe` 1
-        length stored `shouldSatisfy` (< length releases)
+    preserved <- flip finally (releaseBlockedRubyUpload registry) $
+        withObservedRubyProxy config plane $ \observed -> do
+            trigger (rubyProxy observed) releases
+            blocked <- awaitBlockedRubyUpload registry
+            stored <- rubyRegistryFiles registry "rubygems-mirror"
+            length stored `shouldBe` 1
+            length stored `shouldSatisfy` (< length releases)
+            map releaseFilename stored `shouldSatisfy` notElem blocked
+            runProcess_ (proc "docker" ["kill", "--signal=KILL", e2eProxyContainer (rubyProxy observed)])
+            pure stored
+    rubyRegistryFiles registry "rubygems-mirror" `shouldReturn` preserved
     withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
         withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed ->
             proxyStatus (rubyProxy observed) dependencyPath `shouldReturn` 503

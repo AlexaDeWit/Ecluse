@@ -37,13 +37,13 @@ import Ecluse.Test.Registry.RubyGems.Fixtures
 -- | Native comparison never replaces exact raw version identities in observed dependency graphs.
 type RubyCoordinates = [(Text, Text)]
 
--- | A remote queue and source state outlive each restarted product process.
+-- | The private read authority exposes this fixture's mirror target. Queue and state survive product restarts.
 rubyMirrorConfig :: E2EConfig
 rubyMirrorConfig =
     defaultE2EConfig
         { ecExtraEnv =
             [ ("ECLUSE_MIRROR_STATE__URL", "s3://" <> advisoryBucket <> "/rubygems-mirror")
-            , ("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", stubUrl RubyGemsPrivate)
+            , ("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__REGISTRY__URL", stubUrl RubyGemsMirror)
             , ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__URL", stubUrl RubyGemsMirror)
             , ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__UPLOAD_URL", T.dropWhileEnd (== '/') (stubUrl RubyGemsMirror))
             , ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__TOKEN", rubyRegistryToken)
