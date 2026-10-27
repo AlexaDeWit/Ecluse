@@ -238,9 +238,10 @@ data DependencyRow = DependencyRow
 encodeDependencies :: Int -> [DependencyRow] -> Either ParseError ByteString
 encodeDependencies cap rows = do
     when (cap < 0) (bad "negative Dependencies API byte bound")
-    let output = BSL.toStrict (BSL.take (fromIntegral cap + 1) (B.toLazyByteString (B.byteString "\x04\x08[" <> packInteger (toInteger (length rows)) <> foldMap row rows)))
-    when (BS.length output > cap) (bad "Dependencies API response exceeds its byte bound")
-    pure output
+    let encoded = B.toLazyByteString (B.byteString "\x04\x08[" <> packInteger (toInteger (length rows)) <> foldMap row rows)
+        (bounded, remainder) = BSL.splitAt (fromIntegral cap) encoded
+    unless (BSL.null remainder) (bad "Dependencies API response exceeds its byte bound")
+    pure (BSL.toStrict bounded)
   where
     row value = B.word8 123 <> packInteger 4 <> field "name" (text (dependencyName value)) <> field "number" (text (dependencyVersion value)) <> field "platform" (text (dependencyPlatform value)) <> field "dependencies" (B.word8 91 <> packInteger (toInteger (length (dependencyRequirements value))) <> foldMap pair (dependencyRequirements value))
     pair (name, requirement) = B.word8 91 <> packInteger 2 <> text name <> text requirement
