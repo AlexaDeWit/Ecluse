@@ -2202,6 +2202,7 @@ library ecluse-e2e-test-support
     , http-types     ^>=0.12
     , network        ^>=3.2
     , random         ^>=1.2
+    , ram            ^>=0.22
     , sqlite-simple  ^>=0.4
     , unix           ^>=2.8
     , text           ^>=2.1
