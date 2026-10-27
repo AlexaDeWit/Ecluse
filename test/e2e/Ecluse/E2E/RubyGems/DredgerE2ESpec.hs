@@ -85,7 +85,7 @@ rubyDredgerFixture =
 
 -- | The native backend profile preserves exact receipt identities across every scenario family.
 rubyDredgerProfile :: Profile
-rubyDredgerProfile = Profile "rubygems/maintenance" ["ruby", "bundler-4.0.23"] ["codeartifact-fixture", "sqs", "s3"] capabilities
+rubyDredgerProfile = Profile "rubygems/maintenance" ["rubygems"] ["codeartifact-fixture", "sqs", "s3"] capabilities
 
 capabilities, prerequisites, resources, isolation :: [Text]
 capabilities = ["read", "mirror", "maintenance", "advisories"]
