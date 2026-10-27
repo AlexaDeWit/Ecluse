@@ -5,6 +5,7 @@ require 'json'
 require 'zlib'
 require 'tempfile'
 require 'digest'
+require 'stringio'
 
 def specification(spec)
   {name: spec.name, version: spec.version.to_s, platform: spec.platform.to_s,
@@ -27,7 +28,18 @@ when 'archive'
     file.flush
     package = Gem::Package.new(file.path)
     package.verify
-    specification(package.spec).merge(sha256: Digest::SHA256.hexdigest(bytes), files: package.contents.sort)
+    file_sizes = {}
+    Gem::Package::TarReader.new(StringIO.new(bytes)) do |outer|
+      outer.each do |entry|
+        next unless entry.full_name == 'data.tar.gz'
+        Zlib::GzipReader.wrap(StringIO.new(entry.read)) do |gzip|
+          Gem::Package::TarReader.new(gzip) do |files|
+            files.each { |member| file_sizes[member.full_name] = member.header.size if member.file? }
+          end
+        end
+      end
+    end
+    specification(package.spec).merge(sha256: Digest::SHA256.hexdigest(bytes), files: package.contents.sort, file_sizes: file_sizes)
   end
 when 'info'
   require 'bundler'

@@ -7,6 +7,7 @@ require 'json'
 require 'tmpdir'
 require 'zlib'
 require 'optparse'
+require 'date'
 ENV['SOURCE_DATE_EPOCH'] = '1577836800'
 options = {output: File.expand_path(__dir__), payload_bytes: nil}
 OptionParser.new do |parser|
@@ -114,9 +115,7 @@ original = Marshal.load(Zlib::Inflate.inflate(File.binread(File.join(root, 'quic
 fields = Marshal.load(original._dump(-1))
 original_dump = Gem::Specification.instance_method(:_dump)
 legacy = []
-(Gem::Specification::MARSHAL_FIELDS.to_a + [[4, 19]]).each do |version, count|
-  native_fields = fields.first(count)
-  native_fields[1] = version
+capture_legacy = lambda do |label, native_fields|
   nested = Marshal.dump(native_fields)
   begin
     Gem::Specification.define_method(:_dump) { |_level| nested }
@@ -125,15 +124,32 @@ legacy = []
     Gem::Specification.define_method(:_dump, original_dump)
   end
   decoded = Marshal.load(bytes)
-  path = "legacy/spec-v#{version}-fields#{count}.gemspec.rz"
+  path = "legacy/#{label}.gemspec.rz"
   compressed = Zlib::Deflate.deflate(bytes)
   File.binwrite(File.join(root, path), compressed)
-  legacy << {path: path, specification_version: version, field_count: count,
+  legacy << {path: path, specification_version: native_fields[1], field_count: native_fields.length,
              sha256: Digest::SHA256.hexdigest(compressed), decoded_name: decoded.name,
              decoded_version: decoded.version.to_s, decoded_platform: decoded.platform.to_s,
              decoded_licenses: decoded.licenses, decoded_metadata: decoded.metadata,
              dependencies: decoded.dependencies.map { |dependency| [dependency.name, dependency.type.to_s, dependency.requirement.to_s] }}
 end
+(Gem::Specification::MARSHAL_FIELDS.to_a + [[4, 19]]).each do |version, count|
+  native_fields = fields.first(count)
+  native_fields[1] = version
+  capture_legacy.call("spec-v#{version}-fields#{count}", native_fields)
+end
+date_fields = fields.dup
+date_fields[4] = Date.new(2020, 1, 1)
+capture_legacy.call('spec-date', date_fields)
+fractional_fields = fields.dup
+fractional_fields[4] = Time.at(Rational(4_733_510_401, 3)).utc
+capture_legacy.call('spec-fractional-time', fractional_fields)
+legacy_dependencies = fields.dup
+legacy_dependencies[9] = Marshal.load(Marshal.dump(fields[9])).map do |dependency|
+  dependency.remove_instance_variable(:@requirement)
+  dependency
+end
+capture_legacy.call('spec-version-requirements', legacy_dependencies)
 File.write(File.join(root, 'legacy.json'), JSON.pretty_generate({ruby: RUBY_VERSION, rubygems: Gem::VERSION, layouts: legacy}) + "\n")
 require 'psych'
 shared = ['owned', 'native']
