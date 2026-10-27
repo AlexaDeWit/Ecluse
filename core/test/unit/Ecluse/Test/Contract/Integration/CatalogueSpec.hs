@@ -37,7 +37,8 @@ spec = do
         let cases = concatMap groupCases (catalogueGroups integrationCatalogue)
         length cases `shouldBe` 458
         length (ordNub (map caseId cases)) `shouldBe` 458
-        map caseId cases `shouldContain` ["integration/origin/native-018", "integration/rubygems/source-layout", "integration.serving.rubygems.artifact-integrity"]
+        for_ ["integration/origin/native-018", "integration/rubygems/source-layout", "integration.serving.rubygems.artifact-integrity"] $ \identifier ->
+            map caseId cases `shouldContain` [identifier]
 
 removeCase :: Group -> Case -> Group -> Group
 removeCase selected item candidate

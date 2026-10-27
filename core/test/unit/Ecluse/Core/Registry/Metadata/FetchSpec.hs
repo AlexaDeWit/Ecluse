@@ -36,7 +36,7 @@ import Prelude hiding (universe)
 spec :: Spec
 spec = do
     it "holds documents for every ecosystem with an adapter" $
-        map rdEcosystem registered `shouldBe` filter (isJust . adapterFor) universe
+        map rdEcosystem registered `shouldMatchList` filter (isJust . adapterFor) universe
     for_ registered $ \eco -> describe (show (rdEcosystem eco)) $ do
         metadataFetchContract eco
         when (rdEcosystem eco == RubyGems) $

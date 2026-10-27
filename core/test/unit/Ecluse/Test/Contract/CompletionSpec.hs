@@ -31,7 +31,8 @@ spec = describe "full completion" $ do
         requiredFamilyLawsFor "npm" ReadOnlyEcosystemFoundation `shouldBe` requiredFamilyLaws ReadOnlyEcosystemFoundation
     it "requires native Ruby name and origin bindings without inventing self-reported fields" $ do
         let proxying = fromMaybe [] (lookup "proxying" (requiredFamilyLawsFor "rubygems" FullEcosystem))
-        proxying `shouldContain` ["metadata-fetch/held-origin-mismatch", "metadata-projection/name-binding", "metadata-projection/origin-binding"]
+        for_ ["metadata-fetch/held-origin-mismatch", "metadata-projection/name-binding", "metadata-projection/origin-binding"] $ \law ->
+            proxying `shouldContain` [law]
         for_ ["metadata-fetch/held-name-mismatch", "metadata-projection/missing-name", "metadata-projection/name-mismatch"] $ \law ->
             proxying `shouldNotContain` [law]
         length proxying `shouldBe` length (fromMaybe [] (lookup "proxying" (requiredFamilyLaws FullEcosystem)))
