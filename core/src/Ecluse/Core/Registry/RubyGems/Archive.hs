@@ -23,6 +23,8 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
+import Text.Libyaml qualified as Y
+import Text.Show (showString, shows, showsPrec)
 import UnliftIO.Exception (evaluate)
 import UnliftIO.Timeout (timeout)
 
@@ -45,7 +47,10 @@ data GemArchive = GemArchive
     , gemArchiveInventory :: Set Text
     , gemArchiveSha256 :: Text
     }
-    deriving stock (Eq, Show)
+    deriving stock (Eq)
+
+instance Show GemArchive where
+    showsPrec _ archive = showString "GemArchive " . shows (gemArchiveName archive)
 
 -- | Validate the full outer tar, every compressed member and the inner file inventory.
 inspectGemArchive :: Limits -> (Int -> IO ()) -> ByteString -> IO (Either ParseError GemArchive)
@@ -56,7 +61,7 @@ inspectGemArchive limits charge bytes = do
     inspect
         | BS.length bytes > maxMirrorArtifactBytes limits = pure (bad "gem archive exceeds its byte bound")
         | otherwise = do
-            outer <- scanTar limits{maxMetadataBytes = maxMirrorArtifactBytes limits} charge (const (Right True)) (\consume -> consume (yield bytes))
+            outer <- scanTar limits{maxMetadataBytes = maxMirrorArtifactBytes limits} charge (\parts -> Right (parts `elem` [["metadata.gz"], ["data.tar.gz"], ["checksums.yaml.gz"]])) (\consume -> consume (yield bytes))
             case outer >>= envelope of
                 Left fault -> pure (Left fault)
                 Right (metadataGzip, dataGzip, checksumsGzip) -> do
@@ -108,9 +113,11 @@ inflateMetadata limits charge bytes = withInflatedChunks (GzipMembers 1) charge 
 
 verifyChecksums :: ByteString -> ByteString -> YamlValue -> Either ParseError ()
 verifyChecksums metadataBytes dataBytes value = do
+    plainMapping value
     algorithms <- yamlMapping value
     unless (Map.member "SHA256" algorithms && all (`elem` ["SHA256", "SHA512"]) (Map.keys algorithms)) (bad "missing or unsupported gem checksum algorithm")
     for_ (Map.toList algorithms) $ \(algorithm, entries) -> do
+        plainMapping entries
         digests <- yamlMapping entries
         unless (Map.keys digests == ["data.tar.gz", "metadata.gz"]) (bad "gem checksum member inventory disagrees")
         for_ [("metadata.gz", metadataBytes), ("data.tar.gz", dataBytes)] $ \(name, bytes) -> do
@@ -118,6 +125,9 @@ verifyChecksums metadataBytes dataBytes value = do
             digest <- maybeToRight (ParseError "SHA512 computation is unavailable") (computeDigest SHA512)
             let actual = if algorithm == "SHA256" then sha256Hex bytes else hexDigestText (digest (BSL.fromStrict bytes))
             unless (T.toLower expected == actual) (bad "gem member checksum disagrees")
+
+plainMapping :: YamlValue -> Either ParseError ()
+plainMapping value = unless (yamlTag value `elem` [Y.NoTag, Y.MapTag]) (bad "gem checksum mapping has an unsupported native tag")
 
 -- | Return checked native specification facts, without deriving installation policy evidence.
 gemArchiveSpecification :: GemArchive -> GemSpecification

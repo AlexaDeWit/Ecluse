@@ -70,7 +70,8 @@ decodeGemSpecification limits bytes = do
             stringArray licences
             case rdoc of MBool _ -> Right (); _ -> bad "invalid specification documentation flag"
             case stripInstanceVariables date of
-                MUserDefined "Time" raw | BS.length raw >= 8 -> Right ()
+                MUserDefined "Time" raw | BS.length raw >= 8 && BS.length raw <= 122 -> Right ()
+                MUserMarshal "Date" (MArray values) | length values == 6 -> traverse_ dateNumber values
                 _ -> bad "invalid specification date"
             checkedName <- marshalText name >>= projectName
             checkedVersion <- gemVersion version
@@ -83,6 +84,9 @@ decodeGemSpecification limits bytes = do
             pure (GemSpecification checkedName checkedVersion checkedPlatform (catMaybes runtime) requiredRuby requiredGems extras)
         _ -> bad "unsupported compact specification layout"
   where
+    dateNumber (MInteger _) = Right ()
+    dateNumber (MFloat _) = Right ()
+    dateNumber _ = bad "invalid native Date component"
     scalar = void . marshalText
     nullable value = case stripInstanceVariables value of MNil -> Right (); MArray values -> traverse_ scalar values; other -> scalar other
     stringArray value = case stripInstanceVariables value of MNil -> Right (); other -> array other >>= traverse_ scalar
@@ -182,14 +186,18 @@ requirement value = case stripInstanceVariables value of
 dependency :: MarshalValue -> Either ParseError (Maybe GemDependency)
 dependency value = case stripInstanceVariables value of
     MObject "Gem::Dependency" attributes -> do
-        unless (all ((`elem` ["@name", "@requirement", "@type", "@prerelease", "@version_requirements"]) . fst) attributes) (bad "unsupported Gem::Dependency field")
+        unless (all ((`elem` ["@name", "@requirement", "@type", "@prerelease", "@version_requirements", "@force_ruby_platform"]) . fst) attributes) (bad "unsupported Gem::Dependency field")
         name <- field "@name" attributes >>= marshalText >>= projectName
-        wanted <- field "@requirement" attributes >>= requirement
+        wanted <- case lookup "@requirement" attributes of
+            Just MNil -> field "@version_requirements" attributes >>= requirement
+            Just raw -> requirement raw
+            Nothing -> field "@version_requirements" attributes >>= requirement
         case lookup "@version_requirements" attributes of
             Nothing -> Right ()
             Just other -> do
                 old <- requirement other
                 unless (normalRequirement old == normalRequirement wanted) (bad "conflicting gem dependency requirements")
+        for_ (lookup "@force_ruby_platform" attributes) $ \case MBool _ -> Right (); _ -> bad "invalid dependency platform flag"
         for_ (lookup "@prerelease" attributes) $ \case MBool _ -> Right (); _ -> bad "invalid dependency prerelease flag"
         field "@type" attributes >>= \case
             MSymbol "runtime" -> Right (Just (GemDependency name wanted))
@@ -225,12 +233,12 @@ validateClasses :: MarshalValue -> Either ParseError ()
 validateClasses = \case
     MUserDefined className _ | className `elem` ["Gem::Specification", "Time"] -> Right ()
     MUserDefined _ _ -> bad "unsupported Marshal user-defined class"
-    MUserMarshal className value | className `elem` ["Gem::Version", "Gem::Requirement"] -> validateClasses value
+    MUserMarshal className value | className `elem` ["Gem::Version", "Gem::Requirement", "Date"] -> validateClasses value
     MUserMarshal _ _ -> bad "unsupported Marshal user-marshal class"
     MObject className attributes | className `elem` ["Gem::Dependency", "Gem::Platform"] -> traverse_ (validateClasses . snd) attributes
     MObject _ _ -> bad "unsupported Marshal object class"
     MInstance value attributes -> do
-        unless (all ((`elem` ["E", "encoding", "zone", "offset", "nano_num", "nano_den", "submicro"]) . fst) attributes) (bad "unsupported Marshal instance variable")
+        unless (all ((`elem` ["E", "encoding", "zone", "offset", "nano_num", "nano_den", "submicro", "@_zone", "@marshal_with_utc_coercion", "@taguri", "@debug_created_info"]) . fst) attributes) (bad "unsupported Marshal instance variable")
         validateClasses value
         traverse_ (validateClasses . snd) attributes
     MArray values -> traverse_ validateClasses values

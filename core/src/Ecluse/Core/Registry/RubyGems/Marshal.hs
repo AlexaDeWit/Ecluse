@@ -16,6 +16,7 @@ import Control.Monad.State.Strict (StateT, get, gets, modify', put, runStateT)
 import Data.Bits (shiftL)
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder qualified as B
+import Data.ByteString.Char8 qualified as B8
 import Data.ByteString.Lazy qualified as BSL
 import Data.IntMap.Strict qualified as IntMap
 import Data.Set qualified as Set
@@ -29,6 +30,7 @@ data MarshalValue
     = MNil
     | MBool Bool
     | MInteger Integer
+    | MFloat Double
     | MString ByteString
     | MSymbol ByteString
     | MArray [MarshalValue]
@@ -75,6 +77,12 @@ readValue depth = do
         84 -> pure (MBool True)
         70 -> pure (MBool False)
         105 -> MInteger <$> integer
+        102 -> tracked $ do
+            raw <- string
+            when (BS.length raw > 64) (refuse "Marshal float exceeds its byte bound")
+            case readMaybe (B8.unpack raw) of
+                Just value | not (isNaN value || isInfinite value) -> pure (MFloat value)
+                _ -> refuse "invalid or non-finite Marshal float"
         34 -> tracked (MString <$> string)
         58 -> do
             value <- string

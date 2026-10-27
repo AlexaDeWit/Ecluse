@@ -7,21 +7,24 @@ module Ecluse.Core.Registry.RubyGems.ArchiveSpec (spec) where
 
 import Codec.Archive.Tar qualified as Tar
 import Codec.Compression.GZip qualified as GZip
-import Data.Aeson (Value (..), eitherDecodeStrict', object, (.=))
+import Data.Aeson (Value (..), eitherDecodeStrict', object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Set qualified as Set
+import Data.Text.Encoding qualified as TE
 import Test.Hspec
 
 import Ecluse.Core.Package (renderPackageName)
-import Ecluse.Core.Registry (ParseError)
+import Ecluse.Core.Package.Hash (sha256Hex)
+import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.RubyGems.Archive
 import Ecluse.Core.Registry.RubyGems.CompactSpec (specificationCoordinate)
-import Ecluse.Core.Registry.RubyGems.Project (unGemPlatform)
+import Ecluse.Core.Registry.RubyGems.Project (mkCoordinate, projectName, unGemPlatform)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Registry.Archive (tarBytes)
+import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -35,10 +38,16 @@ spec = describe "native gem validation" $ do
             Object fields | Just (String filename) <- KeyMap.lookup "filename" fields -> do
                 bytes <- readFileBS ("test/fixtures/rubygems/gems/" <> toString filename)
                 archive <- inspect defaultLimits bytes >>= expectRight
+                reference <- runRubyReference "archive" bytes
                 gemArchiveBytes archive `shouldBe` bytes
                 let observed = object ["name" .= renderPackageName (gemArchiveName archive), "version" .= renderVersion (gemArchiveVersion archive), "platform" .= unGemPlatform (gemArchivePlatform archive), "sha256" .= gemArchiveSha256 archive]
                     expected = Object (KeyMap.filterWithKey (\key _ -> key `elem` ["name", "version", "platform", "sha256"]) fields)
                 observed `shouldBe` expected
+                case reference of
+                    Object native -> do
+                        Object (KeyMap.filterWithKey (\key _ -> key `elem` ["name", "version", "platform", "sha256"]) native) `shouldBe` observed
+                        KeyMap.lookup "files" native `shouldBe` Just (toJSON (Set.toAscList (gemArchiveInventory archive)))
+                    _ -> fail "native archive reference is not an object"
                 gemArchiveInventory archive `shouldSatisfy` (not . Set.null)
             _ -> fail "native manifest contains an invalid release"
     it "refuses duplicate, missing and unknown envelope members and nonzero trailing data" $ do
@@ -55,6 +64,19 @@ spec = describe "native gem validation" $ do
         for_ [mutate "metadata.gz" (<> "junk"), mutate "data.tar.gz" (<> "junk"), mutate "checksums.yaml.gz" (<> "junk"), mutate "data.tar.gz" (\raw -> BS.take (BS.length raw - 1) raw)] $ \entries -> do
             changed <- BSL.toStrict <$> tarBytes entries
             inspect defaultLimits changed >>= (`shouldSatisfy` isLeft)
+    it "reaches nested tar validation after accepting recomputed member checksums" $ do
+        bytes <- readFileBS fixture
+        members <- nativeMembers bytes
+        dataGzip <- maybe (fail "native fixture has no data member") pure (lookup "data.tar.gz" members)
+        let nativeTar = GZip.decompress (BSL.fromStrict dataGzip)
+        trailing <- repack members (BSL.toStrict (GZip.compress (nativeTar <> "junk")))
+        void <$> inspect defaultLimits trailing `shouldReturn` Left (ParseError "tar archive has trailing nonzero bytes")
+        missing <- repack members (BSL.toStrict (GZip.compress (Tar.write [])))
+        void <$> inspect defaultLimits missing `shouldReturn` Left (ParseError "gem data inventory disagrees with metadata files")
+        padded <- repack members (BSL.toStrict (GZip.compress (nativeTar <> BSL.replicate 32768 0)))
+        let cap = 2 * BS.length bytes
+        BS.length padded `shouldSatisfy` (< cap)
+        void <$> inspect defaultLimits{maxMirrorArtifactBytes = cap} padded `shouldReturn` Left (ParseError "archive inflated bytes exceed their bound")
     it "rejects malformed tagged metadata even when the outer tar is valid" $ do
         bytes <- readFileBS fixture
         members <- nativeMembers bytes
@@ -73,6 +95,9 @@ spec = describe "native gem validation" $ do
         coordinate <- expectRight (specificationCoordinate (gemArchiveSpecification archive))
         checkGemArchive coordinate (gemArchiveSha256 archive) archive `shouldBe` Right archive
         checkGemArchive coordinate wrongDigest archive `shouldSatisfy` isLeft
+        otherName <- expectRight (projectName "other-owned")
+        otherCoordinate <- expectRight (mkCoordinate otherName (gemArchiveVersion archive) (gemArchivePlatform archive))
+        checkGemArchive otherCoordinate (gemArchiveSha256 archive) archive `shouldSatisfy` isLeft
 
 fixture :: FilePath
 fixture = "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
@@ -88,3 +113,10 @@ nativeMembers = walk . Tar.read . BSL.fromStrict
     walk (Tar.Next entry rest) = case Tar.entryContent entry of
         Tar.NormalFile body _ -> ((toText (Tar.entryPath entry), BSL.toStrict body) :) <$> walk rest
         _ -> fail "native fixture contains a non-file envelope entry"
+
+repack :: [(Text, ByteString)] -> ByteString -> IO ByteString
+repack members payload = do
+    metadataGzip <- maybe (fail "native fixture has no metadata member") pure (lookup "metadata.gz" members)
+    let checksums = TE.encodeUtf8 ("---\nSHA256:\n  metadata.gz: " <> sha256Hex metadataGzip <> "\n  data.tar.gz: " <> sha256Hex payload <> "\n")
+        checksumGzip = BSL.toStrict (GZip.compress (BSL.fromStrict checksums))
+    BSL.toStrict <$> tarBytes [("metadata.gz", metadataGzip), ("data.tar.gz", payload), ("checksums.yaml.gz", checksumGzip)]
