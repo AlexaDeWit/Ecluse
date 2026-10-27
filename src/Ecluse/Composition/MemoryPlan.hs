@@ -10,6 +10,7 @@ module Ecluse.Composition.MemoryPlan (
     -- * The plan and its tenants
     MemoryPlan (..),
     PublishTenant (..),
+    VerifiedArtifactPlan (..),
     MirrorArtifactTenant (..),
     QueueTenantDemand (..),
     queueTenantDemand,
@@ -17,6 +18,7 @@ module Ecluse.Composition.MemoryPlan (
 
     -- * Resolution
     resolveMemoryPlanForMounts,
+    resolveMemoryPlanWithVerification,
     planCacheConfig,
     mirrorArtifactEnvelopeMultiplier,
     mirrorArtifactBytesCap,
@@ -52,11 +54,13 @@ import Ecluse.Composition.MemoryPlan.Types (
     PublishTenant (..),
     QueueTenantDemand (..),
     TransientBudget (..),
+    VerifiedArtifactPlan (..),
     queueTenantDemand,
  )
 import Ecluse.Composition.Sizing (resolveServeAdmission, resolveSized)
-import Ecluse.Config (CacheSettings (..), LimitsSettings, QueueSettings)
+import Ecluse.Config (CacheSettings (..), LimitsSettings (limMaxArtifactBytes), QueueSettings)
 import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..))
+import Ecluse.Core.Server.MemoryModel (verifiedArtifactChargeInteger)
 import Ecluse.Rts (EffectiveRuntimePlan (erpAllocAreaBytes), effectiveCapabilities, effectiveHeapCeiling, provenanceClause)
 
 -- | Reserve the largest mount override without changing the inherited request cap.
@@ -84,6 +88,28 @@ resolveMemoryPlanForMounts cacheSettings limitsSettings queueSettings explicitAd
             , piCeilingClause = provenanceClause ceilingProvenance
             }
 
+-- | Resolve verified-read limits against the same transient capacity used by actual body charges.
+resolveMemoryPlanWithVerification :: Bool -> CacheSettings -> LimitsSettings -> QueueSettings -> Maybe Int -> EffectiveRuntimePlan -> QueueTenantDemand -> [Maybe Int] -> (MemoryPlan, [Text])
+resolveMemoryPlanWithVerification enabled cache limits queue admission runtime demand requests
+    | not enabled = base
+    | otherwise =
+        ( plan{mpVerifiedArtifacts = Just verified, mpOverrideViolations = mpOverrideViolations plan <> violations}
+        , lines' <> ["memory plan: verified artifact byte cap " <> show body <> ", aggregate " <> show aggregate <> " wire bytes (shared transient memory capacity)"]
+        )
+  where
+    base@(plan, lines') = resolveMemoryPlanForMounts cache limits queue admission runtime demand requests
+    capacity = tbBootBytes (mpTransientBudget plan)
+    aggregate = largestBody 0 capacity
+    body = fromMaybe (min mirrorArtifactBytesCap aggregate) (limMaxArtifactBytes limits)
+    verified = VerifiedArtifactPlan body aggregate
+    violations = ["limits.maxArtifactBytes exceeds the verified-read capacity of " <> show aggregate <> " bytes" | body <= 0 || body > aggregate]
+    largestBody lo hi
+        | lo >= hi = lo
+        | verifiedArtifactChargeInteger (toInteger mid) <= toInteger capacity = largestBody mid hi
+        | otherwise = largestBody lo (mid - 1)
+      where
+        mid = lo + (hi - lo) `div` 2 + (hi - lo) `mod` 2
+
 -- The solved plan over a heap ceiling h. The arithmetic stays apart from the boot-log
 -- prose, so the sum-within-ceiling invariant reads on its own.
 solvedPlan :: PlanInputs -> Int -> (MemoryPlan, [Text])
@@ -95,6 +121,7 @@ solvedPlan inputs h =
         , mpMaxResponseBytes = soResponseFinal outcomes
         , mpMaxRequestBytes = tdRequestFinal demands
         , mpAdmissionCapacity = soAdmissionFinal outcomes
+        , mpVerifiedArtifacts = Nothing
         , mpPublishTenant = publishTenantOf demands outcomes
         , mpMirrorArtifactTenant = mirrorArtifactTenantOf demands outcomes
         , mpQueueMemoryMaxDepth = soDepthFinal outcomes
@@ -125,6 +152,7 @@ fallbackPlan inputs =
         , mpMaxResponseBytes = responseBytes
         , mpMaxRequestBytes = requestBytes
         , mpAdmissionCapacity = piCpuAdmission inputs
+        , mpVerifiedArtifacts = Nothing
         , mpPublishTenant = publishTenant
         , mpMirrorArtifactTenant = mirrorArtifactTenant
         , mpQueueMemoryMaxDepth = queueDepth

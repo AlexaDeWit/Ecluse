@@ -25,6 +25,7 @@ import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRouter)
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned)
+import Ecluse.Core.Server.Admission.Artifact (newVerifiedArtifactBudget)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
 import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), ReadSourceSelection (PrivateOnly), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime, runHandler)
 import Ecluse.Core.Server.Contract (responseToWai)
@@ -34,6 +35,7 @@ import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Server.Handler (testServeRuntimeWith)
 import Ecluse.Test.Server.Mount (serveDepsFor)
+import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = do
@@ -138,9 +140,10 @@ withNative use = withSweeper $ \deadlines -> do
     testWithApplication (pure upstream) $ \port -> do
         admission <- newServeAdmissionTuned deadlines 1 0 0
         runtime <- testServeRuntimeWith deadlines admission noopMetricsPort
+        verified <- expectRight =<< newVerifiedArtifactBudget deadlines (BS.length archive) (BS.length archive)
         let origin = loopbackRegistryUrl ("http://localhost:" <> show port)
             adapter = rubyGemsAdapter (ChargeFactors 1000 1000 1000)
-            deps = (serveDepsFor adapter (Just origin) origin NoMirrorWrite [] (pure (UTCTime (fromGregorian 2030 1 1) 0))){pdReadSourceSelection = PrivateOnly}
+            deps = (serveDepsFor adapter (Just origin) origin NoMirrorWrite [] (pure (UTCTime (fromGregorian 2030 1 1) 0))){pdReadSourceSelection = PrivateOnly, pdVerifiedArtifacts = Just verified}
             binding = MountBinding ("rubygems" :| []) rubyGemsRouter rubyReadCredential deps Nothing
         use runtime binding hits
 

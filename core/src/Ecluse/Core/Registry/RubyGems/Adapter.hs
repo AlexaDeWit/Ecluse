@@ -10,7 +10,7 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
 import Ecluse.Core.Registry (UrlFormationError (UnparseableUrl))
-import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (..), AdapterMaintenance (..), AdapterMetadata (..), PrivateArtifactAddressing (ConventionalArtifactPath))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (..), AdapterMaintenance (..), AdapterMetadata (..), ArtifactRelayIntegrity (..), PrivateArtifactAddressing (AdmittedIndexedArtifactLocation))
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocToken))
@@ -51,12 +51,13 @@ rubyGemsAdapter factors =
                 }
         , adapterArtifact =
             AdapterArtifact
-                { artifactByFile = \origin _ raw -> do
+                { artifactRelayIntegrity = VerifyBeforeReply
+                , artifactByFile = \origin _ raw -> do
                     file <- maybeToRight (UnparseableUrl "invalid RubyGems artifact filename") (mkFilename raw)
                     artifactGet rubyReadCredential (ocToken origin) <$> requestAt (ocBaseRequest origin) ("gems/" <> encodeComponent (unFilename file))
                 , artifactByUrl = artifactRequestByUrl rubyReadCredential
                 , artifactHosts = []
-                , artifactPrivateAddressing = ConventionalArtifactPath
+                , artifactPrivateAddressing = AdmittedIndexedArtifactLocation
                 }
         , adapterProjectName = rightToMaybe . projectName
         , adapterPublish = Just (rubyPublish factors)

@@ -27,11 +27,11 @@ import Ecluse.Composition (
     ResolveAdapter,
     WiringPorts (WiringPorts, wpBuildCredentials, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
     firstPartyName,
-    resolveBootWiring,
+    resolveBootWiringWithVerified,
  )
 import Ecluse.Composition.BootError (
     Advisory,
-    BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, PilotWithoutEcosystem, StoreMaintenanceUnavailable),
+    BootError (AdvisorySyncUnavailable, MemoryPlanOverrideUnsafe, MirrorQueueUnavailable, PilotWithoutEcosystem, StoreMaintenanceUnavailable),
     StoreMaintenanceReason (PrivateCacheUnavailable),
     refuseOnThrow,
  )
@@ -39,8 +39,9 @@ import Ecluse.Composition.Credential (BuildCredentials, CredentialTarget (..), m
 import Ecluse.Composition.Maintenance (BudgetPorts (BudgetPorts, bpGateFor, bpNominalPace, bpOverrides), BuildUpstreamProbe, StoreBuilds (sbDeleting, sbObserving, sbProbing), StorePorts, planStoreMaintenance, planStoreMaintenanceFor, readUpstreamSafety)
 import Ecluse.Composition.Maintenance.Plan (ClearedBackend (cbUrl))
 import Ecluse.Composition.MemoryPlan (
-    MemoryPlan (mpMaxRequestBytes, mpPublishTenant, mpQueueMemoryMaxDepth),
+    MemoryPlan (mpMaxRequestBytes, mpPublishTenant, mpQueueMemoryMaxDepth, mpVerifiedArtifacts),
     PublishTenant (ptAggregateBytes),
+    VerifiedArtifactPlan (..),
  )
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan,
@@ -79,6 +80,7 @@ import Ecluse.Core.Rules.Install (InstallEvidenceBudget, InstallEvidenceProvider
 import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule, revocationRules)
 import Ecluse.Core.Security (Limits (maxVersionCount))
 import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Core.Server.Admission.Artifact (newVerifiedArtifactBudget)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule))
 import Ecluse.Core.Telemetry.Span (TracingPort)
@@ -398,6 +400,7 @@ planMirrorWiring logEnv deadlines resolveAdapter buildQueue buildCredentials rol
     deferredMetrics <- newDeferredMetrics getCurrentTime
     cveSync <- planAdvisorySync logEnv bootPlan
     publishBudget <- planPublishBudget deadlines memoryPlan
+    verifiedBudget <- fmap sequence (traverse (\resolved -> newVerifiedArtifactBudget deadlines (vapMaxBytes resolved) (vapAggregateBytes resolved)) (mpVerifiedArtifacts memoryPlan))
     queue <- planMirrorQueue buildQueue logEnv (mpQueueMemoryMaxDepth memoryPlan) (bpMirrorRuntime bootPlan)
     -- A refused sync leaves the rules abstaining, so the wiring below still builds and still
     -- reports what it refuses. The accumulation then discards it along with the sync.
@@ -416,7 +419,9 @@ planMirrorWiring logEnv deadlines resolveAdapter buildQueue buildCredentials rol
                 }
     -- The wiring reads the rule deps and the publish budget above, so it follows them rather than
     -- accumulating with them.
-    wiring <- resolveBootWiring ports (mirrorMintPlan role) (bpLimits bootPlan) publishBudget validated
+    wiring <- case verifiedBudget of
+        Left reason -> pure (Left [MemoryPlanOverrideUnsafe [reason]])
+        Right admitted -> resolveBootWiringWithVerified admitted ports (mirrorMintPlan role) (bpLimits bootPlan) publishBudget validated
     pure . validationToEither $
         mirrorWiringFrom role deferredMetrics
             <$> eitherToValidation cveSync

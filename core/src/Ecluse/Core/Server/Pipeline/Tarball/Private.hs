@@ -24,7 +24,7 @@ import Ecluse.Core.Package (
     PackageDetails (pkgArtifacts),
     PackageInfo (PackageInfo),
  )
-import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByFile, artifactByUrl, artifactPrivateAddressing), PrivateArtifactAddressing (..))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByFile, artifactByUrl, artifactPrivateAddressing, artifactRelayIntegrity), ArtifactRelayIntegrity (VerifyBeforeReply), PrivateArtifactAddressing (..))
 import Ecluse.Core.Registry.Metadata (
     MetadataClient (fetchVersionMetadata),
     MetadataError (
@@ -39,6 +39,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionDoc (vdDetails),
     VersionRead (vrVersion),
  )
+import Ecluse.Core.Registry.Public (ReadControl (Uncontrolled))
 import Ecluse.Core.Registry.Request (BaseRequest)
 import Ecluse.Core.Security (
     HostPort,
@@ -49,6 +50,7 @@ import Ecluse.Core.Security (
     thgEcosystemHosts,
     thgPrivateHostPort,
  )
+import Ecluse.Core.Server.Admission.Artifact (verifiedArtifactMaxBytes)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -69,6 +71,7 @@ import Ecluse.Core.Server.Pipeline.Origin (
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Public (servePublicArtifactWithCoverage)
 import Ecluse.Core.Server.Pipeline.Tarball.Relay (
+    ArtifactServe (ServeFull, ServeHead),
     acceptPrivateArtifact,
     privateArtifactResponder,
     relayUnjudged,
@@ -77,6 +80,7 @@ import Ecluse.Core.Server.Pipeline.Tarball.Relay (
     withValidators,
  )
 import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..), relayResponder)
+import Ecluse.Core.Server.Pipeline.Tarball.Verified (VerifiedRelayResult (..), relayVerifiedArtifact, unconditionalArtifactRequest, verifiedHeadRequest, verifiedHeadResponse)
 import Ecluse.Core.Server.Response (mkRefusal)
 import Ecluse.Core.Server.Stream (UpstreamResult (..))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -108,18 +112,33 @@ streamPrivateArtifact ctx token = do
         PrivateIncomplete expected -> PrivateHandled <$> servePublicArtifactWithCoverage (covered expected) ctx
         PrivateRefused code -> PrivateAnswered Metric.Deny <$> liftIO (refuse code)
         PrivateMissing miss -> pure (PrivateMissed miss)
-        PrivateRequest managed req ->
-            liftIO $
-                relayUpstreamResult (arMode ctx) (srPrivateClient (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) (shaped req) acceptPrivateArtifact relayUnjudged privateResponder >>= \case
-                    UpstreamRelayed (_, (decision, received)) -> pure (PrivateAnswered decision received)
-                    UpstreamRejected status -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed (if status == status404 then MissAbsent else MissUnresolved))
-                    UpstreamTransportFailure -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed MissUnresolved)
-                    UpstreamCooling _ -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed MissUnresolved)
+        PrivateRequest managed selected req
+            | (ServeFull, VerifyBeforeReply) <- (arMode ctx, artifactRelayIntegrity (pdArtifact (arDeps ctx))) -> case selected of
+                Nothing -> PrivateAnswered Metric.Unavailable <$> liftIO unavailable
+                Just artifact ->
+                    liftIO (relayVerifiedArtifact ctx Uncontrolled (srPrivateClient (arRuntime ctx)) (unconditionalArtifactRequest req) artifact) >>= \case
+                        VerifiedDelivered received -> pure (PrivateAnswered Metric.Admit received)
+                        VerifiedRefused decision received -> pure (PrivateAnswered decision received)
+                        VerifiedUnanswered status -> liftIO $ if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed (if status == status404 then MissAbsent else MissUnresolved))
+            | otherwise ->
+                liftIO $
+                    relayUpstreamResult (arMode ctx) (srPrivateClient (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) (shaped req) acceptPrivateArtifact (judge selected) privateResponder >>= \case
+                        UpstreamRelayed (_, (decision, received)) -> pure (PrivateAnswered decision received)
+                        UpstreamRejected status -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed (if status == status404 then MissAbsent else MissUnresolved))
+                        UpstreamTransportFailure -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed MissUnresolved)
+                        UpstreamCooling _ -> if managed then PrivateAnswered Metric.Unavailable <$> unavailable else pure (PrivateMissed MissUnresolved)
     replies = arReplies ctx
     respond = arRespond ctx
 
     covered expected = maybe False $ \details -> publicMirrorCoverage (Map.singleton (renderVersion (arVersion ctx)) expected) (PackageInfo (arPackage ctx) (Map.singleton (renderVersion (arVersion ctx)) details) Map.empty [])
-    shaped = withValidators (arValidators ctx) . withMethod (arMode ctx)
+    shaped request
+        | (ServeHead, VerifyBeforeReply) <- (arMode ctx, artifactRelayIntegrity (pdArtifact (arDeps ctx))) = verifiedHeadRequest request
+        | otherwise = withValidators (arValidators ctx) (withMethod (arMode ctx) request)
+    judge (Just artifact) status headers
+        | (ServeHead, VerifyBeforeReply) <- (arMode ctx, artifactRelayIntegrity (pdArtifact (arDeps ctx))) =
+            let (code, represented) = verifiedHeadResponse (maybe 0 verifiedArtifactMaxBytes (pdVerifiedArtifacts (arDeps ctx))) artifact (arValidators ctx) status headers
+             in relayUnjudged code represented
+    judge _ status headers = relayUnjudged status headers
     unavailable = respond (tarballError replies status503 [] (mkRefusal (pdHelp (arDeps ctx)) "managed mirror view is unavailable"))
     refuse code = respond (tarballPrivateRefused replies code [] (privateAuthorisationRefusal (pdHelp (arDeps ctx))))
     privateResponder =
@@ -134,7 +153,7 @@ privateMetadataAdmissionRequired ctx =
     deps = arDeps ctx
 
 data PrivateArtifact
-    = PrivateRequest Bool HTTP.Request
+    = PrivateRequest Bool (Maybe Artifact) HTTP.Request
     | PrivateRefused Int
     | PrivateMissing OriginMiss
     | PrivateUnavailable
@@ -161,7 +180,7 @@ privateArtifactRequest ticket ctx token
     indexed privateBase = byIndexedLocation ticket ctx token privateBase privateHostPort
 
     byConventionalPath privateBase =
-        either (const (PrivateMissing MissAbsent)) (PrivateRequest False) $
+        either (const (PrivateMissing MissAbsent)) (PrivateRequest False Nothing) $
             artifactByFile (pdArtifact deps) (mountOrigin deps (srPrivateClient (arRuntime ctx)) privateBase token) (arPackage ctx) (unFilename (arFile ctx))
 
 byIndexedLocation :: Maybe MemoryTicket -> ArtifactRequest response -> Maybe ClientCredential -> BaseRequest -> Maybe HostPort -> Handler PrivateArtifact
@@ -180,7 +199,7 @@ byIndexedLocation ticket ctx token privateBase privateHostPort = do
                             Just expected -> case mirrorVersionView (arVersion ctx) record (either (const Nothing) (either (const Nothing) vrVersion) resolved) of
                                 Left _ -> pure (PrivateIncomplete expected)
                                 Right _ | Map.notMember (unFilename (arFile ctx)) (versionFiles expected) -> pure (PrivateMissing MissAbsent)
-                                Right restored -> pure (maybe PrivateUnavailable (PrivateRequest True) (restored >>= requestForDetails . vdDetails))
+                                Right restored -> pure (maybe PrivateUnavailable (\(artifact, request) -> PrivateRequest True (Just artifact) request) (restored >>= requestForDetails . vdDetails))
             _ -> pure (unmanaged resolved)
   where
     deps = arDeps ctx
@@ -195,14 +214,14 @@ byIndexedLocation ticket ctx token privateBase privateHostPort = do
     ordinary = \case
         Left _ -> PrivateMissing MissUnresolved
         Right (Left err) -> privateMetadataFailure err
-        Right (Right versionRead) -> maybe (PrivateMissing MissAbsent) (PrivateRequest False) (vrVersion versionRead >>= requestForDetails . vdDetails)
+        Right (Right versionRead) -> maybe (PrivateMissing MissAbsent) (\(artifact, request) -> PrivateRequest False (Just artifact) request) (vrVersion versionRead >>= requestForDetails . vdDetails)
 
     requestForDetails details = do
         artifact <- find ((== unFilename (arFile ctx)) . artFilename) (pkgArtifacts details)
         let target = hostPortAddress (artUrl artifact)
         guard (artifactAuthorityHonoured (thgEcosystemHosts (pdTarballHostGate deps)) privateHostPort target)
         let carried = if target == privateHostPort then token else Nothing
-        rightToMaybe (artifactByUrl (pdArtifact deps) carried (artUrl artifact))
+        (artifact,) <$> rightToMaybe (artifactByUrl (pdArtifact deps) carried (artUrl artifact))
 
 privateMetadataFailure :: MetadataError -> PrivateArtifact
 privateMetadataFailure = \case

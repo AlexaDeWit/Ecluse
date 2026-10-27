@@ -37,7 +37,7 @@ import Ecluse.Core.Queue (
     RemoteSpanContext,
     enqueue,
  )
-import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl, artifactRelayIntegrity), ArtifactRelayIntegrity (VerifyBeforeReply))
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataAbsent),
     VersionDoc (vdDetails),
@@ -45,11 +45,13 @@ import Ecluse.Core.Registry.Metadata (
     VersionRead,
     versionEvaluation,
  )
+import Ecluse.Core.Registry.Public (ReadControl (Controlled))
 import Ecluse.Core.Rules.Effectful (ReadFault (rfDetail))
 import Ecluse.Core.Rules.Install (InstallEvidenceRead, InstallEvidenceRole (InstallPublicAdmission), installEvidenceMode)
 import Ecluse.Core.Rules.Render (renderDecision, renderInability)
 import Ecluse.Core.Rules.Types (EvalContext, SkippedCheck, completeEvidence, mkEvalContext, skippedChecks)
 import Ecluse.Core.Security (Limits (progressFloor), Origin (UntrustedOrigin), hostPortAddress, thgPublicHostPort)
+import Ecluse.Core.Server.Admission.Artifact (verifiedArtifactMaxBytes)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -89,6 +91,7 @@ import Ecluse.Core.Server.Pipeline.Tarball.Relay (
     withValidators,
  )
 import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..), relayResponder)
+import Ecluse.Core.Server.Pipeline.Tarball.Verified (VerifiedRelayResult (..), relayVerifiedArtifact, unconditionalArtifactRequest, verifiedHeadRequest, verifiedHeadResponse)
 import Ecluse.Core.Server.Response (
     ServeDecision (Admit),
     Transience (WontResolve),
@@ -212,14 +215,20 @@ streamPublicArtifact ctx artifact observeVerdict
     | not hostHonoured = respond (crossHostRefused replies)
     | otherwise = case publicRequest of
         Left _ -> respond (internalArtifactError replies)
-        Right req ->
-            relayPublicResult (srPublicControl (arRuntime ctx)) PublicRead.Artifact (arMode ctx) (srPublicClient (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) req (const True) relayJudged (relayResponder replies respond) >>= \case
-                UpstreamRelayed (verdict, received) -> do
-                    observeVerdict verdict
-                    mirrorOnAdmit ctx artifact verdict
-                    pure received
-                UpstreamCooling retry -> respond (artifactError replies deps (upstreamCooling retry))
-                _ -> respond (artifactError replies deps upstreamUnavailable)
+        Right req
+            | (ServeFull, VerifyBeforeReply) <- (arMode ctx, artifactRelayIntegrity (pdArtifact deps)) ->
+                relayVerifiedArtifact ctx (Controlled (srPublicControl (arRuntime ctx)) PublicRead.Artifact) (srPublicClient (arRuntime ctx)) (unconditionalArtifactRequest req) artifact >>= \case
+                    VerifiedDelivered received -> mirrorOnAdmit ctx artifact RelayedArtifact $> received
+                    VerifiedRefused _ received -> pure received
+                    VerifiedUnanswered status -> respond (tarballEmpty replies status [])
+            | otherwise ->
+                relayPublicResult (srPublicControl (arRuntime ctx)) PublicRead.Artifact (arMode ctx) (srPublicClient (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) req (const True) judge (relayResponder replies respond) >>= \case
+                    UpstreamRelayed (verdict, received) -> do
+                        observeVerdict verdict
+                        mirrorOnAdmit ctx artifact verdict
+                        pure received
+                    UpstreamCooling retry -> respond (artifactError replies deps (upstreamCooling retry))
+                    _ -> respond (artifactError replies deps upstreamUnavailable)
   where
     deps = arDeps ctx
     replies = arReplies ctx
@@ -227,7 +236,15 @@ streamPublicArtifact ctx artifact observeVerdict
 
     hostHonoured = tarballHostHonoured UntrustedOrigin deps (thgPublicHostPort (pdTarballHostGate deps)) (hostPortAddress (artUrl artifact))
 
-    publicRequest = withValidators (arValidators ctx) . withMethod (arMode ctx) <$> artifactByUrl (pdArtifact deps) Nothing (artUrl artifact)
+    judge status headers
+        | (ServeHead, VerifyBeforeReply) <- (arMode ctx, artifactRelayIntegrity (pdArtifact deps)) =
+            let (code, represented) = verifiedHeadResponse (maybe 0 verifiedArtifactMaxBytes (pdVerifiedArtifacts deps)) artifact (arValidators ctx) status headers
+             in relayJudged code represented
+        | otherwise = relayJudged status headers
+    shape request
+        | (ServeHead, VerifyBeforeReply) <- (arMode ctx, artifactRelayIntegrity (pdArtifact deps)) = verifiedHeadRequest request
+        | otherwise = withValidators (arValidators ctx) (withMethod (arMode ctx) request)
+    publicRequest = shape <$> artifactByUrl (pdArtifact deps) Nothing (artUrl artifact)
 
 {- Back-fill the mirror only for a relayed artifact on the @GET@ path. A @HEAD@ served no bytes,
 and an odd-shaped or non-success relay is not the artifact. -}

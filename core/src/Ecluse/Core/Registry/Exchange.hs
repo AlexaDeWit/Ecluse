@@ -7,6 +7,7 @@ module Ecluse.Core.Registry.Exchange (
     -- * The bounded exchange
     boundedExchange,
     runExchange,
+    runExchangeUsing,
     singleAttemptSettings,
     newSingleAttemptManager,
     withSuccessBody,
@@ -101,6 +102,7 @@ boundedRelay =
 runExchange :: ExchangeClient -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
 runExchange = runExchangeUsing Uncontrolled
 
+-- | Retain the controlled response lifetime for header-aware bounded consumers.
 runExchangeUsing :: ReadControl -> ExchangeClient -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
 runExchangeUsing control client progress request readResponse =
     watched

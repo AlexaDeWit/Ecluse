@@ -246,6 +246,22 @@ admissionMetricsSpec = describe "enabled admission observations" $ do
             sumPoints "ecluse.serve.admission.in_flight" meterEnv `shouldReturn` [(emptyAttributes, 0)]
             sumPoints "ecluse.publish.body.in_flight_bytes" meterEnv `shouldReturn` [(emptyAttributes, 0)]
 
+    it "records verified body reads independently from publication" $
+        withTestTelemetry $ \telemetry meterEnv -> do
+            port <- metricsPortOf <$> newMetrics telemetry
+            mpArtifactBodyInFlightBytes port 8
+            mpArtifactBodyQueued port
+            mpArtifactReadBytes port 8
+            mpArtifactHashBytes port 8
+            mpArtifactVerified port
+            mpArtifactBodyInFlightBytes port (-8)
+            mpArtifactBodyShed port
+            sumPoints "ecluse.serve.artifact.body.in_flight_bytes" meterEnv `shouldReturn` [(emptyAttributes, 0)]
+            sumPoints "ecluse.serve.artifact.body.queued" meterEnv `shouldReturn` [(emptyAttributes, 1)]
+            sumPoints "ecluse.serve.artifact.read_bytes" meterEnv `shouldReturn` [(emptyAttributes, 8)]
+            sumPoints "ecluse.serve.artifact.hash_bytes" meterEnv `shouldReturn` [(emptyAttributes, 8)]
+            sumPoints "ecluse.serve.artifact.verified" meterEnv `shouldReturn` [(emptyAttributes, 1)]
+            sumPoints "ecluse.serve.artifact.body.shed" meterEnv `shouldReturn` [(emptyAttributes, 1)]
     it "keeps admission queueing and publish refusal counts distinct" $
         withTestTelemetry $ \telemetry meterEnv -> do
             port <- metricsPortOf <$> newMetrics telemetry

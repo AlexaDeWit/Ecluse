@@ -51,6 +51,7 @@ serveDepsFor adapter privateBaseUrl publicBaseUrl mirror rules clock =
         , pdMinIntegrity = defaultMinIntegrity
         , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
         , pdMetadata = adapterMetadata adapter
+        , pdVerifiedArtifacts = Nothing
         , pdArtifact = adapterArtifact adapter
         , pdEgressUrl = mkRegistryUrl
         , pdMirrorState = Nothing
