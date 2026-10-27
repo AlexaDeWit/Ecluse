@@ -79,11 +79,16 @@ inspectGemArchive limits charge bytes = do
                                     (decoderCharge, treeCharge) <- splitArchiveCharge nativePay
                                     let innerLimits = limits{maxMirrorArtifactBytes = maxMirrorArtifactBytes limits - BS.length raw - BS.length sums}
                                     inner <- scanTar innerLimits treeCharge (const (Right False)) (\consume -> withInflatedChunks (GzipMembers 1) decoderCharge dataGzip (consume . sourceReader))
-                                    evaluate $ do
-                                        scan <- inner
-                                        let inventory = Map.keysSet (Map.filter (/= Directory) (tarMembers scan))
-                                        unless (inventory == Set.fromList (metadataFiles metadata)) (bad "gem data inventory disagrees with metadata files")
-                                        pure (GemArchive bytes metadata inventory (sha256Hex bytes))
+                                    case inner of
+                                        Left fault -> pure (Left fault)
+                                        Right scan -> do
+                                            let inventory = Map.keysSet (Map.filter (/= Directory) (tarMembers scan))
+                                            if inventory /= Set.fromList (metadataFiles metadata)
+                                                then pure (bad "gem data inventory disagrees with metadata files")
+                                                else do
+                                                    digest <- evaluate (sha256Hex bytes)
+                                                    archive <- evaluate (GemArchive bytes metadata inventory digest)
+                                                    pure (Right archive)
                                 (Left fault, _) -> pure (Left fault)
                                 (_, Left fault) -> pure (Left fault)
                         (Left fault, _) -> pure (Left fault)

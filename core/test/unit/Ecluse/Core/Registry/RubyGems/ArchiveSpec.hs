@@ -7,12 +7,14 @@ module Ecluse.Core.Registry.RubyGems.ArchiveSpec (spec) where
 
 import Codec.Archive.Tar qualified as Tar
 import Codec.Compression.GZip qualified as GZip
+import Control.Exception (throw)
 import Data.Aeson (Value (..), eitherDecodeStrict', object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Set qualified as Set
 import Data.Text.Encoding qualified as TE
+import GHC.Exts.Heap qualified as Heap
 import Test.Hspec
 
 import Ecluse.Core.Package (renderPackageName)
@@ -50,6 +52,12 @@ spec = describe "native gem validation" $ do
                     _ -> fail "native archive reference is not an object"
                 gemArchiveInventory archive `shouldSatisfy` (not . Set.null)
             _ -> fail "native manifest contains an invalid release"
+    it "returns an evaluated successful archive without forcing it in the caller" $ do
+        hasConstructor 32 (Heap.asBox (throw DeferredArchive :: GemArchive)) `shouldReturn` False
+        bytes <- readFileBS fixture
+        archive <- inspect defaultLimits bytes >>= expectRight
+        hasConstructor 32 (Heap.asBox archive) `shouldReturn` True
+        gemArchiveSha256 archive `shouldBe` sha256Hex bytes
     it "refuses duplicate, missing and unknown envelope members and nonzero trailing data" $ do
         bytes <- readFileBS fixture
         members <- nativeMembers bytes
@@ -120,3 +128,18 @@ repack members payload = do
     let checksums = TE.encodeUtf8 ("---\nSHA256:\n  metadata.gz: " <> sha256Hex metadataGzip <> "\n  data.tar.gz: " <> sha256Hex payload <> "\n")
         checksumGzip = BSL.toStrict (GZip.compress (BSL.fromStrict checksums))
     BSL.toStrict <$> tarBytes [("metadata.gz", metadataGzip), ("data.tar.gz", payload), ("checksums.yaml.gz", checksumGzip)]
+
+hasConstructor :: Int -> Heap.Box -> IO Bool
+hasConstructor remaining box
+    | remaining <= 0 = pure False
+    | otherwise =
+        Heap.getBoxedClosureData box >>= \case
+            Heap.ConstrClosure{} -> pure True
+            Heap.IndClosure{Heap.indirectee = target} -> hasConstructor (remaining - 1) target
+            Heap.BlackholeClosure{Heap.indirectee = target} -> hasConstructor (remaining - 1) target
+            _ -> pure False
+
+data DeferredArchive = DeferredArchive
+    deriving stock (Show)
+
+instance Exception DeferredArchive

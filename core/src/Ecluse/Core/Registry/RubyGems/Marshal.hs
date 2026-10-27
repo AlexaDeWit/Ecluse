@@ -69,9 +69,7 @@ readValue :: Int -> Decoder MarshalValue
 readValue depth = do
     limits <- gets bounds
     when (depth > maxNestingDepth limits) (refuse "Marshal nesting exceeds its bound")
-    count <- gets nodes
-    when (count >= maxMetadataBytes limits `div` 8 || count >= maxArtifactCount limits) (refuse "Marshal node count exceeds its bound")
-    modify' (\cursor -> cursor{nodes = count + 1})
+    countNode
     byte >>= \case
         48 -> pure MNil
         84 -> pure (MBool True)
@@ -84,15 +82,8 @@ readValue depth = do
                 Just value | not (isNaN value || isInfinite value) -> pure (MFloat value)
                 _ -> refuse "invalid or non-finite Marshal float"
         34 -> tracked (MString <$> string)
-        58 -> do
-            value <- string
-            table <- gets symbols
-            modify' (\cursor -> cursor{symbols = IntMap.insert (IntMap.size table) value table})
-            pure (MSymbol value)
-        59 -> do
-            index <- natural
-            table <- gets symbols
-            maybe (refuse "invalid Marshal symbol reference") (pure . MSymbol) (IntMap.lookup index table)
+        58 -> MSymbol <$> defineSymbol
+        59 -> MSymbol <$> referenceSymbol
         64 -> do
             index <- natural
             table <- gets objects
@@ -154,10 +145,32 @@ attributes depth = do
     pure values
 
 symbol :: Decoder ByteString
-symbol =
-    readValue 0 >>= \case
-        MSymbol value -> pure value
+symbol = do
+    countNode
+    byte >>= \case
+        58 -> defineSymbol
+        59 -> referenceSymbol
         _ -> refuse "Marshal class or field name is not a symbol"
+
+defineSymbol :: Decoder ByteString
+defineSymbol = do
+    value <- string
+    table <- gets symbols
+    modify' (\cursor -> cursor{symbols = IntMap.insert (IntMap.size table) value table})
+    pure value
+
+referenceSymbol :: Decoder ByteString
+referenceSymbol = do
+    index <- natural
+    table <- gets symbols
+    maybe (refuse "invalid Marshal symbol reference") pure (IntMap.lookup index table)
+
+countNode :: Decoder ()
+countNode = do
+    limits <- gets bounds
+    count <- gets nodes
+    when (count >= maxMetadataBytes limits `div` 8 || count >= maxArtifactCount limits) (refuse "Marshal node count exceeds its bound")
+    modify' (\cursor -> cursor{nodes = count + 1})
 
 counted :: Decoder a -> Decoder [a]
 counted parse = do
