@@ -25,11 +25,11 @@ import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Version (Version, renderVersion)
 
--- | Initial native charges from observations below one meter step.
+-- | Initial charges combine arm64 captures and local x86_64 synthetic bootstrap.
 rubyGemsChargeFactors :: ChargeFactors
 rubyGemsChargeFactors =
     -- https://github.com/AlexaDeWit/Ecluse/actions/runs/40559003401/job/122382799126
-    ChargeFactors{cfFullReadPermille = 18000, cfKeptPermille = 17300, cfOutputPermille = 3600}
+    ChargeFactors{cfFullReadPermille = 18000, cfKeptPermille = 17300, cfOutputPermille = 4600}
 
 -- | Bind charging callbacks without performing discovery or metadata IO at boot.
 prepareGemRead :: PrepareRead

@@ -80,14 +80,14 @@ cargoCalibration =
         , outputMaximum = 2806578 % 1373462
         }
 
--- | Conservative initial maxima from native sources and bases below one meter step.
+-- | Initial maxima combine arm64 captures and local x86_64 synthetic bootstrap.
 rubyGemsCalibration :: Calibration
 rubyGemsCalibration =
     -- https://github.com/AlexaDeWit/Ecluse/actions/runs/40559003401/job/122382799126
     Calibration
         { realisticReadMaximum = 1621168 % 112670
         , allReadMaximum = 1621168 % 112670
-        , outputMaximum = 322072 % 112670
+        , outputMaximum = 8371680 % 2315422
         }
 
 -- | One capture's live bytes per source byte, and per basis byte for an output working set.

@@ -44,9 +44,9 @@ spec = do
         it "pins conservative initial RubyGems charges from exact native ratios" $ do
             realisticReadMaximum rubyGemsCalibration `shouldBe` 810584 % 56335
             allReadMaximum rubyGemsCalibration `shouldBe` 810584 % 56335
-            outputMaximum rubyGemsCalibration `shouldBe` 161036 % 56335
+            outputMaximum rubyGemsCalibration `shouldBe` 4185840 % 1157711
             fullReadCharge rubyGemsCalibration `shouldBe` 18000
-            marginCharge (outputMaximum rubyGemsCalibration) `shouldBe` 3600
+            marginCharge (outputMaximum rubyGemsCalibration) `shouldBe` 4600
         for_ [(Npm, npmCalibration), (PyPI, pypiCalibration), (Cargo, cargoCalibration), (RubyGems, rubyGemsCalibration)] $ \(ecosystem, calibration) ->
             it (show ecosystem <> " matches its adapter") $ do
                 adapter <- maybe (fail "missing registered adapter") pure (adapterFor ecosystem)
