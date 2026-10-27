@@ -6,6 +6,7 @@
 module Ecluse.Core.Registry.RubyGems.Projection (projectGemRows) where
 
 import Control.Monad (foldM)
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 
@@ -41,6 +42,6 @@ projectGemRows limits name base rows = do
         pure (Map.alter (Just . maybe fresh merge) (renderVersion version) versions)
 
     settle details =
-        let !artifacts = strictElements (pkgArtifacts details)
+        let !artifacts = strictElements (NE.reverse (pkgArtifacts details))
             !published = force (pkgPublishedAt details)
          in details{pkgArtifacts = artifacts, pkgPublishedAt = published}

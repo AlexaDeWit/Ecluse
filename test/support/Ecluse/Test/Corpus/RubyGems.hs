@@ -137,18 +137,18 @@ projectRubyGemsTree limits name bytes = do
     projectRow physical observed = do
         platform <- first (const MetadataUndecodable) (mkGemPlatform (rowPlatform observed))
         coordinate <- first (const MetadataUndecodable) (mkCoordinate name (mkVersion RubyGems (rowVersion observed)) platform)
-        let fields = Map.fromList (rowFields observed)
+        let fields = Map.fromList [(T.copy key, T.copy value) | (key, value) <- rowFields observed]
         rawChecksum <- maybeToRight MetadataUndecodable (Map.lookup "checksum" fields)
         checksum <- first (const MetadataUndecodable) (mkHash SHA256 rawChecksum)
         dependencies <- forM (rowDependencies observed) $ \(dependency, requirements) -> do
-            clauses <- maybeToRight MetadataUndecodable (nonEmpty requirements)
+            clauses <- maybeToRight MetadataUndecodable (nonEmpty (map T.copy requirements))
             pure (GemDependency (mkPackageName RubyGems Nothing dependency) clauses)
         ruby <- requirement "ruby" fields
         rubygems <- requirement "rubygems" fields
         source <- maybeToRight MetadataUndecodable (Map.lookup (rowPosition observed) physical)
         let published = Map.lookup "created_at" fields >>= parseMaybe parsePublishTime . String
         pure (GemRow (RecordEntry (rowPosition observed)) coordinate dependencies ruby rubygems checksum published fields (BS.copy (encodeUtf8 source)))
-    requirement field fields = maybe (Right (">= 0" :| [])) (maybeToRight MetadataUndecodable . nonEmpty . T.splitOn "&") (Map.lookup field fields)
+    requirement field fields = maybe (Right (">= 0" :| [])) (maybeToRight MetadataUndecodable . nonEmpty . map T.copy . T.splitOn "&") (Map.lookup field fields)
     insert versions row =
         let version = coordinateVersion (grCoordinate row)
             filename = unFilename (coordinateFilename (grCoordinate row))

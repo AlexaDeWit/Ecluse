@@ -171,8 +171,8 @@ matchesReference generated selection reference actual = do
         details <- evalMaybe (Map.lookup version (infoVersions info))
         (renderPackageName (pkgName details), renderVersion (pkgVersion details), pkgPublishedAt details, pkgInstallCode details, pkgAvailability details)
             === (generatedName generated, version, referenceNewest rows, CodeExecUnknown, Available)
-        let artifacts = sortOn (entryPosition . artEntryKey) (toList (pkgArtifacts details))
-            ordered = sortOn rowPosition rows
+        let artifacts = toList (pkgArtifacts details)
+            ordered = filter ((== version) . rowVersion) expected
         length artifacts === length ordered
         for_ (zip artifacts ordered) $ \(artifact, declared) -> do
             let filename = referenceFilename (generatedName generated) declared

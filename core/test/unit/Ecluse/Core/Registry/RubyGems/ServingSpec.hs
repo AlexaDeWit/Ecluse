@@ -59,7 +59,7 @@ spec = describe "Ruby native winning-source assembly" $ do
                     , "platform" .= ("ruby" :: Text)
                     , "dependencies" .= ([["ecluse-fixture-leaf", ">= 1.0, < " <> upper]] :: [[Text]])
                     ]
-                | (version, upper) <- [("1.0.0" :: Text, "2.0"), ("2.0.0", "3.0")]
+                | (version, upper) <- [("1.0.0" :: Text, "2.0"), ("2.0.0", "3.0"), ("3.0.0", "3.0")]
                 ]
     it "refuses a foreign source instead of serialising JSON" $
         serialiseRubyGemsDocument (fst npmCached Null) `shouldBe` Left RenderRefused

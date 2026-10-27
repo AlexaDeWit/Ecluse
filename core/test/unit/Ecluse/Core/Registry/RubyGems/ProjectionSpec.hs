@@ -35,6 +35,14 @@ spec = describe "projectGemRows" $ do
         pkgPublishedAt details `shouldBe` Nothing
         map artEntryKey (toList (pkgArtifacts details)) `shouldBe` [RecordEntry 4]
         map artUrl (toList (pkgArtifacts details)) `shouldBe` ["https://private.test/ruby/gems/Native_Gem-1.0-java.gem"]
+    it "preserves source artifact order across interleaved raw versions" $ do
+        name <- expectRight (projectName "native-gem")
+        rows <- forM [(2, "1.0-java"), (3, "2.0"), (4, "1.0"), (5, "1.0-x86_64-linux-musl")] $ \(position, coordinate) ->
+            expectRight (decodeInfoRow name (RecordEntry position) (coordinate <> " |checksum:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"))
+        info <- expectRight (projectGemRows defaultLimits name "https://rubygems.org" rows)
+        details <- expectRight (maybeToRight ("version missing" :: Text) (Map.lookup "1.0" (infoVersions info)))
+        map artEntryKey (toList (pkgArtifacts details)) `shouldBe` [RecordEntry 2, RecordEntry 4, RecordEntry 5]
+        map artFilename (toList (pkgArtifacts details)) `shouldBe` ["native-gem-1.0-java.gem", "native-gem-1.0.gem", "native-gem-1.0-x86_64-linux-musl.gem"]
     it "settles optional publication payloads before returning a successful projection" $ do
         name <- expectRight (projectName "rack")
         row <- expectRight (decodeInfoRow name (RecordEntry 1) "1.0 |checksum:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
