@@ -63,6 +63,7 @@ import Ecluse.Core.Registry.PyPI.Wire (
  )
 import Ecluse.Core.Registry.WireSupport (
     nameComponentWith,
+    newestUpload,
     withinNameLimit,
  )
 import Ecluse.Core.Strict (strictElements)
@@ -192,12 +193,6 @@ projectDetails name file held =
                         }
   where
     artifact = frArtifact file
-
--- An unknown-age file cannot borrow a sibling's expired quarantine. A later wheel restarts
--- quarantine when every timestamp is known.
-newestUpload :: Maybe UTCTime -> Maybe UTCTime -> Maybe UTCTime
-newestUpload (Just instant) (Just previous) = Just $! max instant previous
-newestUpload _ _ = Nothing
 
 releaseInstallCode :: DistributionKind -> CodeExecSignal -> CodeExecSignal
 releaseInstallCode kind previous

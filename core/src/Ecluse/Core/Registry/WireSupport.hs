@@ -14,6 +14,7 @@ module Ecluse.Core.Registry.WireSupport (
 
     -- * Publish times
     parsePublishTime,
+    newestUpload,
 
     -- * Name agreement
     Projection (..),
@@ -61,6 +62,11 @@ parsePublishTime :: Value -> Parser UTCTime
 parsePublishTime = \case
     String raw | Just instant <- readIso8601Utc raw -> pure instant
     value -> parseJSON value
+
+-- | Use the newest artifact timestamp only when every artifact has a known age.
+newestUpload :: Maybe UTCTime -> Maybe UTCTime -> Maybe UTCTime
+newestUpload (Just instant) (Just previous) = Just $! max instant previous
+newestUpload _ _ = Nothing
 
 {- | What an upstream document projected into, once its self-reported name has been checked.
 A mismatch carries no payload, so a disagreeing origin's contribution is unrepresentable.

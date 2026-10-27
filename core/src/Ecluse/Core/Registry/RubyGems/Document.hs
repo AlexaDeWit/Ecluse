@@ -13,6 +13,7 @@ module Ecluse.Core.Registry.RubyGems.Document (
 ) where
 
 import Data.Set qualified as Set
+import Data.Time (UTCTime)
 
 import Ecluse.Core.Package (Hash, PackageName)
 import Ecluse.Core.Package.Entry (EntryKey)
