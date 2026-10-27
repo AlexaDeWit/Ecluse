@@ -1987,6 +1987,7 @@ test-suite ecluse-residency
     Ecluse.Core.Server.Admission.ArtifactResidencySpec
     Ecluse.Core.Server.Pipeline.Tarball.VerifiedResidencySpec
     Ecluse.Core.Registry.RubyGems.ReaderResidencySpec
+    Ecluse.Core.Registry.RubyGems.ServingResidencySpec
     Ecluse.Core.Registry.PyPI.ArchiveResidencySpec
     Ecluse.Core.Server.MemoryModel.Calibration
     Ecluse.Core.Server.MemoryModel.CalibrationResidencySpec
