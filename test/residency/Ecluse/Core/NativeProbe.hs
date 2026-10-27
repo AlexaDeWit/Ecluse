@@ -25,6 +25,7 @@ module Ecluse.Core.NativeProbe (
     nativeMeasurement,
     allocatorSnapshot,
     allocatorTotal,
+    processMemory,
 ) where
 
 import Control.Concurrent.MVar qualified as MVar
@@ -226,6 +227,7 @@ allocatorSnapshot = alloca $ \arena -> alloca $ \mapped -> do
 foreign import ccall unsafe "ecluse_native_allocator_snapshot"
     c_allocatorSnapshot :: Ptr CSize -> Ptr CSize -> IO CInt
 
+-- | Read actual virtual and resident process bytes from Linux procfs.
 processMemory :: IO (Integer, Integer)
 processMemory = do
     rows <- T.lines . decodeUtf8 <$> BS.readFile "/proc/self/status"
