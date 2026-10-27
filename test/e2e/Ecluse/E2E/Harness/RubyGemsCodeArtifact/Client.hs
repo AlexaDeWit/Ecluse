@@ -43,7 +43,7 @@ installIn project name version = do
 
 installedVersion :: RubyProject -> Text -> IO (Maybe Text)
 installedVersion project name = do
-    result <- rubyEvaluate project (toString ("spec = Gem.loaded_specs[" <> show name <> "]; print(spec.version.to_s) if spec"))
+    result <- rubyEvaluate project ("spec = Gem.loaded_specs[" <> show name <> "]; print(spec.version.to_s) if spec")
     unless (crExit result == ExitSuccess) (fail (toString (crStderr result)))
     pure (if T.null (T.strip (crStdout result)) then Nothing else Just (T.strip (crStdout result)))
 

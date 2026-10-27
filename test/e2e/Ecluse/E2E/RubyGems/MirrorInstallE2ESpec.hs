@@ -139,8 +139,8 @@ rubyObservedGraph observed = rubyConsumer proxy currentBundler $ \project -> do
         archives = sort [filename | (_, _, _, filename, _) <- rows]
         platforms = ordNub [platform | (_, _, platform, _, _) <- rows]
         portability = if platforms == ["ruby"] then ArchitectureIndependent else ArchitectureSpecific (T.intercalate "," platforms)
-        local = [toString path | (_, _, _, _, path) <- rows, not ((toText (rubyDirectory project) <> "/installed/") `T.isPrefixOf` path)]
-        observedResult = Observed (Right graph) (Right (T.strip (crStdout exported))) (Just (Right (T.strip (crStdout executable)))) tree result local
+        foreignPaths = [toString path | (_, _, _, _, path) <- rows, not ((toText (rubyDirectory project) <> "/installed/") `T.isPrefixOf` path)]
+        observedResult = Observed (Right graph) (Right (T.strip (crStdout exported))) (Just (Right (T.strip (crStdout executable)))) tree result foreignPaths
     pure (observedResult, TargetObservation portability result (Right graph) (Right archives) tree, ordNub sources)
   where
     proxy = rubyProxy observed

@@ -10,7 +10,6 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Text.Encoding (decodeUtf8')
 import Network.HTTP.Types (RequestHeaders)
 import Test.Hspec (around, it, shouldBe, shouldReturn, shouldSatisfy)
 
