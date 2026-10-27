@@ -19,10 +19,11 @@ import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError (..
 import Ecluse.Core.Registry.Metadata.Fetch (readManifest)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (ReadTerms (..))
 import Ecluse.Core.Registry.Npm.Metadata (npmRead)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit, MirrorArtifactBodyLimit), LimitError (BodyTooLarge, TooDeeplyNested, TooManyArtifacts, TooManyVersions), Limits (maxArtifactCount, maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit, MirrorArtifactBodyLimit), LimitError (BodyTooLarge, TooDeeplyNested, TooManyArtifacts, TooManyVersions), Limits (maxArtifactCount, maxMetadataBytes, maxNestingDepth, maxVersionCount), boundedRead, defaultLimits)
 import Ecluse.Test.Contract.RegistrySmoke (liveMetadata, liveRegistryResponse)
 import Ecluse.Test.Corpus.Npm (benchPackageName, syntheticPackumentBytes)
 import Ecluse.Test.Port (passthroughTracingPort)
+import Ecluse.Test.Registry.JsonStream (heldChunks)
 import Ecluse.Test.Registry.Metadata.Fetch (heldBody, heldManifest)
 import Ecluse.Test.Support (expectRight)
 
@@ -96,8 +97,12 @@ responseSpec = describe "liveRegistryResponse" $ do
     for_ [TransportTls, TransportProtocol] $ \cause ->
         it ("fails an artifact " <> show cause) $
             liveRegistryResponse "files" (pure (Left (FetchTransport (transportFault cause "request refused")))) `shouldThrow` isFailureException
-    it "fails the actual artifact body bound" $
-        liveRegistryResponse "files" (pure (Left (FetchBoundExceeded (BodyTooLarge (MirrorArtifactBodyLimit 1))))) `shouldThrow` isFailureException
+    it "fails the actual artifact body bound" $ do
+        source <- heldChunks ["gem"]
+        bounded <- boundedRead (MirrorArtifactBodyLimit 1) source
+        bounded `shouldBe` Left (BodyTooLarge (MirrorArtifactBodyLimit 1))
+        let fetched = bimap FetchBoundExceeded (uncurry (RegistryResponse 200)) bounded
+        liveRegistryResponse "files" (pure fetched) `shouldThrow` isFailureException
     it "fails a non-success HTTP status instead of declaring the registry unavailable" $
         liveRegistryResponse "files" (pure (Right (RegistryResponse 503 0 ""))) `shouldThrow` isFailureException
     it "propagates cancellation from the artifact exchange" $
