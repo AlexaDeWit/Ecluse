@@ -19,12 +19,13 @@ import UnliftIO.Exception (bracket, evaluate, finally)
 
 import Ecluse.Core.Package (PackageInfo (infoVersions))
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, cargoPacked, npmCached, npmPacked, pypiPacked, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, cargoPacked, npmCached, npmPacked, pypiPacked, pypiSimpleCached, rubyGemsCached)
 import Ecluse.Core.Registry.Cargo.Document (PackedIndex (..), cargoRecords)
 import Ecluse.Core.Registry.Json.Packed (DocTable, docTable)
 import Ecluse.Core.Registry.Json.Writer (packTree)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..))
 import Ecluse.Core.Registry.PyPI.Document (PackedSimple (..), simpleEnvelope, simpleFiles)
+import Ecluse.Core.Registry.RubyGems.Document (GemDocument (gemRows), GemRow (grSource))
 import Ecluse.Core.Server.MemoryModel.Probe (Evaluated (..), measureInChild, packages, project)
 import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
 import Ecluse.Test.Corpus (CorpusPackage (cpPath), cpName, readCapture)
@@ -94,6 +95,12 @@ documentKeys document =
         (Just root, _) -> concat <$> traverse trackObject (root : releases root)
         (_, Just simple) -> (<>) <$> trackMembers (simpleEnvelope simple) <*> (concat <$> traverse (trackObject . snd) (simpleFiles simple))
         _ | Just cargo <- snd cargoCached document -> concat <$> traverse (trackObject . snd) (cargoRecords cargo)
+        _ | Just native <- snd rubyGemsCached document -> do
+            root <- track native
+            rows <- track (gemRows native)
+            objects <- traverse track (gemRows native)
+            sources <- traverse (track . grSource) (gemRows native)
+            pure (root : rows : objects <> sources)
         _ -> pure []
     packedKeys table values = (<>) <$> trackTable table <*> traverse track values
     -- Empty tables carry no source strings and can remain as shared static values.

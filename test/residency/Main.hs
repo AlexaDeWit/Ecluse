@@ -15,6 +15,7 @@ import Ecluse.Core.Registry.MetadataResidencySpec qualified as MetadataResidency
 import Ecluse.Core.Registry.Npm.ReaderResidencySpec qualified as NpmReaderResidencySpec
 import Ecluse.Core.Registry.PyPI.ArchiveResidencySpec qualified as ArchiveResidencySpec
 import Ecluse.Core.Registry.PyPI.ReaderResidencySpec qualified as PyPIReaderResidencySpec
+import Ecluse.Core.Registry.RubyGems.ReaderResidencySpec qualified as RubyGemsReaderResidencySpec
 import Ecluse.Core.Server.MemoryModel.CalibrationResidencySpec qualified as CalibrationResidencySpec
 import Ecluse.Core.Server.MemoryModel.Probe (SelectedShape (SelectedControl, SelectedValue), childMain, packageMain, probe, probeEvaluation, probeListing, probeMerge)
 import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
@@ -50,6 +51,7 @@ main =
             NpmReaderResidencySpec.spec
             PyPIReaderResidencySpec.spec
             CargoReaderResidencySpec.spec
+            RubyGemsReaderResidencySpec.spec
             TarballResidencySpec.spec
             PackumentResidencySpec.spec
             MemoryModelResidencySpec.spec

@@ -69,6 +69,9 @@ import Ecluse.Core.Registry.Npm.VersionListReader (npmVersionListWalk)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiRead)
 import Ecluse.Core.Registry.PyPI.Project qualified as PyPI
+import Ecluse.Core.Registry.RubyGems.Metadata (gemReadWith)
+import Ecluse.Core.Registry.RubyGems.Project qualified as RubyGemsProject
+import Ecluse.Core.Registry.RubyGems.Serving (assembleRubyGemsDocument, serialiseRubyGemsDocument)
 import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, finishVersionList)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, boundedRead, defaultLimits, maxMetadataBytes)
 import Ecluse.Core.Server.Cache (CacheEntry (..))
@@ -80,10 +83,11 @@ import Ecluse.Core.Server.MemoryModel.ProbeMode (ProbeMode, probeArguments)
 import Ecluse.Core.Server.Pipeline.Packument.Representation (Contribution (..), outputBasisBytes)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
-import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), cargoCaptureUpstream, cargoCorpusPackages, corpusPackages, cpName, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, syntheticProxyBase)
+import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), cargoCaptureUpstream, cargoCorpusPackages, corpusPackages, cpName, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, rubyGemsCaptureUpstream, rubyGemsCorpusPackages, syntheticProxyBase)
 import Ecluse.Test.Corpus qualified as Corpus
 import Ecluse.Test.Corpus.Cargo qualified as Cargo
 import Ecluse.Test.Corpus.Merge (MergeDocument (Captured, Rewritten, RewrittenNative), MergeShape, captureDocuments)
+import Ecluse.Test.Corpus.RubyGems qualified as RubyGems
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoRead)
 import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, heldBody, sourceBody)
@@ -198,7 +202,7 @@ data Residency = Residency
     , residencyVersionList :: Limits -> IO ByteString -> IO (Either Text (Held, Int, Maybe ContentDigest))
     }
 
--- | RubyGems has no registered adapter and stays outside the residency tier.
+-- | Native providers expose raw observations before calibration or adapter activation.
 residencyFor :: Ecosystem -> Maybe Residency
 residencyFor = \case
     Npm ->
@@ -247,7 +251,21 @@ residencyFor = \case
                 , residencyIdentity = \name version -> (,mkVersion Cargo (toText version)) <$> either (fail . show) pure (CargoProject.projectName (toText name))
                 , residencyVersionList = \_ _ -> pure (Left "Cargo exposes no version-list-only read")
                 }
-    RubyGems -> Nothing
+    RubyGems ->
+        Just
+            Residency
+                { residencyPackages = rubyGemsCorpusPackages
+                , residencyRead = gemReadWith (const pass) (const pass) "https://rubygems.org"
+                , residencyMetadata = MetadataRendering assembleRubyGemsDocument serialiseRubyGemsDocument
+                , residencyUpstream = rubyGemsCaptureUpstream
+                , residencyCalibration = Nothing
+                , residencyFigures = Map.empty
+                , residencyEntryBelowSource = False
+                , residencyLegacyRead = \limits name bytes -> first (const MetadataUndecodable) (RubyGems.decodeRubyGemsValues bytes) >>= RubyGems.projectRubyGemsValues limits name
+                , residencyLegacyHeld = \info raw _ _ -> HeldLegacy info raw
+                , residencyIdentity = \name version -> (,mkVersion RubyGems (toText version)) <$> either (fail . show) pure (RubyGemsProject.projectName (toText name))
+                , residencyVersionList = \_ _ -> pure (Left "RubyGems exposes no version-list-only read")
+                }
 
 -- | Missing residency wiring fails a probe instead of skipping its checks.
 requireResidency :: Ecosystem -> IO Residency
@@ -479,6 +497,7 @@ prepare shape package = do
         Raw -> do
             raw <- either fail pure $ case pkgEcosystem (cpPackage package) of
                 Cargo -> first toString (Cargo.decodeCargoValues bytes)
+                RubyGems -> first toString (RubyGems.decodeRubyGemsValues bytes)
                 _ -> eitherDecodeStrict bytes
             _ <- forceShown raw
             compact <- evaluate (LBS.length (encode raw))

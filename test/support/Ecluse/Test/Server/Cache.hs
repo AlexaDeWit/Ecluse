@@ -22,14 +22,15 @@ module Ecluse.Test.Server.Cache (
 ) where
 
 import Crypto.Hash (SHA256 (SHA256), hashWith)
-import Data.Aeson (Value (Null), encode, toJSON)
+import Data.Aeson (Value (Null), encode, object, toJSON, (.=))
 import Data.ByteString.Lazy qualified as BSL
 import Data.Time (NominalDiffTime)
 
-import Ecluse.Core.Package (PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, artEntryKey)
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, npmCached, pypiSimpleCached)
+import Ecluse.Core.Package (PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, artEntryKey, renderPackageName)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, npmCached, pypiSimpleCached, rubyGemsCached)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionRead)
+import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..), GemRow (grSource))
 import Ecluse.Core.Server.Cache (CacheConfig (..), CacheEntry (..), MetadataCache, Source, StoreBudget (..), newMetadataCacheWithProvider, resolveMetadata, resolveVersion)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage, LocalStorage), Recency, RetentionBackend, RetentionOperations (..), retentionBackend)
 import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool, newPooledRetention)
@@ -111,6 +112,13 @@ cachedMetadata metrics cache source name = rightToMaybe <$> resolveMetadata metr
 cachedVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Maybe VersionRead)
 cachedVersion metrics cache source name version = rightToMaybe <$> resolveVersion metrics cache source name version (pure (Left MetadataUndecodable))
 
--- | Reconstruct retained JSON only for diagnostic serialisation outside timed source reads.
+-- | Diagnostic JSON preserves source fields. Its size is neither native wire bytes nor production cache charge.
 diagnosticDocumentValue :: CachedDoc -> Value
-diagnosticDocumentValue document = fromMaybe Null (snd npmCached document <|> (simpleValue <$> snd pypiSimpleCached document) <|> (toJSON . map snd . cargoRecords <$> snd cargoCached document))
+diagnosticDocumentValue document = fromMaybe Null (snd npmCached document <|> (simpleValue <$> snd pypiSimpleCached document) <|> (toJSON . map snd . cargoRecords <$> snd cargoCached document) <|> (nativeValue <$> snd rubyGemsCached document))
+  where
+    nativeValue native =
+        object
+            [ "name" .= renderPackageName (gemName native)
+            , "header" .= (decodeUtf8 (gemHeader native) :: Text)
+            , "rows" .= [decodeUtf8 (grSource row) :: Text | row <- gemRows native]
+            ]

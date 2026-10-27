@@ -8,7 +8,6 @@ Cache and stream measurements share no format-specific inputs and run once.
 module Main (main, fullBenchmarkContract) where
 
 import Data.Map.Strict qualified as Map
-import Data.Text qualified as T
 import Ecluse.Bench.Corpus (benchEvalContext, syntheticInput)
 import Ecluse.Core.AdvisoryRulesBench qualified as AdvisoryRulesBench
 import Ecluse.Core.CacheBench qualified as CacheBench
@@ -18,7 +17,7 @@ import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.MergeBench qualified as MergeBench
 import Ecluse.Core.MetadataGzipBench qualified as MetadataGzipBench
 import Ecluse.Core.MirrorReadBench qualified as MirrorReadBench
-import Ecluse.Core.Package (artUrl, infoVersions, pkgArtifacts)
+import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.PackedBench qualified as PackedBench
 import Ecluse.Core.Registry.SweepBench qualified as SweepBench
 import Ecluse.Core.RouteBench qualified as RouteBench
@@ -31,14 +30,13 @@ import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.VersionBench qualified as VersionBench
 import Ecluse.Core.WireBench qualified as WireBench
 import Ecluse.Report.BenchLabels (ecosystemPrefix, tierName)
-import Ecluse.Test.Corpus (syntheticProxyBase)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..), ecosystemBenches)
 import Ecluse.Test.Registry.Metadata.Fetch (captureChunks)
 import Ecluse.Test.Server.Transform (serveDocumentBytes)
 import Ecluse.Test.Support (expectRight)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Bench (bgroup, defaultMain)
-import Test.Tasty.HUnit (assertBool, testCase, (@?=))
+import Test.Tasty.HUnit (testCase, (@?=))
 
 main :: IO ()
 main = do
@@ -93,16 +91,10 @@ generatorTests ecosystem =
             for_ (Map.keys (infoVersions info)) $ \key -> do
                 selected <- ebSelective ecosystem name (mkVersion (ebEcosystem ecosystem) key) (captureChunks raw) >>= expectRight
                 selected @?= Map.lookup key (infoVersions info)
-        , testCase "rewrites every artifact onto the proxy origin" $ do
-            input@(_, original) <- expectRight (syntheticInput ecosystem sampleCount)
+        , testCase "preserves native served records and proxy artifact routes" $ do
+            input <- expectRight (syntheticInput ecosystem sampleCount)
             bytes <- serveDocumentBytes (ebMetadata ecosystem) benchEvalContext input
-            (served, _) <- expectRight (ebProjectServed ecosystem name bytes)
-            let artifacts info = concatMap (toList . pkgArtifacts) (Map.elems (infoVersions info))
-            Map.size (infoVersions served) @?= sampleCount
-            length (artifacts served) @?= length (artifacts original)
-            assertBool
-                "every artifact URL uses the proxy origin"
-                (all (((syntheticProxyBase <> "/") `T.isPrefixOf`) . artUrl) (artifacts served))
+            ebCheckServed ecosystem name raw bytes >>= (@?= Right ())
         , testCase "prepares the large wire-guard input" $ do
             document <- expectRight (ebReadDocument ecosystem (ebSynthetic ecosystem 100000))
             ebNestingDepth ecosystem document @?= 1
