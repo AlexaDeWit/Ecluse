@@ -383,6 +383,60 @@
       }
     },
     {
+      "name": "ecluse-fixture-advisory",
+      "version": "1.18.0",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-advisory-1.18.0.gem",
+      "sha256": "1e972b53b8b462d8fbca4e5c9d702f0034dc6e77283abb70871515836838cc86",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-advisory-1.18.0.gemspec.rz",
+      "compact_sha256": "ec2abd8b0b9e52608440fb3865a6f75c42b5c6d193290b3e530fb909399a794d",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-advisory",
+        "version": "1.18.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
+      "name": "ecluse-fixture-advisory",
+      "version": "1.19.0",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-advisory-1.19.0.gem",
+      "sha256": "fdcb80f1e481accead63fd4edc50c1ed51653503723651f3f6c00feef49cc078",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-advisory-1.19.0.gemspec.rz",
+      "compact_sha256": "39bcd52019f4f0b559e2ffb88acd5524ab588e7fdb7e6089c78f6d42bad795f5",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-advisory",
+        "version": "1.19.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
       "name": "ecluse-fixture-root",
       "version": "3.0.0",
       "platform": "ruby",

@@ -25,10 +25,10 @@ import Network.HTTP.Client (
 import Network.HTTP.Types (hAuthorization, statusCode)
 import UnliftIO (handleAny)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.E2E.Fixtures.Advisories (advisoryEpssPath, advisoryExportBase)
 import Ecluse.E2E.Harness.Docker (RoleRun, advisoryDataDir, ministackAwsEnv, runRoleOnce)
-import Ecluse.E2E.Harness.Stub (StubRoute (CargoPublic, NpmPublic, PyPIPublic), stubUrl)
+import Ecluse.E2E.Harness.Stub (StubRoute (CargoPublic, NpmPublic, PyPIPublic, RubyGemsPublic), stubUrl)
 import Ecluse.E2E.Harness.Types (GlobalDataPlane, ministackPort)
 import Ecluse.Test.Osv (CorpusVersion)
 import Ecluse.Test.Poll (pollUntil)
@@ -101,7 +101,7 @@ pilotEnv ecosystem =
     [ ("ECLUSE_SERVER__PORT", "4873")
     , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873")
     , ("ECLUSE_MOUNTS__" <> T.toUpper (ecosystemName ecosystem) <> "__ENABLED", "true")
-    , ("ECLUSE_MOUNTS__" <> T.toUpper (ecosystemName ecosystem) <> "__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl (case ecosystem of PyPI -> PyPIPublic; Cargo -> CargoPublic; _ -> NpmPublic))
+    , ("ECLUSE_MOUNTS__" <> T.toUpper (ecosystemName ecosystem) <> "__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl (case ecosystem of PyPI -> PyPIPublic; Cargo -> CargoPublic; RubyGems -> RubyGemsPublic; _ -> NpmPublic))
     , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
     , ("SSL_CERT_FILE", "/certs/bundle.pem")
     ]

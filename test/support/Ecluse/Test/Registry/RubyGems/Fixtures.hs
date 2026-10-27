@@ -18,6 +18,7 @@ import Data.Aeson (Value, eitherDecodeStrict, withObject, (.:))
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
+import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import System.Directory (copyFile, createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
 
@@ -97,8 +98,11 @@ writeRubyRegistry destination = do
         BS.writeFile archive (releaseArchive release)
         BS.writeFile compact (releaseCompact release)
     createDirectoryIfMissing True (destination </> "info")
+    now <- toText . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" <$> getCurrentTime
     forM_ (ordNub (map releaseName releases)) $ \name ->
-        copyFile (fixtureDirectory </> "info" </> toString name) (destination </> "info" </> toString name)
+        if name == "ecluse-fixture-advisory"
+            then writeFileText (destination </> "info" </> toString name) ("---\n" <> T.unlines [if releaseVersion release == "1.19.0" then T.replace "2020-01-01T00:00:00Z" now (releaseInfoRow release) else releaseInfoRow release | release <- releases, releaseName release == name])
+            else copyFile (fixtureDirectory </> "info" </> toString name) (destination </> "info" </> toString name)
 
 fixtureDirectory :: FilePath
 fixtureDirectory = "test/fixtures/rubygems"

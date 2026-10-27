@@ -25,6 +25,7 @@ coordinates = [
   ['ecluse-fixture-platform', '1.0.0', 'java'], ['ecluse-fixture-platform', '1.0.0', 'x86_64-linux-musl'],
   ['ecluse-fixture-platform', '1.0.0', 'arm64-darwin'], ['ecluse-fixture-native', '1.0.0', 'ruby'],
   ['ecluse-fixture-future', '1.0.0', 'ruby'],
+  ['ecluse-fixture-advisory', '1.18.0', 'ruby'], ['ecluse-fixture-advisory', '1.19.0', 'ruby'],
   ['ecluse-fixture-root', '3.0.0', 'ruby'],
   ['ecluse-fixture-firstparty', '1.0.0', 'ruby'], ['ecluse-fixture-firstparty', '2.0.0', 'ruby'],
   ['ecluse-fixture-readmitted', '1.0.1.pre.readmitted', 'ruby'],
