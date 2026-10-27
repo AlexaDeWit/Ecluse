@@ -18,11 +18,13 @@ import Ecluse.Core.Registry.Cargo.Adapter (cargoAdapter)
 import Ecluse.Core.Registry.Cargo.Metadata (cargoChargeFactors)
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
+import Ecluse.Core.Registry.RubyGems.Adapter (rubyGemsAdapter)
+import Ecluse.Core.Registry.RubyGems.Metadata (rubyGemsChargeFactors)
 
--- | Resolve adapters with native capabilities and calibrated resource factors.
+-- | Resolve adapters with native capabilities and recorded resource factors.
 adapterFor :: Ecosystem -> Maybe RegistryAdapter
 adapterFor = \case
     Npm -> Just npmAdapter
     PyPI -> Just pypiAdapter
     Cargo -> Just (cargoAdapter cargoChargeFactors)
-    RubyGems -> Nothing
+    RubyGems -> Just (rubyGemsAdapter rubyGemsChargeFactors)

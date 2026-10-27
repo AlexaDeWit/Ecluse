@@ -120,8 +120,10 @@ spec = do
             let deps = inertDepsFor adapter
             (bindingPrefix <$> mountBindingFor Cargo deps (Just deps) Nothing) `shouldBe` Just ("cargo" :| [])
 
-        it "has no binding for an ecosystem with no adapter wired (loud Nothing, not a stub)" $
-            (bindingPrefix <$> mountBindingFor RubyGems inertPackumentDeps Nothing Nothing) `shouldBe` Nothing
+        it "binds RubyGems under its own prefix without publication dependencies" $ do
+            adapter <- maybe (fail "RubyGems has no registered adapter") pure (adapterFor RubyGems)
+            let deps = inertDepsFor adapter
+            (bindingPrefix <$> mountBindingFor RubyGems deps Nothing Nothing) `shouldBe` Just ("rubygems" :| [])
 
 dataPlaneSpec :: Spec
 dataPlaneSpec = describe "the data-plane clients" $ do

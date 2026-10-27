@@ -8,7 +8,7 @@ module Ecluse.Core.Server.MemoryModel.CalibrationResidencySpec (spec) where
 import Data.Ratio ((%))
 import Test.Hspec
 
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
@@ -41,7 +41,13 @@ spec = do
         it "pins Cargo charges" $ do
             fullReadCharge cargoCalibration `shouldBe` 1700
             marginCharge (outputMaximum cargoCalibration) `shouldBe` 2600
-        for_ [(Npm, npmCalibration), (PyPI, pypiCalibration), (Cargo, cargoCalibration)] $ \(ecosystem, calibration) ->
+        it "pins conservative initial RubyGems charges from exact native ratios" $ do
+            realisticReadMaximum rubyGemsCalibration `shouldBe` 810584 % 56335
+            allReadMaximum rubyGemsCalibration `shouldBe` 810584 % 56335
+            outputMaximum rubyGemsCalibration `shouldBe` 161036 % 56335
+            fullReadCharge rubyGemsCalibration `shouldBe` 18000
+            marginCharge (outputMaximum rubyGemsCalibration) `shouldBe` 3600
+        for_ [(Npm, npmCalibration), (PyPI, pypiCalibration), (Cargo, cargoCalibration), (RubyGems, rubyGemsCalibration)] $ \(ecosystem, calibration) ->
             it (show ecosystem <> " matches its adapter") $ do
                 adapter <- maybe (fail "missing registered adapter") pure (adapterFor ecosystem)
                 let factors = metadataChargeFactors (adapterMetadata adapter)
@@ -51,7 +57,8 @@ spec = do
             keptCharge npmFigures `shouldBe` 900
             keptCharge pypiFigures `shouldBe` 3300
             keptCharge cargoFigures `shouldBe` 1500
-        for_ [Npm, PyPI, Cargo] $ \ecosystem ->
+            keptCharge rubyGemsFigures `shouldBe` 17300
+        for_ [Npm, PyPI, Cargo, RubyGems] $ \ecosystem ->
             it (show ecosystem <> " keeps its adapter's kept charge") $ do
                 record <- requireResidency ecosystem
                 adapter <- maybe (fail "missing registered adapter") pure (adapterFor ecosystem)

@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Native RubyGems reads bind the actual origin and charged complete-response reader.
-module Ecluse.Core.Registry.RubyGems.Metadata (prepareGemRead, gemReadWith, finishGemFull, finishGemSelected) where
+module Ecluse.Core.Registry.RubyGems.Metadata (rubyGemsChargeFactors, prepareGemRead, gemReadWith, finishGemFull, finishGemSelected) where
 
 import Data.Map.Strict qualified as Map
 
@@ -22,7 +22,14 @@ import Ecluse.Core.Registry.RubyGems.Reader (GemRead (..), GemReadResult (..), r
 import Ecluse.Core.Registry.RubyGems.Request (gemInfoRequestUnder)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Version (Version, renderVersion)
+
+-- | Initial native charges from observations below one meter step.
+rubyGemsChargeFactors :: ChargeFactors
+rubyGemsChargeFactors =
+    -- https://github.com/AlexaDeWit/Ecluse/actions/runs/40559003401/job/122382799126
+    ChargeFactors{cfFullReadPermille = 18000, cfKeptPermille = 17300, cfOutputPermille = 3600}
 
 -- | Bind charging callbacks without performing discovery or metadata IO at boot.
 prepareGemRead :: PrepareRead

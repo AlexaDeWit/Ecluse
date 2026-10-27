@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Native capabilities and cross-ecosystem dispatch remain explicit.
 module Ecluse.Core.Registry.PyPI.AdapterSpec (spec) where
 
 import Test.Hspec
@@ -67,8 +68,8 @@ spec = describe "the PyPI adapter" $ do
     it "leaves npm's publish capability filled, so npm keeps writing as it did" $
         fmap (isJust . adapterPublish) (adapterFor Npm) `shouldBe` Just True
 
-    it "leaves an ecosystem this build ships no adapter for unresolved" $
-        fmap adapterEcosystem (adapterFor RubyGems) `shouldBe` Nothing
+    it "keeps the registered RubyGems capability distinct from PyPI" $
+        fmap adapterEcosystem (adapterFor RubyGems) `shouldBe` Just RubyGems
   where
     charged CachedWorkerRead = False
     charged (ChargedWorkerRead _) = True

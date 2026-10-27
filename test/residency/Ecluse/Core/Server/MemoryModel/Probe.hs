@@ -77,7 +77,7 @@ import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, boundedRead,
 import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
-import Ecluse.Core.Server.MemoryModel.Calibration (Calibration, Figures (..), cargoCalibration, cargoFigures, npmCalibration, npmFigures, pypiCalibration, pypiFigures)
+import Ecluse.Core.Server.MemoryModel.Calibration (Calibration, Figures (..), cargoCalibration, cargoFigures, npmCalibration, npmFigures, pypiCalibration, pypiFigures, rubyGemsCalibration, rubyGemsFigures)
 import Ecluse.Core.Server.MemoryModel.HeapSample (HeapSample (..), sample)
 import Ecluse.Core.Server.MemoryModel.ProbeMode (ProbeMode, probeArguments)
 import Ecluse.Core.Server.Pipeline.Packument.Representation (Contribution (..), outputBasisBytes)
@@ -258,8 +258,8 @@ residencyFor = \case
                 , residencyRead = gemReadWith (const pass) (const pass) "https://rubygems.org"
                 , residencyMetadata = MetadataRendering assembleRubyGemsDocument serialiseRubyGemsDocument
                 , residencyUpstream = rubyGemsCaptureUpstream
-                , residencyCalibration = Nothing
-                , residencyFigures = Map.empty
+                , residencyCalibration = Just rubyGemsCalibration
+                , residencyFigures = rubyGemsFigures
                 , residencyEntryBelowSource = False
                 , residencyLegacyRead = \limits name bytes -> first (const MetadataUndecodable) (RubyGems.decodeRubyGemsValues bytes) >>= RubyGems.projectRubyGemsValues limits name
                 , residencyLegacyHeld = \info raw _ _ -> HeldLegacy info raw

@@ -12,6 +12,7 @@ module Ecluse.Core.Server.MemoryModel.Calibration (
     npmCalibration,
     pypiCalibration,
     cargoCalibration,
+    rubyGemsCalibration,
 
     -- * Regression limits
     Figures (..),
@@ -20,6 +21,7 @@ module Ecluse.Core.Server.MemoryModel.Calibration (
     npmFigures,
     pypiFigures,
     cargoFigures,
+    rubyGemsFigures,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -76,6 +78,16 @@ cargoCalibration =
         , outputMaximum = 2806578 % 1373462
         }
 
+-- | Conservative initial maxima from native sources and bases below one meter step.
+rubyGemsCalibration :: Calibration
+rubyGemsCalibration =
+    -- https://github.com/AlexaDeWit/Ecluse/actions/runs/40559003401/job/122382799126
+    Calibration
+        { realisticReadMaximum = 1621168 % 112670
+        , allReadMaximum = 1621168 % 112670
+        , outputMaximum = 322072 % 112670
+        }
+
 -- | One capture's live bytes per source byte, and per basis byte for an output working set.
 data Figures = Figures
     { retainedWire :: Rational
@@ -83,18 +95,18 @@ data Figures = Figures
     , retainedTyped :: Rational
     , retainedShared :: Rational
     , readPeak :: Maybe Rational
-    -- ^ The single listing's read peak, measured from one meter step of source up.
+    -- ^ Measured single-listing read peak. Its per-byte guard applies from one meter step.
     , singleOutput :: Maybe Rational
-    -- ^ The single listing's output working set, measured from one meter step of basis up.
+    -- ^ Measured single-listing output. Its per-byte guard applies from one meter step.
     , mergedOutputs :: Map MergeShape Rational
-    -- ^ Each realistic merge's output working set, measured from one meter step of basis up.
+    -- ^ Measured realistic-merge outputs. Their per-byte guards apply from one meter step.
     }
 
--- | Held bytes repeat to the byte between runs: the figure plus 3%, rounded up to a permille.
+-- | Add the existing 3% held-figure margin, rounded up to a permille.
 heldLimit :: Rational -> Integer
 heldLimit ratio = ceiling (ratio * 1030)
 
--- | A read peak moves by up to 0.4% between runs: the figure plus 4%, rounded up to a permille.
+-- | Add the existing 4% read-peak margin, rounded up to a permille.
 readPeakLimit :: Rational -> Integer
 readPeakLimit ratio = ceiling (ratio * 1040)
 
@@ -294,6 +306,49 @@ cargoFigures =
                 , readPeak = Nothing
                 , singleOutput = Nothing
                 , mergedOutputs = mempty
+                }
+            )
+        ]
+
+-- | Initial native figures include fixed overhead below one step, not above-step listing qualification.
+rubyGemsFigures :: Map Text Figures
+rubyGemsFigures =
+    -- https://github.com/AlexaDeWit/Ecluse/actions/runs/40559003401/job/122382799126
+    Map.fromList
+        [
+            ( "rails"
+            , Figures
+                { retainedWire = 171256 % 186441
+                , retainedRaw = 473888 % 186441
+                , retainedTyped = 458648 % 186441
+                , retainedShared = 2565264 % 186441
+                , readPeak = Just (2632952 % 186441)
+                , singleOutput = Just (330860 % 186441)
+                , mergedOutputs = Map.fromList [(Identical, 330860 % 186441), (Overlapping, 330860 % 186554), (Disjoint, 330860 % 186445), (PublishOrder, 330860 % 196174)]
+                }
+            )
+        ,
+            ( "nokogiri"
+            , Figures
+                { retainedWire = 170120 % 186107
+                , retainedRaw = 618728 % 186107
+                , retainedTyped = 600416 % 186107
+                , retainedShared = 2504480 % 186107
+                , readPeak = Just (2581376 % 186107)
+                , singleOutput = Just (353864 % 186107)
+                , mergedOutputs = Map.fromList [(Identical, 342400 % 186107), (Overlapping, 267992 % 185570), (Disjoint, 259776 % 186111), (PublishOrder, 332112 % 227164)]
+                }
+            )
+        ,
+            ( "aws-sdk-ec2"
+            , Figures
+                { retainedWire = 95872 % 112670
+                , retainedRaw = 357176 % 112670
+                , retainedTyped = 545256 % 112670
+                , retainedShared = 1554928 % 112670
+                , readPeak = Just (1621168 % 112670)
+                , singleOutput = Just (269160 % 112670)
+                , mergedOutputs = Map.fromList [(Identical, 322072 % 112670), (Overlapping, 255872 % 112683), (Disjoint, 214000 % 112674), (PublishOrder, 269800 % 113622)]
                 }
             )
         ]
