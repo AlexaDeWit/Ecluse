@@ -33,7 +33,7 @@ import Ecluse.BenchLoad.CpuUse (
     proxyCpuRate,
     proxyCpuShare,
  )
-import Ecluse.BenchLoad.Exposition (CacheOutcomes (..), GaugeSummary (..))
+import Ecluse.BenchLoad.Exposition (ArtifactWindow (..), CacheOutcomes (..), GaugeSummary (..))
 import Ecluse.BenchLoad.Floors (Calibration (calConditions), Enforcement, FloorCheck (..), Pass (ConcurrencyOne, Loaded), PassSelection (LoadedPassOnly), describeEnforcement, describeRetainedConditions, floorCheck, floorsPath)
 import Ecluse.BenchLoad.Harness (LoadKnobs (..), LoadSummary (..), ProxyFigures (..), ScenarioReport (..), hasDiagnosticBurst, windowAttempts, windowRefusals, windowSuccesses)
 import Ecluse.BenchLoad.Latency (Percentiles (..))
@@ -278,6 +278,8 @@ loadRows l =
     , row "completed responses / refusals (429, 503) / other statuses" (show (lsCompleted l) <> " / " <> show (lsRefusals l) <> " / " <> show (lsOtherStatuses l))
     , row "transport failures / unfinished at the deadline" (show (lsTransportFailures l) <> " / " <> show (lsDeadlineAborts l))
     , row "success latency p50 / p90 / p99 / p99.9" (T.intercalate " / " (map msCell [pP50Ms lat, pP90Ms lat, pP99Ms lat, pP999Ms lat]))
+    , row "success latency p95" (msCell (pP95Ms lat))
+    , row "first body byte p50 / p95 / p99 (all completed responses, including refusals)" (maybe "unavailable" (\observed -> T.intercalate " / " (map msCell [pP50Ms observed, pP95Ms observed, pP99Ms observed])) (lsFirstByteLatency l))
     , row "distribution" (lsNote l)
     ]
   where
@@ -379,7 +381,14 @@ cpuRows placed r w =
 
 proxyDetail :: ProxyFigures -> [Text]
 proxyDetail p =
-    section "Admission series at the end of the window" (pfAdmissionSeries p)
+    section
+        "Verified artifact observations in the window"
+        [ "read bytes / hash bytes / verified bodies / queued acquisitions / sheds: "
+            <> maybe "unavailable" (\observed -> T.intercalate " / " (map (maybe "unavailable" show) [awReadBytes observed, awHashBytes observed, awVerified observed, awQueued observed, awShed observed])) (pfArtifactWindow p)
+        , "all serve memory charge bytes: " <> maybe "unavailable" (\observed -> "sampled max " <> maybe "unavailable" show (gsMax observed) <> ", last " <> maybe "unavailable" show (gsLast observed)) (pfMemoryChargeBytes p)
+        , "reserved wire body bytes: " <> maybe "unavailable" (\observed -> "sampled max " <> maybe "unavailable" show (gsMax observed) <> ", last " <> maybe "unavailable" show (gsLast observed)) (pfArtifactBodyBytes p)
+        ]
+        <> section "Admission series at the end of the window" (pfAdmissionSeries p)
         <> section "Retried proxy boots" (concatMap lines (pfBootRetries p))
         <> section "Proxy stderr" (if T.null (pfStderrTail p) then [] else lines (pfStderrTail p))
   where

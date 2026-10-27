@@ -42,7 +42,7 @@ spec = describe "load profiles" $ do
                 `shouldMatchList` ["heavy-private", "slow-readers", "herd", "herd-under-heavy-private", "warm-under-cold", "ramp"]
     it "keeps private, public onboarding and relay-ceiling artifact comparisons" $
         selected Artifacts
-            `shouldMatchList` ["npm/tarball-hot-path", "npm/tarball-onboarding", "npm/tarball-ceiling", "pypi/wheel-hot-path", "pypi/wheel-onboarding", "pypi/wheel-ceiling", "cargo/crate-hot-path", "cargo/crate-onboarding", "cargo/crate-ceiling", "rubygems/gem-hot-path", "rubygems/gem-onboarding", "rubygems/gem-ceiling"]
+            `shouldMatchList` ["npm/tarball-hot-path", "npm/tarball-onboarding", "npm/tarball-ceiling", "pypi/wheel-hot-path", "pypi/wheel-onboarding", "pypi/wheel-ceiling", "cargo/crate-hot-path", "cargo/crate-onboarding", "cargo/crate-ceiling", "rubygems/gem-hot-path", "rubygems/gem-onboarding", "rubygems/gem-ceiling", "rubygems/gem-verified-known-length", "rubygems/gem-verified-slow-readers"]
     it "resolves every selected row under the manual default shape without duplicates" $
         for_ [ReadPaths, MemoryAdmission, Artifacts] $ \profile -> do
             let keys = selected profile

@@ -32,6 +32,7 @@ data ProbeInput = ProbeInput
     { inputBytes :: Int
     , inputChunkBytes :: Int
     , inputKnownSize :: Bool
+    , inputCapBytes :: Int
     }
     deriving stock (Generic, Show)
 
@@ -42,6 +43,8 @@ data Measurement = Measurement
     { bodyBytes :: Int
     , chunkBytes :: Int
     , declaredBytes :: Maybe Int
+    , resolvedCapBytes :: Int
+    , effectiveReadLimitBytes :: Int
     , consumedBytes :: Int
     , consumedChunks :: Int
     , outputBytes :: Int
@@ -86,7 +89,7 @@ spec :: Spec
 spec = describe "verified artifact buffer and hash residency" $ do
     for_ shapes $ \(size, width) -> for_ [False, True] $ \known ->
         it ("records complete buffer and hash work: " <> show (size, width, known)) $ do
-            result <- child "success" (ProbeInput size width known)
+            result <- child "success" (ProbeInput size width known (if known then 2 * size else size))
             outcome result `shouldBe` "verified"
             consumedBytes result `shouldBe` size
             outputBytes result `shouldBe` size
@@ -100,9 +103,16 @@ spec = describe "verified artifact buffer and hash residency" $ do
             retainedHeapBytes result `shouldSatisfy` (<= toInteger (bufferedChunkCharge size) + allowance)
             retainedHeapBytes result `shouldSatisfy` (>= toInteger size - allowance)
             releasedHeapBytes result `shouldSatisfy` (<= allowance)
+    it "records an unknown source shorter than its reserved per-artifact cap" $ do
+        result <- child "success" (ProbeInput (64 * 1024) 4096 False (1024 * 1024))
+        outcome result `shouldBe` "verified"
+        outputBytes result `shouldBe` 64 * 1024
+        resolvedCapBytes result `shouldBe` 1024 * 1024
+        peakHeapBytes result `shouldSatisfy` (<= toInteger (requestedChargeBytes result) + allowance)
+        releasedHeapBytes result `shouldSatisfy` (<= allowance)
     for_ ["over-cap", "mismatch", "cancel-fetch", "cancel-hash-entry"] $ \mode ->
         it ("releases the buffered body after " <> toString mode) $ do
-            result <- child mode (ProbeInput (1024 * 1024) 4096 False)
+            result <- child mode (ProbeInput (1024 * 1024) 4096 False (1024 * 1024))
             outcome result `shouldNotBe` "verified"
             outputBytes result `shouldBe` 0
             digestVerified result `shouldBe` False
@@ -128,7 +138,7 @@ probeMain mode path = do
 
 measure :: Text -> ProbeInput -> IO Measurement
 measure mode input = do
-    unless (inputBytes input > 0 && inputChunkBytes input > 0) (fail "invalid verified artifact probe input")
+    unless (inputBytes input > 0 && inputChunkBytes input > 0 && inputCapBytes input > 0) (fail "invalid verified artifact probe input")
     let digest = show (hashlazy (LBS.replicate (fromIntegral (inputBytes input)) 97) :: Digest SHA256) :: Text
     checksum <- expectRight (mkHash SHA256 digest)
     _ <- evaluate (length (show checksum :: String))
@@ -152,6 +162,8 @@ measure mode input = do
             { bodyBytes = inputBytes input
             , chunkBytes = inputChunkBytes input
             , declaredBytes = artSize artifact
+            , resolvedCapBytes = if mode == "over-cap" then inputBytes input - 1 else inputCapBytes input
+            , effectiveReadLimitBytes = fromMaybe (if mode == "over-cap" then inputBytes input - 1 else inputCapBytes input) (artSize artifact)
             , consumedBytes = preparedConsumed prepared
             , consumedChunks = preparedChunks prepared
             , outputBytes = if preparedOutcome prepared == "verified" then inputBytes input else 0
@@ -229,7 +241,7 @@ prepare mode input artifact baseline = do
                 writeIORef completed True
                 sample
             ArtifactDigestVerified -> writeIORef verified True >> sample
-        cap = if mode == "over-cap" then inputBytes input - 1 else inputBytes input
+        cap = if mode == "over-cap" then inputBytes input - 1 else inputCapBytes input
         work = readVerifiedArtifactWith stage cap pay artifact next
     result <-
         if mode `elem` ["cancel-fetch", "cancel-hash-entry"]

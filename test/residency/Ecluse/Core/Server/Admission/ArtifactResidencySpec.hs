@@ -48,7 +48,7 @@ spec = describe "verified artifact reservation lifetime" $ do
     it "holds bytes through a blocked delivery and releases them when the client is cancelled" $
         withBudget $ \budget metrics held -> do
             delivery <- MVar.newEmptyMVar
-            blocked <- MVar.newEmptyMVar
+            blocked <- MVar.newEmptyMVar :: IO (MVar.MVar ())
             resumed <- newIORef False
             withAsync (withVerifiedArtifactAdmission metrics budget capacity (MVar.putMVar delivery () >> MVar.takeMVar blocked)) $ \client -> do
                 MVar.takeMVar delivery

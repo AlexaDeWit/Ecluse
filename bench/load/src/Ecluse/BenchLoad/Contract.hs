@@ -60,6 +60,8 @@ data LoadLaw
     | ManagedMirrorRevision
     | BatchMetadata
     | QuickSpecification
+    | VerifiedKnownLengthArtifact
+    | VerifiedSlowArtifact
     deriving stock (Eq, Ord, Show)
 
 -- | Missing measurements describe test coverage, not evidence of a production defect.
@@ -148,6 +150,8 @@ loadScenarioName ecosystem law = case ecosystem of
         ManagedMirrorRevision -> "mirror-managed-revision"
         BatchMetadata -> "batch-dependencies"
         QuickSpecification -> "quick-gemspec"
+        VerifiedKnownLengthArtifact -> "gem-verified-known-length"
+        VerifiedSlowArtifact -> "gem-verified-slow-readers"
 
 -- | Report every missing law while retaining unrelated registered scenarios.
 loadCoverageGaps :: LoadScope -> Ecosystem -> [Text] -> [LoadGap]
@@ -178,7 +182,7 @@ requiredFor :: LoadScope -> Ecosystem -> [LoadLaw]
 requiredFor scope ecosystem =
     requiredLoadLaws scope <> case ecosystem of
         PyPI -> [ManagedMirrorBaseline, ManagedMirrorWarm, ManagedMirrorRevision]
-        RubyGems -> [BatchMetadata, QuickSpecification]
+        RubyGems -> [BatchMetadata, QuickSpecification, VerifiedKnownLengthArtifact, VerifiedSlowArtifact]
         _ -> []
 
 hasServiceTime :: LoadLaw -> Bool
@@ -216,3 +220,5 @@ hasServiceTime = \case
     ManagedMirrorRevision -> True
     BatchMetadata -> True
     QuickSpecification -> True
+    VerifiedKnownLengthArtifact -> True
+    VerifiedSlowArtifact -> False

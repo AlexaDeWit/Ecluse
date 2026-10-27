@@ -50,7 +50,7 @@ spec = do
         it "removes only the approved pass observations from the full grid" $
             sum (map (Set.size . Set.filter (not . T.isPrefixOf "rubygems/" . fst) . checkedCounts) scheduledPodShapes) `shouldBe` 486
         it "adds every native batch, specification, read and worker pass" $
-            sum (map (Set.size . checkedCounts) scheduledPodShapes) `shouldBe` 656
+            sum (map (Set.size . checkedCounts) scheduledPodShapes) `shouldBe` 668
 
     describe "checkedCounts" $ do
         it "checks in-process work only under the unlimited shape, the one shape that runs it" $ do

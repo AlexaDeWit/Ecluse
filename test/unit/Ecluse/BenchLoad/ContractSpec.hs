@@ -56,7 +56,7 @@ spec = describe "canonical load contract" $ do
             `shouldBe` [MissingLoadScenario PrivateArtifact "wheel-hot-path"]
     it "requires native batch and compact specification work beside whole-version copying" $ do
         loadCoverageGaps FullLoad RubyGems (names rubyGemsFixture) `shouldBe` []
-        for_ [(BatchMetadata, "batch-dependencies"), (QuickSpecification, "quick-gemspec"), (MirrorWorker, "worker-mirroring")] $ \(law, name) ->
+        for_ [(BatchMetadata, "batch-dependencies"), (QuickSpecification, "quick-gemspec"), (VerifiedKnownLengthArtifact, "gem-verified-known-length"), (VerifiedSlowArtifact, "gem-verified-slow-readers"), (MirrorWorker, "worker-mirroring")] $ \(law, name) ->
             loadCoverageGaps FullLoad RubyGems (filter (/= name) (names rubyGemsFixture)) `shouldBe` [MissingLoadScenario law name]
         loadCoverageGaps FullLoad RubyGems [] `shouldSatisfy` (not . null)
     it "requires the exact passes the full profile executes under each shape" $

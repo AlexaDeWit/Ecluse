@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Native load includes named batches, compact specifications, relays and complete platform copies.
-module Ecluse.BenchLoad.RubyGems (rubyGemsFixture, rubyGemsPrivateCopy, rubyGemsLoadNotes, infoStubWithArtifacts, selectWarmArtifacts) where
+module Ecluse.BenchLoad.RubyGems (RelayShape (..), relayArtifactFixture, rubyGemsFixture, rubyGemsPrivateCopy, rubyGemsLoadNotes, infoStubWithArtifacts, selectWarmArtifacts) where
 
 import Data.Aeson (withArray, withObject, (.:))
 import Data.Aeson.Types (Parser, parseEither)
@@ -15,14 +15,14 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (hContentType, status200, status404)
+import Network.HTTP.Types (hContentLength, hContentType, status200, status404)
 import Network.Wai (Application, pathInfo, rawPathInfo, responseLBS)
 
 import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact (..))
 import Ecluse.BenchLoad.Contract.Driver (LoadReadDriver (..), readLoadContract)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes, delayUpstream, fetchChecked, httpTarget, longCacheTtl, weightedMix, withProxyOverStubs)
-import Ecluse.BenchLoad.Harness (Driver (DriveBurst, DriveRamp), LoadKnobs (..), Scenario (..), Target, UpstreamFixture, proxied, scenario, urlLoad)
+import Ecluse.BenchLoad.Harness (Driver (DriveBeside, DriveBurst, DriveRamp), LoadKnobs (..), Scenario (..), Target, UpstreamFixture, proxied, scenario, urlLoad)
 import Ecluse.BenchLoad.Listing (ListingSetup (..), cacheEvictsLoad, cacheFitsLoad, listingLoad, revalidateLoad, slowReaderScenario, withListingStubs)
 import Ecluse.BenchLoad.PatternScenario (PatternProvider (..))
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
@@ -30,6 +30,7 @@ import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
 import Ecluse.BenchLoad.RubyGems.Worker (rubyGemsWorkerScenario)
 import Ecluse.BenchLoad.RubyGems.WorkerFixture qualified as Worker
 import Ecluse.BenchLoad.Selection (evictionEntries)
+import Ecluse.BenchLoad.SlowReader (slowReaders)
 import Ecluse.BenchLoad.Stress (WarmLoadDriver (..), herdSize, pairedLoad, rampSteps)
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
 import Ecluse.Core.Package (PackageDetails (pkgArtifacts), PackageInfo (infoVersions), artFilename)
@@ -38,13 +39,14 @@ import Ecluse.Core.Registry.RubyGems.Metadata (gemReadWith)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpWeight), cpName, readCorpusPins, rubyGemsCaptureUpstream, rubyGemsCorpusPackages)
 import Ecluse.Test.Corpus.Subset (newestRubyGemsShare)
 import Ecluse.Test.Package (hexSha256Of)
+import Ecluse.Test.Registry.JsonStream (sliceChunks)
 import Ecluse.Test.Registry.Metadata.Fetch (captureManifest)
 import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo, runRubyReference)
-import Ecluse.Test.Wai (localhost)
+import Ecluse.Test.Wai (localhost, pacedBody)
 
 -- | The shared full contract retains every read law alongside native batch, specification and worker work.
 rubyGemsFixture :: UpstreamFixture
-rubyGemsFixture = readLoadContract nativeDriver [batchScenario, quickScenario, rubyGemsWorkerScenario]
+rubyGemsFixture = readLoadContract nativeDriver [batchScenario, quickScenario, artifactScenarioWith False KnownLengthRelay, artifactScenarioWith False SlowChunkedRelay, rubyGemsWorkerScenario]
 
 nativeDriver :: LoadReadDriver
 nativeDriver =
@@ -123,22 +125,51 @@ withNativeListings knobs = withListingStubs nativeListing knobs 0 Nothing rubyGe
 listingUrl :: Int -> Text -> Text
 listingUrl port name = localhost port <> "/rubygems/api/v1/dependencies?gems=" <> name
 
+-- | Native fixture replies retain ordinary, declared-length or paced chunked transport.
+data RelayShape = OrdinaryRelay | KnownLengthRelay | SlowChunkedRelay
+    deriving stock (Eq)
+
 artifactScenario :: Bool -> Scenario
-artifactScenario privateHit = scenario name description $ \knobs use -> do
-    let bytes = artifactBytes (lkPayloadBytes knobs)
-        latency = lkUpstreamLatencyMicros knobs
-        actual = gemStub latency bytes
-        empty = missingStub latency
-        (private, public, ttl) = if privateHit then (actual, empty, longCacheTtl) else (empty, actual, 0)
-        mix port = [localhost port <> "/rubygems/" <> (if privateHit then "private/" else "") <> "gems/" <> cpName package <> "-9999.0.2.gem" | package <- rubyGemsCorpusPackages]
-    withProxyOverStubs RubyGems knobs ttl Nothing private public mix $ \proxy urls -> do
-        for_ urls $ \url -> do
-            response <- fetchChecked status200 [] url
-            unless (HTTP.responseBody response == bytes) (benchFail "RubyGems relay bytes differ from the independently owned payload")
-        httpTarget use proxy urls
+artifactScenario privateHit = artifactScenarioWith privateHit OrdinaryRelay
+
+artifactScenarioWith :: Bool -> RelayShape -> Scenario
+artifactScenarioWith privateHit shape =
+    (scenario name description boot){scenarioVerifiedArtifactMetrics = True, scenarioServiceTime = shape /= SlowChunkedRelay}
   where
-    name = if privateHit then "gem-hot-path" else "gem-onboarding"
-    description = if privateHit then "Relay a private native artifact with caller-authorised metadata and exact digest verification." else "Admit a public native artifact after private absence, then relay its digest-bound bytes without mirroring."
+    boot knobs use = do
+        let bytes = artifactBytes (lkPayloadBytes knobs)
+            latency = lkUpstreamLatencyMicros knobs
+            actual = relayArtifactFixture shape latency bytes
+            empty = missingStub latency
+            (private, public, ttl) = if privateHit then (actual, empty, longCacheTtl) else (empty, actual, 0)
+            mix port = [localhost port <> "/rubygems/" <> (if privateHit then "private/" else "") <> "gems/" <> cpName package <> "-9999.0.2.gem" | package <- rubyGemsCorpusPackages]
+        withProxyOverStubs RubyGems knobs ttl Nothing private public mix $ \proxy urls -> do
+            for_ urls $ \url -> do
+                response <- fetchChecked status200 [] url
+                unless (HTTP.responseBody response == bytes) (benchFail "RubyGems relay bytes differ from the independently owned payload")
+            if shape == SlowChunkedRelay
+                then use (proxied proxy (DriveBeside (urlLoad urls) (slowReaders (lkConcurrency knobs) urls)))
+                else httpTarget use proxy urls
+    name = case shape of
+        KnownLengthRelay -> "gem-verified-known-length"
+        SlowChunkedRelay -> "gem-verified-slow-readers"
+        OrdinaryRelay -> if privateHit then "gem-hot-path" else "gem-onboarding"
+    description = case shape of
+        KnownLengthRelay -> "Verify a public native artifact before replying, with an explicit upstream Content-Length. Record complete-body first-byte latency, actual read/hash bytes and admission pressure."
+        SlowChunkedRelay -> "Verify a public native artifact from a paced chunked origin while equal extra clients read replies slowly. Each 64 KiB source chunk waits its share of one configured upstream delay. Retain reservation and body through client delivery."
+        OrdinaryRelay -> if privateHit then "Relay a private native artifact with caller-authorised metadata and exact digest verification." else "Admit a public native artifact after private absence, then relay its digest-bound bytes without mirroring."
+
+-- | Use the same native fixture and framing in direct controls and the timed proxy load.
+relayArtifactFixture :: RelayShape -> Int -> LByteString -> Application
+relayArtifactFixture shape latency = gemStubWith deliver latency
+  where
+    deliver bytes = case shape of
+        OrdinaryRelay -> \_ respond -> respond (responseLBS status200 [] bytes)
+        KnownLengthRelay -> \_ respond -> respond (responseLBS status200 [(hContentLength, encodeUtf8 (show (LBS.length bytes) :: Text))] bytes)
+        SlowChunkedRelay ->
+            let chunks = sliceChunks (64 * 1024) (toStrict bytes)
+                pause = latency `div` max 1 (length chunks)
+             in pacedBody [(pause, chunk) | chunk <- chunks]
 
 batchScenario :: Scenario
 batchScenario = scenario "batch-dependencies" "Assemble all three named-gem histories in one bounded native Dependencies API reply." $ \knobs use ->
@@ -224,11 +255,14 @@ infoStubWithArtifacts latency captures artifacts request respond = case Map.look
     Nothing -> infoStub latency (fromMaybe copyBytes (listToMaybe (Map.elems artifacts))) captures request respond
 
 gemStub :: Int -> LByteString -> Application
-gemStub latency bytes request respond = do
+gemStub = relayArtifactFixture OrdinaryRelay
+
+gemStubWith :: (LByteString -> Application) -> Int -> LByteString -> Application
+gemStubWith deliver latency bytes request respond = do
     delayUpstream latency
     case pathInfo request of
         ["info", name] | name `elem` map cpName rubyGemsCorpusPackages -> respond (responseLBS status200 [(hContentType, "text/plain")] ("---\n9999.0.2 |checksum:" <> encodeUtf8 (hexSha256Of (toStrict bytes)) <> ",created_at:2020-01-01T00:00:00Z\n"))
-        ["gems", filename] | filename `elem` [cpName package <> "-9999.0.2.gem" | package <- rubyGemsCorpusPackages] -> respond (responseLBS status200 [] bytes)
+        ["gems", filename] | filename `elem` [cpName package <> "-9999.0.2.gem" | package <- rubyGemsCorpusPackages] -> deliver bytes request respond
         _ -> respond (responseLBS status404 [] "missing")
 
 missingStub :: Int -> Application

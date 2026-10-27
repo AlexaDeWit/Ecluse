@@ -58,4 +58,4 @@ selectProfile profile Nothing = (renderLoadProfile profile, selected)
                 <> [law | ecosystem == PyPI, law <- [ManagedMirrorBaseline, ManagedMirrorWarm, ManagedMirrorRevision]]
                 <> [law | ecosystem == RubyGems, law <- [BatchMetadata, QuickSpecification]]
         MemoryAdmission -> [PrivateCopyWhole, SlowReaders, AdmissionHerd, HerdUnderPrivateCopy, WarmUnderCold, AdmissionRamp]
-        Artifacts -> [PrivateArtifact, PublicArtifactOnboarding, PrivateArtifactCeiling]
+        Artifacts -> [PrivateArtifact, PublicArtifactOnboarding, PrivateArtifactCeiling] <> [law | ecosystem == RubyGems, law <- [VerifiedKnownLengthArtifact, VerifiedSlowArtifact]]

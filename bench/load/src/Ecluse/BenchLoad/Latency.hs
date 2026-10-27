@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE DeriveAnyClass #-}
 
--- | Nearest-rank latency percentiles over successful requests only, so a shed never lowers them.
+-- | Latency percentiles preserve the population reported by each measured source.
 module Ecluse.BenchLoad.Latency (
     Percentiles (..),
     noPercentiles,
@@ -14,24 +14,25 @@ module Ecluse.BenchLoad.Latency (
 
 import Data.Aeson (FromJSON, ToJSON)
 
--- | Latency percentiles in milliseconds. Each is 'Nothing' when no request succeeded.
+-- | Latency percentiles in milliseconds. Each unavailable observation stays 'Nothing'.
 data Percentiles = Percentiles
     { pP50Ms :: Maybe Double
     , pP90Ms :: Maybe Double
+    , pP95Ms :: Maybe Double
     , pP99Ms :: Maybe Double
     , pP999Ms :: Maybe Double
     }
     deriving stock (Eq, Show, Generic)
     deriving anyclass (FromJSON, ToJSON)
 
--- | The percentiles of a run with no successful request.
+-- | No observations supply no percentiles.
 noPercentiles :: Percentiles
-noPercentiles = Percentiles Nothing Nothing Nothing Nothing
+noPercentiles = Percentiles Nothing Nothing Nothing Nothing Nothing
 
 -- | Percentiles of latencies given in seconds, in any order.
 percentiles :: [Double] -> Percentiles
 percentiles latencies =
-    Percentiles (at 0.50) (at 0.90) (at 0.99) (at 0.999)
+    Percentiles (at 0.50) (at 0.90) (at 0.95) (at 0.99) (at 0.999)
   where
     sorted = sort latencies
     count = length sorted

@@ -12,7 +12,8 @@ import Test.Hspec
 import Data.Map.Strict qualified as Map
 
 import Ecluse.BenchLoad.Floors (Enforcement (Enforced), Pass (Loaded))
-import Ecluse.BenchLoad.Harness (LoadKnobs (lkProxyTuning), LoadSummary (lsLabel), ProxyFigures (pfBurstMemory, pfCpu), Scenario (scenarioPublicLegUnavailableReason), ScenarioReport (..))
+import Ecluse.BenchLoad.Harness (LoadKnobs (lkProxyTuning), LoadSummary (lsFirstByteLatency, lsLabel, lsLatency), ProxyFigures (pfBurstMemory, pfCpu), Scenario (scenarioPublicLegUnavailableReason), ScenarioReport (..))
+import Ecluse.BenchLoad.Latency (Percentiles (..))
 import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
 import Ecluse.BenchLoad.Pod (CgroupReading (CgroupReading), ProxyTuning (ptCpus), burstMemory, noTuning, parseCpuList)
 import Ecluse.BenchLoad.Report (Section (sectionEnforcement, sectionKnobs), renderReports, renderServiceTime)
@@ -24,6 +25,13 @@ spec :: Spec
 spec = do
     serviceTimeSpec
     describe "renderReports" $ do
+        it "distinguishes successful duration quantiles from all-response first body bytes" $ do
+            let plain = scenarioReport "npm/merge-cold" 100 4 2 5
+                observed = plain{srLoad = (srLoad plain){lsFirstByteLatency = Just (Percentiles (Just 1) Nothing (Just 3) (Just 4) Nothing), lsLatency = Percentiles (Just 2) Nothing (Just 4) (Just 5) Nothing}}
+                rendered = renderReports (loadedSection Npm 5_000 [observed])
+            rendered `shouldSatisfy` T.isInfixOf "success latency p95"
+            rendered `shouldSatisfy` T.isInfixOf "first body byte p50 / p95 / p99 (all completed responses, including refusals)"
+            renderReports (loadedSection Npm 5_000 [plain]) `shouldSatisfy` T.isInfixOf "including refusals) | unavailable"
         it "keeps burst refusals visible beside a background-only floor" $ do
             let name = "npm/herd-under-heavy-private"
                 plain = scenarioReport name 0 100 0 0

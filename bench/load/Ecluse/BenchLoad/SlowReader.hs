@@ -156,7 +156,7 @@ record outcome t = case outcome of
     Failed reason -> t{tErrors = Map.insertWith (+) reason 1 (tErrors t)}
 
 reportOf :: Double -> Tally -> OhaReport
-reportOf elapsed t = OhaReport elapsed (Map.mapKeys show (tStatuses t)) errors (tSuccessSeconds t)
+reportOf elapsed t = OhaReport elapsed (Map.mapKeys show (tStatuses t)) errors Nothing (tSuccessSeconds t)
   where
     unfinished = tStarted t - sum (tStatuses t) - sum (tErrors t)
     errors = if unfinished > 0 then Map.insert "aborted due to deadline" unfinished (tErrors t) else tErrors t
