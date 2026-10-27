@@ -15,6 +15,7 @@ import Ecluse.BenchLoad.Harness (Scenario (scenarioName), UpstreamFixture (..))
 import Ecluse.BenchLoad.Npm (npmFixture)
 import Ecluse.BenchLoad.Pod (PodShape (Unlimited), scheduledPodShapes)
 import Ecluse.BenchLoad.PyPI (pypiFixture)
+import Ecluse.BenchLoad.RubyGems (rubyGemsFixture)
 import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, fixtures)
 import Ecluse.BenchLoad.Support (twoCores)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
@@ -53,14 +54,17 @@ spec = describe "canonical load contract" $ do
     it "does not count a native npm artifact name as PyPI coverage" $
         loadCoverageGaps ReadLoadFoundation PyPI ("tarball-hot-path" : filter (/= "wheel-hot-path") (names pypiFixture))
             `shouldBe` [MissingLoadScenario PrivateArtifact "wheel-hot-path"]
-    it "refuses a protocol without load drivers" $
-        loadCoverageGaps FullLoad RubyGems [] `shouldBe` [NoLoadProtocol RubyGems]
+    it "requires native batch and compact specification work beside whole-version copying" $ do
+        loadCoverageGaps FullLoad RubyGems (names rubyGemsFixture) `shouldBe` []
+        for_ [(BatchMetadata, "batch-dependencies"), (QuickSpecification, "quick-gemspec"), (MirrorWorker, "worker-mirroring")] $ \(law, name) ->
+            loadCoverageGaps FullLoad RubyGems (filter (/= name) (names rubyGemsFixture)) `shouldBe` [MissingLoadScenario law name]
+        loadCoverageGaps FullLoad RubyGems [] `shouldSatisfy` (not . null)
     it "requires the exact passes the full profile executes under each shape" $
         for_ scheduledPodShapes $ \shape ->
-            fmap (Set.fromList . map snd . concat) (traverse (\ecosystem -> requiredLoadPasses FullLoad ecosystem shape) [Npm, PyPI, Cargo])
+            fmap (Set.fromList . map snd . concat) (traverse (\ecosystem -> requiredLoadPasses FullLoad ecosystem shape) [Npm, PyPI, Cargo, RubyGems])
                 `shouldBe` Right (checkedCounts shape)
     it "keeps optional variants out of full obligations while retaining private-copy controls" $
-        for_ [Npm, PyPI, Cargo] $ \ecosystem ->
+        for_ [Npm, PyPI, Cargo, RubyGems] $ \ecosystem ->
             case requiredLoadPasses FullLoad ecosystem twoCores of
                 Left gaps -> expectationFailure (toString (show gaps :: Text))
                 Right passes -> do
@@ -69,7 +73,7 @@ spec = describe "canonical load contract" $ do
                     for_ [PrivateCopyQuarter, PrivateCopyWhole, PatternCiFleet] $ \law ->
                         map fst passes `shouldSatisfy` elem law
     it "retains both worker passes only under the unlimited shape" $
-        for_ [(Npm, "npm/worker-mirroring"), (PyPI, "pypi/worker-mirroring"), (Cargo, "cargo/worker-mirroring")] $ \(ecosystem, key) -> do
+        for_ [(Npm, "npm/worker-mirroring"), (PyPI, "pypi/worker-mirroring"), (Cargo, "cargo/worker-mirroring"), (RubyGems, "rubygems/worker-mirroring")] $ \(ecosystem, key) -> do
             fmap (filter ((== MirrorWorker) . fst)) (requiredLoadPasses FullLoad ecosystem Unlimited)
                 `shouldBe` Right [(MirrorWorker, (key, Loaded)), (MirrorWorker, (key, ConcurrencyOne))]
             fmap (filter ((== MirrorWorker) . fst)) (requiredLoadPasses FullLoad ecosystem twoCores) `shouldBe` Right []

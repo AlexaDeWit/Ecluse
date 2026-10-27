@@ -56,7 +56,7 @@ import Data.Universe.Generic (universeGeneric)
 
 import Ecluse.BenchLoad.Pod (PodShape, ProxyTuning (..), noTuning, parsePodShape, renderPodShape)
 import Ecluse.BenchLoad.Selection (measurementConditionVersion)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 
 -- | Which of a scenario's runs a count of successes comes from.
 data Pass
@@ -231,6 +231,7 @@ data Calibration = Calibration
     , calOperatingPoint :: OperatingPoint
     , calNpmLatency :: LatencyCeiling
     , calCargoLatency :: Maybe LatencyCeiling
+    , calRubyGemsLatency :: Maybe LatencyCeiling
     , calPypiLatency :: Maybe LatencyCeiling
     -- ^ Legacy calibration predates the native PyPI probe.
     , calConditions :: Text
@@ -250,6 +251,7 @@ instance FromJSON Calibration where
                 <*> o .: "operatingPoint"
                 <*> o .: "npmInjectedLatency"
                 <*> o .:? "cargoInjectedLatency"
+                <*> o .:? "rubygemsInjectedLatency"
                 <*> o .:? "pypiInjectedLatency"
                 <*> o .:? "measurementConditions" .!= "legacy-v1"
                 <*> o .:? "retainedFloorConditions" .!= mempty
@@ -275,12 +277,14 @@ instance FromJSON Floors where
         calibration <- o .: "calibration"
         shapes <- o .: "floors"
         byShape <- Map.fromList <$> traverse parseShape (Map.toList shapes)
-        when (any ((/= Map.keysSet byShape) . Map.keysSet . lcHighestMs) (calNpmLatency calibration : maybeToList (calPypiLatency calibration) <> maybeToList (calCargoLatency calibration))) $
+        when (any ((/= Map.keysSet byShape) . Map.keysSet . lcHighestMs) (calNpmLatency calibration : maybeToList (calPypiLatency calibration) <> maybeToList (calCargoLatency calibration) <> maybeToList (calRubyGemsLatency calibration))) $
             fail "the latency ceiling must record a highest latency for each pod shape the floors hold, and for no other"
         unless (all (`elem` map fst (concatMap Map.keys (Map.elems byShape))) (Map.keys (calRetainedConditions calibration))) $
             fail "retained measurement conditions name a scenario without floors"
         when (any (any (T.isPrefixOf "cargo/" . fst) . Map.keys) (Map.elems byShape) && isNothing (calCargoLatency calibration)) $
             fail "Cargo floors require an independently measured native latency ceiling"
+        when (any (any (T.isPrefixOf "rubygems/" . fst) . Map.keys) (Map.elems byShape) && isNothing (calRubyGemsLatency calibration)) $
+            fail "RubyGems floors require an independently measured native latency ceiling"
         pure (Floors calibration byShape)
       where
         parseShape :: (Text, Map Text (Map Text Int)) -> Parser (PodShape, Map FloorKey Int)
@@ -336,6 +340,7 @@ data RunFacts = RunFacts
     , rfNpmLatencyMs :: Int
     -- ^ The native measured round trip or declared configured fallback.
     , rfCargoLatencyMs :: Maybe Int
+    , rfRubyGemsLatencyMs :: Maybe Int
     , rfPypiLatencyMs :: Int
     , rfConditions :: Text
     }
@@ -378,10 +383,12 @@ enforce floors facts = case (Map.lookup shape (floorsByShape floors), reasons) o
   where
     shape = rfShape facts
     calibration = floorsCalibration floors
-    ceilings = [(Npm, rfNpmLatencyMs facts, calNpmLatency calibration)] <> [(PyPI, rfPypiLatencyMs facts, latencyBound) | latencyBound <- maybeToList (calPypiLatency calibration)] <> [(Cargo, injected, latencyBound) | injected <- maybeToList (rfCargoLatencyMs facts), latencyBound <- maybeToList (calCargoLatency calibration)]
+    ceilings = [(Npm, rfNpmLatencyMs facts, calNpmLatency calibration)] <> [(PyPI, rfPypiLatencyMs facts, latencyBound) | latencyBound <- maybeToList (calPypiLatency calibration)] <> [(Cargo, injected, latencyBound) | injected <- maybeToList (rfCargoLatencyMs facts), latencyBound <- maybeToList (calCargoLatency calibration)] <> [(RubyGems, injected, latencyBound) | injected <- maybeToList (rfRubyGemsLatencyMs facts), latencyBound <- maybeToList (calRubyGemsLatency calibration)]
     reasons =
         [MissingNativeLatency Cargo | isJust (rfCargoLatencyMs facts), isNothing (calCargoLatency calibration)]
             <> [MissingNativeObservation Cargo | isNothing (rfCargoLatencyMs facts), isJust (calCargoLatency calibration)]
+            <> [MissingNativeLatency RubyGems | isJust (rfRubyGemsLatencyMs facts), isNothing (calRubyGemsLatency calibration)]
+            <> [MissingNativeObservation RubyGems | isNothing (rfRubyGemsLatencyMs facts), isJust (calRubyGemsLatency calibration)]
             <> [SettingsDiffer settings | Just settings <- [nonEmpty (differingSettings (calOperatingPoint calibration) (rfSettings facts))]]
             <> [OtherRunner (calRunner calibration) (calRunnerKind calibration) (rfRunner facts) | rfRunner facts /= readingOn (calRunnerKind calibration)]
             <> [ConditionsDiffer (calConditions calibration) (rfConditions facts) | calConditions calibration /= rfConditions facts]
@@ -476,7 +483,7 @@ describeEnforcement calibration = \case
             <> " Measurement conditions: "
             <> calConditions calibration
             <> ". "
-            <> T.intercalate " " [ecosystemName ecosystem <> " latency ceiling: " <> show (lcCeilingMs latencyBound) <> " ms." | (ecosystem, latencyBound) <- [(Npm, calNpmLatency calibration)] <> [(PyPI, pypiBound) | pypiBound <- maybeToList (calPypiLatency calibration)] <> [(Cargo, cargoBound) | cargoBound <- maybeToList (calCargoLatency calibration)]]
+            <> T.intercalate " " [ecosystemName ecosystem <> " latency ceiling: " <> show (lcCeilingMs latencyBound) <> " ms." | (ecosystem, latencyBound) <- [(Npm, calNpmLatency calibration)] <> [(PyPI, pypiBound) | pypiBound <- maybeToList (calPypiLatency calibration)] <> [(Cargo, cargoBound) | cargoBound <- maybeToList (calCargoLatency calibration)] <> [(RubyGems, rubyBound) | rubyBound <- maybeToList (calRubyGemsLatency calibration)]]
             <> describeRetainedConditions calibration
     NotHeld reasons ->
         "This run is not held to the success floors in `"

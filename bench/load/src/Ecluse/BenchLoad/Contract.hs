@@ -58,6 +58,8 @@ data LoadLaw
     | ManagedMirrorBaseline
     | ManagedMirrorWarm
     | ManagedMirrorRevision
+    | BatchMetadata
+    | QuickSpecification
     deriving stock (Eq, Ord, Show)
 
 -- | Missing measurements describe test coverage, not evidence of a production defect.
@@ -110,7 +112,7 @@ loadScenarioName ecosystem law = case ecosystem of
     Npm -> Just (name "merge-cold" "tarball")
     PyPI -> Just (name "index-cold" "wheel")
     Cargo -> Just (name "index-cold" "crate")
-    RubyGems -> Nothing
+    RubyGems -> Just (name "dependencies-cold" "gem")
   where
     name cold artifact = case law of
         ColdMetadata -> cold
@@ -144,6 +146,8 @@ loadScenarioName ecosystem law = case ecosystem of
         ManagedMirrorBaseline -> "mirror-native-baseline"
         ManagedMirrorWarm -> "mirror-managed-warm"
         ManagedMirrorRevision -> "mirror-managed-revision"
+        BatchMetadata -> "batch-dependencies"
+        QuickSpecification -> "quick-gemspec"
 
 -- | Report every missing law while retaining unrelated registered scenarios.
 loadCoverageGaps :: LoadScope -> Ecosystem -> [Text] -> [LoadGap]
@@ -174,6 +178,7 @@ requiredFor :: LoadScope -> Ecosystem -> [LoadLaw]
 requiredFor scope ecosystem =
     requiredLoadLaws scope <> case ecosystem of
         PyPI -> [ManagedMirrorBaseline, ManagedMirrorWarm, ManagedMirrorRevision]
+        RubyGems -> [BatchMetadata, QuickSpecification]
         _ -> []
 
 hasServiceTime :: LoadLaw -> Bool
@@ -209,3 +214,5 @@ hasServiceTime = \case
     ManagedMirrorBaseline -> True
     ManagedMirrorWarm -> True
     ManagedMirrorRevision -> True
+    BatchMetadata -> True
+    QuickSpecification -> True

@@ -13,7 +13,7 @@ import Ecluse.Core.AdvisoryRulesBench qualified as AdvisoryRulesBench
 import Ecluse.Core.CacheBench qualified as CacheBench
 import Ecluse.Core.ColdReadBench qualified as ColdReadBench
 import Ecluse.Core.DigestBench qualified as DigestBench
-import Ecluse.Core.Ecosystem (ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (RubyGems), ecosystemName)
 import Ecluse.Core.MergeBench qualified as MergeBench
 import Ecluse.Core.MetadataGzipBench qualified as MetadataGzipBench
 import Ecluse.Core.MirrorReadBench qualified as MirrorReadBench
@@ -91,7 +91,7 @@ generatorTests ecosystem =
             for_ (Map.keys (infoVersions info)) $ \key -> do
                 selected <- ebSelective ecosystem name (mkVersion (ebEcosystem ecosystem) key) (captureChunks raw) >>= expectRight
                 selected @?= Map.lookup key (infoVersions info)
-        , testCase "preserves native served records and proxy artifact routes" $ do
+        , testCase servedLaw $ do
             input <- expectRight (syntheticInput ecosystem sampleCount)
             bytes <- serveDocumentBytes (ebMetadata ecosystem) benchEvalContext input
             ebCheckServed ecosystem name raw bytes >>= (@?= Right ())
@@ -100,6 +100,7 @@ generatorTests ecosystem =
             ebNestingDepth ecosystem document @?= 1
         ]
   where
+    servedLaw = if ebEcosystem ecosystem == RubyGems then "preserves native served records and proxy artifact routes" else "rewrites every artifact onto the proxy origin"
     sampleCount = 500
     name = ebSyntheticName ecosystem
     raw = ebSynthetic ecosystem sampleCount
