@@ -105,8 +105,9 @@ verifiedOriginFailureSpec :: Spec
 verifiedOriginFailureSpec = describe "verified public origin outcomes" $ do
     for_ [(status404, status404), (status500, status500), (status401, status401), (status403, status403), (status429, status503), (status503, status503)] $ \(originStatus, clientStatus) ->
         it ("observes HTTP " <> show (statusCode originStatus) <> " once without artifact bytes or mirror enqueue") $ do
-            (response, observations, messages, attempts, consumed, verified, _) <- publicOutcome originStatus
+            (response, observations, messages, attempts, consumed, verified, _, requests) <- publicOutcome originStatus
             simpleStatus response `shouldBe` clientStatus
+            requests `shouldBe` 1
             observations `shouldBe` [RelayNonSuccess]
             let failures = filter (T.isInfixOf "the public upstream answered a non-success") messages
             length failures `shouldBe` 1
@@ -116,25 +117,27 @@ verifiedOriginFailureSpec = describe "verified public origin outcomes" $ do
             consumed `shouldBe` 0
             verified `shouldBe` 0
     it "does not report a successful verified artifact as a non-success" $ do
-        (response, observations, messages, attempts, _, verified, archive) <- publicOutcome status200
+        (response, observations, messages, attempts, _, verified, archive, requests) <- publicOutcome status200
         simpleStatus response `shouldBe` status200
+        requests `shouldBe` 1
         simpleBody response `shouldBe` fromStrict archive
         observations `shouldBe` []
         filter (T.isInfixOf "the public upstream answered a non-success") messages `shouldBe` []
         attempts `shouldBe` 1
         verified `shouldBe` 1
 
-publicOutcome :: Status -> IO (SResponse, [RelayAnomaly], [Text], Int, Int, Int, ByteString)
+publicOutcome :: Status -> IO (SResponse, [RelayAnomaly], [Text], Int, Int, Int, ByteString, Int)
 publicOutcome originStatus = withSweeper $ \deadlines -> do
     listing <- BS.readFile "test/fixtures/rubygems/info/ecluse-fixture-root"
     archive <- BS.readFile "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
     observations <- newIORef []
+    requests <- newIORef (0 :: Int)
     attempts <- newIORef (0 :: Int)
     consumed <- newIORef (0 :: Int)
     verified <- newIORef (0 :: Int)
     let source request respond = case pathInfo request of
             ["info", "ecluse-fixture-root"] -> respond (responseLBS status200 [] (fromStrict listing))
-            ["gems", "ecluse-fixture-root-1.0.0.gem"] -> respond (responseLBS originStatus [("Content-Type", "application/octet-stream")] (fromStrict archive))
+            ["gems", "ecluse-fixture-root-1.0.0.gem"] -> modifyIORef' requests (+ 1) >> respond (responseLBS originStatus [("Content-Type", "application/octet-stream")] (fromStrict archive))
             _ -> respond (responseLBS status404 [] "")
         metrics =
             noopMetricsPort
@@ -180,4 +183,5 @@ publicOutcome originStatus = withSweeper $ \deadlines -> do
                         , arRespond = respond . responseToWai contract
                         }
                 )
-        (response,,,,,,archive) <$> readIORef observations <*> pure (mapMaybe lineMessage (T.lines logged)) <*> readIORef attempts <*> readIORef consumed <*> readIORef verified
+        requestCount <- readIORef requests
+        (response,,,,,,archive,requestCount) <$> readIORef observations <*> pure (mapMaybe lineMessage (T.lines logged)) <*> readIORef attempts <*> readIORef consumed <*> readIORef verified
