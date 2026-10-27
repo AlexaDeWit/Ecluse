@@ -30,8 +30,8 @@ import Ecluse.Core.Registry.RubyGems.FirstParty (projectFirstPartyEntry, rubyGem
 import Ecluse.Core.Registry.RubyGems.Handlers (parseBatchQuery)
 import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRouter)
-import Ecluse.Core.Rules (PreparedRule (prepEval), RuleEval (PerVersion), prepare)
-import Ecluse.Core.Rules.Types (FailureAlignment (FailDeny), Inability (NoDatabaseLoaded), Rule (AllowIfOlderThan), RuleEvidence (evVersion), RuleVerdict (CannotVet, NoDecision))
+import Ecluse.Core.Rules (PreparedRule (prepEval), RuleEval (PerInstallEvidence, PerPackage, PerVersion), prepare)
+import Ecluse.Core.Rules.Types (FailureAlignment (FailDeny), Inability (NoDatabaseLoaded), Rule (AllowIfOlderThan), RuleEvidence (evVersion), RuleVerdict (CannotVet))
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -52,7 +52,7 @@ import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (captureJsonLog, lineMessage, newTestLogEnv)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.RubyGems.Fixtures (RubyRelease (..), loadRubyReleasesFrom, rubyRelease)
-import Ecluse.Test.Rules (atDefaultPrecedence, cannotVetRule, inertRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (cachedMetadata, externalOperations)
 import Ecluse.Test.Server.Handler (testServeRuntimeWith)
 import Ecluse.Test.Server.Mount (serveDepsFor)
@@ -222,9 +222,12 @@ spec = do
                         observed <- readIORef hits
                         observed `shouldSatisfy` all (\parts -> take 2 parts == ["public", "info"])
 
-        for_ [("2.0", status403, 1), ("1.0", status200, 0)] $ \(version, expected, count) ->
-            it ("logs only the final matching rejected coordinate with its gate tag for " <> toString version) $
-                withCoordinateSources PublicMixedCandidateSource $ \originalRuntime original hits _ -> do
+        let loggedCases =
+                [("public", PublicMixedCandidateSource, "GET", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz", status403, 1), ("public", PublicMixedCandidateSource, "GET", "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz", status200, 0)]
+                    <> [("private sibling", MixedPolicyCandidateSource, method, path, status403, 1) | method <- ["GET", "HEAD"], path <- ["/gems/acme-1-2.0.gem", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz"]]
+        for_ loggedCases $ \(label, sources, method, path, expected, count) ->
+            it ("logs only the final matching rejected coordinate with its gate tag for " <> toString (label :: Text) <> " " <> show (method, path)) $
+                withCoordinateSources sources $ \originalRuntime original hits _ -> do
                     tags <- newIORef (0 :: Int)
                     denials <- newIORef []
                     let deps = bindingPackumentDeps original
@@ -232,7 +235,7 @@ spec = do
                         binding = original{bindingPackumentDeps = deps{pdAdvisoryEtag = tag}}
                         metrics = (srMetrics originalRuntime){mpRuleDenial = \rule reason -> atomicModifyIORef' denials (\seen -> (seen <> [(rule, reason)], ()))}
                         runtime = originalRuntime{srMetrics = metrics}
-                    (response, logged) <- captureJsonLog (\logEnv -> captureWithLog logEnv runtime binding "GET" ("/quick/Marshal.4.8/acme-1-" <> encodeUtf8 (version :: Text) <> ".gemspec.rz") [])
+                    (response, logged) <- captureJsonLog (\logEnv -> captureWithLog logEnv runtime binding method path [])
                     simpleStatus response `shouldBe` expected
                     let rejected = filter ((== Just "denied") . lineMessage) (T.lines logged)
                     length rejected `shouldBe` count
@@ -243,14 +246,19 @@ spec = do
                         line `shouldSatisfy` T.isInfixOf "\"version\":\"2.0\""
                         line `shouldSatisfy` T.isInfixOf "\"active_advisory_db_etag\":\"gate-2\""
                     observed <- readIORef hits
-                    observed `shouldSatisfy` notElem ["public", "gems", "acme-1-2.0.gem"]
+                    case sources of
+                        MixedPolicyCandidateSource -> sort observed `shouldBe` [["private", "info", "acme"], ["private", "info", "acme-1"], ["public", "info", "acme"], ["public", "info", "acme-1"]]
+                        _ -> observed `shouldSatisfy` notElem ["public", "gems", "acme-1-2.0.gem"]
         for_ ["GET", "HEAD"] $ \method ->
             for_ ["/gems/acme-1-2.0.gem", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz"] $ \path ->
                 it ("preserves a matching inability beside an admitted sibling for " <> show (method, path)) $
                     withCoordinateSources PublicMixedCandidateSource $ \runtime original hits _ -> do
                         let deps = bindingPackumentDeps original
-                            unknown = cannotVetRule{prepEval = PerVersion (\_ evidence -> pure (if renderVersion (evVersion evidence) == "2.0" then CannotVet FailDeny NoDatabaseLoaded else NoDecision))}
-                            binding = original{bindingPackumentDeps = deps{pdRules = unknown : pdRules deps}}
+                            unknown rule = case prepEval rule of
+                                PerVersion evaluate -> rule{prepEval = PerVersion (\ctx evidence -> if renderVersion (evVersion evidence) == "2.0" then pure (CannotVet FailDeny NoDatabaseLoaded) else evaluate ctx evidence)}
+                                PerPackage _ -> rule
+                                PerInstallEvidence _ -> rule
+                            binding = original{bindingPackumentDeps = deps{pdRules = map unknown (pdRules deps)}}
                         response <- capture runtime binding method path []
                         simpleStatus response `shouldBe` status500
                         readIORef hits `shouldReturn` [["public", "info", "acme"], ["public", "info", "acme-1"]]
@@ -443,6 +451,7 @@ data CoordinateSources
     = OwnedCandidateSource Status
     | PublicCandidateSource
     | PublicMixedCandidateSource
+    | MixedPolicyCandidateSource
     | MixedPublicIntegrityCandidateSource
     | MixedTrustedIntegrityCandidateSource
 
@@ -468,6 +477,7 @@ withCoordinateSourceHeader header sources use = do
             case pathInfo request of
                 ["private", "info", "acme"] -> answer (case sources of OwnedCandidateSource status -> status; _ -> status404) ""
                 ["private", "info", "acme-1"] -> case sources of
+                    MixedPolicyCandidateSource -> answer status200 admitted
                     MixedPublicIntegrityCandidateSource -> answer status200 admitted
                     MixedTrustedIntegrityCandidateSource -> answer status200 recent
                     _ -> answer status404 ""
@@ -475,7 +485,7 @@ withCoordinateSourceHeader header sources use = do
                     OwnedCandidateSource _ -> answer status200 recent
                     PublicCandidateSource -> answer status200 recent
                     _ -> answer status404 ""
-                ["public", "info", "acme-1"] -> answer status200 (case sources of PublicMixedCandidateSource -> mixed; MixedPublicIntegrityCandidateSource -> mixed; _ -> admitted)
+                ["public", "info", "acme-1"] -> answer status200 (case sources of PublicMixedCandidateSource -> mixed; MixedPolicyCandidateSource -> recent; MixedPublicIntegrityCandidateSource -> mixed; _ -> admitted)
                 ["public", "gems", "acme-1-1.0.gem"] -> respond (responseLBS status200 [("Content-Length", show (BS.length (releaseArchive release)))] (fromStrict (releaseArchive release)))
                 ["public", "quick", "Marshal.4.8", "acme-1-1.0.gemspec.rz"] -> answer status200 (releaseCompact release)
                 _ -> answer status404 ""
@@ -483,6 +493,7 @@ withCoordinateSourceHeader header sources use = do
         let base = "http://localhost:" <> show port
             private = case sources of
                 OwnedCandidateSource _ -> Just privateBase
+                MixedPolicyCandidateSource -> Just privateBase
                 MixedPublicIntegrityCandidateSource -> Just privateBase
                 MixedTrustedIntegrityCandidateSource -> Just privateBase
                 _ -> Nothing

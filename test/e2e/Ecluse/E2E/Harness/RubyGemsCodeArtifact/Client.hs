@@ -33,7 +33,7 @@ rubySweepClientOps =
             response@(status, body) <- storeRequest store ("gems/" <> encodeComponent (releaseFilename release)) "GET" Nothing
             when (status == 503) $ do
                 logs <- proxyContainerLogs (rubyProxy (rssObserved store))
-                putStrLn ("unexpected RubyGems maintenance artifact response for " <> name <> "@" <> version <> ": " <> show status <> "\nBody:\n" <> decodeUtf8 body <> "\nProxy logs:\n" <> logs)
+                putTextLn ("unexpected RubyGems maintenance artifact response for " <> name <> "@" <> version <> ": " <> show status <> "\nBody:\n" <> decodeUtf8 body <> "\nProxy logs:\n" <> logs)
             pure response
         , clientMetadataStatus = \store name -> fst <$> storeRequest store ("api/v1/dependencies?gems=" <> encodeComponent name) "GET" Nothing
         }
