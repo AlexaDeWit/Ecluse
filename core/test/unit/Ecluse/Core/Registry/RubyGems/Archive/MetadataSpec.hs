@@ -10,6 +10,7 @@ import Data.Text.Encoding qualified as TE
 import Test.Hspec
 
 import Ecluse.Core.Package (renderPackageName)
+import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.RubyGems.Archive.Metadata
 import Ecluse.Core.Registry.RubyGems.Archive.Yaml (decodeYaml)
 import Ecluse.Core.Registry.RubyGems.CompactSpec (GemSpecification (..))
@@ -25,6 +26,20 @@ spec = describe "native gem metadata schema" $ do
         metadataFiles parsed `shouldBe` ["lib/owned.rb", "ext/extconf.rb"]
         metadataExtensions parsed `shouldBe` ["ext/extconf.rb"]
         metadataDocument parsed `shouldBe` raw
+    it "preserves file order and permits repeated extension declarations in their original order" $ do
+        let bytes = replace "- ext/extconf.rb\nextensions: [ext/extconf.rb]" "- ext/z.rb\n- ext/a.rb\nextensions: [ext/a.rb, ext/z.rb, ext/a.rb]" metadata
+        raw <- decodeYaml defaultLimits (const (pure ())) bytes >>= expectRight
+        parsed <- expectRight (parseGemMetadata raw)
+        metadataFiles parsed `shouldBe` ["lib/owned.rb", "ext/z.rb", "ext/a.rb"]
+        metadataExtensions parsed `shouldBe` ["ext/a.rb", "ext/z.rb", "ext/a.rb"]
+    it "rejects duplicate files before checking missing extension membership" $ do
+        let bytes = replace "- ext/extconf.rb" "- lib/owned.rb" metadata
+        raw <- decodeYaml defaultLimits (const (pure ())) bytes >>= expectRight
+        parseGemMetadata raw `shouldBe` Left (ParseError "duplicate gem metadata file")
+    it "rejects an extension absent from otherwise distinct files" $ do
+        let bytes = replace "extensions: [ext/extconf.rb]" "extensions: [ext/missing.rb]" metadata
+        raw <- decodeYaml defaultLimits (const (pure ())) bytes >>= expectRight
+        parseGemMetadata raw `shouldBe` Left (ParseError "gem extension is absent from metadata file inventory")
     it "rejects missing identity, non-canonical files and unsupported schema versions" $ do
         for_ ["--- {}", metadata <> "name: other\n", replace "lib/owned.rb" "../owned.rb" metadata, replace "specification_version: 4" "specification_version: 999" metadata, replace "ext/extconf.rb" "ext/missing.rb" (replace "- ext/extconf.rb" "- lib/owned.rb" metadata)] $ \bytes -> do
             decoded <- decodeYaml defaultLimits (const (pure ())) bytes

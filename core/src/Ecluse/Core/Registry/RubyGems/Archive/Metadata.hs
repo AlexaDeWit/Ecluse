@@ -9,6 +9,7 @@ module Ecluse.Core.Registry.RubyGems.Archive.Metadata (
 ) where
 
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Text.Libyaml qualified as Y
 
@@ -48,8 +49,9 @@ parseGemMetadata document = do
         Just raw -> yamlMapping raw >>= traverse yamlText
     files <- yamlField "files" fields >>= paths
     extensions <- maybe (Right []) paths (Map.lookup "extensions" fields)
-    unless (length files == length (ordNub files)) (bad "duplicate gem metadata file")
-    unless (all (`elem` files) extensions) (bad "gem extension is absent from metadata file inventory")
+    let inventory = Set.fromList files
+    unless (Set.size inventory == length files) (bad "duplicate gem metadata file")
+    unless (all (`Set.member` inventory) extensions) (bad "gem extension is absent from metadata file inventory")
     let specification = GemSpecification name version platform (catMaybes dependencies) ruby gems metadata
     pure (GemMetadata specification files extensions document)
 
