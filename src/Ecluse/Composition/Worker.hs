@@ -20,7 +20,7 @@ import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead), AdapterPublish (publishCodec, publishMirrorRequirements), MirrorRequirements (mirrorWorkerRead), WorkerMetadataRead (..))
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Metadata.Fetch (chargingSelectedReads)
-import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (..))
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (..), prepareRead)
 import Ecluse.Core.Registry.Origin (anonymousOrigin, chargingFullReads, chargingSelectedMetadata, controlPublicOrigin)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish,

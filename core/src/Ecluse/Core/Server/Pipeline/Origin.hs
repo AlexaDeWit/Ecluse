@@ -47,6 +47,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionDoc (..),
     VersionRead (..),
  )
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (canChargeFullReadWorkspace)
 import Ecluse.Core.Registry.Origin (OriginClient (ocClient), OriginFor, Private, Public, anonymousOrigin, chargingFullReadWorkspace, chargingFullReads, chargingSelectedMetadata, controlPublicOrigin, originBaseUrl, originClientOf, perCallerOrigin)
 import Ecluse.Core.Registry.Request (BaseRequest)
 import Ecluse.Core.Security (Limits (progressFloor))
@@ -136,8 +137,7 @@ fetchPrivateOrigin deps rt part token name = case pdPrivateBase deps of
     Nothing -> pure OriginAbsent
     Just privateBase -> do
         logFM DebugS (ls ("fetching private origin for " <> renderPackageName name))
-        workspace <- liftIO (newChargeRegion (chargePart part))
-        let origin = chargingFullReadWorkspace workspace (chargingFullReads (fullReadCharge deps part) (privateOrigin rt deps privateBase token))
+        origin <- liftIO (fullReadOrigin deps part (privateOrigin rt deps privateBase token))
         keepingRead deps part . originResultOf =<< tryAny (withMetadataClient rt deps privateMetadataClient origin (`fetchFullManifest` name))
 
 -- | Cache anonymous public metadata under the origin's base URL.
@@ -147,8 +147,7 @@ fetchPublicOrigin deps rt ticket part name = do
     -- Every request that shares this read waits on it, so whichever request leads it pays with their priority.
     let flight = flightOf (fullKey (publicSource deps) name)
         sharedPart = servingPart flight part
-    workspace <- liftIO (newChargeRegion (chargePart sharedPart))
-    let origin = chargingFullReadWorkspace workspace (chargingFullReads (fullReadCharge deps sharedPart) (publicOrigin rt deps))
+    origin <- liftIO (fullReadOrigin deps sharedPart (publicOrigin rt deps))
     keepingRead deps part . originResultOf =<< tryAny (awaitingFlight ticket flight (withMetadataClient rt deps (publicMetadataClient (srMetadataCache rt) (publicSource deps)) origin (`fetchFullManifest` name)))
 
 -- Once its result is evaluated a read holds only its manifest, so its part steps down to the kept charge.
@@ -184,6 +183,15 @@ withMetadataClient rt deps settle origin k =
                 origin
   where
     baseUrl = originBaseUrl (originClientOf origin)
+
+fullReadOrigin :: PackumentDeps -> ChargePart -> OriginFor posture -> IO (OriginFor posture)
+fullReadOrigin deps part origin
+    | canChargeFullReadWorkspace (metadataRead (pdMetadata deps)) = do
+        workspace <- newChargeRegion (chargePart part)
+        pure (chargingFullReadWorkspace workspace charged)
+    | otherwise = pure charged
+  where
+    charged = chargingFullReads (fullReadCharge deps part) origin
 
 fullReadCharge :: PackumentDeps -> ChargePart -> Int -> IO ()
 fullReadCharge deps part = chargePart part . scaleCharge (cfFullReadPermille (chargeFactors deps))

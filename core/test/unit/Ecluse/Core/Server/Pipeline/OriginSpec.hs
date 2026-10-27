@@ -40,7 +40,7 @@ import Ecluse.Core.Registry.Cargo.Route (cargoRouter)
 import Ecluse.Core.Registry.Exchange (chargedRead)
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch (readVersion)
-import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (PrepareRead))
+import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (PrepareRead), prepareRead)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (..), ReadTerms (ReadTerms))
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocChargeFullReadWorkspace))
 import Ecluse.Core.Registry.ServedDocument (stringField)
@@ -201,7 +201,7 @@ fullReadSpec = describe "full Cargo read payments" $ do
             snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
 
 observingFullRead :: MemoryMeter -> Int -> IORef Int -> IORef Int -> IORef [Int] -> PrepareRead -> PrepareRead
-observingFullRead meter factor sourcePaid peak balances (PrepareRead prepare) = PrepareRead $ \tracing origin ->
+observingFullRead meter factor sourcePaid peak balances factory = PrepareRead $ \tracing origin ->
     let recordSource amount = modifyIORef' sourcePaid (+ scaleCharge factor amount)
         source amount = ocChargeFullRead origin amount >> recordSource amount
         -- The fetch retains the original origin, so body payments bypass the preparation wrapper.
@@ -221,7 +221,7 @@ observingFullRead meter factor sourcePaid peak balances (PrepareRead prepare) = 
             rowHeld <- readIORef peak
             held <- snChargedBytes <$> meterSnapshot meter
             modifyIORef' balances ((held - sourceHeld - rowHeld) :)
-     in fmap observeBody <$> prepare tracing origin{ocChargeFullRead = source, ocChargeFullReadWorkspace = workspace}
+     in fmap observeBody <$> prepareRead factory tracing origin{ocChargeFullRead = source, ocChargeFullReadWorkspace = workspace}
 
 runCargoFull :: ServeRuntime -> PackumentDeps -> MemoryTicket -> Bool -> IO OriginResult
 runCargoFull runtime deps ticket public = do
