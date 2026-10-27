@@ -256,11 +256,15 @@ may not be allowed to install. `server.metadataGzip` is on by default, and
 [Metadata admission, authorised response reuse and per-response compression](https://ecluse-proxy.com/docs/threat-model/#metadata-listing-and-admission)
 
 After admission, `Accept-Encoding` selects gzip, identity, or a `406` when neither is permitted.
-A matching `If-None-Match` returns `304` before rendering or compression. Otherwise the proxy
+Input-derived validators return `304` before rendering or compression. Otherwise the proxy
 reads or renders identity bytes, then compresses only when gzip was selected.
+RubyGems first builds the bounded Dependencies API batch after every named package passes admission.
+Its validator hashes the ordered Marshal bytes. Validated compact gemspec bytes use the same conditional and coding rules.
+The empty Dependencies API reply is an empty metadata listing, including for coding and validators.
 
 - **Only admitted listings.** Artifacts, sidecars, probes, refusals and publish replies are never
-  compressed by Écluse. The coding is chosen after every authority and policy check.
+  compressed by Écluse. RubyGems compact gemspecs are admitted native metadata.
+  The coding is chosen after every authority and policy check.
 - **One cached form.** The assembled cache holds identity bytes under the identity tag. Each gzip
   response compresses them again, on a hit as on a miss, at level 1 for speed.
 - **Validators per coding.** The gzip tag is weak and derived from the identity tag, because a

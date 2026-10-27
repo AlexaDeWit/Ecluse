@@ -3,15 +3,17 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE ImportQualifiedPost #-}
 
+-- | Native batch limits and representation headers exercise the routed admission path.
 module Ecluse.Core.Registry.RubyGems.HandlersSpec (spec) where
 
+import Codec.Compression.GZip qualified as GZip
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
-import Network.HTTP.Types (Header, Method, status200, status400, status401, status404, status502)
+import Network.HTTP.Types (Header, Method, status200, status304, status400, status401, status404, status406, status502)
 import Network.Wai (Request (..), defaultRequest, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SRequest (SRequest), SResponse (..), runSession, setPath, srequest)
@@ -29,6 +31,7 @@ import Ecluse.Core.Server.Admission.Artifact (newVerifiedArtifactBudget)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
 import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), ReadSourceSelection (PrivateOnly), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime, runHandler)
 import Ecluse.Core.Server.Contract (responseToWai)
+import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
@@ -121,6 +124,85 @@ spec = do
                 simpleBody headed `shouldBe` ""
                 probe <- capture runtime binding "HEAD" "/versions" []
                 simpleStatus probe `shouldBe` status404
+
+    describe "native metadata representations" $ do
+        for_ metadataPaths $ \path ->
+            it ("shares coding, HEAD and conditional responses for " <> toString (decodeUtf8 path :: Text)) $
+                withNative $ \runtime original _ -> do
+                    let binding = compressing original
+                        serve method = capture runtime binding method path
+                    plain <- serve "GET" []
+                    packed <- serve "GET" [("Accept-Encoding", "gzip")]
+                    map simpleStatus [plain, packed] `shouldBe` [status200, status200]
+                    GZip.decompress (simpleBody packed) `shouldBe` simpleBody plain
+                    lookup "Content-Encoding" (simpleHeaders packed) `shouldBe` Just "gzip"
+                    map (lookup "Vary" . simpleHeaders) [plain, packed] `shouldBe` replicate 2 (Just "Accept-Encoding")
+                    plainTag <- responseTag plain
+                    gzipTag <- responseTag packed
+                    gzipTag `shouldNotBe` plainTag
+                    for_ [([], plain, plainTag), ([("Accept-Encoding", "gzip")], packed, gzipTag)] $ \(offered, fetched, tag) -> do
+                        headed <- serve "HEAD" offered
+                        simpleStatus headed `shouldBe` status200
+                        simpleBody headed `shouldBe` ""
+                        lookup "Content-Length" (simpleHeaders headed) `shouldBe` Just (show (LBS.length (simpleBody fetched)))
+                        lookup "ETag" (simpleHeaders headed) `shouldBe` Just tag
+                        for_ ["GET", "HEAD"] $ \method -> do
+                            matched <- serve method (("If-None-Match", tag) : offered)
+                            simpleStatus matched `shouldBe` status304
+                            simpleBody matched `shouldBe` ""
+                            lookup "ETag" (simpleHeaders matched) `shouldBe` Just tag
+                            lookup "Vary" (simpleHeaders matched) `shouldBe` Just "Accept-Encoding"
+                    crossed <- serve "GET" [("Accept-Encoding", "gzip"), ("If-None-Match", plainTag)]
+                    simpleStatus crossed `shouldBe` status200
+                    excluded <- serve "GET" [("Accept-Encoding", "gzip;q=0, identity;q=0"), ("If-None-Match", "*")]
+                    simpleStatus excluded `shouldBe` status406
+        it "binds a batch validator to its complete ordered admitted bytes" $
+            withNative $ \runtime original _ -> do
+                let binding = compressing original
+                    firstPath = "/api/v1/dependencies?gems=ecluse-fixture-root"
+                    paths =
+                        [ firstPath
+                        , "/api/v1/dependencies?gems=ecluse-fixture-root,ecluse-fixture-leaf"
+                        , "/api/v1/dependencies?gems=ecluse-fixture-leaf,ecluse-fixture-root"
+                        ]
+                first <- capture runtime binding "GET" firstPath []
+                tag <- responseTag first
+                responses <- traverse (\path -> capture runtime binding "GET" path [("If-None-Match", tag)]) paths
+                map simpleStatus responses `shouldBe` [status304, status200, status200]
+                tags <- traverse responseTag responses
+                length (ordNub tags) `shouldBe` 3
+        it "does not let a wildcard validator bypass authentication, bounds or coordinate admission" $
+            withNative $ \runtime original hits -> do
+                let binding = compressing original
+                    secured = binding{bindingPackumentDeps = (bindingPackumentDeps binding){pdInboundToken = Just (mkSecret "secret")}}
+                    wildcard = [("If-None-Match", "*")]
+                for_ metadataPaths $ \path -> do
+                    refused <- capture runtime secured "GET" path wildcard
+                    simpleStatus refused `shouldBe` status401
+                readIORef hits `shouldReturn` []
+                malformed <- capture runtime binding "GET" "/api/v1/dependencies?gems=one&gems=two" wildcard
+                simpleStatus malformed `shouldBe` status400
+                readIORef hits `shouldReturn` []
+                missing <- capture runtime binding "GET" "/quick/Marshal.4.8/ecluse-fixture-root-99.0.0.gemspec.rz" wildcard
+                simpleStatus missing `shouldBe` status404
+                let deps = bindingPackumentDeps binding
+                    bounded = binding{bindingPackumentDeps = deps{pdLimits = (pdLimits deps){maxArtifactCount = 3}}}
+                oversized <- capture runtime bounded "GET" "/api/v1/dependencies?gems=ecluse-fixture-root,ecluse-fixture-leaf" wildcard
+                simpleStatus oversized `shouldBe` status400
+
+metadataPaths :: [ByteString]
+metadataPaths =
+    [ "/api/v1/dependencies"
+    , "/api/v1/dependencies?gems=ecluse-fixture-root"
+    , "/api/v1/dependencies?gems=ecluse-fixture-root,ecluse-fixture-leaf"
+    , "/quick/Marshal.4.8/ecluse-fixture-root-1.0.0.gemspec.rz"
+    ]
+
+compressing :: MountBinding -> MountBinding
+compressing binding = binding{bindingPackumentDeps = (bindingPackumentDeps binding){pdMetadataCompression = GzipWhenAccepted}}
+
+responseTag :: SResponse -> IO ByteString
+responseTag response = maybe (expectationFailure "the admitted metadata response omitted its ETag" >> pure "") pure (lookup "ETag" (simpleHeaders response))
 
 withNative :: (ServeRuntime -> MountBinding -> IORef [([Text], [Header])] -> IO a) -> IO a
 withNative use = withSweeper $ \deadlines -> do

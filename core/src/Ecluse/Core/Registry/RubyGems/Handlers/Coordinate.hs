@@ -9,7 +9,6 @@ module Ecluse.Core.Registry.RubyGems.Handlers.Coordinate (
     serveCompactSpec,
 ) where
 
-import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Network.HTTP.Types (Method)
@@ -42,7 +41,7 @@ import Ecluse.Core.Server.Context (Handler, MountBinding (bindingPackumentDeps),
 import Ecluse.Core.Server.MirrorView (readMirrorCompanion, validateMirrorProject)
 import Ecluse.Core.Server.Path (Filename, unFilename)
 import Ecluse.Core.Server.Pipeline.Origin (ObservedReadBoundExceeded (ObservedReadBoundExceeded))
-import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), mapPackumentReplies, withAdmittedDocument)
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerMetadataBytes, mapPackumentReplies, withAdmittedDocument)
 import Ecluse.Core.Server.Pipeline.Shared (edgeTokenMatches, forwardedCredential, shedMessage, unauthorisedMessage, withListingAdmission, withMetadataAdmission)
 import Ecluse.Core.Server.Pipeline.Tarball (headTarball, serveTarball)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies)
@@ -178,11 +177,9 @@ fetchCompact ticket observe request (row, provenance) = do
         Right body -> do
             pay <- liftIO (newChargeRegion (charge ticket))
             checked <- liftIO (validateCompactSpec limits pay coordinate row body)
-            pure $ case checked of
-                Left _ -> invalid
-                Right compact ->
-                    let original = compactSpecBytes compact
-                     in packumentOk rubyReplies [("Content-Length", show (BS.length original))] (fromStrict original)
+            case checked of
+                Left _ -> pure invalid
+                Right compact -> answerMetadataBytes rubyReplies deps ticket request (compactSpecBytes compact)
 
 sourceLocation :: PackumentDeps -> Provenance -> Maybe RegistryUrl
 sourceLocation deps TrustedSource = pdPrivateBaseUrl deps

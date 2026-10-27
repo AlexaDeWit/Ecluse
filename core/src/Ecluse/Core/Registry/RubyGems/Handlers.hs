@@ -34,7 +34,7 @@ import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Meter (charge)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfOutputPermille))
 import Ecluse.Core.Server.Context (Handler, MountBinding (bindingPackumentDeps), PackumentDeps (..), ServeRuntime (..), ctxMount, ctxRuntime)
-import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), mapPackumentReplies, withAdmittedDocument)
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerMetadataBytes, mapPackumentReplies, withAdmittedDocument)
 import Ecluse.Core.Server.Pipeline.Shared (edgeTokenMatches, forwardedCredential, shedMessage, unauthorisedMessage, withListingAdmission)
 import Ecluse.Core.Server.Response (mkRefusal)
 
@@ -105,9 +105,9 @@ serveDependencies request respond = do
         [] -> do
             let limit = maxMetadataBytes (pdLimits deps)
             liftIO (charge ticket (fromInteger (min (toInteger (maxBound :: Int)) (2 * bytes + 4096))))
-            pure $ case encodeDependencies limit (concat (reverse accumulated)) of
-                Left fault -> rubyBadRequest (parseErrorMessage fault)
-                Right encoded -> packumentOk rubyReplies [] (fromStrict encoded)
+            case encodeDependencies limit (concat (reverse accumulated)) of
+                Left fault -> pure (rubyBadRequest (parseErrorMessage fault))
+                Right encoded -> answerMetadataBytes rubyReplies deps ticket request encoded
         name : rest -> do
             selected <-
                 withAdmittedDocument

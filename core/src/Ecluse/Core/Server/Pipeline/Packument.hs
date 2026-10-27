@@ -9,6 +9,7 @@ module Ecluse.Core.Server.Pipeline.Packument (
     servePackument,
     headPackument,
     withAdmittedDocument,
+    answerMetadataBytes,
     mapPackumentReplies,
 
     -- * The first-party private miss (exported for its unit spec)
@@ -19,13 +20,14 @@ module Ecluse.Core.Server.Pipeline.Packument (
     noSurvivors,
 ) where
 
+import Crypto.Hash (hash)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Katip (Severity (DebugS, ErrorS), logFM, ls)
 import Network.HTTP.Types (Method, ResponseHeaders, hContentLength)
-import Network.Wai (Request, ResponseReceived, requestHeaders)
+import Network.Wai (Request, ResponseReceived, requestHeaders, requestMethod)
 import UnliftIO (concurrently, withRunInIO)
 import UnliftIO.Exception (catchAny, evaluate, throwIO)
 
@@ -64,7 +66,7 @@ import Ecluse.Core.Server.Admission.Meter (ChargePart, MemoryTicket, awaitingFli
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfOutputPermille))
 import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Cache.Types (assembledKey)
-import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag)
+import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag)
 import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps),
@@ -483,31 +485,38 @@ serveResolved serving sources plan = do
     liftIO (mpServeDecision (servingMetrics serving) Metric.Admit)
     psvResolved serving serving sources plan
 
--- The coding is chosen before the validator, so a 304 names the coding's own tag. It skips assembly and compression.
 answerPackumentConditional :: PackumentServing response -> [Contribution] -> MergePlan -> Handler response
 answerPackumentConditional serving sources plan =
+    answerMetadataConditional (psvReplies serving) deps (psvTicket serving) (psvRequest serving) (psvMode serving) identityTag $ do
+        bytes <- servedBytes serving sources plan identityTag
+        releaseReads serving
+        pure bytes
+  where
+    deps = psvDeps serving
+    origins = map registryUrlText (maybeToList (pdPrivateBaseUrl deps) <> [pdPublicBaseUrl deps])
+    identityTag = packumentETag (pdMountBaseUrl deps) origins (psvName serving) (map fingerprintPiece sources)
+
+-- | Finalise bounded native bytes only after current authorisation, admission and validation.
+answerMetadataBytes :: PackumentReplies response -> PackumentDeps -> MemoryTicket -> Request -> ByteString -> Handler response
+answerMetadataBytes replies deps ticket request bytes =
+    answerMetadataConditional replies deps ticket request mode (mkStrongETag (hash bytes)) (pure bytes)
+  where
+    mode = if isHead (requestMethod request) then PackumentHead else PackumentFull
+
+-- Choose coding before its validator. An input-derived tag can skip assembly and compression on 304.
+answerMetadataConditional :: PackumentReplies response -> PackumentDeps -> MemoryTicket -> Request -> PackumentServe -> ETag -> IO ByteString -> Handler response
+answerMetadataConditional replies deps ticket request mode identityTag render =
     case chooseCoding (pdMetadataCompression deps) headers of
         NoAcceptableCoding ->
             pure (packumentNotAcceptable replies (represented []) (mkRefusal (pdHelp deps) "the request's Accept-Encoding excludes both gzip and identity"))
         ServeCoding coding -> case evaluateETag headers (codedETag coding identityTag) of
-            NotModified matched -> do
-                logFM DebugS (ls ("packument unchanged for " <> renderPackageName name <> " (304, unassembled)"))
-                pure (packumentNotModified replies (represented [etagHeader matched]))
+            NotModified matched -> pure (packumentNotModified replies (represented [etagHeader matched]))
             Modified fresh -> do
-                logFM DebugS (ls ("serving packument for " <> renderPackageName name))
-                -- The assembled cache holds the identity bytes under the identity tag, whatever the coding.
-                bytes <- liftIO (servedBytes serving sources plan identityTag)
-                liftIO (releaseReads serving)
-                listing <- liftIO (codedListing (psvTicket serving) coding bytes)
-                pure (packumentResponse replies (psvMode serving) (represented [etagHeader fresh]) listing)
+                bytes <- liftIO render
+                listing <- liftIO (codedListing ticket coding bytes)
+                pure (packumentResponse replies mode (represented [etagHeader fresh]) listing)
   where
-    deps = psvDeps serving
-    name = psvName serving
-    replies = psvReplies serving
-    headers = requestHeaders (psvRequest serving)
-    origins = map registryUrlText (maybeToList (pdPrivateBaseUrl deps) <> [pdPublicBaseUrl deps])
-    identityTag = packumentETag (pdMountBaseUrl deps) origins name (map fingerprintPiece sources)
-    -- An identity-only mount negotiates nothing, so its responses do not vary by Accept-Encoding.
+    headers = requestHeaders request
     represented = case pdMetadataCompression deps of
         GzipWhenAccepted -> varyAcceptEncoding
         IdentityOnly -> id
