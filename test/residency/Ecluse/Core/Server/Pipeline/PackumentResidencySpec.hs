@@ -15,8 +15,10 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Foreign.StablePtr (deRefStablePtr, freeStablePtr, newStablePtr)
 import Network.HTTP.Types (hContentType, methodGet, status200, statusCode)
-import Network.Wai (Application, defaultRequest, pathInfo, requestMethod, responseLBS, responseStatus)
+import Network.HTTP.Types.URI (renderQuery)
+import Network.Wai (Application, Request (..), defaultRequest, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
+import Network.Wai.Test (setPath)
 import Test.Hspec
 import UnliftIO.Exception (bracket, evaluate, throwIO)
 
@@ -45,7 +47,7 @@ import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.Cargo.Fixtures (cargoShard, cargoViewDiscovery)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig, newMetadataCache)
-import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureResponse), deliverServe, testServeRuntime)
+import Ecluse.Test.Server.Handler (deliverServe, testServeRuntime)
 import Ecluse.Test.Server.Mount (serveDepsFor)
 import Ecluse.Test.Support (expectRight, testMemoryMeter)
 import Ecluse.Test.Wai (rebaseAuthority, selfBaseUrl)
@@ -138,9 +140,9 @@ takeCensus package captured capture = withSweeper $ \deadlines -> do
                     writeIORef responded (Just (response, atRespond))
                 atEnd <- live <$> sampleAfterSweep deadlines
                 _ <- deRefStablePtr root
-                (response, atRespond) <- maybe (throwIO MissingFixtureResponse) pure =<< readIORef responded
-                atGate <- maybe (throwIO MissingFixtureResponse) pure =<< readIORef gate
-                atPlan <- maybe (throwIO MissingFixtureResponse) pure =<< readIORef planned
+                (response, atRespond) <- maybe (throwIO MissingCensusResponse) pure =<< readIORef responded
+                atGate <- maybe (throwIO MissingCensusGate) pure =<< readIORef gate
+                atPlan <- maybe (throwIO MissingCensusPlan) pure =<< readIORef planned
                 pure
                     Census
                         { censusStatus = statusCode (responseStatus response)
@@ -153,9 +155,11 @@ takeCensus package captured capture = withSweeper $ \deadlines -> do
   where
     name = cpPackage package
     origin port = loopbackRegistryUrl ("http://localhost:" <> show port)
-    listing logEnv rt binding deliver = case bindingRouter binding methodGet [] (listingPath name) of
-        RouteAction contract (RunPipeline _ action) -> deliverServe logEnv contract rt binding (action defaultRequest{requestMethod = methodGet}) deliver
-        _ -> throwIO MissingFixtureResponse
+    listing logEnv rt binding deliver = case bindingRouter binding methodGet [] segments of
+        RouteAction contract (RunPipeline _ action) -> deliverServe logEnv contract rt binding (action request) deliver
+        _ -> throwIO MissingCensusRoute
+      where
+        (segments, request) = listingOperation name
 
 -- Disarmed deadlines retain worker stacks until the sweeper removes their entries.
 sampleAfterSweep :: Deadlines -> IO HeapSample
@@ -167,12 +171,25 @@ samplePoint deadlines meter point = do
     charged <- snChargedBytes <$> meterSnapshot meter
     writeIORef point (Just (Point (toInteger now) charged))
 
-listingPath :: PackageName -> [Text]
-listingPath name = case pkgEcosystem name of
-    Npm -> T.splitOn "/" (renderPackageName name)
-    PyPI -> ["simple", renderPackageName name]
-    Cargo -> T.splitOn "/" (cargoShard (renderPackageName name))
-    RubyGems -> [renderPackageName name]
+data CensusFixtureFailure
+    = MissingCensusResponse
+    | MissingCensusGate
+    | MissingCensusPlan
+    | MissingCensusRoute
+    deriving stock (Show)
+
+instance Exception CensusFixtureFailure
+
+listingOperation :: PackageName -> ([Text], Request)
+listingOperation name = case pkgEcosystem name of
+    Npm -> ordinary (T.splitOn "/" (renderPackageName name))
+    PyPI -> ordinary ["simple", renderPackageName name]
+    Cargo -> ordinary (T.splitOn "/" (cargoShard (renderPackageName name)))
+    RubyGems -> (pathInfo native, native)
+  where
+    ordinary segments = (segments, defaultRequest{requestMethod = methodGet})
+    -- An empty Dependencies API query skips package admission and both census checkpoints.
+    native = setPath defaultRequest{requestMethod = methodGet} ("/api/v1/dependencies" <> renderQuery True [("gems", Just (encodeUtf8 (renderPackageName name)))])
 
 {- Serve the capture with its locations on this origin's own authority, as projection keeps no other.
 The body is rebased once, so the origin holds the same bytes at every sample. -}
