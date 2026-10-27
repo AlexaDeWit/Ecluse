@@ -140,8 +140,8 @@ artifactScenarioWith privateHit shape =
         let bytes = artifactBytes (lkPayloadBytes knobs)
             latency = lkUpstreamLatencyMicros knobs
             actual = relayArtifactFixture shape latency bytes
-            empty = missingStub latency
-            (private, public, ttl) = if privateHit then (actual, empty, longCacheTtl) else (empty, actual, 0)
+            emptyUpstreamStub = missingStub latency
+            (private, public, ttl) = if privateHit then (actual, emptyUpstreamStub, longCacheTtl) else (emptyUpstreamStub, actual, 0)
             mix port = [localhost port <> "/rubygems/" <> (if privateHit then "private/" else "") <> "gems/" <> cpName package <> "-9999.0.2.gem" | package <- rubyGemsCorpusPackages]
         withProxyOverStubs RubyGems knobs ttl Nothing private public mix $ \proxy urls -> do
             for_ urls $ \url -> do

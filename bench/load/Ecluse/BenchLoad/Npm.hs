@@ -383,7 +383,8 @@ succeedingPublishClient counter = do
     committed <- newIORef Nothing
     pure
         MirrorPublish
-            { mpPrepareVersion = \name version doc -> do
+            { mpMirrorCompanion = Nothing
+            , mpPrepareVersion = \name version doc -> do
                 (inventory, _) <- prepareNpmSource name version doc
                 pure $ PreparedMirrorVersion inventory $ \_ _ _ -> pure . Right $ PreparedMirrorUpload $ \_ -> do
                     atomicModifyIORef' counter (\n -> (n + 1, ()))

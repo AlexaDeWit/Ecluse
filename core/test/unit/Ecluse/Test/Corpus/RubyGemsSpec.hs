@@ -40,7 +40,7 @@ spec = describe "RubyGems corpus transforms" $ do
         enlarged <- expectRight (encodeRubyGemsValues (heavyRubyGemsBase 4096 document))
         before <- expectRight (referenceInfo platformHistory)
         after <- expectRight (referenceInfo enlarged)
-        map identity after `shouldBe` map identity before
+        map installationFields after `shouldBe` map installationFields before
         all (any ((== "ecluse_benchmark") . fst) . rowFields) after `shouldBe` True
     it "generates the requested distinct native releases" $
         for_ [1, 8, 64] $ \count -> do
@@ -50,7 +50,7 @@ spec = describe "RubyGems corpus transforms" $ do
         decodeRubyGemsValues "1.0.0 |checksum:abc\n" `shouldSatisfy` isLeft
         decodeRubyGemsValues "---\n1.0.0 |checksum:abc" `shouldSatisfy` isLeft
   where
-    identity row = (rowPosition row, rowVersion row, rowPlatform row, rowDependencies row, filter ((/= "ecluse_benchmark") . fst) (rowFields row))
+    installationFields row = (rowPosition row, rowVersion row, rowPlatform row, rowDependencies row, filter ((/= "ecluse_benchmark") . fst) (rowFields row))
 
 platformHistory :: ByteString
 platformHistory =

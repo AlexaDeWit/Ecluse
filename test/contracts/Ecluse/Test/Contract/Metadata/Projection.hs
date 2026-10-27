@@ -54,15 +54,15 @@ data CallerBoundProjectionDriver = CallerBoundProjectionDriver
 -- | Named requests replace self-reported-name laws without inventing native identity fields.
 callerBoundProjectionContract :: Text -> CallerBoundProjectionDriver -> Spec
 callerBoundProjectionContract provider bound = describe "caller-bound metadata projection" $ do
-    example "malformed" "rejects a missing native header on full and selected reads" $ do
+    projectionCase "malformed" "rejects a missing native header on full and selected reads" $ do
         void <$> projectFull driver defaultLimits "missing delimiter" `shouldReturn` Left MetadataUndecodable
         for_ versions $ \version ->
             void <$> projectSelected driver defaultLimits version "missing delimiter" `shouldReturn` Left MetadataUndecodable
-    example "name-binding" "projects exactly the checked request package identity" $ do
+    projectionCase "name-binding" "projects exactly the checked request package identity" $ do
         info <- expectRight =<< projectFull driver defaultLimits document
         renderPackageName (infoName info) `shouldBe` projectionPackageName driver
         Map.keys (infoVersions info) `shouldBe` sort versions
-    example "origin-binding" "refuses another source origin on full and selected reads" $ do
+    projectionCase "origin-binding" "refuses another source origin on full and selected reads" $ do
         let foreignOrigin = callerOrigin bound <> "foreign/"
         void <$> callerFullAt bound foreignOrigin defaultLimits document `shouldReturn` Left MetadataUndecodable
         for_ versions $ \version ->
@@ -72,7 +72,7 @@ callerBoundProjectionContract provider bound = describe "caller-bound metadata p
     driver = callerProjection bound
     versions = projectionVersions driver
     document = projectionDocument driver (projectionPackageName driver) versions
-    example identifier = it . caseLabel ("core.metadata.projection." <> provider <> "." <> identifier)
+    projectionCase identifier = it . caseLabel ("core.metadata.projection." <> provider <> "." <> identifier)
 
 -- | Compare native refusal evidence and identical count bounds through full and selected reads.
 metadataProjectionContract :: Text -> ProjectionDriver -> Spec
