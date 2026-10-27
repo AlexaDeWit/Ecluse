@@ -11,6 +11,7 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Support (
     withNpmStore,
     withPyPIStore,
     withCargoStore,
+    withRubyStore,
 
     -- * Describe answers
     describing,
@@ -33,7 +34,7 @@ import Amazonka qualified as AWS
 import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
 
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Fault (tfDetail)
 import Ecluse.Core.Registry.Maintenance (StoreFault (..))
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
@@ -70,6 +71,10 @@ withPyPIStore = withStore PyPI
 -- | Require the native Cargo format at the shared repository coordinates.
 withCargoStore :: (CodeArtifactStore -> Spec) -> Spec
 withCargoStore = withStore Cargo
+
+-- | Require the native Ruby format at the shared repository coordinates.
+withRubyStore :: (CodeArtifactStore -> Spec) -> Spec
+withRubyStore = withStore RubyGems
 
 withStore :: Ecosystem -> (CodeArtifactStore -> Spec) -> Spec
 withStore eco cases = maybe missingFormat cases (storeFor eco)

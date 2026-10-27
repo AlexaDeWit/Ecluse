@@ -140,7 +140,7 @@ codeArtifactFormat = \case
     Npm -> Just (CodeArtifactFormat Npm CA.PackageFormat_Npm)
     PyPI -> Just (CodeArtifactFormat PyPI CA.PackageFormat_Pypi)
     Cargo -> Just (CodeArtifactFormat Cargo (CA.PackageFormat' "cargo"))
-    RubyGems -> Nothing
+    RubyGems -> Just (CodeArtifactFormat RubyGems (CA.PackageFormat' "ruby"))
 
 -- | The ecosystem a format was built from.
 formatEcosystem :: CodeArtifactFormat -> Ecosystem
