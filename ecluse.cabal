@@ -1170,9 +1170,11 @@ test-suite ecluse-core-unit
     SpecHook
     Ecluse.Core.Registry.NpmSmokeSpec
     Ecluse.Core.Registry.PyPISmokeSpec
+    Ecluse.Core.Registry.RubyGemsSmokeSpec
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
     Ecluse.Core.Registry.Cargo.ReaderResidencySpec
+    Ecluse.Core.Registry.RubyGems.ReaderResidencySpec
     Ecluse.Core.Registry.Json.WalkProbe
     Ecluse.Core.Server.MemoryModel.HeapSample
     Ecluse.Core.StreamBench.Sink
