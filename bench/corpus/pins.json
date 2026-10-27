@@ -548,8 +548,8 @@
     },
     "epss": {
       "path": "advisories/epss.csv",
-      "bytes": 1276,
-      "sha256": "3cf76fb34ce24fb5efa60670fdb8a30c0b6dc250bb21c7ce20c4d338f4b6f71b",
+      "bytes": 1315,
+      "sha256": "ab424c95e84680d459920a95f0c26c799aead563402b7e3f6998d70cc013b7a7",
       "source": "https://epss.empiricalsecurity.com/epss_scores-2026-09-27.csv.gz",
       "capturedAt": "2026-09-27T18:03:19Z",
       "additionalRows": [
@@ -557,6 +557,11 @@
           "source": "https://api.first.org/data/v1/epss?cve=CVE-2021-45710&date=2026-09-27",
           "capturedAt": "2026-10-25T18:24:14.837318Z",
           "cve": "CVE-2021-45710"
+        },
+        {
+          "source": "https://api.first.org/data/v1/epss?cve=CVE-2024-26143&date=2026-09-27",
+          "capturedAt": "2026-10-27T14:04:32.965Z",
+          "cve": "CVE-2024-26143"
         }
       ]
     }

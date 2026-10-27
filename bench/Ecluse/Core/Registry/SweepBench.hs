@@ -36,7 +36,7 @@ import Ecluse.Core.Registry.Adapter.Capability (AdapterMaintenance (maintenanceA
 import Ecluse.Core.Registry.Cargo.Project (cargoNameChars)
 import Ecluse.Core.Registry.Maintenance (StoreFacts (factBackend, factBudget), StoreMaintenance (storeFacts), StoreManifestRead, meteredMaintenance, storeFaultOfMetadata)
 import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort (budgetClose), CycleCost (ccRequests), QuotaScope, RequestGate, RequestKind (..), StoreBudget (bgScope), newBudgetMeter, tallyCounts)
-import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet, noNameAlphabet)
+import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet, initialBuckets, noNameAlphabet, renderNamePrefix)
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Registry.Npm.Project (npmNameLeadChars)
 import Ecluse.Core.Registry.PyPI.Project (pypiNameLeadChars)
@@ -66,8 +66,9 @@ withBenchmarks :: [EcosystemBench] -> (TestTree -> IO a) -> IO a
 withBenchmarks ecosystems use = do
     getRTSStatsEnabled >>= assertBool "the Dredger rows need +RTS -T"
     output <- rowOutput
+    prepared <- traverse (maybe (assertFailure "missing native Dredger measurement provider") pure . scaleOf) ecosystems
     withSystemTempDirectory "ecluse-dredger-scale" $ \directory ->
-        withScales directory (mapMaybe scaleOf ecosystems) $ \scales ->
+        withScales directory prepared $ \scales ->
             use (testGroup "dredger scale" (map (scaleRow output) (scaleRows scales)))
 
 -- One ecosystem's inputs: its reader and documents, its adapter, its buckets, and both catalogues.
@@ -80,14 +81,16 @@ data Scale = Scale
     }
 
 scaleOf :: EcosystemBench -> Maybe (EcosystemBench, RegistryAdapter, [Char])
-scaleOf bench = (bench,,) <$> adapterFor eco <*> leads
+scaleOf bench = do
+    adapter <- adapterFor eco
+    let leads = case eco of
+            Npm -> npmNameLeadChars
+            PyPI -> pypiNameLeadChars
+            Cargo -> cargoNameChars
+            RubyGems -> concatMap (T.unpack . renderNamePrefix) (toList (initialBuckets (maintenanceAlphabet (adapterMaintenance adapter))))
+    pure (bench, adapter, leads)
   where
     eco = ebEcosystem bench
-    leads = case eco of
-        Npm -> Just npmNameLeadChars
-        PyPI -> Just pypiNameLeadChars
-        Cargo -> Just cargoNameChars
-        RubyGems -> Nothing
 
 withScales :: FilePath -> [(EcosystemBench, RegistryAdapter, [Char])] -> ([Scale] -> IO a) -> IO a
 withScales _ [] use = use []

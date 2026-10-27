@@ -24,8 +24,9 @@ import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), EvalContext (
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Corpus (cargoCorpusPackages, corpusPackages, cpName, cpPackage, pypiCorpusPackages, rubyGemsCorpusPackages)
 import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (..), checkCapturesServed, compileAdvisoryInputs, compileCorpusAdvisories, configuredShippedPolicy, corpusAdvisories, shippedPolicy)
+import Ecluse.Test.Corpus.RubyGems (projectRubyGemsInfo)
 import Ecluse.Test.Osv (osvZipOf)
-import Ecluse.Test.OsvDb (withServedArtifact)
+import Ecluse.Test.OsvDb (scoresOf, withServedArtifact)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, blockedBy, evalRules, inertRuleDeps, isBlockedByDefault, servingRuleDeps)
@@ -55,6 +56,21 @@ spec = do
                 let ctx = EvalContext (UTCTime (fromGregorian 2026 3 25) 58240.382036) Nothing
                 withServedArtifact PyPI compiled $ \deps _ -> do
                     assertCapturedRemediation deps ctx fixedRelease affected
+
+    describe "real RubyGems advisory remediation" $
+        it "admits the captured exact Rails fix during quarantine and preserves scored and unknown advisory evidence" $
+            withSystemTempDirectory "ecluse-real-rails-remediation" $ \dir -> do
+                compiled <- compileCorpusAdvisories RubyGems dir
+                scores <- scoresOf compiled
+                scores `shouldSatisfy` elem (Just 0.01034)
+                scores `shouldSatisfy` elem Nothing
+                bytes <- readFileBS "bench/corpus/rubygems/rails.info"
+                (info, _) <- expectRight (projectRubyGemsInfo "https://rubygems.org" defaultLimits (mkPackageName RubyGems Nothing "rails") bytes)
+                fixedRelease <- maybe (fail "the Rails capture has no 7.0.8.1 release") pure (Map.lookup "7.0.8.1" (infoVersions info))
+                affected <- maybe (fail "the Rails capture has no 7.0.8 release") pure (Map.lookup "7.0.8" (infoVersions info))
+                uploaded <- maybe (fail "the captured Rails fix has no publication time") pure (pkgPublishedAt fixedRelease)
+                withServedArtifact RubyGems compiled $ \deps _ ->
+                    assertCapturedRemediation deps (EvalContext (addUTCTime 3600 uploaded) Nothing) fixedRelease affected
 
     describe "canonical remediation controls from compiled captures" $ do
         for_ ["4.17.21", "v4.17.21"] $ \advisoryFix ->

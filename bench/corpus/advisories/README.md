@@ -20,6 +20,7 @@ Its source and capture time are recorded separately in `pins.json`, beside the u
 
 The pinned RubyGems records come unchanged from the OSV API.
 They describe Rails advisory ranges and exact fixed releases.
+The EPSS feed also retains the official 2026-09-27 score for CVE-2024-26143.
 Their source records and capture identities are in `../pins.json`.
 GitHub Advisory Database records use CC-BY-4.0:
 https://github.com/github/advisory-database/blob/main/LICENSE.md.
