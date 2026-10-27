@@ -12,6 +12,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Foreign.StablePtr (deRefStablePtr, freeStablePtr, newStablePtr)
 import GHC.Stats (GCDetails (gcdetails_live_bytes), RTSStats (allocated_bytes, gc, max_live_bytes), getRTSStats)
 import System.Environment (getExecutablePath)
@@ -30,7 +31,9 @@ import Ecluse.Core.Server.Admission.Budget (roundUpToStep, scaleCharge)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 import Ecluse.Core.Server.Cache.Types (Source (Source), fullKey)
 import Ecluse.Core.Server.MirrorView (mirrorRetentionWeight)
+import Ecluse.Core.Server.MirrorView.CompanionProbe qualified as CompanionProbe
 import Ecluse.Test.Mirror.Read
+import Ecluse.Test.Mirror.RubyGems.Residency
 import Ecluse.Test.Mirror.State (mirrorPackage)
 import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex)
 import Ecluse.Test.Support (expectRight)
@@ -94,7 +97,12 @@ instance ToJSON Measurement
 
 -- | The recurring tier checks exchange counts, complete output, and reports admission evidence.
 spec :: Spec
-spec = aroundAll withPrepared $ do
+spec = do
+    managedReadSpec
+    nativeCompanionSpec
+
+managedReadSpec :: Spec
+managedReadSpec = aroundAll withPrepared $ do
     describe "managed mirror project requests" $ do
         it "1 versions use one exchange per request" $ \_ -> makeReadFixture 1 >>= checkExchanges 1
         it "1000 versions use one exchange per request" $ \prepared -> loadReadFixture (prepDirectory prepared) >>= checkExchanges 1000
@@ -210,7 +218,12 @@ checkMeasurement measured = do
 
 -- | Each child measures one phase. Peak samples include that phase's cache priming and warm-up.
 probeMain :: String -> FilePath -> IO ()
-probeMain rawPhase directory = do
+probeMain rawPhase directory
+    | "RubyCompanion" `T.isPrefixOf` toText rawPhase = CompanionProbe.probeMain rawPhase directory
+    | otherwise = managedProbeMain rawPhase directory
+
+managedProbeMain :: String -> FilePath -> IO ()
+managedProbeMain rawPhase directory = do
     mode <- maybe (fail "unknown managed read phase") pure (readMaybe rawPhase)
     void (measure mode directory)
     baselineSample <- sample
@@ -247,3 +260,53 @@ sample = do
     performMajorGC
     stats <- getRTSStats
     evaluate (Sample (gcdetails_live_bytes (gc stats)) (max_live_bytes stats) (allocated_bytes stats))
+
+nativeCompanionSpec :: Spec
+nativeCompanionSpec = aroundAll (withRubyStateFiles LargeObjectState) $
+    describe "RubyGems external compact object reservations" $
+        for_ ["RubyCompanionRead", "RubyCompanionValidate", "RubyCompanionCorrupt", "RubyCompanionCancel", "RubyCompanionCancelValidation"] $ \mode ->
+            it (mode <> " releases independently buffered objects and their request reservation") $ \files -> do
+                rsfObjectBytes files `shouldSatisfy` (> 1024 * 1024)
+                executable <- getExecutablePath
+                (status, output, errors) <- readProcessWithExitCode executable ["--mirror-read-probe", mode, rsfDirectory files, "+RTS", "-T", "-N1", "-F1", "-A128k", "-RTS"] ""
+                unless (status == ExitSuccess) (expectationFailure (show status <> ": " <> errors))
+                measured <- expectRight (eitherDecodeStrict (encodeUtf8 (toText output)))
+                putStrLn ("managed-companion-residency " <> mode <> " " <> output)
+                checkNativeCompanion mode measured
+
+checkNativeCompanion :: String -> CompanionProbe.CompanionMeasurement -> Expectation
+checkNativeCompanion mode measured = do
+    let retained = toInteger (CompanionProbe.cmHeldLive measured) - toInteger (CompanionProbe.cmBaselineLive measured)
+        residual = max 0 (toInteger (CompanionProbe.cmReleasedLive measured) - toInteger (CompanionProbe.cmBaselineLive measured))
+        paid = toInteger (CompanionProbe.cmPeakTicketCharge measured)
+    CompanionProbe.cmReferenceBytes measured `shouldSatisfy` (> 64 * 1024)
+    CompanionProbe.cmReadBytes measured `shouldSatisfy` (> 0)
+    CompanionProbe.cmReadChunks measured `shouldSatisfy` (> 0)
+    CompanionProbe.cmRequestedReadCharge measured `shouldSatisfy` (>= CompanionProbe.cmReadBytes measured)
+    CompanionProbe.cmPeakTicketCharge measured `shouldSatisfy` (>= CompanionProbe.cmRequestedReadCharge measured)
+    CompanionProbe.cmSampledPeakLiveGrowth measured `shouldSatisfy` (<= paid)
+    CompanionProbe.cmAllocatedBytes measured `shouldSatisfy` (> 0)
+    CompanionProbe.cmChargeAfterRelease measured `shouldBe` 0
+    residual `shouldSatisfy` (<= 16 * 1024)
+    case mode of
+        "RubyCompanionCancel" -> do
+            CompanionProbe.cmOutcome measured `shouldBe` "cancelled"
+            CompanionProbe.cmReturnedBytes measured `shouldBe` 0
+            CompanionProbe.cmReadBytes measured `shouldSatisfy` (< CompanionProbe.cmReferenceBytes measured)
+            CompanionProbe.cmChargeDuringRequest measured `shouldBe` Nothing
+        "RubyCompanionCancelValidation" -> do
+            CompanionProbe.cmOutcome measured `shouldBe` "cancelled"
+            CompanionProbe.cmReturnedBytes measured `shouldBe` 0
+            CompanionProbe.cmReadBytes measured `shouldBe` CompanionProbe.cmReferenceBytes measured
+            CompanionProbe.cmChargeDuringRequest measured `shouldBe` Nothing
+        "RubyCompanionCorrupt" -> do
+            CompanionProbe.cmOutcome measured `shouldSatisfy` T.isInfixOf "retained companion identity mismatch"
+            CompanionProbe.cmReturnedBytes measured `shouldBe` 0
+            CompanionProbe.cmReadBytes measured `shouldBe` CompanionProbe.cmReferenceBytes measured
+        _ -> do
+            CompanionProbe.cmOutcome measured `shouldBe` "verified"
+            CompanionProbe.cmReturnedBytes measured `shouldBe` CompanionProbe.cmReferenceBytes measured
+            CompanionProbe.cmReadBytes measured `shouldBe` CompanionProbe.cmReferenceBytes measured
+            CompanionProbe.cmChargeDuringRequest measured `shouldSatisfy` maybe False (> 0)
+            retained `shouldSatisfy` (> 0)
+            retained `shouldSatisfy` (<= paid)
