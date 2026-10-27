@@ -22,6 +22,8 @@ module Ecluse.Core.Server.MemoryModel.Calibration (
     pypiFigures,
     cargoFigures,
     rubyGemsFigures,
+    SyntheticListingFigures (..),
+    rubyGemsSyntheticFigures,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -352,3 +354,14 @@ rubyGemsFigures =
                 }
             )
         ]
+
+-- | Listing-only ratios keep labelled synthetic evidence separate from captured retained figures.
+data SyntheticListingFigures = SyntheticListingFigures
+    { syntheticReadPeak :: Rational
+    , syntheticSingleOutput :: Rational
+    , syntheticMergedOutputs :: Map MergeShape Rational
+    }
+
+-- | Unavailable until identified above-step native synthetic observations supply the ratios.
+rubyGemsSyntheticFigures :: Maybe SyntheticListingFigures
+rubyGemsSyntheticFigures = Nothing
