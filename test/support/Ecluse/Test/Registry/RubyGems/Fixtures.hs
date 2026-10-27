@@ -9,6 +9,7 @@ module Ecluse.Test.Registry.RubyGems.Fixtures (
     rubyLeaf,
     rubyVersion,
     loadRubyReleases,
+    loadRubyReleasesFrom,
     rubyRelease,
     writeRubyRegistry,
 ) where
@@ -49,16 +50,20 @@ rubyVersion = "1.0.0"
 
 -- | A corrupted committed archive or compact specification fails fixture acquisition.
 loadRubyReleases :: IO [RubyRelease]
-loadRubyReleases = do
-    raw <- BS.readFile (fixtureDirectory </> "manifest.json")
+loadRubyReleases = loadRubyReleasesFrom fixtureDirectory
+
+-- | Generated load fixtures use the same native manifest and digest checks as the committed corpus.
+loadRubyReleasesFrom :: FilePath -> IO [RubyRelease]
+loadRubyReleasesFrom directory = do
+    raw <- BS.readFile (directory </> "manifest.json")
     value <- either fail pure (eitherDecodeStrict raw)
     rows <- either fail pure (parseEither (withObject "fixture manifest" (.: "releases")) value)
     traverse load rows
   where
     load row = do
         (name, version, platform, filename, checksum, compactPath, compactChecksum) <- either fail pure (parseEither coordinate row)
-        archive <- BS.readFile (fixtureDirectory </> "gems" </> toString filename)
-        compact <- BS.readFile (fixtureDirectory </> compactPath)
+        archive <- BS.readFile (directory </> "gems" </> toString filename)
+        compact <- BS.readFile (directory </> compactPath)
         unless (hexSha256Of archive == checksum) (fail "Ruby fixture archive differs from its native digest")
         unless (hexSha256Of compact == compactChecksum) (fail "Ruby fixture compact specification differs from its native digest")
         pure (RubyRelease name version platform filename checksum archive compactPath compact row)
