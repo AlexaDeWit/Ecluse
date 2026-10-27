@@ -17,6 +17,7 @@ module Ecluse.Test.Registry.RubyGems.Fixtures (
 import Data.Aeson (Value, eitherDecodeStrict, withObject, (.:))
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
+import Data.Text qualified as T
 import System.Directory (copyFile, createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
 
@@ -33,6 +34,7 @@ data RubyRelease = RubyRelease
     , releaseCompactPath :: FilePath
     , releaseCompact :: ByteString
     , releaseManifest :: Value
+    , releaseInfoRow :: Text
     }
     deriving stock (Eq, Show)
 
@@ -66,7 +68,12 @@ loadRubyReleasesFrom directory = do
         compact <- BS.readFile (directory </> compactPath)
         unless (hexSha256Of archive == checksum) (fail "Ruby fixture archive differs from its native digest")
         unless (hexSha256Of compact == compactChecksum) (fail "Ruby fixture compact specification differs from its native digest")
-        pure (RubyRelease name version platform filename checksum archive compactPath compact row)
+        info <- decodeUtf8 <$> BS.readFile (directory </> "info" </> toString name)
+        let key = version <> if platform == "ruby" then "" else "-" <> platform
+        infoRow <- case filter ((== key) . T.takeWhile (/= ' ')) (T.lines info) of
+            [line] -> pure line
+            _ -> fail "Ruby fixture info coordinate is absent or ambiguous"
+        pure (RubyRelease name version platform filename checksum archive compactPath compact row infoRow)
     coordinate :: Value -> Parser (Text, Text, Text, Text, Text, FilePath, Text)
     coordinate = withObject "fixture release" $ \row ->
         (,,,,,,) <$> row .: "name" <*> row .: "version" <*> row .: "platform" <*> row .: "filename" <*> row .: "sha256" <*> row .: "compact" <*> row .: "compact_sha256"

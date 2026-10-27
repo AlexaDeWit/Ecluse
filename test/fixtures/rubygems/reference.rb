@@ -6,6 +6,7 @@ require 'zlib'
 require 'tempfile'
 require 'digest'
 require 'stringio'
+require 'date'
 
 def specification(spec)
   {name: spec.name, version: spec.version.to_s, platform: spec.platform.to_s,
@@ -20,6 +21,15 @@ bytes = ARGV[1] ? File.binread(ARGV[1]) : STDIN.binmode.read
 result = case ARGV.fetch(0)
 when 'dependencies'
   Marshal.load(bytes)
+when 'encode-dependencies'
+  rows = JSON.parse(bytes)
+  records = rows.map do |row|
+    {name: row.fetch('name'), number: row.fetch('version'), platform: row.fetch('platform'),
+     dependencies: row.fetch('dependencies').select { |dependency| dependency.fetch('type') == 'runtime' }.map do |dependency|
+       [dependency.fetch('name'), dependency.fetch('requirements').map { |operator, version| "#{operator} #{version}" }.join(', ')]
+     end}
+  end
+  {bytes: Marshal.dump(records).bytes}
 when 'compact'
   specification(Marshal.load(Zlib::Inflate.inflate(bytes)))
 when 'archive'

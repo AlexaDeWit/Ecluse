@@ -24,7 +24,12 @@ coordinates = [
   ['ecluse-fixture-root', '2.0.0', 'ruby'], ['ecluse-fixture-platform', '1.0.0', 'ruby'],
   ['ecluse-fixture-platform', '1.0.0', 'java'], ['ecluse-fixture-platform', '1.0.0', 'x86_64-linux-musl'],
   ['ecluse-fixture-platform', '1.0.0', 'arm64-darwin'], ['ecluse-fixture-native', '1.0.0', 'ruby'],
-  ['ecluse-fixture-future', '1.0.0', 'ruby']
+  ['ecluse-fixture-future', '1.0.0', 'ruby'],
+  ['ecluse-fixture-root', '3.0.0', 'ruby'],
+  ['ecluse-fixture-firstparty', '1.0.0', 'ruby'], ['ecluse-fixture-firstparty', '2.0.0', 'ruby'],
+  ['ecluse-fixture-readmitted', '1.0.1.pre.readmitted', 'ruby'],
+  ['ecluse-fixture-missing', '1.0.0', 'ruby'], ['ecluse-fixture-late', '1.0.0', 'ruby'],
+  ['ecluse-fixture-sentinel', '1.0.0', 'ruby']
 ]
 coordinates.each do |name, version, platform|
   Dir.mktmpdir('ecluse-gem-fixture') do |directory|
@@ -141,6 +146,15 @@ end
 date_fields = fields.dup
 date_fields[4] = Date.new(2020, 1, 1)
 capture_legacy.call('spec-date', date_fields)
+rational_date_fields = fields.dup
+rational_date_fields[4] = Date.jd(Rational(17_150_001, 7))
+rejected = []
+begin
+  capture_legacy.call('spec-rational-date', rational_date_fields)
+rescue TypeError => error
+  rejected << {input: 'Date.jd(Rational(17150001, 7))', class: error.class.name, message: error.message}
+end
+File.write(File.join(root, 'legacy-rejections.json'), JSON.pretty_generate({ruby: RUBY_VERSION, rubygems: Gem::VERSION, observations: rejected}) + "\n")
 fractional_fields = fields.dup
 fractional_fields[4] = Time.at(Rational(4_733_510_401, 3)).utc
 capture_legacy.call('spec-fractional-time', fractional_fields)
