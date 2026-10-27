@@ -8,6 +8,8 @@ module Ecluse.Core.Server.Pipeline.Packument (
     packumentAction,
     servePackument,
     headPackument,
+    withAdmittedDocument,
+    mapPackumentReplies,
 
     -- * The first-party private miss (exported for its unit spec)
     firstPartyMissDecision,
@@ -58,7 +60,7 @@ import Ecluse.Core.Rules.Render (renderInability)
 import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext (ctxAdvisoryEtag), completeEvidence, mkEvalContext)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
-import Ecluse.Core.Server.Admission.Meter (ChargePart, MemoryTicket, awaitingFlight, charge, newChargePart, servingFlight, stepDown)
+import Ecluse.Core.Server.Admission.Meter (ChargePart, MemoryTicket, awaitingFlight, charge, chargePart, newChargePart, servingFlight, stepDown)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfOutputPermille))
 import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Cache.Types (assembledKey)
@@ -101,8 +103,8 @@ import Ecluse.Core.Server.Pipeline.Internal (
 import Ecluse.Core.Server.Pipeline.Origin (
     OriginMiss (MissAbsent, MissUnresolved),
     OriginResult (..),
-    fetchPrivateOrigin,
-    fetchPublicOrigin,
+    fetchPrivateOriginObserved,
+    fetchPublicOriginObserved,
     originManifest,
     originMiss,
  )
@@ -145,6 +147,23 @@ data PackumentReplies response = PackumentReplies
     , packumentUnavailable :: ResponseHeaders -> Refusal -> response
     }
 
+-- | Change only response construction while retaining shared admission and refusal decisions.
+mapPackumentReplies :: (a -> b) -> PackumentReplies a -> PackumentReplies b
+mapPackumentReplies convert replies =
+    PackumentReplies
+        { packumentForbiddenText = packumentForbiddenText replies
+        , packumentOk = \headers -> convert . packumentOk replies headers
+        , packumentNotModified = convert . packumentNotModified replies
+        , packumentUnauthorised = \headers -> convert . packumentUnauthorised replies headers
+        , packumentPrivateRefused = \code headers -> convert . packumentPrivateRefused replies code headers
+        , packumentForbidden = \headers -> convert . packumentForbidden replies headers
+        , packumentNotFound = \headers -> convert . packumentNotFound replies headers
+        , packumentNotAcceptable = \headers -> convert . packumentNotAcceptable replies headers
+        , packumentInternal = \headers -> convert . packumentInternal replies headers
+        , packumentBadGateway = \headers -> convert . packumentBadGateway replies headers
+        , packumentUnavailable = \headers -> convert . packumentUnavailable replies headers
+        }
+
 -- | GET and HEAD use the same gate and merge. HEAD withholds the body.
 packumentAction :: PackumentReplies response -> Method -> PackageName -> ResponseAction response
 packumentAction replies method name
@@ -174,8 +193,8 @@ headPackument = packumentWith PackumentHead
 data PackumentServe
     = -- A @GET@: serve the merged packument body.
       PackumentFull
-    | -- A @HEAD@: serve the identical status and headers (the would-be body's
-      -- @Content-Length@ and the own @ETag@) with no body.
+    | -- HEAD shares GET admission and representation headers.
+
       PackumentHead
 
 data PackumentServing response = PackumentServing
@@ -189,6 +208,9 @@ data PackumentServing response = PackumentServing
     -- ^ The request's account with the memory meter, which its reads and its output pay into.
     , psvPrivateRead :: ChargePart
     -- ^ What the private read paid. It steps down to what the read keeps, and goes once the body exists.
+    , psvInputBytes :: Int -> IO ()
+    , psvAbsent :: Maybe response
+    , psvResolved :: PackumentServing response -> [Contribution] -> MergePlan -> Handler response
     , psvPublicRead :: ChargePart
     -- ^ The same for the public read, which pays only when this request leads the shared fetch.
     }
@@ -196,8 +218,7 @@ data PackumentServing response = PackumentServing
 servingMetrics :: PackumentServing response -> MetricsPort
 servingMetrics = srMetrics . psvRuntime
 
--- The edge token is checked before any upstream is touched, so an unauthenticated client cannot
--- drive egress. The reply is evaluated in the CPU slot and written after it, under the ticket.
+-- Authenticate before egress. Write after the CPU slot releases, under the memory ticket.
 packumentWith ::
     PackumentServe ->
     PackumentReplies response ->
@@ -210,21 +231,7 @@ packumentWith mode replies name request respond = do
     let mount = ctxMount ctx
         deps = bindingPackumentDeps mount
         clientToken = forwardedCredential mount request
-        serving ticket = do
-            privateRead <- liftIO (newChargePart ticket)
-            publicRead <- liftIO (newChargePart ticket)
-            pure
-                PackumentServing
-                    { psvMode = mode
-                    , psvReplies = replies
-                    , psvDeps = deps
-                    , psvName = name
-                    , psvRequest = request
-                    , psvRuntime = ctxRuntime ctx
-                    , psvTicket = ticket
-                    , psvPrivateRead = privateRead
-                    , psvPublicRead = publicRead
-                    }
+        serving ticket = newServing mode replies name request ticket answerPackumentConditional
     if not (edgeTokenMatches (pdInboundToken deps) clientToken)
         then refuse packumentUnauthorised [] unauthorisedMessage
         else
@@ -233,6 +240,69 @@ packumentWith mode replies name request respond = do
                 else withListingAdmission (ctxRuntime ctx) (\headers -> refuse packumentUnavailable headers shedMessage) (serving >=> (`serveAdmittedPackument` clientToken) >=> evaluate) (liftIO . respond)
   where
     refuse reply headers message = liftIO (respond (reply replies headers (mkRefusal Nothing message)))
+
+-- | Reuse admission and source merging under an existing batch ticket, without acquiring another slot.
+withAdmittedDocument ::
+    PackumentReplies response ->
+    MemoryTicket ->
+    (Int -> IO ()) ->
+    PackageName ->
+    Request ->
+    response ->
+    (CachedDoc -> Int -> Map Text Provenance -> Handler response) ->
+    Handler response
+withAdmittedDocument replies ticket observe name request absent consume = do
+    mount <- asks ctxMount
+    let deps = bindingPackumentDeps mount
+        clientToken = forwardedCredential mount request
+        refuse reply message = pure (reply replies [] (mkRefusal Nothing message))
+    if not (edgeTokenMatches (pdInboundToken deps) clientToken)
+        then refuse packumentUnauthorised unauthorisedMessage
+        else
+            if pdReadSourceSelection deps == ManagedMirrorAndPublic && pdFirstParty deps name
+                then refuse packumentNotFound "first-party packages require the private registry view"
+                else do
+                    serving <- newServing PackumentFull replies name request ticket admitted
+                    serveAdmittedPackument serving{psvAbsent = Just absent, psvInputBytes = observe} clientToken
+  where
+    admitted serving sources plan = do
+        let basis = outputBasisBytes plan sources
+            factor = cfOutputPermille (metadataChargeFactors (pdMetadata (psvDeps serving)))
+        output <- liftIO (newChargePart ticket)
+        liftIO (chargePart output (scaleCharge factor basis))
+        document <- evaluate (renderServedBody (psvDeps serving) sources plan)
+        let origins = Map.mapMaybe (`Map.lookup` Map.fromList (zip [0 ..] (map srcProvenance sources))) (mpSurvivors plan)
+        result <- consume document (sum (map srcBodyBytes sources)) origins
+        liftIO (releaseReads serving >> stepDown output 0)
+        pure result
+
+newServing ::
+    PackumentServe ->
+    PackumentReplies response ->
+    PackageName ->
+    Request ->
+    MemoryTicket ->
+    (PackumentServing response -> [Contribution] -> MergePlan -> Handler response) ->
+    Handler (PackumentServing response)
+newServing mode replies name request ticket resolved = do
+    ctx <- ask
+    privateRead <- liftIO (newChargePart ticket)
+    publicRead <- liftIO (newChargePart ticket)
+    pure
+        PackumentServing
+            { psvMode = mode
+            , psvReplies = replies
+            , psvDeps = bindingPackumentDeps (ctxMount ctx)
+            , psvName = name
+            , psvRequest = request
+            , psvRuntime = ctxRuntime ctx
+            , psvTicket = ticket
+            , psvPrivateRead = privateRead
+            , psvPublicRead = publicRead
+            , psvInputBytes = const pass
+            , psvAbsent = Nothing
+            , psvResolved = resolved
+            }
 
 serveAdmittedPackument :: PackumentServing response -> Maybe ClientCredential -> Handler response
 serveAdmittedPackument serving clientToken = do
@@ -269,10 +339,10 @@ resolveOrigins serving clientToken
     | otherwise = concurrently (readPrivate serving clientToken) (readPublic serving)
 
 readPrivate :: PackumentServing response -> Maybe ClientCredential -> Handler OriginResult
-readPrivate serving clientToken = fetchPrivateOrigin (psvDeps serving) (psvRuntime serving) (psvPrivateRead serving) clientToken (psvName serving)
+readPrivate serving clientToken = fetchPrivateOriginObserved (psvInputBytes serving) (psvDeps serving) (psvRuntime serving) (psvPrivateRead serving) clientToken (psvName serving)
 
 readPublic :: PackumentServing response -> Handler OriginResult
-readPublic serving = fetchPublicOrigin (psvDeps serving) (psvRuntime serving) (psvTicket serving) (psvPublicRead serving) (psvName serving)
+readPublic serving = fetchPublicOriginObserved (psvInputBytes serving) (psvDeps serving) (psvRuntime serving) (psvTicket serving) (psvPublicRead serving) (psvName serving)
 
 privateAccessRefused :: PackumentServing response -> Int -> Handler response
 privateAccessRefused serving code = do
@@ -286,8 +356,16 @@ serveMergedPackument ::
     OriginResult ->
     OriginResult ->
     Handler response
-serveMergedPackument serving evalCtx record privResult pubResult =
-    case views of
+serveMergedPackument serving evalCtx record privResult pubResult
+    | OriginBudgetExceeded fault <- privResult = budgetRefused fault
+    | OriginBudgetExceeded fault <- pubResult = budgetRefused fault
+    | Just absent <- psvAbsent serving
+    , isNothing record
+    , not (pdFirstParty (psvDeps serving) (psvName serving))
+    , settledAbsence privResult
+    , settledAbsence pubResult =
+        pure absent
+    | otherwise = case views of
         Left _ -> mirrorUnavailable serving
         Right (unmanagedManifest, managedManifest, pending) -> do
             let (unmanaged, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) unmanagedManifest
@@ -315,6 +393,10 @@ serveMergedPackument serving evalCtx record privResult pubResult =
                                 noServeableVersions serving (ctxAdvisoryEtag evalCtx) (paVerdicts public) $
                                     collectDecisions privResult pubResult (privateExclusions <> managedExclusions <> paExclusions public)
   where
+    budgetRefused fault = pure (packumentBadGateway (psvReplies serving) [] (mkRefusal (pdHelp deps) ("the cumulative metadata input exceeded its bound: " <> show fault)))
+    settledAbsence OriginAbsent = True
+    settledAbsence OriginNotFound = True
+    settledAbsence _ = False
     deps = psvDeps serving
     name = psvName serving
     rt = psvRuntime serving
@@ -399,7 +481,7 @@ serveResolved :: PackumentServing response -> [Contribution] -> MergePlan -> Han
 serveResolved serving sources plan = do
     warnDivergences (servingMetrics serving) (psvName serving) plan
     liftIO (mpServeDecision (servingMetrics serving) Metric.Admit)
-    answerPackumentConditional serving sources plan
+    psvResolved serving serving sources plan
 
 -- The coding is chosen before the validator, so a 304 names the coding's own tag. It skips assembly and compression.
 answerPackumentConditional :: PackumentServing response -> [Contribution] -> MergePlan -> Handler response
@@ -510,6 +592,7 @@ collectDecisions privResult pubResult publicExclusions =
 
 privateDecision :: OriginResult -> [ServeDecision]
 privateDecision = \case
+    OriginBudgetExceeded _ -> [upstreamInvalidDecision]
     OriginAuthorisationFailure _ -> []
     OriginResolved _ -> []
     -- A merged name keeps a private 404 and a private outage on one refusal, so a name
@@ -524,6 +607,7 @@ privateDecision = \case
 
 publicDecision :: OriginResult -> [ServeDecision]
 publicDecision = \case
+    OriginBudgetExceeded _ -> [upstreamInvalidDecision]
     OriginAuthorisationFailure _ -> []
     OriginNameMismatch -> [upstreamInvalidDecision]
     OriginResolved _ -> []

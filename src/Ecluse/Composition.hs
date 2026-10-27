@@ -51,7 +51,7 @@ import Ecluse.Config (
     EgressSettings (..),
     FirstParty (..),
     IntegritySettings (..),
-    MirrorTarget (mtUploadUrl, mtUrl, mtUsername),
+    MirrorTarget (mtBackend, mtUploadUrl, mtUrl, mtUsername),
     Mount (..),
     MountConfig (..),
     MountIntegrity (..),
@@ -61,6 +61,7 @@ import Ecluse.Config (
     Url,
     regMirrorTarget,
     regPrivateUpstream,
+    sbTag,
     unUrl,
  )
 import Ecluse.Core.Credential (CredentialProvider)
@@ -344,6 +345,8 @@ data PublishTarget = PublishTarget
     -- ^ The mirror-target endpoint the worker publishes approved artifacts to.
     , ptUploadUrl :: RegistryUrl
     -- ^ The exact native upload endpoint, independently configured from the read root.
+    , ptBackendTag :: StoreTag
+    -- ^ The declared backend selects native service credential presentation.
     , ptUsername :: Maybe Text
     -- ^ The backend credential convention retained beside the refreshing secret provider.
     , ptCredentials :: CredentialProvider
@@ -375,6 +378,7 @@ publishTargetFor providers mount = do
                     { ptEcosystem = mountEcosystem mount
                     , ptMirrorUrl = mtUrl target
                     , ptUploadUrl = mtUploadUrl target
+                    , ptBackendTag = sbTag (mtBackend target)
                     , ptUsername = mtUsername target
                     , ptCredentials = provider
                     }
