@@ -129,6 +129,8 @@ withRollout action global = Native.withRubySweepPlane global $ \plane -> do
     Native.withSweepProxy plane permissiveEnv Nothing [] $ \proxy -> do
         seedMirror proxy [readmittedPackage, missingPackage]
         seedCache proxy [deniedPackage, readmittedPackage, missingPackage]
+        Native.storeVersions proxy (packageName deniedPackage) `shouldReturn` []
+        Native.storeVersions (Native.cacheStore proxy) (packageName deniedPackage) `shouldReturn` packageVersions deniedPackage
         action (plane, proxy, Native.cacheStore proxy)
 
 seedMirror :: Native.RubySweepStore -> [PackageFixture] -> IO ()
@@ -187,7 +189,12 @@ rolloutOps :: RolloutOps Native.RubySweepPlane Native.RubySweepStore
 rolloutOps =
     RolloutOps
         { rolloutQueue = sharedMirrorQueue . Native.rspGlobal
-        , withServingRole = \plane queue policy -> Native.withSweepProxy plane (servingEnvironment policy) (Just queue) ["proxy", "--no-worker"]
+        , withServingRole = \plane queue policy ->
+            Native.withSweepProxy
+                plane
+                (servingEnvironment policy <> [("ECLUSE_MOUNTS__RUBYGEMS__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", Native.repositoryUrl "mirror")])
+                (Just queue)
+                ["proxy", "--no-worker"]
         , withWorkerRole = \plane queue action -> withCodeArtifactDeleteAudit (Native.rspControl plane) (Native.rspDredgerDeletes plane) $ withMirrorRole (Native.rspGlobal plane) (Native.proxyRoleEnv <> permissiveEnv <> [("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873"), ("ECLUSE_QUEUE__URL", queue), ("AWS_ENDPOINT_URL_SQS", "http://ministack:4566")]) action
         , awaitPublished = \worker coordinate -> awaitContainerLog worker (T.isInfixOf ("mirror version complete: " <> coordinate)) 240
         , workerLogs = containerLogs

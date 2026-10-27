@@ -12,7 +12,8 @@ module Ecluse.E2E.RubyGems.PublishE2ESpec (
 import Data.ByteString qualified as BS
 import Data.List (lookup)
 import Data.Text qualified as T
-import System.Exit (ExitCode (ExitSuccess))
+import Network.HTTP.Types.URI (renderSimpleQuery)
+import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.FilePath ((</>))
 import Test.Hspec (shouldBe, shouldReturn)
 
@@ -25,6 +26,7 @@ import Ecluse.E2E.Harness.RubyGemsRegistry
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
 import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Publication
+import Ecluse.Test.Contract.Serving (ServingResponse (responseBody, responseStatus))
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Registry.RubyGems.Fixtures
 
@@ -77,8 +79,7 @@ yankDriver :: ObservedRubyProxy -> RubyRegistry -> RubyRelease -> NonUploadDrive
 yankDriver observed registry release =
     NonUploadDriver
         { nonUploadRelease = publishObserved observed registry release
-        , nonUploadWrite = withRubyProject currentBundler proxy (e2eBaseUrl proxy <> "/rubygems/") Nothing $ \project ->
-            rubyGemCommand project rubyRegistryToken ["yank", toString (releaseName release), "--version", toString (releaseVersion release)]
+        , nonUploadWrite = yankObserved observed registry release
         , nonUploadRefusal = ["404"]
         , nonUploadDestination = do
             stored <- rubyRegistryFiles registry "rubygems-private"
@@ -86,8 +87,32 @@ yankDriver observed registry release =
             pure ([releaseFilename item <> " " <> hexSha256Of (releaseArchive item) | item <- stored] <> ["uploads received " <> show (length uploads)])
         , nonUploadSettle = pass
         }
+
+-- RubyGems yank prints only the response body and exits zero on an empty 404.
+yankObserved :: ObservedRubyProxy -> RubyRegistry -> RubyRelease -> IO ClientResult
+yankObserved observed registry release = do
+    before <- rubyTraffic observed
+    headersBefore <- readTVarIO (rubyRegistryHeaders registry)
+    native <- withRubyProject currentBundler proxy (e2eBaseUrl proxy <> "/rubygems/") Nothing $ \project ->
+        rubyGemCommand project rubyRegistryToken ["yank", toString (releaseName release), "--version", toString (releaseVersion release)]
+    crExit native `shouldBe` ExitSuccess
+    response <- proxyRequest "DELETE" [("Authorization", encodeUtf8 rubyRegistryToken), ("Content-Type", "application/x-www-form-urlencoded")] body proxy path
+    responseStatus response `shouldBe` 404
+    traffic <- rubyTrafficSince before <$> rubyTraffic observed
+    [(rubyRequestScheme request, rubyRequestHost request, rubyRequestMethod request, rubyRequestPath request, rubyRequestStatus request) | request <- rubyClientRequests traffic]
+        `shouldBe` replicate 2 ("https", T.drop 8 (e2eBaseUrl proxy), "DELETE", path, 404)
+    readTVarIO (rubyRegistryHeaders registry) `shouldReturn` headersBefore
+    pure
+        ClientResult
+            { crCommand = "DELETE " <> e2eBaseUrl proxy <> path
+            , crExit = if responseStatus response >= 200 && responseStatus response < 300 then ExitSuccess else ExitFailure 1
+            , crStdout = show (responseStatus response)
+            , crStderr = decodeUtf8 (responseBody response)
+            }
   where
     proxy = rubyProxy observed
+    path = "/rubygems/api/v1/gems/yank"
+    body = renderSimpleQuery False [("gem_name", encodeUtf8 (releaseName release)), ("version", encodeUtf8 (releaseVersion release))]
 
 publishObserved :: ObservedRubyProxy -> RubyRegistry -> RubyRelease -> IO ClientResult
 publishObserved observed registry release = do
