@@ -17,6 +17,7 @@ import Data.Aeson.Types (Parser, withObject)
 import Data.ByteArray.Encoding (Base (Base64), convertFromBase, convertToBase)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Data.Time (UTCTime)
 
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))

@@ -55,9 +55,9 @@ identityPrefix = BS.takeWhile (/= 32)
 decodeInfoRow :: PackageName -> EntryKey -> ByteString -> Either GemRowError GemRow
 decodeInfoRow name key bytes = do
     text <- first (const (GemRowMalformed "invalid UTF-8 in RubyGems info row")) (TE.decodeUtf8' bytes)
-    let (identity, afterIdentity) = T.breakOn " " text
+    let (nativeIdentity, afterIdentity) = T.breakOn " " text
     when (T.null afterIdentity) (malformed "missing RubyGems row separator")
-    coordinate <- first parseFailure (parseIdentity name identity)
+    coordinate <- first parseFailure (parseIdentity name nativeIdentity)
     let (dependencyText, afterPipe) = T.breakOn "|" (T.drop 1 afterIdentity)
     when (T.null afterPipe) (malformed "missing RubyGems metadata separator")
     extras <- parseFields (T.drop 1 afterPipe)
@@ -91,8 +91,8 @@ parseGemRequirement raw = do
         pure (T.copy stripped)
 
 parseIdentity :: PackageName -> Text -> Either ParseError GemCoordinate
-parseIdentity name identity = do
-    let (version, suffix) = T.breakOn "-" identity
+parseIdentity name nativeIdentity = do
+    let (version, suffix) = T.breakOn "-" nativeIdentity
     platform <- mkGemPlatform (if T.null suffix then "ruby" else T.drop 1 suffix)
     mkCoordinate name (mkVersion RubyGems version) platform
 

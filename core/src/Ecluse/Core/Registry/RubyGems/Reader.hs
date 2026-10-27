@@ -79,11 +79,11 @@ gemInfoSteps pay limits name base mode = recordSteps reserve consume complete in
                 key = RecordEntry (scanOrdinal scan)
                 claimed = infoRowIdentity name bytes
                 claimedVersion = renderVersion <$> infoRowVersion bytes
-                identity = fmap (\coordinate -> (renderVersion (coordinateVersion coordinate), unGemPlatform (coordinatePlatform coordinate))) claimed
+                nativeIdentity = fmap (\coordinate -> (renderVersion (coordinateVersion coordinate), unGemPlatform (coordinatePlatform coordinate))) claimed
                 versions = case mode of
                     FullRead -> maybe (scanVersions scan) (`Set.insert` scanVersions scan) claimedVersion
                     SelectedRead _ -> Set.empty
-                seen = case identity of
+                seen = case nativeIdentity of
                     Just native@(raw, _) | selected raw -> Map.insertWith (+) native 1 (scanSeen scan)
                     _ -> scanSeen scan
                 next = scan{scanOrdinal = scanOrdinal scan + 1, scanCount = count, scanVersions = versions, scanSeen = seen}
@@ -99,6 +99,7 @@ gemInfoSteps pay limits name base mode = recordSteps reserve consume complete in
                 Right row
                     | selected (renderVersion (coordinateVersion (grCoordinate row))) -> Right next{scanRows = row : scanRows next, scanKeptCharge = addCharge next charge}
                     | otherwise -> Right next
+    addCharge :: Scan -> Int -> Int
     addCharge scan charge = saturate (toInteger (scanKeptCharge scan) + toInteger charge)
     complete scan
         | not (scanHeaderDone scan) = Failed "RubyGems info response has no header delimiter"
