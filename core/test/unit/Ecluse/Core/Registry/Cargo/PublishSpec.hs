@@ -12,20 +12,23 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (ResponseHeaders)
-import Network.HTTP.Types.Status (Status, status200)
+import Network.HTTP.Types.Status (Status, status200, status401, status403, status404, status500)
 import Test.Hspec
 
 import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Package (PackageDetails (pkgName, pkgVersion), PackageInfo (..))
-import Ecluse.Core.Registry (PublishFault (PublishSourceUnavailable))
+import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
+import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchUrlUnformable), PublishError (PublishError), PublishFault (..), UrlFormationError (UnparseableUrl))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishMirrorRequirements, publishRelay), MirrorRequirements (mirrorStateRequirement), MirrorStateRequirement (DurableVersionState), PublishRequestBody (PublishRequestBody))
+import Ecluse.Core.Registry.CachedDocument (cargoCached)
+import Ecluse.Core.Registry.Cargo.Document (cargoDocument)
 import Ecluse.Core.Registry.Cargo.Publish
 import Ecluse.Core.Registry.Cargo.Publish.Body qualified as Body
-import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails))
+import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.Origin (originClient)
 import Ecluse.Core.Registry.Publish (MirrorTransport (..), PublishCodec (pcNativeComplete), PublishPlan (PublishPlan), newMirrorPublish)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Security.Limits (Limits (maxMetadataBytes), defaultLimits)
+import Ecluse.Core.Security.Limits (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
 import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Package (hexSha256Of)
@@ -142,9 +145,54 @@ spec = do
                     let transport = MirrorTransport exchanges (pure (Just (bareCredential (mkSecret "cargo-token")))) defaultLimits passthroughTracingPort
                         writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub <> "/index")) (loopbackRegistryUrl (stubBaseUrl stub <> "/registry")) codec
                     result <- publishOnlyFile writer doc (PublishPlan (pkgVersion (vdDetails doc))) (releaseArchive release)
-                    result `shouldSatisfy` isLeft
+                    result `shouldBe` Left (PublishRejected (PublishError "the target discovery is malformed or names an unapproved API root"))
                     captures <- allCaptured stub
                     map capPath captures `shouldBe` ["/index/config.json"]
+                    map capMethod captures `shouldBe` ["GET"]
+        it "classifies absent, malformed, refused and oversized discovery before any PUT" $ do
+            release <- cargoPublicationFixture
+            doc <- cargoSourceVersion (cargoIndexRecord release)
+            let malformed = PublishRejected (PublishError "the target discovery is malformed or names an unapproved API root")
+                replies =
+                    [(status200, "{\"dl\":\"https://static.crates.io/{crate}\"}", malformed), (status200, "invalid JSON", malformed)]
+                        <> [(status, "upstream refusal", PublishRejected (PublishError ("target discovery failed with HTTP status " <> show code))) | (status, code) <- [(status401, 401 :: Int), (status403, 403), (status404, 404), (status500, 500)]]
+                        <> [(status200, LBS.replicate 65537 32, PublishFetch (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 65536))))]
+            for_ replies $ \(status, body, expected) ->
+                withRoutedStub (const (status, [], body)) $ \stub ->
+                    withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                        let transport = MirrorTransport exchanges (pure (Just (bareCredential (mkSecret "cargo-token")))) defaultLimits passthroughTracingPort
+                            writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub <> "/index")) (loopbackRegistryUrl (stubBaseUrl stub <> "/registry")) codec
+                        publishOnlyFile writer doc (PublishPlan (pkgVersion (vdDetails doc))) (releaseArchive release) `shouldReturn` Left expected
+                        captures <- allCaptured stub
+                        map capPath captures `shouldBe` ["/index/config.json"]
+                        map capMethod captures `shouldBe` ["GET"]
+        it "refuses checksum-verified archives and selected text faults before destination discovery" $ do
+            original <- cargoPublicationFixture
+            missingManifest <- LBS.toStrict . GZip.compress <$> tarBytes [("fixture-1.0.0/src/lib.rs", "owned")]
+            invalidReadme <- LBS.toStrict . GZip.compress <$> tarBytes [("fixture-1.0.0/README.md", BS.singleton 255), ("fixture-1.0.0/Cargo.toml", "[package]\nname='fixture'\nversion='1.0.0'\nrust-version='1.74'\n")]
+            for_ [(missingManifest, "Cargo archive lacks its effective Cargo.toml"), (invalidReadme, "Cargo publication text is not UTF-8")] $ \(archive, reason) ->
+                withRoutedStub (targetReply "/registry") $ \stub -> do
+                    let release = original{releaseArchive = archive, releaseChecksum = hexSha256Of archive}
+                    doc <- cargoSourceVersion (cargoIndexRecord release)
+                    withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                        let transport = MirrorTransport exchanges (pure (Just (bareCredential (mkSecret "cargo-token")))) defaultLimits passthroughTracingPort
+                            writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub <> "/index")) (loopbackRegistryUrl (stubBaseUrl stub <> "/registry")) codec
+                        publishOnlyFile writer doc (PublishPlan (pkgVersion (vdDetails doc))) archive `shouldReturn` Left (PublishSourceUnavailable reason)
+                        allCaptured stub `shouldReturn` []
+        it "refuses malformed source rows before archive preparation or a destination request" $ do
+            release <- cargoPublicationFixture
+            doc <- cargoSourceVersion (cargoIndexRecord release)
+            case cargoIndexRecord release of
+                Object fields -> for_ [(Object (KeyMap.delete "name" fields), "invalid Cargo field: name"), (Object (KeyMap.insert "deps" Null fields), "invalid Cargo field: deps"), (Null, "Cargo requires exactly one paired source row and archive")] $ \(row, reason) ->
+                    withRoutedStub (targetReply "/registry") $ \stub ->
+                        withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                            let source = doc{vdRaw = Just (fst cargoCached (cargoDocument [(RecordEntry 7, row)]))}
+                                transport = MirrorTransport exchanges (pure (Just (bareCredential (mkSecret "cargo-token")))) defaultLimits passthroughTracingPort
+                                writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub <> "/index")) (loopbackRegistryUrl (stubBaseUrl stub <> "/registry")) codec
+                            publishOnlyFile writer source (PublishPlan (pkgVersion (vdDetails doc))) (releaseArchive release)
+                                `shouldReturn` Left (PublishSourceUnavailable reason)
+                            allCaptured stub `shouldReturn` []
+                _ -> expectationFailure "fixture source row is not an object"
         it "requires durable source state even when a target has one complete archive" $ do
             release <- cargoPublicationFixture
             doc <- cargoSourceVersion (cargoIndexRecord release)
@@ -152,6 +200,29 @@ spec = do
             pcNativeComplete codec (pkgName details) (pkgVersion details) (PackageInfo (pkgName details) mempty mempty []) `shouldBe` False
             mirrorStateRequirement (publishMirrorRequirements (cargoPublish factors)) `shouldBe` DurableVersionState
     describe "Cargo first-party claims" $ do
+        it "refuses authorised-name disagreement and query or fragment API roots before sending a credential" $
+            withRoutedStub (targetReply "/registry") $ \stub -> do
+                release <- cargoPublicationFixture
+                bytes <- expectRight (cargoUpload release)
+                withExchangeClient (newManager defaultManagerSettings) $ \exchanges -> do
+                    let root = stubBaseUrl stub <> "/registry"
+                        at target = originClient defaultLimits exchanges (loopbackRegistryUrl target) (Just (bareCredential (mkSecret "cargo-token")))
+                        body = PublishRequestBody bytes Nothing
+                    for_ [root <> "?query=secret", root <> "#fragment"] $ \target ->
+                        publishRelay (cargoPublish factors) (at target) cargoTestName body
+                            `shouldReturn` Left (FetchUrlUnformable (UnparseableUrl "Cargo API root must not contain a query or fragment"))
+                    case cargoUploadMetadata release of
+                        Object fields -> do
+                            changed <- LBS.toStrict <$> expectRight (Body.encodeUpload (Object (KeyMap.insert "name" (String "another") fields)) (releaseArchive release))
+                            publishRelay (cargoPublish factors) (at root) cargoTestName (PublishRequestBody changed Nothing)
+                                `shouldReturn` Left (FetchUrlUnformable (UnparseableUrl "Cargo relay name differs from the authorised package"))
+                        _ -> expectationFailure "fixture upload metadata is not an object"
+                    allCaptured stub `shouldReturn` []
+                    void (publishRelay (cargoPublish factors) (at root) cargoTestName body >>= expectRight)
+                    captures <- allCaptured stub
+                    map capMethod captures `shouldBe` ["PUT"]
+                    map capBody captures `shouldBe` [bytes]
+                    map (headerValue "Authorization") captures `shouldBe` [Just "cargo-token"]
         it "accepts matching complete upload metadata and archive identity" $ do
             release <- cargoPublicationFixture
             bytes <- expectRight (cargoUpload release)
@@ -198,8 +269,8 @@ spec = do
         it "accepts native success objects and rejects errors even with a success status" $ do
             classifyPublish 200 "{}" `shouldBe` Right ()
             classifyPublish 200 "{\"warnings\":{},\"errors\":[]}" `shouldBe` Right ()
-            for_ [(200, "{\"errors\":[{\"detail\":\"rejected\"}]}"), (200, "invalid"), (400, "{\"errors\":[{\"detail\":\"already exists\"}]}"), (409, "{}"), (503, "{}")] $ \(status, body) ->
-                classifyPublish status body `shouldSatisfy` isLeft
+            for_ [(200, "{\"errors\":[{\"detail\":\"rejected\"}]}"), (200, "invalid"), (200, "[]"), (200, "{\"errors\":{}}"), (200, "{\"errors\":null}"), (400, "{\"errors\":[{\"detail\":\"already exists\"}]}"), (409, "{}"), (503, "{}")] $ \(status, body) ->
+                classifyPublish status body `shouldBe` Left (PublishRejected (PublishError ("Cargo publication failed with HTTP status " <> show status)))
 
 factors :: ChargeFactors
 factors = ChargeFactors 1000 1000 1000

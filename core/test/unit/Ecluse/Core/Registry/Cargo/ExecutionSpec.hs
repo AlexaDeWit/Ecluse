@@ -12,18 +12,20 @@ import Data.ByteString.Lazy qualified as BSL
 import Test.Hspec
 import UnliftIO.Async (cancel, wait, withAsync)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm))
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Registry.Cargo.Execution (newCargoInstallEvidence)
 import Ecluse.Core.Registry.Cargo.Project (projectName)
 import Ecluse.Core.Registry.Cargo.Projection (projectCargoRecord)
+import Ecluse.Core.Registry.InstallEvidence (newInstallEvidenceBudget)
 import Ecluse.Core.Rules.Effectful (ReadFault (ReadFault))
 import Ecluse.Core.Rules.Install
-import Ecluse.Core.Rules.Types (Inability (EvaluationFailed, InstallSignalUnread), Transience (WillResolve, WontResolve))
+import Ecluse.Core.Rules.Types (Inability (EvaluationFailed, InstallEvidenceFailed, InstallSignalUnread), Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (Limits (..), defaultLimits, mkProgressFloor)
 import Ecluse.Core.Version (mkVersion)
+import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Package (sampleArtifact, sampleDetails, unsafeHash)
 import Ecluse.Test.Registry.Archive (tarBytes)
 import Ecluse.Test.Registry.Cargo.Fixtures qualified as Fixtures
@@ -32,6 +34,57 @@ import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = describe "Cargo install evidence" $ do
+    it "refuses nonnative, multiple-archive and ambiguous checksum subjects before artifact reads" $
+        withSweeper $ \deadlines -> do
+            archive <- fixture "1.2.3" []
+            count <- newIORef (0 :: Int)
+            budget <- newInstallEvidenceBudget deadlines defaultLimits
+            provider <- newCargoInstallEvidence defaultLimits
+            evidenceReads <- newInstallEvidenceReads provider (evidenceContext (counter count archive)){ieBudget = budget}
+            let admitted = details "1.2.3" archive
+                artifact :| _ = pkgArtifacts admitted
+                cases = [(admitted{pkgName = mkPackageName Npm Nothing "example"}, "Cargo execution evidence requires a native Cargo subject"), (admitted{pkgArtifacts = artifact :| [artifact]}, "Cargo execution evidence requires one exact admitted archive"), (admitted{pkgArtifacts = artifact{artHashes = []} :| []}, "Cargo execution evidence requires one admitted SHA-256"), (admitted{pkgArtifacts = artifact{artHashes = [unsafeHash SHA1 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]} :| []}, "Cargo execution evidence requires one admitted SHA-256"), (admitted{pkgArtifacts = artifact{artHashes = artHashes artifact <> artHashes artifact} :| []}, "Cargo execution evidence requires one admitted SHA-256")]
+            for_ cases $ \(subject, reason) ->
+                resolved evidenceReads subject `shouldReturn` InstallReadFailed (ReadFault WontResolve EvaluationFailed (InstallEvidenceFailed reason))
+            readIORef count `shouldReturn` 0
+            resolved evidenceReads admitted `shouldReturn` InstallDetermined NoCodeOnInstall
+            readIORef count `shouldReturn` 1
+    it "refuses unavailable outer and flight admission before artifact acquisition" $
+        withSweeper $ \deadlines -> do
+            archive <- fixture "1.2.3" []
+            count <- newIORef (0 :: Int)
+            budget <- newInstallEvidenceBudget deadlines defaultLimits
+            provider <- newCargoInstallEvidence defaultLimits
+            enteredFlight <- newIORef False
+            let refused = InstallEvidenceBudget (\_ -> pure Nothing)
+                later = InstallEvidenceFlightBudget (\_ action -> writeIORef enteredFlight True >> action refused)
+                expected = InstallReadFailed (ReadFault (WillResolve Nothing) EvaluationFailed (InstallEvidenceFailed "evidence memory admission is unavailable"))
+            outer <- newInstallEvidenceReads provider (evidenceContext (counter count archive)){ieBudget = refused}
+            resolved outer (details "1.2.3" archive) `shouldReturn` expected
+            inner <- newInstallEvidenceReads provider (evidenceContext (counter count archive)){ieBudget = budget, ieFlightBudget = Just later}
+            resolved inner (details "1.2.3" archive) `shouldReturn` expected
+            readIORef enteredFlight `shouldReturn` True
+            readIORef count `shouldReturn` 0
+    it "releases real admission after typed acquisition overflow and cancellation" $
+        withSweeper $ \deadlines -> do
+            archive <- fixture "1.2.3" []
+            let limits = defaultLimits{maxMetadataBytes = 1024 * 1024}
+            budget <- newInstallEvidenceBudget deadlines limits
+            provider <- newCargoInstallEvidence limits
+            acquisitions <- newIORef (0 :: Int)
+            overflow <- newInstallEvidenceReads provider (evidenceContext (\_ _ pay -> modifyIORef' acquisitions (+ 1) >> pay (maxMetadataBytes limits + 1) $> Right archive)){ieLimits = limits, ieBudget = budget}
+            resolved overflow (details "1.2.3" archive)
+                `shouldReturn` InstallReadFailed (ReadFault WontResolve EvaluationFailed (InstallEvidenceFailed "Cargo execution evidence exceeds its reserved memory envelope"))
+            readIORef acquisitions `shouldReturn` 1
+            entered <- MVar.newEmptyMVar
+            blocked <- MVar.newEmptyMVar
+            pending <- newInstallEvidenceReads provider (evidenceContext (\_ _ pay -> pay (BS.length archive) >> MVar.putMVar entered () >> MVar.takeMVar blocked)){ieLimits = limits, ieBudget = budget}
+            withAsync (resolved pending (details "1.2.3" archive)) $ \owner -> do
+                MVar.takeMVar entered
+                cancel owner
+            recovered <- newInstallEvidenceReads provider (evidenceContext (\_ _ pay -> pay (BS.length archive) $> Right archive)){ieLimits = limits, ieBudget = budget}
+            resolved recovered (details "1.2.3" archive) `shouldReturn` InstallDetermined NoCodeOnInstall
+            withInstallEvidenceBudget budget (\bytes inspection -> bytes (maxMetadataBytes limits) >> inspection 0) `shouldReturn` Just ()
     it "uses the published spelling after a lower-case sparse lookup" $ do
         requested <- expectRight (projectName "mixed_crate")
         for_ [([], False), ([("build.rs", "unexecuted bytes")], True)] $ \(extras, active) -> do

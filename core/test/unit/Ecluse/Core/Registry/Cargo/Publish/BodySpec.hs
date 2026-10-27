@@ -10,8 +10,10 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (byteString, toLazyByteString, word32LE)
 import Data.ByteString.Lazy qualified as LBS
+import Data.Text qualified as T
 import Test.Hspec
 
+import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.Cargo.Publish.Body
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
@@ -40,17 +42,55 @@ spec = describe "Cargo upload framing" $ do
     it "rejects every incomplete length prefix, truncated section and trailing payload" $ do
         release <- cargoPublicationFixture
         bytes <- expectRight (cargoUpload release)
-        for_ [BS.empty, BS.take 1 bytes, BS.take 3 bytes, BS.take 5 bytes, BS.take (BS.length bytes - 1) bytes, bytes <> "trailing", BS.replicate 4 255 <> BS.drop 4 bytes] $ \broken ->
-            decodeUpload defaultLimits broken `shouldSatisfy` isLeft
+        let cases =
+                [(broken, "Cargo upload has a truncated length prefix") | broken <- [BS.empty, BS.take 1 bytes, BS.take 3 bytes]]
+                    <> [(broken, "Cargo upload has a truncated section") | broken <- [BS.take 5 bytes, BS.take (BS.length bytes - 1) bytes]]
+                    <> [(bytes <> "trailing", "Cargo upload contains trailing bytes"), (BS.replicate 4 255 <> BS.drop 4 bytes, "Cargo upload section exceeds its byte bound")]
+        for_ cases $ \(broken, reason) -> do
+            decodeUpload defaultLimits broken `shouldBe` Left (ParseError reason)
+            paid <- newIORef ([] :: [Int])
+            readUpload defaultLimits (\cost -> modifyIORef' paid (cost :)) broken `shouldReturn` Left (ParseError reason)
+            readIORef paid `shouldReturn` []
     it "checks request, metadata, archive and nesting bounds" $ do
         release <- cargoPublicationFixture
         bytes <- expectRight (cargoUpload release)
         for_ [defaultLimits{maxPublishRequestBytes = BS.length bytes - 1}, defaultLimits{maxMetadataBytes = 8}, defaultLimits{maxMirrorArtifactBytes = 8}, defaultLimits{maxNestingDepth = 1}] $ \limits ->
             decodeUpload limits bytes `shouldSatisfy` isLeft
+    it "accepts each exact section cap and rejects one extra byte after earlier guards pass" $ do
+        release <- cargoPublicationFixture
+        let metadata = LBS.toStrict (encode (cargoUploadMetadata release))
+            archive = releaseArchive release
+            bytes = frame metadata <> frame archive
+            requestLimits = defaultLimits{maxPublishRequestBytes = BS.length bytes}
+            metadataLimits = defaultLimits{maxMetadataBytes = BS.length metadata}
+            archiveLimits = defaultLimits{maxMirrorArtifactBytes = BS.length archive}
+        for_ [requestLimits, metadataLimits, archiveLimits] $ \limits ->
+            fmap uploadArchive (decodeUpload limits bytes) `shouldBe` Right archive
+        decodeUpload requestLimits (bytes <> " ") `shouldBe` Left (ParseError "Cargo upload exceeds its request byte bound")
+        decodeUpload metadataLimits (frame (metadata <> " ") <> frame archive) `shouldBe` Left (ParseError "Cargo upload section exceeds its byte bound")
+        decodeUpload archiveLimits (frame metadata <> frame (archive <> " ")) `shouldBe` Left (ParseError "Cargo upload section exceeds its byte bound")
+    it "rejects a fully framed empty archive before reserving metadata" $ do
+        release <- cargoPublicationFixture
+        let bytes = frame (LBS.toStrict (encode (cargoUploadMetadata release))) <> frame BS.empty
+        paid <- newIORef ([] :: [Int])
+        readUpload defaultLimits (\cost -> modifyIORef' paid (cost :)) bytes `shouldReturn` Left (ParseError "Cargo upload has no archive")
+        readIORef paid `shouldReturn` []
     it "rejects duplicate identity keys and an incomplete JSON document" $ do
         release <- cargoPublicationFixture
         for_ ["{\"name\":\"fixture\",\"name\":\"other\"}", "{\"name\":\"fixture\""] $ \json ->
-            decodeUpload defaultLimits (frame json <> frame (releaseArchive release)) `shouldSatisfy` isLeft
+            decodeUpload defaultLimits (frame json <> frame (releaseArchive release)) `shouldBe` Left (ParseError "Cargo upload metadata is malformed or exceeds its nesting bound")
+        paid <- newIORef ([] :: [Int])
+        readUpload defaultLimits (\cost -> modifyIORef' paid (cost :)) (frame "{" <> frame (releaseArchive release))
+            `shouldReturn` Left (ParseError "Cargo upload metadata is malformed or exceeds its nesting bound")
+        readIORef paid `shouldReturn` [65600]
+    it "refuses invalid top-level native names and versions with their owned failure category" $ do
+        release <- cargoPublicationFixture
+        case cargoUploadMetadata release of
+            Object fields -> for_ [("name", "invalid/name", "Cargo upload name is invalid"), ("vers", "1.0", "Cargo upload version is invalid")] $ \(key, value, reason) -> do
+                let metadata = Object (KeyMap.insert key (String value) fields)
+                decodeUpload defaultLimits (frame (LBS.toStrict (encode metadata)) <> frame (releaseArchive release))
+                    `shouldSatisfy` either (T.isInfixOf reason . parseErrorMessage) (const False)
+            _ -> expectationFailure "fixture metadata is not an object"
     it "requires all native identity and metadata fields" $ do
         release <- cargoPublicationFixture
         case cargoUploadMetadata release of
