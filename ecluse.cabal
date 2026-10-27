@@ -1997,6 +1997,8 @@ test-suite ecluse-residency
     Ecluse.Core.Server.MemoryModelResidencySpec
     Ecluse.Core.Server.MetadataGzipResidencySpec
     Ecluse.Core.Server.MirrorViewResidencySpec
+    Ecluse.Core.Server.MirrorView.CompanionProbe
+    Ecluse.Test.Mirror.RubyGems.Residency
     Ecluse.Core.Mirror.State.WeightResidencySpec
     Ecluse.Core.Server.Pipeline.PackumentResidencySpec
     Ecluse.Core.Server.Pipeline.TarballResidencySpec
@@ -2030,6 +2032,7 @@ test-suite ecluse-residency
     , katip            ^>=0.8.8
     , ram              ^>=0.22
     , process          ^>=1.6
+    , stm              ^>=2.5
     , text             ^>=2.1
     , time             ^>=1.12
     , unliftio         ^>=0.2.25
