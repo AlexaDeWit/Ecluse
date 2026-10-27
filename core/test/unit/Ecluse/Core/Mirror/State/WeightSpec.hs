@@ -8,8 +8,10 @@ module Ecluse.Core.Mirror.State.WeightSpec (spec) where
 import Data.Aeson (Value (Object, String))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Hedgehog (forAll, (===))
 import Hedgehog.Gen qualified as Gen
@@ -18,21 +20,24 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
-import Ecluse.Core.Mirror.State.Codec (saturatingStateCharge)
+import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, saturatingStateCharge)
 import Ecluse.Core.Mirror.State.Internal
 import Ecluse.Core.Mirror.State.Weight
 import Ecluse.Core.Package
-import Ecluse.Core.Registry.MirrorUpload (inventoryDetails)
+import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (RubyGemsMirrorRead), inventoryDetails)
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
+import Ecluse.Core.Registry.RubyGems.Document (GemDocument (gemRows), GemRow (grSource))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Cache.Types (Source (Source), fullKey)
 import Ecluse.Core.Server.MirrorView (mirrorRetentionWeight)
 import Ecluse.Core.Version (mkVersion)
+import Ecluse.Test.Mirror.RubyGems
 import Ecluse.Test.Mirror.State
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = describe "durable graph accounting" $ do
+    nativeStateWeightSpec
     it "grows with admitted files and fragments but leaves repeated admission unchanged" $ do
         initialInventory <- mirrorSample [1] False "https://first.test/" "original"
         next <- mirrorSample [2] False "https://first.test/" "original"
@@ -100,6 +105,53 @@ spec = describe "durable graph accounting" $ do
         mirrorRetentionWeight key (StateRevision target mirrorPackage (encodeUtf8 (T.replicate 65536 "x"))) 0
             - mirrorRetentionWeight key revision 0
             `shouldBe` 65532
+
+nativeStateWeightSpec :: Spec
+nativeStateWeightSpec = describe "genuine RubyGems state" $ beforeAll rubyStateProbeFixture $ do
+    it "reopens every platform row and every original compact object" $ \fixture -> do
+        record <- reopenNative fixture
+        let versions = Map.elems (recordVersions record)
+            rows = [row | version <- versions, StoredMirrorFragment _ (RubyGemsMirrorRead source) _ <- toList (versionFragments version), row <- gemRows source]
+            companions = [reference | version <- versions, CompanionRetained reference <- Map.elems (versionCompanions version)]
+            objects = rubyStateCompanionObjects fixture
+        length rows `shouldBe` 4
+        length companions `shouldBe` 4
+        Set.fromList (map companionDigest companions) `shouldBe` Map.keysSet objects
+        for_ companions $ \reference -> do
+            bytes <- maybe (fail "missing native compact object") pure (Map.lookup (companionDigest reference) objects)
+            companionSize reference `shouldBe` BS.length bytes
+            verifyRetainedCompanion reference bytes `shouldBe` Right bytes
+
+    it "detects omitted native source and companion-reference charges" $ \fixture -> do
+        record <- reopenNative fixture
+        let versions = Map.elems (recordVersions record)
+            sourceBytes = sum [BS.length (grSource row) | version <- versions, StoredMirrorFragment _ (RubyGemsMirrorRead source) _ <- toList (versionFragments version), row <- gemRows source]
+            companionCount = sum [Map.size (versionCompanions version) | version <- versions]
+            actual = retainedRecordWeight record
+        sourceBytes `shouldSatisfy` (> 0)
+        companionCount `shouldBe` 4
+        actual - rubyStateSourceOmissionCharge record `shouldSatisfy` (>= toInteger sourceBytes)
+        actual - rubyStateCompanionOmissionCharge record `shouldSatisfy` (>= 64 * toInteger companionCount)
+
+    it "charges labelled source padding without changing compact objects" $ \fixture -> do
+        original <- reopenNative fixture
+        paddedFixture <- padRubyStateProbeSource 1024 fixture
+        padded <- reopenNative paddedFixture
+        rubyStateCompanionObjects paddedFixture `shouldBe` rubyStateCompanionObjects fixture
+        retainedRecordWeight padded - retainedRecordWeight original `shouldSatisfy` (>= 4 * 1024)
+        let originalSource = retainedRecordWeight original - rubyStateSourceOmissionCharge original
+            paddedSource = retainedRecordWeight padded - rubyStateSourceOmissionCharge padded
+        paddedSource - originalSource `shouldSatisfy` (>= 4 * 1024)
+
+    it "keeps external compact-object lengths out of the retained record heap" $ \fixture -> do
+        record <- reopenNative fixture
+        let expand (CompanionRetained (CompanionRef digest size)) = CompanionRetained (CompanionRef digest (size + 1024 * 1024))
+            expand CompanionPending = CompanionPending
+            counterfact = record{projectVersions = fmap (\version -> version{storedCompanions = fmap expand (storedCompanions version)}) (projectVersions record)}
+        retainedRecordWeight counterfact `shouldBe` retainedRecordWeight record
+
+reopenNative :: RubyStateProbeFixture -> IO ProjectMirrorRecord
+reopenNative fixture = chargedDecodeProjectRecord (const pass) defaultLimits (rubyStateTarget fixture) (rubyStatePackage fixture) (rubyStateEncodedRecord fixture) >>= expectRight
 
 sampleRecord :: IO ProjectMirrorRecord
 sampleRecord = do
