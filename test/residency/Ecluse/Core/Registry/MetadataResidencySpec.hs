@@ -17,7 +17,8 @@ import System.Mem.Weak (Weak, deRefWeak, mkWeak)
 import Test.Hspec
 import UnliftIO.Exception (bracket, evaluate, finally)
 
-import Ecluse.Core.Package (PackageInfo (infoVersions))
+import Ecluse.Core.Ecosystem (ecosystemName)
+import Ecluse.Core.Package (PackageInfo (infoVersions), pkgEcosystem)
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, cargoPacked, npmCached, npmPacked, pypiPacked, pypiSimpleCached, rubyGemsCached)
 import Ecluse.Core.Registry.Cargo.Document (PackedIndex (..), cargoRecords)
@@ -28,7 +29,8 @@ import Ecluse.Core.Registry.PyPI.Document (PackedSimple (..), simpleEnvelope, si
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument (gemRows), GemRow (grSource))
 import Ecluse.Core.Server.MemoryModel.Probe (Evaluated (..), measureInChild, packages, project)
 import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
-import Ecluse.Test.Corpus (CorpusPackage (cpPath), cpName, readCapture)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName, readCapture)
+import Ecluse.Test.Package (hexSha256Of)
 
 -- | Every corpus capture, measured in a fresh child process and collected in this one.
 spec :: Spec
@@ -36,11 +38,11 @@ spec = do
     packedTableReleaseSpec
     describe "metadata read evaluation" $ forM_ packages $ \package -> do
         it (toString (cpName package) <> " retains the same at weak head as fully forced") $ do
-            void (readCapture package)
+            digest <- evaluate . hexSha256Of =<< readCapture package
             measureInChild Mode.Evaluation package >>= \case
                 Left failure -> expectationFailure failure
                 Right result -> do
-                    report package result
+                    report package digest result
                     abs (forcing result) `shouldSatisfy` (<= allowance)
 
         it (toString (cpName package) <> " releases the served document while its typed view is held") $ do
@@ -60,11 +62,14 @@ allowance = 1024
 forcing :: Evaluated -> Integer
 forcing result = toInteger (evaluatedForced result) - toInteger (evaluatedWeakHead result)
 
-report :: CorpusPackage -> Evaluated -> IO ()
-report package result =
+report :: CorpusPackage -> Text -> Evaluated -> IO ()
+report package digest result =
     putStrLn . ("metadata-evaluation " <>) . decodeUtf8 . LBS.toStrict . encode $
         object
-            [ "package" .= cpName package
+            [ "ecosystem" .= ecosystemName (pkgEcosystem (cpPackage package))
+            , "package" .= cpName package
+            , "path" .= cpPath package
+            , "sha256" .= digest
             , "versions" .= evaluatedVersions result
             , "weak_head_retained" .= (toInteger (evaluatedWeakHead result) - toInteger (evaluatedBaseline result))
             , "forcing" .= forcing result

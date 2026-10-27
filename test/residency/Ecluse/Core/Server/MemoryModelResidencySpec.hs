@@ -22,7 +22,7 @@ import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Data.ByteArray.Encoding (Base (Base16), convertToBase)
 import Ecluse.Composition.MemoryPlan.Transient (meterStepBytes)
-import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
 import Ecluse.Core.Package (PackageName, pkgEcosystem)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
@@ -79,7 +79,7 @@ spec = do
                     let kept = toInteger (cfKeptPermille (metadataChargeFactors (adapterMetadata adapter)))
                     map (heldLimit . retainedShared) (Map.elems (residencyFigures record)) `shouldSatisfy` all (< kept)
         forM_ packages $ \package -> it (toString (cpName package)) $ do
-            (size, _) <- authenticate package
+            (size, digest) <- authenticate package
             measureInChild Mode.Listing package >>= \case
                 Left failure -> expectationFailure failure
                 Right single -> do
@@ -91,6 +91,7 @@ spec = do
                         , "document_charge_per_source_byte" .= perSource (toInteger (singleDocumentCharge single))
                         ]
                         package
+                        digest
                         peaks
                     listingSourceBytes peaks `shouldBe` size
                     listingBasisBytes peaks `shouldBe` size
@@ -106,7 +107,7 @@ spec = do
                     singleDocumentLive single `shouldSatisfy` (<= toInteger (singleDocumentCharge single))
     describe "merged listing peak heap" $ beforeAll measureMerges $ forM_ merges $ \(package, shape) ->
         it (toString (cpName package) <> "/" <> show shape) $ \measured -> do
-            (size, _) <- authenticate package
+            (size, digest) <- authenticate package
             case Map.lookup (cpPath package, shape) measured of
                 Nothing -> expectationFailure "the merge probe did not run"
                 Just (Left failure) -> expectationFailure failure
@@ -121,6 +122,7 @@ spec = do
                         , "full_read_headroom_per_source_byte" .= fmap (\charge -> fromInteger charge / 1000 - observed) derived
                         ]
                         package
+                        digest
                         peaks
                     checkBasis shape size peaks
                     (_, factors) <- listingBounds package
@@ -239,11 +241,14 @@ checkBasis shape size peaks = case shape of
 rise :: (ListingPeaks -> Word64) -> (ListingPeaks -> Word64) -> ListingPeaks -> Integer
 rise high low peaks = toInteger (high peaks) - toInteger (low peaks)
 
-reportListing :: Text -> [Pair] -> CorpusPackage -> ListingPeaks -> IO ()
-reportListing label details package peaks =
+reportListing :: Text -> [Pair] -> CorpusPackage -> Text -> ListingPeaks -> IO ()
+reportListing label details package digest peaks =
     putStrLn . toString . ((label <> " ") <>) . decodeUtf8 . LBS.toStrict . encode . object $
         details
-            <> [ "package" .= cpName package
+            <> [ "ecosystem" .= ecosystemName (pkgEcosystem (cpPackage package))
+               , "package" .= cpName package
+               , "path" .= cpPath package
+               , "sha256" .= digest
                , "read_peak_per_source_byte" .= perByte listingSourceBytes (rise listingReadPeak listingBaseline peaks)
                , "entry_per_source_byte" .= perByte listingSourceBytes (rise listingEntryLive listingBaseline peaks)
                , "peak_above_entry_per_source_byte" .= perByte listingSourceBytes (rise listingPeak listingEntryLive peaks)
@@ -273,7 +278,8 @@ report package digest shape result = do
         ratio = fromInteger retained / fromIntegral (wireBytes result) :: Double
         row =
             object
-                [ "package" .= cpName package
+                [ "ecosystem" .= ecosystemName (pkgEcosystem (cpPackage package))
+                , "package" .= cpName package
                 , "path" .= cpPath package
                 , "sha256" .= digest
                 , "shape" .= (show shape :: Text)
