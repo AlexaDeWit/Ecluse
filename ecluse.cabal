@@ -53,6 +53,7 @@ extra-source-files:
   test/fixtures/rubygems/*.yaml
   test/fixtures/rubygems/legacy/*.gemspec.rz
   test/fixtures/rubygems/*.marshal
+  test/fixtures/rubygems/info/ecluse-fixture-advisory
   test/fixtures/rubygems/info/ecluse-fixture-firstparty
   test/fixtures/rubygems/info/ecluse-fixture-future
   test/fixtures/rubygems/info/ecluse-fixture-late
@@ -1330,6 +1331,8 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Cargo.ProjectSpec
     Ecluse.Core.Registry.RubyGems.ProjectSpec
     Ecluse.Core.Registry.RubyGems.CredentialSpec
+    Ecluse.Core.Registry.RubyGems.StreamingSpec
+    Ecluse.Test.Server.CacheSpec
     Ecluse.Core.Registry.RubyGems.Handlers.BudgetSpec
     Ecluse.Core.Registry.RubyGems.HandlersSpec
     Ecluse.Core.Registry.RubyGems.MetadataSpec
@@ -1491,6 +1494,7 @@ test-suite ecluse-core-unit
   autogen-modules:    Paths_ecluse
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
+    , ghc-heap          ^>=9.10
     , tar ^>=0.6.4
     , bzlib ^>=0.5
     , lzma ==0.0.1.1
@@ -1590,6 +1594,11 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.Worker
     Ecluse.BenchLoad.PyPI.Worker
     Ecluse.BenchLoad.Cargo
+    Ecluse.BenchLoad.RubyGems
+    Ecluse.BenchLoad.RubyGems.Worker
+    Ecluse.BenchLoad.RubyGems.WorkerFixture
+    Ecluse.BenchLoad.RubyGems.WorkerFixtureSpec
+    Ecluse.BenchLoad.RubyGemsSpec
     Ecluse.BenchLoad.Cargo.CopyState
     Ecluse.BenchLoad.Cargo.Worker
     Ecluse.BenchLoad.Cargo.WorkerFixture
@@ -1967,6 +1976,7 @@ test-suite ecluse-residency
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
     Ecluse.Core.Registry.Cargo.ReaderResidencySpec
+    Ecluse.Core.Registry.RubyGems.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ArchiveResidencySpec
     Ecluse.Core.Server.MemoryModel.Calibration
     Ecluse.Core.Server.MemoryModel.CalibrationResidencySpec
@@ -2081,6 +2091,12 @@ library ecluse-e2e-test-support
     Ecluse.E2E.Harness.RubyGemsGateway
     Ecluse.E2E.Harness.RubyGemsRegistry
     Ecluse.E2E.RubyGems.InstallE2ESpec
+    Ecluse.E2E.Harness.RubyGemsCodeArtifact
+    Ecluse.E2E.Harness.RubyGemsCodeArtifact.Client
+    Ecluse.E2E.Harness.RubyGemsCodeArtifact.Fixtures
+    Ecluse.E2E.RubyGems.AdvisoriesE2ESpec
+    Ecluse.E2E.RubyGems.DredgerE2ESpec
+    Ecluse.E2E.RubyGems.PublishE2ESpec
     Ecluse.E2E.RubyGems.NativeE2ESpec
     Ecluse.E2E.Cargo.MirrorInstallE2ESpec
     Ecluse.E2E.Cargo.MirrorProofE2ESpec
@@ -2463,6 +2479,9 @@ executable bench-load
     Ecluse.BenchLoad.Worker
     Ecluse.BenchLoad.PyPI.Worker
     Ecluse.BenchLoad.Cargo
+    Ecluse.BenchLoad.RubyGems
+    Ecluse.BenchLoad.RubyGems.Worker
+    Ecluse.BenchLoad.RubyGems.WorkerFixture
     Ecluse.BenchLoad.Cargo.CopyState
     Ecluse.BenchLoad.Cargo.Worker
     Ecluse.BenchLoad.Cargo.WorkerFixture
@@ -2483,6 +2502,7 @@ executable bench-load
     Ecluse.BenchLoad.PrivateCopy
 
   build-depends:
+    , temporary         ^>=1.3
     , zlib ^>=0.7
     , wai-extra ^>=3.1
     , amazonka ^>=2.0
