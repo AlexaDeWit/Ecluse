@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Corpus-authenticated metadata measurements in one child process per retained shape or listing.
-module Ecluse.Core.Server.MemoryModelResidencySpec (spec, sourceMain, selectedMain, probeIdentity, probeLimits) where
+module Ecluse.Core.Server.MemoryModelResidencySpec (spec, sourceMain, selectedMain, probeIdentity, probeLimits, checkPaid, checkPhases, checkReadPeak, checkOutputCharge, checkOutputLimit) where
 
 import Prelude hiding (universe)
 
@@ -168,7 +168,7 @@ listingBounds package = (,) <$> requireResidency ecosystem <*> maybe (fail "resi
   where
     ecosystem = pkgEcosystem (cpPackage package)
 
--- Whole meter steps cover sub-step sources and output bases, including the entry step.
+-- | Whole meter steps cover sub-step sources and output bases, including the entry step.
 checkPaid :: ChargeFactors -> ListingPeaks -> Expectation
 checkPaid factors peaks = do
     rise listingReadPeak listingBaseline peaks `shouldSatisfy` (<= paid fullRead)
@@ -183,8 +183,7 @@ checkPaid factors peaks = do
 paidSteps :: Int -> Int
 paidSteps = roundUpToStep meterStepBytes . max meterStepBytes
 
--- After the reads step down to what they keep, the meter covers the entries, then the entries and the render,
--- then the body it sends once the reads' charge is gone. The output spends the reads' headroom first.
+-- | Keep retained entries and rendering within the existing stepped read/output charges.
 checkPhases :: ChargeFactors -> ListingPeaks -> Expectation
 checkPhases factors peaks = do
     entries `shouldSatisfy` (<= toInteger (kept + headroom))
@@ -198,7 +197,7 @@ checkPhases factors peaks = do
     output = scaleCharge (cfOutputPermille factors) (listingBasisBytes peaks)
     sending = headroom + roundUpToStep meterStepBytes (max 0 (output - headroom))
 
--- From one step of source up, a read's peak stays under its capture's limit, which sits below its charge.
+-- | From one step of source up, a read's peak stays under its capture's limit, which sits below its charge.
 checkReadPeak :: Maybe Rational -> ListingPeaks -> Expectation
 checkReadPeak figure peaks = when (size >= meterStepBytes) $ case figure of
     Nothing -> expectationFailure "no read peak figure for a source of at least one meter step"
@@ -206,13 +205,13 @@ checkReadPeak figure peaks = when (size >= meterStepBytes) $ case figure of
   where
     size = listingSourceBytes peaks
 
--- From one step of basis up, the output working set fits the output charge.
+-- | From one step of basis up, the output working set fits the output charge.
 checkOutputCharge :: ChargeFactors -> ListingPeaks -> Expectation
 checkOutputCharge factors peaks = when (basis >= meterStepBytes) $ outputWorkingSet peaks `shouldSatisfy` (<= toInteger (scaleCharge (cfOutputPermille factors) basis))
   where
     basis = listingBasisBytes peaks
 
--- From one step of basis up, a realistic listing's output working set stays under its own limit.
+-- | From one step of basis up, a realistic listing's output working set stays under its own limit.
 checkOutputLimit :: Maybe Rational -> ListingPeaks -> Expectation
 checkOutputLimit figure peaks = when (basis >= meterStepBytes) $ case figure of
     Nothing -> expectationFailure "no output working set figure for a basis of at least one meter step"
