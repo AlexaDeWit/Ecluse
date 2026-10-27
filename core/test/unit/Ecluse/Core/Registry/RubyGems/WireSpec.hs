@@ -5,13 +5,15 @@
 -- | Native compact-index grammar preserves identity and complete dependency requirements.
 module Ecluse.Core.Registry.RubyGems.WireSpec (spec) where
 
+import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
+import Ecluse.Core.Version (renderVersion)
 import Test.Hspec
 
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Registry.RubyGems.Document (GemDependency (..), GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Project (coordinatePlatform, projectName, unGemPlatform)
-import Ecluse.Core.Registry.RubyGems.Wire (decodeInfoRow, parseGemRequirement)
+import Ecluse.Core.Registry.RubyGems.Wire (decodeInfoRow, infoRowIdentity, infoRowVersion, parseGemRequirement)
 import Ecluse.Core.Text.Iso8601 (readIso8601Utc)
 import Ecluse.Test.Support (expectRight)
 
@@ -26,6 +28,18 @@ spec = describe "RubyGems compact info rows" $ do
         map gdRequirement (grDependencies parsed) `shouldBe` ["~> 2.0" :| ["!= 2.1"]]
         grPublishedAt parsed `shouldBe` readIso8601Utc "2026-01-02T03:04:05Z"
         Map.lookup "opaque" (grExtras parsed) `shouldBe` Just "value"
+    it "recovers an ASCII identity independently of invalid UTF-8 in its metadata" $ do
+        name <- expectRight (projectName "rack")
+        let bytes = "1.0 |checksum:" <> BS.singleton 255
+        infoRowIdentity name bytes `shouldSatisfy` isJust
+        fmap renderVersion (infoRowVersion bytes) `shouldBe` Just "1.0"
+        decodeInfoRow name (RecordEntry 1) bytes `shouldSatisfy` isLeft
+    it "retains a raw version claim when the platform cannot decode or is unsupported" $ do
+        name <- expectRight (projectName "rack")
+        for_ ["1.0-unknown-platform |checksum:" <> digest, "1.0-" <> BS.singleton 255 <> " |checksum:" <> digest] $ \bytes -> do
+            infoRowIdentity name bytes `shouldBe` Nothing
+            fmap renderVersion (infoRowVersion bytes) `shouldBe` Just "1.0"
+            decodeInfoRow name (RecordEntry 1) bytes `shouldSatisfy` isLeft
     it "does not invent publication times for older sources" $ do
         name <- expectRight (projectName "rack")
         parsed <- expectRight (decodeInfoRow name (RecordEntry 1) ("1.0 |checksum:" <> digest))

@@ -44,6 +44,17 @@ spec = describe "RubyGems complete named reads" $ do
         result <- readResult (SelectedRead (mkVersion RubyGems "1.0")) bytes
         infoVersions (gemReadInfo result) `shouldBe` Map.empty
         infoInvalidEntries (gemReadInfo result) `shouldSatisfy` (not . null)
+    for_ [("invalid UTF-8 metadata", "1.0 |checksum:" <> digest <> ",opaque:" <> BS.singleton 255), ("unsupported platform", "1.0-unknown-platform |checksum:" <> digest), ("invalid UTF-8 platform", "1.0-" <> BS.singleton 255 <> " |checksum:" <> digest)] $ \(label, malformed) ->
+        it ("quarantines an EOF duplicate with " <> label <> " without removing unrelated versions") $ do
+            let bytes = "---\n" <> row "1.0" "2026-01-01T00:00:00Z" <> "\n" <> row "2.0" "2026-01-01T00:00:00Z" <> "\n" <> malformed
+            full <- readResult FullRead bytes
+            Map.keys (infoVersions (gemReadInfo full)) `shouldBe` ["2.0"]
+            infoInvalidEntries (gemReadInfo full) `shouldSatisfy` (not . null)
+            selected <- readResult (SelectedRead (mkVersion RubyGems "1.0")) bytes
+            infoVersions (gemReadInfo selected) `shouldBe` Map.empty
+            gemRows (gemReadDocument selected) `shouldBe` []
+            unrelated <- readResult (SelectedRead (mkVersion RubyGems "2.0")) bytes
+            Map.keys (infoVersions (gemReadInfo unrelated)) `shouldBe` ["2.0"]
     it "counts trailing unselected artifacts and complete source bytes" $ do
         let bytes = "---\n" <> row "1.0" "2026-01-01T00:00:00Z" <> "\n" <> row "2.0" "2026-01-01T00:00:00Z"
         parse defaultLimits{maxArtifactCount = 1} (SelectedRead (mkVersion RubyGems "1.0")) [bytes] `shouldReturn` Left (TooManyArtifacts 2 1)

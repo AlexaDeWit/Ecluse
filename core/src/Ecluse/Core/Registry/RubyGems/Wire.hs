@@ -7,6 +7,7 @@ module Ecluse.Core.Registry.RubyGems.Wire (
     GemRowError (..),
     decodeInfoRow,
     infoRowIdentity,
+    infoRowVersion,
     parseGemRequirement,
 ) where
 
@@ -24,7 +25,7 @@ import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Registry.RubyGems.Document (GemDependency (..), GemRequirement, GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Project (GemCoordinate, mkCoordinate, mkGemPlatform, projectName, projectVersion)
 import Ecluse.Core.Text.Iso8601 (readIso8601Utc)
-import Ecluse.Core.Version (mkVersion)
+import Ecluse.Core.Version (Version, mkVersion)
 
 -- | Native syntax failure differs from an explicitly unsupported wire representation.
 data GemRowError
@@ -37,8 +38,17 @@ data GemRowError
 -- | Recover a claimed identity before decoding other fields, so malformed duplicates cannot hide.
 infoRowIdentity :: PackageName -> ByteString -> Maybe GemCoordinate
 infoRowIdentity name bytes = do
-    text <- rightToMaybe (TE.decodeUtf8' bytes)
-    rightToMaybe (parseIdentity name (T.takeWhile (/= ' ') text))
+    text <- rightToMaybe (TE.decodeUtf8' (identityPrefix bytes))
+    rightToMaybe (parseIdentity name text)
+
+-- | Preserve the raw version claim even when the platform or later payload cannot decode.
+infoRowVersion :: ByteString -> Maybe Version
+infoRowVersion bytes = do
+    raw <- rightToMaybe (TE.decodeUtf8' (BS.takeWhile (/= 45) (identityPrefix bytes)))
+    rightToMaybe (projectVersion raw)
+
+identityPrefix :: ByteString -> ByteString
+identityPrefix = BS.takeWhile (/= 32)
 
 -- | Decode one complete row without losing timestamp colons or requirement conjunctions.
 decodeInfoRow :: PackageName -> EntryKey -> ByteString -> Either GemRowError GemRow

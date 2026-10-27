@@ -23,7 +23,7 @@ import Ecluse.Core.Registry.Metadata.RecordStream (finishRecordSteps, recordStep
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..), GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Project (coordinatePlatform, coordinateVersion, unGemPlatform)
 import Ecluse.Core.Registry.RubyGems.Projection (projectGemRows)
-import Ecluse.Core.Registry.RubyGems.Wire (GemRowError (..), decodeInfoRow, infoRowIdentity)
+import Ecluse.Core.Registry.RubyGems.Wire (GemRowError (..), decodeInfoRow, infoRowIdentity, infoRowVersion)
 import Ecluse.Core.Security (Limits, checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -78,9 +78,10 @@ gemInfoSteps pay limits name base mode = recordSteps reserve consume complete in
             let count = scanCount scan + 1
                 key = RecordEntry (scanOrdinal scan)
                 claimed = infoRowIdentity name bytes
+                claimedVersion = renderVersion <$> infoRowVersion bytes
                 identity = fmap (\coordinate -> (renderVersion (coordinateVersion coordinate), unGemPlatform (coordinatePlatform coordinate))) claimed
                 versions = case mode of
-                    FullRead -> maybe (scanVersions scan) (\(raw, _) -> Set.insert raw (scanVersions scan)) identity
+                    FullRead -> maybe (scanVersions scan) (`Set.insert` scanVersions scan) claimedVersion
                     SelectedRead _ -> Set.empty
                 seen = case identity of
                     Just native@(raw, _) | selected raw -> Map.insertWith (+) native 1 (scanSeen scan)
@@ -91,7 +92,7 @@ gemInfoSteps pay limits name base mode = recordSteps reserve consume complete in
             case decodeInfoRow name key bytes of
                 Left fault ->
                     let reason = case fault of GemRowMalformed detail -> detail; GemRowUnsupported detail -> detail
-                        bad = case identity of Just (raw, _) | selected raw -> Set.insert raw (scanBad next); _ -> scanBad next
+                        bad = case claimedVersion of Just raw | selected raw -> Set.insert raw (scanBad next); _ -> scanBad next
                         retain = case mode of FullRead -> True; SelectedRead _ -> null (scanInvalid next)
                         invalid = if retain then mkInvalidEntry InvalidVersionManifest (show key) Null reason : scanInvalid next else scanInvalid next
                      in Right next{scanBad = bad, scanInvalid = invalid, scanKeptCharge = if retain then addCharge next 256 else scanKeptCharge next}
