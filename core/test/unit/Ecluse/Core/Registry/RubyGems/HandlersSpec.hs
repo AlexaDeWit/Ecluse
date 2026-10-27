@@ -277,7 +277,7 @@ withAmbiguousNative privateStatus use = do
     owned <- expectRight (projectFirstPartyEntry "acme")
     rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan 0)]
     let upstream request respond = do
-            modifyIORef' hits (<> [pathInfo request])
+            atomicModifyIORef' hits (\events -> (events <> [pathInfo request], ()))
             let answer status bytes = respond (responseLBS status [] (fromStrict bytes))
             case pathInfo request of
                 ["private", "info", "acme"] -> answer privateStatus ""
