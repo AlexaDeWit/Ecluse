@@ -33,16 +33,16 @@ spec = do
                 withInstallEvidenceBudget budget (\bytes inspection -> bytes 6 >> inspection 4 >> bytes 3 >> inspection 7 >> bytes 0 >> inspection 10)
                     `shouldReturn` Just ()
                 withInstallEvidenceBudget budget (\bytes inspection -> bytes 6 >> inspection 5)
-                    `shouldThrow` (== InstallEvidenceBudgetExceeded)
+                    `shouldThrow` (\InstallEvidenceBudgetExceeded -> True)
                 withInstallEvidenceBudget budget (\bytes inspection -> bytes 10 >> inspection 0)
                     `shouldReturn` Just ()
         it "clamps negative regions to zero without creating room beyond capacity" $
             withSweeper $ \deadlines -> do
                 budget <- newInstallEvidenceBudget deadlines defaultLimits{maxMetadataBytes = 10}
                 withInstallEvidenceBudget budget (\bytes inspection -> bytes (-4) >> inspection 10 >> bytes 1)
-                    `shouldThrow` (== InstallEvidenceBudgetExceeded)
+                    `shouldThrow` (\InstallEvidenceBudgetExceeded -> True)
                 withInstallEvidenceBudget budget (\bytes inspection -> inspection (-4) >> bytes 10 >> inspection 1)
-                    `shouldThrow` (== InstallEvidenceBudgetExceeded)
+                    `shouldThrow` (\InstallEvidenceBudgetExceeded -> True)
                 withInstallEvidenceBudget budget (\bytes inspection -> bytes 5 >> inspection 5)
                     `shouldReturn` Just ()
         it "keeps a one-unit envelope when the configured metadata capacity is nonpositive" $
@@ -51,7 +51,7 @@ spec = do
                     budget <- newInstallEvidenceBudget deadlines defaultLimits{maxMetadataBytes = capacity}
                     withInstallEvidenceBudget budget (\bytes inspection -> bytes 1 >> inspection 0) `shouldReturn` Just ()
                     withInstallEvidenceBudget budget (\bytes inspection -> bytes 1 >> inspection 1)
-                        `shouldThrow` (== InstallEvidenceBudgetExceeded)
+                        `shouldThrow` (\InstallEvidenceBudgetExceeded -> True)
     describe "bounded evidence transport" $ do
         it "reads exact-cap bytes and refuses one extra byte through controlled transport" $
             for_ [("four", Right "four"), ("five!", Left (evidenceFault WontResolve "BodyTooLarge (MirrorArtifactBodyLimit 4)"))] $ \(body, expected) ->

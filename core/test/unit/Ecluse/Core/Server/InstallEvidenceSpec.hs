@@ -6,7 +6,7 @@
 module Ecluse.Core.Server.InstallEvidenceSpec (spec) where
 
 import Control.Concurrent.MVar qualified as MVar
-import UnliftIO.Async (cancel, wait, withAsync)
+import UnliftIO.Async (cancel, race, wait, withAsync)
 import UnliftIO.Timeout (timeout)
 
 import Network.HTTP.Types (status200, status503)
@@ -103,9 +103,13 @@ spec = describe "public install evidence boundary" $ do
                 let deps = (dependencies stub){pdInstallEvidence = Just provider}
                     artifact :| _ = pkgArtifacts (vdDetails doc)
                     admitted = (vdDetails doc){pkgArtifacts = artifact{artUrl = stubLocalhostUrl stub <> "/archive"} :| []}
-                withAsync (withBoundReads deps runtime (\evidenceReads -> void (runEvidence evidenceReads admitted))) $ \owner -> do
-                    MVar.takeMVar entered
-                    cancel owner
+                observed <- newIORef Nothing
+                withAsync (withBoundReads deps runtime (\evidenceReads -> runEvidence evidenceReads admitted >>= writeIORef observed . Just)) $ \owner ->
+                    race (MVar.takeMVar entered) (wait owner) >>= \case
+                        Left () -> cancel owner
+                        Right () ->
+                            readIORef observed >>= \result ->
+                                expectationFailure ("evidence read ended before HTTP readiness: " <> show result)
                 snChargedBytes <$> meterSnapshot (srMemoryMeter runtime) `shouldReturn` 0
                 snWaiting <$> meterSnapshot (srMemoryMeter runtime) `shouldReturn` 0
                 snPaused <$> meterSnapshot (srMemoryMeter runtime) `shouldReturn` 0

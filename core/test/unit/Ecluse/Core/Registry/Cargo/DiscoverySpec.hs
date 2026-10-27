@@ -52,6 +52,9 @@ spec = describe "Cargo discovery" $ do
             `shouldBe` Left (MetadataBoundExceeded (TooDeeplyNested 1))
         let valid = renderCargoDiscovery "https://index.crates.io/{crate}" Nothing False
             padded = valid <> BS.replicate (65536 - BS.length valid) 32
+        fmap discoveryDl (parseDiscoveryWithDepth 2 hosts origin valid) `shouldBe` Right "https://index.crates.io/{crate}"
+        fmap discoveryDl (parseDiscoveryWithDepth 2 hosts origin "{\"dl\":\"https://index.crates.io\",\"extra\":{\"nested\":{}}}")
+            `shouldBe` Left (MetadataBoundExceeded (TooDeeplyNested 2))
         fmap discoveryDl (parseCargoDiscovery hosts origin padded) `shouldBe` Right "https://index.crates.io/{crate}"
         fmap discoveryDl (parseCargoDiscovery hosts origin (padded <> " "))
             `shouldBe` Left (MetadataBoundExceeded (BodyTooLarge (MetadataBodyLimit 65536)))

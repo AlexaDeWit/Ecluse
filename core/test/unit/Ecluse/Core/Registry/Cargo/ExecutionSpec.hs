@@ -10,7 +10,7 @@ import Control.Concurrent.MVar qualified as MVar
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Test.Hspec
-import UnliftIO.Async (cancel, wait, withAsync)
+import UnliftIO.Async (cancel, race, wait, withAsync)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm))
 import Ecluse.Core.Package
@@ -79,9 +79,10 @@ spec = describe "Cargo install evidence" $ do
             entered <- MVar.newEmptyMVar
             blocked <- MVar.newEmptyMVar
             pending <- newInstallEvidenceReads provider (evidenceContext (\_ _ pay -> pay (BS.length archive) >> MVar.putMVar entered () >> MVar.takeMVar blocked)){ieLimits = limits, ieBudget = budget}
-            withAsync (resolved pending (details "1.2.3" archive)) $ \owner -> do
-                MVar.takeMVar entered
-                cancel owner
+            withAsync (resolved pending (details "1.2.3" archive)) $ \owner ->
+                race (MVar.takeMVar entered) (wait owner) >>= \case
+                    Left () -> cancel owner
+                    Right result -> expectationFailure ("evidence read ended before acquisition readiness: " <> show result)
             recovered <- newInstallEvidenceReads provider (evidenceContext (\_ _ pay -> pay (BS.length archive) $> Right archive)){ieLimits = limits, ieBudget = budget}
             resolved recovered (details "1.2.3" archive) `shouldReturn` InstallDetermined NoCodeOnInstall
             withInstallEvidenceBudget budget (\bytes inspection -> bytes (maxMetadataBytes limits) >> inspection 0) `shouldReturn` Just ()
