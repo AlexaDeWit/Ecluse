@@ -56,13 +56,12 @@ decodeRubyGemsValues :: ByteString -> Either Text Value
 decodeRubyGemsValues bytes = do
     input <- first (toText . show) (Text.decodeUtf8' bytes)
     rows <- referenceInfo bytes
-    let (header, remainder) = T.breakOn "---\n" input
-        physical = zip [0 ..] (T.lines input)
-    when (T.null remainder || not (T.isSuffixOf "\n" input)) (Left "incomplete RubyGems corpus framing")
+    let physical = Map.fromList (zip [0 ..] (T.lines input))
+    unless (T.isSuffixOf "\n" input) (Left "incomplete RubyGems corpus framing")
     sources <- forM rows $ \row -> do
-        source <- maybeToRight "RubyGems corpus row position is absent" (lookup (rowPosition row) physical)
+        source <- maybeToRight "RubyGems corpus row position is absent" (Map.lookup (rowPosition row) physical)
         pure (object ["version" .= rowVersion row, "source" .= source])
-    pure (object ["header" .= (header <> "---\n"), "rows" .= sources])
+    pure (object ["header" .= corpusHeader input, "rows" .= sources])
 
 -- | Emit native records without exposing the internal JSON envelope on the wire.
 encodeRubyGemsValues :: Value -> Either Text ByteString
@@ -133,8 +132,7 @@ projectRubyGemsTree limits name bytes = do
     unless (Set.size (Set.fromList (map (unFilename . coordinateFilename . grCoordinate) rows)) == length rows) (Left MetadataUndecodable)
     let versions = foldl' insert Map.empty rows
     first MetadataBoundExceeded (checkVersionCountOf limits (Map.size versions))
-    let (header, _) = T.breakOn "---\n" input
-    pure (PackageInfo name versions Map.empty [], fst rubyGemsCached (GemDocument name (encodeUtf8 (header <> "---\n")) rows))
+    pure (PackageInfo name versions Map.empty [], fst rubyGemsCached (GemDocument name (encodeUtf8 (corpusHeader input)) rows))
   where
     projectRow physical observed = do
         platform <- first (const MetadataUndecodable) (mkGemPlatform (rowPlatform observed))
@@ -171,3 +169,6 @@ projectRubyGemsInfo :: Text -> Limits -> PackageName -> ByteString -> Either Met
 projectRubyGemsInfo base limits name bytes = do
     streamed <- first MetadataBoundExceeded (readStepsChunks finishRecordSteps (MetadataBodyLimit (maxMetadataBytes limits)) (gemInfoSteps (const (pure ())) limits name base FullRead) [bytes])
     finishGemFull limits name base streamed
+
+corpusHeader :: Text -> Text
+corpusHeader input = T.unlines (takeWhile (/= "---") (T.lines input) <> ["---"])

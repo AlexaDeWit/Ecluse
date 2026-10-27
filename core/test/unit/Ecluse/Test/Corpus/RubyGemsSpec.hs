@@ -24,6 +24,10 @@ spec = describe "RubyGems corpus transforms" $ do
             oracle <- expectRight (projectRubyGemsTree defaultLimits (cpPackage package) raw)
             native <- expectRight (projectRubyGemsInfo "https://rubygems.org" defaultLimits (cpPackage package) raw)
             native `shouldBe` oracle
+    it "preserves an opaque header ending with delimiter-like text" $ do
+        let raw = "opaque---\n" <> platformHistory
+        document <- expectRight (decodeRubyGemsValues raw)
+        encodeRubyGemsValues document `shouldBe` Right raw
     it "keeps all native platforms for an exact raw version" $ do
         document <- expectRight (decodeRubyGemsValues platformHistory)
         kept <- expectRight (encodeRubyGemsValues (keepRubyGemsVersions (Set.singleton "1.0.0") document))
