@@ -35,6 +35,9 @@ data StubRoute
     | CargoPublic
     | CargoPrivate
     | CargoMirror
+    | RubyGemsPublic
+    | RubyGemsPrivate
+    | RubyGemsMirror
     | -- | A private upstream that holds nothing: it answers every read with a 404.
       EmptyPrivate
     | -- | The front of the second Verdaccio a Dredger case runs as a private cache.
@@ -65,6 +68,9 @@ stubHost = \case
     CargoPublic -> "cargo-upstream"
     CargoPrivate -> "cargo-private"
     CargoMirror -> "cargo-mirror"
+    RubyGemsPublic -> "rubygems-upstream"
+    RubyGemsPrivate -> "rubygems-private"
+    RubyGemsMirror -> "rubygems-mirror"
     EmptyPrivate -> "private-upstream"
     PrivateCache -> "private-cache"
     Mirror -> "mirror"
@@ -82,6 +88,8 @@ data StubFault
       PyPIMirrorBackend Int Bool
     | -- | Route native PyPI stores and the AWS API to one host fixture.
       PyPICodeArtifactBackend Int
+    | RubyGemsBackend Int Bool
+    | RubyGemsPublicBackend Int
     | CargoBackend Int Bool
     | -- | Route Cargo repositories and the native AWS control plane to one host fixture.
       CargoCodeArtifactBackend Int
@@ -118,6 +126,9 @@ serverBlock fault route =
         <> maybe [] (`faultLines` route) fault
         <> [line | isPublic route, line <- publicCoding]
         <> ( case (fault, route) of
+                (Just (RubyGemsPublicBackend port), RubyGemsPublic) -> forwarded nativeUploadLimit port
+                (Just (RubyGemsBackend port _), selected)
+                    | selected `elem` [RubyGemsPrivate, RubyGemsMirror] -> forwarded nativeUploadLimit port
                 (Just (CargoPublicBackend port), CargoPublic) -> forwarded 16777216 port
                 (Just (CargoCodeArtifactBackend port), selected)
                     | selected `elem` [PyPICodeArtifactData, PyPICodeArtifactControl, CargoPrivate, CargoMirror] -> forwarded 16777216 port
@@ -147,6 +158,8 @@ faultLines = \case
     PrivateCacheWritesRefused -> \route -> [refuseWrites | route == PrivateCache]
     PyPIMirrorBackend _ down -> \route -> [closeUnanswered | down && isPublic route]
     PyPICodeArtifactBackend _ -> const []
+    RubyGemsBackend _ down -> \route -> [closeUnanswered | down && isPublic route]
+    RubyGemsPublicBackend _ -> const []
     CargoBackend _ down -> \route -> [closeUnanswered | down && isPublic route]
     CargoCodeArtifactBackend _ -> const []
     CargoPublicBackend _ -> const []
@@ -164,6 +177,9 @@ isPublic = \case
     NpmPublic -> True
     PyPIPublic -> True
     CargoPublic -> True
+    RubyGemsPublic -> True
+    RubyGemsPrivate -> False
+    RubyGemsMirror -> False
     CargoPrivate -> False
     CargoMirror -> False
     EmptyPrivate -> False
@@ -205,6 +221,13 @@ routeLines = \case
         , "    default_type application/octet-stream;"
         , "    location / { try_files $uri =404; }"
         ]
+    RubyGemsPublic ->
+        [ "    root /usr/share/nginx/rubygems;"
+        , "    default_type application/octet-stream;"
+        , "    location / { try_files $uri =404; }"
+        ]
+    RubyGemsPrivate -> ["    location / { return 404; }"]
+    RubyGemsMirror -> ["    location / { return 404; }"]
     CargoPrivate -> ["    location / { return 404; }"]
     CargoMirror -> ["    location / { return 404; }"]
     PyPIMirror -> ["    location / { return 404; }"]
