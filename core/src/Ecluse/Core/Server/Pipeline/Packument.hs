@@ -9,6 +9,7 @@ module Ecluse.Core.Server.Pipeline.Packument (
     servePackument,
     headPackument,
     withAdmittedDocument,
+    withObservedAdmittedDocument,
     answerMetadataBytes,
     mapPackumentReplies,
 
@@ -211,6 +212,7 @@ data PackumentServing response = PackumentServing
     , psvPrivateRead :: ChargePart
     -- ^ What the private read paid. It steps down to what the read keeps, and goes once the body exists.
     , psvInputBytes :: Int -> IO ()
+    , psvDocumentBytes :: Int -> IO (Either response ())
     , psvAbsent :: Maybe response
     , psvResolved :: PackumentServing response -> [Contribution] -> MergePlan -> Handler response
     , psvPublicRead :: ChargePart
@@ -253,7 +255,20 @@ withAdmittedDocument ::
     response ->
     (CachedDoc -> Int -> Map Text Provenance -> Handler response) ->
     Handler response
-withAdmittedDocument replies ticket observe name request absent consume = do
+withAdmittedDocument replies ticket observe = withObservedAdmittedDocument replies ticket observe (const (pure (Right ())))
+
+-- | Check each resolved source document before admission, including cached and policy-denied documents.
+withObservedAdmittedDocument ::
+    PackumentReplies response ->
+    MemoryTicket ->
+    (Int -> IO ()) ->
+    (Int -> IO (Either response ())) ->
+    PackageName ->
+    Request ->
+    response ->
+    (CachedDoc -> Int -> Map Text Provenance -> Handler response) ->
+    Handler response
+withObservedAdmittedDocument replies ticket observe checkDocument name request absent consume = do
     mount <- asks ctxMount
     let deps = bindingPackumentDeps mount
         clientToken = forwardedCredential mount request
@@ -265,7 +280,7 @@ withAdmittedDocument replies ticket observe name request absent consume = do
                 then refuse packumentNotFound "first-party packages require the private registry view"
                 else do
                     serving <- newServing PackumentFull replies name request ticket admitted
-                    serveAdmittedPackument serving{psvAbsent = Just absent, psvInputBytes = observe} clientToken
+                    serveAdmittedPackument serving{psvAbsent = Just absent, psvInputBytes = observe, psvDocumentBytes = checkDocument} clientToken
   where
     admitted serving sources plan = do
         let basis = outputBasisBytes plan sources
@@ -302,6 +317,7 @@ newServing mode replies name request ticket resolved = do
             , psvPrivateRead = privateRead
             , psvPublicRead = publicRead
             , psvInputBytes = const pass
+            , psvDocumentBytes = const (pure (Right ()))
             , psvAbsent = Nothing
             , psvResolved = resolved
             }
@@ -367,7 +383,7 @@ serveMergedPackument serving evalCtx record privResult pubResult
     , settledAbsence privResult
     , settledAbsence pubResult =
         pure absent
-    | otherwise = case views of
+    | otherwise = withCheckedSourceDocuments serving (catMaybes [originManifest privResult, originManifest pubResult]) $ case views of
         Left _ -> mirrorUnavailable serving
         Right (unmanagedManifest, managedManifest, pending) -> do
             let (unmanaged, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) unmanagedManifest
@@ -409,6 +425,16 @@ serveMergedPackument serving evalCtx record privResult pubResult
         Just (revision, current) -> do
             (unmanaged, managed, pending) <- mirrorProjectViews revision current (originManifest privResult)
             pure (if pdReadSourceSelection deps == ManagedMirrorAndPublic then Nothing else unmanaged, managed, pending)
+
+withCheckedSourceDocuments :: PackumentServing response -> [Manifest] -> Handler response -> Handler response
+withCheckedSourceDocuments serving manifests action = go manifests
+  where
+    go [] = action
+    go (manifest : rest) = do
+        checked <- liftIO (psvDocumentBytes serving (manifestBodyBytes manifest))
+        case checked of
+            Left refusal -> pure refusal
+            Right () -> go rest
 
 mirrorUnavailable :: PackumentServing response -> Handler response
 mirrorUnavailable serving = mirrorUnavailableWithRetry serving Nothing

@@ -137,10 +137,8 @@ spec = do
                 it ("continues after an absent owned candidate for " <> show method <> " " <> show path) $
                     withAmbiguousNative status404 $ \runtime binding hits release -> do
                         response <- capture runtime binding method path []
-                        simpleStatus response `shouldBe` status200
                         let body = if path == "/gems/acme-1-1.0.gem" then releaseArchive release else releaseCompact release
-                        simpleBody response `shouldBe` if method == "HEAD" then "" else fromStrict body
-                        lookup "Content-Length" (simpleHeaders response) `shouldBe` Just (show (BS.length body))
+                        checkCoordinateResponse method path body response
                         observed <- readIORef hits
                         observed `shouldSatisfy` elem ["private", "info", "acme"]
                         observed `shouldSatisfy` elem ["public", "info", "acme-1"]
@@ -167,10 +165,8 @@ spec = do
                 it ("admits the longer gem beside an unrelated denied candidate for " <> show method <> " " <> show path) $
                     withCoordinateSources PublicCandidateSource $ \runtime binding hits release -> do
                         response <- capture runtime binding method path []
-                        simpleStatus response `shouldBe` status200
                         let body = if path == "/gems/acme-1-1.0.gem" then releaseArchive release else releaseCompact release
-                        simpleBody response `shouldBe` if method == "HEAD" then "" else fromStrict body
-                        lookup "Content-Length" (simpleHeaders response) `shouldBe` Just (show (BS.length body))
+                        checkCoordinateResponse method path body response
                         observed <- readIORef hits
                         observed `shouldSatisfy` elem ["public", "info", "acme"]
                         observed `shouldSatisfy` elem ["public", "info", "acme-1"]
@@ -179,11 +175,58 @@ spec = do
                         observed `shouldSatisfy` notElem ["public", "quick", "Marshal.4.8", "acme-2.0.gemspec.rz"]
         for_ ["GET", "HEAD"] $ \method ->
             for_ ["/gems/acme-2.0.gem", "/quick/Marshal.4.8/acme-2.0.gemspec.rz"] $ \path ->
-                it ("retains denial for the actual recent coordinate for " <> show method <> " " <> show path) $
-                    withCoordinateSources PublicCandidateSource $ \runtime binding hits _ -> do
+                for_ [False, True] $ \warm ->
+                    it ("retains denial for the actual recent coordinate for " <> show (warm, method, path)) $
+                        withCoordinateSources PublicCandidateSource $ \runtime original hits _ -> do
+                            let binding = coordinateByteCap 200 original
+                            when warm (warmCoordinateCache runtime binding hits)
+                            response <- capture runtime binding method path []
+                            simpleStatus response `shouldBe` status403
+                            readIORef hits `shouldReturn` [["public", "info", "acme"] | not warm]
+
+    describe "coordinate source document limits" $ do
+        for_ ["GET", "HEAD"] $ \method ->
+            for_ ["/gems/acme-1-1.0.gem", "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz"] $ \path -> do
+                it ("counts warm denied source bytes for " <> show method <> " " <> show path) $
+                    withCoordinateSources PublicCandidateSource $ \runtime original hits release -> do
+                        let binding = coordinateByteCap 200 original
+                            (recent, admitted) = coordinateListings "" release
+                        map BS.length [recent, admitted] `shouldSatisfy` all (<= 200)
+                        BS.length recent + BS.length admitted `shouldSatisfy` (> 200)
+                        warmCoordinateCache runtime binding hits
                         response <- capture runtime binding method path []
-                        simpleStatus response `shouldBe` status403
-                        readIORef hits `shouldReturn` [["public", "info", "acme"]]
+                        simpleStatus response `shouldBe` status400
+                        readIORef hits `shouldReturn` []
+                for_ [False, True] $ \warm -> do
+                    it ("refuses one byte below the source total for " <> show (warm, method, path)) $
+                        withCoordinateSourceHeader coordinateBudgetHeader PublicCandidateSource $ \runtime original hits release -> do
+                            let (recent, admitted) = coordinateListings coordinateBudgetHeader release
+                                cap = BS.length recent + BS.length admitted - 1
+                                binding = coordinateByteCap cap original
+                            map BS.length [recent, admitted] `shouldSatisfy` all (<= cap)
+                            when warm (warmCoordinateCache runtime binding hits)
+                            response <- capture runtime binding method path []
+                            simpleStatus response `shouldBe` if warm then status400 else status502
+                            observed <- readIORef hits
+                            if warm
+                                then observed `shouldBe` []
+                                else sort observed `shouldBe` [["public", "info", "acme"], ["public", "info", "acme-1"]]
+                    it ("accepts the exact input total for " <> show (warm, method, path)) $
+                        withCoordinateSourceHeader coordinateBudgetHeader PublicCandidateSource $ \runtime original hits release -> do
+                            let (recent, admitted) = coordinateListings coordinateBudgetHeader release
+                                compact = path == "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz"
+                                body = if compact then releaseCompact release else releaseArchive release
+                                sourceTotal = BS.length recent + BS.length admitted
+                                cap = sourceTotal + if compact && not warm then BS.length body else 0
+                                binding = coordinateByteCap cap original
+                            when warm (warmCoordinateCache runtime binding hits)
+                            response <- capture runtime binding method path []
+                            checkCoordinateResponse method path body response
+                            observed <- readIORef hits
+                            let listings = filter (\parts -> take 2 parts == ["public", "info"]) observed
+                            let selectedRead = [["public", "info", "acme-1"] | not compact]
+                                candidateReads = if warm then [] else [["public", "info", "acme"], ["public", "info", "acme-1"]]
+                            sort listings `shouldBe` sort (candidateReads <> selectedRead)
 
     describe "native metadata representations" $ do
         for_ metadataPaths $ \path ->
@@ -299,22 +342,25 @@ withAmbiguousNative :: Status -> (ServeRuntime -> MountBinding -> IORef [[Text]]
 withAmbiguousNative = withCoordinateSources . OwnedCandidateSource
 
 withCoordinateSources :: CoordinateSources -> (ServeRuntime -> MountBinding -> IORef [[Text]] -> RubyRelease -> IO a) -> IO a
-withCoordinateSources sources use = do
+withCoordinateSources = withCoordinateSourceHeader ""
+
+withCoordinateSourceHeader :: ByteString -> CoordinateSources -> (ServeRuntime -> MountBinding -> IORef [[Text]] -> RubyRelease -> IO a) -> IO a
+withCoordinateSourceHeader header sources use = do
     releases <- loadRubyReleasesFrom "test/fixtures/rubygems/coordinate-ambiguity"
     release <- rubyRelease releases "acme-1" "1.0" "ruby"
     hits <- newIORef []
     owned <- expectRight (projectFirstPartyEntry "acme")
     let age = case sources of OwnedCandidateSource _ -> 0; PublicCandidateSource -> 604800
     rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan age)]
-    let recent = encodeUtf8 ("---\n2.0 |checksum:" <> releaseChecksum release <> ",ruby:>= 3.2,rubygems:>= 3.4,created_at:2029-12-31T00:00:00Z\n")
+    let (recent, admitted) = coordinateListings header release
         upstream request respond = do
             atomicModifyIORef' hits (\events -> (events <> [pathInfo request], ()))
             let answer status bytes = respond (responseLBS status [] (fromStrict bytes))
             case pathInfo request of
                 ["private", "info", "acme"] -> answer (case sources of OwnedCandidateSource status -> status; PublicCandidateSource -> status404) ""
                 ["public", "info", "acme"] -> answer status200 recent
-                ["public", "info", "acme-1"] -> answer status200 (encodeUtf8 ("---\n" <> releaseInfoRow release <> "\n"))
-                ["public", "gems", "acme-1-1.0.gem"] -> answer status200 (releaseArchive release)
+                ["public", "info", "acme-1"] -> answer status200 admitted
+                ["public", "gems", "acme-1-1.0.gem"] -> respond (responseLBS status200 [("Content-Length", show (BS.length (releaseArchive release)))] (fromStrict (releaseArchive release)))
                 ["public", "quick", "Marshal.4.8", "acme-1-1.0.gemspec.rz"] -> answer status200 (releaseCompact release)
                 _ -> answer status404 ""
     testWithApplication (pure upstream) $ \port -> do
@@ -325,6 +371,40 @@ withCoordinateSources sources use = do
             let deps = bindingPackumentDeps binding
                 selected = binding{bindingPackumentDeps = deps{pdReadSourceSelection = MergePrivateAndPublic, pdFirstParty = firstParty, pdRules = rules}}
             use runtime selected hits release
+
+checkCoordinateResponse :: Method -> ByteString -> ByteString -> SResponse -> Expectation
+checkCoordinateResponse method path body response = do
+    simpleStatus response `shouldBe` status200
+    simpleBody response `shouldBe` if method == "HEAD" then "" else fromStrict body
+    let advertised = lookup "Content-Length" (simpleHeaders response)
+        expected = show (BS.length body)
+    if method == "HEAD" || path == "/gems/acme-1-1.0.gem"
+        then advertised `shouldBe` Just expected
+        else for_ advertised (`shouldBe` expected)
+
+coordinateListings :: ByteString -> RubyRelease -> (ByteString, ByteString)
+coordinateListings header release =
+    ( header <> encodeUtf8 ("---\n2.0 |checksum:" <> releaseChecksum release <> ",ruby:>= 3.2,rubygems:>= 3.4,created_at:2029-12-31T00:00:00Z\n")
+    , header <> encodeUtf8 ("---\n" <> releaseInfoRow release <> "\n")
+    )
+
+-- The native header is opaque. Its padding lets the source cap also fit an inflated compact specification.
+coordinateBudgetHeader :: ByteString
+coordinateBudgetHeader = "created_at: 2020-01-01T00:00:00Z\nx-test-padding: " <> BS.replicate 256 120 <> "\n"
+
+coordinateByteCap :: Int -> MountBinding -> MountBinding
+coordinateByteCap cap binding =
+    let deps = bindingPackumentDeps binding
+     in binding{bindingPackumentDeps = deps{pdLimits = (pdLimits deps){maxMetadataBytes = cap}}}
+
+warmCoordinateCache :: ServeRuntime -> MountBinding -> IORef [[Text]] -> IO ()
+warmCoordinateCache runtime binding hits = do
+    denied <- capture runtime binding "GET" "/api/v1/dependencies?gems=acme" []
+    simpleStatus denied `shouldBe` status403
+    admitted <- capture runtime binding "GET" "/api/v1/dependencies?gems=acme-1" []
+    simpleStatus admitted `shouldBe` status200
+    readIORef hits `shouldReturn` [["public", "info", "acme"], ["public", "info", "acme-1"]]
+    writeIORef hits []
 
 capture :: ServeRuntime -> MountBinding -> Method -> ByteString -> [Header] -> IO SResponse
 capture runtime binding method path headers = do
