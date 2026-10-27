@@ -951,6 +951,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.PyPI.Streaming
     Ecluse.Test.Registry.PyPI.Wire
     Ecluse.Test.Registry.RubyGems.Wire
+    Ecluse.Test.Registry.RubyGems.Generated
     Ecluse.Test.Registry.RubyGems.Reference
     Ecluse.Test.Mirror.RubyGems
     Ecluse.Test.Corpus.RubyGems
