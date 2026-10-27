@@ -213,7 +213,8 @@ Losing expected history can hide files that the current public index no longer l
 Partial uploads remain incomplete through Écluse. A state failure answers unavailable.
 A missing recorded version that a named rule denies in the current public read does not block the remaining authorised listing.
 Without decisive denial evidence, the listing still requires complete file coverage. An absent state record leaves ordinary
-unmanaged private handling intact. These controls do not promise atomic direct-registry reads.
+unmanaged private handling intact. Those private reads do not prove original-source restoration.
+These controls do not promise atomic direct-registry reads.
 Project listings still discover public releases. Already mirrored artifact and companion reads
 need no public request or new admission after current private authorisation and identity proof.
 

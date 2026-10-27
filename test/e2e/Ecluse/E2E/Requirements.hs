@@ -289,7 +289,7 @@ obligations =
         "rubygems/mirror-proof"
         Supported
         ["read", "mirror", "client-install"]
-        (map ("rubygems/mirror-proof/" <>) ["source-roundtrip", "lost-reply", "interruption", "upstream-removal", "missing-archive", "checksum-mutation", "missing-state", "corrupt-state", "private-auth"])
+        (map ("rubygems/mirror-proof/" <>) ["source-roundtrip", "lost-reply", "interruption", "upstream-removal", "conclusive-absence", "missing-archive", "checksum-mutation", "missing-state", "missing-compact", "corrupt-state", "private-auth"])
     , Obligation
         "rubygems/dredger-native-safety"
         "rubygems/maintenance"

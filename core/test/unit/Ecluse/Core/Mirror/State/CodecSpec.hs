@@ -7,7 +7,6 @@ module Ecluse.Core.Mirror.State.CodecSpec (spec) where
 
 import Data.Aeson (Value (..), eitherDecodeStrict, encode, object, toJSON, (.=))
 import Data.Aeson.Key (Key)
-import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
@@ -22,6 +21,7 @@ import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (..), Limits (..), defaultLimits)
 import Ecluse.Core.Worker.Managed (readMirrorRecord)
 import Ecluse.Core.Worker.Types (WorkerMirrorState (..), WorkerStateBudget (..))
+import Ecluse.Test.Json (changeAt)
 import Ecluse.Test.Mirror.State
 import Ecluse.Test.Support (expectRight)
 
@@ -119,15 +119,6 @@ decode = chargedDecodeProjectRecord (const pass) defaultLimits target mirrorPack
 invalidBecause :: Text -> Either MirrorStateFault a -> Bool
 invalidBecause reason (Left (StateInvalid detail)) = reason `T.isSuffixOf` detail
 invalidBecause _ _ = False
-
-changeAt :: [Key] -> (Value -> IO Value) -> Value -> IO Value
-changeAt [] change value = change value
-changeAt path change (Array values) = Array <$> traverse (changeAt path change) values
-changeAt (key : rest) change (Object fields) = do
-    original <- maybe (fail ("missing fixture field " <> show key)) pure (KeyMap.lookup key fields)
-    changed <- changeAt rest change original
-    pure (Object (KeyMap.insert key changed fields))
-changeAt _ _ _ = fail "unexpected fixture structure"
 
 duplicateArray :: Value -> IO Value
 duplicateArray (Array values) = pure (Array (values <> values))
