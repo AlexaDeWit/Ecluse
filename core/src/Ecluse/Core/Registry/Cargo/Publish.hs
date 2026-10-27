@@ -74,6 +74,7 @@ cargoPublishCodec factors =
                 _ -> Left (PublishSourceUnavailable "Cargo publication requires one selected source row")
             pure (inventory, row)
         , pcPrepareUpload = prepareUpload
+        , pcMirrorCompanion = Nothing
         , pcNativeComplete = \_ _ _ -> False
         , pcTargetRead = prepareCargoRead
         , pcTargetReadPermille = cfFullReadPermille factors

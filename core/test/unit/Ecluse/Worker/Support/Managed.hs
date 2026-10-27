@@ -26,7 +26,7 @@ import Ecluse.Core.Mirror.State.Internal (StateRevision (..), VerifiedCompanionB
 import Ecluse.Core.Package
 import Ecluse.Core.Queue (MirrorJob (..))
 import Ecluse.Core.Registry (PublishError (PublishError), PublishFault (PublishRejected, PublishSourceUnavailable))
-import Ecluse.Core.Registry.CachedDocument (cargoCached, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (cargoCached, pypiSimpleCached, rubyGemsCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..), VersionEvaluation (VersionPresent))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
@@ -112,6 +112,7 @@ sourceDocument inventory = VersionDoc (inventoryDetails inventory) raw
         PyPIMirrorRead document -> Just (fst pypiSimpleCached document)
         NpmMirrorRead _ -> Nothing
         CargoMirrorRead document -> Just (fst cargoCached document)
+        RubyGemsMirrorRead document -> Just (fst rubyGemsCached document)
 
 fixtureStore :: StateTarget -> IORef (Maybe ProjectMirrorRecord) -> IORef Int -> IORef (Maybe MirrorStateFault) -> IORef (Map Text ByteString) -> MirrorState
 fixtureStore target record revision fault companions =
@@ -142,7 +143,8 @@ fixtureStore target record revision fault companions =
 fixturePublish :: IORef (Maybe ProjectMirrorRecord) -> IORef [Artifact] -> IORef [Text] -> IORef Int -> IORef (Maybe Text) -> IORef Bool -> IORef (Artifact -> Artifact) -> IORef (Int -> IO ()) -> MirrorPublish
 fixturePublish record target uploads probes reject loseReply transform onProbe =
     MirrorPublish
-        { mpNativeComplete = \_ _ _ -> False
+        { mpMirrorCompanion = Nothing
+        , mpNativeComplete = \_ _ _ -> False
         , mpProbeInventory = \_ name -> do
             number <- atomicModifyIORef' probes (\n -> (n + 1, n + 1))
             readIORef onProbe >>= ($ number)

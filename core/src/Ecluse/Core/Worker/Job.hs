@@ -18,6 +18,7 @@ import Control.Monad (foldM)
 import Control.Monad.Except (throwError)
 import Data.Aeson (object, (.=))
 import Data.Map.Strict qualified as Map
+import Data.Traversable (for)
 import Katip (Severity (DebugS, ErrorS, InfoS), SimpleLogPayload, katipAddContext, katipAddNamespace, logFM, ls, sl)
 import UnliftIO (withRunInIO)
 
@@ -56,7 +57,8 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.Public (ReadControl (Controlled))
 import Ecluse.Core.Registry.Publish (
-    MirrorPublish (mpNativeComplete, mpPrepareVersion, mpProbeInventory),
+    MirrorCompanion (..),
+    MirrorPublish (mpMirrorCompanion, mpNativeComplete, mpPrepareVersion, mpProbeInventory),
     PreparedMirrorUpload,
     PreparedMirrorVersion,
     PublishPlan (PublishPlan),
@@ -486,14 +488,13 @@ copyFile context admitted current (file, location) = do
         locations = location :| [candidate | (incoming, candidate) <- toList (raLocations (cpLatest context)), expectedIdentityMatches file incoming, candidate /= location]
     when (any (targetIdentityConflict file verified) matches) $
         throwError (Dropped ("mirror target identity conflicts: " <> name))
-    uploaded <-
-        if null matches
-            then mirrorArtifact charge policy job (cpPlan context) admitted file locations current
-            else
-                if all (expectedTargetMatchesWith file verified) matches
-                    then pure current
-                    else verifyExistingTarget context file locations matches current
-    retained <- retainPending charge policy job file locations uploaded
+    let targetProven = all (expectedTargetMatchesWith file verified) matches
+        needsNativeMetadata = isJust (mpMirrorCompanion (wpPublish policy)) && Map.lookup name (versionCompanions version) == Just CompanionPending
+    uploaded <- case matches of
+        [] -> mirrorArtifact charge policy job (cpPlan context) admitted file locations current
+        _ | targetProven && not needsNativeMetadata -> pure current
+        _ -> verifyExistingTarget context admitted file locations matches current
+    retained <- retainPending charge policy job (pmvInventory (raPrepared admitted)) file locations uploaded
     lift recordWorkerProgress
     pure retained
   where
@@ -501,9 +502,11 @@ copyFile context admitted current (file, location) = do
     policy = cpPolicy context
     job = cpJob context
 
-verifyExistingTarget :: CopyPass -> ExpectedMirrorFile -> NonEmpty RegistryUrl -> [Artifact] -> ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ProjectMirrorRecord
-verifyExistingTarget context file locations matches current = do
+verifyExistingTarget :: CopyPass -> Readmitted -> ExpectedMirrorFile -> NonEmpty RegistryUrl -> [Artifact] -> ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ProjectMirrorRecord
+verifyExistingTarget context admitted file locations matches current = do
     (bytes, retained) <- fetchVerified (cpCharge context) (cpPolicy context) (cpJob context) file locations current
+    for_ (mpMirrorCompanion (wpPublish (cpPolicy context))) $ \_ ->
+        void (publishAction (cpJob context) (liftIO (pmvPrepareUpload (raPrepared admitted) (wsbArchive (cpCharge context)) file bytes)))
     let proof = Just (verifiedTargetHash bytes)
     when (any (targetIdentityConflict file proof) matches) $
         throwError (Dropped ("mirror target identity conflicts: " <> name))
@@ -513,17 +516,28 @@ verifyExistingTarget context file locations matches current = do
   where
     name = artFilename (expectedArtifact file)
 
-retainPending :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> ExpectedMirrorFile -> NonEmpty RegistryUrl -> ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ProjectMirrorRecord
-retainPending charge policy job file locations record = do
+retainPending :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> MirrorInventory -> ExpectedMirrorFile -> NonEmpty RegistryUrl -> ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ProjectMirrorRecord
+retainPending charge policy job inventory file locations record = do
     version <- requiredVersion job record
     case Map.lookup (artFilename (expectedArtifact file)) (versionCompanions version) of
         Just CompanionPending -> case wpMirrorState policy of
             Nothing -> throwError (Retried BeforePublish "declared companion requires durable mirror state")
             Just binding -> do
-                companions <- traverse (either throwError pure . sourceLocation policy . (\location -> (expectedArtifact file){artUrl = sidecarUrl (registryUrlText location)})) locations
+                let native = mpMirrorCompanion (wpPublish policy)
+                case (inventoryReadData inventory, native) of
+                    (RubyGemsMirrorRead _, Nothing) -> throwError (Retried BeforePublish "native companion preparation is unavailable")
+                    _ -> pure ()
+                candidates <- for locations $ \location -> do
+                    url <- case native of
+                        Nothing -> pure (sidecarUrl (registryUrlText location))
+                        Just companion -> publishAction job (pure (mcLocation companion file (registryUrlText location)))
+                    either throwError pure (sourceLocation policy (expectedArtifact file){artUrl = url})
                 let limits = (wmsLimits binding){maxMirrorArtifactBytes = maxMetadataBytes (wmsLimits binding)}
-                bytes <- fetchLocations (wsbCompanions charge) limits policy companions
-                verified <- either (throwError . stateOutcome) pure (verifyCompanionBytes (wmsLimits binding) file bytes)
+                bytes <- fetchLocations (wsbCompanions charge) limits policy candidates
+                checked <- case native of
+                    Nothing -> pure bytes
+                    Just companion -> publishAction job (liftIO (mcValidate companion limits (wsbCompanions charge) inventory file bytes))
+                verified <- either (throwError . stateOutcome) pure (verifySourceCompanionBytes (wmsLimits binding) (inventoryReadData inventory) file checked)
                 stateAction (retainCompanion charge binding (jobVersion job) verified record)
         _ -> pure record
 

@@ -37,6 +37,8 @@ import Ecluse.Core.Registry.Metadata (VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.MirrorUpload (MirrorInventory, MirrorReadData (..), expectedArtifact, inventoryDetails, inventoryReadData, mirrorReadDocument)
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorFragment)
 import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
+import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..), GemRow (..))
+import Ecluse.Core.Registry.RubyGems.SourceState (gemSourceDecodeCharge, gemSourceValue, parseGemSource)
 import Ecluse.Core.Security
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge, expandWireBytes)
@@ -157,7 +159,9 @@ domainDecodeCharge value = 4096 + 8 * toInteger (estimateValueBytes value) + sum
     versionCharge version = sumArray "fragments" version fragmentCharge
     fragmentCharge fragment = maybe 0 detailsCharge (fieldValue "details" fragment) + maybe 0 sourceCharge (fieldValue "source" fragment)
     detailsCharge details = 16 * 1024 + textCharge "version" details
-    sourceCharge source = sumArray "entries" source (maybe 0 (textCharge "filename") . fieldValue "value")
+    sourceCharge source = case fieldValue "kind" source of
+        Just (String "rubygems") -> gemSourceDecodeCharge source
+        _ -> sumArray "entries" source (maybe 0 (textCharge "filename") . fieldValue "value")
     textCharge key parent = case fieldValue key parent of
         Just (String text) -> 256 * toInteger (textStorageBytes text)
         _ -> 0
@@ -184,6 +188,7 @@ forceRecordSources record = force (recordEnvelope record) `seq` foldl' forceVers
         NpmMirrorRead fields -> force fields `seq` ()
         PyPIMirrorRead document -> force (simpleEnvelope document) `seq` foldl' forceEntry () (simpleFiles document)
         CargoMirrorRead document -> foldl' forceEntry () (cargoRecords document)
+        RubyGemsMirrorRead document -> foldl' (\() row -> BS.length (grSource row) `seq` ()) () (gemRows document)
     forceEntry () (key, value) = forceKey key `seq` force value `seq` ()
     forceKey (ArrayEntry position) = force position `seq` ()
     forceKey (RecordEntry position) = force position `seq` ()
@@ -237,6 +242,7 @@ parseRecord = withObject "project mirror state" $ \value -> do
             PyPIMirrorRead document -> void (either (const (fail "invalid project envelope identity")) pure (restoreMirrorFragment details (PyPIMirrorRead (simpleDocument envelope (simpleFiles document)))))
             NpmMirrorRead _ -> unless (KeyMap.null envelope) (fail "npm record has an unexpected project envelope")
             CargoMirrorRead _ -> unless (KeyMap.null envelope) (fail "Cargo record has an unexpected project envelope")
+            RubyGemsMirrorRead _ -> unless (KeyMap.null envelope) (fail "RubyGems record has an unexpected project envelope")
     pure (ProjectMirrorRecord target name envelope (Map.fromList versions))
 
 parseVersion :: PackageName -> Value -> Parser (Text, MirrorVersion)
@@ -259,7 +265,7 @@ parseVersion name = withObject "mirror version" $ \value -> do
     companions <- value .: "companions" >>= traverse parseCompanion
     ensureDistinct (map fst companions)
     let files = [expectedArtifact file | StoredMirrorFragment _ _ expected <- toList fragments, file <- toList expected]
-        required = Set.fromList [artFilename artifact | artifact <- files, declaredCompanion artifact]
+        required = Set.fromList [artFilename (expectedArtifact file) | StoredMirrorFragment _ source expected <- toList fragments, file <- toList expected, declaredSourceCompanion source (expectedArtifact file)]
     ensureDistinct (map artFilename files)
     unless (Set.fromList (map fst companions) == required) (fail "companion set does not match declared source companions")
     unless (Set.fromList (map fst verified) `Set.isSubsetOf` Set.fromList (map artFilename files)) (fail "verified digest has no expected file")
@@ -402,6 +408,7 @@ sourceValue (NpmMirrorRead fields) = object ["kind" .= ("npm" :: Text), "fields"
 sourceValue (PyPIMirrorRead document) =
     object
         ["kind" .= ("pypi" :: Text), "envelope" .= simpleEnvelope document, "entries" .= [object ["key" .= keyValue key, "value" .= value] | (key, value) <- simpleFiles document]]
+sourceValue (RubyGemsMirrorRead document) = gemSourceValue document
 sourceValue (CargoMirrorRead document) =
     object ["kind" .= ("cargo" :: Text), "sourceIndex" .= cratesIoIndex, "entries" .= [object ["key" .= keyValue key, "value" .= value] | (key, value) <- cargoRecords document]]
 
@@ -414,6 +421,7 @@ parseSource = withObject "read source" $ \value ->
             files <- value .: "entries" >>= traverse (withObject "file entry" (\entry -> (,) <$> (entry .: "key" >>= parseKey) <*> entry .: "value"))
             ensureDistinct (map fst files)
             pure (PyPIMirrorRead (simpleDocument envelope files))
+        "rubygems" -> RubyGemsMirrorRead <$> parseGemSource (Object value)
         "cargo" -> do
             sourceIndex <- value .: "sourceIndex"
             unless (sourceIndex == cratesIoIndex) (fail "Cargo mirror source is not crates.io")

@@ -176,6 +176,16 @@ codecSpec = describe "the npm codec" $ do
         for_ [CA.newPackageSummary, named & CAL.packageSummary_namespace ?~ "scope", named & CAL.packageSummary_package ?~ "bad/name"] $ \invalid ->
             packagesOfPage Cargo [named, invalid] `shouldSatisfy` isLeft
 
+    it "retains RubyGems native spelling and rejects namespaces or malformed package names" $ do
+        fmap renderPackageName (packageNameFrom RubyGems Nothing "Published.Name_1") `shouldBe` Right "Published.Name_1"
+        for_ [Just "scope", Just " "] $ \namespace ->
+            packageNameFrom RubyGems namespace "valid-name" `shouldSatisfy` isLeft
+        for_ ["", "bad/name", "bad name"] $ \raw ->
+            packageNameFrom RubyGems Nothing raw `shouldSatisfy` isLeft
+        let named = CA.newPackageSummary & CAL.packageSummary_package ?~ "Published.Name_1"
+        for_ [CA.newPackageSummary, named & CAL.packageSummary_namespace ?~ "scope", named & CAL.packageSummary_package ?~ ""] $ \invalid ->
+            packagesOfPage RubyGems [named, invalid] `shouldSatisfy` isLeft
+
 presenceSpec :: Spec
 presenceSpec = describe "presenceOf" $ do
     it "serves a published or unlisted version" $

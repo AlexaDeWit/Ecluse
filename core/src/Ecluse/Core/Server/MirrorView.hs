@@ -28,19 +28,21 @@ import Data.Time (NominalDiffTime)
 import Data.Traversable (for)
 import UnliftIO (evaluate, tryAny)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, RubyGems))
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Codec (saturatingStateCharge)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..), targetKey)
 import Ecluse.Core.Package (Artifact (..), PackageDetails (..), PackageInfo (..), PackageName, pkgEcosystem)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry, RecordEntry))
-import Ecluse.Core.Registry.CachedDocument (cargoCached, cargoPacked, pypiPacked, pypiSimpleCached, weighCachedDoc)
+import Ecluse.Core.Registry.CachedDocument (cargoCached, cargoPacked, pypiPacked, pypiSimpleCached, rubyGemsCached, weighCachedDoc)
 import Ecluse.Core.Registry.Cargo.Document (cargoDocument, cargoRecords, packCargoDocument)
 import Ecluse.Core.Registry.Json.Packed (docTable)
 import Ecluse.Core.Registry.Json.Writer (packTree)
 import Ecluse.Core.Registry.Metadata (Manifest (..), VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (..), expectedTargetMatchesWith)
 import Ecluse.Core.Registry.PyPI.Document (packedSimple, simpleDocument, simpleEnvelope, simpleFiles, urlHole)
+import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..), GemRow (..))
+import Ecluse.Core.Registry.RubyGems.SourceState (gemSourcePublishedAt)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, charge, newChargeRegion)
 import Ecluse.Core.Server.Cache.Backend (Recency (RefreshRecency), RetentionOperations (..))
@@ -120,7 +122,12 @@ mirrorProjectViews revision record private = do
         files = concat [simpleFiles document | (_, doc) <- rebased, Just raw <- [vdRaw doc], Just document <- [snd pypiSimpleCached raw]]
         packed = packedSimple (recordEnvelope record) (docTable (smallArrayFromList [])) [(key, packTree urlHole value) | (key, value) <- files]
         cargo = packCargoDocument (cargoDocument (concat [cargoRecords document | (_, doc) <- rebased, Just raw <- [vdRaw doc], Just document <- [snd cargoCached raw]]))
-        managedRaw = if pkgEcosystem (recordPackage record) == Cargo then fst cargoPacked cargo else fst pypiPacked packed
+        rubyDocuments = [document | (_, doc) <- rebased, Just raw <- [vdRaw doc], Just document <- [snd rubyGemsCached raw]]
+        ruby = GemDocument (recordPackage record) (maybe mempty gemHeader (listToMaybe rubyDocuments)) (concatMap gemRows rubyDocuments)
+        managedRaw = case pkgEcosystem (recordPackage record) of
+            Cargo -> fst cargoPacked cargo
+            RubyGems -> fst rubyGemsCached ruby
+            _ -> fst pypiPacked packed
         fingerprint = TE.encodeUtf8 (show revision) <> maybe mempty (digestBytes . manifestDigest) private
         managed = Manifest (PackageInfo (recordPackage record) details Map.empty []) managedRaw (fromIntegral (weighCachedDoc managedRaw)) (digestFromContext (hashUpdate hashInit fingerprint))
     pure (unmanaged, managed <$ guard (not (Map.null details)), pending)
@@ -128,7 +135,7 @@ mirrorProjectViews revision record private = do
 rekeyVersion :: Int -> (Text, VersionDoc) -> (Int, (Text, VersionDoc))
 rekeyVersion start (version, doc) =
     let details = vdDetails doc
-        constructor = if pkgEcosystem (pkgName details) == Cargo then RecordEntry else ArrayEntry
+        constructor = if pkgEcosystem (pkgName details) `elem` [Cargo, RubyGems] then RecordEntry else ArrayEntry
         artifacts = pkgArtifacts details
         indexed = zip (map constructor [start ..]) (toList artifacts)
         keys = Map.fromList [(artEntryKey artifact, key) | (key, artifact) <- indexed]
@@ -136,9 +143,10 @@ rekeyVersion start (version, doc) =
         changed = fmap (\artifact -> artifact{artEntryKey = rekey (artEntryKey artifact)}) artifacts
         raw =
             vdRaw doc >>= \old ->
-                case (snd cargoCached old, snd pypiSimpleCached old) of
-                    (Just native, _) -> Just (fst cargoCached (cargoDocument [(rekey key, value) | (key, value) <- cargoRecords native]))
-                    (_, Just simple) -> Just (fst pypiSimpleCached (simpleDocument (simpleEnvelope simple) [(rekey key, value) | (key, value) <- simpleFiles simple]))
+                case (snd cargoCached old, snd pypiSimpleCached old, snd rubyGemsCached old) of
+                    (Just native, _, _) -> Just (fst cargoCached (cargoDocument [(rekey key, value) | (key, value) <- cargoRecords native]))
+                    (_, Just simple, _) -> Just (fst pypiSimpleCached (simpleDocument (simpleEnvelope simple) [(rekey key, value) | (key, value) <- simpleFiles simple]))
+                    (_, _, Just native) -> Just (fst rubyGemsCached native{gemRows = [row{grEntryKey = rekey (grEntryKey row)} | row <- gemRows native]})
                     _ -> Nothing
      in (start + length artifacts, (version, doc{vdDetails = details{pkgArtifacts = changed}, vdRaw = raw}))
 
@@ -154,9 +162,35 @@ mirrorVersionView version record current = case recordVersion version record of
 restoreVersion :: MirrorVersion -> [Artifact] -> Maybe VersionDoc
 restoreVersion mirror current
     | CargoMirrorRead _ <- fragmentReadData firstFragment = restoreCargoVersion mirror current
+    | RubyGemsMirrorRead _ <- fragmentReadData firstFragment = restoreRubyVersion mirror current
     | otherwise = restoreSimpleVersion mirror current
   where
     firstFragment :| _ = versionFragments mirror
+
+restoreRubyVersion :: MirrorVersion -> [Artifact] -> Maybe VersionDoc
+restoreRubyVersion mirror current = do
+    let target = Map.fromList [(artFilename artifact, artifact) | artifact <- current]
+        (_, tasks) = mapAccumL (\start fragment -> (start + length (pkgArtifacts (fragmentDetails fragment)), restoreRubyFragment target start fragment)) 0 (toList (versionFragments mirror))
+    fragments <- sequenceA tasks
+    (firstDetails, _, firstSource) <- listToMaybe fragments
+    artifacts <- nonEmpty (concat [toList files | (_, files, _) <- fragments])
+    let rows = concat [gemRows source | (_, _, source) <- fragments]
+        published = gemSourcePublishedAt firstSource{gemRows = rows}
+        details = firstDetails{pkgArtifacts = artifacts, pkgPublishedAt = published}
+    pure (VersionDoc details (Just (fst rubyGemsCached firstSource{gemRows = rows})))
+
+restoreRubyFragment :: Map Text Artifact -> Int -> StoredMirrorFragment -> Maybe (PackageDetails, NonEmpty Artifact, GemDocument)
+restoreRubyFragment target start fragment = do
+    RubyGemsMirrorRead source <- pure (fragmentReadData fragment)
+    let original = fragmentDetails fragment
+        sourceRows = Map.fromList [(grEntryKey row, row) | row <- gemRows source]
+    restored <- for (zip [start ..] (toList (pkgArtifacts original))) $ \(position, artifact) -> do
+        native <- Map.lookup (artFilename artifact) target
+        row <- Map.lookup (artEntryKey artifact) sourceRows
+        let key = RecordEntry position
+        pure (artifact{artEntryKey = key, artUrl = artUrl native}, row{grEntryKey = key})
+    artifacts <- nonEmpty (map fst restored)
+    pure (original, artifacts, source{gemRows = map snd restored})
 
 restoreCargoVersion :: MirrorVersion -> [Artifact] -> Maybe VersionDoc
 restoreCargoVersion mirror current = do
@@ -184,6 +218,7 @@ restoreFragment current start fragment = do
         PyPIMirrorRead document -> Just document
         NpmMirrorRead _ -> Nothing
         CargoMirrorRead _ -> Nothing
+        RubyGemsMirrorRead _ -> Nothing
     let original = fragmentDetails fragment
         fields = Map.fromList (simpleFiles source)
     restored <- for (zip [start ..] (toList (pkgArtifacts original))) $ \(position, artifact) -> do

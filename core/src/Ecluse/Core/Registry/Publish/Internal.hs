@@ -8,6 +8,7 @@ module Ecluse.Core.Registry.Publish.Internal (
     PreparedMirrorVersion (..),
     PreparedMirrorUpload (..),
     PublishCodec (..),
+    MirrorCompanion (..),
     fetchVersionList,
     relayPublishRequest,
     MirrorTransport (..),
@@ -53,10 +54,19 @@ newtype PreparedMirrorUpload = PreparedMirrorUpload
     { runPreparedUpload :: PublishPlan -> IO (Either PublishFault ())
     }
 
+-- | Native companions retain source metadata under the artifact's existing authority.
+data MirrorCompanion = MirrorCompanion
+    { mcLocation :: ExpectedMirrorFile -> Text -> Either PublishFault Text
+    -- ^ Derive a companion location from an authorised artifact location.
+    , mcValidate :: Limits -> (Int -> IO ()) -> MirrorInventory -> ExpectedMirrorFile -> ByteString -> IO (Either PublishFault ByteString)
+    -- ^ Validate native facts and return the original bounded bytes.
+    }
+
 -- | The codec owns source and upload metadata while the worker owns whole-version orchestration.
 data PublishCodec = forall source metadata. PublishCodec
     { pcPrepareSource :: PackageName -> Version -> VersionDoc -> Either PublishFault (MirrorInventory, source)
     , pcPrepareUpload :: Limits -> (Int -> IO ()) -> MirrorInventory -> source -> ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault (MirrorUploadData metadata))
+    , pcMirrorCompanion :: Maybe MirrorCompanion
     , pcNativeComplete :: PackageName -> Version -> PackageInfo -> Bool
     -- ^ Atomic native inventories may prove completion without retained external source state.
     , pcTargetRead :: PrepareRead
@@ -81,16 +91,18 @@ data MirrorTransport = MirrorTransport
 
 -- | A target-bound version reader and checked upload preparation capability.
 data MirrorPublish = MirrorPublish
-    { mpProbeInventory :: (Int -> IO ()) -> PackageName -> IO (Either MetadataError PackageInfo)
+    { mpMirrorCompanion :: Maybe MirrorCompanion
+    , mpProbeInventory :: (Int -> IO ()) -> PackageName -> IO (Either MetadataError PackageInfo)
     , mpNativeComplete :: PackageName -> Version -> PackageInfo -> Bool
     , mpPrepareVersion :: PackageName -> Version -> VersionDoc -> Either PublishFault PreparedMirrorVersion
     }
 
 -- | The read and upload endpoints are explicit because native upload routes need not share the read root.
 newMirrorPublish :: MirrorTransport -> RegistryUrl -> RegistryUrl -> PublishCodec -> MirrorPublish
-newMirrorPublish transport readTarget uploadTarget PublishCodec{pcPrepareSource, pcPrepareUpload, pcNativeComplete, pcTargetRead, pcTargetReadPermille, pcPrepareTarget, pcPublishRequest, pcPublishOutcome} =
+newMirrorPublish transport readTarget uploadTarget PublishCodec{pcPrepareSource, pcPrepareUpload, pcMirrorCompanion, pcNativeComplete, pcTargetRead, pcTargetReadPermille, pcPrepareTarget, pcPublishRequest, pcPublishOutcome} =
     MirrorPublish
-        { mpProbeInventory = probeInventory transport readTarget pcTargetRead pcTargetReadPermille
+        { mpMirrorCompanion = pcMirrorCompanion
+        , mpProbeInventory = probeInventory transport readTarget pcTargetRead pcTargetReadPermille
         , mpNativeComplete = pcNativeComplete
         , mpPrepareVersion = \name version doc -> do
             (inventory, source) <- pcPrepareSource name version doc
