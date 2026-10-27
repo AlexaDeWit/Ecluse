@@ -80,10 +80,11 @@ cargoCalibration =
         , outputMaximum = 2806578 % 1373462
         }
 
--- | Initial maxima combine arm64 captures and local x86_64 synthetic bootstrap.
+-- | ARM64 maxima combine public captures with labelled synthetic listings.
 rubyGemsCalibration :: Calibration
 rubyGemsCalibration =
-    -- https://github.com/AlexaDeWit/Ecluse/actions/runs/40559003401/job/122382799126
+    -- Public captures: https://github.com/AlexaDeWit/Ecluse/actions/runs/40559003401/job/122382799126
+    -- Synthetic: https://github.com/AlexaDeWit/Ecluse/actions/runs/40575218918/job/122439883465
     Calibration
         { realisticReadMaximum = 1621168 % 112670
         , allReadMaximum = 1621168 % 112670
@@ -362,6 +363,13 @@ data SyntheticListingFigures = SyntheticListingFigures
     , syntheticMergedOutputs :: Map MergeShape Rational
     }
 
--- | Unavailable until identified above-step native synthetic observations supply the ratios.
+-- | ARM64 listing ratios for syntheticInfoBytes v1 with 16,384 versions, separate from captures.
 rubyGemsSyntheticFigures :: Maybe SyntheticListingFigures
-rubyGemsSyntheticFigures = Nothing
+rubyGemsSyntheticFigures =
+    -- https://github.com/AlexaDeWit/Ecluse/actions/runs/40575218918/job/122439883465
+    Just
+        SyntheticListingFigures
+            { syntheticReadPeak = 30435552 % 2315422
+            , syntheticSingleOutput = 6554160 % 2315422
+            , syntheticMergedOutputs = Map.fromList [(Identical, 8371680 % 2315422), (Overlapping, 6627408 % 2315417), (Disjoint, 5757712 % 2315426), (PublishOrder, 6654600 % 2315422)]
+            }
