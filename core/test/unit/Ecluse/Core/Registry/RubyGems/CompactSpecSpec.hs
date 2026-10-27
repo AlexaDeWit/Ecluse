@@ -15,6 +15,8 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Core.Package (renderPackageName)
+import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
+import Ecluse.Core.Package.Hash (HashAlg (SHA256), mkHash, sha256Hex)
 import Ecluse.Core.Registry.RubyGems.CompactSpec
 import Ecluse.Core.Registry.RubyGems.Document
 import Ecluse.Core.Registry.RubyGems.Project (unGemPlatform)
@@ -44,6 +46,33 @@ spec = describe "native compact specifications" $ do
                 when (renderPackageName (specificationName specification) == "ecluse-fixture-root") $
                     map (renderPackageName . gdName) (specificationDependencies specification) `shouldBe` ["ecluse-fixture-leaf"]
             _ -> fail "native manifest contains an invalid release"
+    it "binds runtime requirements and exact identity to the selected native source row" $ do
+        bytes <- readFileBS "test/fixtures/rubygems/quick/Marshal.4.8/ecluse-fixture-root-1.0.0.gemspec.rz"
+        artifact <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
+        compact <- decodeCompactSpec defaultLimits (const (pure ())) bytes >>= expectRight
+        checksum <- expectRight (mkHash SHA256 (sha256Hex artifact))
+        let specification = compactSpecification compact
+        coordinate <- expectRight (specificationCoordinate specification)
+        let row = GemRow (RecordEntry 0) coordinate (specificationDependencies specification) (">=3.2" :| []) (">=3.4" :| []) checksum Nothing Map.empty ""
+        checkGemSpecification coordinate row specification `shouldBe` Right specification
+        for_ [row{grDependencies = []}, row{grRequiredRuby = ">= 999" :| []}, row{grRequiredRubyGems = ">= 999" :| []}] $ \changed -> do
+            result <- validateCompactSpec defaultLimits (const (pure ())) coordinate changed bytes
+            result `shouldSatisfy` isLeft
+    it "accepts historical native layouts observed through Ruby's reference loader" $ do
+        manifest <- readFileBS "test/fixtures/rubygems/legacy.json" >>= expectRight . eitherDecodeStrict'
+        layouts <- case manifest of
+            Object fields | Just (Array rows) <- KeyMap.lookup "layouts" fields -> pure (toList rows)
+            _ -> fail "legacy manifest has no layouts"
+        for_ layouts $ \case
+            Object fields | Just (String path) <- KeyMap.lookup "path" fields -> do
+                bytes <- readFileBS ("test/fixtures/rubygems/" <> toString path)
+                compact <- decodeCompactSpec defaultLimits (const (pure ())) bytes >>= expectRight
+                compactSpecBytes compact `shouldBe` bytes
+                let specification = compactSpecification compact
+                Just (String (renderPackageName (specificationName specification))) `shouldBe` KeyMap.lookup "decoded_name" fields
+                Just (String (renderVersion (specificationVersion specification))) `shouldBe` KeyMap.lookup "decoded_version" fields
+                Just (String (unGemPlatform (specificationPlatform specification))) `shouldBe` KeyMap.lookup "decoded_platform" fields
+            _ -> fail "legacy manifest contains an invalid layout"
     it "rejects trailing compressed or Marshal bytes and checks body/depth bounds" $ do
         bytes <- readFileBS "test/fixtures/rubygems/quick/Marshal.4.8/ecluse-fixture-root-1.0.0.gemspec.rz"
         for_ [bytes <> "junk", BS.take (BS.length bytes - 1) bytes, BSL.toStrict (Zlib.compress "\x04\x08\x30")] $ \malformed -> do

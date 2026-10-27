@@ -42,7 +42,7 @@ data MarshalValue
 data Cursor = Cursor
     { remaining :: ByteString
     , symbols :: IntMap.IntMap ByteString
-    , objects :: IntMap.IntMap (Maybe (MarshalValue, Int))
+    , objects :: IntMap.IntMap (Maybe (MarshalValue, Int, Int))
     , nodes :: Int
     , stringBytes :: Int
     , bounds :: Limits
@@ -89,8 +89,9 @@ readValue depth = do
             index <- natural
             table <- gets objects
             case IntMap.lookup index table of
-                Just (Just (value, cost)) -> do
+                Just (Just (value, cost, height)) -> do
                     cursor <- get
+                    when (depth + height > maxNestingDepth (bounds cursor)) (refuse "Marshal referenced depth exceeds its bound")
                     let cap = min (maxArtifactCount (bounds cursor)) (maxMetadataBytes (bounds cursor) `div` 8)
                     when (cost > cap - nodes cursor) (refuse "Marshal reference work exceeds its bound")
                     modify' (\current -> current{nodes = nodes current + cost})
@@ -124,8 +125,19 @@ tracked parse = do
     modify' (\cursor -> cursor{objects = IntMap.insert index Nothing table})
     value <- parse
     after <- gets nodes
-    modify' (\cursor -> cursor{objects = IntMap.insert index (Just (value, after - before + 1)) (objects cursor)})
+    modify' (\cursor -> cursor{objects = IntMap.insert index (Just (value, after - before + 1, valueDepth value)) (objects cursor)})
     pure value
+
+valueDepth :: MarshalValue -> Int
+valueDepth = \case
+    MArray values -> descendants values
+    MHash entries -> descendants (concatMap (\(key, value) -> [key, value]) entries)
+    MObject _ entries -> descendants (map snd entries)
+    MUserMarshal _ value -> 1 + valueDepth value
+    MInstance value entries -> descendants (value : map snd entries)
+    _ -> 0
+  where
+    descendants values = foldl' max 0 (map ((1 +) . valueDepth) values)
 
 attributes :: Int -> Decoder [(ByteString, MarshalValue)]
 attributes depth = do

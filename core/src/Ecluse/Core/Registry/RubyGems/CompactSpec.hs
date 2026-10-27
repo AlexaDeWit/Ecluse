@@ -18,6 +18,8 @@ module Ecluse.Core.Registry.RubyGems.CompactSpec (
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import UnliftIO.Exception (evaluate)
+import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
 import Ecluse.Core.Package (PackageName, renderPackageName)
@@ -26,11 +28,11 @@ import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (ZlibStream), withInf
 import Ecluse.Core.Registry.RubyGems.Document
 import Ecluse.Core.Registry.RubyGems.Marshal
 import Ecluse.Core.Registry.RubyGems.Project
-import Ecluse.Core.Security.Limits (Limits (..))
+import Ecluse.Core.Security.Limits (Limits (..), requestTimeoutSeconds)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Core.Version.Gem (parseGem)
 
--- | Native installation facts from a supported nineteen-field specification.
+-- | Native installation facts from the supported historical and current specification layouts.
 data GemSpecification = GemSpecification
     { specificationName :: PackageName
     , specificationVersion :: Version
@@ -59,18 +61,21 @@ decodeGemSpecification limits bytes = do
         _ -> bad "compact specification lacks Gem::Specification framing"
     inner <- decodeMarshal limits payload
     validateClasses inner
-    case stripInstanceVariables inner of
-        MArray [rubyGems, MInteger 4, name, version, date, summary, ruby, gems, original, dependencies, rubyforge, email, authors, description, homepage, MBool True, platform, licences, metadata] -> do
+    normalised <- normaliseLayout inner
+    case normalised of
+        MArray [rubyGems, MInteger _, name, version, date, summary, ruby, gems, original, dependencies, rubyforge, email, authors, description, homepage, rdoc, platform, licences, metadata] -> do
             traverse_ scalar [rubyGems, summary, original, rubyforge]
             traverse_ nullable [email, description, homepage]
             stringArray authors
             stringArray licences
+            case rdoc of MBool _ -> Right (); _ -> bad "invalid specification documentation flag"
             case stripInstanceVariables date of
                 MUserDefined "Time" raw | BS.length raw >= 8 -> Right ()
                 _ -> bad "invalid specification date"
             checkedName <- marshalText name >>= projectName
             checkedVersion <- gemVersion version
-            checkedPlatform <- nativePlatform platform
+            checkedPlatform <- nativePlatform original
+            void (nativePlatform platform)
             requiredRuby <- requirement ruby
             requiredGems <- requirement gems
             runtime <- array dependencies >>= traverse dependency
@@ -80,19 +85,37 @@ decodeGemSpecification limits bytes = do
   where
     scalar = void . marshalText
     nullable value = case stripInstanceVariables value of MNil -> Right (); MArray values -> traverse_ scalar values; other -> scalar other
-    stringArray value = array value >>= traverse_ scalar
+    stringArray value = case stripInstanceVariables value of MNil -> Right (); other -> array other >>= traverse_ scalar
+
+normaliseLayout :: MarshalValue -> Either ParseError MarshalValue
+normaliseLayout value = case stripInstanceVariables value of
+    MArray values@(_ : MInteger schema : _ : _ : _ : _ : _ : _ : original : _)
+        | schema `elem` [-1, 1, 2, 3, 4] -> do
+            let count = length values
+                minimumFields
+                    | schema <= 2 = 16
+                    | schema == 3 = 17
+                    | otherwise = 18
+            unless (count >= minimumFields && count <= 19) (bad "invalid historical compact specification field count")
+            let additions = drop (count - 16) [original, MArray [], MHash []]
+            pure (MArray (values <> additions))
+    _ -> bad "unsupported compact specification layout"
 
 -- | Inflate one bounded zlib stream and preserve its exact original representation.
 decodeCompactSpec :: Limits -> (Int -> IO ()) -> ByteString -> IO (Either ParseError CompactSpec)
 decodeCompactSpec limits charge bytes
     | BS.length bytes > maxMetadataBytes limits = pure (bad "compact specification exceeds its compressed byte bound")
-    | otherwise = withInflatedChunks ZlibStream charge bytes (collect 0 [])
+    | otherwise = do
+        result <- timeout (requestTimeoutSeconds * 1000000) (withInflatedChunks ZlibStream charge bytes (collect 0 []))
+        pure (fromMaybe (bad "compact specification validation timed out") result)
   where
     collect seen held pull =
         pull >>= \case
             Left fault -> pure (Left fault)
             Right chunk
-                | BS.null chunk -> pure $ CompactSpec bytes <$> decodeGemSpecification limits (BS.concat (reverse held))
+                | BS.null chunk -> do
+                    charge (73728 + 64 * seen)
+                    evaluate (CompactSpec bytes <$> decodeGemSpecification limits (BS.concat (reverse held)))
                 | BS.length chunk > maxMetadataBytes limits - seen -> pure (bad "compact specification exceeds its inflated byte bound")
                 | otherwise -> do
                     let next = seen + BS.length chunk
@@ -102,11 +125,13 @@ decodeCompactSpec limits charge bytes
 -- | Bind selected source bytes to the admitted physical coordinate and native installation facts.
 validateCompactSpec :: Limits -> (Int -> IO ()) -> GemCoordinate -> GemRow -> ByteString -> IO (Either ParseError CompactSpec)
 validateCompactSpec limits charge coordinate row bytes = do
-    decoded <- decodeCompactSpec limits charge bytes
-    pure $ do
-        compact <- decoded
-        void (checkGemSpecification coordinate row (compactSpecification compact))
-        pure compact
+    result <- timeout (requestTimeoutSeconds * 1000000) $ do
+        decoded <- decodeCompactSpec limits charge bytes
+        evaluate $ do
+            compact <- decoded
+            void (checkGemSpecification coordinate row (compactSpecification compact))
+            pure compact
+    pure (fromMaybe (bad "compact specification agreement timed out") result)
 
 -- | Bind native archive or compact facts to the selected source coordinate and installation metadata.
 checkGemSpecification :: GemCoordinate -> GemRow -> GemSpecification -> Either ParseError GemSpecification
@@ -126,7 +151,11 @@ normalDependencies :: [GemDependency] -> [(Text, [Text])]
 normalDependencies = sort . map (\dependencyValue -> (renderPackageName (gdName dependencyValue), normalRequirement (gdRequirement dependencyValue)))
 
 normalRequirement :: GemRequirement -> [Text]
-normalRequirement = sort . map (T.unwords . T.words) . toList
+normalRequirement = sort . map canonical . toList
+  where
+    canonical clause =
+        let (operator, rest) = T.span (`elem` ['=', '!', '<', '>', '~']) (T.strip clause)
+         in operator <> " " <> T.strip rest
 
 gemVersion :: MarshalValue -> Either ParseError Version
 gemVersion value = case stripInstanceVariables value of
@@ -184,6 +213,7 @@ nativePlatform value = case stripInstanceVariables value of
 
 textMap :: MarshalValue -> Either ParseError (Map Text Text)
 textMap value = case stripInstanceVariables value of
+    MNil -> Right Map.empty
     MHash entries -> do
         pairs <- traverse (\(key, item) -> (,) <$> marshalText key <*> marshalText item) entries
         let result = Map.fromList pairs

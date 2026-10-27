@@ -8,6 +8,7 @@ module Ecluse.Core.Registry.RubyGems.MarshalSpec (spec) where
 import Data.ByteString qualified as BS
 import Test.Hspec
 
+import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.RubyGems.Marshal
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Test.Support (expectRight)
@@ -35,6 +36,9 @@ spec = describe "Ruby Marshal data" $ do
             decodeMarshal defaultLimits bytes `shouldSatisfy` isLeft
     it "resolves completed native references without accepting cycles" $ do
         decodeMarshal defaultLimits "\x04\x08[\x07\x22\x06x@\x06" `shouldBe` Right (MArray [MString "x", MString "x"])
+    it "counts expanded reference work and depth at the reference position" $ do
+        decodeMarshal defaultLimits{maxArtifactCount = 7} "\x04\x08[\x07[\x07\x30\x30@\x06" `shouldBe` Left (ParseError "Marshal reference work exceeds its bound")
+        decodeMarshal defaultLimits{maxNestingDepth = 3} "\x04\x08[\x07[\x06\x30[\x06[\x06@\x06" `shouldBe` Left (ParseError "Marshal referenced depth exceeds its bound")
     it "refuses body, depth, node, collection and string bounds" $ do
         let nested = "\x04\x08[\x06[\x06\x30"
         decodeMarshal defaultLimits{maxNestingDepth = 1} nested `shouldSatisfy` isLeft
