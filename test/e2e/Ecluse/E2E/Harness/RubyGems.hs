@@ -27,7 +27,7 @@ import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import UnliftIO.Environment (getEnvironment)
 
-import Ecluse.E2E.Harness.Client (runClient, withClientDir)
+import Ecluse.E2E.Harness.Client (compilerEnvironmentKeys, runClient, withClientDir)
 import Ecluse.E2E.Harness.Types (ClientResult (..), E2E, clientCertificateBundle)
 import Ecluse.Test.InstalledTree (InstalledTree, TreeEntry (TreeDirectory), snapshotTree)
 
@@ -63,7 +63,7 @@ withRubyProject client proxy source credentials action = withClientDir "rubygems
     inherited <- getEnvironment
     let home = directory </> "home"
         installed = directory </> "installed"
-        retained = filter ((`elem` ["PATH", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL"]) . fst) inherited
+        retained = filter ((`elem` (["PATH", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL"] <> compilerEnvironmentKeys)) . fst) inherited
         overrides =
             [ ("HOME", home)
             , ("BUNDLE_USER_HOME", home </> ".bundle")

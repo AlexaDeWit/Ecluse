@@ -6,6 +6,7 @@
 module Ecluse.E2E.Harness.Client (
     withClientDir,
     runClient,
+    compilerEnvironmentKeys,
 
     -- * Assertions
     shouldSucceed,
@@ -38,3 +39,16 @@ runClient dir env command args = do
             , crStdout = decodeUtf8 (LBS.toStrict out)
             , crStderr = decodeUtf8 (LBS.toStrict err)
             }
+
+-- | Pinned compiler wrappers need these Nix variables without inheriting user or service credentials.
+compilerEnvironmentKeys :: [String]
+compilerEnvironmentKeys =
+    [ "NIX_CC"
+    , "NIX_BINTOOLS"
+    , "NIX_CFLAGS_COMPILE"
+    , "NIX_LDFLAGS"
+    , "NIX_STORE"
+    , "NIX_DONT_SET_RPATH"
+    , "NIX_ENFORCE_PURITY"
+    , "NIX_HARDENING_ENABLE"
+    ]
