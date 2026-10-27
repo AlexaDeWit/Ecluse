@@ -14,21 +14,21 @@ import Ecluse.Core.Security (LimitError)
 recordSteps :: (Monad m) => (s -> Int -> ByteString -> m Int) -> (s -> Int -> ByteString -> Either LimitError s) -> (s -> Steps m a) -> s -> Steps m a
 recordSteps reserve consume complete = await [] 0
   where
-    await pieces charge state = NeedData (receive state pieces charge)
-    receive state pieces charge chunk
+    await pieces charge current = NeedData (receive current pieces charge)
+    receive current pieces charge chunk
         | BS.null chunk = pure $ case pieces of
-            [] -> complete state
-            _ -> either Refused complete (consume state charge (BS.concat (reverse pieces)))
-        | otherwise = splitLines state pieces charge chunk
-    splitLines !state pieces charge chunk = case BS.elemIndex 10 chunk of
+            [] -> complete current
+            _ -> either Refused complete (consume current charge (BS.concat (reverse pieces)))
+        | otherwise = splitLines current pieces charge chunk
+    splitLines !current pieces charge chunk = case BS.elemIndex 10 chunk of
         Nothing -> do
-            nextCharge <- reserve state charge chunk
-            pure (await (chunk : pieces) nextCharge state)
+            nextCharge <- reserve current charge chunk
+            pure (await (chunk : pieces) nextCharge current)
         Just at -> do
             let (line, rest) = BS.splitAt at chunk
-            nextCharge <- reserve state charge line
+            nextCharge <- reserve current charge line
             let record = case pieces of [] -> line; _ -> BS.concat (reverse (line : pieces))
-            case consume state nextCharge record of
+            case consume current nextCharge record of
                 Left fault -> pure (Refused fault)
                 Right next
                     | BS.length rest == 1 -> pure (await [] 0 next)

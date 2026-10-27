@@ -5,6 +5,7 @@
 -- | Whole-version RubyGems policy facts retain every supported platform artifact.
 module Ecluse.Core.Registry.RubyGems.Projection (projectGemRows) where
 
+import Control.Monad (foldM)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 

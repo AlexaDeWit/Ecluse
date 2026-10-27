@@ -15,7 +15,6 @@ module Ecluse.Core.Registry.RubyGems.Archive.Yaml (
 
 import Conduit
 import Control.Monad.Except (throwError)
-import Control.Monad.State.Strict (StateT, evalStateT, get, gets, modify')
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text.Encoding qualified as TE
@@ -111,7 +110,7 @@ retain anchor cost value = do
     for_ anchor $ \name -> do
         references <- gets ysAliases
         when (Map.member name references) (refuse "duplicate YAML anchor")
-        modify' (\state -> state{ysAliases = Map.insert name (value, cost, valueDepth value) references})
+        modify' (\cursor -> cursor{ysAliases = Map.insert name (value, cost, valueDepth value) references})
     pure value
 
 valueDepth :: YamlValue -> Int
@@ -124,9 +123,9 @@ valueDepth = \case
 
 consume :: Int -> Decoder ()
 consume amount = do
-    state <- get
-    let cap = min (maxArtifactCount (ysLimits state)) (maxMetadataBytes (ysLimits state) `div` 8)
-    when (amount > cap - ysNodes state) (refuse "YAML node or alias work exceeds its bound")
+    cursor <- get
+    let cap = min (maxArtifactCount (ysLimits cursor)) (maxMetadataBytes (ysLimits cursor) `div` 8)
+    when (amount > cap - ysNodes cursor) (refuse "YAML node or alias work exceeds its bound")
     modify' (\current -> current{ysNodes = ysNodes current + amount})
 
 checkTag :: Y.Tag -> Decoder ()

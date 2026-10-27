@@ -12,6 +12,7 @@ import Data.Aeson (Value (..), eitherDecodeStrict', object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
+import Data.List (lookup)
 import Data.Set qualified as Set
 import Data.Text.Encoding qualified as TE
 import GHC.Exts.Heap qualified as Heap

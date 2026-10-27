@@ -11,6 +11,7 @@ module Ecluse.Core.Registry.RubyGems.Wire (
     parseGemRequirement,
 ) where
 
+import Control.Monad (foldM)
 import Data.ByteString qualified as BS
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Map.Strict qualified as Map

@@ -16,6 +16,7 @@ module Ecluse.Core.Registry.RubyGems.CompactSpec (
 ) where
 
 import Data.ByteString qualified as BS
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import UnliftIO.Exception (evaluate)

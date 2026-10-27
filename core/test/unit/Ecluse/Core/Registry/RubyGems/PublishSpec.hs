@@ -7,6 +7,7 @@ module Ecluse.Core.Registry.RubyGems.PublishSpec (spec) where
 
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as LBS
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS), defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (status200)

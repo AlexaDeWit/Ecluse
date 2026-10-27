@@ -12,7 +12,6 @@ module Ecluse.Core.Registry.RubyGems.Marshal (
     stripInstanceVariables,
 ) where
 
-import Control.Monad.State.Strict (StateT, get, gets, modify', put, runStateT)
 import Data.Bits (shiftL)
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder qualified as B
