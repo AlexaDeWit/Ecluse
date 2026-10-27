@@ -93,7 +93,7 @@ decodeBytes :: Text -> Parser ByteString
 decodeBytes = either fail pure . sourceBytes
 
 sourceBytes :: Text -> Either String ByteString
-sourceBytes = convertFromBase Base64 . encodeUtf8
+sourceBytes encoded = convertFromBase Base64 (encodeUtf8 encoded :: ByteString)
 
 nativeKey :: EntryKey -> Bool
 nativeKey (RecordEntry position) = position >= 0
