@@ -1,0 +1,172 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
+-- | Native targets retain physical archive inventories and observable writes across product restarts.
+module Ecluse.E2E.Harness.RubyGemsRegistry (
+    RubyRegistry (..),
+    RubyRegistryFault (..),
+    withRubyRegistry,
+    rubyRegistryApplication,
+    allowRubyRegistryUploads,
+    removeRubyRegistryVersion,
+    seedRubyRegistry,
+    rubyRegistryVersions,
+    rubyRegistryFiles,
+    awaitRubyRegistry,
+    setRubyRegistryFault,
+    rubyRegistryToken,
+) where
+
+import Data.Aeson (encode, withObject, (.:))
+import Data.Aeson.Types (parseEither)
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
+import Data.List (lookup)
+import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Network.HTTP.Types (ResponseHeaders, Status, status200, status201, status400, status401, status404, status405, status409, status413, status503, statusCode)
+import Network.Wai qualified as Wai
+
+import Ecluse.Core.Security.Limits (BodyLimit (PublishRequestBodyLimit), boundedRead)
+import Ecluse.E2E.Harness.Container (withBridgeApplication)
+import Ecluse.E2E.Harness.RubyGemsGateway (RubyRequest (..))
+import Ecluse.Test.Poll (pollUntil)
+import Ecluse.Test.Registry.RubyGems.Fixtures
+import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
+
+-- | Faults affect actual target exchanges and never declare completion on behalf of the product.
+data RubyRegistryFault
+    = RubyRegistryHealthy
+    | RubyRegistryUnavailable
+    | RubyRegistryLoseReply
+    | RubyRegistryRequireRead
+    | RubyRegistryMissingArchive Text
+    deriving stock (Eq, Show)
+
+-- | Hostnames identify separate public, private and mirror inventories behind one fixture listener.
+data RubyRegistry = RubyRegistry
+    { rubyRegistryPort :: Int
+    , rubyRegistryInventory :: TVar (Map (Text, Text) RubyRelease)
+    , rubyRegistryRequests :: TVar [RubyRequest]
+    , rubyRegistryUploads :: TVar [(Text, ByteString)]
+    , rubyRegistryFaults :: TVar (Map Text RubyRegistryFault)
+    , rubyRegistryReleases :: TVar [RubyRelease]
+    }
+
+-- | Writes use the native API-key value without a bearer prefix.
+rubyRegistryToken :: Text
+rubyRegistryToken = "rubygems-fixture-token"
+
+-- | The public registry starts with genuine owned source artifacts. Private stores start empty.
+withRubyRegistry :: (RubyRegistry -> IO a) -> IO a
+withRubyRegistry action = do
+    releases <- loadRubyReleases
+    inventory <- newTVarIO Map.empty
+    requests <- newTVarIO []
+    uploads <- newTVarIO []
+    faults <- newTVarIO Map.empty
+    known <- newTVarIO releases
+    let registry = RubyRegistry 0 inventory requests uploads faults known
+    seedRubyRegistry registry "rubygems-upstream" releases
+    withBridgeApplication (rubyRegistryApplication registry) $ \port -> action registry{rubyRegistryPort = port}
+
+-- | Tests seed an ordinary private source without using the product publication path.
+seedRubyRegistry :: RubyRegistry -> Text -> [RubyRelease] -> IO ()
+seedRubyRegistry registry host releases = do
+    allowRubyRegistryUploads registry releases
+    atomically $ modifyTVar' (rubyRegistryInventory registry) (\inventory -> foldl' (\stored release -> Map.insert (host, releaseFilename release) release stored) inventory releases)
+
+-- | Register genuine upload bytes without exposing a first-party package through a read source.
+allowRubyRegistryUploads :: RubyRegistry -> [RubyRelease] -> IO ()
+allowRubyRegistryUploads registry releases = atomically (modifyTVar' (rubyRegistryReleases registry) (ordNub . (<> releases)))
+
+-- | Backend deletion removes every physical platform artifact for one exact raw version.
+removeRubyRegistryVersion :: RubyRegistry -> Text -> Text -> Text -> IO ()
+removeRubyRegistryVersion registry host name version =
+    atomically $
+        modifyTVar' (rubyRegistryInventory registry) $
+            Map.filterWithKey (\(authority, _) release -> authority /= host || releaseName release /= name || releaseVersion release /= version)
+
+-- | Only physically retained archives count towards native inventory.
+rubyRegistryFiles :: RubyRegistry -> Text -> IO [RubyRelease]
+rubyRegistryFiles registry host = map snd . filter ((== host) . fst . fst) . Map.toList <$> readTVarIO (rubyRegistryInventory registry)
+
+-- | Whole raw versions remain distinct from individual platform artifacts.
+rubyRegistryVersions :: RubyRegistry -> Text -> Text -> IO [Text]
+rubyRegistryVersions registry host name = sort . ordNub . map releaseVersion . filter ((== name) . releaseName) <$> rubyRegistryFiles registry host
+
+-- | The expected coordinate set and exact archive bytes must both reach the physical target.
+awaitRubyRegistry :: RubyRegistry -> Text -> [RubyRelease] -> IO Bool
+awaitRubyRegistry registry host expected = pollUntil 120 500000 complete (rubyRegistryFiles registry host) <&> complete
+  where
+    complete actual = all (\release -> any (\stored -> releaseFilename stored == releaseFilename release && releaseArchive stored == releaseArchive release) actual) expected
+
+-- | A fault belongs to one authority and cannot affect another source implicitly.
+setRubyRegistryFault :: RubyRegistry -> Text -> RubyRegistryFault -> IO ()
+setRubyRegistryFault registry host fault = atomically (modifyTVar' (rubyRegistryFaults registry) (Map.insert host fault))
+
+-- | Native data-plane requests retain the requested host as their independent repository identity.
+rubyRegistryApplication :: RubyRegistry -> Wai.Application
+rubyRegistryApplication registry request respond = do
+    let host = T.takeWhile (/= ':') (maybe "" decodeUtf8 (Wai.requestHeaderHost request))
+        method = Wai.requestMethod request
+        path = decodeUtf8 (Wai.rawPathInfo request <> Wai.rawQueryString request)
+        send status headers body = do
+            atomically (modifyTVar' (rubyRegistryRequests registry) (<> [RubyRequest "https" host (decodeUtf8 method) path (statusCode status)]))
+            respond (Wai.responseLBS status headers (if method == "HEAD" then "" else body))
+    fault <- Map.findWithDefault RubyRegistryHealthy host <$> readTVarIO (rubyRegistryFaults registry)
+    stored <- rubyRegistryFiles registry host
+    if fault == RubyRegistryUnavailable
+        then send status503 [] "native registry unavailable"
+        else
+            if fault == RubyRegistryRequireRead && method `elem` ["GET", "HEAD"] && lookup "Authorization" (Wai.requestHeaders request) /= Just "Basic cnVieTpyZWFk"
+                then send status401 [("WWW-Authenticate", "Basic realm=\"RubyGems fixture\"")] "native read authorisation required"
+                else case (method, Wai.pathInfo request) of
+                    ("POST", ["api", "v1", "gems"]) -> publish registry host fault request send respond
+                    (readMethod, ["versions"]) | readMethod `elem` ["GET", "HEAD"] -> send status404 [] ""
+                    (readMethod, ["api", "v1", "dependencies"]) | readMethod `elem` ["GET", "HEAD"] -> do
+                        let names = maybe [] (T.splitOn "," . decodeUtf8) (join (lookup "gems" (Wai.queryString request)))
+                            rows = [releaseManifest release | release <- stored, releaseName release `elem` names]
+                        native <- runRubyReference "encode-dependencies" (LBS.toStrict (encode rows))
+                        bytes <- either fail pure (parseEither (withObject "native bytes" (.: "bytes")) native)
+                        send status200 [("Content-Type", "application/octet-stream")] (LBS.fromStrict (BS.pack bytes))
+                    (readMethod, ["info", name]) | readMethod `elem` ["GET", "HEAD"] -> do
+                        let releases = filter ((== name) . releaseName) stored
+                        if null releases
+                            then send status404 [] ""
+                            else do
+                                let rows = map releaseInfoRow releases
+                                    assigned = if host == "rubygems-upstream" then id else T.replace "2020-01-01T00:00:00Z" "2030-01-01T00:00:00Z" . T.replace "2020-01-03T00:00:00Z" "2030-01-03T00:00:00Z"
+                                send status200 [("Content-Type", "text/plain")] (LBS.fromStrict (encodeUtf8 ("---\n" <> T.unlines (map assigned rows))))
+                    (readMethod, ["gems", filename]) | readMethod `elem` ["GET", "HEAD"] ->
+                        case find ((== filename) . releaseFilename) stored of
+                            Just release | fault /= RubyRegistryMissingArchive filename -> send status200 [] (LBS.fromStrict (releaseArchive release))
+                            _ -> send status404 [] ""
+                    (readMethod, ["quick", "Marshal.4.8", filename]) | readMethod `elem` ["GET", "HEAD"] ->
+                        case find ((== "quick/Marshal.4.8/" <> toString filename) . releaseCompactPath) stored of
+                            Just release -> send status200 [] (LBS.fromStrict (releaseCompact release))
+                            _ -> send status404 [] ""
+                    ("DELETE", _) -> send status405 [] "native yank is not physical deletion"
+                    _ -> send status404 [] ""
+
+publish :: RubyRegistry -> Text -> RubyRegistryFault -> Wai.Request -> (Status -> ResponseHeaders -> LBS.ByteString -> IO Wai.ResponseReceived) -> (Wai.Response -> IO Wai.ResponseReceived) -> IO Wai.ResponseReceived
+publish registry host fault request send respond =
+    boundedRead (PublishRequestBodyLimit (16 * 1024 * 1024)) (Wai.getRequestBodyChunk request) >>= \case
+        Left _ -> send status413 [] "native archive exceeds fixture bound"
+        Right (_, bytes) -> do
+            atomically (modifyTVar' (rubyRegistryUploads registry) (<> [(host, bytes)]))
+            known <- readTVarIO (rubyRegistryReleases registry)
+            if lookup "Authorization" (Wai.requestHeaders request) /= Just (encodeUtf8 rubyRegistryToken)
+                then send status401 [] "native API key required"
+                else case find ((== bytes) . releaseArchive) known of
+                    Nothing -> send status400 [] "archive is not an owned native fixture"
+                    Just release -> do
+                        inventory <- readTVarIO (rubyRegistryInventory registry)
+                        if Map.member (host, releaseFilename release) inventory
+                            then send status409 [] "native coordinate already exists"
+                            else do
+                                seedRubyRegistry registry host [release]
+                                if fault == RubyRegistryLoseReply
+                                    then respond (Wai.responseRaw (\_ _ -> pure ()) (Wai.responseLBS status503 [] "upload reply lost"))
+                                    else send status201 [] "native archive retained"

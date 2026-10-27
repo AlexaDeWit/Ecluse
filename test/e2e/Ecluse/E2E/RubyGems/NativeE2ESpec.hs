@@ -52,7 +52,7 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
                     after <- rubyTraffic observed
                     rubyClientRequests (rubyTrafficSince before after) `shouldSatisfy` any (\request -> rubyRequestPath request == rubyArchiveRoute release && rubyRequestStatus request == 200)
                     tree <- rubyInstalledTree project
-                    Map.keys tree `shouldSatisfy` all (not . T.isSuffixOf "ecluse_fixture_root.rb" . toText)
+                    Map.keys tree `shouldSatisfy` (not . any (T.isSuffixOf "ecluse_fixture_root.rb" . toText))
         it (label "prerelease" "installs an explicitly requested native prerelease") $ \plane ->
             withObservedRubyProxy defaultE2EConfig plane $ \observed -> rubyConsumer (rubyProxy observed) currentBundler $ \project -> do
                 rubyDependency project rubyLeaf "= 2.1.0.pre.1"

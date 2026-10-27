@@ -90,6 +90,7 @@ data StubFault
       PyPICodeArtifactBackend Int
     | RubyGemsBackend Int Bool
     | RubyGemsPublicBackend Int
+    | RubyGemsCodeArtifactBackend Int Int
     | CargoBackend Int Bool
     | -- | Route Cargo repositories and the native AWS control plane to one host fixture.
       CargoCodeArtifactBackend Int
@@ -126,9 +127,12 @@ serverBlock fault route =
         <> maybe [] (`faultLines` route) fault
         <> [line | isPublic route, line <- publicCoding]
         <> ( case (fault, route) of
+                (Just (RubyGemsCodeArtifactBackend controlPort registryPort), selected)
+                    | selected `elem` [PyPICodeArtifactData, PyPICodeArtifactControl] -> forwarded nativeUploadLimit controlPort
+                    | selected `elem` [RubyGemsPublic, RubyGemsPrivate, RubyGemsMirror] -> forwarded nativeUploadLimit registryPort
                 (Just (RubyGemsPublicBackend port), RubyGemsPublic) -> forwarded nativeUploadLimit port
                 (Just (RubyGemsBackend port _), selected)
-                    | selected `elem` [RubyGemsPrivate, RubyGemsMirror] -> forwarded nativeUploadLimit port
+                    | selected `elem` [RubyGemsPublic, RubyGemsPrivate, RubyGemsMirror] -> forwarded nativeUploadLimit port
                 (Just (CargoPublicBackend port), CargoPublic) -> forwarded 16777216 port
                 (Just (CargoCodeArtifactBackend port), selected)
                     | selected `elem` [PyPICodeArtifactData, PyPICodeArtifactControl, CargoPrivate, CargoMirror] -> forwarded 16777216 port
@@ -160,6 +164,7 @@ faultLines = \case
     PyPICodeArtifactBackend _ -> const []
     RubyGemsBackend _ down -> \route -> [closeUnanswered | down && isPublic route]
     RubyGemsPublicBackend _ -> const []
+    RubyGemsCodeArtifactBackend _ _ -> const []
     CargoBackend _ down -> \route -> [closeUnanswered | down && isPublic route]
     CargoCodeArtifactBackend _ -> const []
     CargoPublicBackend _ -> const []
