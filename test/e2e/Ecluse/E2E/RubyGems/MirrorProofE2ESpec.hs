@@ -5,12 +5,8 @@
 -- | Native multi-platform mirror proofs survive lost replies, partial writes, restart and public-source loss.
 module Ecluse.E2E.RubyGems.MirrorProofE2ESpec (rubyMirrorProofContract) where
 
-import Data.Aeson (withObject, (.:))
-import Data.Aeson.Types (parseEither)
-import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
-import System.FilePath ((</>))
 import System.Process.Typed (proc, runProcess_)
 import Test.Hspec (around, it, shouldBe, shouldReturn, shouldSatisfy)
 import UnliftIO (finally)
@@ -28,6 +24,7 @@ import Ecluse.E2E.Harness.RubyGemsGateway
 import Ecluse.E2E.Harness.RubyGemsRegistry
 import Ecluse.E2E.RubyGems.InstallE2ESpec (rubyConsumer)
 import Ecluse.E2E.RubyGems.MirrorInstallE2ESpec
+import Ecluse.E2E.RubyGems.NativeE2ESpec (assertRubyPlatformInstall)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Ecosystem (FamilyMetadata (..))
 import Ecluse.Test.Contract.Phase (timedFixture)
@@ -35,7 +32,6 @@ import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Ecluse.Test.Contract.Types
 import Ecluse.Test.Contract.Types qualified as Contract
 import Ecluse.Test.Registry.RubyGems.Fixtures
-import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
 
 -- | Every fault starts with independent stores and durable state under the shared fixture lifetime.
 rubyMirrorProofContract :: DeclaredGroup
@@ -187,21 +183,7 @@ platformClient = platformClientWith Nothing
 platformClientWith :: Maybe Text -> ObservedRubyProxy -> [RubyRelease] -> IO ()
 platformClientWith credentials observed releases = withRubyProject currentBundler (rubyProxy observed) (e2eBaseUrl (rubyProxy observed) <> "/rubygems/") credentials $ \project -> do
     rubyDependency project "ecluse-fixture-platform" "= 1.0.0"
-    before <- rubyTraffic observed
-    void (runBundler project ["lock", "--add-platform", "ruby", "java", "x86_64-linux-musl", "arm64-darwin", "--add-checksums"] >>= shouldSucceed)
-    void (runBundler project ["cache", "--all-platforms", "--no-install"] >>= shouldSucceed)
-    for_ releases $ \release -> do
-        bytes <- BS.readFile (rubyDirectory project </> "vendor/cache" </> toString (releaseFilename release))
-        bytes `shouldBe` releaseArchive release
-        native <- runRubyReference "archive" bytes
-        coordinate <- either fail pure (parseEither (withObject "native archive" (\row -> (,,,) <$> row .: "name" <*> row .: "version" <*> row .: "platform" <*> row .: "sha256")) native)
-        coordinate `shouldBe` (releaseName release, releaseVersion release, releasePlatform release, releaseChecksum release)
-    void (rubyInstall project True >>= shouldSucceed)
-    installed <- rubyEvaluate project "require 'ecluse_fixture_platform'; puts EcluseFixturePlatform::VALUE" >>= shouldSucceed
-    T.strip (crStdout installed) `shouldSatisfy` T.isPrefixOf "ecluse-fixture-platform-1.0.0-"
-    after <- rubyTraffic observed
-    let archives = [T.takeWhileEnd (/= '/') (rubyRequestPath request) | request <- rubyClientRequests (rubyTrafficSince before after), ".gem" `T.isSuffixOf` rubyRequestPath request, rubyRequestStatus request == 200]
-    for_ releases $ \release -> archives `shouldSatisfy` elem (releaseFilename release)
+    assertRubyPlatformInstall observed releases project
 
 dependencyPath :: Text
 dependencyPath = "/rubygems/api/v1/dependencies?gems=ecluse-fixture-platform"

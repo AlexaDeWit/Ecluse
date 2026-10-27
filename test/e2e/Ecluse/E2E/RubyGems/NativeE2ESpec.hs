@@ -3,8 +3,12 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Supported Bundler clients expose real resolution, installation, update and refusal observations.
-module Ecluse.E2E.RubyGems.NativeE2ESpec (rubyNativeContract) where
+module Ecluse.E2E.RubyGems.NativeE2ESpec (rubyNativeContract, assertRubyPlatformInstall) where
 
+import Data.Aeson (withArray, withObject, (.:))
+import Data.Aeson.Types (parseEither)
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.FilePath ((</>))
@@ -21,6 +25,7 @@ import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Ecluse.Test.Registry.RubyGems.Fixtures
+import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
 
 -- | Each native refusal receives fresh client state and a separate product fixture lifetime.
 rubyNativeContract :: DeclaredGroup
@@ -30,16 +35,14 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
         it (label "current-client" "locks, installs, freezes and updates with Bundler 4.0.23") (clientCase currentBundler)
         it (label "platforms" "retains the Ruby, Java, Linux musl and Darwin variants in a native lockfile") $ \plane ->
             withObservedRubyProxy defaultE2EConfig plane $ \observed -> rubyConsumer (rubyProxy observed) currentBundler $ \project -> do
+                releases <- filter ((== "ecluse-fixture-platform") . releaseName) <$> loadRubyReleases
                 rubyDependency project "ecluse-fixture-platform" "= 1.0.0"
-                void (runBundler project ["lock", "--add-platform", "java", "x86_64-linux-musl", "arm64-darwin", "--add-checksums"] >>= shouldSucceed)
-                lock <- rubyLockfile project >>= maybe (fail "platform resolution did not create a lockfile") pure
-                forM_ ["1.0.0-java", "1.0.0-x86_64-linux-musl", "1.0.0-arm64-darwin"] $ \coordinate -> lock `shouldSatisfy` T.isInfixOf coordinate
-                void (rubyInstall project False >>= shouldSucceed)
-                installedLock <- rubyLockfile project >>= maybe (fail "platform installation did not retain its lockfile") pure
-                void (rubyInstall project True >>= shouldSucceed)
-                rubyLockfile project `shouldReturn` Just installedLock
-                installed <- rubyEvaluate project "require 'ecluse_fixture_platform'; puts EcluseFixturePlatform::VALUE" >>= shouldSucceed
-                T.strip (crStdout installed) `shouldSatisfy` T.isPrefixOf "ecluse-fixture-platform-1.0.0-"
+                (status, body) <- proxyGet (rubyProxy observed) "/rubygems/api/v1/dependencies?gems=ecluse-fixture-platform"
+                status `shouldBe` 200
+                nativeRows <- runRubyReference "dependencies" (LBS.toStrict body)
+                coordinates <- either fail pure (parseEither (withArray "native dependency rows" (traverse (withObject "native dependency" (\row -> (,,) <$> row .: "name" <*> row .: "number" <*> row .: "platform")) . toList)) nativeRows)
+                sort coordinates `shouldBe` sort [(releaseName release, releaseVersion release, releasePlatform release) | release <- releases]
+                assertRubyPlatformInstall observed releases project
         it (label "checksum-failure" "refuses a wrong lockfile digest after fetching the admitted native archive") $ \plane ->
             withObservedRubyProxy defaultE2EConfig plane $ \observed -> do
                 releases <- loadRubyReleases
@@ -100,12 +103,17 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
                     Map.keys tree `shouldSatisfy` (not . any (T.isSuffixOf ".gem" . toText))
                     after <- rubyTraffic observed
                     let interval = rubyTrafficSince before after
-                    rubyClientRequests interval `shouldSatisfy` any (\request -> rubyRequestPath request == rubyArchiveRoute release && rubyRequestStatus request == 403)
+                    rubyClientRequests interval `shouldSatisfy` any (\request -> "/rubygems/api/v1/dependencies?" `T.isPrefixOf` rubyRequestPath request && rubyRequestStatus request == 403)
+                    let fullIndex = filter ((== "/rubygems/specs.4.8.gz") . rubyRequestPath) (rubyClientRequests interval)
+                    map rubyRequestStatus fullIndex `shouldBe` [404]
+                    filter (T.isSuffixOf ".gem" . rubyRequestPath) (rubyClientRequests interval) `shouldBe` []
+                    map rubyRequestPath (rubyUpstreamRequests interval) `shouldSatisfy` all (T.isPrefixOf "/info/")
                     filter (T.isSuffixOf ".gem" . rubyRequestPath) (rubyUpstreamRequests interval) `shouldBe` []
                 before <- rubyTraffic observed
                 proxyStatus (rubyProxy observed) (rubyArchiveRoute release) `shouldReturn` 403
+                proxyGet (rubyProxy observed) "/rubygems/specs.4.8.gz" `shouldReturn` (404, "")
                 after <- rubyTraffic observed
-                filter (T.isSuffixOf ".gem" . rubyRequestPath) (rubyUpstreamRequests (rubyTrafficSince before after)) `shouldBe` []
+                map rubyRequestPath (rubyUpstreamRequests (rubyTrafficSince before after)) `shouldSatisfy` all (T.isPrefixOf "/info/")
         it (label "native-extension" "builds and loads an admitted native extension under the supported default policy") $ \plane ->
             withObservedRubyProxy defaultE2EConfig plane $ \observed -> rubyConsumer (rubyProxy observed) currentBundler $ \project -> do
                 rubyDependency project "ecluse-fixture-native" "= 1.0.0"
@@ -166,6 +174,40 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
                 rubyUpstreamRequests (rubyTrafficSince before after) `shouldBe` []
   where
     label name = caseLabel ("rubygems/native/" <> name)
+
+-- | Bundler selects every foreign archive, while only the compatible host fixture executes.
+assertRubyPlatformInstall :: ObservedRubyProxy -> [RubyRelease] -> RubyProject -> IO ()
+assertRubyPlatformInstall observed releases project = do
+    sort (map releasePlatform releases) `shouldBe` ["arm64-darwin", "java", "ruby", "x86_64-linux-musl"]
+    before <- rubyTraffic observed
+    -- Bundler 4.0.23 materialises checksums before applying platforms in the same command.
+    void (runBundler project ["lock", "--add-platform", "ruby", "java", "x86_64-linux-musl", "arm64-darwin"] >>= shouldSucceed)
+    void (rubyLock project >>= shouldSucceed)
+    lock <- rubyLockfile project >>= maybe (fail "platform resolution did not create a lockfile") pure
+    for_ releases $ \release -> lock `shouldSatisfy` T.isInfixOf ("    " <> lockCoordinate release <> "\n")
+    void (runBundler project ["cache", "--all-platforms", "--no-install"] >>= shouldSucceed)
+    for_ releases $ \release -> do
+        bytes <- BS.readFile (rubyDirectory project </> "vendor/cache" </> toString (releaseFilename release))
+        bytes `shouldBe` releaseArchive release
+        native <- runRubyReference "archive" bytes
+        coordinate <- either fail pure (parseEither (withObject "native archive" (\row -> (,,,) <$> row .: "name" <*> row .: "version" <*> row .: "platform" <*> row .: "sha256")) native)
+        coordinate `shouldBe` (releaseName release, releaseVersion release, releasePlatform release, releaseChecksum release)
+    void (rubyInstall project False >>= shouldSucceed)
+    void (rubyCacheChecksums project >>= shouldSucceed)
+    installedLock <- rubyLockfile project >>= maybe (fail "platform installation did not retain its lockfile") pure
+    for_ releases $ \release -> installedLock `shouldSatisfy` T.isInfixOf ("  " <> lockCoordinate release <> " sha256=" <> releaseChecksum release <> "\n")
+    void (rubyInstall project True >>= shouldSucceed)
+    rubyLockfile project `shouldReturn` Just installedLock
+    installed <- rubyEvaluate project "require 'ecluse_fixture_platform'; puts EcluseFixturePlatform::VALUE" >>= shouldSucceed
+    T.strip (crStdout installed) `shouldBe` "ecluse-fixture-platform-1.0.0-ruby"
+    after <- rubyTraffic observed
+    let requests = rubyClientRequests (rubyTrafficSince before after)
+        paths = ["/rubygems/versions", "/rubygems/api/v1/dependencies", "/rubygems/api/v1/dependencies?gems=ecluse-fixture-platform"] <> concatMap (\release -> [rubyArchiveRoute release, "/rubygems/" <> toText (releaseCompactPath release)]) releases
+        archives = [T.takeWhileEnd (/= '/') (rubyRequestPath request) | request <- requests, ".gem" `T.isSuffixOf` rubyRequestPath request, rubyRequestStatus request == 200]
+    map rubyRequestPath requests `shouldSatisfy` all (`elem` paths)
+    for_ releases $ \release -> archives `shouldSatisfy` elem (releaseFilename release)
+  where
+    lockCoordinate release = releaseName release <> " (" <> releaseVersion release <> (if releasePlatform release == "ruby" then "" else "-" <> releasePlatform release) <> ")"
 
 clientCase :: BundlerClient -> GlobalDataPlane -> IO ()
 clientCase client plane = withObservedRubyProxy defaultE2EConfig plane $ \observed -> rubyConsumer (rubyProxy observed) client $ \project -> do

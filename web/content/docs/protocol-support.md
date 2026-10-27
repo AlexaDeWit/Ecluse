@@ -223,6 +223,11 @@ Public acquisition uses per-gem `/info/<gem>` metadata and selected native reque
 Compact specification and archive locations point through Écluse.
 A batch shares cumulative limits and one deadline. A failed read stays a failure, rather than an empty successful result.
 
+The named Dependencies API carries no source archive hashes. Installed archives can populate lockfile hashes.
+Bundler 4.0.23 leaves foreign platform checksum entries empty after ordinary `bundle lock` and `bundle cache` commands.
+Complete existing frozen lockfiles remain supported, including their platform hashes.
+These client limits do not change the server's archive verification.
+
 Names, raw versions, and platform labels retain their native identity.
 Dependencies, version constraints, required Ruby and RubyGems versions, checksums, and supported source fields remain available.
 Malformed records and conflicting coordinates cannot supply an admitted version.
