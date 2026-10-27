@@ -15,8 +15,10 @@ import Network.HTTP.Types (Method)
 import Network.Wai (Request, ResponseReceived)
 import UnliftIO (try, withRunInIO)
 
+import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Deadline qualified as Deadline
 import Ecluse.Core.Mirror.State (recordVersion, versionFiles)
+import Ecluse.Core.Package (Artifact (artFilename), PackageDetails (pkgArtifacts, pkgName, pkgVersion), PackageName)
 import Ecluse.Core.Package.Merge (Provenance (..))
 import Ecluse.Core.Registry (BodyOutcome (..), FetchFault (FetchUrlUnformable))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
@@ -32,6 +34,7 @@ import Ecluse.Core.Registry.RubyGems.Handlers.Budget (newNativeDocumentBudget, n
 import Ecluse.Core.Registry.RubyGems.Project (candidateCoordinates, coordinateFilename, coordinateName, coordinateVersion)
 import Ecluse.Core.Registry.RubyGems.Request (gemCompactSpecUrl)
 import Ecluse.Core.Registry.RubyGems.Route.Response (RubyResponse, rubyBadRequest, rubyReplies)
+import Ecluse.Core.Rules.Types (EvalContext (ctxAdvisoryEtag))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Limits (BodyLimit (MetadataBodyLimit), Limits (..), floorServeCapMicros)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
@@ -40,12 +43,14 @@ import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfOutputPermille))
 import Ecluse.Core.Server.Context (Handler, MountBinding (bindingPackumentDeps), PackumentDeps (..), ServeRuntime (..), ctxMount, ctxRuntime, pdPrivateBaseUrl, pdPublicBaseUrl)
 import Ecluse.Core.Server.MirrorView (readMirrorCompanion, validateMirrorProject)
 import Ecluse.Core.Server.Path (Filename, unFilename)
+import Ecluse.Core.Server.Pipeline.Internal (VersionVerdict (VersionVerdict), logDenials, recordDenials, statusServeDecision)
 import Ecluse.Core.Server.Pipeline.Origin (ObservedReadBoundExceeded (ObservedReadBoundExceeded))
-import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerMetadataBytes, mapPackumentReplies, withObservedAdmittedDocument)
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerMetadataBytes, mapPackumentReplies, noSurvivors, withObservedAdmittedDocument)
 import Ecluse.Core.Server.Pipeline.Shared (edgeTokenMatches, forwardedCredential, shedMessage, unauthorisedMessage, withListingAdmission, withMetadataAdmission)
 import Ecluse.Core.Server.Pipeline.Tarball (headTarball, serveTarball)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies)
-import Ecluse.Core.Server.Response (mkRefusal)
+import Ecluse.Core.Server.Response (RejectReason (..), Rejection (rejectionReason), ServeDecision (Reject), mkRefusal, packumentStatus)
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpServeDecision))
 import Ecluse.Core.Telemetry.Upstream (PublicReadKind (Companion))
 import Ecluse.Core.Version (renderVersion)
 
@@ -103,6 +108,8 @@ data CandidateRead a
     | CandidateRefused RubyResponse
     | CandidateAdmitted a
 
+data CoordinateRejection = CoordinateRejection PackageName Text (Maybe DbEtag) Rejection
+
 resolveCoordinate :: MemoryTicket -> (Int -> IO ()) -> Request -> Filename -> Handler (Either RubyResponse (GemRow, Provenance))
 resolveCoordinate ticket observe request file = do
     mount <- asks ctxMount
@@ -116,30 +123,64 @@ resolveCoordinate ticket observe request file = do
                 collect deps observe checkDocument candidates 0 [] Nothing (Set.toAscList (Set.fromList (map coordinateName candidates)))
   where
     collect deps observer checkDocument candidates spent matches denied = \case
-        [] -> pure $ case matches of
-            [selected] -> Right selected
-            [] -> Left (fromMaybe (packumentNotFound rubyReplies [] (mkRefusal Nothing "the native coordinate is absent")) denied)
-            _ -> Left (rubyBadRequest "the native coordinate names more than one admitted artifact")
+        [] -> case matches of
+            [selected] -> pure (Right selected)
+            [] -> case denied of
+                Nothing -> pure (Left (packumentNotFound rubyReplies [] (mkRefusal Nothing "the native coordinate is absent")))
+                Just (Left refusal) -> pure (Left refusal)
+                Just (Right rejection) -> Left <$> coordinateRefusal deps rejection
+            _ -> pure (Left (rubyBadRequest "the native coordinate names more than one admitted artifact"))
         name : names -> do
+            rejected <- liftIO (newIORef Nothing)
             let replies =
                     (mapPackumentReplies CandidateRefused rubyReplies)
                         { packumentNotFound = \_ _ -> CandidateAbsent
                         , packumentForbidden = \headers refusal -> CandidateDenied (packumentForbidden rubyReplies headers refusal)
                         }
-            result <- withObservedAdmittedDocument replies ticket observer checkDocument name request CandidateAbsent $ \cached sourceBytes origins -> do
+                recordRejected ctx details rejection =
+                    when (any (\candidate -> coordinateName candidate == pkgName details && coordinateVersion candidate == pkgVersion details) candidates && any ((== unFilename file) . artFilename) (pkgArtifacts details)) $
+                        atomicModifyIORef' rejected $ \previous ->
+                            let current = CoordinateRejection (pkgName details) (renderVersion (pkgVersion details)) (ctxAdvisoryEtag ctx) rejection
+                             in (if terminalRejection rejection then Just current else previous <|> Just current, ())
+            result <- withObservedAdmittedDocument replies ticket observer checkDocument (Just recordRejected) name request CandidateAbsent $ \cached sourceBytes origins -> do
                 liftIO (charge ticket (scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) sourceBytes))
                 pure (CandidateAdmitted (cached, sourceBytes, origins))
             case result of
                 CandidateRefused refusal -> pure (Left refusal)
                 CandidateAbsent -> collect deps observer checkDocument candidates spent matches denied names
-                CandidateDenied refusal -> collect deps observer checkDocument candidates spent matches (denied <|> Just refusal) names
+                CandidateDenied refusal -> collect deps observer checkDocument candidates spent matches (denied <|> Just (Left refusal)) names
                 CandidateAdmitted (cached, sourceBytes, origins)
                     | spent + toInteger sourceBytes > toInteger (maxMetadataBytes (pdLimits deps)) -> pure (Left (rubyBadRequest "the coordinate lookup exceeds its cumulative metadata bound"))
                     | otherwise -> case snd rubyGemsCached cached of
                         Nothing -> pure (Left (packumentInternal rubyReplies [] (mkRefusal Nothing "the admitted coordinate source is not RubyGems metadata")))
                         Just document -> do
                             let found = [(row, origin) | row <- gemRows document, grCoordinate row `elem` candidates, coordinateFilename (grCoordinate row) == file, Just origin <- [Map.lookup (renderVersion (coordinateVersion (grCoordinate row))) origins]]
-                            collect deps observer checkDocument candidates (spent + toInteger sourceBytes) (matches <> found) denied names
+                                next = collect deps observer checkDocument candidates (spent + toInteger sourceBytes) (matches <> found)
+                            refusal <- if null found then liftIO (readIORef rejected) else pure Nothing
+                            case refusal of
+                                Just current@(CoordinateRejection _ _ _ rejection)
+                                    | terminalRejection rejection -> Left <$> coordinateRefusal deps current
+                                    | otherwise -> next (denied <|> Just (Right current)) names
+                                Nothing -> next denied names
+
+terminalRejection :: Rejection -> Bool
+terminalRejection rejection = case rejectionReason rejection of
+    Unavailable{} -> True
+    UpstreamInvalid -> True
+    ByPolicy{} -> False
+    MissingIntegrity -> False
+    BelowIntegrityFloor -> False
+
+coordinateRefusal :: PackumentDeps -> CoordinateRejection -> Handler RubyResponse
+coordinateRefusal deps (CoordinateRejection name version etag rejection) = do
+    rt <- asks ctxRuntime
+    let decision = Reject rejection
+        status = packumentStatus [decision]
+    liftIO $ do
+        recordDenials (srMetrics rt) [decision]
+        mpServeDecision (srMetrics rt) (statusServeDecision status)
+    logDenials name etag [VersionVerdict version decision]
+    pure (noSurvivors rubyReplies (pdHelp deps) status [decision])
 
 fetchCompact :: MemoryTicket -> (Int -> IO ()) -> Request -> (GemRow, Provenance) -> Handler RubyResponse
 fetchCompact ticket observe request (row, provenance) = do

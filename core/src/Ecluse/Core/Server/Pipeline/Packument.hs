@@ -36,14 +36,18 @@ import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Mirror.State (ProjectMirrorRecord, StateRevision)
 import Ecluse.Core.Package (
-    PackageDetails,
+    Artifact (artHashes),
+    PackageDetails (pkgArtifacts),
     PackageInfo (infoVersions),
     PackageName,
     renderPackageName,
  )
 import Ecluse.Core.Package.Filter (filterPlanFromDecisions, fpDecisions, fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Integrity (
+    IntegrityFloor,
     MinTrustedIntegrity,
+    VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
+    classifyDigests,
  )
 import Ecluse.Core.Package.Merge (
     MergePlan (mpDivergences, mpSurvivors),
@@ -120,7 +124,7 @@ import Ecluse.Core.Server.Response (
     RejectReason (ByPolicy, Unavailable, UpstreamInvalid),
     Rejection (Rejection),
     RetryAfter,
-    ServeDecision (Reject),
+    ServeDecision (Admit, Reject),
     Transience (WillResolve),
     mkRefusal,
     packumentStatus,
@@ -213,6 +217,7 @@ data PackumentServing response = PackumentServing
     -- ^ What the private read paid. It steps down to what the read keeps, and goes once the body exists.
     , psvInputBytes :: Int -> IO ()
     , psvDocumentBytes :: Int -> IO (Either response ())
+    , psvRejectedVersion :: Maybe (EvalContext -> PackageDetails -> Rejection -> IO ())
     , psvAbsent :: Maybe response
     , psvResolved :: PackumentServing response -> [Contribution] -> MergePlan -> Handler response
     , psvPublicRead :: ChargePart
@@ -255,20 +260,21 @@ withAdmittedDocument ::
     response ->
     (CachedDoc -> Int -> Map Text Provenance -> Handler response) ->
     Handler response
-withAdmittedDocument replies ticket observe = withObservedAdmittedDocument replies ticket observe (const (pure (Right ())))
+withAdmittedDocument replies ticket observe = withObservedAdmittedDocument replies ticket observe (const (pure (Right ()))) Nothing
 
--- | Check each resolved source document before admission, including cached and policy-denied documents.
+-- | Observe source sizes before admission and checked rejections hidden by a surviving contribution.
 withObservedAdmittedDocument ::
     PackumentReplies response ->
     MemoryTicket ->
     (Int -> IO ()) ->
     (Int -> IO (Either response ())) ->
+    Maybe (EvalContext -> PackageDetails -> Rejection -> IO ()) ->
     PackageName ->
     Request ->
     response ->
     (CachedDoc -> Int -> Map Text Provenance -> Handler response) ->
     Handler response
-withObservedAdmittedDocument replies ticket observe checkDocument name request absent consume = do
+withObservedAdmittedDocument replies ticket observe checkDocument rejected name request absent consume = do
     mount <- asks ctxMount
     let deps = bindingPackumentDeps mount
         clientToken = forwardedCredential mount request
@@ -280,7 +286,7 @@ withObservedAdmittedDocument replies ticket observe checkDocument name request a
                 then refuse packumentNotFound "first-party packages require the private registry view"
                 else do
                     serving <- newServing PackumentFull replies name request ticket admitted
-                    serveAdmittedPackument serving{psvAbsent = Just absent, psvInputBytes = observe, psvDocumentBytes = checkDocument} clientToken
+                    serveAdmittedPackument serving{psvAbsent = Just absent, psvInputBytes = observe, psvDocumentBytes = checkDocument, psvRejectedVersion = rejected} clientToken
   where
     admitted serving sources plan = do
         let basis = outputBasisBytes plan sources
@@ -318,6 +324,7 @@ newServing mode replies name request ticket resolved = do
             , psvPublicRead = publicRead
             , psvInputBytes = const pass
             , psvDocumentBytes = const (pure (Right ()))
+            , psvRejectedVersion = Nothing
             , psvAbsent = Nothing
             , psvResolved = resolved
             }
@@ -392,7 +399,7 @@ serveMergedPackument serving evalCtx record privResult pubResult
                 trustedVersions = Map.unions (map (infoVersions . srcInfo) privateSources)
             public <- withRunInIO $ \run -> do
                 evidenceReads <- newPublicInstallEvidenceReads deps (srPublicClient rt) (srPublicControl rt) InstallPublicAdmission (psvTicket serving) (run . logFM ErrorS . ls . renderInability . rfDetail)
-                gatePublic evidenceReads (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) (originManifest pubResult)
+                gatePublic (psvRejectedVersion serving) evidenceReads (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) (originManifest pubResult)
             let sources = privateSources <> maybeToList (paContribution public)
                 required = Map.withoutKeys pending (paBlockedPending public)
                 covered = Map.null required || maybe False (publicMirrorCoverage required . srcInfo) (paContribution public)
@@ -402,7 +409,13 @@ serveMergedPackument serving evalCtx record privResult pubResult
                     Just miss | pdReadSourceSelection deps == PrivateOnly -> privateViewMissed serving miss
                     Just miss | pdFirstParty deps name -> firstPartyMissed serving miss
                     _ -> case packumentPlan sources trustedVersions (paDeniedEvidence public) of
-                        Just plan -> serveResolved serving sources plan
+                        Just plan -> do
+                            liftIO $ do
+                                paReportRejections public
+                                for_ (psvRejectedVersion serving) $ \report ->
+                                    for_ (catMaybes [unmanagedManifest, managedManifest]) $ \manifest ->
+                                        reportIntegrityRejections report evalCtx (pdMinTrustedIntegrity deps) trustedIntegrityBelowFloor trustedIntegrityMissing (manifestInfo manifest)
+                            serveResolved serving sources plan
                         Nothing
                             | pdReadSourceSelection deps == ManagedMirrorAndPublic
                             , OriginUnresolved <- pubResult ->
@@ -461,12 +474,13 @@ data PublicAdmission = PublicAdmission
     , paBlockedPending :: Set Text
     , -- Only named denials release a missing recorded version from coverage.
       paDeniedEvidence :: Map Text PackageDetails
-      -- Integrity-admitted but rule-denied versions contribute alarms, never served entries.
+    , -- Integrity-admitted but rule-denied versions contribute alarms, never served entries.
+      paReportRejections :: IO ()
     }
 
-gatePublic :: (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Map Text PackageDetails -> Set Text -> Maybe Manifest -> IO PublicAdmission
-gatePublic evidenceReads tracing metrics deps name ctx trustedVersions pendingVersions = \case
-    Nothing -> pure (PublicAdmission Nothing [] [] Set.empty Map.empty)
+gatePublic :: Maybe (EvalContext -> PackageDetails -> Rejection -> IO ()) -> (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Map Text PackageDetails -> Set Text -> Maybe Manifest -> IO PublicAdmission
+gatePublic rejected evidenceReads tracing metrics deps name ctx trustedVersions pendingVersions = \case
+    Nothing -> pure (PublicAdmission Nothing [] [] Set.empty Map.empty pass)
     Just manifest -> spanPackumentGate tracing name $ do
         let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) integrityBelowFloor integrityMissing (manifestInfo manifest)
         (decisions, seconds) <- timedSeconds (decideVersions evidenceReads deps ctx admissible)
@@ -475,11 +489,17 @@ gatePublic evidenceReads tracing metrics deps name ctx trustedVersions pendingVe
         let plan = filterPlanFromDecisions decisions
             blockedPending = Set.fromList [version | (version, Blocked{}) <- Map.toList (Map.restrictKeys decisions pendingVersions)]
             deniedEvidence = Map.withoutKeys (Map.intersection (infoVersions admissible) trustedVersions) (fpSurvivors plan)
+            reportRejections = for_ rejected $ \report -> do
+                reportIntegrityRejections report ctx (pdMinIntegrity deps) integrityBelowFloor integrityMissing (manifestInfo manifest)
+                for_ (Map.toList (infoVersions admissible)) $ \(version, details) ->
+                    for_ (Map.lookup version decisions) $ \decision -> case serveDecisionOf (completeEvidence details) decision of
+                        Admit -> pass
+                        Reject rejection -> report ctx details rejection
         pure $
             if Set.null (fpSurvivors plan)
                 then
                     let verdicts = projectDecisions admissible (fpDecisions plan)
-                     in PublicAdmission Nothing (map vvDecision verdicts <> integrityRefusals) verdicts blockedPending deniedEvidence
+                     in PublicAdmission Nothing (map vvDecision verdicts <> integrityRefusals) verdicts blockedPending deniedEvidence reportRejections
                 else
                     PublicAdmission
                         (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) (manifestRaw manifest) (manifestDigest manifest) (manifestBodyBytes manifest)))
@@ -487,6 +507,20 @@ gatePublic evidenceReads tracing metrics deps name ctx trustedVersions pendingVe
                         []
                         blockedPending
                         deniedEvidence
+                        reportRejections
+
+reportIntegrityRejections :: (IntegrityFloor floor) => (EvalContext -> PackageDetails -> Rejection -> IO ()) -> EvalContext -> floor -> ServeDecision -> ServeDecision -> PackageInfo -> IO ()
+reportIntegrityRejections report ctx floorSpec below missing info =
+    for_ (Map.elems (infoVersions info)) $ \details ->
+        for_ (pkgArtifacts details) $ \artifact ->
+            case classifyDigests floorSpec (artHashes artifact) of
+                MeetsFloor -> pass
+                BelowFloor -> rejected details artifact below
+                NoIntegrity -> rejected details artifact missing
+  where
+    rejected details artifact = \case
+        Admit -> pass
+        Reject rejection -> report ctx details{pkgArtifacts = artifact :| []} rejection
 
 decideVersions :: (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text Decision)
 decideVersions evidenceReads deps ctx info = do

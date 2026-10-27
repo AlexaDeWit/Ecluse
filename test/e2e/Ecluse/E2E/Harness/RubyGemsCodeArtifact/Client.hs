@@ -9,6 +9,7 @@ import Data.Text qualified as T
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 
 import Ecluse.Core.Server.Path (encodeComponent)
+import Ecluse.E2E.Harness.Proxy (proxyContainerLogs)
 import Ecluse.E2E.Harness.RubyGems
 import Ecluse.E2E.Harness.RubyGemsCodeArtifact
 import Ecluse.E2E.Harness.RubyGemsGateway (rubyProxy)
@@ -29,7 +30,11 @@ rubySweepClientOps =
         , clientPublish = publish
         , clientArtifact = \store name version -> do
             release <- rubyRelease (rspReleases (rssPlane store)) name version "ruby"
-            storeRequest store ("gems/" <> encodeComponent (releaseFilename release)) "GET" Nothing
+            response@(status, body) <- storeRequest store ("gems/" <> encodeComponent (releaseFilename release)) "GET" Nothing
+            when (status == 503) $ do
+                logs <- proxyContainerLogs (rubyProxy (rssObserved store))
+                putStrLn ("unexpected RubyGems maintenance artifact response for " <> name <> "@" <> version <> ": " <> show status <> "\nBody:\n" <> decodeUtf8 body <> "\nProxy logs:\n" <> logs)
+            pure response
         , clientMetadataStatus = \store name -> fst <$> storeRequest store ("api/v1/dependencies?gems=" <> encodeComponent name) "GET" Nothing
         }
 

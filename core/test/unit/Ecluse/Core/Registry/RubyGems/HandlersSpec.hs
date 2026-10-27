@@ -13,21 +13,25 @@ import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
-import Network.HTTP.Types (Header, Method, Status, status200, status304, status400, status401, status403, status404, status406, status502, status503)
+import Katip (LogEnv)
+import Network.HTTP.Types (Header, Method, Status, status200, status304, status400, status401, status403, status404, status406, status500, status502, status503)
 import Network.Wai (Request (..), defaultRequest, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SRequest (SRequest), SResponse (..), runSession, setPath, srequest)
 import Test.Hspec
 
 import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
+import Ecluse.Core.Package (HashAlg (SHA512))
+import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Registry.RubyGems.Adapter (rubyGemsAdapter)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyReadCredential)
 import Ecluse.Core.Registry.RubyGems.FirstParty (projectFirstPartyEntry, rubyGemsFirstPartyName)
 import Ecluse.Core.Registry.RubyGems.Handlers (parseBatchQuery)
 import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRouter)
-import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
+import Ecluse.Core.Rules (PreparedRule (prepEval), RuleEval (PerVersion), prepare)
+import Ecluse.Core.Rules.Types (FailureAlignment (FailDeny), Inability (NoDatabaseLoaded), Rule (AllowIfOlderThan), RuleEvidence (evVersion), RuleVerdict (CannotVet, NoDecision))
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -37,15 +41,18 @@ import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCacheWithProvider)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage))
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
-import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), ReadSourceSelection (MergePrivateAndPublic, PrivateOnly), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime (srMetadataCache), pdPublicBaseUrl, runHandler)
+import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), ReadSourceSelection (MergePrivateAndPublic, PrivateOnly), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime (srMetadataCache, srMetrics), pdPublicBaseUrl, runHandler)
 import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpRuleDenial))
+import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Deadline (withSweeper)
-import Ecluse.Test.Log (newTestLogEnv)
+import Ecluse.Test.Log (captureJsonLog, lineMessage, newTestLogEnv)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.RubyGems.Fixtures (RubyRelease (..), loadRubyReleasesFrom, rubyRelease)
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, cannotVetRule, inertRuleDeps)
 import Ecluse.Test.Server.Cache (cachedMetadata, externalOperations)
 import Ecluse.Test.Server.Handler (testServeRuntimeWith)
 import Ecluse.Test.Server.Mount (serveDepsFor)
@@ -188,6 +195,81 @@ spec = do
                             response <- capture runtime binding method path []
                             simpleStatus response `shouldBe` status403
                             readIORef hits `shouldReturn` [["public", "info", "acme"] | not warm]
+
+    describe "partially denied coordinate inventory" $ do
+        for_ ["GET", "HEAD"] $ \method -> do
+            for_ ["/gems/acme-1-2.0.gem", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz"] $ \path ->
+                it ("retains the denied coordinate beside an admitted sibling for " <> show (method, path)) $
+                    withCoordinateSources PublicMixedCandidateSource $ \runtime binding hits _ -> do
+                        response <- capture runtime binding method path []
+                        simpleStatus response `shouldBe` status403
+                        readIORef hits `shouldReturn` [["public", "info", "acme"], ["public", "info", "acme-1"]]
+            for_ ["/gems/acme-1-1.0.gem", "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz"] $ \path ->
+                it ("serves the admitted sibling beside a denied coordinate for " <> show (method, path)) $
+                    withCoordinateSources PublicMixedCandidateSource $ \runtime binding hits release -> do
+                        response <- capture runtime binding method path []
+                        let body = if path == "/gems/acme-1-1.0.gem" then releaseArchive release else releaseCompact release
+                        checkCoordinateResponse method path body response
+                        observed <- readIORef hits
+                        observed `shouldSatisfy` all (\parts -> take 1 parts == ["public"])
+                        observed `shouldSatisfy` notElem ["public", "gems", "acme-1-2.0.gem"]
+                        observed `shouldSatisfy` notElem ["public", "quick", "Marshal.4.8", "acme-1-2.0.gemspec.rz"]
+            for_ ["/gems/acme-1-2.0-java.gem", "/quick/Marshal.4.8/acme-1-2.0-java.gemspec.rz", "/gems/acme-1-3.0.gem", "/quick/Marshal.4.8/acme-1-3.0.gemspec.rz"] $ \path ->
+                it ("keeps an absent native coordinate absent beside a denied version for " <> show (method, path)) $
+                    withCoordinateSources PublicMixedCandidateSource $ \runtime binding hits _ -> do
+                        response <- capture runtime binding method path []
+                        simpleStatus response `shouldBe` status404
+                        observed <- readIORef hits
+                        observed `shouldSatisfy` all (\parts -> take 2 parts == ["public", "info"])
+
+        for_ [("2.0", status403, 1), ("1.0", status200, 0)] $ \(version, expected, count) ->
+            it ("logs only the final matching rejected coordinate with its gate tag for " <> toString version) $
+                withCoordinateSources PublicMixedCandidateSource $ \originalRuntime original hits _ -> do
+                    tags <- newIORef (0 :: Int)
+                    denials <- newIORef []
+                    let deps = bindingPackumentDeps original
+                        tag = atomicModifyIORef' tags (\previous -> let next = previous + 1 in (next, Just (DbEtag ("gate-" <> show next))))
+                        binding = original{bindingPackumentDeps = deps{pdAdvisoryEtag = tag}}
+                        metrics = (srMetrics originalRuntime){mpRuleDenial = \rule reason -> atomicModifyIORef' denials (\seen -> (seen <> [(rule, reason)], ()))}
+                        runtime = originalRuntime{srMetrics = metrics}
+                    (response, logged) <- captureJsonLog (\logEnv -> captureWithLog logEnv runtime binding "GET" ("/quick/Marshal.4.8/acme-1-" <> encodeUtf8 (version :: Text) <> ".gemspec.rz") [])
+                    simpleStatus response `shouldBe` expected
+                    let rejected = filter ((== Just "denied") . lineMessage) (T.lines logged)
+                    length rejected `shouldBe` count
+                    readIORef tags `shouldReturn` 2
+                    readIORef denials `shouldReturn` replicate count (Just "BlockedByDefault", Metric.ReasonPolicy)
+                    for_ rejected $ \line -> do
+                        line `shouldSatisfy` T.isInfixOf "\"package\":\"acme-1\""
+                        line `shouldSatisfy` T.isInfixOf "\"version\":\"2.0\""
+                        line `shouldSatisfy` T.isInfixOf "\"active_advisory_db_etag\":\"gate-2\""
+                    observed <- readIORef hits
+                    observed `shouldSatisfy` notElem ["public", "gems", "acme-1-2.0.gem"]
+        for_ ["GET", "HEAD"] $ \method ->
+            for_ ["/gems/acme-1-2.0.gem", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz"] $ \path ->
+                it ("preserves a matching inability beside an admitted sibling for " <> show (method, path)) $
+                    withCoordinateSources PublicMixedCandidateSource $ \runtime original hits _ -> do
+                        let deps = bindingPackumentDeps original
+                            unknown = cannotVetRule{prepEval = PerVersion (\_ evidence -> pure (if renderVersion (evVersion evidence) == "2.0" then CannotVet FailDeny NoDatabaseLoaded else NoDecision))}
+                            binding = original{bindingPackumentDeps = deps{pdRules = unknown : pdRules deps}}
+                        response <- capture runtime binding method path []
+                        simpleStatus response `shouldBe` status500
+                        readIORef hits `shouldReturn` [["public", "info", "acme"], ["public", "info", "acme-1"]]
+
+    describe "partial coordinate integrity exclusions" $ do
+        for_ [False, True] $ \trusted ->
+            for_ ["GET", "HEAD"] $ \method ->
+                for_ ["/gems/acme-1-2.0.gem", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz"] $ \path ->
+                    it ("retains an excluded checked file beside a surviving contribution for " <> show (trusted, method, path)) $
+                        withCoordinateSources (if trusted then MixedTrustedIntegrityCandidateSource else MixedPublicIntegrityCandidateSource) $ \runtime original hits _ -> do
+                            publicFloor <- expectRight (mkMinIntegrity SHA512)
+                            trustedFloor <- expectRight (mkMinTrustedIntegrity SHA512)
+                            let deps = bindingPackumentDeps original
+                                selected = if trusted then deps{pdMinTrustedIntegrity = trustedFloor} else deps{pdMinIntegrity = publicFloor}
+                                binding = original{bindingPackumentDeps = selected}
+                            response <- capture runtime binding method path []
+                            simpleStatus response `shouldBe` status403
+                            observed <- readIORef hits
+                            sort observed `shouldBe` [["private", "info", "acme"], ["private", "info", "acme-1"], ["public", "info", "acme"], ["public", "info", "acme-1"]]
 
     describe "coordinate source document limits" $ do
         for_ ["GET", "HEAD"] $ \method ->
@@ -357,7 +439,12 @@ withNativeOrigins private public cap use = withSweeper $ \deadlines -> do
         binding = MountBinding ("rubygems" :| []) rubyGemsRouter rubyReadCredential deps Nothing
     use runtime binding
 
-data CoordinateSources = OwnedCandidateSource Status | PublicCandidateSource
+data CoordinateSources
+    = OwnedCandidateSource Status
+    | PublicCandidateSource
+    | PublicMixedCandidateSource
+    | MixedPublicIntegrityCandidateSource
+    | MixedTrustedIntegrityCandidateSource
 
 withAmbiguousNative :: Status -> (ServeRuntime -> MountBinding -> IORef [[Text]] -> RubyRelease -> IO a) -> IO a
 withAmbiguousNative = withCoordinateSources . OwnedCandidateSource
@@ -371,23 +458,36 @@ withCoordinateSourceHeader header sources use = do
     release <- rubyRelease releases "acme-1" "1.0" "ruby"
     hits <- newIORef []
     owned <- expectRight (projectFirstPartyEntry "acme")
-    let age = case sources of OwnedCandidateSource _ -> 0; PublicCandidateSource -> 604800
+    let age = case sources of OwnedCandidateSource _ -> 0; _ -> 604800
     rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan age)]
     let (recent, admitted) = coordinateListings header release
+        mixed = admitted <> BS.drop (BS.length header + 4) recent
         upstream request respond = do
             atomicModifyIORef' hits (\events -> (events <> [pathInfo request], ()))
             let answer status bytes = respond (responseLBS status [] (fromStrict bytes))
             case pathInfo request of
-                ["private", "info", "acme"] -> answer (case sources of OwnedCandidateSource status -> status; PublicCandidateSource -> status404) ""
-                ["public", "info", "acme"] -> answer status200 recent
-                ["public", "info", "acme-1"] -> answer status200 admitted
+                ["private", "info", "acme"] -> answer (case sources of OwnedCandidateSource status -> status; _ -> status404) ""
+                ["private", "info", "acme-1"] -> case sources of
+                    MixedPublicIntegrityCandidateSource -> answer status200 admitted
+                    MixedTrustedIntegrityCandidateSource -> answer status200 recent
+                    _ -> answer status404 ""
+                ["public", "info", "acme"] -> case sources of
+                    OwnedCandidateSource _ -> answer status200 recent
+                    PublicCandidateSource -> answer status200 recent
+                    _ -> answer status404 ""
+                ["public", "info", "acme-1"] -> answer status200 (case sources of PublicMixedCandidateSource -> mixed; MixedPublicIntegrityCandidateSource -> mixed; _ -> admitted)
                 ["public", "gems", "acme-1-1.0.gem"] -> respond (responseLBS status200 [("Content-Length", show (BS.length (releaseArchive release)))] (fromStrict (releaseArchive release)))
                 ["public", "quick", "Marshal.4.8", "acme-1-1.0.gemspec.rz"] -> answer status200 (releaseCompact release)
                 _ -> answer status404 ""
     testWithApplication (pure upstream) $ \port -> do
         let base = "http://localhost:" <> show port
-            private = case sources of OwnedCandidateSource _ -> Just (loopbackRegistryUrl (base <> "/private/")); PublicCandidateSource -> Nothing
-            firstParty = case sources of OwnedCandidateSource _ -> rubyGemsFirstPartyName (owned :| []); PublicCandidateSource -> const False
+            private = case sources of
+                OwnedCandidateSource _ -> Just privateBase
+                MixedPublicIntegrityCandidateSource -> Just privateBase
+                MixedTrustedIntegrityCandidateSource -> Just privateBase
+                _ -> Nothing
+            privateBase = loopbackRegistryUrl (base <> "/private/")
+            firstParty = case sources of OwnedCandidateSource _ -> rubyGemsFirstPartyName (owned :| []); _ -> const False
         withNativeOrigins private (loopbackRegistryUrl (base <> "/public/")) (BS.length (releaseArchive release)) $ \runtime binding -> do
             let deps = bindingPackumentDeps binding
                 selected = binding{bindingPackumentDeps = deps{pdReadSourceSelection = MergePrivateAndPublic, pdFirstParty = firstParty, pdRules = rules}}
@@ -447,6 +547,10 @@ warmCoordinateCache uncached binding hits = do
 capture :: ServeRuntime -> MountBinding -> Method -> ByteString -> [Header] -> IO SResponse
 capture runtime binding method path headers = do
     logEnv <- newTestLogEnv
+    captureWithLog logEnv runtime binding method path headers
+
+captureWithLog :: LogEnv -> ServeRuntime -> MountBinding -> Method -> ByteString -> [Header] -> IO SResponse
+captureWithLog logEnv runtime binding method path headers = do
     let request = setPath defaultRequest{requestMethod = method, requestHeaders = headers} path
     runSession (srequest (SRequest request "")) $ \incoming respond ->
         case rubyGemsRouter (requestMethod incoming) (requestHeaders incoming) (pathInfo incoming) of
