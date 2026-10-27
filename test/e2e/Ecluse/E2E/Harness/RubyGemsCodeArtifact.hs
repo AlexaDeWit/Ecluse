@@ -210,7 +210,7 @@ proxyRoleEnv =
            , ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL", repositoryUrl "mirror")
            , ("ECLUSE_MOUNTS__RUBYGEMS__PUBLICATION_TARGET__CODE_ARTIFACT__URL", repositoryUrl "mirror")
            , ("ECLUSE_MOUNTS__RUBYGEMS__PUBLICATION_TARGET__CODE_ARTIFACT__UPLOAD_URL", repositoryUrl "mirror")
-           , ("ECLUSE_MOUNTS__RUBYGEMS__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN", rubyRegistryToken)
+           , ("ECLUSE_MOUNTS__RUBYGEMS__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN", "Bearer " <> rubyRegistryToken)
            , ("ECLUSE_MOUNTS__RUBYGEMS__FIRST_PARTY", firstPartyName)
            , ("ECLUSE_SERVER__AUTH_TOKEN", rubyRegistryToken)
            , ("ECLUSE_CACHE__TTL", "1")

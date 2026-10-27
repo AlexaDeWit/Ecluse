@@ -138,7 +138,7 @@ rubyLockfile project = do
     exists <- doesFileExist path
     if exists then Just . decodeUtf8 <$> readFileBS path else pure Nothing
 
--- | RubyGems sends the native API key through its documented isolated environment variable.
+-- | Native publication commands append their API path to a host without a trailing slash.
 rubyGemCommand :: RubyProject -> Text -> [String] -> IO ClientResult
 rubyGemCommand project token arguments =
-    runClient (rubyDirectory project) (rubyEnvironment project <> [("GEM_HOST_API_KEY", toString token)]) (rubyInterpreter project) (["-S", "gem"] <> arguments)
+    runClient (rubyDirectory project) (rubyEnvironment project <> [("GEM_HOST_API_KEY", toString token)]) (rubyInterpreter project) (["-S", "gem"] <> arguments <> ["--host", toString (T.dropWhileEnd (== '/') (rubySource project))])

@@ -114,5 +114,5 @@ Configure the caller's Basic credentials through Bundler's credential settings o
 Keep credentials out of the Gemfile and committed Bundler configuration.
 Use ordinary `bundle lock`, `bundle install`, and `bundle update`, without `--full-index`.
 The registry returns `404` for the Compact Index probe so Bundler requests named dependency records.
-Publication uses `gem push --host https://packages.example.com/rubygems/` with a native API key and optional OTP.
+Publication uses `gem push --host https://packages.example.com/rubygems` with a native API key and optional OTP.
 Only declared first-party packages can publish to a configured publication target.

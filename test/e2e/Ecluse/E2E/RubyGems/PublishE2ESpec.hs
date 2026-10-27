@@ -10,6 +10,7 @@ module Ecluse.E2E.RubyGems.PublishE2ESpec (
 ) where
 
 import Data.ByteString qualified as BS
+import Data.List (lookup)
 import Data.Text qualified as T
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
@@ -56,7 +57,7 @@ rubyPublicationFamily = concreteFamily rubyPublicationFixture $ \recorder action
 driver :: ObservedRubyProxy -> RubyRegistry -> RubyRelease -> PublicationDriver
 driver observed registry release =
     PublicationDriver
-        { publicationRun = rubyPublishRelease proxy currentBundler release
+        { publicationRun = publishObserved observed registry release
         , publicationInstall = withRubyProject currentBundler proxy (e2eBaseUrl proxy <> "/rubygems/") (Just ("ruby:" <> rubyRegistryToken)) $ \project -> do
             rubyDependency project (releaseName release) ("= " <> releaseVersion release)
             result <- rubyInstall project False
@@ -75,9 +76,9 @@ driver observed registry release =
 yankDriver :: ObservedRubyProxy -> RubyRegistry -> RubyRelease -> NonUploadDriver
 yankDriver observed registry release =
     NonUploadDriver
-        { nonUploadRelease = rubyPublishRelease proxy currentBundler release
+        { nonUploadRelease = publishObserved observed registry release
         , nonUploadWrite = withRubyProject currentBundler proxy (e2eBaseUrl proxy <> "/rubygems/") Nothing $ \project ->
-            rubyGemCommand project rubyRegistryToken ["yank", toString (releaseName release), "--version", toString (releaseVersion release), "--host", toString (rubySource project)]
+            rubyGemCommand project rubyRegistryToken ["yank", toString (releaseName release), "--version", toString (releaseVersion release)]
         , nonUploadRefusal = ["404"]
         , nonUploadDestination = do
             stored <- rubyRegistryFiles registry "rubygems-private"
@@ -88,9 +89,27 @@ yankDriver observed registry release =
   where
     proxy = rubyProxy observed
 
+publishObserved :: ObservedRubyProxy -> RubyRegistry -> RubyRelease -> IO ClientResult
+publishObserved observed registry release = do
+    before <- rubyTraffic observed
+    headersBefore <- length <$> readTVarIO (rubyRegistryHeaders registry)
+    uploadsBefore <- length <$> readTVarIO (rubyRegistryUploads registry)
+    result <- rubyPublishRelease (rubyProxy observed) currentBundler release
+    when (crExit result == ExitSuccess) $ do
+        traffic <- rubyTrafficSince before <$> rubyTraffic observed
+        [(rubyRequestMethod request, rubyRequestPath request) | request <- rubyClientRequests traffic]
+            `shouldBe` [("POST", "/rubygems/api/v1/gems")]
+        target <- drop headersBefore <$> readTVarIO (rubyRegistryHeaders registry)
+        [(host, method, path, lookup "Authorization" headers, lookup "OTP" headers) | (host, method, path, headers) <- target]
+            `shouldBe` [("rubygems-private", "POST", "/api/v1/gems", Just (encodeUtf8 rubyRegistryToken), Nothing)]
+        drop uploadsBefore
+            <$> readTVarIO (rubyRegistryUploads registry)
+                `shouldReturn` [("rubygems-private", releaseArchive release)]
+    pure result
+
 -- | The RubyGems client uploads the exact independent archive without rebuilding its metadata.
 rubyPublishRelease :: E2E -> BundlerClient -> RubyRelease -> IO ClientResult
 rubyPublishRelease proxy client release = withRubyProject client proxy (e2eBaseUrl proxy <> "/rubygems/") Nothing $ \project -> do
     let archive = rubyDirectory project </> toString (releaseFilename release)
     BS.writeFile archive (releaseArchive release)
-    rubyGemCommand project rubyRegistryToken ["push", archive, "--host", toString (rubySource project)]
+    rubyGemCommand project rubyRegistryToken ["push", archive]
