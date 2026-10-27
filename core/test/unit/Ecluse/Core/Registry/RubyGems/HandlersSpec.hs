@@ -228,6 +228,22 @@ spec = do
                                 candidateReads = if warm then [] else [["public", "info", "acme"], ["public", "info", "acme-1"]]
                             sort listings `shouldBe` sort (candidateReads <> selectedRead)
 
+        for_ ["GET", "HEAD"] $ \method ->
+            it ("refuses the final cold compact bytes one byte below the wire total for " <> show method) $
+                withCoordinateSourceHeader coordinateBudgetHeader PublicCandidateSource $ \runtime original hits release -> do
+                    let (recent, admitted) = coordinateListings coordinateBudgetHeader release
+                        sourceTotal = BS.length recent + BS.length admitted
+                        cap = sourceTotal + BS.length (releaseCompact release) - 1
+                        binding = coordinateByteCap cap original
+                    sourceTotal `shouldSatisfy` (<= cap)
+                    response <- capture runtime binding method "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz" []
+                    simpleStatus response `shouldBe` status502
+                    readIORef hits
+                        `shouldReturn` [ ["public", "info", "acme"]
+                                       , ["public", "info", "acme-1"]
+                                       , ["public", "quick", "Marshal.4.8", "acme-1-1.0.gemspec.rz"]
+                                       ]
+
     describe "native metadata representations" $ do
         for_ metadataPaths $ \path ->
             it ("shares coding, HEAD and conditional responses for " <> toString (decodeUtf8 path :: Text)) $
