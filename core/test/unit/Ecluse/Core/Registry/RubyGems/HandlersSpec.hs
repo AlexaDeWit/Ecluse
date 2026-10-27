@@ -24,16 +24,20 @@ import Ecluse.Core.Registry.RubyGems.Adapter (rubyGemsAdapter)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyReadCredential)
 import Ecluse.Core.Registry.RubyGems.FirstParty (projectFirstPartyEntry, rubyGemsFirstPartyName)
 import Ecluse.Core.Registry.RubyGems.Handlers (parseBatchQuery)
+import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRouter)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
 import Ecluse.Core.Security (Limits (..), defaultLimits)
-import Ecluse.Core.Security.Egress (RegistryUrl)
+import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned)
 import Ecluse.Core.Server.Admission.Artifact (newVerifiedArtifactBudget)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
-import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), ReadSourceSelection (MergePrivateAndPublic, PrivateOnly), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime, runHandler)
+import Ecluse.Core.Server.Cache (Source (Source), newMetadataCacheWithProvider)
+import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage))
+import Ecluse.Core.Server.Cache.Provider (cacheProvider)
+import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), ReadSourceSelection (MergePrivateAndPublic, PrivateOnly), RequestCtx (RequestCtx), ResponseAction (..), RouteAction (RouteAction), ServeRuntime (srMetadataCache), pdPublicBaseUrl, runHandler)
 import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Encoding (MetadataCompression (GzipWhenAccepted))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
@@ -42,6 +46,7 @@ import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.RubyGems.Fixtures (RubyRelease (..), loadRubyReleasesFrom, rubyRelease)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Server.Cache (cachedMetadata, externalOperations)
 import Ecluse.Test.Server.Handler (testServeRuntimeWith)
 import Ecluse.Test.Server.Mount (serveDepsFor)
 import Ecluse.Test.Support (expectRight)
@@ -177,9 +182,9 @@ spec = do
             for_ ["/gems/acme-2.0.gem", "/quick/Marshal.4.8/acme-2.0.gemspec.rz"] $ \path ->
                 for_ [False, True] $ \warm ->
                     it ("retains denial for the actual recent coordinate for " <> show (warm, method, path)) $
-                        withCoordinateSources PublicCandidateSource $ \runtime original hits _ -> do
+                        withCoordinateSources PublicCandidateSource $ \uncached original hits _ -> do
                             let binding = coordinateByteCap 200 original
-                            when warm (warmCoordinateCache runtime binding hits)
+                            runtime <- if warm then warmCoordinateCache uncached binding hits else pure uncached
                             response <- capture runtime binding method path []
                             simpleStatus response `shouldBe` status403
                             readIORef hits `shouldReturn` [["public", "info", "acme"] | not warm]
@@ -188,23 +193,23 @@ spec = do
         for_ ["GET", "HEAD"] $ \method ->
             for_ ["/gems/acme-1-1.0.gem", "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz"] $ \path -> do
                 it ("counts warm denied source bytes for " <> show method <> " " <> show path) $
-                    withCoordinateSources PublicCandidateSource $ \runtime original hits release -> do
+                    withCoordinateSources PublicCandidateSource $ \uncached original hits release -> do
                         let binding = coordinateByteCap 200 original
                             (recent, admitted) = coordinateListings "" release
                         map BS.length [recent, admitted] `shouldSatisfy` all (<= 200)
                         BS.length recent + BS.length admitted `shouldSatisfy` (> 200)
-                        warmCoordinateCache runtime binding hits
+                        runtime <- warmCoordinateCache uncached binding hits
                         response <- capture runtime binding method path []
                         simpleStatus response `shouldBe` status400
                         readIORef hits `shouldReturn` []
                 for_ [False, True] $ \warm -> do
                     it ("refuses one byte below the source total for " <> show (warm, method, path)) $
-                        withCoordinateSourceHeader coordinateBudgetHeader PublicCandidateSource $ \runtime original hits release -> do
+                        withCoordinateSourceHeader coordinateBudgetHeader PublicCandidateSource $ \uncached original hits release -> do
                             let (recent, admitted) = coordinateListings coordinateBudgetHeader release
                                 cap = BS.length recent + BS.length admitted - 1
                                 binding = coordinateByteCap cap original
                             map BS.length [recent, admitted] `shouldSatisfy` all (<= cap)
-                            when warm (warmCoordinateCache runtime binding hits)
+                            runtime <- if warm then warmCoordinateCache uncached binding hits else pure uncached
                             response <- capture runtime binding method path []
                             simpleStatus response `shouldBe` if warm then status400 else status502
                             observed <- readIORef hits
@@ -212,14 +217,14 @@ spec = do
                                 then observed `shouldBe` []
                                 else sort observed `shouldBe` [["public", "info", "acme"], ["public", "info", "acme-1"]]
                     it ("accepts the exact input total for " <> show (warm, method, path)) $
-                        withCoordinateSourceHeader coordinateBudgetHeader PublicCandidateSource $ \runtime original hits release -> do
+                        withCoordinateSourceHeader coordinateBudgetHeader PublicCandidateSource $ \uncached original hits release -> do
                             let (recent, admitted) = coordinateListings coordinateBudgetHeader release
                                 compact = path == "/quick/Marshal.4.8/acme-1-1.0.gemspec.rz"
                                 body = if compact then releaseCompact release else releaseArchive release
                                 sourceTotal = BS.length recent + BS.length admitted
                                 cap = sourceTotal + if compact && not warm then BS.length body else 0
                                 binding = coordinateByteCap cap original
-                            when warm (warmCoordinateCache runtime binding hits)
+                            runtime <- if warm then warmCoordinateCache uncached binding hits else pure uncached
                             response <- capture runtime binding method path []
                             checkCoordinateResponse method path body response
                             observed <- readIORef hits
@@ -413,14 +418,31 @@ coordinateByteCap cap binding =
     let deps = bindingPackumentDeps binding
      in binding{bindingPackumentDeps = deps{pdLimits = (pdLimits deps){maxMetadataBytes = cap}}}
 
-warmCoordinateCache :: ServeRuntime -> MountBinding -> IORef [[Text]] -> IO ()
-warmCoordinateCache runtime binding hits = do
+warmCoordinateCache :: ServeRuntime -> MountBinding -> IORef [[Text]] -> IO ServeRuntime
+warmCoordinateCache uncached binding hits = do
+    values <- newIORef Map.empty
+    let full = externalOperations (\_ key -> Map.lookup key <$> readIORef values) (\key value -> atomicModifyIORef' values (\stored -> (Map.insert key value stored, ())))
+    cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) (Just full) Nothing Nothing)
+    let runtime = uncached{srMetadataCache = cache}
+        source = Source (registryUrlText (pdPublicBaseUrl (bindingPackumentDeps binding)))
     denied <- capture runtime binding "GET" "/api/v1/dependencies?gems=acme" []
     simpleStatus denied `shouldBe` status403
     admitted <- capture runtime binding "GET" "/api/v1/dependencies?gems=acme-1" []
     simpleStatus admitted `shouldBe` status200
     readIORef hits `shouldReturn` [["public", "info", "acme"], ["public", "info", "acme-1"]]
+    for_ ["acme", "acme-1"] $ \raw -> do
+        name <- expectRight (projectName raw)
+        retained <- cachedMetadata noopMetricsPort cache source name
+        retained `shouldSatisfy` isJust
     writeIORef hits []
+    repeatedDenied <- capture runtime binding "GET" "/api/v1/dependencies?gems=acme" []
+    simpleStatus repeatedDenied `shouldBe` status403
+    simpleBody repeatedDenied `shouldBe` simpleBody denied
+    repeatedAdmitted <- capture runtime binding "GET" "/api/v1/dependencies?gems=acme-1" []
+    simpleStatus repeatedAdmitted `shouldBe` status200
+    simpleBody repeatedAdmitted `shouldBe` simpleBody admitted
+    readIORef hits `shouldReturn` []
+    pure runtime
 
 capture :: ServeRuntime -> MountBinding -> Method -> ByteString -> [Header] -> IO SResponse
 capture runtime binding method path headers = do
