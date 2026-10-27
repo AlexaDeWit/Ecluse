@@ -6,6 +6,8 @@
 module Ecluse.E2E.Harness.RubyGemsRegistry (
     RubyRegistry (..),
     RubyRegistryFault (..),
+    RubyArtifactResponse (..),
+    setRubyArtifactResponse,
     withRubyRegistry,
     rubyRegistryApplication,
     allowRubyRegistryUploads,
@@ -21,11 +23,12 @@ module Ecluse.E2E.Harness.RubyGemsRegistry (
 import Data.Aeson (encode, withObject, (.:))
 import Data.Aeson.Types (parseEither)
 import Data.ByteString qualified as BS
+import Data.ByteString.Builder (byteString)
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Network.HTTP.Types (ResponseHeaders, Status, status200, status201, status400, status401, status404, status405, status409, status413, status503, statusCode)
+import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, mkStatus, status200, status201, status400, status401, status404, status405, status409, status413, status503, statusCode)
 import Network.Wai qualified as Wai
 
 import Ecluse.Core.Security.Limits (BodyLimit (PublishRequestBodyLimit), boundedRead)
@@ -47,6 +50,15 @@ data RubyRegistryFault
     | RubyRegistryStopAfterOne
     deriving stock (Eq, Show)
 
+-- | Programmable native responses retain real status, framing and chunk boundaries.
+data RubyArtifactResponse = RubyArtifactResponse
+    { artifactReplyStatus :: Int
+    , artifactReplyHeaders :: ResponseHeaders
+    , artifactReplyChunks :: [ByteString]
+    , artifactReplyChunked :: Bool
+    }
+    deriving stock (Eq, Show)
+
 -- | Hostnames identify separate public, private and mirror inventories behind one fixture listener.
 data RubyRegistry = RubyRegistry
     { rubyRegistryPort :: Int
@@ -57,6 +69,8 @@ data RubyRegistry = RubyRegistry
     , rubyRegistryFaults :: TVar (Map Text RubyRegistryFault)
     , rubyRegistryCredentials :: TVar [(Text, ByteString, Maybe ByteString)]
     , rubyRegistryReleases :: TVar [RubyRelease]
+    , rubyRegistryArtifactReplies :: TVar (Map (Text, Text) RubyArtifactResponse)
+    , rubyRegistryHeaders :: TVar [(Text, ByteString, Text, RequestHeaders)]
     }
 
 -- | Writes use the native API-key value without a bearer prefix.
@@ -74,7 +88,9 @@ withRubyRegistry action = do
     faults <- newTVarIO Map.empty
     known <- newTVarIO releases
     credentials <- newTVarIO []
-    let registry = RubyRegistry 0 inventory requests uploads lostReplies faults credentials known
+    replies <- newTVarIO Map.empty
+    headers <- newTVarIO []
+    let registry = RubyRegistry 0 inventory requests uploads lostReplies faults credentials known replies headers
     seedRubyRegistry registry "rubygems-upstream" releases
     withBridgeApplication (rubyRegistryApplication registry) $ \port -> action registry{rubyRegistryPort = port}
 
@@ -113,6 +129,13 @@ awaitRubyRegistry registry host expected = pollUntil 120 500000 complete (rubyRe
 setRubyRegistryFault :: RubyRegistry -> Text -> RubyRegistryFault -> IO ()
 setRubyRegistryFault registry host fault = atomically (modifyTVar' (rubyRegistryFaults registry) (Map.insert host fault))
 
+-- | Overrides belong to one actual authority and native artifact filename.
+setRubyArtifactResponse :: RubyRegistry -> Text -> Text -> Maybe RubyArtifactResponse -> IO ()
+setRubyArtifactResponse registry host filename response =
+    atomically $
+        modifyTVar' (rubyRegistryArtifactReplies registry) $
+            maybe (Map.delete (host, filename)) (Map.insert (host, filename)) response
+
 -- | Native data-plane requests retain the requested host as their independent repository identity.
 rubyRegistryApplication :: RubyRegistry -> Wai.Application
 rubyRegistryApplication registry request respond = do
@@ -122,6 +145,7 @@ rubyRegistryApplication registry request respond = do
         send status headers body = do
             atomically (modifyTVar' (rubyRegistryRequests registry) (<> [RubyRequest "https" host (decodeUtf8 method) path (statusCode status)]))
             respond (Wai.responseLBS status headers (if method == "HEAD" then "" else body))
+    atomically (modifyTVar' (rubyRegistryHeaders registry) (<> [(host, method, path, Wai.requestHeaders request)]))
     atomically (modifyTVar' (rubyRegistryCredentials registry) (<> [(host, method, lookup "Authorization" (Wai.requestHeaders request))]))
     fault <- Map.findWithDefault RubyRegistryHealthy host <$> readTVarIO (rubyRegistryFaults registry)
     stored <- rubyRegistryFiles registry host
@@ -149,7 +173,7 @@ rubyRegistryApplication registry request respond = do
                                 send status200 [("Content-Type", "text/plain")] (LBS.fromStrict (encodeUtf8 ("---\n" <> T.unlines (map assigned rows))))
                     (readMethod, ["gems", filename]) | readMethod `elem` ["GET", "HEAD"] ->
                         case find ((== filename) . releaseFilename) stored of
-                            Just release | fault /= RubyRegistryMissingArchive filename -> send status200 [] (LBS.fromStrict (releaseArchive release))
+                            Just release | fault /= RubyRegistryMissingArchive filename -> serveArchive registry host request release send respond
                             _ -> send status404 [] ""
                     (readMethod, ["quick", "Marshal.4.8", filename]) | readMethod `elem` ["GET", "HEAD"] ->
                         case find ((== "quick/Marshal.4.8/" <> toString filename) . releaseCompactPath) stored of
@@ -161,6 +185,26 @@ rubyRegistryApplication registry request respond = do
                             _ -> send status404 [] ""
                     ("DELETE", _) -> send status405 [] "native yank is not physical deletion"
                     _ -> send status404 [] ""
+
+serveArchive :: RubyRegistry -> Text -> Wai.Request -> RubyRelease -> (Status -> ResponseHeaders -> LBS.ByteString -> IO Wai.ResponseReceived) -> (Wai.Response -> IO Wai.ResponseReceived) -> IO Wai.ResponseReceived
+serveArchive registry host request release send respond = do
+    selected <- Map.lookup (host, releaseFilename release) <$> readTVarIO (rubyRegistryArtifactReplies registry)
+    case selected of
+        Nothing -> send status200 [("Content-Length", show (BS.length (releaseArchive release)))] (LBS.fromStrict (releaseArchive release))
+        Just reply -> do
+            let status = mkStatus (artifactReplyStatus reply) "native fixture"
+                body = LBS.fromChunks (artifactReplyChunks reply)
+                supplied = artifactReplyHeaders reply
+                headers =
+                    if artifactReplyChunked reply || isJust (lookup "Content-Length" supplied)
+                        then supplied
+                        else ("Content-Length", show (LBS.length body)) : supplied
+            if artifactReplyChunked reply && Wai.requestMethod request /= "HEAD"
+                then do
+                    let path = decodeUtf8 (Wai.rawPathInfo request <> Wai.rawQueryString request)
+                    atomically (modifyTVar' (rubyRegistryRequests registry) (<> [RubyRequest "https" host (decodeUtf8 (Wai.requestMethod request)) path (statusCode status)]))
+                    respond (Wai.responseStream status headers (\write flush -> for_ (artifactReplyChunks reply) (\chunk -> write (byteString chunk) >> flush)))
+                else send status headers body
 
 publish :: RubyRegistry -> Text -> RubyRegistryFault -> Wai.Request -> (Status -> ResponseHeaders -> LBS.ByteString -> IO Wai.ResponseReceived) -> (Wai.Response -> IO Wai.ResponseReceived) -> IO Wai.ResponseReceived
 publish registry host fault request send respond =

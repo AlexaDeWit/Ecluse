@@ -80,10 +80,24 @@ rubyNativeContract = DeclaredGroup (fixtureMetadata rubyNativeFixture) $ \record
                 proxyStatus (rubyProxy observed) (rubyArchiveRoute release) `shouldReturn` 403
                 after <- rubyTraffic observed
                 filter (T.isSuffixOf ".gem" . rubyRequestPath) (rubyUpstreamRequests (rubyTrafficSince before after)) `shouldBe` []
+        it (label "native-extension" "builds and loads an admitted native extension under the supported default policy") $ \plane ->
+            withObservedRubyProxy defaultE2EConfig plane $ \observed -> rubyConsumer (rubyProxy observed) currentBundler $ \project -> do
+                rubyDependency project "ecluse-fixture-native" "= 1.0.0"
+                before <- rubyTraffic observed
+                void (rubyInstall project False >>= shouldSucceed)
+                tree <- rubyInstalledTree project
+                Map.keys tree `shouldSatisfy` any (T.isSuffixOf "gem.build_complete" . toText)
+                Map.keys tree `shouldSatisfy` any (T.isSuffixOf "ecluse_fixture_native.so" . toText)
+                loaded <- rubyEvaluate project "spec = Gem.loaded_specs.fetch('ecluse-fixture-native'); require File.join(spec.extension_dir, 'ecluse_fixture_native.' + RbConfig::CONFIG.fetch('DLEXT')); require 'ecluse_fixture_native'; puts EcluseFixtureNative::VALUE" >>= shouldSucceed
+                T.strip (crStdout loaded) `shouldBe` "ecluse-fixture-native-1.0.0-ruby"
+                after <- rubyTraffic observed
+                let interval = rubyTrafficSince before after
+                assertRubyRouting interval
+                assertRubyAssets project interval
         it (label "metadata-no-archives" "reads only named metadata without policy-only archive or compact-spec requests") $ \plane ->
             withObservedRubyProxy defaultE2EConfig plane $ \observed -> do
                 before <- rubyTraffic observed
-                proxyStatus (rubyProxy observed) "/rubygems/api/v1/dependencies?gems=ecluse-fixture-root,ecluse-fixture-leaf" `shouldReturn` 200
+                proxyStatus (rubyProxy observed) "/rubygems/api/v1/dependencies?gems=ecluse-fixture-root,ecluse-fixture-leaf,ecluse-fixture-native" `shouldReturn` 200
                 after <- rubyTraffic observed
                 let requests = rubyUpstreamRequests (rubyTrafficSince before after)
                 requests `shouldSatisfy` (not . null)

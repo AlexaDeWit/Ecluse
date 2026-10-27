@@ -15,6 +15,7 @@ import Ecluse.E2E.RubyGems.MirrorInstallE2ESpec (RubyCoordinates, rubyMirrorFami
 import Ecluse.E2E.RubyGems.MirrorProofE2ESpec (rubyMirrorProofContract)
 import Ecluse.E2E.RubyGems.NativeE2ESpec (rubyNativeContract)
 import Ecluse.E2E.RubyGems.PublishE2ESpec (rubyPublicationFamily)
+import Ecluse.E2E.RubyGems.RelayE2ESpec (rubyRelayContract)
 import Ecluse.E2E.RubyGems.TelemetryE2ESpec (rubyMirrorTelemetryFamily, rubyReadTelemetryFamily)
 import Ecluse.Test.Contract.Ecosystem
 
@@ -31,5 +32,5 @@ rubyDriver =
         , ecosystemPublication = Available rubyPublicationFamily
         , ecosystemDredger = Available (fixtureMetadata rubyDredgerFixture, rubySweepDriver rubyDredgerFixture)
         , ecosystemTelemetry = Available (rubyReadTelemetryFamily, Available rubyMirrorTelemetryFamily)
-        , ecosystemNativeExtensions = [rubyNativeContract, rubyMirrorProofContract] <> rubyDredgerSafetyContract
+        , ecosystemNativeExtensions = [rubyNativeContract, rubyMirrorProofContract, rubyRelayContract] <> rubyDredgerSafetyContract
         }

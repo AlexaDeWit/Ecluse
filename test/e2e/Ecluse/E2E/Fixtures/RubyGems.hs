@@ -54,9 +54,9 @@ rubyNativeFixture =
             , groupProfileId = "rubygems/read"
             , groupTier = E2E
             , groupPartition = "rubygems"
-            , groupCases = [Case ("rubygems/native/" <> name) ["rubygems/native"] | name <- ["minimum-client", "current-client", "platforms", "checksum-failure", "prerelease", "ruby-requirement", "direct-denial", "batch-limits", "metadata-no-archives", "private-authority"]]
+            , groupCases = [Case ("rubygems/native/" <> name) ["rubygems/native"] | name <- ["minimum-client", "current-client", "platforms", "checksum-failure", "prerelease", "ruby-requirement", "direct-denial", "batch-limits", "metadata-no-archives", "private-authority", "native-extension"]]
             , groupCapabilities = ["read", "client-install"]
-            , groupPrerequisites = familyPrerequisites metadata
+            , groupPrerequisites = familyPrerequisites metadata <> ["cc", "make"]
             , groupResources = familyResources metadata
             , groupIsolation = familyIsolation metadata
             }

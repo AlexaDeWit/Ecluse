@@ -128,11 +128,11 @@ serverBlock fault route =
         <> [line | isPublic route, line <- publicCoding]
         <> ( case (fault, route) of
                 (Just (RubyGemsCodeArtifactBackend controlPort registryPort), selected)
-                    | selected `elem` [PyPICodeArtifactData, PyPICodeArtifactControl] -> forwarded nativeUploadLimit controlPort
-                    | selected `elem` [RubyGemsPublic, RubyGemsPrivate, RubyGemsMirror] -> forwarded nativeUploadLimit registryPort
-                (Just (RubyGemsPublicBackend port), RubyGemsPublic) -> forwarded nativeUploadLimit port
+                    | selected `elem` [PyPICodeArtifactData, PyPICodeArtifactControl] -> rubyForwarded nativeUploadLimit controlPort
+                    | selected `elem` [RubyGemsPublic, RubyGemsPrivate, RubyGemsMirror] -> rubyForwarded nativeUploadLimit registryPort
+                (Just (RubyGemsPublicBackend port), RubyGemsPublic) -> rubyForwarded nativeUploadLimit port
                 (Just (RubyGemsBackend port _), selected)
-                    | selected `elem` [RubyGemsPublic, RubyGemsPrivate, RubyGemsMirror] -> forwarded nativeUploadLimit port
+                    | selected `elem` [RubyGemsPublic, RubyGemsPrivate, RubyGemsMirror] -> rubyForwarded nativeUploadLimit port
                 (Just (CargoPublicBackend port), CargoPublic) -> forwarded 16777216 port
                 (Just (CargoCodeArtifactBackend port), selected)
                     | selected `elem` [PyPICodeArtifactData, PyPICodeArtifactControl, CargoPrivate, CargoMirror] -> forwarded 16777216 port
@@ -150,6 +150,9 @@ forwarded limit port =
     [ "    client_max_body_size " <> show limit <> ";"
     , "    location / { proxy_set_header Host $host; proxy_pass http://203.0.113.1:" <> show port <> "; }"
     ]
+
+rubyForwarded :: Int -> Int -> [Text]
+rubyForwarded limit port = ["    proxy_http_version 1.1;", "    proxy_buffering off;"] <> forwarded limit port
 
 -- Gzip any response a request permits: more than a registry CDN, which gzips JSON and companions.
 publicCoding :: [Text]

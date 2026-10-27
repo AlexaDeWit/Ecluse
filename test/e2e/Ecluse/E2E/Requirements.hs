@@ -282,7 +282,7 @@ obligations =
         "rubygems/native"
         Supported
         ["read", "client-install"]
-        (map ("rubygems/native/" <>) ["minimum-client", "current-client", "platforms", "checksum-failure", "prerelease", "ruby-requirement", "direct-denial", "batch-limits", "metadata-no-archives", "private-authority"])
+        (map ("rubygems/native/" <>) ["minimum-client", "current-client", "platforms", "checksum-failure", "prerelease", "ruby-requirement", "direct-denial", "batch-limits", "metadata-no-archives", "private-authority", "native-extension"])
     , Obligation
         "rubygems/mirror-proof"
         "rubygems/write"
@@ -297,6 +297,13 @@ obligations =
         Supported
         ["read", "mirror", "maintenance", "advisories"]
         (map ("rubygems/dredger-native-safety/" <>) ["deletion-cap", "unsafe-upstream", "native-yank-not-deletion", "authorisation", "multi-platform-deletion"])
+    , Obligation
+        "rubygems/relay"
+        "rubygems/read"
+        "rubygems/relay"
+        Supported
+        ["read", "client-install"]
+        (map ("rubygems/relay/" <>) ["initial-digest", "private-401", "private-403", "private-digest", "private-miss", "known-length", "chunked", "bound-known", "bound-chunked", "origin-304", "origin-206", "conditional-fetch", "conditional-mismatch", "conditional-revision", "range", "head", "head-conditional", "head-private-auth"])
     , Obligation
         "rubygems/registration"
         "rubygems/contracts"
