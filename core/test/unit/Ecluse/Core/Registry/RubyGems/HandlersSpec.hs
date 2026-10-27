@@ -14,7 +14,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Katip (LogEnv)
-import Network.HTTP.Types (Header, Method, Status, status200, status304, status400, status401, status403, status404, status406, status500, status502, status503)
+import Network.HTTP.Types (Header, Method, Status, status200, status304, status400, status401, status403, status404, status406, status502, status503)
 import Network.Wai (Request (..), defaultRequest, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SRequest (SRequest), SResponse (..), runSession, setPath, srequest)
@@ -251,7 +251,7 @@ spec = do
                         _ -> observed `shouldSatisfy` notElem ["public", "gems", "acme-1-2.0.gem"]
         for_ ["GET", "HEAD"] $ \method ->
             for_ ["/gems/acme-1-2.0.gem", "/quick/Marshal.4.8/acme-1-2.0.gemspec.rz"] $ \path ->
-                it ("preserves a matching inability beside an admitted sibling for " <> show (method, path)) $
+                it ("preserves a transient missing-database inability beside an admitted sibling for " <> show (method, path)) $
                     withCoordinateSources PublicMixedCandidateSource $ \runtime original hits _ -> do
                         let deps = bindingPackumentDeps original
                             unknown rule = case prepEval rule of
@@ -260,7 +260,8 @@ spec = do
                                 PerInstallEvidence _ -> rule
                             binding = original{bindingPackumentDeps = deps{pdRules = map unknown (pdRules deps)}}
                         response <- capture runtime binding method path []
-                        simpleStatus response `shouldBe` status500
+                        simpleStatus response `shouldBe` status503
+                        when (method == "GET") (simpleBody response `shouldSatisfy` BS.isInfixOf "no advisory database loaded" . LBS.toStrict)
                         readIORef hits `shouldReturn` [["public", "info", "acme"], ["public", "info", "acme-1"]]
 
     describe "partial coordinate integrity exclusions" $ do
