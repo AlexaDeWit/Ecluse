@@ -25,3 +25,16 @@ The default invocation leaves the committed archive bytes unchanged.
 `legacy/` contains compact specifications with RubyGems' declared historical field counts.
 `legacy.json` records the current Ruby decoder's observations for each layout.
 `aliases.yaml` and `aliases.json` record a Psych-generated alias and its independent decoded value.
+
+For state probes, generate a separate synthetic registry with `--output DIRECTORY --state-versions N`.
+N ranges from 1 to 256. Versions run from `1.0.0` to `1.0.(N-1)` for all four platform artifacts.
+These outputs are generated stress data, not public captures. Their manifest records `synthetic_stress`.
+The ordinary manifest, info rows, archives and compact paths keep the same format.
+
+Use `--state-versions 128` for inventory growth with ordinary specifications.
+Use `--state-versions 1 --metadata-bytes 1048576` for large external compact objects.
+`--metadata-bytes` sets the exact description length in each genuine native specification.
+The description uses deterministic pseudorandom hexadecimal text. RubyGems metadata hash values have native length limits.
+The description limit is 2097152 bytes per artifact and 16777216 bytes across all generated artifacts.
+The generator verifies each native archive and compares its decoded specification and compact description.
+Generate before timing, then authenticate all selected bytes against the generated manifest.

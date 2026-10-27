@@ -9,12 +9,20 @@ require 'zlib'
 require 'optparse'
 require 'date'
 ENV['SOURCE_DATE_EPOCH'] = '1577836800'
-options = {output: File.expand_path(__dir__), payload_bytes: nil}
+options = {output: File.expand_path(__dir__), payload_bytes: nil, state_versions: nil, metadata_bytes: 0}
 OptionParser.new do |parser|
   parser.on('--output DIRECTORY') { |value| options[:output] = File.expand_path(value) }
   parser.on('--payload-bytes INTEGER', Integer) { |value| options[:payload_bytes] = value }
+  parser.on('--state-versions INTEGER', Integer) { |value| options[:state_versions] = value }
+  parser.on('--metadata-bytes INTEGER', Integer) { |value| options[:metadata_bytes] = value }
 end.parse!
 abort 'payload bytes must be positive' if options[:payload_bytes] && options[:payload_bytes] <= 0
+stress = !options[:state_versions].nil?
+abort 'state versions must be between 1 and 256' if stress && !(1..256).cover?(options[:state_versions])
+abort 'metadata bytes must be between 0 and 2097152' unless (0..2_097_152).cover?(options[:metadata_bytes])
+abort 'metadata bytes require state versions' if options[:metadata_bytes] > 0 && !stress
+abort 'synthetic stress requires a separate output directory' if stress && options[:output] == File.expand_path(__dir__)
+abort 'aggregate specification descriptions exceed 16 MiB' if stress && options[:state_versions] * 4 * options[:metadata_bytes] > 16_777_216
 root = options[:output]
 %w[gems quick/Marshal.4.8 info].each { |path| FileUtils.mkdir_p(File.join(root, path)) }
 releases = []
@@ -32,6 +40,11 @@ coordinates = [
   ['ecluse-fixture-missing', '1.0.0', 'ruby'], ['ecluse-fixture-late', '1.0.0', 'ruby'],
   ['ecluse-fixture-sentinel', '1.0.0', 'ruby']
 ]
+if stress
+  coordinates = (0...options[:state_versions]).flat_map do |index|
+    %w[ruby java x86_64-linux-musl arm64-darwin].map { |platform| ['ecluse-fixture-platform', "1.0.#{index}", platform] }
+  end
+end
 coordinates.each do |name, version, platform|
   Dir.mktmpdir('ecluse-gem-fixture') do |directory|
     Dir.chdir(directory) do
@@ -44,7 +57,11 @@ coordinates.each do |name, version, platform|
         s.version = version
         s.platform = platform
         s.summary = 'Owned package protocol fixture'
-        s.description = 'Synthetic source owned by the Ecluse test suite.'
+        s.description = if options[:metadata_bytes] > 0
+          Random.new(1886).bytes((options[:metadata_bytes] + 1) / 2).unpack1('H*').slice(0, options[:metadata_bytes])
+        else
+          'Synthetic source owned by the Ecluse test suite.'
+        end
         s.authors = ['Ecluse contributors']
         s.license = 'MIT'
         s.homepage = 'https://example.invalid/ecluse-fixture'
@@ -83,6 +100,13 @@ coordinates.each do |name, version, platform|
       File.binwrite(File.join(root, compact_path), Zlib::Deflate.deflate(compact))
       File.binwrite(File.join(root, 'gems', archive), bytes)
       decoded = Marshal.load(compact)
+      if stress
+        package = Gem::Package.new(File.join(root, 'gems', archive))
+        abort 'native archive verification failed' unless package.verify
+        abort 'native compact description mismatch' unless decoded.description == spec.description
+        abort 'native archive description mismatch' unless package.spec.description == spec.description
+        abort 'native compact identity mismatch' unless [decoded.name, decoded.version, decoded.platform] == [spec.name, spec.version, spec.platform]
+      end
       releases << {
         name: spec.name, version: spec.version.to_s, platform: spec.platform.to_s,
         filename: archive, sha256: Digest::SHA256.hexdigest(bytes), bytes: bytes.bytesize,
@@ -114,6 +138,11 @@ dependencies = releases.map do |row|
   {name: row[:name], number: row[:version], platform: row[:platform], dependencies: row[:dependencies].select { |d| d[:type] == :runtime }.map { |d| [d[:name], d[:requirements].map { |op, v| "#{op} #{v}" }.join(', ')] }}
 end
 File.binwrite(File.join(root, 'dependencies.marshal'), Marshal.dump(dependencies))
+
+if stress
+  File.write(File.join(root, 'manifest.json'), JSON.pretty_generate({ruby: RUBY_VERSION, rubygems: Gem::VERSION, source_date_epoch: ENV['SOURCE_DATE_EPOCH'], synthetic_stress: {kind: 'owned-generated-state-stress', versions: options[:state_versions], platforms: 4, description_bytes: options[:metadata_bytes], encoding: 'deterministic-pseudorandom-hex'}, releases: releases}) + "\n")
+  exit
+end
 
 legacy_directory = File.join(root, 'legacy')
 FileUtils.mkdir_p(legacy_directory)
