@@ -34,5 +34,5 @@ projectGemRows limits name base rows = do
         url <- first (const MetadataUndecodable) (joinPath base ("gems/" <> encodeComponent (unFilename (coordinateFilename coordinate))))
         let artifact = Artifact{artEntryKey = grEntryKey row, artFilename = unFilename (coordinateFilename coordinate), artUrl = url, artHashes = [grChecksum row], artCoreMetadata = Nothing, artSize = Nothing}
             fresh = PackageDetails{pkgName = name, pkgVersion = version, pkgPublishedAt = grPublishedAt row, pkgInstallCode = CodeExecUnknown, pkgAvailability = Available, pkgArtifacts = artifact :| []}
-            merge previous = previous{pkgPublishedAt = newestUpload (grPublishedAt row) (pkgPublishedAt previous), pkgArtifacts = pkgArtifacts previous <> (artifact :| [])}
+            merge previous = previous{pkgPublishedAt = newestUpload (grPublishedAt row) (pkgPublishedAt previous), pkgArtifacts = artifact :| toList (pkgArtifacts previous)}
         pure (Map.alter (Just . maybe fresh merge) (renderVersion version) versions)

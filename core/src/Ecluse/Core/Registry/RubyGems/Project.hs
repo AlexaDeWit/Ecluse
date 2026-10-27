@@ -5,6 +5,7 @@
 -- | Native RubyGems identities preserve published versions and platform spellings.
 module Ecluse.Core.Registry.RubyGems.Project (
     projectName,
+    projectVersion,
     GemPlatform,
     mkGemPlatform,
     unGemPlatform,
@@ -37,6 +38,12 @@ projectName :: Text -> Either ParseError PackageName
 projectName raw = mkPackageName RubyGems Nothing <$> nameComponentWith "RubyGems package name" (T.all nameChar) raw
   where
     nameChar c = isAsciiAlphaNum c || c `elem` ['.', '-', '_']
+
+-- | Parse a digit-leading native version and retain its exact source spelling.
+projectVersion :: Text -> Either ParseError Version
+projectVersion raw = do
+    unless (T.strip raw == raw && maybe False (isDigit . fst) (T.uncons raw) && isJust (parseGem raw)) (Left (ParseError "invalid RubyGems version"))
+    pure (mkVersion RubyGems (T.copy raw))
 
 -- | A native platform label, distinct from a version or a content address.
 newtype GemPlatform = GemPlatform Text
@@ -75,12 +82,12 @@ mkCoordinate :: PackageName -> Version -> GemPlatform -> Either ParseError GemCo
 mkCoordinate name version platform = do
     unless (pkgEcosystem name == RubyGems && isNothing (pkgNamespace name)) (Left (ParseError "not an unscoped RubyGems package"))
     checkedName <- projectName (renderPackageName name)
-    let raw = renderVersion version
-    unless (T.strip raw == raw && maybe False (\(firstChar, _) -> isDigit firstChar) (T.uncons raw) && isJust (parseGem raw)) (Left (ParseError "invalid RubyGems version"))
+    checkedVersion <- projectVersion (renderVersion version)
+    let raw = renderVersion checkedVersion
     let suffix = if unGemPlatform platform == "ruby" then "" else "-" <> unGemPlatform platform
         filename = renderPackageName checkedName <> "-" <> raw <> suffix <> ".gem"
     file <- maybeToRight (ParseError "invalid RubyGems artifact filename") (mkFilename filename)
-    pure (GemCoordinate checkedName (mkVersion RubyGems (T.copy raw)) platform file)
+    pure (GemCoordinate checkedName checkedVersion platform file)
 
 -- | Return the native filename without its @.gem@ extension for quick specifications.
 coordinateStem :: GemCoordinate -> Text

@@ -15,24 +15,33 @@ module Ecluse.Core.Registry.RubyGems.Request (
 import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential)
-import Ecluse.Core.Package (PackageName, renderPackageName)
-import Ecluse.Core.Registry (UrlFormationError)
+import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
+import Ecluse.Core.Package (PackageName, pkgEcosystem, pkgNamespace, renderPackageName)
+import Ecluse.Core.Registry (UrlFormationError (UnparseableUrl))
 import Ecluse.Core.Registry.Request (BaseRequest, joinPath, metadataGet, requestAt)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyReadCredential)
-import Ecluse.Core.Registry.RubyGems.Project (GemCoordinate, coordinateFilename, coordinateName, coordinatePlatform, coordinateStem, coordinateVersion, unGemPlatform)
+import Ecluse.Core.Registry.RubyGems.Project (GemCoordinate, coordinateFilename, coordinateName, coordinatePlatform, coordinateStem, coordinateVersion, projectName, unGemPlatform)
 import Ecluse.Core.Server.Path (encodeComponent, unFilename)
 import Ecluse.Core.Version (renderVersion)
 
 -- | Fetch the named compact-index document under caller-selected credentials.
 gemInfoRequestUnder :: BaseRequest -> Maybe ClientCredential -> PackageName -> Either UrlFormationError Request
-gemInfoRequestUnder base credential name = metadataGet rubyReadCredential credential "text/plain" <$> requestAt base (infoPath name)
+gemInfoRequestUnder base credential name = do
+    path <- infoPath name
+    metadataGet rubyReadCredential credential "text/plain" <$> requestAt base path
 
 -- | Construct the named upstream path without acquiring a registry-wide catalogue.
 gemInfoUrl :: Text -> PackageName -> Either UrlFormationError Text
-gemInfoUrl base name = joinPath base (infoPath name)
+gemInfoUrl base name = infoPath name >>= joinPath base
 
-infoPath :: PackageName -> Text
-infoPath name = "info/" <> encodeComponent (renderPackageName name)
+infoPath :: PackageName -> Either UrlFormationError Text
+infoPath name = ("info/" <>) . encodeComponent <$> nativeName name
+
+nativeName :: PackageName -> Either UrlFormationError Text
+nativeName name = do
+    unless (pkgEcosystem name == RubyGems && isNothing (pkgNamespace name)) (Left (UnparseableUrl "not an unscoped RubyGems package"))
+    checked <- first (const (UnparseableUrl "invalid RubyGems package name")) (projectName (renderPackageName name))
+    pure (renderPackageName checked)
 
 -- | Address an artifact by its exact checked native filename.
 gemArtifactUrl :: Text -> GemCoordinate -> Either UrlFormationError Text
@@ -50,4 +59,6 @@ gemVersionJsonRequestUnder base credential coordinate = metadataGet rubyReadCred
 
 -- | Fetch bounded per-package version facts when an older native source omits a required field.
 gemVersionsJsonRequestUnder :: BaseRequest -> Maybe ClientCredential -> PackageName -> Either UrlFormationError Request
-gemVersionsJsonRequestUnder base credential name = metadataGet rubyReadCredential credential "application/json" <$> requestAt base ("api/v1/versions/" <> encodeComponent (renderPackageName name) <> ".json")
+gemVersionsJsonRequestUnder base credential name = do
+    checked <- nativeName name
+    metadataGet rubyReadCredential credential "application/json" <$> requestAt base ("api/v1/versions/" <> encodeComponent checked <> ".json")

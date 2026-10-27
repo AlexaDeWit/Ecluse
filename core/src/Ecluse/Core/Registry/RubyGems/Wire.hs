@@ -22,10 +22,9 @@ import Ecluse.Core.Package (HashAlg (SHA256), PackageName, mkHash)
 import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Registry.RubyGems.Document (GemDependency (..), GemRequirement, GemRow (..))
-import Ecluse.Core.Registry.RubyGems.Project (GemCoordinate, mkCoordinate, mkGemPlatform, projectName)
+import Ecluse.Core.Registry.RubyGems.Project (GemCoordinate, mkCoordinate, mkGemPlatform, projectName, projectVersion)
 import Ecluse.Core.Text.Iso8601 (readIso8601Utc)
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Core.Version.Gem (parseGem)
 
 -- | Native syntax failure differs from an explicitly unsupported wire representation.
 data GemRowError
@@ -77,7 +76,7 @@ parseGemRequirement raw = do
         let stripped = T.strip clause
             (operator, rest) = T.span (`elem` ['=', '!', '<', '>', '~']) stripped
             version = T.strip rest
-        unless (operator `elem` ["=", "!=", ">", "<", ">=", "<=", "~>"] && not (T.null version) && isJust (parseGem version)) (malformed "invalid RubyGems requirement")
+        unless (operator `elem` ["=", "!=", ">", "<", ">=", "<=", "~>"] && not (T.null version) && isRight (projectVersion version)) (malformed "invalid RubyGems requirement")
         pure (T.copy stripped)
 
 parseIdentity :: PackageName -> Text -> Either ParseError GemCoordinate

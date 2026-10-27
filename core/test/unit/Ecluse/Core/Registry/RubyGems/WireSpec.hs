@@ -37,6 +37,6 @@ spec = describe "RubyGems compact info rows" $ do
             decodeInfoRow name (RecordEntry 1) bytes `shouldSatisfy` isLeft
     it "requires every conjunction to carry a native operator and valid version" $ do
         parseGemRequirement ">= 1&< 2" `shouldBe` Right (">= 1" :| ["< 2"])
-        for_ ["", ">=", ">= 1&", "^ 1", ">= 💎"] $ \raw -> parseGemRequirement raw `shouldSatisfy` isLeft
+        for_ ["", ">=", ">= 1&", "^ 1", ">= 💎", ">= arbitrary"] $ \raw -> parseGemRequirement raw `shouldSatisfy` isLeft
   where
     digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
