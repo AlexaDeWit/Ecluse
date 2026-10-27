@@ -6,9 +6,11 @@
 module Ecluse.Core.Registry.RubyGems.ArchiveSpec (spec) where
 
 import Codec.Archive.Tar qualified as Tar
+import Codec.Archive.Tar.Entry qualified as Tar
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception (throw)
 import Data.Aeson (Value (..), eitherDecodeStrict', object, toJSON, (.=))
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
@@ -92,11 +94,35 @@ spec = describe "native gem validation" $ do
         let malicious = BSL.toStrict (GZip.compress "--- !ruby/object:Kernel {}")
         changed <- BSL.toStrict <$> tarBytes (map (\(name, body) -> (name, if name == "metadata.gz" then malicious else body)) members)
         inspect defaultLimits changed >>= (`shouldSatisfy` isLeft)
-    it "reaches artifact, inflated, metadata and inventory bounds" $ do
+    it "reaches artifact and metadata byte bounds" $ do
         bytes <- readFileBS fixture
         inspect defaultLimits{maxMirrorArtifactBytes = BS.length bytes - 1} bytes >>= (`shouldSatisfy` isLeft)
         inspect defaultLimits{maxMetadataBytes = 32} bytes >>= (`shouldSatisfy` isLeft)
-        inspect defaultLimits{maxArtifactCount = 2} bytes >>= (`shouldSatisfy` isLeft)
+    it "refuses the third outer-envelope member at the outer count bound" $ do
+        bytes <- readFileBS fixture
+        void <$> inspect defaultLimits{maxArtifactCount = 2} bytes `shouldReturn` Left (ParseError "archive entry count exceeds its bound")
+    it "reaches the inner member count after the envelope and YAML fit their bounds" $ do
+        bytes <- readFileBS fixture
+        members <- nativeMembers bytes
+        length members `shouldBe` 3
+        dataGzip <- maybe (fail "native fixture has no data member") pure (lookup "data.tar.gz" members)
+        entries <- nativeEntries (GZip.decompress (BSL.fromStrict dataGzip))
+        directories <- forM [1 .. 512 :: Int] $ \index -> do
+            path <- expectRight (Tar.toTarPath True ("inventory-" <> show index))
+            pure (Tar.simpleEntry path Tar.Directory)
+        let memberCount = length entries + length directories
+            payload = BSL.toStrict (GZip.compress (Tar.write (entries <> directories)))
+        changed <- repack members payload
+        reference <- runRubyReference "archive" changed
+        archive <- inspect defaultLimits{maxArtifactCount = memberCount} changed >>= expectRight
+        case reference of
+            Object native
+                | Just (Array contents) <- KeyMap.lookup "files" native
+                , Just (Object regularFiles) <- KeyMap.lookup "file_sizes" native -> do
+                    length contents `shouldBe` memberCount
+                    gemArchiveInventory archive `shouldBe` Set.fromList (map Key.toText (KeyMap.keys regularFiles))
+            _ -> fail "native archive reference lacks its physical and regular-file inventories"
+        void <$> inspect defaultLimits{maxArtifactCount = memberCount - 1} changed `shouldReturn` Left (ParseError "archive entry count exceeds its bound")
     it "binds the checked archive to an exact admitted coordinate and digest" $ do
         bytes <- readFileBS fixture
         archive <- inspect defaultLimits bytes >>= expectRight
@@ -115,13 +141,14 @@ inspect :: Limits -> ByteString -> IO (Either ParseError GemArchive)
 inspect limits = inspectGemArchive limits (const (pure ()))
 
 nativeMembers :: ByteString -> IO [(Text, ByteString)]
-nativeMembers = walk . Tar.read . BSL.fromStrict
+nativeMembers bytes = nativeEntries (BSL.fromStrict bytes) >>= traverse member
   where
-    walk Tar.Done = pure []
-    walk (Tar.Fail fault) = fail (show fault)
-    walk (Tar.Next entry rest) = case Tar.entryContent entry of
-        Tar.NormalFile body _ -> ((toText (Tar.entryPath entry), BSL.toStrict body) :) <$> walk rest
+    member entry = case Tar.entryContent entry of
+        Tar.NormalFile body _ -> pure (toText (Tar.entryPath entry), BSL.toStrict body)
         _ -> fail "native fixture contains a non-file envelope entry"
+
+nativeEntries :: BSL.ByteString -> IO [Tar.Entry]
+nativeEntries = Tar.foldEntries (\entry rest -> (entry :) <$> rest) (pure []) (fail . show) . Tar.read
 
 repack :: [(Text, ByteString)] -> ByteString -> IO ByteString
 repack members payload = do
