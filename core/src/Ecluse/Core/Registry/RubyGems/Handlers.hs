@@ -24,7 +24,7 @@ import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeF
 import Ecluse.Core.Registry.CachedDocument (rubyGemsCached)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.RubyGems.Document (GemDocument (..))
-import Ecluse.Core.Registry.RubyGems.Handlers.Budget (newNativeReadBudget)
+import Ecluse.Core.Registry.RubyGems.Handlers.Budget (newNativeDocumentBudget, newNativeReadBudget)
 import Ecluse.Core.Registry.RubyGems.Marshal (encodeDependencies)
 import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Route.Response (RubyResponse, rubyBadRequest, rubyReplies)
@@ -34,7 +34,7 @@ import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Meter (charge)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfOutputPermille))
 import Ecluse.Core.Server.Context (Handler, MountBinding (bindingPackumentDeps), PackumentDeps (..), ServeRuntime (..), ctxMount, ctxRuntime)
-import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerMetadataBytes, mapPackumentReplies, withAdmittedDocument)
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), answerMetadataBytes, mapPackumentReplies, withObservedAdmittedDocument)
 import Ecluse.Core.Server.Pipeline.Shared (edgeTokenMatches, forwardedCredential, shedMessage, unauthorisedMessage, withListingAdmission)
 import Ecluse.Core.Server.Response (mkRefusal)
 
@@ -96,12 +96,13 @@ serveDependencies request respond = do
                                             Left fault -> pure (rubyBadRequest (parseErrorMessage fault))
                                             Right names -> do
                                                 observe <- liftIO (newNativeReadBudget (maxMetadataBytes (pdLimits deps)))
-                                                batch ticket deps observe 0 0 [] names
+                                                checkDocument <- liftIO (newNativeDocumentBudget (maxMetadataBytes (pdLimits deps)) (Left (rubyBadRequest "the dependency batch exceeds its cumulative metadata bound")))
+                                                batch ticket deps observe checkDocument 0 0 [] names
                                     )
                         )
                         reply
   where
-    batch ticket deps observe bytes rows accumulated = \case
+    batch ticket deps observe checkDocument bytes rows accumulated = \case
         [] -> do
             let limit = maxMetadataBytes (pdLimits deps)
             liftIO (charge ticket (fromInteger (min (toInteger (maxBound :: Int)) (2 * bytes + 4096))))
@@ -110,10 +111,12 @@ serveDependencies request respond = do
                 Right encoded -> answerMetadataBytes rubyReplies deps ticket request encoded
         name : rest -> do
             selected <-
-                withAdmittedDocument
+                withObservedAdmittedDocument
                     (mapPackumentReplies Left rubyReplies)
                     ticket
                     observe
+                    checkDocument
+                    Nothing
                     name
                     request
                     (Right Nothing)
@@ -123,7 +126,7 @@ serveDependencies request respond = do
                     )
             case selected of
                 Left refusal -> pure refusal
-                Right Nothing -> batch ticket deps observe bytes rows accumulated rest
+                Right Nothing -> batch ticket deps observe checkDocument bytes rows accumulated rest
                 Right (Just (cached, sourceBytes)) -> case snd rubyGemsCached cached of
                     Nothing -> pure (packumentInternal rubyReplies [] (mkRefusal Nothing "the admitted document is not RubyGems metadata"))
                     Just document -> do
@@ -134,4 +137,4 @@ serveDependencies request respond = do
                             then pure (rubyBadRequest "the dependency batch exceeds its cumulative metadata bound")
                             else do
                                 let converted = marshalDependencyRows document
-                                batch ticket deps observe nextBytes nextRows (converted : accumulated) rest
+                                batch ticket deps observe checkDocument nextBytes nextRows (converted : accumulated) rest

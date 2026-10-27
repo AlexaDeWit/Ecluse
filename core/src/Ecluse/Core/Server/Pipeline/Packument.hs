@@ -9,7 +9,6 @@ module Ecluse.Core.Server.Pipeline.Packument (
     packumentAction,
     servePackument,
     headPackument,
-    withAdmittedDocument,
     withObservedAdmittedDocument,
     answerMetadataBytes,
     mapPackumentReplies,
@@ -258,18 +257,6 @@ packumentWith mode replies name request respond = do
                 else withListingAdmission (ctxRuntime ctx) (\headers -> refuse packumentUnavailable headers shedMessage) (serving >=> (`serveAdmittedPackument` clientToken) >=> evaluate) (liftIO . respond)
   where
     refuse reply headers message = liftIO (respond (reply replies headers (mkRefusal Nothing message)))
-
--- | Reuse admission and source merging under an existing batch ticket, without acquiring another slot.
-withAdmittedDocument ::
-    PackumentReplies response ->
-    MemoryTicket ->
-    (Int -> IO ()) ->
-    PackageName ->
-    Request ->
-    response ->
-    (CachedDoc -> Int -> Map Text Provenance -> Handler response) ->
-    Handler response
-withAdmittedDocument replies ticket observe = withObservedAdmittedDocument replies ticket observe (const (pure (Right ()))) Nothing
 
 -- | Observe source sizes and checked rejections, including admission with no surviving contribution.
 withObservedAdmittedDocument ::

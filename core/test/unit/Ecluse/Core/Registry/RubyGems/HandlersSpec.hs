@@ -7,6 +7,7 @@
 module Ecluse.Core.Registry.RubyGems.HandlersSpec (spec) where
 
 import Codec.Compression.GZip qualified as GZip
+import Data.Aeson (object, toJSON, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
@@ -52,10 +53,11 @@ import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (captureJsonLog, lineMessage, newTestLogEnv)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.RubyGems.Fixtures (RubyRelease (..), loadRubyReleasesFrom, rubyRelease)
+import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (cachedMetadata, externalOperations)
 import Ecluse.Test.Server.Handler (testServeRuntimeWith)
-import Ecluse.Test.Server.Mount (serveDepsFor)
+import Ecluse.Test.Server.Mount (serveDepsFor, withPrivateBaseUrl)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -142,6 +144,61 @@ spec = do
                 simpleBody headed `shouldBe` ""
                 probe <- capture runtime binding "HEAD" "/versions" []
                 simpleStatus probe `shouldBe` status404
+
+    describe "examined documents in a named batch" $ do
+        for_ [False, True] $ \warm ->
+            for_ [False, True] $ \exact ->
+                for_ ["GET", "HEAD"] $ \method ->
+                    it ("bounds denied public documents beside private survivors for " <> show (warm, exact, method)) $ do
+                        privateStatus <- newIORef status200
+                        withCoordinateSourceHeader coordinateBudgetHeader (CachedDeniedBatchCandidateSource privateStatus) $ \uncached original hits release -> do
+                            let (denied, paddedPrivate) = coordinateListings coordinateBudgetHeader release
+                                private = BS.drop (BS.length coordinateBudgetHeader) paddedPrivate
+                                oneNameBytes = BS.length denied + BS.length private
+                                cap = 2 * oneNameBytes - if exact then 0 else 1
+                                binding = coordinateByteCap cap original
+                                deps = bindingPackumentDeps binding
+                                public = binding{bindingPackumentDeps = withPrivateBaseUrl Nothing deps}
+                            oneNameBytes `shouldSatisfy` (< cap)
+                            runtime <- if warm then warmPublicDocuments uncached public hits [("acme", status403), ("acme-1", status403)] else pure uncached
+                            response <- capture runtime binding method "/api/v1/dependencies?gems=acme,acme-1" []
+                            simpleStatus response `shouldBe` if exact then status200 else if warm then status400 else status502
+                            when exact $
+                                if method == "HEAD"
+                                    then simpleBody response `shouldBe` ""
+                                    else checkPrivateBatchRows (simpleBody response)
+                            sort <$> readIORef hits `shouldReturn` if warm then [["private", "info", "acme"], ["private", "info", "acme-1"]] else coordinatePrivateMetadataReads
+        for_ [status401, status403] $ \refused ->
+            for_ ["GET", "HEAD"] $ \method ->
+                it ("rechecks private authority after warm batch success for " <> show (refused, method)) $ do
+                    privateStatus <- newIORef status200
+                    withCoordinateSourceHeader coordinateBudgetHeader (CachedDeniedBatchCandidateSource privateStatus) $ \uncached binding hits release -> do
+                        let public = binding{bindingPackumentDeps = withPrivateBaseUrl Nothing (bindingPackumentDeps binding)}
+                        runtime <- warmPublicDocuments uncached public hits [("acme", status403), ("acme-1", status403)]
+                        allowed <- capture runtime binding "GET" "/api/v1/dependencies?gems=acme,acme-1" []
+                        simpleStatus allowed `shouldBe` status200
+                        checkPrivateBatchRows (simpleBody allowed)
+                        sort <$> readIORef hits `shouldReturn` [["private", "info", "acme"], ["private", "info", "acme-1"]]
+                        writeIORef hits []
+                        writeIORef privateStatus refused
+                        let cap = BS.length (fst (coordinateListings coordinateBudgetHeader release)) - 1
+                        denied <- capture runtime (coordinateByteCap cap binding) method "/api/v1/dependencies?gems=acme,acme-1" []
+                        simpleStatus denied `shouldBe` refused
+                        readIORef hits `shouldReturn` [["private", "info", "acme"]]
+        for_ ["GET", "HEAD"] $ \method ->
+            it ("does not use a cached public document for owned private absence in a batch for " <> show method) $ do
+                privateStatus <- newIORef status200
+                withCoordinateSourceHeader coordinateBudgetHeader (CachedDeniedBatchCandidateSource privateStatus) $ \uncached original hits release -> do
+                    let public = original{bindingPackumentDeps = withPrivateBaseUrl Nothing (bindingPackumentDeps original)}
+                    runtime <- warmPublicDocuments uncached public hits [("acme", status403), ("acme-1", status403)]
+                    owned <- expectRight (projectFirstPartyEntry "acme")
+                    let deps = bindingPackumentDeps original
+                        binding = original{bindingPackumentDeps = deps{pdFirstParty = rubyGemsFirstPartyName (owned :| [])}}
+                    writeIORef privateStatus status404
+                    let cap = BS.length (fst (coordinateListings coordinateBudgetHeader release)) - 1
+                    response <- capture runtime (coordinateByteCap cap binding) method "/api/v1/dependencies?gems=acme" []
+                    simpleStatus response `shouldBe` status404
+                    readIORef hits `shouldReturn` [["private", "info", "acme"]]
 
     describe "first-party coordinate candidates" $ do
         for_ ["GET", "HEAD"] $ \method ->
@@ -483,6 +540,7 @@ data CoordinateSources
     | PublicCandidateSource
     | PublicMixedCandidateSource
     | MixedPolicyCandidateSource
+    | CachedDeniedBatchCandidateSource (IORef Status)
     | PublicDeniedPrivateCandidateSource Status
     | CheckedEmptyCandidateSource
     | InvalidInventoryCandidateSource
@@ -508,10 +566,17 @@ withCoordinateSourceHeader header sources use = do
         upstream request respond = do
             atomicModifyIORef' hits (\events -> (events <> [pathInfo request], ()))
             let answer status bytes = respond (responseLBS status [] (fromStrict bytes))
+                answerBatchPrivate variable = do
+                    status <- readIORef variable
+                    answer status (if status == status200 then BS.drop (BS.length header) admitted else "")
             case pathInfo request of
-                ["private", "info", "acme"] -> answer (case sources of OwnedCandidateSource status -> status; _ -> status404) ""
+                ["private", "info", "acme"] -> case sources of
+                    OwnedCandidateSource status -> answer status ""
+                    CachedDeniedBatchCandidateSource variable -> answerBatchPrivate variable
+                    _ -> answer status404 ""
                 ["private", "info", "acme-1"] -> case sources of
                     MixedPolicyCandidateSource -> answer status200 admitted
+                    CachedDeniedBatchCandidateSource variable -> answerBatchPrivate variable
                     PublicDeniedPrivateCandidateSource status -> answer status ""
                     MixedPublicIntegrityCandidateSource -> answer status200 admitted
                     MixedTrustedIntegrityCandidateSource -> answer status200 recent
@@ -519,8 +584,9 @@ withCoordinateSourceHeader header sources use = do
                 ["public", "info", "acme"] -> case sources of
                     OwnedCandidateSource _ -> answer status200 recent
                     PublicCandidateSource -> answer status200 recent
+                    CachedDeniedBatchCandidateSource _ -> answer status200 recent
                     _ -> answer status404 ""
-                ["public", "info", "acme-1"] -> answer status200 (case sources of PublicMixedCandidateSource -> mixed; MixedPolicyCandidateSource -> recent; PublicDeniedPrivateCandidateSource _ -> recent; CheckedEmptyCandidateSource -> "---\n"; InvalidInventoryCandidateSource -> "---\n2.0 |checksum:invalid\n"; MixedPublicIntegrityCandidateSource -> mixed; _ -> admitted)
+                ["public", "info", "acme-1"] -> answer status200 (case sources of PublicMixedCandidateSource -> mixed; MixedPolicyCandidateSource -> recent; CachedDeniedBatchCandidateSource _ -> recent; PublicDeniedPrivateCandidateSource _ -> recent; CheckedEmptyCandidateSource -> "---\n"; InvalidInventoryCandidateSource -> "---\n2.0 |checksum:invalid\n"; MixedPublicIntegrityCandidateSource -> mixed; _ -> admitted)
                 ["public", "gems", "acme-1-1.0.gem"] -> respond (responseLBS status200 [("Content-Length", show (BS.length (releaseArchive release)))] (fromStrict (releaseArchive release)))
                 ["public", "quick", "Marshal.4.8", "acme-1-1.0.gemspec.rz"] -> answer status200 (releaseCompact release)
                 _ -> answer status404 ""
@@ -529,6 +595,7 @@ withCoordinateSourceHeader header sources use = do
             private = case sources of
                 OwnedCandidateSource _ -> Just privateBase
                 MixedPolicyCandidateSource -> Just privateBase
+                CachedDeniedBatchCandidateSource _ -> Just privateBase
                 PublicDeniedPrivateCandidateSource _ -> Just privateBase
                 CheckedEmptyCandidateSource -> Just privateBase
                 InvalidInventoryCandidateSource -> Just privateBase
@@ -551,6 +618,20 @@ checkCoordinateResponse method path body response = do
     if method == "HEAD" || path == "/gems/acme-1-1.0.gem"
         then advertised `shouldBe` Just expected
         else for_ advertised (`shouldBe` expected)
+
+checkPrivateBatchRows :: LByteString -> Expectation
+checkPrivateBatchRows body = do
+    observed <- runRubyReference "dependencies" (LBS.toStrict body)
+    observed
+        `shouldBe` toJSON
+            [ object
+                [ "name" .= (name :: Text)
+                , "number" .= ("1.0" :: Text)
+                , "platform" .= ("ruby" :: Text)
+                , "dependencies" .= ([] :: [[Text]])
+                ]
+            | name <- ["acme", "acme-1"]
+            ]
 
 coordinateListings :: ByteString -> RubyRelease -> (ByteString, ByteString)
 coordinateListings header release =
@@ -577,28 +658,30 @@ coordinateByteCap cap binding =
      in binding{bindingPackumentDeps = deps{pdLimits = (pdLimits deps){maxMetadataBytes = cap}}}
 
 warmCoordinateCache :: ServeRuntime -> MountBinding -> IORef [[Text]] -> IO ServeRuntime
-warmCoordinateCache uncached binding hits = do
+warmCoordinateCache uncached binding hits = warmPublicDocuments uncached binding hits [("acme", status403), ("acme-1", status200)]
+
+warmPublicDocuments :: ServeRuntime -> MountBinding -> IORef [[Text]] -> [(Text, Status)] -> IO ServeRuntime
+warmPublicDocuments uncached binding hits documents = do
     values <- newIORef Map.empty
     let full = externalOperations (\_ key -> Map.lookup key <$> readIORef values) (\key value -> atomicModifyIORef' values (\stored -> (Map.insert key value stored, ())))
     cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) (Just full) Nothing Nothing)
     let runtime = uncached{srMetadataCache = cache}
         source = Source (registryUrlText (pdPublicBaseUrl (bindingPackumentDeps binding)))
-    denied <- capture runtime binding "GET" "/api/v1/dependencies?gems=acme" []
-    simpleStatus denied `shouldBe` status403
-    admitted <- capture runtime binding "GET" "/api/v1/dependencies?gems=acme-1" []
-    simpleStatus admitted `shouldBe` status200
-    readIORef hits `shouldReturn` [["public", "info", "acme"], ["public", "info", "acme-1"]]
-    for_ ["acme", "acme-1"] $ \raw -> do
+        listing name = capture runtime binding "GET" ("/api/v1/dependencies?gems=" <> encodeUtf8 name) []
+    responses <- forM documents $ \(name, expected) -> do
+        response <- listing name
+        simpleStatus response `shouldBe` expected
+        pure response
+    readIORef hits `shouldReturn` [["public", "info", name] | (name, _) <- documents]
+    for_ documents $ \(raw, _) -> do
         name <- expectRight (projectName raw)
         retained <- cachedMetadata noopMetricsPort cache source name
         retained `shouldSatisfy` isJust
     writeIORef hits []
-    repeatedDenied <- capture runtime binding "GET" "/api/v1/dependencies?gems=acme" []
-    simpleStatus repeatedDenied `shouldBe` status403
-    simpleBody repeatedDenied `shouldBe` simpleBody denied
-    repeatedAdmitted <- capture runtime binding "GET" "/api/v1/dependencies?gems=acme-1" []
-    simpleStatus repeatedAdmitted `shouldBe` status200
-    simpleBody repeatedAdmitted `shouldBe` simpleBody admitted
+    for_ (zip documents responses) $ \((name, expected), original) -> do
+        repeated <- listing name
+        simpleStatus repeated `shouldBe` expected
+        simpleBody repeated `shouldBe` simpleBody original
     readIORef hits `shouldReturn` []
     pure runtime
 
