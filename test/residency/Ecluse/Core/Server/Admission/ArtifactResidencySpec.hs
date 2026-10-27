@@ -70,7 +70,7 @@ withBudget :: (VerifiedArtifactBudget -> MetricsPort -> IORef Int -> IO a) -> IO
 withBudget use = withSweeper $ \deadlines -> do
     budget <- newVerifiedArtifactBudget deadlines capacity capacity >>= expectRight
     held <- newIORef 0
-    let metrics = noopMetricsPort{mpArtifactBodyInFlightBytes = \delta -> atomicModifyIORef' held (\before -> (before + delta, ()))}
+    let metrics = noopMetricsPort{mpArtifactBodyInFlightBytes = \delta -> atomicModifyIORef' held (\current -> (current + delta, ()))}
     use budget metrics held
 
 awaitQueued :: VerifiedArtifactBudget -> Async a -> IO ()

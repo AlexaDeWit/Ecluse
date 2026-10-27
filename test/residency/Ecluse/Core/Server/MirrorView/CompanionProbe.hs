@@ -7,13 +7,12 @@ module Ecluse.Core.Server.MirrorView.CompanionProbe (CompanionMeasurement (..), 
 
 import Control.Concurrent.MVar qualified as MVar
 import Data.Aeson (FromJSON, ToJSON, encode)
-import Data.Bits (xor)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Foreign.StablePtr (deRefStablePtr, freeStablePtr, newStablePtr)
 import System.FilePath ((</>))
-import System.IO (IOMode (ReadMode), withBinaryFile)
+import System.IO (withBinaryFile)
 import UnliftIO.Async (cancel, waitCatch, waitEither, withAsync)
 import UnliftIO.Exception (bracket, evaluate)
 

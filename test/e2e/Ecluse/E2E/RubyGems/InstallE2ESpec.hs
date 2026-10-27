@@ -24,7 +24,6 @@ import Ecluse.E2E.Fixtures.RubyGems
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.RubyGems
 import Ecluse.E2E.Harness.RubyGemsGateway
-import Ecluse.E2E.Harness.Stub (StubRoute (RubyGemsPublic))
 import Ecluse.E2E.InstallationE2ESpec (codedArtifact)
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
 import Ecluse.Test.Contract.Install
