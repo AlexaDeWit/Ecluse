@@ -87,11 +87,12 @@ import Ecluse.Core.Server.Pipeline.Tarball.Relay (
     observeRelayAnomaly,
     relayJudged,
     relayPublicResult,
+    relayVerdict,
     withMethod,
     withValidators,
  )
 import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..), relayResponder)
-import Ecluse.Core.Server.Pipeline.Tarball.Verified (VerifiedRelayResult (..), relayVerifiedArtifact, unconditionalArtifactRequest, verifiedHeadRequest, verifiedHeadResponse)
+import Ecluse.Core.Server.Pipeline.Tarball.Verified (VerifiedRelayResult (..), relayVerifiedArtifactObserved, unconditionalArtifactRequest, verifiedHeadRequest, verifiedHeadResponse)
 import Ecluse.Core.Server.Response (
     ServeDecision (Admit),
     Transience (WontResolve),
@@ -217,7 +218,7 @@ streamPublicArtifact ctx artifact observeVerdict
         Left _ -> respond (internalArtifactError replies)
         Right req
             | (ServeFull, VerifyBeforeReply) <- (arMode ctx, artifactRelayIntegrity (pdArtifact deps)) ->
-                relayVerifiedArtifact ctx (Controlled (srPublicControl (arRuntime ctx)) PublicRead.Artifact) (srPublicClient (arRuntime ctx)) (unconditionalArtifactRequest req) artifact >>= \case
+                relayVerifiedArtifactObserved observeOrigin ctx (Controlled (srPublicControl (arRuntime ctx)) PublicRead.Artifact) (srPublicClient (arRuntime ctx)) (unconditionalArtifactRequest req) artifact >>= \case
                     VerifiedDelivered received -> mirrorOnAdmit ctx artifact RelayedArtifact $> received
                     VerifiedRefused _ received -> pure received
                     VerifiedUnanswered status -> respond (tarballEmpty replies status [])
@@ -236,6 +237,9 @@ streamPublicArtifact ctx artifact observeVerdict
 
     hostHonoured = tarballHostHonoured UntrustedOrigin deps (thgPublicHostPort (pdTarballHostGate deps)) (hostPortAddress (artUrl artifact))
 
+    observeOrigin status headers = case relayVerdict status headers of
+        verdict@RelayedNonSuccess{} -> observeVerdict verdict
+        _ -> pass
     judge status headers
         | (ServeHead, VerifyBeforeReply) <- (arMode ctx, artifactRelayIntegrity (pdArtifact deps)) =
             let (code, represented) = verifiedHeadResponse (maybe 0 verifiedArtifactMaxBytes (pdVerifiedArtifacts deps)) artifact (arValidators ctx) status headers

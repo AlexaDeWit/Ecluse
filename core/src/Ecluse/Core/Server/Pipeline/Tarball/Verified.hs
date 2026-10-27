@@ -13,6 +13,7 @@ module Ecluse.Core.Server.Pipeline.Tarball.Verified (
     readVerifiedArtifactWith,
     verifiedBodyBytes,
     relayVerifiedArtifact,
+    relayVerifiedArtifactObserved,
     unconditionalArtifactRequest,
     verifiedHeadRequest,
     verifiedHeadResponse,
@@ -37,7 +38,7 @@ import Ecluse.Core.Package (Artifact (..), HashAlg (SHA256))
 import Ecluse.Core.Package.Hash (canonicalHashValue)
 import Ecluse.Core.Package.Integrity (IntegrityResult (..), assertedAlg, authoritativeDigest, verifyIntegrity)
 import Ecluse.Core.Registry (FetchFault (..))
-import Ecluse.Core.Registry.Exchange (runExchangeUsing, withinServeCap)
+import Ecluse.Core.Registry.Exchange (runExchangeUsingObserved, withinServeCap)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Public (ReadControl)
 import Ecluse.Core.Security (BodyLimit (VerifiedArtifactBodyLimit), LimitError (BodyTooLarge), Limits (progressFloor))
@@ -133,7 +134,11 @@ checkedLimit cap artifact
 
 -- | Byte and memory reservations outlive verification and client delivery. Upstream closes before delivery.
 relayVerifiedArtifact :: ArtifactRequest response -> ReadControl -> ExchangeClient -> Request -> Artifact -> IO (VerifiedRelayResult ResponseReceived)
-relayVerifiedArtifact ctx control client request artifact = case pdVerifiedArtifacts deps of
+relayVerifiedArtifact = relayVerifiedArtifactObserved (\_ _ -> pass)
+
+-- | Public relay diagnostics retain actual origin status even when the reply becomes a local refusal.
+relayVerifiedArtifactObserved :: (Status -> ResponseHeaders -> IO ()) -> ArtifactRequest response -> ReadControl -> ExchangeClient -> Request -> Artifact -> IO (VerifiedRelayResult ResponseReceived)
+relayVerifiedArtifactObserved observe ctx control client request artifact = case pdVerifiedArtifacts deps of
     Nothing -> refuse Metric.Unavailable status500 [] "verified artifact admission is unavailable"
     Just budget -> case checkedLimit (verifiedArtifactMaxBytes budget) artifact of
         Left fault -> invalid fault
@@ -146,7 +151,7 @@ relayVerifiedArtifact ctx control client request artifact = case pdVerifiedArtif
                         ( \ticket -> do
                             pay <- newChargeRegion (charge ticket)
                             withinServeCap (ecDeadlines client) (progressFloor (pdLimits deps)) id $
-                                runExchangeUsing control client (progressFloor (pdLimits deps)) request (fetch (verifiedArtifactMaxBytes budget) pay)
+                                runExchangeUsingObserved observe control client (progressFloor (pdLimits deps)) request (fetch (verifiedArtifactMaxBytes budget) pay)
                         )
                         deliver
             case outcome of
