@@ -1,5 +1,5 @@
 {
-  "_note": "Reviewed success floors by pod shape, scenario and pass. Calibration records conditions, retained row identities, source runs and native latency ceilings. Full coverage omits the 5% private-copy and default restart cases, which remain available by explicit selection. Remaining floor values, calibration runs, operating settings and latency ceilings stay unchanged. The calibration rule describes the historical groups of source runs. The Success floors section in docs/testing.md owns eligibility and recalibration.",
+  "_note": "Reviewed success floors by pod shape, scenario and pass. Calibration records conditions, retained row identities, source runs and native latency ceilings. Full coverage omits the 5% private-copy and default restart cases, which remain available by explicit selection. Cargo adds 154 floor cells and its independently measured latency policy. Existing npm and PyPI floors, operating settings, native latency records and historical source groups remain unchanged. The calibration rule identifies each source group. The Success floors section in docs/testing.md owns eligibility and recalibration.",
   "calibration": {
     "measurementConditions": "unified-v2",
     "retainedFloorConditions": {
@@ -19,7 +19,7 @@
       "npm/worker-mirroring": "legacy-v1",
       "pypi/wheel-ceiling": "legacy-v1"
     },
-    "rule": "The first 35 run records preserve historical calibration provenance. The retained 78 floor cells keep their values and original source groups. Their scenario names carry legacy-v1 in retainedFloorConditions. Historical calibration: Each floor is half the lowest count of successes over the calibration runs for its scenario, pass, and pod shape, rounded down, and at least 1. A scenario with several loads takes the lowest count of any of them. The first ten listed runs retain the previous calibration for every unchanged floor. The next ten dispatched runs recalibrate only npm/tarball-ceiling at concurrency one, after its service pass changed from four connections to one. No loaded-pass or other scenario floor is recalibrated by those ten dispatched runs. The next nine dispatched runs add only the PyPI wheel-ceiling loaded and concurrency-one floors, and the PyPI herd, warm-under-cold and ramp loaded floors. Each pod shape has three observations on 4528093eb2834801f1a099713834ed4743426ff7. Every earlier floor retains its prior calibration. The final six dispatched runs add loaded and concurrency-one floors only for PyPI mirror-native-baseline, mirror-managed-warm, mirror-managed-revision and worker-mirroring. The mirror scenarios run under all four pod shapes, and worker-mirroring runs under unlimited only. Each applicable scenario has three observations per pod shape across 48166311b42f035e2a8ea96ead28f35886b4d713 and 30ca5206bbb5402c144a29f8857b029a0f54353a. These six runs change no earlier floor. The final three run records, 38497708999, 38508047442 and 38518124038, measured unified-v2 at ba4276f8e31077c72d41415b90f3847c3f51ae3a. Each supplies one qualifying observation under each of the four scheduled pod shapes. They recalibrate only the 11 npm listing scenarios and every PyPI scenario except wheel-ceiling. For those 262 cells, the floor is half the lowest selected success count, rounded down, and at least 1. A scenario with several loads uses its lowest count across those loads. Bootstrap selection uses existing applicable constraints: default unified-v2 inputs, the npm 230 ms ceiling, retained floors, successful outcomes and clean final memory. No PyPI ceiling existed during sample selection. The new PyPI ceiling is derived after selection and governs future observations. Recorded maxima can exceed that ceiling because the formula uses the lowest per-shape maximum. The original npm maxima and 230 ms ceiling keep their historical source group and are not recomputed from these new observations. The new PyPI maxima use only the final three qualifying runs. Each ecosystem uses the same ceiling formula independently because its floors depend on its own injected RTT. Runs 38502988119 and 38513015540 are wholly excluded because a profile exceeded the existing npm ceiling. They contribute no counts or latency maxima. Failures and adverse observations remain in the corresponding workflow reports. Future runs above either applicable native ceiling are unheld as a whole. The final 3 run records, 40016327682, 40018954941, 40019366641, measured unified-v2 at e72c13663bbccc4cd2f49b2d2e418f0a5bd284b0. Each supplies one qualifying observation under each of the four scheduled pod shapes. They add only the npm/slow-readers and pypi/slow-readers loaded floors: half the lowest count of either load, rounded down, and at least 1. Four runs dispatched at the same commit are wholly excluded, because a profile exceeded the PyPI ceiling of 20 ms. Run 39958149768 injected 22 ms under 4cpu-2gib and 23 ms under unlimited. Run 39985720638 injected 32 ms under 4cpu-2gib. Run 39991179217 injected 70 ms under 2cpu-1gib. Run 40020024081 injected 29 to 32 ms under every shape. They contribute no counts or latency maxima. Runs 40022928943, 40023792987, 40025832132 and 40027186864, dispatched at the same commit, were cancelled once three runs qualified, and contribute nothing. These runs change no earlier floor and no latency record. The next 12 run records add only the npm/herd-under-heavy-private and pypi/herd-under-heavy-private loaded floors under unified-v2. Three qualifying observations cover each scheduled pod shape at the default settings. 2cpu-1gib uses runs 40134641614, 40148240836, 40152892339. 4cpu-1gib uses runs 40134643827, 40138804551, 40142650212. 4cpu-2gib uses runs 40134645719, 40143174575, 40148248838. unlimited uses runs 40134647640, 40138820330, 40143181139. Each new floor is half the lowest qualifying background success count for its ecosystem and shape, rounded down, and at least 1. Primary burst successes and refusals remain diagnostic and do not supply floor counts. The sources span production commits under unchanged probe conditions, with exact measured commits recorded for every run. All 41 earlier source records retain their floor groups and native latency provenance. No earlier floor, measurement identity, operating setting, native latency maximum, or ceiling changes. Runs 40138798221 and 40138811076 are wholly excluded because their PyPI injected latency was 23 ms, above the existing 20 ms ceiling. Runs 40143168227 and 40149097553 are wholly excluded because their PyPI injected latency was 22 ms, above that ceiling. These four excluded runs contribute no floor counts or latency maxima. Their reports retain their outcomes.",
+    "rule": "The first 35 run records preserve historical calibration provenance. The retained 78 floor cells keep their values and original source groups. Their scenario names carry legacy-v1 in retainedFloorConditions. Historical calibration: Each floor is half the lowest count of successes over the calibration runs for its scenario, pass, and pod shape, rounded down, and at least 1. A scenario with several loads takes the lowest count of any of them. The first ten listed runs retain the previous calibration for every unchanged floor. The next ten dispatched runs recalibrate only npm/tarball-ceiling at concurrency one, after its service pass changed from four connections to one. No loaded-pass or other scenario floor is recalibrated by those ten dispatched runs. The next nine dispatched runs add only the PyPI wheel-ceiling loaded and concurrency-one floors, and the PyPI herd, warm-under-cold and ramp loaded floors. Each pod shape has three observations on 4528093eb2834801f1a099713834ed4743426ff7. Every earlier floor retains its prior calibration. The final six dispatched runs add loaded and concurrency-one floors only for PyPI mirror-native-baseline, mirror-managed-warm, mirror-managed-revision and worker-mirroring. The mirror scenarios run under all four pod shapes, and worker-mirroring runs under unlimited only. Each applicable scenario has three observations per pod shape across 48166311b42f035e2a8ea96ead28f35886b4d713 and 30ca5206bbb5402c144a29f8857b029a0f54353a. These six runs change no earlier floor. The final three run records, 38497708999, 38508047442 and 38518124038, measured unified-v2 at ba4276f8e31077c72d41415b90f3847c3f51ae3a. Each supplies one qualifying observation under each of the four scheduled pod shapes. They recalibrate only the 11 npm listing scenarios and every PyPI scenario except wheel-ceiling. For those 262 cells, the floor is half the lowest selected success count, rounded down, and at least 1. A scenario with several loads uses its lowest count across those loads. Bootstrap selection uses existing applicable constraints: default unified-v2 inputs, the npm 230 ms ceiling, retained floors, successful outcomes and clean final memory. No PyPI ceiling existed during sample selection. The new PyPI ceiling is derived after selection and governs future observations. Recorded maxima can exceed that ceiling because the formula uses the lowest per-shape maximum. The original npm maxima and 230 ms ceiling keep their historical source group and are not recomputed from these new observations. The new PyPI maxima use only the final three qualifying runs. Each ecosystem uses the same ceiling formula independently because its floors depend on its own injected RTT. Runs 38502988119 and 38513015540 are wholly excluded because a profile exceeded the existing npm ceiling. They contribute no counts or latency maxima. Failures and adverse observations remain in the corresponding workflow reports. Future runs above either applicable native ceiling are unheld as a whole. The final 3 run records, 40016327682, 40018954941, 40019366641, measured unified-v2 at e72c13663bbccc4cd2f49b2d2e418f0a5bd284b0. Each supplies one qualifying observation under each of the four scheduled pod shapes. They add only the npm/slow-readers and pypi/slow-readers loaded floors: half the lowest count of either load, rounded down, and at least 1. Four runs dispatched at the same commit are wholly excluded, because a profile exceeded the PyPI ceiling of 20 ms. Run 39958149768 injected 22 ms under 4cpu-2gib and 23 ms under unlimited. Run 39985720638 injected 32 ms under 4cpu-2gib. Run 39991179217 injected 70 ms under 2cpu-1gib. Run 40020024081 injected 29 to 32 ms under every shape. They contribute no counts or latency maxima. Runs 40022928943, 40023792987, 40025832132 and 40027186864, dispatched at the same commit, were cancelled once three runs qualified, and contribute nothing. These runs change no earlier floor and no latency record. The next 12 run records add only the npm/herd-under-heavy-private and pypi/herd-under-heavy-private loaded floors under unified-v2. Three qualifying observations cover each scheduled pod shape at the default settings. 2cpu-1gib uses runs 40134641614, 40148240836, 40152892339. 4cpu-1gib uses runs 40134643827, 40138804551, 40142650212. 4cpu-2gib uses runs 40134645719, 40143174575, 40148248838. unlimited uses runs 40134647640, 40138820330, 40143181139. Each new floor is half the lowest qualifying background success count for its ecosystem and shape, rounded down, and at least 1. Primary burst successes and refusals remain diagnostic and do not supply floor counts. The sources span production commits under unchanged probe conditions, with exact measured commits recorded for every run. All 41 earlier source records retain their floor groups and native latency provenance. No earlier floor, measurement identity, operating setting, native latency maximum, or ceiling changes. Runs 40138798221 and 40138811076 are wholly excluded because their PyPI injected latency was 23 ms, above the existing 20 ms ceiling. Runs 40143168227 and 40149097553 are wholly excluded because their PyPI injected latency was 22 ms, above that ceiling. These four excluded runs contribute no floor counts or latency maxima. Their reports retain their outcomes. The final three added run records, 40308556913, 40344077603 and 40415498969, supply only the new Cargo floors and native latency record under unified-v2. Each supplies one qualifying full-profile observation for every scheduled shape, at its exact recorded source and default operating point. All 154 Cargo cells use half the lowest required success count across those three runs, rounded down and at least 1. Paired loads use their lower count, ramps use the lowest of all six steps, combined herd probes use only the background count, and worker mirroring uses unlimited only. Every earlier npm and PyPI floor, native maximum, ceiling and assigned source group remains unchanged. Bootstrap selection uses the existing npm 230 ms and PyPI 20 ms ceilings, complete native outcomes, retained floors, routine conditions and reported clean final memory. No Cargo ceiling existed during selection. The new Cargo ceiling is derived afterward from only this source group. Recorded Cargo maxima can exceed the derived future ceiling because the formula uses the lowest per-shape maximum. No selected sample is retrospectively excluded by that new ceiling. Later source changes do not relabel these measurements or establish performance parity. Runs 40308889538 and 40319891234 are wholly excluded for PyPI 22 ms. Run 40329872873 is wholly excluded for PyPI 23 ms and retains its wheel-hot-path concurrency-one 614 count against the existing 664 floor. Run 40355225948 is wholly excluded for PyPI 23 ms. Run 40380676927 is wholly excluded for PyPI 23 ms on two shapes and retains its wheel-hot-path concurrency-one 615 count against 664. Run 40394505205 is wholly excluded for PyPI 23 ms on 4cpu-1gib and 43 ms on unlimited. None of those workflows contributes any count or Cargo maximum from any shape. Run 40392907045 has two Hackage setup failures with zero observations for those shapes, so its incomplete grid contributes no count or maximum. All raw and adverse rows remain in the corresponding workflow artifacts. The selected sources retain six recovered premeasurement proxy boots under the documented fresh-cgroup retry policy. Two scenario/pass mappings remain unknown. Failed boots supply no measurements. Source 40308556913 retains one Cargo index-cold recovery, 40344077603 retains one unknown recovery, and 40415498969 retains four recoveries with one unknown mapping.",
     "runner": "ubuntu-26.04-arm",
     "runnerOs": "Linux",
     "runnerArch": "ARM64",
@@ -76,7 +76,10 @@
       { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40143181139", "commit": "b4000350653e0dd41c5577183328c4363ce9615d" },
       { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40148240836", "commit": "b4000350653e0dd41c5577183328c4363ce9615d" },
       { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40148248838", "commit": "b4000350653e0dd41c5577183328c4363ce9615d" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40152892339", "commit": "b4000350653e0dd41c5577183328c4363ce9615d" }
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40152892339", "commit": "b4000350653e0dd41c5577183328c4363ce9615d" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40308556913", "commit": "406b7719283c4d1a217d56a2f1bef799698ccc6c" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40344077603", "commit": "314721f635c04c889e9c159a5cb7824c9126e369" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/40415498969", "commit": "a0a865903d30cfb3994cef20daadf6224029d31d" }
     ],
     "operatingPoint": {
       "durationSeconds": 30,
@@ -105,6 +108,16 @@
         "4cpu-2gib": 22
       },
       "ceilingMs": 20
+    },
+    "cargoInjectedLatency": {
+      "rule": "Select these three bootstrap runs under existing native constraints, then derive the future Cargo ceiling as 1.5 times the lowest per-shape maximum, rounded up to 10 ms. Only runs 40308556913, 40344077603 and 40415498969 supply these maxima. Recorded maxima can exceed the derived future ceiling.",
+      "highestMs": {
+        "unlimited": 4,
+        "2cpu-1gib": 15,
+        "4cpu-1gib": 16,
+        "4cpu-2gib": 12
+      },
+      "ceilingMs": 10
     }
   },
   "floors": {
@@ -163,7 +176,33 @@
       "pypi/pattern-heterogeneous": { "loaded": 2 },
       "pypi/pattern-zipf": { "loaded": 24 },
       "pypi/pattern-scan": { "loaded": 6 },
-      "pypi/pattern-cold-install-default-body-cap": { "loaded": 1 }
+      "pypi/pattern-cold-install-default-body-cap": { "loaded": 1 },
+      "cargo/assembled-response-hit": { "loaded": 3569, "concurrencyOne": 167 },
+      "cargo/cache-evicts-large": { "loaded": 3128, "concurrencyOne": 180 },
+      "cargo/cache-fits-large": { "loaded": 3508, "concurrencyOne": 183 },
+      "cargo/crate-ceiling": { "loaded": 17258, "concurrencyOne": 1729 },
+      "cargo/crate-hot-path": { "loaded": 21159, "concurrencyOne": 1005 },
+      "cargo/crate-onboarding": { "loaded": 11696, "concurrencyOne": 512 },
+      "cargo/heavy-private-25pct": { "loaded": 416, "concurrencyOne": 144 },
+      "cargo/heavy-private": { "loaded": 97, "concurrencyOne": 55 },
+      "cargo/herd-under-heavy-private": { "loaded": 89 },
+      "cargo/herd": { "loaded": 50 },
+      "cargo/index-cold-advisories": { "loaded": 2277, "concurrencyOne": 164 },
+      "cargo/index-cold-all-advisory-rules": { "loaded": 2223, "concurrencyOne": 163 },
+      "cargo/index-cold": { "loaded": 2839, "concurrencyOne": 164 },
+      "cargo/pattern-ci-fleet": { "loaded": 12 },
+      "cargo/pattern-cold-install-default-body-cap": { "loaded": 3 },
+      "cargo/pattern-cold-install": { "loaded": 3 },
+      "cargo/pattern-heterogeneous": { "loaded": 4 },
+      "cargo/pattern-hot-set-control": { "loaded": 48 },
+      "cargo/pattern-scan": { "loaded": 12 },
+      "cargo/pattern-zipf": { "loaded": 48 },
+      "cargo/ramp": { "loaded": 1815 },
+      "cargo/revalidate-not-modified-advisories": { "loaded": 7080, "concurrencyOne": 148 },
+      "cargo/revalidate-not-modified": { "loaded": 7440, "concurrencyOne": 149 },
+      "cargo/slow-readers": { "loaded": 649 },
+      "cargo/warm-under-cold": { "loaded": 1810 },
+      "cargo/worker-mirroring": { "loaded": 209, "concurrencyOne": 209 }
     },
     "2cpu-1gib": {
       "npm/merge-cold": { "loaded": 717, "concurrencyOne": 52 },
@@ -218,7 +257,32 @@
       "pypi/pattern-heterogeneous": { "loaded": 2 },
       "pypi/pattern-zipf": { "loaded": 24 },
       "pypi/pattern-scan": { "loaded": 6 },
-      "pypi/pattern-cold-install-default-body-cap": { "loaded": 1 }
+      "pypi/pattern-cold-install-default-body-cap": { "loaded": 1 },
+      "cargo/assembled-response-hit": { "loaded": 1936, "concurrencyOne": 138 },
+      "cargo/cache-evicts-large": { "loaded": 1498, "concurrencyOne": 143 },
+      "cargo/cache-fits-large": { "loaded": 2111, "concurrencyOne": 147 },
+      "cargo/crate-ceiling": { "loaded": 13165, "concurrencyOne": 1752 },
+      "cargo/crate-hot-path": { "loaded": 15687, "concurrencyOne": 311 },
+      "cargo/crate-onboarding": { "loaded": 7612, "concurrencyOne": 155 },
+      "cargo/heavy-private-25pct": { "loaded": 222, "concurrencyOne": 116 },
+      "cargo/heavy-private": { "loaded": 62, "concurrencyOne": 53 },
+      "cargo/herd-under-heavy-private": { "loaded": 63 },
+      "cargo/herd": { "loaded": 50 },
+      "cargo/index-cold-advisories": { "loaded": 1470, "concurrencyOne": 131 },
+      "cargo/index-cold-all-advisory-rules": { "loaded": 1418, "concurrencyOne": 133 },
+      "cargo/index-cold": { "loaded": 1337, "concurrencyOne": 134 },
+      "cargo/pattern-ci-fleet": { "loaded": 12 },
+      "cargo/pattern-cold-install-default-body-cap": { "loaded": 3 },
+      "cargo/pattern-cold-install": { "loaded": 3 },
+      "cargo/pattern-heterogeneous": { "loaded": 4 },
+      "cargo/pattern-hot-set-control": { "loaded": 48 },
+      "cargo/pattern-scan": { "loaded": 12 },
+      "cargo/pattern-zipf": { "loaded": 48 },
+      "cargo/ramp": { "loaded": 756 },
+      "cargo/revalidate-not-modified-advisories": { "loaded": 4280, "concurrencyOne": 123 },
+      "cargo/revalidate-not-modified": { "loaded": 4299, "concurrencyOne": 123 },
+      "cargo/slow-readers": { "loaded": 334 },
+      "cargo/warm-under-cold": { "loaded": 864 }
     },
     "4cpu-1gib": {
       "npm/merge-cold": { "loaded": 1921, "concurrencyOne": 71 },
@@ -273,7 +337,32 @@
       "pypi/pattern-heterogeneous": { "loaded": 2 },
       "pypi/pattern-zipf": { "loaded": 24 },
       "pypi/pattern-scan": { "loaded": 6 },
-      "pypi/pattern-cold-install-default-body-cap": { "loaded": 1 }
+      "pypi/pattern-cold-install-default-body-cap": { "loaded": 1 },
+      "cargo/assembled-response-hit": { "loaded": 6512, "concurrencyOne": 136 },
+      "cargo/cache-evicts-large": { "loaded": 5721, "concurrencyOne": 145 },
+      "cargo/cache-fits-large": { "loaded": 6159, "concurrencyOne": 146 },
+      "cargo/crate-ceiling": { "loaded": 17940, "concurrencyOne": 1729 },
+      "cargo/crate-hot-path": { "loaded": 21567, "concurrencyOne": 294 },
+      "cargo/crate-onboarding": { "loaded": 12373, "concurrencyOne": 146 },
+      "cargo/heavy-private-25pct": { "loaded": 274, "concurrencyOne": 114 },
+      "cargo/heavy-private": { "loaded": 71, "concurrencyOne": 53 },
+      "cargo/herd-under-heavy-private": { "loaded": 70 },
+      "cargo/herd": { "loaded": 50 },
+      "cargo/index-cold-advisories": { "loaded": 3838, "concurrencyOne": 132 },
+      "cargo/index-cold-all-advisory-rules": { "loaded": 3787, "concurrencyOne": 134 },
+      "cargo/index-cold": { "loaded": 4882, "concurrencyOne": 132 },
+      "cargo/pattern-ci-fleet": { "loaded": 12 },
+      "cargo/pattern-cold-install-default-body-cap": { "loaded": 3 },
+      "cargo/pattern-cold-install": { "loaded": 3 },
+      "cargo/pattern-heterogeneous": { "loaded": 4 },
+      "cargo/pattern-hot-set-control": { "loaded": 48 },
+      "cargo/pattern-scan": { "loaded": 12 },
+      "cargo/pattern-zipf": { "loaded": 48 },
+      "cargo/ramp": { "loaded": 1564 },
+      "cargo/revalidate-not-modified-advisories": { "loaded": 7960, "concurrencyOne": 123 },
+      "cargo/revalidate-not-modified": { "loaded": 8280, "concurrencyOne": 122 },
+      "cargo/slow-readers": { "loaded": 813 },
+      "cargo/warm-under-cold": { "loaded": 2583 }
     },
     "4cpu-2gib": {
       "npm/merge-cold": { "loaded": 2230, "concurrencyOne": 58 },
@@ -328,7 +417,32 @@
       "pypi/pattern-heterogeneous": { "loaded": 2 },
       "pypi/pattern-zipf": { "loaded": 24 },
       "pypi/pattern-scan": { "loaded": 6 },
-      "pypi/pattern-cold-install-default-body-cap": { "loaded": 1 }
+      "pypi/pattern-cold-install-default-body-cap": { "loaded": 1 },
+      "cargo/assembled-response-hit": { "loaded": 6437, "concurrencyOne": 142 },
+      "cargo/cache-evicts-large": { "loaded": 5918, "concurrencyOne": 154 },
+      "cargo/cache-fits-large": { "loaded": 6631, "concurrencyOne": 154 },
+      "cargo/crate-ceiling": { "loaded": 16328, "concurrencyOne": 1691 },
+      "cargo/crate-hot-path": { "loaded": 21230, "concurrencyOne": 383 },
+      "cargo/crate-onboarding": { "loaded": 12453, "concurrencyOne": 191 },
+      "cargo/heavy-private-25pct": { "loaded": 346, "concurrencyOne": 122 },
+      "cargo/heavy-private": { "loaded": 80, "concurrencyOne": 52 },
+      "cargo/herd-under-heavy-private": { "loaded": 80 },
+      "cargo/herd": { "loaded": 50 },
+      "cargo/index-cold-advisories": { "loaded": 3867, "concurrencyOne": 138 },
+      "cargo/index-cold-all-advisory-rules": { "loaded": 3750, "concurrencyOne": 140 },
+      "cargo/index-cold": { "loaded": 4798, "concurrencyOne": 138 },
+      "cargo/pattern-ci-fleet": { "loaded": 12 },
+      "cargo/pattern-cold-install-default-body-cap": { "loaded": 3 },
+      "cargo/pattern-cold-install": { "loaded": 3 },
+      "cargo/pattern-heterogeneous": { "loaded": 4 },
+      "cargo/pattern-hot-set-control": { "loaded": 48 },
+      "cargo/pattern-scan": { "loaded": 12 },
+      "cargo/pattern-zipf": { "loaded": 48 },
+      "cargo/ramp": { "loaded": 1645 },
+      "cargo/revalidate-not-modified-advisories": { "loaded": 7960, "concurrencyOne": 128 },
+      "cargo/revalidate-not-modified": { "loaded": 8240, "concurrencyOne": 128 },
+      "cargo/slow-readers": { "loaded": 833 },
+      "cargo/warm-under-cold": { "loaded": 3006 }
     }
   }
 }

@@ -236,6 +236,7 @@ Native providers retain parsing, version canonicalisation, route construction, a
 [PatternProvider](../bench/load/Ecluse/BenchLoad/PatternScenario.hs) supplies capture authority and selected artifacts through `LoadReadDriver.lrdPatternProvider`.
 The [npm provider](../bench/load/Ecluse/BenchLoad/Npm.hs) supplies selected replay from native pins.
 The [PyPI provider](../bench/load/Ecluse/BenchLoad/PyPI.hs) keeps selected pattern replay unsupported and selects warm-read artifacts separately.
+The [Cargo provider](../bench/load/Ecluse/BenchLoad/Cargo.hs) supplies sparse discovery and selected replay from native workload pins.
 
 Keep allocation, heap retention, native memory, complete-request throughput, and latency claims distinct.
 The [metadata reference](ecosystem-metadata.md#lessons-from-earlier-changes) records lessons from earlier work.

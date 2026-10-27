@@ -893,12 +893,12 @@ served `dist.tarball` to an absolute installable URL under `ECLUSE_SERVER__PUBLI
 `npm` cannot install the path-relative form.
 
 The [fixed E2E entrypoints](test-contracts.md#fixed-e2e-entrypoints) list each contract and its named concrete fixture.
-Both ecosystems run the full contract with concrete serving, mirroring, publication, Dredger and telemetry providers.
+npm, PyPI, and Cargo run the full contract with concrete serving, mirroring, publication, Dredger and telemetry providers.
 Native cases retain protocol-specific observations beside the shared laws.
 Their fixture and provider modules share the `ecluse-e2e-test-support` library.
 Metadata checks declarations and reports. It does not choose test combinations at runtime.
 
-CI prepares the real image once. The npm, PyPI, and shared-system subjects each run on a separate arm64 runner.
+CI prepares the real image once. The npm, PyPI, Cargo, and shared-system subjects each run on a separate arm64 runner.
 The npm subject composes the former serving and write arrangements under one ecosystem entrypoint.
 The shared-system subject owns cross-ecosystem and core capability cases that belong to no single ecosystem.
 The subject matrix disables fail-fast, so one failure does not stop the other subjects.
@@ -1101,7 +1101,7 @@ The load test alone stores reviewed minimums, its [success floors](#success-floo
 |---|---|---|
 | [Work per request](../.github/workflows/bench.yml) | Time and allocations for the benchmark groups over committed and synthetic corpora | `bench-results.csv`, `bench-output.txt`, per-ecosystem receipts, and `against-main.md` off `main` |
 | [Performance acceptance](../.github/workflows/perf-acceptance.yml) | Allocation and time for each [allocation leg](#allocation-budgets-perf-allocation-gating) over live registry documents, with no budget | `perf-acceptance-report.md`, native observations, per-ecosystem receipts or an unavailable diagnostic, and `against-main.md` off `main` |
-| [Load](../.github/workflows/bench-load.yml) | npm and PyPI successes, latency, memory, and collector cost through a proxy process under each pod shape, with separate ecosystem sections and baseline sources | `bench-load-results.md`, native observations and per-ecosystem receipts for complete runs, a diagnostic record for selected or GC-thrash runs, and `against-main.md` off `main`. A [sweep](#capability-sweeps) job uploads a directory per arm, `comparison.md`, and `comparison.json` |
+| [Load](../.github/workflows/bench-load.yml) | npm, PyPI, and Cargo successes, latency, memory, and collector cost through a proxy process under each pod shape, with separate ecosystem sections and baseline sources | `bench-load-results.md`, native observations and per-ecosystem receipts for complete runs, a diagnostic record for selected or GC-thrash runs, and `against-main.md` off `main`. A [sweep](#capability-sweeps) job uploads a directory per arm, `comparison.md`, and `comparison.json` |
 
 Each workflow calls a fixed Task measurement target, then a receipt target after the native process exits.
 Task records the options it passes before measurement. The native producer records its own measurement conditions.
@@ -1201,15 +1201,15 @@ between two runners:
   part therefore leads with how many rows rose, fell, and held, the median change, and the range,
   and says so when no row moved against the others.
 - A row means something only beside the rows that the change does not touch. The rows of one
-  ecosystem share a table, and the other ecosystem's part holds the rest.
+  ecosystem share a table, and the other ecosystems' sections hold the rest.
 - Every run off `main` shares one baseline run until a newer run on `main` succeeds. A row that
   the baseline run drew slow or fast therefore shows the same difference in every pull request and
   in every repeat. A second baseline needs a new run on `main`, and all three workflows accept a
   dispatch there.
 - A bench's `2*stdev` is what one run resolves for it. One run on each side does not resolve a
   smaller change, and a larger one can still be the runner.
-- Each load run injects the npm upstream latency it probed, and the latency-bound scenarios move
-  with it. The operating point rows show both values when they differ.
+- Each ecosystem injects its own measured public RTT or configured fallback.
+  Its latency-bound scenarios move with that value. The operating point rows show both values when they differ.
 - A live acceptance document grows as its package publishes, so its legs then read more versions.
 - A finite replay sends the same requests every run, so its successes hold and only its latency
   can show a change. It sends few requests, and its percentiles differ widely between two runs of
@@ -1261,7 +1261,7 @@ They keep the duration, traffic, limits and assertions unchanged.
 | --- | --- |
 | `read-paths` | Cold metadata, shipped advisories, full private copies, assembled hits, 304 revalidation, cache-fit and eviction controls, and every managed PyPI read |
 | `memory-admission` | Full private copies, slow readers, idle bursts, bursts under private load, warm reads under cold load, and admission ramps |
-| `artifacts` | Private artifact relay, public onboarding, and relay ceilings for npm and PyPI |
+| `artifacts` | Private artifact relay, public onboarding, and relay ceilings for npm, PyPI, and Cargo |
 | `full` | Every routine scenario, including worker and replay measurements |
 
 Explicit `scenarios` override the profile and appear as `custom` in the native report.
@@ -1269,9 +1269,10 @@ Named partial profiles remain diagnostic. They do not enforce calibrated floors 
 
 Full nightly runs retain all four pod shapes. Remaining floor values and eligibility checks stay unchanged.
 The full profile now omits the 5% private-copy cases and default restart replays.
-They remain available through explicit scenario selection. The routine grid contains 332 pass observations, down from 356.
+They remain available through explicit scenario selection. The npm and PyPI grid contains 332 pass observations, down from 356.
+Cargo adds 154 pass observations, giving 486 across the three ecosystems.
 
-The npm serving handoff still requires an explicit full run:
+The serving handoff requires an explicit full run:
 
 ```bash
 gh workflow run bench-load.yml --ref <branch> -f profile=full -f pod-shape=all
@@ -1353,6 +1354,7 @@ pass uses four times the base connections, and its service pass uses one. The at
 keeps its raw p50 and p99 totals but marks the public-leg split unavailable, with the reason that
 the relay has no public leg. Ordinary scenarios still subtract only the public baseline, with
 private work in Écluse overhead. p50 remains primary, and p99 remains the labelled tail.
+`pypi/wheel-ceiling` and `cargo/crate-ceiling` use the same settings and attribution.
 
 A boot that fails because the runtime could not start an OS thread is booted once more, two
 seconds later, into a fresh cgroup, so every reading comes from the boot that succeeded. That
@@ -1363,17 +1365,17 @@ and the report counts the boot attempts. Any other boot failure fails the scenar
 Four scenarios per ecosystem stress admission under memory pressure.
 `npm/herd` sends 100 simultaneous cold `typescript` listings to an idle proxy.
 `pypi/herd` sends the same burst of cold `boto3` Simple-index requests.
-`npm/herd-under-heavy-private` and `pypi/herd-under-heavy-private` send that burst during a heavy
-private load, as [The herd under heavy private load](#the-herd-under-heavy-private-load) describes.
-`npm/warm-under-cold` and `pypi/warm-under-cold` measure assembled hits and retained selected reads.
+`cargo/herd` sends it for the `aws-sdk-ec2` sparse index.
+Each ecosystem's `herd-under-heavy-private` sends that burst during a heavy private load.
+See [The herd under heavy private load](#the-herd-under-heavy-private-load).
+Each ecosystem's `warm-under-cold` measures assembled hits and retained selected reads.
 A second generator drives heavy-tier listings that never reuse an assembled response.
-`npm/ramp` and `pypi/ramp` step from 10 to 400 connections, one configured duration per step, and report each step.
-None of these eight scenarios joins the concurrency-one pass.
+Each ecosystem's `ramp` steps from 10 to 400 connections, with one configured duration per step, and reports each step.
+None of these twelve scenarios joins the concurrency-one pass.
 
-`npm/slow-readers` and `pypi/slow-readers` measure what slow clients cost the requests beside them.
-Each repeats its ecosystem's cold listing load (`npm/merge-cold`, `pypi/index-cold`) and reports
-that load. Beside it, the same number of further clients request the same listings and read each
-response at 1 MiB/s. These slow readers run in the harness process:
+`npm/slow-readers`, `pypi/slow-readers`, and `cargo/slow-readers` measure what slow clients cost the requests beside them.
+Each repeats and reports its cold listing load: `npm/merge-cold`, `pypi/index-cold`, or `cargo/index-cold`.
+Beside it, the same number of further clients request the same listings and read each response at 1 MiB/s. These slow readers run in the harness process:
 
 - Each advertises a 1448-byte segment size, as an Ethernet path does. The proxy's socket send
   buffer then stays near a few hundred KiB, where loopback lets it grow to 4 MiB, so a listing
@@ -1383,7 +1385,7 @@ response at 1 MiB/s. These slow readers run in the harness process:
 - The scenario's section shows the slow readers' successes, refusals, and time to the last byte
   beside the measured load. The report lists the scenario after the private-copy rows.
 
-Neither slow-reader scenario joins the concurrency-one pass.
+No slow-reader scenario joins the concurrency-one pass.
 
 The private-copy scenarios model a mirror target that is also the private upstream. Its document
 for a package holds the versions the deployment has mirrored. Every listing decodes its own private
@@ -1398,15 +1400,18 @@ TTL is 0. The private copy stays fixed for the run, so each scenario measures on
 | Scenario | Private copy of each capture |
 |---|---|
 | `npm/merge-cold`, `pypi/index-cold` | The comparison point, not a cut: a synthetic overlay of versions the public document does not hold, three for npm and one wheel for PyPI |
-| `npm/heavy-private-5pct`, `pypi/heavy-private-5pct` | The newest 5% of the versions |
-| `npm/heavy-private-25pct`, `pypi/heavy-private-25pct` | The newest 25% of the versions |
-| `npm/heavy-private`, `pypi/heavy-private` | The complete capture, as a private registry that proxies the public one returns |
+| `npm/heavy-private-5pct`, `pypi/heavy-private-5pct`, `cargo/heavy-private-5pct` | The newest 5% of the versions |
+| `npm/heavy-private-25pct`, `pypi/heavy-private-25pct`, `cargo/heavy-private-25pct` | The newest 25% of the versions |
+| `npm/heavy-private`, `pypi/heavy-private`, `cargo/heavy-private` | The complete capture, as a private registry that proxies the public one returns |
+
+Cargo's `index-cold` comparison has no completed private source copy.
+Its private-copy variants retain checked source rows and verify matching target archives before measurement.
 
 The full profile runs the 25% and complete-copy cases after the cold listing and its advisory variants.
 The 25% case keeps an intermediate comparison, and the complete copy keeps the stress case.
 The 5% case requires explicit scenario selection. All four rows join the concurrency-one pass when selected.
 
-Three npm and three PyPI scenarios load an advisory database, so the per-version advisory cost
+Three scenarios per ecosystem load an advisory database, so the per-version advisory cost
 shows in the load report. Before the proxy boots, the scenario compiles the captured advisories
 under `bench/corpus/advisories/` through Pilot's compiler, and fails when they compile to no range.
 It then serves the artifact from a loopback stub of the object store, outside the proxy's cgroup.
@@ -1425,9 +1430,12 @@ lists it right after that counterpart, so their allocations per success sit side
 | `pypi/index-cold-advisories` | `pypi/index-cold` | The shipped policy | Advisories for `numpy` and `requests`, and none for `boto3` |
 | `pypi/index-cold-all-advisory-rules` | `pypi/index-cold` | The shipped policy with `DenyIfCve` at CVSS 8 and `DenyIfEpss` at 0.5, both failing closed | As `pypi/index-cold-advisories`, with `DenyIfEpss` never denying for the same reason |
 | `pypi/revalidate-not-modified-advisories` | `pypi/revalidate-not-modified` | The shipped policy | Nothing: `boto3` has no advisory, so this measures a present database and an absent package |
+| `cargo/index-cold-advisories` | `cargo/index-cold` | The shipped policy | The captured RustSec advisory for `tokio`, and none for `windows` or `aws-sdk-ec2` |
+| `cargo/index-cold-all-advisory-rules` | `cargo/index-cold` | The shipped policy with `DenyIfCve` at CVSS 8 and `DenyIfEpss` at 0.5, both failing closed | As `cargo/index-cold-advisories` |
+| `cargo/revalidate-not-modified-advisories` | `cargo/revalidate-not-modified` | The shipped policy | Nothing: `aws-sdk-ec2` has no advisory, so this measures a present database and an absent package |
 
 The load harness boots the shipped mount policy. npm therefore also carries the admission-only
-`deny-scripts` rule, while PyPI carries only the shared defaults. Two captured npm versions declare
+`deny-scripts` rule, while PyPI and Cargo carry only the shared defaults. Two captured npm versions declare
 `postinstall` and the default denies them. Check a scheduled-equivalent npm run against the existing
 success floors when changing this default, keeping every failure visible.
 
@@ -1446,15 +1454,15 @@ heap overflows as its reading, so they do not fail it. It fails only when no lim
 
 The heap ceiling leaves room in the memory limit for memory outside the heap, such as kernel socket
 buffers ([runtime-sizing arithmetic](../web/content/docs/operations.md#appendix-runtime-sizing-arithmetic)).
-`npm/herd-under-heavy-private` and `pypi/herd-under-heavy-private` measure that memory while the
+Each ecosystem's `herd-under-heavy-private` measures that memory while the
 proxy sends a burst of large responses and private reads hold its heap high. A change that lets the
 proxy hold more live data shrinks the margin, so run these scenarios under every pod shape for such
 a change. Like every scenario, each fails on an OOM kill or a heap overflow.
 
 Each scenario runs its ecosystem's `heavy-private` load at the base concurrency for the window.
 Halfway through, 100 more connections each send one request for the herd's listing at the same
-moment: `typescript` for npm and `boto3` for PyPI. The burst passes through the same admission as
-the load. From that moment until the last burst response ends, the harness reads the proxy cgroup's
+moment: `typescript` for npm, `boto3` for PyPI, and `aws-sdk-ec2` for Cargo.
+The burst passes through the same admission as the load. From that moment until the last burst response ends, the harness reads the proxy cgroup's
 files every 10 ms. A herd on an idle proxy completes in about a second, so the one-second gauges
 would miss its peak. The scenario's own section adds three rows to the usual figures:
 
@@ -1464,7 +1472,7 @@ would miss its peak. The scenario's own section adds three rows to the usual fig
 | Highest `memory.current` in the burst | The most memory charged to the cgroup, with `anon`, `file`, `kernel` and `sock` from `memory.stat` at the same reading |
 | Highest `memory.stat` `sock` in the burst | The most memory in kernel socket buffers, with `memory.current` at the same reading |
 
-`npm/herd` and `pypi/herd` show the same rows for their burst on an idle proxy. A run without
+Each ecosystem's `herd` shows the same rows for its burst on an idle proxy. A run without
 `BENCH_LOAD_CGROUP` starts its proxy outside any cgroup of its own, so these rows read `no cgroup`
 there.
 
@@ -1474,11 +1482,11 @@ maximum memory in use. A `sock` peak near that gap shows that socket buffers tak
 the heap. The at-a-glance row shows the burst's successes, and the concurrent load row shows the
 `heavy-private` load's. Only the background `heavy-private` load requires successes and meets a floor.
 The burst's successes and refusals remain diagnostic, including zero successes. This exception applies
-only to these two combined scenarios. All process and memory-failure checks still apply.
+only to these combined scenarios. All process and memory-failure checks still apply.
 
-Both scenarios stay in scheduled coverage. Their background floors need fresh measurements after
-the integrated contention fixes in #1868, at the pod shapes used for delivery. Earlier observations
-do not supply this calibration. Until those measurements exist, the missing-floor check remains red.
+The npm and PyPI combined scenarios stay in scheduled coverage.
+Their eight background floors use 12 qualifying source runs, with three observations per scheduled pod shape.
+The [calibration record](../bench/load/floors.json) keeps each measured commit, the earlier source groups, and the native latency provenance.
 
 #### Capability sweeps
 
@@ -1489,7 +1497,7 @@ arms, and the anchor again, so the runner's speed moves every arm of a job alike
 
 | Field | Meaning |
 |---|---|
-| `upstreamLatencyMs`, `passes`, `scenarios` | What every arm shares. The runner turns the round-trip probe off and injects the fixed latency for both ecosystems. |
+| `upstreamLatencyMs`, `passes`, `scenarios` | What every arm shares. The runner turns the round-trip probe off and injects the fixed latency for every selected ecosystem. |
 | `anchor`, `scored` | The arm every job opens and closes with, and the scenarios whose anchor ratios make an arm's score |
 | `arms.<name>`: `shape`, `cpus`, `cores`, `maxHeapBytes`, `allocAreaMib`, `serveMaxInFlight` | The arm's pod shape, its proxy settings, and an explicit admission. The proxy's boot resolves any it leaves out. |
 | `arms.<name>.expect` | The capabilities, allocation area, heap ceiling, and admission every proxy of the arm must report |
@@ -1534,10 +1542,9 @@ alone, and phase `A` also measures the `2cpu-1gib` shape with no placement.
 
 ### Success floors
 
-[bench/load/floors.json](../bench/load/floors.json) holds a reviewed minimum for every count of
-successes a scheduled run checks: one floor per scenario, pass, and pod shape, for npm and PyPI
-alike. A run held to the floors fails when a count is below its floor. A floor catches what the
-zero-success check cannot: a scenario at a tenth of its normal successes is not at zero. The floors
+[bench/load/floors.json](../bench/load/floors.json) holds reviewed minimum successes for npm, PyPI, and Cargo.
+Each checked scenario, pass, and pod shape has a floor.
+A run held to the floors fails when a count is below its floor. A floor catches what the zero-success check cannot: a scenario at a tenth of its normal successes is not at zero. The floors
 are loose. Each is half the lowest count of its reviewed calibration runs, so it leaves room for
 variation between runs and for a change that moves throughput by a few percent. The load test never gates a
 merge: a breach turns only its own scheduled or dispatched run red.
@@ -1546,16 +1553,18 @@ merge: a breach turns only its own scheduled or dispatched run red.
 |---|---|
 | Loaded pass | The successes in the scenario's window |
 | Concurrency-one pass | The same count, for each scenario that joins that pass |
-| `npm/ramp`, `pypi/ramp` | Every step. The one floor comes from the lowest step of the calibration runs, and each step must reach it |
-| `npm/warm-under-cold`, `pypi/warm-under-cold`, `npm/slow-readers`, `pypi/slow-readers` | Both loads, the measured one and the one beside it |
-| `npm/herd-under-heavy-private`, `pypi/herd-under-heavy-private` | Only the concurrent `heavy-private` background load. Burst successes and refusals stay diagnostic |
-| `npm/worker-mirroring`, `pypi/worker-mirroring` | Complete jobs under `unlimited`, the only shape that runs the in-process worker |
+| `npm/ramp`, `pypi/ramp`, `cargo/ramp` | Every step. The one floor comes from the lowest step of the calibration runs, and each step must reach it |
+| Each ecosystem's `warm-under-cold` and `slow-readers` | Both loads, the measured one and the one beside it |
+| Each ecosystem's `herd-under-heavy-private` | Only the concurrent `heavy-private` background load. Burst successes and refusals stay diagnostic |
+| `npm/worker-mirroring`, `pypi/worker-mirroring`, `cargo/worker-mirroring` | Complete jobs under `unlimited`, the only shape that runs the in-process worker |
 | The request-pattern replays | A finite trace whose count is the same every night, so the floor is half of it |
 
 The PyPI worker row runs in process under `unlimited`. Its admission capacity is `maxBound(Int) / 2`,
 not a constrained worker pod. The three managed-read HTTP rows retain constrained-pod coverage.
 The worker payload setting controls uncompressed bytes per archive file. Its timer excludes fixture
 reset, queue setup and assertions, while the scenario duration includes that work.
+The Cargo worker uses the same in-process scope and nonbinding admission capacity.
+It copies one crate archive, with native discovery, metadata, archive inspection, upload, conditional state writes, and completion proof.
 
 The floor checks fail closed over the routine full profile:
 
@@ -1603,18 +1612,20 @@ After the calibration conditions match, the harness compares nothing else:
 - The harness reads the runner's operating system and architecture, not its label, so any Linux
   ARM64 runner on GitHub Actions counts as the calibrated `ubuntu-26.04-arm`.
 
-Both ecosystems use measurement conditions `unified-v2`:
+All three ecosystems use measurement conditions `unified-v2`:
 
 - Each eviction bound is `min(max(1, configured entries), actual selected project count - 1)`.
   A selected working set with fewer than two projects fails before capture reads or proxy boot.
 - Each listing pass preflights every distinct selected URL before its measurement callback.
   npm checks JSON, package identity, native metadata, rewritten artifact URLs, and the private
   overlay for merged listings. PyPI retains its media, project, file, artifact URL, and overlay checks.
+  Cargo checks nonempty native records, checksum fields, and local archive discovery.
   Private-copy listings retain their native checks without requiring a synthetic overlay.
   Cold admission bursts and ramps remain unprimed.
 - All shared upstream stubs skip the delay at zero or negative latency. Positive delays stay unchanged.
 - Each ecosystem warms a native public listing connection before probing its own RTT.
   npm fetches packuments. PyPI requests PEP 691 JSON Simple indexes, not the project JSON API.
+  Cargo requests native sparse indexes from `index.crates.io`.
   Disabled probes, failed warm-ups, and probes with no successful samples report an explicit configured fallback.
   Each report and observation artifact retains the baseline identity and sample count.
 
@@ -1632,11 +1643,14 @@ partial recalibration. It records retained row provenance without changing those
 
 Latency-bound counts fall as injected latency rises. Derive each native ceiling separately:
 1.5 times the lowest of its pod shapes' highest qualifying latencies, rounded up to 10 ms.
-`npmInjectedLatency.highestMs` and `pypiInjectedLatency.highestMs` record the per-shape observations.
-The reader checks the formula and pod identities for each ceiling. `unified-v2` calibration requires
-both native ceilings. A run above either ceiling is not held as a whole, including the other ecosystem.
-The report names the ecosystem, its injected latency, and its own ceiling. The network exception
-still applies to either ceiling breach. A missing calibration or condition mismatch is a configuration fault.
+`npmInjectedLatency.highestMs`, `pypiInjectedLatency.highestMs`, and `cargoInjectedLatency.highestMs` record the per-shape observations.
+The reader checks the formula and pod identities for each ceiling.
+`unified-v2` calibration requires npm and PyPI ceilings. Cargo floors also require their own native ceiling.
+A run above any native ceiling is not held as a whole, including the other ecosystems.
+The report names the ecosystem, its injected latency, and its own ceiling.
+The network exception applies to each ceiling breach.
+A missing calibration or condition mismatch is a configuration fault.
+Missing Cargo calibration or a missing Cargo latency observation fails scheduled and dispatched runs.
 
 To recalibrate, take the last ten scheduled runs of the Load test workflow on `main`, and take the
 next older run in place of each one you leave out:
@@ -1667,7 +1681,7 @@ their background counts. Then write the `calibration` record:
   in `runs` do not count as observations under the new conditions.
 - `measurementConditions`: the conditions measured by the new calibration.
 - `retainedFloorConditions`: unaffected rows that retain an earlier calibration identity.
-- `npmInjectedLatency` and `pypiInjectedLatency`: each native ecosystem's highest qualifying injected
+- `npmInjectedLatency`, `pypiInjectedLatency`, and `cargoInjectedLatency`: each native ecosystem's highest qualifying injected
   latency by pod shape and its derived ceiling. Preserve the measured baseline and fallback identities
   when deciding whether an observation qualifies.
 
@@ -1685,7 +1699,7 @@ unheld workflow results into qualified measurements or invent calibration values
 
 In both cases, collect at least three qualifying observations per applicable pod shape. Add their
 run URLs and exact measured commits to `runs`. Preserve earlier source records and their assigned
-floor groups when those floors stay unchanged. A whole run above either applicable native ceiling
+floor groups when those floors stay unchanged. A whole run above any applicable native ceiling
 contributes no floor counts or latency maxima, including its otherwise eligible profiles.
 
 For a new native latency policy, select bootstrap samples under the existing applicable constraints.
@@ -1708,7 +1722,7 @@ The next routine recalibration uses ten qualifying scheduled runs. Remove histor
 only after no retained floor or latency record refers to them.
 
 After a calibration-only patch, the committed-floor unit checks parse the actual file and verify
-default-condition enforcement under each scheduled shape at both native ceilings. Review and CI
+default-condition enforcement under each scheduled shape at every native ceiling. Review and CI
 check the final commit. Keep the measured harness code unchanged and record any later report-only
 change. These checks do not require another timed grid.
 
@@ -1717,11 +1731,11 @@ without the file.
 
 ### Benchmark captures
 
-The catalogue records complete npm packuments and PyPI PEP 691 Simple JSON snapshots.
+The catalogue records complete npm packuments, PyPI PEP 691 Simple JSON snapshots, and Cargo sparse indexes.
 Each capture keeps the upstream response body unchanged, including prereleases, operational fields,
 and PyPI serial metadata. The catalogue records its source, capture time, actual media type, byte
 size, and SHA-256 digest. Requests use identity content encoding, so these bytes match decompressed
-JSON input rather than compressed transport traffic.
+metadata input rather than compressed transport traffic.
 
 Run `task gen-bench-corpus` only for a deliberate recapture. Version pins identify workloads and do
 not limit the captured releases. Run `BENCH_CORPUS_VERIFY=1 task gen-bench-corpus` to check committed
@@ -1736,10 +1750,10 @@ The harness separately validates each capture through the production read driver
 |---|---|
 | `wire+project (per package)` | Complete bodies feed decoding and production full-document projection on every iteration. |
 | `single-version metadata (per package)` | Complete bodies feed production full-document and selective projections. |
-| `cold production reads (per package)` | Unchanged complete bodies pass through the production npm and PyPI full-document and selected-version HTTP readers on every iteration. |
+| `cold production reads (per package)` | Unchanged complete bodies pass through the production npm, PyPI, and Cargo full-document and selected-version HTTP readers on every iteration. |
 | `source digest (32 KiB chunks)` | Unchanged complete bodies pass through the production digesting source in 32 KiB pieces, and nothing reads them further. |
 | Realistic serve, merge, rules, and version groups | Inputs derive from complete captures, with preparation outside the measured operation. |
-| Load metadata and cache scenarios | Fixture upstreams serve the captured metadata and rewrite artifact authorities for the local harness. The private upstream of the 5% and 25% private-copy points serves cut captures, and that of the 100% points serves the capture bytes uncut. These are derived bodies, not byte-identity measurements. |
+| Load metadata and cache scenarios | Fixture upstreams serve captured metadata with native local artifact routing. Cargo substitutes checksums for owned relay bytes. npm and PyPI rebase artifact URLs. The private upstream of the 5% and 25% private-copy points serves cut captures, and that of the 100% points serves all captured versions. These are derived bodies, not byte-identity measurements. |
 | Scaled groups | Synthetic bodies measure growth separately and do not establish wire-to-resident ratios. They pass through the projection under a fixed table key, with no location check. |
 
 The projection groups read held bytes, including the structural guards. Their rows that read a
