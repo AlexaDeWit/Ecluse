@@ -32,7 +32,7 @@ data RubyInfoRow = RubyInfoRow
 -- | This test reader shares no parser or coordinate helper with the production adapter.
 referenceInfo :: ByteString -> Either Text [RubyInfoRow]
 referenceInfo bytes = do
-    input <- first (toText . show) (Text.decodeUtf8' bytes)
+    input <- first show (Text.decodeUtf8' bytes)
     let physical = zip [0 ..] (T.splitOn "\n" input)
     case dropWhile ((/= "---") . snd) physical of
         [] -> Left "Compact Index header delimiter is absent"

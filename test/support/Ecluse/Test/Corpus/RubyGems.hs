@@ -54,7 +54,7 @@ rubyGemsVersionKeys = fmap (ordNub . map rowVersion) . referenceInfo
 -- | The internal tree retains original row bytes and independently read version keys.
 decodeRubyGemsValues :: ByteString -> Either Text Value
 decodeRubyGemsValues bytes = do
-    input <- first (toText . show) (Text.decodeUtf8' bytes)
+    input <- first show (Text.decodeUtf8' bytes)
     rows <- referenceInfo bytes
     let physical = Map.fromList (zip [0 ..] (T.lines input))
     unless (T.isSuffixOf "\n" input) (Left "incomplete RubyGems corpus framing")
