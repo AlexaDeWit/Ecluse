@@ -38,7 +38,7 @@ import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Corpus.RubyGems (projectRubyGemsInfo)
 import Ecluse.Test.Registry.RubyGems.Fixtures (RubyRelease (..), loadRubyReleasesFrom, rubyRelease)
-import Ecluse.Test.Support (expectRight)
+import Ecluse.Test.Support (expectRight, expectRightIO)
 
 -- | Encoded records own rows and references. The object map owns the original compressed specifications.
 data RubyStateProbeFixture = RubyStateProbeFixture
@@ -83,22 +83,35 @@ retainVersion target name source releases (previous, objects) details = do
 
 retainFile :: MirrorInventory -> [RubyRelease] -> (ProjectMirrorRecord, Map Text ByteString) -> ExpectedMirrorFile -> IO (ProjectMirrorRecord, Map Text ByteString)
 retainFile inventory releases (record, objects) file = do
+    (verified, checked@(VerifiedCompanionBytes _ reference _)) <- checkedFixtureFile inventory releases file
+    withIdentity <- expectRight (retainVerifiedIdentity (inventoryVersion inventory) verified record)
+    retained <- expectRight (retainCompanionReference (inventoryVersion inventory) checked reference withIdentity)
+    addedObjects <- retainFixtureCompanionObject checked objects
+    pure (retained, addedObjects)
+
+checkedFixtureFile :: MirrorInventory -> [RubyRelease] -> ExpectedMirrorFile -> IO (VerifiedArtifactBytes, VerifiedCompanionBytes)
+checkedFixtureFile inventory releases file = do
     row <- expectRight (mirrorRow inventory file)
     let coordinate = grCoordinate row
     release <- rubyRelease releases (renderPackageName (inventoryPackage inventory)) (renderVersion (coordinateVersion coordinate)) (unGemPlatform (coordinatePlatform coordinate))
     unless (releaseFilename release == artFilename (expectedArtifact file)) (fail "native state fixture filename disagrees with source")
     verified <- expectRight (verifyMirrorBytes file (releaseArchive release))
-    inspected <- inspectGemArchive defaultLimits (const pass) (verifiedBytes verified) >>= expectRight
+    inspected <- expectRightIO (inspectGemArchive defaultLimits (const pass) (verifiedBytes verified))
     archive <- expectRight (checkGemArchive coordinate (hashValue (grChecksum row)) inspected)
     void (expectRight (checkGemSpecification coordinate row (gemArchiveSpecification archive)))
-    compact <- mcValidate rubyMirrorCompanion defaultLimits (const pass) inventory file (releaseCompact release) >>= expectRight
+    compact <- expectRightIO (mcValidate rubyMirrorCompanion defaultLimits (const pass) inventory file (releaseCompact release))
     unless (compact == releaseCompact release) (fail "native state fixture changed the original compact bytes")
-    checked@(VerifiedCompanionBytes _ reference _) <- expectRight (verifySourceCompanionBytes defaultLimits (inventoryReadData inventory) file compact)
-    withIdentity <- expectRight (retainVerifiedIdentity (inventoryVersion inventory) verified record)
-    retained <- expectRight (retainCompanionReference (inventoryVersion inventory) checked reference withIdentity)
+    checked <- expectRight (verifySourceCompanionBytes defaultLimits (inventoryReadData inventory) file compact)
+    pure (verified, checked)
+
+retainFixtureCompanionObject :: VerifiedCompanionBytes -> Map Text ByteString -> IO (Map Text ByteString)
+retainFixtureCompanionObject checked@(VerifiedCompanionBytes _ reference _) objects = do
     let digest = companionDigest reference
-    for_ (Map.lookup digest objects) $ \existing -> unless (existing == compact) (fail "native state fixture has conflicting companion objects")
-    pure (retained, Map.insert digest (BS.copy compact) objects)
+        compact = companionBody checked
+    case Map.lookup digest objects of
+        Nothing -> pure ()
+        Just existing -> unless (existing == compact) (fail "native state fixture has conflicting companion objects")
+    pure (Map.insert digest (BS.copy compact) objects)
 
 -- | Add labelled opaque source metadata for omission controls, preserving native archive and specification identities.
 padRubyStateProbeSource :: Int -> RubyStateProbeFixture -> IO RubyStateProbeFixture
