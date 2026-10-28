@@ -34,6 +34,7 @@ Answer these questions with protocol evidence:
 - Which facts support age, availability, install-time execution, and advisory rules?
 - How do clients discover metadata, download, and publication endpoints?
 - How do private credentials, caches, conditional requests, and lockfiles affect those requests?
+- Do initial downloads verify the registry's advertised artifact digest, or does the client only record the received bytes?
 - What proves a complete version, and what survives interruption or public-source outage?
 - Which backend supplies inventory and deletion under the required authority and consent?
 
@@ -111,6 +112,11 @@ Keep private-source authorisation, first-party precedence, and merge provenance 
 Declare `AdapterArtifact.artifactPrivateAddressing` independently of `artifactHosts` in [Adapter.Capability](../core/src/Ecluse/Core/Registry/Adapter/Capability.hs).
 `ConventionalArtifactPath` uses a native path. `IndexedArtifactLocation` requires an authoritative private metadata location.
 The public host allowance does not select private addressing.
+
+Declare `AdapterArtifact.artifactRelayIntegrity` from native client evidence.
+Use `ClientVerifiedStream` when supported clients check the registry's advertised digest on the first download.
+Use `VerifyBeforeReply` when the proxy must buffer bounded bytes and verify the digest before replying.
+Frozen lockfile checks and mirror ingestion do not establish this check for a first download.
 
 ## 5. Map policy and advisory evidence
 
