@@ -11,6 +11,7 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Test.Hspec
 
 import Ecluse.Core.Package (Artifact (..), HashAlg (SHA256), PackageDetails (pkgArtifacts, pkgName, pkgVersion), PackageInfo (infoInvalidEntries, infoVersions), hashAlg, hashValue)
+import Ecluse.Core.Package.Integrity (IntegrityResult (IntegrityVerified), verifyIntegrity)
 import Ecluse.Core.Registry (RegistryResponse (responseBody))
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (prepareManifest)
 import Ecluse.Core.Registry.Origin (originClient)
@@ -22,7 +23,6 @@ import Ecluse.Core.Registry.RubyGems.Project (mkCoordinate, mkGemPlatform, proje
 import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), Limits (progressFloor), defaultLimits)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Version (renderVersion)
-import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityVerified), verifyIntegrity)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.RegistrySmoke (liveMetadata, liveRegistryResponse)
 import Ecluse.Test.Deadline (withExchangeClient)

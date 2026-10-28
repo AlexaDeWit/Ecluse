@@ -2,11 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Exercise npm mirror publication through a recording transport stub.
-Integrity cases connect worker verification to the published document and attachment, and the
-field-rewrite cases pin what the published version object keeps, replaces, and strips. The
-upload-guard cases classify the bodies npm clients send to the first-party publish route.
--}
+-- | npm publication through a recording transport stub preserves verified bytes and checked upload claims.
 module Ecluse.Core.Registry.Npm.PublishSpec (spec) where
 
 import Data.Aeson (Object, Value (Bool, Null, Number, Object, String), encode, object, toJSON, (.:), (.:?), (.=))
@@ -24,6 +20,7 @@ import Ecluse.Core.Deadline (Deadlines)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportFault (tfDetail))
 import Ecluse.Core.Package (Artifact (artFilename, artHashes, artSize), HashAlg (SHA1, SHA256, SRI), PackageDetails (pkgArtifacts, pkgName, pkgVersion), PackageInfo (..), mkHash, mkSriHashes)
+import Ecluse.Core.Package.Integrity (IntegrityResult (IntegrityVerified), verifyIntegrity)
 import Ecluse.Core.Registry (
     FetchFault (FetchTransport),
     MirrorArtifact (maHashes, maSize),
@@ -42,7 +39,6 @@ import Ecluse.Core.Registry.Publish (
  )
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityVerified), verifyIntegrity)
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, pypiVersion, sriSha256Of, sriSha512Of, unsafeHash, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc, mirrorVersionDoc)
 import Ecluse.Test.Registry.Npm.Publish (npmDeprecateDocument, npmMisfiledVersion, npmProvenanceRelease, npmReleaseDocument, npmRepeatedAttachments, npmStarDocument, npmTaggedRelease)

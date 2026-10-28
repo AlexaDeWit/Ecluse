@@ -2,14 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The mirror worker's public surface over the supervised loop that turns enqueued jobs
-into mirrored packages.
-
-The loop long-polls the demand-driven mirror queue ("Ecluse.Core.Queue") and resolves each job's
-ecosystem bundle ('WorkerPolicy'). A job is fail-closed when its ecosystem carries no bundle, and
-when its name is one the deployment owns: the queue outlives a namespace declaration, so that
-privilege is read here before any public request. The per-job decision, the digest gate, the
-receipt lease, verdict realisation and supervision live in the child modules re-exported below.
+{- | Mirror worker entry points and supervision.
+Queued jobs receive current policy and first-party checks before any public fetch.
+The queue can outlive the deployment's first-party declarations.
 -}
 module Ecluse.Core.Worker (
     -- * Worker runtime
@@ -47,7 +42,7 @@ module Ecluse.Core.Worker (
     verifyIntegrity,
 ) where
 
-import Ecluse.Core.Worker.Integrity
+import Ecluse.Core.Package.Integrity (IntegrityResult (..), verifyIntegrity)
 import Ecluse.Core.Worker.Job
 import Ecluse.Core.Worker.Liveness
 import Ecluse.Core.Worker.Loop

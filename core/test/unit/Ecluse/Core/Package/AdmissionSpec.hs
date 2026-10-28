@@ -35,12 +35,14 @@ import Ecluse.Core.Package.Admission (
     admissionTransience,
  )
 import Ecluse.Core.Package.Integrity (
+    IntegrityResult (IntegrityMismatch, IntegrityVerified),
     VersionIntegrity (MeetsFloor),
     assertedAlg,
     authoritativeDigest,
     classifyDigests,
     mkMinIntegrity,
     partitionByFloor,
+    verifyIntegrity,
  )
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Rules.Types (
@@ -54,7 +56,6 @@ import Ecluse.Core.Rules.Types (
     Transience (WillResolve, WontResolve),
  )
 import Ecluse.Core.Server.Path (unFilename)
-import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityMismatch, IntegrityVerified), verifyIntegrity)
 import Ecluse.Test.Package (
     artifactWith,
     defaultMinIntegrity,

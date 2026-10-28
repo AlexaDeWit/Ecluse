@@ -45,7 +45,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (Artifact (..), Availability (Available, Yanked), Hash, HashAlg (SHA256), PackageDetails (..), PackageInfo (infoVersions), PackageName, mkHash, pkgEcosystem)
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Package.Hash (canonicalHashValue, computeDigest, hexDigestText)
-import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest)
+import Ecluse.Core.Package.Integrity (IntegrityResult (..), assertedAlg, authoritativeDigest, verifyIntegrity)
 import Ecluse.Core.Registry (MirrorArtifact (..), PublishFault (PublishIntegrityMismatch, PublishSourceUnavailable))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, npmCached, pypiSimpleCached, rubyGemsCached)
 import Ecluse.Core.Registry.Cargo.Discovery (cargoArtifactCoordinate, coordinateFilename)
@@ -62,7 +62,6 @@ import Ecluse.Core.Registry.ServedDocument (stringField, uniqueEntries, validEnt
 import Ecluse.Core.Registry.WireSupport (parsePublishTime)
 import Ecluse.Core.Server.Path (mkFilename, unFilename)
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Core.Worker.Integrity (IntegrityResult (..), verifyIntegrity)
 
 -- | Supported read fields retain their source coordinates independently of physical uploads.
 data MirrorReadData

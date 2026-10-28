@@ -55,12 +55,12 @@ import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Hash (sha256Hex)
+import Ecluse.Core.Package.Integrity (IntegrityResult (..), verifyIntegrity)
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorFragment)
 import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Security (LimitError, Limits (..), checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Core.Worker.Integrity (IntegrityResult (..), verifyIntegrity)
 
 -- | A digest of the configured target, never a credential or caller authorisation.
 newtype StateTarget = StateTarget Text

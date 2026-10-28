@@ -462,7 +462,6 @@ library ecluse-core
     Ecluse.Core.Wire
     Ecluse.Core.Worker
       Ecluse.Core.Worker.Fetch
-      Ecluse.Core.Worker.Integrity
       Ecluse.Core.Worker.Job
       Ecluse.Core.Worker.Managed
       Ecluse.Core.Worker.Lease
@@ -1479,7 +1478,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.VersionSpec
     Ecluse.Core.WireSpec
     Ecluse.Core.Worker.FetchSpec
-    Ecluse.Core.Worker.IntegritySpec
     Ecluse.Core.Worker.JobSpec
     Ecluse.Core.Worker.ManagedSpec
     Ecluse.Core.Worker.LeaseSpec
