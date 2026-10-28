@@ -73,6 +73,7 @@ pypiReadDriver =
         , lrdPatternProvider =
             PatternProvider
                 { ppCaptureAuthority = "https://files.pythonhosted.org"
+                , ppRootUrl = (`indexUrl` "")
                 , ppListingSuffix = id
                 , ppDiscoveryPath = Nothing
                 , ppCapturedRead = const (Right pypiRead)

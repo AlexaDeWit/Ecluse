@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Native load includes named batches, compact specifications, relays and complete platform copies.
-module Ecluse.BenchLoad.RubyGems (DependencyWorkload (..), dependencyPackages, RelayShape (..), RelayFixture (..), relayFixture, relayArtifactFixture, rubyGemsFixture, rubyGemsPrivateCopy, rubyGemsLoadNotes, infoStubWithArtifacts, selectWarmArtifacts) where
+module Ecluse.BenchLoad.RubyGems (DependencyWorkload (..), dependencyPackages, RelayShape (..), RelayFixture (..), relayFixture, relayArtifactFixture, rubyGemsFixture, rubyGemsPrivateCopy, rubyGemsPatternProvider, rubyGemsLoadNotes, infoStubWithArtifacts, selectWarmArtifacts) where
 
 import Data.Aeson (withArray, withObject, (.:))
 import Data.Aeson.Types (Parser, parseEither)
@@ -74,19 +74,24 @@ nativeDriver =
                 }
         , lrdWarmUnderCold = (scenario "warm-under-cold" "Read warm named metadata and artifacts while cold requests change an opaque public header." warmUnderCold){scenarioServiceTime = False}
         , lrdRamp = (scenario "ramp" "Read the weighted native corpus at each configured concurrency step with public TTL 0." (\knobs use -> withNativeListings knobs (weightedMix cpWeight listingUrl rubyGemsCorpusPackages) (\proxy urls -> use (proxied proxy (DriveRamp rampSteps (urlLoad urls)))))){scenarioServiceTime = False}
-        , lrdPatternProvider =
-            PatternProvider
-                { ppCaptureAuthority = "https://rubygems.org"
-                , ppListingSuffix = ("api/v1/dependencies?gems=" <>)
-                , ppDiscoveryPath = Nothing
-                , ppCapturedRead = Right . gemReadWith (const pass) (const pass)
-                , ppSelectedArtifacts = \selected packages captures -> case selected of
-                    Nothing -> pure Map.empty
-                    Just "pinned" -> selectWarmArtifacts packages captures
-                    Just _ -> benchFail "RubyGems selected replay requires pinned"
-                }
+        , lrdPatternProvider = rubyGemsPatternProvider
         , lrdPatternPrivate = lsPrivate nativeListing
         , lrdPatternPublic = \knobs captures artifacts -> pure (infoStubWithArtifacts (lkUpstreamLatencyMicros knobs) captures artifacts)
+        }
+
+-- | Replay roots exclude the listing query so native artifact paths share the same mount.
+rubyGemsPatternProvider :: PatternProvider
+rubyGemsPatternProvider =
+    PatternProvider
+        { ppCaptureAuthority = "https://rubygems.org"
+        , ppRootUrl = \port -> localhost port <> "/rubygems/"
+        , ppListingSuffix = ("api/v1/dependencies?gems=" <>)
+        , ppDiscoveryPath = Nothing
+        , ppCapturedRead = Right . gemReadWith (const pass) (const pass)
+        , ppSelectedArtifacts = \selected packages captures -> case selected of
+            Nothing -> pure Map.empty
+            Just "pinned" -> selectWarmArtifacts packages captures
+            Just _ -> benchFail "RubyGems selected replay requires pinned"
         }
 
 nativeListing :: ListingSetup

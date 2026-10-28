@@ -120,6 +120,7 @@ npmReadDriver =
         , lrdPatternProvider =
             PatternProvider
                 { ppCaptureAuthority = "https://registry.npmjs.org"
+                , ppRootUrl = (`packageUrl` "")
                 , ppListingSuffix = id
                 , ppDiscoveryPath = Nothing
                 , ppCapturedRead = const (Right npmRead)

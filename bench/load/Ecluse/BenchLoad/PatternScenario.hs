@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | A finite matrix over authenticated captures, with independent cache and upstream evidence.
-module Ecluse.BenchLoad.PatternScenario (PatternProvider (..), patternScenarios) where
+module Ecluse.BenchLoad.PatternScenario (PatternProvider (..), patternRequestUrls, patternScenarios) where
 
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
@@ -39,6 +39,8 @@ import Ecluse.Test.Wai (localhost, rebaseAuthority)
 -- | Native replay inputs keep capture rewriting and artifact selection with the provider.
 data PatternProvider = PatternProvider
     { ppCaptureAuthority :: Text
+    , ppRootUrl :: Int -> Text
+    -- ^ The native proxy root, including its final slash, without a listing query.
     , ppListingSuffix :: Text -> Text
     , ppDiscoveryPath :: Maybe Text
     , ppCapturedRead :: Text -> Either MetadataError EcosystemRead
@@ -46,8 +48,8 @@ data PatternProvider = PatternProvider
     }
 
 -- | Every family receives a fresh proxy. No preflight request consumes or warms its trace.
-patternScenarios :: PatternProvider -> Ecosystem -> [CorpusPackage] -> (LoadKnobs -> Application) -> (LoadKnobs -> Map Text LByteString -> Map ByteString LByteString -> IO Application) -> (Int -> Text -> Text) -> [Scenario]
-patternScenarios provider ecosystem packages privateApp publicApp urlFor =
+patternScenarios :: PatternProvider -> Ecosystem -> [CorpusPackage] -> (LoadKnobs -> Application) -> (LoadKnobs -> Map Text LByteString -> Map ByteString LByteString -> IO Application) -> [Scenario]
+patternScenarios provider ecosystem packages privateApp publicApp =
     [cell patternKind False | patternKind <- [minBound .. maxBound]]
         <> [cell ColdInstall True]
   where
@@ -124,7 +126,7 @@ patternScenarios provider ecosystem packages privateApp publicApp urlFor =
                         )
                     )
                 public request respond
-        withProxyConfigured ecosystem knobs configure (privateApp knobs) counted (\port -> [urlFor port ""]) $ \proxy -> \case
+        withProxyConfigured ecosystem knobs configure (privateApp knobs) counted (\port -> [ppRootUrl provider port]) $ \proxy -> \case
             [root] -> do
                 writeIORef upstreamCount (0, 0, 0)
                 use
@@ -134,12 +136,19 @@ patternScenarios provider ecosystem packages privateApp publicApp urlFor =
                             Replay
                                 { replayTrace = requestTrace
                                 , replayDeadlineMicros = deadlineMicros
-                                , replayUrls = \name -> [root <> path | path <- maybeToList (ppDiscoveryPath provider)] <> [root <> ppListingSuffix provider name] <> [root <> saProxyPath artifact | artifact <- maybeToList (Map.lookup name selectedArtifacts)]
+                                , replayUrls = patternRequestUrls provider root selectedArtifacts
                                 , replayEvidence = (<> ("\nReplay deadline: " <> show deadlineMicros <> " microseconds.\n")) <$> evidence proxy upstreamCount capacity wireBytes measuredBodies patternKnobs requestTrace selected evaluationTime
                                 }
                         )
                     )
             _ -> benchFail "pattern fixture requires exactly one URL root"
+
+-- | Discovery precedes the listing, followed by a selected native artifact when present.
+patternRequestUrls :: PatternProvider -> Text -> Map Text SelectedArtifact -> Text -> [Text]
+patternRequestUrls provider root selected name =
+    [root <> path | path <- maybeToList (ppDiscoveryPath provider)]
+        <> [root <> ppListingSuffix provider name]
+        <> [root <> saProxyPath artifact | artifact <- maybeToList (Map.lookup name selected)]
 
 knobsFromEnv :: Pattern -> Int -> IO PatternKnobs
 knobsFromEnv family available = do

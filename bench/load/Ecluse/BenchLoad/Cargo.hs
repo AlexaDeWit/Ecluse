@@ -76,6 +76,7 @@ cargoReadDriver =
         , lrdPatternProvider =
             PatternProvider
                 { ppCaptureAuthority = "https://static.crates.io"
+                , ppRootUrl = (`indexUrl` "")
                 , ppListingSuffix = cargoShard
                 , ppDiscoveryPath = Just "config.json"
                 , ppCapturedRead = \base -> cargoRead <$> parseCargoDiscovery (ecosystemArtifactAuthorities cargoArtifactHosts) base (renderCargoDiscovery (base <> "/crates/{crate}/{crate}-{version}.crate") Nothing False)

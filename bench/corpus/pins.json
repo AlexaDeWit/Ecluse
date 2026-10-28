@@ -574,6 +574,6 @@
   "rubygemsPins": {
     "rails": "8.1.4",
     "nokogiri": "1.19.4",
-    "aws-sdk-ec2": "1.660.0"
+    "aws-sdk-ec2": "1.657.0"
   }
 }

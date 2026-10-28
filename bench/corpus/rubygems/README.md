@@ -2,8 +2,9 @@
 
 These files contain complete original named-gem `/info/<gem>` responses from RubyGems.org.
 `../pins.json` records each source, capture time, media type, byte size and SHA-256.
-Workload pins come from `/api/v1/versions/<gem>/latest.json` at capture time.
-They select releases without cutting captured histories.
+`rubygemsPins` in `../pins.json` selects captured workloads without cutting their histories.
+Each selected version already clears the default quarantine at its authenticated capture time.
+The capture tool preserves these workload choices when it replaces snapshots.
 `BENCH_CORPUS_ECOSYSTEM=rubygems task gen-bench-corpus` replaces these snapshots.
 `BENCH_CORPUS_VERIFY=1` authenticates the committed bytes without network access.
 

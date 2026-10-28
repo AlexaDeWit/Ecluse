@@ -12,26 +12,38 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List (isInfixOf, lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (diffUTCTime, nominalDay)
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (hContentLength, methodGet, status200, status404)
+import Network.HTTP.Types (hContentLength, methodGet, status200, status400, status404)
 import Network.HTTP.Types.Header (hTransferEncoding)
-import Network.Wai (queryString, responseLBS)
+import Network.Wai (pathInfo, queryString, rawPathInfo, rawQueryString, requestMethod, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 
 import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact (..))
 import Ecluse.BenchLoad.Error (BenchLoadError (BenchLoadError))
 import Ecluse.BenchLoad.Fixture (fetchChecked, loadCorpusBodies, longCacheTtl)
-import Ecluse.BenchLoad.Harness (LoadKnobs (..), Scenario (..), UpstreamFixture (fixtureScenarios), defaultLoadKnobs)
+import Ecluse.BenchLoad.Harness (Driver (DriveReplay), LoadKnobs (..), Scenario (..), UpstreamFixture (fixtureScenarios), defaultLoadKnobs, warmUp)
+import Ecluse.BenchLoad.Oha (OhaReport (ohaStatusCounts, ohaSuccessLatencies))
+import Ecluse.BenchLoad.PatternScenario (PatternProvider (..), patternRequestUrls)
+import Ecluse.BenchLoad.Patterns (ClientTrace (ClientTrace), RequestTrace (RequestTrace))
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (pcPreflight, pcUrl))
-import Ecluse.BenchLoad.RubyGems (DependencyWorkload (..), RelayFixture (..), RelayShape (..), dependencyPackages, infoStubWithArtifacts, relayArtifactFixture, relayFixture, rubyGemsFixture, rubyGemsPrivateCopy, selectWarmArtifacts)
+import Ecluse.BenchLoad.Replay (Replay (Replay), ReplayReport (replayHttp), runReplay)
+import Ecluse.BenchLoad.RubyGems (DependencyWorkload (..), RelayFixture (..), RelayShape (..), dependencyPackages, infoStubWithArtifacts, relayArtifactFixture, relayFixture, rubyGemsFixture, rubyGemsPatternProvider, rubyGemsPrivateCopy, selectWarmArtifacts)
+import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
+import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions), renderPackageName)
+import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
+import Ecluse.Core.Registry.RubyGems.Handlers (parseBatchQuery)
+import Ecluse.Core.Registry.RubyGems.Metadata (gemReadWith)
 import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRoutes)
+import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Route (RouteName (RouteName))
-import Ecluse.Test.Corpus (cpName, rubyGemsCorpusPackages)
+import Ecluse.Test.Corpus (CaptureRecord (crCapturedAt), CorpusPackage (cpPackage), cpName, readCaptureRecords, readCorpusPins, rubyGemsCaptureUpstream, rubyGemsCorpusPackages)
 import Ecluse.Test.Package (hexSha256Of)
+import Ecluse.Test.Registry.Metadata.Fetch (captureManifest)
 import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo, runRubyReference)
 import Ecluse.Test.Server.Route (claimedOn)
-import Ecluse.Test.Support (expectRight)
+import Ecluse.Test.Support (expectRight, expectRightText)
 import Ecluse.Test.Wai (localhost)
 
 spec :: Spec
@@ -53,6 +65,57 @@ spec = do
             for_ (Map.elems selected) $ \artifact -> saUpstreamUrl artifact `shouldBe` "https://rubygems.org/" <> saProxyPath artifact
         it "fails missing capture data instead of supplying selected placeholders" $
             selectWarmArtifacts rubyGemsCorpusPackages Map.empty `shouldThrow` (\(BenchLoadError _) -> True)
+        it "keeps every native workload pin outside quarantine at its authenticated capture time" $ do
+            captures <- loadCorpusBodies rubyGemsCorpusPackages
+            records <- readCaptureRecords RubyGems >>= expectRight
+            pins <- readCorpusPins (.: "rubygemsPins") >>= expectRight
+            for_ rubyGemsCorpusPackages $ \package -> do
+                let name = cpName package
+                captured <- expectRightText (maybeToRight "missing authenticated capture record" (Map.lookup name records))
+                bytes <- expectRightText (maybeToRight "missing authenticated capture bytes" (Map.lookup name captures))
+                version <- expectRightText (maybeToRight "missing native workload pin" (Map.lookup name pins))
+                manifest <- captureManifest (gemReadWith (const pass) (const pass) "https://rubygems.org") rubyGemsCaptureUpstream (cpPackage package) [toStrict bytes] >>= expectRight
+                details <- expectRightText (maybeToRight "workload pin is absent from native metadata" (Map.lookup version (infoVersions (manifestInfo manifest))))
+                published <- expectRightText (maybeToRight "workload pin has an unknown platform publication time" (pkgPublishedAt details))
+                diffUTCTime (crCapturedAt captured) published `shouldSatisfy` (>= 7 * nominalDay)
+    describe "native finite replay URLs" $ do
+        for_ [False, True] $ \withArtifacts ->
+            it (if withArtifacts then "preserves native listing and artifact order from a cold start" else "replays exact named queries from a cold start") $ do
+                let provider = rubyGemsPatternProvider
+                    names = map cpName rubyGemsCorpusPackages
+                captures <- loadCorpusBodies rubyGemsCorpusPackages
+                selected <- ppSelectedArtifacts provider ("pinned" <$ guard withArtifacts) rubyGemsCorpusPackages captures
+                Map.keys selected `shouldMatchList` if withArtifacts then names else []
+                replies <- Map.fromList <$> traverse (\name -> (name,) <$> dependencyReply [name]) names
+                seen <- newIORef []
+                let artifacts = Map.fromList [(encodeUtf8 ("/rubygems/" <> saProxyPath artifact), "owned native artifact bytes") | artifact <- Map.elems selected]
+                    app request respond = do
+                        modifyIORef' seen ((rawPathInfo request, rawQueryString request) :)
+                        let route = case pathInfo request of
+                                "rubygems" : path -> claimedOn rubyGemsRoutes (requestMethod request) path
+                                _ -> Nothing
+                            body = case route of
+                                Just (RouteName "dependencies") -> case fmap (map renderPackageName) (parseBatchQuery defaultLimits (rawQueryString request)) of
+                                    Right [name] -> Map.lookup name replies
+                                    _ -> Nothing
+                                Just (RouteName "artifact") | BS.null (rawQueryString request) -> Map.lookup (rawPathInfo request) artifacts
+                                _ -> Nothing
+                        respond (maybe (responseLBS status400 [] "invalid native request") (responseLBS status200 []) body)
+                testWithApplication (pure app) $ \port -> do
+                    let replay root = Replay (RequestTrace [ClientTrace 0 0 names] names) 5_000_000 (patternRequestUrls provider root selected) (pure "")
+                        native = replay (ppRootUrl provider port)
+                        expected = concat [[("/rubygems/api/v1/dependencies", "?gems=" <> encodeUtf8 name)] <> [(encodeUtf8 ("/rubygems/" <> saProxyPath artifact), "") | artifact <- maybeToList (Map.lookup name selected)] | name <- names]
+                    warmUp (DriveReplay native)
+                    readIORef seen `shouldReturn` []
+                    report <- replayHttp <$> runReplay native
+                    ohaStatusCounts report `shouldBe` Map.singleton "200" (length expected)
+                    reverse <$> readIORef seen `shouldReturn` expected
+                    writeIORef seen []
+                    malformed <- replayHttp <$> runReplay (replay (pcUrl rubyGemsPrivateCopy port ""))
+                    ohaStatusCounts malformed `shouldBe` Map.singleton "400" (length expected)
+                    ohaSuccessLatencies malformed `shouldBe` []
+        it "rejects unsupported selected-version modes before replay" $
+            ppSelectedArtifacts rubyGemsPatternProvider (Just "latest") [] Map.empty `shouldThrow` (\(BenchLoadError _) -> True)
     describe "native dependency working sets" $ do
         it "selects the weighted corpus, one history and the configured many-project set" $ do
             fmap (map cpName) (dependencyPackages RepeatedCorpus defaultLoadKnobs) `shouldBe` Right ["rails", "nokogiri", "aws-sdk-ec2"]
@@ -85,7 +148,7 @@ spec = do
                             let urls = map (pcUrl rubyGemsPrivateCopy port) names
                             for_ urls $ \url -> do
                                 request <- HTTP.parseRequest (toString url)
-                                path <- expectRight (maybeToRight ("dependency target is outside its mount" :: Text) (T.stripPrefix "/rubygems/" (decodeUtf8 (HTTP.path request))))
+                                path <- expectRightText (maybeToRight "dependency target is outside its mount" (T.stripPrefix "/rubygems/" (decodeUtf8 (HTTP.path request))))
                                 claimedOn rubyGemsRoutes methodGet (T.splitOn "/" path) `shouldBe` Just (RouteName "dependencies")
                             pcPreflight rubyGemsPrivateCopy urls
                         readIORef seen
@@ -104,7 +167,7 @@ spec = do
                     testWithApplication (pure (rfPrivate fixture)) $ \privatePort ->
                         testWithApplication (pure (rfPublic fixture)) $ \publicPort ->
                             for_ requests $ \request -> do
-                                path <- expectRight (maybeToRight ("relay target is outside its mount" :: Text) (T.stripPrefix "/rubygems/" (decodeUtf8 (HTTP.path request))))
+                                path <- expectRightText (maybeToRight "relay target is outside its mount" (T.stripPrefix "/rubygems/" (decodeUtf8 (HTTP.path request))))
                                 claimedOn rubyGemsRoutes methodGet (T.splitOn "/" path) `shouldBe` Just (RouteName "artifact")
                                 private <- fetchChecked (if privateHit then status200 else status404) [] (localhost privatePort <> "/" <> path)
                                 public <- fetchChecked (if privateHit then status404 else status200) [] (localhost publicPort <> "/" <> path)
