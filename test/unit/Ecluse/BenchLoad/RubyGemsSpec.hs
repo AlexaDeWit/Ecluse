@@ -61,7 +61,8 @@ spec = do
             fmap (map cpName) (dependencyPackages ManyProjects defaultLoadKnobs{lkWorkingSet = 2}) `shouldBe` Right ["rails", "nokogiri"]
         it "refuses a many-project singleton before reading captures or starting a proxy" $
             for_ [-1, 0, 1] $ \count -> do
-                dependencyPackages ManyProjects defaultLoadKnobs{lkWorkingSet = count} `shouldSatisfy` isLeft
+                fmap (map cpName) (dependencyPackages ManyProjects defaultLoadKnobs{lkWorkingSet = count})
+                    `shouldBe` Left "dependencies-working-set-many requires at least two corpus projects"
                 case find ((== "dependencies-working-set-many") . scenarioName) (fixtureScenarios rubyGemsFixture) of
                     Nothing -> expectationFailure "missing native many-project scenario"
                     Just item ->
@@ -71,19 +72,20 @@ spec = do
             it ("preflights every selected source and rejects each omitted reply for " <> show workload) $ do
                 packages <- expectRight (dependencyPackages workload defaultLoadKnobs)
                 replies <- Map.fromList <$> traverse (\package -> (cpName package,) <$> dependencyReply [cpName package]) packages
-                empty <- dependencyReply []
+                emptyReply <- dependencyReply []
                 let names = map cpName packages
+                    run :: Map Text LByteString -> IO [Text]
                     run available = do
                         seen <- newIORef []
                         let app request respond = do
                                 let name = fromMaybe "" (join (lookup "gems" (queryString request)))
                                 modifyIORef' seen (decodeUtf8 name :)
-                                respond (responseLBS status200 [] (Map.findWithDefault empty (decodeUtf8 name) available))
+                                respond (responseLBS status200 [] (Map.findWithDefault emptyReply (decodeUtf8 name) available))
                         testWithApplication (pure app) $ \port -> do
                             let urls = map (pcUrl rubyGemsPrivateCopy port) names
                             for_ urls $ \url -> do
                                 request <- HTTP.parseRequest (toString url)
-                                path <- expectRight (maybeToRight "dependency target is outside its mount" (T.stripPrefix "/rubygems/" (decodeUtf8 (HTTP.path request))))
+                                path <- expectRight (maybeToRight ("dependency target is outside its mount" :: Text) (T.stripPrefix "/rubygems/" (decodeUtf8 (HTTP.path request))))
                                 claimedOn rubyGemsRoutes methodGet (T.splitOn "/" path) `shouldBe` Just (RouteName "dependencies")
                             pcPreflight rubyGemsPrivateCopy urls
                         readIORef seen
@@ -102,7 +104,7 @@ spec = do
                     testWithApplication (pure (rfPrivate fixture)) $ \privatePort ->
                         testWithApplication (pure (rfPublic fixture)) $ \publicPort ->
                             for_ requests $ \request -> do
-                                path <- expectRight (maybeToRight "relay target is outside its mount" (T.stripPrefix "/rubygems/" (decodeUtf8 (HTTP.path request))))
+                                path <- expectRight (maybeToRight ("relay target is outside its mount" :: Text) (T.stripPrefix "/rubygems/" (decodeUtf8 (HTTP.path request))))
                                 claimedOn rubyGemsRoutes methodGet (T.splitOn "/" path) `shouldBe` Just (RouteName "artifact")
                                 private <- fetchChecked (if privateHit then status200 else status404) [] (localhost privatePort <> "/" <> path)
                                 public <- fetchChecked (if privateHit then status404 else status200) [] (localhost publicPort <> "/" <> path)
