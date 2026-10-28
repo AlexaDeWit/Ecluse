@@ -218,6 +218,8 @@ It fetches no archive body, computes no archive hash, and enqueues no mirroring.
 Its success does not prove body verification.
 `limits.maxArtifactBytes` also controls this verified-read cap, under the resolved transient capacity.
 Verified downloads delay the first byte until verification ends and use memory proportional to the bounded archive.
+When metadata omits the archive size, Écluse reserves the full resolved cap before fetching bytes and holds it through delivery.
+Even small archives then consume a full reservation, which limits concurrent downloads.
 There is no registry-wide catalogue, full specification index, unfiltered fallback, or client yank relay.
 Public acquisition uses per-gem `/info/<gem>` metadata and selected native requests.
 Compact specification and archive locations point through Écluse.
