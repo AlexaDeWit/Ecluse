@@ -249,6 +249,7 @@ The shape follows the ecosystem, and an empty or malformed list is refused at bo
 | npm | A scope | `@acme,@beta` |
 | PyPI | A distribution name, or a prefix written as a separator then `*` | `acme,acme-*` |
 | Cargo | A crate name, or a prefix ending in `-*` or `_*` | `acme-tools,acme-*` |
+| RubyGems | A gem name, or a prefix ending in `.*`, `-*`, or `_*` | `acme-tools,acme-*` |
 
 A PyPI entry reads through PEP 503 normalisation, so `Acme_Tools` and `acme-tools` are one name. A
 prefix stops at the separator, so `acme-*` covers `acme-tools` and not `acmeco`, which is a name
@@ -266,6 +267,8 @@ Cargo declarations use the name grammar in the configuration reference.
 Ownership folds ASCII case and hyphen/underscore aliases while preserving separator runs.
 It does not apply PyPI period folding. Published spelling and index lookup paths remain separate from ownership matching.
 The [private package guide](@/docs/private-packages.md#names) gives an example.
+
+RubyGems declarations preserve case, dots, hyphens, and underscores without normalisation.
 
 Setting `firstParty` on an npm mount narrows what a scoped install reaches. A name under one of
 your scopes that the private upstream does not have answers `404`, and Écluse does not fall back to
@@ -654,7 +657,7 @@ Publish a valid artifact for each ecosystem before configuring its source. Roll 
 writer roles forward before enabling Dredger revocation. Preview deletions and retain target-local
 consent, first-party protection, maintenance support, and deletion caps. When relaxing a rule,
 update Dredger first, then admission and writer roles. Trusted private copies keep serving until
-eligible deletion completes. The rule applies the same way to npm, PyPI, and Cargo admission, mirror
+eligible deletion completes. The rule applies the same way to npm, PyPI, Cargo, and RubyGems admission, mirror
 writes, and Dredger revocation.
 
 An absent generation or a faulted read follows `onUnavailable`, defaulting to `deny`.

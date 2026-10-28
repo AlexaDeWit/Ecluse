@@ -13,7 +13,8 @@ reference = "/docs/configuration/#first-party-namespaces"
 
 ## Declare first-party names {#names}
 
-Configure a private upstream, then declare your package names. npm uses scopes. PyPI and Cargo use exact names or separator-bounded prefixes.
+Configure a private upstream, then declare your package names. npm uses scopes.
+PyPI, Cargo, and RubyGems use exact names or separator-bounded prefixes.
 
 **Namespace declarations**
 
@@ -25,6 +26,8 @@ mounts:
     firstParty: "acme,acme-*"
   cargo:
     firstParty: "acme-tools,acme-*"
+  rubygems:
+    firstParty: "acme-tools,acme-*"
 ```
 
 These are additions to mounts with a configured `privateUpstream`. A first-party name never falls back to a public registry.
@@ -32,6 +35,9 @@ These are additions to mounts with a configured `privateUpstream`. A first-party
 Cargo declarations fold ASCII case and equate hyphen with underscore while preserving separator runs.
 A prefix must end in `-*` or `_*`. `acme-*` covers `acme-tools` and `acme_tools`, but excludes `acmeco`.
 Cargo first-party packages use `/cargo/private/`. The public replacement view excludes them.
+
+RubyGems declarations preserve case, dots, hyphens, and underscores.
+A prefix ends in `.*`, `-*`, or `_*`.
 
 Use the same declarations in every role. Review existing public-derived copies before reserving a name: cleanup protects first-party names.
 
@@ -45,7 +51,11 @@ Cargo clients publish with `cargo publish --registry ecluse-private` after [conf
 Configure the target's sparse read root and its exact approved API base separately.
 The discovery API base must match the configured upload root, including its path.
 
-The proxy forwards the publisher's credential. It refuses publications outside the declared first-party names.
+RubyGems clients publish `.gem` archives to `/rubygems/api/v1/gems` with their native API key and optional `OTP` header.
+
+The proxy uses a configured static publication credential behind an authenticated edge.
+Otherwise, it forwards the publisher's credential.
+It refuses publications outside the declared first-party names.
 
 ## Check both directions {#verify}
 
