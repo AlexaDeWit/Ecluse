@@ -29,7 +29,7 @@ spec = describe "load profiles" $ do
     it "retains both cache controls and every managed PyPI read in read paths" $ do
         let keys = selected ReadPaths
         keys `shouldContain` ["npm/merge-cold", "npm/merge-cold-advisories", "npm/heavy-private"]
-        for_ ["npm", "pypi", "cargo", "rubygems"] $ \ecosystem ->
+        for_ ["npm", "pypi", "cargo"] $ \ecosystem ->
             for_ ["assembled-response-hit", "revalidate-not-modified", "cache-fits-large", "cache-evicts-large"] $ \name ->
                 keys `shouldSatisfy` elem (ecosystem <> "/" <> name)
         keys `shouldContain` ["pypi/mirror-native-baseline", "pypi/mirror-managed-warm", "pypi/mirror-managed-revision"]
@@ -38,10 +38,10 @@ spec = describe "load profiles" $ do
             `shouldBe` [ "rubygems/dependencies-cold"
                        , "rubygems/dependencies-cold-advisories"
                        , "rubygems/heavy-private"
-                       , "rubygems/assembled-response-hit"
+                       , "rubygems/dependencies-repeated-corpus"
                        , "rubygems/revalidate-not-modified"
-                       , "rubygems/cache-fits-large"
-                       , "rubygems/cache-evicts-large"
+                       , "rubygems/dependencies-working-set-one"
+                       , "rubygems/dependencies-working-set-many"
                        , "rubygems/batch-dependencies"
                        , "rubygems/quick-gemspec"
                        ]

@@ -25,7 +25,7 @@ spec :: Spec
 spec = describe "canonical load contract" $ do
     it "rejects each omitted read measurement even when other scenarios remain" $
         for_ fixtures $ \fixture ->
-            for_ (requiredLoadLaws ReadLoadFoundation) $ \law -> do
+            for_ (requiredLoadLaws ReadLoadFoundation (fixtureEcosystem fixture)) $ \law -> do
                 let name = loadScenarioName (fixtureEcosystem fixture) law
                     shortened = fixture{fixtureScenarios = filter ((/= name) . Just . scenarioName) (fixtureScenarios fixture)}
                     providers = shortened : filter ((/= fixtureEcosystem fixture) . fixtureEcosystem) fixtures
@@ -56,13 +56,17 @@ spec = describe "canonical load contract" $ do
             `shouldBe` [MissingLoadScenario PrivateArtifact "wheel-hot-path"]
     it "requires native batch and compact specification work beside whole-version copying" $ do
         loadCoverageGaps FullLoad RubyGems (names rubyGemsFixture) `shouldBe` []
-        for_ [(BatchMetadata, "batch-dependencies"), (QuickSpecification, "quick-gemspec"), (VerifiedKnownLengthArtifact, "gem-verified-known-length"), (VerifiedSlowArtifact, "gem-verified-slow-readers"), (MirrorWorker, "worker-mirroring")] $ \(law, name) ->
+        for_ [(RepeatedDependencies, "dependencies-repeated-corpus"), (OneProjectDependencies, "dependencies-working-set-one"), (ManyProjectDependencies, "dependencies-working-set-many"), (BatchMetadata, "batch-dependencies"), (QuickSpecification, "quick-gemspec"), (VerifiedKnownLengthArtifact, "gem-verified-known-length"), (VerifiedSlowArtifact, "gem-verified-slow-readers"), (MirrorWorker, "worker-mirroring")] $ \(law, name) ->
             loadCoverageGaps FullLoad RubyGems (filter (/= name) (names rubyGemsFixture)) `shouldBe` [MissingLoadScenario law name]
         loadCoverageGaps FullLoad RubyGems [] `shouldSatisfy` (not . null)
+        for_ [AssembledResponseHit, CacheFits, CacheEvicts] $ \law -> do
+            requiredLoadLaws FullLoad RubyGems `shouldSatisfy` notElem law
+            loadScenarioName RubyGems law `shouldBe` Nothing
     it "requires the exact passes the full profile executes under each shape" $
-        for_ scheduledPodShapes $ \shape ->
+        for_ scheduledPodShapes $ \shape -> do
             fmap (Set.fromList . map snd . concat) (traverse (\ecosystem -> requiredLoadPasses FullLoad ecosystem shape) [Npm, PyPI, Cargo, RubyGems])
                 `shouldBe` Right (checkedCounts shape)
+            fmap length (requiredLoadPasses FullLoad RubyGems shape) `shouldBe` Right (if shape == Unlimited then 47 else 45)
     it "keeps optional variants out of full obligations while retaining private-copy controls" $
         for_ [Npm, PyPI, Cargo, RubyGems] $ \ecosystem ->
             case requiredLoadPasses FullLoad ecosystem twoCores of

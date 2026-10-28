@@ -2230,6 +2230,17 @@ Missing providers, observations, factors, or calibration remain failures.
 Native load qualification requires the standard full profile and three qualifying observations per applicable shape, with source and run provenance.
 Retain adverse and excluded observations. Existing ecosystems' factors, budgets, and floors do not supply RubyGems values.
 
+### Native RubyGems dependency load
+
+RubyGems named-dependency load rows rebuild each native reply after admission.
+`dependencies-repeated-corpus` reads the weighted three captured histories.
+`dependencies-working-set-one` selects one history.
+`dependencies-working-set-many` reads the configured corpus working set uniformly and requires at least two histories.
+The report states the selected cardinalities, and each row preflights every distinct named request through Ruby's independent decoder.
+The local backend retains no full source document, and these native replies do not use assembled-response retention.
+Concurrent public reads can share an active read. A configured external provider can retain full source documents.
+The existing full-store miss/collapse observations describe public fetches and waiting consumers, not private reads or exact per-name request counts.
+
 ### Verified RubyGems relay evidence
 
 RubyGems verified replies require independent no-response-commit controls for corrupt bodies on public-only serve-only mounts and caller-authorised private paths.

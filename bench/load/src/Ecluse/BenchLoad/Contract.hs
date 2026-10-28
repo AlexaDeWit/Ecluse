@@ -62,6 +62,9 @@ data LoadLaw
     | QuickSpecification
     | VerifiedKnownLengthArtifact
     | VerifiedSlowArtifact
+    | RepeatedDependencies
+    | OneProjectDependencies
+    | ManyProjectDependencies
     deriving stock (Eq, Ord, Show)
 
 -- | Missing measurements describe test coverage, not evidence of a production defect.
@@ -72,37 +75,45 @@ data LoadGap
     deriving stock (Eq, Show)
 
 -- | Requirements do not depend on available drivers or advertised capabilities.
-requiredLoadLaws :: LoadScope -> [LoadLaw]
-requiredLoadLaws scope =
-    [ ColdMetadata
-    , ShippedAdvisoryMetadata
-    , AllAdvisoryMetadata
-    , SlowReaders
-    , PrivateCopyQuarter
-    , PrivateCopyWhole
-    , AssembledResponseHit
-    , RevalidateMetadata
-    , RevalidateAdvisories
-    , CacheFits
-    , CacheEvicts
-    , PrivateArtifact
-    , PublicArtifactOnboarding
-    , PatternHotSet
-    , PatternColdInstall
-    , PatternCiFleet
-    , PatternHeterogeneous
-    , PatternZipf
-    , PatternScan
-    , PatternDefaultBodyCap
-    , PrivateArtifactCeiling
-    , AdmissionHerd
-    , HerdUnderPrivateCopy
-    , WarmUnderCold
-    , AdmissionRamp
-    ]
+requiredLoadLaws :: LoadScope -> Ecosystem -> [LoadLaw]
+requiredLoadLaws scope ecosystem =
+    filter
+        applicable
+        [ ColdMetadata
+        , ShippedAdvisoryMetadata
+        , AllAdvisoryMetadata
+        , SlowReaders
+        , PrivateCopyQuarter
+        , PrivateCopyWhole
+        , AssembledResponseHit
+        , RevalidateMetadata
+        , RevalidateAdvisories
+        , CacheFits
+        , CacheEvicts
+        , PrivateArtifact
+        , PublicArtifactOnboarding
+        , PatternHotSet
+        , PatternColdInstall
+        , PatternCiFleet
+        , PatternHeterogeneous
+        , PatternZipf
+        , PatternScan
+        , PatternDefaultBodyCap
+        , PrivateArtifactCeiling
+        , AdmissionHerd
+        , HerdUnderPrivateCopy
+        , WarmUnderCold
+        , AdmissionRamp
+        ]
         <> case scope of
             ReadLoadFoundation -> []
             FullLoad -> [MirrorWorker]
+        <> case ecosystem of
+            PyPI -> [ManagedMirrorBaseline, ManagedMirrorWarm, ManagedMirrorRevision]
+            RubyGems -> [RepeatedDependencies, OneProjectDependencies, ManyProjectDependencies, BatchMetadata, QuickSpecification, VerifiedKnownLengthArtifact, VerifiedSlowArtifact]
+            _ -> []
+  where
+    applicable law = ecosystem /= RubyGems || law `notElem` [AssembledResponseHit, CacheFits, CacheEvicts]
 
 -- | Extra variants remain available through explicit scenario selection.
 onRequestLoadLaws :: [LoadLaw]
@@ -110,6 +121,8 @@ onRequestLoadLaws = [PrivateCopyFivePercent, PatternRestart]
 
 -- | Resolve native names without changing measured work or accepting an unknown protocol.
 loadScenarioName :: Ecosystem -> LoadLaw -> Maybe Text
+loadScenarioName RubyGems law | law `elem` [AssembledResponseHit, CacheFits, CacheEvicts] = Nothing
+loadScenarioName ecosystem law | ecosystem /= RubyGems, law `elem` [RepeatedDependencies, OneProjectDependencies, ManyProjectDependencies] = Nothing
 loadScenarioName ecosystem law = case ecosystem of
     Npm -> Just (name "merge-cold" "tarball")
     PyPI -> Just (name "index-cold" "wheel")
@@ -152,6 +165,9 @@ loadScenarioName ecosystem law = case ecosystem of
         QuickSpecification -> "quick-gemspec"
         VerifiedKnownLengthArtifact -> "gem-verified-known-length"
         VerifiedSlowArtifact -> "gem-verified-slow-readers"
+        RepeatedDependencies -> "dependencies-repeated-corpus"
+        OneProjectDependencies -> "dependencies-working-set-one"
+        ManyProjectDependencies -> "dependencies-working-set-many"
 
 -- | Report every missing law while retaining unrelated registered scenarios.
 loadCoverageGaps :: LoadScope -> Ecosystem -> [Text] -> [LoadGap]
@@ -160,7 +176,7 @@ loadCoverageGaps scope ecosystem actual =
         <> [MissingLoadScenario law name | law <- required, name <- maybeToList (loadScenarioName ecosystem law), Map.notMember name counts]
         <> [DuplicateLoadScenario name | (name, count) <- Map.toList counts, count > 1]
   where
-    required = requiredFor scope ecosystem
+    required = requiredLoadLaws scope ecosystem
     counts = Map.fromListWith (+) [(name, 1 :: Int) | name <- actual]
 
 -- | Independent pass obligations preserve the worker's process limit and non-duration scenarios.
@@ -176,14 +192,7 @@ requiredLoadPasses scope ecosystem shape
             , whichPass <- Loaded : [ConcurrencyOne | hasServiceTime law]
             ]
   where
-    laws = requiredFor scope ecosystem
-
-requiredFor :: LoadScope -> Ecosystem -> [LoadLaw]
-requiredFor scope ecosystem =
-    requiredLoadLaws scope <> case ecosystem of
-        PyPI -> [ManagedMirrorBaseline, ManagedMirrorWarm, ManagedMirrorRevision]
-        RubyGems -> [BatchMetadata, QuickSpecification, VerifiedKnownLengthArtifact, VerifiedSlowArtifact]
-        _ -> []
+    laws = requiredLoadLaws scope ecosystem
 
 hasServiceTime :: LoadLaw -> Bool
 hasServiceTime = \case
@@ -222,3 +231,6 @@ hasServiceTime = \case
     QuickSpecification -> True
     VerifiedKnownLengthArtifact -> True
     VerifiedSlowArtifact -> False
+    RepeatedDependencies -> True
+    OneProjectDependencies -> True
+    ManyProjectDependencies -> True

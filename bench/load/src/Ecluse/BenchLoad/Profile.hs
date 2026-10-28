@@ -50,11 +50,8 @@ selectProfile profile Nothing = (renderLoadProfile profile, selected)
             [ ColdMetadata
             , ShippedAdvisoryMetadata
             , PrivateCopyWhole
-            , AssembledResponseHit
-            , RevalidateMetadata
-            , CacheFits
-            , CacheEvicts
             ]
+                <> (if ecosystem == RubyGems then [RepeatedDependencies, RevalidateMetadata, OneProjectDependencies, ManyProjectDependencies] else [AssembledResponseHit, RevalidateMetadata, CacheFits, CacheEvicts])
                 <> [law | ecosystem == PyPI, law <- [ManagedMirrorBaseline, ManagedMirrorWarm, ManagedMirrorRevision]]
                 <> [law | ecosystem == RubyGems, law <- [BatchMetadata, QuickSpecification]]
         MemoryAdmission -> [PrivateCopyWhole, SlowReaders, AdmissionHerd, HerdUnderPrivateCopy, WarmUnderCold, AdmissionRamp]
