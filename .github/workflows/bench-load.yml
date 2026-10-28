@@ -90,7 +90,7 @@ jobs:
     name: Load test (${{ matrix.pod-shape }}, inform-only)
     if: inputs.sweep == '' || inputs.sweep == 'none'
     runs-on: ubuntu-26.04-arm
-    timeout-minutes: 120
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:

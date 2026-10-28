@@ -1960,8 +1960,9 @@ out.
 | `versions_per_hour` | Decided versions per hour of wall time. A paced row runs at the ceiling pace. An unpaced row serves no wait, so its figure is not a rate the quotas allow |
 | `decisions`, `decision_digest` | The tally, request counts, waits asked for, cursor writes, and identity checksum, then their SHA-256. Times and the covered-name query count stay out, so a change that only saves work keeps the digest |
 
-The group takes about 28 minutes, 21 of them in the paced npm full walk of 10,000 names. A paced
-PyPI walk of that size would not fit the job's hour, so its native counts come from the unpaced row.
+The group runs default cycles and unpaced full walks for inventories of 1,000 and 10,000 names in each ecosystem.
+It also runs each ecosystem's small control and paced full walk of 1,000 names.
+Only npm runs the paced full walk of 10,000 names.
 To skip the group in a local run, pass
 `-p '!/dredger scale/'` in the benchmark options. The fixture shares the process, so the allocation
 and live heap figures include its documents. The RTS measures the live heap only at a major GC, and
