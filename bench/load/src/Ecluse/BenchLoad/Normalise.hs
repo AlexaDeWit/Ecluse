@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Attribute successful service latency only where a public leg exists, and derive saturation
-from loaded latency above concurrency-one service time. Private-hit relays keep raw measurements.
+{- | Attribute service latency where the public baseline applies.
+Derive saturation from loaded latency above concurrency-one service time.
 -}
 module Ecluse.BenchLoad.Normalise (
     -- * The public-leg baseline
@@ -90,7 +90,7 @@ renderNormalised source rows =
     T.unlines $
         [ "## Service-time attribution: upstream against Écluse overhead (concurrency 1)"
         , ""
-        , "Concurrency-1 pass. For scenarios with a public leg, successful latency is "
+        , "Concurrency-1 pass. For scenarios with an applicable public baseline, successful latency is "
             <> "the upstream baseline plus the Écluse overhead. Baseline = "
             <> baselineLabel source
             <> ", "
@@ -98,7 +98,7 @@ renderNormalised source rows =
             <> "Overhead is everything Écluse adds on top of hitting the public registry (the private "
             <> "leg, the merge, the decode, the re-serialise). p50 is primary. p99 is the tail, GC included."
         , ""
-        , "Private-hit relays have no public leg. Their raw totals remain, and public-leg attribution is unavailable."
+        , "Rows without an applicable public baseline retain their raw totals. Their upstream and overhead attribution is unavailable."
         , ""
         , "| scenario | p50 total | p50 upstream | p50 overhead | p99 total | p99 upstream | p99 overhead | public-leg attribution |"
         , "| --- | --- | --- | --- | --- | --- | --- | --- |"

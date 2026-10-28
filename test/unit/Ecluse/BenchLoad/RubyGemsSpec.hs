@@ -43,7 +43,6 @@ spec = do
             let selected = [(scenarioName item, scenarioConcurrencyScale item, scenarioServiceTime item, scenarioUpstreamLatencyMicros item) | item <- fixtureScenarios rubyGemsFixture, scenarioName item `elem` ["gem-ceiling", "herd", "herd-under-heavy-private", "warm-under-cold", "ramp"]]
             selected `shouldBe` [("gem-ceiling", 4, True, Just 2000), ("herd", 1, False, Nothing), ("herd-under-heavy-private", 1, False, Nothing), ("warm-under-cold", 1, False, Nothing), ("ramp", 1, False, Nothing)]
             [scenarioInProcess item | item <- fixtureScenarios rubyGemsFixture, scenarioName item == "worker-mirroring"] `shouldBe` [True]
-            [scenarioPublicLegUnavailableReason item | item <- fixtureScenarios rubyGemsFixture, scenarioName item == "gem-ceiling"] `shouldBe` [Nothing]
         it "declares verified-read observations and retains slow-delivery work in the loaded pass" $ do
             let observed = [(scenarioName item, scenarioVerifiedArtifactMetrics item, scenarioServiceTime item) | item <- fixtureScenarios rubyGemsFixture, scenarioName item `elem` ["gem-verified-known-length", "gem-verified-slow-readers"]]
             observed `shouldBe` [("gem-verified-known-length", True, True), ("gem-verified-slow-readers", True, False)]

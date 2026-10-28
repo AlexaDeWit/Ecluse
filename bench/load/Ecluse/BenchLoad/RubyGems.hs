@@ -60,7 +60,7 @@ nativeDriver =
         , lrdCacheEvicts = dependencyScenario ManyProjects
         , lrdPrivateArtifact = artifactScenario True
         , lrdPublicArtifact = artifactScenario False
-        , lrdArtifactCeiling = (artifactScenario True){scenarioName = "gem-ceiling", scenarioConcurrencyScale = 4, scenarioUpstreamLatencyMicros = Just 2_000}
+        , lrdArtifactCeiling = (artifactScenario True){scenarioName = "gem-ceiling", scenarioConcurrencyScale = 4, scenarioUpstreamLatencyMicros = Just 2_000, scenarioPublicLegUnavailableReason = Just "the fixture uses a fixed 2 ms upstream delay instead of the run's native RTT baseline"}
         , lrdHerd =
             ( scenario
                 "herd"
