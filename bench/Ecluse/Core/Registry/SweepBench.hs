@@ -155,8 +155,7 @@ data Row = Row
 data Pace = Paced | Unpaced
     deriving stock (Eq)
 
-{- The cheap rows first, so a run cut short still reports them. One paced full walk of 10,000 names
-takes about 21 minutes, so only npm runs one inside the job's hour. -}
+-- Keep the long paced npm walk last so interrupted runs retain the other measurements.
 scaleRows :: [Scale] -> [Row]
 scaleRows scales =
     map smallControl scales
