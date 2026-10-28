@@ -10,7 +10,6 @@ module Ecluse.Core.Server.Pipeline.Tarball.Verified (
     VerifiedArtifactStage (..),
     VerifiedRelayResult (..),
     readVerifiedArtifactWith,
-    verifiedBodyBytes,
     relayVerifiedArtifact,
     relayVerifiedArtifactObserved,
     unconditionalArtifactRequest,
@@ -48,13 +47,11 @@ import Ecluse.Core.Server.Context (PackumentDeps (..), ServeRuntime (..))
 import Ecluse.Core.Server.MemoryModel (verifiedArtifactCharge)
 import Ecluse.Core.Server.Pipeline.Shared (retryAfterHeaders, shedMessage, shedRetryAfter, withListingAdmission)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..))
+import Ecluse.Core.Server.Pipeline.Tarball.Verified.Internal (VerifiedArtifactBody (..))
 import Ecluse.Core.Server.Response (mkRefusal)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Core.Text (readDecimalText)
-
--- | Immutable bytes and their local representation validator share one checked constructor.
-data VerifiedArtifactBody = VerifiedArtifactBody !ByteString !ETag
 
 -- | Fetched but inadmissible bytes remain distinct from transport failures.
 data VerifiedArtifactFault = VerifiedArtifactBound LimitError | VerifiedArtifactInvalid Text
@@ -66,10 +63,6 @@ data VerifiedArtifactStage = VerifyingArtifact | HashingArtifactValidator | Arti
 
 -- | Only a delivered verified GET may trigger mirror enqueueing.
 data VerifiedRelayResult a = VerifiedDelivered a | VerifiedRefused Metric.Decision a | VerifiedUnanswered Status
-
--- | The immutable body remains owned by the enclosing memory and byte reservation.
-verifiedBodyBytes :: VerifiedArtifactBody -> ByteString
-verifiedBodyBytes (VerifiedArtifactBody bytes _) = bytes
 
 newtype VerifiedReadFailure = VerifiedReadFailure VerifiedArtifactFault
     deriving stock (Show)

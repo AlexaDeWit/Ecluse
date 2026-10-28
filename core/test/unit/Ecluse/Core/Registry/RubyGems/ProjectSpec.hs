@@ -10,13 +10,12 @@ import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, RubyGems))
 import Ecluse.Core.Package (renderPackageName)
-import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Registry.RubyGems.Project
 import Ecluse.Core.Server.Path (mkFilename, unFilename)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Support (expectRight)
 
--- | Preserve native identity and refuse filename ambiguity.
+-- | Preserve native identity and bound filename interpretations.
 spec :: Spec
 spec = do
     describe "projectName" $ do
@@ -53,16 +52,6 @@ spec = do
             fmap (unFilename . coordinateFilename) (coordinate "x86_64-linux-musl") `shouldBe` Right "my-gem-1.0.0-x86_64-linux-musl.gem"
         it "omits the generic platform from the filename" $
             fmap coordinateStem (coordinate "ruby") `shouldBe` Right "my-gem-1.0.0"
-        it "matches only an exact unambiguous coordinate" $ do
-            let result = do
-                    value <- coordinate "java"
-                    file <- maybeToRight (ParseError "invalid fixture filename") (mkFilename "my-gem-1.0.0-java.gem")
-                    pure (value, file)
-            case result of
-                Left _ -> expectationFailure "fixture coordinate failed"
-                Right (value, file) -> do
-                    matchCoordinate (coordinateName value) [value] file `shouldBe` Right value
-                    matchCoordinate (coordinateName value) [value, value] file `shouldSatisfy` isLeft
   where
     coordinate platform = do
         name <- projectName "my-gem"

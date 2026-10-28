@@ -12,12 +12,12 @@ import Data.Set qualified as Set
 
 import Ecluse.Core.Package (Artifact (..), Availability (Available), CodeExecSignal (CodeExecUnknown), PackageDetails (..), PackageInfo (..), PackageName, renderPackageName)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable))
-import Ecluse.Core.Registry.Request (joinPath)
 import Ecluse.Core.Registry.RubyGems.Document (GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Project (coordinateFilename, coordinateName, coordinateVersion)
+import Ecluse.Core.Registry.RubyGems.Request (gemArtifactUrl)
 import Ecluse.Core.Registry.WireSupport (newestUpload)
 import Ecluse.Core.Security (Limits, checkArtifactCount, checkVersionCountOf)
-import Ecluse.Core.Server.Path (encodeComponent, unFilename)
+import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (renderVersion)
 
@@ -35,7 +35,7 @@ projectGemRows limits name base rows = do
         let coordinate = grCoordinate row
             version = coordinateVersion coordinate
         unless (coordinateName coordinate == name) (Left (MetadataNameMismatch (renderPackageName (coordinateName coordinate))))
-        url <- first (const MetadataUndecodable) (joinPath base ("gems/" <> encodeComponent (unFilename (coordinateFilename coordinate))))
+        url <- first (const MetadataUndecodable) (gemArtifactUrl base coordinate)
         let !artifact = Artifact{artEntryKey = grEntryKey row, artFilename = unFilename (coordinateFilename coordinate), artUrl = url, artHashes = strictElements [grChecksum row], artCoreMetadata = Nothing, artSize = Nothing}
             fresh = PackageDetails{pkgName = name, pkgVersion = version, pkgPublishedAt = grPublishedAt row, pkgInstallCode = CodeExecUnknown, pkgAvailability = Available, pkgArtifacts = artifact :| []}
             merge previous = previous{pkgPublishedAt = newestUpload (grPublishedAt row) (pkgPublishedAt previous), pkgArtifacts = artifact :| toList (pkgArtifacts previous)}

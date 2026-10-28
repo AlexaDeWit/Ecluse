@@ -332,7 +332,9 @@ library ecluse-core
     Ecluse.Core.Registry.RubyGems.Document
     Ecluse.Core.Registry.RubyGems.Credential
     Ecluse.Core.Server.Admission.Artifact
+    Ecluse.Core.Server.Admission.Artifact.Internal
     Ecluse.Core.Server.Pipeline.Tarball.Verified
+    Ecluse.Core.Server.Pipeline.Tarball.Verified.Internal
     Ecluse.Core.Registry.RubyGems.Adapter
     Ecluse.Core.Registry.RubyGems.Handlers
     Ecluse.Core.Registry.RubyGems.Handlers.Budget

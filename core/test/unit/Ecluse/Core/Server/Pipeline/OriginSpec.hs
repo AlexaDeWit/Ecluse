@@ -71,9 +71,8 @@ import Ecluse.Core.Server.Pipeline.Origin (
         OriginResolved,
         OriginUnresolved
     ),
-    fetchPrivateOrigin,
     fetchPrivateOriginObserved,
-    fetchPublicOrigin,
+    fetchPublicOriginObserved,
     originManifest,
     originMiss,
     withPublicMetadata,
@@ -238,8 +237,8 @@ runCargoFull runtime deps ticket public = do
     let binding = MountBinding ("cargo" :| []) (cargoRouter Nothing) cargoCredential deps Nothing
     runHandler logEnv mempty (RequestCtx runtime binding) $
         if public
-            then fetchPublicOrigin deps runtime ticket part cargoTestName
-            else fetchPrivateOrigin deps runtime part Nothing cargoTestName
+            then fetchPublicOriginObserved (const pass) deps runtime ticket part cargoTestName
+            else fetchPrivateOriginObserved (const pass) deps runtime part Nothing cargoTestName
 
 retainedConsumerSpec :: Spec
 retainedConsumerSpec = describe "successful selected consumers" $ do

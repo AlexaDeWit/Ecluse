@@ -6,14 +6,14 @@
 module Ecluse.Core.Registry.RubyGems.RequestSpec (spec) where
 
 import Data.List (lookup)
-import Network.HTTP.Client (path, queryString, redirectCount, requestHeaders)
+import Network.HTTP.Client (path, redirectCount, requestHeaders)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, RubyGems))
 import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Registry.Request (mkBaseRequest)
 import Ecluse.Core.Registry.RubyGems.Project (mkCoordinate, mkGemPlatform, projectName)
-import Ecluse.Core.Registry.RubyGems.Request (gemArtifactUrl, gemCompactSpecUrl, gemInfoRequestUnder, gemVersionJsonRequestUnder)
+import Ecluse.Core.Registry.RubyGems.Request (gemArtifactUrl, gemCompactSpecUrl, gemInfoRequestUnder)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Registry.PyPI (alicePair)
@@ -37,14 +37,9 @@ spec = describe "RubyGems requests" $ do
         request <- expectRight (gemInfoRequestUnder base alicePair name)
         lookup "Authorization" (requestHeaders request) `shouldBe` Just "Basic YWxpY2U6aHVudGVyMg=="
         redirectCount request `shouldBe` 0
-    it "uses the checked platform coordinate in artifact, compact-spec and selected JSON paths" $ do
+    it "uses the checked platform coordinate in artifact and compact-spec paths" $ do
         name <- expectRight (projectName "native-gem")
         platform <- expectRight (mkGemPlatform "x86_64-linux-musl")
         coordinate <- expectRight (mkCoordinate name (mkVersion RubyGems "1.2.3") platform)
         gemArtifactUrl "https://registry.test/ruby" coordinate `shouldBe` Right "https://registry.test/ruby/gems/native-gem-1.2.3-x86_64-linux-musl.gem"
         gemCompactSpecUrl "https://registry.test/ruby" coordinate `shouldBe` Right "https://registry.test/ruby/quick/Marshal.4.8/native-gem-1.2.3-x86_64-linux-musl.gemspec.rz"
-        base <- mkBaseRequest <$> expectRight (mkRegistryUrl "https://registry.test/ruby")
-        request <- expectRight (gemVersionJsonRequestUnder base Nothing coordinate)
-        path request `shouldBe` "/ruby/api/v2/rubygems/native-gem/versions/1.2.3.json"
-        queryString request `shouldBe` "?platform=x86_64-linux-musl"
-        redirectCount request `shouldBe` 0

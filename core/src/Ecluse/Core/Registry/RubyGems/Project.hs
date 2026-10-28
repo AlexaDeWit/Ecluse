@@ -16,7 +16,6 @@ module Ecluse.Core.Registry.RubyGems.Project (
     coordinatePlatform,
     coordinateFilename,
     coordinateStem,
-    matchCoordinate,
     candidateCoordinates,
 ) where
 
@@ -92,14 +91,6 @@ mkCoordinate name version platform = do
 -- | Return the native filename without its @.gem@ extension for quick specifications.
 coordinateStem :: GemCoordinate -> Text
 coordinateStem = T.dropEnd 4 . unFilename . coordinateFilename
-
--- | Match complete checked identities, refusing missing or ambiguous captures.
-matchCoordinate :: PackageName -> [GemCoordinate] -> Filename -> Either ParseError GemCoordinate
-matchCoordinate name coordinates filename = case filter matches coordinates of
-    [coordinate] -> Right coordinate
-    _ -> Left (ParseError "unknown or ambiguous RubyGems artifact coordinate")
-  where
-    matches coordinate = coordinateName coordinate == name && coordinateFilename coordinate == filename
 
 -- | Enumerate bounded native capture candidates before checking admitted artifact inventory.
 candidateCoordinates :: Int -> Filename -> Either ParseError [GemCoordinate]

@@ -24,7 +24,8 @@ import Ecluse.Core.Package (Artifact (artSize), HashAlg (SHA256), mkHash)
 import Ecluse.Core.Registry.Json.WalkProbe (allowance)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge)
 import Ecluse.Core.Server.MemoryModel.HeapSample qualified as Heap
-import Ecluse.Core.Server.Pipeline.Tarball.Verified (VerifiedArtifactBody, VerifiedArtifactStage (..), readVerifiedArtifactWith, verifiedBodyBytes)
+import Ecluse.Core.Server.Pipeline.Tarball.Verified (VerifiedArtifactStage (..), readVerifiedArtifactWith)
+import Ecluse.Core.Server.Pipeline.Tarball.Verified.Internal (VerifiedArtifactBody (VerifiedArtifactBody))
 import Ecluse.Test.Package (artifactWith)
 import Ecluse.Test.Support (expectRight)
 
@@ -150,8 +151,8 @@ measure mode input = do
         Nothing -> (,) <$> Heap.sample <*> (snd <$> processMemory)
         Just pointer -> do
             sampled <- Heap.sample
-            value <- deRefStablePtr pointer
-            _ <- evaluate (BS.length (verifiedBodyBytes value))
+            VerifiedArtifactBody bytes _ <- deRefStablePtr pointer
+            _ <- evaluate (BS.length bytes)
             (_, resident) <- processMemory
             freeStablePtr pointer
             pure (sampled, resident)
@@ -257,8 +258,8 @@ prepare mode input artifact baseline = do
     sample
     rooted <- case result of
         Left problem -> pure (Nothing, problem)
-        Right body -> do
-            _ <- evaluate (BS.length (verifiedBodyBytes body))
+        Right body@(VerifiedArtifactBody bytes _) -> do
+            _ <- evaluate (BS.length bytes)
             pointer <- newStablePtr body
             pure (Just pointer, "verified")
     Prepared (fst rooted) <$> readIORef consumed <*> readIORef chunks <*> readIORef charged <*> readIORef producerAllocated <*> readIORef highest <*> readIORef started <*> readIORef completed <*> readIORef verified <*> readIORef hashElapsed <*> pure (snd rooted)

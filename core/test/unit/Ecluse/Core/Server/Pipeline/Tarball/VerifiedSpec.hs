@@ -16,6 +16,7 @@ import Ecluse.Core.Package.Entry (EntryKey (SingletonEntry))
 import Ecluse.Core.Security (BodyLimit (VerifiedArtifactBodyLimit), LimitError (BodyTooLarge))
 import Ecluse.Core.Server.MemoryModel (verifiedArtifactCharge)
 import Ecluse.Core.Server.Pipeline.Tarball.Verified
+import Ecluse.Core.Server.Pipeline.Tarball.Verified.Internal (VerifiedArtifactBody (VerifiedArtifactBody))
 import Ecluse.Test.Registry.JsonStream (heldChunks)
 import Ecluse.Test.Support (expectRight, parseRequestOrFail)
 
@@ -26,8 +27,8 @@ spec = describe "complete verified artifact bodies" $ do
         for_ [[bytes], map BS.singleton (BS.unpack bytes)] $ \chunks -> do
             next <- heldChunks chunks
             paid <- newIORef []
-            checked <- expectRight =<< readVerifiedArtifactWith (const pass) (BS.length bytes) (\amount -> modifyIORef' paid (<> [amount])) artifact next
-            verifiedBodyBytes checked `shouldBe` bytes
+            VerifiedArtifactBody checked _ <- expectRight =<< readVerifiedArtifactWith (const pass) (BS.length bytes) (\amount -> modifyIORef' paid (<> [amount])) artifact next
+            checked `shouldBe` bytes
             charges <- readIORef paid
             charges `shouldSatisfy` (not . null)
             all (== verifiedArtifactCharge (BS.length bytes)) charges `shouldBe` True
@@ -36,8 +37,8 @@ spec = describe "complete verified artifact bodies" $ do
         paid <- newIORef []
         next <- heldChunks [bytes]
         let cap = 2 * BS.length bytes
-        checked <- expectRight =<< readVerifiedArtifactWith (const pass) cap (\amount -> modifyIORef' paid (<> [amount])) artifact{artSize = Nothing} next
-        verifiedBodyBytes checked `shouldBe` bytes
+        VerifiedArtifactBody checked _ <- expectRight =<< readVerifiedArtifactWith (const pass) cap (\amount -> modifyIORef' paid (<> [amount])) artifact{artSize = Nothing} next
+        checked `shouldBe` bytes
         readIORef paid `shouldReturn` replicate 3 (verifiedArtifactCharge cap)
     it "refuses a known cap before reading and rejects one byte past an unknown cap" $ do
         (artifact, bytes) <- fixture

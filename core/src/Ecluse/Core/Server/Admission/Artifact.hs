@@ -8,19 +8,18 @@ module Ecluse.Core.Server.Admission.Artifact (
     newVerifiedArtifactBudget,
     verifiedArtifactMaxBytes,
     withVerifiedArtifactAdmission,
-    verifiedArtifactWaiting,
 ) where
 
 import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Deadline (Deadlines)
-import Ecluse.Core.Server.Admission.Weighted (AdmissionObservers (..), WeightedAdmission, admissionWaitMicros, newWeightedAdmission, weightedAdmissionWaiting, withWeightedAdmission)
+import Ecluse.Core.Server.Admission.Artifact.Internal (VerifiedArtifactBudget (..))
+import Ecluse.Core.Server.Admission.Weighted (AdmissionObservers (..), admissionWaitMicros, newWeightedAdmission, withWeightedAdmission)
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
--- | The constructor refuses a per-body cap that cannot fit the aggregate.
-data VerifiedArtifactBudget = VerifiedArtifactBudget Int Int WeightedAdmission
-
--- | Both limits count wire bytes. Waiting uses the existing bounded serve-admission timing.
+{- | Refuse a non-positive body cap or aggregate capacity below it.
+Both limits count wire bytes. Waiting uses the bounded serve-admission timing.
+-}
 newVerifiedArtifactBudget :: Deadlines -> Int -> Int -> IO (Either Text VerifiedArtifactBudget)
 newVerifiedArtifactBudget deadlines body aggregate
     | body <= 0 || aggregate < body = pure (Left "verified artifact limits require a positive body cap within aggregate capacity")
@@ -37,7 +36,3 @@ withVerifiedArtifactAdmission metrics (VerifiedArtifactBudget cap aggregate gate
     | otherwise = rightToMaybe <$> withWeightedAdmission observers gate weight action
   where
     observers = AdmissionObservers (mpArtifactBodyQueued metrics) (mpArtifactBodyShed metrics) (mpArtifactBodyInFlightBytes metrics)
-
--- | Observe queued readers without changing capacity or their deadlines.
-verifiedArtifactWaiting :: VerifiedArtifactBudget -> STM Int
-verifiedArtifactWaiting (VerifiedArtifactBudget _ _ gate) = weightedAdmissionWaiting gate

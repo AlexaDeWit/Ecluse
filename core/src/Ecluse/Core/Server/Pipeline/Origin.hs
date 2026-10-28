@@ -14,8 +14,6 @@ module Ecluse.Core.Server.Pipeline.Origin (
     originMiss,
 
     -- * Fetching the two origins
-    fetchPrivateOrigin,
-    fetchPublicOrigin,
     fetchPrivateOriginObserved,
     fetchPublicOriginObserved,
     withPublicMetadata,
@@ -144,11 +142,7 @@ originResultOf = \case
     Right (Left (MetadataFetch _)) -> OriginUnresolved
     Right (Right manifest) -> OriginResolved manifest
 
--- | Resolve the private origin uncached with the caller's credential, retaining explicit access refusals.
-fetchPrivateOrigin :: PackumentDeps -> ServeRuntime -> ChargePart -> Maybe ClientCredential -> PackageName -> Handler OriginResult
-fetchPrivateOrigin = fetchPrivateOriginObserved (const pass)
-
--- | Observe every incoming full-read chunk before parsing, including responses later refused.
+-- | Read caller-authorised private metadata without caching and observe every incoming full-read chunk.
 fetchPrivateOriginObserved :: (Int -> IO ()) -> PackumentDeps -> ServeRuntime -> ChargePart -> Maybe ClientCredential -> PackageName -> Handler OriginResult
 fetchPrivateOriginObserved observe deps rt part token name = case pdPrivateBase deps of
     Nothing -> pure OriginAbsent
@@ -157,11 +151,7 @@ fetchPrivateOriginObserved observe deps rt part token name = case pdPrivateBase 
         origin <- liftIO (fullReadOrigin observe deps part (privateOrigin rt deps privateBase token))
         keepingRead deps part . originResultOf =<< tryAny (withMetadataClient rt deps privateMetadataClient origin (`fetchFullManifest` name))
 
--- | Cache anonymous public metadata under the origin's base URL.
-fetchPublicOrigin :: PackumentDeps -> ServeRuntime -> MemoryTicket -> ChargePart -> PackageName -> Handler OriginResult
-fetchPublicOrigin = fetchPublicOriginObserved (const pass)
-
--- | Shared-read leaders report actual chunks. Cache consumers retain their own document accounting.
+-- | Cache anonymous public metadata and observe shared-read leader chunks. Cache consumers retain their own document accounting.
 fetchPublicOriginObserved :: (Int -> IO ()) -> PackumentDeps -> ServeRuntime -> MemoryTicket -> ChargePart -> PackageName -> Handler OriginResult
 fetchPublicOriginObserved observe deps rt ticket part name = do
     logFM DebugS (ls ("fetching public origin for " <> renderPackageName name))

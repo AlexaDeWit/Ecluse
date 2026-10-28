@@ -8,8 +8,6 @@ module Ecluse.Core.Registry.RubyGems.Request (
     gemInfoUrl,
     gemArtifactUrl,
     gemCompactSpecUrl,
-    gemVersionJsonRequestUnder,
-    gemVersionsJsonRequestUnder,
 ) where
 
 import Network.HTTP.Client (Request)
@@ -20,9 +18,8 @@ import Ecluse.Core.Package (PackageName, pkgEcosystem, pkgNamespace, renderPacka
 import Ecluse.Core.Registry (UrlFormationError (UnparseableUrl))
 import Ecluse.Core.Registry.Request (BaseRequest, joinPath, metadataGet, requestAt)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyReadCredential)
-import Ecluse.Core.Registry.RubyGems.Project (GemCoordinate, coordinateFilename, coordinateName, coordinatePlatform, coordinateStem, coordinateVersion, projectName, unGemPlatform)
+import Ecluse.Core.Registry.RubyGems.Project (GemCoordinate, coordinateFilename, coordinateStem, projectName)
 import Ecluse.Core.Server.Path (encodeComponent, unFilename)
-import Ecluse.Core.Version (renderVersion)
 
 -- | Fetch the named compact-index document under caller-selected credentials.
 gemInfoRequestUnder :: BaseRequest -> Maybe ClientCredential -> PackageName -> Either UrlFormationError Request
@@ -50,15 +47,3 @@ gemArtifactUrl base coordinate = joinPath base ("gems/" <> encodeComponent (unFi
 -- | Address the original zlib-compressed compact specification for one checked artifact.
 gemCompactSpecUrl :: Text -> GemCoordinate -> Either UrlFormationError Text
 gemCompactSpecUrl base coordinate = joinPath base ("quick/Marshal.4.8/" <> encodeComponent (coordinateStem coordinate) <> ".gemspec.rz")
-
--- | Select JSON facts for one version and platform without borrowing another artifact's identity.
-gemVersionJsonRequestUnder :: BaseRequest -> Maybe ClientCredential -> GemCoordinate -> Either UrlFormationError Request
-gemVersionJsonRequestUnder base credential coordinate = metadataGet rubyReadCredential credential "application/json" <$> requestAt base path
-  where
-    path = "api/v2/rubygems/" <> encodeComponent (renderPackageName (coordinateName coordinate)) <> "/versions/" <> encodeComponent (renderVersion (coordinateVersion coordinate)) <> ".json?platform=" <> encodeComponent (unGemPlatform (coordinatePlatform coordinate))
-
--- | Fetch bounded per-package version facts when an older native source omits a required field.
-gemVersionsJsonRequestUnder :: BaseRequest -> Maybe ClientCredential -> PackageName -> Either UrlFormationError Request
-gemVersionsJsonRequestUnder base credential name = do
-    checked <- nativeName name
-    metadataGet rubyReadCredential credential "application/json" <$> requestAt base ("api/v1/versions/" <> encodeComponent checked <> ".json")
