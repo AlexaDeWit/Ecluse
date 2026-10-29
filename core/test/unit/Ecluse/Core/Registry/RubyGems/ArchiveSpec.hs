@@ -16,6 +16,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.List (lookup)
 import Data.Set qualified as Set
+import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import GHC.Exts.Heap qualified as Heap
 import Test.Hspec
@@ -77,6 +78,23 @@ spec = describe "native gem validation" $ do
         for_ [mutate "metadata.gz" (<> "junk"), mutate "data.tar.gz" (<> "junk"), mutate "checksums.yaml.gz" (<> "junk"), mutate "data.tar.gz" (\raw -> BS.take (BS.length raw - 1) raw)] $ \entries -> do
             changed <- BSL.toStrict <$> tarBytes (map (first toString) entries)
             inspect defaultLimits changed >>= (`shouldSatisfy` isLeft)
+    it "verifies every checksum algorithm and member in well-formed members" $ do
+        bytes <- readFileBS fixture
+        members <- nativeMembers bytes
+        metadataGzip <- maybe (fail "native fixture has no metadata member") pure (lookup "metadata.gz" members)
+        dataGzip <- maybe (fail "native fixture has no data member") pure (lookup "data.tar.gz" members)
+        let sha256 = "SHA256:\n  metadata.gz: " <> sha256Hex metadataGzip <> "\n  data.tar.gz: " <> sha256Hex dataGzip <> "\n"
+            zeros = T.replicate 128 "0"
+        for_
+            [ ("---\nSHA256:\n  metadata.gz: " <> sha256Hex metadataGzip <> "\n  data.tar.gz: " <> T.replicate 64 "0" <> "\n", "gem member checksum disagrees")
+            , ("---\n" <> sha256 <> "SHA512:\n  metadata.gz: " <> zeros <> "\n  data.tar.gz: " <> zeros <> "\n", "gem member checksum disagrees")
+            , ("---\n" <> sha256 <> "MD5:\n  metadata.gz: " <> zeros <> "\n  data.tar.gz: " <> zeros <> "\n", "missing or unsupported gem checksum algorithm")
+            , ("--- !ruby/object:Gem::Specification\n" <> sha256, "gem checksum mapping has an unsupported native tag")
+            , ("---\nSHA256:\n  metadata.gz: " <> sha256Hex metadataGzip <> "\n", "gem checksum member inventory disagrees")
+            ]
+            $ \(checksums, reason) -> do
+                changed <- repackChecksums members checksums
+                void <$> inspect defaultLimits changed `shouldReturn` Left (ParseError reason)
     it "reaches nested tar validation after accepting recomputed member checksums" $ do
         bytes <- readFileBS fixture
         members <- nativeMembers bytes
@@ -158,6 +176,14 @@ repack members payload = do
     let checksums = TE.encodeUtf8 ("---\nSHA256:\n  metadata.gz: " <> sha256Hex metadataGzip <> "\n  data.tar.gz: " <> sha256Hex payload <> "\n")
         checksumGzip = BSL.toStrict (GZip.compress (BSL.fromStrict checksums))
     BSL.toStrict <$> tarBytes [("metadata.gz", metadataGzip), ("data.tar.gz", payload), ("checksums.yaml.gz", checksumGzip)]
+
+-- The genuine metadata and data members under the given checksums document, every member well-formed.
+repackChecksums :: [(Text, ByteString)] -> Text -> IO ByteString
+repackChecksums members checksums = do
+    metadataGzip <- maybe (fail "native fixture has no metadata member") pure (lookup "metadata.gz" members)
+    dataGzip <- maybe (fail "native fixture has no data member") pure (lookup "data.tar.gz" members)
+    let checksumGzip = BSL.toStrict (GZip.compress (BSL.fromStrict (TE.encodeUtf8 checksums)))
+    BSL.toStrict <$> tarBytes [("metadata.gz", metadataGzip), ("data.tar.gz", dataGzip), ("checksums.yaml.gz", checksumGzip)]
 
 hasConstructor :: Int -> Heap.Box -> IO Bool
 hasConstructor remaining box
