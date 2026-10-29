@@ -764,9 +764,10 @@ name states the ecosystem of its cases. The suite's log heads each section with 
 `Spec` suffix. A module in an ecosystem directory holds that ecosystem's cases alone. A module whose
 cases belong to no single ecosystem sits beside the directories, and there are two:
 
-- `Ecluse.E2E.MixedEcosystemE2ESpec` holds the one case in which a single proxy serves both
-  clients in turn: an `npm` install from the public leg, a `pip` install, then an `npm` install
-  once the mirror holds the version. This case does not assert which leg serves that install.
+- `Ecluse.E2E.MixedEcosystemE2ESpec` holds the one case in which a single proxy serves three
+  clients in turn: an `npm` install from the public leg, a `pip` install, a Cargo build, then an
+  `npm` install once the mirror holds the version. This case does not assert which leg serves that
+  install.
 - `Ecluse.E2E.TelemetryE2ESpec` holds the telemetry cases. The telemetry configuration is
   independent of the mount, and the traffic is npm's. Two of its cases need a mount with a mirror
   target: the mirror-span case, and the case that serves a mirrored artifact from the private leg
@@ -785,7 +786,7 @@ cases belong to no single ecosystem sits beside the directories, and there are t
 | `Ecluse.E2E.AdvisoriesE2ESpec` | Pilot publishes independent scored, MAL, and partial-fix sources for npm and PyPI. The shared laws check exact listings, native client refusal, direct 403, structured advisory audit evidence, and the exact-fix and partial-fix remediation controls. The npm MAL session also observes absent mirror publication. |
 | `Ecluse.E2E.PyPI.AdvisoriesE2ESpec` | The native canonical-fix extension checks equivalent version spellings and retains its remediation-disabled and scored-denial controls. |
 | `Ecluse.E2E.TelemetryE2ESpec` | Telemetry export under each configuration. An `npm` client supplies the traffic, and the mirror cases require a mirror target. |
-| `Ecluse.E2E.MixedEcosystemE2ESpec` | Both clients use one proxy in turn. |
+| `Ecluse.E2E.MixedEcosystemE2ESpec` | The npm, pip, and Cargo clients use one proxy in turn. |
 
 The cases of one telemetry group share a collector, and each install emits the same span names. A
 span assertion therefore reads whole spans through `exportedSpans` and keys on an attribute of its
@@ -893,12 +894,12 @@ served `dist.tarball` to an absolute installable URL under `ECLUSE_SERVER__PUBLI
 `npm` cannot install the path-relative form.
 
 The [fixed E2E entrypoints](test-contracts.md#fixed-e2e-entrypoints) list each contract and its named concrete fixture.
-npm, PyPI, and Cargo run the full contract with concrete serving, mirroring, publication, Dredger and telemetry providers.
+npm, PyPI, Cargo, and RubyGems run the full contract with concrete serving, mirroring, publication, Dredger and telemetry providers.
 Native cases retain protocol-specific observations beside the shared laws.
 Their fixture and provider modules share the `ecluse-e2e-test-support` library.
 Metadata checks declarations and reports. It does not choose test combinations at runtime.
 
-CI prepares the real image once. The npm, PyPI, Cargo, and shared-system subjects each run on a separate arm64 runner.
+CI prepares the real image once. The npm, PyPI, Cargo, RubyGems, and shared-system subjects each run on a separate arm64 runner.
 The npm subject composes the former serving and write arrangements under one ecosystem entrypoint.
 The shared-system subject owns cross-ecosystem and core capability cases that belong to no single ecosystem.
 The subject matrix disables fail-fast, so one failure does not stop the other subjects.
@@ -932,6 +933,8 @@ task test-e2e-prepare
 task test-e2e-load
 task test-e2e-npm
 task test-e2e-pypi
+task test-e2e-cargo
+task test-e2e-rubygems
 task test-e2e-shared-system
 task test-e2e-audit
 ```
@@ -1108,7 +1111,7 @@ The load test alone stores reviewed minimums, its [success floors](#success-floo
 |---|---|---|
 | [Work per request](../.github/workflows/bench.yml) | Time and allocations for the benchmark groups over committed and synthetic corpora | `bench-results.csv`, `bench-output.txt`, per-ecosystem receipts, and `against-main.md` off `main` |
 | [Performance acceptance](../.github/workflows/perf-acceptance.yml) | Allocation and time for each [allocation leg](#allocation-budgets-perf-allocation-gating) over live registry documents, with no budget | `perf-acceptance-report.md`, native observations, per-ecosystem receipts or an unavailable diagnostic, and `against-main.md` off `main` |
-| [Load](../.github/workflows/bench-load.yml) | npm, PyPI, and Cargo successes, latency, memory, and collector cost through a proxy process under each pod shape, with separate ecosystem sections and baseline sources | `bench-load-results.md`, native observations and per-ecosystem receipts for complete runs, a diagnostic record for selected or GC-thrash runs, and `against-main.md` off `main`. A [sweep](#capability-sweeps) job uploads a directory per arm, `comparison.md`, and `comparison.json` |
+| [Load](../.github/workflows/bench-load.yml) | npm, PyPI, Cargo, and RubyGems successes, latency, memory, and collector cost through a proxy process under each pod shape, with separate ecosystem sections and baseline sources | `bench-load-results.md`, native observations and per-ecosystem receipts for complete runs, a diagnostic record for selected or GC-thrash runs, and `against-main.md` off `main`. A [sweep](#capability-sweeps) job uploads a directory per arm, `comparison.md`, and `comparison.json` |
 
 Each workflow calls a fixed Task measurement target, then a receipt target after the native process exits.
 Task records the options it passes before measurement. The native producer records its own measurement conditions.
@@ -1268,7 +1271,7 @@ They keep the duration, traffic, limits and assertions unchanged.
 | --- | --- |
 | `read-paths` | Cold metadata, shipped advisories, full private copies, assembled hits, 304 revalidation, cache-fit and eviction controls, and every managed PyPI read |
 | `memory-admission` | Full private copies, slow readers, idle bursts, bursts under private load, warm reads under cold load, and admission ramps |
-| `artifacts` | Private artifact relay, public onboarding, and relay ceilings for npm, PyPI, and Cargo |
+| `artifacts` | Private artifact relay, public onboarding, and relay ceilings for npm, PyPI, Cargo, and RubyGems |
 | `full` | Every routine scenario, including worker and replay measurements |
 
 Explicit `scenarios` override the profile and appear as `custom` in the native report.
@@ -1277,7 +1280,7 @@ Named partial profiles remain diagnostic. They do not enforce calibrated floors 
 Full nightly runs retain all four pod shapes. Remaining floor values and eligibility checks stay unchanged.
 The full profile now omits the 5% private-copy cases and default restart replays.
 They remain available through explicit scenario selection. The npm and PyPI grid contains 332 pass observations, down from 356.
-Cargo adds 154 pass observations, giving 486 across the three ecosystems.
+Cargo adds 154 and RubyGems 162 pass observations, giving 648 across the four ecosystems.
 
 The serving handoff requires an explicit full run:
 
@@ -1361,7 +1364,7 @@ pass uses four times the base connections, and its service pass uses one. The at
 keeps its raw p50 and p99 totals but marks the public-leg split unavailable, with the reason that
 the relay has no public leg. Ordinary scenarios still subtract only the public baseline, with
 private work in Écluse overhead. p50 remains primary, and p99 remains the labelled tail.
-`pypi/wheel-ceiling` and `cargo/crate-ceiling` use the same settings and attribution.
+`pypi/wheel-ceiling`, `cargo/crate-ceiling`, and `rubygems/gem-ceiling` use the same settings and attribution.
 
 A boot that fails because the runtime could not start an OS thread is booted once more, two
 seconds later, into a fresh cgroup, so every reading comes from the boot that succeeded. That
@@ -1373,15 +1376,16 @@ Four scenarios per ecosystem stress admission under memory pressure.
 `npm/herd` sends 100 simultaneous cold `typescript` listings to an idle proxy.
 `pypi/herd` sends the same burst of cold `boto3` Simple-index requests.
 `cargo/herd` sends it for the `aws-sdk-ec2` sparse index.
+`rubygems/herd` sends it for the `rails` per-gem `/info` record.
 Each ecosystem's `herd-under-heavy-private` sends that burst during a heavy private load.
 See [The herd under heavy private load](#the-herd-under-heavy-private-load).
 Each ecosystem's `warm-under-cold` measures assembled hits and retained selected reads.
 A second generator drives heavy-tier listings that never reuse an assembled response.
 Each ecosystem's `ramp` steps from 10 to 400 connections, with one configured duration per step, and reports each step.
-None of these twelve scenarios joins the concurrency-one pass.
+None of these sixteen scenarios joins the concurrency-one pass.
 
-`npm/slow-readers`, `pypi/slow-readers`, and `cargo/slow-readers` measure what slow clients cost the requests beside them.
-Each repeats and reports its cold listing load: `npm/merge-cold`, `pypi/index-cold`, or `cargo/index-cold`.
+`npm/slow-readers`, `pypi/slow-readers`, `cargo/slow-readers`, and `rubygems/slow-readers` measure what slow clients cost the requests beside them.
+Each repeats and reports its cold listing load: `npm/merge-cold`, `pypi/index-cold`, `cargo/index-cold`, or `rubygems/info-cold`.
 Beside it, the same number of further clients request the same listings and read each response at 1 MiB/s. These slow readers run in the harness process:
 
 - Each advertises a 1448-byte segment size, as an Ethernet path does. The proxy's socket send
@@ -1407,9 +1411,9 @@ TTL is 0. The private copy stays fixed for the run, so each scenario measures on
 | Scenario | Private copy of each capture |
 |---|---|
 | `npm/merge-cold`, `pypi/index-cold` | The comparison point, not a cut: a synthetic overlay of versions the public document does not hold, three for npm and one wheel for PyPI |
-| `npm/heavy-private-5pct`, `pypi/heavy-private-5pct`, `cargo/heavy-private-5pct` | The newest 5% of the versions |
-| `npm/heavy-private-25pct`, `pypi/heavy-private-25pct`, `cargo/heavy-private-25pct` | The newest 25% of the versions |
-| `npm/heavy-private`, `pypi/heavy-private`, `cargo/heavy-private` | The complete capture, as a private registry that proxies the public one returns |
+| `npm/heavy-private-5pct`, `pypi/heavy-private-5pct`, `cargo/heavy-private-5pct`, `rubygems/heavy-private-5pct` | The newest 5% of the versions |
+| `npm/heavy-private-25pct`, `pypi/heavy-private-25pct`, `cargo/heavy-private-25pct`, `rubygems/heavy-private-25pct` | The newest 25% of the versions |
+| `npm/heavy-private`, `pypi/heavy-private`, `cargo/heavy-private`, `rubygems/heavy-private` | The complete capture, as a private registry that proxies the public one returns |
 
 Cargo's `index-cold` comparison has no completed private source copy.
 Its private-copy variants retain checked source rows and verify matching target archives before measurement.
@@ -1440,9 +1444,12 @@ lists it right after that counterpart, so their allocations per success sit side
 | `cargo/index-cold-advisories` | `cargo/index-cold` | The shipped policy | The captured RustSec advisory for `tokio`, and none for `windows` or `aws-sdk-ec2` |
 | `cargo/index-cold-all-advisory-rules` | `cargo/index-cold` | The shipped policy with `DenyIfCve` at CVSS 8 and `DenyIfEpss` at 0.5, both failing closed | As `cargo/index-cold-advisories` |
 | `cargo/revalidate-not-modified-advisories` | `cargo/revalidate-not-modified` | The shipped policy | Nothing: `aws-sdk-ec2` has no advisory, so this measures a present database and an absent package |
+| `rubygems/info-cold-advisories` | `rubygems/info-cold` | The shipped policy | The captured advisories for `rails`, and none for `nokogiri` or `aws-sdk-ec2` |
+| `rubygems/info-cold-all-advisory-rules` | `rubygems/info-cold` | The shipped policy with `DenyIfCve` at CVSS 8 and `DenyIfEpss` at 0.5, both failing closed | As `rubygems/info-cold-advisories` |
+| `rubygems/revalidate-not-modified-advisories` | `rubygems/revalidate-not-modified` | The shipped policy | The captured advisories for `rails`, the first gem in the working set |
 
 The load harness boots the shipped mount policy. npm therefore also carries the admission-only
-`deny-scripts` rule, while PyPI and Cargo carry only the shared defaults. Two captured npm versions declare
+`deny-scripts` rule, while PyPI, Cargo, and RubyGems carry only the shared defaults. Two captured npm versions declare
 `postinstall` and the default denies them. Check a scheduled-equivalent npm run against the existing
 success floors when changing this default, keeping every failure visible.
 
@@ -2100,9 +2107,10 @@ obligations come with the testing pattern, beside the checklist in
 [Onboarding an ecosystem](#onboarding-an-ecosystem):
 
 - **Hold each metadata walk to a reference reader.** A differential property in `ecluse-core-unit`
-  compares the walk with an independent reader of the same fields, written with json-stream's
-  parser combinators. For a new ecosystem, that reader is a test oracle written for the walk.
-  npm's independent `npmFields` oracle lives in `Ecluse.Test.Registry.Npm.Streaming`.
+  compares the walk with an independent reader of the same fields. For a new ecosystem, that reader
+  is a test oracle written for the walk, outside the production parser. npm writes its oracle with
+  json-stream's parser combinators: the independent `npmFields` oracle lives in
+  `Ecluse.Test.Registry.Npm.Streaming`.
   `referenceVersionListParser` in `Ecluse.Test.Registry.Npm.Project` reads with that oracle.
 
   The production `npmVersionListWalk` lives in `Ecluse.Core.Registry.Npm.VersionListReader`.
@@ -2110,6 +2118,10 @@ obligations come with the testing pattern, beside the checklist in
   and nesting-failure classification. PyPI's reference, `pypiFields` in
   `Ecluse.Test.Registry.PyPI.Streaming`, is the reader PyPI ran before its walk.
   Where a walk skips more than its reference, as PyPI's selected read does, a property states the difference.
+  Cargo's `referenceIndex` in `Ecluse.Test.Registry.Cargo.Reference` decodes each sparse index line
+  with Aeson, and `Cargo.ReaderSpec` holds the native reader to its physical rows.
+  RubyGems' `referenceInfo` in `Ecluse.Test.Registry.RubyGems.Reference` reads Compact Index rows,
+  and `RubyGems.ReaderSpec` compares generated native facts with it in full and selected reads.
   The 2,000-case property for `packageListingWalk` compares package names,
   byte counts and failures with `referencePackageListingParser` in `Ecluse.Test.Registry.Npm.Maintenance`.
   The production walk lives in `Ecluse.Core.Registry.Npm.Maintenance.Listing`.
