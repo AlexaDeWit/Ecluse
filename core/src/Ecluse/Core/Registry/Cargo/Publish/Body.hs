@@ -21,7 +21,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Builder (byteString, lazyByteString, toLazyByteString, word32LE)
 import Data.ByteString.Lazy qualified as LBS
 
-import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry (ParseError (..), parseRefusal)
 import Ecluse.Core.Registry.Cargo.Manifest (parseRustRelease)
 import Ecluse.Core.Registry.Cargo.Project (projectName)
 import Ecluse.Core.Registry.Cargo.Wire (cargoTreeCharge, decodeCargoRecord)
@@ -70,20 +70,20 @@ metadataCharge = cargoTreeCharge . toInteger . BS.length
 
 splitUpload :: Limits -> ByteString -> Either ParseError (ByteString, ByteString)
 splitUpload limits bytes = do
-    when (BS.length bytes > maxPublishRequestBytes limits) (bad "Cargo upload exceeds its request byte bound")
+    when (BS.length bytes > maxPublishRequestBytes limits) (parseRefusal "Cargo upload exceeds its request byte bound")
     (metadata, rest) <- section (maxMetadataBytes limits) bytes
     (archive, trailing) <- section (maxMirrorArtifactBytes limits) rest
-    unless (BS.null trailing) (bad "Cargo upload contains trailing bytes")
-    when (BS.null archive) (bad "Cargo upload has no archive")
+    unless (BS.null trailing) (parseRefusal "Cargo upload contains trailing bytes")
+    when (BS.null archive) (parseRefusal "Cargo upload has no archive")
     pure (metadata, archive)
 
 section :: Int -> ByteString -> Either ParseError (ByteString, ByteString)
 section cap bytes = do
     let (prefix, available) = BS.splitAt 4 bytes
         declared = BS.foldr' (\byte total -> total `shiftL` 8 .|. toInteger byte) 0 prefix
-    when (BS.length prefix < 4) (bad "Cargo upload has a truncated length prefix")
-    when (cap <= 0 || declared > toInteger cap) (bad "Cargo upload section exceeds its byte bound")
-    when (declared > toInteger (BS.length available)) (bad "Cargo upload has a truncated section")
+    when (BS.length prefix < 4) (parseRefusal "Cargo upload has a truncated length prefix")
+    when (cap <= 0 || declared > toInteger cap) (parseRefusal "Cargo upload section exceeds its byte bound")
+    when (declared > toInteger (BS.length available)) (parseRefusal "Cargo upload has a truncated section")
     pure (BS.splitAt (fromInteger declared) available)
 
 decodeSections :: Limits -> ByteString -> ByteString -> Either ParseError CargoUploadBody
@@ -132,8 +132,5 @@ nativeName = either (const (fail "Cargo upload name is invalid")) (const (pure (
 encodeUpload :: Value -> ByteString -> Either ParseError LByteString
 encodeUpload metadata archive = do
     let json = encode metadata
-    unless (toInteger (LBS.length json) <= toInteger (maxBound :: Word32) && toInteger (BS.length archive) <= toInteger (maxBound :: Word32)) (bad "Cargo upload cannot fit uint32 framing")
+    unless (toInteger (LBS.length json) <= toInteger (maxBound :: Word32) && toInteger (BS.length archive) <= toInteger (maxBound :: Word32)) (parseRefusal "Cargo upload cannot fit uint32 framing")
     pure . toLazyByteString $ word32LE (fromIntegral (LBS.length json)) <> lazyByteString json <> word32LE (fromIntegral (BS.length archive)) <> byteString archive
-
-bad :: Text -> Either ParseError a
-bad = Left . ParseError

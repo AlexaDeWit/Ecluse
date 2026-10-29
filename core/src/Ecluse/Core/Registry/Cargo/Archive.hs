@@ -25,7 +25,7 @@ import Text.Show (showString, shows, showsPrec)
 import UnliftIO.Exception (evaluate)
 
 import Ecluse.Core.Package.Hash (sha256Hex)
-import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry (ParseError (..), parseRefusal)
 import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), splitArchiveCharge, withInflatedChunks)
 import Ecluse.Core.Registry.Archive.Tar (TarMember (..), TarScan, scanTar, sourceReader, tarContents, tarMembers)
 import Ecluse.Core.Registry.CachedDocument (estimateValueBytes)
@@ -54,10 +54,10 @@ A first-party upload carries no checksum, so only an admitted SHA-256 is compare
 inspectCargoArchive :: Limits -> (Int -> IO ()) -> Text -> Text -> Maybe Text -> ByteString -> IO (Either ParseError CargoArchiveMetadata)
 inspectCargoArchive limits charge name version checksum bytes = do
     if maxMirrorArtifactBytes limits <= 0 || BS.length bytes > maxMirrorArtifactBytes limits
-        then pure (bad "Cargo compressed archive exceeds its byte bound")
+        then pure (parseRefusal "Cargo compressed archive exceeds its byte bound")
         else
             if any (\expected -> T.toLower expected /= sha256Hex bytes) checksum
-                then pure (bad "Cargo compressed archive disagrees with its admitted SHA-256")
+                then pure (parseRefusal "Cargo compressed archive disagrees with its admitted SHA-256")
                 else do
                     let root = name <> "-" <> version
                     result <- archivePass limits charge root (Set.singleton "Cargo.toml") bytes
@@ -118,17 +118,17 @@ archiveFacts root scan = do
     case Map.lookup root (tarMembers scan) of
         Nothing -> Right ()
         Just Directory -> Right ()
-        _ -> bad "Cargo archive root is not a directory"
+        _ -> parseRefusal "Cargo archive root is not a directory"
     for_ (Map.elems (tarMembers scan)) $ \case
-        Link _ -> bad "Cargo packaged archive contains an unflattened link"
+        Link _ -> parseRefusal "Cargo packaged archive contains an unflattened link"
         _ -> Right ()
     let prefix = root <> "/"
         files = Set.fromList [dropArchiveRoot path | (path, Regular) <- Map.toList (tarMembers scan)]
         retained = 65536 + sum [256 + 4 * BS.length (TE.encodeUtf8 path) | path <- Set.toList files]
     for_ (Set.toList files) $ \path -> do
         let prefixes = drop 1 (scanl (\held part -> if T.null held then part else held <> "/" <> part) "" (T.splitOn "/" path))
-        when (any (`Set.member` files) (take (length prefixes - 1) prefixes)) (bad "Cargo archive file traverses another regular file")
-    manifest <- maybe (bad "Cargo archive lacks its effective Cargo.toml") Right (Map.lookup (prefix <> "Cargo.toml") (tarContents scan))
+        when (any (`Set.member` files) (take (length prefixes - 1) prefixes)) (parseRefusal "Cargo archive file traverses another regular file")
+    manifest <- maybe (parseRefusal "Cargo archive lacks its effective Cargo.toml") Right (Map.lookup (prefix <> "Cargo.toml") (tarContents scan))
     pure (manifest, files, retained)
 
 dropArchiveRoot :: Text -> Text
@@ -149,10 +149,7 @@ archivePass limits charge root selected bytes = do
   where
     select parts = case parts of
         actualRoot : relative | actualRoot == root -> Right (Set.member (T.intercalate "/" relative) selected)
-        _ -> bad "Cargo archive member disagrees with its admitted package root"
+        _ -> parseRefusal "Cargo archive member disagrees with its admitted package root"
 
 manifestMemory :: ByteString -> Int
 manifestMemory = cargoTreeCharge . toInteger . BS.length
-
-bad :: Text -> Either ParseError a
-bad = Left . ParseError
