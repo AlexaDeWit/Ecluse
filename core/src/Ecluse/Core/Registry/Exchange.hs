@@ -8,7 +8,6 @@ module Ecluse.Core.Registry.Exchange (
     boundedExchange,
     runExchange,
     runExchangeUsing,
-    runExchangeUsingObserved,
     singleAttemptSettings,
     newSingleAttemptManager,
     withSuccessBody,
@@ -48,8 +47,7 @@ import Network.HTTP.Client (
     responseBody,
     responseHeaders,
  )
-import Network.HTTP.Types (ResponseHeaders)
-import Network.HTTP.Types.Status (Status, statusCode)
+import Network.HTTP.Types.Status (statusCode)
 import UnliftIO (try)
 
 import Ecluse.Core.Deadline (Deadlines, timeout)
@@ -108,11 +106,7 @@ runExchange = runExchangeUsing Uncontrolled
 
 -- | Retain the controlled response lifetime for header-aware bounded consumers.
 runExchangeUsing :: ReadControl -> ExchangeClient -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
-runExchangeUsing = runExchangeUsingObserved (\_ _ -> pass)
-
--- | Observe actual origin headers before cooldown handling can replace their response.
-runExchangeUsingObserved :: (Status -> ResponseHeaders -> IO ()) -> ReadControl -> ExchangeClient -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
-runExchangeUsingObserved observe control client progress request readResponse =
+runExchangeUsing control client progress request readResponse =
     watched
         (ecDeadlines client)
         progress
@@ -120,7 +114,6 @@ runExchangeUsingObserved observe control client progress request readResponse =
             try
                 ( withReadControl control (metered watch) $ \observed recordHeaders ->
                     withResponse client observed $ \response -> do
-                        observe (responseStatus response) (responseHeaders response)
                         cooldown <- recordHeaders (responseStatus response) (responseHeaders response)
                         case cooldown of
                             Just retry -> pure (Left (FetchCooldown retry))
