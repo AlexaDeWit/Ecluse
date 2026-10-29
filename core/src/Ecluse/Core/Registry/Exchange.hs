@@ -209,11 +209,9 @@ accumulatingChargeFrom initial charge = do
             charge (total required)
     pure (add, total <$> readIORef held)
 
--- | Reserve buffered chunks and their final strict copy before the bounded reader retains them.
+-- | Pay the running total of buffered chunks and their final strict copy before the bounded reader retains them.
 boundedChargedRead :: (Int -> IO ()) -> BodyLimit -> IO ByteString -> IO (Either LimitError (Int, ByteString))
-boundedChargedRead charge limits readChunk = do
-    retain <- accumulatingCharge charge
-    boundedRead limits (chargedRead (retain . bufferedChunkCharge) readChunk)
+boundedChargedRead charge limits readChunk = accumulatingCharge charge >>= \retain -> boundedIncrementalRead retain limits readChunk
 
 -- | Pay each buffered chunk's own charge, never a running total, before the bounded reader retains it.
 boundedIncrementalRead :: (Int -> IO ()) -> BodyLimit -> IO ByteString -> IO (Either LimitError (Int, ByteString))

@@ -23,7 +23,7 @@ import Ecluse.Core.Registry (
     PublishRelayResponse (PublishRelayResponse),
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishCodec, publishCredential, publishRelay, publishRequestExtras, publishUploadClaims), PublishRequestBody (..))
-import Ecluse.Core.Registry.Exchange (withinServeCap)
+import Ecluse.Core.Registry.Exchange (accumulatingCharge, withinServeCap)
 import Ecluse.Core.Registry.Exchange.Types (ExchangeClient (ecDeadlines))
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseRequest, ocChargeFullRead, ocClient), originClient)
@@ -136,7 +136,8 @@ readAndRelay replies deps registry rt workspace target name request =
                         Left refusal -> pure refusal
                         Right agreed -> do
                             outcome <- withinServeCap (ecDeadlines (ocClient target)) (progressFloor (pubLimits deps)) MetadataFetch $ do
-                                prepared <- pcPrepareTarget (publishCodec (pubAdapter deps)) (srTracing rt) target{ocChargeFullRead = workspace . scaleCharge (pcTargetReadPermille (publishCodec (pubAdapter deps)))} (pubTargetUrl deps)
+                                fullRead <- accumulatingCharge (workspace . scaleCharge (pcTargetReadPermille (publishCodec (pubAdapter deps))))
+                                prepared <- pcPrepareTarget (publishCodec (pubAdapter deps)) (srTracing rt) target{ocChargeFullRead = fullRead} (pubTargetUrl deps)
                                 case prepared of
                                     Left fault -> pure (Left fault)
                                     Right approved -> first MetadataFetch <$> publishRelay (pubAdapter deps) target{ocBaseRequest = mkBaseRequest approved} agreed body
