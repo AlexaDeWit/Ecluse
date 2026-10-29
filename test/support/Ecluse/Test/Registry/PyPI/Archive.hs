@@ -3,8 +3,8 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE ImportQualifiedPost #-}
 
--- | Native Python archive fixtures with shared tar helpers for compatibility.
-module Ecluse.Test.Registry.PyPI.Archive (metadata, tarBytes, zipBytes, zip64Bytes, zipBzipBytes, zipLzmaBytes, zipTruncatedBytes, paxRecord) where
+-- | Native Python archive fixtures.
+module Ecluse.Test.Registry.PyPI.Archive (metadata, zipBytes, zip64Bytes, zipBzipBytes, zipLzmaBytes, zipTruncatedBytes) where
 
 import Codec.Archive.Zip.Conduit.Zip qualified as Zip
 import Conduit
@@ -12,7 +12,6 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Time (LocalTime (..), fromGregorian, midnight)
 import Ecluse.Test.Osv (osvZipOf)
-import Ecluse.Test.Registry.Archive (paxRecord, tarBytes)
 
 -- | The same Core Metadata payload for every native archive format.
 metadata :: ByteString
