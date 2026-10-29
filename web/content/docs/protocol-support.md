@@ -180,7 +180,7 @@ Missing, corrupt, or unrecorded state cannot supply a managed original-source co
 Ordinary compatible private reads remain available through the alternate view.
 Retained fields reflect first admission. Écluse does not continuously synchronise later yanks or mutate the target's yank state.
 
-Native publication checks length framing, archive root, manifest identity, version, and digest before discovery or writes.
+Native publication checks length framing, archive root, manifest identity, and version before discovery or writes.
 Dependency inventories, aliases, kinds, targets, registry sources, version requirements, and dependency features must agree with the effective archived manifest.
 Package feature graphs, native-library `links` declarations, and the optional minimum Rust version must also agree, allowing native normalisation.
 Target comparison parses native cfg expressions under the configured nesting limit, including final commas in `all` and `any` lists.
