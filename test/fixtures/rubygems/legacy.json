@@ -1,0 +1,235 @@
+{
+  "ruby": "3.4.9",
+  "rubygems": "3.7.2",
+  "layouts": [
+    {
+      "path": "legacy/spec-v-1-fields16.gemspec.rz",
+      "specification_version": -1,
+      "field_count": 16,
+      "sha256": "726ad370d3db024efc371ea41ba5e66b03bdc0ef052ba48ed1f45638d01b6202",
+      "decoded_name": "ecluse-fixture-root",
+      "decoded_version": "1.0.0",
+      "decoded_platform": "ruby",
+      "decoded_licenses": [],
+      "decoded_metadata": null,
+      "dependencies": [
+        [
+          "ecluse-fixture-leaf",
+          "runtime",
+          ">= 1.0, < 2.0"
+        ],
+        [
+          "ecluse-fixture-dev",
+          "development",
+          "~> 1.0, >= 1.0.1"
+        ]
+      ]
+    },
+    {
+      "path": "legacy/spec-v1-fields16.gemspec.rz",
+      "specification_version": 1,
+      "field_count": 16,
+      "sha256": "879ea33f4ea3bfff54b3289946602361fb01d850bfea0141f5ff2985ac99309e",
+      "decoded_name": "ecluse-fixture-root",
+      "decoded_version": "1.0.0",
+      "decoded_platform": "ruby",
+      "decoded_licenses": [],
+      "decoded_metadata": null,
+      "dependencies": [
+        [
+          "ecluse-fixture-leaf",
+          "runtime",
+          ">= 1.0, < 2.0"
+        ],
+        [
+          "ecluse-fixture-dev",
+          "development",
+          "~> 1.0, >= 1.0.1"
+        ]
+      ]
+    },
+    {
+      "path": "legacy/spec-v2-fields16.gemspec.rz",
+      "specification_version": 2,
+      "field_count": 16,
+      "sha256": "d21a0377c6d8e715c54301eb13ffc4be1d2aea452f98c0beff0116d7954fcc5d",
+      "decoded_name": "ecluse-fixture-root",
+      "decoded_version": "1.0.0",
+      "decoded_platform": "ruby",
+      "decoded_licenses": [],
+      "decoded_metadata": null,
+      "dependencies": [
+        [
+          "ecluse-fixture-leaf",
+          "runtime",
+          ">= 1.0, < 2.0"
+        ],
+        [
+          "ecluse-fixture-dev",
+          "development",
+          "~> 1.0, >= 1.0.1"
+        ]
+      ]
+    },
+    {
+      "path": "legacy/spec-v3-fields17.gemspec.rz",
+      "specification_version": 3,
+      "field_count": 17,
+      "sha256": "1c62296e17aa68721a14b89d7f6a2b5518e6169cb4ea59bf2b5b2f6940dc366f",
+      "decoded_name": "ecluse-fixture-root",
+      "decoded_version": "1.0.0",
+      "decoded_platform": "ruby",
+      "decoded_licenses": [],
+      "decoded_metadata": null,
+      "dependencies": [
+        [
+          "ecluse-fixture-leaf",
+          "runtime",
+          ">= 1.0, < 2.0"
+        ],
+        [
+          "ecluse-fixture-dev",
+          "development",
+          "~> 1.0, >= 1.0.1"
+        ]
+      ]
+    },
+    {
+      "path": "legacy/spec-v4-fields18.gemspec.rz",
+      "specification_version": 4,
+      "field_count": 18,
+      "sha256": "5a94169e62e30392ef590ca6385524de72eef64b6b2518cf43bd3977927346a2",
+      "decoded_name": "ecluse-fixture-root",
+      "decoded_version": "1.0.0",
+      "decoded_platform": "ruby",
+      "decoded_licenses": [
+        "MIT"
+      ],
+      "decoded_metadata": null,
+      "dependencies": [
+        [
+          "ecluse-fixture-leaf",
+          "runtime",
+          ">= 1.0, < 2.0"
+        ],
+        [
+          "ecluse-fixture-dev",
+          "development",
+          "~> 1.0, >= 1.0.1"
+        ]
+      ]
+    },
+    {
+      "path": "legacy/spec-v4-fields19.gemspec.rz",
+      "specification_version": 4,
+      "field_count": 19,
+      "sha256": "1dbba507fc3e1ac6775917f6da1260f0bf5e4b80f217fd41a7ad090c6dd30021",
+      "decoded_name": "ecluse-fixture-root",
+      "decoded_version": "1.0.0",
+      "decoded_platform": "ruby",
+      "decoded_licenses": [
+        "MIT"
+      ],
+      "decoded_metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "dependencies": [
+        [
+          "ecluse-fixture-leaf",
+          "runtime",
+          ">= 1.0, < 2.0"
+        ],
+        [
+          "ecluse-fixture-dev",
+          "development",
+          "~> 1.0, >= 1.0.1"
+        ]
+      ]
+    },
+    {
+      "path": "legacy/spec-date.gemspec.rz",
+      "specification_version": 4,
+      "field_count": 19,
+      "sha256": "2f86e2aba5ed8e54534ad7c85e7909337e0b99e1c8caed169be9cdbee8af3cf8",
+      "decoded_name": "ecluse-fixture-root",
+      "decoded_version": "1.0.0",
+      "decoded_platform": "ruby",
+      "decoded_licenses": [
+        "MIT"
+      ],
+      "decoded_metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "dependencies": [
+        [
+          "ecluse-fixture-leaf",
+          "runtime",
+          ">= 1.0, < 2.0"
+        ],
+        [
+          "ecluse-fixture-dev",
+          "development",
+          "~> 1.0, >= 1.0.1"
+        ]
+      ]
+    },
+    {
+      "path": "legacy/spec-fractional-time.gemspec.rz",
+      "specification_version": 4,
+      "field_count": 19,
+      "sha256": "dec9f093c3016c839ee8b7ad00eb27a0b7ff4b2a674686fb3551349329a12c7d",
+      "decoded_name": "ecluse-fixture-root",
+      "decoded_version": "1.0.0",
+      "decoded_platform": "ruby",
+      "decoded_licenses": [
+        "MIT"
+      ],
+      "decoded_metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "dependencies": [
+        [
+          "ecluse-fixture-leaf",
+          "runtime",
+          ">= 1.0, < 2.0"
+        ],
+        [
+          "ecluse-fixture-dev",
+          "development",
+          "~> 1.0, >= 1.0.1"
+        ]
+      ]
+    },
+    {
+      "path": "legacy/spec-version-requirements.gemspec.rz",
+      "specification_version": 4,
+      "field_count": 19,
+      "sha256": "3306e231dea1a9588f4eb7568cd8f8cb6e2949bafd769791db6153d04a5777dd",
+      "decoded_name": "ecluse-fixture-root",
+      "decoded_version": "1.0.0",
+      "decoded_platform": "ruby",
+      "decoded_licenses": [
+        "MIT"
+      ],
+      "decoded_metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "dependencies": [
+        [
+          "ecluse-fixture-leaf",
+          "runtime",
+          ">= 1.0, < 2.0"
+        ],
+        [
+          "ecluse-fixture-dev",
+          "development",
+          "~> 1.0, >= 1.0.1"
+        ]
+      ]
+    }
+  ]
+}

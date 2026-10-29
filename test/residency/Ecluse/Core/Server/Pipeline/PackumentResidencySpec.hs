@@ -15,15 +15,16 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Foreign.StablePtr (deRefStablePtr, freeStablePtr, newStablePtr)
 import Network.HTTP.Types (hContentType, methodGet, status200, statusCode)
-import Network.Wai (Application, defaultRequest, pathInfo, requestMethod, responseLBS, responseStatus)
+import Network.Wai (Application, Request (..), defaultRequest, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 import UnliftIO.Exception (bracket, evaluate, throwIO)
 
 import Ecluse.Composition.MemoryPlan.Transient (meterStepBytes)
 import Ecluse.Core.Deadline (Deadlines, sweepTick)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Package (PackageName, pkgEcosystem, renderPackageName)
+import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
@@ -38,25 +39,25 @@ import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpRuleEvalDuration, mpServeDecision))
 import Ecluse.Service (mountBindingFor)
-import Ecluse.Test.Corpus (CaptureUpstream (upstreamOrigin), CorpusPackage (cpPackage), cpName, readCapture)
+import Ecluse.Test.Corpus (CaptureUpstream (upstreamOrigin), CorpusPackage (cpPackage, cpPath), cpName, readCapture)
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.Cargo.Fixtures (cargoShard, cargoViewDiscovery)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (defaultCacheConfig, newMetadataCache)
-import Ecluse.Test.Server.Handler (MissingFixtureResponse (MissingFixtureResponse), deliverServe, testServeRuntime)
+import Ecluse.Test.Server.Handler (deliverServe, testServeRuntime)
 import Ecluse.Test.Server.Mount (serveDepsFor)
 import Ecluse.Test.Support (expectRight, testMemoryMeter)
 import Ecluse.Test.Wai (rebaseAuthority, selfBaseUrl)
 
--- | Each capture of at least one meter step, read from a private and a public origin that both serve it.
+-- | Censuses use each capture with a recorded listing peak, from private and public origins.
 spec :: Spec
 spec = describe "listing heap census" $
     for_ censused $ \(package, figures) -> it (toString (cpName package)) $ do
         capture <- readCapture package
         census <- measureInChild Mode.ListingCensus package >>= expectRight
-        report package census
+        report package capture census
         censusStatus census `shouldBe` statusCode status200
         -- The control: the census sees a document while the request holds it.
         held census (censusGate census) `shouldSatisfy` (>= ceiling (retainedShared figures * toRational (BS.length capture)))
@@ -138,9 +139,9 @@ takeCensus package captured capture = withSweeper $ \deadlines -> do
                     writeIORef responded (Just (response, atRespond))
                 atEnd <- live <$> sampleAfterSweep deadlines
                 _ <- deRefStablePtr root
-                (response, atRespond) <- maybe (throwIO MissingFixtureResponse) pure =<< readIORef responded
-                atGate <- maybe (throwIO MissingFixtureResponse) pure =<< readIORef gate
-                atPlan <- maybe (throwIO MissingFixtureResponse) pure =<< readIORef planned
+                (response, atRespond) <- maybe (throwIO MissingCensusResponse) pure =<< readIORef responded
+                atGate <- maybe (throwIO MissingCensusGate) pure =<< readIORef gate
+                atPlan <- maybe (throwIO MissingCensusPlan) pure =<< readIORef planned
                 pure
                     Census
                         { censusStatus = statusCode (responseStatus response)
@@ -153,9 +154,11 @@ takeCensus package captured capture = withSweeper $ \deadlines -> do
   where
     name = cpPackage package
     origin port = loopbackRegistryUrl ("http://localhost:" <> show port)
-    listing logEnv rt binding deliver = case bindingRouter binding methodGet [] (listingPath name) of
-        RouteAction contract (RunPipeline _ action) -> deliverServe logEnv contract rt binding (action defaultRequest{requestMethod = methodGet}) deliver
-        _ -> throwIO MissingFixtureResponse
+    listing logEnv rt binding deliver = case bindingRouter binding methodGet [] segments of
+        RouteAction contract (RunPipeline _ action) -> deliverServe logEnv contract rt binding (action request) deliver
+        _ -> throwIO MissingCensusRoute
+      where
+        (segments, request) = listingOperation name
 
 -- Disarmed deadlines retain worker stacks until the sweeper removes their entries.
 sampleAfterSweep :: Deadlines -> IO HeapSample
@@ -167,12 +170,23 @@ samplePoint deadlines meter point = do
     charged <- snChargedBytes <$> meterSnapshot meter
     writeIORef point (Just (Point (toInteger now) charged))
 
-listingPath :: PackageName -> [Text]
-listingPath name = case pkgEcosystem name of
-    Npm -> T.splitOn "/" (renderPackageName name)
-    PyPI -> ["simple", renderPackageName name]
-    Cargo -> T.splitOn "/" (cargoShard (renderPackageName name))
-    RubyGems -> [renderPackageName name]
+data CensusFixtureFailure
+    = MissingCensusResponse
+    | MissingCensusGate
+    | MissingCensusPlan
+    | MissingCensusRoute
+    deriving stock (Show)
+
+instance Exception CensusFixtureFailure
+
+listingOperation :: PackageName -> ([Text], Request)
+listingOperation name = case pkgEcosystem name of
+    Npm -> ordinary (T.splitOn "/" (renderPackageName name))
+    PyPI -> ordinary ["simple", renderPackageName name]
+    Cargo -> ordinary (T.splitOn "/" (cargoShard (renderPackageName name)))
+    RubyGems -> ordinary ["info", renderPackageName name]
+  where
+    ordinary segments = (segments, defaultRequest{requestMethod = methodGet})
 
 {- Serve the capture with its locations on this origin's own authority, as projection keeps no other.
 The body is rebased once, so the origin holds the same bytes at every sample. -}
@@ -189,11 +203,14 @@ servingCapture ecosystem captured capture = do
     authority = T.intercalate "/" (take 3 (T.splitOn "/" captured))
     rebase request = evaluate (rebaseAuthority authority (selfBaseUrl request) (LBS.fromStrict capture))
 
-report :: CorpusPackage -> Census -> IO ()
-report package census =
+report :: CorpusPackage -> ByteString -> Census -> IO ()
+report package capture census =
     putStrLn . ("listing-census " <>) . decodeUtf8 . LBS.toStrict . encode $
         object
             [ "package" .= cpName package
+            , "ecosystem" .= ecosystemName (pkgEcosystem (cpPackage package))
+            , "path" .= cpPath package
+            , "sha256" .= sha256Hex capture
             , "held_at_gate" .= held census (censusGate census)
             , "charged_at_gate" .= pointCharged (censusGate census)
             , "held_when_planned" .= held census (censusPlanned census)

@@ -285,7 +285,7 @@ Adapters must establish these contracts before their metadata reaches assembly:
 
 Snapshot scope is transient and content-addressed. It changes no stored schema or epoch.
 Source positions distinguish identical content from different upstream contributions.
-`PackageInfo` equality remains independent of snapshot scope. npm, PyPI, and Cargo implement this contract.
+`PackageInfo` equality remains independent of snapshot scope. npm, PyPI, Cargo, and RubyGems implement this contract.
 Future adapters must supply equivalent keys and contract tests before activation.
 
 The metadata cache charges new entry keys, including text backing allocations. The merge plan
@@ -378,7 +378,7 @@ consumes. Adapters map their protocols into this shared model. Four principles g
 |---|---|---|
 | **Identity** | `PackageName`: an ecosystem tag, an optional namespace (npm scope), a normalised `canonical` key, and a `display` form. Equality and ordering use `(ecosystem, namespace, canonical)` only, never the display or base forms. | npm is case-sensitive with scopes, PyPI normalises (PEP 503), RubyGems is verbatim. `Flask` and `flask` are one PyPI package but two npm ones, so the ecosystem tag is part of identity. Matching uses the canonical key while rendering stays faithful. |
 | **Version** | In [`Ecluse.Core.Version`](../../core/src/Ecluse/Core/Version.hs): opaque, holding the raw text plus a `Maybe VersionKey` parsed at construction. `parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey` is the only way to a key, and `compareVersions` works only on keys, so non-canonical text never reaches the comparator. Unparseable means no key, so ordering rules abstain and the proxy still serves the version. `Version` carries no derived `Ord`. | Lexicographic ordering is wrong for every grammar (`"10.0.0" < "9.0.0"`), and the proxy must keep serving a version even when the parser can't order it. |
-| **Install-time code execution** | `CodeExecSignal = NoCodeOnInstall \| RunsCodeOnInstall reason \| CodeExecUnknown`. | Unifies npm install scripts, PyPI sdist builds, and RubyGems native extensions. `Unknown` carries the gemspec-fetch case. |
+| **Install-time code execution** | `CodeExecSignal = NoCodeOnInstall \| RunsCodeOnInstall reason \| CodeExecUnknown`. | Unifies npm install scripts, PyPI sdist builds, and RubyGems native extensions. RubyGems retains `CodeExecUnknown` and blocks the unsupported execution-denial rule at boot. |
 | **Availability** | `Availability = Available \| Deprecated \| Yanked`, a flag with no text. | npm deprecates and RubyGems yanks whole versions. PyPI yanks individual files, so a release reads as `Yanked` only when every file of it is. |
 | **Artifacts** | A version owns `NonEmpty Artifact`. Each carries its entry key, file name, location, algorithm-tagged `Hash`es, and size. | npm has one tarball, PyPI an sdist plus many wheels, and RubyGems one gem per platform. |
 | **Dependencies** | Retained for installation, outside the typed policy model. | Each dependency receives its own verdict when the client fetches it. npm retains supported dependency relationships in its installation representation, without adding them to the rules vocabulary. |
@@ -472,7 +472,7 @@ supplies.
 The two sides share only the vocabulary above: `Ecosystem`, `PackageName`, and `Version`. Neither
 imports the other, and a store that needs an ecosystem fact reads it off the `Ecosystem` value, as
 the CodeArtifact format token does. A backend matrix therefore costs one adapter per ecosystem plus
-one backend per store, never a cell per pair. npm, PyPI, and Cargo ship read and native publication capabilities in this build. Their stores
+one backend per store, never a cell per pair. npm, PyPI, Cargo, and RubyGems ship read and native publication capabilities in this build. Their stores
 are CodeArtifact, any host that speaks the protocol, and Verdaccio for development.
 
 ### Incremental npm extraction
@@ -528,3 +528,28 @@ Parser continuations advance before the next chunk, so successful reads do not r
 source buffer.
 These bounds do not make required output constant in size. Process peak, native allocation and
 retained-live measurements remain distinct from the cached accounting estimate.
+
+## RubyGems integration
+
+RubyGems uses `MergePrivateAndPublic` with global Compact Index discovery and per-gem metadata acquisition.
+The public directory shares bounded retention. Caller-authorised private discovery remains fresh and separate from public retention.
+Per-gem `/info/<gem>` rows follow the shared source selection, admission and mirror restoration paths.
+Unknown transformed info-file MD5 values use explicit blank hints in the supported clients.
+This keeps detailed metadata acquisition on demand without publishing a false checksum.
+Selected compact specifications and archives use exact native coordinates.
+The [operator protocol reference](https://ecluse-proxy.com/docs/protocol-support/#rubygems) owns the route and client contract.
+
+Raw version identity differs from native version ordering. Platforms identify separate physical artifacts of the same raw version.
+A conflicting coordinate quarantines its version. Selected reads still scan through EOF and enforce counts before selection.
+Full reads count distinct raw versions, while selected reads count all nonblank artifact positions, including malformed or skipped rows.
+Artifact counts include every nonblank row before projection.
+
+RubyGems supplies no supported deprecation flag or scope. Native builds are normal installation behaviour.
+The adapter blocks `DenyIfDeprecated`, `AllowScope`, and `DenyInstallTimeExecution` through typed rule capabilities.
+No policy-only archive fetch or execution-evidence cache follows from unknown installation metadata.
+Bounded archive interpretation remains necessary for publication and mirroring.
+
+A mirror binds all supported platform archives to their original rows, checksums, publication times, and compact specifications in durable state.
+A target's regenerated metadata or publication time cannot replace those source facts.
+Current target membership and verified bytes must prove the complete inventory before managed reads use retained source data.
+Native raw `.gem` publication validates archive identity and relays the original bytes under separate publication authority.

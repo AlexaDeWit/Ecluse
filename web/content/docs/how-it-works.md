@@ -7,7 +7,7 @@ weight = 1
 Use this reference to follow metadata discovery, downloads, mirroring, and publication.
 For the operating purpose and deployment choices, start with
 [Understand Écluse](@/docs/understand.md) or [Set up Écluse](@/docs/setup.md).
-npm, PyPI, and Cargo support reads, mirroring, and first-party publication.
+npm, PyPI, Cargo, and RubyGems support reads, mirroring, and first-party publication.
 [Complete PyPI setup](@/docs/pypi-setup.md) connects those roles and their required stores.
 [Protocol support](@/docs/protocol-support.md) describes each protocol and its configuration requirements.
 
@@ -44,11 +44,11 @@ you supply. Package archives remain in your registries.
 ### The registry roles
 
 Écluse sees registries by role, and each role is a URL on a mount. Each ecosystem gets its own
-path prefix: `/npm/`, `/pypi/`, or `/cargo/`.
+path prefix: `/npm/`, `/pypi/`, `/cargo/`, or `/rubygems/`.
 
 | Role | What it does | Trust | Required? |
 |------|--------------|-------|-----------|
-| Public upstream | The registry Écluse gates | Subject to admission | Defaults to `registry.npmjs.org` for npm, `pypi.org` for PyPI, and `index.crates.io` for Cargo |
+| Public upstream | The registry Écluse gates | Subject to admission | Defaults to `registry.npmjs.org` for npm, `pypi.org` for PyPI, `index.crates.io` for Cargo, and `rubygems.org` for RubyGems |
 | Private upstream | Supplies trusted package versions | Trusted | No. Without it, a pure public gate |
 | Mirror target | Receives admitted package files and supplies completion proof | Operator-controlled | No. Declaring it enables mirroring for the mount |
 | Publication target | Receives your `publish` requests | Trusted | Opt-in |
@@ -61,6 +61,7 @@ and explains what you lose when two share one.
 
 For npm, a client requests a version listing and then a tarball. PyPI clients request project indexes
 and distribution files. Cargo clients read sparse discovery, native index records, and crate archives.
+RubyGems clients read a Compact Index directory, per-gem metadata, and gem archives.
 Cargo separates crates.io source replacement from private alternate-registry access.
 The [Cargo protocol contract](@/docs/protocol-support.md#cargo) defines those views and their source rules.
 
@@ -73,12 +74,14 @@ The [Cargo protocol contract](@/docs/protocol-support.md#cargo) defines those vi
    It never exposes a private or mirror store's `latest` tag.
 2. **The artifact.** Private files use the trusted path. A managed mirror hit also requires current
    authorisation, matching target identities, and a complete expected version. A private miss uses current
-   public metadata and policy. An admitted public request streams the file and queues a whole-version job
-   when mirroring is configured. For PyPI, that job copies every supported wheel and sdist in the admitted version.
+   public metadata and policy. An admitted public request delivers the file and queues a whole-version job
+   when mirroring is configured. Clients verify streamed archives against checksums from admitted metadata.
+   For PyPI, that job copies every supported wheel and sdist in the admitted version.
+   For RubyGems, it copies every platform archive in the admitted version.
 3. **A publish.** Publishing stays off until you configure a publication target. With one, Écluse
    refuses any name outside the mount's first-party namespaces before it writes upstream.
 
-{{ diagram(name="artifact-downloads", alt="An artifact request prefers the private source. An admitted public fallback streams to the client and queues a version trigger when mirroring is configured.", caption="Downloads and the trigger for background mirroring.") }}
+{{ diagram(name="artifact-downloads", alt="An artifact request prefers the private source. An admitted public fallback delivers the file and queues a version trigger when mirroring is configured.", caption="Downloads and the trigger for background mirroring.") }}
 
 Private versions do not re-enter public admission. Private metadata passes the trusted integrity
 floor, but a conventional private npm artifact hit bypasses that metadata path.

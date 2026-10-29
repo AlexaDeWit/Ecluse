@@ -15,7 +15,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Mirror.State.Internal
 import Ecluse.Core.Package
 import Ecluse.Core.Registry (MirrorArtifact (..))
-import Ecluse.Core.Registry.CachedDocument (cargoCached, estimateValueBytes, npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (cargoCached, estimateValueBytes, npmCached, pypiSimpleCached, rubyGemsCached)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.MirrorUpload (ExpectedMirrorFile, MirrorReadData (..), expectedArtifact, expectedDescriptor)
 import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope, simpleFiles)
@@ -58,6 +58,7 @@ sourceWeight = \case
         retainedRawWeight (fst pypiSimpleCached document)
             + valueBackingExcess (Object (simpleEnvelope document))
             + sum [weighEntryKey key + valueBackingExcess value | (key, value) <- simpleFiles document]
+    RubyGemsMirrorRead document -> retainedRawWeight (fst rubyGemsCached document)
     CargoMirrorRead document -> retainedRawWeight (fst cargoCached document) + sum [weighEntryKey key + valueBackingExcess value | (key, value) <- cargoRecords document]
 
 expectedWeight :: ExpectedMirrorFile -> Integer

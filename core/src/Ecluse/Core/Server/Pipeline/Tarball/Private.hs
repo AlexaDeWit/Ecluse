@@ -101,7 +101,7 @@ streamPrivateArtifact ctx token = do
             else privateArtifactRequest Nothing ctx token
     answer selected
   where
-    answer selected = case selected of
+    answer prepared = case prepared of
         -- The admission shed already counted its decision.
         PrivateShed headers -> PrivateHandled <$> liftIO (respond (tarballError replies shedStatus headers (mkRefusal Nothing shedMessage)))
         PrivateUnavailable -> PrivateAnswered Metric.Unavailable <$> liftIO unavailable
@@ -119,7 +119,7 @@ streamPrivateArtifact ctx token = do
     respond = arRespond ctx
 
     covered expected = maybe False $ \details -> publicMirrorCoverage (Map.singleton (renderVersion (arVersion ctx)) expected) (PackageInfo (arPackage ctx) (Map.singleton (renderVersion (arVersion ctx)) details) Map.empty [])
-    shaped = withValidators (arValidators ctx) . withMethod (arMode ctx)
+    shaped request = withValidators (arValidators ctx) (withMethod (arMode ctx) request)
     unavailable = respond (tarballError replies status503 [] (mkRefusal (pdHelp (arDeps ctx)) "managed mirror view is unavailable"))
     refuse code = respond (tarballPrivateRefused replies code [] (privateAuthorisationRefusal (pdHelp (arDeps ctx))))
     privateResponder =

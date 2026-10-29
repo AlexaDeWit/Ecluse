@@ -19,6 +19,7 @@ module Ecluse.Core.Version.Gem (
 import Data.List (dropWhileEnd)
 import Data.Text qualified as T
 
+import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Text (isAsciiAlphaNum)
 import Ecluse.Core.Version.Token (VToken (..), classifyRun, digitRuns, renderToken, withinVersionLength)
 
@@ -29,9 +30,7 @@ newtype GemKey = GemKey [VToken]
 instance Ord GemKey where
     compare (GemKey a) (GemKey b) = compareGemTokens a b
 
-{- | Parse a @Gem::Version@ into its ordering key. Fails on an empty or non-alphanumeric
-segment.
--}
+-- | Parse and settle canonical tokens, refusing empty or non-alphanumeric segments.
 parseGem :: Text -> Maybe GemKey
 parseGem raw = do
     guard (withinVersionLength raw)
@@ -43,7 +42,7 @@ parseGem raw = do
     guard (all validSeg segs)
     let toks = concatMap segTokens segs
     guard (not (null toks))
-    pure (GemKey (canonicalSegments toks))
+    pure (GemKey (strictElements (canonicalSegments toks)))
   where
     validSeg s = not (T.null s) && T.all isAsciiAlphaNum s
     segTokens = map classifyRun . digitRuns
@@ -64,8 +63,7 @@ compareGemTokens (x : xs) (y : ys) = compare x y <> compareGemTokens xs ys
 compareGemTokens (x : xs) [] = compare x (VNum 0) <> compareGemTokens xs []
 compareGemTokens [] (y : ys) = compare (VNum 0) y <> compareGemTokens [] ys
 
-{- Mirror @Gem::Version#canonical_segments@: trailing zeros drop from the numeric release and
-from the prerelease tail separately, which is why @2.t > 2.0.a@ and @2.0.a == 2.a@. -}
+-- Gem::Version drops trailing zeros independently from release and prerelease tokens.
 canonicalSegments :: [VToken] -> [VToken]
 canonicalSegments toks =
     let (release, prerelease) = span isNumeric toks

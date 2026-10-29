@@ -24,7 +24,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Cargo), ecosystemName)
 import Ecluse.Core.Fault.Http (typedBodyReads)
 import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, cargoPacked, npmCached, npmPacked, pypiPacked, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, cargoPacked, npmCached, npmPacked, pypiPacked, pypiSimpleCached, rubyGemsCached)
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataClient (..), MetadataError (MetadataFetch), VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.Origin (perCallerOrigin)
@@ -145,6 +145,7 @@ sameDocument :: CachedDoc -> CachedDoc -> Bool
 sameDocument left right
     | Just expected <- snd cargoPacked left, Just actual <- snd cargoPacked right = expected == actual
     | Just expected <- snd cargoCached left, Just actual <- snd cargoCached right = expected == actual
+    | Just expected <- snd rubyGemsCached left, Just actual <- snd rubyGemsCached right = expected == actual
     | otherwise = case (snd npmPacked left, snd npmPacked right, snd pypiPacked left, snd pypiPacked right) of
         (Just expected, Just actual, _, _) -> expected == actual
         (_, _, Just expected, Just actual) -> expected == actual

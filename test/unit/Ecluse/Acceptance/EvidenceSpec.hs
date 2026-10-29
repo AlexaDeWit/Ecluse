@@ -40,4 +40,4 @@ conditions = Map.fromList [("mode", "captures"), ("passes", "5"), ("capabilities
 report :: Verdict -> CapturesReport
 report verdict = CapturesReport calibration [CapturesSection Npm [Assessed (AssessedLeg "react" 10 FullDocument (Measurement 100 99 101 1) (Just 100) verdict)]] []
   where
-    calibration = Calibration "aarch64" "runner" "source" ("run" :| []) 10
+    calibration = Calibration "aarch64" "runner" "source" ("run" :| []) 10 mempty

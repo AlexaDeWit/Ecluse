@@ -7,6 +7,8 @@ module Ecluse.Test.Corpus.Outputs (
     CorpusRead (..),
     captureOutputs,
     recordedOutputs,
+    captureOutputKey,
+    recordedOutputsFrom,
     rendered,
     releaseFacts,
     selectedFacts,
@@ -18,6 +20,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
 import Ecluse.Core.Package (
     Artifact (..),
     PackageDetails (..),
@@ -36,7 +39,7 @@ import Ecluse.Core.Server.Conditional (renderETag)
 import Ecluse.Core.Server.Pipeline.Packument.Representation (Contribution (..), fingerprintPiece, packumentETag)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage), cpName, syntheticProxyBase)
+import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), cpName, syntheticProxyBase)
 import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, captureVersion)
 import Ecluse.Test.Registry.Metadata.Rendering (MetadataRendering (metadataAssemble, metadataSerialise))
 
@@ -129,8 +132,39 @@ selectedFacts selected =
     )
 
 line :: CorpusPackage -> (Text, LByteString) -> Text
-line package (label, bytes) = T.intercalate "\t" [cpName package, label, show (BSL.length bytes), show (hashWith SHA256 (toStrict bytes))]
+line package (label, bytes) = T.intercalate "\t" [captureOutputKey package, label, show (BSL.length bytes), show (hashWith SHA256 (toStrict bytes))]
 
 -- | The recorded lines for one capture, in recorded order.
 recordedOutputs :: CorpusPackage -> IO [Text]
-recordedOutputs package = filter ((== cpName package) . T.takeWhile (/= '\t')) . lines . decodeUtf8 <$> readFileBS "core/test/unit/fixtures/corpus-outputs.tsv"
+recordedOutputs package = recordedOutputsFrom package . lines . decodeUtf8 <$> readFileBS "core/test/unit/fixtures/corpus-outputs.tsv"
+
+-- | New captures use versioned paths. Only fixed historical owners receive unqualified keys.
+captureOutputKey :: CorpusPackage -> Text
+captureOutputKey package = case Map.lookup (pkgEcosystem (cpPackage package), cpPath package) legacyOutputOwners of
+    Just owner | owner == cpName package -> owner
+    _ -> "v2:" <> toText (cpPath package)
+
+-- | Preserve owned rows and their order, including malformed output fields for the exact comparison.
+recordedOutputsFrom :: CorpusPackage -> [Text] -> [Text]
+recordedOutputsFrom package = filter ((== captureOutputKey package) . T.takeWhile (/= '\t'))
+
+-- This map records v1 ownership, not current package discovery.
+legacyOutputOwners :: Map (Ecosystem, FilePath) Text
+legacyOutputOwners =
+    Map.fromList
+        [ ((Npm, "bench/corpus/npm/types-node.full.json"), "@types/node")
+        , ((Npm, "bench/corpus/npm/webpack.full.json"), "webpack")
+        , ((Npm, "bench/corpus/npm/aws-sdk-client-s3.full.json"), "@aws-sdk/client-s3")
+        , ((Npm, "bench/corpus/npm/express.full.json"), "express")
+        , ((Npm, "bench/corpus/npm/typescript.full.json"), "typescript")
+        , ((Npm, "bench/corpus/npm/babel-core.full.json"), "@babel/core")
+        , ((Npm, "bench/corpus/npm/react.full.json"), "react")
+        , ((Npm, "bench/corpus/npm/request.full.json"), "request")
+        , ((Npm, "bench/corpus/npm/lodash.full.json"), "lodash")
+        , ((PyPI, "bench/corpus/pypi/boto3.simple.json"), "boto3")
+        , ((PyPI, "bench/corpus/pypi/numpy.simple.json"), "numpy")
+        , ((PyPI, "bench/corpus/pypi/requests.simple.json"), "requests")
+        , ((Cargo, "bench/corpus/cargo/aws-sdk-ec2.index.ndjson"), "aws-sdk-ec2")
+        , ((Cargo, "bench/corpus/cargo/windows.index.ndjson"), "windows")
+        , ((Cargo, "bench/corpus/cargo/tokio.index.ndjson"), "tokio")
+        ]

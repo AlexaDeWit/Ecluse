@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Project scenario reports into service attribution without discarding raw private-hit latency, and render a placed proxy's CPU time.
+-- | Service attribution retains raw latency. CPU reports distinguish placed and unplaced proxies.
 module Ecluse.BenchLoad.ReportSpec (spec) where
 
 import Data.Aeson (eitherDecode, encode)
@@ -12,7 +12,8 @@ import Test.Hspec
 import Data.Map.Strict qualified as Map
 
 import Ecluse.BenchLoad.Floors (Enforcement (Enforced), Pass (Loaded))
-import Ecluse.BenchLoad.Harness (LoadKnobs (lkProxyTuning), LoadSummary (lsLabel), ProxyFigures (pfBurstMemory, pfCpu), Scenario (scenarioPublicLegUnavailableReason), ScenarioReport (..))
+import Ecluse.BenchLoad.Harness (LoadKnobs (lkProxyTuning), LoadSummary (lsElapsedSeconds, lsFirstByteLatency, lsLabel, lsLatency, lsTransferredBodyBytes), ProxyFigures (pfBurstMemory, pfCpu), Scenario (scenarioPublicLegUnavailableReason, scenarioUpstreamLatencyMicros), ScenarioReport (..))
+import Ecluse.BenchLoad.Latency (Percentiles (..))
 import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
 import Ecluse.BenchLoad.Pod (CgroupReading (CgroupReading), ProxyTuning (ptCpus), burstMemory, noTuning, parseCpuList)
 import Ecluse.BenchLoad.Report (Section (sectionEnforcement, sectionKnobs), renderReports, renderServiceTime)
@@ -24,6 +25,19 @@ spec :: Spec
 spec = do
     serviceTimeSpec
     describe "renderReports" $ do
+        it "reports observed transfer bytes without deriving them from fixture sizes" $ do
+            let plain = scenarioReport "npm/merge-cold" 100 4 2 5
+                observed = plain{srLoad = (srLoad plain){lsTransferredBodyBytes = Just 1234, lsElapsedSeconds = 2}}
+                rendered = renderReports (loadedSection Npm 5_000 [observed])
+            rendered `shouldSatisfy` T.isInfixOf "| transferred response body bytes / bytes per second (all statuses) | 1234 / 617.0 |"
+            renderReports (loadedSection Npm 5_000 [plain]) `shouldSatisfy` T.isInfixOf "(all statuses) | unavailable |"
+        it "distinguishes successful duration quantiles from all-response first body bytes" $ do
+            let plain = scenarioReport "npm/merge-cold" 100 4 2 5
+                observed = plain{srLoad = (srLoad plain){lsFirstByteLatency = Just (Percentiles (Just 1) Nothing (Just 3) (Just 4) Nothing), lsLatency = Percentiles (Just 2) Nothing (Just 4) (Just 5) Nothing}}
+                rendered = renderReports (loadedSection Npm 5_000 [observed])
+            rendered `shouldSatisfy` T.isInfixOf "success latency p95"
+            rendered `shouldSatisfy` T.isInfixOf "first body byte p50 / p95 / p99 (all completed responses, including refusals)"
+            renderReports (loadedSection Npm 5_000 [plain]) `shouldSatisfy` T.isInfixOf "including refusals) | unavailable"
         it "keeps burst refusals visible beside a background-only floor" $ do
             let name = "npm/herd-under-heavy-private"
                 plain = scenarioReport name 0 100 0 0
@@ -73,6 +87,17 @@ serviceTimeSpec = describe "renderServiceTime" $ do
             rendered = renderServiceTime (MeasuredRtt 150 8) [report]
         T.lines rendered `shouldSatisfy` elem "| npm/merge-cold | 255.0 ms | 150.0 ms (59%) | 105.0 ms (41%) | 300.0 ms | 150.0 ms (50%) | 150.0 ms (50%) | available |"
         rendered `shouldSatisfy` T.isInfixOf "p50 is primary. p99 is the tail, GC included."
+    it "keeps Ruby ceiling totals without attributing a fixed delay to a different live baseline" $
+        case findScenario "rubygems/gem-ceiling" of
+            Nothing -> expectationFailure "missing rubygems/gem-ceiling scenario"
+            Just ceilingScenario -> do
+                scenarioUpstreamLatencyMicros ceilingScenario `shouldBe` Just 2_000
+                let report = (scenarioReport "rubygems/gem-ceiling" 100 0 8 12){srPublicLegUnavailableReason = scenarioPublicLegUnavailableReason ceilingScenario}
+                    rendered = renderServiceTime (MeasuredRtt 50 9) [report]
+                T.lines rendered `shouldSatisfy` elem "| rubygems/gem-ceiling | 8.0 ms | n/a | n/a | 12.0 ms | n/a | n/a | unavailable: the fixture uses a fixed 2 ms upstream delay instead of the run's native RTT baseline |"
+                rendered `shouldNotSatisfy` T.isInfixOf "0.0 ms (0%)"
+                rendered `shouldSatisfy` T.isInfixOf "Rows without an applicable public baseline retain their raw totals."
+                rendered `shouldNotSatisfy` T.isInfixOf "Private-hit relays have no public leg."
 
 mib :: Int
 mib = 1024 * 1024

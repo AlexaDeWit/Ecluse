@@ -12,7 +12,7 @@ module Ecluse.BenchLoad.Profile (
 
 import Ecluse.BenchLoad.Contract (LoadLaw (..), loadScenarioName)
 import Ecluse.BenchLoad.Selection (scenarioKey)
-import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (PyPI, RubyGems))
 import Ecluse.Test.EcosystemBench (benchmarkEcosystems)
 
 -- | Full runs retain calibration coverage. Named selections remain diagnostic.
@@ -50,11 +50,9 @@ selectProfile profile Nothing = (renderLoadProfile profile, selected)
             [ ColdMetadata
             , ShippedAdvisoryMetadata
             , PrivateCopyWhole
-            , AssembledResponseHit
-            , RevalidateMetadata
-            , CacheFits
-            , CacheEvicts
             ]
+                <> (if ecosystem == RubyGems then [RepeatedInfo, RevalidateMetadata, OneProjectInfo, ManyProjectInfo] else [AssembledResponseHit, RevalidateMetadata, CacheFits, CacheEvicts])
                 <> [law | ecosystem == PyPI, law <- [ManagedMirrorBaseline, ManagedMirrorWarm, ManagedMirrorRevision]]
+                <> [QuickSpecification | ecosystem == RubyGems]
         MemoryAdmission -> [PrivateCopyWhole, SlowReaders, AdmissionHerd, HerdUnderPrivateCopy, WarmUnderCold, AdmissionRamp]
         Artifacts -> [PrivateArtifact, PublicArtifactOnboarding, PrivateArtifactCeiling]

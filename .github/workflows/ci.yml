@@ -398,7 +398,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        subject: [npm, pypi, cargo, shared-system]
+        subject: [npm, pypi, cargo, rubygems, shared-system]
     permissions:
       contents: read
     env:
@@ -559,6 +559,9 @@ jobs:
       - name: Audit Cargo completion across tiers
         if: ${{ !cancelled() }}
         run: nix develop .#ci --command task test-e2e-cargo-completion
+      - name: Audit RubyGems completion across tiers
+        if: ${{ !cancelled() }}
+        run: nix develop .#ci --command task test-e2e-rubygems-completion
 
   backend-conformance:
     name: Conformance (package stores verdaccio, codeartifact)

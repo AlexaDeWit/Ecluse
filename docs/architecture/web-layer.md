@@ -105,8 +105,8 @@ version collision before assembly.
 
 ## Streaming and resource lifetime
 
-The proxy pulls from upstream only as fast as the client drains: constant memory regardless of
-artifact size, with backpressure for free. Only the time spent waiting on upstream counts toward the
+For npm, PyPI, and Cargo, the proxy pulls from upstream only as fast as the client drains.
+These streamed bodies use constant memory regardless of artifact size. Only the time spent waiting on upstream counts toward the
 progress floor (`limits.progressWindow`, `limits.minProgressBytes`), so a slow client never trips it.
 An upstream that falls below it aborts the stream, and the client sees an incomplete download.
 
@@ -120,7 +120,7 @@ plus the sweep and scheduling. Arming a deadline adds it to a list for the armin
 request threads never wait on each other to arm one, as they would on GHC's process-wide timer
 queue. Amazonka's S3 calls and the OSV and EPSS fetches keep their own clients' timers.
 
-The proxy streams artifact responses without hashing their bodies. Integrity on this path depends
+The npm, PyPI, and Cargo adapters stream artifact responses without hashing their bodies. Integrity on this path depends
 on the client checking the preserved metadata hashes. The proxy therefore asks the upstream for
 every artifact and Core Metadata companion in identity coding. A registry CDN gzips a companion
 when the request permits it, and gzip bytes miss the advertised digest. npm documents integrity
@@ -137,10 +137,18 @@ connection and pumped a whole body for warp to discard is a DoS-amplification le
 would force arbitrary full-artifact upstream fetches. So dispatch handles `HEAD` explicitly, not the
 `Autohead` middleware.
 
+## RubyGems client integrity
+
+Compact Index `/info` replies carry archive SHA-256 values from the admitted winning source.
+Supported Bundler clients check those values during the first installation, without requiring a pre-existing lockfile.
+Archive delivery uses the shared streaming relay. Mirror ingestion verifies bytes before publication.
+The [operator protocol contract](https://ecluse-proxy.com/docs/protocol-support/#rubygems) defines the supported clients and cache behaviour.
+
 ## Metadata cache
 
-The local backend retains selected versions and assembled responses. It never retains full
-metadata, including a compact full representation. Concurrent full reads share active work,
+The local backend retains selected versions, assembled responses and the public RubyGems discovery directory.
+The directory shares the retention pool and contains names and native version tokens, without detailed per-gem metadata.
+It never retains full package metadata, including a compact full representation. Concurrent full reads share active work,
 then completion removes the flight registration. This path does not weigh, encode, or insert
 full entries. A subsequent full read fetches again, so an earlier listing does not make a later
 selected-version read an upstream-free operation.
@@ -226,11 +234,15 @@ may not be allowed to install. `server.metadataGzip` is on by default, and
 [Metadata admission, authorised response reuse and per-response compression](https://ecluse-proxy.com/docs/threat-model/#metadata-listing-and-admission)
 
 After admission, `Accept-Encoding` selects gzip, identity, or a `406` when neither is permitted.
-A matching `If-None-Match` returns `304` before rendering or compression. Otherwise the proxy
+Input-derived validators return `304` before rendering or compression. Otherwise the proxy
 reads or renders identity bytes, then compresses only when gzip was selected.
+RubyGems first builds the bounded Dependencies API batch after every named package passes admission.
+Its validator hashes the ordered Marshal bytes. Validated compact gemspec bytes use the same conditional and coding rules.
+The empty Dependencies API reply is an empty metadata listing, including for coding and validators.
 
 - **Only admitted listings.** Artifacts, sidecars, probes, refusals and publish replies are never
-  compressed by Écluse. The coding is chosen after every authority and policy check.
+  compressed by Écluse. RubyGems compact gemspecs are admitted native metadata.
+  The coding is chosen after every authority and policy check.
 - **One cached form.** The assembled cache holds identity bytes under the identity tag. Each gzip
   response compresses them again, on a hit as on a miss, at level 1 for speed.
 - **Validators per coding.** The gzip tag is weak and derived from the identity tag, because a

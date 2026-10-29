@@ -42,11 +42,12 @@ import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttp), LoadKnobs (..), Target, proxied, urlLoad)
 import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
 import Ecluse.BenchLoad.ProxyProcess (AdvisoryFeed (afObject), ProxyProcess, ProxySettings (..), mirrorStateBucket, proxyPort, proxySettings, withProxyProcess)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, RubyGems))
 import Ecluse.Core.Package (PackageName, pkgEcosystem)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName)
 import Ecluse.Test.Corpus qualified as Corpus
 import Ecluse.Test.Corpus.Cargo (encodeCargoValues)
+import Ecluse.Test.Corpus.RubyGems (encodeRubyGemsValues)
 import Ecluse.Test.Wai (rebaseAuthority)
 
 -- | Boot a proxy over two stubs with the given cache TTL and optional entry bound.
@@ -106,6 +107,7 @@ loadCorpusCuts cut packages = Map.fromList <$> traverse load packages
         document <- either (\reason -> benchFail ("bench-load: cannot cut " <> toText (cpPath cp) <> ": " <> toText reason)) pure (cut (cpPackage cp) (toStrict bytes))
         body <- case pkgEcosystem (cpPackage cp) of
             Cargo -> either benchFail evaluate (encodeCargoValues document)
+            RubyGems -> either benchFail evaluate (encodeRubyGemsValues document)
             _ -> evaluate (toStrict (encode document))
         pure (cpName cp, toLazy body)
 

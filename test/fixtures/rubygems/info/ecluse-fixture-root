@@ -1,0 +1,4 @@
+---
+1.0.0 ecluse-fixture-leaf:>= 1.0&< 2.0|checksum:646c0b16ba8b286beb737cc2e18ceb32b9cd42f7c7903ca3adc9b2896f489885,ruby:>= 3.2,rubygems:>= 3.4,created_at:2020-01-01T00:00:00Z
+2.0.0 ecluse-fixture-leaf:>= 1.0&< 3.0|checksum:1a64355f223fb775b48257611ad5822fcb421d61174b8d2fdebce7a86847908f,ruby:>= 3.2,rubygems:>= 3.4,created_at:2020-01-01T00:00:00Z
+3.0.0 ecluse-fixture-leaf:>= 1.0&< 3.0|checksum:5bc7e3193eec05c1d1d649d7ff829d78798c9ca71a0836c03010815d71532cb8,ruby:>= 3.2,rubygems:>= 3.4,created_at:2020-01-01T00:00:00Z

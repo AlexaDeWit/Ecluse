@@ -14,7 +14,7 @@ reference = "/docs/deployment/"
 ## Start with the proxy {#minimum}
 
 Run `ecluse proxy` behind an HTTPS endpoint that only your intended clients can reach.
-Enable the npm, PyPI, or Cargo mounts your teams need.
+Enable the npm, PyPI, Cargo, or RubyGems mounts your teams need.
 
 A public-only deployment needs no package store, queue, or advisory database. It applies the minimum age and any other rules that do not need advisories.
 
@@ -24,7 +24,7 @@ A public-only deployment needs no package store, queue, or advisory database. It
 | --- | --- | --- |
 | Check advisories | An advisory store and a writable local data directory. | `pilot` to publish databases. Other roles read them. |
 | Serve private packages | A private registry read endpoint and caller credentials. | The proxy. |
-| Mirror public packages | A mirror registry, private reads, and a queue. PyPI and Cargo also need durable completion state. | The proxy with its embedded worker, or separate `proxy --no-worker` and `mirror` processes. |
+| Mirror public packages | A mirror registry, private reads, and a queue. PyPI, Cargo, and RubyGems also need durable completion state. | The proxy with its embedded worker, or separate `proxy --no-worker` and `mirror` processes. |
 | Publish your packages | A publication target and the first-party names you own. | The proxy. |
 | Remove denied stored versions | A supported maintenance backend, separate credentials, and consent for each deletion target. | `dredger`. Start with a preview. |
 
@@ -75,7 +75,8 @@ A proxy adds public metadata reads, so plan traffic across your organisation bef
 
 ## On AWS {#aws}
 
-CodeArtifact can provide the package repositories, SQS the durable mirror queue, and S3 the advisory and PyPI state stores.
+CodeArtifact can provide the package repositories and SQS the durable mirror queue.
+S3 can hold advisories and the completion state for PyPI, Cargo, and RubyGems mirrors.
 
 Use EKS Pod Identity, IRSA, or an ECS task role for service credentials. The mirror worker mints its CodeArtifact write token. Client reads still use each caller's token.
 

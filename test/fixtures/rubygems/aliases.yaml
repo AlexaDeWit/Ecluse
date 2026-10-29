@@ -1,0 +1,5 @@
+---
+first: &1
+- owned
+- native
+second: *1

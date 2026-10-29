@@ -1,0 +1,5 @@
+---
+1.0.0 |checksum:64bbe671cb4af27cdfd590d7b9bdfa83c0b26b368db56beebf8643e07cd46155,ruby:>= 3.2,rubygems:>= 3.4,created_at:2020-01-01T00:00:00Z
+1.0.0-java |checksum:468f29562292692f2d8b316c86015dfe31a1f9a96a5fa3dd7cabf2b455e40dc7,ruby:>= 3.2,rubygems:>= 3.4,created_at:2020-01-03T00:00:00Z
+1.0.0-x86_64-linux-musl |checksum:ef35940f581b82d7b5a234747380b539909361eed680417d3765c4a637f2b847,ruby:>= 3.2,rubygems:>= 3.4,created_at:2020-01-03T00:00:00Z
+1.0.0-arm64-darwin |checksum:4a8d7f6ce76f233d20ad900d068c2615b5a34d6188027d1c9f4f7ca54a9ced06,ruby:>= 3.2,rubygems:>= 3.4,created_at:2020-01-03T00:00:00Z

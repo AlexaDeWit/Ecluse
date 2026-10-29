@@ -5,9 +5,13 @@
 -- | Merge authorised private metadata with admitted public versions. First-party names use only private metadata.
 module Ecluse.Core.Server.Pipeline.Packument (
     PackumentReplies (..),
+    DocumentRejectionObserver (..),
     packumentAction,
     servePackument,
     headPackument,
+    withObservedAdmittedDocument,
+    answerMetadataBytes,
+    mapPackumentReplies,
 
     -- * The first-party private miss (exported for its unit spec)
     firstPartyMissDecision,
@@ -17,13 +21,14 @@ module Ecluse.Core.Server.Pipeline.Packument (
     noSurvivors,
 ) where
 
+import Crypto.Hash (hash)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Katip (Severity (DebugS, ErrorS), logFM, ls)
 import Network.HTTP.Types (Method, ResponseHeaders, hContentLength)
-import Network.Wai (Request, ResponseReceived, requestHeaders)
+import Network.Wai (Request, ResponseReceived, requestHeaders, requestMethod)
 import UnliftIO (concurrently, withRunInIO)
 import UnliftIO.Exception (catchAny, evaluate, throwIO)
 
@@ -31,14 +36,18 @@ import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Mirror.State (ProjectMirrorRecord, StateRevision)
 import Ecluse.Core.Package (
-    PackageDetails,
-    PackageInfo (infoVersions),
+    Artifact (artHashes),
+    PackageDetails (pkgArtifacts),
+    PackageInfo (infoInvalidEntries, infoVersions),
     PackageName,
     renderPackageName,
  )
 import Ecluse.Core.Package.Filter (filterPlanFromDecisions, fpDecisions, fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Integrity (
+    IntegrityFloor,
     MinTrustedIntegrity,
+    VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
+    classifyDigests,
  )
 import Ecluse.Core.Package.Merge (
     MergePlan (mpDivergences, mpSurvivors),
@@ -58,11 +67,11 @@ import Ecluse.Core.Rules.Render (renderInability)
 import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext (ctxAdvisoryEtag), completeEvidence, mkEvalContext)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
-import Ecluse.Core.Server.Admission.Meter (ChargePart, MemoryTicket, awaitingFlight, charge, newChargePart, servingFlight, stepDown)
+import Ecluse.Core.Server.Admission.Meter (ChargePart, MemoryTicket, awaitingFlight, charge, chargePart, newChargePart, servingFlight, stepDown)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfOutputPermille))
 import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Cache.Types (assembledKey)
-import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag)
+import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag)
 import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps),
@@ -101,8 +110,8 @@ import Ecluse.Core.Server.Pipeline.Internal (
 import Ecluse.Core.Server.Pipeline.Origin (
     OriginMiss (MissAbsent, MissUnresolved),
     OriginResult (..),
-    fetchPrivateOrigin,
-    fetchPublicOrigin,
+    fetchPrivateOriginObserved,
+    fetchPublicOriginObserved,
     originManifest,
     originMiss,
  )
@@ -115,7 +124,7 @@ import Ecluse.Core.Server.Response (
     RejectReason (ByPolicy, Unavailable, UpstreamInvalid),
     Rejection (Rejection),
     RetryAfter,
-    ServeDecision (Reject),
+    ServeDecision (Admit, Reject),
     Transience (WillResolve),
     mkRefusal,
     packumentStatus,
@@ -144,6 +153,31 @@ data PackumentReplies response = PackumentReplies
     , packumentBadGateway :: ResponseHeaders -> Refusal -> response
     , packumentUnavailable :: ResponseHeaders -> Refusal -> response
     }
+
+-- | Observe checked version and file rejections for native coordinate resolution.
+data DocumentRejectionObserver response = DocumentRejectionObserver
+    { observeVersionRejection :: EvalContext -> PackageDetails -> Rejection -> IO ()
+    -- ^ Keep the original gate context with each checked version or file exclusion.
+    , onCheckedNoSurvivorAdmission :: IO response
+    -- ^ Resolve a checked public inventory after settled private absence and no surviving contribution.
+    }
+
+-- | Change only response construction while retaining shared admission and refusal decisions.
+mapPackumentReplies :: (a -> b) -> PackumentReplies a -> PackumentReplies b
+mapPackumentReplies convert replies =
+    PackumentReplies
+        { packumentForbiddenText = packumentForbiddenText replies
+        , packumentOk = \headers -> convert . packumentOk replies headers
+        , packumentNotModified = convert . packumentNotModified replies
+        , packumentUnauthorised = \headers -> convert . packumentUnauthorised replies headers
+        , packumentPrivateRefused = \code headers -> convert . packumentPrivateRefused replies code headers
+        , packumentForbidden = \headers -> convert . packumentForbidden replies headers
+        , packumentNotFound = \headers -> convert . packumentNotFound replies headers
+        , packumentNotAcceptable = \headers -> convert . packumentNotAcceptable replies headers
+        , packumentInternal = \headers -> convert . packumentInternal replies headers
+        , packumentBadGateway = \headers -> convert . packumentBadGateway replies headers
+        , packumentUnavailable = \headers -> convert . packumentUnavailable replies headers
+        }
 
 -- | GET and HEAD use the same gate and merge. HEAD withholds the body.
 packumentAction :: PackumentReplies response -> Method -> PackageName -> ResponseAction response
@@ -174,8 +208,8 @@ headPackument = packumentWith PackumentHead
 data PackumentServe
     = -- A @GET@: serve the merged packument body.
       PackumentFull
-    | -- A @HEAD@: serve the identical status and headers (the would-be body's
-      -- @Content-Length@ and the own @ETag@) with no body.
+    | -- HEAD shares GET admission and representation headers.
+
       PackumentHead
 
 data PackumentServing response = PackumentServing
@@ -189,6 +223,11 @@ data PackumentServing response = PackumentServing
     -- ^ The request's account with the memory meter, which its reads and its output pay into.
     , psvPrivateRead :: ChargePart
     -- ^ What the private read paid. It steps down to what the read keeps, and goes once the body exists.
+    , psvInputBytes :: Int -> IO ()
+    , psvDocumentBytes :: Int -> IO (Either response ())
+    , psvRejectionObserver :: Maybe (DocumentRejectionObserver response)
+    , psvAbsent :: Maybe response
+    , psvResolved :: PackumentServing response -> [Contribution] -> MergePlan -> Handler response
     , psvPublicRead :: ChargePart
     -- ^ The same for the public read, which pays only when this request leads the shared fetch.
     }
@@ -196,8 +235,7 @@ data PackumentServing response = PackumentServing
 servingMetrics :: PackumentServing response -> MetricsPort
 servingMetrics = srMetrics . psvRuntime
 
--- The edge token is checked before any upstream is touched, so an unauthenticated client cannot
--- drive egress. The reply is evaluated in the CPU slot and written after it, under the ticket.
+-- Authenticate before egress. Write after the CPU slot releases, under the memory ticket.
 packumentWith ::
     PackumentServe ->
     PackumentReplies response ->
@@ -210,21 +248,7 @@ packumentWith mode replies name request respond = do
     let mount = ctxMount ctx
         deps = bindingPackumentDeps mount
         clientToken = forwardedCredential mount request
-        serving ticket = do
-            privateRead <- liftIO (newChargePart ticket)
-            publicRead <- liftIO (newChargePart ticket)
-            pure
-                PackumentServing
-                    { psvMode = mode
-                    , psvReplies = replies
-                    , psvDeps = deps
-                    , psvName = name
-                    , psvRequest = request
-                    , psvRuntime = ctxRuntime ctx
-                    , psvTicket = ticket
-                    , psvPrivateRead = privateRead
-                    , psvPublicRead = publicRead
-                    }
+        serving ticket = newServing mode replies name request ticket answerPackumentConditional
     if not (edgeTokenMatches (pdInboundToken deps) clientToken)
         then refuse packumentUnauthorised [] unauthorisedMessage
         else
@@ -233,6 +257,73 @@ packumentWith mode replies name request respond = do
                 else withListingAdmission (ctxRuntime ctx) (\headers -> refuse packumentUnavailable headers shedMessage) (serving >=> (`serveAdmittedPackument` clientToken) >=> evaluate) (liftIO . respond)
   where
     refuse reply headers message = liftIO (respond (reply replies headers (mkRefusal Nothing message)))
+
+-- | Observe source sizes and checked rejections, including admission with no surviving contribution.
+withObservedAdmittedDocument ::
+    PackumentReplies response ->
+    MemoryTicket ->
+    (Int -> IO ()) ->
+    (Int -> IO (Either response ())) ->
+    Maybe (DocumentRejectionObserver response) ->
+    PackageName ->
+    Request ->
+    response ->
+    (CachedDoc -> Int -> Map Text Provenance -> Handler response) ->
+    Handler response
+withObservedAdmittedDocument replies ticket observe checkDocument rejected name request absent consume = do
+    mount <- asks ctxMount
+    let deps = bindingPackumentDeps mount
+        clientToken = forwardedCredential mount request
+        refuse reply message = pure (reply replies [] (mkRefusal Nothing message))
+    if not (edgeTokenMatches (pdInboundToken deps) clientToken)
+        then refuse packumentUnauthorised unauthorisedMessage
+        else
+            if pdReadSourceSelection deps == ManagedMirrorAndPublic && pdFirstParty deps name
+                then refuse packumentNotFound "first-party packages require the private registry view"
+                else do
+                    serving <- newServing PackumentFull replies name request ticket admitted
+                    serveAdmittedPackument serving{psvAbsent = Just absent, psvInputBytes = observe, psvDocumentBytes = checkDocument, psvRejectionObserver = rejected} clientToken
+  where
+    admitted serving sources plan = do
+        let basis = outputBasisBytes plan sources
+            factor = cfOutputPermille (metadataChargeFactors (pdMetadata (psvDeps serving)))
+        output <- liftIO (newChargePart ticket)
+        liftIO (chargePart output (scaleCharge factor basis))
+        document <- evaluate (renderServedBody (psvDeps serving) sources plan)
+        let origins = Map.mapMaybe (`Map.lookup` Map.fromList (zip [0 ..] (map srcProvenance sources))) (mpSurvivors plan)
+        result <- consume document (sum (map srcBodyBytes sources)) origins
+        liftIO (releaseReads serving >> stepDown output 0)
+        pure result
+
+newServing ::
+    PackumentServe ->
+    PackumentReplies response ->
+    PackageName ->
+    Request ->
+    MemoryTicket ->
+    (PackumentServing response -> [Contribution] -> MergePlan -> Handler response) ->
+    Handler (PackumentServing response)
+newServing mode replies name request ticket resolved = do
+    ctx <- ask
+    privateRead <- liftIO (newChargePart ticket)
+    publicRead <- liftIO (newChargePart ticket)
+    pure
+        PackumentServing
+            { psvMode = mode
+            , psvReplies = replies
+            , psvDeps = bindingPackumentDeps (ctxMount ctx)
+            , psvName = name
+            , psvRequest = request
+            , psvRuntime = ctxRuntime ctx
+            , psvTicket = ticket
+            , psvPrivateRead = privateRead
+            , psvPublicRead = publicRead
+            , psvInputBytes = const pass
+            , psvDocumentBytes = const (pure (Right ()))
+            , psvRejectionObserver = Nothing
+            , psvAbsent = Nothing
+            , psvResolved = resolved
+            }
 
 serveAdmittedPackument :: PackumentServing response -> Maybe ClientCredential -> Handler response
 serveAdmittedPackument serving clientToken = do
@@ -269,10 +360,10 @@ resolveOrigins serving clientToken
     | otherwise = concurrently (readPrivate serving clientToken) (readPublic serving)
 
 readPrivate :: PackumentServing response -> Maybe ClientCredential -> Handler OriginResult
-readPrivate serving clientToken = fetchPrivateOrigin (psvDeps serving) (psvRuntime serving) (psvPrivateRead serving) clientToken (psvName serving)
+readPrivate serving clientToken = fetchPrivateOriginObserved (psvInputBytes serving) (psvDeps serving) (psvRuntime serving) (psvPrivateRead serving) clientToken (psvName serving)
 
 readPublic :: PackumentServing response -> Handler OriginResult
-readPublic serving = fetchPublicOrigin (psvDeps serving) (psvRuntime serving) (psvTicket serving) (psvPublicRead serving) (psvName serving)
+readPublic serving = fetchPublicOriginObserved (psvInputBytes serving) (psvDeps serving) (psvRuntime serving) (psvTicket serving) (psvPublicRead serving) (psvName serving)
 
 privateAccessRefused :: PackumentServing response -> Int -> Handler response
 privateAccessRefused serving code = do
@@ -286,8 +377,16 @@ serveMergedPackument ::
     OriginResult ->
     OriginResult ->
     Handler response
-serveMergedPackument serving evalCtx record privResult pubResult =
-    case views of
+serveMergedPackument serving evalCtx record privResult pubResult
+    | OriginBudgetExceeded fault <- privResult = budgetRefused fault
+    | OriginBudgetExceeded fault <- pubResult = budgetRefused fault
+    | Just absent <- psvAbsent serving
+    , isNothing record
+    , not (pdFirstParty (psvDeps serving) (psvName serving))
+    , settledAbsence privResult
+    , settledAbsence pubResult =
+        pure absent
+    | otherwise = withCheckedSourceDocuments serving (catMaybes [originManifest privResult, originManifest pubResult]) $ case views of
         Left _ -> mirrorUnavailable serving
         Right (unmanagedManifest, managedManifest, pending) -> do
             let (unmanaged, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) unmanagedManifest
@@ -296,7 +395,7 @@ serveMergedPackument serving evalCtx record privResult pubResult =
                 trustedVersions = Map.unions (map (infoVersions . srcInfo) privateSources)
             public <- withRunInIO $ \run -> do
                 evidenceReads <- newPublicInstallEvidenceReads deps (srPublicClient rt) (srPublicControl rt) InstallPublicAdmission (psvTicket serving) (run . logFM ErrorS . ls . renderInability . rfDetail)
-                gatePublic evidenceReads (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) (originManifest pubResult)
+                gatePublic (observeVersionRejection <$> psvRejectionObserver serving) evidenceReads (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) (originManifest pubResult)
             let sources = privateSources <> maybeToList (paContribution public)
                 required = Map.withoutKeys pending (paBlockedPending public)
                 covered = Map.null required || maybe False (publicMirrorCoverage required . srcInfo) (paContribution public)
@@ -306,8 +405,19 @@ serveMergedPackument serving evalCtx record privResult pubResult =
                     Just miss | pdReadSourceSelection deps == PrivateOnly -> privateViewMissed serving miss
                     Just miss | pdFirstParty deps name -> firstPartyMissed serving miss
                     _ -> case packumentPlan sources trustedVersions (paDeniedEvidence public) of
-                        Just plan -> serveResolved serving sources plan
+                        Just plan -> do
+                            liftIO $ do
+                                paReportRejections public
+                                for_ (psvRejectionObserver serving) $ \observer ->
+                                    for_ (catMaybes [unmanagedManifest, managedManifest]) $ \manifest ->
+                                        reportIntegrityRejections (observeVersionRejection observer) evalCtx (pdMinTrustedIntegrity deps) trustedIntegrityBelowFloor trustedIntegrityMissing (manifestInfo manifest)
+                            serveResolved serving sources plan
                         Nothing
+                            | Just observer <- psvRejectionObserver serving
+                            , settledAbsence privResult
+                            , Just manifest <- originManifest pubResult
+                            , null (infoInvalidEntries (manifestInfo manifest)) ->
+                                liftIO (paReportRejections public >> onCheckedNoSurvivorAdmission observer)
                             | pdReadSourceSelection deps == ManagedMirrorAndPublic
                             , OriginUnresolved <- pubResult ->
                                 mirrorUnavailable serving
@@ -315,6 +425,10 @@ serveMergedPackument serving evalCtx record privResult pubResult =
                                 noServeableVersions serving (ctxAdvisoryEtag evalCtx) (paVerdicts public) $
                                     collectDecisions privResult pubResult (privateExclusions <> managedExclusions <> paExclusions public)
   where
+    budgetRefused fault = pure (packumentBadGateway (psvReplies serving) [] (mkRefusal (pdHelp deps) ("the cumulative metadata input exceeded its bound: " <> show fault)))
+    settledAbsence OriginAbsent = True
+    settledAbsence OriginNotFound = True
+    settledAbsence _ = False
     deps = psvDeps serving
     name = psvName serving
     rt = psvRuntime serving
@@ -325,6 +439,16 @@ serveMergedPackument serving evalCtx record privResult pubResult =
         Just (revision, current) -> do
             (unmanaged, managed, pending) <- mirrorProjectViews revision current (originManifest privResult)
             pure (if pdReadSourceSelection deps == ManagedMirrorAndPublic then Nothing else unmanaged, managed, pending)
+
+withCheckedSourceDocuments :: PackumentServing response -> [Manifest] -> Handler response -> Handler response
+withCheckedSourceDocuments serving manifests action = go manifests
+  where
+    go [] = action
+    go (manifest : rest) = do
+        checked <- liftIO (psvDocumentBytes serving (manifestBodyBytes manifest))
+        case checked of
+            Left refusal -> pure refusal
+            Right () -> go rest
 
 mirrorUnavailable :: PackumentServing response -> Handler response
 mirrorUnavailable serving = mirrorUnavailableWithRetry serving Nothing
@@ -351,12 +475,13 @@ data PublicAdmission = PublicAdmission
     , paBlockedPending :: Set Text
     , -- Only named denials release a missing recorded version from coverage.
       paDeniedEvidence :: Map Text PackageDetails
-      -- Integrity-admitted but rule-denied versions contribute alarms, never served entries.
+    , -- Integrity-admitted but rule-denied versions contribute alarms, never served entries.
+      paReportRejections :: IO ()
     }
 
-gatePublic :: (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Map Text PackageDetails -> Set Text -> Maybe Manifest -> IO PublicAdmission
-gatePublic evidenceReads tracing metrics deps name ctx trustedVersions pendingVersions = \case
-    Nothing -> pure (PublicAdmission Nothing [] [] Set.empty Map.empty)
+gatePublic :: Maybe (EvalContext -> PackageDetails -> Rejection -> IO ()) -> (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Map Text PackageDetails -> Set Text -> Maybe Manifest -> IO PublicAdmission
+gatePublic rejected evidenceReads tracing metrics deps name ctx trustedVersions pendingVersions = \case
+    Nothing -> pure (PublicAdmission Nothing [] [] Set.empty Map.empty pass)
     Just manifest -> spanPackumentGate tracing name $ do
         let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) integrityBelowFloor integrityMissing (manifestInfo manifest)
         (decisions, seconds) <- timedSeconds (decideVersions evidenceReads deps ctx admissible)
@@ -365,11 +490,17 @@ gatePublic evidenceReads tracing metrics deps name ctx trustedVersions pendingVe
         let plan = filterPlanFromDecisions decisions
             blockedPending = Set.fromList [version | (version, Blocked{}) <- Map.toList (Map.restrictKeys decisions pendingVersions)]
             deniedEvidence = Map.withoutKeys (Map.intersection (infoVersions admissible) trustedVersions) (fpSurvivors plan)
+            reportRejections = for_ rejected $ \report -> do
+                reportIntegrityRejections report ctx (pdMinIntegrity deps) integrityBelowFloor integrityMissing (manifestInfo manifest)
+                for_ (Map.toList (infoVersions admissible)) $ \(version, details) ->
+                    for_ (Map.lookup version decisions) $ \decision -> case serveDecisionOf (completeEvidence details) decision of
+                        Admit -> pass
+                        Reject rejection -> report ctx details rejection
         pure $
             if Set.null (fpSurvivors plan)
                 then
                     let verdicts = projectDecisions admissible (fpDecisions plan)
-                     in PublicAdmission Nothing (map vvDecision verdicts <> integrityRefusals) verdicts blockedPending deniedEvidence
+                     in PublicAdmission Nothing (map vvDecision verdicts <> integrityRefusals) verdicts blockedPending deniedEvidence reportRejections
                 else
                     PublicAdmission
                         (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) (manifestRaw manifest) (manifestDigest manifest) (manifestBodyBytes manifest)))
@@ -377,6 +508,20 @@ gatePublic evidenceReads tracing metrics deps name ctx trustedVersions pendingVe
                         []
                         blockedPending
                         deniedEvidence
+                        reportRejections
+
+reportIntegrityRejections :: (IntegrityFloor floor) => (EvalContext -> PackageDetails -> Rejection -> IO ()) -> EvalContext -> floor -> ServeDecision -> ServeDecision -> PackageInfo -> IO ()
+reportIntegrityRejections report ctx floorSpec below missing info =
+    for_ (Map.elems (infoVersions info)) $ \details ->
+        for_ (pkgArtifacts details) $ \artifact ->
+            case classifyDigests floorSpec (artHashes artifact) of
+                MeetsFloor -> pass
+                BelowFloor -> rejected details artifact below
+                NoIntegrity -> rejected details artifact missing
+  where
+    rejected details artifact = \case
+        Admit -> pass
+        Reject rejection -> report ctx details{pkgArtifacts = artifact :| []} rejection
 
 decideVersions :: (PackageDetails -> IO (Maybe InstallEvidenceRead)) -> PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text Decision)
 decideVersions evidenceReads deps ctx info = do
@@ -399,33 +544,40 @@ serveResolved :: PackumentServing response -> [Contribution] -> MergePlan -> Han
 serveResolved serving sources plan = do
     warnDivergences (servingMetrics serving) (psvName serving) plan
     liftIO (mpServeDecision (servingMetrics serving) Metric.Admit)
-    answerPackumentConditional serving sources plan
+    psvResolved serving serving sources plan
 
--- The coding is chosen before the validator, so a 304 names the coding's own tag. It skips assembly and compression.
 answerPackumentConditional :: PackumentServing response -> [Contribution] -> MergePlan -> Handler response
 answerPackumentConditional serving sources plan =
+    answerMetadataConditional (psvReplies serving) deps (psvTicket serving) (psvRequest serving) (psvMode serving) identityTag $ do
+        bytes <- servedBytes serving sources plan identityTag
+        releaseReads serving
+        pure bytes
+  where
+    deps = psvDeps serving
+    origins = map registryUrlText (maybeToList (pdPrivateBaseUrl deps) <> [pdPublicBaseUrl deps])
+    identityTag = packumentETag (pdMountBaseUrl deps) origins (psvName serving) (map fingerprintPiece sources)
+
+-- | Finalise bounded native bytes only after current authorisation, admission and validation.
+answerMetadataBytes :: PackumentReplies response -> PackumentDeps -> MemoryTicket -> Request -> ByteString -> Handler response
+answerMetadataBytes replies deps ticket request bytes =
+    answerMetadataConditional replies deps ticket request mode (mkStrongETag (hash bytes)) (pure bytes)
+  where
+    mode = if isHead (requestMethod request) then PackumentHead else PackumentFull
+
+-- Choose coding before its validator. An input-derived tag can skip assembly and compression on 304.
+answerMetadataConditional :: PackumentReplies response -> PackumentDeps -> MemoryTicket -> Request -> PackumentServe -> ETag -> IO ByteString -> Handler response
+answerMetadataConditional replies deps ticket request mode identityTag render =
     case chooseCoding (pdMetadataCompression deps) headers of
         NoAcceptableCoding ->
             pure (packumentNotAcceptable replies (represented []) (mkRefusal (pdHelp deps) "the request's Accept-Encoding excludes both gzip and identity"))
         ServeCoding coding -> case evaluateETag headers (codedETag coding identityTag) of
-            NotModified matched -> do
-                logFM DebugS (ls ("packument unchanged for " <> renderPackageName name <> " (304, unassembled)"))
-                pure (packumentNotModified replies (represented [etagHeader matched]))
+            NotModified matched -> pure (packumentNotModified replies (represented [etagHeader matched]))
             Modified fresh -> do
-                logFM DebugS (ls ("serving packument for " <> renderPackageName name))
-                -- The assembled cache holds the identity bytes under the identity tag, whatever the coding.
-                bytes <- liftIO (servedBytes serving sources plan identityTag)
-                liftIO (releaseReads serving)
-                listing <- liftIO (codedListing (psvTicket serving) coding bytes)
-                pure (packumentResponse replies (psvMode serving) (represented [etagHeader fresh]) listing)
+                bytes <- liftIO render
+                listing <- liftIO (codedListing ticket coding bytes)
+                pure (packumentResponse replies mode (represented [etagHeader fresh]) listing)
   where
-    deps = psvDeps serving
-    name = psvName serving
-    replies = psvReplies serving
-    headers = requestHeaders (psvRequest serving)
-    origins = map registryUrlText (maybeToList (pdPrivateBaseUrl deps) <> [pdPublicBaseUrl deps])
-    identityTag = packumentETag (pdMountBaseUrl deps) origins name (map fingerprintPiece sources)
-    -- An identity-only mount negotiates nothing, so its responses do not vary by Accept-Encoding.
+    headers = requestHeaders request
     represented = case pdMetadataCompression deps of
         GzipWhenAccepted -> varyAcceptEncoding
         IdentityOnly -> id
@@ -510,6 +662,7 @@ collectDecisions privResult pubResult publicExclusions =
 
 privateDecision :: OriginResult -> [ServeDecision]
 privateDecision = \case
+    OriginBudgetExceeded _ -> [upstreamInvalidDecision]
     OriginAuthorisationFailure _ -> []
     OriginResolved _ -> []
     -- A merged name keeps a private 404 and a private outage on one refusal, so a name
@@ -524,6 +677,7 @@ privateDecision = \case
 
 publicDecision :: OriginResult -> [ServeDecision]
 publicDecision = \case
+    OriginBudgetExceeded _ -> [upstreamInvalidDecision]
     OriginAuthorisationFailure _ -> []
     OriginNameMismatch -> [upstreamInvalidDecision]
     OriginResolved _ -> []

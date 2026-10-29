@@ -33,14 +33,25 @@ spec = describe "load profiles" $ do
             for_ ["assembled-response-hit", "revalidate-not-modified", "cache-fits-large", "cache-evicts-large"] $ \name ->
                 keys `shouldSatisfy` elem (ecosystem <> "/" <> name)
         keys `shouldContain` ["pypi/mirror-native-baseline", "pypi/mirror-managed-warm", "pypi/mirror-managed-revision"]
-        length keys `shouldBe` 24
+        length (filter (not . T.isPrefixOf "rubygems/") keys) `shouldBe` 24
+        filter (T.isPrefixOf "rubygems/") keys
+            `shouldBe` [ "rubygems/info-cold"
+                       , "rubygems/info-cold-advisories"
+                       , "rubygems/heavy-private"
+                       , "rubygems/info-repeated-corpus"
+                       , "rubygems/revalidate-not-modified"
+                       , "rubygems/info-working-set-one"
+                       , "rubygems/info-working-set-many"
+                       , "rubygems/quick-gemspec"
+                       ]
+        length keys `shouldBe` 32
     it "keeps slow clients, bursts under private load and the full admission ramp" $
-        for_ ["npm", "pypi", "cargo"] $ \ecosystem ->
+        for_ ["npm", "pypi", "cargo", "rubygems"] $ \ecosystem ->
             [name | key <- selected MemoryAdmission, Just name <- [T.stripPrefix (ecosystem <> "/") key]]
                 `shouldMatchList` ["heavy-private", "slow-readers", "herd", "herd-under-heavy-private", "warm-under-cold", "ramp"]
     it "keeps private, public onboarding and relay-ceiling artifact comparisons" $
         selected Artifacts
-            `shouldMatchList` ["npm/tarball-hot-path", "npm/tarball-onboarding", "npm/tarball-ceiling", "pypi/wheel-hot-path", "pypi/wheel-onboarding", "pypi/wheel-ceiling", "cargo/crate-hot-path", "cargo/crate-onboarding", "cargo/crate-ceiling"]
+            `shouldMatchList` ["npm/tarball-hot-path", "npm/tarball-onboarding", "npm/tarball-ceiling", "pypi/wheel-hot-path", "pypi/wheel-onboarding", "pypi/wheel-ceiling", "cargo/crate-hot-path", "cargo/crate-onboarding", "cargo/crate-ceiling", "rubygems/gem-hot-path", "rubygems/gem-onboarding", "rubygems/gem-ceiling"]
     it "resolves every selected row under the manual default shape without duplicates" $
         for_ [ReadPaths, MemoryAdmission, Artifacts] $ \profile -> do
             let keys = selected profile

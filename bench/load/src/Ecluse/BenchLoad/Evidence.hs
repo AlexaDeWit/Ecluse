@@ -12,7 +12,7 @@ import Data.Text qualified as T
 import Ecluse.BenchLoad.Floors (Enforcement (Enforced, NotHeld), FloorKey, floorCheck, passKey)
 import Ecluse.BenchLoad.Verdict (RunEvidence, runViolations)
 
--- | Record actual enforcement after measurement, including every reason a diagnostic run is not held.
+-- | Record actual enforcement, including every reason a diagnostic run is not held.
 loadEvidence :: Map Text Text -> Enforcement -> [Text] -> [(FloorKey, Either Text RunEvidence)] -> Value
 loadEvidence conditions enforcement violations outcomes =
     object

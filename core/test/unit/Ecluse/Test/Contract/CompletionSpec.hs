@@ -29,6 +29,18 @@ spec = describe "full completion" $ do
     it "keeps the outage law outside PyPI and the read-only foundation" $ do
         requiredFamilyLawsFor "pypi" FullEcosystem `shouldBe` requiredFamilyLaws FullEcosystem
         requiredFamilyLawsFor "npm" ReadOnlyEcosystemFoundation `shouldBe` requiredFamilyLaws ReadOnlyEcosystemFoundation
+    it "requires native Ruby name and origin bindings without inventing self-reported fields" $ do
+        let proxying = fromMaybe [] (lookup "proxying" (requiredFamilyLawsFor "rubygems" FullEcosystem))
+        for_ ["metadata-fetch/held-origin-mismatch", "metadata-projection/name-binding", "metadata-projection/origin-binding"] $ \law ->
+            proxying `shouldContain` [law]
+        for_ ["metadata-fetch/held-name-mismatch", "metadata-projection/missing-name", "metadata-projection/name-mismatch"] $ \law ->
+            proxying `shouldNotContain` [law]
+        length proxying `shouldBe` length (fromMaybe [] (lookup "proxying" (requiredFamilyLaws FullEcosystem)))
+    it "rejects an omitted Ruby binding even when its declaration and evidence disappear" $ do
+        for_ ["metadata-fetch/held-origin-mismatch", "metadata-projection/name-binding", "metadata-projection/origin-binding"] $ \missing -> do
+            let evidence = [LawEvidence family law E2E "rubygems" ("rubygems/" <> family <> "/" <> law) | (family, required) <- requiredFamilyLawsFor "rubygems" FullEcosystem, law <- required, law /= missing]
+            fromLeft [] (validateCompletion (Completion "rubygems" FullEcosystem evidence) [])
+                `shouldContain` ["missing required law: proxying/" <> missing]
     it "requires MAL refusal in both scopes and MAL revocation in full completion" $ do
         for_ [FullEcosystem, ReadOnlyEcosystemFoundation] $ \scope ->
             lookup "advisories" (requiredFamilyLaws scope) `shouldSatisfy` maybe False (elem "mal-denial")

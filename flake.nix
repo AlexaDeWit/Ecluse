@@ -443,6 +443,9 @@
           LANG = "C.UTF-8";
           LC_ALL = "C.UTF-8";
           NODE_PATH = "${oracleNodeModules}/node_modules";
+          ECLTEST_RUBY = "${pkgs.ruby}/bin/ruby";
+          ECLTEST_BUNDLER_269 = "${bundler269}/bin/bundle-2.6.9";
+          ECLTEST_BUNDLER_4023 = "${bundler4023}/bin/bundle-4.0.23";
           AWS_EC2_METADATA_DISABLED = "true";
           ECLTEST_SEMGREP_ACTION_RULE = pkgs.fetchurl {
             url = "${semgrepActionPinningSource}.yaml";
@@ -504,6 +507,37 @@
           meta.license = [ pkgs.lib.licenses.mit pkgs.lib.licenses.asl20 ];
         };
 
+        # Both Bundler clients use the pinned Ruby runtime without a registry install.
+        bundlerClient = version: hash: pkgs.stdenvNoCC.mkDerivation {
+          pname = "bundler-client";
+          inherit version;
+          src = pkgs.fetchurl {
+            url = "https://rubygems.org/gems/bundler-${version}.gem";
+            inherit hash;
+          };
+          nativeBuildInputs = [ pkgs.ruby pkgs.makeWrapper ];
+          dontUnpack = true;
+          dontConfigure = true;
+          dontBuild = true;
+          installPhase = ''
+            runHook preInstall
+            cp "$src" "$TMPDIR/bundler-${version}.gem"
+            gem install --local "$TMPDIR/bundler-${version}.gem" --no-document \
+              --install-dir "$out/gems" --bindir "$TMPDIR/bundler-bin"
+            mkdir -p "$out/bin"
+            makeWrapper ${pkgs.ruby}/bin/ruby "$out/bin/bundle-${version}" \
+              --set GEM_PATH "$out/gems" \
+              --set BUNDLE_VERSION "${version}" \
+              --add-flags "-I$out/gems/gems/bundler-${version}/lib" \
+              --add-flags "$out/gems/gems/bundler-${version}/exe/bundle"
+            ln -s "bundle-${version}" "$out/bin/bundler-${version}"
+            runHook postInstall
+          '';
+          meta.license = pkgs.lib.licenses.mit;
+        };
+        bundler269 = bundlerClient "2.6.9" "sha256-olZ1/70FWuEYZ2bMHhILTPYliOiKu1m5nFfiKxxVyes=";
+        bundler4023 = bundlerClient "4.0.23" "sha256-QHuoodko9BKEf4Gapfi2rvfFn7Uf61FxEq+KFlSHKHs=";
+
         # Compiling and testing share this toolchain in development and CI.
         toolchainInputs = [
           pkgs.bashInteractive
@@ -527,6 +561,8 @@
           # against a pypi mount, the way it drives npm against an npm mount.
           (pkgs.python3.withPackages (ps: [ ps.packaging ps.pip ]))
           pkgs.ruby
+          bundler269
+          bundler4023
           pkgs.go-task
           pkgs.flock
         ];

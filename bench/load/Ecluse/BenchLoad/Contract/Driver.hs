@@ -58,7 +58,7 @@ readLoadContract driver extensions =
                    , lrdRamp driver
                    ]
                 <> extensions
-                <> patternScenarios (lrdPatternProvider driver) ecosystem (pcPackages copy) (lrdPatternPrivate driver) (lrdPatternPublic driver) (pcUrl copy)
+                <> patternScenarios (lrdPatternProvider driver) ecosystem (pcPackages copy) (lrdPatternPrivate driver) (lrdPatternPublic driver)
         }
   where
     copy = lrdPrivateCopy driver

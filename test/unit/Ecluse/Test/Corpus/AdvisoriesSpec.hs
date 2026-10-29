@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Pin the corpus captures the compiled corpus advisories cover, the rows the rules read for them, and the shared shipped policy.
+-- | Captured advisories retain native package coverage and the shared shipped policy.
 module Ecluse.Test.Corpus.AdvisoriesSpec (spec) where
 
 import Data.ByteString.Lazy qualified as LBS
@@ -16,16 +16,17 @@ import Ecluse.Config (RulePolicy (policyRules), decodeDefaultConfig, sourceDefau
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), CveDb (cveDbLookup), CveLookup (CveLookup, cveCoveredNames))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions), mkPackageName)
 import Ecluse.Core.Rules (RuleDeps, prepare)
 import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), EvalContext (EvalContext), FailureAlignment (FailDeny), Rule (AllowIfOlderThan, DenyIfCve), completeEvidence)
 import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Test.Corpus (cargoCorpusPackages, corpusPackages, cpName, cpPackage, pypiCorpusPackages)
+import Ecluse.Test.Corpus (cargoCorpusPackages, corpusPackages, cpName, cpPackage, pypiCorpusPackages, rubyGemsCorpusPackages)
 import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (..), checkCapturesServed, compileAdvisoryInputs, compileCorpusAdvisories, configuredShippedPolicy, corpusAdvisories, shippedPolicy)
+import Ecluse.Test.Corpus.RubyGems (projectRubyGemsInfo)
 import Ecluse.Test.Osv (osvZipOf)
-import Ecluse.Test.OsvDb (withServedArtifact)
+import Ecluse.Test.OsvDb (scoresOf, withServedArtifact)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, blockedBy, evalRules, inertRuleDeps, isBlockedByDefault, servingRuleDeps)
@@ -34,12 +35,11 @@ import Ecluse.Test.Support (expectRight)
 spec :: Spec
 spec = do
     describe "compileCorpusAdvisories" $
-        for_ [(Npm, corpusPackages, ["@babel/core", "express", "lodash", "react", "request", "webpack"]), (PyPI, pypiCorpusPackages, ["numpy", "requests"]), (Cargo, cargoCorpusPackages, ["tokio"])] $ \(eco, captures, advised) ->
+        for_ [(Npm, corpusPackages, ["@babel/core", "express", "lodash", "react", "request", "webpack"]), (PyPI, pypiCorpusPackages, ["numpy", "requests"]), (Cargo, cargoCorpusPackages, ["tokio"]), (RubyGems, rubyGemsCorpusPackages, ["rails"])] $ \(eco, captures, advised) ->
             it ("covers the " <> show eco <> " captures the corpus records name, and the rules read their rows") $
                 withSystemTempDirectory "ecluse-corpus-advisories" $ \dir -> do
                     compiled <- compileCorpusAdvisories eco dir
                     withServedArtifact eco compiled $ \deps db -> do
-                        -- A pass also holds each capture's display name equal to its lookup key, which the filter below relies on.
                         checkCapturesServed deps (map cpPackage captures) `shouldReturn` Right ()
                         covered <- cveCoveredNames (cveDbLookup db)
                         sort (filter (`elem` covered) (map cpName captures)) `shouldBe` advised
@@ -56,6 +56,21 @@ spec = do
                 let ctx = EvalContext (UTCTime (fromGregorian 2026 3 25) 58240.382036) Nothing
                 withServedArtifact PyPI compiled $ \deps _ -> do
                     assertCapturedRemediation deps ctx fixedRelease affected
+
+    describe "real RubyGems advisory remediation" $
+        it "admits the captured exact Rails fix during quarantine and preserves scored and unknown advisory evidence" $
+            withSystemTempDirectory "ecluse-real-rails-remediation" $ \dir -> do
+                compiled <- compileCorpusAdvisories RubyGems dir
+                scores <- scoresOf compiled
+                scores `shouldSatisfy` elem (Just 0.01034)
+                scores `shouldSatisfy` elem Nothing
+                bytes <- readFileBS "bench/corpus/rubygems/rails.info"
+                (info, _) <- expectRight (projectRubyGemsInfo "https://rubygems.org" defaultLimits (mkPackageName RubyGems Nothing "rails") bytes)
+                fixedRelease <- maybe (fail "the Rails capture has no 7.0.8.1 release") pure (Map.lookup "7.0.8.1" (infoVersions info))
+                affected <- maybe (fail "the Rails capture has no 7.0.8 release") pure (Map.lookup "7.0.8" (infoVersions info))
+                uploaded <- maybe (fail "the captured Rails fix has no publication time") pure (pkgPublishedAt fixedRelease)
+                withServedArtifact RubyGems compiled $ \deps _ ->
+                    assertCapturedRemediation deps (EvalContext (addUTCTime 3600 uploaded) Nothing) fixedRelease affected
 
     describe "canonical remediation controls from compiled captures" $ do
         for_ ["4.17.21", "v4.17.21"] $ \advisoryFix ->

@@ -27,6 +27,7 @@ import Ecluse.Core.Registry.Json.Packed (Packed, docTable)
 import Ecluse.Core.Registry.Json.Writer (packTree)
 import Ecluse.Core.Registry.JsonStream (Steps (..), isJsonSpace, readStepsWithEnd)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk)
+import Ecluse.Core.Registry.Metadata.RecordStream (finishRecordSteps, recordSteps)
 import Ecluse.Core.Registry.ServedDocument (stringField)
 import Ecluse.Core.Security (Limits (maxNestingDepth), checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
@@ -66,13 +67,11 @@ readCargoIndexCharged pay discovery limits name mode bound _ =
 
 -- | Close an incomplete final record with the same empty-chunk signal as the streaming reader.
 finishCargoSteps :: (Monad m) => Steps m a -> m (Steps m a)
-finishCargoSteps = \case
-    NeedData next -> next BS.empty
-    step -> pure step
+finishCargoSteps = finishRecordSteps
 
 -- | Frame and project native records while reserving current and retained selected-row workspace.
 cargoIndexSteps :: (Monad m) => (Int -> m ()) -> CargoDiscovery -> Limits -> PackageName -> CargoRead -> Steps m CargoIndexResult
-cargoIndexSteps pay discovery limits name mode = await initial [] 0
+cargoIndexSteps pay discovery limits name mode = recordSteps reserve consume (Finished . complete) initial
   where
     initial = Scan 0 0 0 Map.empty [] [] 0
     requestedIdentity = case mode of
@@ -87,25 +86,6 @@ cargoIndexSteps pay discovery limits name mode = await initial [] 0
     rememberInvalid invalid scan = case mode of
         FullRead -> scan{scanInvalid = invalid : scanInvalid scan}
         SelectedRead _ -> scan
-    await !scan pieces rowCharge = NeedData (receive scan pieces rowCharge)
-    receive scan pieces rowCharge chunk
-        | BS.null chunk = pure $ case pieces of
-            [] -> Finished (complete scan)
-            _ -> either Refused (Finished . complete) (consume scan rowCharge (BS.concat (reverse pieces)))
-        | otherwise = splitLines scan pieces rowCharge chunk
-    splitLines !scan pieces rowCharge chunk = case BS.elemIndex 10 chunk of
-        Nothing -> do
-            nextCharge <- reserve scan rowCharge chunk
-            pure (await scan (chunk : pieces) nextCharge)
-        Just at -> do
-            let (line, rest) = BS.splitAt at chunk
-            nextCharge <- reserve scan rowCharge line
-            let record = case pieces of [] -> line; _ -> BS.concat (reverse (line : pieces))
-            case consume scan nextCharge record of
-                Left fault -> pure (Refused fault)
-                Right next
-                    | BS.length rest == 1 -> pure (await next [] 0)
-                    | otherwise -> splitLines next [] 0 (BS.drop 1 rest)
     reserve scan previous fragment = do
         let cost = saturated (toInteger previous + toInteger (decodedDocumentCharge fragment) + toInteger (bufferedChunkCharge (BS.length fragment)))
         pay (saturated (toInteger (scanKeptCharge scan) + toInteger cost))

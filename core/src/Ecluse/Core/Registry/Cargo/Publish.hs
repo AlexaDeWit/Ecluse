@@ -24,7 +24,7 @@ import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageName, hashValue)
 import Ecluse.Core.Package.Hash (sha256Hex)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), ParseError (..), PublishBodyFault (PublishMalformed), PublishError (PublishError), PublishFault (..), UrlFormationError (UnparseableUrl), isSuccessStatus)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (..), MirrorRequirements (..), MirrorStateRequirement (DurableVersionState), PublishRequestBody (..), UploadEndpointRequirement (ExplicitUploadEndpoint), UploadIdentityRequirement (TokenIdentity), WorkerMetadataRead (NativeChargedWorkerRead))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (..), MirrorRequirements (..), MirrorStateRequirement (DurableVersionState), PublishExtras (NoPublishExtras), PublishRequestBody (..), UploadEndpointRequirement (ExplicitUploadEndpoint), UploadIdentityRequirement (TokenIdentity), WorkerMetadataRead (NativeChargedWorkerRead))
 import Ecluse.Core.Registry.CachedDocument (cargoCached)
 import Ecluse.Core.Registry.Cargo.Archive (cargoPublicationAgreement, cargoPublicationMetadata, cargoUploadAgreement, inspectCargoArchive)
 import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
@@ -53,7 +53,9 @@ import Ecluse.Core.Version (renderVersion)
 cargoPublish :: ChargeFactors -> AdapterPublish
 cargoPublish factors =
     AdapterPublish
-        { publishRelay = \origin name body -> relayPublishRequest origin (relayRequest origin name body)
+        { publishCredential = cargoCredential
+        , publishRequestExtras = const (Right NoPublishExtras)
+        , publishRelay = \origin name body -> relayPublishRequest origin (relayRequest origin name body)
         , publishUploadClaims = uploadClaims
         , publishCodec = cargoPublishCodec factors
         , publishMirrorRequirements = MirrorRequirements (NativeChargedWorkerRead prepareCargoRead) DurableVersionState ExplicitUploadEndpoint
@@ -72,6 +74,7 @@ cargoPublishCodec factors =
                 _ -> Left (PublishSourceUnavailable "Cargo publication requires one selected source row")
             pure (inventory, row)
         , pcPrepareUpload = prepareUpload
+        , pcMirrorCompanion = Nothing
         , pcNativeComplete = \_ _ _ -> False
         , pcTargetRead = prepareCargoRead
         , pcTargetReadPermille = cfFullReadPermille factors

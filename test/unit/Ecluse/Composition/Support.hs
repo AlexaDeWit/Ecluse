@@ -19,6 +19,9 @@ module Ecluse.Composition.Support (
     cargoMirrorEnv,
     cargoCodeArtifactEnv,
     cargoScopeRefusal,
+    withRubyInstallBlock,
+    rubyInstallRefusal,
+    rubyScopeRefusal,
     cargoDeprecationRefusal,
     privateUpstreamUrl,
     collapsingMirrorTarget,
@@ -74,9 +77,9 @@ import Ecluse.Composition.Types (BootRole (BootWithoutPipeline), RegistryRole (M
 import Ecluse.Composition.Validate (ValidatedPlan (vpMounts), VettedMount (vmMount), vetBoot)
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig, Config (configApp), StoreTag (TagRegistry), loadConfig, renderConfigError)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, RubyGems))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
-import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType))
+import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyInstallTimeExecutionType))
 import Ecluse.Core.Security (Limits, defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
@@ -149,6 +152,20 @@ cargoScopeRefusal = RuleBlockedOnMount Cargo AllowScopeType "Cargo package names
 -- | The native deprecation refusal shared by boot and pure validation observations.
 cargoDeprecationRefusal :: BootError
 cargoDeprecationRefusal = RuleBlockedOnMount Cargo DenyIfDeprecatedType "Cargo's sparse index supplies no deprecation flag."
+
+-- | Activate a Ruby mount whose explicit installation rule the adapter cannot support.
+withRubyInstallBlock :: [(String, String)] -> [(String, String)]
+withRubyInstallBlock =
+    overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__RULES" "{\"native-builds\":{\"type\":\"DenyInstallTimeExecution\"}}"
+        . overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true"
+
+-- | The independent native installation refusal used by boot and validation tests.
+rubyInstallRefusal :: BootError
+rubyInstallRefusal = RuleBlockedOnMount RubyGems DenyInstallTimeExecutionType "RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem."
+
+-- | A shared scope rule also refuses the unscoped Ruby mount.
+rubyScopeRefusal :: BootError
+rubyScopeRefusal = RuleBlockedOnMount RubyGems AllowScopeType "RubyGems package names have no scope."
 
 -- | The private upstream the composition fixtures declare.
 privateUpstreamUrl :: (IsString s) => s

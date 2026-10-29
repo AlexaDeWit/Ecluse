@@ -2,13 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The katip plumbing every tier's specs share.
-
-A spec either wants no log output at all ('newTestLogEnv', 'runQuietKatip') or wants to
-read back exactly what a scribe serialised ('jsonLogEnv' with 'captureStdout'), what a
-refusal reported ('captureStderr'), or each message while the code under test still runs
-('memoryLogEnv').
--}
+-- | Shared log environments and capture helpers for every test tier.
 module Ecluse.Test.Log (
     newTestLogEnv,
     runQuietKatip,
@@ -126,8 +120,8 @@ runJsonLogAt :: Severity -> KatipContextT IO () -> IO Text
 runJsonLogAt severity action =
     snd <$> captureJsonLogAt severity (\logEnv -> runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty action)
 
--- | Read a JSONL message, returning 'Nothing' for malformed JSON or a missing or non-text message.
+-- | Read a JSONL message from the application or native Katip formatter.
 lineMessage :: Text -> Maybe Text
 lineMessage line = case eitherDecodeStrict (encodeUtf8 line) of
-    Right o -> parseMaybe (.: "message") (o :: Object)
+    Right o -> parseMaybe (\fields -> fields .: "message" <|> fields .: "msg") (o :: Object)
     Left _ -> Nothing

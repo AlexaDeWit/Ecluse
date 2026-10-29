@@ -70,11 +70,14 @@ limits:
   # maxVersionCount counts every source npm version. PyPI full reads count distinct
   # releases, while selected reads count all source file positions, including skips.
   # Cargo full and selected reads count every nonblank source index record, including invalid records.
+  # RubyGems full reads count distinct raw versions. Selected reads count every
+  # nonblank artifact position, including skipped and malformed rows.
   maxVersionCount: 1000000
   # Valid retained npm artifacts and full-read PyPI distribution files. The selected
   # PyPI path uses maxVersionCount's source-file bound instead of a separate check.
   # Cargo full and selected reads count every valid projected archive before version selection.
-  # This counts files. maxArtifactBytes below bounds a mirror worker's artifact body.
+  # RubyGems counts every nonblank artifact row before parsing or version selection.
+  # This counts files. maxArtifactBytes below bounds worker artifact bodies.
   maxArtifactCount: 1000000
   # Nesting in retained metadata fields and Cargo records. Skipped npm/PyPI fields do not use this limit.
   maxNestingDepth: 64
@@ -109,9 +112,8 @@ limits:
   # The aggregate admission covers the largest active cap. Unsafe overrides refuse boot.
   # maxResponseBytes: 134217728
   # maxRequestBytes: 26214400
-  # The mirror worker's per-artifact fetch cap. The memory plan computes this one too,
-  # as the mirror-artifact tenant, sized so the transient publish envelope stays within
-  # the heap ceiling. Raising it needs headroom the plan will refuse to boot without.
+  # The mirror worker's per-artifact fetch cap.
+  # The worker plan accounts for its transient publication envelope.
   # maxArtifactBytes: 536870912
 
 cache:
@@ -153,10 +155,10 @@ integrity:
 #   # Empty, control, non-ASCII and oversized values refuse startup, naming egress.operatorContact.
 #   operatorContact: null
 
-# Durable expected PyPI files and preserved read metadata, separate from advisory storage.
+# Durable expected native files and preserved read metadata, separate from advisory storage.
 # Requires conditional creates/replacements and strong reads. Referenced objects must not expire.
 mirrorState:
-  url: null # s3://bucket/prefix, required when a PyPI mirror target is configured.
+  url: null # s3://bucket/prefix, required for PyPI, Cargo, or RubyGems mirroring.
 
 advisories:
   # How often the proxy polls object storage for a fresh advisory database (a cheap
@@ -550,9 +552,23 @@ mounts:
     # Cargo blocks AllowScope and DenyIfDeprecated at boot.
     # AllowScope: Cargo package names have no scope.
     # DenyIfDeprecated: Cargo's sparse index supplies no deprecation flag.
-  # No adapter ships for rubygems yet, so activating it refuses the boot. The public
-  # upstream is here so the key is settled before the ecosystem lands.
+  # Bundler 2.6.9 and 4.0.23 use /versions discovery and on-demand /info metadata.
+  # Compact specifications and .gem downloads stay under this mount. No full specification index is served.
+  # Native publication posts the original built .gem to /api/v1/gems below the target root.
+  # Reads preserve caller Basic pairs. Publication preserves the raw API key and optional OTP.
+  # Declared CodeArtifact service roles use Basic aws reads and Bearer publication.
+  # Mirroring requires mirrorState.url and retains every supported platform artifact,
+  # original compact specifications and source facts. Preserve that state across restarts.
+  # DenyInstallTimeExecution: RubyGems native builds are normal installation behaviour. This rule is unsupported for the ecosystem.
+  # DenyIfDeprecated: RubyGems metadata supplies no supported deprecation flag.
+  # AllowScope: RubyGems package names have no scope.
+  # Active entries refuse boot, including rules inherited from the shared policy.
+  # Disable an incompatible entry under mounts.rubygems.rules or restrict it to another mount.
+  # No client yank relay is supported. Dredger needs physical deletion capability.
   rubygems:
+    # Exact names preserve case, dots, hyphens and underscores. A prefix ends
+    # with ., - or _ followed by *. Declaring ownership requires privateUpstream.
+    # firstParty: "acme-tools,acme-*"
     publicUpstream:
       registry:
         url: https://rubygems.org

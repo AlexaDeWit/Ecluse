@@ -15,9 +15,11 @@ import Ecluse.E2E.Cargo.DredgerE2ESpec (cargoDredgerProfile)
 import Ecluse.E2E.Harness.Availability (e2ePrerequisites)
 import Ecluse.E2E.PyPI.DredgerE2ESpec (pypiDredgerProfile)
 import Ecluse.E2E.Requirements (obligations)
+import Ecluse.E2E.RubyGems.Profiles (rubyProfiles)
 import Ecluse.E2E.Suites.Cargo qualified as Cargo
 import Ecluse.E2E.Suites.Npm qualified as Npm
 import Ecluse.E2E.Suites.PyPI qualified as PyPI
+import Ecluse.E2E.Suites.RubyGems qualified as RubyGems
 import Ecluse.E2E.Suites.SharedSystem qualified as SharedSystem
 import Ecluse.Test.Contract.Ecosystem (missingCapabilityObligations, missingCapabilityProfiles)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
@@ -28,7 +30,7 @@ catalogue :: Catalogue
 catalogue =
     Catalogue
         { catalogueProductionEcosystems = map ecosystemName $ filter (isJust . adapterFor) universe
-        , catalogueProfiles = profiles <> missingCapabilityProfiles "npm" Npm.declarations <> missingCapabilityProfiles "pypi" PyPI.declarations <> missingCapabilityProfiles "cargo" Cargo.declarations
+        , catalogueProfiles = profiles <> missingCapabilityProfiles "npm" Npm.declarations <> missingCapabilityProfiles "pypi" PyPI.declarations <> missingCapabilityProfiles "cargo" Cargo.declarations <> missingCapabilityProfiles "rubygems" RubyGems.declarations
         , catalogueObligations = obligations <> missingCapabilityObligations declarations
         , catalogueGroups = map declaredGroup declarations
         }
@@ -53,9 +55,10 @@ profiles =
     , Profile "npm/telemetry" ["npm"] ["verdaccio", "memory", "collector"] ["read", "mirror", "telemetry", "client-install"]
     , Profile "pypi/telemetry" ["pypi"] ["http", "collector"] ["read", "telemetry", "client-install"]
     ]
+        <> rubyProfiles
 
 declarations :: [DeclaredGroup]
-declarations = Npm.declarations <> PyPI.declarations <> Cargo.declarations <> SharedSystem.declarations
+declarations = Npm.declarations <> PyPI.declarations <> Cargo.declarations <> RubyGems.declarations <> SharedSystem.declarations
 
 -- | Missing tools fail setup without replacing declared examples with pending placeholders.
 prerequisites :: Group -> IO (Maybe Text)

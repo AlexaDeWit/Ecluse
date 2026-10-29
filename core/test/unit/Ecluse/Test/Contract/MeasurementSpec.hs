@@ -13,6 +13,8 @@ import Ecluse.Core.Registry.Npm.ReaderResidencySpec qualified as NpmRetention
 import Ecluse.Core.Registry.NpmSmokeSpec qualified as NpmSmoke
 import Ecluse.Core.Registry.PyPI.ReaderResidencySpec qualified as PyPIRetention
 import Ecluse.Core.Registry.PyPISmokeSpec qualified as PyPISmoke
+import Ecluse.Core.Registry.RubyGems.ReaderResidencySpec qualified as RubyGemsRetention
+import Ecluse.Core.Registry.RubyGemsSmokeSpec qualified as RubyGemsSmoke
 import Ecluse.Test.Contract.Binding (labelledCaseIds)
 import Ecluse.Test.Contract.Catalogue (caseLabel, labelCaseId, validateCatalogue)
 import Ecluse.Test.Contract.Measurement (measurementCatalogue, measurementRegistration)
@@ -51,8 +53,10 @@ registrations =
     [ (measurementRegistration "retention/npm" "retention" "measurement/npm" Residency [] ["rts-stats", "serial-heap"] [], NpmRetention.spec)
     , (measurementRegistration "retention/pypi" "retention" "measurement/pypi" Residency [] ["rts-stats", "serial-heap"] [], PyPIRetention.spec)
     , (measurementRegistration "retention/cargo" "retention" "measurement/cargo" Residency [] ["rts-stats", "serial-heap"] [], CargoRetention.spec)
+    , (measurementRegistration "retention/rubygems" "retention" "measurement/rubygems" Residency [] ["rts-stats", "serial-heap"] [], RubyGemsRetention.spec)
     , (measurementRegistration "live/npm" "live-metadata" "measurement/npm" Smoke ["public-network"] [] [], NpmSmoke.spec)
     , (measurementRegistration "live/pypi" "live-metadata" "measurement/pypi" Smoke ["public-network"] [] [], PyPISmoke.spec)
+    , (measurementRegistration "live/rubygems" "live-metadata" "measurement/rubygems" Smoke ["public-network"] [] [], RubyGemsSmoke.spec)
     ]
 
 inspect :: [(Group, Spec)] -> IO Catalogue

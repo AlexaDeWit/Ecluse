@@ -172,8 +172,8 @@ holds on any backend, and the AWS column shows one way to grant it:
 
 | Role | Needs | AWS example |
 |---|---|---|
-| `ecluse proxy --no-worker` | Send mirror jobs, read advisory artifacts, read and list PyPI mirror state when configured, inspect the private upstream's repository chain | `sqs:SendMessage`, `sqs:GetQueueAttributes`, `s3:GetObject`, `codeartifact:DescribeRepository` on the private upstream repository and every repository in its upstream chain |
-| `ecluse mirror` | Consume mirror jobs, publish to the mirror store, read advisory artifacts, read/list/conditionally write PyPI mirror state when configured | SQS receive, delete, change visibility, and get attributes. CodeArtifact token mint, reads, and publish on the mirror repository. `s3:GetObject` |
+| `ecluse proxy --no-worker` | Send mirror jobs, read advisory artifacts, read and list configured mirror state, inspect the private upstream's repository chain | `sqs:SendMessage`, `sqs:GetQueueAttributes`, `s3:GetObject`, `codeartifact:DescribeRepository` on the private upstream repository and every repository in its upstream chain |
+| `ecluse mirror` | Consume mirror jobs, publish to the mirror store, read advisory artifacts, read/list/conditionally write configured mirror state | SQS receive, delete, change visibility, and get attributes. CodeArtifact token mint, reads, and publish on the mirror repository. `s3:GetObject` |
 | `ecluse pilot` | Read the published artifacts' metadata, and publish advisory artifacts | `s3:GetObject` and `s3:PutObject` on the advisory prefix, and `s3:ListBucket` limited to that prefix. With SSE-KMS, `kms:GenerateDataKey` on the bucket's key |
 | `ecluse dredger` | Read and delete in the mirror target and in the private cache, read advisory artifacts, inspect the private upstream's repository chain | CodeArtifact token mint, repository reads, and `codeartifact:DeletePackageVersions` on package ARNs in both repositories ([full list](@/docs/dredger.md#permissions)). `codeartifact:DescribeRepository` on both repositories and on every repository in the private upstream's chain. `s3:GetObject` |
 
@@ -183,7 +183,7 @@ fleet must hold no write access to the mirror store. The mirror worker publishes
 under the configured publisher credential. Within Écluse, Dredger holds deletion authority
 for the maintained mirror and private-cache repositories.
 
-For a PyPI mirror, scope state access separately from advisory storage. The proxy needs
+Scope configured mirror state access separately from advisory storage. The proxy needs
 `s3:GetObject` and prefix-scoped `s3:ListBucket`. The worker also needs `s3:PutObject` for
 conditional state writes. Both use the same `mirrorState.url` bucket and prefix.
 
@@ -567,9 +567,9 @@ a separate metrics listener only when that exporter is selected.
 
 | Role | Registry or feed egress | Configured queue and advisory egress |
 |---|---|---|
-| `ecluse proxy` with embedded worker | Public/private discovery, metadata and artifact hosts, mirror repository, optional publication target | Queue send/receive/ack/visibility and redrive probe, advisory S3 read, PyPI/Cargo state read/list/conditional write when configured |
-| `ecluse proxy --no-worker` | Public/private discovery, metadata and artifact hosts, optional publication target | Queue send and redrive probe, advisory S3 read, PyPI/Cargo state read/list when configured |
-| `ecluse mirror` | Public discovery, metadata/artifact hosts and mirror repository | Queue receive/ack/visibility and redrive probe, advisory S3 read, PyPI/Cargo state read/list/conditional write when configured |
+| `ecluse proxy` with embedded worker | Public/private discovery, metadata and artifact hosts, mirror repository, optional publication target | Queue send/receive/ack/visibility and redrive probe, advisory S3 read, PyPI/Cargo/RubyGems state read/list/conditional write when configured |
+| `ecluse proxy --no-worker` | Public/private discovery, metadata and artifact hosts, optional publication target | Queue send and redrive probe, advisory S3 read, PyPI/Cargo/RubyGems state read/list when configured |
+| `ecluse mirror` | Public discovery, metadata/artifact hosts and mirror repository | Queue receive/ack/visibility and redrive probe, advisory S3 read, PyPI/Cargo/RubyGems state read/list/conditional write when configured |
 | `ecluse pilot` | OSV export host and EPSS feed host | Advisory S3 upload, no mirror queue |
 | `ecluse dredger` | Mirror target and private cache metadata, and each one's maintenance API | Advisory S3 read, no mirror queue |
 
@@ -579,7 +579,7 @@ network access.
 
 The default public endpoints are `registry.npmjs.org` for npm metadata and artifacts, `pypi.org` for
 PyPI metadata, `files.pythonhosted.org` for PyPI distributions, `index.crates.io` for Cargo discovery and indexes,
-and `static.crates.io` for Cargo archives. Private artifact hosts depend on
+`static.crates.io` for Cargo archives, and `rubygems.org` for RubyGems metadata and artifacts. Private artifact hosts depend on
 the selected backend. Pilot uses `osv-vulnerabilities.storage.googleapis.com` and
 `epss.empiricalsecurity.com` by default. It attempts the EPSS feed on every compile, even when no
 EPSS rule is enabled, so allow that egress whatever your rules. `ecluse check-config` prints the

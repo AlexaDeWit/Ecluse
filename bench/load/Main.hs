@@ -16,7 +16,7 @@ import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Ecluse.Core.Registry.PyPI.Wire (SimpleIndex (..), simpleIndexMediaType)
-import Ecluse.Test.Corpus (cargoCorpusPackages, cpName, pypiCorpusPackages)
+import Ecluse.Test.Corpus (cargoCorpusPackages, cpName, pypiCorpusPackages, rubyGemsCorpusPackages)
 import GHC.Clock (getMonotonicTime)
 import GHC.Conc (getNumCapabilities)
 import Network.HTTP.Client (Manager, newManager)
@@ -51,7 +51,7 @@ import Ecluse.BenchLoad.Floors (
 import Ecluse.BenchLoad.Harness (
     LoadKnobs (..),
     Scenario (scenarioName, scenarioServiceTime),
-    ScenarioReport (srName),
+    ScenarioReport (..),
     UpstreamFixture (fixtureEcosystem),
     loadKnobsFromEnv,
     operatingPoint,
@@ -68,12 +68,14 @@ import Ecluse.BenchLoad.ProxyServe (runServeProxy)
 import Ecluse.BenchLoad.PyPI (pypiLoadNotes)
 import Ecluse.BenchLoad.Report (Section (..), renderFloors, renderLoadSaturation, renderReports, renderServiceTime, renderThrash, renderVerdict)
 import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
+import Ecluse.BenchLoad.RubyGems (rubyGemsLoadNotes)
 import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScenario, fixtures, runsUnder, scenariosForSelection)
 import Ecluse.BenchLoad.Selection (fixtureSection, measurementConditionVersion, scenarioKey)
 import Ecluse.BenchLoad.Verdict (RunEvidence, runVerdict)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Test.Registry.Cargo.Fixtures (cargoShard)
 import Ecluse.Test.Registry.Cargo.Reference (IndexLine (indexValue), referenceIndex)
+import Ecluse.Test.Registry.RubyGems.Reference (referenceInfo)
 import Ecluse.Test.RegistryCapture (catBenchPins, fetchPackumentBody, loadCatalogue)
 
 -- | Run the passes, serve as a scenario's proxy, or run one ecosystem-qualified child scenario.
@@ -133,12 +135,14 @@ runPasses environment knobs processors shape profile selected = do
     npmBaseline <- probePublicRtt Npm knobs
     pypiBaseline <- probePublicRtt PyPI knobs
     cargoBaseline <- probePublicRtt Cargo knobs
+    rubyGemsBaseline <- probePublicRtt RubyGems knobs
     self <- getExecutablePath
     capabilities <- getNumCapabilities
     -- One source for what each fixture injects, so the latency compared is the latency injected.
     let baselineOf eco = case eco of
             PyPI -> pypiBaseline
             Cargo -> cargoBaseline
+            RubyGems -> rubyGemsBaseline
             _ -> npmBaseline
         facts =
             RunFacts
@@ -147,6 +151,7 @@ runPasses environment knobs processors shape profile selected = do
                 , rfShape = shape
                 , rfNpmLatencyMs = baselineInjectedMs (baselineOf Npm)
                 , rfCargoLatencyMs = Just (baselineInjectedMs (baselineOf Cargo))
+                , rfRubyGemsLatencyMs = Just (baselineInjectedMs (baselineOf RubyGems))
                 , rfPypiLatencyMs = baselineInjectedMs (baselineOf PyPI)
                 , rfConditions = measurementConditionVersion
                 }
@@ -154,13 +159,13 @@ runPasses environment knobs processors shape profile selected = do
         setup = Setup knobs shape selected enforcement baselineOf self capabilities processors
     ran <- catMaybes <$> traverse (fixturePasses setup) fixtures
     when (null ran) (benchFail "no scenario matched BENCH_LOAD_SCENARIOS under this pod shape")
-    let outcomes = concatMap snd ran
+    let outcomes = concatMap fprOutcomes ran
         violations = runVerdict (triggerIn environment) enforcement (checkedCounts shape) outcomes
     let calibration = floorsCalibration floors
         provenance = Map.fromList [("loadProfile", profile), ("floorMeasurementConditions", calConditions calibration), ("retainedFloorConditions", show (calRetainedConditions calibration))]
     writeLoadObservations (Map.union provenance (measurementConditions setup facts)) enforcement violations outcomes
     pure
-        ( map fst ran <> [renderFloors (floorsCalibration floors) enforcement]
+        ( map fprBody ran <> [renderFloors (floorsCalibration floors) enforcement]
         , violations
         )
 
@@ -170,6 +175,7 @@ measurementConditions setup facts =
         [ ("measurementConditions", measurementConditionVersion)
         , ("npmBaseline", show (setupBaselineOf setup Npm))
         , ("cargoBaseline", show (setupBaselineOf setup Cargo))
+        , ("rubygemsBaseline", show (setupBaselineOf setup RubyGems))
         , ("pypiBaseline", show (setupBaselineOf setup PyPI))
         , ("podShape", renderPodShape (setupShape setup))
         , ("operatingPoint", show (rfSettings facts))
@@ -177,6 +183,7 @@ measurementConditions setup facts =
         , ("processors", show (setupProcessors setup))
         , ("npmLatencyMs", show (baselineInjectedMs (setupBaselineOf setup Npm)))
         , ("cargoLatencyMs", show (baselineInjectedMs (setupBaselineOf setup Cargo)))
+        , ("rubygemsLatencyMs", show (baselineInjectedMs (setupBaselineOf setup RubyGems)))
         , ("pypiLatencyMs", show (baselineInjectedMs (setupBaselineOf setup PyPI)))
         , ("durationSeconds", show (lkDurationSeconds knobs))
         , ("concurrency", show (lkConcurrency knobs))
@@ -196,8 +203,13 @@ writeLoadObservations conditions enforcement violations outcomes =
   where
     native = loadEvidence conditions enforcement violations outcomes
 
+data FixturePassResult = FixturePassResult
+    { fprBody :: Text
+    , fprOutcomes :: [(FloorKey, Either Text RunEvidence)]
+    }
+
 -- One ecosystem's loaded and concurrency-one passes: its report section, and what each pass of each scenario produced.
-fixturePasses :: Setup -> UpstreamFixture -> IO (Maybe (Text, [(FloorKey, Either Text RunEvidence)]))
+fixturePasses :: Setup -> UpstreamFixture -> IO (Maybe FixturePassResult)
 fixturePasses setup fixture
     | null chosen = pure Nothing
     | otherwise = do
@@ -218,10 +230,11 @@ fixturePasses setup fixture
                 fixtureSection eco $
                     [pypiLoadNotes knobs | eco == PyPI]
                         <> [cargoLoadNotes knobs | eco == Cargo]
+                        <> [rubyGemsLoadNotes knobs | eco == RubyGems]
                         <> [renderReports section]
                         <> [renderServiceTime baseline (sectionConcurrencyOne section) | everyPass]
                         <> [renderLoadSaturation (sectionConcurrencyOne section) (filter ((`elem` map keyOf serviceTime) . srName) (sectionLoaded section)) | everyPass]
-        pure (Just (body, map (outcomeOf Loaded) loaded <> map (outcomeOf ConcurrencyOne) c1))
+        pure (Just (FixturePassResult body (map (outcomeOf Loaded) loaded <> map (outcomeOf ConcurrencyOne) c1)))
   where
     knobs = setupKnobs setup
     self = setupSelf setup
@@ -328,7 +341,7 @@ probePublicRtt ecosystem knobs = do
                 Npm -> Map.keys . catBenchPins <$> loadCatalogue
                 PyPI -> pure (map cpName pypiCorpusPackages)
                 Cargo -> pure (map cpName cargoCorpusPackages)
-                _ -> pure []
+                RubyGems -> pure (map cpName rubyGemsCorpusPackages)
             manager <- newManager tlsManagerSettings
             probeBaseline configured True names (timeFetch manager)
   where
@@ -339,6 +352,7 @@ probePublicRtt ecosystem knobs = do
         body <- case ecosystem of
             PyPI -> fetchPublicIndex manager name
             Cargo -> fetchCargoIndex manager name
+            RubyGems -> fetchRubyGemsInfo manager name
             _ -> fetchPackumentBody manager ecosystem name
         t1 <- getMonotonicTime
         pure (if isJust body then Just ((t1 - t0) * 1_000) else Nothing)
@@ -356,14 +370,20 @@ fetchPublicIndex manager name = do
     pure (either (const Nothing) listToMaybe result)
 
 fetchCargoIndex :: Manager -> Text -> IO (Maybe LByteString)
-fetchCargoIndex manager name = do
+fetchCargoIndex = fetchNativeListing (\name -> "https://index.crates.io/" <> cargoShard name) valid
+  where
+    valid bytes = let rows = referenceIndex bytes in not (null rows) && all (isRight . indexValue) rows
+
+fetchRubyGemsInfo :: Manager -> Text -> IO (Maybe LByteString)
+fetchRubyGemsInfo = fetchNativeListing ("https://rubygems.org/info/" <>) (either (const False) (not . null) . referenceInfo)
+
+fetchNativeListing :: (Text -> Text) -> (ByteString -> Bool) -> Manager -> Text -> IO (Maybe LByteString)
+fetchNativeListing location native manager name = do
     result <- tryAny $ do
-        request <- HTTP.parseRequest (toString ("https://index.crates.io/" <> cargoShard name))
+        request <- HTTP.parseRequest (toString (location name))
         response <- HTTP.httpLbs request{HTTP.requestHeaders = [("Accept", "text/plain")], HTTP.responseTimeout = HTTP.responseTimeoutMicro (30 * 1_000 * 1_000)} manager
         let bytes = HTTP.responseBody response
-            rows = referenceIndex (toStrict bytes)
-            native = not (null rows) && all (isRight . indexValue) rows
-        pure [bytes | HTTP.responseStatus response == status200, native]
+        pure [bytes | HTTP.responseStatus response == status200, native (toStrict bytes)]
     pure (either (const Nothing) listToMaybe result)
 
 probeEnabled :: IO Bool

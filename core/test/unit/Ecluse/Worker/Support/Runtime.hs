@@ -109,7 +109,8 @@ emptyPublishLog = PublishLog{plDocuments = [], plArtifacts = [], plPublications 
 recordingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 recordingPublish logRef outcome =
     MirrorPublish
-        { mpNativeComplete = pcNativeComplete npmPublishCodec
+        { mpMirrorCompanion = Nothing
+        , mpNativeComplete = pcNativeComplete npmPublishCodec
         , mpProbeInventory = \_ name -> do
             targets <- plTargets <$> readIORef logRef
             pure (Right (PackageInfo name targets mempty []))

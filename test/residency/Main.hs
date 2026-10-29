@@ -7,6 +7,8 @@ Explicit imports keep integration fixtures from registering unrelated examples.
 -}
 module Main (main) where
 
+import Data.Aeson (encode)
+import Data.ByteString.Lazy qualified as LBS
 import Data.JsonStream.LexerResidencySpec qualified as LexerResidencySpec
 import Ecluse.Core.Mirror.State.WeightResidencySpec qualified as StateWeightResidencySpec
 import Ecluse.Core.Registry.Cargo.ReaderResidencySpec qualified as CargoReaderResidencySpec
@@ -15,8 +17,10 @@ import Ecluse.Core.Registry.MetadataResidencySpec qualified as MetadataResidency
 import Ecluse.Core.Registry.Npm.ReaderResidencySpec qualified as NpmReaderResidencySpec
 import Ecluse.Core.Registry.PyPI.ArchiveResidencySpec qualified as ArchiveResidencySpec
 import Ecluse.Core.Registry.PyPI.ReaderResidencySpec qualified as PyPIReaderResidencySpec
+import Ecluse.Core.Registry.RubyGems.ReaderResidencySpec qualified as RubyGemsReaderResidencySpec
+import Ecluse.Core.Registry.RubyGems.ServingResidencySpec qualified as RubyGemsServingResidencySpec
 import Ecluse.Core.Server.MemoryModel.CalibrationResidencySpec qualified as CalibrationResidencySpec
-import Ecluse.Core.Server.MemoryModel.Probe (SelectedShape (SelectedControl, SelectedValue), childMain, packageMain, probe, probeEvaluation, probeListing, probeMerge)
+import Ecluse.Core.Server.MemoryModel.Probe (SelectedShape (SelectedControl, SelectedValue), childMain, packageMain, probe, probeEvaluation, probeListing, probeListingFor, probeMerge, probeMergeFor)
 import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
 import Ecluse.Core.Server.MemoryModel.ProbeModeResidencySpec qualified as ProbeModeResidencySpec
 import Ecluse.Core.Server.MemoryModelResidencySpec qualified as MemoryModelResidencySpec
@@ -50,6 +54,8 @@ main =
             NpmReaderResidencySpec.spec
             PyPIReaderResidencySpec.spec
             CargoReaderResidencySpec.spec
+            RubyGemsReaderResidencySpec.spec
+            RubyGemsServingResidencySpec.spec
             TarballResidencySpec.spec
             PackumentResidencySpec.spec
             MemoryModelResidencySpec.spec
@@ -59,6 +65,12 @@ runProbe mode path = case mode of
     Mode.Retained shape -> childMain probe shape path
     Mode.Evaluation -> packageMain probeEvaluation path
     Mode.Listing -> packageMain probeListing path
+    Mode.ListingFor ecosystem name -> do
+        (package, _) <- MemoryModelResidencySpec.probeIdentity ecosystem name "1.0.0"
+        probeListingFor package path >>= LBS.putStr . encode
+    Mode.MergeFor ecosystem name private -> do
+        (package, _) <- MemoryModelResidencySpec.probeIdentity ecosystem name "1.0.0"
+        probeMergeFor package private path >>= LBS.putStr . encode
     Mode.ListingCensus -> packageMain PackumentResidencySpec.probeListingCensus path
     Mode.Merge private public -> packageMain (probeMerge private public) path
     Mode.Source ecosystem source name version limit -> MemoryModelResidencySpec.sourceMain ecosystem source name version limit path

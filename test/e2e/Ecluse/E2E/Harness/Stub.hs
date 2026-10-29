@@ -35,6 +35,9 @@ data StubRoute
     | CargoPublic
     | CargoPrivate
     | CargoMirror
+    | RubyGemsPublic
+    | RubyGemsPrivate
+    | RubyGemsMirror
     | -- | A private upstream that holds nothing: it answers every read with a 404.
       EmptyPrivate
     | -- | The front of the second Verdaccio a Dredger case runs as a private cache.
@@ -65,6 +68,9 @@ stubHost = \case
     CargoPublic -> "cargo-upstream"
     CargoPrivate -> "cargo-private"
     CargoMirror -> "cargo-mirror"
+    RubyGemsPublic -> "rubygems-upstream"
+    RubyGemsPrivate -> "rubygems-private"
+    RubyGemsMirror -> "rubygems-mirror"
     EmptyPrivate -> "private-upstream"
     PrivateCache -> "private-cache"
     Mirror -> "mirror"
@@ -82,6 +88,9 @@ data StubFault
       PyPIMirrorBackend Int Bool
     | -- | Route native PyPI stores and the AWS API to one host fixture.
       PyPICodeArtifactBackend Int
+    | RubyGemsBackend Int Bool
+    | RubyGemsPublicBackend Int
+    | RubyGemsCodeArtifactBackend Int Int
     | CargoBackend Int Bool
     | -- | Route Cargo repositories and the native AWS control plane to one host fixture.
       CargoCodeArtifactBackend Int
@@ -118,6 +127,12 @@ serverBlock fault route =
         <> maybe [] (`faultLines` route) fault
         <> [line | isPublic route, line <- publicCoding]
         <> ( case (fault, route) of
+                (Just (RubyGemsCodeArtifactBackend controlPort registryPort), selected)
+                    | selected `elem` [PyPICodeArtifactData, PyPICodeArtifactControl] -> rubyForwarded nativeUploadLimit controlPort
+                    | selected `elem` [RubyGemsPublic, RubyGemsPrivate, RubyGemsMirror] -> rubyForwarded nativeUploadLimit registryPort
+                (Just (RubyGemsPublicBackend port), RubyGemsPublic) -> rubyForwarded nativeUploadLimit port
+                (Just (RubyGemsBackend port _), selected)
+                    | selected `elem` [RubyGemsPublic, RubyGemsPrivate, RubyGemsMirror] -> rubyForwarded nativeUploadLimit port
                 (Just (CargoPublicBackend port), CargoPublic) -> forwarded 16777216 port
                 (Just (CargoCodeArtifactBackend port), selected)
                     | selected `elem` [PyPICodeArtifactData, PyPICodeArtifactControl, CargoPrivate, CargoMirror] -> forwarded 16777216 port
@@ -136,6 +151,9 @@ forwarded limit port =
     , "    location / { proxy_set_header Host $host; proxy_pass http://203.0.113.1:" <> show port <> "; }"
     ]
 
+rubyForwarded :: Int -> Int -> [Text]
+rubyForwarded limit port = ["    proxy_http_version 1.1;", "    proxy_buffering off;"] <> forwarded limit port
+
 -- Gzip any response a request permits: more than a registry CDN, which gzips JSON and companions.
 publicCoding :: [Text]
 publicCoding = ["    gzip on;", "    gzip_types *;"]
@@ -147,6 +165,9 @@ faultLines = \case
     PrivateCacheWritesRefused -> \route -> [refuseWrites | route == PrivateCache]
     PyPIMirrorBackend _ down -> \route -> [closeUnanswered | down && isPublic route]
     PyPICodeArtifactBackend _ -> const []
+    RubyGemsBackend _ down -> \route -> [closeUnanswered | down && isPublic route]
+    RubyGemsPublicBackend _ -> const []
+    RubyGemsCodeArtifactBackend _ _ -> const []
     CargoBackend _ down -> \route -> [closeUnanswered | down && isPublic route]
     CargoCodeArtifactBackend _ -> const []
     CargoPublicBackend _ -> const []
@@ -164,6 +185,9 @@ isPublic = \case
     NpmPublic -> True
     PyPIPublic -> True
     CargoPublic -> True
+    RubyGemsPublic -> True
+    RubyGemsPrivate -> False
+    RubyGemsMirror -> False
     CargoPrivate -> False
     CargoMirror -> False
     EmptyPrivate -> False
@@ -205,6 +229,13 @@ routeLines = \case
         , "    default_type application/octet-stream;"
         , "    location / { try_files $uri =404; }"
         ]
+    RubyGemsPublic ->
+        [ "    root /usr/share/nginx/rubygems;"
+        , "    default_type application/octet-stream;"
+        , "    location / { try_files $uri =404; }"
+        ]
+    RubyGemsPrivate -> ["    location / { return 404; }"]
+    RubyGemsMirror -> ["    location / { return 404; }"]
     CargoPrivate -> ["    location / { return 404; }"]
     CargoMirror -> ["    location / { return 404; }"]
     PyPIMirror -> ["    location / { return 404; }"]

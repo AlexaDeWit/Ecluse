@@ -7,6 +7,7 @@ module Ecluse.Core.Server.Cache.Provider (
     cacheProvider,
     localCacheProviderWithPool,
     providerFull,
+    providerDirectory,
     providerVersion,
     providerAssembled,
 ) where
@@ -14,6 +15,7 @@ module Ecluse.Core.Server.Cache.Provider (
 import Data.ByteString qualified as BS
 
 import Ecluse.Core.Registry.Metadata (VersionRead)
+import Ecluse.Core.Registry.RubyGems.Directory (GemDirectory, directoryWeight)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (LocalStorage), RetentionBackend, RetentionOperations, retentionBackend, supportsFullRetention)
 import Ecluse.Core.Server.Cache.Backend.Local (LocalPool, newPooledRetention)
 import Ecluse.Core.Server.Cache.Types
@@ -21,12 +23,17 @@ import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 
 -- | Missing capabilities remain uncached. They never fall back to another storage provider.
 data CacheProvider = CacheProvider
-    { cpFull :: Maybe (RetentionBackend CacheKey CacheEntry)
+    { cpDirectory :: Maybe (RetentionBackend Text (GemDirectory, Int))
+    , cpFull :: Maybe (RetentionBackend CacheKey CacheEntry)
     -- ^ Full metadata is absent for local storage, regardless of the supplied operations.
     , cpVersion :: Maybe (RetentionBackend CacheKey VersionRead)
     -- ^ Selected reads may use an adapter-owned projection without loading a full value locally.
     , cpAssembled :: Maybe (RetentionBackend CacheKey ByteString)
     }
+
+-- | Public discovery shares the local pool without using a package identity.
+providerDirectory :: CacheProvider -> Maybe (RetentionBackend Text (GemDirectory, Int))
+providerDirectory = cpDirectory
 
 -- | Full retention from the selected provider, absent for local storage.
 providerFull :: CacheProvider -> Maybe (RetentionBackend CacheKey CacheEntry)
@@ -49,7 +56,8 @@ cacheProvider ::
     CacheProvider
 cacheProvider storage full version assembled =
     CacheProvider
-        { cpFull = (retentionBackend storage <$> full) <* guard (supportsFullRetention storage)
+        { cpDirectory = Nothing
+        , cpFull = (retentionBackend storage <$> full) <* guard (supportsFullRetention storage)
         , cpVersion = retentionBackend storage <$> version
         , cpAssembled = retentionBackend storage <$> assembled
         }
@@ -59,7 +67,8 @@ localCacheProviderWithPool :: LocalPool -> CacheConfig -> IO CacheProvider
 localCacheProviderWithPool pool config = do
     version <- newPooledRetention pool (cacheTtl config) (cacheVersionBudget config) weighVersion
     assembled <- newPooledRetention pool (cacheTtl config) (cacheAssembledBudget config) weighAssembled
-    pure (cacheProvider LocalStorage Nothing (Just version) (Just assembled))
+    directory <- newPooledRetention pool (cacheTtl config) (StoreBudget 0 0) (\(value, keyBytes) -> directoryWeight value + keyBytes)
+    pure ((cacheProvider LocalStorage Nothing (Just version) (Just assembled)){cpDirectory = Just (retentionBackend LocalStorage directory)})
 
 weighAssembled :: ByteString -> Int
 weighAssembled bytes = BS.length bytes + 256

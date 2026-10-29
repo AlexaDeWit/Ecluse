@@ -9,12 +9,13 @@ module Ecluse.Core.Server.Pipeline.Origin (
     -- * The per-origin outcome
     OriginResult (..),
     OriginMiss (..),
+    ObservedReadBoundExceeded (..),
     originManifest,
     originMiss,
 
     -- * Fetching the two origins
-    fetchPrivateOrigin,
-    fetchPublicOrigin,
+    fetchPrivateOriginObserved,
+    fetchPublicOriginObserved,
     withPublicMetadata,
     withPrivateMetadataClient,
 
@@ -50,7 +51,7 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (canChargeFullReadWorkspace)
 import Ecluse.Core.Registry.Origin (OriginClient (ocClient), OriginFor, Private, Public, anonymousOrigin, chargingFullReadWorkspace, chargingFullReads, chargingSelectedMetadata, controlPublicOrigin, originBaseUrl, originClientOf, perCallerOrigin)
 import Ecluse.Core.Registry.Request (BaseRequest)
-import Ecluse.Core.Security (Limits (progressFloor))
+import Ecluse.Core.Security (LimitError, Limits (progressFloor))
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Meter (ChargePart, MemoryTicket, awaitingFlight, charge, chargePart, newChargeRegion, servingFlight, servingPart, stepDown)
@@ -71,9 +72,16 @@ import Ecluse.Core.Server.Pipeline.Diagnostics (logInvalidEntries, logMetadataFa
 import Ecluse.Core.Server.Pipeline.Shared (flightOf)
 import Ecluse.Core.Version (Version)
 
+-- | A request-wide observed read limit, distinct from a transport failure.
+newtype ObservedReadBoundExceeded = ObservedReadBoundExceeded LimitError
+    deriving stock (Show)
+
+instance Exception ObservedReadBoundExceeded
+
 -- | One origin's contribution, access refusal, identity mismatch, or absence.
 data OriginResult
-    = -- | A packument that decoded and whose self-reported name matched the request.
+    = OriginBudgetExceeded LimitError
+    | -- | A packument that decoded and whose self-reported name matched the request.
       OriginResolved Manifest
     | -- | An explicit upstream access refusal, retaining its 401 or 403.
       OriginAuthorisationFailure Int
@@ -99,6 +107,7 @@ data OriginMiss
 -- | The resolved manifest an origin contributed, if any.
 originManifest :: OriginResult -> Maybe Manifest
 originManifest = \case
+    OriginBudgetExceeded _ -> Nothing
     OriginAuthorisationFailure _ -> Nothing
     OriginResolved manifest -> Just manifest
     OriginNameMismatch -> Nothing
@@ -110,6 +119,7 @@ originManifest = \case
 -- | The miss an origin yielded, or 'Nothing' when it contributed a document or an explicit refusal.
 originMiss :: OriginResult -> Maybe OriginMiss
 originMiss = \case
+    OriginBudgetExceeded _ -> Just MissUnresolved
     OriginAuthorisationFailure _ -> Nothing
     OriginResolved{} -> Nothing
     OriginNameMismatch -> Nothing
@@ -120,6 +130,7 @@ originMiss = \case
 
 originResultOf :: Either SomeException (Either MetadataError Manifest) -> OriginResult
 originResultOf = \case
+    Left fault | Just (ObservedReadBoundExceeded bound) <- fromException fault -> OriginBudgetExceeded bound
     Left _ -> OriginUnresolved
     Right (Left (MetadataAuthorisationFailure code)) -> OriginAuthorisationFailure code
     Right (Left (MetadataNameMismatch _)) -> OriginNameMismatch
@@ -131,23 +142,23 @@ originResultOf = \case
     Right (Left (MetadataFetch _)) -> OriginUnresolved
     Right (Right manifest) -> OriginResolved manifest
 
--- | Resolve the private origin uncached with the caller's credential, retaining explicit access refusals.
-fetchPrivateOrigin :: PackumentDeps -> ServeRuntime -> ChargePart -> Maybe ClientCredential -> PackageName -> Handler OriginResult
-fetchPrivateOrigin deps rt part token name = case pdPrivateBase deps of
+-- | Read caller-authorised private metadata without caching and observe every incoming full-read chunk.
+fetchPrivateOriginObserved :: (Int -> IO ()) -> PackumentDeps -> ServeRuntime -> ChargePart -> Maybe ClientCredential -> PackageName -> Handler OriginResult
+fetchPrivateOriginObserved observe deps rt part token name = case pdPrivateBase deps of
     Nothing -> pure OriginAbsent
     Just privateBase -> do
         logFM DebugS (ls ("fetching private origin for " <> renderPackageName name))
-        origin <- liftIO (fullReadOrigin deps part (privateOrigin rt deps privateBase token))
+        origin <- liftIO (fullReadOrigin observe deps part (privateOrigin rt deps privateBase token))
         keepingRead deps part . originResultOf =<< tryAny (withMetadataClient rt deps privateMetadataClient origin (`fetchFullManifest` name))
 
--- | Cache anonymous public metadata under the origin's base URL.
-fetchPublicOrigin :: PackumentDeps -> ServeRuntime -> MemoryTicket -> ChargePart -> PackageName -> Handler OriginResult
-fetchPublicOrigin deps rt ticket part name = do
+-- | Cache anonymous public metadata and observe shared-read leader chunks. Cache consumers retain their own document accounting.
+fetchPublicOriginObserved :: (Int -> IO ()) -> PackumentDeps -> ServeRuntime -> MemoryTicket -> ChargePart -> PackageName -> Handler OriginResult
+fetchPublicOriginObserved observe deps rt ticket part name = do
     logFM DebugS (ls ("fetching public origin for " <> renderPackageName name))
     -- Every request that shares this read waits on it, so whichever request leads it pays with their priority.
     let flight = flightOf (fullKey (publicSource deps) name)
         sharedPart = servingPart flight part
-    origin <- liftIO (fullReadOrigin deps sharedPart (publicOrigin rt deps))
+    origin <- liftIO (fullReadOrigin observe deps sharedPart (publicOrigin rt deps))
     keepingRead deps part . originResultOf =<< tryAny (awaitingFlight ticket flight (withMetadataClient rt deps (publicMetadataClient (srMetadataCache rt) (publicSource deps)) origin (`fetchFullManifest` name)))
 
 -- Once its result is evaluated a read holds only its manifest, so its part steps down to the kept charge.
@@ -184,14 +195,14 @@ withMetadataClient rt deps settle origin k =
   where
     baseUrl = originBaseUrl (originClientOf origin)
 
-fullReadOrigin :: PackumentDeps -> ChargePart -> OriginFor posture -> IO (OriginFor posture)
-fullReadOrigin deps part origin
+fullReadOrigin :: (Int -> IO ()) -> PackumentDeps -> ChargePart -> OriginFor posture -> IO (OriginFor posture)
+fullReadOrigin observe deps part origin
     | canChargeFullReadWorkspace (metadataRead (pdMetadata deps)) = do
         workspace <- newChargeRegion (chargePart part)
         pure (chargingFullReadWorkspace workspace charged)
     | otherwise = pure charged
   where
-    charged = chargingFullReads (fullReadCharge deps part) origin
+    charged = chargingFullReads (\bytes -> observe bytes >> fullReadCharge deps part bytes) origin
 
 fullReadCharge :: PackumentDeps -> ChargePart -> Int -> IO ()
 fullReadCharge deps part = chargePart part . scaleCharge (cfFullReadPermille (chargeFactors deps))

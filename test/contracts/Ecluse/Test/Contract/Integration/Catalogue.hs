@@ -8,6 +8,7 @@ module Ecluse.Test.Contract.Integration.Catalogue (
     awsComposition,
     pypiHttp,
     cargoHttp,
+    rubyGemsHttp,
     mirrorViewHttp,
     egressHttp,
     originHttp,
@@ -44,6 +45,7 @@ integrationCatalogue =
         { catalogueProductionEcosystems = map ecosystemName (filter (isJust . adapterFor) universe)
         , catalogueProfiles =
             [ Profile "integration/aws-composition" ["npm"] ["ministack"] ["serving", "mirror-worker"]
+            , Profile "integration/rubygems" ["rubygems"] ["wai"] ["metadata-read", "artifact-read", "serving"]
             , Profile "integration/cargo" ["cargo"] ["wai"] ["metadata-read", "artifact-read", "serving"]
             , Profile "integration/pypi" ["pypi"] ["wai"] ["metadata-read", "artifact-read", "serving"]
             , Profile "integration/mirror-view" ["pypi"] ["wai"] ["metadata-read", "artifact-read", "serving"]
@@ -69,6 +71,7 @@ integrationCatalogue =
         , catalogueGroups =
             [ awsComposition
             , cargoHttp
+            , rubyGemsHttp
             , pypiHttp
             , mirrorViewHttp
             , egressHttp
@@ -114,6 +117,10 @@ pypiHttp =
 -- | Native sparse HTTP and shared serving laws use local upstreams.
 cargoHttp :: Group
 cargoHttp = expectedGroup "integration/cargo" "serving" ["metadata-read", "artifact-read", "serving"] [] ["wai"]
+
+-- | Named-gem native bytes run the same serving laws against independent local origins.
+rubyGemsHttp :: Group
+rubyGemsHttp = expectedGroup "integration/rubygems" "serving" ["metadata-read", "artifact-read", "serving"] [] ["wai"]
 
 -- | Scheduling metadata for integration/mirror-view.
 mirrorViewHttp :: Group

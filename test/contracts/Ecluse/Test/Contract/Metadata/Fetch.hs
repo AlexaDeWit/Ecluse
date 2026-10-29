@@ -14,14 +14,14 @@ import Control.Exception (throwIO)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Network.HTTP.Client (Request, defaultManagerSettings, newManager, parseRequest)
+import Network.HTTP.Client (Request, defaultManagerSettings, newManager, parseRequest, path)
 import Network.HTTP.Types (ResponseHeaders, Status, hLocation, mkStatus, status200, status302)
 import Network.HTTP.Types.Header (hContentEncoding)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageInfo (infoInvalidEntries, infoVersions), PackageName, mkPackageName)
-import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchUrlUnformable), UrlFormationError (EmptyBaseUrl))
+import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchUrlUnformable), UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
     ContentDigest,
@@ -220,9 +220,28 @@ heldSpec eco = describe "held chunks, against the response" $ do
         (full, selected) <- bothWays eco defaultLimits (const pass) (const (BS.take 12 (rdDocument eco "thing" 0)))
         assertHeldFailure eco MetadataUndecodable full selected
 
-    fetchCase eco "held-name-mismatch" "refuses another package's document by the name it reports" $ do
-        (full, selected) <- bothWays eco defaultLimits (const pass) (const (rdDocument eco "other" 0))
-        assertHeldFailure eco (MetadataNameMismatch "other") full selected
+    case rdFraming eco of
+        CallerBoundRecords -> fetchCase eco "held-origin-mismatch" "binds the requested name and rejects another source origin" $ do
+            let base = "https://registry.example.test/"
+                foreignBase = "https://other.example.test/"
+                terms = ReadTerms defaultLimits foreignBase (const pass)
+                bytes = rdReleases eco base ["1.2.3"]
+            nativeRead <- expectRight (rdRead eco base)
+            let own = mkBaseRequest (loopbackRegistryUrl base)
+                foreignRequest = mkBaseRequest (loopbackRegistryUrl foreignBase)
+            request <- expectRight (erRequest nativeRead own Nothing (thing eco))
+            expectedPath <- maybe (fail "caller-bound fixture has no expected native request path") pure (rdCallerBoundPath eco)
+            path request `shouldBe` expectedPath
+            case erRequest nativeRead foreignRequest Nothing (thing eco) of
+                Left (UnparseableUrl _) -> pass
+                _ -> expectationFailure "caller-bound reader accepted another request origin"
+            full <- readManifest nativeRead passthroughTracingPort terms (thing eco) (heldBody [bytes])
+            selected <- readVersion nativeRead passthroughTracingPort terms (thing eco) (releaseOf eco) (heldBody [bytes])
+            void full `shouldBe` Left MetadataUndecodable
+            void selected `shouldBe` Left MetadataUndecodable
+        _ -> fetchCase eco "held-name-mismatch" "refuses another package's document by the name it reports" $ do
+            (full, selected) <- bothWays eco defaultLimits (const pass) (const (rdDocument eco "other" 0))
+            assertHeldFailure eco (MetadataNameMismatch "other") full selected
 
     fetchCase eco "held-version-bound" "reports a version count over the limit as a bound the walk raised" $ do
         (full, _) <- bothWays eco defaultLimits{maxVersionCount = 1} (const pass) (\base -> rdReleases eco base ["1.2.3", "2.3.4"])
@@ -267,6 +286,8 @@ data ReadFixture = ReadFixture
     , rdRead :: Text -> Either MetadataError EcosystemRead
     -- ^ The explicit reader used only for held bodies.
     , rdFraming :: MetadataFraming
+    , rdCallerBoundPath :: Maybe ByteString
+    -- ^ The native checked-name route is required for a caller-bound provider.
     , rdDiscovery :: Maybe (Text -> ByteString)
     -- ^ Native preparation bytes served only from the selected origin's config route.
     , rdDocument :: ByteString -> Int -> ByteString
@@ -310,7 +331,10 @@ assertHeldFailure eco failure full selected = case rdFraming eco of
     SingleDocument -> do
         void full `shouldBe` Left failure
         void selected `shouldBe` Left failure
-    RecordStream -> do
+    CallerBoundRecords -> invalidRecords
+    RecordStream -> invalidRecords
+  where
+    invalidRecords = do
         (info, _, _, _) <- expectRight full
         infoVersions info `shouldBe` Map.empty
         infoInvalidEntries info `shouldSatisfy` not . null

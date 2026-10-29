@@ -5,15 +5,17 @@
 -- | Calibration rounding, and production charges that match the listing maxima.
 module Ecluse.Core.Server.MemoryModel.CalibrationResidencySpec (spec) where
 
+import Data.Map.Strict qualified as Map
 import Data.Ratio ((%))
 import Test.Hspec
 
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Server.MemoryModel.Calibration
 import Ecluse.Core.Server.MemoryModel.Probe (Residency (..), requireResidency)
+import Ecluse.Test.Corpus.Merge (MergeShape (Disjoint, Identical, Overlapping, PublishOrder))
 
 -- | Check exact rounding, each current charge and the production factors.
 spec :: Spec
@@ -41,7 +43,23 @@ spec = do
         it "pins Cargo charges" $ do
             fullReadCharge cargoCalibration `shouldBe` 1700
             marginCharge (outputMaximum cargoCalibration) `shouldBe` 2600
-        for_ [(Npm, npmCalibration), (PyPI, pypiCalibration), (Cargo, cargoCalibration)] $ \(ecosystem, calibration) ->
+        it "pins combined ARM64 RubyGems charges from exact native ratios" $ do
+            realisticReadMaximum rubyGemsCalibration `shouldBe` 810584 % 56335
+            allReadMaximum rubyGemsCalibration `shouldBe` 810584 % 56335
+            outputMaximum rubyGemsCalibration `shouldBe` 4185840 % 1157711
+            fullReadCharge rubyGemsCalibration `shouldBe` 18000
+            marginCharge (outputMaximum rubyGemsCalibration) `shouldBe` 4600
+        it "pins the labelled ARM64 synthetic listing ratios and regression limits" $ do
+            figures <- maybe (fail "missing native synthetic listing figures") pure rubyGemsSyntheticFigures
+            syntheticReadPeak figures `shouldBe` 15217776 % 1157711
+            syntheticSingleOutput figures `shouldBe` 3277080 % 1157711
+            syntheticMergedOutputs figures `shouldBe` Map.fromList [(Identical, 4185840 % 1157711), (Overlapping, 6627408 % 2315417), (Disjoint, 2878856 % 1157713), (PublishOrder, 3327300 % 1157711)]
+            readPeakLimit (syntheticReadPeak figures) `shouldBe` 13671
+            heldLimit (syntheticSingleOutput figures) `shouldBe` 2916
+            Map.map heldLimit (syntheticMergedOutputs figures) `shouldBe` Map.fromList [(Identical, 3725), (Overlapping, 2949), (Disjoint, 2562), (PublishOrder, 2961)]
+            readPeakLimit (syntheticReadPeak figures) `shouldSatisfy` (< fullReadCharge rubyGemsCalibration)
+            map heldLimit (syntheticSingleOutput figures : Map.elems (syntheticMergedOutputs figures)) `shouldSatisfy` all (< marginCharge (outputMaximum rubyGemsCalibration))
+        for_ [(Npm, npmCalibration), (PyPI, pypiCalibration), (Cargo, cargoCalibration), (RubyGems, rubyGemsCalibration)] $ \(ecosystem, calibration) ->
             it (show ecosystem <> " matches its adapter") $ do
                 adapter <- maybe (fail "missing registered adapter") pure (adapterFor ecosystem)
                 let factors = metadataChargeFactors (adapterMetadata adapter)
@@ -51,7 +69,8 @@ spec = do
             keptCharge npmFigures `shouldBe` 900
             keptCharge pypiFigures `shouldBe` 3300
             keptCharge cargoFigures `shouldBe` 1500
-        for_ [Npm, PyPI, Cargo] $ \ecosystem ->
+            keptCharge rubyGemsFigures `shouldBe` 17300
+        for_ [Npm, PyPI, Cargo, RubyGems] $ \ecosystem ->
             it (show ecosystem <> " keeps its adapter's kept charge") $ do
                 record <- requireResidency ecosystem
                 adapter <- maybe (fail "missing registered adapter") pure (adapterFor ecosystem)

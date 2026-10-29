@@ -1,0 +1,11 @@
+{
+  "ruby": "3.4.9",
+  "rubygems": "3.7.2",
+  "observations": [
+    {
+      "input": "Date.jd(Rational(17150001, 7))",
+      "class": "TypeError",
+      "message": "wrong @requirements"
+    }
+  ]
+}

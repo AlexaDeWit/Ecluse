@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Corpus-authenticated metadata measurements in one child process per retained shape or listing.
-module Ecluse.Core.Server.MemoryModelResidencySpec (spec, sourceMain, selectedMain, probeIdentity, probeLimits) where
+module Ecluse.Core.Server.MemoryModelResidencySpec (spec, sourceMain, selectedMain, probeIdentity, probeLimits, checkRegressionLimits, checkPaid, checkPhases, checkReadPeak, checkOutputCharge, checkOutputLimit) where
 
 import Prelude hiding (universe)
 
@@ -22,7 +22,7 @@ import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Data.ByteArray.Encoding (Base (Base16), convertToBase)
 import Ecluse.Composition.MemoryPlan.Transient (meterStepBytes)
-import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
 import Ecluse.Core.Package (PackageName, pkgEcosystem)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
@@ -70,8 +70,7 @@ spec = do
                     record <- requireResidency ecosystem
                     let factors = metadataChargeFactors (adapterMetadata adapter)
                     for_ (residencyFigures record) $ \figures -> do
-                        map readPeakLimit (maybeToList (readPeak figures)) `shouldSatisfy` all (< toInteger (cfFullReadPermille factors))
-                        map heldLimit (maybeToList (singleOutput figures) <> Map.elems (mergedOutputs figures)) `shouldSatisfy` all (< toInteger (cfOutputPermille factors))
+                        checkRegressionLimits factors (maybeToList (readPeak figures)) (maybeToList (singleOutput figures) <> Map.elems (mergedOutputs figures))
         it "keeps each shared entry's regression limit below the kept charge" $
             for_ universe $ \ecosystem ->
                 for_ (adapterFor ecosystem) $ \adapter -> do
@@ -79,7 +78,7 @@ spec = do
                     let kept = toInteger (cfKeptPermille (metadataChargeFactors (adapterMetadata adapter)))
                     map (heldLimit . retainedShared) (Map.elems (residencyFigures record)) `shouldSatisfy` all (< kept)
         forM_ packages $ \package -> it (toString (cpName package)) $ do
-            (size, _) <- authenticate package
+            (size, digest) <- authenticate package
             measureInChild Mode.Listing package >>= \case
                 Left failure -> expectationFailure failure
                 Right single -> do
@@ -91,6 +90,7 @@ spec = do
                         , "document_charge_per_source_byte" .= perSource (toInteger (singleDocumentCharge single))
                         ]
                         package
+                        digest
                         peaks
                     listingSourceBytes peaks `shouldBe` size
                     listingBasisBytes peaks `shouldBe` size
@@ -106,7 +106,7 @@ spec = do
                     singleDocumentLive single `shouldSatisfy` (<= toInteger (singleDocumentCharge single))
     describe "merged listing peak heap" $ beforeAll measureMerges $ forM_ merges $ \(package, shape) ->
         it (toString (cpName package) <> "/" <> show shape) $ \measured -> do
-            (size, _) <- authenticate package
+            (size, digest) <- authenticate package
             case Map.lookup (cpPath package, shape) measured of
                 Nothing -> expectationFailure "the merge probe did not run"
                 Just (Left failure) -> expectationFailure failure
@@ -121,6 +121,7 @@ spec = do
                         , "full_read_headroom_per_source_byte" .= fmap (\charge -> fromInteger charge / 1000 - observed) derived
                         ]
                         package
+                        digest
                         peaks
                     checkBasis shape size peaks
                     (_, factors) <- listingBounds package
@@ -145,6 +146,12 @@ measureMerges = do
         (private, public) <- writeMergeDocuments shape directory package
         measureInChild (Mode.Merge private public) package
 
+-- | Keep fixed regression limits below the admission charges that bound them.
+checkRegressionLimits :: ChargeFactors -> [Rational] -> [Rational] -> Expectation
+checkRegressionLimits factors readFigures outputFigures = do
+    map readPeakLimit readFigures `shouldSatisfy` all (< toInteger (cfFullReadPermille factors))
+    map heldLimit outputFigures `shouldSatisfy` all (< toInteger (cfOutputPermille factors))
+
 checkMeasurement :: CorpusPackage -> Shape -> Int -> Measurement -> Expectation
 checkMeasurement package shape size result = do
     figures <- requireFigures package
@@ -166,7 +173,7 @@ listingBounds package = (,) <$> requireResidency ecosystem <*> maybe (fail "resi
   where
     ecosystem = pkgEcosystem (cpPackage package)
 
--- Whole meter steps cover sub-step sources and output bases, including the entry step.
+-- | Whole meter steps cover sub-step sources and output bases, including the entry step.
 checkPaid :: ChargeFactors -> ListingPeaks -> Expectation
 checkPaid factors peaks = do
     rise listingReadPeak listingBaseline peaks `shouldSatisfy` (<= paid fullRead)
@@ -181,8 +188,7 @@ checkPaid factors peaks = do
 paidSteps :: Int -> Int
 paidSteps = roundUpToStep meterStepBytes . max meterStepBytes
 
--- After the reads step down to what they keep, the meter covers the entries, then the entries and the render,
--- then the body it sends once the reads' charge is gone. The output spends the reads' headroom first.
+-- | Keep retained entries and rendering within the existing stepped read/output charges.
 checkPhases :: ChargeFactors -> ListingPeaks -> Expectation
 checkPhases factors peaks = do
     entries `shouldSatisfy` (<= toInteger (kept + headroom))
@@ -196,7 +202,7 @@ checkPhases factors peaks = do
     output = scaleCharge (cfOutputPermille factors) (listingBasisBytes peaks)
     sending = headroom + roundUpToStep meterStepBytes (max 0 (output - headroom))
 
--- From one step of source up, a read's peak stays under its capture's limit, which sits below its charge.
+-- | From one step of source up, a read's peak stays under its capture's limit, which sits below its charge.
 checkReadPeak :: Maybe Rational -> ListingPeaks -> Expectation
 checkReadPeak figure peaks = when (size >= meterStepBytes) $ case figure of
     Nothing -> expectationFailure "no read peak figure for a source of at least one meter step"
@@ -204,13 +210,13 @@ checkReadPeak figure peaks = when (size >= meterStepBytes) $ case figure of
   where
     size = listingSourceBytes peaks
 
--- From one step of basis up, the output working set fits the output charge.
+-- | From one step of basis up, the output working set fits the output charge.
 checkOutputCharge :: ChargeFactors -> ListingPeaks -> Expectation
 checkOutputCharge factors peaks = when (basis >= meterStepBytes) $ outputWorkingSet peaks `shouldSatisfy` (<= toInteger (scaleCharge (cfOutputPermille factors) basis))
   where
     basis = listingBasisBytes peaks
 
--- From one step of basis up, a realistic listing's output working set stays under its own limit.
+-- | From one step of basis up, a realistic listing's output working set stays under its own limit.
 checkOutputLimit :: Maybe Rational -> ListingPeaks -> Expectation
 checkOutputLimit figure peaks = when (basis >= meterStepBytes) $ case figure of
     Nothing -> expectationFailure "no output working set figure for a basis of at least one meter step"
@@ -239,11 +245,14 @@ checkBasis shape size peaks = case shape of
 rise :: (ListingPeaks -> Word64) -> (ListingPeaks -> Word64) -> ListingPeaks -> Integer
 rise high low peaks = toInteger (high peaks) - toInteger (low peaks)
 
-reportListing :: Text -> [Pair] -> CorpusPackage -> ListingPeaks -> IO ()
-reportListing label details package peaks =
+reportListing :: Text -> [Pair] -> CorpusPackage -> Text -> ListingPeaks -> IO ()
+reportListing label details package digest peaks =
     putStrLn . toString . ((label <> " ") <>) . decodeUtf8 . LBS.toStrict . encode . object $
         details
-            <> [ "package" .= cpName package
+            <> [ "ecosystem" .= ecosystemName (pkgEcosystem (cpPackage package))
+               , "package" .= cpName package
+               , "path" .= cpPath package
+               , "sha256" .= digest
                , "read_peak_per_source_byte" .= perByte listingSourceBytes (rise listingReadPeak listingBaseline peaks)
                , "entry_per_source_byte" .= perByte listingSourceBytes (rise listingEntryLive listingBaseline peaks)
                , "peak_above_entry_per_source_byte" .= perByte listingSourceBytes (rise listingPeak listingEntryLive peaks)
@@ -273,7 +282,8 @@ report package digest shape result = do
         ratio = fromInteger retained / fromIntegral (wireBytes result) :: Double
         row =
             object
-                [ "package" .= cpName package
+                [ "ecosystem" .= ecosystemName (pkgEcosystem (cpPackage package))
+                , "package" .= cpName package
                 , "path" .= cpPath package
                 , "sha256" .= digest
                 , "shape" .= (show shape :: Text)

@@ -1,0 +1,669 @@
+{
+  "ruby": "3.4.9",
+  "rubygems": "3.7.2",
+  "source_date_epoch": "1577836800",
+  "releases": [
+    {
+      "name": "ecluse-fixture-leaf",
+      "version": "1.0.0",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-leaf-1.0.0.gem",
+      "sha256": "6b7ad38bba7e2788b4303cb3fa12bb1c449e6e4f39ec5169b6c30837bdd6c756",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-leaf-1.0.0.gemspec.rz",
+      "compact_sha256": "ac6bfc8f1a4f3835ffe51b8df13c88098f2e71a6f6c530706c53fd4e4deb8364",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-leaf",
+        "version": "1.0.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
+      "name": "ecluse-fixture-leaf",
+      "version": "2.0.0",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-leaf-2.0.0.gem",
+      "sha256": "62447aef303b6cd363cc2014cbecd372e5ab465982b0efaf7e22763dce775c8b",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-leaf-2.0.0.gemspec.rz",
+      "compact_sha256": "6527ed0f83573b837255d4d12d17e312b119492ea2d5ab3f142265880c3ad88a",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-leaf",
+        "version": "2.0.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
+      "name": "ecluse-fixture-leaf",
+      "version": "2.1.0.pre.1",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-leaf-2.1.0.pre.1.gem",
+      "sha256": "5176fd81bfe2c35cc7ccc1325ff354654e66497e70c3c0a44a9ac486144d1558",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-leaf-2.1.0.pre.1.gemspec.rz",
+      "compact_sha256": "edb2bdb8c04fb438bb75e5a2728592858db868761966b30fb2b58d4a3c8734ec",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-leaf",
+        "version": "2.1.0.pre.1",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
+      "name": "ecluse-fixture-root",
+      "version": "1.0.0",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-root-1.0.0.gem",
+      "sha256": "646c0b16ba8b286beb737cc2e18ceb32b9cd42f7c7903ca3adc9b2896f489885",
+      "bytes": 4608,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-root-1.0.0.gemspec.rz",
+      "compact_sha256": "1dbba507fc3e1ac6775917f6da1260f0bf5e4b80f217fd41a7ad090c6dd30021",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [
+        {
+          "name": "ecluse-fixture-leaf",
+          "type": "runtime",
+          "requirements": [
+            [
+              ">=",
+              "1.0"
+            ],
+            [
+              "<",
+              "2.0"
+            ]
+          ]
+        },
+        {
+          "name": "ecluse-fixture-dev",
+          "type": "development",
+          "requirements": [
+            [
+              "~>",
+              "1.0"
+            ],
+            [
+              ">=",
+              "1.0.1"
+            ]
+          ]
+        }
+      ],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-root",
+        "version": "1.0.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": [
+          [
+            "ecluse-fixture-leaf",
+            ">= 1.0, < 2.0",
+            "runtime"
+          ],
+          [
+            "ecluse-fixture-dev",
+            "~> 1.0, >= 1.0.1",
+            "development"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "ecluse-fixture-root",
+      "version": "2.0.0",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-root-2.0.0.gem",
+      "sha256": "1a64355f223fb775b48257611ad5822fcb421d61174b8d2fdebce7a86847908f",
+      "bytes": 4608,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-root-2.0.0.gemspec.rz",
+      "compact_sha256": "5a6371a2b24dda7584a9abbb86e2290d771dd1c3a677df6b45897f1bbc3a6c5b",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [
+        {
+          "name": "ecluse-fixture-leaf",
+          "type": "runtime",
+          "requirements": [
+            [
+              ">=",
+              "1.0"
+            ],
+            [
+              "<",
+              "3.0"
+            ]
+          ]
+        },
+        {
+          "name": "ecluse-fixture-dev",
+          "type": "development",
+          "requirements": [
+            [
+              "~>",
+              "1.0"
+            ],
+            [
+              ">=",
+              "1.0.1"
+            ]
+          ]
+        }
+      ],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-root",
+        "version": "2.0.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": [
+          [
+            "ecluse-fixture-leaf",
+            ">= 1.0, < 3.0",
+            "runtime"
+          ],
+          [
+            "ecluse-fixture-dev",
+            "~> 1.0, >= 1.0.1",
+            "development"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "ecluse-fixture-platform",
+      "version": "1.0.0",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-platform-1.0.0.gem",
+      "sha256": "64bbe671cb4af27cdfd590d7b9bdfa83c0b26b368db56beebf8643e07cd46155",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-platform-1.0.0.gemspec.rz",
+      "compact_sha256": "f669a706b0f66b04203b735114e17f52ac87d8cc339f2eb7dc705361944e1d87",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-platform",
+        "version": "1.0.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
+      "name": "ecluse-fixture-platform",
+      "version": "1.0.0",
+      "platform": "java",
+      "filename": "ecluse-fixture-platform-1.0.0-java.gem",
+      "sha256": "468f29562292692f2d8b316c86015dfe31a1f9a96a5fa3dd7cabf2b455e40dc7",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-platform-1.0.0-java.gemspec.rz",
+      "compact_sha256": "cb3ecce87250d35a6f1fbb5807c5ef4e758198351e93a6329692c9670a9a9e6a",
+      "created_at": "2020-01-03T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-platform",
+        "version": "1.0.0",
+        "platform": "java",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
+      "name": "ecluse-fixture-platform",
+      "version": "1.0.0",
+      "platform": "x86_64-linux-musl",
+      "filename": "ecluse-fixture-platform-1.0.0-x86_64-linux-musl.gem",
+      "sha256": "ef35940f581b82d7b5a234747380b539909361eed680417d3765c4a637f2b847",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-platform-1.0.0-x86_64-linux-musl.gemspec.rz",
+      "compact_sha256": "03553e24f9970c03c7c3ce168f364fe522fb64e80403107ae7527d71b9c7666f",
+      "created_at": "2020-01-03T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-platform",
+        "version": "1.0.0",
+        "platform": "x86_64-linux-musl",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
+      "name": "ecluse-fixture-platform",
+      "version": "1.0.0",
+      "platform": "arm64-darwin",
+      "filename": "ecluse-fixture-platform-1.0.0-arm64-darwin.gem",
+      "sha256": "4a8d7f6ce76f233d20ad900d068c2615b5a34d6188027d1c9f4f7ca54a9ced06",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-platform-1.0.0-arm64-darwin.gemspec.rz",
+      "compact_sha256": "48a616397c09af0cbca4b68e2d258903de43d1c5203c313d48561b779f751c56",
+      "created_at": "2020-01-03T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-platform",
+        "version": "1.0.0",
+        "platform": "arm64-darwin",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
+      "name": "ecluse-fixture-native",
+      "version": "1.0.0",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-native-1.0.0.gem",
+      "sha256": "0efbd22c52614ca3daec2e9cb92bf1e42c517969b8b33abce85df69867ee4d1c",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-native-1.0.0.gemspec.rz",
+      "compact_sha256": "6efc40f3274d714751248bb88f243ae239a3c46456a85bf4605779667350863c",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [
+        "ext/ecluse_fixture_native/extconf.rb"
+      ],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-native",
+        "version": "1.0.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
+      "name": "ecluse-fixture-future",
+      "version": "1.0.0",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-future-1.0.0.gem",
+      "sha256": "956c2d87383324bc039411d6b1af17bf56fa43555c928ba7e8cf1a9923e9aa71",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-future-1.0.0.gemspec.rz",
+      "compact_sha256": "fb0d1af7a86a483a08682aeb077dd46caf3a2f2ff554d18c3eddcfcf211f4d04",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 99.0",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-future",
+        "version": "1.0.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
+      "name": "ecluse-fixture-advisory",
+      "version": "1.18.0",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-advisory-1.18.0.gem",
+      "sha256": "1e972b53b8b462d8fbca4e5c9d702f0034dc6e77283abb70871515836838cc86",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-advisory-1.18.0.gemspec.rz",
+      "compact_sha256": "ec2abd8b0b9e52608440fb3865a6f75c42b5c6d193290b3e530fb909399a794d",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-advisory",
+        "version": "1.18.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
+      "name": "ecluse-fixture-advisory",
+      "version": "1.19.0",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-advisory-1.19.0.gem",
+      "sha256": "fdcb80f1e481accead63fd4edc50c1ed51653503723651f3f6c00feef49cc078",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-advisory-1.19.0.gemspec.rz",
+      "compact_sha256": "39bcd52019f4f0b559e2ffb88acd5524ab588e7fdb7e6089c78f6d42bad795f5",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-advisory",
+        "version": "1.19.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
+      "name": "ecluse-fixture-root",
+      "version": "3.0.0",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-root-3.0.0.gem",
+      "sha256": "5bc7e3193eec05c1d1d649d7ff829d78798c9ca71a0836c03010815d71532cb8",
+      "bytes": 4608,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-root-3.0.0.gemspec.rz",
+      "compact_sha256": "67b7b017177262878a0d3cd0d111d8b7294e73325c81518edb4b9327e11581bb",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [
+        {
+          "name": "ecluse-fixture-leaf",
+          "type": "runtime",
+          "requirements": [
+            [
+              ">=",
+              "1.0"
+            ],
+            [
+              "<",
+              "3.0"
+            ]
+          ]
+        },
+        {
+          "name": "ecluse-fixture-dev",
+          "type": "development",
+          "requirements": [
+            [
+              "~>",
+              "1.0"
+            ],
+            [
+              ">=",
+              "1.0.1"
+            ]
+          ]
+        }
+      ],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-root",
+        "version": "3.0.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": [
+          [
+            "ecluse-fixture-leaf",
+            ">= 1.0, < 3.0",
+            "runtime"
+          ],
+          [
+            "ecluse-fixture-dev",
+            "~> 1.0, >= 1.0.1",
+            "development"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "ecluse-fixture-firstparty",
+      "version": "1.0.0",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-firstparty-1.0.0.gem",
+      "sha256": "086f33a1aa37a4f7c508a121da535e968eba5db509ae5c060af89c8fc95a1c00",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-firstparty-1.0.0.gemspec.rz",
+      "compact_sha256": "9e50d884ac592b6d4609e784f0a1a06542924eaebff18c65dc22a78eaeebf133",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-firstparty",
+        "version": "1.0.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
+      "name": "ecluse-fixture-firstparty",
+      "version": "2.0.0",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-firstparty-2.0.0.gem",
+      "sha256": "533cece64546463c039690625978305fd18d7b02841f63614ff4e81066a403c6",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-firstparty-2.0.0.gemspec.rz",
+      "compact_sha256": "d4b4525200c94b8a4d53456ebfdec40bff5c4f6a96479ddb7d674cacfa88d763",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-firstparty",
+        "version": "2.0.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
+      "name": "ecluse-fixture-readmitted",
+      "version": "1.0.1.pre.readmitted",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-readmitted-1.0.1.pre.readmitted.gem",
+      "sha256": "61ff4a23b174269d73ad4827319fcd3edbf9ad410c480295acf1c2a5c2440f18",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-readmitted-1.0.1.pre.readmitted.gemspec.rz",
+      "compact_sha256": "3fa124f51ff61dc15b80401ee31c55cbfd4aa257e95d3616a790ee2dfdc113ca",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-readmitted",
+        "version": "1.0.1.pre.readmitted",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
+      "name": "ecluse-fixture-missing",
+      "version": "1.0.0",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-missing-1.0.0.gem",
+      "sha256": "379c9a8c3579cd68f6afe6d9ae1bcd8a7975351578f44eaae921dbaee8039dbc",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-missing-1.0.0.gemspec.rz",
+      "compact_sha256": "28832156e441bcbbc81005407c452c8c2d980da5e2ce805a957f5934f9411d6c",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-missing",
+        "version": "1.0.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
+      "name": "ecluse-fixture-late",
+      "version": "1.0.0",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-late-1.0.0.gem",
+      "sha256": "b8ba1440b814b632f9b9453c3142f14ead7aa8a894a7454d283544674d37b310",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-late-1.0.0.gemspec.rz",
+      "compact_sha256": "a35498e4d8922253af636f55c53a9b22df1fcadf66fdf8552c52d1ed0d3e9a02",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-late",
+        "version": "1.0.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": []
+      }
+    },
+    {
+      "name": "ecluse-fixture-sentinel",
+      "version": "1.0.0",
+      "platform": "ruby",
+      "filename": "ecluse-fixture-sentinel-1.0.0.gem",
+      "sha256": "8977b9fc1136a009a1a657658978e88a99b9f07378785e9fd4a060696d27036a",
+      "bytes": 4096,
+      "compact": "quick/Marshal.4.8/ecluse-fixture-sentinel-1.0.0.gemspec.rz",
+      "compact_sha256": "c21e7e5a3771e469592926cf2e5b50ae90e1db6f866bdfe3c4383529ead22ab2",
+      "created_at": "2020-01-01T00:00:00Z",
+      "dependencies": [],
+      "required_ruby_version": ">= 3.2",
+      "required_rubygems_version": ">= 3.4",
+      "extensions": [],
+      "metadata": {
+        "fixture-kind": "owned",
+        "source_code_uri": "https://example.invalid/source"
+      },
+      "decoded_compact": {
+        "class": "Gem::Specification",
+        "name": "ecluse-fixture-sentinel",
+        "version": "1.0.0",
+        "platform": "ruby",
+        "extensions": [],
+        "dependencies": []
+      }
+    }
+  ]
+}

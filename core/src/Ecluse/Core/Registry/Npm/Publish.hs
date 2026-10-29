@@ -97,6 +97,7 @@ npmPublishCodec =
     PublishCodec
         { pcPrepareSource = prepareNpmSource
         , pcPrepareUpload = \_ _ inventory metadata file bytes -> pure (prepareNpmUpload inventory metadata file bytes)
+        , pcMirrorCompanion = Nothing
         , pcNativeComplete = nativeNpmComplete
         , pcTargetRead = staticRead npmRead
         , pcTargetReadPermille = cfFullReadPermille npmChargeFactors

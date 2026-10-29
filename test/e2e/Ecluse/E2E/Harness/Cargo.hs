@@ -46,7 +46,7 @@ import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath (takeDirectory, (</>))
 import UnliftIO.Environment (getEnvironment)
 
-import Ecluse.E2E.Harness.Client (runClient, withClientDir)
+import Ecluse.E2E.Harness.Client (compilerEnvironmentKeys, runClient, withClientDir)
 import Ecluse.E2E.Harness.Types (ClientResult (..), E2E, clientCertificateBundle)
 import Ecluse.Test.InstalledTree (InstalledTree, snapshotTree)
 import Ecluse.Test.Registry.Cargo.Fixtures (CargoCrate (..), cargoRoot, cargoVersion)
@@ -124,15 +124,8 @@ inheritedKeys =
     , "LC_ALL"
     , "SSL_CERT_FILE"
     , "NIX_SSL_CERT_FILE"
-    , "NIX_CC"
-    , "NIX_BINTOOLS"
-    , "NIX_CFLAGS_COMPILE"
-    , "NIX_LDFLAGS"
-    , "NIX_STORE"
-    , "NIX_DONT_SET_RPATH"
-    , "NIX_ENFORCE_PURITY"
-    , "NIX_HARDENING_ENABLE"
     ]
+        <> compilerEnvironmentKeys
 
 configuration :: CargoView -> Text -> Text
 configuration view index =

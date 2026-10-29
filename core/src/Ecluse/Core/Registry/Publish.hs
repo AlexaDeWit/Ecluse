@@ -11,6 +11,7 @@ module Ecluse.Core.Registry.Publish (
     PreparedMirrorUpload,
     publishPrepared,
     PublishCodec (..),
+    MirrorCompanion (..),
     fetchVersionList,
     relayPublishRequest,
     MirrorTransport (..),

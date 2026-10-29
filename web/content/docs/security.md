@@ -33,11 +33,16 @@ Each operation has its own view, including public admission, private downloads, 
 
 Trusted private reads do not repeat public admission. Removing a stored version requires authorised cleanup, and does not recall client-cached or installed bytes.
 
-PyPI and Cargo mirror completion applies to reads through Écluse. Direct registry reads can observe incomplete copies or changed target metadata.
+PyPI, Cargo, and RubyGems mirror completion applies to reads through Écluse. Direct registry reads can observe incomplete copies or changed target metadata.
 
 Écluse hosts no package archives and does not inspect package code to detect malware.
+Clients verify streamed archives against checksums from admitted metadata.
+RubyGems requires the supported Bundler clients with checksum validation enabled.
+The mirror worker verifies archive bytes before publication.
+HEAD authorises and checks availability without reading or hashing an archive body.
 
 An explicit Cargo execution rule can inspect bounded archive and manifest evidence for build scripts and procedural macros.
+RubyGems permits native builds and blocks the unsupported installation-execution rule at boot.
 The server never runs the inspected code. A registry checksum proves agreement with that registry's assertion, not harmlessness.
 
 Écluse checks neither Certificate Transparency nor certificate revocation. It trusts any certificate

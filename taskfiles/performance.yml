@@ -3,7 +3,7 @@ tasks:
   invalidate:
     cmds:
       - mkdir -p "$PERF_ARTIFACT_DIR"
-      - rm -f "$PERF_ARTIFACT_DIR/diagnostic.json" "$PERF_ARTIFACT_DIR"/ecosystem-{npm,pypi}/{obligation,request,receipt}.json
+      - rm -f "$PERF_ARTIFACT_DIR/diagnostic.json" "$PERF_ARTIFACT_DIR"/ecosystem-{npm,pypi,cargo,rubygems}/{obligation,request,receipt}.json
 
   reporter:
     cmds:

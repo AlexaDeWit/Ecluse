@@ -21,6 +21,7 @@ measurementCatalogue registrations =
         , catalogueProfiles =
             [ Profile "measurement/npm" ["npm"] [] ["full-read", "selected-read"]
             , Profile "measurement/pypi" ["pypi"] [] ["full-read", "selected-read"]
+            , Profile "measurement/rubygems" ["rubygems"] [] ["full-read", "selected-read"]
             , Profile "measurement/cargo" ["cargo"] [] ["full-read", "selected-read"]
             ]
         , catalogueObligations =
@@ -54,11 +55,19 @@ measurementCatalogue registrations =
                 , "retention/cargo/full/past-limit"
                 ]
             , required
+                "retention/rubygems"
+                "measurement/rubygems"
+                "retention"
+                [ "retention/rubygems/selected/other-releases"
+                , "retention/rubygems/full/past-limit"
+                ]
+            , required
                 "live/npm"
                 "measurement/npm"
                 "live-metadata"
                 ["live/npm/react", "live/npm/types-node", "live/npm/lodash", "live/npm/typescript"]
             , required "live/pypi" "measurement/pypi" "live-metadata" ["live/pypi/sampleproject"]
+            , required "live/rubygems" "measurement/rubygems" "live-metadata" ["live/rubygems/rake"]
             ]
         , catalogueGroups = registrations
         }

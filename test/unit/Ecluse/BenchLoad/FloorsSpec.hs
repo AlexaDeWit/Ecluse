@@ -39,7 +39,7 @@ import Ecluse.BenchLoad.Floors (
  )
 import Ecluse.BenchLoad.Pod (PodShape (Unlimited), ProxyTuning (..), noTuning, parseCpuList)
 import Ecluse.BenchLoad.Support (floorsAtTwoCores, slowNetwork, twoCores)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 
 spec :: Spec
 spec = do
@@ -77,6 +77,11 @@ spec = do
                 decodeFloors (document (calibrationValue ["measurementConditions" .= ("unified-v2" :: Text), "pypiInjectedLatency" .= latencyRecord]) twoCoreFloors) `shouldSatisfy` isLeft
         it "refuses Cargo floor rows without a native ceiling" $
             decodeFloors (document (calibrationValue []) ["2cpu-1gib" .= object ["cargo/index-cold" .= object ["loaded" .= (1 :: Int)]]]) `shouldSatisfy` isLeft
+        it "refuses RubyGems floors without independent native ceiling provenance" $
+            decodeFloors (document (calibrationValue []) ["2cpu-1gib" .= object ["rubygems/info-cold" .= object ["loaded" .= (1 :: Int)]]]) `shouldSatisfy` isLeft
+        it "checks native RubyGems ceiling arithmetic and pod identities" $
+            for_ [latencyValue [("2cpu-1gib", 20)] 31, latencyValue [("4cpu-1gib", 20)] 30] $ \latencyRecord ->
+                decodeFloors (document (calibrationValue ["rubygemsInjectedLatency" .= latencyRecord]) twoCoreFloors) `shouldSatisfy` isLeft
         it "checks native Cargo ceiling arithmetic and pod identities" $
             for_ [latencyValue [("2cpu-1gib", 20)] 31, latencyValue [("4cpu-1gib", 20)] 30] $ \latencyRecord ->
                 decodeFloors (document (calibrationValue ["cargoInjectedLatency" .= latencyRecord]) twoCoreFloors) `shouldSatisfy` isLeft
@@ -124,6 +129,16 @@ spec = do
             enforce native held `shouldBe` NotHeld (MissingNativeObservation Cargo :| [])
             enforce native held{rfCargoLatencyMs = Just 30} `shouldBe` Enforced twoCores floorsAtTwoCores
             enforce native held{rfCargoLatencyMs = Just 31} `shouldBe` NotHeld (LatencyAboveCeiling Cargo 31 30 :| [])
+        it "requires native RubyGems calibration after retaining the observed latency" $ do
+            let facts = held{rfRubyGemsLatencyMs = Just 12}
+            enforce sample facts `shouldBe` NotHeld (MissingNativeLatency RubyGems :| [])
+            unheldViolations OnDemand (enforce sample facts) `shouldBe` ["no independently measured native latency ceiling for rubygems"]
+        it "applies the independent RubyGems ceiling to every ecosystem in the run" $ do
+            let native = sample{floorsCalibration = calibration{calRubyGemsLatency = Just (LatencyCeiling ceilingRule (Map.singleton twoCores 20) 30)}}
+            enforce native held `shouldBe` NotHeld (MissingNativeObservation RubyGems :| [])
+            enforce native held{rfRubyGemsLatencyMs = Just 30} `shouldBe` Enforced twoCores floorsAtTwoCores
+            enforce native held{rfRubyGemsLatencyMs = Just 31} `shouldBe` NotHeld (LatencyAboveCeiling RubyGems 31 30 :| [])
+            floorCheck (enforce native held{rfRubyGemsLatencyMs = Just 31}) ("npm/merge-cold", Loaded) `shouldBe` Unchecked
         it "applies a native PyPI ceiling independently and leaves the whole run unheld" $ do
             let native = sample{floorsCalibration = calibration{calConditions = "unified-v2", calPypiLatency = Just (LatencyCeiling ceilingRule (Map.singleton twoCores 100) 150)}}
                 matched = held{rfConditions = "unified-v2", rfPypiLatencyMs = 150}
@@ -140,7 +155,7 @@ spec = do
         it "does not hold a run under a pod shape the floors do not hold, and names the shape once" $
             enforce sample held{rfShape = Unlimited} `shouldBe` NotHeld (ShapeNotCalibrated Unlimited :| [])
         it "names every reason a run is not held" $
-            enforce sample RunFacts{rfSettings = calibrated{opDurationSeconds = 10, opScenarios = Just ["pypi/index-cold"]}, rfRunner = offGitHub, rfShape = Unlimited, rfNpmLatencyMs = 444, rfPypiLatencyMs = 5, rfCargoLatencyMs = Nothing, rfConditions = "legacy-v1"}
+            enforce sample RunFacts{rfSettings = calibrated{opDurationSeconds = 10, opScenarios = Just ["pypi/index-cold"]}, rfRunner = offGitHub, rfShape = Unlimited, rfNpmLatencyMs = 444, rfPypiLatencyMs = 5, rfCargoLatencyMs = Nothing, rfRubyGemsLatencyMs = Nothing, rfConditions = "legacy-v1"}
                 `shouldBe` NotHeld (ShapeNotCalibrated Unlimited :| [SettingsDiffer ("durationSeconds" :| ["scenarios"]), OtherRunner "ubuntu-26.04-arm" calibratedRunner offGitHub, LatencyAboveCeiling Npm 444 210])
 
     describe "floorCheck" $ do
@@ -217,6 +232,7 @@ calibration =
         , calOperatingPoint = calibrated
         , calNpmLatency = LatencyCeiling ceilingRule (Map.singleton twoCores 135) 210
         , calCargoLatency = Nothing
+        , calRubyGemsLatency = Nothing
         , calPypiLatency = Nothing
         , calConditions = "legacy-v1"
         , calRetainedConditions = mempty
@@ -227,7 +243,7 @@ sample = Floors calibration (Map.singleton twoCores floorsAtTwoCores)
 
 -- A run that matches the sample's calibration under its one pod shape.
 held :: RunFacts
-held = RunFacts{rfSettings = calibrated, rfRunner = onCalibratedRunner, rfShape = twoCores, rfNpmLatencyMs = 135, rfPypiLatencyMs = 5, rfCargoLatencyMs = Nothing, rfConditions = "legacy-v1"}
+held = RunFacts{rfSettings = calibrated, rfRunner = onCalibratedRunner, rfShape = twoCores, rfNpmLatencyMs = 135, rfPypiLatencyMs = 5, rfCargoLatencyMs = Nothing, rfRubyGemsLatencyMs = Nothing, rfConditions = "legacy-v1"}
 
 -- One run per setting, each differing from the calibrated operating point in that setting alone.
 offCalibration :: [(Text, OperatingPoint)]

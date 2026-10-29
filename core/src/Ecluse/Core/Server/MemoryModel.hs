@@ -46,9 +46,12 @@ mirrorJobEstimatedBytes = 1024
 
 -- | Allow four overlapping byte copies and builder/list cells before retaining a nonempty chunk.
 bufferedChunkCharge :: Int -> Int
-bufferedChunkCharge bytes
+bufferedChunkCharge = fromInteger . min (toInteger (maxBound :: Int)) . bufferedChargeInteger . toInteger
+
+bufferedChargeInteger :: Integer -> Integer
+bufferedChargeInteger bytes
     | bytes <= 0 = 0
-    | otherwise = fromInteger (min (toInteger (maxBound :: Int)) (4 * toInteger bytes + 128))
+    | otherwise = 4 * bytes + 128
 
 -- | Estimate scalar copies and tree/domain slots from actual JSON or XML bytes before decoding.
 decodedDocumentCharge :: ByteString -> Int

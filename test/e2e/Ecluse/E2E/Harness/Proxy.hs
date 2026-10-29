@@ -19,6 +19,7 @@ module Ecluse.E2E.Harness.Proxy (
     logTail,
     logTailLines,
     awaitProxyLog,
+    mirrorVersionComplete,
     hasPopulatedTraceId,
 ) where
 
@@ -40,18 +41,19 @@ import Network.HTTP.Types.Header (hAcceptEncoding)
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec (expectationFailure)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, RubyGems))
 import Ecluse.E2E.Harness.CargoGateway (cargoTraffic, observedProxy, withObservedCargoProxy)
 import Ecluse.E2E.Harness.Client (clientReport)
 import Ecluse.E2E.Harness.Docker (awaitContainerLog, containerLogs, withE2EWith)
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Contract.Serving qualified as Serving
 import Ecluse.Test.Contract.Telemetry (hasPopulatedTraceId)
+import Ecluse.Test.Log (lineMessage)
 
--- | Use the observed TLS edge whenever native Cargo clients share the proxy.
+-- | Native clients use the observed TLS edge and the real product listener.
 withClientProxyWith :: E2EConfig -> (E2E -> IO a) -> GlobalDataPlane -> IO a
 withClientProxyWith config action plane
-    | Cargo `elem` topologyMounts (gdpTopology plane) =
+    | any (`elem` topologyMounts (gdpTopology plane)) [Cargo, RubyGems] =
         withObservedCargoProxy config plane (\observed -> action (observedProxy observed) <* cargoTraffic observed)
     | otherwise = withE2EWith config action plane
 
@@ -148,3 +150,7 @@ for an assertion that must await an asynchronous line.
 -}
 awaitProxyLog :: E2E -> (Text -> Bool) -> Int -> IO Bool
 awaitProxyLog e2e = awaitContainerLog (e2eProxyContainer e2e)
+
+-- | Match the worker's structured completion message for one exact native package identity.
+mirrorVersionComplete :: Text -> Text -> Text -> Bool
+mirrorVersionComplete name version = elem ("mirror version complete: " <> name <> "@" <> version) . mapMaybe lineMessage . T.lines

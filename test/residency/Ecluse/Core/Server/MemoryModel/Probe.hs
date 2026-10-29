@@ -22,9 +22,13 @@ module Ecluse.Core.Server.MemoryModel.Probe (
     ListingPeaks (..),
     SingleListing (..),
     probeListing,
+    probeListingFor,
     writeMergeDocuments,
     probeMerge,
+    probeMergeFor,
+    writeNamedMergeDocuments,
     measureInChild,
+    measurePathInChild,
     childMain,
     packageMain,
     SelectedShape (..),
@@ -69,21 +73,25 @@ import Ecluse.Core.Registry.Npm.VersionListReader (npmVersionListWalk)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiRead)
 import Ecluse.Core.Registry.PyPI.Project qualified as PyPI
+import Ecluse.Core.Registry.RubyGems.Metadata (gemReadWith)
+import Ecluse.Core.Registry.RubyGems.Project qualified as RubyGemsProject
+import Ecluse.Core.Registry.RubyGems.Serving (assembleRubyGemsDocument, serialiseRubyGemsDocument)
 import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, finishVersionList)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, boundedRead, defaultLimits, maxMetadataBytes)
 import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
-import Ecluse.Core.Server.MemoryModel.Calibration (Calibration, Figures (..), cargoCalibration, cargoFigures, npmCalibration, npmFigures, pypiCalibration, pypiFigures)
+import Ecluse.Core.Server.MemoryModel.Calibration (Calibration, Figures (..), cargoCalibration, cargoFigures, npmCalibration, npmFigures, pypiCalibration, pypiFigures, rubyGemsCalibration, rubyGemsFigures)
 import Ecluse.Core.Server.MemoryModel.HeapSample (HeapSample (..), sample)
 import Ecluse.Core.Server.MemoryModel.ProbeMode (ProbeMode, probeArguments)
 import Ecluse.Core.Server.Pipeline.Packument.Representation (Contribution (..), outputBasisBytes)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
-import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), cargoCaptureUpstream, cargoCorpusPackages, corpusPackages, cpName, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, syntheticProxyBase)
+import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), cargoCaptureUpstream, cargoCorpusPackages, corpusPackages, cpName, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, rubyGemsCaptureUpstream, rubyGemsCorpusPackages, syntheticProxyBase)
 import Ecluse.Test.Corpus qualified as Corpus
 import Ecluse.Test.Corpus.Cargo qualified as Cargo
-import Ecluse.Test.Corpus.Merge (MergeDocument (Captured, Rewritten, RewrittenNative), MergeShape, captureDocuments)
+import Ecluse.Test.Corpus.Merge (MergeDocument (Captured, Rewritten, RewrittenNative), MergeShape, captureDocuments, mergeDocuments)
+import Ecluse.Test.Corpus.RubyGems qualified as RubyGems
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoRead)
 import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, heldBody, sourceBody)
@@ -198,7 +206,7 @@ data Residency = Residency
     , residencyVersionList :: Limits -> IO ByteString -> IO (Either Text (Held, Int, Maybe ContentDigest))
     }
 
--- | RubyGems has no registered adapter and stays outside the residency tier.
+-- | Native providers expose raw observations before calibration or adapter activation.
 residencyFor :: Ecosystem -> Maybe Residency
 residencyFor = \case
     Npm ->
@@ -247,7 +255,21 @@ residencyFor = \case
                 , residencyIdentity = \name version -> (,mkVersion Cargo (toText version)) <$> either (fail . show) pure (CargoProject.projectName (toText name))
                 , residencyVersionList = \_ _ -> pure (Left "Cargo exposes no version-list-only read")
                 }
-    RubyGems -> Nothing
+    RubyGems ->
+        Just
+            Residency
+                { residencyPackages = rubyGemsCorpusPackages
+                , residencyRead = gemReadWith (const pass) (const pass) "https://rubygems.org"
+                , residencyMetadata = MetadataRendering assembleRubyGemsDocument serialiseRubyGemsDocument
+                , residencyUpstream = rubyGemsCaptureUpstream
+                , residencyCalibration = Just rubyGemsCalibration
+                , residencyFigures = rubyGemsFigures
+                , residencyEntryBelowSource = False
+                , residencyLegacyRead = \limits name bytes -> first (const MetadataUndecodable) (RubyGems.decodeRubyGemsValues bytes) >>= RubyGems.projectRubyGemsValues limits name
+                , residencyLegacyHeld = \info raw _ _ -> HeldLegacy info raw
+                , residencyIdentity = \name version -> (,mkVersion RubyGems (toText version)) <$> either (fail . show) pure (RubyGemsProject.projectName (toText name))
+                , residencyVersionList = \_ _ -> pure (Left "RubyGems exposes no version-list-only read")
+                }
 
 -- | Missing residency wiring fails a probe instead of skipping its checks.
 requireResidency :: Ecosystem -> IO Residency
@@ -269,9 +291,13 @@ retainedFigure = \case
 
 -- | Measure one capture in a fresh process of this executable, on one capability with RTS statistics.
 measureInChild :: (FromJSON a) => ProbeMode -> CorpusPackage -> IO (Either String a)
-measureInChild mode package = do
+measureInChild mode package = measurePathInChild mode (cpPath package)
+
+-- | Run an explicitly named source without adding it to the authenticated public corpus.
+measurePathInChild :: (FromJSON a) => ProbeMode -> FilePath -> IO (Either String a)
+measurePathInChild mode path = do
     executable <- getExecutablePath
-    (status, output, errors) <- readProcessWithExitCode executable (probeArguments mode (cpPath package)) ""
+    (status, output, errors) <- readProcessWithExitCode executable (probeArguments mode path) ""
     pure $
         if status == ExitSuccess
             then eitherDecodeStrict (encodeUtf8 (toText output))
@@ -323,26 +349,34 @@ forceEntry root = deRefStablePtr root >>= void . forceShown
 
 -- | Measure a public-only listing where most collections are major.
 probeListing :: CorpusPackage -> IO SingleListing
-probeListing package = do
-    peaks <- probeReads [(GatedSource, cpPath package)] package
-    (document, charged) <- documentLive package
+probeListing package = probeListingFor (cpPackage package) (cpPath package)
+
+-- | Measure a named file through the same native read, output and document-lifetime probes.
+probeListingFor :: PackageName -> FilePath -> IO SingleListing
+probeListingFor name path = do
+    peaks <- probeReads [(GatedSource, path)] name
+    (document, charged) <- documentLive name path
     pure SingleListing{singlePeaks = peaks, singleDocumentLive = document, singleDocumentCharge = charged}
 
 -- | 'probeListing' for a listing that merges a trusted private document with a public one.
 probeMerge :: FilePath -> FilePath -> CorpusPackage -> IO ListingPeaks
-probeMerge private public = probeReads [(TrustedSource, private), (GatedSource, public)]
+probeMerge private public package = probeMergeFor (cpPackage package) private public
 
-probeReads :: [(Provenance, FilePath)] -> CorpusPackage -> IO ListingPeaks
-probeReads documents package = do
+-- | Measure explicit named source files with the existing merge, rendering and sampling flow.
+probeMergeFor :: PackageName -> FilePath -> FilePath -> IO ListingPeaks
+probeMergeFor name private public = probeReads [(TrustedSource, private), (GatedSource, public)] name
+
+probeReads :: [(Provenance, FilePath)] -> PackageName -> IO ListingPeaks
+probeReads documents name = do
     enabled <- getRTSStatsEnabled
     unless enabled (fail "metadata residency requires RTS -T")
     -- A first read settles the read's one-off state, so the baseline holds it.
-    bracket (prepareListingReads (cpPackage package) (take 1 documents)) freeStablePtr (void . deRefStablePtr)
+    bracket (prepareListingReads name (take 1 documents)) freeStablePtr (void . deRefStablePtr)
     before <- sample
-    bracket (prepareListingReads (cpPackage package) documents) freeStablePtr $ \sourcesRoot -> do
+    bracket (prepareListingReads name documents) freeStablePtr $ \sourcesRoot -> do
         held <- sample
         sources <- deRefStablePtr sourcesRoot
-        bracket (prepareListingRender (pkgEcosystem (cpPackage package)) sources) (freeStablePtr . fst) $ \(servedRoot, basis) -> do
+        bracket (prepareListingRender (pkgEcosystem name) sources) (freeStablePtr . fst) $ \(servedRoot, basis) -> do
             rendered <- sample
             served <- deRefStablePtr servedRoot
             -- Evaluated here, so nothing sampled later holds the sources or the served body.
@@ -359,9 +393,9 @@ probeReads documents package = do
 
 -- Both samples stay in this function so each counts only the entry fields still reachable.
 {-# NOINLINE documentLive #-}
-documentLive :: CorpusPackage -> IO (Integer, Int)
-documentLive package = do
-    (whole, others, charged) <- bracket (prepareListingRead package) freeStablePtr $ \root -> do
+documentLive :: PackageName -> FilePath -> IO (Integer, Int)
+documentLive name path = do
+    (whole, others, charged) <- bracket (prepareListingRead name path) freeStablePtr $ \root -> do
         whole <- sample
         entry <- deRefStablePtr root
         charged <- evaluate (expandWireBytes (fromIntegral (weighCachedDoc (entryRaw entry))))
@@ -379,8 +413,8 @@ readListingEntry name path = do
     entry <$ evaluate (sourceSize (HeldShared entry))
 
 {-# NOINLINE prepareListingRead #-}
-prepareListingRead :: CorpusPackage -> IO (StablePtr CacheEntry)
-prepareListingRead package = readListingEntry (cpPackage package) (cpPath package) >>= newStablePtr
+prepareListingRead :: PackageName -> FilePath -> IO (StablePtr CacheEntry)
+prepareListingRead name path = readListingEntry name path >>= newStablePtr
 
 -- One production full read for each document, held as the merge's sources.
 {-# NOINLINE prepareListingReads #-}
@@ -409,10 +443,21 @@ prepareListingRender ecosystem sources = do
 writeMergeDocuments :: MergeShape -> FilePath -> CorpusPackage -> IO (FilePath, FilePath)
 writeMergeDocuments shape directory package = do
     (private, public) <- Corpus.readCapture package >>= either fail pure . captureDocuments shape package
-    (,) <$> place "private.json" private <*> place "public.json" public
+    placeMergeDocuments (cpPath package) directory (private, public)
+
+-- | Apply existing native merge rewrites to a named generated file, preserving captured-file handling.
+writeNamedMergeDocuments :: MergeShape -> FilePath -> PackageName -> FilePath -> IO (FilePath, FilePath)
+writeNamedMergeDocuments shape directory name path = do
+    bytes <- BS.readFile path
+    entry <- readListingEntry name path
+    documents <- either fail pure (mergeDocuments shape (entryInfo entry) bytes)
+    placeMergeDocuments path directory documents
+
+placeMergeDocuments :: FilePath -> FilePath -> (MergeDocument, MergeDocument) -> IO (FilePath, FilePath)
+placeMergeDocuments original directory (private, public) = (,) <$> place "private.json" private <*> place "public.json" public
   where
     place file = \case
-        Captured -> pure (cpPath package)
+        Captured -> pure original
         Rewritten document -> (directory <> "/" <> file) <$ LBS.writeFile (directory <> "/" <> file) (encode document)
         RewrittenNative bytes -> (directory <> "/" <> file) <$ BS.writeFile (directory <> "/" <> file) bytes
 
@@ -479,6 +524,7 @@ prepare shape package = do
         Raw -> do
             raw <- either fail pure $ case pkgEcosystem (cpPackage package) of
                 Cargo -> first toString (Cargo.decodeCargoValues bytes)
+                RubyGems -> first toString (RubyGems.decodeRubyGemsValues bytes)
                 _ -> eitherDecodeStrict bytes
             _ <- forceShown raw
             compact <- evaluate (LBS.length (encode raw))

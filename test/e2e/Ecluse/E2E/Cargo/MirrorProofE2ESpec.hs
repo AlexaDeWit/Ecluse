@@ -10,17 +10,13 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Network.HTTP.Client qualified as Http
-import Network.HTTP.Types (statusCode)
 import System.FilePath ((</>))
 import Test.Hspec (around, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
 
-import Ecluse.Core.Clock (secondsToMicros)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Mirror.State (stateTarget)
 import Ecluse.Core.Mirror.State.Internal (projectKey)
 import Ecluse.Core.Package (mkPackageName)
-import Ecluse.Core.Queue (Seconds (Seconds))
 import Ecluse.E2E.Cargo.InstallE2ESpec (cargoConsumer)
 import Ecluse.E2E.Cargo.MirrorInstallE2ESpec
 import Ecluse.E2E.Fixtures.Cargo
@@ -29,8 +25,7 @@ import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Cargo
 import Ecluse.E2E.Harness.CargoGateway
 import Ecluse.E2E.Harness.CargoRegistry
-import Ecluse.E2E.Harness.Container (containerLogPollMicros)
-import Ecluse.Runtime.Queue.Sqs.Internal (SqsConfig (sqsVisibilityTimeout, sqsWaitSeconds), defaultSqsConfig)
+import Ecluse.E2E.Harness.MirrorState (mirrorRetryAttempts, mutateMirrorStateObject)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
@@ -145,10 +140,7 @@ lostReply :: GlobalDataPlane -> IO ()
 lostReply plane = withCargoMirrorFixture plane $ \registry releases -> do
     queue <- sharedMirrorQueue plane
     let config = cargoMirrorConfig{ecQueueUrl = Just queue, ecExtraEnv = ecExtraEnv cargoMirrorConfig <> [("ECLUSE_OBSERVABILITY__LOG_LEVEL", "debug")]}
-        queueConfig = defaultSqsConfig queue "us-east-1"
-        Seconds visibilitySeconds = sqsVisibilityTimeout queueConfig
-        -- A failed visibility reset leaves the job hidden until its lease expires.
-        retryAttempts = 120 + secondsToMicros (fromIntegral (visibilitySeconds + sqsWaitSeconds queueConfig)) `div` containerLogPollMicros
+        retryAttempts = mirrorRetryAttempts queue
     setCargoRegistryFault registry CargoRegistryLoseReply
     completeWithin retryAttempts plane registry releases config
     withStubFault plane (CargoBackend (registryPort registry) True) $
@@ -184,14 +176,6 @@ faultCase fault plane = withCargoMirrorFixture plane $ \registry releases -> do
     changed stored = stored{storedRow = case storedRow stored of Object row -> Object (KeyMap.insert "cksum" (String (T.replicate 64 "0")) row); other -> other}
 
 mutateState :: GlobalDataPlane -> ByteString -> ByteString -> IO ()
-mutateState plane verb body = do
-    port <- ministackPort plane
-    manager <- Http.newManager Http.defaultManagerSettings
-    signature <- s3CredentialScope
-    let key = "cargo-mirror/" <> projectKey (stateTarget (stubUrl CargoMirror)) (mkPackageName Cargo Nothing cargoRoot) <> "/project.json"
-        url = "http://127.0.0.1:" <> show port <> "/" <> advisoryBucket <> "/" <> key
-    initial <- Http.parseRequest (toString url)
-    before <- Http.httpLbs initial{Http.requestHeaders = [("Authorization", encodeUtf8 signature)]} manager
-    statusCode (Http.responseStatus before) `shouldBe` 200
-    response <- Http.httpLbs initial{Http.method = verb, Http.requestBody = Http.RequestBodyBS body, Http.requestHeaders = [("Authorization", encodeUtf8 signature)]} manager
-    statusCode (Http.responseStatus response) `shouldSatisfy` (`elem` [200, 204])
+mutateState plane = mutateMirrorStateObject plane key
+  where
+    key = "cargo-mirror/" <> projectKey (stateTarget (stubUrl CargoMirror)) (mkPackageName Cargo Nothing cargoRoot) <> "/project.json"

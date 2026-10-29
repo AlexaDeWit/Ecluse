@@ -11,6 +11,7 @@ module Ecluse.BenchLoad.Support (
     loadedSection,
     proxyWithPeak,
     placedWindow,
+    rtsSnapshot,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -22,6 +23,7 @@ import Ecluse.BenchLoad.Harness (LoadKnobs (lkUpstreamLatencyMicros), LoadSummar
 import Ecluse.BenchLoad.Latency (Percentiles (Percentiles))
 import Ecluse.BenchLoad.Pod (CgroupReading (CgroupReading), PodShape (Limited), parseCpuList)
 import Ecluse.BenchLoad.Report (Section (..))
+import Ecluse.BenchLoad.RtsWindow (RtsSnapshot (..))
 import Ecluse.BenchLoad.Verdict (ProxyEnding (CleanShutdown))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 
@@ -76,7 +78,9 @@ scenarioReport name successes refusals p50 p99 =
             , lsOtherStatuses = 0
             , lsTransportFailures = 0
             , lsDeadlineAborts = 0
-            , lsLatency = Percentiles (Just p50) Nothing (Just p99) Nothing
+            , lsFirstByteLatency = Nothing
+            , lsLatency = Percentiles (Just p50) Nothing Nothing (Just p99) Nothing
+            , lsTransferredBodyBytes = Nothing
             , lsNote = ""
             }
 
@@ -112,6 +116,7 @@ proxyWithPeak peak =
         , pfBootRetries = []
         , pfInFlight = summariseGauge []
         , pfTasks = summariseGauge []
+        , pfMemoryChargeBytes = Nothing
         , pfAdmissionSeries = []
         , pfCacheWindow = Nothing
         , pfBurstMemory = Nothing
@@ -120,3 +125,27 @@ proxyWithPeak peak =
 -- | A 30 s window with the proxy on CPUs 2-3, the harness cgroup at half of CPUs 0-1, and CPU 0 this many of 2000 ticks busy.
 placedWindow :: Int -> CpuWindow
 placedWindow busy = CpuWindow 30 (rightToMaybe (parseCpuList "2-3")) (Just 45) (rightToMaybe (parseCpuList "0-1")) (Just 30) (Map.fromList [(0, CpuTicks busy 2_000), (2, CpuTicks 1_600 2_000), (3, CpuTicks 1_600 2_000)]) 0.01
+
+-- | A scalar runtime fixture for window arithmetic and evidence availability controls.
+rtsSnapshot :: RtsSnapshot
+rtsSnapshot =
+    RtsSnapshot
+        { rsAllocatedBytes = 1_000
+        , rsGcs = 10
+        , rsMajorGcs = 2
+        , rsGcCpuNs = 100
+        , rsCpuNs = 1_000
+        , rsGcElapsedNs = 50
+        , rsMaxLiveBytes = 0
+        , rsMaxMemInUseBytes = 0
+        , rsMaxLargeObjectsBytes = 0
+        , rsCumulativeLiveBytes = 0
+        , rsLiveBytes = 0
+        , rsMemInUseBytes = 0
+        , rsCapabilities = 2
+        , rsProcessors = 4
+        , rsMaxHeapBytes = Nothing
+        , rsAllocAreaBytes = 0
+        , rsCompactAlways = False
+        , rsCompactThresholdPercent = 30
+        }

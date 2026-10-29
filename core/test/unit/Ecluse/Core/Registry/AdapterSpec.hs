@@ -12,6 +12,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Registry.Adapter (adapterEcosystem, adapterFor, adapterMetadata, adapterRuleBlocks)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
 import Ecluse.Core.Registry.Cargo.Metadata (cargoChargeFactors)
+import Ecluse.Core.Registry.RubyGems.Metadata (rubyGemsChargeFactors)
 
 import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyIfYankedType, DenyInstallTimeExecutionType))
 
@@ -50,5 +51,6 @@ spec = describe "adapterFor (the ecosystem adapter registry)" $ do
                     ]
                 )
 
-    it "resolves RubyGems to no adapter (unsupported by the build, a loud miss)" $
-        (adapterEcosystem <$> adapterFor RubyGems) `shouldBe` Nothing
+    it "resolves RubyGems with its initial measured native charge factors" $ do
+        (adapterEcosystem <$> adapterFor RubyGems) `shouldBe` Just RubyGems
+        (metadataChargeFactors . adapterMetadata <$> adapterFor RubyGems) `shouldBe` Just rubyGemsChargeFactors

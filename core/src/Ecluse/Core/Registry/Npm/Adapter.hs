@@ -20,6 +20,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     MirrorRequirements (..),
     MirrorStateRequirement (..),
     PrivateArtifactAddressing (..),
+    PublishExtras (NoPublishExtras),
     PublishRequestBody (..),
     UploadEndpointRequirement (..),
     UploadIdentityRequirement (..),
@@ -73,7 +74,9 @@ npmAdapter =
 npmPublish :: AdapterPublish
 npmPublish =
     AdapterPublish
-        { publishRelay = \origin name -> relayPublishDocument origin name . publishBodyBytes
+        { publishCredential = npmCredential
+        , publishRequestExtras = const (Right NoPublishExtras)
+        , publishRelay = \origin name -> relayPublishDocument origin name . publishBodyBytes
         , publishUploadClaims = \_ _ _ -> pure . uploadClaims . publishBodyBytes
         , publishCodec = npmPublishCodec
         , publishMirrorRequirements = MirrorRequirements CachedWorkerRead NativeVersionState ReadRootUpload

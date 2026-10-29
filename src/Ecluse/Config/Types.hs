@@ -86,6 +86,7 @@ import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Registry.Cargo.FirstParty (CargoFirstParty)
 import Ecluse.Core.Registry.Maintenance.Budget (QuotaDimension, RequestKind)
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty)
+import Ecluse.Core.Registry.RubyGems.FirstParty (RubyGemsFirstParty)
 import Ecluse.Core.Rules.Types (PrecededRule)
 import Ecluse.Core.Security (hostPortAddress, refuseCredentialMaterial)
 import Ecluse.Core.Security.Egress (RegistryUrl)
@@ -275,6 +276,8 @@ data FirstParty
       FirstPartyPyPI (NonEmpty PyPIFirstParty)
     | -- | The Cargo names and separator-delimited prefixes the deployment owns.
       FirstPartyCargo (NonEmpty CargoFirstParty)
+    | -- | The exact RubyGems names and separator-delimited prefixes the deployment owns.
+      FirstPartyRubyGems (NonEmpty RubyGemsFirstParty)
     deriving stock (Eq, Show)
 
 -- | A mount's refinements of the global @integrity@ group, under its own @integrity@ key. Each is 'Nothing' at the global setting.

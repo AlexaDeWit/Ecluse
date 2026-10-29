@@ -17,10 +17,11 @@ import Data.Map.Strict qualified as Map
 import Data.Ratio ((%))
 import Data.Set qualified as Set
 
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, RubyGems))
 import Ecluse.Core.Package (PackageInfo (infoName, infoVersions), pkgEcosystem)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage))
 import Ecluse.Test.Corpus.Cargo (decodeCargoValues, encodeCargoValues)
+import Ecluse.Test.Corpus.RubyGems (decodeRubyGemsValues, encodeRubyGemsValues)
 import Ecluse.Test.Corpus.Subset (byPublishTime, newestVersions, oldestVersions)
 import Ecluse.Test.EcosystemBench (EcosystemBench (ebHeavyBase, ebKeepVersions, ebTreeRead), ecosystemBenchFor)
 
@@ -78,6 +79,7 @@ mergeDocuments shape info bytes = do
       where
         rewrite keep = case pkgEcosystem (infoName info) of
             Cargo -> RewrittenNative <$> (first toString (decodeCargoValues bytes) >>= first toString . encodeCargoValues . keep)
+            RubyGems -> RewrittenNative <$> (first toString (decodeRubyGemsValues bytes) >>= first toString . encodeRubyGemsValues . keep)
             _ -> Rewritten . keep <$> eitherDecodeStrict bytes
         both private public = (,) <$> rewrite (ebKeepVersions ecosystem info private) <*> rewrite (ebKeepVersions ecosystem info public)
         privateOnly keep = (,Captured) <$> rewrite keep

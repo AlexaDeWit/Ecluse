@@ -145,7 +145,7 @@ observeRelayAnomaly :: forall m. (KatipContext m) => MetricsPort -> PackageName 
 observeRelayAnomaly metrics name version = \case
     RelayedArtifact -> pass
     RelayedOddShape reason -> record Metric.RelayOddShape ("the public upstream answered a success that does not look like the admitted artifact: " <> reason)
-    RelayedNonSuccess status -> record Metric.RelayNonSuccess ("the public upstream answered a non-success, relayed verbatim: HTTP " <> show (statusCode status))
+    RelayedNonSuccess status -> record Metric.RelayNonSuccess ("the public upstream answered a non-success: HTTP " <> show (statusCode status))
   where
     record :: Metric.RelayAnomaly -> Text -> m ()
     record cls message = do

@@ -2,11 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The @oha@ load generator, run as a subprocess against a list of URLs. Its JSON report gives
-the status and transport-error counts. Its per-request database gives the latency of successful
-responses alone, because the report's own percentiles mix sheds in with served requests.
-A run that cannot start, or whose report does not parse, fails the harness.
--}
+-- | Oha reports statuses and transferred bytes. Its database supplies success-only latencies.
 module Ecluse.BenchLoad.Oha (
     OhaRun (..),
     RunLength (..),
@@ -16,6 +12,8 @@ module Ecluse.BenchLoad.Oha (
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.!=), (.:), (.:?))
+import Data.Aeson.Types (Parser)
+import Data.Map.Strict qualified as Map
 import Database.SQLite.Simple (Only (fromOnly), query_, withConnection)
 import System.FilePath ((</>))
 import System.Process.Typed (nullStream, proc, runProcess_, setStdout)
@@ -23,6 +21,7 @@ import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.BenchLoad.CpuUse (ohaCpu)
 import Ecluse.BenchLoad.Error (benchFail)
+import Ecluse.BenchLoad.Latency (Percentiles (..), noPercentiles)
 
 -- | How long a run lasts: a fixed duration, or a fixed number of requests.
 data RunLength
@@ -48,8 +47,12 @@ data OhaReport = OhaReport
     -- ^ Response counts keyed by HTTP status code.
     , ohaErrorCounts :: Map Text Int
     -- ^ Transport-error counts keyed by oha's error text, including its deadline aborts.
+    , ohaFirstBytePercentiles :: Maybe Percentiles
+    -- ^ First body bytes over all completed responses, including refusals.
     , ohaSuccessLatencies :: [Double]
     -- ^ Seconds per 2xx or 3xx response, empty when the run did not record requests.
+    , ohaTransferredBodyBytes :: Maybe Word64
+    -- ^ Oha's actual @summary.totalData@, including response bodies for non-success statuses.
     }
     deriving stock (Show)
 
@@ -57,9 +60,19 @@ instance FromJSON OhaReport where
     parseJSON = withObject "oha report" $ \o -> do
         summary <- o .: "summary"
         elapsed <- summary .: "total"
+        transferred <- summary .:? "totalData"
         statusCounts <- o .:? "statusCodeDistribution" .!= mempty
         errorCounts <- o .:? "errorDistribution" .!= mempty
-        pure (OhaReport elapsed statusCounts errorCounts [])
+        firstByte <- o .:? "firstBytePercentiles"
+        observed <- traverse firstByteObservations firstByte
+        pure (OhaReport elapsed statusCounts errorCounts (join observed) [] transferred)
+
+firstByteObservations :: Map Text (Maybe Double) -> Parser (Maybe Percentiles)
+firstByteObservations values = do
+    when (any (\value -> value < 0 || isNaN value || isInfinite value) (catMaybes (Map.elems values))) (fail "invalid Oha first-byte percentile")
+    let at key = (* 1000) <$> join (Map.lookup key values)
+        observed = Percentiles (at "p50") (at "p90") (at "p95") (at "p99") (at "p99.9")
+    pure (observed <$ guard (observed /= noPercentiles))
 
 -- | Run @oha@, pinned to the CPU 'ohaPinned' names.
 runOha :: OhaRun -> IO OhaReport

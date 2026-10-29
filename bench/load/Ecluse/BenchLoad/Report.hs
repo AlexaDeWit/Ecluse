@@ -276,8 +276,11 @@ loadRows l =
     [ row "connections held open" (show (lsConnections l))
     , row "successes" (show (lsSuccesses l) <> " in " <> fmt1 (lsElapsedSeconds l) <> " s (" <> fmt1 (throughput l) <> " req/s)")
     , row "completed responses / refusals (429, 503) / other statuses" (show (lsCompleted l) <> " / " <> show (lsRefusals l) <> " / " <> show (lsOtherStatuses l))
+    , row "transferred response body bytes / bytes per second (all statuses)" (maybe "unavailable" (\bytes -> show bytes <> " / " <> fmt1 (fromIntegral bytes / max 1e-9 (lsElapsedSeconds l))) (lsTransferredBodyBytes l))
     , row "transport failures / unfinished at the deadline" (show (lsTransportFailures l) <> " / " <> show (lsDeadlineAborts l))
     , row "success latency p50 / p90 / p99 / p99.9" (T.intercalate " / " (map msCell [pP50Ms lat, pP90Ms lat, pP99Ms lat, pP999Ms lat]))
+    , row "success latency p95" (msCell (pP95Ms lat))
+    , row "first body byte p50 / p95 / p99 (all completed responses, including refusals)" (maybe "unavailable" (\observed -> T.intercalate " / " (map msCell [pP50Ms observed, pP95Ms observed, pP99Ms observed])) (lsFirstByteLatency l))
     , row "distribution" (lsNote l)
     ]
   where
@@ -379,7 +382,11 @@ cpuRows placed r w =
 
 proxyDetail :: ProxyFigures -> [Text]
 proxyDetail p =
-    section "Admission series at the end of the window" (pfAdmissionSeries p)
+    section
+        "Serve memory charges in the window"
+        [ "all serve memory charge bytes: " <> maybe "unavailable" (\observed -> "sampled max " <> maybe "unavailable" show (gsMax observed) <> ", last " <> maybe "unavailable" show (gsLast observed)) (pfMemoryChargeBytes p)
+        ]
+        <> section "Admission series at the end of the window" (pfAdmissionSeries p)
         <> section "Retried proxy boots" (concatMap lines (pfBootRetries p))
         <> section "Proxy stderr" (if T.null (pfStderrTail p) then [] else lines (pfStderrTail p))
   where

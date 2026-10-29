@@ -41,13 +41,13 @@ import Data.Aeson.Types (parseEither, parseMaybe)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (Artifact (..), Availability (Available, Yanked), Hash, HashAlg (SHA256), PackageDetails (..), PackageInfo (infoVersions), PackageName, mkHash, pkgEcosystem)
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Package.Hash (canonicalHashValue, computeDigest, hexDigestText)
-import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest)
+import Ecluse.Core.Package.Integrity (IntegrityResult (..), assertedAlg, authoritativeDigest, verifyIntegrity)
 import Ecluse.Core.Registry (MirrorArtifact (..), PublishFault (PublishIntegrityMismatch, PublishSourceUnavailable))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, npmCached, pypiSimpleCached, rubyGemsCached)
 import Ecluse.Core.Registry.Cargo.Discovery (cargoArtifactCoordinate, coordinateFilename)
 import Ecluse.Core.Registry.Cargo.Document (CargoDocument, cargoDocument, cargoRecords)
 import Ecluse.Core.Registry.Cargo.Project qualified as Cargo
@@ -56,11 +56,12 @@ import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, restrictSimpleFiles, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Project (fileCoordinate, projectFile, projectName, projectSimpleIndex)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifEntryKey, ifFilename))
+import Ecluse.Core.Registry.RubyGems.Document (GemDocument, restrictGemDocument)
+import Ecluse.Core.Registry.RubyGems.SourceState (validateGemSource)
 import Ecluse.Core.Registry.ServedDocument (stringField, uniqueEntries, validEntryKey)
 import Ecluse.Core.Registry.WireSupport (parsePublishTime)
 import Ecluse.Core.Server.Path (mkFilename, unFilename)
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Core.Worker.Integrity (IntegrityResult (..), verifyIntegrity)
 
 -- | Supported read fields retain their source coordinates independently of physical uploads.
 data MirrorReadData
@@ -68,6 +69,7 @@ data MirrorReadData
     | PyPIMirrorRead SimpleDocument
     | -- | Original crates.io rows. Their stored source identity never grants target transport authority.
       CargoMirrorRead CargoDocument
+    | RubyGemsMirrorRead GemDocument
     deriving stock (Eq, Show)
 
 -- | Restore retained source fields without encoding or reparsing them.
@@ -76,6 +78,7 @@ mirrorReadDocument = \case
     NpmMirrorRead fields -> fst npmCached (Object fields)
     PyPIMirrorRead document -> fst pypiSimpleCached document
     CargoMirrorRead document -> fst cargoCached document
+    RubyGemsMirrorRead document -> fst rubyGemsCached document
 
 -- | Membership comes from the complete paired version snapshot, never a requested-file subset.
 data MirrorInventory = MirrorInventory
@@ -164,6 +167,7 @@ checkedMirrorInventory name version doc readData = do
             NpmMirrorRead fields -> snd npmCached raw == Just (Object fields)
             PyPIMirrorRead document -> snd pypiSimpleCached raw == Just document
             CargoMirrorRead document -> snd cargoCached raw == Just document
+            RubyGemsMirrorRead document -> snd rubyGemsCached raw == Just document
         )
         $ refused "the read metadata is not paired with the admitted snapshot"
     restoreMirrorInventory details (restrictReadData (Set.fromList (map artEntryKey (toList (pkgArtifacts details)))) readData)
@@ -197,6 +201,7 @@ restrictReadData keys = \case
     NpmMirrorRead fields -> NpmMirrorRead fields
     PyPIMirrorRead document -> PyPIMirrorRead (restrictSimpleFiles keys document)
     CargoMirrorRead document -> CargoMirrorRead (cargoDocument (filter ((`Set.member` keys) . fst) (cargoRecords document)))
+    RubyGemsMirrorRead document -> RubyGemsMirrorRead (restrictGemDocument keys document)
 
 validateReadData :: PackageDetails -> MirrorReadData -> Either PublishFault ()
 validateReadData details = \case
@@ -212,6 +217,9 @@ validateReadData details = \case
             Just (String name) | projectName name == Right (pkgName details) -> Right ()
             _ -> refused "the source envelope belongs to another package"
         traverse_ (validatePyPIEntry details entries) (pkgArtifacts details)
+    RubyGemsMirrorRead document -> do
+        unless (pkgEcosystem (pkgName details) == RubyGems) (refused "the source fields belong to another ecosystem")
+        first PublishSourceUnavailable (validateGemSource details document)
     CargoMirrorRead document -> do
         unless (pkgEcosystem (pkgName details) == Cargo) (refused "the source fields belong to another ecosystem")
         case (cargoRecords document, toList (pkgArtifacts details)) of

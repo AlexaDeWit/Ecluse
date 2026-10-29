@@ -92,7 +92,9 @@ summarise scheduled elapsed results = ReplayReport http totals
             { ohaElapsedSeconds = elapsed
             , ohaStatusCounts = statuses
             , ohaErrorCounts = if failed == 0 then mempty else Map.singleton "transport failure" failed
+            , ohaFirstBytePercentiles = Nothing
             , ohaSuccessLatencies = successes
+            , ohaTransferredBodyBytes = Nothing
             }
 
 waitUntil :: Double -> IO ()

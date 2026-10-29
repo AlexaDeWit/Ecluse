@@ -10,6 +10,8 @@ See @docs/architecture/security.md@ for the trust assumptions.
 module Ecluse.Core.Package.Integrity (
     -- * Algorithm strength
     assertedAlg,
+    IntegrityResult (..),
+    verifyIntegrity,
 
     -- * The authoritative digest of a set
     authoritativeDigest,
@@ -38,16 +40,22 @@ module Ecluse.Core.Package.Integrity (
 
 import Data.Foldable (maximumBy)
 import Data.List.NonEmpty qualified as NE
+import Data.Text qualified as T
 
 import Ecluse.Core.Package.Hash (
     Hash,
     HashAlg (SHA256, SRI),
+    base64DigestText,
+    computeDigest,
     hashAlg,
     hashValue,
+    hexDigestText,
     isComputable,
     parseHashAlg,
     renderHashAlg,
     sriAlgorithm,
+    sriBody,
+    sriPrefix,
  )
 
 -- | Resolve an SRI prefix or a raw algorithm tag. An unknown prefix clears no floor.
@@ -153,3 +161,44 @@ classifyDigests flr digests
     | digestsMeetFloor flr digests = MeetsFloor
     | null digests = NoIntegrity
     | otherwise = BelowFloor
+
+-- | Whether complete artifact bytes agree with the strongest admitted digest.
+data IntegrityResult
+    = -- | The bytes matched the selected digest or one of its SRI alternatives.
+      IntegrityVerified
+    | -- | The selected digest mismatched or its algorithm cannot be computed.
+      IntegrityMismatch Text
+    deriving stock (Eq, Show)
+
+{- | Verify the strongest selected digest, allowing only its same-algorithm SRI alternatives.
+A weaker match or an uncomputable selected algorithm never permits verified delivery.
+-}
+verifyIntegrity :: NonEmpty Hash -> ByteString -> IntegrityResult
+verifyIntegrity hashes bytes =
+    let strongest = authoritativeDigest hashes
+     in case matchesDigest (toLazy bytes) strongest hashes of
+            Nothing ->
+                IntegrityMismatch
+                    ( "the strongest admitted digest ("
+                        <> describeDigest strongest
+                        <> ") is in an algorithm the worker cannot verify"
+                    )
+            Just True -> IntegrityVerified
+            Just False ->
+                IntegrityMismatch ("the " <> describeDigest strongest <> " digest did not match the fetched bytes")
+
+matchesDigest :: LByteString -> Hash -> NonEmpty Hash -> Maybe Bool
+matchesDigest lazyBytes h hashes = do
+    alg <- assertedAlg h
+    digestOf <- computeDigest alg
+    let digest = digestOf lazyBytes
+    pure $ case hashAlg h of
+        SRI ->
+            let encoded = base64DigestText digest
+             in any (\candidate -> hashAlg candidate == SRI && assertedAlg candidate == Just alg && sriBody (hashValue candidate) == encoded) hashes
+        _ -> hexDigestText digest == T.toLower (hashValue h)
+
+describeDigest :: Hash -> Text
+describeDigest h = case hashAlg h of
+    SRI -> "SRI " <> sriPrefix (hashValue h)
+    alg -> show alg

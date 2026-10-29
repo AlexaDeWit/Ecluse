@@ -1043,8 +1043,12 @@ it read from the running RTS.
 bytes. A leg's budget is that figure plus the file's `marginPercent`, rounded up to a whole byte.
 The margin is 1%. Over six main runs a leg's median moved by at most 0.051%, so 1% is about twenty
 times the noise and fails a regression of 1% on any leg.
-The file's calibration record names the architecture, runner, commit, and run URLs the figures came
-from. The job fails closed. It fails when:
+The calibration record names the default architecture, runner, commit, and run URLs.
+Optional `calibration.sourcesByEcosystem` overrides those source fields for a named ecosystem.
+Each override contains only `arch`, `runner`, `commit`, and non-empty `runs`.
+All ecosystems use the sole global `marginPercent`. Unchanged ecosystems keep their recorded
+figures and source records. Reports and architecture warnings select each ecosystem's source.
+The job fails closed. It fails when:
 
 - a leg allocates more than its budget,
 - a measured leg has no calibrated figure,
@@ -1055,10 +1059,13 @@ from. The job fails closed. It fails when:
 
 A red result needs a human decision: fix the regression, or recalibrate. A leg that allocates more
 than the margin below its figure passes, and the job raises a warning on it that asks for a
-recalibration, because the budget no longer holds the gain. To recalibrate, take every figure from
-the report of one arm64 CI run, and record that run's runner, URL, and the commit it checked out in
-the calibration. A pull request run checks out the merge of its head into the base, and the log of
-its checkout step names that commit. The job writes its report to the run summary and uploads it as
+recalibration, because the budget no longer holds the gain.
+To recalibrate an ecosystem, take all its figures from one arm64 CI report.
+Record the runner, URL, and executed commit in its source override.
+Keep other ecosystems' values and source records unchanged. A full recalibration can instead
+replace every figure and the default source together, removing obsolete overrides.
+A pull request run checks out the merge of its head into the base.
+The checkout log names that commit. The job writes its report to the run summary and uploads it as
 `perf-allocation-report.md`.
 
 Arm64 CI is the calibration source, and you can also run `task perf-allocation` on x86_64. On an
@@ -1542,8 +1549,8 @@ alone, and phase `A` also measures the `2cpu-1gib` shape with no placement.
 
 ### Success floors
 
-[bench/load/floors.json](../bench/load/floors.json) holds reviewed minimum successes for npm, PyPI, and Cargo.
-Each checked scenario, pass, and pod shape has a floor.
+Each ecosystem requires reviewed minimum successes in [bench/load/floors.json](../bench/load/floors.json).
+A held run requires a floor for every checked scenario, pass, and pod shape.
 A run held to the floors fails when a count is below its floor. A floor catches what the zero-success check cannot: a scenario at a tenth of its normal successes is not at zero. The floors
 are loose. Each is half the lowest count of its reviewed calibration runs, so it leaves room for
 variation between runs and for a change that moves throughput by a few percent. The load test never gates a
@@ -1553,10 +1560,10 @@ merge: a breach turns only its own scheduled or dispatched run red.
 |---|---|
 | Loaded pass | The successes in the scenario's window |
 | Concurrency-one pass | The same count, for each scenario that joins that pass |
-| `npm/ramp`, `pypi/ramp`, `cargo/ramp` | Every step. The one floor comes from the lowest step of the calibration runs, and each step must reach it |
+| `npm/ramp`, `pypi/ramp`, `cargo/ramp`, `rubygems/ramp` | Every step. The one floor comes from the lowest step of the calibration runs, and each step must reach it |
 | Each ecosystem's `warm-under-cold` and `slow-readers` | Both loads, the measured one and the one beside it |
 | Each ecosystem's `herd-under-heavy-private` | Only the concurrent `heavy-private` background load. Burst successes and refusals stay diagnostic |
-| `npm/worker-mirroring`, `pypi/worker-mirroring`, `cargo/worker-mirroring` | Complete jobs under `unlimited`, the only shape that runs the in-process worker |
+| `npm/worker-mirroring`, `pypi/worker-mirroring`, `cargo/worker-mirroring`, `rubygems/worker-mirroring` | Complete jobs under `unlimited`, the only shape that runs the in-process worker |
 | The request-pattern replays | A finite trace whose count is the same every night, so the floor is half of it |
 
 The PyPI worker row runs in process under `unlimited`. Its admission capacity is `maxBound(Int) / 2`,
@@ -1612,7 +1619,7 @@ After the calibration conditions match, the harness compares nothing else:
 - The harness reads the runner's operating system and architecture, not its label, so any Linux
   ARM64 runner on GitHub Actions counts as the calibrated `ubuntu-26.04-arm`.
 
-All three ecosystems use measurement conditions `unified-v2`:
+All four ecosystems use measurement conditions `unified-v2`:
 
 - Each eviction bound is `min(max(1, configured entries), actual selected project count - 1)`.
   A selected working set with fewer than two projects fails before capture reads or proxy boot.
@@ -1620,12 +1627,14 @@ All three ecosystems use measurement conditions `unified-v2`:
   npm checks JSON, package identity, native metadata, rewritten artifact URLs, and the private
   overlay for merged listings. PyPI retains its media, project, file, artifact URL, and overlay checks.
   Cargo checks nonempty native records, checksum fields, and local archive discovery.
+  RubyGems independently decodes native dependency replies and checks the requested names, versions, platforms, and dependency fields.
   Private-copy listings retain their native checks without requiring a synthetic overlay.
   Cold admission bursts and ramps remain unprimed.
 - All shared upstream stubs skip the delay at zero or negative latency. Positive delays stay unchanged.
 - Each ecosystem warms a native public listing connection before probing its own RTT.
   npm fetches packuments. PyPI requests PEP 691 JSON Simple indexes, not the project JSON API.
   Cargo requests native sparse indexes from `index.crates.io`.
+  RubyGems requests per-gem `/info/` records from `rubygems.org`.
   Disabled probes, failed warm-ups, and probes with no successful samples report an explicit configured fallback.
   Each report and observation artifact retains the baseline identity and sample count.
 
@@ -1643,14 +1652,14 @@ partial recalibration. It records retained row provenance without changing those
 
 Latency-bound counts fall as injected latency rises. Derive each native ceiling separately:
 1.5 times the lowest of its pod shapes' highest qualifying latencies, rounded up to 10 ms.
-`npmInjectedLatency.highestMs`, `pypiInjectedLatency.highestMs`, and `cargoInjectedLatency.highestMs` record the per-shape observations.
+`npmInjectedLatency.highestMs`, `pypiInjectedLatency.highestMs`, `cargoInjectedLatency.highestMs`, and `rubygemsInjectedLatency.highestMs` record the per-shape observations.
 The reader checks the formula and pod identities for each ceiling.
-`unified-v2` calibration requires npm and PyPI ceilings. Cargo floors also require their own native ceiling.
+`unified-v2` calibration requires npm and PyPI ceilings. Cargo and RubyGems floors also require their own native ceilings.
 A run above any native ceiling is not held as a whole, including the other ecosystems.
 The report names the ecosystem, its injected latency, and its own ceiling.
 The network exception applies to each ceiling breach.
 A missing calibration or condition mismatch is a configuration fault.
-Missing Cargo calibration or a missing Cargo latency observation fails scheduled and dispatched runs.
+Missing Cargo or RubyGems calibration or a missing native latency observation fails scheduled and dispatched runs.
 
 To recalibrate, take the last ten scheduled runs of the Load test workflow on `main`, and take the
 next older run in place of each one you leave out:
@@ -1681,7 +1690,7 @@ their background counts. Then write the `calibration` record:
   in `runs` do not count as observations under the new conditions.
 - `measurementConditions`: the conditions measured by the new calibration.
 - `retainedFloorConditions`: unaffected rows that retain an earlier calibration identity.
-- `npmInjectedLatency`, `pypiInjectedLatency`, and `cargoInjectedLatency`: each native ecosystem's highest qualifying injected
+- `npmInjectedLatency`, `pypiInjectedLatency`, `cargoInjectedLatency`, and `rubygemsInjectedLatency`: each native ecosystem's highest qualifying injected
   latency by pod shape and its derived ceiling. Preserve the measured baseline and fallback identities
   when deciding whether an observation qualifies.
 
@@ -1731,7 +1740,7 @@ without the file.
 
 ### Benchmark captures
 
-The catalogue records complete npm packuments, PyPI PEP 691 Simple JSON snapshots, and Cargo sparse indexes.
+The catalogue records complete npm packuments, PyPI PEP 691 Simple JSON snapshots, Cargo sparse indexes, and RubyGems per-gem `/info/` records.
 Each capture keeps the upstream response body unchanged, including prereleases, operational fields,
 and PyPI serial metadata. The catalogue records its source, capture time, actual media type, byte
 size, and SHA-256 digest. Requests use identity content encoding, so these bytes match decompressed
@@ -1750,7 +1759,7 @@ The harness separately validates each capture through the production read driver
 |---|---|
 | `wire+project (per package)` | Complete bodies feed decoding and production full-document projection on every iteration. |
 | `single-version metadata (per package)` | Complete bodies feed production full-document and selective projections. |
-| `cold production reads (per package)` | Unchanged complete bodies pass through the production npm, PyPI, and Cargo full-document and selected-version HTTP readers on every iteration. |
+| `cold production reads (per package)` | Unchanged complete bodies pass through the production full-document and selected-version HTTP readers for npm, PyPI, Cargo, and RubyGems on every iteration. |
 | `source digest (32 KiB chunks)` | Unchanged complete bodies pass through the production digesting source in 32 KiB pieces, and nothing reads them further. |
 | Realistic serve, merge, rules, and version groups | Inputs derive from complete captures, with preparation outside the measured operation. |
 | Load metadata and cache scenarios | Fixture upstreams serve captured metadata with native local artifact routing. Cargo substitutes checksums for owned relay bytes. npm and PyPI rebase artifact URLs. The private upstream of the 5% and 25% private-copy points serves cut captures, and that of the 100% points serves all captured versions. These are derived bodies, not byte-identity measurements. |
@@ -1953,8 +1962,9 @@ out.
 | `versions_per_hour` | Decided versions per hour of wall time. A paced row runs at the ceiling pace. An unpaced row serves no wait, so its figure is not a rate the quotas allow |
 | `decisions`, `decision_digest` | The tally, request counts, waits asked for, cursor writes, and identity checksum, then their SHA-256. Times and the covered-name query count stay out, so a change that only saves work keeps the digest |
 
-The group takes about 28 minutes, 21 of them in the paced npm full walk of 10,000 names. A paced
-PyPI walk of that size would not fit the job's hour, so its native counts come from the unpaced row.
+The group runs default cycles and unpaced full walks for inventories of 1,000 and 10,000 names in each ecosystem.
+It also runs each ecosystem's small control and paced full walk of 1,000 names.
+Only npm runs the paced full walk of 10,000 names.
 To skip the group in a local run, pass
 `-p '!/dredger scale/'` in the benchmark options. The fixture shares the process, so the allocation
 and live heap figures include its documents. The RTS measures the live heap only at a major GC, and
@@ -2131,7 +2141,7 @@ requires reads, writes, inventory, deletion, integrity, and recovery for every b
 An incomplete driver cannot reduce either required list. Discovery is pure, and missing families
 produce named failures without stopping unrelated contracts. A passing full composition defines
 completion only when its lower-tier obligations and execution reports also pass.
-npm, PyPI, and Cargo register the full ecosystem composition. The separately named read-only foundation
+npm, PyPI, Cargo, and RubyGems register the full ecosystem composition. The separately named read-only foundation
 remains an API for incomplete providers and does not establish full ecosystem completion.
 CI uploads actual plan and report pairs from the instrumented core unit, runtime unit and
 integration legs. The `e2e` job downloads all three pairs and audits each ecosystem against its subject's E2E report.
@@ -2197,6 +2207,68 @@ Ready handoff requires the existing standard load workflows with the full profil
 The delivery agent obtains at least three qualifying observations per shape and commits derived floors and latency policy with source and run provenance.
 Keep adverse and disqualified observations. A provider registration or unmeasured value cannot satisfy calibration.
 Fresh independent review, final-commit CI, and a fresh-context final adversarial review remain delivery requirements.
+
+## RubyGems native coverage and evidence limits
+
+RubyGems uses the shared contracts with native independent oracles and providers.
+The baseline clients are Bundler 2.6.9 and 4.0.23 with compatible Ruby runtimes recorded in each execution receipt.
+Required client operations include lock, install, update, frozen lockfiles, checksums, prereleases, dependency constraints, Ruby requirements, and platform selection.
+Require Compact Index `/versions` and on-demand `/info` requests, with local archive paths and no Dependencies API fallback for ordinary supported installs.
+Each real client must install from fresh state without an existing lockfile or preceding lock command.
+An incorrect registry archive checksum must fail with `Bundler::ChecksumMismatchError`.
+Historical full-index clients, `--full-index`, Git dependencies, and local-path dependencies remain outside registry conformance claims.
+
+Native coverage must exercise these boundaries:
+
+- Basic caller reads, raw publication keys, optional OTP, and declared CodeArtifact service credential presentation.
+- Admission, advisory decisions, direct denied downloads, and boot rejection of unsupported rules.
+- Exact raw archive publication, identity mismatches, bounded Marshal and archive decoding, and independent reference fixtures.
+- Complete platform mirroring, retained original source facts, restart, public outage, and incomplete or corrupt inventory refusal.
+- Physical maintenance deletion, first-party protection, role authority, consent, caps, and native telemetry.
+- Per-gem reads, selected compact specifications, long histories, platform multiplicity, and whole-version worker costs.
+
+The two-gem protocol experiment establishes discovery, revalidation and initial-download checksums for the two client versions.
+It does not establish production performance, policy coverage, platform coverage, or full conformance.
+Source registration alone supplies no runtime evidence. Backend fixtures supply no live AWS or IAM evidence.
+A delivery claim requires the actual native providers, independent obligations, final-commit CI receipts, and measured resource factors.
+Missing providers, observations, factors, or calibration remain failures.
+RubyGems delivery uses best-effort real observations from its eight-workflow load limit, with source and run provenance.
+Keep original eligibility verdicts and adverse rows. Do not relabel failed runs as held receipts.
+Use bounded focused measurements for changed paths rather than another broad workflow.
+Existing ecosystems' numeric floors and budgets remain unchanged.
+Retain adverse and excluded observations. Existing ecosystems' factors, budgets, and floors do not supply RubyGems values.
+
+### Native RubyGems info load
+
+RubyGems per-gem load rows rebuild each admitted Compact Index reply.
+`info-repeated-corpus` reads the weighted three captured histories.
+`info-working-set-one` selects one history.
+`info-working-set-many` reads the configured corpus working set uniformly and requires at least two histories.
+The report states the selected cardinalities, and each row preflights every distinct info request through an independent native reader.
+The local backend retains no full package document, and these replies do not use assembled-response retention.
+Concurrent public reads can share an active read. A configured external provider can retain full source documents.
+The full-store miss/collapse observations describe public fetches and waiting consumers, not private reads or exact per-name request counts.
+Pattern rows measure per-gem metadata and artifacts. They exclude `/versions` and do not represent a complete Bundler installation.
+A separate bounded directory fixture measures discovery with an immutable externally supplied capture.
+
+### RubyGems Compact Index and streaming evidence
+
+Require fresh root and transitive discovery, native archive SHA-256 values, and client refusal of changed archive bytes.
+Force directory and later per-gem failures while valid archives remain available.
+Both clients must fail rather than install through the checksumless Dependencies API fallback.
+Test public and caller-authorised private sources with both supported Bundler versions.
+Keep the Compact Index client cache while changing policy, private visibility or checksums, and require fresh `/info` revalidation.
+Test source collisions, platform selection, mirror restart/outage, and complete `200` replacements after ranged requests.
+Keep independent reference readers separate from production parsers.
+
+The directory parser must reconcile repeated update rows and removals under byte, row and name bounds.
+Measure directory acquisition, packed retention, private merge, response assembly and full-body transfer separately from per-gem policy work.
+Record captured input sizes, name counts, source digests, actual response bytes, settings, completions, failures and measurement limits.
+A prototype without production authorisation or admission does not prove production throughput or a pod memory bound.
+
+Archive serving uses the shared streaming relay. Preserve its authorisation, framing, conditional, HEAD, cancellation, queue and residency controls.
+Mirroring verifies copied archive bytes. Publication and mirroring retain their bounded native archive validation.
+Neither streaming nor metadata checks prove that an archive is harmless.
 
 ## Onboarding an ecosystem
 
@@ -2340,7 +2412,7 @@ runs the second after a failed first, so one failure cannot hide the other. `cod
 follows the coverage legs and releases the Codecov statuses.
 The core unit, runtime unit and integration suites upload their plan and execution reports.
 The `e2e` job waits for the subjects and the coverage legs. It audits every subject report
-against the plan, then runs the npm, PyPI, and Cargo completion audits over all four tiers' reports.
+against the plan, then runs the npm, PyPI, Cargo, and RubyGems completion audits over all four tiers' reports.
 
 CI's primary architecture is arm64: every job that builds or tests the code runs on the
 `ubuntu-26.04-arm` runner. amd64 is also supported: the release dry-run builds and starts the amd64

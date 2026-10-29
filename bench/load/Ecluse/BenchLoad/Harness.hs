@@ -302,7 +302,11 @@ data LoadSummary = LoadSummary
     , lsTransportFailures :: Int
     , lsDeadlineAborts :: Int
     -- ^ Requests still in flight when the window closed, or unfinished replay work.
+    , lsFirstByteLatency :: Maybe Percentiles
+    -- ^ All completed-response first body bytes, including refusals.
     , lsLatency :: Percentiles
+    , lsTransferredBodyBytes :: Maybe Word64
+    -- ^ Actual response body bytes from Oha, including non-success statuses. Other drivers leave this unavailable.
     , lsNote :: Text
     -- ^ The status and transport-error distribution.
     }
@@ -334,6 +338,8 @@ data ProxyFigures = ProxyFigures
     -- ^ @ecluse.serve.admission.in_flight@ sampled each second of the window.
     , pfTasks :: GaugeSummary
     -- ^ The proxy cgroup's @pids.current@, its thread count, sampled each second of the window.
+    , pfMemoryChargeBytes :: Maybe GaugeSummary
+    -- ^ All serve memory charges sampled each second, including metadata.
     , pfAdmissionSeries :: [Text]
     -- ^ Every admission series at the end of the window.
     , pfCacheWindow :: Maybe [(Text, CacheOutcomes)]
@@ -408,7 +414,7 @@ measure knobs s shape (Target proxy driver) = do
     before <- snapshotOf proxy MajorCollection
     cgroupBefore <- cgroupOf proxy
     cpuStart <- forM proxy (const (cpuSampleNow cgroupBefore))
-    (outcome, (inFlight, tasks)) <- sampling proxy (drive knobs proxy driver)
+    (outcome, (inFlight, tasks, memoryCharges)) <- sampling proxy (drive knobs proxy driver)
     after <- snapshotOf proxy MinorCollection
     cgroupAfter <- cgroupOf proxy
     cpu <- traverse (`cpuWindowSince` cgroupAfter) cpuStart
@@ -417,7 +423,7 @@ measure knobs s shape (Target proxy driver) = do
         DriveReplay replay -> replayEvidence replay
         _ -> pure ""
     let evidence = T.intercalate "\n\n" (filter (not . T.null) [replayed, maybe "" ruleFailureNote (ruleFailuresWindow <$> startScrape <*> endScrape)])
-        window = ProxyWindow cgroupBefore cgroupAfter cpu inFlight tasks startScrape endScrape (doBurstMemory outcome)
+        window = ProxyWindow cgroupBefore cgroupAfter cpu inFlight tasks memoryCharges startScrape endScrape (doBurstMemory outcome)
     retained <- snapshotOf proxy MajorCollection
     ends <- traverse (\p -> (p,) <$> stopProxy p) proxy
     pure
@@ -448,6 +454,7 @@ data ProxyWindow = ProxyWindow
     , pwCpu :: Maybe CpuWindow
     , pwInFlight :: [Maybe Double]
     , pwTasks :: [Maybe Double]
+    , pwMemoryChargeBytes :: [Maybe Double]
     , pwStartScrape :: Maybe [Sample]
     , pwEndScrape :: Maybe [Sample]
     , pwBurstMemory :: Maybe BurstMemory
@@ -470,6 +477,7 @@ proxyFigures proxy end window =
         , pfBootRetries = proxyBootRetries proxy
         , pfInFlight = summariseGauge (pwInFlight window)
         , pfTasks = summariseGauge (pwTasks window)
+        , pfMemoryChargeBytes = Just (summariseGauge (pwMemoryChargeBytes window))
         , pfAdmissionSeries = maybe ["(the final scrape failed)"] admissionSeries (pwEndScrape window)
         , pfCacheWindow = cacheWindow <$> pwStartScrape window <*> pwEndScrape window
         , pfBurstMemory = pwBurstMemory window
@@ -492,9 +500,9 @@ snapshotOf proxy collection = case proxy of
 -- Wait up to a minute for the requests the warm-up abandoned at its deadline to leave admission,
 -- so they do not spend the window's capacity. A request that never leaves shows in the gauge.
 settle :: Maybe ProxyProcess -> IO ()
-settle = traverse_ $ \p -> void (pollUntil 300 200_000 (== Just 0) (inFlightNow p))
+settle = traverse_ (void . pollUntil 300 200_000 (== Just 0) . metadata)
   where
-    inFlightNow p = fmap (fromMaybe 0 . seriesTotal inFlightSeries []) <$> proxyScrape p
+    metadata process = fmap (fromMaybe 0 . seriesTotal inFlightSeries []) <$> proxyScrape process
 
 cgroupOf :: Maybe ProxyProcess -> IO (Maybe CgroupReading)
 cgroupOf = fmap join . traverse proxyCgroupNow
@@ -504,15 +512,15 @@ scrapeOf = fmap join . traverse proxyScrape
 
 -- Sample the in-flight gauge and thread count each second. A failed scrape is a miss, and a gauge
 -- not yet created reads zero, since it appears on the first admission.
-sampling :: Maybe ProxyProcess -> IO a -> IO (a, ([Maybe Double], [Maybe Double]))
+sampling :: Maybe ProxyProcess -> IO a -> IO (a, ([Maybe Double], [Maybe Double], [Maybe Double]))
 sampling proxy load = case proxy of
-    Nothing -> (,([], [])) <$> load
-    Just p -> second unzip <$> sampleEvery 1_000_000 (gauges p) load
+    Nothing -> (,([], [], [])) <$> load
+    Just p -> second unzip3 <$> sampleEvery 1_000_000 (gauges p) load
   where
     gauges p = do
         scraped <- proxyScrape p
         tasks <- proxyTasksNow p
-        pure (fromMaybe 0 . seriesTotal inFlightSeries [] <$> scraped, fromIntegral <$> tasks)
+        pure (fromMaybe 0 . seriesTotal inFlightSeries [] <$> scraped, fromIntegral <$> tasks, scraped >>= seriesTotal "ecluse_serve_admission_memory_charged_bytes" [])
 
 -- | The burst sampling interval in milliseconds. One-second gauges miss short bursts.
 burstReadingMs :: Int
@@ -533,7 +541,9 @@ inFlightSeries :: Text
 inFlightSeries = "ecluse_serve_admission_in_flight"
 
 admissionSeries :: [Sample] -> [Text]
-admissionSeries samples = map (renderSample (commonLabels samples)) (filter (T.isInfixOf "admission" . sampleName) samples)
+admissionSeries samples = map (renderSample (commonLabels samples)) (filter measured samples)
+  where
+    measured value = "admission" `T.isInfixOf` sampleName value
 
 -- | Prime duration-driven HTTP loads. Bursts and finite replays meet a cold proxy.
 warmUp :: Driver -> IO ()
@@ -566,7 +576,7 @@ drive knobs proxy = \case
     DriveRamp steps load -> do
         reports <- traverse (\c -> (c,) <$> runOha (timed c load)) steps
         let stepSummaries = [summariseOha (show c <> " connections") c r | (c, r) <- reports]
-            highest = fromMaybe (summariseOha "" 0 (OhaReport 0 mempty mempty [])) (listToMaybe (reverse stepSummaries))
+            highest = fromMaybe (summariseOha "" 0 (OhaReport 0 mempty mempty Nothing [] Nothing)) (listToMaybe (reverse stepSummaries))
         pure (DriveOutcome highest Nothing stepSummaries Nothing Nothing)
     DriveUnder measured beside -> paired measured (summariseOha "concurrent load" connections) (runOha (timed connections beside))
     DriveBeside measured companion ->
@@ -585,7 +595,7 @@ drive knobs proxy = \case
         end <- getMonotonicTime
         let completed = length latencies
         pure . alone $
-            LoadSummary "" connections (max 1e-9 (end - start)) completed completed 0 0 0 0 (percentiles latencies) "in-process worker loop (no HTTP surface)"
+            LoadSummary "" connections (max 1e-9 (end - start)) completed completed 0 0 0 0 Nothing (percentiles latencies) Nothing "in-process worker loop (no HTTP surface)"
   where
     connections = lkConcurrency knobs
     halfWindow = lkDurationSeconds knobs * 500_000
@@ -608,7 +618,9 @@ summariseOha label connections report =
         , lsOtherStatuses = completed - successes - refusals
         , lsTransportFailures = sum (Map.elems (ohaErrorCounts report)) - aborts
         , lsDeadlineAborts = aborts
+        , lsFirstByteLatency = ohaFirstBytePercentiles report
         , lsLatency = percentiles (ohaSuccessLatencies report)
+        , lsTransferredBodyBytes = ohaTransferredBodyBytes report
         , lsNote = distributionNote report
         }
   where

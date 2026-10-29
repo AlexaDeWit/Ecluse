@@ -2,12 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Clients that read each response at a fixed rate, as a CI runner on a slow link does. Each one
-advertises an Ethernet segment size, so the server's send buffer grows as it would across a network
-instead of to the megabytes loopback allows, and a body larger than that buffer keeps the server
-writing while the client reads. After a @429@ or @503@, or a failed request, a client waits one
-second, the proxy's admission wait, before it asks again. It does not read @Retry-After@.
--}
+-- | Paced clients constrain receive buffers and wait one second after refusal or transport failure.
 module Ecluse.BenchLoad.SlowReader (
     slowReaders,
     slowReaderDescription,
@@ -156,7 +151,7 @@ record outcome t = case outcome of
     Failed reason -> t{tErrors = Map.insertWith (+) reason 1 (tErrors t)}
 
 reportOf :: Double -> Tally -> OhaReport
-reportOf elapsed t = OhaReport elapsed (Map.mapKeys show (tStatuses t)) errors (tSuccessSeconds t)
+reportOf elapsed t = OhaReport elapsed (Map.mapKeys show (tStatuses t)) errors Nothing (tSuccessSeconds t) Nothing
   where
     unfinished = tStarted t - sum (tStatuses t) - sum (tErrors t)
     errors = if unfinished > 0 then Map.insert "aborted due to deadline" unfinished (tErrors t) else tErrors t

@@ -65,7 +65,7 @@ data MetricName
       OverflowShed
     | -- | @ecluse.serve.admission.overflow.full@: requests refused at once because the queue was full (counter).
       OverflowFull
-    | -- | @ecluse.publish.body.in_flight_bytes@: bytes reserved for buffered publish bodies (up-down counter).
+    | -- | @ecluse.publish.body.in_flight_bytes@: buffered publication reservations (up-down counter).
       PublishBodyInFlightBytes
     | -- | @ecluse.publish.body.shed@: publishes shed at the body-byte budget (counter).
       PublishBodyShed

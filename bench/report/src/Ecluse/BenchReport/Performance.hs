@@ -72,16 +72,22 @@ benchmarkRequiredRows ecosystem packages =
                         ]
                    ]
                 <> ["security guards.checkNestingDepth (synthetic / 100000)", "security guards.checkVersionCount (synthetic / 2000)"]
+                <> [ "route.match." <> native
+                   | ecosystem == "rubygems"
+                   , native <- ["gem action", "quick specification action", "native info action", "request building metadata request", "request building artifact request", "request building compact specification request"]
+                   ]
                 <> ["managed mirror read: 1000 versions, three files per version." <> row | ecosystem == "pypi", row <- ["cold record and listing", "warm conditional 304 and listing", "cold listing then changed revision adding a file"]]
             )
   where
     prefix = ecosystemPrefix <> ecosystem <> "."
+    servedLaw = if ecosystem == "rubygems" then "preserves native served records and proxy artifact routes" else "rewrites every artifact onto the proxy origin"
     guards =
-        [ "native/" <> prefix <> family <> ".scales linearly in version count"
-        | family <- ["rules.evalRules", "package.mergePackuments", "serve (filter + merge-assemble)"]
-        ]
+        ["native/" <> prefix <> "route.match.malformed native coordinate" | ecosystem == "rubygems"]
+            <> [ "native/" <> prefix <> family <> ".scales linearly in version count"
+               | family <- ["rules.evalRules", "package.mergePackuments", "serve (filter + merge-assemble)"]
+               ]
             <> [ "native/synthetic generators." <> ecosystem <> "." <> law
-               | law <- ["decodes every generated release", "projects every measured synthetic size", "selective projection agrees with the full release", "rewrites every artifact onto the proxy origin", "prepares the large wire-guard input"]
+               | law <- ["decodes every generated release", "projects every measured synthetic size", "selective projection agrees with the full release", servedLaw, "prepares the large wire-guard input"]
                ]
 
 -- | Four business operations are required even if criteria or registrations omit one.

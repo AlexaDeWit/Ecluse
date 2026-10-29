@@ -14,7 +14,7 @@ The route tables render from the same OpenAPI document Écluse publishes as JSON
 | npm | Served, mirrored, and published |
 | PyPI | Served, mirrored, and published |
 | Cargo | Sparse HTTPS reads, mirroring, and first-party publication, Cargo 1.74+ |
-| RubyGems | Planned |
+| RubyGems | Named-gem reads, complete platform mirrors, and native first-party publication |
 
 A **served** registry answers reads: the metadata a client resolves against and the artifact
 bytes it installs, both gated by the same rules, integrity floors, and egress controls.
@@ -77,9 +77,6 @@ The companion path checks edge authentication and private access, but does not e
 The package client, such as pip, verifies advertised companion digests on ordinary upstream reads. For mirrored versions, the worker verifies and retains declared companions, and Écluse verifies retained bytes before serving them.
 Distribution bytes stay unchanged. The proxy hashes the complete upstream index for response
 validators, including fields omitted from the served response.
-
-A **planned** registry is already a valid `mounts` key, but no adapter answers its routes yet,
-so activating one refuses the boot.
 
 {{ generated(name="openapi") }}
 
@@ -194,3 +191,68 @@ The sparse read root and approved upload API root remain distinct.
 Discovery must advertise the exact approved API authority and base path before Écluse attaches the publication credential.
 CodeArtifact supplies Cargo inventory and physical deletion through the existing maintenance interface.
 A generic Cargo API yank is not physical deletion. Maintenance support depends on the store's capabilities.
+
+## RubyGems and Bundler {#rubygems}
+
+The client baseline is Bundler 2.6.9 and 4.0.23 for registry-based `bundle lock`, `bundle install`, and `bundle update`.
+Historical full-index clients and `--full-index` are outside this contract.
+Git and local-path dependencies do not acquire registry admission guarantees.
+
+| Route below `/rubygems/` | Behaviour |
+|---|---|
+| `GET /versions` | Merges public and caller-authorised private discovery. Directory membership does not grant admission. |
+| `GET /info/<gem>` | Returns admitted native rows, dependencies, runtime requirements and archive SHA-256 values. |
+| `/api/v1/dependencies` | Returns `404`. The checksumless fallback is unsupported. |
+| `GET /quick/Marshal.4.8/<coordinate>.gemspec.rz` | Returns the exact admitted coordinate's validated native compact specification. |
+| `GET /gems/<coordinate>.gem` | Applies artifact admission and relays the selected archive. |
+| `POST /api/v1/gems` | Validates and relays an unchanged first-party `.gem` archive. Returns `405` without configured publication. |
+
+Read routes also accept `HEAD` under their response contracts.
+Bundler verifies streamed archives against the SHA-256 values from admitted `/info` metadata, including the first installation without a lockfile.
+Keep checksum validation enabled. The server verifies archive bytes during mirroring.
+Private access refusal does not authorise public substitution.
+HEAD authorises and checks availability without reading or hashing an archive body, and never enqueues mirroring.
+
+The public `/versions` directory adds a global transfer and refresh cost before per-gem acquisition.
+Private discovery uses current caller credentials and remains outside public shared retention.
+Private directory failure remains a failure rather than a public-only or stale conditional response.
+Detailed metadata acquisition stays on demand. There is no full specification index, unfiltered fallback, or client yank relay.
+Compact specification and archive locations point through Écluse.
+A failed read stays a failure rather than an empty successful result.
+The Dependencies API does not supply archive checksums to these Bundler clients.
+Écluse refuses that fallback after either directory or per-gem metadata failure.
+
+The [Compact Index format](https://guides.rubygems.org/rubygems-org-compact-index-api/) describes an MD5 hint for each info file.
+Filtered or merged info bytes differ from upstream bytes, so forwarding an upstream MD5 can preserve stale client metadata.
+Écluse emits an explicit blank hint when the transformed MD5 is unknown.
+Bundler 2.6.9 and 4.0.23 then revalidate `/info` while retaining archive SHA-256 verification.
+This is the tested client contract, not a claim of compatibility with every Compact Index client.
+Responses use validators for the selected content coding.
+`Repr-Digest` describes the decoded native file. Supported Bundler clients decompress gzip before checking that digest.
+Modified directories and info files return complete `200` replacements when clients request byte ranges.
+Matching validators return `304` after current caller authorisation, including ranged requests.
+Client caches can retain removed names, metadata or installed packages. New archive requests still enforce current authorisation and admission.
+
+[CodeArtifact](https://docs.aws.amazon.com/codeartifact/latest/ug/bundler-compatibility.html) limits `/versions` and `/names` to 5,000 gems.
+It weights directory reads by the number of returned gems, so concurrent installs can reach read quotas at low HTTP request rates.
+A directory failure does not remove unrelated backend capabilities, such as publication or maintenance.
+
+Names, raw versions, and platform labels retain their native identity.
+Dependencies, version constraints, required Ruby and RubyGems versions, checksums, and supported source fields remain available.
+Malformed records and conflicting coordinates cannot supply an admitted version.
+Native builds remain allowed. RubyGems blocks active `DenyInstallTimeExecution`, `DenyIfDeprecated`, and `AllowScope` rules at boot.
+Unknown installation metadata does not prove that an archive executes no code.
+
+Private reads preserve the caller's complete Basic credential pair.
+Publication uses the complete native API-key header value and an optional validated `OTP` header.
+A declared CodeArtifact service role uses Basic with username `aws` for reads and Bearer for publication.
+The backend declaration selects this presentation, not a hostname guess.
+Static publication credentials retain the required edge-token guard.
+
+Mirroring copies every supported platform artifact of an admitted raw version, with original compact specifications and durable source facts.
+The worker verifies exact archives and native identities without executing Ruby, constructing YAML objects, or extracting files to disk.
+Target publication timestamps do not replace the original public age.
+Current inventory, verified digests, and retained companions prove completion. A duplicate upload response or version name does not.
+Missing or corrupt durable state cannot prove an original-source mirror during a public outage.
+Registry management is separate: CodeArtifact inventory and physical deletion use existing worker authority, consent, and deletion caps.
+A native yank is not physical deletion.

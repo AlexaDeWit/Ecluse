@@ -22,11 +22,13 @@ import GHC.Exts (UnliftedType, mkWeakNoFinalizer#)
 import GHC.IO (IO (IO))
 import GHC.Weak (Weak (Weak))
 import Network.HTTP.Types (status200)
+import Network.Wai (responseLBS)
+import Network.Wai.Handler.Warp (testWithApplication)
 import System.Mem (performGC)
 import System.Mem.Weak (deRefWeak)
 import Test.Hspec
 import UnliftIO (timeout, wait, withAsync)
-import UnliftIO.Exception (bracket, evaluate)
+import UnliftIO.Exception (bracket, evaluate, throwIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (PackageInfo (infoVersions))
@@ -42,9 +44,11 @@ import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (MetadataAbse
 import Ecluse.Core.Registry.Metadata.Fetch (readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (PrepareRead), prepareRead)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (..), ReadTerms (ReadTerms))
+import Ecluse.Core.Registry.Npm.Credential (npmCredential)
+import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocChargeFullReadWorkspace))
 import Ecluse.Core.Registry.ServedDocument (stringField)
-import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxVersionCount), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
@@ -56,17 +60,19 @@ import Ecluse.Core.Server.Cache.Provider (cacheProvider)
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Server.Context (MountBinding (..), PackumentDeps (..), RequestCtx (RequestCtx), ServeRuntime (srMemoryMeter, srMetadataCache), pdPublicBaseUrl, runHandler)
 import Ecluse.Core.Server.Pipeline.Origin (
+    ObservedReadBoundExceeded (ObservedReadBoundExceeded),
     OriginMiss (MissAbsent, MissUnresolved),
     OriginResult (
         OriginAbsent,
         OriginAuthorisationFailure,
+        OriginBudgetExceeded,
         OriginNameMismatch,
         OriginNotFound,
         OriginResolved,
         OriginUnresolved
     ),
-    fetchPrivateOrigin,
-    fetchPublicOrigin,
+    fetchPrivateOriginObserved,
+    fetchPublicOriginObserved,
     originManifest,
     originMiss,
     withPublicMetadata,
@@ -76,19 +82,20 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpVersionCacheRequest, mpVersionCacheResidentBytes))
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Package (sampleManifest, thingName)
+import Ecluse.Test.Package (leftpadName, sampleManifest, thingName)
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoFeatureRecord, cargoRead, cargoTestDiscovery, cargoTestName, cargoTestRecord, cargoTestVersion)
 import Ecluse.Test.Registry.Metadata.Fetch (heldBody)
 import Ecluse.Test.Server.Cache (cachedVersion, defaultCacheConfig, newLocalRetention, newMetadataCache)
 import Ecluse.Test.Server.Handler (testServeRuntime)
-import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps, serveDepsFor)
+import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps, serveDepsFor, withPrivateBaseUrl)
 import Ecluse.Test.Stub (Captured (capPath), stubBaseUrl, withRoutedStubIO)
 import Ecluse.Test.Support (expectRight)
 
 -- | Check origin outcomes, read charges and selected Cargo ownership.
 spec :: Spec
 spec = describe "originMiss -- the outcomes that leave nothing to serve" $ do
+    observedReadSpec
     retainedConsumerSpec
     fullReadSpec
     it "reports no miss for a document, an access refusal, or an identity refusal" $
@@ -230,8 +237,8 @@ runCargoFull runtime deps ticket public = do
     let binding = MountBinding ("cargo" :| []) (cargoRouter Nothing) cargoCredential deps Nothing
     runHandler logEnv mempty (RequestCtx runtime binding) $
         if public
-            then fetchPublicOrigin deps runtime ticket part cargoTestName
-            else fetchPrivateOrigin deps runtime part Nothing cargoTestName
+            then fetchPublicOriginObserved (const pass) deps runtime ticket part cargoTestName
+            else fetchPrivateOriginObserved (const pass) deps runtime part Nothing cargoTestName
 
 retainedConsumerSpec :: Spec
 retainedConsumerSpec = describe "successful selected consumers" $ do
@@ -481,3 +488,31 @@ seedRetainedCargo metrics cache source = do
         pure roots
     assertCargoRetained roots (cachedVersion noopMetricsPort cache source cargoTestName (cargoTestVersion "1.0.0"))
     pure (served, roots)
+
+observedReadSpec :: Spec
+observedReadSpec = describe "observed full origin reads" $ do
+    it "reports actual input bytes even when native parsing rejects the response" $ do
+        seen <- newIORef 0
+        result <- readObserved (\bytes -> modifyIORef' seen (+ bytes))
+        (case result of OriginUnresolved -> True; _ -> False) `shouldBe` True
+        readIORef seen `shouldReturn` BS.length malformed
+    it "retains a typed request-wide bound refusal instead of a transport outcome" $ do
+        let fault = BodyTooLarge (MetadataBodyLimit 12)
+        result <- readObserved (\_ -> throwIO (ObservedReadBoundExceeded fault))
+        (case result of OriginBudgetExceeded observed -> observed == fault; _ -> False) `shouldBe` True
+  where
+    malformed = "{invalid native metadata that must still consume its bounded response}"
+    readObserved observe = withSweeper $ \deadlines ->
+        testWithApplication (pure (\_ respond -> respond (responseLBS status200 [] (fromStrict malformed)))) $ \port -> do
+            runtime <- testServeRuntime deadlines noopMetricsPort
+            logEnv <- newTestLogEnv
+            let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) inertPackumentDeps
+                binding = MountBinding ("npm" :| []) npmRouter npmCredential deps Nothing
+            expectRight
+                =<< withMemoryEntry
+                    noopMetricsPort
+                    (srMemoryMeter runtime)
+                    ( \ticket -> do
+                        part <- newChargePart ticket
+                        runHandler logEnv mempty (RequestCtx runtime binding) (fetchPrivateOriginObserved observe deps runtime part Nothing leftpadName)
+                    )

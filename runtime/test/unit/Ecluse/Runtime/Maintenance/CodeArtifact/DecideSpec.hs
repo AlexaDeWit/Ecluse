@@ -93,6 +93,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Support (
     withCargoStore,
     withNpmStore,
     withPyPIStore,
+    withRubyStore,
  )
 import Ecluse.Runtime.Test.Aws (canonicalRequestMessage, plantedRefusal)
 import Ecluse.Test.Maintenance (withBucket)
@@ -106,6 +107,7 @@ spec = do
     requestSpec
     pypiRequestSpec
     cargoRequestSpec
+    rubyRequestSpec
     ceilingSpec
     deleteFoldSpec
     faultSpec
@@ -115,16 +117,17 @@ spec = do
 
 formatSpec :: Spec
 formatSpec = describe "codeArtifactFormat" $ do
-    it "names npm and pypi by CodeArtifact's own format tokens" $ do
+    it "names supported ecosystems by CodeArtifact's own format tokens" $ do
         fmap formatToken (codeArtifactFormat Npm) `shouldBe` Just "npm"
         fmap formatToken (codeArtifactFormat PyPI) `shouldBe` Just "pypi"
         fmap formatToken (codeArtifactFormat Cargo) `shouldBe` Just "cargo"
+        fmap formatToken (codeArtifactFormat RubyGems) `shouldBe` Just "ruby"
 
     it "keeps the ecosystem a format was built from" $
         fmap formatEcosystem (codeArtifactFormat PyPI) `shouldBe` Just PyPI
 
-    it "has no format for an ecosystem CodeArtifact does not serve" $
-        codeArtifactFormat RubyGems `shouldBe` Nothing
+    it "binds the native ruby format to RubyGems" $
+        fmap formatEcosystem (codeArtifactFormat RubyGems) `shouldBe` Just RubyGems
 
 codecSpec :: Spec
 codecSpec = describe "the npm codec" $ do
@@ -172,6 +175,16 @@ codecSpec = describe "the npm codec" $ do
         fmap (map renderPackageName) (packagesOfPage Cargo [named]) `shouldBe` Right ["Published_Name"]
         for_ [CA.newPackageSummary, named & CAL.packageSummary_namespace ?~ "scope", named & CAL.packageSummary_package ?~ "bad/name"] $ \invalid ->
             packagesOfPage Cargo [named, invalid] `shouldSatisfy` isLeft
+
+    it "retains RubyGems native spelling and rejects namespaces or malformed package names" $ do
+        fmap renderPackageName (packageNameFrom RubyGems Nothing "Published.Name_1") `shouldBe` Right "Published.Name_1"
+        for_ [Just "scope", Just " "] $ \namespace ->
+            packageNameFrom RubyGems namespace "valid-name" `shouldSatisfy` isLeft
+        for_ ["", "bad/name", "bad name"] $ \raw ->
+            packageNameFrom RubyGems Nothing raw `shouldSatisfy` isLeft
+        let named = CA.newPackageSummary & CAL.packageSummary_package ?~ "Published.Name_1"
+        for_ [CA.newPackageSummary, named & CAL.packageSummary_namespace ?~ "scope", named & CAL.packageSummary_package ?~ ""] $ \invalid ->
+            packagesOfPage RubyGems [named, invalid] `shouldSatisfy` isLeft
 
 presenceSpec :: Spec
 presenceSpec = describe "presenceOf" $ do
@@ -296,9 +309,15 @@ pypiRequestCases store = do
                        )
 
 cargoRequestSpec :: Spec
-cargoRequestSpec = describe "native Cargo control-plane requests" $ withCargoStore $ \store -> do
-    let name = mkPackageName Cargo Nothing "Published_Name"
-        nativeFormat = CA.PackageFormat' "cargo"
+cargoRequestSpec = describe "native Cargo control-plane requests" $ withCargoStore $ nativeRequestCases Cargo "cargo" "1.0.0-rc.1+build"
+
+rubyRequestSpec :: Spec
+rubyRequestSpec = describe "native RubyGems control-plane requests" $ withRubyStore $ nativeRequestCases RubyGems "ruby" "1.0.0.pre.1"
+
+nativeRequestCases :: Ecosystem -> Text -> Text -> CodeArtifactStore -> Spec
+nativeRequestCases ecosystem format version store = do
+    let name = mkPackageName ecosystem Nothing "Published_Name"
+        nativeFormat = CA.PackageFormat' format
     it "lists native packages and preserves the pagination token" $
         withBucket "p" $ \prefix -> do
             let request = listPackagesRequest store prefix (Just "page-2")
@@ -312,11 +331,11 @@ cargoRequestSpec = describe "native Cargo control-plane requests" $ withCargoSto
         request ^. CAL.listPackageVersions_namespace `shouldBe` Nothing
         request ^. CAL.listPackageVersions_nextToken `shouldBe` Just "versions-2"
     it "physically deletes exact raw versions under the native format" $ do
-        let request = deleteRequest store name [mkVersion Cargo "1.0.0-rc.1+build"]
+        let request = deleteRequest store name [mkVersion ecosystem version]
         request ^. CAL.deletePackageVersions_format `shouldBe` nativeFormat
         request ^. CAL.deletePackageVersions_package `shouldBe` "Published_Name"
         request ^. CAL.deletePackageVersions_namespace `shouldBe` Nothing
-        request ^. CAL.deletePackageVersions_versions `shouldBe` ["1.0.0-rc.1+build"]
+        request ^. CAL.deletePackageVersions_versions `shouldBe` [version]
         request ^. CAL.deletePackageVersions_expectedStatus `shouldBe` Just CA.PackageVersionStatus_Published
 
 ceilingSpec :: Spec

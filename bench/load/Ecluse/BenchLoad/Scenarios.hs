@@ -22,12 +22,13 @@ import Ecluse.BenchLoad.Harness (Scenario (scenarioInProcess, scenarioName, scen
 import Ecluse.BenchLoad.Npm (npmFixture)
 import Ecluse.BenchLoad.Pod (PodShape (Unlimited))
 import Ecluse.BenchLoad.PyPI (pypiFixture)
+import Ecluse.BenchLoad.RubyGems (rubyGemsFixture)
 import Ecluse.BenchLoad.Selection (scenarioKey, selectScenario)
 import Ecluse.Test.EcosystemBench (checkBenchmarkCoverage)
 
 -- | Each ecosystem's fixture, in report order.
 fixtures :: [UpstreamFixture]
-fixtures = [npmFixture, pypiFixture, cargoFixture]
+fixtures = [npmFixture, pypiFixture, cargoFixture, rubyGemsFixture]
 
 -- | Reject omitted load laws and ambiguous scenario identities before loading work.
 checkFixtureCoverage :: [UpstreamFixture] -> Either Text ()
@@ -73,6 +74,6 @@ qualificationScenarios :: UpstreamFixture -> [Scenario]
 qualificationScenarios fixture =
     [ maliciousQualification (fixtureEcosystem fixture) source scenario
     | scenario <- fixtureScenarios fixture
-    , scenarioName scenario `elem` ["merge-cold", "index-cold"]
+    , scenarioName scenario `elem` ["merge-cold", "index-cold", "info-cold"]
     , source <- [MaliciousHit, MaliciousMixedHeavy]
     ]

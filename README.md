@@ -6,7 +6,7 @@
 
 ![Écluse: control which packages reach your builds](docs/branding/banner.png)
 
-Écluse is a self-hosted package policy proxy for npm, PyPI, and Cargo. A central platform,
+Écluse is a self-hosted package policy proxy for npm, PyPI, Cargo, and RubyGems. A central platform,
 DevOps, or IT team runs it for the organisation's developer teams and CI.
 Clients use the company registry address while Écluse decides which public package versions
 they can install.

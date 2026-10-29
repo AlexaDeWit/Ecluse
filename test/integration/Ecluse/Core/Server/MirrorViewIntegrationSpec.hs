@@ -371,6 +371,7 @@ nativeWith companion bytes status numbers request respond = case dropWhileEnd T.
                 PyPIMirrorRead document -> encode (Object (KeyMap.insert "files" (fromListValue (map snd (simpleFiles document))) (simpleEnvelope document)))
                 NpmMirrorRead fields -> encode (Object fields)
                 CargoMirrorRead _ -> "unsupported fixture source"
+                RubyGemsMirrorRead _ -> "unsupported fixture source"
         respond (responseLBS status [("Content-Type", "application/vnd.pypi.simple.v1+json")] body)
     _ -> respond (responseLBS status [] bytes)
 

@@ -53,6 +53,7 @@ pypiPublishCodec =
                         pure $ do
                             metadata <- first (PublishSourceUnavailable . parseErrorMessage) (parseUploadMetadata (maxMetadataBytes limits) (inventoryPackage inventory) (inventoryVersion inventory) raw)
                             checkedMirrorUploadData inventory file bytes metadata
+        , pcMirrorCompanion = Nothing
         , pcNativeComplete = \_ _ _ -> False
         , pcTargetRead = staticRead pypiRead
         , pcTargetReadPermille = cfFullReadPermille pypiChargeFactors

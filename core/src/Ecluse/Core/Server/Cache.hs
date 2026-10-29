@@ -1,6 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+{-# LANGUAGE TupleSections #-}
 
 {- | One provider owns metadata retention. Local single-flight shares active requests.
 Public metadata and content-addressed responses follow the sharing policy in the web-layer architecture.
@@ -20,6 +21,7 @@ module Ecluse.Core.Server.Cache (
 
     -- * Resolution
     resolveMetadata,
+    resolveDirectory,
 
     -- * Single-version resolution
     resolveVersion,
@@ -29,9 +31,12 @@ module Ecluse.Core.Server.Cache (
     resolveAssembled,
 ) where
 
+import Data.ByteString qualified as BS
+
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Metadata (MetadataError, VersionRead)
-import Ecluse.Core.Server.Cache.Provider (CacheProvider, providerAssembled, providerFull, providerVersion)
+import Ecluse.Core.Registry.RubyGems.Directory (GemDirectory)
+import Ecluse.Core.Server.Cache.Provider (CacheProvider, providerAssembled, providerDirectory, providerFull, providerVersion)
 import Ecluse.Core.Server.Cache.Store (
     CacheOccupancy (..),
     PreparedStore,
@@ -48,7 +53,8 @@ import Ecluse.Core.Version (Version)
 
 -- | One provider supplies every retention capability beside process-local request coalescing.
 data MetadataCache = MetadataCache
-    { mcFull :: SingleFlight MetadataError CacheKey CacheEntry
+    { mcDirectory :: SingleFlight MetadataError Text (GemDirectory, Int)
+    , mcFull :: SingleFlight MetadataError CacheKey CacheEntry
     -- ^ Full fetches partition by source, ecosystem, and package without local retention.
     , mcVersion :: SingleFlight MetadataError CacheKey VersionRead
     , mcAssembled :: SingleFlight Void CacheKey ByteString
@@ -58,7 +64,8 @@ data MetadataCache = MetadataCache
 newMetadataCacheWithProvider :: CacheProvider -> IO MetadataCache
 newMetadataCacheWithProvider provider =
     MetadataCache
-        <$> newSingleFlightWithBackend (providerFull provider)
+        <$> newSingleFlightWithBackend (providerDirectory provider)
+        <*> newSingleFlightWithBackend (providerFull provider)
         <*> newSingleFlightWithBackend (providerVersion provider)
         <*> newSingleFlightWithBackend (providerAssembled provider)
 
@@ -103,3 +110,15 @@ recordFullOccupancy :: MetricsPort -> CacheOccupancy -> IO ()
 recordFullOccupancy metrics occ = do
     mpCacheEntries metrics (occEntries occ)
     mpCacheResidentBytes metrics (occBytes occ)
+
+-- | Refresh one public directory per origin and share active acquisitions.
+resolveDirectory :: MetadataCache -> Text -> IO (Either MetadataError GemDirectory) -> IO (Either MetadataError GemDirectory)
+resolveDirectory cache source fetch =
+    fmap fst
+        <$> resolveSingleFlight
+            (const pass)
+            (const pass)
+            pass
+            (mcDirectory cache)
+            source
+            (fmap (fmap (,BS.length (encodeUtf8 source) + 256)) fetch)

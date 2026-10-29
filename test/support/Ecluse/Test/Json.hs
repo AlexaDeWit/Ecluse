@@ -2,15 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Hedgehog generators for arbitrary JSON documents, and the readers a spec navigates a
-served one with.
-
-Every entry point that reads a registry document is total over the generators, so a suite
-fuzzing one shares them with every other. The caller supplies the object-key pool, which is
-the only part that differs between documents. The readers answer an absent or wrongly shaped
-step with the empty value of their result, so a malformed body surfaces as an assertion
-mismatch rather than a crash.
--}
+-- | JSON generators, readers and field updates for fixture documents.
 module Ecluse.Test.Json (
     -- * Generating a document
     genValue,
@@ -28,6 +20,9 @@ module Ecluse.Test.Json (
     textAt,
     textAtPath,
     encodeStrict,
+
+    -- * Updating a document
+    changeAt,
 ) where
 
 import Data.Aeson (Object, Value (Array, Bool, Null, Number, Object, String), encode)
@@ -120,6 +115,16 @@ keysAt key = map Key.toText . KeyMap.keys . objectAt key
 -- | A document as the strict bytes a decoder reads.
 encodeStrict :: Value -> ByteString
 encodeStrict = LBS.toStrict . encode
+
+-- | Change a required field path, applying the same path to each array entry.
+changeAt :: [Key] -> (Value -> IO Value) -> Value -> IO Value
+changeAt [] change value = change value
+changeAt path change (Array values) = Array <$> traverse (changeAt path change) values
+changeAt (key : rest) change (Object fields) = do
+    original <- maybe (fail ("missing fixture field " <> show key)) pure (KeyMap.lookup key fields)
+    changed <- changeAt rest change original
+    pure (Object (KeyMap.insert key changed fields))
+changeAt _ _ _ = fail "unexpected fixture structure"
 
 -- | The string at one key, 'Nothing' when it is absent or holds another shape.
 textAt :: Key -> Object -> Maybe Text

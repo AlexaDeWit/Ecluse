@@ -39,5 +39,19 @@ spec = describe "independent conditions" $ do
                               | package <- ["tokio", "windows", "aws-sdk-ec2"]
                               , leg <- ["full", "singleVersion", "fullShippedAdvisories", "fullAllAdvisoryRules"]
                               ]
+    it "requires all native RubyGems captures and allocation legs independently" $ do
+        let conditions = Map.fromList [("compiler", "declared"), ("optimisation", "-O1"), ("profiling", "off"), ("mode", "captures"), ("passes", "5")]
+        obligation <- expectRight (compileObligation "allocation" "ecosystem-rubygems" conditions)
+        poRows obligation
+            `shouldMatchList` [ "rubygems/" <> package <> "/" <> leg
+                              | package <- ["rails", "nokogiri", "aws-sdk-ec2"]
+                              , leg <- ["full", "singleVersion", "fullShippedAdvisories", "fullAllAdvisoryRules"]
+                              ]
+    it "requires native quick-spec and whole-version worker observations" $ do
+        let conditions = Map.fromList [("compiler", "declared"), ("optimisation", "-O1"), ("profiling", "off"), ("podShape", "unlimited"), ("durationSeconds", "30"), ("concurrency", "100"), ("serveMaxInFlight", "automatic"), ("affinity", "taskset -c 0 oha")]
+        obligation <- expectRight (compileObligation "load" "ecosystem-rubygems" conditions)
+        for_ ["quick-gemspec", "worker-mirroring"] $ \scenario ->
+            for_ ["loaded", "concurrencyOne"] $ \whichPass ->
+                poRows obligation `shouldSatisfy` elem ("rubygems/" <> scenario <> "/" <> whichPass)
     it "rejects a missing measurement declaration" $
         compileObligation "allocation" "ecosystem-npm" Map.empty `shouldSatisfy` isLeft

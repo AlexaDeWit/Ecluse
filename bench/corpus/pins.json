@@ -1,5 +1,5 @@
 {
-  "_note": "Complete npm packuments, PyPI PEP 691 Simple JSON bodies and Cargo sparse LF records, preserved byte for byte including prereleases and registry metadata. pins, pypiPins and cargoPins identify workloads, not capture cutoffs. captures records each source, actual Content-Type, identity Content-Encoding, byte size, SHA-256 digest and UTC capture time. Capture paths are relative to this catalogue. Identity encoding makes these JSON entity bytes match the decompressed input measured by boundedRead, not compressed transport bytes. task gen-bench-corpus deliberately replaces snapshots. Committed bytes are the measurement authority. BENCH_CORPUS_VERIFY=1 checks them offline. Simple HTML and legacy PyPI project JSON are not benchmark inputs. smokeNames supplies live version-oracle names. Renovate does not update this catalogue.",
+  "_note": "Complete npm packuments, PyPI PEP 691 Simple JSON bodies and Cargo sparse LF records and RubyGems named-gem Compact Index bodies, preserved byte for byte including prereleases and registry metadata. pins, pypiPins, cargoPins and rubygemsPins identify workloads, not capture cutoffs. captures records each source, actual Content-Type, identity Content-Encoding, byte size, SHA-256 digest and UTC capture time. Capture paths are relative to this catalogue. Identity encoding makes these native entity bytes match the decompressed input measured by boundedRead, not compressed transport bytes. task gen-bench-corpus deliberately replaces snapshots. Committed bytes are the measurement authority. BENCH_CORPUS_VERIFY=1 checks them offline. Simple HTML and legacy PyPI project JSON are not benchmark inputs. smokeNames supplies live version-oracle names. Renovate does not update this catalogue.",
   "pins": {
     "lodash": "4.18.1",
     "request": "2.88.2",
@@ -184,6 +184,35 @@
         "bytes": 1427352,
         "sha256": "9fb18c468017f34e2ffe2882c82a60dc62426a02882b32530aea80ea2092e4cd",
         "capturedAt": "2026-10-25T18:19:29.316987Z"
+      }
+    },
+    "rubygems": {
+      "rails": {
+        "path": "rubygems/rails.info",
+        "source": "https://rubygems.org/info/rails",
+        "mediaType": "text/plain; charset=utf-8",
+        "contentEncoding": "identity",
+        "bytes": 186441,
+        "sha256": "9992153511c6d8b95f05ae7df9d38ba0e4d3338161dc81c9193556886e9f1545",
+        "capturedAt": "2026-10-27T13:18:26.745Z"
+      },
+      "nokogiri": {
+        "path": "rubygems/nokogiri.info",
+        "source": "https://rubygems.org/info/nokogiri",
+        "mediaType": "text/plain; charset=utf-8",
+        "contentEncoding": "identity",
+        "bytes": 186107,
+        "sha256": "45f78ecea69f1bca1c1d3a3d91608dbe7303bbcf11972b8a0864064bdda79078",
+        "capturedAt": "2026-10-27T13:18:26.797Z"
+      },
+      "aws-sdk-ec2": {
+        "path": "rubygems/aws-sdk-ec2.info",
+        "source": "https://rubygems.org/info/aws-sdk-ec2",
+        "mediaType": "text/plain; charset=utf-8",
+        "contentEncoding": "identity",
+        "bytes": 112670,
+        "sha256": "de9f4e3a9058fd4c70ba20677cc51a0b46e6848c0eccf9c4f92683b98d20b7f4",
+        "capturedAt": "2026-10-27T13:18:26.826Z"
       }
     }
   },
@@ -486,12 +515,41 @@
           "licence": "CC0-1.0",
           "licenceSource": "https://github.com/RustSec/advisory-db/blob/main/LICENSE.txt"
         }
+      },
+      "rubygems": {
+        "GHSA-9822-6m93-xqf4": {
+          "path": "advisories/rubygems/GHSA-9822-6m93-xqf4.json",
+          "source": "https://api.osv.dev/v1/vulns/GHSA-9822-6m93-xqf4",
+          "capturedAt": "2026-10-27T13:19:57.267Z",
+          "bytes": 5042,
+          "sha256": "400c3f73c44039ab4837bf92b323d4ad61a183f78587e939226c1cab00916030",
+          "licence": "CC-BY-4.0",
+          "licenceSource": "https://github.com/github/advisory-database/blob/main/LICENSE.md"
+        },
+        "GHSA-9p3v-wf2w-v29c": {
+          "path": "advisories/rubygems/GHSA-9p3v-wf2w-v29c.json",
+          "source": "https://api.osv.dev/v1/vulns/GHSA-9p3v-wf2w-v29c",
+          "capturedAt": "2026-10-27T13:19:57.415Z",
+          "bytes": 3331,
+          "sha256": "b602b3ee4059b9f53230ff705ae2776346564aa84f962b61bdcbf95a5e707310",
+          "licence": "CC-BY-4.0",
+          "licenceSource": "https://github.com/github/advisory-database/blob/main/LICENSE.md"
+        },
+        "GHSA-9wrq-xvmp-xjc8": {
+          "path": "advisories/rubygems/GHSA-9wrq-xvmp-xjc8.json",
+          "source": "https://api.osv.dev/v1/vulns/GHSA-9wrq-xvmp-xjc8",
+          "capturedAt": "2026-10-27T13:19:57.504Z",
+          "bytes": 2128,
+          "sha256": "c5c98b50712d400907dae8f222dbccafe3378423b7febd71e1abea7ef6db61a8",
+          "licence": "CC-BY-4.0",
+          "licenceSource": "https://github.com/github/advisory-database/blob/main/LICENSE.md"
+        }
       }
     },
     "epss": {
       "path": "advisories/epss.csv",
-      "bytes": 1276,
-      "sha256": "3cf76fb34ce24fb5efa60670fdb8a30c0b6dc250bb21c7ce20c4d338f4b6f71b",
+      "bytes": 1315,
+      "sha256": "ab424c95e84680d459920a95f0c26c799aead563402b7e3f6998d70cc013b7a7",
       "source": "https://epss.empiricalsecurity.com/epss_scores-2026-09-27.csv.gz",
       "capturedAt": "2026-09-27T18:03:19Z",
       "additionalRows": [
@@ -499,6 +557,11 @@
           "source": "https://api.first.org/data/v1/epss?cve=CVE-2021-45710&date=2026-09-27",
           "capturedAt": "2026-10-25T18:24:14.837318Z",
           "cve": "CVE-2021-45710"
+        },
+        {
+          "source": "https://api.first.org/data/v1/epss?cve=CVE-2024-26143&date=2026-09-27",
+          "capturedAt": "2026-10-27T14:04:32.965Z",
+          "cve": "CVE-2024-26143"
         }
       ]
     }
@@ -507,5 +570,10 @@
     "tokio": "1.53.1",
     "windows": "0.62.2",
     "aws-sdk-ec2": "1.243.0"
+  },
+  "rubygemsPins": {
+    "rails": "8.1.4",
+    "nokogiri": "1.19.4",
+    "aws-sdk-ec2": "1.657.0"
   }
 }

@@ -11,6 +11,8 @@ module Ecluse.Test.Contract.UnitCatalogue (
     unitCoverageSpec,
     metadataFetchLaws,
     metadataProjectionLaws,
+    metadataFetchLawsFor,
+    metadataProjectionLawsFor,
 ) where
 
 import Data.Universe.Class (Universe (universe))
@@ -28,7 +30,7 @@ coreUnitCatalogue groups =
     Catalogue
         { catalogueProductionEcosystems = map ecosystemName (filter (isJust . adapterFor) universe)
         , catalogueProfiles =
-            [ Profile "unit/metadata" ["npm", "pypi", "cargo"] [] ["metadata-read", "metadata-projection"]
+            [ Profile "unit/metadata" ["npm", "pypi", "cargo", "rubygems"] [] ["metadata-read", "metadata-projection"]
             , Profile "unit/memory" [] ["memory"] ["payload", "ephemeral-delivery"]
             , Profile "unit/static" [] ["static"] ["token"]
             , Profile "unit/protocol" ["npm"] ["verdaccio"] protocolCapabilities
@@ -39,9 +41,10 @@ coreUnitCatalogue groups =
                 "metadata-fetch"
                 "unit/metadata"
                 ["metadata-read"]
-                (["core.metadata.fetch." <> ecosystem <> "." <> suffix | ecosystem <- ["npm", "pypi", "cargo"], suffix <- metadataFetchLaws] <> ["core.metadata.fetch.cargo.record-framing"])
+                (["core.metadata.fetch." <> ecosystem <> "." <> suffix | ecosystem <- ["npm", "pypi", "cargo", "rubygems"], suffix <- metadataFetchLawsFor ecosystem] <> ["core.metadata.fetch.cargo.record-framing", "core.metadata.fetch.rubygems.record-framing"])
             , unitObligation "core/metadata/projection/npm" "metadata-projection" "unit/metadata" ["metadata-projection"] (projectionCases "npm")
             , unitObligation "core/metadata/projection/cargo" "metadata-projection" "unit/metadata" ["metadata-projection"] (projectionCases "cargo" <> map ("core.metadata.projection.cargo." <>) ["record-framing", "invalid-evidence-control", "record-siblings"])
+            , unitObligation "core/metadata/projection/rubygems" "metadata-projection" "unit/metadata" ["metadata-projection"] (projectionCases "rubygems" <> map ("core.metadata.projection.rubygems." <>) ["record-framing", "invalid-evidence-control"])
             , unitObligation "core/metadata/projection/pypi" "metadata-projection" "unit/metadata" ["metadata-projection"] (projectionCases "pypi")
             , unitObligation
                 "core/queue/memory"
@@ -113,7 +116,7 @@ projectionCases :: Text -> [Text]
 projectionCases ecosystem =
     map
         (("core.metadata.projection." <> ecosystem <> ".") <>)
-        metadataProjectionLaws
+        (metadataProjectionLawsFor ecosystem)
 
 -- | Projection requirements stay independent of each ecosystem's registered examples.
 metadataProjectionLaws :: [Text]
@@ -178,3 +181,17 @@ unitCoverageSpec inspect = do
     removeCapability identifier capability profile
         | profileId profile == identifier = profile{profileCapabilities = filter (/= capability) (profileCapabilities profile)}
         | otherwise = profile
+
+-- | Caller-bound formats owe native name and origin evidence instead of absent wire identity fields.
+metadataProjectionLawsFor :: Text -> [Text]
+metadataProjectionLawsFor "rubygems" = map replace metadataProjectionLaws
+  where
+    replace "missing-name" = "name-binding"
+    replace "name-mismatch" = "origin-binding"
+    replace law = law
+metadataProjectionLawsFor _ = metadataProjectionLaws
+
+-- | The request origin supplies the identity boundary for named Compact Index reads.
+metadataFetchLawsFor :: Text -> [Text]
+metadataFetchLawsFor "rubygems" = map (\law -> if law == "held-name-mismatch" then "held-origin-mismatch" else law) metadataFetchLaws
+metadataFetchLawsFor _ = metadataFetchLaws

@@ -24,11 +24,15 @@ extra-source-files:
   bench/corpus/advisories/npm/*.json
   bench/corpus/advisories/pypi/*.json
   bench/corpus/advisories/cargo/*.json
+  bench/corpus/advisories/rubygems/*.json
   bench/corpus/npm/*.json
   bench/corpus/pypi/*.json
   bench/corpus/cargo/*.index.ndjson
+  bench/corpus/rubygems/*.info
+  bench/corpus/rubygems/README.md
   bench/corpus/pins.json
   bench/load/floors.json
+  bench/load/rubygems-calibration.json
   core/test/unit/fixtures/npm/*.json
   core/test/unit/fixtures/json-stream/*.json
   core/test/unit/fixtures/json-stream/README.md
@@ -44,6 +48,30 @@ extra-source-files:
   test/oracles/cargo-semver/Cargo.toml
   test/oracles/cargo-semver/Cargo.lock
   test/oracles/cargo-semver/src/main.rs
+  test/fixtures/rubygems/*.rb
+  test/fixtures/rubygems/*.md
+  test/fixtures/rubygems/*.json
+  test/fixtures/rubygems/*.yaml
+  test/fixtures/rubygems/legacy/*.gemspec.rz
+  test/fixtures/rubygems/*.marshal
+  test/fixtures/rubygems/coordinate-ambiguity/*.json
+  test/fixtures/rubygems/coordinate-ambiguity/*.marshal
+  test/fixtures/rubygems/coordinate-ambiguity/info/acme-1
+  test/fixtures/rubygems/coordinate-ambiguity/gems/*.gem
+  test/fixtures/rubygems/coordinate-ambiguity/quick/Marshal.4.8/*.gemspec.rz
+  test/fixtures/rubygems/info/ecluse-fixture-advisory
+  test/fixtures/rubygems/info/ecluse-fixture-firstparty
+  test/fixtures/rubygems/info/ecluse-fixture-future
+  test/fixtures/rubygems/info/ecluse-fixture-late
+  test/fixtures/rubygems/info/ecluse-fixture-leaf
+  test/fixtures/rubygems/info/ecluse-fixture-missing
+  test/fixtures/rubygems/info/ecluse-fixture-native
+  test/fixtures/rubygems/info/ecluse-fixture-platform
+  test/fixtures/rubygems/info/ecluse-fixture-readmitted
+  test/fixtures/rubygems/info/ecluse-fixture-root
+  test/fixtures/rubygems/info/ecluse-fixture-sentinel
+  test/fixtures/rubygems/gems/*.gem
+  test/fixtures/rubygems/quick/Marshal.4.8/*.gemspec.rz
   bench/corpus/cargo/README.md
   test/fixtures/osv/v1/*.json
   test/fixtures/osv/v2/*.json
@@ -300,6 +328,32 @@ library ecluse-core
     Ecluse.Core.Registry.Cargo.Reader
     Ecluse.Core.Registry.Cargo.Projection
     Ecluse.Core.Registry.Cargo.Document
+    Ecluse.Core.Registry.RubyGems.FirstParty
+    Ecluse.Core.Registry.RubyGems.Project
+    Ecluse.Core.Registry.RubyGems.Document
+    Ecluse.Core.Registry.RubyGems.Directory
+    Ecluse.Core.Registry.RubyGems.Credential
+    Ecluse.Core.Registry.RubyGems.Adapter
+    Ecluse.Core.Registry.RubyGems.Handlers.Budget
+    Ecluse.Core.Registry.RubyGems.Handlers.Coordinate
+    Ecluse.Core.Registry.RubyGems.Handlers.CompactIndex
+    Ecluse.Core.Registry.RubyGems.Mirror
+    Ecluse.Core.Registry.RubyGems.Publish
+    Ecluse.Core.Registry.RubyGems.Route
+    Ecluse.Core.Registry.RubyGems.Route.Response
+    Ecluse.Core.Registry.RubyGems.Serving
+    Ecluse.Core.Registry.RubyGems.SourceState
+    Ecluse.Core.Registry.RubyGems.Archive
+    Ecluse.Core.Registry.RubyGems.Archive.Metadata
+    Ecluse.Core.Registry.RubyGems.Archive.Yaml
+    Ecluse.Core.Registry.Metadata.RecordStream
+    Ecluse.Core.Registry.RubyGems.CompactSpec
+    Ecluse.Core.Registry.RubyGems.Marshal
+    Ecluse.Core.Registry.RubyGems.Metadata
+    Ecluse.Core.Registry.RubyGems.Projection
+    Ecluse.Core.Registry.RubyGems.Reader
+    Ecluse.Core.Registry.RubyGems.Request
+    Ecluse.Core.Registry.RubyGems.Wire
     Ecluse.Core.Registry.Cargo.Metadata
     Ecluse.Core.Registry.Cargo.Serving
     Ecluse.Core.Registry.Cargo.Execution
@@ -406,7 +460,6 @@ library ecluse-core
     Ecluse.Core.Wire
     Ecluse.Core.Worker
       Ecluse.Core.Worker.Fetch
-      Ecluse.Core.Worker.Integrity
       Ecluse.Core.Worker.Job
       Ecluse.Core.Worker.Managed
       Ecluse.Core.Worker.Lease
@@ -463,6 +516,7 @@ library ecluse-core
     , clock                 ^>=0.8
     , containers            ^>=0.7
     , conduit               ^>=1.3
+    , libyaml               ^>=0.1.4
     , directory             ^>=1.3
     , filepath              ^>=1.4 || ^>=1.5
     , crypton               >=2.2.1 && <2.3
@@ -902,6 +956,11 @@ library ecluse-test-support
     Ecluse.Test.Registry.PyPI.Streaming
     Ecluse.Test.Registry.PyPI.Wire
     Ecluse.Test.Registry.RubyGems.Wire
+    Ecluse.Test.Registry.RubyGems.Generated
+    Ecluse.Test.Registry.RubyGems.Reference
+    Ecluse.Test.Mirror.RubyGems
+    Ecluse.Test.Corpus.RubyGems
+    Ecluse.Test.Registry.RubyGems.Fixtures
     Ecluse.Test.RegistryCapture
     Ecluse.Test.Rules
     Ecluse.Test.Security.Limits
@@ -1116,9 +1175,11 @@ test-suite ecluse-core-unit
     SpecHook
     Ecluse.Core.Registry.NpmSmokeSpec
     Ecluse.Core.Registry.PyPISmokeSpec
+    Ecluse.Core.Registry.RubyGemsSmokeSpec
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
     Ecluse.Core.Registry.Cargo.ReaderResidencySpec
+    Ecluse.Core.Registry.RubyGems.ReaderResidencySpec
     Ecluse.Core.Registry.Json.WalkProbe
     Ecluse.Core.Server.MemoryModel.HeapSample
     Ecluse.Core.StreamBench.Sink
@@ -1151,6 +1212,7 @@ test-suite ecluse-core-unit
     Ecluse.Test.Contract.MeasurementSpec
     Ecluse.Test.Contract.RetentionSpec
     Ecluse.Test.CorpusSpec
+    Ecluse.Test.Corpus.OutputsSpec
     Ecluse.Test.Corpus.CargoSpec
     Ecluse.Test.EcosystemBenchSpec
     Ecluse.Test.EnvSpec
@@ -1279,6 +1341,33 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.PendingSidecarSpec
     Ecluse.Core.Registry.PyPI.ProjectSpec
     Ecluse.Core.Registry.Cargo.ProjectSpec
+    Ecluse.Core.Registry.RubyGems.FirstPartySpec
+    Ecluse.Core.Registry.RubyGems.ProjectSpec
+    Ecluse.Core.Registry.RubyGems.CredentialSpec
+    Ecluse.Core.Registry.RubyGems.StreamingSpec
+    Ecluse.Test.Server.CacheSpec
+    Ecluse.Core.Registry.RubyGems.Handlers.BudgetSpec
+    Ecluse.Core.Registry.RubyGems.HandlersSpec
+    Ecluse.Core.Registry.RubyGems.MetadataSpec
+    Ecluse.Core.Registry.RubyGems.MirrorSpec
+    Ecluse.Core.Registry.RubyGems.PublishSpec
+    Ecluse.Core.Registry.RubyGems.RequestSpec
+    Ecluse.Core.Registry.RubyGems.RouteSpec
+    Ecluse.Core.Registry.RubyGems.ServingSpec
+    Ecluse.Core.Registry.RubyGems.SourceStateSpec
+    Ecluse.Core.Server.Pipeline.PublishSpec
+    Ecluse.Test.Corpus.RubyGemsSpec
+    Ecluse.Core.Registry.RubyGems.Archive.MetadataSpec
+    Ecluse.Core.Registry.RubyGems.Archive.YamlSpec
+    Ecluse.Core.Registry.RubyGems.ArchiveSpec
+    Ecluse.Core.Registry.Metadata.RecordStreamSpec
+    Ecluse.Core.Registry.RubyGems.CompactSpecSpec
+    Ecluse.Core.Registry.RubyGems.DocumentSpec
+    Ecluse.Core.Registry.RubyGems.DirectorySpec
+    Ecluse.Core.Registry.RubyGems.MarshalSpec
+    Ecluse.Core.Registry.RubyGems.ProjectionSpec
+    Ecluse.Core.Registry.RubyGems.ReaderSpec
+    Ecluse.Core.Registry.RubyGems.WireSpec
     Ecluse.Core.Registry.Cargo.FirstPartySpec
     Ecluse.Core.Registry.Cargo.AdapterSpec
     Ecluse.Core.Registry.Cargo.CredentialSpec
@@ -1386,7 +1475,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.VersionSpec
     Ecluse.Core.WireSpec
     Ecluse.Core.Worker.FetchSpec
-    Ecluse.Core.Worker.IntegritySpec
     Ecluse.Core.Worker.JobSpec
     Ecluse.Core.Worker.ManagedSpec
     Ecluse.Core.Worker.LeaseSpec
@@ -1419,6 +1507,7 @@ test-suite ecluse-core-unit
   autogen-modules:    Paths_ecluse
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
+    , ghc-heap          ^>=9.10
     , tar ^>=0.6.4
     , bzlib ^>=0.5
     , lzma ==0.0.1.1
@@ -1518,6 +1607,14 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.Worker
     Ecluse.BenchLoad.PyPI.Worker
     Ecluse.BenchLoad.Cargo
+    Ecluse.BenchLoad.RubyGems
+    Ecluse.BenchLoad.RubyGems.Directory
+    Ecluse.BenchLoad.RubyGems.Worker
+    Ecluse.BenchLoad.RubyGems.WorkerFixture
+    Ecluse.BenchLoad.RubyGems.WorkerFixtureSpec
+    Ecluse.BenchLoad.RubyGemsSpec
+    Ecluse.BenchLoad.RubyGems.DirectorySpec
+    Ecluse.BenchLoad.OhaSpec
     Ecluse.BenchLoad.Cargo.CopyState
     Ecluse.BenchLoad.Cargo.Worker
     Ecluse.BenchLoad.Cargo.WorkerFixture
@@ -1818,6 +1915,7 @@ test-suite ecluse-integration
     Ecluse.Core.Security.EgressIntegrationSpec
     Ecluse.Core.Server.Pipeline.OriginIntegrationSpec
     Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec
+    Ecluse.Core.Registry.RubyGems.AdapterIntegrationSpec
     Ecluse.Core.Registry.Cargo.AdapterIntegrationSpec
     Ecluse.Core.Server.MirrorViewIntegrationSpec
     Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec
@@ -1895,6 +1993,8 @@ test-suite ecluse-residency
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
     Ecluse.Core.Registry.Cargo.ReaderResidencySpec
+    Ecluse.Core.Registry.RubyGems.ReaderResidencySpec
+    Ecluse.Core.Registry.RubyGems.ServingResidencySpec
     Ecluse.Core.Registry.PyPI.ArchiveResidencySpec
     Ecluse.Core.Server.MemoryModel.Calibration
     Ecluse.Core.Server.MemoryModel.CalibrationResidencySpec
@@ -1905,6 +2005,8 @@ test-suite ecluse-residency
     Ecluse.Core.Server.MemoryModelResidencySpec
     Ecluse.Core.Server.MetadataGzipResidencySpec
     Ecluse.Core.Server.MirrorViewResidencySpec
+    Ecluse.Core.Server.MirrorView.CompanionProbe
+    Ecluse.Test.Mirror.RubyGems.Residency
     Ecluse.Core.Mirror.State.WeightResidencySpec
     Ecluse.Core.Server.Pipeline.PackumentResidencySpec
     Ecluse.Core.Server.Pipeline.TarballResidencySpec
@@ -1938,6 +2040,7 @@ test-suite ecluse-residency
     , katip            ^>=0.8.8
     , ram              ^>=0.22
     , process          ^>=1.6
+    , stm              ^>=2.5
     , text             ^>=2.1
     , time             ^>=1.12
     , unliftio         ^>=0.2.25
@@ -1959,6 +2062,7 @@ test-suite ecluse-smoke
   other-modules:
     Ecluse.Core.Registry.NpmSmokeSpec
     Ecluse.Core.Registry.PyPISmokeSpec
+    Ecluse.Core.Registry.RubyGemsSmokeSpec
     Ecluse.Core.Security.HostSmokeSpec
     Ecluse.Core.VersionSmokeSpec
     Ecluse.PilotSmokeSpec
@@ -2004,6 +2108,27 @@ library ecluse-e2e-test-support
     Ecluse.E2E.Harness.CargoDredger
     Ecluse.E2E.Harness.CargoDredger.Client
     Ecluse.E2E.Cargo.InstallE2ESpec
+    Ecluse.E2E.Fixtures.RubyGems
+    Ecluse.E2E.Harness.RubyGems
+    Ecluse.E2E.Harness.RubyGemsGateway
+    Ecluse.E2E.Harness.RubyGemsRegistry
+    Ecluse.E2E.RubyGems.InstallE2ESpec
+    Ecluse.E2E.Drivers.RubyGems
+    Ecluse.E2E.Harness.MirrorState
+    Ecluse.E2E.RubyGems.MirrorInstallE2ESpec
+    Ecluse.E2E.RubyGems.MirrorProofE2ESpec
+    Ecluse.E2E.RubyGems.Profiles
+    Ecluse.E2E.RubyGems.RegistrationE2ESpec
+    Ecluse.E2E.RubyGems.RelayE2ESpec
+    Ecluse.E2E.RubyGems.TelemetryE2ESpec
+    Ecluse.E2E.Suites.RubyGems
+    Ecluse.E2E.Harness.RubyGemsCodeArtifact
+    Ecluse.E2E.Harness.RubyGemsCodeArtifact.Client
+    Ecluse.E2E.Harness.RubyGemsCodeArtifact.Fixtures
+    Ecluse.E2E.RubyGems.AdvisoriesE2ESpec
+    Ecluse.E2E.RubyGems.DredgerE2ESpec
+    Ecluse.E2E.RubyGems.PublishE2ESpec
+    Ecluse.E2E.RubyGems.NativeE2ESpec
     Ecluse.E2E.Cargo.MirrorInstallE2ESpec
     Ecluse.E2E.Cargo.MirrorProofE2ESpec
     Ecluse.E2E.Cargo.PublishE2ESpec
@@ -2085,6 +2210,7 @@ library ecluse-e2e-test-support
     , http-types     ^>=0.12
     , network        ^>=3.2
     , random         ^>=1.2
+    , ram            ^>=0.22
     , sqlite-simple  ^>=0.4
     , unix           ^>=2.8
     , text           ^>=2.1
@@ -2124,6 +2250,19 @@ test-suite ecluse-e2e-cargo
   type:            exitcode-stdio-1.0
   main-is:         Main.hs
   hs-source-dirs:   test/e2e-cargo
+  build-depends:
+    , ecluse:ecluse-e2e-test-support
+    , ecluse:ecluse-test-contracts
+
+
+test-suite ecluse-e2e-rubygems
+  import:          shared
+  ghc-options:     -threaded
+  if !flag(dev-http-egress)
+    buildable: False
+  type:            exitcode-stdio-1.0
+  main-is:         Main.hs
+  hs-source-dirs:   test/e2e-rubygems
   build-depends:
     , ecluse:ecluse-e2e-test-support
     , ecluse:ecluse-test-contracts
@@ -2248,6 +2387,20 @@ executable ecluse-completion-cargo-audit
     buildable: False
   main-is:         Main.hs
   hs-source-dirs:   test/tools/completion-cargo-audit test/tools/completion-support
+  other-modules:   Ecluse.Test.Contract.CompletionAudit
+  build-depends:
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-runtime-test-support
+    , ecluse:ecluse-e2e-test-support
+    , text           ^>=2.1
+
+
+executable ecluse-completion-rubygems-audit
+  import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
+  main-is:         Main.hs
+  hs-source-dirs:   test/tools/completion-rubygems-audit test/tools/completion-support
   other-modules:   Ecluse.Test.Contract.CompletionAudit
   build-depends:
     , ecluse:ecluse-test-contracts
@@ -2385,6 +2538,10 @@ executable bench-load
     Ecluse.BenchLoad.Worker
     Ecluse.BenchLoad.PyPI.Worker
     Ecluse.BenchLoad.Cargo
+    Ecluse.BenchLoad.RubyGems
+    Ecluse.BenchLoad.RubyGems.Directory
+    Ecluse.BenchLoad.RubyGems.Worker
+    Ecluse.BenchLoad.RubyGems.WorkerFixture
     Ecluse.BenchLoad.Cargo.CopyState
     Ecluse.BenchLoad.Cargo.Worker
     Ecluse.BenchLoad.Cargo.WorkerFixture
@@ -2405,6 +2562,7 @@ executable bench-load
     Ecluse.BenchLoad.PrivateCopy
 
   build-depends:
+    , temporary         ^>=1.3
     , zlib ^>=0.7
     , wai-extra ^>=3.1
     , amazonka ^>=2.0

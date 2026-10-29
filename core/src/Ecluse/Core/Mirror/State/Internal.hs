@@ -41,6 +41,8 @@ module Ecluse.Core.Mirror.State.Internal (
     MirrorCompletion (..),
     MirrorCompletionFault (..),
     declaredCompanion,
+    declaredSourceCompanion,
+    verifySourceCompanionBytes,
 ) where
 
 import Data.Aeson (Object)
@@ -53,12 +55,12 @@ import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Hash (sha256Hex)
+import Ecluse.Core.Package.Integrity (IntegrityResult (..), verifyIntegrity)
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorFragment)
 import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Security (LimitError, Limits (..), checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Core.Worker.Integrity (IntegrityResult (..), verifyIntegrity)
 
 -- | A digest of the configured target, never a credential or caller authorisation.
 newtype StateTarget = StateTarget Text
@@ -178,6 +180,7 @@ extendProjectRecord limits target inventory previous = do
             PyPIMirrorRead document -> simpleEnvelope document
             NpmMirrorRead _ -> mempty
             CargoMirrorRead _ -> mempty
+            RubyGemsMirrorRead _ -> mempty
         result = record{projectEnvelope = envelope, projectVersions = Map.insert key updated (recordVersions record)}
     first StateBound (checkVersionCountOf limits (Map.size (recordVersions result)))
     first StateBound (checkArtifactCount limits (sum (map (Map.size . versionFiles) (Map.elems (recordVersions result)))))
@@ -200,9 +203,10 @@ extendVersion inventory previous = do
                     PyPIMirrorRead document -> PyPIMirrorRead (simpleDocument mempty (simpleFiles document))
                     NpmMirrorRead _ -> source
                     CargoMirrorRead _ -> source
+                    RubyGemsMirrorRead _ -> source
             files <- first (const (StateInvalid "invalid source fragment")) (restoreMirrorFragment details ownedSource)
             let fragment = StoredMirrorFragment details ownedSource files
-                companions = Map.fromList [(name, CompanionPending) | (name, file) <- Map.toList additions, declaredCompanion (expectedArtifact file)]
+                companions = Map.fromList [(name, CompanionPending) | (name, file) <- Map.toList additions, declaredSourceCompanion ownedSource (expectedArtifact file)]
             pure $ case previous of
                 Nothing -> MirrorVersion (fragment :| []) Map.empty companions
                 Just old -> old{storedFragments = versionFragments old <> (fragment :| []), storedCompanions = versionCompanions old <> companions}
@@ -324,3 +328,19 @@ declaredCompanion artifact = case artCoreMetadata artifact of
     Just (MetadataAvailable available) -> available
     Just (MetadataDigests values) -> not (Map.null values)
     Nothing -> False
+
+-- | Native source payloads can require metadata beyond artifact-advertised sidecars.
+declaredSourceCompanion :: MirrorReadData -> Artifact -> Bool
+declaredSourceCompanion source artifact = case source of
+    RubyGemsMirrorRead _ -> True
+    _ -> declaredCompanion artifact
+
+-- | The native codec checks meaning before this step binds its bytes to the declared parent.
+verifySourceCompanionBytes :: Limits -> MirrorReadData -> ExpectedMirrorFile -> ByteString -> Either MirrorStateFault VerifiedCompanionBytes
+verifySourceCompanionBytes limits source file bytes = case source of
+    RubyGemsMirrorRead _ -> do
+        unless (declaredSourceCompanion source (expectedArtifact file)) (Left (StateInvalid "native companion was not declared"))
+        when (BS.length bytes > maxMetadataBytes limits) (Left (StateInvalid "companion exceeds metadata byte bound"))
+        digest <- first StateInvalid (mkHash SHA256 (sha256Hex bytes))
+        pure (VerifiedCompanionBytes (expectedArtifact file) (CompanionRef digest (BS.length bytes)) bytes)
+    _ -> verifyCompanionBytes limits file bytes

@@ -38,7 +38,7 @@ import Test.Hspec (shouldReturn)
 import UnliftIO (bracket)
 import UnliftIO.STM (swapTVar)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, PyPI), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, PyPI, RubyGems))
 import Ecluse.Core.Package (mkPackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (StoreObservation (..), StoredVersion (storedVersion), collectPages)
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
@@ -46,7 +46,7 @@ import Ecluse.Core.Registry.PyPI.Project (pypiNameLeadChars)
 import Ecluse.Core.Security.Limits (BodyLimit (PublishRequestBodyLimit), boundedRead)
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.E2E.Harness.Container (withBridgeApplication)
-import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), codeArtifactFormat)
+import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), codeArtifactFormat, formatToken)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Internal (ControlPlane (cpRead), controlPlaneFor, observationFor)
 import Ecluse.Test.Contract.Sweep.Types (SweepRun)
 import Ecluse.Test.Maintenance (withBucket)
@@ -95,6 +95,7 @@ withCodeArtifactFixture = withCodeArtifactFixtureFor PyPI codeArtifactToken
 -- | Reuse the same control plane with a native ecosystem and its minted test token.
 withCodeArtifactFixtureFor :: Ecosystem -> Text -> [RepositoryBoundary] -> (CodeArtifactFixture -> IO a) -> IO a
 withCodeArtifactFixtureFor ecosystem token repositories action = do
+    when (isNothing (codeArtifactFormat ecosystem)) (fail "fixture ecosystem has no native CodeArtifact format")
     tags <- newTVarIO (Map.fromList [(repositoryName repository, Map.singleton "ecluse-dredger-consent" "true") | repository <- repositories])
     upstreams <- newTVarIO (Map.fromList [(repositoryName repository, repositoryUpstreams repository) | repository <- repositories])
     refused <- newTVarIO []
@@ -126,12 +127,13 @@ fixtureObservation fixture repository = do
     let store = CodeArtifactStore codeArtifactDomain codeArtifactOwner "us-east-1" repository format
         alphabet = case cafEcosystem fixture of
             Cargo -> "-0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+            RubyGems -> ".-0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
             _ -> pypiNameLeadChars
     pure (observationFor (mkNameAlphabet alphabet) (\_ -> fail "direct inventory must not read package metadata") store plane)
 
 codeArtifactApplication :: [RepositoryBoundary] -> CodeArtifactFixture -> Application
 codeArtifactApplication repositories fixture request respond = case pathInfo request of
-    format : name : rest | format == ecosystemName (cafEcosystem fixture) -> case find ((== name) . repositoryName) repositories of
+    format : name : rest | Just format == nativeFormat fixture -> case find ((== name) . repositoryName) repositories of
         Just repository -> repositoryApplication repository request{pathInfo = rest} respond
         Nothing -> respond missingRepository
     _ -> do
@@ -170,12 +172,12 @@ repositoryRequest fixture repository request = case (requestMethod request, path
     ("POST", ["v1", "packages"]) | validFormat fixture request -> do
         names <- Map.keys <$> repositoryInventory repository
         let prefix = fromMaybe "" (parameter "package-prefix" request)
-        pure (json (object ["packages" .= [object ["format" .= ecosystemName (cafEcosystem fixture), "package" .= name] | name <- names, prefix `T.isPrefixOf` name]]))
+        pure (json (object ["packages" .= [object ["format" .= nativeFormat fixture, "package" .= name] | name <- names, prefix `T.isPrefixOf` name]]))
     ("POST", ["v1", "package", "versions"])
         | validFormat fixture request
         , Just name <- parameter "package" request -> do
             versions <- Map.findWithDefault [] name <$> repositoryInventory repository
-            pure (json (object ["format" .= ecosystemName (cafEcosystem fixture), "package" .= name, "versions" .= [object ["version" .= version, "status" .= ("Published" :: Text)] | version <- versions]]))
+            pure (json (object ["format" .= nativeFormat fixture, "package" .= name, "versions" .= [object ["version" .= version, "status" .= ("Published" :: Text)] | version <- versions]]))
     ("POST", ["v1", "package", "versions", "delete"])
         | validFormat fixture request
         , Just name <- parameter "package" request ->
@@ -252,7 +254,10 @@ validDomain :: Request -> Bool
 validDomain request = parameter "domain" request == Just codeArtifactDomain && parameter "domain-owner" request == Just codeArtifactOwner
 
 validFormat :: CodeArtifactFixture -> Request -> Bool
-validFormat fixture request = parameter "format" request == Just (ecosystemName (cafEcosystem fixture)) && isNothing (parameter "namespace" request) && isNothing (parameter "next-token" request)
+validFormat fixture request = maybe False (\format -> parameter "format" request == Just format) (nativeFormat fixture) && isNothing (parameter "namespace" request) && isNothing (parameter "next-token" request)
+
+nativeFormat :: CodeArtifactFixture -> Maybe Text
+nativeFormat fixture = formatToken <$> codeArtifactFormat (cafEcosystem fixture)
 
 json :: Value -> Response
 json = responseLBS status200 [("Content-Type", "application/json")] . Aeson.encode

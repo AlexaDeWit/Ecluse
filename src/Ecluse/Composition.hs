@@ -51,7 +51,7 @@ import Ecluse.Config (
     EgressSettings (..),
     FirstParty (..),
     IntegritySettings (..),
-    MirrorTarget (mtUploadUrl, mtUrl, mtUsername),
+    MirrorTarget (mtBackend, mtUploadUrl, mtUrl, mtUsername),
     Mount (..),
     MountConfig (..),
     MountIntegrity (..),
@@ -61,6 +61,7 @@ import Ecluse.Config (
     Url,
     regMirrorTarget,
     regPrivateUpstream,
+    sbTag,
     unUrl,
  )
 import Ecluse.Core.Credential (CredentialProvider)
@@ -79,6 +80,7 @@ import Ecluse.Core.Registry.Cargo.Execution (newCargoInstallEvidence)
 import Ecluse.Core.Registry.Cargo.FirstParty (cargoFirstPartyName)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
 import Ecluse.Core.Registry.PyPI.FirstParty (pypiFirstPartyName)
+import Ecluse.Core.Registry.RubyGems.FirstParty (rubyGemsFirstPartyName)
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag, rdSourceReporter)
 import Ecluse.Core.Rules.Outage (SourceReporter (noteAdmission))
 import Ecluse.Core.Security (Limits, maxPublishRequestBytes)
@@ -114,7 +116,7 @@ data BootWiring = BootWiring
     -- ^ One target per mirrored mount, with the provider that mints its write token. A role that writes nothing plans none.
     }
 
--- | Build the boot wiring from the cleared plan, or the refusals only a live environment can settle. The credential providers stay internal.
+-- | Resolve serving mounts and worker targets from the same credential providers.
 resolveBootWiring :: WiringPorts -> MirrorMintPlan -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] BootWiring)
 resolveBootWiring ports mintPlan limits publishBudget plan = do
     providersE <- mintedProviders
@@ -142,17 +144,8 @@ data PublishBudget = PublishBudget
     , pbMaxRequestBytes :: Int
     }
 
--- | The cleared plan's served 'MountBinding's, or every remaining boot error at once. It opens no socket.
-planMounts ::
-    ResolveAdapter ->
-    IO UTCTime ->
-    (Ecosystem -> RuleDeps) ->
-    MirrorMintPlan ->
-    CredentialProviders ->
-    Limits ->
-    Maybe PublishBudget ->
-    ValidatedPlan ->
-    IO (Either [BootError] [MountBinding])
+-- | Resolve mounts with their configured authority and publication budget.
+planMounts :: ResolveAdapter -> IO UTCTime -> (Ecosystem -> RuleDeps) -> MirrorMintPlan -> CredentialProviders -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] [MountBinding])
 planMounts resolveAdapter clock ruleDepsFor mintPlan providers limits publishBudget plan = do
     bindingResults <- traverse bindingFor (vpMounts plan)
     pure $ case partitionEithers bindingResults of
@@ -335,6 +328,7 @@ firstPartyName = \case
     FirstPartyNpmScopes scopes -> npmPublishAllowed (toList scopes)
     FirstPartyPyPI entries -> pypiFirstPartyName entries
     FirstPartyCargo entries -> cargoFirstPartyName entries
+    FirstPartyRubyGems entries -> rubyGemsFirstPartyName entries
 
 -- | One ecosystem's publish target, resolved once: the worker's write endpoint and its token provider.
 data PublishTarget = PublishTarget
@@ -344,6 +338,8 @@ data PublishTarget = PublishTarget
     -- ^ The mirror-target endpoint the worker publishes approved artifacts to.
     , ptUploadUrl :: RegistryUrl
     -- ^ The exact native upload endpoint, independently configured from the read root.
+    , ptBackendTag :: StoreTag
+    -- ^ The declared backend selects native service credential presentation.
     , ptUsername :: Maybe Text
     -- ^ The backend credential convention retained beside the refreshing secret provider.
     , ptCredentials :: CredentialProvider
@@ -375,6 +371,7 @@ publishTargetFor providers mount = do
                     { ptEcosystem = mountEcosystem mount
                     , ptMirrorUrl = mtUrl target
                     , ptUploadUrl = mtUploadUrl target
+                    , ptBackendTag = sbTag (mtBackend target)
                     , ptUsername = mtUsername target
                     , ptCredentials = provider
                     }

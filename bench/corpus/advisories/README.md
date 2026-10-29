@@ -15,3 +15,14 @@ It covers Tokio and aliases CVE-2021-45710 and GHSA-fg7r-2g4j-5cgr.
 RustSec dedicates its original data under CC0-1.0: https://github.com/RustSec/advisory-db/blob/main/LICENSE.txt.
 The exact dated CVE-2021-45710 EPSS row comes from FIRST's public API.
 Its source and capture time are recorded separately in `pins.json`, beside the unchanged feed date.
+
+## RubyGems
+
+The pinned RubyGems records come unchanged from the OSV API.
+They describe Rails advisory ranges and exact fixed releases.
+The EPSS feed also retains the official 2026-09-27 score for CVE-2024-26143.
+Their source records and capture identities are in `../pins.json`.
+GitHub Advisory Database records use CC-BY-4.0:
+https://github.com/github/advisory-database/blob/main/LICENSE.md.
+These records contain no primary malicious-package advisory.
+Shared synthetic malicious fixtures remain separate from captured advisory evidence.

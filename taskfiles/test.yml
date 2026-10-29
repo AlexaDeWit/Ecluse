@@ -45,10 +45,12 @@ tasks:
       - '"$(cabal list-bin exe:ecluse-artifact)" attempt-continue "$ECLTEST_ARTIFACT_DIR" pypi "$(cat "$ECLTEST_ARTIFACT_DIR/reports/pypi.attempt")"'
       - bash scripts/process-capture.sh "$ECLTEST_ARTIFACT_DIR/cargo.status" "$ECLTEST_ARTIFACT_DIR/cargo.log" env ECLTEST_SHARD=cargo ECLTEST_COMPONENT=ecluse-e2e-cargo task --exit-code test:e2e-attempt
       - '"$(cabal list-bin exe:ecluse-artifact)" attempt-continue "$ECLTEST_ARTIFACT_DIR" cargo "$(cat "$ECLTEST_ARTIFACT_DIR/reports/cargo.attempt")"'
+      - bash scripts/process-capture.sh "$ECLTEST_ARTIFACT_DIR/rubygems.status" "$ECLTEST_ARTIFACT_DIR/rubygems.log" env ECLTEST_SHARD=rubygems ECLTEST_COMPONENT=ecluse-e2e-rubygems task --exit-code test:e2e-attempt
+      - '"$(cabal list-bin exe:ecluse-artifact)" attempt-continue "$ECLTEST_ARTIFACT_DIR" rubygems "$(cat "$ECLTEST_ARTIFACT_DIR/reports/rubygems.attempt")"'
       - bash scripts/process-capture.sh "$ECLTEST_ARTIFACT_DIR/shared-system.status" "$ECLTEST_ARTIFACT_DIR/shared-system.log" env ECLTEST_SHARD=shared-system ECLTEST_COMPONENT=ecluse-e2e-shared-system task --exit-code test:e2e-attempt
       - '"$(cabal list-bin exe:ecluse-artifact)" attempt-continue "$ECLTEST_ARTIFACT_DIR" shared-system "$(cat "$ECLTEST_ARTIFACT_DIR/reports/shared-system.attempt")"'
       - bash scripts/process-capture.sh "$ECLTEST_ARTIFACT_DIR/audit.status" "$ECLTEST_ARTIFACT_DIR/audit.log" task --exit-code test:e2e-audit-locked
-      - bash scripts/process-status.sh "$ECLTEST_ARTIFACT_DIR/npm.status" "$ECLTEST_ARTIFACT_DIR/pypi.status" "$ECLTEST_ARTIFACT_DIR/cargo.status" "$ECLTEST_ARTIFACT_DIR/shared-system.status" "$ECLTEST_ARTIFACT_DIR/audit.status"
+      - bash scripts/process-status.sh "$ECLTEST_ARTIFACT_DIR/npm.status" "$ECLTEST_ARTIFACT_DIR/pypi.status" "$ECLTEST_ARTIFACT_DIR/cargo.status" "$ECLTEST_ARTIFACT_DIR/rubygems.status" "$ECLTEST_ARTIFACT_DIR/shared-system.status" "$ECLTEST_ARTIFACT_DIR/audit.status"
 
   e2e-prepare-locked:
     vars:
@@ -104,6 +106,12 @@ tasks:
     cmds:
       - env ECLTEST_SHARD=cargo ECLTEST_COMPONENT=ecluse-e2e-cargo bash scripts/artifact-lock.sh "${ECLTEST_ARTIFACT_DIR:?set ECLTEST_ARTIFACT_DIR}" task --exit-code test:e2e-attempt
 
+  e2e-rubygems:
+    vars: *identity-vars
+    env: *identity-env
+    cmds:
+      - env ECLTEST_SHARD=rubygems ECLTEST_COMPONENT=ecluse-e2e-rubygems bash scripts/artifact-lock.sh "${ECLTEST_ARTIFACT_DIR:?set ECLTEST_ARTIFACT_DIR}" task --exit-code test:e2e-attempt
+
   e2e-shared-system:
     vars: *identity-vars
     env: *identity-env
@@ -151,7 +159,7 @@ tasks:
       - task: artifact-tool
       - '"$(cabal list-bin exe:ecluse-artifact)" verify-plan "$ECLTEST_ARTIFACT_DIR"'
       - cabal build ecluse-e2e-audit
-      - '. "$ECLTEST_ARTIFACT_DIR/identity.env"; "$(cabal list-bin ecluse-e2e-audit)" "$ECLTEST_ARTIFACT_DIR/plan.json" "$ECLTEST_ARTIFACT_DIR/reports/npm.json" "$ECLTEST_ARTIFACT_DIR/reports/pypi.json" "$ECLTEST_ARTIFACT_DIR/reports/cargo.json" "$ECLTEST_ARTIFACT_DIR/reports/shared-system.json"'
+      - '. "$ECLTEST_ARTIFACT_DIR/identity.env"; "$(cabal list-bin ecluse-e2e-audit)" "$ECLTEST_ARTIFACT_DIR/plan.json" "$ECLTEST_ARTIFACT_DIR/reports/npm.json" "$ECLTEST_ARTIFACT_DIR/reports/pypi.json" "$ECLTEST_ARTIFACT_DIR/reports/cargo.json" "$ECLTEST_ARTIFACT_DIR/reports/rubygems.json" "$ECLTEST_ARTIFACT_DIR/reports/shared-system.json"'
 
   e2e-diagnostics:
     cmds:
@@ -217,6 +225,26 @@ tasks:
         "$ECLTEST_INTEGRATION_ARTIFACT_DIR/report.json"
         "$ECLTEST_ARTIFACT_DIR/plan.json"
         "$ECLTEST_ARTIFACT_DIR/reports/cargo.json"
+
+  rubygems-completion:
+    vars: *identity-vars
+    env: *identity-env
+    cmds:
+      - test -z "$ECLTEST_ARGUMENTS"
+      - task: artifact-tool
+      - '"$(cabal list-bin exe:ecluse-artifact)" verify "$ECLTEST_ARTIFACT_DIR"'
+      - cabal build ecluse-completion-rubygems-audit
+      - >-
+        . "$ECLTEST_ARTIFACT_DIR/identity.env";
+        "$(cabal list-bin ecluse-completion-rubygems-audit)"
+        "${ECLTEST_CORE_UNIT_ARTIFACT_DIR:?}/unit-plan.json"
+        "$ECLTEST_CORE_UNIT_ARTIFACT_DIR/unit-report.json"
+        "${ECLTEST_RUNTIME_UNIT_ARTIFACT_DIR:?}/unit-plan.json"
+        "$ECLTEST_RUNTIME_UNIT_ARTIFACT_DIR/unit-report.json"
+        "${ECLTEST_INTEGRATION_ARTIFACT_DIR:?}/plan.json"
+        "$ECLTEST_INTEGRATION_ARTIFACT_DIR/report.json"
+        "$ECLTEST_ARTIFACT_DIR/plan.json"
+        "$ECLTEST_ARTIFACT_DIR/reports/rubygems.json"
 
   conformance-verdaccio:
     vars:

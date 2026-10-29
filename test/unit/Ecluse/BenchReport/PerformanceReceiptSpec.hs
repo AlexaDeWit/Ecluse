@@ -54,7 +54,7 @@ spec = do
     describe "receipt publication" $ do
         it "binds all subjects to their own obligations and actual artifact bytes" $ withFixture $ do
             writePerformanceReceipts "allocation" "receipts" "conditions.json"
-            forM_ ["npm", "pypi", "cargo"] $ \ecosystem -> do
+            forM_ ["npm", "pypi", "cargo", "rubygems"] $ \ecosystem -> do
                 let directory = "receipts/ecosystem-" <> ecosystem <> "/"
                 request <- readJsonFile (directory <> "request.json")
                 receipt <- readJsonFile (directory <> "receipt.json")
@@ -65,14 +65,14 @@ spec = do
             withFixture $
                 withEnvOverrides [("PERF_NATIVE_OUTCOME", "failure")] $ do
                     writePerformanceReceipts "allocation" "receipts" "conditions.json" `shouldThrow` (== ExitFailure 1)
-                    forM_ ["npm", "pypi", "cargo"] $ \ecosystem -> do
+                    forM_ ["npm", "pypi", "cargo", "rubygems"] $ \ecosystem -> do
                         receipt <- readJsonFile ("receipts/ecosystem-" <> ecosystem <> "/receipt.json")
                         npOutcome (prNative receipt) `shouldBe` NativeFailed
         it "clears stale receipts before missing native evidence fails" $ withFixture $ do
             writePerformanceReceipts "allocation" "receipts" "conditions.json"
             removeFile "perf-allocation-observations.json"
             writePerformanceReceipts "allocation" "receipts" "conditions.json" `shouldThrow` (== ExitFailure 1)
-            forM_ ["npm", "pypi", "cargo"] $ \ecosystem ->
+            forM_ ["npm", "pypi", "cargo", "rubygems"] $ \ecosystem ->
                 doesFileExist ("receipts/ecosystem-" <> ecosystem <> "/receipt.json") `shouldReturn` False
         it "clears stale publication before an invalid conditions file fails" $ withFixture $ do
             writePerformanceReceipts "allocation" "receipts" "conditions.json"
@@ -81,6 +81,7 @@ spec = do
             doesFileExist "receipts/ecosystem-npm/receipt.json" `shouldReturn` False
             doesFileExist "receipts/ecosystem-pypi/receipt.json" `shouldReturn` False
             doesFileExist "receipts/ecosystem-cargo/receipt.json" `shouldReturn` False
+            doesFileExist "receipts/ecosystem-rubygems/receipt.json" `shouldReturn` False
 
 held :: NativePerformance
 held = NativePerformance NativePassed [] (Map.fromList [("floorEnforcement", "held"), ("floorEnforcementReasons", "")])
@@ -90,12 +91,12 @@ withFixture action = withSystemTempDirectory "performance-receipt" $ \root -> wi
     withEnvOverrides [("ECLTEST_SOURCE", "source"), ("ECLTEST_ARCHITECTURE", "arm64"), ("ECLTEST_RUN_ID", "run"), ("ECLTEST_ATTEMPT", "2"), ("PERF_NATIVE_OUTCOME", "success")] $ do
         writeConditions "conditions.json" ["optimisation=-O1", "profiling=off"]
         conditions <- readJsonFile "conditions.json"
-        obligations <- traverse (expectRight . (\subject -> compileObligation "allocation" subject (Map.union allocationConditions conditions))) ["ecosystem-npm", "ecosystem-pypi", "ecosystem-cargo"]
+        obligations <- traverse (expectRight . (\subject -> compileObligation "allocation" subject (Map.union allocationConditions conditions))) ["ecosystem-npm", "ecosystem-pypi", "ecosystem-cargo", "ecosystem-rubygems"]
         writeJsonFile "perf-allocation-observations.json" (NativePerformance NativePassed [PerformanceObservation row NativePassed | obligation <- obligations, row <- poRows obligation] allocationConditions)
         BS.writeFile "perf-allocation-report.md" "native report\n"
         writeJsonFile "acceptance/criteria.json" (Map.empty :: Map Text Text)
-        writeJsonFile "bench/corpus/pins.json" (Map.singleton "captures" (Map.fromList [(ecosystem, Map.singleton "sample" (Map.singleton "path" (ecosystem <> "/sample.json"))) | ecosystem <- ["npm", "pypi", "cargo"]]) :: Map Text (Map Text (Map Text (Map Text Text))))
-        forM_ ["npm", "pypi", "cargo"] $ \ecosystem -> writeJsonFile ("bench/corpus/" <> ecosystem <> "/sample.json") (Map.empty :: Map Text Text)
+        writeJsonFile "bench/corpus/pins.json" (Map.singleton "captures" (Map.fromList [(ecosystem, Map.singleton "sample" (Map.singleton "path" (ecosystem <> "/sample.json"))) | ecosystem <- ["npm", "pypi", "cargo", "rubygems"]]) :: Map Text (Map Text (Map Text (Map Text Text))))
+        forM_ ["npm", "pypi", "cargo", "rubygems"] $ \ecosystem -> writeJsonFile ("bench/corpus/" <> ecosystem <> "/sample.json") (Map.empty :: Map Text Text)
         action
 
 allocationConditions :: Map Text Text
@@ -104,5 +105,5 @@ allocationConditions = Map.fromList [("mode", "captures"), ("passes", "5")]
 nativeFor :: PerformanceRequest -> NativePerformance
 nativeFor request = NativePerformance NativePassed observations allocationConditions
   where
-    obligations = mapMaybe (rightToMaybe . (\subject -> compileObligation "allocation" subject (requestRecordedConditions request))) ["ecosystem-npm", "ecosystem-pypi", "ecosystem-cargo"]
+    obligations = mapMaybe (rightToMaybe . (\subject -> compileObligation "allocation" subject (requestRecordedConditions request))) ["ecosystem-npm", "ecosystem-pypi", "ecosystem-cargo", "ecosystem-rubygems"]
     observations = [PerformanceObservation row NativePassed | obligation <- obligations, row <- poRows obligation]

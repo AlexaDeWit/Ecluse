@@ -80,7 +80,7 @@ import Ecluse.E2E.Harness.Container
 import Ecluse.E2E.Harness.Stub (
     StubFault (..),
     StubRead,
-    StubRoute (CargoPublic, Mirror, NpmPublic, PrivateCache),
+    StubRoute (CargoPublic, Mirror, NpmPublic, PrivateCache, RubyGemsPublic),
     retiredWorkers,
     startedWorkers,
     stubConfig,
@@ -100,6 +100,7 @@ import Ecluse.Test.Container.Image (
 import Ecluse.Test.Containers (dockerLabelArgs)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Registry.Cargo.Fixtures (loadCargoGraph, writeCargoRegistry)
+import Ecluse.Test.Registry.RubyGems.Fixtures (writeRubyRegistry)
 
 -- | The private mirror host on the container network, also recorded by upstream fetch spans.
 mirrorHost :: Text
@@ -136,15 +137,18 @@ withFixtureDir topology action = withSystemTempDirectory "ecluse-e2e-fixtures" $
     let htmlDir = workDir </> "html"
         pypiDir = workDir </> "pypi"
         cargoDir = workDir </> "cargo"
+        rubyDir = workDir </> "rubygems"
     createDirectoryIfMissing True htmlDir
     createDirectoryIfMissing True pypiDir
     createDirectoryIfMissing True cargoDir
+    createDirectoryIfMissing True rubyDir
     when (Npm `elem` topologyMounts topology) (buildFixtures htmlDir fixturePackages)
     when (PyPI `elem` topologyMounts topology) (buildPyPIFixtures pypiDir)
     when (Cargo `elem` topologyMounts topology) $ do
         releases <- loadCargoGraph "test/fixtures/cargo/graph"
         writeCargoRegistry cargoDir (stubUrl CargoPublic) Nothing False releases
         buildCargoAdvisoryReleases cargoDir (stubUrl CargoPublic)
+    when (RubyGems `elem` topologyMounts topology) (writeRubyRegistry rubyDir)
     when (topologyAws topology) (buildAdvisoryFixtures htmlDir)
     writeFileText (workDir </> "verdaccio.yaml") verdaccioConfig
     writeFileText (workDir </> "nginx.conf") (stubConfig Nothing)
@@ -183,6 +187,7 @@ withDataPlane topology action =
                                 [ (workDir </> "html", "/usr/share/nginx/html:ro")
                                 , (workDir </> "pypi", "/usr/share/nginx/pypi:ro")
                                 , (workDir </> "cargo", "/usr/share/nginx/cargo:ro")
+                                , (workDir </> "rubygems", "/usr/share/nginx/rubygems:ro")
                                 , (workDir </> "nginx.conf", "/etc/nginx/conf.d/default.conf:ro")
                                 , (workDir </> "certs", "/certs:ro")
                                 ]
@@ -340,12 +345,7 @@ environment plane manager base proxy collector = do
     mountPath Npm = pure "/npm/"
     mountPath PyPI = pure "/pypi/simple/"
     mountPath Cargo = pure "/cargo/"
-    mountPath RubyGems = throwIO $ UnsupportedTopology RubyGems
-
-newtype UnsupportedTopology = UnsupportedTopology Ecosystem
-    deriving stock (Show)
-
-instance Exception UnsupportedTopology
+    mountPath RubyGems = pure "/rubygems/"
 
 proxyEnv :: Topology -> Int -> Maybe Text -> IO [(Text, Text)]
 proxyEnv topology hostPort queueUrl = do
@@ -368,7 +368,7 @@ proxyEnv topology hostPort queueUrl = do
                 <> [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", stubUrl Mirror) | topologyStore topology]
     mountEnv Cargo = pure [("ECLUSE_MOUNTS__CARGO__ENABLED", "true"), ("ECLUSE_MOUNTS__CARGO__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl CargoPublic)]
     mountEnv PyPI = pure [("ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL", pypiUpstreamUrl)]
-    mountEnv RubyGems = throwIO $ UnsupportedTopology RubyGems
+    mountEnv RubyGems = pure [("ECLUSE_MOUNTS__RUBYGEMS__ENABLED", "true"), ("ECLUSE_MOUNTS__RUBYGEMS__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl RubyGemsPublic)]
 
 mirrorTargetEnv :: [(Text, Text)]
 mirrorTargetEnv =

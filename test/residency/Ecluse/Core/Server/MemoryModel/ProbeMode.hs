@@ -10,6 +10,8 @@ data ProbeMode
     = Retained String
     | Evaluation
     | Listing
+    | ListingFor String String
+    | MergeFor String String FilePath
     | ListingCensus
     | Merge FilePath FilePath
     | Source String String String String String
@@ -23,6 +25,8 @@ parseProbeMode = \case
     ["--metadata-probe", shape, path] -> Just (Retained shape, path)
     ["--metadata-evaluation-probe", path] -> Just (Evaluation, path)
     ["--metadata-listing-probe", path] -> Just (Listing, path)
+    ["--metadata-listing-for", ecosystem, name, path] -> Just (ListingFor ecosystem name, path)
+    ["--metadata-merge-for", ecosystem, name, private, public] -> Just (MergeFor ecosystem name private, public)
     ["--metadata-listing-census-probe", path] -> Just (ListingCensus, path)
     ["--metadata-merge-probe", private, public, path] -> Just (Merge private public, path)
     ["--metadata-source-probe", ecosystem, mode, name, version, limit, path] -> Just (Source ecosystem mode name version limit, path)
@@ -36,6 +40,8 @@ renderProbeMode = \case
     Retained shape -> ["--metadata-probe", shape]
     Evaluation -> ["--metadata-evaluation-probe"]
     Listing -> ["--metadata-listing-probe"]
+    ListingFor ecosystem name -> ["--metadata-listing-for", ecosystem, name]
+    MergeFor ecosystem name private -> ["--metadata-merge-for", ecosystem, name, private]
     ListingCensus -> ["--metadata-listing-census-probe"]
     Merge private public -> ["--metadata-merge-probe", private, public]
     Source ecosystem mode name version limit -> ["--metadata-source-probe", ecosystem, mode, name, version, limit]
@@ -48,6 +54,8 @@ probeArguments mode path = renderProbeMode mode <> sampling <> [path, "+RTS", "-
   where
     sampling = case mode of
         Listing -> majorSampling
+        ListingFor _ _ -> majorSampling
+        MergeFor{} -> majorSampling
         Merge _ _ -> majorSampling
         _ -> []
     -- A fixed old generation and 128 KiB nursery sample live data at nearly every collection.

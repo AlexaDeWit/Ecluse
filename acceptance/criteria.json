@@ -1,5 +1,5 @@
 {
-  "_note": "Allocation budgets for the performance-acceptance captures run. allocatedBytes holds, per ecosystem, package and leg, the bytes the leg allocated over its committed capture on the calibration run. A leg's budget is that figure plus marginPercent, rounded up to a whole byte. Wall-clock time has no budget. Recalibrate every figure from one arm64 CI run of the captures run, and record that run's runner and URL in calibration. calibration.commit is the commit the run checked out: a pull request run checks out the merge of its head into the base, which the log of its checkout step names.",
+  "_note": "Allocation budgets for the performance-acceptance captures run. allocatedBytes holds the reported five-pass median allocation by ecosystem, package and leg. A budget adds the sole global marginPercent, rounded up to a byte. Wall-clock time has no budget. Each recorded source group comes from one arm64 CI report. calibration supplies the retained default source. Optional calibration.sourcesByEcosystem supplies source-only overrides for named ecosystems. An override does not recalibrate other ecosystems or change their values. commit records the executed checkout, including a pull request merge. Individual pass vectors are not retained.",
   "calibration": {
     "arch": "aarch64",
     "runner": "ubuntu-26.04-arm",
@@ -7,7 +7,17 @@
     "runs": [
       "https://github.com/AlexaDeWit/Ecluse/actions/runs/40235400884/job/121295869291"
     ],
-    "marginPercent": 1
+    "marginPercent": 1,
+    "sourcesByEcosystem": {
+      "rubygems": {
+        "arch": "aarch64",
+        "runner": "ubuntu-26.04-arm",
+        "commit": "878ba15dbdf0e561e4ed68748c950e6a75aa589a",
+        "runs": [
+          "https://github.com/AlexaDeWit/Ecluse/actions/runs/40575218918/job/122439883319"
+        ]
+      }
+    }
   },
   "allocatedBytes": {
     "npm": {
@@ -104,6 +114,26 @@
         "singleVersion": 225497408,
         "fullShippedAdvisories": 246606080,
         "fullAllAdvisoryRules": 246713872
+      }
+    },
+    "rubygems": {
+      "aws-sdk-ec2": {
+        "full": 40744816,
+        "singleVersion": 21378576,
+        "fullShippedAdvisories": 40940472,
+        "fullAllAdvisoryRules": 41152240
+      },
+      "nokogiri": {
+        "full": 76814440,
+        "singleVersion": 45205656,
+        "fullShippedAdvisories": 76887224,
+        "fullAllAdvisoryRules": 76951888
+      },
+      "rails": {
+        "full": 50941392,
+        "singleVersion": 31166984,
+        "fullShippedAdvisories": 51193232,
+        "fullAllAdvisoryRules": 51318808
       }
     }
   }

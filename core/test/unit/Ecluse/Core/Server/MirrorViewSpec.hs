@@ -20,7 +20,7 @@ import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (StateRevision))
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry, RecordEntry))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, npmCached, pypiPacked, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, pypiPacked, pypiSimpleCached)
 import Ecluse.Core.Registry.Cargo.Document (cargoDocument, cargoRecords)
 import Ecluse.Core.Registry.Metadata (Manifest (..), VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload
@@ -190,10 +190,7 @@ info :: MirrorInventory -> PackageInfo
 info inventory = PackageInfo mirrorPackage (Map.singleton (renderVersion mirrorVersion) (inventoryDetails inventory)) Map.empty []
 
 raw :: MirrorInventory -> CachedDoc
-raw inventory = case inventoryReadData inventory of
-    PyPIMirrorRead document -> fst pypiSimpleCached document
-    NpmMirrorRead fields -> fst npmCached (Object fields)
-    CargoMirrorRead document -> fst cargoCached document
+raw = mirrorReadDocument . inventoryReadData
 
 sampleRecord :: IO ProjectMirrorRecord
 sampleRecord = mirrorSample [1, 2, 3] False "https://public.test/" "source" >>= \inventory -> expectRight (extendProjectRecord defaultLimits target inventory Nothing)

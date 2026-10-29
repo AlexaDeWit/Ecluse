@@ -101,3 +101,19 @@ A failed private authentication check is not a reason to try the public registry
 Client configuration selects the proxy. The network policy enforces that choice.
 
 {{ next(path="@/docs/verify.md", title="Verify your deployment") }}
+
+## RubyGems clients {#rubygems}
+
+Use Bundler 2.6.9 or 4.0.23 with the native registry source:
+
+```ruby
+source "https://packages.example.com/rubygems/"
+```
+
+Configure the caller's Basic credentials through Bundler's credential settings or your approved secret provider.
+Keep credentials out of the Gemfile and committed Bundler configuration.
+Use ordinary `bundle lock`, `bundle install`, and `bundle update`, without `--full-index`.
+Bundler reads Compact Index `/versions` discovery and fetches admitted `/info` metadata for each required gem.
+Keep Bundler checksum validation enabled.
+Publication uses `gem push --host https://packages.example.com/rubygems` with a native API key and optional OTP.
+Only declared first-party packages can publish to a configured publication target.

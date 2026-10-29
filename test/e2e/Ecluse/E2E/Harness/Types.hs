@@ -11,6 +11,7 @@ module Ecluse.E2E.Harness.Types (
     npmTopology,
     pypiTopology,
     cargoTopology,
+    rubyGemsTopology,
     pypiAdvisoryTopology,
     dredgerTopology,
     mixedTopology,
@@ -27,7 +28,7 @@ module Ecluse.E2E.Harness.Types (
 ) where
 
 import Data.Map.Strict qualified as Map
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Test.Contract.Install (ClientResult (..))
 import Network.HTTP.Client (Manager)
 import System.FilePath ((</>))
@@ -77,6 +78,10 @@ pypiTopology = Topology [PyPI] False False
 -- | Native Cargo reads use the shared TLS registry fixture.
 cargoTopology :: Topology
 cargoTopology = Topology [Cargo] False False
+
+-- | Native RubyGems reads use an isolated named-gem registry.
+rubyGemsTopology :: Topology
+rubyGemsTopology = Topology [RubyGems] False False
 
 -- | Advisory compilation and reads share the S3 emulator.
 pypiAdvisoryTopology :: Topology

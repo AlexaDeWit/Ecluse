@@ -20,7 +20,7 @@ import Data.Text qualified as T
 import Ecluse.Test.Contract.Catalogue (duplicates, validateCatalogue)
 import Ecluse.Test.Contract.Result
 import Ecluse.Test.Contract.Types
-import Ecluse.Test.Contract.UnitCatalogue (metadataFetchLaws, metadataProjectionLaws)
+import Ecluse.Test.Contract.UnitCatalogue (metadataFetchLaws, metadataFetchLawsFor, metadataProjectionLaws, metadataProjectionLawsFor)
 
 -- | The read-only scope never certifies full ecosystem completion.
 data CompletionScope = FullEcosystem | ReadOnlyEcosystemFoundation | FullPackageStore
@@ -79,11 +79,18 @@ requiredFamilyLaws scope =
 
 -- | Add ecosystem-specific requirements without changing the shared laws.
 requiredFamilyLawsFor :: Text -> CompletionScope -> [(Text, [Text])]
-requiredFamilyLawsFor subject scope = map addOutage (requiredFamilyLaws scope)
+requiredFamilyLawsFor subject scope = map (nativeIdentity . addOutage) (requiredFamilyLaws scope)
   where
     addOutage ("dredger", laws)
         | subject == "npm", scope == FullEcosystem = ("dredger", laws <> ["skipped-admission-recovery"])
     addOutage family = family
+    nativeIdentity ("proxying", laws) =
+        ( "proxying"
+        , filter (\law -> not ("metadata-fetch/" `T.isPrefixOf` law || "metadata-projection/" `T.isPrefixOf` law)) laws
+            <> map ("metadata-fetch/" <>) (metadataFetchLawsFor subject)
+            <> map ("metadata-projection/" <>) (metadataProjectionLawsFor subject)
+        )
+    nativeIdentity family = family
 
 -- | Missing laws fail even when both their registration and their evidence mapping disappear.
 validateCompletion :: Completion -> [Catalogue] -> Either [Text] Completion

@@ -7,6 +7,7 @@ Print predicted runtime posture and role-specific refusals. Exit @2@ when the ch
 -}
 module Ecluse.CheckConfig (runCheckConfig) where
 
+import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 
 import Ecluse.Boot (loadBootConfig, refuseBoot, runtimeOverridesOf)
@@ -19,7 +20,7 @@ import Ecluse.Composition.Plan (
     roleRefusalWarnings,
  )
 import Ecluse.Composition.Sizing (openFileSoftLimit)
-import Ecluse.Composition.Types (BootRole (BootWithoutPipeline))
+import Ecluse.Composition.Types (BootRole (BootMirrorPipeline, BootWithoutPipeline), MirrorRole (ServeAndMirror))
 import Ecluse.Config (AppConfig (cfgRuntime), Config (configApp))
 import Ecluse.Rts (appliedRuntimePlan, currentRtsPosture, renderEffectivePosture, renderPostureWarnings, resolveRuntimePlan)
 import Ecluse.Rts.Cgroup (readCgroupLimits)
@@ -61,6 +62,9 @@ runCheckConfig = do
             refuseBoot (renderBootErrors errs <> "\nconfiguration: refused")
         Right plan -> pure plan
     traverse_ TIO.putStrLn (bpLines bootPlan)
+    case brOutcome (resolveBootPlan (BootMirrorPipeline ServeAndMirror) inputs) of
+        Left _ -> pure ()
+        Right proxy -> traverse_ (TIO.putStrLn . ("ecluse proxy: " <>)) (filter (T.isPrefixOf "memory plan: verified artifact byte cap ") (bpLines proxy))
     traverse_ warn (bpWarnings bootPlan)
     traverse_ (warn . renderAdvisory) (brAdvisories report)
     -- A configuration one role refuses and another boots is a normal deployment, so the other

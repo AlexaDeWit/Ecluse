@@ -17,8 +17,8 @@ import UnliftIO.Exception (bracket, mask_, throwIO)
 import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Zlib (ZlibFault (InvalidZlibState, ZlibAllocationFailed), advanceStream, initialiseInflate, openStream, releaseInflate)
 
--- | Raw ZIP members or a bounded sequence of gzip members.
-data InflateFormat = RawDeflate | GzipMembers Int
+-- | Raw deflate, one zlib stream, or a bounded sequence of gzip members.
+data InflateFormat = RawDeflate | ZlibStream | GzipMembers Int
 
 data Inflater = Fresh !Int ByteString | Active !Int Z.ZStream' ByteString | Finished | Failed ParseError
 
@@ -51,6 +51,7 @@ nextChunk format owner output =
                     close owner
                     case format of
                         RawDeflate | not (BS.null remaining) -> failStream owner "deflate member has trailing compressed bytes"
+                        ZlibStream | not (BS.null remaining) -> failStream owner "zlib stream has trailing compressed bytes"
                         GzipMembers _ | not (BS.null remaining) -> do
                             writeIORef owner (Fresh count remaining)
                             emitOrContinue bytes
@@ -68,11 +69,12 @@ nextChunk format owner output =
 
 memberLimit :: InflateFormat -> Int
 memberLimit RawDeflate = 1
+memberLimit ZlibStream = 1
 memberLimit (GzipMembers limit) = limit
 
 -- Allocation failures belong to the worker fault boundary, not the archive-refusal result.
 acquire :: InflateFormat -> IO Z.ZStream'
-acquire format = openStream (`initialiseInflate` (case format of RawDeflate -> -15; GzipMembers _ -> 31))
+acquire format = openStream (`initialiseInflate` (case format of RawDeflate -> -15; ZlibStream -> 15; GzipMembers _ -> 31))
 
 close :: IORef Inflater -> IO ()
 close owner = mask_ $ do

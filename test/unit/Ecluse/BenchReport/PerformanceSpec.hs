@@ -43,6 +43,15 @@ spec = do
             rows `shouldContain` ["native/synthetic generators.npm.decodes every generated release"]
             rows `shouldContain` ["native/ecosystem: npm.rules.evalRules.scales linearly in version count"]
             rows `shouldContain` ["ecosystem: npm.wire+project (per package).react (large).full metadata projection"]
+        it "preserves embedded-URL generator identities and requires native served-field observations" $ do
+            for_ ["npm", "pypi", "cargo"] $ \ecosystem ->
+                benchmarkRequiredRows ecosystem [] `shouldContain` ["native/synthetic generators." <> ecosystem <> ".rewrites every artifact onto the proxy origin"]
+            benchmarkRequiredRows "rubygems" [] `shouldContain` ["native/synthetic generators.rubygems.preserves native served records and proxy artifact routes"]
+        it "requires native route, request and coordinate-complexity outcomes independently" $ do
+            let rows = benchmarkRequiredRows "rubygems" ["nokogiri (large)"]
+            rows `shouldContain` ["native/ecosystem: rubygems.route.match.malformed native coordinate"]
+            for_ ["gem action", "quick specification action", "native info action", "request building metadata request", "request building artifact request", "request building compact specification request"] $ \nativeRow ->
+                rows `shouldContain` ["ecosystem: rubygems.route.match." <> nativeRow]
     describe "makePerformanceReceipt" $ do
         it "keeps an invocation failure despite successful measured rows" $
             npOutcome (prNative (makePerformanceReceipt request{requestOutcome = NativeFailed} Map.empty native)) `shouldBe` NativeFailed

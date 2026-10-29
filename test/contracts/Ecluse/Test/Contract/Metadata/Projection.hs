@@ -6,6 +6,8 @@
 module Ecluse.Test.Contract.Metadata.Projection (
     MetadataFraming (..),
     ProjectionDriver (..),
+    CallerBoundProjectionDriver (..),
+    callerBoundProjectionContract,
     metadataProjectionContract,
     projectionFailureLaw,
 ) where
@@ -13,7 +15,7 @@ module Ecluse.Test.Contract.Metadata.Projection (
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
-import Ecluse.Core.Package (PackageDetails, PackageInfo (infoInvalidEntries, infoVersions))
+import Ecluse.Core.Package (PackageDetails, PackageInfo (infoInvalidEntries, infoName, infoVersions), renderPackageName)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable))
 import Ecluse.Core.Security (LimitError (TooManyArtifacts, TooManyVersions), Limits (maxArtifactCount, maxVersionCount), defaultLimits)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
@@ -25,6 +27,8 @@ data MetadataFraming
       SingleDocument
     | -- | Every record owns its identity. Invalid records must leave explicit evidence.
       RecordStream
+    | -- | The request binds identity. A header frames records that carry no package name.
+      CallerBoundRecords
     deriving stock (Eq, Show)
 
 -- | Projection operations and native fixtures. Each valid release contains one artifact.
@@ -38,6 +42,37 @@ data ProjectionDriver = ProjectionDriver
     , projectionVersions :: [Text]
     , projectionMissingName :: ByteString
     }
+
+-- | The captured source remains fixed when a test supplies a different response origin.
+data CallerBoundProjectionDriver = CallerBoundProjectionDriver
+    { callerProjection :: ProjectionDriver
+    , callerOrigin :: Text
+    , callerFullAt :: Text -> Limits -> ByteString -> IO (Either MetadataError PackageInfo)
+    , callerSelectedAt :: Text -> Limits -> Text -> ByteString -> IO (Either MetadataError (Maybe PackageDetails))
+    }
+
+-- | Named requests replace self-reported-name laws without inventing native identity fields.
+callerBoundProjectionContract :: Text -> CallerBoundProjectionDriver -> Spec
+callerBoundProjectionContract provider bound = describe "caller-bound metadata projection" $ do
+    projectionCase "malformed" "rejects a missing native header on full and selected reads" $ do
+        void <$> projectFull driver defaultLimits "missing delimiter" `shouldReturn` Left MetadataUndecodable
+        for_ versions $ \version ->
+            void <$> projectSelected driver defaultLimits version "missing delimiter" `shouldReturn` Left MetadataUndecodable
+    projectionCase "name-binding" "projects exactly the checked request package identity" $ do
+        info <- expectRight =<< projectFull driver defaultLimits document
+        renderPackageName (infoName info) `shouldBe` projectionPackageName driver
+        Map.keys (infoVersions info) `shouldBe` sort versions
+    projectionCase "origin-binding" "refuses another source origin on full and selected reads" $ do
+        let foreignOrigin = callerOrigin bound <> "foreign/"
+        void <$> callerFullAt bound foreignOrigin defaultLimits document `shouldReturn` Left MetadataUndecodable
+        for_ versions $ \version ->
+            void <$> callerSelectedAt bound foreignOrigin defaultLimits version document `shouldReturn` Left MetadataUndecodable
+    projectionCountAndSelectionContract provider driver
+  where
+    driver = callerProjection bound
+    versions = projectionVersions driver
+    document = projectionDocument driver (projectionPackageName driver) versions
+    projectionCase identifier = it . caseLabel ("core.metadata.projection." <> provider <> "." <> identifier)
 
 -- | Compare native refusal evidence and identical count bounds through full and selected reads.
 metadataProjectionContract :: Text -> ProjectionDriver -> Spec
@@ -57,6 +92,16 @@ metadataProjectionContract provider driver = describe "shared metadata projectio
                 infoInvalidEntries info `shouldSatisfy` not . null
                 for_ versions $ \version ->
                     selected defaultLimits version mixed `shouldReturn` Right (Map.lookup version (infoVersions info))
+    projectionCountAndSelectionContract provider driver
+  where
+    contractExample identifier description = it (caseLabel ("core.metadata.projection." <> provider <> "." <> identifier) description)
+    full = projectFull driver
+    selected = projectSelected driver
+    versions = projectionVersions driver
+    document = projectionDocument driver (projectionPackageName driver) versions
+
+projectionCountAndSelectionContract :: Text -> ProjectionDriver -> Spec
+projectionCountAndSelectionContract provider driver = do
     contractExample "version-bound" "rejects two entries above a one-entry version ceiling" $ do
         let limits = defaultLimits{maxVersionCount = 1}
             expected = Left (MetadataBoundExceeded (TooManyVersions 2 1))
@@ -87,6 +132,7 @@ projectionFailureLaw :: ProjectionDriver -> MetadataError -> ByteString -> Expec
 projectionFailureLaw driver failure bytes = do
     full <- projectFull driver defaultLimits bytes
     case projectionFraming driver of
+        CallerBoundRecords -> void full `shouldBe` Left failure
         SingleDocument -> void full `shouldBe` Left failure
         RecordStream -> do
             info <- expectRight full
@@ -95,5 +141,6 @@ projectionFailureLaw driver failure bytes = do
     for_ (projectionVersions driver) $ \version -> do
         selected <- projectSelected driver defaultLimits version bytes
         case projectionFraming driver of
+            CallerBoundRecords -> void selected `shouldBe` Left failure
             SingleDocument -> void selected `shouldBe` Left failure
             RecordStream -> selected `shouldBe` Right Nothing

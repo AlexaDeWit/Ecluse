@@ -28,6 +28,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     MirrorRequirements (..),
     MirrorStateRequirement (..),
     PrivateArtifactAddressing (..),
+    PublishExtras (NoPublishExtras),
     PublishRequestBody (..),
     UploadEndpointRequirement (..),
     UploadIdentityRequirement (..),
@@ -93,7 +94,9 @@ pypiAdapter =
 pypiPublish :: AdapterPublish
 pypiPublish =
     AdapterPublish
-        { publishRelay = \origin _ body ->
+        { publishCredential = pypiCredential
+        , publishRequestExtras = const (Right NoPublishExtras)
+        , publishRelay = \origin _ body ->
             relayPublishRequest
                 origin
                 ( do

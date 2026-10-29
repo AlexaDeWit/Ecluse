@@ -20,22 +20,22 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Universe.Class (universe)
 import Network.HTTP.Client (Request)
-import Network.HTTP.Types (Method, methodGet, methodPut)
+import Network.HTTP.Types (Method, methodGet, methodPost, methodPut)
 
 import Ecluse.Core.Credential (ClientCredential, bareCredential, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
-import Ecluse.Core.Package (PackageName, infoVersions, renderPackageName, unscopedName)
-import Ecluse.Core.Registry (UrlFormationError)
+import Ecluse.Core.Package (PackageInfo, PackageName, artUrl, infoVersions, pkgArtifacts, renderPackageName, unscopedName)
+import Ecluse.Core.Registry (UrlFormationError (UnparseableUrl))
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl), AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, adapterMetadata))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, cargoCached, npmCached, pypiSimpleCached, rubyGemsCached)
 import Ecluse.Core.Registry.Cargo.Document (cargoRecords)
 import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead)
 import Ecluse.Core.Registry.Cargo.Request (cargoArtifactRequest, cargoConfigRequest, cargoIndexRequest)
 import Ecluse.Core.Registry.Cargo.Route.Internal (cargoRoutes)
 import Ecluse.Core.Registry.Cargo.Serving (assembleCargoDocument, serialiseCargoDocument)
-import Ecluse.Core.Registry.Metadata (Manifest (..))
+import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.Metadata (npmRead)
@@ -46,15 +46,22 @@ import Ecluse.Core.Registry.PyPI.Metadata (pypiRead)
 import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, filenameMemo, readCoordinate)
 import Ecluse.Core.Registry.PyPI.Route.Internal (pypiRoutes)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifFilename), SimpleIndex (siFiles))
-import Ecluse.Core.Registry.Request (BaseRequest, mkBaseRequest, sealRequest)
+import Ecluse.Core.Registry.Request (BaseRequest, artifactRequestByUrl, mkBaseRequest, sealRequest)
+import Ecluse.Core.Registry.RubyGems.Credential (rubyReadCredential)
+import Ecluse.Core.Registry.RubyGems.Metadata (gemReadWith, prepareGemRead)
+import Ecluse.Core.Registry.RubyGems.Project (GemCoordinate, mkCoordinate, mkGemPlatform)
+import Ecluse.Core.Registry.RubyGems.Request (gemArtifactUrl, gemCompactSpecUrl)
+import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRoutes)
+import Ecluse.Core.Registry.RubyGems.Serving (assembleRubyGemsDocument, serialiseRubyGemsDocument)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
-import Ecluse.Core.Version (renderVersion)
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpTier), cargoCaptureUpstream, cargoCorpusPackages, corpusPackages, cpName, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, readCapture)
+import Ecluse.Core.Version (mkVersion, renderVersion)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpTier), cargoCaptureUpstream, cargoCorpusPackages, corpusPackages, cpName, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, readCapture, rubyGemsCaptureUpstream, rubyGemsCorpusPackages, syntheticProxyBase)
 import Ecluse.Test.Corpus.Cargo qualified as Cargo
 import Ecluse.Test.Corpus.Npm (benchPackageName, syntheticPackumentBytes)
 import Ecluse.Test.Corpus.PyPI (benchProject, syntheticIndexBytes)
+import Ecluse.Test.Corpus.RubyGems qualified as RubyGems
 import Ecluse.Test.Corpus.Subset (heavyCargoBase, heavyNpmBase, heavyPyPIBase, keepCargoVersions, keepNpmVersions, keepPyPIVersions)
 import Ecluse.Test.EcosystemBench.Types
 import Ecluse.Test.Package (unsafeRegistryUrl)
@@ -66,6 +73,7 @@ import Ecluse.Test.Registry.Npm.Project (parseVersionBytes)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist)
 import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex, simpleValue)
 import Ecluse.Test.Registry.PyPI.Project (readThrough)
+import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo)
 import Ecluse.Test.Security.Limits (checkNestingDepth)
 import Ecluse.Test.Snapshot (readDetails)
 
@@ -91,7 +99,7 @@ checkProviderCoverage :: [Ecosystem] -> Either Text ()
 checkProviderCoverage actual =
     unless (sort actual == sort required) (Left ("measurement providers differ from required ecosystems: " <> show actual))
   where
-    required = [Cargo, Npm, PyPI]
+    required = [Cargo, Npm, PyPI, RubyGems]
 
 -- | The explicit provider registry, without loading captures or running measured operations.
 ecosystemBenchFor :: Ecosystem -> Maybe EcosystemBench
@@ -99,10 +107,10 @@ ecosystemBenchFor = \case
     Npm -> Just npmBench
     PyPI -> Just pypiBench
     Cargo -> Just cargoBench
-    RubyGems -> Nothing
+    RubyGems -> Just rubyGemsBench
 
 benchmarkRegistrations :: [(EcosystemBench, [CorpusPackage])]
-benchmarkRegistrations = [(npmBench, corpusPackages), (pypiBench, pypiCorpusPackages), (cargoBench, cargoCorpusPackages)]
+benchmarkRegistrations = [(npmBench, corpusPackages), (pypiBench, pypiCorpusPackages), (cargoBench, cargoCorpusPackages), (rubyGemsBench, rubyGemsCorpusPackages)]
 
 loadEcosystem :: EcosystemBench -> [CorpusPackage] -> IO EcosystemBench
 loadEcosystem ecosystem packages = do
@@ -134,7 +142,7 @@ npmBench =
         , ebSyntheticName = benchPackageName
         , ebDecode = \_ -> first show . fmap (map renderVersion) . parseVersionBytes
         , ebProject = projectNpmFull defaultLimits
-        , ebProjectServed = projectNpmFull defaultLimits
+        , ebCheckServed = checkProjectedServed (projectNpmFull defaultLimits) (projectNpmFull defaultLimits)
         , ebRead = captureManifest npmRead npmCaptureUpstream
         , ebSelective = \name version -> fmap (fmap readDetails) . captureVersion npmRead npmCaptureUpstream name version
         , ebReadDocument = readDocument (fst npmCached)
@@ -168,7 +176,7 @@ pypiBench =
         , ebSyntheticName = benchProject
         , ebDecode = \name raw -> pypiReleaseKeys name . siFiles <$> first toText (eitherDecodeStrict raw)
         , ebProject = \name -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits name
-        , ebProjectServed = \name -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits name
+        , ebCheckServed = checkProjectedServed (\name -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits name) (\name -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits name)
         , ebRead = captureManifest pypiRead pypiCaptureUpstream
         , ebSelective = \name version -> fmap (fmap readDetails) . captureVersion pypiRead pypiCaptureUpstream name version
         , ebReadDocument = readDocument (fst pypiSimpleCached . documentFromValue)
@@ -209,7 +217,7 @@ cargoBench =
         , ebSyntheticName = Cargo.benchCrate
         , ebDecode = const Cargo.cargoVersionKeys
         , ebProject = \name bytes -> Cargo.cargoCaptureDiscovery >>= \discovery -> projectCargoIndex discovery defaultLimits name bytes
-        , ebProjectServed = \name bytes -> Cargo.cargoServedDiscovery >>= \discovery -> projectCargoIndex discovery defaultLimits name bytes
+        , ebCheckServed = checkProjectedServed (\name bytes -> Cargo.cargoCaptureDiscovery >>= \discovery -> projectCargoIndex discovery defaultLimits name bytes) (\name bytes -> Cargo.cargoServedDiscovery >>= \discovery -> projectCargoIndex discovery defaultLimits name bytes)
         , ebRead = \name chunks -> either (pure . Left) (\nativeRead -> captureManifest nativeRead cargoCaptureUpstream name chunks) capturedCargoRead
         , ebSelective = \name version chunks -> either (pure . Left) (\nativeRead -> fmap (fmap readDetails) (captureVersion nativeRead cargoCaptureUpstream name version chunks)) capturedCargoRead
         , ebReadDocument = fmap snd . first show . Cargo.projectCargoTree defaultLimits Cargo.benchCrate
@@ -231,6 +239,71 @@ cargoBench =
   where
     capturedCargoRead = cargoRead <$> Cargo.cargoCaptureDiscovery
     cargoBase = mkBaseRequest (unsafeRegistryUrl "https://index.crates.io")
+
+rubyGemsBench :: EcosystemBench
+rubyGemsBench =
+    EcosystemBench
+        { ebEcosystem = RubyGems
+        , ebCorpus = []
+        , ebUpstream = rubyGemsCaptureUpstream
+        , ebOrigin = rubyGemsOrigin
+        , ebTreeRead = RubyGems.projectRubyGemsTree defaultLimits
+        , ebTreeDocument = (fst rubyGemsCached <$>) . snd rubyGemsCached
+        , ebKeepVersions = const RubyGems.keepRubyGemsVersions
+        , ebHeavyBase = RubyGems.heavyRubyGemsBase
+        , ebSynthetic = RubyGems.syntheticInfoBytes
+        , ebSyntheticName = RubyGems.benchGem
+        , ebDecode = const RubyGems.rubyGemsVersionKeys
+        , ebProject = RubyGems.projectRubyGemsInfo rubyGemsOrigin defaultLimits
+        , ebCheckServed = checkRubyGemsServed
+        , ebRead = captureManifest rubyGemsRead rubyGemsCaptureUpstream
+        , ebSelective = \name version -> fmap (fmap readDetails) . captureVersion rubyGemsRead rubyGemsCaptureUpstream name version
+        , ebReadDocument = first show . fmap snd . RubyGems.projectRubyGemsTree defaultLimits RubyGems.benchGem
+        , ebNestingDepth = maybe (-1) (const 1) . snd rubyGemsCached
+        , ebMetadata = MetadataRendering assembleRubyGemsDocument serialiseRubyGemsDocument
+        , ebReader = Right rubyGemsRead
+        , ebReadFactory = prepareGemRead
+        , ebRoutes = [RouteCase "mixed requests" (concat (replicate 1000 rubyGemsRequests))]
+        , ebClassify = \(method, segments) -> routeDepth (matchRoute rubyGemsRoutes method [] segments)
+        , ebActionRoutes =
+            [ RouteCase "gem action" (replicate 1000 (methodGet, ["gems", "bench-gem-1.0.0.gem"]))
+            , RouteCase "quick specification action" (replicate 1000 (methodGet, ["quick", "Marshal.4.8", "bench-gem-1.0.0.gemspec.rz"]))
+            , RouteCase "native info action" (replicate 1000 (methodGet, ["info", "bench-gem"]))
+            ]
+        , ebAction = \(method, segments) -> snd <$> matchRoute rubyGemsRoutes method [] segments
+        , ebRouteScaling = [RouteScaling "malformed native coordinate" (\count -> (methodGet, ["quick", "Marshal.4.8", "bench" <> T.replicate (fromIntegral count) "-" <> ".gemspec.rz"]))]
+        , ebRequestBuilds =
+            [ RequestBuild "metadata request" (originRequest rubyGemsRead rubyGemsBase)
+            , RequestBuild "artifact request" (nativeCoordinateRequest gemArtifactUrl)
+            , RequestBuild "compact specification request" (nativeCoordinateRequest gemCompactSpecUrl)
+            ]
+        }
+
+rubyGemsOrigin :: Text
+rubyGemsOrigin = "https://rubygems.org"
+
+rubyGemsRead :: EcosystemRead
+rubyGemsRead = gemReadWith (const pass) (const pass) rubyGemsOrigin
+
+rubyGemsBase :: BaseRequest
+rubyGemsBase = mkBaseRequest (unsafeRegistryUrl rubyGemsOrigin)
+
+nativeCoordinateRequest :: (Text -> GemCoordinate -> Either UrlFormationError Text) -> PackageName -> Either UrlFormationError Request
+nativeCoordinateRequest location name = do
+    coordinate <- first (const (UnparseableUrl "invalid native benchmark coordinate")) (mkGemPlatform "ruby" >>= mkCoordinate name (mkVersion RubyGems "1.0.0"))
+    url <- location rubyGemsOrigin coordinate
+    artifactRequestByUrl rubyReadCredential benchCredential url
+
+rubyGemsRequests :: [(Method, [Text])]
+rubyGemsRequests =
+    [ (methodGet, ["versions"])
+    , (methodGet, ["api", "v1", "dependencies"])
+    , (methodGet, ["quick", "Marshal.4.8", "bench-gem-1.0.0.gemspec.rz"])
+    , (methodGet, ["gems", "bench-gem-1.0.0.gem"])
+    , (methodPost, ["api", "v1", "gems"])
+    , (methodGet, ["info", "bench-gem"])
+    , (methodGet, [])
+    ]
 
 cargoRequests :: [(Method, [Text])]
 cargoRequests =
@@ -312,3 +385,22 @@ pypiRequests =
     , (methodGet, ["favicon.ico"])
     , (methodPut, ["simple", "requests"])
     ]
+
+-- Existing embedded-URL protocols retain count, artifact and proxy-origin checks together.
+checkProjectedServed :: (PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)) -> (PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)) -> PackageName -> ByteString -> ByteString -> IO (Either Text ())
+checkProjectedServed originalProject servedProject name originalBytes servedBytes = pure $ do
+    original <- first show (fst <$> originalProject name originalBytes)
+    served <- first show (fst <$> servedProject name servedBytes)
+    unless (Map.size (infoVersions served) == Map.size (infoVersions original)) (Left "served release count differs")
+    unless (length (artifacts served) == length (artifacts original)) (Left "served artifact count differs")
+    unless (all (((syntheticProxyBase <> "/") `T.isPrefixOf`) . artUrl) (artifacts served)) (Left "served artifact URL escaped the proxy origin")
+  where
+    artifacts info = concatMap (toList . pkgArtifacts) (Map.elems (infoVersions info))
+
+checkRubyGemsServed :: PackageName -> ByteString -> ByteString -> IO (Either Text ())
+checkRubyGemsServed _ original served = pure $ do
+    expected <- referenceInfo original
+    actual <- referenceInfo served
+    unless (map installationRow actual == map installationRow expected) (Left "served native installation rows differ from the independent source rows")
+  where
+    installationRow row = row{rowPosition = 0}

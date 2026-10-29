@@ -5,7 +5,8 @@
 -- | Allocation criteria, the captures run's verdicts and exit decision, and the live run's.
 module Ecluse.AcceptanceSpec (spec) where
 
-import Data.Aeson (Key, Value, encode, object, (.=))
+import Data.Aeson (Key, Value (..), encode, object, toJSON, (.=))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
@@ -14,6 +15,7 @@ import Test.Hspec
 import Ecluse.Acceptance (
     AssessedLeg (..),
     Calibration (..),
+    CalibrationSource (..),
     CapturesReport (..),
     CapturesSection (..),
     Criteria (..),
@@ -27,6 +29,7 @@ import Ecluse.Acceptance (
     Verdict (Breached, NoBudget, Within),
     assessCaptures,
     budgetBytes,
+    calibrationSourceFor,
     capturesAnnotations,
     capturesExitCode,
     capturesProblems,
@@ -39,7 +42,7 @@ import Ecluse.Acceptance (
     renderCapturesReport,
     renderLiveReport,
  )
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportTimeout, TransportTls, TransportUnreachable), transportFault)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable), RegistryResponse (RegistryResponse), UrlFormationError (EmptyBaseUrl))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
@@ -73,7 +76,57 @@ spec = do
             decodeCriteria (document (calibrationJson "abc123" ["https://example.test/runs/1"] (-1)) []) `shouldSatisfy` isLeft
         it "loads the committed criteria, with a section per ecosystem" $ do
             criteria <- loadCriteria
-            Map.keys (critAllocatedBytes criteria) `shouldBe` [Npm, PyPI, Cargo]
+            Map.keys (critAllocatedBytes criteria) `shouldBe` [Npm, PyPI, RubyGems, Cargo]
+
+    describe "ecosystem calibration sources" $ do
+        it "uses the default source when the optional map is absent or empty" $ do
+            let expected = CalibrationSource hostArch "ubuntu-24.04-arm" "abc123" ("https://example.test/runs/1" :| [])
+            calibrationSourceFor calibration Cargo `shouldBe` expected
+            decodeCriteria (document (withSources (object [])) []) `shouldBe` decodeCriteria (document validCalibration [])
+        it "decodes a Ruby override without changing the Cargo source or margin" $ do
+            parsed <- either fail pure (decodeCriteria (document (withSources (object ["rubygems" .= nativeSourceJson])) []))
+            calibrationSourceFor (critCalibration parsed) RubyGems `shouldBe` nativeSource
+            calibrationSourceFor (critCalibration parsed) Cargo `shouldBe` calibrationSourceFor calibration Cargo
+            calMarginPercent (critCalibration parsed) `shouldBe` 10
+            budgetBytes (critCalibration parsed) 1001 `shouldBe` 1102
+        for_ ["unknown", "RubyGems", "rubygems/"] $ \key ->
+            it ("rejects the source ecosystem key " <> show key) $
+                decodeCriteria (document (withSources (object [key .= nativeSourceJson])) []) `shouldSatisfy` isLeft
+        for_ [Null, object ["rubygems" .= Null], object ["rubygems" .= (1 :: Int)], object ["rubygems" .= object ["arch" .= hostArch]]] $ \invalid ->
+            it ("rejects malformed source data " <> show invalid) $
+                decodeCriteria (document (withSources invalid) []) `shouldSatisfy` isLeft
+        for_ [("", "runner", "commit", ["run"]), ("arch", " ", "commit", ["run"]), ("arch", "runner", "", ["run"]), ("arch", "runner", "commit", []), ("arch", "runner", "commit", [""])] $ \(arch, runner, commit, runs) ->
+            it ("rejects an incomplete source " <> show (arch, runner, commit, runs)) $
+                decodeCriteria (document (withSources (object ["rubygems" .= sourceJson arch runner commit runs])) []) `shouldSatisfy` isLeft
+        for_ ["marginPercent", "unknown"] $ \key ->
+            it ("rejects the unsupported source field " <> show key) $
+                let invalidSource = case nativeSourceJson of
+                        Object fields -> Object (KeyMap.insert key (toJSON (99 :: Int)) fields)
+                        other -> other
+                 in decodeCriteria (document (withSources (object ["rubygems" .= invalidSource])) []) `shouldSatisfy` isLeft
+        it "keeps same-name Cargo and Ruby budgets and report sources separate" $ do
+            let report = assessCaptures mixedCriteria mixedRuns
+                renderedMixed = renderCapturesReport operatingPoint report
+            verdicts report `shouldBe` [("aws-sdk-ec2", FullDocument, Within), ("aws-sdk-ec2", SingleVersion, NoBudget), ("aws-sdk-ec2", FullDocument, Breached 1), ("aws-sdk-ec2", SingleVersion, NoBudget)]
+            renderedMixed `shouldSatisfy` T.isInfixOf ("Each cargo budget is the figure measured on ubuntu-24.04-arm (" <> hostArch <> ") at abc123, plus 10%")
+            renderedMixed `shouldSatisfy` T.isInfixOf "Each rubygems budget is the figure measured on native-runner (not-native-architecture) at native-commit, plus 10%"
+            renderedMixed `shouldSatisfy` T.isInfixOf "https://example.test/native-run"
+        it "warns only for the selected source architecture" $ do
+            let report = assessCaptures mixedCriteria mixedRuns
+                warnings = capturesAnnotations report
+            filter (T.isInfixOf "calibrated elsewhere") warnings
+                `shouldBe` ["::warning title=Allocation budgets calibrated elsewhere::The budgets were calibrated on rubygems not-native-architecture and this run is on " <> hostArch <> ", so a leg close to its budget can read differently."]
+            renderCapturesReport operatingPoint report `shouldSatisfy` T.isInfixOf ("calibrated on rubygems not-native-architecture and this run is on " <> hostArch)
+        it "does not warn for a matching override when the unused default differs" $ do
+            let selected = mixedCriteria{critCalibration = calibration{calArch = "not-" <> hostArch, calSourcesByEcosystem = Map.singleton RubyGems nativeSource{sourceArch = hostArch}}}
+            filter (T.isInfixOf "calibrated elsewhere") (capturesAnnotations (assessCaptures selected [(RubyGems, [measured "aws-sdk-ec2" 200 1])])) `shouldBe` []
+        it "pins the twelve reported native medians and retained global source" $ do
+            committed <- loadCriteria
+            calMarginPercent (critCalibration committed) `shouldBe` 1
+            calCommit (critCalibration committed) `shouldBe` "47f527179338f1b51f68a272684f3eef32aec43d"
+            calRuns (critCalibration committed) `shouldBe` ("https://github.com/AlexaDeWit/Ecluse/actions/runs/40235400884/job/121295869291" :| [])
+            calibrationSourceFor (critCalibration committed) RubyGems `shouldBe` CalibrationSource "aarch64" "ubuntu-26.04-arm" "878ba15dbdf0e561e4ed68748c950e6a75aa589a" ("https://github.com/AlexaDeWit/Ecluse/actions/runs/40575218918/job/122439883319" :| [])
+            Map.lookup RubyGems (critAllocatedBytes committed) `shouldBe` Just (Map.fromList [(name, Map.fromList (zip [FullDocument, SingleVersion, FullShippedAdvisories, FullAllAdvisoryRules] bytes)) | (name, bytes) <- [("aws-sdk-ec2", [40744816, 21378576, 40940472, 41152240]), ("nokogiri", [76814440, 45205656, 76887224, 76951888]), ("rails", [50941392, 31166984, 51193232, 51318808])]])
 
     describe "budgetBytes" $ do
         it "adds the margin and rounds up to a whole byte" $
@@ -230,7 +283,7 @@ fetchCases =
     response code = RegistryResponse code 4 "body"
 
 calibration :: Calibration
-calibration = Calibration hostArch "ubuntu-24.04-arm" "abc123" ("https://example.test/runs/1" :| []) 10
+calibration = Calibration hostArch "ubuntu-24.04-arm" "abc123" ("https://example.test/runs/1" :| []) 10 Map.empty
 
 criteriaFixture :: Criteria
 criteriaFixture =
@@ -262,6 +315,28 @@ calibrationJson commit runs margin =
 
 document :: Value -> [(Text, Value)] -> LByteString
 document calibrationValue sections = encode (object ["calibration" .= calibrationValue, "allocatedBytes" .= Map.fromList sections])
+
+sourceJson :: Text -> Text -> Text -> [Text] -> Value
+sourceJson arch runner commit runs = object ["arch" .= arch, "runner" .= runner, "commit" .= commit, "runs" .= runs]
+
+nativeSourceJson :: Value
+nativeSourceJson = sourceJson "not-native-architecture" "native-runner" "native-commit" ["https://example.test/native-run"]
+
+nativeSource :: CalibrationSource
+nativeSource = CalibrationSource "not-native-architecture" "native-runner" "native-commit" ("https://example.test/native-run" :| [])
+
+withSources :: Value -> Value
+withSources sources = case validCalibration of
+    Object fields -> Object (KeyMap.insert "sourcesByEcosystem" sources fields)
+    other -> other
+
+mixedCriteria :: Criteria
+mixedCriteria = Criteria calibration{calSourcesByEcosystem = Map.singleton RubyGems nativeSource} (Map.fromList [(Cargo, figure 100), (RubyGems, figure 200)])
+  where
+    figure bytes = Map.singleton "aws-sdk-ec2" (Map.singleton FullDocument bytes)
+
+mixedRuns :: [(Ecosystem, [PackageOutcome])]
+mixedRuns = [(Cargo, [measured "aws-sdk-ec2" 110 1]), (RubyGems, [measured "aws-sdk-ec2" 221 1])]
 
 fixedCapturesReport :: Text
 fixedCapturesReport =

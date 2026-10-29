@@ -49,8 +49,8 @@ data EcosystemBench = EcosystemBench
     -- ^ Decode release keys through the adapter's wire parser.
     , ebProject :: PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
     -- ^ The pure projection of a synthetic body, under the fixed test key and with no location check.
-    , ebProjectServed :: PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
-    -- ^ Reproject with the served discovery binding when native metadata has no artifact URLs.
+    , ebCheckServed :: PackageName -> ByteString -> ByteString -> IO (Either Text ())
+    -- ^ Independently check observable served fields outside the timed benchmark operation.
     , ebRead :: PackageName -> [ByteString] -> IO (Either MetadataError Manifest)
     -- ^ The production full read of a capture's chunks, as a fetch from the capture's registry runs it.
     , ebSelective :: PackageName -> Version -> [ByteString] -> IO (Either MetadataError (Maybe PackageDetails))

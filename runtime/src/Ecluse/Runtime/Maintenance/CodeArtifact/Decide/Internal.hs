@@ -76,6 +76,7 @@ import Ecluse.Core.Fault (
     transportRetryable,
  )
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, pkgNamespace, unScope, unscopedName)
+import Ecluse.Core.Registry (ParseError)
 import Ecluse.Core.Registry.Cargo.Project qualified as Cargo
 import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
@@ -115,6 +116,7 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UnsafeReason (InsufficientPermissions),
     UpstreamSafety (Undecidable, Unsafe),
  )
+import Ecluse.Core.Registry.RubyGems.Project qualified as RubyGems
 import Ecluse.Core.Text (nonBlank, readDecimalText)
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport, errorCodeText)
@@ -140,7 +142,7 @@ codeArtifactFormat = \case
     Npm -> Just (CodeArtifactFormat Npm CA.PackageFormat_Npm)
     PyPI -> Just (CodeArtifactFormat PyPI CA.PackageFormat_Pypi)
     Cargo -> Just (CodeArtifactFormat Cargo (CA.PackageFormat' "cargo"))
-    RubyGems -> Nothing
+    RubyGems -> Just (CodeArtifactFormat RubyGems (CA.PackageFormat' "ruby"))
 
 -- | The ecosystem a format was built from.
 formatEcosystem :: CodeArtifactFormat -> Ecosystem
@@ -211,12 +213,16 @@ listPageLimit = 1000
 packageCoordinates :: PackageName -> (Maybe Text, Text)
 packageCoordinates name = (unScope <$> pkgNamespace name, unscopedName name)
 
--- | Parse Cargo listing identities and retain existing coordinate handling for other formats.
+-- | Parse native listing identities and refuse namespaces for formats that do not have them.
 packageNameFrom :: Ecosystem -> Maybe Text -> Text -> Either StoreFault PackageName
-packageNameFrom Cargo namespace raw = do
-    unless (maybe True T.null namespace) (Left (protocolFault "Cargo packages cannot have a namespace"))
-    first (const (protocolFault "CodeArtifact returned an invalid Cargo package name")) (Cargo.projectName raw)
-packageNameFrom eco namespace raw = Right (mkPackageName eco (mkScope <$> (nonBlank =<< namespace)) raw)
+packageNameFrom Cargo = nativePackageName "Cargo" Cargo.projectName
+packageNameFrom RubyGems = nativePackageName "RubyGems" RubyGems.projectName
+packageNameFrom eco = \namespace raw -> Right (mkPackageName eco (mkScope <$> (nonBlank =<< namespace)) raw)
+
+nativePackageName :: Text -> (Text -> Either ParseError PackageName) -> Maybe Text -> Text -> Either StoreFault PackageName
+nativePackageName label parse namespace raw = do
+    unless (maybe True T.null namespace) (Left (protocolFault (label <> " packages cannot have a namespace")))
+    first (const (protocolFault ("CodeArtifact returned an invalid " <> label <> " package name"))) (parse raw)
 
 -- | List one bucket page. The prefix filters the package component, never its namespace.
 listPackagesRequest :: CodeArtifactStore -> NamePrefix -> Maybe Text -> CA.ListPackages
@@ -320,13 +326,13 @@ descriptionFault detail =
         , faultRetry = RetryFutile
         }
 
--- | Reject malformed Cargo inventory. Other formats retain their absent-name filtering.
+-- | Reject malformed Cargo and RubyGems inventory. Other formats retain their absent-name filtering.
 packagesOfPage :: Ecosystem -> [CA.PackageSummary] -> Either StoreFault [PackageName]
 packagesOfPage eco = fmap catMaybes . traverse named
   where
     named summary = case summary ^. CAL.packageSummary_package of
-        Just raw | eco == Cargo -> Just <$> packageNameFrom eco (summary ^. CAL.packageSummary_namespace) raw
-        _ | eco == Cargo -> Left (protocolFault "CodeArtifact returned a Cargo package without a name")
+        Just raw | eco `elem` [Cargo, RubyGems] -> Just <$> packageNameFrom eco (summary ^. CAL.packageSummary_namespace) raw
+        _ | eco `elem` [Cargo, RubyGems] -> Left (protocolFault ("CodeArtifact returned a " <> show eco <> " package without a name"))
         raw -> traverse (packageNameFrom eco (summary ^. CAL.packageSummary_namespace)) (nonBlank =<< raw)
 
 -- | Published and Unlisted versions remain installable. Other statuses are withdrawn.

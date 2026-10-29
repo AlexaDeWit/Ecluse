@@ -198,6 +198,7 @@ unsealedCodec =
     PublishCodec
         { pcProbeRequest = \targetUrl _token _name -> unsealed (targetUrl <> "/probe")
         , pcVersionListWalk = pcVersionListWalk npmPublishCodec
+        , pcMirrorCompanion = Nothing
         , pcNativeComplete = pcNativeComplete npmPublishCodec
         , pcTargetReadPermille = pcTargetReadPermille npmPublishCodec
         , pcTargetRead = staticRead npmRead{erRequest = \target _ _ -> unsealed (registryUrlText (baseRequestUrl target) <> "/probe")}
