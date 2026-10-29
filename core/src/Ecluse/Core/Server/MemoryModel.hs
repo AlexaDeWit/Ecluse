@@ -13,6 +13,7 @@ module Ecluse.Core.Server.MemoryModel (
     mirrorJobEstimatedBytes,
     bufferedChunkCharge,
     decodedDocumentCharge,
+    saturatingCharge,
 ) where
 
 import Data.ByteString qualified as BS
@@ -60,3 +61,7 @@ decodedDocumentCharge bytes
     | otherwise = fromInteger (min (toInteger (maxBound :: Int)) (4096 + 8 * toInteger (BS.length bytes) + 512 * markers))
   where
     markers = BS.foldl' (\count byte -> if byte `elem` [34, 44, 58, 60, 62, 91, 93, 123, 125] then count + 1 else count) 0 bytes
+
+-- | Clamp an Integer charge into the Int admission interface: below zero to zero, past 'maxBound' to 'maxBound'.
+saturatingCharge :: Integer -> Int
+saturatingCharge = fromInteger . max 0 . min (toInteger (maxBound :: Int))
