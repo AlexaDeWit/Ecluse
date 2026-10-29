@@ -9,17 +9,15 @@ import Control.Concurrent (threadDelay)
 import Control.Monad (foldM)
 import Data.Aeson (Object, Value (Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Network.HTTP.Client (defaultManagerSettings, newManager, parseRequest)
-import Network.HTTP.Types (hContentType, status200, status304, status404)
-import Network.HTTP.Types.Header (hETag, hIfNoneMatch)
-import Network.Wai (Application, rawPathInfo, requestHeaders, responseLBS)
+import Network.Wai (Application, rawPathInfo)
 import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.AdvisoryStore (AdvisoryObject, advisoryStoreApplication)
 import Ecluse.BenchLoad.Error (benchFail)
+import Ecluse.BenchLoad.ObjectStore (conditionalObjectRead, objectRevision)
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Mirror.State (encodeProjectRecord, extendProjectRecord, stateTarget)
 import Ecluse.Core.Mirror.State.Internal (projectKey, retainVerifiedIdentity)
@@ -35,7 +33,6 @@ import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit, MirrorArtifactBodyLim
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Corpus (CaptureUpstream (CaptureUpstream), CorpusPackage (cpPackage), cargoCorpusPackages)
 import Ecluse.Test.Deadline (withExchangeClient)
-import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Registry.Cargo.Fixtures (cargoShard)
 import Ecluse.Test.Registry.Cargo.Metadata (cargoRead, parseCargoDiscovery)
 import Ecluse.Test.Registry.Cargo.Reference (IndexLine (indexValue), referenceIndex)
@@ -108,10 +105,4 @@ nativeRows bytes = Map.fromListWith (<>) <$> traverse row (referenceIndex bytes)
 copyStateApplication :: Int -> Map ByteString ByteString -> Application
 copyStateApplication latency records request respond = do
     when (latency > 0) (threadDelay latency)
-    respond $ case Map.lookup (rawPathInfo request) records of
-        Nothing -> responseLBS status404 [(hContentType, "application/xml")] "<Error><Code>NoSuchKey</Code></Error>"
-        Just body
-            | lookup hIfNoneMatch (requestHeaders request) == Just (revision body) -> responseLBS status304 [(hETag, revision body)] ""
-            | otherwise -> responseLBS status200 [(hETag, revision body), (hContentType, "application/json")] (fromStrict body)
-  where
-    revision body = "\"" <> encodeUtf8 (hexSha256Of body) <> "\""
+    respond (conditionalObjectRead request ((\body -> (objectRevision body, body)) <$> Map.lookup (rawPathInfo request) records))
