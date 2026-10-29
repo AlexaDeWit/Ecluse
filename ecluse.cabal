@@ -190,7 +190,6 @@ library ecluse-core
     Ecluse.Core.Registry.Cargo.Publish.Body
     Ecluse.Core.Registry.PyPI.Archive.Path
     Ecluse.Core.Registry.PyPI.Archive.BZip
-    Ecluse.Core.Registry.PyPI.Archive.Inflate
     Ecluse.Core.Registry.PyPI.Archive.Lzma
     Ecluse.Core.Registry.PyPI.Archive.Tar
     Ecluse.Core.Registry.PyPI.UploadMetadata
