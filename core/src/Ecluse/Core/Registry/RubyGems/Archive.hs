@@ -28,7 +28,7 @@ import UnliftIO.Exception (evaluate)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Hash (HashAlg (SHA512), computeDigest, hexDigestText, sha256Hex)
 import Ecluse.Core.Registry (ParseError (..))
-import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), splitArchiveCharge, withInflatedChunks)
+import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (GzipMembers), inflateBounded, splitArchiveCharge, withInflatedChunks)
 import Ecluse.Core.Registry.Archive.Tar (TarMember (..), scanTar, sourceReader, tarContents, tarMembers)
 import Ecluse.Core.Registry.RubyGems.Archive.Metadata
 import Ecluse.Core.Registry.RubyGems.Archive.Yaml
@@ -59,8 +59,8 @@ inspectGemArchive limits charge bytes
             Right (metadataGzip, dataGzip, checksumsGzip) -> do
                 let retained = BS.length bytes + BS.length metadataGzip + BS.length dataGzip + BS.length checksumsGzip
                     pay extra = charge (retained + extra)
-                metadataBytes <- inflateMetadata limits pay metadataGzip
-                checksumBytes <- inflateMetadata limits (\extra -> pay (either (const 0) ((3 *) . BS.length) metadataBytes + extra)) checksumsGzip
+                metadataBytes <- inflateMetadata pay metadataGzip
+                checksumBytes <- inflateMetadata (\extra -> pay (either (const 0) ((3 *) . BS.length) metadataBytes + extra)) checksumsGzip
                 case (metadataBytes, checksumBytes) of
                     (Right raw, Right sums) -> do
                         let nativePay extra = pay (128 * (BS.length raw + BS.length sums) + extra)
@@ -85,6 +85,7 @@ inspectGemArchive limits charge bytes
                     (Left fault, _) -> pure (Left fault)
                     (_, Left fault) -> pure (Left fault)
   where
+    inflateMetadata = inflateBounded (GzipMembers 1) "gem compressed metadata exceeds its inflated byte bound" (maxMetadataBytes limits)
     envelope scan = do
         let members = tarMembers scan
             mandatory = ["metadata.gz", "data.tar.gz", "checksums.yaml.gz"]
@@ -93,20 +94,6 @@ inspectGemArchive limits charge bytes
         traverse_ (\name -> unless (Map.member name members) (bad "missing required gem envelope member")) mandatory
         let content name = maybeToRight (ParseError "missing gem member payload") (Map.lookup name (tarContents scan))
         (,,) <$> content "metadata.gz" <*> content "data.tar.gz" <*> content "checksums.yaml.gz"
-
-inflateMetadata :: Limits -> (Int -> IO ()) -> ByteString -> IO (Either ParseError ByteString)
-inflateMetadata limits charge bytes = withInflatedChunks (GzipMembers 1) charge bytes (collect 0 [])
-  where
-    collect seen held pull =
-        pull >>= \case
-            Left fault -> pure (Left fault)
-            Right chunk
-                | BS.null chunk -> pure (Right (BS.concat (reverse held)))
-                | BS.length chunk > maxMetadataBytes limits - seen -> pure (bad "gem compressed metadata exceeds its inflated byte bound")
-                | otherwise -> do
-                    let next = seen + BS.length chunk
-                    charge (73728 + 3 * next)
-                    collect next (chunk : held) pull
 
 verifyChecksums :: ByteString -> ByteString -> YamlValue -> Either ParseError ()
 verifyChecksums metadataBytes dataBytes value = do
