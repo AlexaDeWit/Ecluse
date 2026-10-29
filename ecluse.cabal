@@ -1609,6 +1609,7 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.Worker
     Ecluse.BenchLoad.PyPI.Worker
     Ecluse.BenchLoad.Cargo
+    Ecluse.BenchLoad.CargoSpec
     Ecluse.BenchLoad.RubyGems
     Ecluse.BenchLoad.RubyGems.Directory
     Ecluse.BenchLoad.RubyGems.Worker
