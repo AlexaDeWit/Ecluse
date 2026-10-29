@@ -14,6 +14,7 @@ import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.RubyGems.Archive.Metadata
 import Ecluse.Core.Registry.RubyGems.Archive.Yaml (decodeYaml)
 import Ecluse.Core.Registry.RubyGems.CompactSpec (GemSpecification (..))
+import Ecluse.Core.Registry.RubyGems.Project (unGemPlatform)
 import Ecluse.Core.Security.Limits (defaultLimits)
 import Ecluse.Test.Support (expectRight)
 
@@ -44,6 +45,18 @@ spec = describe "native gem metadata schema" $ do
         for_ ["--- {}", metadata <> "name: other\n", replace "lib/owned.rb" "../owned.rb" metadata, replace "specification_version: 4" "specification_version: 999" metadata, replace "ext/extconf.rb" "ext/missing.rb" (replace "- ext/extconf.rb" "- lib/owned.rb" metadata)] $ \bytes -> do
             decoded <- decodeYaml defaultLimits (const (pure ())) bytes
             (decoded >>= parseGemMetadata) `shouldSatisfy` isLeft
+    it "reads identity scalars as Psych loads them" $ do
+        for_ [("{cpu: null, os: linux, version: ~}", "linux"), ("{cpu: 'x86_64', os: linux, version: }", "x86_64-linux"), ("{cpu: !!null arm64, os: darwin, version: '8'}", "arm64-darwin-8")] $ \(mapping, expected) -> do
+            raw <- decodeYaml defaultLimits (const (pure ())) (replace "platform: ruby" ("platform: !ruby/object:Gem::Platform " <> mapping) metadata) >>= expectRight
+            parsed <- expectRight (parseGemMetadata raw)
+            unGemPlatform (specificationPlatform (metadataSpecification parsed)) `shouldBe` expected
+        raw <- decodeYaml defaultLimits (const (pure ())) (replace "name: owned" "name: '010'" metadata) >>= expectRight
+        parsed <- expectRight (parseGemMetadata raw)
+        renderPackageName (specificationName (metadataSpecification parsed)) `shouldBe` "010"
+    it "refuses identity scalars Psych would load as nil, a Boolean or a number" $
+        for_ [replace "{version: '1.0'}" "{version: 1.0}" metadata, replace "name: owned" "name: 010" metadata, replace "name: owned" "name: Yes" metadata, replace "name: owned" "name: ~" metadata, replace "name: owned" "name: !!float 1" metadata] $ \bytes -> do
+            raw <- decodeYaml defaultLimits (const (pure ())) bytes >>= expectRight
+            parseGemMetadata raw `shouldBe` Left (ParseError "YAML scalar does not load as a native string")
   where
     replace needle replacement = TE.encodeUtf8 . T.replace (TE.decodeUtf8 needle) (TE.decodeUtf8 replacement) . TE.decodeUtf8
 
