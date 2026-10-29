@@ -18,31 +18,38 @@ module Ecluse.BenchLoad.Fixture (
     fetchChecked,
     benchNow,
     delayUpstream,
+    absentUpstream,
+    selectPinnedArtifacts,
+    rewriteLines,
+    swapChecksumPreservingWidth,
     preflightDistinct,
     probeBaseline,
 ) where
 
 import Control.Concurrent (threadDelay)
 
-import Data.Aeson (Value, encode)
+import Data.Aeson (Key, Value, encode, (.:))
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (Header, Status, status200, status304)
+import Network.HTTP.Types (Header, Status, status200, status304, status404)
 import Network.HTTP.Types.Header (hETag, hIfNoneMatch)
-import Network.Wai (Application)
+import Network.Wai (Application, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import UnliftIO (evaluate)
 
+import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact)
 import Ecluse.BenchLoad.Cargo.CopyState (withCopyState)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttp), LoadKnobs (..), Target, proxied, urlLoad)
 import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
 import Ecluse.BenchLoad.ProxyProcess (AdvisoryFeed (afObject), ProxyProcess, ProxySettings (..), mirrorStateBucket, proxyPort, proxySettings, withProxyProcess)
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, RubyGems))
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, RubyGems), ecosystemName)
 import Ecluse.Core.Package (PackageName, pkgEcosystem)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName)
 import Ecluse.Test.Corpus qualified as Corpus
@@ -157,6 +164,35 @@ benchNow = UTCTime (fromGregorian 2026 6 1) 0
 -- | Skip zero and negative delays while preserving each positive injected wait.
 delayUpstream :: Int -> IO ()
 delayUpstream latency = when (latency > 0) (threadDelay latency)
+
+-- | An upstream that answers every request with a 404 after the injected latency.
+absentUpstream :: Int -> Application
+absentUpstream latency _ respond = delayUpstream latency >> respond (responseLBS status404 [] "missing")
+
+-- | Resolve each package's workload pin in its capture, failing the run on a missing pin, capture or release.
+selectPinnedArtifacts :: Key -> (CorpusPackage -> Text -> ByteString -> IO (Either Text SelectedArtifact)) -> [CorpusPackage] -> Map Text LByteString -> IO (Map Text SelectedArtifact)
+selectPinnedArtifacts pinsKey select packages captures = do
+    pins <- Corpus.readCorpusPins (.: pinsKey) >>= either (benchFail . toText) pure
+    fmap Map.fromList . forM packages $ \package -> do
+        let name = cpName package
+            label = ecosystemName (pkgEcosystem (cpPackage package))
+        version <- maybe (benchFail ("missing " <> label <> " workload pin: " <> name)) pure (Map.lookup name pins)
+        bytes <- maybe (benchFail ("missing " <> label <> " capture: " <> name)) pure (Map.lookup name captures)
+        artifact <- select package version (toStrict bytes) >>= either benchFail pure
+        pure (name, artifact)
+
+-- | Rewrite each LF-delimited line by its zero-based position, keeping the original framing byte for byte.
+rewriteLines :: (Int -> ByteString -> Either Text ByteString) -> LByteString -> Either Text LByteString
+rewriteLines rewrite original = fromStrict . BS.intercalate "\n" <$> traverse (uncurry rewrite) (zip [0 ..] (BS.split 10 (toStrict original)))
+
+-- | Replace one exact checksum field with a value of the same byte width, refusing an absent field.
+swapChecksumPreservingWidth :: Text -> Text -> Text -> ByteString -> Either Text ByteString
+swapChecksumPreservingWidth label before after line = do
+    let raw = decodeUtf8 line
+    when (T.null before || not (before `T.isInfixOf` raw)) (Left (label <> " relay fixture has no exact checksum field"))
+    let replaced = encodeUtf8 (T.replace before after raw)
+    unless (BS.length replaced == BS.length line) (Left (label <> " relay fixture changed its native wire width"))
+    pure replaced
 
 -- | Check each selected URL once before invoking the measurement callback.
 preflightDistinct :: (Text -> IO ()) -> [Text] -> IO a -> IO a
