@@ -55,7 +55,7 @@ spec = describe "cacheProvider" $ do
         version <- recordingStore
         assembled <- recordingStore
         calls <- newIORef (0 :: Int)
-        let provider = cacheProvider (ExternalStorage 100000) (Just (rsOperations full)) (Just (rsOperations version)) (Just (rsOperations assembled))
+        let provider = cacheProvider (ExternalStorage 100000) Nothing (Just (rsOperations full)) (Just (rsOperations version)) (Just (rsOperations assembled))
             fetch value = modifyIORef' calls (+ 1) $> value
             selected = untaggedRead Nothing
         cache <- newMetadataCacheWithProvider provider
@@ -75,7 +75,7 @@ spec = describe "cacheProvider" $ do
         readIORef calls `shouldReturn` 6
 
     it "leaves absent capabilities uncached instead of allocating local stores" $ do
-        cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) Nothing Nothing Nothing)
+        cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) Nothing Nothing Nothing Nothing)
         calls <- newIORef (0 :: Int)
         let fetch value = modifyIORef' calls (+ 1) $> value
         replicateM_ 2 $ do
@@ -88,7 +88,7 @@ spec = describe "cacheProvider" $ do
         calls <- newIORef (0 :: Int)
         failures <- newIORef (0 :: Int)
         let failedOperations = externalOperations (\_ _ -> throwIO AdapterFault) (\_ _ -> throwIO AdapterFault)
-            provider = cacheProvider (ExternalStorage 100000) (Just failedOperations) (Just failedOperations) (Just failedOperations)
+            provider = cacheProvider (ExternalStorage 100000) Nothing (Just failedOperations) (Just failedOperations) (Just failedOperations)
             metrics = noopMetricsPort{mpCacheRefused = \_ -> modifyIORef' failures (+ 1)}
             fetch value = modifyIORef' calls (+ 1) $> value
         cache <- newMetadataCacheWithProvider provider
@@ -101,7 +101,7 @@ spec = describe "cacheProvider" $ do
 
     it "partitions selected identities by source, ecosystem, scope, package, and version" $ do
         version <- recordingStore
-        cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) Nothing (Just (rsOperations version)) Nothing)
+        cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) Nothing Nothing (Just (rsOperations version)) Nothing)
         let identities =
                 [ (source, unscopedNpm "shared", npmVersion "1")
                 , (Source "https://other.example", unscopedNpm "shared", npmVersion "1")
