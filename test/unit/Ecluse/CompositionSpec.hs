@@ -55,8 +55,8 @@ import Ecluse.Core.Package.Integrity (
     mkMinIntegrity,
     mkMinTrustedIntegrity,
  )
+import Ecluse.Core.Registry.FirstParty (FirstPartyEntry (OwnedName))
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName))
-import Ecluse.Core.Registry.RubyGems.FirstParty (RubyGemsFirstParty (RubyGemsOwnedName))
 import Ecluse.Core.Rules (PreparedRule (prepName), bootOrder, renderBootOrder)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), identityEvidence)
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
@@ -487,7 +487,7 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
     it "dispatches RubyGems ownership without changing native identity" $
         let owned = mkPackageName RubyGems Nothing "Acme_Tools"
          in map
-                (firstPartyName (FirstPartyRubyGems (RubyGemsOwnedName owned :| [])))
+                (firstPartyName (FirstPartyRubyGems (OwnedName owned :| [])))
                 [owned, mkPackageName RubyGems Nothing "acme-tools", mkPackageName Npm Nothing "Acme_Tools"]
                 `shouldBe` [True, False, False]
 
