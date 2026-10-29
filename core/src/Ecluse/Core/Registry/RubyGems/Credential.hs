@@ -41,10 +41,10 @@ rubyPublishExtras headers = case [value | (name, value) <- headers, name == "OTP
         | not (BS.null value)
         , BS.length value <= 1024
         , BS.all (\byte -> byte >= 33 && byte <= 126) value ->
-            Right (RubyPublishOtp (mkSecret (decodeUtf8 value)))
+            Right (PublishOneTimePassword (mkSecret (decodeUtf8 value)))
     _ -> Left (PublishMalformed (ParseError "the publication OTP header is duplicate, empty, malformed or exceeds its byte bound"))
 
 -- | Only the checked native OTP header can accompany a caller's publication.
 rubyOtpHeaders :: PublishExtras -> RequestHeaders
 rubyOtpHeaders NoPublishExtras = []
-rubyOtpHeaders (RubyPublishOtp otp) = [("OTP", encodeUtf8 (unSecret otp))]
+rubyOtpHeaders (PublishOneTimePassword otp) = [("OTP", encodeUtf8 (unSecret otp))]
