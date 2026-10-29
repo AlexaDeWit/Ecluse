@@ -138,7 +138,7 @@ boundedReadSpec = describe "boundedRead" $ do
     it "passes a small body under the generous default budget" $
         runBounded defaultLimits ["small", "body"] `shouldBe` Right (9, "smallbody")
 
-    for_ [MetadataBodyLimit 1, PublishRequestBodyLimit 1, MirrorArtifactBodyLimit 1, VerifiedArtifactBodyLimit 1] $ \bound ->
+    for_ [MetadataBodyLimit 1, PublishRequestBodyLimit 1, MirrorArtifactBodyLimit 1] $ \bound ->
         it ("retains the selected bound on refusal: " <> show bound) $
             boundedRead bound (pure "xx") `shouldReturn` Left (BodyTooLarge bound)
 

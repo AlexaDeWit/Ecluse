@@ -2,11 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The @oha@ load generator, run as a subprocess against a list of URLs. Its JSON report gives
-the status and transport-error counts. Its per-request database gives the latency of successful
-responses alone, because the report's own percentiles mix sheds in with served requests.
-A run that cannot start, or whose report does not parse, fails the harness.
--}
+-- | Oha reports statuses and transferred bytes. Its database supplies success-only latencies.
 module Ecluse.BenchLoad.Oha (
     OhaRun (..),
     RunLength (..),
@@ -55,6 +51,8 @@ data OhaReport = OhaReport
     -- ^ First body bytes over all completed responses, including refusals.
     , ohaSuccessLatencies :: [Double]
     -- ^ Seconds per 2xx or 3xx response, empty when the run did not record requests.
+    , ohaTransferredBodyBytes :: Maybe Word64
+    -- ^ Oha's actual @summary.totalData@, including response bodies for non-success statuses.
     }
     deriving stock (Show)
 
@@ -62,11 +60,12 @@ instance FromJSON OhaReport where
     parseJSON = withObject "oha report" $ \o -> do
         summary <- o .: "summary"
         elapsed <- summary .: "total"
+        transferred <- summary .:? "totalData"
         statusCounts <- o .:? "statusCodeDistribution" .!= mempty
         errorCounts <- o .:? "errorDistribution" .!= mempty
         firstByte <- o .:? "firstBytePercentiles"
         observed <- traverse firstByteObservations firstByte
-        pure (OhaReport elapsed statusCounts errorCounts (join observed) [])
+        pure (OhaReport elapsed statusCounts errorCounts (join observed) [] transferred)
 
 firstByteObservations :: Map Text (Maybe Double) -> Parser (Maybe Percentiles)
 firstByteObservations values = do

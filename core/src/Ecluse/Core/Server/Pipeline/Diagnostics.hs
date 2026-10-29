@@ -116,7 +116,6 @@ logBreach name err =
                     MetadataBodyLimit _ -> "metadata-body-size"
                     PublishRequestBodyLimit _ -> "publish-request-body-size"
                     MirrorArtifactBodyLimit _ -> "mirror-artifact-body-size"
-                    VerifiedArtifactBodyLimit _ -> "verified-artifact-body-size"
              in (role, "over " <> show c <> " bytes", show c <> " bytes")
         TooManyVersions seen c -> ("version-count", show seen, show c)
         TooManyArtifacts seen c -> ("artifact-count", show seen, show c)

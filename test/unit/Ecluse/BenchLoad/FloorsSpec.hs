@@ -78,7 +78,7 @@ spec = do
         it "refuses Cargo floor rows without a native ceiling" $
             decodeFloors (document (calibrationValue []) ["2cpu-1gib" .= object ["cargo/index-cold" .= object ["loaded" .= (1 :: Int)]]]) `shouldSatisfy` isLeft
         it "refuses RubyGems floors without independent native ceiling provenance" $
-            decodeFloors (document (calibrationValue []) ["2cpu-1gib" .= object ["rubygems/dependencies-cold" .= object ["loaded" .= (1 :: Int)]]]) `shouldSatisfy` isLeft
+            decodeFloors (document (calibrationValue []) ["2cpu-1gib" .= object ["rubygems/info-cold" .= object ["loaded" .= (1 :: Int)]]]) `shouldSatisfy` isLeft
         it "checks native RubyGems ceiling arithmetic and pod identities" $
             for_ [latencyValue [("2cpu-1gib", 20)] 31, latencyValue [("4cpu-1gib", 20)] 30] $ \latencyRecord ->
                 decodeFloors (document (calibrationValue ["rubygemsInjectedLatency" .= latencyRecord]) twoCoreFloors) `shouldSatisfy` isLeft

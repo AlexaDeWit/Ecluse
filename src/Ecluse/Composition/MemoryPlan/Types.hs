@@ -8,7 +8,6 @@ The composition root builds each byte bound from this plan.
 module Ecluse.Composition.MemoryPlan.Types (
     MemoryPlan (..),
     PublishTenant (..),
-    VerifiedArtifactPlan (..),
     MirrorArtifactTenant (..),
     QueueTenantDemand (..),
     queueTenantDemand,
@@ -51,13 +50,6 @@ newtype MirrorArtifactTenant = MirrorArtifactTenant
     }
     deriving stock (Eq, Show)
 
--- | Verified reads borrow transient capacity without requiring a write role.
-data VerifiedArtifactPlan = VerifiedArtifactPlan
-    { vapMaxBytes :: Int
-    , vapAggregateBytes :: Int
-    }
-    deriving stock (Eq, Show)
-
 {- | The resolved plan: every byte-valued bound the composition root builds with, each an
 explicit config value or its tenant-derived default. Override violations are the one refusal.
 -}
@@ -73,8 +65,6 @@ data MemoryPlan = MemoryPlan
     -- ^ The per-request (publish body) wire cap @Q@, enforced at the publish read site.
     , mpAdmissionCapacity :: Int
     -- ^ CPU-derived concurrency, or the exact explicit operator pin.
-    , mpVerifiedArtifacts :: Maybe VerifiedArtifactPlan
-    -- ^ Bounded verified-read wire bytes sharing the transient memory meter.
     , mpPublishTenant :: Maybe PublishTenant
     -- ^ Tenant 5, present only when a publication target is configured.
     , mpMirrorArtifactTenant :: Maybe MirrorArtifactTenant

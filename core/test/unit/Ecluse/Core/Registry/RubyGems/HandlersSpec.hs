@@ -3,11 +3,10 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE ImportQualifiedPost #-}
 
--- | Native batch limits and representation headers exercise the routed admission path.
+-- | Native info and coordinate requests exercise admission and response contracts.
 module Ecluse.Core.Registry.RubyGems.HandlersSpec (spec) where
 
 import Codec.Compression.GZip qualified as GZip
-import Data.Aeson (object, toJSON, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
@@ -15,7 +14,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Katip (LogEnv)
-import Network.HTTP.Types (Header, Method, Status, status200, status304, status400, status401, status403, status404, status406, status502, status503)
+import Network.HTTP.Types (Header, Method, Status, status200, status206, status304, status400, status401, status403, status404, status406, status502, status503)
 import Network.Wai (Request (..), defaultRequest, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SRequest (SRequest), SResponse (..), runSession, setPath, srequest)
@@ -28,16 +27,14 @@ import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Registry.RubyGems.Adapter (rubyGemsAdapter)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyReadCredential)
 import Ecluse.Core.Registry.RubyGems.FirstParty (projectFirstPartyEntry, rubyGemsFirstPartyName)
-import Ecluse.Core.Registry.RubyGems.Handlers (parseBatchQuery)
 import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRouter)
 import Ecluse.Core.Rules (PreparedRule (prepEval), RuleEval (PerInstallEvidence, PerPackage, PerVersion), prepare)
 import Ecluse.Core.Rules.Types (FailureAlignment (FailDeny), Inability (NoDatabaseLoaded), Rule (AllowIfOlderThan), RuleEvidence (evVersion), RuleVerdict (CannotVet))
-import Ecluse.Core.Security (Limits (..), defaultLimits)
+import Ecluse.Core.Security (Limits (..))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (newServeAdmissionTuned)
-import Ecluse.Core.Server.Admission.Artifact (newVerifiedArtifactBudget)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCacheWithProvider)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage))
@@ -53,7 +50,6 @@ import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (captureJsonLog, lineMessage, newTestLogEnv)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.RubyGems.Fixtures (RubyRelease (..), loadRubyReleasesFrom, rubyRelease)
-import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Cache (cachedMetadata, externalOperations)
 import Ecluse.Test.Server.Handler (testServeRuntimeWith)
@@ -62,65 +58,24 @@ import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = do
-    describe "bounded native query syntax" $ do
-        it "accepts the released Bundler default batch of 100 names" $
-            fmap length (parseBatchQuery defaultLimits ("?gems=" <> encodeUtf8 (T.intercalate "," ["gem" <> show n | n <- [1 :: Int .. 100]]))) `shouldBe` Right 100
-        it "accepts a valid default batch with long legacy names" $
-            fmap length (parseBatchQuery defaultLimits ("?gems=" <> encodeUtf8 (T.intercalate "," [T.replicate 200 "a" <> show n | n <- [1 :: Int .. 100]]))) `shouldBe` Right 100
-        it "refuses malformed escapes, duplicate parameters, unknown parameters and empty names" $
-            for_ ["?gems=one&gems=two", "?gems=one&other=two", "?gems=one%2", "?gems=one,,two", "?gems=", "?gems"] $
-                \query -> parseBatchQuery defaultLimits query `shouldSatisfy` isLeft
-        it "refuses the raw byte cap before parsing" $
-            parseBatchQuery defaultLimits{maxMetadataBytes = 8} "?gems=example" `shouldSatisfy` isLeft
-    describe "one-ticket native batching" $ do
-        it "serves two gems with a single CPU slot and no nested admission" $
-            withNative $ \runtime binding hits -> do
-                response <- capture runtime binding "GET" "/api/v1/dependencies?gems=ecluse-fixture-root,ecluse-fixture-leaf" []
-                simpleStatus response `shouldBe` status200
-                simpleBody response `shouldSatisfy` BS.isInfixOf "ecluse-fixture-root" . LBS.toStrict
-                simpleBody response `shouldSatisfy` BS.isInfixOf "ecluse-fixture-leaf" . LBS.toStrict
-                length <$> readIORef hits `shouldReturn` 2
-        it "answers an empty capability probe without upstream reads" $
-            withNative $ \runtime binding hits -> do
-                response <- capture runtime binding "GET" "/api/v1/dependencies" []
-                simpleStatus response `shouldBe` status200
-                simpleBody response `shouldBe` "\x04\x08[\x00"
-                readIORef hits `shouldReturn` []
-        it "refuses malformed and oversized batches before reads" $
-            withNative $ \runtime binding hits -> do
-                for_ ["/api/v1/dependencies?gems=one&gems=two", "/api/v1/dependencies?gems=" <> encodeUtf8 (T.intercalate "," ["gem" <> show n | n <- [1 :: Int .. 101]])] $ \path -> do
-                    response <- capture runtime binding "GET" path []
-                    simpleStatus response `shouldBe` status400
-                readIORef hits `shouldReturn` []
-        it "counts artifact rows cumulatively across named gems" $
-            withNative $ \runtime binding hits -> do
-                let deps = bindingPackumentDeps binding
-                    bounded = binding{bindingPackumentDeps = deps{pdLimits = (pdLimits deps){maxArtifactCount = 3}}}
-                response <- capture runtime bounded "GET" "/api/v1/dependencies?gems=ecluse-fixture-root,ecluse-fixture-leaf" []
-                simpleStatus response `shouldBe` status400
-                length <$> readIORef hits `shouldReturn` 2
-        it "keeps protected Basic reads and caller presentation" $
+    describe "native protocol routes" $ do
+        for_ ["GET", "HEAD"] $ \method ->
+            for_ ["/api/v1/dependencies", "/api/v1/dependencies?gems=ecluse-fixture-root", "/api/v1/dependencies?gems=one&gems=two"] $ \path ->
+                it ("refuses checksum-free dependency fallback for " <> show (method, path)) $
+                    withNative $ \runtime binding hits -> do
+                        response <- capture runtime binding method path []
+                        simpleStatus response `shouldBe` status404
+                        readIORef hits `shouldReturn` []
+        it "authenticates admitted info before reading a private source" $
             withNative $ \runtime binding hits -> do
                 let secured = binding{bindingPackumentDeps = (bindingPackumentDeps binding){pdInboundToken = Just (mkSecret "secret")}}
-                for_ ["/quick/Marshal.4.8/ecluse-fixture-root-1.0.0.gemspec.rz", "/gems/ecluse-fixture-root-1.0.0.gem"] $ \path -> do
-                    unauthorised <- capture runtime secured "GET" path []
-                    simpleStatus unauthorised `shouldBe` status401
-                readIORef hits `shouldReturn` []
-                denied <- capture runtime secured "GET" "/api/v1/dependencies?gems=ecluse-fixture-root" [("Authorization", "secret")]
+                denied <- capture runtime secured "GET" "/info/ecluse-fixture-root" []
                 simpleStatus denied `shouldBe` status401
-                allowed <- capture runtime secured "GET" "/api/v1/dependencies?gems=ecluse-fixture-root" [("Authorization", "Basic YWxpY2U6c2VjcmV0")]
+                readIORef hits `shouldReturn` []
+                allowed <- capture runtime secured "GET" "/info/ecluse-fixture-root" [("Authorization", "Basic YWxpY2U6c2VjcmV0")]
                 simpleStatus allowed `shouldBe` status200
                 observed <- readIORef hits
                 map (lookup "Authorization" . snd) observed `shouldBe` [Just "Basic YWxpY2U6c2VjcmV0"]
-        it "fails a batch when cumulative actual upstream bytes exceed the cap" $
-            withNative $ \runtime binding _ -> do
-                root <- BS.readFile "test/fixtures/rubygems/info/ecluse-fixture-root"
-                leaf <- BS.readFile "test/fixtures/rubygems/info/ecluse-fixture-leaf"
-                let deps = bindingPackumentDeps binding
-                    cap = max (BS.length root) (BS.length leaf) + 1
-                    bounded = binding{bindingPackumentDeps = deps{pdLimits = (pdLimits deps){maxMetadataBytes = cap}}}
-                response <- capture runtime bounded "GET" "/api/v1/dependencies?gems=ecluse-fixture-root,ecluse-fixture-leaf" []
-                simpleStatus response `shouldBe` status502
         it "relays original validated compact bytes and shares HEAD admission" $
             withNative $ \runtime binding _ -> do
                 original <- BS.readFile "test/fixtures/rubygems/quick/Marshal.4.8/ecluse-fixture-root-1.0.0.gemspec.rz"
@@ -139,56 +94,102 @@ spec = do
                 simpleBody response `shouldBe` fromStrict original
         it "shares GET admission with HEAD and withholds its body" $
             withNative $ \runtime binding _ -> do
-                headed <- capture runtime binding "HEAD" "/api/v1/dependencies?gems=ecluse-fixture-root" []
+                headed <- capture runtime binding "HEAD" "/info/ecluse-fixture-root" []
                 simpleStatus headed `shouldBe` status200
                 simpleBody headed `shouldBe` ""
                 probe <- capture runtime binding "HEAD" "/versions" []
-                simpleStatus probe `shouldBe` status404
+                simpleStatus probe `shouldBe` status200
 
-    describe "examined documents in a named batch" $ do
+    describe "current Compact Index authority" $ do
+        it "authorises private reads before304 while reusing the public snapshot" $
+            withDirectorySources $ \runtime binding hits privateStatus -> do
+                let auth = [("Authorization", "Basic YWxpY2U6c2VjcmV0")]
+                firstReply <- capture runtime binding "GET" "/versions" auth
+                simpleStatus firstReply `shouldBe` status200
+                validator <- maybe (expectationFailure "missing directory ETag" >> fail "missing directory ETag") pure (lookup "ETag" (simpleHeaders firstReply))
+                unchanged <- capture runtime binding "GET" "/versions" (("If-None-Match", validator) : auth)
+                simpleStatus unchanged `shouldBe` status304
+                events <- readIORef hits
+                map fst events `shouldBe` [["private", "versions"], ["public", "versions"], ["private", "versions"]]
+                map (lookup "Authorization" . snd) events `shouldBe` [Just "Basic YWxpY2U6c2VjcmV0", Nothing, Just "Basic YWxpY2U6c2VjcmV0"]
+                writeIORef privateStatus status403
+                refused <- capture runtime binding "GET" "/versions" (("If-None-Match", validator) : auth)
+                simpleStatus refused `shouldBe` status403
+                finalEvents <- readIORef hits
+                map fst finalEvents `shouldBe` [["private", "versions"], ["public", "versions"], ["private", "versions"], ["private", "versions"]]
+        it "returns a complete replacement for Range with a matching validator" $
+            withDirectorySources $ \runtime binding _ _ -> do
+                original <- capture runtime binding "GET" "/versions" []
+                validator <- maybe (expectationFailure "missing directory ETag" >> fail "missing directory ETag") pure (lookup "ETag" (simpleHeaders original))
+                replacement <- capture runtime binding "GET" "/versions" [("Range", "bytes=10-"), ("If-None-Match", validator)]
+                simpleStatus replacement `shouldBe` status200
+                simpleBody replacement `shouldBe` simpleBody original
+                lookup "Content-Range" (simpleHeaders replacement) `shouldBe` Nothing
+                lookup "Repr-Digest" (simpleHeaders replacement) `shouldBe` Just "sha-256=\"xaNf1tjTCVlsE8k7j2wsswDnodbM0L3OP3+Q1vuN02c=\""
+        it "keeps a native400 directory limit failure at the capability boundary" $
+            withDirectorySources $ \runtime binding hits privateStatus -> do
+                writeIORef privateStatus status400
+                response <- capture runtime binding "GET" "/versions" []
+                simpleStatus response `shouldBe` status502
+                LBS.toStrict (simpleBody response) `shouldSatisfy` BS.isInfixOf "5,000"
+                map fst <$> readIORef hits `shouldReturn` [["private", "versions"]]
+        for_ [status206, status304] $ \originStatus ->
+            it ("rejects an unsolicited directory response with " <> show originStatus) $
+                withDirectorySources $ \runtime binding _ privateStatus -> do
+                    writeIORef privateStatus originStatus
+                    response <- capture runtime binding "GET" "/versions" []
+                    simpleStatus response `shouldBe` status502
+        it "serves exact admitted info rows without acquiring a directory" $
+            withNative $ \runtime binding hits -> do
+                original <- BS.readFile "test/fixtures/rubygems/info/ecluse-fixture-root"
+                response <- capture runtime binding "GET" "/info/ecluse-fixture-root" []
+                simpleStatus response `shouldBe` status200
+                simpleBody response `shouldBe` fromStrict original
+                map fst <$> readIORef hits `shouldReturn` [["info", "ecluse-fixture-root"]]
+
+    describe "examined per-gem source documents" $ do
         for_ [False, True] $ \warm ->
             for_ [False, True] $ \exact ->
                 for_ ["GET", "HEAD"] $ \method ->
                     it ("bounds denied public documents beside private survivors for " <> show (warm, exact, method)) $ do
                         privateStatus <- newIORef status200
-                        withCoordinateSourceHeader coordinateBudgetHeader (CachedDeniedBatchCandidateSource privateStatus) $ \uncached original hits release -> do
+                        withCoordinateSourceHeader coordinateBudgetHeader (CachedDeniedCandidateSource privateStatus) $ \uncached original hits release -> do
                             let (denied, paddedPrivate) = coordinateListings coordinateBudgetHeader release
                                 private = BS.drop (BS.length coordinateBudgetHeader) paddedPrivate
                                 oneNameBytes = BS.length denied + BS.length private
-                                cap = 2 * oneNameBytes - if exact then 0 else 1
+                                cap = oneNameBytes - if exact then 0 else 1
                                 binding = coordinateByteCap cap original
                                 deps = bindingPackumentDeps binding
                                 public = binding{bindingPackumentDeps = withPrivateBaseUrl Nothing deps}
-                            oneNameBytes `shouldSatisfy` (< cap)
-                            runtime <- if warm then warmPublicDocuments uncached public hits [("acme", status403), ("acme-1", status403)] else pure uncached
-                            response <- capture runtime binding method "/api/v1/dependencies?gems=acme,acme-1" []
-                            simpleStatus response `shouldBe` if exact then status200 else if warm then status400 else status502
+                            runtime <- if warm then warmPublicDocuments uncached public hits [("acme-1", status403)] else pure uncached
+                            response <- capture runtime binding method "/info/acme-1" []
+                            simpleStatus response `shouldBe` if exact then status200 else status502
                             when exact $
                                 if method == "HEAD"
                                     then simpleBody response `shouldBe` ""
-                                    else checkPrivateBatchRows (simpleBody response)
-                            sort <$> readIORef hits `shouldReturn` if warm then [["private", "info", "acme"], ["private", "info", "acme-1"]] else coordinatePrivateMetadataReads
+                                    else simpleBody response `shouldBe` fromStrict private
+                            sort <$> readIORef hits `shouldReturn` if warm then [["private", "info", "acme-1"]] else [["private", "info", "acme-1"], ["public", "info", "acme-1"]]
         for_ [status401, status403] $ \refused ->
             for_ ["GET", "HEAD"] $ \method ->
-                it ("rechecks private authority after warm batch success for " <> show (refused, method)) $ do
+                it ("rechecks private authority after warm info success for " <> show (refused, method)) $ do
                     privateStatus <- newIORef status200
-                    withCoordinateSourceHeader coordinateBudgetHeader (CachedDeniedBatchCandidateSource privateStatus) $ \uncached binding hits release -> do
+                    withCoordinateSourceHeader coordinateBudgetHeader (CachedDeniedCandidateSource privateStatus) $ \uncached binding hits release -> do
                         let public = binding{bindingPackumentDeps = withPrivateBaseUrl Nothing (bindingPackumentDeps binding)}
-                        runtime <- warmPublicDocuments uncached public hits [("acme", status403), ("acme-1", status403)]
-                        allowed <- capture runtime binding "GET" "/api/v1/dependencies?gems=acme,acme-1" []
+                        runtime <- warmPublicDocuments uncached public hits [("acme-1", status403)]
+                        allowed <- capture runtime binding "GET" "/info/acme-1" []
                         simpleStatus allowed `shouldBe` status200
-                        checkPrivateBatchRows (simpleBody allowed)
-                        sort <$> readIORef hits `shouldReturn` [["private", "info", "acme"], ["private", "info", "acme-1"]]
+                        simpleBody allowed `shouldBe` fromStrict (BS.drop (BS.length coordinateBudgetHeader) (snd (coordinateListings coordinateBudgetHeader release)))
+                        sort <$> readIORef hits `shouldReturn` [["private", "info", "acme-1"]]
                         writeIORef hits []
                         writeIORef privateStatus refused
                         let cap = BS.length (fst (coordinateListings coordinateBudgetHeader release)) - 1
-                        denied <- capture runtime (coordinateByteCap cap binding) method "/api/v1/dependencies?gems=acme,acme-1" []
+                        denied <- capture runtime (coordinateByteCap cap binding) method "/info/acme-1" []
                         simpleStatus denied `shouldBe` refused
-                        readIORef hits `shouldReturn` [["private", "info", "acme"]]
+                        readIORef hits `shouldReturn` [["private", "info", "acme-1"]]
         for_ ["GET", "HEAD"] $ \method ->
-            it ("does not use a cached public document for owned private absence in a batch for " <> show method) $ do
+            it ("does not use a cached public document for owned private absence for " <> show method) $ do
                 privateStatus <- newIORef status200
-                withCoordinateSourceHeader coordinateBudgetHeader (CachedDeniedBatchCandidateSource privateStatus) $ \uncached original hits release -> do
+                withCoordinateSourceHeader coordinateBudgetHeader (CachedDeniedCandidateSource privateStatus) $ \uncached original hits release -> do
                     let public = original{bindingPackumentDeps = withPrivateBaseUrl Nothing (bindingPackumentDeps original)}
                     runtime <- warmPublicDocuments uncached public hits [("acme", status403), ("acme-1", status403)]
                     owned <- expectRight (projectFirstPartyEntry "acme")
@@ -196,7 +197,7 @@ spec = do
                         binding = original{bindingPackumentDeps = deps{pdFirstParty = rubyGemsFirstPartyName (owned :| [])}}
                     writeIORef privateStatus status404
                     let cap = BS.length (fst (coordinateListings coordinateBudgetHeader release)) - 1
-                    response <- capture runtime (coordinateByteCap cap binding) method "/api/v1/dependencies?gems=acme" []
+                    response <- capture runtime (coordinateByteCap cap binding) method "/info/acme" []
                     simpleStatus response `shouldBe` status404
                     readIORef hits `shouldReturn` [["private", "info", "acme"]]
 
@@ -325,7 +326,7 @@ spec = do
     describe "checked no-survivor native admission" $ do
         it "preserves the ordinary listing refusal after settled private absence" $
             withCoordinateSources (PublicDeniedPrivateCandidateSource status404) $ \runtime binding hits _ -> do
-                response <- capture runtime binding "GET" "/api/v1/dependencies?gems=acme-1" []
+                response <- capture runtime binding "GET" "/info/acme-1" []
                 simpleStatus response `shouldBe` status503
                 sort <$> readIORef hits `shouldReturn` [["private", "info", "acme-1"], ["public", "info", "acme-1"]]
         for_ ["GET", "HEAD"] $ \method ->
@@ -458,21 +459,6 @@ spec = do
                     simpleStatus crossed `shouldBe` status200
                     excluded <- serve "GET" [("Accept-Encoding", "gzip;q=0, identity;q=0"), ("If-None-Match", "*")]
                     simpleStatus excluded `shouldBe` status406
-        it "binds a batch validator to its complete ordered admitted bytes" $
-            withNative $ \runtime original _ -> do
-                let binding = compressing original
-                    firstPath = "/api/v1/dependencies?gems=ecluse-fixture-root"
-                    paths =
-                        [ firstPath
-                        , "/api/v1/dependencies?gems=ecluse-fixture-root,ecluse-fixture-leaf"
-                        , "/api/v1/dependencies?gems=ecluse-fixture-leaf,ecluse-fixture-root"
-                        ]
-                initial <- capture runtime binding "GET" firstPath []
-                tag <- responseTag initial
-                responses <- traverse (\path -> capture runtime binding "GET" path [("If-None-Match", tag)]) paths
-                map simpleStatus responses `shouldBe` [status304, status200, status200]
-                tags <- traverse responseTag responses
-                length (ordNub tags) `shouldBe` 3
         it "does not let a wildcard validator bypass authentication, bounds or coordinate admission" $
             withNative $ \runtime original hits -> do
                 let binding = compressing original
@@ -482,22 +468,12 @@ spec = do
                     refused <- capture runtime secured "GET" path wildcard
                     simpleStatus refused `shouldBe` status401
                 readIORef hits `shouldReturn` []
-                malformed <- capture runtime binding "GET" "/api/v1/dependencies?gems=one&gems=two" wildcard
-                simpleStatus malformed `shouldBe` status400
-                readIORef hits `shouldReturn` []
                 missing <- capture runtime binding "GET" "/quick/Marshal.4.8/ecluse-fixture-root-99.0.0.gemspec.rz" wildcard
                 simpleStatus missing `shouldBe` status404
-                let deps = bindingPackumentDeps binding
-                    bounded = binding{bindingPackumentDeps = deps{pdLimits = (pdLimits deps){maxArtifactCount = 3}}}
-                oversized <- capture runtime bounded "GET" "/api/v1/dependencies?gems=ecluse-fixture-root,ecluse-fixture-leaf" wildcard
-                simpleStatus oversized `shouldBe` status400
 
 metadataPaths :: [ByteString]
 metadataPaths =
-    [ "/api/v1/dependencies"
-    , "/api/v1/dependencies?gems=ecluse-fixture-root"
-    , "/api/v1/dependencies?gems=ecluse-fixture-root,ecluse-fixture-leaf"
-    , "/quick/Marshal.4.8/ecluse-fixture-root-1.0.0.gemspec.rz"
+    [ "/quick/Marshal.4.8/ecluse-fixture-root-1.0.0.gemspec.rz"
     ]
 
 compressing :: MountBinding -> MountBinding
@@ -505,6 +481,24 @@ compressing binding = binding{bindingPackumentDeps = (bindingPackumentDeps bindi
 
 responseTag :: SResponse -> IO ByteString
 responseTag response = maybe (expectationFailure "the admitted metadata response omitted its ETag" >> pure "") pure (lookup "ETag" (simpleHeaders response))
+
+withDirectorySources :: (ServeRuntime -> MountBinding -> IORef [([Text], [Header])] -> IORef Status -> IO a) -> IO a
+withDirectorySources use = do
+    hits <- newIORef []
+    privateStatus <- newIORef status200
+    let upstream request respond = do
+            modifyIORef' hits (<> [(pathInfo request, requestHeaders request)])
+            case pathInfo request of
+                ["private", "versions"] -> do
+                    status <- readIORef privateStatus
+                    respond (responseLBS status [] "---\nprivate-gem 1.0 \n")
+                ["public", "versions"] -> respond (responseLBS status200 [] "---\npublic-gem 1.0 \n")
+                _ -> respond (responseLBS status404 [] "")
+    testWithApplication (pure upstream) $ \port -> do
+        let base = "http://localhost:" <> show port
+        withNativeOrigins (Just (loopbackRegistryUrl (base <> "/private/"))) (loopbackRegistryUrl (base <> "/public/")) $ \runtime binding -> do
+            let deps = bindingPackumentDeps binding
+            use runtime binding{bindingPackumentDeps = deps{pdReadSourceSelection = MergePrivateAndPublic}} hits privateStatus
 
 withNative :: (ServeRuntime -> MountBinding -> IORef [([Text], [Header])] -> IO a) -> IO a
 withNative use = do
@@ -517,21 +511,21 @@ withNative use = do
         upstream request respond = do
             modifyIORef' hits (<> [(pathInfo request, requestHeaders request)])
             case pathInfo request of
+                ["versions"] -> respond (responseLBS status200 [] "---\necluse-fixture-leaf 1.0.0 \necluse-fixture-root 1.0.0 \n")
                 ["info", name] | Just body <- Map.lookup name fixtures -> respond (responseLBS status200 [] (fromStrict body))
                 ["quick", "Marshal.4.8", "ecluse-fixture-root-1.0.0.gemspec.rz"] -> respond (responseLBS status200 [] (fromStrict compact))
                 ["gems", "ecluse-fixture-root-1.0.0.gem"] -> respond (responseLBS status200 [] (fromStrict archive))
                 _ -> respond (responseLBS status404 [] "")
     testWithApplication (pure upstream) $ \port -> do
         let origin = loopbackRegistryUrl ("http://localhost:" <> show port)
-        withNativeOrigins (Just origin) origin (BS.length archive) $ \runtime binding -> use runtime binding hits
+        withNativeOrigins (Just origin) origin $ \runtime binding -> use runtime binding hits
 
-withNativeOrigins :: Maybe RegistryUrl -> RegistryUrl -> Int -> (ServeRuntime -> MountBinding -> IO a) -> IO a
-withNativeOrigins private public cap use = withSweeper $ \deadlines -> do
+withNativeOrigins :: Maybe RegistryUrl -> RegistryUrl -> (ServeRuntime -> MountBinding -> IO a) -> IO a
+withNativeOrigins private public use = withSweeper $ \deadlines -> do
     admission <- newServeAdmissionTuned deadlines 1 0 0
     runtime <- testServeRuntimeWith deadlines admission noopMetricsPort
-    verified <- expectRight =<< newVerifiedArtifactBudget deadlines cap cap
     let adapter = rubyGemsAdapter (ChargeFactors 1000 1000 1000)
-        deps = (serveDepsFor adapter private public NoMirrorWrite [] (pure (UTCTime (fromGregorian 2030 1 1) 0))){pdReadSourceSelection = PrivateOnly, pdVerifiedArtifacts = Just verified}
+        deps = (serveDepsFor adapter private public NoMirrorWrite [] (pure (UTCTime (fromGregorian 2030 1 1) 0))){pdReadSourceSelection = PrivateOnly}
         binding = MountBinding ("rubygems" :| []) rubyGemsRouter rubyReadCredential deps Nothing
     use runtime binding
 
@@ -540,7 +534,7 @@ data CoordinateSources
     | PublicCandidateSource
     | PublicMixedCandidateSource
     | MixedPolicyCandidateSource
-    | CachedDeniedBatchCandidateSource (IORef Status)
+    | CachedDeniedCandidateSource (IORef Status)
     | PublicDeniedPrivateCandidateSource Status
     | CheckedEmptyCandidateSource
     | InvalidInventoryCandidateSource
@@ -572,11 +566,11 @@ withCoordinateSourceHeader header sources use = do
             case pathInfo request of
                 ["private", "info", "acme"] -> case sources of
                     OwnedCandidateSource status -> answer status ""
-                    CachedDeniedBatchCandidateSource variable -> answerBatchPrivate variable
+                    CachedDeniedCandidateSource variable -> answerBatchPrivate variable
                     _ -> answer status404 ""
                 ["private", "info", "acme-1"] -> case sources of
                     MixedPolicyCandidateSource -> answer status200 admitted
-                    CachedDeniedBatchCandidateSource variable -> answerBatchPrivate variable
+                    CachedDeniedCandidateSource variable -> answerBatchPrivate variable
                     PublicDeniedPrivateCandidateSource status -> answer status ""
                     MixedPublicIntegrityCandidateSource -> answer status200 admitted
                     MixedTrustedIntegrityCandidateSource -> answer status200 recent
@@ -584,9 +578,9 @@ withCoordinateSourceHeader header sources use = do
                 ["public", "info", "acme"] -> case sources of
                     OwnedCandidateSource _ -> answer status200 recent
                     PublicCandidateSource -> answer status200 recent
-                    CachedDeniedBatchCandidateSource _ -> answer status200 recent
+                    CachedDeniedCandidateSource _ -> answer status200 recent
                     _ -> answer status404 ""
-                ["public", "info", "acme-1"] -> answer status200 (case sources of PublicMixedCandidateSource -> mixed; MixedPolicyCandidateSource -> recent; CachedDeniedBatchCandidateSource _ -> recent; PublicDeniedPrivateCandidateSource _ -> recent; CheckedEmptyCandidateSource -> "---\n"; InvalidInventoryCandidateSource -> "---\n2.0 |checksum:invalid\n"; MixedPublicIntegrityCandidateSource -> mixed; _ -> admitted)
+                ["public", "info", "acme-1"] -> answer status200 (case sources of PublicMixedCandidateSource -> mixed; MixedPolicyCandidateSource -> recent; CachedDeniedCandidateSource _ -> recent; PublicDeniedPrivateCandidateSource _ -> recent; CheckedEmptyCandidateSource -> "---\n"; InvalidInventoryCandidateSource -> "---\n2.0 |checksum:invalid\n"; MixedPublicIntegrityCandidateSource -> mixed; _ -> admitted)
                 ["public", "gems", "acme-1-1.0.gem"] -> respond (responseLBS status200 [("Content-Length", show (BS.length (releaseArchive release)))] (fromStrict (releaseArchive release)))
                 ["public", "quick", "Marshal.4.8", "acme-1-1.0.gemspec.rz"] -> answer status200 (releaseCompact release)
                 _ -> answer status404 ""
@@ -595,7 +589,7 @@ withCoordinateSourceHeader header sources use = do
             private = case sources of
                 OwnedCandidateSource _ -> Just privateBase
                 MixedPolicyCandidateSource -> Just privateBase
-                CachedDeniedBatchCandidateSource _ -> Just privateBase
+                CachedDeniedCandidateSource _ -> Just privateBase
                 PublicDeniedPrivateCandidateSource _ -> Just privateBase
                 CheckedEmptyCandidateSource -> Just privateBase
                 InvalidInventoryCandidateSource -> Just privateBase
@@ -604,7 +598,7 @@ withCoordinateSourceHeader header sources use = do
                 _ -> Nothing
             privateBase = loopbackRegistryUrl (base <> "/private/")
             firstParty = case sources of OwnedCandidateSource _ -> rubyGemsFirstPartyName (owned :| []); _ -> const False
-        withNativeOrigins private (loopbackRegistryUrl (base <> "/public/")) (BS.length (releaseArchive release)) $ \runtime binding -> do
+        withNativeOrigins private (loopbackRegistryUrl (base <> "/public/")) $ \runtime binding -> do
             let deps = bindingPackumentDeps binding
                 selected = binding{bindingPackumentDeps = deps{pdReadSourceSelection = MergePrivateAndPublic, pdFirstParty = firstParty, pdRules = rules}}
             use runtime selected hits release
@@ -618,20 +612,6 @@ checkCoordinateResponse method path body response = do
     if method == "HEAD" || path == "/gems/acme-1-1.0.gem"
         then advertised `shouldBe` Just expected
         else for_ advertised (`shouldBe` expected)
-
-checkPrivateBatchRows :: LByteString -> Expectation
-checkPrivateBatchRows body = do
-    observed <- runRubyReference "dependencies" (LBS.toStrict body)
-    observed
-        `shouldBe` toJSON
-            [ object
-                [ "name" .= (name :: Text)
-                , "number" .= ("1.0" :: Text)
-                , "platform" .= ("ruby" :: Text)
-                , "dependencies" .= ([] :: [[Text]])
-                ]
-            | name <- ["acme", "acme-1"]
-            ]
 
 coordinateListings :: ByteString -> RubyRelease -> (ByteString, ByteString)
 coordinateListings header release =
@@ -667,7 +647,7 @@ warmPublicDocuments uncached binding hits documents = do
     cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) (Just full) Nothing Nothing)
     let runtime = uncached{srMetadataCache = cache}
         source = Source (registryUrlText (pdPublicBaseUrl (bindingPackumentDeps binding)))
-        listing name = capture runtime binding "GET" ("/api/v1/dependencies?gems=" <> encodeUtf8 name) []
+        listing name = capture runtime binding "GET" ("/info/" <> encodeUtf8 name) []
     responses <- forM documents $ \(name, expected) -> do
         response <- listing name
         simpleStatus response `shouldBe` expected

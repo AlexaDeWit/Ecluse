@@ -246,37 +246,6 @@ admissionMetricsSpec = describe "enabled admission observations" $ do
             sumPoints "ecluse.serve.admission.in_flight" meterEnv `shouldReturn` [(emptyAttributes, 0)]
             sumPoints "ecluse.publish.body.in_flight_bytes" meterEnv `shouldReturn` [(emptyAttributes, 0)]
 
-    it "exports actual zero observations for fresh artifact instruments" $
-        withTestTelemetry $ \telemetry meterEnv -> do
-            _ <- newMetrics telemetry
-            for_
-                [ "ecluse.serve.artifact.body.in_flight_bytes"
-                , "ecluse.serve.artifact.body.queued"
-                , "ecluse.serve.artifact.body.shed"
-                , "ecluse.serve.artifact.read_bytes"
-                , "ecluse.serve.artifact.hash_bytes"
-                , "ecluse.serve.artifact.verified"
-                ]
-                $ \name -> sumPoints name meterEnv `shouldReturn` [(emptyAttributes, 0)]
-            sumPoints "ecluse.publish.body.shed" meterEnv `shouldReturn` []
-            sumPoints "ecluse.serve.admission.queued" meterEnv `shouldReturn` []
-
-    it "records verified body reads independently from publication" $
-        withTestTelemetry $ \telemetry meterEnv -> do
-            port <- metricsPortOf <$> newMetrics telemetry
-            mpArtifactBodyInFlightBytes port 8
-            mpArtifactBodyQueued port
-            mpArtifactReadBytes port 8
-            mpArtifactHashBytes port 8
-            mpArtifactVerified port
-            mpArtifactBodyInFlightBytes port (-8)
-            mpArtifactBodyShed port
-            sumPoints "ecluse.serve.artifact.body.in_flight_bytes" meterEnv `shouldReturn` [(emptyAttributes, 0)]
-            sumPoints "ecluse.serve.artifact.body.queued" meterEnv `shouldReturn` [(emptyAttributes, 1)]
-            sumPoints "ecluse.serve.artifact.read_bytes" meterEnv `shouldReturn` [(emptyAttributes, 8)]
-            sumPoints "ecluse.serve.artifact.hash_bytes" meterEnv `shouldReturn` [(emptyAttributes, 8)]
-            sumPoints "ecluse.serve.artifact.verified" meterEnv `shouldReturn` [(emptyAttributes, 1)]
-            sumPoints "ecluse.serve.artifact.body.shed" meterEnv `shouldReturn` [(emptyAttributes, 1)]
     it "keeps admission queueing and publish refusal counts distinct" $
         withTestTelemetry $ \telemetry meterEnv -> do
             port <- metricsPortOf <$> newMetrics telemetry

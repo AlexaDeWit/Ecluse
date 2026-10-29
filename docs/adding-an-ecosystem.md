@@ -113,10 +113,12 @@ Declare `AdapterArtifact.artifactPrivateAddressing` independently of `artifactHo
 `ConventionalArtifactPath` uses a native path. `IndexedArtifactLocation` requires an authoritative private metadata location.
 The public host allowance does not select private addressing.
 
-Declare `AdapterArtifact.artifactRelayIntegrity` from native client evidence.
-Use `ClientVerifiedStream` when supported clients check the registry's advertised digest on the first download.
-Use `VerifyBeforeReply` when the proxy must buffer bounded bytes and verify the digest before replying.
+Prove that supported clients verify the registry's advertised archive digest on the first download.
+Use an ordinary installation without an existing lockfile, then repeat with an incorrect registry checksum.
 Frozen lockfile checks and mirror ingestion do not establish this check for a first download.
+Choose a metadata protocol that carries strong archive checksums to the client.
+Record its discovery, freshness and acquisition costs before writing the adapter.
+Serve paths rely on client verification. The mirror worker verifies copied archive bytes.
 
 ## 5. Map policy and advisory evidence
 

@@ -73,18 +73,6 @@ data MetricsPort = MetricsPort
     -- ^ Record one queued request refused after the wait (@ecluse.serve.admission.overflow.shed@).
     , mpOverflowFull :: IO ()
     -- ^ Record one request refused at once at a full queue (@ecluse.serve.admission.overflow.full@).
-    , mpArtifactBodyInFlightBytes :: Int -> IO ()
-    -- ^ Reserved verified-read wire bytes (@ecluse.serve.artifact.body.in_flight_bytes@).
-    , mpArtifactBodyQueued :: IO ()
-    -- ^ Verified reads that waited for byte capacity (@ecluse.serve.artifact.body.queued@).
-    , mpArtifactBodyShed :: IO ()
-    -- ^ Verified reads refused at byte capacity (@ecluse.serve.artifact.body.shed@).
-    , mpArtifactReadBytes :: Int -> IO ()
-    -- ^ Actual identity bytes read, including refused transfers (@ecluse.serve.artifact.read_bytes@).
-    , mpArtifactHashBytes :: Int -> IO ()
-    -- ^ Bytes in completed digest computations (@ecluse.serve.artifact.hash_bytes@).
-    , mpArtifactVerified :: IO ()
-    -- ^ Complete bodies that matched their admitted digest (@ecluse.serve.artifact.verified@).
     , mpPublishBodyInFlightBytes :: Int -> IO ()
     {- ^ Record a change in the bytes held for buffered publish bodies, the reserved weight
     signed (@ecluse.publish.body.in_flight_bytes@).

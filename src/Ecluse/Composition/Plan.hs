@@ -45,7 +45,7 @@ import Ecluse.Composition.MemoryPlan (
     MemoryPlan (mpDegradations, mpMaxResponseBytes, mpOverrideViolations, mpQueueMemoryMaxDepth),
     planCacheConfig,
     queueTenantDemand,
-    resolveMemoryPlanWithVerification,
+    resolveMemoryPlanForMounts,
  )
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
@@ -53,7 +53,7 @@ import Ecluse.Composition.MirrorQueue (
     mirrorQueuePlanWarning,
     planMirrorRuntime,
  )
-import Ecluse.Composition.MirrorRole (enqueuesJobs, mirrorRoleRefusal)
+import Ecluse.Composition.MirrorRole (mirrorRoleRefusal)
 import Ecluse.Composition.Sizing (resolvePrivateConnections, resolvePublicConnections)
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline), bootInvocation, everyBootRole, pipelineRoleOf, registryRoleOf)
 import Ecluse.Composition.Validate (ValidatedPlan (vpProgressFloor), vetBoot, vetMirrorCapabilities)
@@ -73,8 +73,6 @@ import Ecluse.Config (
  )
 import Ecluse.Config.Ambient (AmbientAws, ambientAwsFromEnv, ambientS3Endpoint)
 import Ecluse.Core.Ecosystem (ecosystemName)
-import Ecluse.Core.Registry.Adapter (adapterArtifact, adapterFor)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactRelayIntegrity), ArtifactRelayIntegrity (VerifyBeforeReply))
 import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Cache (CacheConfig)
@@ -191,7 +189,7 @@ selection picks the in-memory backend, and the role's fitness is judged against 
 mirrorDecision :: BootRole -> AmbientAws -> EffectiveRuntimePlan -> Config -> Either [BootError] MirrorDecision
 mirrorDecision role ambient effective config = do
     runtime <- planMirrorRuntime ambient config
-    let (memoryPlan, memoryLines) = memoryPlanFor (maybe False enqueuesJobs (pipelineRoleOf role)) (configApp config) effective runtime
+    let (memoryPlan, memoryLines) = memoryPlanFor (configApp config) effective runtime
         violations = mpOverrideViolations memoryPlan
     -- A degraded-but-coherent plan boots, because shrinking is what makes it safe. Only
     -- an explicit override the shed ladder cannot work around refuses.
@@ -248,10 +246,9 @@ handlesAdvisoryArtifact role app = role == BootWithoutPipeline || advisorySource
 
 {- The memory plan and its lines. The 'publishConfigured' predicate and this settings
 projection live here, so the two entry points cannot disagree on either. -}
-memoryPlanFor :: Bool -> AppConfig -> EffectiveRuntimePlan -> MirrorRuntimePlan -> (MemoryPlan, [Text])
-memoryPlanFor serving appConfig effective mirrorRuntime =
-    resolveMemoryPlanWithVerification
-        (serving && any needsVerification (Map.keys (cfgMounts appConfig)))
+memoryPlanFor :: AppConfig -> EffectiveRuntimePlan -> MirrorRuntimePlan -> (MemoryPlan, [Text])
+memoryPlanFor appConfig effective mirrorRuntime =
+    resolveMemoryPlanForMounts
         (cfgCache appConfig)
         (cfgLimits appConfig)
         (cfgQueue appConfig)
@@ -260,7 +257,6 @@ memoryPlanFor serving appConfig effective mirrorRuntime =
         (queueTenantDemand mirrorRuntime)
         (map mntMaxRequestBytes publishingMounts)
   where
-    needsVerification eco = maybe False ((== VerifyBeforeReply) . artifactRelayIntegrity . adapterArtifact) (adapterFor eco)
     publishingMounts = filter (isJust . mntPublicationTarget) (Map.elems (cfgMounts appConfig))
 
 {- The document the boot read, or the path it found none at. An absent document is

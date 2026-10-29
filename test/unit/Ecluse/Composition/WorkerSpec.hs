@@ -12,7 +12,7 @@ import Network.HTTP.Types.Status (status200, status429)
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
 
-import Ecluse.Composition (PublishTarget (ptEcosystem, ptMirrorUrl, ptUploadUrl), planMountsWithVerified, planPublishTargets)
+import Ecluse.Composition (PublishTarget (ptEcosystem, ptMirrorUrl, ptUploadUrl), planMounts, planPublishTargets)
 import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite))
 import Ecluse.Composition.MirrorState (MirrorStateBinding (MirrorStateBinding))
 import Ecluse.Composition.Support (expectConfig, expectProviders, expectValidated, fixedNow, overrideEnv, pypiMirrorEnv, scopedName, staticEnvVars, testLimits)
@@ -319,7 +319,7 @@ composedFixturesFrom deadlines envVars limits = do
     providers <- expectProviders config
     plan <- expectValidated config
     bindings <-
-        planMountsWithVerified Nothing mountBindingFor (pure fixedNow) (const inertRuleDeps) MintMirrorWrite providers limits Nothing plan
+        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) MintMirrorWrite providers limits Nothing plan
             >>= either (\errs -> fail ("unexpected boot errors: " <> show errs)) pure
     targets <-
         either (\errs -> fail ("unexpected publish-target errors: " <> show errs)) pure (planPublishTargets MintMirrorWrite providers plan)

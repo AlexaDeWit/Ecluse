@@ -53,7 +53,6 @@ scenarioReport name successes refusals p50 p99 =
         { srName = name
         , srDescription = "A scenario."
         , srPublicLegUnavailableReason = Nothing
-        , srVerifiedWarmupSettled = Nothing
         , srShape = "2cpu-1gib"
         , srLoad = window
         , srCompanion = Nothing
@@ -81,6 +80,7 @@ scenarioReport name successes refusals p50 p99 =
             , lsDeadlineAborts = 0
             , lsFirstByteLatency = Nothing
             , lsLatency = Percentiles (Just p50) Nothing Nothing (Just p99) Nothing
+            , lsTransferredBodyBytes = Nothing
             , lsNote = ""
             }
 
@@ -116,9 +116,7 @@ proxyWithPeak peak =
         , pfBootRetries = []
         , pfInFlight = summariseGauge []
         , pfTasks = summariseGauge []
-        , pfArtifactWindow = Nothing
         , pfMemoryChargeBytes = Nothing
-        , pfArtifactBodyBytes = Nothing
         , pfAdmissionSeries = []
         , pfCacheWindow = Nothing
         , pfBurstMemory = Nothing

@@ -111,13 +111,10 @@ construct `MinIntegrity` (public) below SHA-256, while `MinTrustedIntegrity` (tr
 lower, so no config or constructor path lowers the public floor. The floor admits by
 algorithm strength, and the digest is computable for every algorithm it admits. The mirror worker verifies the admitted digest before publication.
 
-RubyGems artifact GETs additionally verify the advertised SHA-256 before a successful reply, including caller-authorised private reads.
-The named Dependencies API supplies no archive checksum to the client, so client verification cannot replace this check.
-Missing SHA-256 evidence or corrupt bytes cannot yield an artifact success, even if the trusted metadata floor permits a weaker digest.
-The proxy buffers bounded transient bytes without a persistent artifact cache.
-This proves agreement with the selected source assertion, not that the source or archive is harmless.
-HEAD checks authorisation and availability without reading or hashing archive bytes.
-The [verified reply contract](web-layer.md#verified-rubygems-artifact-replies) defines conditional responses and resource ownership.
+RubyGems Compact Index metadata supplies archive SHA-256 values to the supported Bundler clients.
+Clients verify streamed downloads. The mirror worker verifies copied bytes before publication.
+Digest agreement proves neither source honesty nor harmless archive contents.
+The [protocol contract](https://ecluse-proxy.com/docs/protocol-support/#rubygems) defines initial-download and cache limits.
 
 For PyPI metadata companions, the parent distribution must clear its origin's integrity floor.
 Companion digest declarations remain separate and impose no new proxy hash floor.

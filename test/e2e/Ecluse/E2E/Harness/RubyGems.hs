@@ -12,7 +12,6 @@ module Ecluse.E2E.Harness.RubyGems (
     rubyDependency,
     runBundler,
     rubyLock,
-    rubyCacheChecksums,
     rubyInstall,
     rubyUpdate,
     rubyEvaluate,
@@ -107,24 +106,9 @@ rubyLiteral value = "'" <> T.replace "'" "\\'" (T.replace "\\" "\\\\" value) <> 
 runBundler :: RubyProject -> [String] -> IO ClientResult
 runBundler project = runClient (rubyDirectory project) (rubyEnvironment project) (rubyBundler project)
 
--- | Enable lockfile checksums. Named dependency records need installation to populate archive digests.
+-- | Native Compact Index rows supply lockfile archive checksums.
 rubyLock :: RubyProject -> IO ClientResult
 rubyLock project = runBundler project ["lock", "--add-checksums"]
-
--- | Create the frozen-lock test input from native digests of independently checked cached archives.
-rubyCacheChecksums :: RubyProject -> IO ClientResult
-rubyCacheChecksums project =
-    rubyEvaluate project . toString . T.unlines $
-        [ "require 'rubygems/package'"
-        , "definition = Bundler.definition"
-        , "definition.resolve.each do |spec|"
-        , "  next if spec.name == 'bundler'"
-        , "  package = Gem::Package.new(File.join('vendor/cache', spec.full_name + '.gem'))"
-        , "  package.verify"
-        , "  spec.source.checksum_store.register(spec, Bundler::Checksum.from_gem_package(package))"
-        , "end"
-        , "definition.lock"
-        ]
 
 -- | Frozen installs preserve the existing lockfile instead of resolving a replacement.
 rubyInstall :: RubyProject -> Bool -> IO ClientResult

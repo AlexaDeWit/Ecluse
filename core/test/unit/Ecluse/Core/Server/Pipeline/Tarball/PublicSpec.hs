@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Public artifact admission and verified origin-failure observations.
+-- | Public artifact admission and origin-failure observations.
 module Ecluse.Core.Server.Pipeline.Tarball.PublicSpec (spec) where
 
 import Data.ByteString qualified as BS
@@ -39,9 +39,8 @@ import Ecluse.Core.Rules.Types (
     Transience (WillResolve, WontResolve),
  )
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Admission.Artifact (newVerifiedArtifactBudget)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
-import Ecluse.Core.Server.Context (MountBinding (MountBinding), PackumentDeps (pdVerifiedArtifacts), RequestCtx (RequestCtx), ServeRuntime (srQueue), runHandler)
+import Ecluse.Core.Server.Context (MountBinding (MountBinding), RequestCtx (RequestCtx), ServeRuntime (srQueue), runHandler)
 import Ecluse.Core.Server.Contract (PassthroughBody (..), passthroughContract, passthroughResponse, responseToWai)
 import Ecluse.Core.Server.Pipeline.Tarball.Public (
     PublicArtifactGate (Admitted, Refused),
@@ -57,7 +56,7 @@ import Ecluse.Core.Server.Response (
  )
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
 import Ecluse.Core.Telemetry.Metrics (RelayAnomaly (RelayNonSuccess))
-import Ecluse.Core.Telemetry.Record (MetricsPort (mpArtifactReadBytes, mpArtifactVerified, mpPublicRelayAnomaly))
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpPublicRelayAnomaly))
 import Ecluse.Test.Deadline (withSweeper)
 import Ecluse.Test.Log (captureJsonLog, lineMessage)
 import Ecluse.Test.Package (npmVersion, sampleDetails, thingName, unsafeFilename)
@@ -77,7 +76,7 @@ statusOf admission = case publicArtifactGate details admission [] of
 
 spec :: Spec
 spec = describe "publicArtifactGate -- the shared admission verdict on the serve surface" $ do
-    verifiedOriginFailureSpec
+    originFailureSpec
     it "renders an inability the evaluator expects to clear as a 503" $
         -- The transience comes from the shared projection, the one the worker reads to
         -- redeliver the job.
@@ -101,40 +100,35 @@ spec = describe "publicArtifactGate -- the shared admission verdict on the serve
         statusOf AdmissionBelowFloor `shouldBe` Just Forbidden
         statusOf AdmissionIntegrityMissing `shouldBe` Just Forbidden
 
-verifiedOriginFailureSpec :: Spec
-verifiedOriginFailureSpec = describe "verified public origin outcomes" $ do
-    for_ [(status404, status404), (status500, status500), (status401, status401), (status403, status403), (status429, status503), (status503, status503)] $ \(originStatus, clientStatus) ->
-        it ("observes HTTP " <> show (statusCode originStatus) <> " once without artifact bytes or mirror enqueue") $ do
-            (response, observations, messages, attempts, consumed, verified, _, requests) <- publicOutcome originStatus
+originFailureSpec :: Spec
+originFailureSpec = describe "public origin outcomes" $ do
+    for_ [(status404, status404), (status500, status500), (status401, status401), (status403, status403), (status429, status429), (status503, status503)] $ \(originStatus, clientStatus) ->
+        it ("observes HTTP " <> show (statusCode originStatus) <> " once without mirror enqueue") $ do
+            (response, observations, messages, attempts, archive, requests) <- publicOutcome originStatus
             simpleStatus response `shouldBe` clientStatus
             requests `shouldBe` 1
             observations `shouldBe` [RelayNonSuccess]
             let failures = filter (T.isInfixOf "the public upstream answered a non-success") messages
             length failures `shouldBe` 1
             failures `shouldSatisfy` all (T.isInfixOf ("HTTP " <> show (statusCode originStatus)))
-            when (originStatus == status404 || originStatus == status500) (simpleBody response `shouldBe` "")
+            simpleBody response `shouldBe` fromStrict archive
             attempts `shouldBe` 0
-            consumed `shouldBe` 0
-            verified `shouldBe` 0
-    it "does not report a successful verified artifact as a non-success" $ do
-        (response, observations, messages, attempts, _, verified, archive, requests) <- publicOutcome status200
+    it "does not report a successful artifact as a non-success" $ do
+        (response, observations, messages, attempts, archive, requests) <- publicOutcome status200
         simpleStatus response `shouldBe` status200
         requests `shouldBe` 1
         simpleBody response `shouldBe` fromStrict archive
         observations `shouldBe` []
         filter (T.isInfixOf "the public upstream answered a non-success") messages `shouldBe` []
         attempts `shouldBe` 1
-        verified `shouldBe` 1
 
-publicOutcome :: Status -> IO (SResponse, [RelayAnomaly], [Text], Int, Int, Int, ByteString, Int)
+publicOutcome :: Status -> IO (SResponse, [RelayAnomaly], [Text], Int, ByteString, Int)
 publicOutcome originStatus = withSweeper $ \deadlines -> do
     listing <- BS.readFile "test/fixtures/rubygems/info/ecluse-fixture-root"
     archive <- BS.readFile "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
     observations <- newIORef []
     requests <- newIORef (0 :: Int)
     attempts <- newIORef (0 :: Int)
-    consumed <- newIORef (0 :: Int)
-    verified <- newIORef (0 :: Int)
     let source request respond = case pathInfo request of
             ["info", "ecluse-fixture-root"] -> respond (responseLBS status200 [] (fromStrict listing))
             ["gems", "ecluse-fixture-root-1.0.0.gem"] -> modifyIORef' requests (+ 1) >> respond (responseLBS originStatus [("Content-Type", "application/octet-stream")] (fromStrict archive))
@@ -142,12 +136,9 @@ publicOutcome originStatus = withSweeper $ \deadlines -> do
         metrics =
             noopMetricsPort
                 { mpPublicRelayAnomaly = \verdict -> modifyIORef' observations (<> [verdict])
-                , mpArtifactReadBytes = \bytes -> modifyIORef' consumed (+ bytes)
-                , mpArtifactVerified = modifyIORef' verified (+ 1)
                 }
     testWithApplication (pure source) $ \port -> do
         baseRuntime <- testServeRuntime deadlines metrics
-        budget <- expectRight =<< newVerifiedArtifactBudget deadlines (BS.length archive) (BS.length archive)
         rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan 0)]
         name <- expectRight (projectName "ecluse-fixture-root")
         version <- expectRight (projectVersion "1.0.0")
@@ -155,9 +146,9 @@ publicOutcome originStatus = withSweeper $ \deadlines -> do
             runtime = baseRuntime{srQueue = queue{enqueue = \job -> modifyIORef' attempts (+ 1) >> enqueue queue job}}
             adapter = rubyGemsAdapter (ChargeFactors 1000 1000 1000)
             origin = loopbackRegistryUrl ("http://localhost:" <> show port)
-            deps = (serveDepsFor adapter (Just (loopbackRegistryUrl "http://localhost:1")) origin (MirrorOnAdmit (loopbackRegistryUrl "http://localhost:2")) rules (pure (UTCTime (fromGregorian 2030 1 1) 0))){pdVerifiedArtifacts = Just budget}
+            deps = serveDepsFor adapter (Just (loopbackRegistryUrl "http://localhost:1")) origin (MirrorOnAdmit (loopbackRegistryUrl "http://localhost:2")) rules (pure (UTCTime (fromGregorian 2030 1 1) 0))
             binding = MountBinding ("rubygems" :| []) rubyGemsRouter rubyReadCredential deps Nothing
-            contract = passthroughContract "The verified public artifact response."
+            contract = passthroughContract "The public artifact response."
             replies =
                 TarballReplies
                     { tarballError = \status headers -> passthroughResponse status headers . PassthroughBytes . fromStrict . encodeUtf8 . renderRefusal
@@ -184,4 +175,4 @@ publicOutcome originStatus = withSweeper $ \deadlines -> do
                         }
                 )
         requestCount <- readIORef requests
-        (response,,,,,,archive,requestCount) <$> readIORef observations <*> pure (mapMaybe lineMessage (T.lines logged)) <*> readIORef attempts <*> readIORef consumed <*> readIORef verified
+        (response,,,,archive,requestCount) <$> readIORef observations <*> pure (mapMaybe lineMessage (T.lines logged)) <*> readIORef attempts

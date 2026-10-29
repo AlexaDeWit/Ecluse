@@ -16,8 +16,9 @@ import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Network.HTTP.Types (ResponseHeaders, Status, mkStatus, status404, status405, status500)
 
-import Ecluse.Core.Registry.RubyGems.Handlers (serveDependencies)
+import Ecluse.Core.Registry.RubyGems.Handlers.CompactIndex (serveDirectory, serveInfo)
 import Ecluse.Core.Registry.RubyGems.Handlers.Coordinate (serveCompactSpec, serveGemArtifact)
+import Ecluse.Core.Registry.RubyGems.Project (projectName)
 import Ecluse.Core.Registry.RubyGems.Route.Response (rubyContract, rubyReplies)
 import Ecluse.Core.Server.Context (MountRouter, ResponseAction (..), RouteAction (RouteAction))
 import Ecluse.Core.Server.Contract (BodySchema (SchemaOpaque), PassthroughBody (..), PassthroughResponse, RequestSpec (RequestSpec), ResponseChoice (..), ResponseContract, ResponseValue, chooseContract, emptyContract, passthroughContract, passthroughResponse, responseValue)
@@ -33,7 +34,7 @@ import Ecluse.Core.Server.RouteDescription (RouteSpec, catchAllSpecs, specsOf, u
 rubyGemsRouter :: MountRouter
 rubyGemsRouter = routerOf notFound rubyGemsRoutes
 
--- | No global catalogue or client-facing management route is exposed.
+-- | Native discovery and per-gem reads share the admitted installation path.
 rubyGemsRoutes :: [Route Filename]
 rubyGemsRoutes =
     [ Route
@@ -41,21 +42,26 @@ rubyGemsRoutes =
         MethodRead
         AcceptsAnything
         [SegLit "versions"]
-        (\_ captures -> AnswerLocally (responseValue [] ()) <$ guard (null captures))
-        "Select named-gem metadata"
-        "The Compact Index probe returns 404 so supported Bundler clients use the Dependencies API."
+        (\_ captures -> RunPipeline metadataFallback serveDirectory <$ guard (null captures))
+        "Discover native gem names and versions"
+        "Combines bounded public discovery with the current caller-authorised private directory. Discovery does not grant admission."
         Nothing
-        notFoundContract
+        (rubyContract "text/plain")
     , Route
-        (RouteName "dependencies")
+        (RouteName "info")
         MethodRead
         AcceptsAnything
-        (map SegLit ["api", "v1", "dependencies"])
-        (\_ captures -> RunPipeline metadataFallback serveDependencies <$ guard (null captures))
-        "Read admitted dependency records"
-        "Returns native Marshal records for at most 100 named gems. Query syntax, cumulative bytes, work and the whole request deadline are bounded."
+        [SegLit "info", SegCap nameCapture]
+        ( \_ -> \case
+            [file] -> do
+                name <- rightToMaybe (projectName (unFilename file))
+                Just (RunPipeline metadataFallback (serveInfo name))
+            _ -> Nothing
+        )
+        "Read admitted Compact Index metadata"
+        "Returns exact admitted native rows with the winning archive SHA-256 and current runtime requirements."
         Nothing
-        (rubyContract "application/octet-stream")
+        (rubyContract "text/plain")
     , Route
         (RouteName "compactSpec")
         MethodRead
@@ -89,6 +95,16 @@ rubyGemsRoutes =
     ]
   where
     metadataFallback = packumentInternal rubyReplies [] (mkRefusal Nothing "internal server error")
+
+nameCapture :: Capture Filename
+nameCapture = Capture "gem" "The native gem name." consume (\file -> [unFilename file])
+  where
+    consume = \case
+        name : rest -> do
+            _ <- rightToMaybe (projectName name)
+            file <- mkFilename name
+            pure (file, rest)
+        _ -> Nothing
 
 nativeCapture :: Capture Filename
 nativeCapture = Capture "coordinate" "The native package, raw version and platform filename stem." consume (\file -> [T.dropEnd 4 (unFilename file)])

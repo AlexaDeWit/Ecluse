@@ -2213,7 +2213,9 @@ Fresh independent review, final-commit CI, and a fresh-context final adversarial
 RubyGems uses the shared contracts with native independent oracles and providers.
 The baseline clients are Bundler 2.6.9 and 4.0.23 with compatible Ruby runtimes recorded in each execution receipt.
 Required client operations include lock, install, update, frozen lockfiles, checksums, prereleases, dependency constraints, Ruby requirements, and platform selection.
-The `/versions` probe must return `404`, followed by named Dependencies API requests, compact specifications, and local archive paths.
+Require Compact Index `/versions` and on-demand `/info` requests, with local archive paths and no Dependencies API fallback for ordinary supported installs.
+Each real client must install from fresh state without an existing lockfile or preceding lock command.
+An incorrect registry archive checksum must fail with `Bundler::ChecksumMismatchError`.
 Historical full-index clients, `--full-index`, Git dependencies, and local-path dependencies remain outside registry conformance claims.
 
 Native coverage must exercise these boundaries:
@@ -2223,43 +2225,50 @@ Native coverage must exercise these boundaries:
 - Exact raw archive publication, identity mismatches, bounded Marshal and archive decoding, and independent reference fixtures.
 - Complete platform mirroring, retained original source facts, restart, public outage, and incomplete or corrupt inventory refusal.
 - Physical maintenance deletion, first-party protection, role authority, consent, caps, and native telemetry.
-- Multi-gem batches, selected compact specifications, long histories, platform multiplicity, and whole-version worker costs.
+- Per-gem reads, selected compact specifications, long histories, platform multiplicity, and whole-version worker costs.
 
-The two-gem protocol experiment establishes only the named request flow for the two client versions.
+The two-gem protocol experiment establishes discovery, revalidation and initial-download checksums for the two client versions.
 It does not establish production performance, policy coverage, platform coverage, or full conformance.
 Source registration alone supplies no runtime evidence. Backend fixtures supply no live AWS or IAM evidence.
 A delivery claim requires the actual native providers, independent obligations, final-commit CI receipts, and measured resource factors.
 Missing providers, observations, factors, or calibration remain failures.
-Native load qualification requires the standard full profile and three qualifying observations per applicable shape, with source and run provenance.
+RubyGems delivery uses best-effort real observations from its eight-workflow load limit, with source and run provenance.
+Keep original eligibility verdicts and adverse rows. Do not relabel failed runs as held receipts.
+Use bounded focused measurements for changed paths rather than another broad workflow.
+Existing ecosystems' numeric floors and budgets remain unchanged.
 Retain adverse and excluded observations. Existing ecosystems' factors, budgets, and floors do not supply RubyGems values.
 
-### Native RubyGems dependency load
+### Native RubyGems info load
 
-RubyGems named-dependency load rows rebuild each native reply after admission.
-`dependencies-repeated-corpus` reads the weighted three captured histories.
-`dependencies-working-set-one` selects one history.
-`dependencies-working-set-many` reads the configured corpus working set uniformly and requires at least two histories.
-The report states the selected cardinalities, and each row preflights every distinct named request through Ruby's independent decoder.
-The local backend retains no full source document, and these native replies do not use assembled-response retention.
+RubyGems per-gem load rows rebuild each admitted Compact Index reply.
+`info-repeated-corpus` reads the weighted three captured histories.
+`info-working-set-one` selects one history.
+`info-working-set-many` reads the configured corpus working set uniformly and requires at least two histories.
+The report states the selected cardinalities, and each row preflights every distinct info request through an independent native reader.
+The local backend retains no full package document, and these replies do not use assembled-response retention.
 Concurrent public reads can share an active read. A configured external provider can retain full source documents.
-The existing full-store miss/collapse observations describe public fetches and waiting consumers, not private reads or exact per-name request counts.
+The full-store miss/collapse observations describe public fetches and waiting consumers, not private reads or exact per-name request counts.
+Pattern rows measure per-gem metadata and artifacts. They exclude `/versions` and do not represent a complete Bundler installation.
+A separate bounded directory fixture measures discovery with an immutable externally supplied capture.
 
-### Verified RubyGems relay evidence
+### RubyGems Compact Index and streaming evidence
 
-RubyGems verified replies require independent no-response-commit controls for corrupt bodies on public-only serve-only mounts and caller-authorised private paths.
-Required refusal cases include missing SHA-256, private access refusals, partial or nonidentity responses, origin `304`, framing conflicts, and digest mismatches.
-Check exact-cap and cap-plus-one bodies, unknown lengths, truncation, and false declared lengths.
-Conditional GET must fetch and verify before a local `304`. HEAD must read zero archive body bytes and enqueue no mirror.
-Cancellation controls must cover admission, fetching, hashing, and slow client delivery, with every reservation returned.
-Only a delivered verified successful GET may enqueue work.
-Existing npm, PyPI, and Cargo streaming controls and constant-memory residency assertions remain required.
+Require fresh root and transitive discovery, native archive SHA-256 values, and client refusal of changed archive bytes.
+Force directory and later per-gem failures while valid archives remain available.
+Both clients must fail rather than install through the checksumless Dependencies API fallback.
+Test public and caller-authorised private sources with both supported Bundler versions.
+Keep the Compact Index client cache while changing policy, private visibility or checksums, and require fresh `/info` revalidation.
+Test source collisions, platform selection, mirror restart/outage, and complete `200` replacements after ranged requests.
+Keep independent reference readers separate from production parsers.
 
-Measure allocation, peak live heap, retained heap, requested charges, first-byte latency, throughput, p95/p99, and queue pressure separately.
-Vary archive sizes, concurrency, origin chunk sizes, slow origins, and slow clients.
-RubyGems verified replies hold bounded body-proportional memory, so streaming constant-memory claims do not apply to this path.
-Source charges and metric registration alone prove no measured memory envelope or performance result.
-The native verified-relay load shape needs genuine observations and standard all-shapes calibration before delivery claims.
-Missing observations and calibration remain failures.
+The directory parser must reconcile repeated update rows and removals under byte, row and name bounds.
+Measure directory acquisition, packed retention, private merge, response assembly and full-body transfer separately from per-gem policy work.
+Record captured input sizes, name counts, source digests, actual response bytes, settings, completions, failures and measurement limits.
+A prototype without production authorisation or admission does not prove production throughput or a pod memory bound.
+
+Archive serving uses the shared streaming relay. Preserve its authorisation, framing, conditional, HEAD, cancellation, queue and residency controls.
+Mirroring verifies copied archive bytes. Publication and mirroring retain their bounded native archive validation.
+Neither streaming nor metadata checks prove that an archive is harmless.
 
 ## Onboarding an ecosystem
 

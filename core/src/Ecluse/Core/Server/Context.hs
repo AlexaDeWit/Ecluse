@@ -66,7 +66,6 @@ import Ecluse.Core.Rules.Outage (AdmissionIdentity)
 import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, tarballHostAllowed, thgAllowlist, thgEcosystemHosts)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission)
-import Ecluse.Core.Server.Admission.Artifact (VerifiedArtifactBudget)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter)
 import Ecluse.Core.Server.Cache (MetadataCache)
@@ -152,8 +151,6 @@ data PackumentDeps = PackumentDeps
     -- ^ The minimum integrity hash required for a trusted upstream dependency.
     , pdMetadata :: AdapterMetadata
     -- ^ The ecosystem's metadata capability, carried whole, never copied field by field.
-    , pdVerifiedArtifacts :: Maybe VerifiedArtifactBudget
-    -- ^ Process-wide verified-read capacity, independent from publication and mirroring.
     , pdArtifact :: AdapterArtifact
     -- ^ The ecosystem's artifact request formation, carried whole, never copied field by field.
     , pdEgressUrl :: Text -> Either Text RegistryUrl

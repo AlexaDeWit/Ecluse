@@ -1,0 +1,56 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+-- SPDX-License-Identifier: MIT
+
+-- | Directory fixtures check native updates independently from per-gem admission.
+module Ecluse.Core.Registry.RubyGems.DirectorySpec (spec) where
+
+import Data.ByteString qualified as BS
+import Data.ByteString.Char8 qualified as B8
+import Test.Hspec
+
+import Ecluse.Core.Registry.JsonStream (StreamResult (..), readStepsWithEnd)
+import Ecluse.Core.Registry.Metadata.RecordStream (finishRecordSteps)
+import Ecluse.Core.Registry.RubyGems.Directory
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (..), Limits (..), defaultLimits)
+import Ecluse.Core.Server.MemoryModel (decodedDocumentCharge)
+import Ecluse.Test.Registry.JsonStream (heldChunks)
+import Ecluse.Test.Support (expectRight)
+
+spec :: Spec
+spec = describe "RubyGems packed discovery" $ do
+    it "reconciles repeated additions and yanks at every byte split" $ do
+        let body = "created_at: 2026-01-01T00:00:00Z\n---\nb 1.0,2.0 0123456789abcdef0123456789abcdef\na 1.0 \nb -1.0,3.0 \na -1.0 \n"
+            expected = GemDirectory "b 2.0,3.0 \n"
+        for_ [1 .. BS.length body] $ \cut -> do
+            result <- expectRight =<< parse defaultLimits [BS.take cut body, BS.drop cut body]
+            streamValue result `shouldBe` Right expected
+    it "merges public and private collisions with explicit blank hints" $ do
+        let public = GemDirectory "a 1.0 \nc 2.0 \n"
+            private = GemDirectory "b 1.0 \nc 1.0,3.0 \n"
+        mergeDirectories public private `shouldBe` GemDirectory "a 1.0 \nb 1.0 \nc 1.0,2.0,3.0 \n"
+    it "rejects malformed rows even when a later delimiter appears" $ do
+        result <- expectRight =<< parse defaultLimits ["---\na 1.0 wrong\n---\n"]
+        streamValue result `shouldSatisfy` isLeft
+    it "bounds names, repeated rows and complete source bytes" $ do
+        let body = "---\na 1.0 \nb 1.0 \n"
+        parse defaultLimits{maxVersionCount = 1} [body] `shouldReturn` Left (TooManyVersions 2 1)
+        parse defaultLimits{maxArtifactCount = 1} [body] `shouldReturn` Left (TooManyArtifacts 2 1)
+        parse defaultLimits{maxMetadataBytes = BS.length body - 1} [body] `shouldReturn` Left (BodyTooLarge (MetadataBodyLimit (BS.length body - 1)))
+    it "rejects missing delimiters and invalid names" $ do
+        for_ ["a 1.0 \n", "---\n../a 1.0 \n", "---\na 1.0 0123\n"] $ \body -> do
+            result <- expectRight =<< parse defaultLimits [body]
+            streamValue result `shouldSatisfy` isLeft
+    it "charges a long public history colliding with one private token" $ do
+        let row = "a " <> B8.intercalate "," [show n | n <- [1 .. 10000 :: Int]] <> " "
+            public = GemDirectory (row <> "\n")
+            private = GemDirectory "a 10001 \n"
+        directoryMergeWorkspace public private `shouldBe` decodedDocumentCharge row + decodedDocumentCharge "a 10001 "
+        directoryMergeWorkspace public (GemDirectory "b 1 \n") `shouldBe` 0
+        BS.length (directoryBytes (mergeDirectories public private)) `shouldSatisfy` (> BS.length row)
+    it "retains only packed bytes after parsing" $ do
+        result <- expectRight . streamValue =<< expectRight =<< parse defaultLimits ["---\na 1.0,2.0 \n"]
+        directoryWeight result `shouldBe` BS.length (directoryBytes result) + 256
+  where
+    parse limits chunks = do
+        next <- heldChunks chunks
+        readStepsWithEnd id finishRecordSteps (MetadataBodyLimit (maxMetadataBytes limits)) (directorySteps (const pass) limits) next

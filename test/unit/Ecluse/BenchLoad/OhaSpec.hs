@@ -29,5 +29,17 @@ spec = describe "Oha first body-byte observations" $ do
         ohaFirstBytePercentiles report `shouldBe` Just (Percentiles Nothing Nothing (Just 3) Nothing Nothing)
     it "refuses an invalid observed percentile" $
         decode ",\"firstBytePercentiles\":{\"p95\":-0.001}" `shouldSatisfy` isLeft
+    it "retains actual transferred bytes independently of response counts" $ do
+        report <- expectRight (bodyBytes "123456")
+        ohaTransferredBodyBytes report `shouldBe` Just 123456
+        Map.lookup "200" (ohaStatusCounts report) `shouldBe` Just 1
+    it "distinguishes observed zero bytes from unavailable bytes" $ do
+        zero <- expectRight (bodyBytes "0")
+        missing <- expectRight (decode "")
+        ohaTransferredBodyBytes zero `shouldBe` Just 0
+        ohaTransferredBodyBytes missing `shouldBe` Nothing
+    it "rejects negative transferred bytes" $
+        bodyBytes "-1" `shouldSatisfy` isLeft
   where
     decode fields = eitherDecodeStrict ("{\"summary\":{\"total\":1},\"statusCodeDistribution\":{\"200\":1,\"503\":4}" <> fields <> "}") :: Either String OhaReport
+    bodyBytes bytes = eitherDecodeStrict ("{\"summary\":{\"total\":1,\"totalData\":" <> bytes <> "},\"statusCodeDistribution\":{\"200\":1}}") :: Either String OhaReport

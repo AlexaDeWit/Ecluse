@@ -5,8 +5,6 @@
 -- | Native dependency coordinates and actual gated archive responses satisfy the shared serving laws.
 module Ecluse.Core.Registry.RubyGems.AdapterIntegrationSpec (spec) where
 
-import Data.Aeson (FromJSON (parseJSON), Value, withObject, (.:))
-import Data.Aeson.Types (parseEither)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Types (Method, RequestHeaders, methodGet, methodHead, status200)
@@ -20,7 +18,7 @@ import Ecluse.Server.Pipeline.TestSupport (publishedDaysAgo)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Serving
 import Ecluse.Test.Package (hexSha256Of)
-import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
+import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo)
 
 spec :: Spec
 spec = do
@@ -33,7 +31,7 @@ requiredAdapter :: IO RegistryAdapter
 requiredAdapter = maybe (fail "RubyGems has no production adapter registration") pure (adapterFor RubyGems)
 
 rubyServingDriver :: ServingDriver
-rubyServingDriver = nativeByteDriver RubyGems requiredAdapter "/rubygems" "/api/v1/dependencies?gems=thing" "/info/thing" artifact document observation hexSha256Of
+rubyServingDriver = nativeByteDriver RubyGems requiredAdapter "/rubygems" "/info/thing" "/info/thing" artifact document observation hexSha256Of
   where
     artifact version = encodeUtf8 ("/gems/thing-" <> version <> ".gem")
     document _ releases = "---\n" <> BS.intercalate "\n" (map releaseRow releases) <> "\n"
@@ -44,14 +42,12 @@ metadata :: (Method -> RequestHeaders -> Text -> IO SResponse) -> Method -> SRes
 metadata artifact method response
     | simpleStatus response /= status200 || method == methodHead = pure (responseEvidence response [] Map.empty)
     | otherwise = do
-        decoded <- runRubyReference "dependencies" (responseBytes method response)
-        values <- either fail pure (parseEither parseJSON decoded :: Either String [Value])
-        coordinates <- traverse (either fail pure . parseEither (withObject "native dependency" (\row -> (,,) <$> row .: "name" <*> row .: "number" <*> row .: "platform"))) values
-        for_ coordinates $ \(name, _, platform) -> do
-            name `shouldBe` ("thing" :: Text)
-            platform `shouldBe` ("ruby" :: Text)
-        digests <- forM coordinates $ \(_, version, _) -> do
-            actual <- artifact methodGet [] version
-            let checksums = [hexSha256Of (responseBytes methodGet actual) | simpleStatus actual == status200]
-            pure (version, checksums)
-        pure (responseEvidence response (sort [version | (_, version, _) <- coordinates]) (Map.fromList digests))
+        rows <- either (fail . toString) pure (referenceInfo (responseBytes method response))
+        for_ rows $ \row -> rowPlatform row `shouldBe` "ruby"
+        digests <- forM rows $ \row -> do
+            actual <- artifact methodGet [] (rowVersion row)
+            let checksums = [checksum | ("checksum", checksum) <- rowFields row]
+            when (simpleStatus actual == status200) $
+                checksums `shouldBe` [hexSha256Of (responseBytes methodGet actual)]
+            pure (rowVersion row, checksums)
+        pure (responseEvidence response (sort (map rowVersion rows)) (Map.fromList digests))

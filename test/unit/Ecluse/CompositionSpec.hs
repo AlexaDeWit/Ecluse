@@ -13,8 +13,8 @@ import Ecluse.Composition (
     PublishBudget (..),
     WiringPorts (WiringPorts, wpBuildCredentials, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
     firstPartyName,
-    planMountsWithVerified,
-    resolveBootWiringWithVerified,
+    planMounts,
+    resolveBootWiring,
  )
 import Ecluse.Composition.BootError (BootError (..), renderBootError)
 import Ecluse.Composition.Credential (initTargetCredentialProviders)
@@ -134,10 +134,10 @@ planFromWith mintPlan limits envVars mDocBytes = do
                 -- generous test budget keeps these specs about the wiring.
                 bodyBudget <- newDeadlines >>= \deadlines -> newByteAdmission deadlines (128 * 1024 * 1024)
                 let publishBudget = PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = 26214400}
-                fmap bwBindings <$> resolveBootWiringWithVerified Nothing testWiringPorts mintPlan limits (Just publishBudget) plan
+                fmap bwBindings <$> resolveBootWiring testWiringPorts mintPlan limits (Just publishBudget) plan
 
 planMountsSpec :: Spec
-planMountsSpec = describe "resolveBootWiringWithVerified (config-driven serving)" $ do
+planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
     it "produces one npm binding with packument-serve deps wired (served, not a 501 stub)" $ do
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case
@@ -204,7 +204,7 @@ planMountsSpec = describe "resolveBootWiringWithVerified (config-driven serving)
         config <- expectConfig (("ECLUSE_SERVER__AUTH_TOKEN", "edge-secret") : ("ECLUSE_SERVER__HELP_MESSAGE", "ask #platform") : staticEnvVars) Nothing
         providers <- expectProviders config
         plan <- expectValidated config
-        planMountsWithVerified Nothing mountBindingFor (pure fixedNow) (const inertRuleDeps) MintMirrorWrite providers testLimits Nothing plan >>= \case
+        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) MintMirrorWrite providers testLimits Nothing plan >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
                 fmap unSecret (pdInboundToken deps) `shouldBe` Just "edge-secret"
@@ -314,7 +314,7 @@ planMountsSpec = describe "resolveBootWiringWithVerified (config-driven serving)
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
 bootErrorSpec :: Spec
-bootErrorSpec = describe "resolveBootWiringWithVerified (fail fast at boot)" $ do
+bootErrorSpec = describe "resolveBootWiring (fail fast at boot)" $ do
     it "fails on an unresolved rule policy (a typo'd rule type)" $ do
         _ <- expectEnv staticEnvVars
         _ <- expectDoc "{\"rules\":{\"oops\":{\"type\":\"Nope\"}}}"
@@ -400,7 +400,7 @@ bootErrorSpec = describe "resolveBootWiringWithVerified (fail fast at boot)" $ d
             Right _ -> expectationFailure "expected both publish boot errors, accumulated"
 
 publishWiringSpec :: Spec
-publishWiringSpec = describe "resolveBootWiringWithVerified (first-party publish deps)" $ do
+publishWiringSpec = describe "resolveBootWiring (first-party publish deps)" $ do
     it "wires the publication target and the first-party predicate onto the mount when configured" $ do
         let testEnv =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL", "https://publish.example.test")

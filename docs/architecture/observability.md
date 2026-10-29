@@ -225,21 +225,3 @@ and the wiring. Six design facts hold regardless:
 
 A Dockerised, Datadog-free [integration tier](../testing.md) verifies telemetry against a real
 Agent or Collector. It asserts that the spans and metrics arrive.
-
-## Verified artifact read metrics
-
-RubyGems verified replies expose these instruments without package identity labels:
-
-| Instrument | Observation |
-|---|---|
-| `ecluse.serve.artifact.body.in_flight_bytes` | Wire bytes reserved by active verified bodies. |
-| `ecluse.serve.artifact.body.queued` | Count of verified requests that waited for byte admission. |
-| `ecluse.serve.artifact.body.shed` | Verified body requests refused by admission. |
-| `ecluse.serve.artifact.read_bytes` | Actual identity bytes read, including failed transfers. |
-| `ecluse.serve.artifact.hash_bytes` | Bytes in completed digest computations, including mismatches. |
-| `ecluse.serve.artifact.verified` | Completed successful body verifications. |
-
-A verified body observation does not establish successful client delivery or mirror completion.
-Partial hash work interrupted by cancellation is unobserved. Reusing the verified expected SHA-256 as a validator adds no second hash.
-HEAD adds no verified body observation. Conditional GETs retain full fetching and verification work.
-These instruments expose work and pressure, not a measured heap bound or a calibrated throughput guarantee.

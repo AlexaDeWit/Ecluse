@@ -36,10 +36,10 @@ Trusted private reads do not repeat public admission. Removing a stored version 
 PyPI, Cargo, and RubyGems mirror completion applies to reads through Écluse. Direct registry reads can observe incomplete copies or changed target metadata.
 
 Écluse hosts no package archives and does not inspect package code to detect malware.
-RubyGems GETs buffer bounded transient archive bytes and verify the advertised SHA-256 before artifact success, including authorised private reads.
-This is digest verification, not malware inspection or a persistent artifact cache.
+Clients verify streamed archives against checksums from admitted metadata.
+RubyGems requires the supported Bundler clients with checksum validation enabled.
+The mirror worker verifies archive bytes before publication.
 HEAD authorises and checks availability without reading or hashing an archive body.
-npm, PyPI, and Cargo retain streamed delivery and its client-verification dependency.
 
 An explicit Cargo execution rule can inspect bounded archive and manifest evidence for build scripts and procedural macros.
 RubyGems permits native builds and blocks the unsupported installation-execution rule at boot.

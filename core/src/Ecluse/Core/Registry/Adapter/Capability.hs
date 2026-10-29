@@ -12,7 +12,6 @@ module Ecluse.Core.Registry.Adapter.Capability (
     -- * Artifact requests
     AdapterArtifact (..),
     PrivateArtifactAddressing (..),
-    ArtifactRelayIntegrity (..),
 
     -- * Publish
     AdapterPublish (..),
@@ -84,15 +83,9 @@ data PrivateArtifactAddressing
       AdmittedIndexedArtifactLocation
     deriving stock (Eq, Show)
 
--- | Client-verifiable protocols can stream. Other protocols verify complete bounded bytes first.
-data ArtifactRelayIntegrity = ClientVerifiedStream | VerifyBeforeReply
-    deriving stock (Eq, Show)
-
 -- | Artifact request formation by filename or authoritative URL, shared by serve and worker ('Ecluse.Core.Server.Context.pdArtifact').
 data AdapterArtifact = AdapterArtifact
-    { artifactRelayIntegrity :: ArtifactRelayIntegrity
-    -- ^ Whether the native client receives the source digest needed for independent verification.
-    , artifactByFile :: OriginClient -> PackageName -> Text -> Either UrlFormationError Request
+    { artifactByFile :: OriginClient -> PackageName -> Text -> Either UrlFormationError Request
     -- ^ Address a trusted origin by the conventional filename path under its base URL.
     , artifactByUrl :: Maybe ClientCredential -> Text -> Either UrlFormationError Request
     -- ^ Build the request at the authoritative upstream URL. It names no origin, because the mirror worker has none.

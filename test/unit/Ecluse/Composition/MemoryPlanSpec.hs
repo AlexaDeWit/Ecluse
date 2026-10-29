@@ -19,16 +19,12 @@ import Ecluse.Composition.MemoryPlan (
     MirrorArtifactTenant (matMaxBytes),
     PublishTenant (ptAggregateBytes),
     QueueTenantDemand (MemoryQueueTenant, MirroringWithoutMemoryQueue, NoQueueTenant),
-    TransientBudget (tbBootBytes),
-    VerifiedArtifactPlan (..),
     mirrorArtifactEnvelopeMultiplier,
     planCacheConfig,
     resolveMemoryPlanForMounts,
-    resolveMemoryPlanWithVerification,
  )
 import Ecluse.Config (CacheSettings (..), LimitsSettings (..), QueueSettings (..))
 import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..))
-import Ecluse.Core.Server.MemoryModel (verifiedArtifactCharge)
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromCgroup, FromRts))
 
 -- | Verify the resolved plan and its operator-facing report.
@@ -44,19 +40,6 @@ spec = describe "resolveMemoryPlanForMounts" $ do
         mpOverrideViolations plan `shouldBe` []
         lines' `shouldSatisfy` any (T.isInfixOf "built-in default, no heap-ceiling datapoint")
 
-    it "budgets verified reads for a serve-only mount without a write tenant" $ do
-        let (plan, lines') = resolveMemoryPlanWithVerification True bareCache bareLimits bareQueue Nothing (planWith (Just gib)) NoQueueTenant []
-        mpPublishTenant plan `shouldBe` Nothing
-        mpMirrorArtifactTenant plan `shouldBe` Nothing
-        selected <- maybe (expectationFailure "verified read plan absent" >> fail "verified read plan absent") pure (mpVerifiedArtifacts plan)
-        vapMaxBytes selected `shouldSatisfy` (> 0)
-        vapMaxBytes selected `shouldSatisfy` (<= vapAggregateBytes selected)
-        verifiedArtifactCharge (vapAggregateBytes selected) `shouldSatisfy` (<= tbBootBytes (mpTransientBudget plan))
-        lines' `shouldSatisfy` any (T.isInfixOf "verified artifact byte cap")
-    it "honours a fitting artifact override and identifies an impossible verified override" $ do
-        let resolveVerified cap = fst (resolveMemoryPlanWithVerification True bareCache bareLimits{limMaxArtifactBytes = Just cap} bareQueue Nothing (planWith (Just gib)) NoQueueTenant [])
-        fmap vapMaxBytes (mpVerifiedArtifacts (resolveVerified 8192)) `shouldBe` Just 8192
-        mpOverrideViolations (resolveVerified (2 * gib)) `shouldSatisfy` any (T.isInfixOf "limits.maxArtifactBytes")
     it "reserves a larger mount request without changing the inherited default" $ do
         let (plan, _) = resolveMemoryPlanForMounts bareCache bareLimits bareQueue Nothing (planWith Nothing) NoQueueTenant [Nothing, Just (50 * mib)]
         mpMaxRequestBytes plan `shouldBe` 25 * mib

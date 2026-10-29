@@ -5,7 +5,7 @@
 
 module Ecluse.Core.Registry.RubyGems.ServingSpec (spec) where
 
-import Data.Aeson (Value (Null), object, toJSON, (.=))
+import Data.Aeson (Value (Null))
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Test.Hspec
@@ -22,7 +22,6 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Registry.Metadata.Fetch (heldManifest)
-import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRight)
 
@@ -42,25 +41,14 @@ spec = describe "Ruby native winning-source assembly" $ do
         let mismatched = Map.insert 0 (Snapshot (digestOf "different snapshot") (manifestRaw trusted)) sources
         emptyDocument <- expectRight (maybeToRight ("missing Ruby document" :: Text) (snd rubyGemsCached (assembleRubyGemsDocument "https://proxy.test" mismatched plan Nothing)))
         gemRows emptyDocument `shouldBe` []
-    it "serialises nonempty admitted rows accepted by Ruby's native Marshal decoder" $ do
+    it "serialises the exact admitted native Compact Index rows" $ do
         name <- expectRight (projectName "ecluse-fixture-root")
         bytes <- BS.readFile "test/fixtures/rubygems/info/ecluse-fixture-root"
         manifest <- expectRight =<< heldManifest (gemReadWith (const pass) (const pass) "https://public.test") defaultLimits "https://public.test" name [bytes]
         plan <- expectRight (maybeToRight ("missing merge plan" :: Text) (mergePackuments [(GatedSource, info manifest)]))
         let served = assembleRubyGemsDocument "https://proxy.test" (Map.singleton 0 (raw manifest)) plan Nothing
         encoded <- toStrict <$> expectRight (serialiseRubyGemsDocument served)
-        BS.null encoded `shouldBe` False
-        observed <- runRubyReference "dependencies" encoded
-        observed
-            `shouldBe` toJSON
-                [ object
-                    [ "name" .= ("ecluse-fixture-root" :: Text)
-                    , "number" .= version
-                    , "platform" .= ("ruby" :: Text)
-                    , "dependencies" .= ([["ecluse-fixture-leaf", ">= 1.0, < " <> upper]] :: [[Text]])
-                    ]
-                | (version, upper) <- [("1.0.0" :: Text, "2.0"), ("2.0.0", "3.0"), ("3.0.0", "3.0")]
-                ]
+        encoded `shouldBe` bytes
     it "refuses a foreign source instead of serialising JSON" $
         serialiseRubyGemsDocument (fst npmCached Null) `shouldBe` Left RenderRefused
   where

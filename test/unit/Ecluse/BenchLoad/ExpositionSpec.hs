@@ -8,12 +8,10 @@ module Ecluse.BenchLoad.ExpositionSpec (spec) where
 import Test.Hspec
 
 import Ecluse.BenchLoad.Exposition (
-    ArtifactWindow (..),
     CacheOutcomes (..),
     GaugeSummary (..),
     Sample (..),
     advisoryDatabaseInstalled,
-    artifactWindow,
     cacheWindow,
     commonLabels,
     parseExposition,
@@ -58,15 +56,6 @@ spec = do
             seriesTotal "ecluse_metadata_cache_version_requests" [("result", "hit")] samples `shouldBe` Just 7
         it "keeps an absent metric apart from a zero one" $
             seriesTotal "ecluse_missing" [] samples `shouldBe` Nothing
-    describe "verified artifact window" $ do
-        let metric name = Sample ("ecluse_serve_artifact_" <> name) []
-        it "records actual counter changes rather than warm-up totals" $ do
-            let initialSamples = [metric "read_bytes" 100, metric "hash_bytes" 80, metric "verified" 2, metric "body_queued" 1, metric "body_shed" 0]
-                finalSamples = [metric "read_bytes" 150, metric "hash_bytes" 120, metric "verified" 3, metric "body_queued" 2, metric "body_shed" 0]
-            artifactWindow initialSamples finalSamples `shouldBe` ArtifactWindow (Just 50) (Just 40) (Just 1) (Just 1) (Just 0)
-        it "keeps missing endpoints and reset counters unavailable" $ do
-            artifactWindow [] [metric "read_bytes" 10] `shouldBe` ArtifactWindow Nothing Nothing Nothing Nothing Nothing
-            artifactWindow [metric "read_bytes" 10] [metric "read_bytes" 5] `shouldBe` ArtifactWindow Nothing Nothing Nothing Nothing Nothing
     describe "advisoryDatabaseInstalled" $ do
         let installed = parseExposition "ecluse_advisory_database_age_seconds{job=\"ecluse\",ecosystem=\"npm\"} 0\n"
         it "reads the ecosystem's database age, even a zero one, as an installed database" $

@@ -5,8 +5,7 @@
 -- | Native load fixtures preserve source fields and expose the required work before timing.
 module Ecluse.BenchLoad.RubyGemsSpec (spec) where
 
-import Data.Aeson (encode, object, withObject, (.:), (.=))
-import Data.Aeson.Types (parseEither)
+import Data.Aeson ((.:))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (isInfixOf, lookup)
@@ -16,7 +15,7 @@ import Data.Time (diffUTCTime, nominalDay)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (hContentLength, methodGet, status200, status400, status404)
 import Network.HTTP.Types.Header (hTransferEncoding)
-import Network.Wai (pathInfo, queryString, rawPathInfo, rawQueryString, requestMethod, responseLBS)
+import Network.Wai (pathInfo, rawPathInfo, rawQueryString, requestMethod, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 
@@ -29,19 +28,17 @@ import Ecluse.BenchLoad.PatternScenario (PatternProvider (..), patternRequestUrl
 import Ecluse.BenchLoad.Patterns (ClientTrace (ClientTrace), RequestTrace (RequestTrace))
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (pcPreflight, pcUrl))
 import Ecluse.BenchLoad.Replay (Replay (Replay), ReplayReport (replayHttp), runReplay)
-import Ecluse.BenchLoad.RubyGems (DependencyWorkload (..), RelayFixture (..), RelayShape (..), dependencyPackages, infoStubWithArtifacts, relayArtifactFixture, relayFixture, rubyGemsFixture, rubyGemsPatternProvider, rubyGemsPrivateCopy, selectWarmArtifacts)
+import Ecluse.BenchLoad.RubyGems (InfoWorkload (..), RelayFixture (..), RelayShape (..), infoPackages, infoStubWithArtifacts, relayArtifactFixture, relayFixture, rubyGemsFixture, rubyGemsPatternProvider, rubyGemsPrivateCopy, selectWarmArtifacts)
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
-import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions), renderPackageName)
+import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions))
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
-import Ecluse.Core.Registry.RubyGems.Handlers (parseBatchQuery)
 import Ecluse.Core.Registry.RubyGems.Metadata (gemReadWith)
 import Ecluse.Core.Registry.RubyGems.Route (rubyGemsRoutes)
-import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Route (RouteName (RouteName))
 import Ecluse.Test.Corpus (CaptureRecord (crCapturedAt), CorpusPackage (cpPackage), cpName, readCaptureRecords, readCorpusPins, rubyGemsCaptureUpstream, rubyGemsCorpusPackages)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Registry.Metadata.Fetch (captureManifest)
-import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo, runRubyReference)
+import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo)
 import Ecluse.Test.Server.Route (claimedOn)
 import Ecluse.Test.Support (expectRight, expectRightText)
 import Ecluse.Test.Wai (localhost)
@@ -49,15 +46,12 @@ import Ecluse.Test.Wai (localhost)
 spec :: Spec
 spec = do
     describe "native measurement work" $ do
-        it "keeps batch, original quick-spec and complete-copy work before replay patterns" $
-            map scenarioName (fixtureScenarios rubyGemsFixture) `shouldSatisfy` isInfixOf ["batch-dependencies", "quick-gemspec", "gem-verified-known-length", "gem-verified-slow-readers", "worker-mirroring", "pattern-hot-set-control"]
+        it "keeps original quick-spec, directory and complete-copy work before replay patterns" $
+            map scenarioName (fixtureScenarios rubyGemsFixture) `shouldSatisfy` isInfixOf ["quick-gemspec", "versions-directory", "worker-mirroring", "pattern-hot-set-control"]
         it "retains the shared stress settings and unlimited-only worker" $ do
             let selected = [(scenarioName item, scenarioConcurrencyScale item, scenarioServiceTime item, scenarioUpstreamLatencyMicros item) | item <- fixtureScenarios rubyGemsFixture, scenarioName item `elem` ["gem-ceiling", "herd", "herd-under-heavy-private", "warm-under-cold", "ramp"]]
             selected `shouldBe` [("gem-ceiling", 4, True, Just 2000), ("herd", 1, False, Nothing), ("herd-under-heavy-private", 1, False, Nothing), ("warm-under-cold", 1, False, Nothing), ("ramp", 1, False, Nothing)]
             [scenarioInProcess item | item <- fixtureScenarios rubyGemsFixture, scenarioName item == "worker-mirroring"] `shouldBe` [True]
-        it "declares verified-read observations and retains slow-delivery work in the loaded pass" $ do
-            let observed = [(scenarioName item, scenarioVerifiedArtifactMetrics item, scenarioServiceTime item) | item <- fixtureScenarios rubyGemsFixture, scenarioName item `elem` ["gem-verified-known-length", "gem-verified-slow-readers"]]
-            observed `shouldBe` [("gem-verified-known-length", True, True), ("gem-verified-slow-readers", True, False)]
         it "resolves every real native workload pin before selecting artifacts" $ do
             captures <- loadCorpusBodies rubyGemsCorpusPackages
             selected <- selectWarmArtifacts rubyGemsCorpusPackages captures
@@ -80,13 +74,13 @@ spec = do
                 diffUTCTime (crCapturedAt captured) published `shouldSatisfy` (>= 7 * nominalDay)
     describe "native finite replay URLs" $ do
         for_ [False, True] $ \withArtifacts ->
-            it (if withArtifacts then "preserves native listing and artifact order from a cold start" else "replays exact named queries from a cold start") $ do
+            it (if withArtifacts then "preserves native listing and artifact order from a cold start" else "replays per-gem info requests from a cold start") $ do
                 let provider = rubyGemsPatternProvider
                     names = map cpName rubyGemsCorpusPackages
                 captures <- loadCorpusBodies rubyGemsCorpusPackages
                 selected <- ppSelectedArtifacts provider ("pinned" <$ guard withArtifacts) rubyGemsCorpusPackages captures
                 Map.keys selected `shouldMatchList` if withArtifacts then names else []
-                replies <- Map.fromList <$> traverse (\name -> (name,) <$> dependencyReply [name]) names
+                let replies = Map.fromList [(name, infoReply) | name <- names]
                 seen <- newIORef []
                 let artifacts = Map.fromList [(encodeUtf8 ("/rubygems/" <> saProxyPath artifact), "owned native artifact bytes") | artifact <- Map.elems selected]
                     app request respond = do
@@ -95,8 +89,8 @@ spec = do
                                 "rubygems" : path -> claimedOn rubyGemsRoutes (requestMethod request) path
                                 _ -> Nothing
                             body = case route of
-                                Just (RouteName "dependencies") -> case fmap (map renderPackageName) (parseBatchQuery defaultLimits (rawQueryString request)) of
-                                    Right [name] -> Map.lookup name replies
+                                Just (RouteName "info") -> case pathInfo request of
+                                    ["rubygems", "info", name] | BS.null (rawQueryString request) -> Map.lookup name replies
                                     _ -> Nothing
                                 Just (RouteName "artifact") | BS.null (rawQueryString request) -> Map.lookup (rawPathInfo request) artifacts
                                 _ -> Nothing
@@ -104,7 +98,7 @@ spec = do
                 testWithApplication (pure app) $ \port -> do
                     let replay root = Replay (RequestTrace [ClientTrace 0 0 names] names) 5_000_000 (patternRequestUrls provider root selected) (pure "")
                         native = replay (ppRootUrl provider port)
-                        expected = concat [[("/rubygems/api/v1/dependencies", "?gems=" <> encodeUtf8 name)] <> [(encodeUtf8 ("/rubygems/" <> saProxyPath artifact), "") | artifact <- maybeToList (Map.lookup name selected)] | name <- names]
+                        expected = concat [[(encodeUtf8 ("/rubygems/info/" <> name), "")] <> [(encodeUtf8 ("/rubygems/" <> saProxyPath artifact), "") | artifact <- maybeToList (Map.lookup name selected)] | name <- names]
                     warmUp (DriveReplay native)
                     readIORef seen `shouldReturn` []
                     report <- replayHttp <$> runReplay native
@@ -116,40 +110,42 @@ spec = do
                     ohaSuccessLatencies malformed `shouldBe` []
         it "rejects unsupported selected-version modes before replay" $
             ppSelectedArtifacts rubyGemsPatternProvider (Just "latest") [] Map.empty `shouldThrow` (\(BenchLoadError _) -> True)
-    describe "native dependency working sets" $ do
+    describe "native info working sets" $ do
         it "selects the weighted corpus, one history and the configured many-project set" $ do
-            fmap (map cpName) (dependencyPackages RepeatedCorpus defaultLoadKnobs) `shouldBe` Right ["rails", "nokogiri", "aws-sdk-ec2"]
-            fmap (map cpName) (dependencyPackages OneProject defaultLoadKnobs) `shouldBe` Right ["rails"]
-            fmap (map cpName) (dependencyPackages ManyProjects defaultLoadKnobs) `shouldBe` Right ["rails", "nokogiri", "aws-sdk-ec2"]
-            fmap (map cpName) (dependencyPackages ManyProjects defaultLoadKnobs{lkWorkingSet = 2}) `shouldBe` Right ["rails", "nokogiri"]
+            fmap (map cpName) (infoPackages RepeatedCorpus defaultLoadKnobs) `shouldBe` Right ["rails", "nokogiri", "aws-sdk-ec2"]
+            fmap (map cpName) (infoPackages OneProject defaultLoadKnobs) `shouldBe` Right ["rails"]
+            fmap (map cpName) (infoPackages ManyProjects defaultLoadKnobs) `shouldBe` Right ["rails", "nokogiri", "aws-sdk-ec2"]
+            fmap (map cpName) (infoPackages ManyProjects defaultLoadKnobs{lkWorkingSet = 2}) `shouldBe` Right ["rails", "nokogiri"]
         it "refuses a many-project singleton before reading captures or starting a proxy" $
             for_ [-1, 0, 1] $ \count -> do
-                fmap (map cpName) (dependencyPackages ManyProjects defaultLoadKnobs{lkWorkingSet = count})
-                    `shouldBe` Left "dependencies-working-set-many requires at least two corpus projects"
-                case find ((== "dependencies-working-set-many") . scenarioName) (fixtureScenarios rubyGemsFixture) of
+                fmap (map cpName) (infoPackages ManyProjects defaultLoadKnobs{lkWorkingSet = count})
+                    `shouldBe` Left "info-working-set-many requires at least two corpus projects"
+                case find ((== "info-working-set-many") . scenarioName) (fixtureScenarios rubyGemsFixture) of
                     Nothing -> expectationFailure "missing native many-project scenario"
                     Just item ->
                         scenarioBoot item defaultLoadKnobs{lkWorkingSet = count} (const (expectationFailure "singleton reached measurement"))
-                            `shouldThrow` (\(BenchLoadError message) -> message == "dependencies-working-set-many requires at least two corpus projects")
+                            `shouldThrow` (\(BenchLoadError message) -> message == "info-working-set-many requires at least two corpus projects")
         for_ [RepeatedCorpus, OneProject, ManyProjects] $ \workload ->
             it ("preflights every selected source and rejects each omitted reply for " <> show workload) $ do
-                packages <- expectRight (dependencyPackages workload defaultLoadKnobs)
-                replies <- Map.fromList <$> traverse (\package -> (cpName package,) <$> dependencyReply [cpName package]) packages
-                emptyReply <- dependencyReply []
+                packages <- expectRight (infoPackages workload defaultLoadKnobs)
+                let replies = Map.fromList [(cpName package, infoReply) | package <- packages]
+                    emptyReply = "---\n"
                 let names = map cpName packages
                     run :: Map Text LByteString -> IO [Text]
                     run available = do
                         seen <- newIORef []
                         let app request respond = do
-                                let name = fromMaybe "" (join (lookup "gems" (queryString request)))
-                                modifyIORef' seen (decodeUtf8 name :)
-                                respond (responseLBS status200 [] (Map.findWithDefault emptyReply (decodeUtf8 name) available))
+                                let name = case pathInfo request of
+                                        ["rubygems", "info", package] -> package
+                                        _ -> ""
+                                modifyIORef' seen (name :)
+                                respond (responseLBS status200 [] (Map.findWithDefault emptyReply name available))
                         testWithApplication (pure app) $ \port -> do
                             let urls = map (pcUrl rubyGemsPrivateCopy port) names
                             for_ urls $ \url -> do
                                 request <- HTTP.parseRequest (toString url)
-                                path <- expectRightText (maybeToRight "dependency target is outside its mount" (T.stripPrefix "/rubygems/" (decodeUtf8 (HTTP.path request))))
-                                claimedOn rubyGemsRoutes methodGet (T.splitOn "/" path) `shouldBe` Just (RouteName "dependencies")
+                                path <- expectRightText (maybeToRight "info target is outside its mount" (T.stripPrefix "/rubygems/" (decodeUtf8 (HTTP.path request))))
+                                claimedOn rubyGemsRoutes methodGet (T.splitOn "/" path) `shouldBe` Just (RouteName "info")
                             pcPreflight rubyGemsPrivateCopy urls
                         readIORef seen
                 run replies `shouldReturn` reverse names
@@ -173,7 +169,7 @@ spec = do
                                 public <- fetchChecked (if privateHit then status404 else status200) [] (localhost publicPort <> "/" <> path)
                                 HTTP.responseBody private `shouldBe` if privateHit then payload else "missing"
                                 HTTP.responseBody public `shouldBe` if privateHit then "missing" else payload
-    describe "verified relay source framing" $
+    describe "streaming relay source framing" $
         for_ [KnownLengthRelay, SlowChunkedRelay] $ \shape ->
             it (if shape == KnownLengthRelay then "transmits a genuine known Content-Length" else "transmits chunked bytes without a declared length") $ do
                 let payload = LBS.replicate (128 * 1024) 97
@@ -203,8 +199,5 @@ spec = do
   where
     withoutChecksum row = row{rowFields = filter ((/= "checksum") . fst) (rowFields row)}
 
-dependencyReply :: [Text] -> IO LByteString
-dependencyReply names = do
-    let rows = [object ["name" .= name, "version" .= ("1.0.0" :: Text), "platform" .= ("ruby" :: Text), "dependencies" .= ([] :: [Text])] | name <- names]
-    encoded <- runRubyReference "encode-dependencies" (toStrict (encode rows))
-    fromStrict <$> expectRight (parseEither (withObject "Ruby-generated dependency reply" (\fields -> BS.pack <$> fields .: "bytes")) encoded)
+infoReply :: LByteString
+infoReply = "---\n1.0.0 |checksum:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"

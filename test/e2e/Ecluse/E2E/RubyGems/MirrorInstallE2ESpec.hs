@@ -162,4 +162,4 @@ rubyMirrorComplete = mirrorVersionComplete
 
 -- | An unmirrored name proves whether the fresh product can still reach public source data.
 rubyPublicReachable :: E2E -> IO Bool
-rubyPublicReachable proxy = (== 200) <$> proxyStatus proxy "/rubygems/api/v1/dependencies?gems=ecluse-fixture-sentinel"
+rubyPublicReachable proxy = (== 200) <$> proxyStatus proxy "/rubygems/info/ecluse-fixture-sentinel"

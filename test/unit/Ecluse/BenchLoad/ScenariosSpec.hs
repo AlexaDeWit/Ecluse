@@ -34,7 +34,7 @@ spec = do
         it "rejects duplicate scenario identities" $
             checkFixtureCoverage (map (\fixture -> fixture{fixtureScenarios = fixtureScenarios fixture <> fixtureScenarios fixture}) fixtures) `shouldSatisfy` isLeft
     describe "MAL qualification selection" $
-        for_ ["npm/merge-cold-mal-hit", "npm/merge-cold-mal-mixed-heavy", "pypi/index-cold-mal-hit", "pypi/index-cold-mal-mixed-heavy", "rubygems/dependencies-cold-mal-hit", "rubygems/dependencies-cold-mal-mixed-heavy"] $ \name ->
+        for_ ["npm/merge-cold-mal-hit", "npm/merge-cold-mal-mixed-heavy", "pypi/index-cold-mal-hit", "pypi/index-cold-mal-mixed-heavy", "rubygems/info-cold-mal-hit", "rubygems/info-cold-mal-mixed-heavy"] $ \name ->
             it ("requires explicit selection for " <> toString name) $ do
                 isJust (findScenario name) `shouldBe` True
                 checkedCounts twoCores `shouldSatisfy` Set.notMember (name, Loaded)
@@ -49,8 +49,12 @@ spec = do
                     map scenarioName (scenariosForSelection (Just [key]) fixture) `shouldSatisfy` elem name
         it "removes only the approved pass observations from the full grid" $
             sum (map (Set.size . Set.filter (not . T.isPrefixOf "rubygems/" . fst) . checkedCounts) scheduledPodShapes) `shouldBe` 486
-        it "adds every native batch, specification, read and worker pass" $
-            sum (map (Set.size . checkedCounts) scheduledPodShapes) `shouldBe` 668
+        it "adds every native specification, read and worker pass" $
+            sum (map (Set.size . checkedCounts) scheduledPodShapes) `shouldBe` 648
+        it "keeps the focused directory diagnostic outside all full profiles" $ do
+            isJust (findScenario "rubygems/versions-directory") `shouldBe` True
+            for_ scheduledPodShapes $ \shape ->
+                checkedCounts shape `shouldSatisfy` Set.notMember ("rubygems/versions-directory", Loaded)
 
     describe "checkedCounts" $ do
         it "checks in-process work only under the unlimited shape, the one shape that runs it" $ do

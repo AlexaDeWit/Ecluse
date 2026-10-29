@@ -61,7 +61,7 @@ and explains what you lose when two share one.
 
 For npm, a client requests a version listing and then a tarball. PyPI clients request project indexes
 and distribution files. Cargo clients read sparse discovery, native index records, and crate archives.
-RubyGems clients request named dependencies, compact specifications, and gem archives.
+RubyGems clients read a Compact Index directory, per-gem metadata, and gem archives.
 Cargo separates crates.io source replacement from private alternate-registry access.
 The [Cargo protocol contract](@/docs/protocol-support.md#cargo) defines those views and their source rules.
 
@@ -75,7 +75,7 @@ The [Cargo protocol contract](@/docs/protocol-support.md#cargo) defines those vi
 2. **The artifact.** Private files use the trusted path. A managed mirror hit also requires current
    authorisation, matching target identities, and a complete expected version. A private miss uses current
    public metadata and policy. An admitted public request delivers the file and queues a whole-version job
-   when mirroring is configured. RubyGems verifies the complete archive before delivery.
+   when mirroring is configured. Clients verify streamed archives against checksums from admitted metadata.
    For PyPI, that job copies every supported wheel and sdist in the admitted version.
    For RubyGems, it copies every platform archive in the admitted version.
 3. **A publish.** Publishing stays off until you configure a publication target. With one, Écluse

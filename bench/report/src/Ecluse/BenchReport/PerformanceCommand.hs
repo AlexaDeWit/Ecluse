@@ -21,7 +21,6 @@ import Data.Version (showVersion)
 import System.Info (compilerName, compilerVersion)
 
 import Ecluse.BenchLoad.Contract (LoadScope (FullLoad, ReadLoadFoundation), requiredLoadPasses)
-import Ecluse.BenchLoad.Evidence (verifiedRelayRequiredRows)
 import Ecluse.BenchLoad.Floors (passKey)
 import Ecluse.BenchLoad.Pod (parsePodShape)
 import Ecluse.BenchReport.Performance
@@ -67,7 +66,7 @@ compileObligation kind subject conditions = do
     loadRows scope ecosystem = do
         shape <- maybeToRight "load obligations require podShape" (Map.lookup "podShape" conditions) >>= parsePodShape
         passes <- first show (requiredLoadPasses scope ecosystem shape)
-        pure ([scenario <> "/" <> passKey whichPass | (_, (scenario, whichPass)) <- passes] <> verifiedRelayRequiredRows (map snd passes))
+        pure [scenario <> "/" <> passKey whichPass | (_, (scenario, whichPass)) <- passes]
 
 requiredConditions :: Text -> Map Text Text -> Map Text Text
 requiredConditions kind conditions =

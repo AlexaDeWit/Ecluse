@@ -12,6 +12,7 @@ module Ecluse.Test.Registry.RubyGems.Fixtures (
     loadRubyReleasesFrom,
     rubyRelease,
     writeRubyRegistry,
+    rubyVersions,
 ) where
 
 import Data.Aeson (Value, eitherDecodeStrict, withObject, (.:))
@@ -87,10 +88,12 @@ rubyRelease releases name version platform = case filter matches releases of
   where
     matches release = releaseName release == name && releaseVersion release == version && releasePlatform release == platform
 
--- | The public fixture exposes named files only. It supplies no global catalogue.
+-- | The fixture directory supports discovery and on-demand native metadata.
 writeRubyRegistry :: FilePath -> IO ()
 writeRubyRegistry destination = do
     releases <- loadRubyReleases
+    createDirectoryIfMissing True destination
+    writeFileText (destination </> "versions") (rubyVersions releases)
     forM_ releases $ \release -> do
         let archive = destination </> "gems" </> toString (releaseFilename release)
             compact = destination </> releaseCompactPath release
@@ -103,6 +106,15 @@ writeRubyRegistry destination = do
         if name == "ecluse-fixture-advisory"
             then writeFileText (destination </> "info" </> toString name) ("---\n" <> T.unlines [if releaseVersion release == "1.19.0" then T.replace "2020-01-01T00:00:00Z" now (releaseInfoRow release) else releaseInfoRow release | release <- releases, releaseName release == name])
             else copyFile (fixtureDirectory </> "info" </> toString name) (destination </> "info" </> toString name)
+
+-- | Blank info hints force supported clients to revalidate their cached rows.
+rubyVersions :: [RubyRelease] -> Text
+rubyVersions releases =
+    "created_at: 2026-01-01T00:00:00Z\n---\n" <> T.unlines (map directoryRow names)
+  where
+    names = sort (ordNub (map releaseName releases))
+    directoryRow name =
+        name <> " " <> T.intercalate "," [T.takeWhile (/= ' ') (releaseInfoRow release) | release <- releases, releaseName release == name] <> " "
 
 fixtureDirectory :: FilePath
 fixtureDirectory = "test/fixtures/rubygems"

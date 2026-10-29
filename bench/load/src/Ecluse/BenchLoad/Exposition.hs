@@ -26,8 +26,6 @@ module Ecluse.BenchLoad.Exposition (
     CacheOutcomes (..),
     storeOutcomes,
     cacheWindow,
-    ArtifactWindow (..),
-    artifactWindow,
 ) where
 
 import Data.Aeson (FromJSON, ToJSON)
@@ -35,7 +33,7 @@ import Data.Text qualified as T
 import Data.Universe.Class qualified as Universe
 
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Telemetry.Catalogue (MetricName (AdvisoryDatabaseAgeSeconds, ArtifactBodyQueued, ArtifactBodyShed, ArtifactHashBytes, ArtifactReadBytes, ArtifactVerified, AssembledCacheRequests, MetadataCacheRequests, RuleEffectfulFailures, SingleVersionCacheRequests), metricName)
+import Ecluse.Core.Telemetry.Catalogue (MetricName (AdvisoryDatabaseAgeSeconds, AssembledCacheRequests, MetadataCacheRequests, RuleEffectfulFailures, SingleVersionCacheRequests), metricName)
 import Ecluse.Core.Telemetry.Metrics (CacheResult (Collapsed, Hit, Miss), CacheStore (AssembledStore, FullStore, VersionStore), Label (LCacheResult, LCacheStore, LEcosystem), renderLabel)
 import Ecluse.Test.Exposition (Sample (..), parseExposition)
 
@@ -136,24 +134,3 @@ cacheWindow start end = [(storeLabel store, since (storeOutcomes end store) (sto
             , coMisses = max 0 (coMisses now - coMisses before)
             , coCollapsed = max 0 (coCollapsed now - coCollapsed before)
             }
-
--- | Actual verified-read counter deltas. Missing endpoints or counter resets remain unavailable.
-data ArtifactWindow = ArtifactWindow
-    { awReadBytes :: Maybe Double
-    , awHashBytes :: Maybe Double
-    , awVerified :: Maybe Double
-    , awQueued :: Maybe Double
-    , awShed :: Maybe Double
-    }
-    deriving stock (Eq, Show, Generic)
-    deriving anyclass (FromJSON, ToJSON)
-
--- | Counter observations exclude preflight and warm-up without inferring unobserved zero values.
-artifactWindow :: [Sample] -> [Sample] -> ArtifactWindow
-artifactWindow start end = ArtifactWindow (delta ArtifactReadBytes) (delta ArtifactHashBytes) (delta ArtifactVerified) (delta ArtifactBodyQueued) (delta ArtifactBodyShed)
-  where
-    delta metric = do
-        before <- seriesTotal (expositionName metric) [] start
-        after <- seriesTotal (expositionName metric) [] end
-        guard (after >= before)
-        pure (after - before)

@@ -79,7 +79,7 @@ assertRubyContents project expected = do
     executable <- runBundler project ["exec", "ecluse-fixture"] >>= shouldSucceed
     T.strip (crStdout executable) `shouldBe` expected
 
--- | The proxy and TLS edge must observe each native artifact and compact-spec exchange.
+-- | The proxy and TLS edge observe native archives and on-demand info exchanges.
 assertRubyRouting :: RubyTraffic -> IO ()
 assertRubyRouting traffic = do
     assertRubyClientAssets traffic
@@ -91,7 +91,7 @@ assertRubyRouting traffic = do
     map (\request -> (rubyRequestMethod request, T.drop (T.length "/rubygems") (rubyRequestPath request), rubyRequestStatus request)) clients
         `shouldMatchList` map exchange (filter native origins)
 
--- | Retained compact specifications can satisfy an image exchange without another origin request.
+-- | Client archives and info rows traverse the product listener.
 assertRubyClientAssets :: RubyTraffic -> IO ()
 assertRubyClientAssets traffic = do
     let native request = any (`T.isSuffixOf` rubyRequestPath request) [".gem", ".gemspec.rz"]
@@ -100,7 +100,7 @@ assertRubyClientAssets traffic = do
         exchange request = (rubyRequestMethod request, rubyRequestPath request, rubyRequestStatus request)
         successful suffix = any (\request -> suffix `T.isSuffixOf` rubyRequestPath request && rubyRequestStatus request == 200)
     clients `shouldSatisfy` successful ".gem"
-    clients `shouldSatisfy` successful ".gemspec.rz"
+    rubyClientRequests traffic `shouldSatisfy` any (\request -> "/rubygems/info/" `T.isPrefixOf` rubyRequestPath request && rubyRequestStatus request == 200)
     map rubyRequestScheme clients `shouldSatisfy` all (== "https")
     map rubyRequestPath clients `shouldSatisfy` all (T.isPrefixOf "/rubygems/")
     map exchange clients `shouldMatchList` map exchange forwarded

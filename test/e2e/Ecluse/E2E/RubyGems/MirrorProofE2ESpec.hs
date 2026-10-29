@@ -97,7 +97,7 @@ roundtrip :: GlobalDataPlane -> IO ()
 roundtrip plane = withPlatform plane $ \registry releases config -> do
     before <- withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
         trigger (rubyProxy observed) releases
-        proxyGet (rubyProxy observed) dependencyPath
+        proxyGet (rubyProxy observed) infoPath
     fst before `shouldBe` 200
     drain plane registry releases config
     control <- rubyRelease releases "ecluse-fixture-platform" "1.0.0" "arm64-darwin"
@@ -106,7 +106,7 @@ roundtrip plane = withPlatform plane $ \registry releases config -> do
     withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
         withObservedRubyProxy aged plane $ \observed -> do
             rubyPublicReachable (rubyProxy observed) `shouldReturn` False
-            proxyGet (rubyProxy observed) dependencyPath `shouldReturn` before
+            proxyGet (rubyProxy observed) infoPath `shouldReturn` before
             for_ releases $ \release -> proxyGet (rubyProxy observed) ("/rubygems/" <> toText (releaseCompactPath release)) `shouldReturn` (200, LBS.fromStrict (releaseCompact release))
             platformClient observed releases
 
@@ -139,7 +139,7 @@ interrupted plane = withPlatform plane $ \registry releases config -> do
     rubyRegistryFiles registry "rubygems-mirror" `shouldReturn` preserved
     withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
         withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed ->
-            proxyStatus (rubyProxy observed) dependencyPath `shouldReturn` 503
+            proxyStatus (rubyProxy observed) infoPath `shouldReturn` 503
     setRubyRegistryFault registry "rubygems-mirror" RubyRegistryHealthy
     withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) False) $
         drain plane registry releases config
@@ -160,7 +160,7 @@ absentProject plane = withPlatform plane $ \registry releases config -> do
     withStubFault plane (RubyGemsBackend (rubyRegistryPort registry) True) $
         withObservedRubyProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \observed -> do
             rubyPublicReachable (rubyProxy observed) `shouldReturn` False
-            proxyStatus (rubyProxy observed) dependencyPath `shouldReturn` 200
+            proxyStatus (rubyProxy observed) infoPath `shouldReturn` 200
             platformClient observed releases
 
 data MirrorFault = MissingArchive | ChangedChecksum | MissingState | MissingCompact | CorruptState | PrivateAuthorisation
@@ -185,7 +185,7 @@ faultCase fault plane = withPlatform plane $ \registry releases config -> do
                 path = case fault of
                     MissingArchive -> rubyArchiveRoute release
                     MissingCompact -> "/rubygems/" <> toText (releaseCompactPath release)
-                    _ -> dependencyPath
+                    _ -> infoPath
             proxyStatus (rubyProxy observed) path `shouldReturn` expected
             rubyConsumer (rubyProxy observed) currentBundler $ \project -> do
                 rubyDependency project "ecluse-fixture-platform" "= 1.0.0"
@@ -255,5 +255,5 @@ platformClientWith credentials observed releases = withRubyProject currentBundle
     rubyDependency project "ecluse-fixture-platform" "= 1.0.0"
     assertRubyPlatformInstall observed releases project
 
-dependencyPath :: Text
-dependencyPath = "/rubygems/api/v1/dependencies?gems=ecluse-fixture-platform"
+infoPath :: Text
+infoPath = "/rubygems/info/ecluse-fixture-platform"

@@ -5,8 +5,6 @@
 -- | Native RubyGems OSV generations drive real Bundler advisory and remediation observations.
 module Ecluse.E2E.RubyGems.AdvisoriesE2ESpec (rubyAdvisoryFamily) where
 
-import Data.Aeson (FromJSON (parseJSON), Value, withObject, (.:))
-import Data.Aeson.Types (parseEither)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -21,7 +19,7 @@ import Ecluse.E2E.RubyGems.InstallE2ESpec (rubyConsumer)
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
 import Ecluse.Test.Contract.Install.Advisory
 import Ecluse.Test.Registry.RubyGems.Fixtures
-import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
+import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo)
 
 -- | CVSS, EPSS, malicious denial and exact/partial fixes keep independent source and client lifetimes.
 rubyAdvisoryFamily :: FamilyFixture AdvisoryScenarioDriver
@@ -34,22 +32,21 @@ rubyAdvisoryFamily = scenarioFamily fixture RubyGems rubyGemsTopology{topologyAw
         PartialFix -> partialFixAdvisoryId
         PartialFixAbstaining -> partialFixRemainingAdvisoryId
         _ -> rubyAdvisoryId
-    session _ proxy = AdvisorySession (map number <$> dependencyRows proxy) (releaseDriver proxy) Nothing
+    session _ proxy = AdvisorySession (map number <$> infoCoordinates proxy) (releaseDriver proxy) Nothing
     number (_, version, _) = version
 
-dependencyRows :: E2E -> IO [(Text, Text, Text)]
-dependencyRows proxy = do
-    (status, bytes) <- proxyGet proxy "/rubygems/api/v1/dependencies?gems=ecluse-fixture-advisory"
-    unless (status == 200) (fail "Ruby advisory dependency listing failed")
-    decoded <- runRubyReference "dependencies" (LBS.toStrict bytes)
-    values <- either fail pure (parseEither parseJSON decoded :: Either String [Value])
-    traverse (either fail pure . parseEither (withObject "native dependency" (\row -> (,,) <$> row .: "name" <*> row .: "number" <*> row .: "platform"))) values
+infoCoordinates :: E2E -> IO [(Text, Text, Text)]
+infoCoordinates proxy = do
+    (status, bytes) <- proxyGet proxy "/rubygems/info/ecluse-fixture-advisory"
+    unless (status == 200) (fail "Ruby advisory info listing failed")
+    rows <- either (fail . toString) pure (referenceInfo (LBS.toStrict bytes))
+    pure [("ecluse-fixture-advisory", rowVersion row, rowPlatform row) | row <- rows]
 
 releaseDriver :: E2E -> Text -> IO AdvisoryDriver
 releaseDriver proxy version = do
     releases <- loadRubyReleases
     release <- rubyRelease releases "ecluse-fixture-advisory" version "ruby"
-    rows <- dependencyRows proxy
+    rows <- infoCoordinates proxy
     let artifact name number platform = "/rubygems/gems/" <> name <> "-" <> number <> (if platform == "ruby" then "" else "-" <> platform) <> ".gem"
     pure
         AdvisoryDriver

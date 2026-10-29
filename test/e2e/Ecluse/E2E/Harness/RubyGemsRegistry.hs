@@ -46,6 +46,8 @@ import Ecluse.Test.Registry.RubyGems.Reference (runRubyReference)
 data RubyRegistryFault
     = RubyRegistryHealthy
     | RubyRegistryUnavailable
+    | RubyRegistryDirectoryStatus Int
+    | RubyRegistryInfoStatus Text Int
     | RubyRegistryLoseReply
     | RubyRegistryRequireRead
     | RubyRegistryMissingArchive Text
@@ -174,13 +176,21 @@ rubyRegistryApplication registry request respond = do
                 then send status401 [("WWW-Authenticate", "Basic realm=\"RubyGems fixture\"")] "native read authorisation required"
                 else case (method, Wai.pathInfo request) of
                     ("POST", ["api", "v1", "gems"]) -> publish registry host fault request send respond
-                    (readMethod, ["versions"]) | readMethod `elem` ["GET", "HEAD"] -> send status404 [] ""
+                    (readMethod, ["versions"]) | readMethod `elem` ["GET", "HEAD"] ->
+                        case fault of
+                            RubyRegistryDirectoryStatus status -> send (mkStatus status "native directory failure") [] "native directory unavailable"
+                            _ -> send status200 [("Content-Type", "text/plain")] (LBS.fromStrict (encodeUtf8 (rubyVersions stored)))
                     (readMethod, ["api", "v1", "dependencies"]) | readMethod `elem` ["GET", "HEAD"] -> do
                         let names = maybe [] (T.splitOn "," . decodeUtf8) (join (lookup "gems" (Wai.queryString request)))
                             rows = [releaseManifest release | release <- stored, releaseName release `elem` names]
                         native <- runRubyReference "encode-dependencies" (LBS.toStrict (encode rows))
                         bytes <- either fail pure (parseEither (withObject "native bytes" (.: "bytes")) native)
                         send status200 [("Content-Type", "application/octet-stream")] (LBS.fromStrict (BS.pack bytes))
+                    (readMethod, ["info", name])
+                        | readMethod `elem` ["GET", "HEAD"]
+                        , RubyRegistryInfoStatus selected status <- fault
+                        , selected == name ->
+                            send (mkStatus status "native info failure") [] "native info unavailable"
                     (readMethod, ["info", name]) | readMethod `elem` ["GET", "HEAD"] -> do
                         let releases = filter ((== name) . releaseName) stored
                         if null releases

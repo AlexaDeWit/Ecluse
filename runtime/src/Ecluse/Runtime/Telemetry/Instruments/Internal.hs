@@ -126,12 +126,6 @@ data Metrics = Metrics
     { mServeDecision :: Counter Int64
     , mServeAdmissionInFlight :: UpDownCounter Int64
     , mServeAdmissionQueued :: Counter Int64
-    , mArtifactBodyInFlightBytes :: UpDownCounter Int64
-    , mArtifactBodyQueued :: Counter Int64
-    , mArtifactBodyShed :: Counter Int64
-    , mArtifactReadBytes :: Counter Int64
-    , mArtifactHashBytes :: Counter Int64
-    , mArtifactVerified :: Counter Int64
     , mPublishBodyInFlightBytes :: UpDownCounter Int64
     , mPublishBodyShed :: Counter Int64
     , mMergeDivergence :: Counter Int64
@@ -190,15 +184,6 @@ newMetrics telemetry = do
     serveDecision <- counter meter ServeDecision "{decision}" "serve decisions by admit/deny/unavailable"
     serveAdmissionInFlight <- upDownCounter meter ServeAdmissionInFlight "{request}" "in-flight metadata parses"
     serveAdmissionQueued <- counter meter ServeAdmissionQueued "{request}" "admissions that waited for a slot"
-    artifactBodyInFlightBytes <- upDownCounter meter ArtifactBodyInFlightBytes "By" "bytes reserved for verified artifact reads"
-    artifactBodyQueued <- counter meter ArtifactBodyQueued "{request}" "verified reads waiting for byte capacity"
-    artifactBodyShed <- counter meter ArtifactBodyShed "{request}" "verified reads shed at byte capacity"
-    artifactReadBytes <- counter meter ArtifactReadBytes "By" "identity bytes consumed by verified artifact reads"
-    artifactHashBytes <- counter meter ArtifactHashBytes "By" "bytes in completed artifact digest computations"
-    artifactVerified <- counter meter ArtifactVerified "{artifact}" "complete artifacts matching their admitted digest"
-    -- Record known initial states before any transfer, without seeding other instruments.
-    addDelta artifactBodyInFlightBytes 0 []
-    traverse_ (\instrument -> addCount instrument 0 []) [artifactBodyQueued, artifactBodyShed, artifactReadBytes, artifactHashBytes, artifactVerified]
     publishBodyInFlightBytes <- upDownCounter meter PublishBodyInFlightBytes "By" "bytes reserved for buffered publish bodies"
     publishBodyShed <- counter meter PublishBodyShed "{request}" "publishes shed at the body-byte budget"
     mergeDivergence <- counter meter MergeDivergence "{divergence}" "cross-upstream integrity divergences detected in the packument merge"
@@ -251,12 +236,6 @@ newMetrics telemetry = do
             { mServeDecision = serveDecision
             , mServeAdmissionInFlight = serveAdmissionInFlight
             , mServeAdmissionQueued = serveAdmissionQueued
-            , mArtifactBodyInFlightBytes = artifactBodyInFlightBytes
-            , mArtifactBodyQueued = artifactBodyQueued
-            , mArtifactBodyShed = artifactBodyShed
-            , mArtifactReadBytes = artifactReadBytes
-            , mArtifactHashBytes = artifactHashBytes
-            , mArtifactVerified = artifactVerified
             , mPublishBodyInFlightBytes = publishBodyInFlightBytes
             , mPublishBodyShed = publishBodyShed
             , mMergeDivergence = mergeDivergence
@@ -336,12 +315,6 @@ metricsPortOf m =
         { mpServeDecision = recordServeDecision m
         , mpServeAdmissionInFlight = recordServeAdmissionInFlight m
         , mpServeAdmissionQueued = recordServeAdmissionQueued m
-        , mpArtifactBodyInFlightBytes = \delta -> addDelta (mArtifactBodyInFlightBytes m) (fromIntegral delta) []
-        , mpArtifactBodyQueued = addOne (mArtifactBodyQueued m) []
-        , mpArtifactBodyShed = addOne (mArtifactBodyShed m) []
-        , mpArtifactReadBytes = \bytes -> addCount (mArtifactReadBytes m) bytes []
-        , mpArtifactHashBytes = \bytes -> addCount (mArtifactHashBytes m) bytes []
-        , mpArtifactVerified = addOne (mArtifactVerified m) []
         , mpPublishBodyInFlightBytes = \delta -> addDelta (mPublishBodyInFlightBytes m) (fromIntegral delta) []
         , mpPublishBodyShed = addOne (mPublishBodyShed m) []
         , mpMemoryAdmissionQueued = addOne (mMemoryAdmissionQueued m) []

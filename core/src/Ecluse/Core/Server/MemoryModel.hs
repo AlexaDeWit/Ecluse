@@ -12,12 +12,9 @@ module Ecluse.Core.Server.MemoryModel (
     chargeForResident,
     mirrorJobEstimatedBytes,
     bufferedChunkCharge,
-    verifiedArtifactChargeInteger,
-    verifiedArtifactCharge,
     decodedDocumentCharge,
 ) where
 
-import Crypto.Hash (SHA256 (SHA256), hashDigestSize)
 import Data.ByteString qualified as BS
 
 {- | Estimate retained bytes from a compact representation charge using the 7.5 factor.
@@ -55,14 +52,6 @@ bufferedChargeInteger :: Integer -> Integer
 bufferedChargeInteger bytes
     | bytes <= 0 = 0
     | otherwise = 4 * bytes + 128
-
--- | Preallocated body/source/copy overlap plus fixed digest and ownership storage.
-verifiedArtifactCharge :: Int -> Int
-verifiedArtifactCharge = fromInteger . min (toInteger (maxBound :: Int)) . verifiedArtifactChargeInteger . toInteger
-
--- | Planning compares unsaturated charges before converting to the meter's bounded integer.
-verifiedArtifactChargeInteger :: Integer -> Integer
-verifiedArtifactChargeInteger bytes = bufferedChargeInteger (max 1 bytes) + bufferedChargeInteger (toInteger (hashDigestSize SHA256))
 
 -- | Estimate scalar copies and tree/domain slots from actual JSON or XML bytes before decoding.
 decodedDocumentCharge :: ByteString -> Int

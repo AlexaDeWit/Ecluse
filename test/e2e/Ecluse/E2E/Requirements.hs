@@ -282,7 +282,7 @@ obligations =
         "rubygems/native"
         Supported
         ["read", "client-install"]
-        (map ("rubygems/native/" <>) ["minimum-client", "current-client", "platforms", "checksum-failure", "prerelease", "ruby-requirement", "direct-denial", "batch-limits", "metadata-no-archives", "private-authority", "native-extension"])
+        (map ("rubygems/native/" <>) ["minimum-client", "current-client", "compact-required", "info-required", "minimum-cache", "current-cache", "compact-replacement", "platforms", "checksum-failure", "prerelease", "ruby-requirement", "direct-denial", "native-surface", "metadata-no-archives", "private-authority", "native-extension"])
     , Obligation
         "rubygems/mirror-proof"
         "rubygems/write"

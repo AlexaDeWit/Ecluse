@@ -51,8 +51,8 @@ selectProfile profile Nothing = (renderLoadProfile profile, selected)
             , ShippedAdvisoryMetadata
             , PrivateCopyWhole
             ]
-                <> (if ecosystem == RubyGems then [RepeatedDependencies, RevalidateMetadata, OneProjectDependencies, ManyProjectDependencies] else [AssembledResponseHit, RevalidateMetadata, CacheFits, CacheEvicts])
+                <> (if ecosystem == RubyGems then [RepeatedInfo, RevalidateMetadata, OneProjectInfo, ManyProjectInfo] else [AssembledResponseHit, RevalidateMetadata, CacheFits, CacheEvicts])
                 <> [law | ecosystem == PyPI, law <- [ManagedMirrorBaseline, ManagedMirrorWarm, ManagedMirrorRevision]]
-                <> [law | ecosystem == RubyGems, law <- [BatchMetadata, QuickSpecification]]
+                <> [QuickSpecification | ecosystem == RubyGems]
         MemoryAdmission -> [PrivateCopyWhole, SlowReaders, AdmissionHerd, HerdUnderPrivateCopy, WarmUnderCold, AdmissionRamp]
-        Artifacts -> [PrivateArtifact, PublicArtifactOnboarding, PrivateArtifactCeiling] <> [law | ecosystem == RubyGems, law <- [VerifiedKnownLengthArtifact, VerifiedSlowArtifact]]
+        Artifacts -> [PrivateArtifact, PublicArtifactOnboarding, PrivateArtifactCeiling]

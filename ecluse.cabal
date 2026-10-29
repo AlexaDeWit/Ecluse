@@ -330,15 +330,12 @@ library ecluse-core
     Ecluse.Core.Registry.RubyGems.FirstParty
     Ecluse.Core.Registry.RubyGems.Project
     Ecluse.Core.Registry.RubyGems.Document
+    Ecluse.Core.Registry.RubyGems.Directory
     Ecluse.Core.Registry.RubyGems.Credential
-    Ecluse.Core.Server.Admission.Artifact
-    Ecluse.Core.Server.Admission.Artifact.Internal
-    Ecluse.Core.Server.Pipeline.Tarball.Verified
-    Ecluse.Core.Server.Pipeline.Tarball.Verified.Internal
     Ecluse.Core.Registry.RubyGems.Adapter
-    Ecluse.Core.Registry.RubyGems.Handlers
     Ecluse.Core.Registry.RubyGems.Handlers.Budget
     Ecluse.Core.Registry.RubyGems.Handlers.Coordinate
+    Ecluse.Core.Registry.RubyGems.Handlers.CompactIndex
     Ecluse.Core.Registry.RubyGems.Mirror
     Ecluse.Core.Registry.RubyGems.Publish
     Ecluse.Core.Registry.RubyGems.Route
@@ -1346,8 +1343,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.RubyGems.FirstPartySpec
     Ecluse.Core.Registry.RubyGems.ProjectSpec
     Ecluse.Core.Registry.RubyGems.CredentialSpec
-    Ecluse.Core.Server.Admission.ArtifactSpec
-    Ecluse.Core.Server.Pipeline.Tarball.VerifiedSpec
     Ecluse.Core.Registry.RubyGems.StreamingSpec
     Ecluse.Test.Server.CacheSpec
     Ecluse.Core.Registry.RubyGems.Handlers.BudgetSpec
@@ -1367,6 +1362,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Metadata.RecordStreamSpec
     Ecluse.Core.Registry.RubyGems.CompactSpecSpec
     Ecluse.Core.Registry.RubyGems.DocumentSpec
+    Ecluse.Core.Registry.RubyGems.DirectorySpec
     Ecluse.Core.Registry.RubyGems.MarshalSpec
     Ecluse.Core.Registry.RubyGems.ProjectionSpec
     Ecluse.Core.Registry.RubyGems.ReaderSpec
@@ -1611,10 +1607,12 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.PyPI.Worker
     Ecluse.BenchLoad.Cargo
     Ecluse.BenchLoad.RubyGems
+    Ecluse.BenchLoad.RubyGems.Directory
     Ecluse.BenchLoad.RubyGems.Worker
     Ecluse.BenchLoad.RubyGems.WorkerFixture
     Ecluse.BenchLoad.RubyGems.WorkerFixtureSpec
     Ecluse.BenchLoad.RubyGemsSpec
+    Ecluse.BenchLoad.RubyGems.DirectorySpec
     Ecluse.BenchLoad.OhaSpec
     Ecluse.BenchLoad.Cargo.CopyState
     Ecluse.BenchLoad.Cargo.Worker
@@ -1994,8 +1992,6 @@ test-suite ecluse-residency
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
     Ecluse.Core.Registry.Cargo.ReaderResidencySpec
-    Ecluse.Core.Server.Admission.ArtifactResidencySpec
-    Ecluse.Core.Server.Pipeline.Tarball.VerifiedResidencySpec
     Ecluse.Core.Registry.RubyGems.ReaderResidencySpec
     Ecluse.Core.Registry.RubyGems.ServingResidencySpec
     Ecluse.Core.Registry.PyPI.ArchiveResidencySpec
@@ -2542,6 +2538,7 @@ executable bench-load
     Ecluse.BenchLoad.PyPI.Worker
     Ecluse.BenchLoad.Cargo
     Ecluse.BenchLoad.RubyGems
+    Ecluse.BenchLoad.RubyGems.Directory
     Ecluse.BenchLoad.RubyGems.Worker
     Ecluse.BenchLoad.RubyGems.WorkerFixture
     Ecluse.BenchLoad.Cargo.CopyState

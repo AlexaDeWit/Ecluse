@@ -137,40 +137,18 @@ connection and pumped a whole body for warp to discard is a DoS-amplification le
 would force arbitrary full-artifact upstream fetches. So dispatch handles `HEAD` explicitly, not the
 `Autohead` middleware.
 
-## Verified RubyGems artifact replies
+## RubyGems client integrity
 
-Bundler's named Dependencies API does not carry the source archive checksum.
-RubyGems therefore declares `VerifyBeforeReply`, while npm, PyPI, and Cargo retain `ClientVerifiedStream`.
-This applies to public and caller-authorised private `.gem` GETs, including public-only mounts without mirroring.
-It neither inspects install scripts nor changes admission policy.
-
-The proxy requests an unconditional identity-coded representation, without origin validators or range headers.
-It buffers the complete bounded body and verifies its advertised SHA-256 before committing `200` or a local `304`.
-Known metadata and response lengths must agree with the actual complete body. Unknown lengths reserve the full resolved cap.
-Unsolicited origin `206` or `304`, partial framing, nonidentity coding, or a digest mismatch returns `502` without artifact bytes.
-Private `401` or `403` and private digest mismatches cannot trigger public substitution.
-A genuine private `404` retains the existing public fallback, except for declared first-party names.
-
-The reply uses a strong local validator for the verified representation and evaluates the client's `If-None-Match` condition.
-A matching GET can return `304` only after fetching and verifying the complete body.
-An arbitrary origin validator cannot bypass verification. Conditional GETs retain the body fetch and hash costs.
-The upstream connection closes before delivery. Byte and memory reservations remain held through client delivery.
-Only a delivered successful verified GET can enqueue mirroring.
-
-`HEAD` makes a real upstream `HEAD` after coordinate admission and caller authorisation.
-It checks available length and coding facts, then evaluates the local digest validator after source authorisation and availability succeed.
-It reads no archive body, computes no archive hash, and enqueues no mirror work.
-A successful HEAD or its local `304` proves no observation of verified body bytes.
-
-The dedicated verified-read plan derives its per-body and aggregate byte bounds from existing transient capacity and conservative buffer/copy charges.
-It adds no persistent artifact cache or configuration key.
-Unlike streamed delivery, verified replies hold memory proportional to the bounded body and delay the first byte until verification ends.
-The [memory plan](configuration.md#runtime-sizing-cores-and-heap-ceiling) owns the resolved capacity and override rules.
+Compact Index `/info` replies carry archive SHA-256 values from the admitted winning source.
+Supported Bundler clients check those values during the first installation, without requiring a pre-existing lockfile.
+Archive delivery uses the shared streaming relay. Mirror ingestion verifies bytes before publication.
+The [operator protocol contract](https://ecluse-proxy.com/docs/protocol-support/#rubygems) defines the supported clients and cache behaviour.
 
 ## Metadata cache
 
-The local backend retains selected versions and assembled responses. It never retains full
-metadata, including a compact full representation. Concurrent full reads share active work,
+The local backend retains selected versions, assembled responses and the public RubyGems discovery directory.
+The directory shares the retention pool and contains names and native version tokens, without detailed per-gem metadata.
+It never retains full package metadata, including a compact full representation. Concurrent full reads share active work,
 then completion removes the flight registration. This path does not weigh, encode, or insert
 full entries. A subsequent full read fetches again, so an earlier listing does not make a later
 selected-version read an upstream-free operation.

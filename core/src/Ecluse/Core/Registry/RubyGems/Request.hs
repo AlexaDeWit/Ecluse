@@ -5,6 +5,7 @@
 -- | RubyGems requests use checked native coordinates and the selected origin's authority.
 module Ecluse.Core.Registry.RubyGems.Request (
     gemInfoRequestUnder,
+    gemDirectoryRequestUnder,
     gemInfoUrl,
     gemArtifactUrl,
     gemCompactSpecUrl,
@@ -47,3 +48,7 @@ gemArtifactUrl base coordinate = joinPath base ("gems/" <> encodeComponent (unFi
 -- | Address the original zlib-compressed compact specification for one checked artifact.
 gemCompactSpecUrl :: Text -> GemCoordinate -> Either UrlFormationError Text
 gemCompactSpecUrl base coordinate = joinPath base ("quick/Marshal.4.8/" <> encodeComponent (coordinateStem coordinate) <> ".gemspec.rz")
+
+-- | Directory reads retain the selected caller or anonymous public authority.
+gemDirectoryRequestUnder :: BaseRequest -> Maybe ClientCredential -> Either UrlFormationError Request
+gemDirectoryRequestUnder base credential = metadataGet rubyReadCredential credential "text/plain" <$> requestAt base "versions"

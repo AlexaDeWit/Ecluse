@@ -25,7 +25,6 @@ import Ecluse.Core.Registry.Adapter.Capability (
     AdapterMaintenance (..),
     AdapterMetadata (..),
     AdapterPublish (..),
-    ArtifactRelayIntegrity (..),
     MirrorRequirements (..),
     MirrorStateRequirement (..),
     PrivateArtifactAddressing (..),
@@ -76,8 +75,7 @@ pypiAdapter =
                 }
         , adapterArtifact =
             AdapterArtifact
-                { artifactRelayIntegrity = ClientVerifiedStream
-                , artifactByFile = \origin -> PyPIRequest.artifactRequestByFile (originBaseUrl origin) (ocToken origin)
+                { artifactByFile = \origin -> PyPIRequest.artifactRequestByFile (originBaseUrl origin) (ocToken origin)
                 , artifactByUrl = PyPIRequest.artifactRequestByUrl
                 , artifactHosts = PyPIRequest.pypiArtifactHosts
                 , artifactPrivateAddressing = IndexedArtifactLocation

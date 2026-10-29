@@ -17,7 +17,6 @@ import Ecluse.Core.Registry.Adapter.Capability (
     AdapterArtifact (..),
     AdapterMetadata (..),
     AdapterPublish (..),
-    ArtifactRelayIntegrity (..),
     MirrorRequirements (..),
     MirrorStateRequirement (..),
     PrivateArtifactAddressing (..),
@@ -61,8 +60,7 @@ npmAdapter =
                 }
         , adapterArtifact =
             AdapterArtifact
-                { artifactRelayIntegrity = ClientVerifiedStream
-                , artifactByFile = \origin -> NpmRequest.artifactRequestByFile (ocBaseRequest origin) (ocToken origin)
+                { artifactByFile = \origin -> NpmRequest.artifactRequestByFile (ocBaseRequest origin) (ocToken origin)
                 , artifactByUrl = NpmRequest.artifactRequestByUrl
                 , artifactHosts = NpmRequest.npmArtifactHosts
                 , artifactPrivateAddressing = ConventionalArtifactPath

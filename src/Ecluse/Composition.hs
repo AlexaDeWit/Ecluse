@@ -10,10 +10,10 @@ module Ecluse.Composition (
     ResolveAdapter,
     WiringPorts (..),
     BootWiring (..),
-    resolveBootWiringWithVerified,
+    resolveBootWiring,
 
     -- * Boot-time wiring
-    planMountsWithVerified,
+    planMounts,
 
     -- * The first-party privilege
     firstPartyName,
@@ -85,7 +85,6 @@ import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag, rdSourceRepo
 import Ecluse.Core.Rules.Outage (SourceReporter (noteAdmission))
 import Ecluse.Core.Security (Limits, maxPublishRequestBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
-import Ecluse.Core.Server.Admission.Artifact (VerifiedArtifactBudget)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
 import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..), ReadSourceSelection (..))
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
@@ -117,14 +116,14 @@ data BootWiring = BootWiring
     -- ^ One target per mirrored mount, with the provider that mints its write token. A role that writes nothing plans none.
     }
 
--- | Supply a verified-read budget independently from publication configuration.
-resolveBootWiringWithVerified :: Maybe VerifiedArtifactBudget -> WiringPorts -> MirrorMintPlan -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] BootWiring)
-resolveBootWiringWithVerified verified ports mintPlan limits publishBudget plan = do
+-- | Resolve serving mounts and worker targets from the same credential providers.
+resolveBootWiring :: WiringPorts -> MirrorMintPlan -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] BootWiring)
+resolveBootWiring ports mintPlan limits publishBudget plan = do
     providersE <- mintedProviders
     case providersE of
         Left errs -> pure (Left errs)
         Right providers -> do
-            bindingsE <- planMountsWithVerified verified (wpResolveAdapter ports) (wpClock ports) (wpRuleDeps ports) mintPlan providers limits publishBudget plan
+            bindingsE <- planMounts (wpResolveAdapter ports) (wpClock ports) (wpRuleDeps ports) mintPlan providers limits publishBudget plan
             -- The serve side and the publish side read the same providers independently, so
             -- 'Validation' reports both rather than the mounts' refusals alone.
             pure . validationToEither $
@@ -145,9 +144,9 @@ data PublishBudget = PublishBudget
     , pbMaxRequestBytes :: Int
     }
 
--- | Every verified native mount shares the process-wide bounded artifact budget.
-planMountsWithVerified :: Maybe VerifiedArtifactBudget -> ResolveAdapter -> IO UTCTime -> (Ecosystem -> RuleDeps) -> MirrorMintPlan -> CredentialProviders -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] [MountBinding])
-planMountsWithVerified verified resolveAdapter clock ruleDepsFor mintPlan providers limits publishBudget plan = do
+-- | Resolve mounts with their configured authority and publication budget.
+planMounts :: ResolveAdapter -> IO UTCTime -> (Ecosystem -> RuleDeps) -> MirrorMintPlan -> CredentialProviders -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] [MountBinding])
+planMounts resolveAdapter clock ruleDepsFor mintPlan providers limits publishBudget plan = do
     bindingResults <- traverse bindingFor (vpMounts plan)
     pure $ case partitionEithers bindingResults of
         ([], bindings) -> Right bindings
@@ -163,7 +162,6 @@ planMountsWithVerified verified resolveAdapter clock ruleDepsFor mintPlan provid
             , wcLimits = limits
             , wcClock = clock
             , wcRuleDeps = ruleDepsFor
-            , wcVerifiedArtifacts = verified
             , wcPublishBudget = publishBudget
             , -- Derived from the environment layer like the inbound token, and resolved once, so
               -- every mount's denials carry the same message.
@@ -189,7 +187,6 @@ data WiringContext = WiringContext
     , wcLimits :: Limits
     , wcClock :: IO UTCTime
     , wcRuleDeps :: Ecosystem -> RuleDeps
-    , wcVerifiedArtifacts :: Maybe VerifiedArtifactBudget
     , wcPublishBudget :: Maybe PublishBudget
     , wcHelp :: Maybe HelpMessage
     }
@@ -273,7 +270,6 @@ packumentDepsFor ctx adapter mount mcfg = do
               -- never leaks onto a neighbouring mount.
               pdMinTrustedIntegrity = fromMaybe (intMinTrusted (cfgIntegrity app)) (miMinTrusted (mntIntegrity mcfg))
             , pdMetadata = adapterMetadata adapter
-            , pdVerifiedArtifacts = wcVerifiedArtifacts ctx
             , pdArtifact = adapterArtifact adapter
             , pdEgressUrl = mkRegistryUrl
             , pdReadSourceSelection = MergePrivateAndPublic

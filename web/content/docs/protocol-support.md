@@ -200,35 +200,40 @@ Git and local-path dependencies do not acquire registry admission guarantees.
 
 | Route below `/rubygems/` | Behaviour |
 |---|---|
-| `GET /versions` | Returns `404`, selecting the supported Bundler Dependencies API path. |
-| `GET /api/v1/dependencies` | Answers the native capability probe. |
-| `GET /api/v1/dependencies?gems=a,b` | Returns admitted native Marshal records for at most 100 named gems. |
+| `GET /versions` | Merges public and caller-authorised private discovery. Directory membership does not grant admission. |
+| `GET /info/<gem>` | Returns admitted native rows, dependencies, runtime requirements and archive SHA-256 values. |
+| `/api/v1/dependencies` | Returns `404`. The checksumless fallback is unsupported. |
 | `GET /quick/Marshal.4.8/<coordinate>.gemspec.rz` | Returns the exact admitted coordinate's validated native compact specification. |
 | `GET /gems/<coordinate>.gem` | Applies artifact admission and relays the selected archive. |
 | `POST /api/v1/gems` | Validates and relays an unchanged first-party `.gem` archive. Returns `405` without configured publication. |
 
 Read routes also accept `HEAD` under their response contracts.
-A `.gem` GET buffers bounded transient bytes and verifies the advertised SHA-256 before returning artifact success.
-This covers public-only mounts and caller-authorised private reads, without requiring mirroring or a persistent artifact cache.
-A local strong ETag can produce `304` only after the GET fetches and verifies the complete body.
-Origin `304`, partial responses, nonidentity coding, and corrupt bytes cannot bypass verification.
-Private access refusal or a private digest mismatch does not substitute public bytes.
-HEAD checks the selected origin's authorisation and availability before local conditional evaluation.
-It fetches no archive body, computes no archive hash, and enqueues no mirroring.
-Its success does not prove body verification.
-`limits.maxArtifactBytes` also controls this verified-read cap, under the resolved transient capacity.
-Verified downloads delay the first byte until verification ends and use memory proportional to the bounded archive.
-When metadata omits the archive size, Écluse reserves the full resolved cap before fetching bytes and holds it through delivery.
-Even small archives then consume a full reservation, which limits concurrent downloads.
-There is no registry-wide catalogue, full specification index, unfiltered fallback, or client yank relay.
-Public acquisition uses per-gem `/info/<gem>` metadata and selected native requests.
-Compact specification and archive locations point through Écluse.
-A batch shares cumulative limits and one deadline. A failed read stays a failure, rather than an empty successful result.
+Bundler verifies streamed archives against the SHA-256 values from admitted `/info` metadata, including the first installation without a lockfile.
+Keep checksum validation enabled. The server verifies archive bytes during mirroring.
+Private access refusal does not authorise public substitution.
+HEAD authorises and checks availability without reading or hashing an archive body, and never enqueues mirroring.
 
-The named Dependencies API carries no source archive hashes. Installed archives can populate lockfile hashes.
-Bundler 4.0.23 leaves foreign platform checksum entries empty after ordinary `bundle lock` and `bundle cache` commands.
-Complete existing frozen lockfiles remain supported, including their platform hashes.
-These client limits do not change the server's archive verification.
+The public `/versions` directory adds a global transfer and refresh cost before per-gem acquisition.
+Private discovery uses current caller credentials and remains outside public shared retention.
+Private directory failure remains a failure rather than a public-only or stale conditional response.
+Detailed metadata acquisition stays on demand. There is no full specification index, unfiltered fallback, or client yank relay.
+Compact specification and archive locations point through Écluse.
+A failed read stays a failure rather than an empty successful result.
+The Dependencies API does not supply archive checksums to these Bundler clients.
+Écluse refuses that fallback after either directory or per-gem metadata failure.
+
+The [Compact Index format](https://guides.rubygems.org/rubygems-org-compact-index-api/) describes an MD5 hint for each info file.
+Filtered or merged info bytes differ from upstream bytes, so forwarding an upstream MD5 can preserve stale client metadata.
+Écluse emits an explicit blank hint when the transformed MD5 is unknown.
+Bundler 2.6.9 and 4.0.23 then revalidate `/info` while retaining archive SHA-256 verification.
+This is the tested client contract, not a claim of compatibility with every Compact Index client.
+Responses use validators and `Repr-Digest` for the selected bytes.
+Rewritten directories and info files return complete `200` replacements when clients request byte ranges.
+Client caches can retain removed names, metadata or installed packages. New archive requests still enforce current authorisation and admission.
+
+[CodeArtifact](https://docs.aws.amazon.com/codeartifact/latest/ug/bundler-compatibility.html) limits `/versions` and `/names` to 5,000 gems.
+It weights directory reads by the number of returned gems, so concurrent installs can reach read quotas at low HTTP request rates.
+A directory failure does not remove unrelated backend capabilities, such as publication or maintenance.
 
 Names, raw versions, and platform labels retain their native identity.
 Dependencies, version constraints, required Ruby and RubyGems versions, checksums, and supported source fields remain available.

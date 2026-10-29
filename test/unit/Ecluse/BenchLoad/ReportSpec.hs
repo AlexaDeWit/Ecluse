@@ -12,7 +12,7 @@ import Test.Hspec
 import Data.Map.Strict qualified as Map
 
 import Ecluse.BenchLoad.Floors (Enforcement (Enforced), Pass (Loaded))
-import Ecluse.BenchLoad.Harness (LoadKnobs (lkProxyTuning), LoadSummary (lsFirstByteLatency, lsLabel, lsLatency), ProxyFigures (pfBurstMemory, pfCpu), Scenario (scenarioPublicLegUnavailableReason, scenarioUpstreamLatencyMicros), ScenarioReport (..))
+import Ecluse.BenchLoad.Harness (LoadKnobs (lkProxyTuning), LoadSummary (lsElapsedSeconds, lsFirstByteLatency, lsLabel, lsLatency, lsTransferredBodyBytes), ProxyFigures (pfBurstMemory, pfCpu), Scenario (scenarioPublicLegUnavailableReason, scenarioUpstreamLatencyMicros), ScenarioReport (..))
 import Ecluse.BenchLoad.Latency (Percentiles (..))
 import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
 import Ecluse.BenchLoad.Pod (CgroupReading (CgroupReading), ProxyTuning (ptCpus), burstMemory, noTuning, parseCpuList)
@@ -25,6 +25,12 @@ spec :: Spec
 spec = do
     serviceTimeSpec
     describe "renderReports" $ do
+        it "reports observed transfer bytes without deriving them from fixture sizes" $ do
+            let plain = scenarioReport "npm/merge-cold" 100 4 2 5
+                observed = plain{srLoad = (srLoad plain){lsTransferredBodyBytes = Just 1234, lsElapsedSeconds = 2}}
+                rendered = renderReports (loadedSection Npm 5_000 [observed])
+            rendered `shouldSatisfy` T.isInfixOf "| transferred response body bytes / bytes per second (all statuses) | 1234 / 617.0 |"
+            renderReports (loadedSection Npm 5_000 [plain]) `shouldSatisfy` T.isInfixOf "(all statuses) | unavailable |"
         it "distinguishes successful duration quantiles from all-response first body bytes" $ do
             let plain = scenarioReport "npm/merge-cold" 100 4 2 5
                 observed = plain{srLoad = (srLoad plain){lsFirstByteLatency = Just (Percentiles (Just 1) Nothing (Just 3) (Just 4) Nothing), lsLatency = Percentiles (Just 2) Nothing (Just 4) (Just 5) Nothing}}

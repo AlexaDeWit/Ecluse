@@ -58,13 +58,11 @@ data LoadLaw
     | ManagedMirrorBaseline
     | ManagedMirrorWarm
     | ManagedMirrorRevision
-    | BatchMetadata
     | QuickSpecification
-    | VerifiedKnownLengthArtifact
-    | VerifiedSlowArtifact
-    | RepeatedDependencies
-    | OneProjectDependencies
-    | ManyProjectDependencies
+    | RepeatedInfo
+    | OneProjectInfo
+    | ManyProjectInfo
+    | DirectorySnapshot
     deriving stock (Eq, Ord, Show)
 
 -- | Missing measurements describe test coverage, not evidence of a production defect.
@@ -110,24 +108,25 @@ requiredLoadLaws scope ecosystem =
             FullLoad -> [MirrorWorker]
         <> case ecosystem of
             PyPI -> [ManagedMirrorBaseline, ManagedMirrorWarm, ManagedMirrorRevision]
-            RubyGems -> [RepeatedDependencies, OneProjectDependencies, ManyProjectDependencies, BatchMetadata, QuickSpecification, VerifiedKnownLengthArtifact, VerifiedSlowArtifact]
+            RubyGems -> [RepeatedInfo, OneProjectInfo, ManyProjectInfo, QuickSpecification]
             _ -> []
   where
     applicable law = ecosystem /= RubyGems || law `notElem` [AssembledResponseHit, CacheFits, CacheEvicts]
 
 -- | Extra variants remain available through explicit scenario selection.
 onRequestLoadLaws :: [LoadLaw]
-onRequestLoadLaws = [PrivateCopyFivePercent, PatternRestart]
+onRequestLoadLaws = [PrivateCopyFivePercent, PatternRestart, DirectorySnapshot]
 
 -- | Resolve native names without changing measured work or accepting an unknown protocol.
 loadScenarioName :: Ecosystem -> LoadLaw -> Maybe Text
+loadScenarioName ecosystem DirectorySnapshot = "versions-directory" <$ guard (ecosystem == RubyGems)
 loadScenarioName RubyGems law | law `elem` [AssembledResponseHit, CacheFits, CacheEvicts] = Nothing
-loadScenarioName ecosystem law | ecosystem /= RubyGems, law `elem` [RepeatedDependencies, OneProjectDependencies, ManyProjectDependencies] = Nothing
+loadScenarioName ecosystem law | ecosystem /= RubyGems, law `elem` [RepeatedInfo, OneProjectInfo, ManyProjectInfo] = Nothing
 loadScenarioName ecosystem law = case ecosystem of
     Npm -> Just (name "merge-cold" "tarball")
     PyPI -> Just (name "index-cold" "wheel")
     Cargo -> Just (name "index-cold" "crate")
-    RubyGems -> Just (name "dependencies-cold" "gem")
+    RubyGems -> Just (name "info-cold" "gem")
   where
     name cold artifact = case law of
         ColdMetadata -> cold
@@ -161,13 +160,10 @@ loadScenarioName ecosystem law = case ecosystem of
         ManagedMirrorBaseline -> "mirror-native-baseline"
         ManagedMirrorWarm -> "mirror-managed-warm"
         ManagedMirrorRevision -> "mirror-managed-revision"
-        BatchMetadata -> "batch-dependencies"
         QuickSpecification -> "quick-gemspec"
-        VerifiedKnownLengthArtifact -> "gem-verified-known-length"
-        VerifiedSlowArtifact -> "gem-verified-slow-readers"
-        RepeatedDependencies -> "dependencies-repeated-corpus"
-        OneProjectDependencies -> "dependencies-working-set-one"
-        ManyProjectDependencies -> "dependencies-working-set-many"
+        RepeatedInfo -> "info-repeated-corpus"
+        OneProjectInfo -> "info-working-set-one"
+        ManyProjectInfo -> "info-working-set-many"
 
 -- | Report every missing law while retaining unrelated registered scenarios.
 loadCoverageGaps :: LoadScope -> Ecosystem -> [Text] -> [LoadGap]
@@ -227,10 +223,8 @@ hasServiceTime = \case
     ManagedMirrorBaseline -> True
     ManagedMirrorWarm -> True
     ManagedMirrorRevision -> True
-    BatchMetadata -> True
     QuickSpecification -> True
-    VerifiedKnownLengthArtifact -> True
-    VerifiedSlowArtifact -> False
-    RepeatedDependencies -> True
-    OneProjectDependencies -> True
-    ManyProjectDependencies -> True
+    RepeatedInfo -> True
+    OneProjectInfo -> True
+    ManyProjectInfo -> True
+    DirectorySnapshot -> False

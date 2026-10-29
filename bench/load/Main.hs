@@ -30,7 +30,7 @@ import UnliftIO.Exception (tryAny)
 
 import Ecluse.BenchLoad.Cargo (cargoLoadNotes)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Evidence (VerifiedRelayMeasurement (..), VerifiedResponseCounts (..), loadEvidenceWithVerified, verifiedRelayProblems)
+import Ecluse.BenchLoad.Evidence (loadEvidence)
 import Ecluse.BenchLoad.Fixture (probeBaseline)
 import Ecluse.BenchLoad.Floors (
     Calibration (calConditions, calRetainedConditions),
@@ -50,9 +50,7 @@ import Ecluse.BenchLoad.Floors (
  )
 import Ecluse.BenchLoad.Harness (
     LoadKnobs (..),
-    LoadSummary (..),
-    ProxyFigures (pfArtifactBodyBytes, pfArtifactWindow, pfMemoryChargeBytes, pfWindowCgroup),
-    Scenario (scenarioName, scenarioServiceTime, scenarioVerifiedArtifactMetrics),
+    Scenario (scenarioName, scenarioServiceTime),
     ScenarioReport (..),
     UpstreamFixture (fixtureEcosystem),
     loadKnobsFromEnv,
@@ -162,11 +160,10 @@ runPasses environment knobs processors shape profile selected = do
     ran <- catMaybes <$> traverse (fixturePasses setup) fixtures
     when (null ran) (benchFail "no scenario matched BENCH_LOAD_SCENARIOS under this pod shape")
     let outcomes = concatMap fprOutcomes ran
-        measured = concatMap fprVerified ran
-        violations = runVerdict (triggerIn environment) enforcement (checkedCounts shape) outcomes <> verifiedRelayProblems measured (map fst outcomes)
+        violations = runVerdict (triggerIn environment) enforcement (checkedCounts shape) outcomes
     let calibration = floorsCalibration floors
         provenance = Map.fromList [("loadProfile", profile), ("floorMeasurementConditions", calConditions calibration), ("retainedFloorConditions", show (calRetainedConditions calibration))]
-    writeLoadObservations measured (Map.union provenance (measurementConditions setup facts)) enforcement violations outcomes
+    writeLoadObservations (Map.union provenance (measurementConditions setup facts)) enforcement violations outcomes
     pure
         ( map fprBody ran <> [renderFloors (floorsCalibration floors) enforcement]
         , violations
@@ -200,16 +197,15 @@ measurementConditions setup facts =
   where
     knobs = setupKnobs setup
 
-writeLoadObservations :: [VerifiedRelayMeasurement] -> Map Text Text -> Enforcement -> [Text] -> [(FloorKey, Either Text RunEvidence)] -> IO ()
-writeLoadObservations measured conditions enforcement violations outcomes =
+writeLoadObservations :: Map Text Text -> Enforcement -> [Text] -> [(FloorKey, Either Text RunEvidence)] -> IO ()
+writeLoadObservations conditions enforcement violations outcomes =
     lookupEnv "ECLUSE_PERFORMANCE_OBSERVATIONS" >>= traverse_ (`writeFileLBS` (encode native <> "\n"))
   where
-    native = loadEvidenceWithVerified measured conditions enforcement violations outcomes
+    native = loadEvidence conditions enforcement violations outcomes
 
 data FixturePassResult = FixturePassResult
     { fprBody :: Text
     , fprOutcomes :: [(FloorKey, Either Text RunEvidence)]
-    , fprVerified :: [VerifiedRelayMeasurement]
     }
 
 -- One ecosystem's loaded and concurrency-one passes: its report section, and what each pass of each scenario produced.
@@ -238,7 +234,7 @@ fixturePasses setup fixture
                         <> [renderReports section]
                         <> [renderServiceTime baseline (sectionConcurrencyOne section) | everyPass]
                         <> [renderLoadSaturation (sectionConcurrencyOne section) (filter ((`elem` map keyOf serviceTime) . srName) (sectionLoaded section)) | everyPass]
-        pure (Just (FixturePassResult body (map (outcomeOf Loaded) loaded <> map (outcomeOf ConcurrencyOne) c1) (mapMaybe (measurementOf Loaded) loaded <> mapMaybe (measurementOf ConcurrencyOne) c1)))
+        pure (Just (FixturePassResult body (map (outcomeOf Loaded) loaded <> map (outcomeOf ConcurrencyOne) c1)))
   where
     knobs = setupKnobs setup
     self = setupSelf setup
@@ -254,28 +250,6 @@ fixturePasses setup fixture
     injMs = baselineInjectedMs baseline
     loadOverrides = [latencyOverride injMs, childRts capabilities]
     outcomeOf whichPass (key, result) = ((key, whichPass), reportEvidence <$> result)
-    measurementOf whichPass (key, Right report)
-        | key `elem` [keyOf item | item <- chosen, scenarioVerifiedArtifactMetrics item] =
-            Just
-                VerifiedRelayMeasurement
-                    { vrmKey = (key, whichPass)
-                    , vrmExpectedBodyBytes = max 1 (lkPayloadBytes knobs)
-                    , vrmElapsedSeconds = lsElapsedSeconds (srLoad report)
-                    , vrmMeasuredResponses = responseCounts (srLoad report)
-                    , vrmCompanionResponses = responseCounts <$> srCompanion report
-                    , vrmWarmupSettled = srVerifiedWarmupSettled report
-                    , vrmCounters = srProxy report >>= pfArtifactWindow
-                    , vrmWireReservation = srProxy report >>= pfArtifactBodyBytes
-                    , vrmAllServeMemoryCharges = srProxy report >>= pfMemoryChargeBytes
-                    , vrmFirstBodyByteAllResponses = lsFirstByteLatency (srLoad report)
-                    , vrmSuccessfulDuration = lsLatency (srLoad report)
-                    , vrmAllocationWindow = srRtsWindow report
-                    , vrmProcessRtsAtEnd = srRtsEnd report
-                    , vrmRetainedHeapAfterGc = srRetainedBytes report
-                    , vrmCgroupAtEnd = srProxy report >>= pfWindowCgroup
-                    }
-    measurementOf _ _ = Nothing
-    responseCounts load = VerifiedResponseCounts (lsCompleted load) (lsSuccesses load) (lsRefusals load) (lsOtherStatuses load) (lsTransportFailures load) (lsDeadlineAborts load)
 
 -- Run one scenario at each memory limit. An OOM kill or a heap overflow is the probe's reading,
 -- so the probe fails only when no limit produced a report.

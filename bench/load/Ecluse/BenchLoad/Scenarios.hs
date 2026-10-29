@@ -74,6 +74,6 @@ qualificationScenarios :: UpstreamFixture -> [Scenario]
 qualificationScenarios fixture =
     [ maliciousQualification (fixtureEcosystem fixture) source scenario
     | scenario <- fixtureScenarios fixture
-    , scenarioName scenario `elem` ["merge-cold", "index-cold", "dependencies-cold"]
+    , scenarioName scenario `elem` ["merge-cold", "index-cold", "info-cold"]
     , source <- [MaliciousHit, MaliciousMixedHeavy]
     ]

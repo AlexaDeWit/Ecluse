@@ -531,9 +531,12 @@ retained-live measurements remain distinct from the cached accounting estimate.
 
 ## RubyGems integration
 
-RubyGems uses `MergePrivateAndPublic` with named-gem acquisition rather than a registry-wide catalogue.
-The `/versions` refusal selects Bundler's Dependencies API, whose records derive from admitted per-gem `/info/<gem>` rows.
-One batch owns its deadline and cumulative resource limits. Selected compact specifications and archives use exact native coordinates.
+RubyGems uses `MergePrivateAndPublic` with global Compact Index discovery and per-gem metadata acquisition.
+The public directory shares bounded retention. Caller-authorised private discovery remains fresh and separate from public retention.
+Per-gem `/info/<gem>` rows follow the shared source selection, admission and mirror restoration paths.
+Unknown transformed info-file MD5 values use explicit blank hints in the supported clients.
+This keeps detailed metadata acquisition on demand without publishing a false checksum.
+Selected compact specifications and archives use exact native coordinates.
 The [operator protocol reference](https://ecluse-proxy.com/docs/protocol-support/#rubygems) owns the route and client contract.
 
 Raw version identity differs from native version ordering. Platforms identify separate physical artifacts of the same raw version.

@@ -19,7 +19,6 @@ import Ecluse.Core.Registry.PyPI.ArchiveResidencySpec qualified as ArchiveReside
 import Ecluse.Core.Registry.PyPI.ReaderResidencySpec qualified as PyPIReaderResidencySpec
 import Ecluse.Core.Registry.RubyGems.ReaderResidencySpec qualified as RubyGemsReaderResidencySpec
 import Ecluse.Core.Registry.RubyGems.ServingResidencySpec qualified as RubyGemsServingResidencySpec
-import Ecluse.Core.Server.Admission.ArtifactResidencySpec qualified as ArtifactAdmissionResidencySpec
 import Ecluse.Core.Server.MemoryModel.CalibrationResidencySpec qualified as CalibrationResidencySpec
 import Ecluse.Core.Server.MemoryModel.Probe (SelectedShape (SelectedControl, SelectedValue), childMain, packageMain, probe, probeEvaluation, probeListing, probeListingFor, probeMerge, probeMergeFor)
 import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
@@ -28,7 +27,6 @@ import Ecluse.Core.Server.MemoryModelResidencySpec qualified as MemoryModelResid
 import Ecluse.Core.Server.MetadataGzipResidencySpec qualified as MetadataGzipResidencySpec
 import Ecluse.Core.Server.MirrorViewResidencySpec qualified as MirrorViewResidencySpec
 import Ecluse.Core.Server.Pipeline.PackumentResidencySpec qualified as PackumentResidencySpec
-import Ecluse.Core.Server.Pipeline.Tarball.VerifiedResidencySpec qualified as VerifiedResidencySpec
 import Ecluse.Core.Server.Pipeline.TarballResidencySpec qualified as TarballResidencySpec
 import Ecluse.Core.Server.Response.SummaryResidencySpec qualified as SummaryResidencySpec
 import System.Environment qualified as Environment
@@ -39,7 +37,6 @@ main =
     Environment.getArgs >>= \case
         ["--mirror-state-probe", mode, path] -> StateWeightResidencySpec.probeMain mode path
         ["--archive-probe", mode, path] -> ArchiveResidencySpec.probeMain mode path
-        ["--verified-artifact-probe", mode, path] -> VerifiedResidencySpec.probeMain mode path
         ["--gzip-probe", mode, path] -> MetadataGzipResidencySpec.probeMain mode path
         ["--mirror-read-probe", phase, directory] -> MirrorViewResidencySpec.probeMain phase directory
         arguments | Just (mode, path) <- Mode.parseProbeMode arguments -> runProbe mode path
@@ -60,8 +57,6 @@ main =
             RubyGemsReaderResidencySpec.spec
             RubyGemsServingResidencySpec.spec
             TarballResidencySpec.spec
-            VerifiedResidencySpec.spec
-            ArtifactAdmissionResidencySpec.spec
             PackumentResidencySpec.spec
             MemoryModelResidencySpec.spec
 

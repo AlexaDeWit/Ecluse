@@ -48,7 +48,6 @@ import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Admission.Artifact (newVerifiedArtifactBudget)
 import Ecluse.Core.Server.Context (PackumentDeps (..), ReadSourceSelection (ManagedMirrorAndPublic, PrivateOnly))
 import Ecluse.Core.Server.Encoding (CodingChoice (ServeCoding), ContentCoding (GzipCoding), MetadataCompression (GzipWhenAccepted), chooseCoding, gzipEncodingHeader)
 import Ecluse.Core.Server.MirrorView (MirrorView)
@@ -109,13 +108,11 @@ nativeByteDriver ecosystem acquireAdapter mount clientMetadataPath upstreamMetad
                     manager <- newManager defaultManagerSettings
                     env <- newTestEnvWithQueue deadlines queue manager
                     prepared <- prepare inertRuleDeps (map atDefaultPrecedence rules)
-                    budget <- expectRight =<< newVerifiedArtifactBudget deadlines (64 * 1024) (256 * 1024)
                     let deps =
                             (serveDepsFor adapter (Just (loopbackRegistryUrl (localhost privatePort))) (loopbackRegistryUrl (localhost publicPort)) NoMirrorWrite prepared (pure now))
                                 { pdMountBaseUrl = "http://ecluse.test" <> decodeUtf8 mount
                                 , pdEgressUrl = Right . loopbackRegistryUrl
                                 , pdMetadataCompression = compression
-                                , pdVerifiedArtifacts = Just budget
                                 }
                         app = proxyApplication ecosystem env deps
                         raw method path headers = requestAt method (mount <> path) Wai.defaultRequest{Wai.requestHeaders = headers} app

@@ -75,8 +75,6 @@ data BodyLimit
       PublishRequestBodyLimit Int
     | -- | Artifacts buffered by the mirror worker.
       MirrorArtifactBodyLimit Int
-    | -- | Artifact bytes verified before a client response commits.
-      VerifiedArtifactBodyLimit Int
     deriving stock (Eq, Show)
 
 -- | The selected ceiling in bytes, before decoding or projection.
@@ -85,7 +83,6 @@ bodyLimitBytes = \case
     MetadataBodyLimit cap -> cap
     PublishRequestBodyLimit cap -> cap
     MirrorArtifactBodyLimit cap -> cap
-    VerifiedArtifactBodyLimit cap -> cap
 
 -- | Which 'Limits' ceiling a response exceeded.
 data LimitError

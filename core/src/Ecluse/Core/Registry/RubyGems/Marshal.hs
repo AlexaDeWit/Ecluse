@@ -6,17 +6,13 @@
 module Ecluse.Core.Registry.RubyGems.Marshal (
     MarshalValue (..),
     decodeMarshal,
-    DependencyRow (..),
-    encodeDependencies,
     marshalText,
     stripInstanceVariables,
 ) where
 
 import Data.Bits (shiftL)
 import Data.ByteString qualified as BS
-import Data.ByteString.Builder qualified as B
 import Data.ByteString.Char8 qualified as B8
-import Data.ByteString.Lazy qualified as BSL
 import Data.IntMap.Strict qualified as IntMap
 import Data.Set qualified as Set
 import Data.Text.Encoding qualified as TE
@@ -236,37 +232,3 @@ marshalText :: MarshalValue -> Either ParseError Text
 marshalText value = case stripInstanceVariables value of
     MString bytes -> first (const (ParseError "Marshal string is not UTF-8")) (TE.decodeUtf8' bytes)
     _ -> bad "expected Marshal string"
-
--- | One physical dependency API row with native requirement conjunctions.
-data DependencyRow = DependencyRow
-    { dependencyName :: Text
-    , dependencyVersion :: Text
-    , dependencyPlatform :: Text
-    , dependencyRequirements :: [(Text, Text)]
-    }
-    deriving stock (Eq, Show)
-
--- | Emit deterministic symbol-key hashes and fail before exceeding the cumulative byte cap.
-encodeDependencies :: Int -> [DependencyRow] -> Either ParseError ByteString
-encodeDependencies cap rows = do
-    when (cap < 0) (bad "negative Dependencies API byte bound")
-    let encoded = B.toLazyByteString (B.byteString "\x04\x08[" <> packInteger (toInteger (length rows)) <> foldMap row rows)
-        (bounded, remainder) = BSL.splitAt (fromIntegral cap) encoded
-    unless (BSL.null remainder) (bad "Dependencies API response exceeds its byte bound")
-    pure (BSL.toStrict bounded)
-  where
-    row value = B.word8 123 <> packInteger 4 <> field "name" (text (dependencyName value)) <> field "number" (text (dependencyVersion value)) <> field "platform" (text (dependencyPlatform value)) <> field "dependencies" (B.word8 91 <> packInteger (toInteger (length (dependencyRequirements value))) <> foldMap pair (dependencyRequirements value))
-    pair (name, requirement) = B.word8 91 <> packInteger 2 <> text name <> text requirement
-    field key value = B.word8 58 <> packed key <> value
-    text = (B.word8 34 <>) . packed . TE.encodeUtf8
-    packed bytes = packInteger (toInteger (BS.length bytes)) <> B.byteString bytes
-
-packInteger :: Integer -> B.Builder
-packInteger value
-    | value == 0 = B.word8 0
-    | value > 0 && value < 123 = B.word8 (fromInteger value + 5)
-    | otherwise = B.word8 (fromIntegral (length bytes)) <> foldMap B.word8 bytes
-  where
-    bytes = digits value
-    digits 0 = []
-    digits number = fromInteger (number `mod` 256) : digits (number `div` 256)

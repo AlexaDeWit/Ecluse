@@ -15,7 +15,7 @@ module Ecluse.Test.EcosystemBench (
 
 import Prelude hiding (universe)
 
-import Data.Aeson (Value, eitherDecodeStrict, object, toJSON, (.=))
+import Data.Aeson (Value, eitherDecodeStrict)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Universe.Class (universe)
@@ -73,7 +73,7 @@ import Ecluse.Test.Registry.Npm.Project (parseVersionBytes)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist)
 import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex, simpleValue)
 import Ecluse.Test.Registry.PyPI.Project (readThrough)
-import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo, runRubyReference)
+import Ecluse.Test.Registry.RubyGems.Reference (RubyInfoRow (..), referenceInfo)
 import Ecluse.Test.Security.Limits (checkNestingDepth)
 import Ecluse.Test.Snapshot (readDetails)
 
@@ -268,7 +268,7 @@ rubyGemsBench =
         , ebActionRoutes =
             [ RouteCase "gem action" (replicate 1000 (methodGet, ["gems", "bench-gem-1.0.0.gem"]))
             , RouteCase "quick specification action" (replicate 1000 (methodGet, ["quick", "Marshal.4.8", "bench-gem-1.0.0.gemspec.rz"]))
-            , RouteCase "named batch action" (replicate 1000 (methodGet, ["api", "v1", "dependencies"]))
+            , RouteCase "native info action" (replicate 1000 (methodGet, ["info", "bench-gem"]))
             ]
         , ebAction = \(method, segments) -> snd <$> matchRoute rubyGemsRoutes method [] segments
         , ebRouteScaling = [RouteScaling "malformed native coordinate" (\count -> (methodGet, ["quick", "Marshal.4.8", "bench" <> T.replicate (fromIntegral count) "-" <> ".gemspec.rz"]))]
@@ -398,16 +398,9 @@ checkProjectedServed originalProject servedProject name originalBytes servedByte
     artifacts info = concatMap (toList . pkgArtifacts) (Map.elems (infoVersions info))
 
 checkRubyGemsServed :: PackageName -> ByteString -> ByteString -> IO (Either Text ())
-checkRubyGemsServed name original served = case referenceInfo original of
-    Left problem -> pure (Left problem)
-    Right rows -> do
-        actual <- runRubyReference "dependencies" served
-        pure $ unless (actual == toJSON (map expected rows)) (Left "served native dependency records differ from the independent source rows")
+checkRubyGemsServed _ original served = pure $ do
+    expected <- referenceInfo original
+    actual <- referenceInfo served
+    unless (map installationRow actual == map installationRow expected) (Left "served native installation rows differ from the independent source rows")
   where
-    expected row =
-        object
-            [ "name" .= renderPackageName name
-            , "number" .= rowVersion row
-            , "platform" .= rowPlatform row
-            , "dependencies" .= [[dependency, T.intercalate ", " (map T.strip clauses)] | (dependency, clauses) <- rowDependencies row]
-            ]
+    installationRow row = row{rowPosition = 0}

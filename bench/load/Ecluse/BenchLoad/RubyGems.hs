@@ -2,11 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Native load includes named batches, compact specifications, relays and complete platform copies.
-module Ecluse.BenchLoad.RubyGems (DependencyWorkload (..), dependencyPackages, RelayShape (..), RelayFixture (..), relayFixture, relayArtifactFixture, rubyGemsFixture, rubyGemsPrivateCopy, rubyGemsPatternProvider, rubyGemsLoadNotes, infoStubWithArtifacts, selectWarmArtifacts) where
+-- | Native load includes per-gem info, directory discovery, compact specifications and platform copies.
+module Ecluse.BenchLoad.RubyGems (InfoWorkload (..), infoPackages, RelayShape (..), RelayFixture (..), relayFixture, relayArtifactFixture, rubyGemsFixture, rubyGemsPrivateCopy, rubyGemsPatternProvider, rubyGemsLoadNotes, infoStubWithArtifacts, selectWarmArtifacts) where
 
-import Data.Aeson (withArray, withObject, (.:))
-import Data.Aeson.Types (Parser, parseEither)
+import Data.Aeson ((.:))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
@@ -22,15 +21,15 @@ import Ecluse.BenchLoad.CapturedArtifact (SelectedArtifact (..))
 import Ecluse.BenchLoad.Contract.Driver (LoadReadDriver (..), readLoadContract)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes, delayUpstream, fetchChecked, httpTarget, longCacheTtl, preflightDistinct, weightedMix, withProxyOverStubs)
-import Ecluse.BenchLoad.Harness (Driver (DriveBeside, DriveBurst, DriveRamp), LoadKnobs (..), Scenario (..), Target, UpstreamFixture, proxied, scenario, urlLoad)
+import Ecluse.BenchLoad.Harness (Driver (DriveBurst, DriveRamp), LoadKnobs (..), Scenario (..), Target, UpstreamFixture, proxied, scenario, urlLoad)
 import Ecluse.BenchLoad.Listing (ListingSetup (..), listingLoad, listingWorkingSet, revalidateLoad, slowReaderScenario, withListingStubs)
 import Ecluse.BenchLoad.PatternScenario (PatternProvider (..))
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
+import Ecluse.BenchLoad.RubyGems.Directory (rubyGemsDirectoryScenario)
 import Ecluse.BenchLoad.RubyGems.Worker (rubyGemsWorkerScenario)
 import Ecluse.BenchLoad.RubyGems.WorkerFixture qualified as Worker
 import Ecluse.BenchLoad.Selection (evictionEntries)
-import Ecluse.BenchLoad.SlowReader (slowReaders)
 import Ecluse.BenchLoad.Stress (WarmLoadDriver (..), herdSize, pairedLoad, rampSteps)
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
 import Ecluse.Core.Package (PackageDetails (pkgArtifacts), PackageInfo (infoVersions), artFilename)
@@ -46,18 +45,18 @@ import Ecluse.Test.Wai (localhost, pacedBody)
 
 -- | Native scenarios satisfy the ecosystem's full read, artifact and worker obligations.
 rubyGemsFixture :: UpstreamFixture
-rubyGemsFixture = readLoadContract nativeDriver [batchScenario, quickScenario, artifactScenarioWith False KnownLengthRelay, artifactScenarioWith False SlowChunkedRelay, rubyGemsWorkerScenario]
+rubyGemsFixture = readLoadContract nativeDriver [quickScenario, rubyGemsDirectoryScenario, rubyGemsWorkerScenario]
 
 nativeDriver :: LoadReadDriver
 nativeDriver =
     LoadReadDriver
         { lrdPrivateCopy = rubyGemsPrivateCopy
-        , lrdColdMetadata = scenario "dependencies-cold" "Read named dependency records with public TTL 0, live private overlays and shared concurrent public reads." (listingLoad nativeListing 0)
-        , lrdSlowReaders = slowReaderScenario nativeListing "dependencies-cold"
-        , lrdAssembledHit = dependencyScenario RepeatedCorpus
-        , lrdRevalidate = scenario "revalidate-not-modified" "Read a primed native dependency reply with its conditional validator." (revalidateLoad nativeListing)
-        , lrdCacheFits = dependencyScenario OneProject
-        , lrdCacheEvicts = dependencyScenario ManyProjects
+        , lrdColdMetadata = scenario "info-cold" "Read per-gem Compact Index records with public TTL 0, live private overlays and shared concurrent public reads." (listingLoad nativeListing 0)
+        , lrdSlowReaders = slowReaderScenario nativeListing "info-cold"
+        , lrdAssembledHit = infoScenario RepeatedCorpus
+        , lrdRevalidate = scenario "revalidate-not-modified" "Read primed per-gem Compact Index records with their conditional validator." (revalidateLoad nativeListing)
+        , lrdCacheFits = infoScenario OneProject
+        , lrdCacheEvicts = infoScenario ManyProjects
         , lrdPrivateArtifact = artifactScenario True
         , lrdPublicArtifact = artifactScenario False
         , lrdArtifactCeiling = (artifactScenario True){scenarioName = "gem-ceiling", scenarioConcurrencyScale = 4, scenarioUpstreamLatencyMicros = Just 2_000, scenarioPublicLegUnavailableReason = Just "the fixture uses a fixed 2 ms upstream delay instead of the run's native RTT baseline"}
@@ -79,13 +78,13 @@ nativeDriver =
         , lrdPatternPublic = \knobs captures artifacts -> pure (infoStubWithArtifacts (lkUpstreamLatencyMicros knobs) captures artifacts)
         }
 
--- | Replay roots exclude the listing query so native artifact paths share the same mount.
+-- | Per-gem diagnostic replays share one mount for info and artifact paths. They exclude discovery.
 rubyGemsPatternProvider :: PatternProvider
 rubyGemsPatternProvider =
     PatternProvider
         { ppCaptureAuthority = "https://rubygems.org"
         , ppRootUrl = \port -> localhost port <> "/rubygems/"
-        , ppListingSuffix = ("api/v1/dependencies?gems=" <>)
+        , ppListingSuffix = ("info/" <>)
         , ppDiscoveryPath = Nothing
         , ppCapturedRead = Right . gemReadWith (const pass) (const pass)
         , ppSelectedArtifacts = \selected packages captures -> case selected of
@@ -110,8 +109,8 @@ rubyGemsPrivateCopy :: PrivateCopy
 rubyGemsPrivateCopy =
     PrivateCopy
         { pcEcosystem = RubyGems
-        , pcListing = "GET the weighted named-gem dependency corpus"
-        , pcRegistry = "a private registry holding native named-gem metadata"
+        , pcListing = "GET the weighted per-gem Compact Index corpus"
+        , pcRegistry = "a private registry holding native per-gem metadata"
         , pcPackages = rubyGemsCorpusPackages
         , pcCut = newestRubyGemsShare
         , pcStub = \latency captures -> pure (infoStub latency copyBytes captures)
@@ -126,48 +125,48 @@ rubyGemsLoadNotes knobs =
     "HTTP relay fixtures replace captured checksums with hashes of owned payloads. Relay bytes do not prove client installation. Native worker work copies four genuine platform archives, each with "
         <> show (lkPayloadBytes knobs)
         <> " uncompressed payload bytes. Quick-spec work returns original Ruby-generated bytes.\n\n"
-        <> "Native dependency working sets: repeated corpus "
+        <> "Native info working sets: repeated corpus "
         <> count RepeatedCorpus
         <> ", one project "
         <> count OneProject
         <> ", many projects "
         <> count ManyProjects
-        <> ". Replies are rebuilt per request. Full-store misses and collapsed reads describe public fetches and their waiting consumers. They do not count private reads or exact per-name upstream requests."
+        <> ". Info replies are rebuilt per request. Full-store misses and collapsed reads describe public fetches and their waiting consumers. They do not count private reads or exact per-name upstream requests. Ruby pattern rows measure per-gem metadata and synthetic archive requests. They omit /versions discovery and do not measure complete Bundler installations."
   where
-    count workload = either ("unavailable: " <>) (show . length) (dependencyPackages workload knobs)
+    count workload = either ("unavailable: " <>) (show . length) (infoPackages workload knobs)
 
--- | Named dependency workloads vary corpus cardinality without claiming assembled-response retention.
-data DependencyWorkload = RepeatedCorpus | OneProject | ManyProjects
+-- | Per-gem info workloads vary corpus cardinality without claiming assembled-response retention.
+data InfoWorkload = RepeatedCorpus | OneProject | ManyProjects
     deriving stock (Eq, Show)
 
 -- | The many-project comparison requires at least two selected captures before proxy boot.
-dependencyPackages :: DependencyWorkload -> LoadKnobs -> Either Text [CorpusPackage]
-dependencyPackages workload knobs = case workload of
+infoPackages :: InfoWorkload -> LoadKnobs -> Either Text [CorpusPackage]
+infoPackages workload knobs = case workload of
     RepeatedCorpus -> Right rubyGemsCorpusPackages
     OneProject -> Right (take 1 rubyGemsCorpusPackages)
     ManyProjects ->
         let packages = listingWorkingSet nativeListing knobs
          in if length packages < 2
-                then Left "dependencies-working-set-many requires at least two corpus projects"
+                then Left "info-working-set-many requires at least two corpus projects"
                 else Right packages
 
-dependencyScenario :: DependencyWorkload -> Scenario
-dependencyScenario workload = scenario name description $ \knobs use -> do
-    packages <- either benchFail pure (dependencyPackages workload knobs)
+infoScenario :: InfoWorkload -> Scenario
+infoScenario workload = scenario name description $ \knobs use -> do
+    packages <- either benchFail pure (infoPackages workload knobs)
     withListingStubs nativeListing knobs longCacheTtl Nothing packages (weightedMix weight listingUrl packages) $ \proxy urls ->
         preflightDistinct (preflightListings . pure) urls (httpTarget use proxy urls)
   where
     weight = if workload == RepeatedCorpus then cpWeight else const 1
     (name, description) = case workload of
-        RepeatedCorpus -> ("dependencies-repeated-corpus", "Read the weighted three-capture native corpus. Each request admits source documents and encodes its named dependency reply.")
-        OneProject -> ("dependencies-working-set-one", "Read one captured native history repeatedly, with a fresh named dependency reply per request.")
-        ManyProjects -> ("dependencies-working-set-many", "Read the configured native corpus working set uniformly, with at least two histories and a fresh dependency reply per request.")
+        RepeatedCorpus -> ("info-repeated-corpus", "Read the weighted three-capture native corpus. Each request admits source documents and encodes its Compact Index info reply.")
+        OneProject -> ("info-working-set-one", "Read one captured native history repeatedly, with a fresh Compact Index info reply per request.")
+        ManyProjects -> ("info-working-set-many", "Read the configured native corpus working set uniformly, with at least two histories and a fresh Compact Index info reply per request.")
 
 withNativeListings :: LoadKnobs -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
 withNativeListings knobs = withListingStubs nativeListing knobs 0 Nothing rubyGemsCorpusPackages
 
 listingUrl :: Int -> Text -> Text
-listingUrl port name = localhost port <> "/rubygems/api/v1/dependencies?gems=" <> name
+listingUrl port name = localhost port <> "/rubygems/info/" <> name
 
 -- | Native fixture replies retain ordinary, declared-length or paced chunked transport.
 data RelayShape = OrdinaryRelay | KnownLengthRelay | SlowChunkedRelay
@@ -196,30 +195,20 @@ relayFixture privateHit shape knobs =
     absent = missingStub latency
 
 artifactScenario :: Bool -> Scenario
-artifactScenario privateHit = artifactScenarioWith privateHit OrdinaryRelay
-
-artifactScenarioWith :: Bool -> RelayShape -> Scenario
-artifactScenarioWith privateHit shape =
-    (scenario name description boot){scenarioVerifiedArtifactMetrics = True, scenarioServiceTime = shape /= SlowChunkedRelay}
+artifactScenario privateHit = scenario name description $ \knobs use -> do
+    let bytes = artifactBytes (lkPayloadBytes knobs)
+        fixture = relayFixture privateHit OrdinaryRelay knobs
+    withProxyOverStubs RubyGems knobs (rfCacheTtlSeconds fixture) Nothing (rfPrivate fixture) (rfPublic fixture) (rfTargets fixture) $ \proxy urls -> do
+        for_ urls $ \url -> do
+            response <- fetchChecked status200 [] url
+            unless (HTTP.responseBody response == bytes) (benchFail "RubyGems relay bytes differ from the independently owned payload")
+        httpTarget use proxy urls
   where
-    boot knobs use = do
-        let bytes = artifactBytes (lkPayloadBytes knobs)
-            fixture = relayFixture privateHit shape knobs
-        withProxyOverStubs RubyGems knobs (rfCacheTtlSeconds fixture) Nothing (rfPrivate fixture) (rfPublic fixture) (rfTargets fixture) $ \proxy urls -> do
-            for_ urls $ \url -> do
-                response <- fetchChecked status200 [] url
-                unless (HTTP.responseBody response == bytes) (benchFail "RubyGems relay bytes differ from the independently owned payload")
-            if shape == SlowChunkedRelay
-                then use (proxied proxy (DriveBeside (urlLoad urls) (slowReaders (lkConcurrency knobs) urls)))
-                else httpTarget use proxy urls
-    name = case shape of
-        KnownLengthRelay -> "gem-verified-known-length"
-        SlowChunkedRelay -> "gem-verified-slow-readers"
-        OrdinaryRelay -> if privateHit then "gem-hot-path" else "gem-onboarding"
-    description = case shape of
-        KnownLengthRelay -> "Verify a public native artifact before replying, with an explicit upstream Content-Length. Record complete-body first-byte latency, actual read/hash bytes and admission pressure."
-        SlowChunkedRelay -> "Verify a public native artifact from a paced chunked origin while equal extra clients read replies slowly. Each 64 KiB source chunk waits its share of one configured upstream delay. Retain reservation and body through client delivery."
-        OrdinaryRelay -> if privateHit then "Relay a private native artifact with caller-authorised metadata and exact digest verification." else "Admit a public native artifact after private absence, then relay its digest-bound bytes without mirroring."
+    name = if privateHit then "gem-hot-path" else "gem-onboarding"
+    description =
+        if privateHit
+            then "Stream a private native artifact after caller-authorised metadata admission."
+            else "Stream a public native artifact after private absence and current admission."
 
 -- | Use the same native fixture and framing in direct controls and the timed proxy load.
 relayArtifactFixture :: RelayShape -> Int -> LByteString -> Application
@@ -232,12 +221,6 @@ relayArtifactFixture shape latency = gemStubWith deliver latency
             let chunks = sliceChunks (64 * 1024) (toStrict bytes)
                 pause = latency `div` max 1 (length chunks)
              in pacedBody [(pause, chunk) | chunk <- chunks]
-
-batchScenario :: Scenario
-batchScenario = scenario "batch-dependencies" "Assemble all three named-gem histories in one bounded native Dependencies API reply." $ \knobs use ->
-    withNativeListings knobs (\port -> [listingUrl port (T.intercalate "," (map cpName rubyGemsCorpusPackages))]) $ \proxy urls -> do
-        preflightListings urls
-        httpTarget use proxy urls
 
 quickScenario :: Scenario
 quickScenario = scenario "quick-gemspec" "Admit an exact native platform coordinate and relay its original Ruby-generated zlib compact specification." $ \knobs use -> do
@@ -355,16 +338,10 @@ preflightListings = traverse_ checked . ordNub
   where
     checked url = do
         response <- fetchChecked status200 [] url
-        value <- runRubyReference "dependencies" (toStrict (HTTP.responseBody response))
-        rows <- either (benchFail . toText) pure (parseEither (withArray "native dependency rows" (traverse row . toList)) value)
-        let requested = T.splitOn "," (snd (T.breakOnEnd "?gems=" url))
-        unless (not (null rows) && sort (ordNub (map fst rows)) == sort requested && not (any (T.null . snd) rows)) (benchFail "RubyGems dependency preflight lost a named package or native version")
-    row = withObject "native dependency row" $ \fields -> do
-        name <- fields .: "name"
-        number <- fields .: "number"
-        _ <- fields .: "platform" :: Parser Text
-        _ <- fields .: "dependencies" :: Parser [[Text]]
-        pure (name, number)
+        let bytes = toStrict (HTTP.responseBody response)
+        rows <- either benchFail pure (referenceInfo bytes)
+        void (runRubyReference "info" bytes)
+        unless (not (null rows) && not (any (T.null . rowVersion) rows) && all (isJust . lookup "checksum" . rowFields) rows) (benchFail "RubyGems info preflight lost native versions or checksums")
 
 copyBytes :: LByteString
 copyBytes = "Owned RubyGems native listing relay bytes"

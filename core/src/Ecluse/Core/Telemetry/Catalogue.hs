@@ -65,18 +65,6 @@ data MetricName
       OverflowShed
     | -- | @ecluse.serve.admission.overflow.full@: requests refused at once because the queue was full (counter).
       OverflowFull
-    | -- | @ecluse.serve.artifact.body.in_flight_bytes@: verified-read reservations (up-down counter).
-      ArtifactBodyInFlightBytes
-    | -- | Verified reads waiting for byte capacity (counter).
-      ArtifactBodyQueued
-    | -- | Verified reads refused at byte capacity (counter).
-      ArtifactBodyShed
-    | -- | Actual identity bytes read, including failed transfers (counter).
-      ArtifactReadBytes
-    | -- | Bytes in completed digest computations (counter).
-      ArtifactHashBytes
-    | -- | Complete bodies matching the admitted digest (counter).
-      ArtifactVerified
     | -- | @ecluse.publish.body.in_flight_bytes@: buffered publication reservations (up-down counter).
       PublishBodyInFlightBytes
     | -- | @ecluse.publish.body.shed@: publishes shed at the body-byte budget (counter).
@@ -165,12 +153,6 @@ metricName = \case
     OverflowAdmitted -> "ecluse.serve.admission.overflow.admitted"
     OverflowShed -> "ecluse.serve.admission.overflow.shed"
     OverflowFull -> "ecluse.serve.admission.overflow.full"
-    ArtifactBodyInFlightBytes -> "ecluse.serve.artifact.body.in_flight_bytes"
-    ArtifactBodyQueued -> "ecluse.serve.artifact.body.queued"
-    ArtifactBodyShed -> "ecluse.serve.artifact.body.shed"
-    ArtifactReadBytes -> "ecluse.serve.artifact.read_bytes"
-    ArtifactHashBytes -> "ecluse.serve.artifact.hash_bytes"
-    ArtifactVerified -> "ecluse.serve.artifact.verified"
     PublishBodyInFlightBytes -> "ecluse.publish.body.in_flight_bytes"
     PublishBodyShed -> "ecluse.publish.body.shed"
     MergeDivergence -> "ecluse.registry.merge.divergence"

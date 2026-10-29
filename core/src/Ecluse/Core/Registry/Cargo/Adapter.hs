@@ -11,7 +11,7 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Registry (UrlFormationError (UnparseableUrl))
-import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (..), AdapterMaintenance (..), AdapterMetadata (..), ArtifactRelayIntegrity (..), PrivateArtifactAddressing (AdmittedIndexedArtifactLocation))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (..), AdapterMaintenance (..), AdapterMetadata (..), PrivateArtifactAddressing (AdmittedIndexedArtifactLocation))
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
 import Ecluse.Core.Registry.Cargo.Credential (cargoCredential)
 import Ecluse.Core.Registry.Cargo.Metadata (prepareCargoRead)
@@ -49,8 +49,7 @@ cargoAdapter factors =
                 }
         , adapterArtifact =
             AdapterArtifact
-                { artifactRelayIntegrity = ClientVerifiedStream
-                , artifactByFile = \_ _ _ -> Left (UnparseableUrl "Cargo archives require an index-selected location")
+                { artifactByFile = \_ _ _ -> Left (UnparseableUrl "Cargo archives require an index-selected location")
                 , artifactByUrl = cargoArtifactRequest
                 , artifactHosts = cargoArtifactHosts
                 , artifactPrivateAddressing = AdmittedIndexedArtifactLocation

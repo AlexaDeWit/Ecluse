@@ -132,17 +132,6 @@ transient archive metadata instead of an npm publish envelope. The derivation se
 (`maxArtifactBytes`) so that this envelope is what the tenant charges. An explicit config value
 wins its own bound, and otherwise the shipped fallbacks apply.
 
-RubyGems verified artifact reads share the existing transient memory capacity through a dedicated resolved byte plan.
-`VerifiedArtifactPlan` records a per-body cap and aggregate wire-byte capacity, derived using the actual conservative buffer/copy charge.
-Unknown lengths reserve the full body cap. Reservations cover complete reading, verification, and client delivery.
-The plan adds neither a write tenant nor persistent artifact storage.
-
-`limits.maxArtifactBytes` also overrides the verified-read cap when this proxy role is active, including serve-only RubyGems mounts.
-An override above the resolved aggregate capacity refuses proxy boot.
-`check-config` reports the role-specific verified cap, aggregate capacity, and applicable refusal.
-The bound uses `VerifiedArtifactBodyLimit` diagnostics, separate from the mirror worker's body limit.
-These charges are an accounting model. They do not substitute for measured allocation, live heap, or serving latency.
-
 A pod below the automatic plan's floors sheds optional tenants in a documented order. The
 mirror-artifact cap goes first, to zero, so the background back-fill leg gives way before the serve
 hot path. The cache goes next, also to zero, and each step logs a loud warning. The boot and

@@ -77,7 +77,7 @@ limits:
   # PyPI path uses maxVersionCount's source-file bound instead of a separate check.
   # Cargo full and selected reads count every valid projected archive before version selection.
   # RubyGems counts every nonblank artifact row before parsing or version selection.
-  # This counts files. maxArtifactBytes below bounds worker and verified-read artifact bodies.
+  # This counts files. maxArtifactBytes below bounds worker artifact bodies.
   maxArtifactCount: 1000000
   # Nesting in retained metadata fields and Cargo records. Skipped npm/PyPI fields do not use this limit.
   maxNestingDepth: 64
@@ -112,13 +112,8 @@ limits:
   # The aggregate admission covers the largest active cap. Unsafe overrides refuse boot.
   # maxResponseBytes: 134217728
   # maxRequestBytes: 26214400
-  # The mirror worker's per-artifact fetch cap also overrides RubyGems verified GETs.
+  # The mirror worker's per-artifact fetch cap.
   # The worker plan accounts for its transient publication envelope.
-  # A proxy with RubyGems derives a separate verified-read cap and aggregate byte capacity
-  # from existing transient memory and conservative buffer/copy charges, even without mirroring.
-  # Unknown lengths reserve the full verified cap. Bytes stay reserved through client delivery.
-  # A verified-read override above aggregate capacity refuses proxy boot. check-config reports
-  # the resolved role-specific limits. This adds no persistent artifact cache.
   # maxArtifactBytes: 536870912
 
 cache:
@@ -557,8 +552,8 @@ mounts:
     # Cargo blocks AllowScope and DenyIfDeprecated at boot.
     # AllowScope: Cargo package names have no scope.
     # DenyIfDeprecated: Cargo's sparse index supplies no deprecation flag.
-  # Bundler 2.6.9 and 4.0.23 use named Dependencies API reads after /versions returns 404.
-  # Compact specifications and .gem downloads stay under this mount. No full index is served.
+  # Bundler 2.6.9 and 4.0.23 use /versions discovery and on-demand /info metadata.
+  # Compact specifications and .gem downloads stay under this mount. No full specification index is served.
   # Native publication posts the original built .gem to /api/v1/gems below the target root.
   # Reads preserve caller Basic pairs. Publication preserves the raw API key and optional OTP.
   # Declared CodeArtifact service roles use Basic aws reads and Bearer publication.

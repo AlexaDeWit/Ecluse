@@ -47,18 +47,11 @@ spec = describe "independent conditions" $ do
                               | package <- ["rails", "nokogiri", "aws-sdk-ec2"]
                               , leg <- ["full", "singleVersion", "fullShippedAdvisories", "fullAllAdvisoryRules"]
                               ]
-    it "requires native batch, quick-spec and whole-version worker observations" $ do
+    it "requires native quick-spec and whole-version worker observations" $ do
         let conditions = Map.fromList [("compiler", "declared"), ("optimisation", "-O1"), ("profiling", "off"), ("podShape", "unlimited"), ("durationSeconds", "30"), ("concurrency", "100"), ("serveMaxInFlight", "automatic"), ("affinity", "taskset -c 0 oha")]
         obligation <- expectRight (compileObligation "load" "ecosystem-rubygems" conditions)
-        for_ ["batch-dependencies", "quick-gemspec", "worker-mirroring"] $ \scenario ->
+        for_ ["quick-gemspec", "worker-mirroring"] $ \scenario ->
             for_ ["loaded", "concurrencyOne"] $ \whichPass ->
                 poRows obligation `shouldSatisfy` elem ("rubygems/" <> scenario <> "/" <> whichPass)
-    it "requires the verified relay values beside both real native load shapes" $ do
-        let conditions = Map.fromList [("compiler", "declared"), ("optimisation", "-O1"), ("profiling", "off"), ("podShape", "unlimited"), ("durationSeconds", "30"), ("concurrency", "100"), ("serveMaxInFlight", "automatic"), ("affinity", "taskset -c 0 oha")]
-        obligation <- expectRight (compileObligation "load" "ecosystem-rubygems" conditions)
-        poRows obligation `shouldSatisfy` elem "rubygems/gem-verified-known-length/loaded/verified-relay-observations"
-        poRows obligation `shouldSatisfy` elem "rubygems/gem-verified-known-length/concurrencyOne/verified-relay-observations"
-        poRows obligation `shouldSatisfy` elem "rubygems/gem-verified-slow-readers/loaded/verified-relay-observations"
-        poRows obligation `shouldSatisfy` notElem "rubygems/gem-verified-slow-readers/concurrencyOne/verified-relay-observations"
     it "rejects a missing measurement declaration" $
         compileObligation "allocation" "ecosystem-npm" Map.empty `shouldSatisfy` isLeft
