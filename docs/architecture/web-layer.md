@@ -304,10 +304,10 @@ An expired wait sheds with `503` and `Retry-After: 1`. A full overflow refuses a
 same headers and permits normal connection reuse. An ingress or sidecar can pool its connections
 to the pod. Closing those connections adds accepts and pool reconnections without requiring the
 end client to slow down. Overflow bounds held admission state, but does not impose a per-client
-request rate. Health probes, cheap local routes and conventional private artifact hits bypass both
-gates. A private hit that needs an admitted indexed location (Cargo, RubyGems) or a mirror-state
-check passes both gates for its decision, then releases them before streaming. The mirror worker
-runs outside the gates. A slow artifact client therefore holds no serve metadata slot while its
+request rate. A private artifact hit that needs an admitted indexed location (Cargo, RubyGems) or
+a mirror-state check passes both gates for its decision, then releases them before streaming.
+Health probes, cheap local routes and other trusted private artifact hits bypass both gates. The
+mirror worker runs outside the gates. A slow artifact client therefore holds no serve metadata slot while its
 download drains.
 
 The public and private connection pools take independent settings. The private pool takes the larger
