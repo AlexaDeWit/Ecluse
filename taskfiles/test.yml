@@ -167,76 +167,36 @@ tasks:
       - 'printf "source=%s\nrun=%s\ncomponent=%s\njob-status=%s\n" "${ECLTEST_SOURCE:-unknown}" "${ECLTEST_RUN_ID:-unknown}" "${ECLTEST_COMPONENT:-unknown}" "${ECLTEST_JOB_STATUS:-unknown}" > "$ECLTEST_ARTIFACT_DIR/reports/${ECLTEST_COMPONENT:-unknown}-job.log"'
 
   npm-completion:
-    vars: *identity-vars
-    env: *identity-env
     cmds:
-      - test -z "$ECLTEST_ARGUMENTS"
-      - task: artifact-tool
-      - '"$(cabal list-bin exe:ecluse-artifact)" verify "$ECLTEST_ARTIFACT_DIR"'
-      - cabal build ecluse-completion-npm-audit
-      - >-
-        . "$ECLTEST_ARTIFACT_DIR/identity.env";
-        "$(cabal list-bin ecluse-completion-npm-audit)"
-        "${ECLTEST_CORE_UNIT_ARTIFACT_DIR:?}/unit-plan.json"
-        "$ECLTEST_CORE_UNIT_ARTIFACT_DIR/unit-report.json"
-        "${ECLTEST_RUNTIME_UNIT_ARTIFACT_DIR:?}/unit-plan.json"
-        "$ECLTEST_RUNTIME_UNIT_ARTIFACT_DIR/unit-report.json"
-        "${ECLTEST_INTEGRATION_ARTIFACT_DIR:?}/plan.json"
-        "$ECLTEST_INTEGRATION_ARTIFACT_DIR/report.json"
-        "$ECLTEST_ARTIFACT_DIR/plan.json"
-        "$ECLTEST_ARTIFACT_DIR/reports/npm.json"
+      - task: ecosystem-completion
+        vars: {ECOSYSTEM: npm}
 
   pypi-completion:
-    vars: *identity-vars
-    env: *identity-env
     cmds:
-      - test -z "$ECLTEST_ARGUMENTS"
-      - task: artifact-tool
-      - '"$(cabal list-bin exe:ecluse-artifact)" verify "$ECLTEST_ARTIFACT_DIR"'
-      - cabal build ecluse-completion-pypi-audit
-      - >-
-        . "$ECLTEST_ARTIFACT_DIR/identity.env";
-        "$(cabal list-bin ecluse-completion-pypi-audit)"
-        "${ECLTEST_CORE_UNIT_ARTIFACT_DIR:?}/unit-plan.json"
-        "$ECLTEST_CORE_UNIT_ARTIFACT_DIR/unit-report.json"
-        "${ECLTEST_RUNTIME_UNIT_ARTIFACT_DIR:?}/unit-plan.json"
-        "$ECLTEST_RUNTIME_UNIT_ARTIFACT_DIR/unit-report.json"
-        "${ECLTEST_INTEGRATION_ARTIFACT_DIR:?}/plan.json"
-        "$ECLTEST_INTEGRATION_ARTIFACT_DIR/report.json"
-        "$ECLTEST_ARTIFACT_DIR/plan.json"
-        "$ECLTEST_ARTIFACT_DIR/reports/pypi.json"
+      - task: ecosystem-completion
+        vars: {ECOSYSTEM: pypi}
 
   cargo-completion:
-    vars: *identity-vars
-    env: *identity-env
     cmds:
-      - test -z "$ECLTEST_ARGUMENTS"
-      - task: artifact-tool
-      - '"$(cabal list-bin exe:ecluse-artifact)" verify "$ECLTEST_ARTIFACT_DIR"'
-      - cabal build ecluse-completion-cargo-audit
-      - >-
-        . "$ECLTEST_ARTIFACT_DIR/identity.env";
-        "$(cabal list-bin ecluse-completion-cargo-audit)"
-        "${ECLTEST_CORE_UNIT_ARTIFACT_DIR:?}/unit-plan.json"
-        "$ECLTEST_CORE_UNIT_ARTIFACT_DIR/unit-report.json"
-        "${ECLTEST_RUNTIME_UNIT_ARTIFACT_DIR:?}/unit-plan.json"
-        "$ECLTEST_RUNTIME_UNIT_ARTIFACT_DIR/unit-report.json"
-        "${ECLTEST_INTEGRATION_ARTIFACT_DIR:?}/plan.json"
-        "$ECLTEST_INTEGRATION_ARTIFACT_DIR/report.json"
-        "$ECLTEST_ARTIFACT_DIR/plan.json"
-        "$ECLTEST_ARTIFACT_DIR/reports/cargo.json"
+      - task: ecosystem-completion
+        vars: {ECOSYSTEM: cargo}
 
   rubygems-completion:
+    cmds:
+      - task: ecosystem-completion
+        vars: {ECOSYSTEM: rubygems}
+
+  ecosystem-completion:
     vars: *identity-vars
     env: *identity-env
     cmds:
       - test -z "$ECLTEST_ARGUMENTS"
       - task: artifact-tool
       - '"$(cabal list-bin exe:ecluse-artifact)" verify "$ECLTEST_ARTIFACT_DIR"'
-      - cabal build ecluse-completion-rubygems-audit
+      - cabal build ecluse-completion-{{.ECOSYSTEM}}-audit
       - >-
         . "$ECLTEST_ARTIFACT_DIR/identity.env";
-        "$(cabal list-bin ecluse-completion-rubygems-audit)"
+        "$(cabal list-bin ecluse-completion-{{.ECOSYSTEM}}-audit)"
         "${ECLTEST_CORE_UNIT_ARTIFACT_DIR:?}/unit-plan.json"
         "$ECLTEST_CORE_UNIT_ARTIFACT_DIR/unit-report.json"
         "${ECLTEST_RUNTIME_UNIT_ARTIFACT_DIR:?}/unit-plan.json"
@@ -244,7 +204,7 @@ tasks:
         "${ECLTEST_INTEGRATION_ARTIFACT_DIR:?}/plan.json"
         "$ECLTEST_INTEGRATION_ARTIFACT_DIR/report.json"
         "$ECLTEST_ARTIFACT_DIR/plan.json"
-        "$ECLTEST_ARTIFACT_DIR/reports/rubygems.json"
+        "$ECLTEST_ARTIFACT_DIR/reports/{{.ECOSYSTEM}}.json"
 
   conformance-verdaccio:
     vars:
