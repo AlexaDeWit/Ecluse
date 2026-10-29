@@ -664,7 +664,7 @@ warmPublicDocuments :: ServeRuntime -> MountBinding -> IORef [[Text]] -> [(Text,
 warmPublicDocuments uncached binding hits documents = do
     values <- newIORef Map.empty
     let full = externalOperations (\_ key -> Map.lookup key <$> readIORef values) (\key value -> atomicModifyIORef' values (\stored -> (Map.insert key value stored, ())))
-    cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) (Just full) Nothing Nothing)
+    cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) Nothing (Just full) Nothing Nothing)
     let runtime = uncached{srMetadataCache = cache}
         source = Source (registryUrlText (pdPublicBaseUrl (bindingPackumentDeps binding)))
         listing name = capture runtime binding "GET" ("/info/" <> encodeUtf8 name) []
