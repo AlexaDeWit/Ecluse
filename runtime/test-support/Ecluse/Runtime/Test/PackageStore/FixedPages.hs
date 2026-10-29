@@ -43,6 +43,7 @@ import Ecluse.Core.Registry.Maintenance (
     protocolFault,
  )
 import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet)
+import Ecluse.Core.Rules.Install (unavailableInstallArtifactRead)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), formatEcosystem)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal (consentTagKey, consentTagValue, cursorTagKey)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Internal (ControlPlane (..), boundedObservationFor, cacheMaintenanceFor, maintenanceFor)
@@ -129,8 +130,8 @@ newFixedPlane repository = do
 -- | The mirror handle 'Ecluse.Runtime.Maintenance.CodeArtifact.newCodeArtifactMaintenance' builds, over the fixture.
 fixedMirror :: Int -> NameAlphabet -> StoreManifestRead -> FixedPlane -> StoreMaintenance
 fixedMirror limit alphabet readManifest plane =
-    (maintenanceFor alphabet reading store control)
-        { enumerateVersions = obEnumerateVersions (boundedObservationFor limit alphabet reading store (cpRead control))
+    (maintenanceFor alphabet reading unavailableInstallArtifactRead store control)
+        { enumerateVersions = obEnumerateVersions (boundedObservationFor limit alphabet reading unavailableInstallArtifactRead store (cpRead control))
         }
   where
     store = frStore (fpRepository plane)
@@ -140,7 +141,7 @@ fixedMirror limit alphabet readManifest plane =
 -- | The cache handle 'Ecluse.Runtime.Maintenance.CodeArtifact.newCodeArtifactCacheMaintenance' builds, over the fixture.
 fixedCache :: Int -> NameAlphabet -> StoreManifestRead -> FixedPlane -> StoreMaintenance
 fixedCache limit alphabet readManifest plane =
-    cacheMaintenanceFor limit alphabet (fpReadManifest plane readManifest) (frStore (fpRepository plane)) (fpControl plane)
+    cacheMaintenanceFor limit alphabet (fpReadManifest plane readManifest) unavailableInstallArtifactRead (frStore (fpRepository plane)) (fpControl plane)
 
 -- Wait the fixture delay, count the call, then answer.
 serve :: FixedRepository -> FixedState -> NativeCall -> IO a -> IO a
