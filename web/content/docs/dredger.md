@@ -447,7 +447,7 @@ reaches the other.
 
 ## Known limits
 
-**PyPI maintenance requires CodeArtifact.** The PyPI adapter supplies no protocol inventory or deletion operation for `registry` or `verdaccio`.
+**PyPI, Cargo, and RubyGems maintenance requires CodeArtifact.** Those adapters supply no protocol inventory or deletion operation for `registry` or `verdaccio`.
 Dredger refuses those configurations. Their supported read and write roles remain available.
 
 **One Dredger per store.** There is no lease. Two Dredgers against one store double the cap's blast

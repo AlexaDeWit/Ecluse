@@ -89,6 +89,13 @@ A successful upload or a present archive cannot replace them, as the [Cargo prot
 Separate public mirrors from first-party publication where possible.
 Collapsed storage remains supported subject to existing endpoint checks and role-specific cleanup restrictions.
 
+## For RubyGems, retain platform and source records {#rubygems}
+
+RubyGems mirroring requires `mirrorState.url`, with the same proxy and worker state permissions as Cargo.
+Preserve the same state prefix and target identity across restarts, and do not expire or discard these records.
+The [configuration reference](@/docs/configuration.md#the-configuration-reference) owns the keys.
+The [RubyGems protocol reference](@/docs/protocol-support.md#rubygems) describes what the state proves.
+
 ## Verify a complete copy {#verify}
 
 An admitted artifact download triggers background mirroring. The worker checks current policy before copying. For PyPI, it copies every supported distribution in the admitted version.

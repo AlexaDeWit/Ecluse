@@ -32,9 +32,9 @@ Print the resolved order with `check-config`. Use that order when reviewing an e
 
 ## How age is measured {#age}
 
-npm uses the version's publication time. PyPI and RubyGems use the newest file upload in the release, so adding a file can restart its waiting period.
+npm uses the version's publication time, and Cargo uses the index record's native `pubtime`. PyPI and RubyGems use the newest file upload in the release, so adding a file can restart its waiting period.
 
-A missing or malformed PyPI or RubyGems artifact timestamp leaves the release age unknown. The age rule then cannot admit it. An explicit exception still needs to satisfy other applicable checks.
+A missing or malformed PyPI or RubyGems artifact timestamp, or a missing or invalid Cargo `pubtime`, leaves the release age unknown. The age rule then cannot admit it. An explicit exception still needs to satisfy other applicable checks.
 
 ## Policy is not the only check {#integrity}
 
@@ -42,7 +42,7 @@ Public files must satisfy the artifact host and integrity requirements. The defa
 
 Files that fail these checks disappear from listings. A release disappears when no eligible file remains. An allow rule does not waive those checks.
 
-PyPI and RubyGems do not support the npm scope, deprecation, or install-execution rule types. An active incompatible rule prevents that mount from starting.
+PyPI and RubyGems do not support the npm scope, deprecation, or install-execution rule types. Cargo does not support the scope or deprecation types, and keeps install-time execution denial as an optional rule. An active incompatible rule prevents that mount from starting. The [rule policy](@/docs/configuration.md#rule-policy) lists each blocked type and its reason.
 
 {{ task_link(path="@/docs/exceptions.md", title="Allow a specific version", description="Choose the override deliberately and inspect its effect.") }}
 
