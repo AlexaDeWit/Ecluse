@@ -42,7 +42,7 @@ boot :: LoadKnobs -> (Target -> IO a) -> IO a
 boot knobs use = do
     fixture <- newWorkerFixture (lkPayloadBytes knobs)
     let latency = lkUpstreamLatencyMicros knobs
-        state = wfState fixture
+        workerTarget = wfState fixture
         native =
             NativeWorker
                 { nwSourceApp = sourceApp latency fixture
@@ -52,9 +52,9 @@ boot knobs use = do
                 , nwJob = MirrorJob fixturePackage fixtureVersion (Just (unsafeFilename fixtureTrigger)) Nothing
                 , nwExpectedFiles = 4
                 , nwReset = resetWorkerFixture fixture
-                , nwRejectUpload = writeIORef (wtReject state)
-                , nwUploadAttempts = Map.findWithDefault 0 "upload-attempt" <$> readIORef (wtCounts state)
-                , nwRemoveTrigger = modifyIORef' (wtFiles state) (Map.delete fixtureTrigger)
+                , nwRejectUpload = writeIORef (wtReject workerTarget)
+                , nwUploadAttempts = Map.findWithDefault 0 "upload-attempt" <$> readIORef (wtCounts workerTarget)
+                , nwRemoveTrigger = modifyIORef' (wtFiles workerTarget) (Map.delete fixtureTrigger)
                 , nwMissingArtifact = "wheel"
                 , nwVerifyCopy = verifyCopy fixture
                 }
