@@ -10,8 +10,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Network.HTTP.Client (brRead, responseBody, responseStatus)
 import Network.HTTP.Types (statusCode)
-import Network.HTTP.Types.Header (hRange)
-import Network.Wai (Request (requestHeaders), ResponseReceived)
+import Network.Wai (Request, ResponseReceived)
 import UnliftIO (evaluate)
 
 import Ecluse.Core.Credential (ClientCredential)
@@ -150,7 +149,7 @@ fetchDirectory pay limits control client base credential = do
 answerCompact :: PackumentDeps -> MemoryTicket -> Request -> ByteString -> Handler RubyResponse
 answerCompact deps ticket request bytes
     | BS.length bytes > maxMetadataBytes (pdLimits deps) = pure (directoryFailure (MetadataBoundExceeded (BodyTooLarge (MetadataBodyLimit (maxMetadataBytes (pdLimits deps))))))
-    | otherwise = answerDigestedMetadataBytes replies deps ticket replacement digest bytes
+    | otherwise = answerDigestedMetadataBytes replies deps ticket request digest bytes
   where
     -- One SHA-256 serves the strong ETag and Repr-Digest, which Bundler checks against the decoded native file.
     digest = hash bytes :: Digest SHA256
@@ -160,10 +159,6 @@ answerCompact deps ticket request bytes
             { packumentOk = \headers -> packumentOk rubyReplies (("Repr-Digest", reprDigest) : headers)
             , packumentNotModified = \headers -> packumentNotModified rubyReplies (("Repr-Digest", reprDigest) : headers)
             }
-    replacement =
-        if any ((== hRange) . fst) (requestHeaders request)
-            then request{requestHeaders = filter ((/= hRange) . fst) (requestHeaders request)}
-            else request
 
 directoryFailure :: MetadataError -> RubyResponse
 directoryFailure fault = case fault of
