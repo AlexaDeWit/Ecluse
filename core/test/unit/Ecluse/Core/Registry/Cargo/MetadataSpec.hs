@@ -10,7 +10,6 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Test.Hspec
-import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Cargo))
 import Ecluse.Core.Package (PackageInfo (..))
@@ -23,6 +22,7 @@ import Ecluse.Core.Registry.Metadata.Fetch (readManifest, readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (ReadTerms (..))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Version (mkVersion)
+import Ecluse.Server.Admission.Support (ChargeRefused (..), refuseCharge)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Metadata.Projection (MetadataFraming (RecordStream), ProjectionDriver (..), metadataProjectionContract, projectionFailureLaw)
 import Ecluse.Test.Port (passthroughTracingPort)
@@ -112,15 +112,10 @@ workspaceSpec = describe "full Cargo row workspace" $ do
         readsTaken <- newIORef (0 :: Int)
         let body = toStrict (encode (cargoFeatureRecord "1.0.0" 16384))
             next = modifyIORef' readsTaken (+ 1) $> BS.take (BS.length body `div` 2) body
-            native = cargoReadWith (const (throwIO FullWorkspaceRefused)) (const pass) discovery
+            native = cargoReadWith refuseCharge (const pass) discovery
             terms = ReadTerms defaultLimits "https://index.crates.io" (const pass)
-        readManifest native passthroughTracingPort terms cargoTestName (sourceBody next) `shouldThrow` (== FullWorkspaceRefused)
+        readManifest native passthroughTracingPort terms cargoTestName (sourceBody next) `shouldThrow` (== ChargeRefused)
         readIORef readsTaken `shouldReturn` 1
-
-data FullWorkspaceRefused = FullWorkspaceRefused
-    deriving stock (Eq, Show)
-
-instance Exception FullWorkspaceRefused
 
 row :: Text -> ByteString
 row = toStrict . encode . cargoTestRecord
