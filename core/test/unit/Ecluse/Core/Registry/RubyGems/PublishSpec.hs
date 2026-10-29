@@ -20,7 +20,7 @@ import Ecluse.Core.Registry.Adapter.Capability
 import Ecluse.Core.Registry.CachedDocument (rubyGemsCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload
-import Ecluse.Core.Registry.Origin (originClient)
+import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullReadWorkspace), originClient)
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpProbeInventory), MirrorTransport (..), PublishCodec (..), PublishPlan (PublishPlan), newMirrorPublish)
 import Ecluse.Core.Registry.RubyGems.Credential (rubyCodeArtifactPublishCredential, rubyCodeArtifactReadCredential)
 import Ecluse.Core.Registry.RubyGems.Document
@@ -31,6 +31,7 @@ import Ecluse.Core.Registry.RubyGems.Wire (decodeInfoRow)
 import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (ChargeFactors))
+import Ecluse.Server.Admission.Support (refuseCharge)
 import Ecluse.Test.Deadline (withExchangeClient)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Publish (publishOnlyFile)
@@ -55,6 +56,15 @@ spec = describe "RubyGems publication" $ do
                         headerValue "Authorization" written `shouldBe` Just "native-api-key"
                         headerValue "OTP" written `shouldBe` Just "opaque-code"
                     _ -> expectationFailure "expected exactly one native publication"
+
+    it "relays an authorised body without inspecting the archive a second time" $
+        withRoutedStub (const (status200, [], "owned native reply")) $ \target -> do
+            archive <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-root-1.0.0.gem"
+            name <- expectRight (projectName "ecluse-fixture-root")
+            withExchangeClient (newManager defaultManagerSettings) $ \client -> do
+                let origin = (originClient defaultLimits client (loopbackRegistryUrl (stubBaseUrl target <> "/private")) (Just (bareCredential (mkSecret "native-api-key")))){ocChargeFullReadWorkspace = refuseCharge}
+                void (publishRelay publisher origin name (PublishRequestBody archive (Just "application/octet-stream") NoPublishExtras) >>= expectRight)
+                map capMethod <$> allCaptured target `shouldReturn` ["POST"]
 
     it "accepts native-extension builds and refuses malformed or oversized archives" $ do
         archive <- readFileBS "test/fixtures/rubygems/gems/ecluse-fixture-native-1.0.0.gem"
