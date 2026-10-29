@@ -1621,9 +1621,11 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.Cargo.CopyState
     Ecluse.BenchLoad.Cargo.Worker
     Ecluse.BenchLoad.Cargo.WorkerFixture
+    Ecluse.BenchLoad.Cargo.WorkerFixtureSpec
     Ecluse.BenchLoad.ObjectStore
     Ecluse.BenchLoad.WorkerState
     Ecluse.BenchLoad.PyPI.WorkerFixture
+    Ecluse.BenchLoad.PyPI.WorkerFixtureSpec
     Ecluse.BenchLoad.PatternScenario
     Ecluse.BenchLoad.PrivateCopy
     Ecluse.BenchLoad.PrivateCopySpec
