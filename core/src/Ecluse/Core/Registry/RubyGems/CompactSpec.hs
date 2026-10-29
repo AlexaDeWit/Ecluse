@@ -20,7 +20,6 @@ import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import UnliftIO.Exception (evaluate)
-import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
 import Ecluse.Core.Package (PackageName, renderPackageName)
@@ -29,7 +28,7 @@ import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (ZlibStream), withInf
 import Ecluse.Core.Registry.RubyGems.Document
 import Ecluse.Core.Registry.RubyGems.Marshal
 import Ecluse.Core.Registry.RubyGems.Project
-import Ecluse.Core.Security.Limits (Limits (..), requestTimeoutSeconds)
+import Ecluse.Core.Security.Limits (Limits (..))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Core.Version.Gem (parseGem)
 
@@ -110,9 +109,7 @@ normaliseLayout value = case stripInstanceVariables value of
 decodeCompactSpec :: Limits -> (Int -> IO ()) -> ByteString -> IO (Either ParseError CompactSpec)
 decodeCompactSpec limits charge bytes
     | BS.length bytes > maxMetadataBytes limits = pure (bad "compact specification exceeds its compressed byte bound")
-    | otherwise = do
-        result <- timeout (requestTimeoutSeconds * 1000000) (withInflatedChunks ZlibStream charge bytes (collect 0 []))
-        pure (fromMaybe (bad "compact specification validation timed out") result)
+    | otherwise = withInflatedChunks ZlibStream charge bytes (collect 0 [])
   where
     collect seen held pull =
         pull >>= \case
@@ -130,13 +127,11 @@ decodeCompactSpec limits charge bytes
 -- | Bind selected source bytes to the admitted physical coordinate and native installation facts.
 validateCompactSpec :: Limits -> (Int -> IO ()) -> GemCoordinate -> GemRow -> ByteString -> IO (Either ParseError CompactSpec)
 validateCompactSpec limits charge coordinate row bytes = do
-    result <- timeout (requestTimeoutSeconds * 1000000) $ do
-        decoded <- decodeCompactSpec limits charge bytes
-        evaluate $ do
-            compact <- decoded
-            void (checkGemSpecification coordinate row (compactSpecification compact))
-            pure compact
-    pure (fromMaybe (bad "compact specification agreement timed out") result)
+    decoded <- decodeCompactSpec limits charge bytes
+    evaluate $ do
+        compact <- decoded
+        void (checkGemSpecification coordinate row (compactSpecification compact))
+        pure compact
 
 -- | Bind native archive or compact facts to the selected source coordinate and installation metadata.
 checkGemSpecification :: GemCoordinate -> GemRow -> GemSpecification -> Either ParseError GemSpecification

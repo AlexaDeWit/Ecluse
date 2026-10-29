@@ -15,9 +15,9 @@ import Data.Text qualified as T
 import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS))
 import Network.HTTP.Types.Header (hContentType)
 import UnliftIO.Exception (evaluate)
-import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Credential (ClientCredential)
+import Ecluse.Core.Deadline (inspectionDeadline)
 import Ecluse.Core.Package (hashValue, renderPackageName)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), ParseError (..), PublishBodyFault (PublishMalformed), PublishError (PublishError), PublishFault (..), UrlFormationError (UnparseableUrl), isSuccessStatus)
 import Ecluse.Core.Registry.Adapter.Capability
@@ -37,7 +37,7 @@ import Ecluse.Core.Registry.RubyGems.Document (GemRow (..))
 import Ecluse.Core.Registry.RubyGems.Metadata (prepareGemRead)
 import Ecluse.Core.Registry.RubyGems.Mirror (mirrorRow, rubyMirrorCompanion)
 import Ecluse.Core.Registry.RubyGems.Request (gemInfoRequestUnder, gemInfoUrl)
-import Ecluse.Core.Security.Limits (Limits, requestTimeoutSeconds)
+import Ecluse.Core.Security.Limits (Limits)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 
 -- | Caller publication uses the configured native key and checked OTP header.
@@ -65,7 +65,7 @@ rubyPublishCodecWith readCredential writeCredential factors =
             source <- maybeToRight (PublishSourceUnavailable "RubyGems snapshot has no paired native source") (vdRaw doc >>= snd rubyGemsCached)
             inventory <- checkedMirrorInventory name version doc (RubyGemsMirrorRead source)
             pure (inventory, ())
-        , pcPrepareUpload = \limits charge inventory () file verified -> do
+        , pcPrepareUpload = \deadlines limits charge inventory () file verified -> inspectionDeadline deadlines (PublishSourceUnavailable "gem archive validation timed out") $ do
             inspected <- inspectGemArchive limits charge (verifiedBytes verified)
             evaluate $ do
                 archive <- first (PublishSourceUnavailable . parseErrorMessage) inspected
@@ -86,16 +86,13 @@ rubyPublishCodecWith readCredential writeCredential factors =
 
 -- | Archive identity controls first-party ownership before the server forwards any bytes.
 uploadClaims :: Limits -> (Int -> IO ()) -> Text -> PublishRequestBody -> IO (Either PublishBodyFault [Text])
-uploadClaims limits charge _ body =
-    fromMaybe (Left (PublishMalformed (ParseError "RubyGems upload inspection exceeded its deadline"))) <$> timeout (requestTimeoutSeconds * 1000000) inspect
-  where
-    inspect = do
-        inspected <- inspectGemArchive limits charge (publishBodyBytes body)
-        case inspected of
-            Left fault -> pure (Left (PublishMalformed fault))
-            Right archive -> do
-                name <- evaluate (gemArchiveName archive)
-                pure (Right [renderPackageName name])
+uploadClaims limits charge _ body = do
+    inspected <- inspectGemArchive limits charge (publishBodyBytes body)
+    case inspected of
+        Left fault -> pure (Left (PublishMalformed fault))
+        Right archive -> do
+            name <- evaluate (gemArchiveName archive)
+            pure (Right [renderPackageName name])
 
 bodyRequest :: CredentialMapping -> Text -> Maybe ClientCredential -> PublishExtras -> ByteString -> Either UrlFormationError Request
 bodyRequest credentialMapping target credential extras bytes = do

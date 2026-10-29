@@ -10,6 +10,7 @@ module Ecluse.Core.Registry.RubyGems.Mirror (
 
 import Data.Text qualified as T
 
+import Ecluse.Core.Deadline (inspectionDeadline)
 import Ecluse.Core.Package (Artifact (artEntryKey, artFilename))
 import Ecluse.Core.Registry (ParseError (parseErrorMessage), PublishFault (PublishSourceUnavailable))
 import Ecluse.Core.Registry.MirrorUpload
@@ -27,7 +28,7 @@ rubyMirrorCompanion =
             base <- maybeToRight (PublishSourceUnavailable "RubyGems artifact URL disagrees with its native filename") (T.stripSuffix ("/gems/" <> filename) source)
             stem <- maybeToRight (PublishSourceUnavailable "RubyGems artifact lacks its native extension") (T.stripSuffix ".gem" filename)
             pure (base <> "/quick/Marshal.4.8/" <> stem <> ".gemspec.rz")
-        , mcValidate = \limits charge inventory file bytes -> case mirrorRow inventory file of
+        , mcValidate = \deadlines limits charge inventory file bytes -> inspectionDeadline deadlines (PublishSourceUnavailable "compact specification agreement timed out") $ case mirrorRow inventory file of
             Left fault -> pure (Left fault)
             Right row -> fmap (first (PublishSourceUnavailable . parseErrorMessage) . fmap compactSpecBytes) (validateCompactSpec limits charge (grCoordinate row) row bytes)
         }
