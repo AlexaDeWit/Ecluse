@@ -23,6 +23,7 @@ module Ecluse.Core.Server.Admission.Meter (
     tryMemoryEntry,
     charge,
     newChargeRegion,
+    newChargePair,
 
     -- * Giving charge back
     ChargePart,
@@ -55,6 +56,7 @@ import Ecluse.Core.Server.Admission.Budget (
  )
 import Ecluse.Core.Server.Admission.Overflow (Line, newLine, signalLine)
 import Ecluse.Core.Server.Admission.Types (BrakeLevel (Calm), FlightKey, MeterSnapshot (..), Shed (..))
+import Ecluse.Core.Server.MemoryModel (saturatingCharge)
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
 -- | The boot-time shape of a meter.
@@ -278,6 +280,16 @@ newChargeRegion pay = do
         let next = max previous requested
         when (next > previous) (pay (next - previous))
         pure next
+
+-- | Two portions of one workspace, each set absolutely. Every change pays their saturated sum.
+newChargePair :: (Int -> IO ()) -> IO (Int -> IO (), Int -> IO ())
+newChargePair pay = do
+    portions <- MVar.newMVar (0, 0)
+    let reserve change = MVar.modifyMVar_ portions $ \previous -> do
+            let next@(former, latter) = change previous
+            pay (saturatingCharge (toInteger former + toInteger latter))
+            pure next
+    pure (\former -> reserve (\(_, latter) -> (former, latter)), \latter -> reserve (\(former, _) -> (former, latter)))
 
 {- | What one phase of a request paid onto its ticket, so the phase can give it back once the data it
 paid for is dead.

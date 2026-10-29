@@ -21,7 +21,7 @@ import UnliftIO.Exception (evaluate)
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (ParseError (..), parseRefusal)
-import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (..), splitArchiveCharge, withInflatedChunks)
+import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (..), withInflatedChunks)
 import Ecluse.Core.Registry.Archive.Tar (sourceReader)
 import Ecluse.Core.Registry.PyPI.Archive.BZip (withBzipChunks)
 import Ecluse.Core.Registry.PyPI.Archive.Lzma (LzmaFormat (..), withLzmaChunks)
@@ -29,6 +29,7 @@ import Ecluse.Core.Registry.PyPI.Archive.Path (checkPath, metadataPath)
 import Ecluse.Core.Registry.PyPI.Archive.Tar (extractTar)
 import Ecluse.Core.Registry.PyPI.Project (DistributionKind (..), FileCoordinate (..), fileCoordinate)
 import Ecluse.Core.Security.Limits (Limits (..))
+import Ecluse.Core.Server.Admission.Meter (newChargePair)
 import Ecluse.Core.Version (Version)
 
 -- | Request absolute extra workspace before retention. The caller separately charges the verified source bytes.
@@ -38,7 +39,7 @@ archiveMetadata limits charge package version filename bytes = case fileCoordina
         | fcVersion coordinate == version
         , BS.length bytes <= maxMirrorArtifactBytes limits
         , maxMirrorArtifactBytes limits > 0 -> do
-            (decoderCharge, contentCharge) <- splitArchiveCharge charge
+            (decoderCharge, contentCharge) <- newChargePair charge
             contentCharge archiveScratchBytes
             result <-
                 if any (`T.isSuffixOf` filename) [".whl", ".zip"]
