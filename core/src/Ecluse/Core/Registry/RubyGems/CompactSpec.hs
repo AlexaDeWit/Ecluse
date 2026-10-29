@@ -24,7 +24,7 @@ import UnliftIO.Exception (evaluate)
 import Ecluse.Core.Ecosystem (Ecosystem (RubyGems))
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (ParseError (..))
-import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (ZlibStream), withInflatedChunks)
+import Ecluse.Core.Registry.Archive.Inflate (InflateFormat (ZlibStream), inflateBounded)
 import Ecluse.Core.Registry.RubyGems.Document
 import Ecluse.Core.Registry.RubyGems.Marshal
 import Ecluse.Core.Registry.RubyGems.Project
@@ -109,20 +109,12 @@ normaliseLayout value = case stripInstanceVariables value of
 decodeCompactSpec :: Limits -> (Int -> IO ()) -> ByteString -> IO (Either ParseError CompactSpec)
 decodeCompactSpec limits charge bytes
     | BS.length bytes > maxMetadataBytes limits = pure (bad "compact specification exceeds its compressed byte bound")
-    | otherwise = withInflatedChunks ZlibStream charge bytes (collect 0 [])
-  where
-    collect seen held pull =
-        pull >>= \case
+    | otherwise =
+        inflateBounded ZlibStream "compact specification exceeds its inflated byte bound" (maxMetadataBytes limits) charge bytes >>= \case
             Left fault -> pure (Left fault)
-            Right chunk
-                | BS.null chunk -> do
-                    charge (73728 + 64 * seen)
-                    evaluate (CompactSpec bytes <$> decodeGemSpecification limits (BS.concat (reverse held)))
-                | BS.length chunk > maxMetadataBytes limits - seen -> pure (bad "compact specification exceeds its inflated byte bound")
-                | otherwise -> do
-                    let next = seen + BS.length chunk
-                    charge (73728 + 3 * next)
-                    collect next (chunk : held) pull
+            Right raw -> do
+                charge (73728 + 64 * BS.length raw)
+                evaluate (CompactSpec bytes <$> decodeGemSpecification limits raw)
 
 -- | Bind selected source bytes to the admitted physical coordinate and native installation facts.
 validateCompactSpec :: Limits -> (Int -> IO ()) -> GemCoordinate -> GemRow -> ByteString -> IO (Either ParseError CompactSpec)
