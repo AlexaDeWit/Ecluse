@@ -8,6 +8,7 @@ module Ecluse.E2E.Harness.Stub (
     StubRoute (..),
     stubHosts,
     stubUrl,
+    publicStubRoute,
     nativeUploadLimit,
 
     -- * Faults
@@ -25,6 +26,8 @@ module Ecluse.E2E.Harness.Stub (
 ) where
 
 import Data.Text qualified as T
+
+import Ecluse.Core.Ecosystem (Ecosystem (Cargo, Npm, PyPI, RubyGems))
 
 -- | A registry name the stub answers for.
 data StubRoute
@@ -59,6 +62,14 @@ stubHosts = map stubHost universe
 -- | The base URL a product role dials a route at.
 stubUrl :: StubRoute -> Text
 stubUrl route = "https://" <> stubHost route <> "/"
+
+-- | The route that answers as an ecosystem's public registry.
+publicStubRoute :: Ecosystem -> StubRoute
+publicStubRoute = \case
+    Npm -> NpmPublic
+    PyPI -> PyPIPublic
+    Cargo -> CargoPublic
+    RubyGems -> RubyGemsPublic
 
 -- The name a route answers to, which is also its @server_name@.
 stubHost :: StubRoute -> Text
