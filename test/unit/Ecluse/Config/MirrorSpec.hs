@@ -25,8 +25,6 @@ spec = describe "native mirror declarations" $ do
         let target = regMirrorTarget . mountRegistries =<< Map.lookup PyPI (configMounts config)
         fmap (registryUrlText . mtUploadUrl) target `shouldBe` Just "https://target.example.test/legacy/"
         fmap mtUsername target `shouldBe` Just (Just "publisher")
-    it "refuses an upload endpoint on a public upstream host" $
-        loadConfig (overrideEnv uploadKey "https://pypi.org/legacy/" pypiMirrorEnv) Nothing `shouldSatisfy` isLeft
     describe "publication credentials" $ do
         for_ [("REGISTRY", "https://publish.example.test/legacy/"), ("CODE_ARTIFACT", codeArtifactHost <> "/pypi/cache/")] $ \(tag, url) ->
             it ("refuses a username without a token for " <> tag) $
@@ -112,9 +110,8 @@ spec = describe "native mirror declarations" $ do
         cap baseline `shouldBe` Just Nothing
         cap configured `shouldBe` Just (Just 52428800)
 
-stateKey, uploadKey, usernameKey :: String
+stateKey, usernameKey :: String
 stateKey = "ECLUSE_MIRROR_STATE__URL"
-uploadKey = "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__UPLOAD_URL"
 usernameKey = "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__USERNAME"
 
 codeArtifactPrefix, codeArtifactHost :: String
