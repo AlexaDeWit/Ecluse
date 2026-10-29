@@ -18,20 +18,22 @@ One Écluse process serves one or more ecosystems from one listener. It mounts e
 path prefix on a shared base URL:
 
 ```
-https://registry.internal.example.com/npm    → npm mount
-https://registry.internal.example.com/pypi   → PyPI mount
-https://registry.internal.example.com/cargo  → Cargo mount
+https://registry.internal.example.com/npm      → npm mount
+https://registry.internal.example.com/pypi     → PyPI mount
+https://registry.internal.example.com/cargo    → Cargo mount
+https://registry.internal.example.com/rubygems → RubyGems mount
 ```
 
 Each ecosystem gets one mount, and Écluse derives that mount's prefix from the ecosystem
-(npm → `/npm`, PyPI → `/pypi`, Cargo → `/cargo`). Nobody configures a prefix, so no two prefixes can collide and
-nobody can mistype one. No mount sits at `/`, so adding an ecosystem never changes an existing
-consumer's URLs. Each mount also carries an optional per-ecosystem
+(npm → `/npm`, PyPI → `/pypi`, Cargo → `/cargo`, RubyGems → `/rubygems`). Nobody configures a
+prefix, so no two prefixes can collide and nobody can mistype one. No mount sits at `/`, so adding
+an ecosystem never changes an existing consumer's URLs. Each mount also carries an optional per-ecosystem
 [rule refinement](configuration.md#rule-policy) merged over the shared policy. A single-npm setup is
 the single-mount case, under its own derived prefix.
 
 A mount carries its ecosystem's credential presentation.
 npm uses `Authorization: Bearer`. PyPI uses HTTP Basic under any username. Cargo uses a raw `Authorization` token.
+RubyGems reads keep the complete HTTP Basic pair, and RubyGems publication uses the raw API-key value of `Authorization`.
 Écluse forwards the recovered credential upstream in that same form.
 The web layer compares its secret against the configured edge token in constant time and refuses a mismatch.
 
@@ -68,7 +70,7 @@ body, while a `POST` over those paths takes the deny-by-default `404`.
 
 ## OpenAPI spec
 
-Écluse speaks npm, PyPI, and Cargo read and publication protocols rather than a bespoke HTTP API.
+Écluse speaks npm, PyPI, Cargo, and RubyGems read and publication protocols rather than a bespoke HTTP API.
 Package clients use those protocols rather than an API description, so the
 published OpenAPI spec is not a client-integration contract. It states which protocols this
 server speaks, and what each ecosystem does and does not support. That stops being self-evident as mounts multiply.
@@ -105,7 +107,7 @@ version collision before assembly.
 
 ## Streaming and resource lifetime
 
-For npm, PyPI, and Cargo, the proxy pulls from upstream only as fast as the client drains.
+For npm, PyPI, Cargo, and RubyGems, the proxy pulls from upstream only as fast as the client drains.
 These streamed bodies use constant memory regardless of artifact size. Only the time spent waiting on upstream counts toward the
 progress floor (`limits.progressWindow`, `limits.minProgressBytes`), so a slow client never trips it.
 An upstream that falls below it aborts the stream, and the client sees an incomplete download.
@@ -122,7 +124,7 @@ queue. Amazonka's S3 calls and the OSV and EPSS fetches keep their own clients' 
 The mirror worker has no serve-path cap, so it bounds Cargo and RubyGems archive preparation and
 RubyGems companion validation at the 60-second request timeout, on the same sweeper.
 
-The npm, PyPI, and Cargo adapters stream artifact responses without hashing their bodies. Integrity on this path depends
+The npm, PyPI, Cargo, and RubyGems adapters stream artifact responses without hashing their bodies. Integrity on this path depends
 on the client checking the preserved metadata hashes. The proxy therefore asks the upstream for
 every artifact and Core Metadata companion in identity coding. A registry CDN gzips a companion
 when the request permits it, and gzip bytes miss the advertised digest. npm documents integrity
@@ -302,9 +304,11 @@ An expired wait sheds with `503` and `Retry-After: 1`. A full overflow refuses a
 same headers and permits normal connection reuse. An ingress or sidecar can pool its connections
 to the pod. Closing those connections adds accepts and pool reconnections without requiring the
 end client to slow down. Overflow bounds held admission state, but does not impose a per-client
-request rate. Health probes, cheap local routes and trusted private artifact hits bypass both
-gates. The mirror worker runs outside them. A slow artifact client therefore holds no serve
-metadata slot while its download drains.
+request rate. Health probes, cheap local routes and conventional private artifact hits bypass both
+gates. A private hit that needs an admitted indexed location (Cargo, RubyGems) or a mirror-state
+check passes both gates for its decision, then releases them before streaming. The mirror worker
+runs outside the gates. A slow artifact client therefore holds no serve metadata slot while its
+download drains.
 
 The public and private connection pools take independent settings. The private pool takes the larger
 share, because a trusted tarball hit streams outside admission, which makes its demand the
