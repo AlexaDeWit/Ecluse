@@ -17,6 +17,7 @@ import Test.Hspec
 import Ecluse.Core.Package (renderPackageName)
 import Ecluse.Core.Package.Entry (EntryKey (RecordEntry))
 import Ecluse.Core.Package.Hash (HashAlg (SHA256), mkHash, sha256Hex)
+import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.RubyGems.CompactSpec
 import Ecluse.Core.Registry.RubyGems.Document
 import Ecluse.Core.Registry.RubyGems.Project (unGemPlatform)
@@ -73,6 +74,15 @@ spec = describe "native compact specifications" $ do
                 Just (String (renderVersion (specificationVersion specification))) `shouldBe` KeyMap.lookup "decoded_version" fields
                 Just (String (unGemPlatform (specificationPlatform specification))) `shouldBe` KeyMap.lookup "decoded_platform" fields
             _ -> fail "legacy manifest contains an invalid layout"
+    it "refuses each Marshal class and instance variable outside the specification allowlist" $
+        for_
+            [ (marshal (userDefined "Evil" "x"), "unsupported Marshal user-defined class")
+            , (specificationOf ("[\x06U" <> symbol "Evil" <> "0"), "unsupported Marshal user-marshal class")
+            , (specificationOf ("[\x06o" <> symbol "Evil" <> "\x00"), "unsupported Marshal object class")
+            , (specificationOf ("[\x06I\x22\x06x\x06" <> symbol "@evil" <> "\x22\x06y"), "unsupported Marshal instance variable")
+            , (specificationOf ("[\x06I\x22\x06x\x06" <> symbol "E" <> "o" <> symbol "Evil" <> "\x00"), "unsupported Marshal object class")
+            ]
+            $ \(bytes, reason) -> decodeGemSpecification defaultLimits bytes `shouldBe` Left (ParseError reason)
     it "rejects trailing compressed or Marshal bytes and checks body/depth bounds" $ do
         bytes <- readFileBS "test/fixtures/rubygems/quick/Marshal.4.8/ecluse-fixture-root-1.0.0.gemspec.rz"
         for_ [bytes <> "junk", BS.take (BS.length bytes - 1) bytes, BSL.toStrict (Zlib.compress "\x04\x08\x30")] $ \malformed -> do
@@ -83,3 +93,19 @@ spec = describe "native compact specifications" $ do
         result `shouldSatisfy` isLeft
         deep <- decodeCompactSpec defaultLimits{maxNestingDepth = 1} (const (pure ())) bytes
         deep `shouldSatisfy` isLeft
+
+-- Hand-built Marshal 4.8: a version header, then lengths under 123 as one byte offset by five.
+marshal :: ByteString -> ByteString
+marshal body = "\x04\x08" <> body
+
+specificationOf :: ByteString -> ByteString
+specificationOf inner = marshal (userDefined "Gem::Specification" (marshal inner))
+
+userDefined :: ByteString -> ByteString -> ByteString
+userDefined name payload = "u" <> symbol name <> counted payload
+
+symbol :: ByteString -> ByteString
+symbol name = ":" <> counted name
+
+counted :: ByteString -> ByteString
+counted bytes = BS.singleton (fromIntegral (BS.length bytes + 5)) <> bytes

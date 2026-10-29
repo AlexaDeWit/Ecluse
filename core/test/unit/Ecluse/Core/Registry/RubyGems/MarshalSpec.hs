@@ -28,6 +28,9 @@ spec = describe "Ruby Marshal data" $ do
     it "rejects trailing data, truncation, cyclic and forward references, and executable tags" $ do
         for_ ["\x04\x08\x30junk", "\x04\x08\x22\x09x", "\x04\x08[\x06@\x00", "\x04\x08@\x06", "\x04\x08;\x00", "\x04\x08\&e", "\x04\x08\&C", "\x04\x09\x30"] $ \bytes ->
             decodeMarshal defaultLimits bytes `shouldSatisfy` isLeft
+    it "refuses extension and user-class tags whatever follows them" $
+        for_ ["\x04\x08\&e:\x06M\x22\x06x", "\x04\x08\&C:\x06S\x22\x06x"] $ \bytes ->
+            decodeMarshal defaultLimits bytes `shouldBe` Left (ParseError "unsupported Marshal tag")
     it "rejects malformed class-name chains before recursing or exhausting the node budget" $ do
         let chain = BS.replicate 100000 111
             limits = defaultLimits{maxArtifactCount = 2, maxNestingDepth = 1}
