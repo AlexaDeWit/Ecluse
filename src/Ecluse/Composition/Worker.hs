@@ -22,7 +22,7 @@ import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeF
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Metadata.Fetch (chargingSelectedReads)
 import Ecluse.Core.Registry.Metadata.Fetch.Preparation (PrepareRead (..), prepareRead)
-import Ecluse.Core.Registry.Origin (anonymousOrigin, chargingFullReads, chargingSelectedMetadata, controlPublicOrigin)
+import Ecluse.Core.Registry.Origin (anonymousOrigin, chargingNativeReads, controlPublicOrigin)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish,
     MirrorTransport (MirrorTransport, ptClient, ptLimits, ptMintCredential, ptTracing),
@@ -32,9 +32,7 @@ import Ecluse.Core.Registry.RubyGems.Credential (rubyCodeArtifactPublishCredenti
 import Ecluse.Core.Registry.RubyGems.Publish (rubyPublishCodecWith)
 import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes), Origin (UntrustedOrigin), thgPublicHostPort)
 import Ecluse.Core.Security.Egress (registryUrlText)
-import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Meter (charge, newChargeRegion, withMemoryEntry)
-import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Context (
     PackumentDeps,
@@ -125,7 +123,7 @@ workerPolicyFor :: Env -> MirrorRequirements -> PackumentDeps -> MirrorPublish -
 workerPolicyFor env requirements deps publish artifactMaxBytes =
     WorkerPolicy
         { wpFirstParty = pdFirstParty deps
-        , wpResolveVersion = fetchVersionDetails . client
+        , wpResolveVersion = \pay name version -> client pay >>= \metadata -> fetchVersionDetails metadata name version
         , wpInstallEvidence = pdInstallEvidence deps
         , wpRules = pdRules deps
         , wpMinIntegrity = pdMinIntegrity deps
@@ -141,13 +139,13 @@ workerPolicyFor env requirements deps publish artifactMaxBytes =
   where
     client pay = case mirrorWorkerRead requirements of
         ChargedWorkerRead nativeRead ->
-            uncachedPublicMetadataClient . readCapability publicOrigin $
+            pure . uncachedPublicMetadataClient . readCapability publicOrigin $
                 PrepareRead $ \tracing origin ->
                     fmap (chargingSelectedReads decodedDocumentCharge pay) <$> prepareRead nativeRead tracing origin
         NativeChargedWorkerRead nativeRead ->
-            let origin = chargingSelectedMetadata pay (chargingFullReads (pay . scaleCharge (cfFullReadPermille (metadataChargeFactors (pdMetadata deps)))) publicOrigin)
-             in uncachedPublicMetadataClient (readCapability origin nativeRead)
-        CachedWorkerRead -> publicMetadataClient (envMetadataCache env) (Source (registryUrlText publicBaseUrl)) (readCapability publicOrigin (metadataRead (pdMetadata deps)))
+            (\origin -> uncachedPublicMetadataClient (readCapability origin nativeRead))
+                <$> chargingNativeReads (metadataChargeFactors (pdMetadata deps)) pay publicOrigin
+        CachedWorkerRead -> pure (publicMetadataClient (envMetadataCache env) (Source (registryUrlText publicBaseUrl)) (readCapability publicOrigin (metadataRead (pdMetadata deps))))
     readCapability origin ecosystemRead =
         ecosystemMetadataReads
             ecosystemRead
