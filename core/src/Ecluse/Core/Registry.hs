@@ -18,6 +18,7 @@ module Ecluse.Core.Registry (
 
     -- * Errors
     ParseError (..),
+    parseRefusal,
     FetchFault (..),
     PublishError (..),
     PublishFault (..),
@@ -81,6 +82,10 @@ newtype ParseError = ParseError
     -- ^ A human-readable description of what could not be parsed.
     }
     deriving stock (Eq, Show)
+
+-- | Refuse a decode with a human-readable reason.
+parseRefusal :: Text -> Either ParseError a
+parseRefusal = Left . ParseError
 
 -- | Why the mirror target refused a publication.
 newtype PublishError = PublishError
