@@ -26,7 +26,7 @@ import Ecluse.E2E.Fixtures.Cargo
 import Ecluse.E2E.Fixtures.Contracts (concreteFamily)
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Cargo
-import Ecluse.E2E.Harness.CargoGateway
+import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.E2E.Harness.CargoRegistry
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
 import Ecluse.Test.Contract.Install (TargetExpectation (..), TargetObservation (..), TargetPortability (ArchitectureIndependent))
@@ -91,7 +91,7 @@ mirrorDriver plane registry releases config =
         { mirrorPublicInstall = do
             before <- versions
             (observed, target, reachable) <-
-                withObservedCargoProxy
+                withObservedNativeProxy
                     config{ecArgs = ["proxy", "--no-worker"]}
                     plane
                     ( \proxy -> do
@@ -99,25 +99,25 @@ mirrorDriver plane registry releases config =
                         (\(observed, target, _) -> (observed, target, reachable)) <$> cargoObservedGraph proxy
                     )
             cargoRegistryFiles registry `shouldReturn` Map.empty
-            withObservedCargoProxy config plane $ \proxy -> do
+            withObservedNativeProxy config plane $ \proxy -> do
                 awaitCargoRegistry registry releases `shouldReturn` True
                 for_ releases $ \release -> awaitProxyLog (observedProxy proxy) (cargoMirrorComplete (crateName (releaseCrate release)) (crateVersion (releaseCrate release))) 120 `shouldReturn` True
             PublicPhase observed target reachable before <$> versions
         , mirrorOfflineInstall = withStubFault plane (CargoBackend (registryPort registry) True) $
-            withObservedCargoProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \proxy -> do
+            withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \proxy -> do
                 reachable <- cargoPublicReachable (observedProxy proxy)
-                before <- cargoTraffic proxy
+                before <- nativeTraffic proxy
                 (observed, target, sources) <- cargoObservedGraph proxy
-                after <- cargoTraffic proxy
-                let requests = drop (length (cargoUpstreamRequests before)) (cargoUpstreamRequests after)
+                after <- nativeTraffic proxy
+                let requests = drop (length (nativeUpstreamRequests before)) (nativeUpstreamRequests after)
                 pure
                     ( OfflinePhase
                         observed
                         target
                         Nothing
                         reachable
-                        (Set.fromList [cargoRequestPath request | request <- requests, cargoRequestHost request == "cargo-mirror", cargoRequestStatus request == 200])
-                        [show request | request <- requests, cargoRequestHost request == "cargo-upstream", cargoRequestStatus request /= 444]
+                        (Set.fromList [nativeRequestPath request | request <- requests, nativeRequestHost request == "cargo-mirror", nativeRequestStatus request == 200])
+                        [show request | request <- requests, nativeRequestHost request == "cargo-upstream", nativeRequestStatus request /= 444]
                         sources
                     )
         , mirrorEmptyInstall = do
@@ -125,7 +125,7 @@ mirrorDriver plane registry releases config =
             atomically (writeTVar (registryFiles registry) Map.empty)
             flip finally (atomically (writeTVar (registryFiles registry) files)) $
                 withStubFault plane (CargoBackend (registryPort registry) True) $
-                    withObservedCargoProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \proxy ->
+                    withObservedNativeProxy config{ecArgs = ["proxy", "--no-worker"]} plane $ \proxy ->
                         do
                             reachable <- cargoPublicReachable (observedProxy proxy)
                             cargoConsumer (observedProxy proxy) currentCargo $ \project -> (reachable,) <$> runCargo project ["build"]
@@ -134,9 +134,9 @@ mirrorDriver plane registry releases config =
     versions = forM (ordNub (map fst cargoCoordinates)) $ \name -> (name,) <$> cargoRegistryVersions registry "cargo-mirror" name
 
 -- | Capture a real build, install, graph, executable and complete native package sources.
-cargoObservedGraph :: ObservedCargoProxy -> IO (Observed CargoCoordinates Text, TargetObservation CargoCoordinates, [Text])
+cargoObservedGraph :: ObservedNativeProxy -> IO (Observed CargoCoordinates Text, TargetObservation CargoCoordinates, [Text])
 cargoObservedGraph observed = cargoConsumer proxy currentCargo $ \project -> do
-    before <- cargoTraffic observed
+    before <- nativeTraffic observed
     built <- runCargo project ["build"] >>= shouldSucceed
     metadata <- cargoMetadata project [] >>= shouldSucceed
     graph <- either (fail . toString) pure (cargoGraph metadata)
@@ -145,8 +145,8 @@ cargoObservedGraph observed = cargoConsumer proxy currentCargo $ \project -> do
     void (cargoInstall project cargoRoot cargoVersion [] >>= shouldSucceed)
     executable <- cargoInstalledExecutable project cargoExecutable >>= shouldSucceed
     tree <- cargoPackageTree project
-    after <- cargoTraffic observed
-    interval <- cargoTrafficSince before after
+    after <- nativeTraffic observed
+    interval <- nativeTrafficSince before after
     assertCargoAssets project interval
     locked <- cargoLock project >>= either (fail . toString) pure
     let archives = sort [toText filename | (path, TreeFile _ _) <- Map.toList tree, let filename = fromMaybe path (listToMaybe (reverse (splitDirectories path))), ".crate" `T.isSuffixOf` toText filename]

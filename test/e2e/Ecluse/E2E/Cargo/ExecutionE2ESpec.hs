@@ -20,7 +20,7 @@ import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Cargo
 import Ecluse.E2E.Harness.CargoDredger qualified as Native
 import Ecluse.E2E.Harness.CargoDredger.Client (cargoSweepClientOps)
-import Ecluse.E2E.Harness.CargoGateway
+import Ecluse.E2E.Harness.NativeEdge
 import Ecluse.E2E.Harness.CargoRegistry
 import Ecluse.E2E.Harness.CodeArtifact (codeArtifactDeleteRequests)
 import Ecluse.E2E.Harness.Sweep (minAgeRule, permissiveRules, renderRules)
@@ -92,19 +92,19 @@ deniedNative :: Text -> GlobalDataPlane -> IO ()
 deniedNative name plane = do
     releases <- cargoFixtureReleases
     withPublicRegistry plane releases $ \registry ->
-        withObservedCargoProxy executionConfig plane $ \observed -> do
-            before <- cargoTraffic observed
+        withObservedNativeProxy executionConfig plane $ \observed -> do
+            before <- nativeTraffic observed
             response <- proxyRequest "GET" [] "" (observedProxy observed) ("/cargo/" <> cargoShard name)
             responseStatus response `shouldBe` 403
             decodeUtf8 (LBS.toStrict (responseBody response)) `shouldSatisfy` T.isInfixOf "runs code on install"
-            evidence <- cargoTraffic observed >>= cargoTrafficSince before
+            evidence <- nativeTraffic observed >>= nativeTrafficSince before
             publicArchives evidence `shouldBe` [(archivePath name, 200)]
-            archiveRequests (cargoClientRequests evidence) `shouldBe` []
+            archiveRequests (nativeClientRequests evidence) `shouldBe` []
             for_ [currentCargo, floorCargo] $ \toolchain ->
                 selectedConsumer observed toolchain name $ \project -> do
-                    invocation <- observeCargo (cargoTraffic observed) project ["build"]
+                    invocation <- observeCargo (nativeTraffic observed) project ["build"]
                     void (shouldFail (cargoInvocationClient invocation))
-                    archiveRequests (cargoClientRequests (cargoInvocationTraffic invocation)) `shouldBe` []
+                    archiveRequests (nativeClientRequests (cargoInvocationTraffic invocation)) `shouldBe` []
             proxyStatus (observedProxy observed) (cargoArchiveRoute name cargoVersion) `shouldReturn` 403
             assertPublicAnonymous registry
 
@@ -112,15 +112,15 @@ plainNative :: GlobalDataPlane -> IO ()
 plainNative plane = do
     plain <- cargoLeafRelease plainName cargoVersion
     withPublicRegistry plane [plain] $ \registry ->
-        withObservedCargoProxy executionConfig plane $ \observed -> do
-            before <- cargoTraffic observed
+        withObservedNativeProxy executionConfig plane $ \observed -> do
+            before <- nativeTraffic observed
             cargoReadVersions (observedProxy observed) "/cargo/" plainName `shouldReturn` [cargoVersion]
-            evidence <- cargoTraffic observed >>= cargoTrafficSince before
+            evidence <- nativeTraffic observed >>= nativeTrafficSince before
             publicArchives evidence `shouldBe` [(archivePath plainName, 200)]
-            archiveRequests (cargoClientRequests evidence) `shouldBe` []
+            archiveRequests (nativeClientRequests evidence) `shouldBe` []
             for_ [currentCargo, floorCargo] $ \toolchain ->
                 selectedConsumer observed toolchain plainName $ \project -> do
-                    invocation <- observeCargo (cargoTraffic observed) project ["build"]
+                    invocation <- observeCargo (nativeTraffic observed) project ["build"]
                     void (shouldSucceed (cargoInvocationClient invocation))
                     assertCargoAssets project (cargoInvocationTraffic invocation)
             assertPublicAnonymous registry
@@ -131,15 +131,15 @@ exactOverride plane = do
     let rules = renderRules [minAgeRule, "execution" .= object ["type" .= ("DenyInstallTimeExecution" :: Text)], "override" .= object ["type" .= ("AllowByIdentity" :: Text), "identity" .= (macroName <> "@" <> cargoVersion), "precedence" .= (301 :: Int)]]
         config = defaultE2EConfig{ecExtraEnv = [("ECLUSE_RULES", rules)]}
     withPublicRegistry plane releases $ \registry ->
-        withObservedCargoProxy config plane $ \observed -> do
-            before <- cargoTraffic observed
+        withObservedNativeProxy config plane $ \observed -> do
+            before <- nativeTraffic observed
             cargoReadVersions (observedProxy observed) "/cargo/" macroName `shouldReturn` [cargoVersion]
-            metadata <- cargoTraffic observed >>= cargoTrafficSince before
+            metadata <- nativeTraffic observed >>= nativeTrafficSince before
             publicArchives metadata `shouldBe` []
-            archiveRequests (cargoClientRequests metadata) `shouldBe` []
+            archiveRequests (nativeClientRequests metadata) `shouldBe` []
             for_ [currentCargo, floorCargo] $ \toolchain ->
                 selectedConsumer observed toolchain macroName $ \project -> do
-                    invocation <- observeCargo (cargoTraffic observed) project ["build"]
+                    invocation <- observeCargo (nativeTraffic observed) project ["build"]
                     void (shouldSucceed (cargoInvocationClient invocation))
                     assertCargoAssets project (cargoInvocationTraffic invocation)
                     assertCargoRouting (cargoInvocationTraffic invocation)
@@ -167,48 +167,48 @@ unsupportedEvidence plane = do
 
 failedEvidence :: GlobalDataPlane -> CargoRegistry -> Text -> Text -> Int -> IO ()
 failedEvidence plane registry name diagnostic sourceStatus =
-    withObservedCargoProxy executionConfig plane $ \observed -> do
-        before <- cargoTraffic observed
+    withObservedNativeProxy executionConfig plane $ \observed -> do
+        before <- nativeTraffic observed
         response <- proxyRequest "GET" [] "" (observedProxy observed) ("/cargo/" <> cargoShard name)
         responseStatus response `shouldBe` 500
         decodeUtf8 (LBS.toStrict (responseBody response)) `shouldSatisfy` T.isInfixOf "could not be evaluated"
         awaitProxyLog (observedProxy observed) (T.isInfixOf diagnostic) 40 `shouldReturn` True
-        evidence <- cargoTraffic observed >>= cargoTrafficSince before
+        evidence <- nativeTraffic observed >>= nativeTrafficSince before
         publicArchives evidence `shouldBe` [(archivePath name, sourceStatus)]
         for_ [currentCargo, floorCargo] $ \toolchain ->
             selectedConsumer observed toolchain name $ \project -> do
-                invocation <- observeCargo (cargoTraffic observed) project ["build"]
+                invocation <- observeCargo (nativeTraffic observed) project ["build"]
                 void (shouldFail (cargoInvocationClient invocation))
-                archiveRequests (cargoClientRequests (cargoInvocationTraffic invocation)) `shouldBe` []
+                archiveRequests (nativeClientRequests (cargoInvocationTraffic invocation)) `shouldBe` []
         assertPublicAnonymous registry
 
 defaultMetadata :: GlobalDataPlane -> IO ()
-defaultMetadata plane = withObservedCargoProxy defaultE2EConfig plane $ \observed -> do
-    before <- cargoTraffic observed
+defaultMetadata plane = withObservedNativeProxy defaultE2EConfig plane $ \observed -> do
+    before <- nativeTraffic observed
     for_ [cargoRoot, macroName] $ \name -> cargoReadVersions (observedProxy observed) "/cargo/" name `shouldReturn` [cargoVersion]
-    metadata <- cargoTraffic observed >>= cargoTrafficSince before
+    metadata <- nativeTraffic observed >>= nativeTrafficSince before
     publicArchives metadata `shouldBe` []
     for_ [currentCargo, floorCargo] $ \toolchain ->
         cargoConsumer (observedProxy observed) toolchain $ \project -> do
-            invocation <- observeCargo (cargoTraffic observed) project ["build"]
+            invocation <- observeCargo (nativeTraffic observed) project ["build"]
             void (shouldSucceed (cargoInvocationClient invocation))
             assertCargoAssets project (cargoInvocationTraffic invocation)
             assertCargoRouting (cargoInvocationTraffic invocation)
 
-selectedConsumer :: ObservedCargoProxy -> CargoToolchain -> Text -> (CargoProject -> IO a) -> IO a
+selectedConsumer :: ObservedNativeProxy -> CargoToolchain -> Text -> (CargoProject -> IO a) -> IO a
 selectedConsumer observed toolchain name action =
     withCargoProject toolchain CargoReplacement (observedProxy observed) ("sparse+" <> e2eBaseUrl (observedProxy observed) <> "/cargo/") Nothing $ \project -> do
         cargoSelectDependency CargoReplacement name cargoVersion project
         action project
 
-archiveRequests :: [CargoRequest] -> [CargoRequest]
-archiveRequests = filter (T.isSuffixOf ".crate" . cargoRequestPath)
+archiveRequests :: [NativeRequest] -> [NativeRequest]
+archiveRequests = filter (T.isSuffixOf ".crate" . nativeRequestPath)
 
 archivePath :: Text -> Text
 archivePath name = "/crates/" <> name <> "/" <> cargoVersion <> "/" <> name <> "-" <> cargoVersion <> ".crate"
 
-publicArchives :: CargoTraffic -> [(Text, Int)]
-publicArchives traffic = [(cargoRequestPath request, cargoRequestStatus request) | request <- archiveRequests (cargoUpstreamRequests traffic), cargoRequestHost request == "cargo-upstream"]
+publicArchives :: NativeTraffic -> [(Text, Int)]
+publicArchives traffic = [(nativeRequestPath request, nativeRequestStatus request) | request <- archiveRequests (nativeUpstreamRequests traffic), nativeRequestHost request == "cargo-upstream"]
 
 assertPublicAnonymous :: CargoRegistry -> IO ()
 assertPublicAnonymous registry = do
@@ -278,7 +278,7 @@ dredgerRevocation global = withExecutionStores global $ \plane releases -> do
         requests <- readTVarIO (registryRequests registry)
         for_ ["cargo-mirror", "cargo-private"] $ \host ->
             for_ [cargoRoot, macroName, plainName] $ \name ->
-                requests `shouldSatisfy` any (\request -> cargoRequestHost request == host && cargoRequestMethod request == "GET" && cargoRequestPath request == archivePath name && cargoRequestStatus request == 200)
+                requests `shouldSatisfy` any (\request -> nativeRequestHost request == host && nativeRequestMethod request == "GET" && nativeRequestPath request == archivePath name && nativeRequestStatus request == 200)
         tokens <- readTVarIO (registryTokens registry)
         map snd tokens `shouldSatisfy` all (== Just (encodeUtf8 cargoRegistryToken))
         after <- stubReadsNow global

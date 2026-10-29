@@ -27,7 +27,7 @@ import Network.HTTP.Types (ResponseHeaders, Status, status200, status400, status
 import Network.Wai (Application, Request, Response, ResponseReceived, getRequestBodyChunk, pathInfo, requestHeaderHost, requestHeaders, requestMethod, responseLBS, responseRaw)
 
 import Ecluse.Core.Security.Limits (BodyLimit (PublishRequestBodyLimit), boundedRead)
-import Ecluse.E2E.Harness.Cargo (CargoRequest (..))
+import Ecluse.E2E.Harness.NativeEdge (NativeRequest (..))
 import Ecluse.E2E.Harness.Container (withBridgeApplication)
 import Ecluse.E2E.Harness.Stub (StubRoute (CargoMirror, CargoPrivate, CargoPublic), stubUrl)
 import Ecluse.Test.Package (hexSha256Of)
@@ -50,7 +50,7 @@ data CargoRegistryFault = CargoRegistryHealthy | CargoRegistryUnavailable | Carg
 data CargoRegistry = CargoRegistry
     { registryPort :: Int
     , registryFiles :: TVar (Map (Text, Text, Text) CargoStored)
-    , registryRequests :: TVar [CargoRequest]
+    , registryRequests :: TVar [NativeRequest]
     , registryUploads :: TVar [ByteString]
     , registryTokens :: TVar [(Text, Maybe ByteString)]
     , registryFault :: TVar CargoRegistryFault
@@ -101,7 +101,7 @@ cargoRegistryApplication registry request respond = do
     fault <- readTVarIO (registryFault registry)
     atomically (modifyTVar' (registryTokens registry) (<> [(host, lookup "Authorization" (requestHeaders request))]))
     let answer status headers body = do
-            atomically (modifyTVar' (registryRequests registry) (<> [CargoRequest "http" host (decodeUtf8 (requestMethod request)) path (statusCode status)]))
+            atomically (modifyTVar' (registryRequests registry) (<> [NativeRequest "http" host (decodeUtf8 (requestMethod request)) path (statusCode status)]))
             respond (responseLBS status headers (if requestMethod request == "HEAD" then "" else body))
         unauthorised = answer status401 [("WWW-Authenticate", "Cargo login_url=\"https://cargo-private/login\"")] "credential required"
         authenticated = lookup "Authorization" (requestHeaders request) == Just (encodeUtf8 cargoRegistryToken)
