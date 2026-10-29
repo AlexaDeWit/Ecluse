@@ -5,7 +5,7 @@
 {-# LANGUAGE RankNTypes #-}
 
 -- | Python Core Metadata selection over the shared complete tar traversal.
-module Ecluse.Core.Registry.PyPI.Archive.Tar (TarDecode, extractTar) where
+module Ecluse.Core.Registry.PyPI.Archive.Tar (extractTar) where
 
 import Conduit
 import Data.Map.Strict qualified as Map
