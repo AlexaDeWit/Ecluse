@@ -17,13 +17,10 @@ import Data.Map.Strict qualified as Map
 import Data.Ratio ((%))
 import Data.Set qualified as Set
 
-import Ecluse.Core.Ecosystem (Ecosystem (Cargo, RubyGems))
 import Ecluse.Core.Package (PackageInfo (infoName, infoVersions), pkgEcosystem)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage))
-import Ecluse.Test.Corpus.Cargo (decodeCargoValues, encodeCargoValues)
-import Ecluse.Test.Corpus.RubyGems (decodeRubyGemsValues, encodeRubyGemsValues)
 import Ecluse.Test.Corpus.Subset (byPublishTime, newestVersions, oldestVersions)
-import Ecluse.Test.EcosystemBench (EcosystemBench (ebHeavyBase, ebKeepVersions, ebTreeRead), ecosystemBenchFor)
+import Ecluse.Test.EcosystemBench (CorpusFraming (..), EcosystemBench (ebFraming, ebHeavyBase, ebKeepVersions, ebTreeRead), ecosystemBenchFor)
 
 -- | How the private and public documents of a two-source listing share a capture's versions.
 data MergeShape
@@ -77,10 +74,9 @@ mergeDocuments shape info bytes = do
         HeavyBase -> privateOnly (ebHeavyBase ecosystem (BS.length bytes `div` 2) . ebKeepVersions ecosystem info (everyTenth (byPublishTime info)))
         HeavyOldBase -> privateOnly (ebHeavyBase ecosystem (BS.length bytes `div` 2) . ebKeepVersions ecosystem info (oldestVersions (1 % 10) info))
       where
-        rewrite keep = case pkgEcosystem (infoName info) of
-            Cargo -> RewrittenNative <$> (first toString (decodeCargoValues bytes) >>= first toString . encodeCargoValues . keep)
-            RubyGems -> RewrittenNative <$> (first toString (decodeRubyGemsValues bytes) >>= first toString . encodeRubyGemsValues . keep)
-            _ -> Rewritten . keep <$> eitherDecodeStrict bytes
+        rewrite keep = case ebFraming ecosystem of
+            JsonFraming -> Rewritten . keep <$> eitherDecodeStrict bytes
+            NativeFraming decodeValues encodeValues -> RewrittenNative <$> (first toString (decodeValues bytes) >>= first toString . encodeValues . keep)
         both private public = (,) <$> rewrite (ebKeepVersions ecosystem info private) <*> rewrite (ebKeepVersions ecosystem info public)
         privateOnly keep = (,Captured) <$> rewrite keep
         byKey keeps = Set.fromList [key | (position, key) <- zip [0 :: Int ..] (Map.keys (infoVersions info)), keeps position]
